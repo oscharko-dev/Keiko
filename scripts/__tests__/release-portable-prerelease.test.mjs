@@ -192,6 +192,9 @@ describe("hermetic end-to-end (scripted gh double)", () => {
         '{"status":"completed","conclusion":"success","headSha":"b2e3900a"}',
       ],
       ["api repos/oscharko-dev/Keiko/releases/tags/", '{"body":"old beta.1 body"}'],
+      // An existing tag is a PUBLISHED release unless a test overrides it to a draft — the
+      // published case must keep the historical refusal (review finding on #3037).
+      ["release view", '{"isDraft":false}'],
     ];
     for (const [needle, answer] of answers) {
       if (joined.includes(needle)) return answer;
@@ -227,6 +230,9 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     const createLine = recorded.find((line) => line.startsWith("gh release create"));
     expect(createLine).toContain(currentTag);
     expect(createLine).toContain("--prerelease");
+    // Draft-first: the create is NOT the publish — the release goes public only through the
+    // final --draft=false edit, after the supersede edit landed (review finding on #3037).
+    expect(createLine).toContain("--draft");
     // The tag binds to the exact commit the workflow built, never a moving branch ref — assets
     // and release source must agree even when the branch advanced mid-run (review finding on
     // #3032).
@@ -240,8 +246,18 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     expect(createLine).toContain("keiko-macos-x64.zip");
     expect(createLine).toContain("keiko-windows-x64.zip");
     expect(createLine).toContain("keiko-windows-x64-setup.exe");
-    // The predecessor got the superseded pointer prepended.
-    expect(recorded.some((line) => line.startsWith(`gh release edit ${previousTag}`))).toBe(true);
+    // The predecessor got the superseded pointer prepended BEFORE the draft went public:
+    // create (draft), then supersede edit, then --draft=false, in exactly that order.
+    const createIndex = recorded.findIndex((line) => line.startsWith("gh release create"));
+    const supersedeIndex = recorded.findIndex((line) =>
+      line.startsWith(`gh release edit ${previousTag}`),
+    );
+    const publishIndex = recorded.findIndex((line) =>
+      line.startsWith(`gh release edit ${currentTag} --draft=false`),
+    );
+    expect(createIndex).toBeGreaterThanOrEqual(0);
+    expect(supersedeIndex).toBeGreaterThan(createIndex);
+    expect(publishIndex).toBeGreaterThan(supersedeIndex);
     // BOTH macOS seals were verified on the darwin host before anything published, and the
     // release body names what was verified (review finding on #3037).
     expect(
@@ -251,6 +267,86 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     expect(bodyLine).toContain(
       "macOS seal verification: verified (keiko-macos-arm64.zip, keiko-macos-x64.zip).",
     );
+  });
+
+  it("never leaves draft state when the predecessor supersede edit fails", () => {
+    // Review finding on #3037: the release used to be public before the supersede edit ran, so a
+    // transient edit failure left a live release without its superseded pointer — and no retry,
+    // because the existing tag was refused up front. Draft-first: the create carries --draft and
+    // a failing supersede aborts BEFORE any --draft=false publish is recorded.
+    const recorded = [];
+    const doubleBase = ghDouble(recorded);
+    const failingSupersede = (command, args, options) => {
+      const line = [command.split("/").pop(), ...args].join(" ");
+      if (line.startsWith(`gh release edit ${previousTag}`)) {
+        recorded.push(line);
+        return { status: 1, stdout: "", stderr: "transient 502" };
+      }
+      return doubleBase(command, args, options);
+    };
+
+    expect(() =>
+      withHostPlatform("darwin", () =>
+        withProcessRunner(failingSupersede, () =>
+          runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
+        ),
+      ),
+    ).toThrowError(/exited 1: transient 502/u);
+    const createLine = recorded.find((line) => line.startsWith("gh release create"));
+    expect(createLine).toContain("--draft");
+    expect(recorded.some((line) => line.includes("--draft=false"))).toBe(false);
+  });
+
+  it("resumes over an interrupted draft: deletes it and recreates the release fresh", () => {
+    // Review finding on #3037: a run that died between create and publish leaves a DRAFT carrying
+    // the target tag. The old code refused the tag outright, making the interruption permanent —
+    // a draft was never public, so the resume deletes it and proceeds with a fresh create.
+    const recorded = [];
+    const overrides = {
+      answers: [
+        [
+          "api repos/{owner}/{repo}/releases",
+          JSON.stringify([{ tag_name: previousTag }, { tag_name: currentTag }]),
+        ],
+        [`release view ${currentTag}`, '{"isDraft":true}'],
+      ],
+    };
+    withHostPlatform("darwin", () =>
+      withProcessRunner(ghDouble(recorded, overrides), () =>
+        runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
+      ),
+    );
+
+    const deleteIndex = recorded.findIndex((line) =>
+      line.startsWith(`gh release delete ${currentTag} --yes`),
+    );
+    const createIndex = recorded.findIndex((line) => line.startsWith("gh release create"));
+    expect(deleteIndex).toBeGreaterThanOrEqual(0);
+    expect(createIndex).toBeGreaterThan(deleteIndex);
+    expect(
+      recorded.some((line) => line.startsWith(`gh release edit ${currentTag} --draft=false`)),
+    ).toBe(true);
+  });
+
+  it("still refuses a tag that exists as a PUBLISHED release", () => {
+    const recorded = [];
+    const overrides = {
+      answers: [
+        [
+          "api repos/{owner}/{repo}/releases",
+          JSON.stringify([{ tag_name: previousTag }, { tag_name: currentTag }]),
+        ],
+        [`release view ${currentTag}`, '{"isDraft":false}'],
+      ],
+    };
+
+    expect(() =>
+      withProcessRunner(ghDouble(recorded, overrides), () =>
+        runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
+      ),
+    ).toThrowError(/already exists/u);
+    expect(recorded.some((line) => line.startsWith("gh release delete"))).toBe(false);
+    expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
   });
 
   it("refuses to publish when a staging job failed", () => {
@@ -432,6 +528,45 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     expect(waits.length).toBeGreaterThan(0);
   });
 
+  it("refuses to bind when two unseen dispatch runs race on the same ref", () => {
+    // Review finding on #3037: when a second operator dispatches the same workflow on the same
+    // ref concurrently, BOTH new run ids are absent from the pre-dispatch set. gh cannot return
+    // the created run id, so the two runs are indistinguishable — the old `.find()` selection
+    // bound one anyway and could publish the competing operator's assets. The only safe outcome
+    // is a refusal that names the ambiguity; never a guess.
+    const recorded = [];
+    const waits = [];
+    let listCalls = 0;
+    const doubleBase = ghDouble(recorded);
+    const racing = (command, args, options) => {
+      if (args.join(" ").startsWith("run list")) {
+        listCalls += 1;
+        return {
+          status: 0,
+          stdout:
+            listCalls === 1
+              ? '[{"databaseId":41}]'
+              : '[{"databaseId":41},{"databaseId":43},{"databaseId":44}]',
+          stderr: "",
+        };
+      }
+      return doubleBase(command, args, options);
+    };
+
+    expect(() =>
+      withSleeper(
+        (ms) => waits.push(ms),
+        () =>
+          withHostPlatform("darwin", () =>
+            withProcessRunner(racing, () => runPortablePrerelease(["--tag", currentTag])),
+          ),
+      ),
+    ).toThrowError(/concurrent dispatch/u);
+    // Neither candidate run was bound, and nothing was published.
+    expect(recorded.some((line) => line.startsWith("gh run view"))).toBe(false);
+    expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+  });
+
   it("refuses when the dispatched run never appears instead of guessing at an existing run", () => {
     const recorded = [];
     const waits = [];
@@ -555,7 +690,15 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     );
 
     expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(true);
-    expect(recorded.some((line) => line.startsWith("gh release edit"))).toBe(false);
+    // The only edit is the release's own --draft=false publish — no predecessor supersede edit.
+    expect(
+      recorded.some((line) => line.startsWith("gh release edit") && line.includes("--notes-file")),
+    ).toBe(false);
+    expect(
+      recorded.some((line) =>
+        line.startsWith(`gh release edit v${localVersion}-beta.0 --draft=false`),
+      ),
+    ).toBe(true);
   });
 
   it("leaves an already-superseded predecessor untouched", () => {
@@ -571,7 +714,8 @@ describe("hermetic end-to-end (scripted gh double)", () => {
       ),
     );
 
-    expect(recorded.some((line) => line.startsWith("gh release edit"))).toBe(false);
+    // No supersede edit for the predecessor — only the release's own --draft=false publish.
+    expect(recorded.some((line) => line.startsWith(`gh release edit ${previousTag}`))).toBe(false);
   });
 
   it("finds staged assets nested one directory deep in an artifact", () => {

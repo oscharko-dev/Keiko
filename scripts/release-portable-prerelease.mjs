@@ -16,8 +16,10 @@
  *    (beta.0's "damaged" dead end) must not appear. codesign verifies the x64 seal statically on
  *    an arm64 host — no execution involved. On a non-darwin host the script says the verification
  *    did not run — a skipped check is reported, never silently dropped.
- * 5. The release is created as a PRERELEASE with provenance (source commit + workflow run id) in
- *    the body, and the previous beta of the same version gets a superseded pointer prepended.
+ * 5. The release is created as a DRAFT PRERELEASE with provenance (source commit + workflow run
+ *    id) in the body; the previous beta of the same version gets a superseded pointer prepended,
+ *    and only then does the draft go public — an interrupted run leaves a resumable draft that
+ *    the next run deletes and recreates, never a live release missing its superseded pointer.
  *
  * The evaluation lane is never publishable to npm and never promoted to `latest` here; this
  * script owns only the GitHub prerelease surface. `release:publish` owns npm.
@@ -219,6 +221,11 @@ function listWorkflowRunIds(ref) {
     WORKFLOW_PATH,
     "--branch",
     ref,
+    // Only a dispatch-created run can be the one THIS dispatch created — a push- or
+    // schedule-triggered run appearing mid-poll must neither be selected nor manufacture a
+    // false ambiguity (review finding on #3037).
+    "--event",
+    "workflow_dispatch",
     "--limit",
     "50",
     "--json",
@@ -231,7 +238,11 @@ function listWorkflowRunIds(ref) {
  * The newest list entry is NOT necessarily the run this dispatch created — a previous or
  * concurrent run can sit at the top of the list. Only a run id that did not exist BEFORE the
  * dispatch can be the one just created, so the pre-dispatch id set is captured first and the
- * poll waits for an id outside it (review finding on #3037).
+ * poll waits for an id outside it (review finding on #3037). gh cannot return the created run
+ * id, so when TWO operators dispatch concurrently BOTH new ids are unseen and indistinguishable
+ * — selecting one could publish the competing operator's assets. The binding therefore fails
+ * closed on ambiguity: exactly one unseen run binds, more than one refuses (review finding on
+ * #3037).
  */
 function dispatchWorkflow(ref) {
   const before = new Set(listWorkflowRunIds(ref));
@@ -240,8 +251,13 @@ function dispatchWorkflow(ref) {
   for (let attempt = 0; attempt < DISPATCH_FIND_ATTEMPTS; attempt += 1) {
     // The freshly dispatched run needs a moment to exist before it can be found.
     sleep(DISPATCH_FIND_INTERVAL_MS);
-    const created = listWorkflowRunIds(ref).find((id) => !before.has(id));
-    if (created !== undefined) return created;
+    const unseen = listWorkflowRunIds(ref).filter((id) => !before.has(id));
+    if (unseen.length === 1) return unseen[0];
+    if (unseen.length > 1) {
+      fail(
+        `${String(unseen.length)} unseen workflow_dispatch runs (${unseen.join(", ")}) appeared on ${ref} — a concurrent dispatch by another operator is indistinguishable from this one; refusing to bind to either run.`,
+      );
+    }
   }
   fail(
     `the dispatched workflow run did not appear within ${String(DISPATCH_FIND_ATTEMPTS)} polls; refusing to guess at an existing run.`,
@@ -450,6 +466,11 @@ function createRelease(input) {
     "release",
     "create",
     input.tag,
+    // Draft-first (review finding on #3037): nothing is public until the predecessor carries its
+    // superseded pointer — publishDraftRelease flips --draft=false as the LAST step, so a
+    // transient supersede failure leaves a resumable draft, never a live release without its
+    // pointer.
+    "--draft",
     "--prerelease",
     // The tag must point at the exact commit the workflow built — a branch target would drift
     // whenever the branch advances mid-run or an older --run-id is reused, making the release's
@@ -462,7 +483,26 @@ function createRelease(input) {
     bodyPath,
     ...PUBLISH_ASSETS.map((asset) => join(input.publishDir, asset.file)),
   ]);
-  log(`published ${input.tag}.`);
+  log(`created draft ${input.tag} (not public yet).`);
+}
+
+/** Publishing is the LAST step: the draft goes public only after the supersede edit landed. */
+function publishDraftRelease(tag) {
+  gh(["release", "edit", tag, "--draft=false"]);
+  log(`published ${tag}.`);
+}
+
+/**
+ * Draft-first publishing makes an interrupted run resumable: a DRAFT carrying the target tag is
+ * the remnant of a run that died between create and the final --draft=false publish — it was
+ * never public, so it is deleted and the release is recreated fresh. A PUBLISHED release keeps
+ * the historical refusal: a live tag is never recreated (review finding on #3037).
+ */
+function deleteDraftOrRefuseExistingTag(tag) {
+  const { isDraft } = ghJson(["release", "view", tag, "--json", "isDraft"]);
+  if (isDraft !== true) fail(`release ${tag} already exists.`);
+  gh(["release", "delete", tag, "--yes"]);
+  log(`deleted the interrupted draft ${tag}; recreating it.`);
 }
 
 function markPreviousSuperseded(previousTag, tag, repository) {
@@ -486,7 +526,7 @@ export function runPortablePrerelease(argv) {
   const repository = repositorySlug();
   const tags = existingReleaseTags();
   const tag = options.tag ?? nextBetaTag(version, tags);
-  if (tags.includes(tag)) fail(`release ${tag} already exists.`);
+  if (tags.includes(tag)) deleteDraftOrRefuseExistingTag(tag);
   const runId = options.runId ?? dispatchWorkflow(options.ref);
   log(`waiting for workflow run ${runId} ...`);
   const view = waitForRun(runId);
@@ -539,6 +579,7 @@ function runPublishSteps({
   }
   createRelease({ workDir, publishDir, tag, commitSha: view.headSha, version, body });
   markPreviousSuperseded(previousTag, tag, repository);
+  publishDraftRelease(tag);
   log(`DONE - ${tag} is live with 4 verified assets.`);
 }
 
