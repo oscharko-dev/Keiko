@@ -36,6 +36,9 @@ describe("GatewayConfigUpload", () => {
       );
       expect(onApply).not.toHaveBeenCalled();
       expect(reportError).toHaveBeenCalledOnce();
+      // The report is sanitized: no fragment of the uploaded file may reach the error channel.
+      const reported = reportError.mock.calls[0]?.[0] as Error;
+      expect(reported.message).toBe("gateway config upload: parser threw on an uploaded file");
     } finally {
       vi.unstubAllGlobals();
     }

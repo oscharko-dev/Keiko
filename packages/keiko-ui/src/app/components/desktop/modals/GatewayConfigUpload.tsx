@@ -75,11 +75,13 @@ function applyReadOutcome(
   let result;
   try {
     result = serialized === undefined ? undefined : parseGatewayConfigUpload(serialized);
-  } catch (error) {
+  } catch {
     // The parser is written to never throw on hostile input — if it ever does, that is a
-    // programming error: report it through the page's error channel and show the honest
-    // failed state, exactly like a throwing apply callback below (review finding on #3031).
-    window.reportError(error);
+    // programming error: report it through the page's error channel and show the honest failed
+    // state, exactly like a throwing apply callback below. The original error is deliberately
+    // NOT forwarded: engine messages can embed excerpts of the uploaded file, which may carry
+    // credentials (review findings on #3031; diagnostics stay body-free).
+    window.reportError(new Error("gateway config upload: parser threw on an uploaded file"));
     result = undefined;
   }
   if (result === undefined || result.outcome === "invalid") {
@@ -92,11 +94,12 @@ function applyReadOutcome(
   }
   try {
     onApply(result.fields);
-  } catch (error) {
+  } catch {
     // A throwing apply callback is a programming error, not a user problem: report it through the
     // page's error channel (never an unhandled rejection out of a void handler) and show the
-    // honest failed state instead of a success count.
-    window.reportError(error);
+    // honest failed state instead of a success count. Sanitized for the same body-free reason as
+    // the parser branch above — field setters receive parsed file values.
+    window.reportError(new Error("gateway config upload: apply callback threw"));
     setState({ ...INITIAL_STATE, issue: "invalid" });
     return;
   }
