@@ -71,7 +71,16 @@ function applyReadOutcome(
     setState({ issue: result.outcome, appliedCount: undefined });
     return;
   }
-  onApply(result.fields);
+  try {
+    onApply(result.fields);
+  } catch (error) {
+    // A throwing apply callback is a programming error, not a user problem: report it through the
+    // page's error channel (never an unhandled rejection out of a void handler) and show the
+    // honest failed state instead of a success count.
+    window.reportError(error);
+    setState({ issue: "invalid", appliedCount: undefined });
+    return;
+  }
   setState({ issue: undefined, appliedCount: appliedGatewayConfigFieldCount(result.fields) });
 }
 
