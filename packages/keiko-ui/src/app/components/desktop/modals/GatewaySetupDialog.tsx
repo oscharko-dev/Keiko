@@ -2444,8 +2444,9 @@ export function GatewaySetupDialog({
     setImportedVoiceRealtimeAuthMode(fields.voiceRealtimeAuthMode ?? "");
     // The protocol is BOUND to the uploaded endpoint URL: the payload submits it only while the
     // form still points at exactly that endpoint, so a manually retyped URL can never inherit
-    // the file's deployment-path shape (#3037).
-    setImportedVoiceEndpointBaseUrl(fields.voiceBaseUrl);
+    // the file's deployment-path shape (#3037). Trimmed with the same trim the submit-time
+    // comparison applies — an untrimmed stored URL would silently drop the protocol.
+    setImportedVoiceEndpointBaseUrl(fields.voiceBaseUrl.trim());
   }
 
   async function submit(event: FormSubmitEvent): Promise<void> {

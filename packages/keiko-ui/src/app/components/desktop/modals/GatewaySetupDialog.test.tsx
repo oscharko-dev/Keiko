@@ -1545,6 +1545,63 @@ describe("GatewaySetupDialog", () => {
     expect(payload).not.toHaveProperty("workflowEligibleModelIds");
   });
 
+  it("submits the imported endpoint protocol while the form still points at the uploaded endpoint", async () => {
+    // The positive branch of the URL binding: without a manual retype, the imported protocol
+    // rides the submit verbatim (#3037).
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.upload(
+      await screen.findByLabelText(/load keiko\.config\.json/i),
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "gpt-5o",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                capability: { id: "gpt-5o", kind: "chat" },
+              },
+              {
+                modelId: "keiko-stt",
+                baseUrl: "https://speech.example.com",
+                endpointStyle: "azure-openai-deployment",
+                apiVersion: "2025-03-01-preview",
+                capability: { id: "keiko-stt", kind: "voice", supportsSpeechInput: true },
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(/audio endpoint url/i)).toHaveValue(
+        "https://speech.example.com",
+      ),
+    );
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).toMatchObject({
+      voiceEndpointStyle: "azure-openai-deployment",
+      voiceApiVersion: "2025-03-01-preview",
+    });
+  });
+
   it("clears the imported endpoint protocol when the user retypes the voice endpoint", async () => {
     // The protocol belongs to the imported connection: after the user manually replaces the
     // uploaded Azure speech endpoint with an OpenAI-compatible one, the submit must not carry

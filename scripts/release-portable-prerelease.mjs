@@ -21,8 +21,9 @@
  *    and only then does the draft go public — an interrupted run leaves a resumable draft that
  *    the next PUBLISHING run deletes and recreates (a plan-only run only reports the pending
  *    recovery), never a live release missing its superseded pointer. Before creating, the tag is
- *    resolved as a remote git ref: an existing ref not at the built commit refuses, because
- *    `gh release create --target` binds only a tag that does not yet exist.
+ *    bound to the built commit ATOMICALLY (a git/refs POST that fails on an existing ref; an
+ *    existing ref must already point at the built commit) and the create runs with --verify-tag,
+ *    so a tag that moves or vanishes in between fails closed instead of re-binding the assets.
  *
  * The evaluation lane is never publishable to npm and never promoted to `latest` here; this
  * script owns only the GitHub prerelease surface. `release:publish` owns npm.
@@ -475,11 +476,10 @@ function createRelease(input) {
     // pointer.
     "--draft",
     "--prerelease",
-    // The tag must point at the exact commit the workflow built — a branch target would drift
-    // whenever the branch advances mid-run or an older --run-id is reused, making the release's
-    // source and its assets disagree (review finding on #3032).
-    "--target",
-    input.commitSha,
+    // The tag was already created ATOMICALLY at the built commit (ensureTagRefAtBuiltCommit) —
+    // --verify-tag fails closed if it vanished in the remaining window instead of silently
+    // minting a new one at whatever --target would resolve to (review finding on #3037).
+    "--verify-tag",
     "--title",
     `Keiko ${input.version} (${input.tag})`,
     "--notes-file",
@@ -515,11 +515,42 @@ function deleteInterruptedDraft(tag) {
 }
 
 /**
- * `gh release create --target` binds the release to the built commit ONLY while the tag does not
- * yet exist as a git ref — an existing ref wins silently and the fresh assets would attach to
- * that tag's OLD commit. The remote ref is therefore resolved first: absent (404) proceeds
- * exactly as before, a ref whose (peeled) commit is the built commit proceeds, anything else
- * refuses before creating (review finding on #3037).
+ * The tag is bound to the built commit ATOMICALLY: a POST to git/refs either creates the ref at
+ * exactly that commit or fails on an existing ref (the GitHub API rejects duplicate refs in one
+ * operation) — closing the check-then-create window in which another actor could create or move
+ * the tag between a read-only assertion and `gh release create` (review finding on #3037). On
+ * the conflict, the existing ref is re-read and must already point at the built commit; release
+ * creation then runs with --verify-tag so a tag that vanishes afterwards fails closed.
+ */
+function ensureTagRefAtBuiltCommit(tag, commitSha) {
+  const args = [
+    "api",
+    "--method",
+    "POST",
+    "repos/{owner}/{repo}/git/refs",
+    "-f",
+    `ref=refs/tags/${tag}`,
+    "-f",
+    `sha=${commitSha}`,
+  ];
+  const result = processRunner(resolveHostExecutable("gh"), args, {});
+  if (result.error !== undefined) fail(`gh could not spawn: ${result.error.message}`);
+  if (result.status === 0) {
+    log(`created tag ${tag} at the built commit ${commitSha}.`);
+    return;
+  }
+  if (String(result.stderr ?? "").includes("already exists")) {
+    assertTagRefMatchesBuiltCommit(tag, commitSha);
+    return;
+  }
+  fail(`gh ${args.join(" ")} exited ${String(result.status)}: ${result.stderr}`);
+}
+
+/**
+ * The conflict half of ensureTagRefAtBuiltCommit: an existing ref is acceptable only when its
+ * (peeled) commit IS the built commit — a resumed run's own tag, or an identical concurrent
+ * creation. Anything else refuses before a release could attach fresh assets to an old commit
+ * (review finding on #3037).
  */
 function assertTagRefMatchesBuiltCommit(tag, commitSha) {
   const ref = readRemoteTagRef(tag);
@@ -643,7 +674,7 @@ function runPublishSteps({
     log(`PLAN-ONLY complete for ${tag} (nothing published).`);
     return;
   }
-  assertTagRefMatchesBuiltCommit(tag, view.headSha);
+  ensureTagRefAtBuiltCommit(tag, view.headSha);
   if (hasPendingDraft) deleteInterruptedDraft(tag);
   createRelease({ workDir, publishDir, tag, commitSha: view.headSha, version, body });
   markPreviousSuperseded(previousTag, tag, repository);

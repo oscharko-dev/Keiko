@@ -156,8 +156,16 @@ describe("hermetic end-to-end (scripted gh double)", () => {
 
   function ghAnswer(args, overrides) {
     const joined = args.join(" ");
+    for (const [needle, failure] of overrides.failures ?? []) {
+      if (joined.includes(needle)) return { status: 1, stdout: "", stderr: failure };
+    }
     for (const [needle, answer] of overrides.answers ?? []) {
       if (joined.includes(needle)) return { status: 0, stdout: answer, stderr: "" };
+    }
+    if (joined.startsWith("api --method POST repos/{owner}/{repo}/git/refs")) {
+      // Default: the atomic tag creation succeeds — the ref did not exist. Conflict scenarios
+      // override via `failures` with the API's "Reference already exists" error (#3037).
+      return { status: 0, stdout: "{}", stderr: "" };
     }
     if (joined.startsWith("api repos/{owner}/{repo}/git/ref/tags/")) {
       // Default: the requested tag does not exist as a remote git ref — a 404-style gh failure,
@@ -239,11 +247,20 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     // Draft-first: the create is NOT the publish — the release goes public only through the
     // final --draft=false edit, after the supersede edit landed (review finding on #3037).
     expect(createLine).toContain("--draft");
-    // The tag binds to the exact commit the workflow built, never a moving branch ref — assets
-    // and release source must agree even when the branch advanced mid-run (review finding on
-    // #3032).
-    expect(createLine).toContain("--target b2e3900a");
-    expect(createLine).not.toContain("--target dev");
+    // The tag binds to the exact commit the workflow built, never a moving branch ref — and it
+    // is bound ATOMICALLY through a git/refs POST before the release exists, with the create
+    // only verifying the tag is still there (review findings on #3032/#3037; relocated from the
+    // former --target pin, which bound only a not-yet-existing tag).
+    expect(
+      recorded.some(
+        (line) =>
+          line.includes("git/refs") &&
+          line.includes(`ref=refs/tags/${currentTag}`) &&
+          line.includes("sha=b2e3900a"),
+      ),
+    ).toBe(true);
+    expect(createLine).toContain("--verify-tag");
+    expect(createLine).not.toContain("--target");
     // The built commit's manifest was read at the exact head sha the run reports — the version
     // binding judges the BUILT commit, not the local checkout alone (review finding on #3037).
     expect(recorded.some((line) => line.includes("contents/package.json?ref=b2e3900a"))).toBe(true);
@@ -377,6 +394,9 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     // a mismatch refuses before anything is created.
     const recorded = [];
     const overrides = {
+      failures: [
+        ["POST repos/{owner}/{repo}/git/refs", "Validation Failed: Reference already exists"],
+      ],
       answers: [
         [
           `git/ref/tags/${currentTag}`,
@@ -398,6 +418,9 @@ describe("hermetic end-to-end (scripted gh double)", () => {
   it("proceeds when the existing tag ref already points at the built commit", () => {
     const recorded = [];
     const overrides = {
+      failures: [
+        ["POST repos/{owner}/{repo}/git/refs", "Validation Failed: Reference already exists"],
+      ],
       answers: [[`git/ref/tags/${currentTag}`, '{"object":{"type":"commit","sha":"b2e3900a"}}']],
     };
     withHostPlatform("darwin", () =>
@@ -414,6 +437,9 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     // comparison would judge the tag object's own sha and wrongly refuse a matching tag.
     const recorded = [];
     const overrides = {
+      failures: [
+        ["POST repos/{owner}/{repo}/git/refs", "Validation Failed: Reference already exists"],
+      ],
       answers: [
         [`git/ref/tags/${currentTag}`, '{"object":{"type":"tag","sha":"a66tag0b"}}'],
         ["git/tags/a66tag0b", '{"object":{"type":"commit","sha":"b2e3900a"}}'],
@@ -431,6 +457,9 @@ describe("hermetic end-to-end (scripted gh double)", () => {
   it("refuses an annotated tag ref that peels to a different commit", () => {
     const recorded = [];
     const overrides = {
+      failures: [
+        ["POST repos/{owner}/{repo}/git/refs", "Validation Failed: Reference already exists"],
+      ],
       answers: [
         [`git/ref/tags/${currentTag}`, '{"object":{"type":"tag","sha":"a66tag0b"}}'],
         ["git/tags/a66tag0b", '{"object":{"type":"commit","sha":"0ther5ha"}}'],
