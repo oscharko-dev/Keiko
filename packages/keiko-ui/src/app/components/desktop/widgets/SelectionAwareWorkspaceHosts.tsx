@@ -569,10 +569,10 @@ function executeChatCreationRequest(execution: ChatCreationRequestExecution): vo
       (result): void => {
         if (execution.isCurrent()) applyChatCreationResult(execution, result);
       },
-      (failure): void => {
+      (error_): void => {
         const correlationId =
-          failure instanceof ChatCreationRequestFailure
-            ? failure.correlationId
+          error_ instanceof ChatCreationRequestFailure
+            ? error_.correlationId
             : newClientCorrelationId();
         window.reportError(correlatedDiagnostic(CHAT_CREATION_REQUEST_DIAGNOSTIC, correlationId));
         if (!execution.isCurrent()) return;

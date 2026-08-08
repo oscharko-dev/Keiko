@@ -30,7 +30,37 @@ import { Icons } from "../Icons";
 import KeikoSelect from "../KeikoSelect";
 import { useTheme } from "../hooks/useTheme";
 import { NATIVE_BLOCK_STYLE } from "../native-element-styles";
+import dynamic from "next/dynamic";
 import { notifyGatewayConfigUpdated } from "../widgets/shared/gatewaySetupBus";
+import type { GatewayConfigUploadFields } from "./gatewayConfigParsing";
+
+// A failed upload-chunk load must not make the feature silently disappear from an otherwise
+// working dialog — surface the redacted error and a retry (review finding on #3031).
+function GatewayConfigUploadLoadFailure({
+  error,
+  retry,
+}: {
+  readonly error?: Error | null | undefined;
+  readonly retry?: (() => void) | null | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  if (!error) return null;
+  return (
+    <div role="alert">
+      {t("gatewaySetup.loading.error")}{" "}
+      <button type="button" onClick={retry ?? ((): void => window.location.reload())}>
+        {t("common.retry")}
+      </button>
+    </div>
+  );
+}
+
+// The upload path (control + fail-closed parser) is not first-paint-critical: loading it as its
+// own chunk keeps the setup page inside the static-export first-load budget (bundle gate).
+const GatewayConfigUpload = dynamic(
+  () => import("./GatewayConfigUpload").then((mod) => mod.GatewayConfigUpload),
+  { ssr: false, loading: GatewayConfigUploadLoadFailure },
+);
 import styles from "./GatewaySetupDialog.module.css";
 
 /**
@@ -530,6 +560,7 @@ interface GatewayFormFields {
   readonly timeoutMs: string;
   readonly deploymentNames: string;
   readonly imageInputModelIds: string;
+  readonly imageInputModelIdsConfigured: boolean;
   readonly workflowEligibleModelIds: string;
   readonly workflowEligibleModelIdsConfigured: boolean;
   readonly voiceBaseUrl: string;
@@ -588,7 +619,7 @@ function buildSetupGatewayPayload(
     ...(derived.parsedTimeoutMs === undefined ? {} : { timeoutMs: derived.parsedTimeoutMs }),
     deploymentNames: derived.parsedDeploymentNames,
     preserveExisting: fields.preserveExisting,
-    ...(derived.parsedImageInputModelIds.length === 0
+    ...(derived.parsedImageInputModelIds.length === 0 && !fields.imageInputModelIdsConfigured
       ? {}
       : { imageInputModelIds: derived.parsedImageInputModelIds }),
     ...(!fields.workflowEligibleModelIdsConfigured
@@ -792,6 +823,7 @@ async function performGatewaySubmission(
   const submittedGatewaySettings =
     submittedGatewayCredentials ||
     derived.parsedTimeoutMs !== undefined ||
+    fields.imageInputModelIdsConfigured ||
     fields.workflowEligibleModelIdsConfigured;
   const submittedFigmaCredential = fields.figmaAccessToken.trim() !== "";
   const result = await setupGateway(
@@ -2077,6 +2109,8 @@ export function GatewaySetupDialog({
   const [workflowEligibleModelIds, setWorkflowEligibleModelIds] = useState(() =>
     preserveExisting ? storedWorkflowEligibleModelIds(storedModels) : "",
   );
+  const [imageInputModelIdsConfigured, setImageInputModelIdsConfigured] = useState(false);
+  const [uploadReadPending, setUploadReadPending] = useState(false);
   const [workflowEligibleModelIdsConfigured, setWorkflowEligibleModelIdsConfigured] =
     useState(false);
   const [voiceBaseUrl, setVoiceBaseUrl] = useState("");
@@ -2303,6 +2337,68 @@ export function GatewaySetupDialog({
     }
   }, [apiKey, baseUrl, busy, error, preserveExisting]);
 
+  function applyUploadedConfig(fields: GatewayConfigUploadFields): void {
+    if (fields.baseUrl !== undefined) setBaseUrl(fields.baseUrl);
+    if (fields.apiKey !== undefined) setApiKey(fields.apiKey);
+    if (fields.apiKeyHeaderName !== undefined) setApiKeyHeaderName(fields.apiKeyHeaderName);
+    if (fields.timeoutMs !== undefined) setTimeoutMs(fields.timeoutMs);
+    if (fields.deploymentNames.length > 0) setDeploymentNames(fields.deploymentNames.join("\n"));
+    // A defined-but-empty flag list is the file explicitly declaring "none" and must clear the
+    // field exactly like manual emptying would (review finding on #3031); only an undefined list
+    // (the file never speaks about the flag) leaves the field untouched.
+    if (fields.imageInputModelIds !== undefined) {
+      setImageInputModelIdsConfigured(true);
+      setImageInputModelIds(fields.imageInputModelIds.join("\n"));
+    }
+    if (fields.workflowEligibleModelIds !== undefined) {
+      setWorkflowEligibleModelIdsConfigured(true);
+      setWorkflowEligibleModelIds(fields.workflowEligibleModelIds.join("\n"));
+    }
+    if (fields.figmaAccessToken !== undefined) setFigmaAccessToken(fields.figmaAccessToken);
+    applyUploadedVoiceConfig(fields);
+  }
+
+  /**
+   * Voice fields apply through the SAME update wrappers typing uses, in typing order: the base
+   * URL first (its identity transition resets the dependent role fields), the realtime id before
+   * its transcription id (the realtime transition clears the transcription), and the semantic
+   * turn detection flag last so the file's explicit declaration wins over inherited defaults.
+   */
+  function applyUploadedVoiceConnection(fields: GatewayConfigUploadFields): void {
+    if (fields.voiceBaseUrl !== undefined) updateVoiceBaseUrl(fields.voiceBaseUrl);
+    if (fields.voiceApiKey !== undefined) setVoiceApiKey(fields.voiceApiKey);
+    if (fields.voiceApiKeyHeaderName !== undefined) {
+      setVoiceApiKeyHeaderName(fields.voiceApiKeyHeaderName);
+    }
+    if (fields.voiceTimeoutMs !== undefined) setVoiceTimeoutMs(fields.voiceTimeoutMs);
+  }
+
+  function applyUploadedVoiceConfig(fields: GatewayConfigUploadFields): void {
+    applyUploadedVoiceConnection(fields);
+    if (fields.voiceModelId !== undefined) setVoiceModelId(fields.voiceModelId);
+    if (fields.voiceRealtimeModelId !== undefined) {
+      updateVoiceRealtimeModelId(fields.voiceRealtimeModelId);
+    }
+    if (fields.voiceRealtimeTranscriptionModelId !== undefined) {
+      setVoiceRealtimeTranscriptionModelId(fields.voiceRealtimeTranscriptionModelId);
+    }
+    if (fields.voiceSpeechOutputModelId !== undefined) {
+      updateVoiceSpeechOutputModelId(fields.voiceSpeechOutputModelId);
+    }
+    // After the speech-output update above — its identity transition clears the output voice.
+    if (fields.voiceOutputVoiceId !== undefined) {
+      setVoiceOutputVoiceId(fields.voiceOutputVoiceId);
+      setVoiceOutputVoiceIdConfigured(true);
+    }
+    if (fields.voiceProviderLocality !== undefined) {
+      setVoiceProviderLocality(fields.voiceProviderLocality);
+      setVoiceProviderLocalityConfigured(true);
+    }
+    if (fields.voiceSemanticTurnDetection !== undefined) {
+      updateVoiceSemanticTurnDetection(fields.voiceSemanticTurnDetection);
+    }
+  }
+
   async function submit(event: FormSubmitEvent): Promise<void> {
     event.preventDefault();
     if (busy) return;
@@ -2323,6 +2419,7 @@ export function GatewaySetupDialog({
           timeoutMs,
           deploymentNames,
           imageInputModelIds,
+          imageInputModelIdsConfigured,
           workflowEligibleModelIds,
           workflowEligibleModelIdsConfigured,
           voiceBaseUrl,
@@ -2406,7 +2503,7 @@ export function GatewaySetupDialog({
   });
   const hasFigmaCredentialInput = figmaAccessToken.trim() !== "";
   const canSubmit = computeCanSubmit({
-    busy,
+    busy: busy || uploadReadPending,
     success,
     requiresGatewayCredentials,
     baseUrl,
@@ -2437,7 +2534,10 @@ export function GatewaySetupDialog({
       deploymentNames={deploymentNames}
       setDeploymentNames={setDeploymentNames}
       imageInputModelIds={imageInputModelIds}
-      setImageInputModelIds={setImageInputModelIds}
+      setImageInputModelIds={(value): void => {
+        setImageInputModelIdsConfigured(true);
+        setImageInputModelIds(value);
+      }}
       workflowEligibleModelIds={workflowEligibleModelIds}
       setWorkflowEligibleModelIds={(value): void => {
         setWorkflowEligibleModelIdsConfigured(true);
@@ -2519,6 +2619,12 @@ export function GatewaySetupDialog({
             <h1 id="gw-setup-title">{dialogCopy.title}</h1>
             <p id="gw-setup-desc">{dialogCopy.description}</p>
           </div>
+
+          <GatewayConfigUpload
+            disabled={busy || success !== undefined}
+            onApply={applyUploadedConfig}
+            onReadPendingChange={setUploadReadPending}
+          />
 
           <GatewayModelSection
             preserveExisting={preserveExisting}

@@ -427,9 +427,12 @@ function providerRaw(
     apiKeyHeaderName: options.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
     capability: {
       ...defaultCapability,
-      ...(options.imageInputModelIds?.includes(modelId) === true
-        ? { supportsImageInput: true }
-        : {}),
+      // The provided list is authoritative, not additive: a model absent from it loses a stored
+      // supportsImageInput flag, which is what lets an update ever REMOVE image capability
+      // (review finding on #3031 — previously true could never be cleared).
+      ...(options.imageInputModelIds === undefined
+        ? {}
+        : { supportsImageInput: options.imageInputModelIds.includes(modelId) }),
       ...(supportsResponseFormat ? { structuredOutput: true, supportsResponseFormat: true } : {}),
     },
     timeoutMs: options.timeoutMs ?? 30_000,
@@ -689,6 +692,55 @@ function currentImageInputModelIds(config: GatewayConfig | undefined): readonly 
   return (
     config?.capabilities
       ?.filter((capability) => capability.kind === "chat" && capability.supportsImageInput)
+      .map((capability) => capability.id) ?? []
+  );
+}
+
+function currentEmbeddingModelIds(config: GatewayConfig | undefined): readonly string[] {
+  return (
+    config?.capabilities
+      ?.filter((capability) => capability.kind === "embedding")
+      .map((capability) => capability.id) ?? []
+  );
+}
+
+function currentOcrModelIds(config: GatewayConfig | undefined): readonly string[] {
+  return (
+    config?.capabilities
+      ?.filter((capability) => capability.kind === "ocr-vision")
+      .map((capability) => capability.id) ?? []
+  );
+}
+
+/**
+ * Stored embedding providers with their OWN connection: the rebuild writes every derived
+ * embedding onto the setup-wide connection, which would silently migrate a different endpoint
+ * OR overwrite a distinct same-endpoint credential with the gateway token (review findings on
+ * #3031). Dedicated means the FULL stored connection identity differs from the stored primary
+ * provider's — embeddings sharing the gateway connection keep following rotations and endpoint
+ * moves through the normal rebuild.
+ */
+function currentDedicatedEmbeddingModelIds(config: GatewayConfig | undefined): readonly string[] {
+  const primary = config?.providers.at(0);
+  if (config === undefined || primary === undefined) return [];
+  const embeddingIds = new Set(currentEmbeddingModelIds(config));
+  const primaryHeader = primary.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
+  return config.providers
+    .filter((provider) => {
+      if (!embeddingIds.has(provider.modelId)) return false;
+      const sharesConnection =
+        sameBaseUrlIdentity(provider.baseUrl, primary.baseUrl) &&
+        provider.apiKey === primary.apiKey &&
+        (provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME) === primaryHeader;
+      return !sharesConnection;
+    })
+    .map((provider) => provider.modelId);
+}
+
+function currentVoiceModelIds(config: GatewayConfig | undefined): readonly string[] {
+  return (
+    config?.capabilities
+      ?.filter((capability) => isVoiceCapability(capability))
       .map((capability) => capability.id) ?? []
   );
 }
@@ -1124,9 +1176,12 @@ function parseDeploymentNames(value: unknown): readonly string[] | RouteResult {
   return names;
 }
 
-function parseImageInputModelIds(value: unknown): readonly string[] | RouteResult {
+function parseImageInputModelIds(value: unknown): readonly string[] | undefined | RouteResult {
+  // Absent and explicitly empty are different statements: absent inherits the stored set in
+  // update mode, an explicit empty list clears it — exactly like the workflow-eligible field
+  // (review finding on #3031).
   if (value === undefined) {
-    return [];
+    return undefined;
   }
   const values = deploymentNameValues(value);
   if (values === undefined) {
@@ -1359,6 +1414,31 @@ interface SetupRequest {
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
+  /** True when the request stated the list explicitly — discovery must not re-add models then. */
+  readonly imageInputModelIdsProvided: boolean;
+  /**
+   * Model ids whose stored capability kind is `embedding` — authoritative over the name
+   * heuristic when a preserve-mode rebuild re-verifies inherited or resubmitted deployments
+   * (review finding on #3031: a misclassified stored embedding fails the chat probe and
+   * silently vanishes). Empty outside preserve mode.
+   */
+  readonly storedEmbeddingModelIds: readonly string[];
+  /**
+   * Model ids whose stored capability kind is `ocr-vision` — the rebuild neither chat-probes
+   * nor re-derives them; the stored providers are restored verbatim, exactly like voice
+   * (review finding on #3031: the same silent-loss class as embeddings, fixed for every stored
+   * non-chat kind). Empty outside preserve mode.
+   */
+  readonly storedOcrModelIds: readonly string[];
+  /**
+   * Stored embedding ids whose FULL connection identity differs from the stored primary
+   * provider's — rebuilt embeddings land on the setup-wide connection, so these are restored
+   * verbatim instead (review findings on #3031). Empty outside inherited-deployment preserve
+   * mode.
+   */
+  readonly storedDedicatedEmbeddingModelIds: readonly string[];
+  /** Stored voice ids excluded from the chat probe — restored by applyVoiceProviders. */
+  readonly storedVoiceModelIds: readonly string[];
   readonly workflowEligibleModelIds: readonly string[];
   readonly workflowEligibleModelIdsConfigured: boolean;
   readonly voiceProviders: readonly SetupVoiceProvider[];
@@ -1369,7 +1449,8 @@ interface SetupRequest {
 
 interface SetupModelLists {
   readonly deploymentNames: readonly string[];
-  readonly imageInputModelIds: readonly string[];
+  /** `undefined` = the field was absent; an explicit empty list clears the image-capable set. */
+  readonly imageInputModelIds: readonly string[] | undefined;
   readonly workflowEligibleModelIds: readonly string[];
 }
 
@@ -1665,6 +1746,38 @@ function setupVoiceApiKeyHeaderSource(
   return provider?.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
 }
 
+/**
+ * A changed endpoint never inherits the stored secret: in update mode a submitted base URL that
+ * differs from the stored one, with no fresh token beside it, would send the STORED token to the
+ * NEW endpoint during verification — so a supplied configuration file (or a typo'd URL) could
+ * exfiltrate it (review finding on #3031). Server-side so no client path can bypass it.
+ */
+function inheritedTokenForChangedEndpoint(
+  raw: Record<string, unknown>,
+  submittedKeys: { readonly baseUrl: string; readonly apiKey: string },
+  storedBaseUrl: string | undefined,
+  preserveExisting: boolean,
+): boolean {
+  const submittedBaseUrl = trimmedSubmittedString(raw, submittedKeys.baseUrl);
+  return (
+    preserveExisting &&
+    submittedBaseUrl !== undefined &&
+    storedBaseUrl !== undefined &&
+    !sameBaseUrlIdentity(submittedBaseUrl, storedBaseUrl) &&
+    trimmedSubmittedString(raw, submittedKeys.apiKey) === undefined
+  );
+}
+
+function changedEndpointRequiresTokenError(): RouteResult {
+  return {
+    status: 400,
+    body: errorBody(
+      "GATEWAY_URL_CHANGE_REQUIRES_TOKEN",
+      "A changed gateway URL requires a fresh API token.",
+    ),
+  };
+}
+
 function readSetupGatewayCredentials(
   raw: Record<string, unknown>,
   env: EnvSource,
@@ -1672,6 +1785,16 @@ function readSetupGatewayCredentials(
   preserveExisting: boolean,
 ): SetupGatewayCredentials | RouteResult {
   const provider = firstProvider(current);
+  if (
+    inheritedTokenForChangedEndpoint(
+      raw,
+      { baseUrl: "baseUrl", apiKey: "apiKey" },
+      provider?.baseUrl,
+      preserveExisting,
+    )
+  ) {
+    return changedEndpointRequiresTokenError();
+  }
   const baseUrl = submittedOrInheritedString(raw, "baseUrl", provider?.baseUrl, preserveExisting);
   const apiKey = submittedOrInheritedString(raw, "apiKey", provider?.apiKey, preserveExisting);
   if (baseUrl.length === 0 || apiKey.length === 0) {
@@ -2768,11 +2891,17 @@ function readSetupVoiceProviders(
   return validatedVoiceProviders(providers, env);
 }
 
+interface ResolvedSetupModelLists {
+  readonly deploymentNames: readonly string[];
+  readonly imageInputModelIds: readonly string[];
+  readonly workflowEligibleModelIds: readonly string[];
+}
+
 function resolveSetupModelLists(
   modelLists: SetupModelLists,
   current: GatewayConfig | undefined,
   preserveExisting: boolean,
-): SetupModelLists {
+): ResolvedSetupModelLists {
   const existing = preserveExisting ? current : undefined;
   return {
     deploymentNames:
@@ -2780,9 +2909,8 @@ function resolveSetupModelLists(
         ? existing.providers.map((item) => item.modelId)
         : modelLists.deploymentNames,
     imageInputModelIds:
-      existing !== undefined && modelLists.imageInputModelIds.length === 0
-        ? currentImageInputModelIds(existing)
-        : modelLists.imageInputModelIds,
+      modelLists.imageInputModelIds ??
+      (existing === undefined ? [] : currentImageInputModelIds(existing)),
     workflowEligibleModelIds: modelLists.workflowEligibleModelIds,
   };
 }
@@ -2829,7 +2957,9 @@ function setupRequiresGatewayVerification(
     hasNonBlankStringField(raw, "apiKey") ||
     hasNonBlankStringField(raw, "apiKeyHeaderName") ||
     hasNonEmptyListField(raw, "deploymentNames") ||
-    hasNonEmptyListField(raw, "imageInputModelIds")
+    // Present-but-empty counts: an explicit empty image list CLEARS stored capability, which must
+    // flow through the verified rebuild, not the settings-only patch (review finding on #3031).
+    hasListField(raw, "imageInputModelIds")
   );
 }
 
@@ -2867,6 +2997,25 @@ function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | Route
     timeoutMs: input.timeoutMs,
     deploymentNames: resolved.deploymentNames,
     imageInputModelIds: resolved.imageInputModelIds,
+    imageInputModelIdsProvided: hasListField(input.raw, "imageInputModelIds"),
+    storedEmbeddingModelIds: input.preserveExisting ? currentEmbeddingModelIds(input.current) : [],
+    // Verbatim restoration applies only to INHERITED deployments: an explicitly submitted
+    // deployment list is authoritative, and restoring an omitted provider would make it
+    // impossible to remove through the setup (review findings on #3031).
+    storedOcrModelIds:
+      input.preserveExisting && !hasNonEmptyListField(input.raw, "deploymentNames")
+        ? currentOcrModelIds(input.current)
+        : [],
+    storedDedicatedEmbeddingModelIds:
+      input.preserveExisting && !hasNonEmptyListField(input.raw, "deploymentNames")
+        ? currentDedicatedEmbeddingModelIds(input.current)
+        : [],
+    // Stored voice deployments never belong in the chat probe: a succeeding probe would persist
+    // a DUPLICATE provider next to the restored voice entry (review finding on #3031).
+    storedVoiceModelIds:
+      input.preserveExisting && !hasNonEmptyListField(input.raw, "deploymentNames")
+        ? currentVoiceModelIds(input.current)
+        : [],
     workflowEligibleModelIds: resolved.workflowEligibleModelIds,
     workflowEligibleModelIdsConfigured: hasListField(input.raw, "workflowEligibleModelIds"),
     voiceProviders: input.voiceProviders,
@@ -2964,6 +3113,16 @@ interface SetupVerificationInput {
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
+  /** True when the request stated the list explicitly — discovery must not re-add models then. */
+  readonly imageInputModelIdsProvided: boolean;
+  /** Stored embedding ids that override the name heuristic — see {@link SetupRequest}. */
+  readonly storedEmbeddingModelIds: readonly string[];
+  /** Stored `ocr-vision` ids restored verbatim instead of probed — see {@link SetupRequest}. */
+  readonly storedOcrModelIds: readonly string[];
+  /** Dedicated-connection embedding ids restored verbatim — see {@link SetupRequest}. */
+  readonly storedDedicatedEmbeddingModelIds: readonly string[];
+  /** Stored voice ids excluded from the chat probe — see {@link SetupRequest}. */
+  readonly storedVoiceModelIds: readonly string[];
   readonly workflowEligibleModelIds: readonly string[] | undefined;
   readonly voiceProviders: readonly SetupVoiceProvider[];
   readonly tester: GatewaySetupTester;
@@ -3079,12 +3238,23 @@ function normalizeDiscoveryResult(result: GatewayModelDiscoveryOutput): SetupCan
 
 function candidateModelsFromDeploymentNames(
   deploymentNames: readonly string[],
+  storedEmbeddingModelIds: readonly string[],
+  restoredVerbatimModelIds: readonly string[],
 ): SetupCandidateModels {
-  const embeddingModelIds = embeddingModelIdsFromDeployments(deploymentNames);
+  // Stored kinds win over the name heuristic: a preserve-mode rebuild must not chat-probe a
+  // verified embedding or OCR deployment out of the config (review findings on #3031). Stored
+  // OCR and dedicated-endpoint embedding providers leave the candidate set entirely — they are
+  // restored verbatim afterwards.
+  const restoredSet = new Set(restoredVerbatimModelIds);
+  const candidateNames = deploymentNames.filter((modelId) => !restoredSet.has(modelId));
+  const storedEmbeddingSet = new Set(storedEmbeddingModelIds);
+  const embeddingModelIds = candidateNames.filter(
+    (modelId) => storedEmbeddingSet.has(modelId) || isLikelyEmbeddingModelId(modelId),
+  );
   const embeddingSet = new Set(embeddingModelIds);
   return {
-    modelIds: deploymentNames,
-    chatModelIds: deploymentNames.filter((modelId) => !embeddingSet.has(modelId)),
+    modelIds: candidateNames,
+    chatModelIds: candidateNames.filter((modelId) => !embeddingSet.has(modelId)),
     embeddingModelIds,
     imageInputModelIds: [],
     modelMetadata: {},
@@ -3096,7 +3266,17 @@ async function candidateModelIdsForSetup(
   validationConfig: GatewayConfig,
 ): Promise<SetupCandidateModels> {
   if (input.deploymentNames.length > 0) {
-    return candidateModelsFromDeploymentNames(input.deploymentNames);
+    return candidateModelsFromDeploymentNames(
+      input.deploymentNames,
+      input.storedEmbeddingModelIds,
+      [
+        ...input.storedOcrModelIds,
+        ...input.storedDedicatedEmbeddingModelIds,
+        // Voice ids leave the candidate set too, but applyVoiceProviders restores them — they
+        // must not join the verbatim-restore list below.
+        ...input.storedVoiceModelIds,
+      ],
+    );
   }
   return normalizeDiscoveryResult(
     await input.discovery(
@@ -3129,17 +3309,93 @@ function finalRawConfigForSetup(
   });
   const rawConfigWithOptionalBlocks = {
     ...rawConfig,
+    // Every top-level block the rebuild does not itself produce survives from the current
+    // configuration — a reranker or egress topology must not vanish because an unrelated
+    // capability was updated (review finding on #3031).
     ...(input.current?.grounding === undefined ? {} : { grounding: input.current.grounding }),
+    ...(input.current?.reranker === undefined ? {} : { reranker: input.current.reranker }),
+    ...(input.current?.egress === undefined ? {} : { egress: input.current.egress }),
     ...(input.figmaAccessToken === undefined
       ? {}
       : { figma: { accessToken: input.figmaAccessToken } }),
   };
-  return applyVoiceProviders(
-    rawConfigWithOptionalBlocks,
-    input.voiceProviders.length > 0
-      ? input.voiceProviders
-      : setupVoiceProvidersFromCurrent(input.current),
+  return applyStoredDedicatedProviders(
+    applyVoiceProviders(
+      rawConfigWithOptionalBlocks,
+      input.voiceProviders.length > 0
+        ? input.voiceProviders
+        : setupVoiceProvidersFromCurrent(input.current),
+    ),
+    input.current,
+    [...input.storedOcrModelIds, ...input.storedDedicatedEmbeddingModelIds],
+    { baseUrl: input.baseUrl, apiKey: input.apiKey },
   );
+}
+
+function storedDedicatedProviderRaw(
+  provider: ModelProviderConfig,
+  capability: ModelCapability,
+  gateway: { readonly baseUrl: string; readonly apiKey: string },
+  storedPrimary: ModelProviderConfig | undefined,
+): Record<string, unknown> {
+  // A provider that SHARED the stored gateway connection (same endpoint AND same credential)
+  // follows a credential rotation — the old token dies with the rotation. A provider with its
+  // own credential or endpoint keeps it: the freshly verified gateway token must never travel
+  // to a connection it was not tested against (review findings on #3031, same rule as the
+  // endpoint-change token guard).
+  const sharedGatewayConnection =
+    storedPrimary !== undefined &&
+    sameBaseUrlIdentity(provider.baseUrl, gateway.baseUrl) &&
+    provider.apiKey === storedPrimary.apiKey &&
+    (provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME) ===
+      (storedPrimary.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME);
+  return {
+    modelId: provider.modelId,
+    baseUrl: provider.baseUrl,
+    apiKey: sharedGatewayConnection ? gateway.apiKey : provider.apiKey,
+    ...(provider.apiKeyHeaderName === undefined
+      ? {}
+      : { apiKeyHeaderName: provider.apiKeyHeaderName }),
+    ...(provider.endpointStyle === undefined ? {} : { endpointStyle: provider.endpointStyle }),
+    ...(provider.apiVersion === undefined ? {} : { apiVersion: provider.apiVersion }),
+    ...(provider.outputTokenParameter === undefined
+      ? {}
+      : { outputTokenParameter: provider.outputTokenParameter }),
+    timeoutMs: provider.timeoutMs,
+    maxRetries: provider.maxRetries,
+    retryBaseDelayMs: provider.retryBaseDelayMs,
+    capability,
+  };
+}
+
+/**
+ * A verified rebuild only re-derives chat and embedding providers onto the setup-wide
+ * connection; stored `ocr-vision` providers (no probe, no setup field) and embedding providers
+ * on a DIFFERENT endpoint would silently vanish or migrate. Exactly like voice, they are
+ * restored verbatim from the current configuration (review findings on #3031).
+ */
+function applyStoredDedicatedProviders(
+  rawConfig: Record<string, unknown>,
+  current: GatewayConfig | undefined,
+  restoredModelIds: readonly string[],
+  gateway: { readonly baseUrl: string; readonly apiKey: string },
+): Record<string, unknown> {
+  if (restoredModelIds.length === 0 || current === undefined) return rawConfig;
+  const providers: unknown[] = Array.isArray(rawConfig.providers) ? rawConfig.providers : [];
+  const presentIds = new Set(
+    providers.flatMap((provider) =>
+      isRecord(provider) && typeof provider.modelId === "string" ? [provider.modelId] : [],
+    ),
+  );
+  const restored = restoredModelIds.flatMap((modelId) => {
+    if (presentIds.has(modelId)) return [];
+    const provider = current.providers.find((item) => item.modelId === modelId);
+    const capability = current.capabilities?.find((item) => item.id === modelId);
+    if (provider === undefined || capability === undefined) return [];
+    return [storedDedicatedProviderRaw(provider, capability, gateway, current.providers.at(0))];
+  });
+  if (restored.length === 0) return rawConfig;
+  return { ...rawConfig, providers: [...providers, ...restored] };
 }
 
 function skippedModelIdsForSetup(
@@ -3158,7 +3414,9 @@ function finalRawConfigForTestedSetup(
 ): Record<string, unknown> {
   const imageInputModelIds = testedImageInputModelIds(
     input.imageInputModelIds,
-    candidateModels.imageInputModelIds,
+    // An explicitly provided list is authoritative: discovery and current-config candidates must
+    // not re-add models the request just removed (review finding on #3031).
+    input.imageInputModelIdsProvided ? [] : candidateModels.imageInputModelIds,
     testResult.testedModelIds,
   );
   return finalRawConfigForSetup(
@@ -3457,6 +3715,11 @@ async function trySetupCandidate(
     timeoutMs: request.timeoutMs,
     deploymentNames: request.deploymentNames,
     imageInputModelIds: request.imageInputModelIds,
+    imageInputModelIdsProvided: request.imageInputModelIdsProvided,
+    storedEmbeddingModelIds: request.storedEmbeddingModelIds,
+    storedOcrModelIds: request.storedOcrModelIds,
+    storedDedicatedEmbeddingModelIds: request.storedDedicatedEmbeddingModelIds,
+    storedVoiceModelIds: request.storedVoiceModelIds,
     workflowEligibleModelIds: request.workflowEligibleModelIdsConfigured
       ? request.workflowEligibleModelIds
       : undefined,

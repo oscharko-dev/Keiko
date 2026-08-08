@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import {
@@ -53,7 +54,6 @@ import {
   VOICE_PERSONA_STORAGE_KEY,
   writeVoicePersonaPreference,
 } from "../../hooks/useVoiceDialogMode";
-import { GatewaySetupDialog } from "../../modals/GatewaySetupDialog";
 import { Toggle } from "../shared/Toggle";
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
@@ -91,6 +91,35 @@ import {
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import editorStyles from "./EditorSettingsPanel.module.css";
+
+// A failed dialog chunk load must not leave `setupOpen` true with nothing on screen — surface
+// the redacted error and a retry, like the first-run fallback does (review finding on #3031).
+function GatewaySetupDialogLoadFailure({
+  error,
+  retry,
+}: {
+  readonly error?: Error | null | undefined;
+  readonly retry?: (() => void) | null | undefined;
+}): ReactNode {
+  const t = useGlobalTranslate();
+  if (!error) return null;
+  return (
+    <div role="alert">
+      {t("gatewaySetup.loading.error")}{" "}
+      <button type="button" onClick={retry ?? ((): void => window.location.reload())}>
+        {t("common.retry")}
+      </button>
+    </div>
+  );
+}
+
+// The gateway setup dialog is reached only by an explicit gesture (`setupOpen`), exactly like the
+// shell's own gesture-only modals (ADR-0042 D3.6) — a static import here pulled the whole dialog
+// (and the config-upload import surface behind it) into the first-load chunk.
+const GatewaySetupDialog = dynamic(
+  () => import("../../modals/GatewaySetupDialog").then((mod) => mod.GatewaySetupDialog),
+  { ssr: false, loading: GatewaySetupDialogLoadFailure },
+);
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CopyIcon = Icons.copy;
