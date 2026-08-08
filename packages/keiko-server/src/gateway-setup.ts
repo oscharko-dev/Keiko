@@ -1206,6 +1206,39 @@ function parseImageInputModelIds(value: unknown): readonly string[] | undefined 
   return names;
 }
 
+/**
+ * Embedding ids the CLIENT asserts (e.g. imported from a configuration file whose capability
+ * records carry the kind). Authoritative over the name heuristic for fresh setups, where no
+ * stored kind exists yet — without it a non-heuristic embedding id would be chat-probed and
+ * dropped or persisted as chat (review finding on #3037). Absent means "derive as before".
+ */
+function parseEmbeddingModelIds(value: unknown): readonly string[] | undefined | RouteResult {
+  if (value === undefined) {
+    return undefined;
+  }
+  const values = deploymentNameValues(value);
+  if (values === undefined) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "embeddingModelIds must be a string or an array of strings."),
+    };
+  }
+  const names = normalizeDeploymentNames(values);
+  if (names.length > MAX_DEPLOYMENT_NAMES) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "embeddingModelIds exceeds the model setup limit."),
+    };
+  }
+  if (names.some((name) => !isUsableModelId(name))) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "embeddingModelIds contains an invalid model id."),
+    };
+  }
+  return names;
+}
+
 function parseWorkflowEligibleModelIds(value: unknown): readonly string[] | RouteResult {
   if (value === undefined) return [];
   const values = deploymentNameValues(value);
@@ -1423,6 +1456,8 @@ interface SetupRequest {
    * silently vanishes). Empty outside preserve mode.
    */
   readonly storedEmbeddingModelIds: readonly string[];
+  /** Client-asserted embedding ids (validated against the deployment set) — same authority. */
+  readonly submittedEmbeddingModelIds: readonly string[];
   /**
    * Model ids whose stored capability kind is `ocr-vision` — the rebuild neither chat-probes
    * nor re-derives them; the stored providers are restored verbatim, exactly like voice
@@ -1451,6 +1486,8 @@ interface SetupModelLists {
   readonly deploymentNames: readonly string[];
   /** `undefined` = the field was absent; an explicit empty list clears the image-capable set. */
   readonly imageInputModelIds: readonly string[] | undefined;
+  /** Client-asserted embedding kinds — see parseEmbeddingModelIds. */
+  readonly embeddingModelIds: readonly string[] | undefined;
   readonly workflowEligibleModelIds: readonly string[];
 }
 
@@ -1502,11 +1539,15 @@ function readSetupModelLists(raw: Record<string, unknown>): SetupModelLists | Ro
   if (isRouteResult(imageInputModelIds)) {
     return imageInputModelIds;
   }
+  const embeddingModelIds = parseEmbeddingModelIds(raw.embeddingModelIds);
+  if (isRouteResult(embeddingModelIds)) {
+    return embeddingModelIds;
+  }
   const workflowEligibleModelIds = parseWorkflowEligibleModelIds(raw.workflowEligibleModelIds);
   if (isRouteResult(workflowEligibleModelIds)) {
     return workflowEligibleModelIds;
   }
-  return { deploymentNames, imageInputModelIds, workflowEligibleModelIds };
+  return { deploymentNames, imageInputModelIds, embeddingModelIds, workflowEligibleModelIds };
 }
 
 function optionalSetupSecret(value: unknown, path: string): SetupParseResult<string | undefined> {
@@ -2947,9 +2988,28 @@ function validateVoiceModelIdSeparation(
   };
 }
 
+/**
+ * An image list needs the VERIFIED rebuild only when it claims a NEW image capability — those
+ * ids must pass the vision probe. Clearing or shrinking to already-verified ids is a metadata
+ * edit and patches the stored flags in place, exactly like workflow eligibility: routing it
+ * through the rebuild let a transient smoke failure of an unrelated model delete that provider
+ * during a flags-only edit (review findings on #3031/#3037).
+ */
+function imageListRequiresVerification(
+  raw: Record<string, unknown>,
+  modelLists: SetupModelLists,
+  current: GatewayConfig | undefined,
+): boolean {
+  if (!hasListField(raw, "imageInputModelIds")) return false;
+  const alreadyImageCapable = new Set(currentImageInputModelIds(current));
+  return (modelLists.imageInputModelIds ?? []).some((id) => !alreadyImageCapable.has(id));
+}
+
 function setupRequiresGatewayVerification(
   raw: Record<string, unknown>,
   preserveExisting: boolean,
+  modelLists: SetupModelLists,
+  current: GatewayConfig | undefined,
 ): boolean {
   return (
     !preserveExisting ||
@@ -2957,9 +3017,7 @@ function setupRequiresGatewayVerification(
     hasNonBlankStringField(raw, "apiKey") ||
     hasNonBlankStringField(raw, "apiKeyHeaderName") ||
     hasNonEmptyListField(raw, "deploymentNames") ||
-    // Present-but-empty counts: an explicit empty image list CLEARS stored capability, which must
-    // flow through the verified rebuild, not the settings-only patch (review finding on #3031).
-    hasListField(raw, "imageInputModelIds")
+    imageListRequiresVerification(raw, modelLists, current)
   );
 }
 
@@ -2999,6 +3057,7 @@ function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | Route
     imageInputModelIds: resolved.imageInputModelIds,
     imageInputModelIdsProvided: hasListField(input.raw, "imageInputModelIds"),
     storedEmbeddingModelIds: input.preserveExisting ? currentEmbeddingModelIds(input.current) : [],
+    submittedEmbeddingModelIds: input.modelLists.embeddingModelIds ?? [],
     // Verbatim restoration applies only to INHERITED deployments: an explicitly submitted
     // deployment list is authoritative, and restoring an omitted provider would make it
     // impossible to remove through the setup (review findings on #3031).
@@ -3020,7 +3079,12 @@ function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | Route
     workflowEligibleModelIdsConfigured: hasListField(input.raw, "workflowEligibleModelIds"),
     voiceProviders: input.voiceProviders,
     figmaAccessToken: input.figmaAccessToken ?? input.current?.figma?.accessToken,
-    verifyGateway: setupRequiresGatewayVerification(input.raw, input.preserveExisting),
+    verifyGateway: setupRequiresGatewayVerification(
+      input.raw,
+      input.preserveExisting,
+      input.modelLists,
+      input.current,
+    ),
     verifyFigmaCredential: input.figmaAccessToken !== undefined,
   };
 }
@@ -3117,6 +3181,8 @@ interface SetupVerificationInput {
   readonly imageInputModelIdsProvided: boolean;
   /** Stored embedding ids that override the name heuristic — see {@link SetupRequest}. */
   readonly storedEmbeddingModelIds: readonly string[];
+  /** Client-asserted embedding ids — see {@link SetupRequest}. */
+  readonly submittedEmbeddingModelIds: readonly string[];
   /** Stored `ocr-vision` ids restored verbatim instead of probed — see {@link SetupRequest}. */
   readonly storedOcrModelIds: readonly string[];
   /** Dedicated-connection embedding ids restored verbatim — see {@link SetupRequest}. */
@@ -3268,7 +3334,7 @@ async function candidateModelIdsForSetup(
   if (input.deploymentNames.length > 0) {
     return candidateModelsFromDeploymentNames(
       input.deploymentNames,
-      input.storedEmbeddingModelIds,
+      [...input.storedEmbeddingModelIds, ...input.submittedEmbeddingModelIds],
       [
         ...input.storedOcrModelIds,
         ...input.storedDedicatedEmbeddingModelIds,
@@ -3717,6 +3783,7 @@ async function trySetupCandidate(
     imageInputModelIds: request.imageInputModelIds,
     imageInputModelIdsProvided: request.imageInputModelIdsProvided,
     storedEmbeddingModelIds: request.storedEmbeddingModelIds,
+    submittedEmbeddingModelIds: request.submittedEmbeddingModelIds,
     storedOcrModelIds: request.storedOcrModelIds,
     storedDedicatedEmbeddingModelIds: request.storedDedicatedEmbeddingModelIds,
     storedVoiceModelIds: request.storedVoiceModelIds,
@@ -3796,7 +3863,7 @@ function saveExistingConfigUpdate(
 ): RouteResult {
   const workflowEligibilityError = validateWorkflowEligibleModelIds(request, current);
   if (workflowEligibilityError !== undefined) return workflowEligibilityError;
-  const updatedCurrent = request.workflowEligibleModelIdsConfigured
+  const withWorkflowPatch = request.workflowEligibleModelIdsConfigured
     ? {
         ...current,
         capabilities: listConfiguredCapabilities(current).map((capability) => ({
@@ -3810,6 +3877,19 @@ function saveExistingConfigUpdate(
         })),
       }
     : current;
+  // Image flags patch in place for clears and shrinks — only NEW image claims take the verified
+  // rebuild (review findings on #3031/#3037). Same shape as the workflow-eligibility patch.
+  const updatedCurrent = request.imageInputModelIdsProvided
+    ? {
+        ...withWorkflowPatch,
+        capabilities: listConfiguredCapabilities(withWorkflowPatch).map((capability) => ({
+          ...capability,
+          ...(capability.kind === "chat"
+            ? { supportsImageInput: request.imageInputModelIds.includes(capability.id) }
+            : {}),
+        })),
+      }
+    : withWorkflowPatch;
   const rawConfig = applyVoiceProviders(
     rawConfigFromCurrent(updatedCurrent, request.figmaAccessToken, request.timeoutMs),
     request.voiceProviders,

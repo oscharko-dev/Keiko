@@ -2849,6 +2849,133 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("patches image flags in place — a metadata edit cannot delete a provider", async () => {
+    // Review finding on #3037 (P1): routing a flags-only image clear through the verified
+    // rebuild meant a transient smoke failure of an UNRELATED chat model silently deleted that
+    // provider. Clears and shrinks now patch the stored capability flags in place, exactly like
+    // workflow eligibility — no probe, no rebuild, nothing to lose.
+    const uiDir = await tempDir("keiko-gw-ui-image-patch-");
+    const evidenceDir = await tempDir("keiko-gw-ev-image-patch-");
+    let probes = 0;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["stable-chat", "flaky-chat", "vision-chat"]),
+      gatewaySetupTester: (_config, modelIds) => {
+        probes += 1;
+        // After the first setup, every probe transiently drops flaky-chat.
+        return Promise.resolve(
+          probes === 1 ? modelIds : modelIds.filter((id) => id !== "flaky-chat"),
+        );
+      },
+    });
+    const first = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com",
+        apiKey: "example-secret-token",
+        imageInputModelIds: ["vision-chat"],
+      }),
+      deps,
+    );
+    expect(first.status).toBe(200);
+
+    const clearedFlags = await handleGatewaySetup(
+      ctx({ preserveExisting: true, imageInputModelIds: [] }),
+      deps,
+    );
+    expect(clearedFlags.status).toBe(200);
+    const config = currentGatewayConfig(deps);
+    // No probe ran for the flags-only edit, and the flaky provider SURVIVED.
+    expect(probes).toBe(1);
+    expect(config?.providers.map((provider) => provider.modelId).sort()).toEqual([
+      "flaky-chat",
+      "stable-chat",
+      "vision-chat",
+    ]);
+    expect(
+      config?.capabilities?.every(
+        (capability) => capability.kind !== "chat" || capability.supportsImageInput === false,
+      ),
+    ).toBe(true);
+    deps.store.close();
+  });
+
+  it("keeps a NEW image claim on the verified rebuild path", async () => {
+    // Expanding image capability onto an id that never carried it still demands the vision
+    // probe — only clears and shrinks are metadata edits.
+    const uiDir = await tempDir("keiko-gw-ui-image-expand-");
+    const evidenceDir = await tempDir("keiko-gw-ev-image-expand-");
+    let probes = 0;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["text-chat", "vision-chat"]),
+      gatewaySetupTester: (_config, modelIds) => {
+        probes += 1;
+        return Promise.resolve(modelIds);
+      },
+    });
+    const first = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(first.status).toBe(200);
+    const before = probes;
+
+    const expanded = await handleGatewaySetup(
+      ctx({ preserveExisting: true, imageInputModelIds: ["vision-chat"] }),
+      deps,
+    );
+    expect(expanded.status).toBe(200);
+    // The expansion was verified — the probe ran again.
+    expect(probes).toBeGreaterThan(before);
+    expect(
+      currentGatewayConfig(deps)?.capabilities?.find((item) => item.id === "vision-chat")
+        ?.supportsImageInput,
+    ).toBe(true);
+    deps.store.close();
+  });
+
+  it("honours client-asserted embedding kinds on a FRESH setup", async () => {
+    // Review finding on #3037 (P1): on first setup there is no stored kind, so an imported
+    // embedding whose id defies the name heuristic was chat-probed and dropped (or persisted as
+    // chat). The importer now asserts the kinds through embeddingModelIds.
+    const uiDir = await tempDir("keiko-gw-ui-embed-fresh-");
+    const evidenceDir = await tempDir("keiko-gw-ev-embed-fresh-");
+    const probedModelIds: string[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => {
+        probedModelIds.push(...modelIds);
+        return Promise.resolve(modelIds.filter((modelId) => modelId !== "vectorizer-v2"));
+      },
+    });
+
+    const created = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com",
+        apiKey: "example-secret-token",
+        deploymentNames: ["example-chat", "vectorizer-v2"],
+        embeddingModelIds: ["vectorizer-v2"],
+      }),
+      deps,
+    );
+    expect(created.status).toBe(200);
+    const config = currentGatewayConfig(deps);
+    expect(config?.capabilities?.find((item) => item.id === "vectorizer-v2")?.kind).toBe(
+      "embedding",
+    );
+    expect(probedModelIds).not.toContain("vectorizer-v2");
+    deps.store.close();
+  });
+
   it("preserves stored embedding kinds through preserve-mode rebuilds despite the name heuristic", async () => {
     // Review finding on #3031 (P1): a preserve-mode rebuild inherits the stored deployment ids
     // and reclassifies them by name. A stored embedding provider whose id the heuristic misses
@@ -3080,8 +3207,9 @@ describe("handleGatewaySetup", () => {
       true,
     );
 
+    // The rebuild trigger: a credential rotation (an image clear is now an in-place patch).
     const cleared = await handleGatewaySetup(
-      ctx({ preserveExisting: true, imageInputModelIds: [] }),
+      ctx({ preserveExisting: true, apiKey: "rotated-token" }),
       deps,
     );
     expect(cleared.status).toBe(200);
@@ -3116,8 +3244,9 @@ describe("handleGatewaySetup", () => {
     });
     seedSeparatedVoiceGateway(deps);
 
+    // The rebuild trigger: a credential rotation (an image clear is now an in-place patch).
     const cleared = await handleGatewaySetup(
-      ctx({ preserveExisting: true, imageInputModelIds: [] }),
+      ctx({ preserveExisting: true, apiKey: "rotated-token" }),
       deps,
     );
     expect(cleared.status).toBe(200);

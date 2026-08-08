@@ -561,6 +561,8 @@ interface GatewayFormFields {
   readonly deploymentNames: string;
   readonly imageInputModelIds: string;
   readonly imageInputModelIdsConfigured: boolean;
+  /** Imported embedding-kind ids asserted to the setup route (empty when nothing was imported). */
+  readonly importedEmbeddingModelIds: readonly string[];
   readonly workflowEligibleModelIds: string;
   readonly workflowEligibleModelIdsConfigured: boolean;
   readonly voiceBaseUrl: string;
@@ -622,6 +624,9 @@ function buildSetupGatewayPayload(
     ...(derived.parsedImageInputModelIds.length === 0 && !fields.imageInputModelIdsConfigured
       ? {}
       : { imageInputModelIds: derived.parsedImageInputModelIds }),
+    ...(fields.importedEmbeddingModelIds.length === 0
+      ? {}
+      : { embeddingModelIds: fields.importedEmbeddingModelIds }),
     ...(!fields.workflowEligibleModelIdsConfigured
       ? {}
       : { workflowEligibleModelIds: derived.parsedWorkflowEligibleModelIds }),
@@ -2110,6 +2115,7 @@ export function GatewaySetupDialog({
     preserveExisting ? storedWorkflowEligibleModelIds(storedModels) : "",
   );
   const [imageInputModelIdsConfigured, setImageInputModelIdsConfigured] = useState(false);
+  const [importedEmbeddingModelIds, setImportedEmbeddingModelIds] = useState<readonly string[]>([]);
   const [uploadReadPending, setUploadReadPending] = useState(false);
   const [workflowEligibleModelIdsConfigured, setWorkflowEligibleModelIdsConfigured] =
     useState(false);
@@ -2354,6 +2360,10 @@ export function GatewaySetupDialog({
       setWorkflowEligibleModelIdsConfigured(true);
       setWorkflowEligibleModelIds(fields.workflowEligibleModelIds.join("\n"));
     }
+    // Imported embedding kinds ride along invisibly — they assert the kind to the setup route
+    // so a fresh save cannot chat-probe an embedding out of the config (review finding on #3037).
+    if (fields.embeddingModelIds !== undefined)
+      setImportedEmbeddingModelIds(fields.embeddingModelIds);
     if (fields.figmaAccessToken !== undefined) setFigmaAccessToken(fields.figmaAccessToken);
     applyUploadedVoiceConfig(fields);
   }
@@ -2420,6 +2430,7 @@ export function GatewaySetupDialog({
           deploymentNames,
           imageInputModelIds,
           imageInputModelIdsConfigured,
+          importedEmbeddingModelIds,
           workflowEligibleModelIds,
           workflowEligibleModelIdsConfigured,
           voiceBaseUrl,

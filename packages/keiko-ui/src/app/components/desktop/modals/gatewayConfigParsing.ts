@@ -95,6 +95,12 @@ export interface GatewayConfigUploadFields {
    */
   readonly imageInputModelIds: readonly string[] | undefined;
   readonly workflowEligibleModelIds: readonly string[] | undefined;
+  /**
+   * The embedding-kind deployment ids the file declares — asserted through the setup request so
+   * a FRESH setup cannot chat-probe (and drop) an embedding whose id defies the server's name
+   * heuristic (review finding on #3037). `undefined` when the file declares none.
+   */
+  readonly embeddingModelIds: readonly string[] | undefined;
   readonly voiceBaseUrl: string | undefined;
   readonly voiceApiKey: string | undefined;
   readonly voiceApiKeyHeaderName: string | undefined;
@@ -491,6 +497,14 @@ function carriesUnrepresentableRetryTuning(
   );
 }
 
+/** The generic (non-voice) deployment ids whose declared kind is embedding. */
+function genericEmbeddingIds(partition: PartitionedProviders): readonly string[] | undefined {
+  const ids = partition.generic
+    .filter((provider) => partition.capabilities.get(provider.modelId)?.kind === "embedding")
+    .map((provider) => provider.modelId);
+  return ids.length > 0 ? ids : undefined;
+}
+
 /** Flag lists derive from CHAT capabilities only: the setup route smoke-tests chat candidates and
  * rejects non-chat ids in either list AFTER a reported upload success (review finding on #3031). */
 function chatFlaggedIds(
@@ -735,6 +749,7 @@ function fieldsFrom(
     imageInputModelIds: speaksAboutFlags
       ? chatFlaggedIds(partition.capabilities, "supportsImageInput")
       : undefined,
+    embeddingModelIds: genericEmbeddingIds(partition),
     workflowEligibleModelIds: speaksAboutFlags
       ? chatFlaggedIds(partition.capabilities, "workflowEligible")
       : undefined,

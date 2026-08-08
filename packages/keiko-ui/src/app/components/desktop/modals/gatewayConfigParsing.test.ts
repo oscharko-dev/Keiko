@@ -85,6 +85,7 @@ describe("parseGatewayConfigUpload", () => {
       deploymentNames: ["gpt-5o", "text-embed"],
       imageInputModelIds: ["gpt-5o"],
       workflowEligibleModelIds: ["gpt-5o"],
+      embeddingModelIds: ["text-embed"],
       figmaAccessToken: undefined,
       ...NO_VOICE_FIELDS,
     });
@@ -151,6 +152,7 @@ describe("parseGatewayConfigUpload", () => {
       deploymentNames: ["gpt-5o", "large-chat", "text-embed"],
       imageInputModelIds: ["gpt-5o"],
       workflowEligibleModelIds: ["gpt-5o"],
+      embeddingModelIds: ["text-embed"],
       figmaAccessToken: undefined,
       voiceBaseUrl: "https://voice.example.com",
       voiceApiKey: undefined,
