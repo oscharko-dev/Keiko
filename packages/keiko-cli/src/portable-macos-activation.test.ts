@@ -63,7 +63,28 @@ describe("activateMacosPortableRuntime", () => {
     });
 
     expect(activation).toBe("waived-unsigned");
-    expect(probed).toEqual([[fixture.layout.installRoot, "macos-arm64"]]);
+    // The probe receives the RESOURCE root — the shape the server's lane-downgrade guard derives
+    // its app root from. Handing it the bundle path instead would silently classify every install,
+    // signed included, as unsigned (caught on #3026 by pinning this exact argument).
+    expect(probed).toEqual([[fixture.layout.resourceRoot, "macos-arm64"]]);
+    expect(managerExecuted).toBe(false);
+  });
+
+  it("waives through the production probe when the install carries no signable code", async () => {
+    // No seams for the signature anchor: the real lazy-loaded server probe runs against a root
+    // whose resource layout carries no Endpoint Security surface, which is deterministic on every
+    // host — there is no signable code, so no platform verifier is ever spawned.
+    const fixture = activationFixture();
+    let managerExecuted = false;
+
+    const activation = await activateMacosPortableRuntime(fixture.layout, "macos-arm64", {
+      runManager: () => {
+        managerExecuted = true;
+        return Promise.resolve({ ok: true, stdout: "active\n", stderr: "" });
+      },
+    });
+
+    expect(activation).toBe("waived-unsigned");
     expect(managerExecuted).toBe(false);
   });
 

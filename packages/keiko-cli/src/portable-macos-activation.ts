@@ -37,18 +37,21 @@ interface MacosActivationDeps {
   /**
    * Signature-anchor seam for tests; production asks the platform verifier. The anchor must stay
    * outside the artifact: a probe that reads any file the install can rewrite would let that file
-   * switch off the very activation requirement that detects the rewrite.
+   * switch off the very activation requirement that detects the rewrite. The probe takes the
+   * RESOURCE root (`Contents/Resources`), the same shape the server's lane-downgrade guard uses —
+   * handing it the bundle path would make it derive the wrong app root, never find signable code,
+   * and silently classify even a release-signed install as unsigned.
    */
   readonly carriesReleaseSignature?:
-    ((installRoot: string, target: PortableTarget) => boolean | Promise<boolean>) | undefined;
+    ((resourceRoot: string, target: PortableTarget) => boolean | Promise<boolean>) | undefined;
 }
 
 async function platformCarriesReleaseSignature(
-  installRoot: string,
+  resourceRoot: string,
   target: PortableTarget,
 ): Promise<boolean> {
   const { portableInstallCarriesReleaseSignature } = await loadServer();
-  return portableInstallCarriesReleaseSignature(installRoot, target);
+  return portableInstallCarriesReleaseSignature(resourceRoot, target);
 }
 
 function activationManagerPath(
@@ -113,7 +116,7 @@ export async function activateMacosPortableRuntime(
   deps: MacosActivationDeps = {},
 ): Promise<MacosRuntimeActivation> {
   const carriesReleaseSignature = deps.carriesReleaseSignature ?? platformCarriesReleaseSignature;
-  if (!(await carriesReleaseSignature(layout.installRoot, target))) return "waived-unsigned";
+  if (!(await carriesReleaseSignature(layout.resourceRoot, target))) return "waived-unsigned";
   try {
     const manager = activationManagerPath(
       layout,
