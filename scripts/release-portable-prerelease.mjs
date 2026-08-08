@@ -233,6 +233,17 @@ function assertStagingJobsSucceeded(runId) {
 
 function downloadAssets(runId) {
   const workDir = mkdtempSync(join(tmpdir(), "keiko-prerelease-"));
+  try {
+    return assembleDownloadedAssets(runId, workDir);
+  } catch (error) {
+    // A refusal INSIDE assembly (missing artifact, drifting publish set) throws before the
+    // caller's finally exists — the temp directory must not survive it (review finding on #3037).
+    rmSync(workDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function assembleDownloadedAssets(runId, workDir) {
   for (const artifact of EVALUATION_ARTIFACTS) {
     gh(["run", "download", runId, "--name", artifact, "--dir", join(workDir, artifact)]);
   }

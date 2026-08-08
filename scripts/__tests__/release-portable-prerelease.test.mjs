@@ -296,6 +296,11 @@ describe("hermetic end-to-end (scripted gh double)", () => {
         ),
       ),
     ).toThrowError(/artifact is missing the expected asset/u);
+    // The refusal happened INSIDE assembly — the temp directory must not survive it either
+    // (review finding on #3037).
+    const download = recorded.find((line) => line.includes("run download"));
+    const parts = download.split(" ");
+    expect(fsModule.existsSync(pathModule.dirname(parts[parts.indexOf("--dir") + 1]))).toBe(false);
   });
 
   it("refuses the beta.0 damaged-bundle signature text before publishing", () => {
