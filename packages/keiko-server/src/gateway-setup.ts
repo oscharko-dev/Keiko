@@ -712,6 +712,27 @@ function currentOcrModelIds(config: GatewayConfig | undefined): readonly string[
   );
 }
 
+/**
+ * Stored embedding providers that live on their OWN endpoint: the rebuild writes every derived
+ * embedding onto the setup-wide connection, which would silently migrate these to the chat
+ * gateway (review finding on #3031). They are restored verbatim instead, like stored OCR.
+ */
+function currentDedicatedEmbeddingModelIds(
+  config: GatewayConfig | undefined,
+  gatewayBaseUrl: string,
+): readonly string[] {
+  const embeddingIds = new Set(currentEmbeddingModelIds(config));
+  return (
+    config?.providers
+      .filter(
+        (provider) =>
+          embeddingIds.has(provider.modelId) &&
+          !sameBaseUrlIdentity(provider.baseUrl, gatewayBaseUrl),
+      )
+      .map((provider) => provider.modelId) ?? []
+  );
+}
+
 // `supportedVoicePersonas` is DERIVED at parse time from a provider's `voiceProfiles` (Issue #1557,
 // ADR-0094 D2 / HAZARD-3). It must NOT be persisted: the strict top-level `capabilities` parser
 // rejects it as an unrecognised input key, and re-deriving it on reload keeps a single source of
@@ -1397,6 +1418,12 @@ interface SetupRequest {
    * non-chat kind). Empty outside preserve mode.
    */
   readonly storedOcrModelIds: readonly string[];
+  /**
+   * Stored embedding ids on a DIFFERENT endpoint than the gateway connection — rebuilt
+   * embeddings land on the setup-wide connection, so these are restored verbatim instead
+   * (review finding on #3031). Empty outside inherited-deployment preserve mode.
+   */
+  readonly storedDedicatedEmbeddingModelIds: readonly string[];
   readonly workflowEligibleModelIds: readonly string[];
   readonly workflowEligibleModelIdsConfigured: boolean;
   readonly voiceProviders: readonly SetupVoiceProvider[];
@@ -2957,12 +2984,16 @@ function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | Route
     imageInputModelIds: resolved.imageInputModelIds,
     imageInputModelIdsProvided: hasListField(input.raw, "imageInputModelIds"),
     storedEmbeddingModelIds: input.preserveExisting ? currentEmbeddingModelIds(input.current) : [],
-    // OCR restoration applies only to INHERITED deployments: an explicitly submitted deployment
-    // list is authoritative, and restoring an omitted OCR provider would make it impossible to
-    // remove through the setup (review finding on #3031).
+    // Verbatim restoration applies only to INHERITED deployments: an explicitly submitted
+    // deployment list is authoritative, and restoring an omitted provider would make it
+    // impossible to remove through the setup (review findings on #3031).
     storedOcrModelIds:
       input.preserveExisting && !hasNonEmptyListField(input.raw, "deploymentNames")
         ? currentOcrModelIds(input.current)
+        : [],
+    storedDedicatedEmbeddingModelIds:
+      input.preserveExisting && !hasNonEmptyListField(input.raw, "deploymentNames")
+        ? currentDedicatedEmbeddingModelIds(input.current, input.credentials.baseUrl)
         : [],
     workflowEligibleModelIds: resolved.workflowEligibleModelIds,
     workflowEligibleModelIdsConfigured: hasListField(input.raw, "workflowEligibleModelIds"),
@@ -3067,6 +3098,8 @@ interface SetupVerificationInput {
   readonly storedEmbeddingModelIds: readonly string[];
   /** Stored `ocr-vision` ids restored verbatim instead of probed — see {@link SetupRequest}. */
   readonly storedOcrModelIds: readonly string[];
+  /** Dedicated-endpoint embedding ids restored verbatim — see {@link SetupRequest}. */
+  readonly storedDedicatedEmbeddingModelIds: readonly string[];
   readonly workflowEligibleModelIds: readonly string[] | undefined;
   readonly voiceProviders: readonly SetupVoiceProvider[];
   readonly tester: GatewaySetupTester;
@@ -3183,13 +3216,14 @@ function normalizeDiscoveryResult(result: GatewayModelDiscoveryOutput): SetupCan
 function candidateModelsFromDeploymentNames(
   deploymentNames: readonly string[],
   storedEmbeddingModelIds: readonly string[],
-  storedOcrModelIds: readonly string[],
+  restoredVerbatimModelIds: readonly string[],
 ): SetupCandidateModels {
   // Stored kinds win over the name heuristic: a preserve-mode rebuild must not chat-probe a
   // verified embedding or OCR deployment out of the config (review findings on #3031). Stored
-  // OCR providers leave the candidate set entirely — they are restored verbatim afterwards.
-  const storedOcrSet = new Set(storedOcrModelIds);
-  const candidateNames = deploymentNames.filter((modelId) => !storedOcrSet.has(modelId));
+  // OCR and dedicated-endpoint embedding providers leave the candidate set entirely — they are
+  // restored verbatim afterwards.
+  const restoredSet = new Set(restoredVerbatimModelIds);
+  const candidateNames = deploymentNames.filter((modelId) => !restoredSet.has(modelId));
   const storedEmbeddingSet = new Set(storedEmbeddingModelIds);
   const embeddingModelIds = candidateNames.filter(
     (modelId) => storedEmbeddingSet.has(modelId) || isLikelyEmbeddingModelId(modelId),
@@ -3212,7 +3246,7 @@ async function candidateModelIdsForSetup(
     return candidateModelsFromDeploymentNames(
       input.deploymentNames,
       input.storedEmbeddingModelIds,
-      input.storedOcrModelIds,
+      [...input.storedOcrModelIds, ...input.storedDedicatedEmbeddingModelIds],
     );
   }
   return normalizeDiscoveryResult(
@@ -3251,7 +3285,7 @@ function finalRawConfigForSetup(
       ? {}
       : { figma: { accessToken: input.figmaAccessToken } }),
   };
-  return applyStoredOcrProviders(
+  return applyStoredDedicatedProviders(
     applyVoiceProviders(
       rawConfigWithOptionalBlocks,
       input.voiceProviders.length > 0
@@ -3259,12 +3293,12 @@ function finalRawConfigForSetup(
         : setupVoiceProvidersFromCurrent(input.current),
     ),
     input.current,
-    input.storedOcrModelIds,
+    [...input.storedOcrModelIds, ...input.storedDedicatedEmbeddingModelIds],
     { baseUrl: input.baseUrl, apiKey: input.apiKey },
   );
 }
 
-function storedOcrProviderRaw(
+function storedDedicatedProviderRaw(
   provider: ModelProviderConfig,
   capability: ModelCapability,
   gateway: { readonly baseUrl: string; readonly apiKey: string },
@@ -3294,30 +3328,30 @@ function storedOcrProviderRaw(
 }
 
 /**
- * A verified rebuild only re-derives chat and embedding providers; stored `ocr-vision`
- * providers have no probe and no setup field, so — exactly like voice — they are restored
- * verbatim from the current configuration instead of silently vanishing (review finding on
- * #3031).
+ * A verified rebuild only re-derives chat and embedding providers onto the setup-wide
+ * connection; stored `ocr-vision` providers (no probe, no setup field) and embedding providers
+ * on a DIFFERENT endpoint would silently vanish or migrate. Exactly like voice, they are
+ * restored verbatim from the current configuration (review findings on #3031).
  */
-function applyStoredOcrProviders(
+function applyStoredDedicatedProviders(
   rawConfig: Record<string, unknown>,
   current: GatewayConfig | undefined,
-  storedOcrModelIds: readonly string[],
+  restoredModelIds: readonly string[],
   gateway: { readonly baseUrl: string; readonly apiKey: string },
 ): Record<string, unknown> {
-  if (storedOcrModelIds.length === 0 || current === undefined) return rawConfig;
+  if (restoredModelIds.length === 0 || current === undefined) return rawConfig;
   const providers: unknown[] = Array.isArray(rawConfig.providers) ? rawConfig.providers : [];
   const presentIds = new Set(
     providers.flatMap((provider) =>
       isRecord(provider) && typeof provider.modelId === "string" ? [provider.modelId] : [],
     ),
   );
-  const restored = storedOcrModelIds.flatMap((modelId) => {
+  const restored = restoredModelIds.flatMap((modelId) => {
     if (presentIds.has(modelId)) return [];
     const provider = current.providers.find((item) => item.modelId === modelId);
     const capability = current.capabilities?.find((item) => item.id === modelId);
     if (provider === undefined || capability === undefined) return [];
-    return [storedOcrProviderRaw(provider, capability, gateway)];
+    return [storedDedicatedProviderRaw(provider, capability, gateway)];
   });
   if (restored.length === 0) return rawConfig;
   return { ...rawConfig, providers: [...providers, ...restored] };
@@ -3643,6 +3677,7 @@ async function trySetupCandidate(
     imageInputModelIdsProvided: request.imageInputModelIdsProvided,
     storedEmbeddingModelIds: request.storedEmbeddingModelIds,
     storedOcrModelIds: request.storedOcrModelIds,
+    storedDedicatedEmbeddingModelIds: request.storedDedicatedEmbeddingModelIds,
     workflowEligibleModelIds: request.workflowEligibleModelIdsConfigured
       ? request.workflowEligibleModelIds
       : undefined,

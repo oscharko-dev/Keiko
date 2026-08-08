@@ -22,6 +22,16 @@ const MAX_IMPORT_PROVIDERS = 100;
 /** Mirrors the setup route's model-id bound so an unusable id fails here, not at Test & Save. */
 const MAX_IMPORT_MODEL_ID_LENGTH = 160;
 /**
+ * Mirrors the model gateway's SUPPORTED_API_KEY_HEADER_NAMES — an unsupported header would be
+ * rejected by Test & Save AFTER a reported upload success (review finding on #3031).
+ */
+const SUPPORTED_API_KEY_HEADER_NAMES = new Set([
+  "authorization",
+  "x-litellm-key",
+  "x-api-key",
+  "api-key",
+]);
+/**
  * Generic provider settings the setup form has no field for — importing a chat or embedding
  * provider that carries one would silently change runtime behavior (review finding on #3031).
  * Voice providers are exempt: the voice setup route regenerates their endpoint details itself.
@@ -285,6 +295,12 @@ function providerConnectionScalars(value: Record<string, unknown>): ConnectionSc
   const header = readString(value.apiKeyHeaderName);
   const timeout = readTimeout(value.timeoutMs);
   if (!baseUrl.ok || !apiKey.ok || !header.ok || !timeout.ok) return undefined;
+  if (
+    header.value !== undefined &&
+    !SUPPORTED_API_KEY_HEADER_NAMES.has(header.value.toLowerCase())
+  ) {
+    return undefined;
+  }
   return {
     baseUrl: baseUrl.value,
     apiKey: apiKey.value,

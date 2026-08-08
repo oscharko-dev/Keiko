@@ -3016,6 +3016,62 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("preserves a dedicated-endpoint embedding provider through preserve-mode rebuilds", async () => {
+    // Review finding on #3031 (P1): the rebuild wrote every embedding onto the setup-wide
+    // connection, silently migrating an embedding that lives on its OWN endpoint (with its own
+    // credential) onto the chat gateway during an unrelated update. Same silent-loss class as
+    // stored OCR — dedicated embeddings are now restored verbatim instead of rebuilt.
+    const uiDir = await tempDir("keiko-gw-ui-embed-dedicated-");
+    const evidenceDir = await tempDir("keiko-gw-ev-embed-dedicated-");
+    const probedModelIds: string[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => {
+        probedModelIds.push(...modelIds);
+        return Promise.resolve(modelIds.filter((modelId) => modelId !== "vector-dedicated"));
+      },
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "vector-dedicated",
+            baseUrl: "https://embed.example.com",
+            apiKey: "embed-token",
+            capability: { id: "vector-dedicated", kind: "embedding" },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const cleared = await handleGatewaySetup(
+      ctx({ preserveExisting: true, imageInputModelIds: [] }),
+      deps,
+    );
+    expect(cleared.status).toBe(200);
+    const config = currentGatewayConfig(deps);
+    const embedding = config?.providers.find((provider) => provider.modelId === "vector-dedicated");
+    expect(embedding?.baseUrl).toBe("https://embed.example.com");
+    expect(embedding?.apiKey).toBe("embed-token");
+    expect(config?.capabilities?.find((item) => item.id === "vector-dedicated")?.kind).toBe(
+      "embedding",
+    );
+    expect(probedModelIds).not.toContain("vector-dedicated");
+    deps.store.close();
+  });
+
   it("does not store image-input capability claims for models that fail setup testing", async () => {
     const uiDir = await tempDir("keiko-gw-ui-image-input-fail-");
     const evidenceDir = await tempDir("keiko-gw-ev-image-input-fail-");

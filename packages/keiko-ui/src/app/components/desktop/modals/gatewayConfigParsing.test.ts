@@ -252,6 +252,18 @@ describe("parseGatewayConfigUpload", () => {
     expect(parseGatewayConfigUpload(mixed)).toEqual({ outcome: "invalid" });
   });
 
+  it("accepts supported header names case-insensitively", () => {
+    // The gateway normalizes header names to lower case — "API-Key" is the same supported
+    // header, not an unsupported one (review finding on #3031).
+    const fields = fieldsOf(
+      JSON.stringify({
+        providers: [providerFixture({ apiKeyHeaderName: "API-Key", capability: undefined })],
+      }),
+    );
+
+    expect(fields.apiKeyHeaderName).toBe("API-Key");
+  });
+
   it("treats identical repeated scalars as one connection", () => {
     const fields = fieldsOf(
       JSON.stringify({
@@ -748,6 +760,12 @@ describe("parseGatewayConfigUpload", () => {
     [
       "a present non-object circuit breaker",
       JSON.stringify({ providers: [providerFixture()], circuitBreaker: "default" }),
+    ],
+    [
+      "an unsupported API key header name",
+      JSON.stringify({
+        providers: [providerFixture({ apiKeyHeaderName: "x-custom", capability: undefined })],
+      }),
     ],
     [
       "a voice-only configuration the setup form cannot save",
