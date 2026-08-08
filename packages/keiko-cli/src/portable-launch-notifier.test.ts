@@ -30,7 +30,8 @@ describe("notifyPortableLaunchFailure", () => {
       },
     });
 
-    expect(scripts[0]?.length ?? 0).toBeLessThan(600);
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0]?.length ?? Number.POSITIVE_INFINITY).toBeLessThan(600);
   });
 
   it("substitutes a fixed text for an empty failure message", () => {
