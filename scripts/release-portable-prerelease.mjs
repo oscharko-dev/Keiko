@@ -187,7 +187,7 @@ function ghJson(args) {
 // .github/workflows/release.yml: leading-zero indices are refused everywhere, or the lane
 // could publish a tag whose own verification run stays red (review finding on #3043).
 const BETA_INDEX = "(?:0|[1-9][0-9]*)";
-const GOVERNED_BETA_TAG_RE = new RegExp(`^v.+-beta\\.${BETA_INDEX}$`, "u");
+const GOVERNED_BETA_TAG_RE = new RegExp(String.raw`^v.+-beta\.${BETA_INDEX}$`, "u");
 
 /** The next free beta number for the version: v<version>-beta.<n>. */
 export function nextBetaTag(version, existingTags) {
@@ -229,7 +229,9 @@ function releaseIsDraft(tag) {
 }
 
 export function assertTagKeepsBetaSequenceMonotonic(tag, existingTags) {
-  const match = new RegExp(`^(?<prefix>v.+-beta\\.)(?<index>${BETA_INDEX})$`, "u").exec(tag);
+  const match = new RegExp(String.raw`^(?<prefix>v.+-beta\.)(?<index>${BETA_INDEX})$`, "u").exec(
+    tag,
+  );
   if (match?.groups === undefined) return;
   const { prefix } = match.groups;
   const current = Number.parseInt(match.groups.index, 10);
@@ -250,7 +252,9 @@ export function assertTagKeepsBetaSequenceMonotonic(tag, existingTags) {
  * carry the superseded pointer regardless of the gap (review finding on #3037).
  */
 export function previousBetaTag(tag, existingTags) {
-  const match = new RegExp(`^(?<prefix>v.+-beta\\.)(?<index>${BETA_INDEX})$`, "u").exec(tag);
+  const match = new RegExp(String.raw`^(?<prefix>v.+-beta\.)(?<index>${BETA_INDEX})$`, "u").exec(
+    tag,
+  );
   if (match?.groups === undefined) return undefined;
   const { prefix } = match.groups;
   const current = Number.parseInt(match.groups.index, 10);
@@ -419,7 +423,7 @@ function assertRunMatchesRelease(commitSha, version, tag) {
       `the workflow head commit ${commitSha} builds version ${built} but the local checkout is ${version}; refusing to publish another version's assets.`,
     );
   }
-  const match = new RegExp(`^v(?<version>.+)-beta\\.${BETA_INDEX}$`, "u").exec(tag);
+  const match = new RegExp(String.raw`^v(?<version>.+)-beta\.${BETA_INDEX}$`, "u").exec(tag);
   if (match?.groups?.version !== built) {
     fail(`tag ${tag} does not name the built version ${built} (expected v${built}-beta.<n>).`);
   }
