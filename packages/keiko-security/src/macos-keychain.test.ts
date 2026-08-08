@@ -54,7 +54,11 @@ describe("readMacosKeychainSecret", () => {
     // `absent` invites the caller to store a key; `unavailable` must not, or the caller spends a
     // second timeout on the boot path.
     expect(
-      readMacosKeychainSecret("svc", "acct", { executable: REFUSES, platform: "darwin" }),
+      readMacosKeychainSecret("svc", "acct", {
+        executable: REFUSES,
+        platform: "darwin",
+        timeoutMs: 30_000,
+      }),
     ).toEqual({
       kind: "absent",
     });
@@ -66,7 +70,11 @@ describe("readMacosKeychainSecret", () => {
     // bounded wait on the boot path that `unavailable` exists to prevent — so only the measured
     // item-not-found status may mean "store one".
     expect(
-      readMacosKeychainSecret("svc", "acct", { executable: DENIES, platform: "darwin" }),
+      readMacosKeychainSecret("svc", "acct", {
+        executable: DENIES,
+        platform: "darwin",
+        timeoutMs: 30_000,
+      }),
     ).toEqual({ kind: "unavailable" });
   });
 
@@ -114,7 +122,7 @@ describe("readMacosKeychainSecret", () => {
     // Exercises the production defaults for platform and timeout against a controlled fixture, so
     // no test ever reaches the host keychain. On darwin the fixture answers "no such item"; on any
     // other host the tier reports itself unavailable without spawning at all.
-    const read = readMacosKeychainSecret("svc", "acct", { executable: REFUSES });
+    const read = readMacosKeychainSecret("svc", "acct", { executable: REFUSES, timeoutMs: 30_000 });
     expect(read.kind).toBe(process.platform === "darwin" ? "absent" : "unavailable");
   });
 });
@@ -136,6 +144,7 @@ describe("writeMacosKeychainSecret", () => {
       writeMacosKeychainSecret("svc", "acct", "secret", {
         executable: REFUSES,
         platform: "darwin",
+        timeoutMs: 30_000,
       }),
     ).toBe(false);
   });
@@ -145,6 +154,7 @@ describe("writeMacosKeychainSecret", () => {
       writeMacosKeychainSecret("svc", "acct", "secret", {
         executable: ANSWERS,
         platform: "darwin",
+        timeoutMs: 30_000,
       }),
     ).toBe(true);
   });
@@ -166,6 +176,7 @@ describe("writeMacosKeychainSecret", () => {
       writeMacosKeychainSecret("svc", "acct", secret, {
         executable: recorder,
         platform: "darwin",
+        timeoutMs: 30_000,
       }),
     ).toBe(true);
 
@@ -185,6 +196,7 @@ describe("writeMacosKeychainSecret", () => {
     writeMacosKeychainSecret("svc", "acct", "secret", {
       executable: recorder,
       platform: "darwin",
+      timeoutMs: 30_000,
     });
     expect(readFileSync(join(dir, "argv"), "utf8").split("\n")).toContain("-U");
   });
@@ -202,7 +214,10 @@ describe("writeMacosKeychainSecret", () => {
     // defaults. On darwin the fake answers and the store reports success; elsewhere the tier is
     // unavailable and reports failure. Either way it returns a boolean promptly and never throws.
     const started = process.hrtime.bigint();
-    const stored = writeMacosKeychainSecret("svc", "acct", "secret", { executable: ANSWERS });
+    const stored = writeMacosKeychainSecret("svc", "acct", "secret", {
+      executable: ANSWERS,
+      timeoutMs: 30_000,
+    });
     expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(5_000);
     expect(stored).toBe(process.platform === "darwin");
   });
