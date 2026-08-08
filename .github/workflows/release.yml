@@ -76,39 +76,46 @@ jobs:
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Validate release tag
+        id: release-tag
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-        # A stable tag must equal v<version> exactly. A GOVERNED beta prerelease tag
-        # (v<version>-beta.<n>, cut by scripts/release-portable-prerelease.mjs — ADR-0163 D9)
-        # is validated against the same package version, so a foreign, RC, or malformed
-        # hyphenated tag still fails closed instead of skipping verification entirely.
+        # A tag equal to v<version> is EXACT — full verification, even when the package version
+        # itself is a prerelease (an exact npm prerelease tag is not the portable exception). A
+        # GOVERNED portable beta tag (v<version>-beta.<n> LAYERED OVER the package version, cut
+        # by scripts/release-portable-prerelease.mjs — ADR-0163 D9) is validated against the
+        # same package version and recorded as the portable exception; any other hyphenated tag
+        # fails closed instead of skipping verification.
         run: |
           node <<'NODE'
+          const { appendFileSync } = require("node:fs");
           const { version } = require("./package.json");
           const releaseTag = process.env.RELEASE_TAG;
           const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
           const beta = new RegExp(`^v${escaped}-beta\\.(?:0|[1-9][0-9]*)$`, "u");
-          if (releaseTag !== `v${version}` && !beta.test(releaseTag)) {
+          const exact = releaseTag === `v${version}`;
+          if (!exact && !beta.test(releaseTag)) {
             throw new Error(`Release tag ${releaseTag} does not match package version ${version}.`);
           }
+          appendFileSync(process.env.GITHUB_OUTPUT, `portable-beta=${String(!exact)}\n`);
           NODE
       # The remaining steps verify the STABLE release surface (required checks on the tagged
-      # SHA, npm manifest plan, portable approvals). Beta prerelease tags stop after the
-      # format validation above: their assets are verified by the portable-prerelease lane
-      # (built-commit version match, checksums, seal), not by the npm release surface.
+      # SHA, npm manifest plan, portable approvals). Only the PORTABLE beta exception recorded
+      # by the tag validation skips them — an exact tag over a prerelease package version runs
+      # everything, because exact npm prereleases publish through this verification (review
+      # finding on #3043). Portable beta assets are verified by the prerelease lane itself.
       - name: Validate required-check workflow names
-        if: ${{ !contains(github.ref_name, '-') }}
+        if: ${{ steps.release-tag.outputs.portable-beta != 'true' }}
         run: npm run check:release-required-workflows
       - name: Validate approved portable runtime inputs
-        if: ${{ !contains(github.ref_name, '-') }}
+        if: ${{ steps.release-tag.outputs.portable-beta != 'true' }}
         run: npm run check:portable-approvals
       - name: Verify required checks for tagged SHA
-        if: ${{ !contains(github.ref_name, '-') }}
+        if: ${{ steps.release-tag.outputs.portable-beta != 'true' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: RELEASE_SHA="$(git rev-parse HEAD)" node scripts/verify-release-required-checks.mjs
       - name: Validate release manifest plan
-        if: ${{ !contains(github.ref_name, '-') }}
+        if: ${{ steps.release-tag.outputs.portable-beta != 'true' }}
         run: npm run release:plan -- --tag beta
 
   publish:
