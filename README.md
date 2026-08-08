@@ -22,11 +22,15 @@
   <a href="https://github.com/oscharko-dev/Keiko-for-Quality"><img alt="Reviewed by Keiko for Quality" src="https://raw.githubusercontent.com/oscharko-dev/Keiko-for-Quality/1869ec1ce1f4fa465d5a0d512f11f18b76ba9a9c/.github/assets/kq/badge-reviewed.svg" height="20"></a>
 </p>
 
-<!-- Live review-record widget, enabled once quality.keiko.dev is deployed (Keiko-for-Quality/widget):
+<!-- Review-record card, rendered on a schedule by Keiko-for-Quality's quality-cards workflow
+     from GitHub API data. When quality.keiko.dev is deployed, only the URLs below change to
+     https://quality.keiko.dev/widget/oscharko-dev/Keiko.svg . -->
 <p align="center">
-  <a href="https://github.com/oscharko-dev/Keiko/pulls?q=is%3Apr"><img src="https://quality.keiko.dev/widget/oscharko-dev/Keiko.svg?v=card&theme=dark" width="340" alt="Reviewed by Keiko for Quality — live run, finding and acted-on numbers for this repository"></a>
+  <a href="https://github.com/oscharko-dev/Keiko/pulls?q=is%3Apr"><picture>
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/oscharko-dev/Keiko-for-Quality/quality-cards/cards/oscharko-dev/Keiko-light.svg">
+    <img src="https://raw.githubusercontent.com/oscharko-dev/Keiko-for-Quality/quality-cards/cards/oscharko-dev/Keiko.svg" width="340" alt="Reviewed by Keiko for Quality — run, finding and acted-on numbers for this repository">
+  </picture></a>
 </p>
--->
 
 <p align="center">
   <a href="#quickstart">Quickstart</a>
