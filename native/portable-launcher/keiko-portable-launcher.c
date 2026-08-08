@@ -135,8 +135,12 @@ static int run_launcher(keiko_launcher_buffers *buffers) {
   }
 
   /* Same double-click marker as the macOS launcher: the portable CLI surfaces launch failures
-   * visibly only when a human started the app through this binary. Inherited by the child. */
-  SetEnvironmentVariableW(L"KEIKO_PORTABLE_UI_LAUNCH", L"1");
+   * visibly only when a human started the app through this binary, and the marker's contract must
+   * hold on every platform even though today's notifier renders only on macOS. A shell invocation
+   * owns a console window; an Explorer double-click of a windowed launcher does not. */
+  if (GetConsoleWindow() == NULL) {
+    SetEnvironmentVariableW(L"KEIKO_PORTABLE_UI_LAUNCH", L"1");
+  }
   STARTUPINFOW startup;
   PROCESS_INFORMATION process;
   ZeroMemory(&startup, sizeof(startup));
