@@ -78,14 +78,18 @@ jobs:
       - name: Validate release tag
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          node <<'NODE'
-          const { version } = require("./package.json");
-          const releaseTag = process.env.RELEASE_TAG;
-          if (releaseTag !== `v${version}`) {
-            throw new Error(`Release tag ${releaseTag} does not match package version ${version}.`);
-          }
-          NODE
+        # The tag shape has ONE owner, scripts/release-tag-contract.mjs, which the producing
+        # prerelease script imports as well — restating the syntax here would let the lane mint
+        # a tag whose verification then stays red (review findings on #3043). Two shapes pass:
+        # the EXACT tag (v<version>, an npm prerelease version included) and the governed
+        # portable beta (v<version>-beta.<n> layered over it, ADR-0163 D9). Dependency-free, so
+        # it runs before any install. Every verification step below runs for BOTH shapes.
+        run: node scripts/release-tag-contract.mjs "$RELEASE_TAG"
+      # EVERY verification step runs for EVERY accepted tag, portable betas included — there is
+      # no skip. The required-check lookup resolves its contexts from RELEASE_REQUIRED_CHECKS
+      # (set at workflow level), so it never queries branch protection and passes on a dev-based
+      # prerelease commit; verified against the real v0.3.0-beta.2 commit (review finding on
+      # #3043).
       - name: Validate required-check workflow names
         run: npm run check:release-required-workflows
       - name: Validate approved portable runtime inputs
