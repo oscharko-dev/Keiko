@@ -3637,6 +3637,36 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("falls back to the runtime view when the persisted file is unparseable", async () => {
+    // The documented fail-safe of durableStoredGatewayConfig: a corrupt stored file must not
+    // fail the setup — classification degrades to the env-resolved runtime view (exactly the
+    // pre-change behavior) and the rotation still completes.
+    const uiDir = await tempDir("keiko-gw-ui-durable-corrupt-");
+    const evidenceDir = await tempDir("keiko-gw-ev-durable-corrupt-");
+    writeFileSync(join(uiDir, "keiko.config.json"), "{ not json", "utf8");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const fresh = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm.example.com/v1", apiKey: "chat-token" }),
+      deps,
+    );
+    expect(fresh.status).toBe(200);
+
+    const rotated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "example-rotated-token" }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.providers[0]?.apiKey).toBe("example-rotated-token");
+    deps.store.close();
+  });
+
   it("keeps parser-required per-model protocol overrides while masking connection identity", async () => {
     // Codex finding on #3040: masking the ENTIRE KEIKO_MODEL_* namespace broke the durable parse
     // for a stored Azure provider whose apiVersion arrives via KEIKO_MODEL_<ID>_API_VERSION —
