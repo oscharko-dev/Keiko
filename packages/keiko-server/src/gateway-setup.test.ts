@@ -838,6 +838,22 @@ describe("handleGatewaySetup", () => {
     expect(JSON.stringify(hijacked.body)).toContain("GATEWAY_URL_CHANGE_REQUIRES_TOKEN");
     // The stored token never reached any verification against the new endpoint.
     expect(smokeCalls).toBe(1);
+
+    // An EMPTY or blank submitted token is the same as a missing one — it must not slip the
+    // stored credential past the guard either (review finding on #3031).
+    for (const blankToken of ["", "   "]) {
+      const blanked = await handleGatewaySetup(
+        ctx({
+          preserveExisting: true,
+          baseUrl: "https://attacker.example.com/v1",
+          apiKey: blankToken,
+        }),
+        deps,
+      );
+      expect(blanked.status).toBe(400);
+      expect(JSON.stringify(blanked.body)).toContain("GATEWAY_URL_CHANGE_REQUIRES_TOKEN");
+    }
+    expect(smokeCalls).toBe(1);
     expect(currentGatewayConfig(deps)?.providers[0]?.baseUrl).toBe(
       "https://llm-gateway.example.com/v1",
     );
