@@ -2902,6 +2902,80 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("restores stored OCR providers verbatim through preserve-mode rebuilds", async () => {
+    // Review finding on #3031 (P1): the rebuild only re-derives chat and embedding providers, so
+    // a stored ocr-vision provider was chat-probed and silently dropped (or reclassified) by an
+    // unrelated preserve-mode update. Stored OCR providers now bypass the probe and are restored
+    // like voice providers.
+    const uiDir = await tempDir("keiko-gw-ui-ocr-kind-");
+    const evidenceDir = await tempDir("keiko-gw-ev-ocr-kind-");
+    const probedModelIds: string[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => {
+        probedModelIds.push(...modelIds);
+        return Promise.resolve(modelIds.filter((modelId) => modelId !== "scan-ocr"));
+      },
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "scan-ocr",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            capability: {
+              id: "scan-ocr",
+              kind: "ocr-vision",
+              contextWindow: 32_000,
+              maxOutputTokens: 4_096,
+              toolCalling: false,
+              structuredOutput: false,
+              streaming: false,
+              supportsImageInput: false,
+              supportsDocumentInput: true,
+              workflowEligible: false,
+              costClass: "low",
+              latencyClass: "fast",
+              throughputHint: "test ocr deployment",
+              preferredUseCases: ["Document OCR"],
+              knownLimitations: [],
+            },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const cleared = await handleGatewaySetup(
+      ctx({ preserveExisting: true, imageInputModelIds: [] }),
+      deps,
+    );
+    expect(cleared.status).toBe(200);
+    const saved = JSON.parse(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")) as {
+      readonly providers: readonly {
+        readonly modelId: string;
+        readonly capability?: { readonly kind: string };
+      }[];
+    };
+    const ocrProvider = saved.providers.find((provider) => provider.modelId === "scan-ocr");
+    expect(ocrProvider?.capability?.kind).toBe("ocr-vision");
+    // The stored OCR deployment is never chat-probed — it has no chat protocol to answer.
+    expect(probedModelIds).not.toContain("scan-ocr");
+    deps.store.close();
+  });
+
   it("does not store image-input capability claims for models that fail setup testing", async () => {
     const uiDir = await tempDir("keiko-gw-ui-image-input-fail-");
     const evidenceDir = await tempDir("keiko-gw-ev-image-input-fail-");

@@ -243,6 +243,8 @@ export const DE_MESSAGES = {
     "Diese Datei enthält OCR-Provider, die dieser Upload nicht ausfüllen kann — trage diesen Abschnitt manuell ein und entferne ihn aus der Datei.",
   "gatewaySetup.upload.realtimeSkipped":
     "Das Realtime-Sprachmodell nutzt einen eigenen Endpoint und wurde nicht übernommen — ergänze es nach dem Speichern über die Sprach-Einstellungen.",
+  "gatewaySetup.upload.voiceProfilesReduced":
+    "Die Datei konfiguriert mehrere Ausgabestimmen; übernommen wurde die neutrale Stimme — die übrigen lassen sich später neu wählen.",
   "gatewaySetup.loading.title": "Modell-Gateway-Einrichtung wird vorbereitet",
   "gatewaySetup.loading.description":
     "Die lokalen Einrichtungsfelder werden geladen. Es wurde noch keine Anbieteranfrage gestartet.",

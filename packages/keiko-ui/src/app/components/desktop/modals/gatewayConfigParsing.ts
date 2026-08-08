@@ -13,6 +13,8 @@
  * so only the connection scalars and role model ids need to travel through the form.
  */
 
+import type { VoiceProviderLocality } from "@/lib/types";
+
 export const MAX_GATEWAY_CONFIG_BYTES = 256 * 1024;
 
 /** Mirrors the setup route's MAX_DEPLOYMENT_NAMES so an oversized file fails here, not at Test & Save. */
@@ -36,6 +38,17 @@ const UNSUPPORTED_GENERIC_PROVIDER_SETTINGS = [
 const KNOWN_KINDS = new Set(["chat", "embedding", "ocr-vision", "voice"]);
 /** The provider kinds SOME setup field can represent; `ocr-vision` has none. */
 const REPRESENTABLE_KINDS = new Set(["chat", "embedding", "voice"]);
+const VOICE_LOCALITIES: ReadonlySet<VoiceProviderLocality> = new Set([
+  "azure-foundry",
+  "customer-hosted",
+  "local-only",
+]);
+/**
+ * The setup route rebuilds the circuit breaker with exactly these values and the form has no
+ * field for them — a file that tunes them differently cannot be represented without silently
+ * changing retry-isolation behavior (review finding on #3031).
+ */
+const REBUILT_CIRCUIT_BREAKER = { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 };
 const CAPABILITY_FLAG_KEYS = [
   "supportsImageInput",
   "workflowEligible",
@@ -69,6 +82,16 @@ export interface GatewayConfigUploadFields {
   readonly voiceRealtimeTranscriptionModelId: string | undefined;
   /** `undefined` when the file carries no realtime voice capability to speak about it. */
   readonly voiceSemanticTurnDetection: boolean | undefined;
+  /** Derived from the speech-output provider's voice profiles — see voiceProfilesReduced. */
+  readonly voiceOutputVoiceId: string | undefined;
+  /**
+   * True when the speech-output provider carries several DIFFERENT profile voices: the form
+   * holds one output voice, so the neutral persona's voice is applied and the reduction is
+   * stated (review finding on #3031 — never silently, never a refusal that would lose the
+   * whole file).
+   */
+  readonly voiceProfilesReduced: boolean;
+  readonly voiceProviderLocality: VoiceProviderLocality | undefined;
   /**
    * True when the file carries a realtime voice provider on a DIFFERENT connection than the
    * speech providers. The form holds one voice connection per submit, so that provider cannot
@@ -86,12 +109,18 @@ export type GatewayConfigUploadResult =
   | { readonly outcome: "unsupportedKind" }
   | { readonly outcome: "unsupportedSetting" };
 
+interface ParsedVoiceProfile {
+  readonly persona: string;
+  readonly voiceId: string;
+}
+
 interface ParsedProvider {
   readonly modelId: string;
   readonly baseUrl: string | undefined;
   readonly apiKey: string | undefined;
   readonly apiKeyHeaderName: string | undefined;
   readonly timeoutMs: number | undefined;
+  readonly voiceProfiles: readonly ParsedVoiceProfile[] | undefined;
   readonly capability: ParsedCapability | undefined;
 }
 
@@ -104,6 +133,7 @@ interface ParsedCapability {
   readonly realtime: boolean;
   readonly semanticTurnDetection: boolean;
   readonly realtimeTranscriptionModel: string | undefined;
+  readonly voiceProviderLocality: VoiceProviderLocality | undefined;
 }
 
 function objectRecord(value: unknown): value is Record<string, unknown> {
@@ -145,6 +175,31 @@ function capabilityFlagsAreBooleans(value: Record<string, unknown>): boolean {
   );
 }
 
+function readLocality(value: unknown): {
+  readonly ok: boolean;
+  readonly value: VoiceProviderLocality | undefined;
+} {
+  const locality = readString(value);
+  if (!locality.ok) return { ok: false, value: undefined };
+  if (locality.value === undefined) return { ok: true, value: undefined };
+  return VOICE_LOCALITIES.has(locality.value as VoiceProviderLocality)
+    ? { ok: true, value: locality.value as VoiceProviderLocality }
+    : { ok: false, value: undefined };
+}
+
+/**
+ * An inline capability whose `id` names a DIFFERENT model than its owning provider is corrupted
+ * input — the canonical gateway parser rejects the same mismatch (review finding on #3031).
+ */
+function capabilityIdMatches(
+  value: Record<string, unknown>,
+  expectedId: string | undefined,
+): boolean {
+  if (expectedId === undefined) return true;
+  const id = readString(value.id);
+  return id.ok && (id.value === undefined || id.value === expectedId);
+}
+
 /**
  * A capability must carry a known string `kind` and boolean-or-absent flags; coercing a corrupted
  * declaration to `false` could clear stored image or workflow eligibility during an update while
@@ -152,13 +207,31 @@ function capabilityFlagsAreBooleans(value: Record<string, unknown>): boolean {
  * (context window, cost class, …) stay tolerated — the persisted product configuration carries
  * them.
  */
-function parsedCapability(value: unknown): ParsedCapability | undefined {
+function readTranscriptionModel(value: unknown): {
+  readonly ok: boolean;
+  readonly value: string | undefined;
+} {
+  const transcription = readString(value);
+  if (!transcription.ok) return { ok: false, value: undefined };
+  if (transcription.value !== undefined && !usableModelId(transcription.value)) {
+    return { ok: false, value: undefined };
+  }
+  return transcription;
+}
+
+function knownCapabilityKind(value: unknown): string | undefined {
+  return typeof value === "string" && KNOWN_KINDS.has(value) ? value : undefined;
+}
+
+function parsedCapability(value: unknown, expectedId?: string): ParsedCapability | undefined {
   if (!objectRecord(value) || !capabilityFlagsAreBooleans(value)) return undefined;
-  const kind = typeof value.kind === "string" ? value.kind : undefined;
-  if (kind === undefined || !KNOWN_KINDS.has(kind)) return undefined;
-  const transcription = readString(value.realtimeTranscriptionModel);
+  if (!capabilityIdMatches(value, expectedId)) return undefined;
+  const kind = knownCapabilityKind(value.kind);
+  if (kind === undefined) return undefined;
+  const transcription = readTranscriptionModel(value.realtimeTranscriptionModel);
   if (!transcription.ok) return undefined;
-  if (transcription.value !== undefined && !usableModelId(transcription.value)) return undefined;
+  const locality = readLocality(value.voiceProviderLocality);
+  if (!locality.ok) return undefined;
   return {
     kind,
     supportsImageInput: value.supportsImageInput === true,
@@ -168,7 +241,27 @@ function parsedCapability(value: unknown): ParsedCapability | undefined {
     realtime: value.supportsRealtimeVoice === true,
     semanticTurnDetection: value.supportsSemanticTurnDetection === true,
     realtimeTranscriptionModel: transcription.value,
+    voiceProviderLocality: locality.value,
   };
+}
+
+function readVoiceProfiles(value: unknown): {
+  readonly ok: boolean;
+  readonly value: readonly ParsedVoiceProfile[] | undefined;
+} {
+  if (value === undefined) return { ok: true, value: undefined };
+  if (!Array.isArray(value)) return { ok: false, value: undefined };
+  const profiles: ParsedVoiceProfile[] = [];
+  for (const entry of value) {
+    if (!objectRecord(entry)) return { ok: false, value: undefined };
+    const persona = readString(entry.persona);
+    const voiceId = readString(entry.voiceId);
+    if (persona.value === undefined || voiceId.value === undefined) {
+      return { ok: false, value: undefined };
+    }
+    profiles.push({ persona: persona.value, voiceId: voiceId.value });
+  }
+  return { ok: true, value: profiles };
 }
 
 function providerConnectionScalars(value: Record<string, unknown>): ConnectionScalars | undefined {
@@ -191,12 +284,14 @@ function parsedProvider(value: unknown): ParsedProvider | undefined {
   if (modelId.value === undefined || !usableModelId(modelId.value)) return undefined;
   const scalars = providerConnectionScalars(value);
   if (scalars === undefined) return undefined;
+  const voiceProfiles = readVoiceProfiles(value.voiceProfiles);
+  if (!voiceProfiles.ok) return undefined;
   // A capability that is PRESENT but malformed is corrupted input, not an absent field — the
   // production parser rejects the same shape (review finding on #3031).
   const capability =
-    value.capability === undefined ? undefined : parsedCapability(value.capability);
+    value.capability === undefined ? undefined : parsedCapability(value.capability, modelId.value);
   if (value.capability !== undefined && capability === undefined) return undefined;
-  return { modelId: modelId.value, ...scalars, capability };
+  return { modelId: modelId.value, ...scalars, voiceProfiles: voiceProfiles.value, capability };
 }
 
 function parsedProviders(value: unknown): readonly ParsedProvider[] | undefined {
@@ -373,6 +468,9 @@ interface VoiceFields {
   readonly voiceRealtimeModelId: string | undefined;
   readonly voiceRealtimeTranscriptionModelId: string | undefined;
   readonly voiceSemanticTurnDetection: boolean | undefined;
+  readonly voiceOutputVoiceId: string | undefined;
+  readonly voiceProfilesReduced: boolean;
+  readonly voiceProviderLocality: VoiceProviderLocality | undefined;
   readonly voiceRealtimeSkipped: boolean;
 }
 
@@ -389,14 +487,10 @@ function realtimeVoiceFields(realtime: VoiceRoleProvider | undefined): {
 }
 
 /**
- * The form holds ONE voice connection per submit. The speech (STT/TTS) providers must agree on
- * it or the file refuses; a realtime provider on a different connection is skipped with an
- * explicit flag — see {@link GatewayConfigUploadFields.voiceRealtimeSkipped}.
- */
-/**
  * The one voice connection a submit can hold. The speech (STT/TTS) providers must agree on it or
  * the file refuses; a realtime provider is included when it shares that connection (trivially so
- * when it is the only voice provider) and skipped otherwise.
+ * when it is the only voice provider) and skipped otherwise — see
+ * {@link GatewayConfigUploadFields.voiceRealtimeSkipped}.
  */
 function resolvedVoiceConnection(
   roles: VoiceRoles,
@@ -412,16 +506,82 @@ function resolvedVoiceConnection(
   return { connection: speechConnection, realtimeSkipped: true };
 }
 
+/**
+ * The form holds ONE output voice; the setup route persists it as the neutral persona's profile.
+ * A uniform profile set imports losslessly; several different voices reduce to the neutral
+ * persona's (first profile as fallback) with an explicit flag (review finding on #3031). No
+ * profiles means no voice to derive — the form field stays empty and visibly required.
+ */
+function outputVoiceFromProfiles(profiles: readonly ParsedVoiceProfile[] | undefined): {
+  readonly voiceId: string | undefined;
+  readonly reduced: boolean;
+} {
+  if (profiles === undefined || profiles.length === 0) {
+    return { voiceId: undefined, reduced: false };
+  }
+  const distinctVoices = new Set(profiles.map((profile) => profile.voiceId));
+  if (distinctVoices.size === 1) return { voiceId: profiles[0]?.voiceId, reduced: false };
+  const neutral = profiles.find((profile) => profile.persona === "neutral") ?? profiles[0];
+  return { voiceId: neutral?.voiceId, reduced: true };
+}
+
+/**
+ * The locality of every imported voice provider must agree — the form has one locality select.
+ * An absent declaration means the production default (`azure-foundry`), exactly as the setup
+ * route reads it back (review finding on #3031).
+ */
+function uniformVoiceLocality(imported: readonly VoiceRoleProvider[]): {
+  readonly ok: boolean;
+  readonly value: VoiceProviderLocality | undefined;
+} {
+  if (imported.length === 0) return { ok: true, value: undefined };
+  const localities = new Set(
+    imported.map((entry) => entry.capability.voiceProviderLocality ?? "azure-foundry"),
+  );
+  if (localities.size > 1) return { ok: false, value: undefined };
+  return { ok: true, value: [...localities][0] };
+}
+
+/**
+ * The setup route merges roles that share one model id, so a realtime provider that also
+ * advertises speech roles fills any UNCLAIMED speech field — dropping the flag would silently
+ * remove Dictate or Read-aloud support (review finding on #3031). A dedicated provider wins,
+ * and a SKIPPED realtime provider (different connection) claims nothing.
+ */
+function effectiveSpeechRoles(
+  roles: VoiceRoles,
+  realtime: VoiceRoleProvider | undefined,
+): { readonly stt: VoiceRoleProvider | undefined; readonly tts: VoiceRoleProvider | undefined } {
+  return {
+    stt: roles.stt ?? (realtime?.capability.speechInput === true ? realtime : undefined),
+    tts: roles.tts ?? (realtime?.capability.speechOutput === true ? realtime : undefined),
+  };
+}
+
+function definedVoiceProviders(
+  entries: readonly (VoiceRoleProvider | undefined)[],
+): readonly VoiceRoleProvider[] {
+  return [...new Set(entries)].filter((entry): entry is VoiceRoleProvider => entry !== undefined);
+}
+
 function voiceFields(partition: PartitionedProviders): VoiceFields | undefined {
   const roles = voiceRoles(partition);
   if (roles === undefined) return undefined;
   const resolved = resolvedVoiceConnection(roles);
   if (resolved === undefined) return undefined;
+  const realtime = resolved.realtimeSkipped ? undefined : roles.realtime;
+  const { stt, tts } = effectiveSpeechRoles(roles, realtime);
+  const outputVoice = outputVoiceFromProfiles(tts?.provider.voiceProfiles);
+  const locality = uniformVoiceLocality(definedVoiceProviders([stt, tts, realtime]));
+  if (!locality.ok) return undefined;
   return {
     connection: resolved.connection,
-    voiceModelId: roles.stt?.provider.modelId,
-    voiceSpeechOutputModelId: roles.tts?.provider.modelId,
-    ...realtimeVoiceFields(resolved.realtimeSkipped ? undefined : roles.realtime),
+    voiceModelId: stt?.provider.modelId,
+    voiceSpeechOutputModelId: tts?.provider.modelId,
+    ...realtimeVoiceFields(realtime),
+    voiceOutputVoiceId: outputVoice.voiceId,
+    voiceProfilesReduced: outputVoice.reduced,
+    voiceProviderLocality: locality.value,
     voiceRealtimeSkipped: resolved.realtimeSkipped,
   };
 }
@@ -487,8 +647,27 @@ function fieldsFrom(
     voiceRealtimeModelId: voice.voiceRealtimeModelId,
     voiceRealtimeTranscriptionModelId: voice.voiceRealtimeTranscriptionModelId,
     voiceSemanticTurnDetection: voice.voiceSemanticTurnDetection,
+    voiceOutputVoiceId: voice.voiceOutputVoiceId,
+    voiceProfilesReduced: voice.voiceProfilesReduced,
+    voiceProviderLocality: voice.voiceProviderLocality,
     voiceRealtimeSkipped: voice.voiceRealtimeSkipped,
   };
+}
+
+/**
+ * The setup route rebuilds the circuit breaker with fixed values and the form has no field for
+ * it: a file that matches them imports losslessly, a file that tunes them differently cannot be
+ * represented, and a malformed block is corrupted input (review finding on #3031).
+ */
+function circuitBreakerOutcome(value: unknown): "representable" | "invalid" | "unsupportedSetting" {
+  if (value === undefined) return "representable";
+  if (!objectRecord(value)) return "invalid";
+  const expectedKeys = Object.keys(
+    REBUILT_CIRCUIT_BREAKER,
+  ) as readonly (keyof typeof REBUILT_CIRCUIT_BREAKER)[];
+  const matches = expectedKeys.every((key) => value[key] === REBUILT_CIRCUIT_BREAKER[key]);
+  const noExtraKeys = Object.keys(value).every((key) => key in REBUILT_CIRCUIT_BREAKER);
+  return matches && noExtraKeys ? "representable" : "unsupportedSetting";
 }
 
 function capabilitiesForUpload(
@@ -530,6 +709,9 @@ function assembledFields(
   if (generic === undefined || voice === undefined) {
     return { outcome: "invalid" };
   }
+  // A PRESENT but non-object figma block is corrupted input, not an absent connector — the
+  // production parser rejects the same shape (review finding on #3031).
+  if (root.figma !== undefined && !objectRecord(root.figma)) return { outcome: "invalid" };
   const figma = readString(objectRecord(root.figma) ? root.figma.accessToken : undefined);
   if (!figma.ok) return { outcome: "invalid" };
   return {
@@ -551,10 +733,15 @@ export function parseGatewayConfigUpload(serialized: string): GatewayConfigUploa
   }
   const resolved = capabilitiesForUpload(root, providers);
   if (resolved.outcome !== "capabilities") return resolved;
+  // A voice-only file cannot be saved: Test & Save requires the main gateway connection, so a
+  // "successful" load would leave the form permanently unsubmittable (review finding on #3031).
+  if (resolved.partition.generic.length === 0) return { outcome: "invalid" };
   const genericIds = new Set(resolved.partition.generic.map((provider) => provider.modelId));
   if (carriesUnsupportedGenericSetting(root.providers, genericIds)) {
     return { outcome: "unsupportedSetting" };
   }
+  const circuitBreaker = circuitBreakerOutcome(root.circuitBreaker);
+  if (circuitBreaker !== "representable") return { outcome: circuitBreaker };
   return assembledFields(root, resolved.partition);
 }
 
@@ -574,6 +761,8 @@ export function appliedGatewayConfigFieldCount(fields: GatewayConfigUploadFields
     fields.voiceSpeechOutputModelId,
     fields.voiceRealtimeModelId,
     fields.voiceRealtimeTranscriptionModelId,
+    fields.voiceOutputVoiceId,
+    fields.voiceProviderLocality,
   ];
   // A defined-but-empty flag list clears its field, which is an applied change too.
   const flagLists = [fields.imageInputModelIds, fields.workflowEligibleModelIds];

@@ -233,6 +233,8 @@ export const EN_MESSAGES = {
     "This file contains OCR providers this upload cannot fill in — enter that section manually and remove it from the file.",
   "gatewaySetup.upload.realtimeSkipped":
     "The realtime voice model uses its own endpoint and was not applied — add it in the voice settings after saving.",
+  "gatewaySetup.upload.voiceProfilesReduced":
+    "The file configures several output voices; the neutral voice was applied — the others can be reselected later.",
   "gatewaySetup.loading.title": "Preparing model gateway setup",
   "gatewaySetup.loading.description":
     "Loading the local setup controls. No provider request has been started.",

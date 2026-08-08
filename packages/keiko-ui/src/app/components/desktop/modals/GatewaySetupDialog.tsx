@@ -2306,13 +2306,17 @@ export function GatewaySetupDialog({
    * its transcription id (the realtime transition clears the transcription), and the semantic
    * turn detection flag last so the file's explicit declaration wins over inherited defaults.
    */
-  function applyUploadedVoiceConfig(fields: GatewayConfigUploadFields): void {
+  function applyUploadedVoiceConnection(fields: GatewayConfigUploadFields): void {
     if (fields.voiceBaseUrl !== undefined) updateVoiceBaseUrl(fields.voiceBaseUrl);
     if (fields.voiceApiKey !== undefined) setVoiceApiKey(fields.voiceApiKey);
     if (fields.voiceApiKeyHeaderName !== undefined) {
       setVoiceApiKeyHeaderName(fields.voiceApiKeyHeaderName);
     }
     if (fields.voiceTimeoutMs !== undefined) setVoiceTimeoutMs(fields.voiceTimeoutMs);
+  }
+
+  function applyUploadedVoiceConfig(fields: GatewayConfigUploadFields): void {
+    applyUploadedVoiceConnection(fields);
     if (fields.voiceModelId !== undefined) setVoiceModelId(fields.voiceModelId);
     if (fields.voiceRealtimeModelId !== undefined) {
       updateVoiceRealtimeModelId(fields.voiceRealtimeModelId);
@@ -2322,6 +2326,15 @@ export function GatewaySetupDialog({
     }
     if (fields.voiceSpeechOutputModelId !== undefined) {
       updateVoiceSpeechOutputModelId(fields.voiceSpeechOutputModelId);
+    }
+    // After the speech-output update above — its identity transition clears the output voice.
+    if (fields.voiceOutputVoiceId !== undefined) {
+      setVoiceOutputVoiceId(fields.voiceOutputVoiceId);
+      setVoiceOutputVoiceIdConfigured(true);
+    }
+    if (fields.voiceProviderLocality !== undefined) {
+      setVoiceProviderLocality(fields.voiceProviderLocality);
+      setVoiceProviderLocalityConfigured(true);
     }
     if (fields.voiceSemanticTurnDetection !== undefined) {
       updateVoiceSemanticTurnDetection(fields.voiceSemanticTurnDetection);

@@ -704,6 +704,14 @@ function currentEmbeddingModelIds(config: GatewayConfig | undefined): readonly s
   );
 }
 
+function currentOcrModelIds(config: GatewayConfig | undefined): readonly string[] {
+  return (
+    config?.capabilities
+      ?.filter((capability) => capability.kind === "ocr-vision")
+      .map((capability) => capability.id) ?? []
+  );
+}
+
 // `supportedVoicePersonas` is DERIVED at parse time from a provider's `voiceProfiles` (Issue #1557,
 // ADR-0094 D2 / HAZARD-3). It must NOT be persisted: the strict top-level `capabilities` parser
 // rejects it as an unrecognised input key, and re-deriving it on reload keeps a single source of
@@ -1382,6 +1390,13 @@ interface SetupRequest {
    * silently vanishes). Empty outside preserve mode.
    */
   readonly storedEmbeddingModelIds: readonly string[];
+  /**
+   * Model ids whose stored capability kind is `ocr-vision` — the rebuild neither chat-probes
+   * nor re-derives them; the stored providers are restored verbatim, exactly like voice
+   * (review finding on #3031: the same silent-loss class as embeddings, fixed for every stored
+   * non-chat kind). Empty outside preserve mode.
+   */
+  readonly storedOcrModelIds: readonly string[];
   readonly workflowEligibleModelIds: readonly string[];
   readonly workflowEligibleModelIdsConfigured: boolean;
   readonly voiceProviders: readonly SetupVoiceProvider[];
@@ -2942,6 +2957,7 @@ function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | Route
     imageInputModelIds: resolved.imageInputModelIds,
     imageInputModelIdsProvided: hasListField(input.raw, "imageInputModelIds"),
     storedEmbeddingModelIds: input.preserveExisting ? currentEmbeddingModelIds(input.current) : [],
+    storedOcrModelIds: input.preserveExisting ? currentOcrModelIds(input.current) : [],
     workflowEligibleModelIds: resolved.workflowEligibleModelIds,
     workflowEligibleModelIdsConfigured: hasListField(input.raw, "workflowEligibleModelIds"),
     voiceProviders: input.voiceProviders,
@@ -3043,6 +3059,8 @@ interface SetupVerificationInput {
   readonly imageInputModelIdsProvided: boolean;
   /** Stored embedding ids that override the name heuristic — see {@link SetupRequest}. */
   readonly storedEmbeddingModelIds: readonly string[];
+  /** Stored `ocr-vision` ids restored verbatim instead of probed — see {@link SetupRequest}. */
+  readonly storedOcrModelIds: readonly string[];
   readonly workflowEligibleModelIds: readonly string[] | undefined;
   readonly voiceProviders: readonly SetupVoiceProvider[];
   readonly tester: GatewaySetupTester;
@@ -3159,17 +3177,21 @@ function normalizeDiscoveryResult(result: GatewayModelDiscoveryOutput): SetupCan
 function candidateModelsFromDeploymentNames(
   deploymentNames: readonly string[],
   storedEmbeddingModelIds: readonly string[],
+  storedOcrModelIds: readonly string[],
 ): SetupCandidateModels {
   // Stored kinds win over the name heuristic: a preserve-mode rebuild must not chat-probe a
-  // verified embedding deployment out of the config (review finding on #3031).
+  // verified embedding or OCR deployment out of the config (review findings on #3031). Stored
+  // OCR providers leave the candidate set entirely — they are restored verbatim afterwards.
+  const storedOcrSet = new Set(storedOcrModelIds);
+  const candidateNames = deploymentNames.filter((modelId) => !storedOcrSet.has(modelId));
   const storedEmbeddingSet = new Set(storedEmbeddingModelIds);
-  const embeddingModelIds = deploymentNames.filter(
+  const embeddingModelIds = candidateNames.filter(
     (modelId) => storedEmbeddingSet.has(modelId) || isLikelyEmbeddingModelId(modelId),
   );
   const embeddingSet = new Set(embeddingModelIds);
   return {
-    modelIds: deploymentNames,
-    chatModelIds: deploymentNames.filter((modelId) => !embeddingSet.has(modelId)),
+    modelIds: candidateNames,
+    chatModelIds: candidateNames.filter((modelId) => !embeddingSet.has(modelId)),
     embeddingModelIds,
     imageInputModelIds: [],
     modelMetadata: {},
@@ -3181,7 +3203,11 @@ async function candidateModelIdsForSetup(
   validationConfig: GatewayConfig,
 ): Promise<SetupCandidateModels> {
   if (input.deploymentNames.length > 0) {
-    return candidateModelsFromDeploymentNames(input.deploymentNames, input.storedEmbeddingModelIds);
+    return candidateModelsFromDeploymentNames(
+      input.deploymentNames,
+      input.storedEmbeddingModelIds,
+      input.storedOcrModelIds,
+    );
   }
   return normalizeDiscoveryResult(
     await input.discovery(
@@ -3219,12 +3245,68 @@ function finalRawConfigForSetup(
       ? {}
       : { figma: { accessToken: input.figmaAccessToken } }),
   };
-  return applyVoiceProviders(
-    rawConfigWithOptionalBlocks,
-    input.voiceProviders.length > 0
-      ? input.voiceProviders
-      : setupVoiceProvidersFromCurrent(input.current),
+  return applyStoredOcrProviders(
+    applyVoiceProviders(
+      rawConfigWithOptionalBlocks,
+      input.voiceProviders.length > 0
+        ? input.voiceProviders
+        : setupVoiceProvidersFromCurrent(input.current),
+    ),
+    input.current,
+    input.storedOcrModelIds,
   );
+}
+
+function storedOcrProviderRaw(
+  provider: ModelProviderConfig,
+  capability: ModelCapability,
+): Record<string, unknown> {
+  return {
+    modelId: provider.modelId,
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey,
+    ...(provider.apiKeyHeaderName === undefined
+      ? {}
+      : { apiKeyHeaderName: provider.apiKeyHeaderName }),
+    ...(provider.endpointStyle === undefined ? {} : { endpointStyle: provider.endpointStyle }),
+    ...(provider.apiVersion === undefined ? {} : { apiVersion: provider.apiVersion }),
+    ...(provider.outputTokenParameter === undefined
+      ? {}
+      : { outputTokenParameter: provider.outputTokenParameter }),
+    timeoutMs: provider.timeoutMs,
+    maxRetries: provider.maxRetries,
+    retryBaseDelayMs: provider.retryBaseDelayMs,
+    capability,
+  };
+}
+
+/**
+ * A verified rebuild only re-derives chat and embedding providers; stored `ocr-vision`
+ * providers have no probe and no setup field, so — exactly like voice — they are restored
+ * verbatim from the current configuration instead of silently vanishing (review finding on
+ * #3031).
+ */
+function applyStoredOcrProviders(
+  rawConfig: Record<string, unknown>,
+  current: GatewayConfig | undefined,
+  storedOcrModelIds: readonly string[],
+): Record<string, unknown> {
+  if (storedOcrModelIds.length === 0 || current === undefined) return rawConfig;
+  const providers: unknown[] = Array.isArray(rawConfig.providers) ? rawConfig.providers : [];
+  const presentIds = new Set(
+    providers.flatMap((provider) =>
+      isRecord(provider) && typeof provider.modelId === "string" ? [provider.modelId] : [],
+    ),
+  );
+  const restored = storedOcrModelIds.flatMap((modelId) => {
+    if (presentIds.has(modelId)) return [];
+    const provider = current.providers.find((item) => item.modelId === modelId);
+    const capability = current.capabilities?.find((item) => item.id === modelId);
+    if (provider === undefined || capability === undefined) return [];
+    return [storedOcrProviderRaw(provider, capability)];
+  });
+  if (restored.length === 0) return rawConfig;
+  return { ...rawConfig, providers: [...providers, ...restored] };
 }
 
 function skippedModelIdsForSetup(
@@ -3546,6 +3628,7 @@ async function trySetupCandidate(
     imageInputModelIds: request.imageInputModelIds,
     imageInputModelIdsProvided: request.imageInputModelIdsProvided,
     storedEmbeddingModelIds: request.storedEmbeddingModelIds,
+    storedOcrModelIds: request.storedOcrModelIds,
     workflowEligibleModelIds: request.workflowEligibleModelIdsConfigured
       ? request.workflowEligibleModelIds
       : undefined,

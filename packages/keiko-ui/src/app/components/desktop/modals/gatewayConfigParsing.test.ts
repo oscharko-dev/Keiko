@@ -50,6 +50,9 @@ const NO_VOICE_FIELDS = {
   voiceRealtimeModelId: undefined,
   voiceRealtimeTranscriptionModelId: undefined,
   voiceSemanticTurnDetection: undefined,
+  voiceOutputVoiceId: undefined,
+  voiceProfilesReduced: false,
+  voiceProviderLocality: undefined,
   voiceRealtimeSkipped: false,
 } as const;
 
@@ -70,7 +73,7 @@ describe("parseGatewayConfigUpload", () => {
             capability: { id: "text-embed", kind: "embedding" },
           }),
         ],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 1_000, halfOpenProbes: 1 },
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
       }),
     );
 
@@ -113,7 +116,13 @@ describe("parseGatewayConfigUpload", () => {
           voiceProviderFixture(
             "keiko-tts",
             { supportsSpeechOutput: true },
-            { voiceProfiles: [{ persona: "male", voiceId: "alloy" }] },
+            {
+              voiceProfiles: [
+                { persona: "male", voiceId: "alloy" },
+                { persona: "female", voiceId: "nova" },
+                { persona: "neutral", voiceId: "alloy" },
+              ],
+            },
           ),
           voiceProviderFixture(
             "keiko-realtime",
@@ -130,7 +139,7 @@ describe("parseGatewayConfigUpload", () => {
             },
           ),
         ],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 1_000, halfOpenProbes: 1 },
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
       }),
     );
 
@@ -154,9 +163,13 @@ describe("parseGatewayConfigUpload", () => {
       voiceRealtimeModelId: undefined,
       voiceRealtimeTranscriptionModelId: undefined,
       voiceSemanticTurnDetection: undefined,
+      // Three profiles carrying two voices reduce to the neutral persona's, stated.
+      voiceOutputVoiceId: "alloy",
+      voiceProfilesReduced: true,
+      voiceProviderLocality: "azure-foundry",
       voiceRealtimeSkipped: true,
     });
-    expect(appliedGatewayConfigFieldCount(fields)).toBe(11);
+    expect(appliedGatewayConfigFieldCount(fields)).toBe(13);
   });
 
   it("imports all three voice roles when they share one connection", () => {
@@ -215,7 +228,11 @@ describe("parseGatewayConfigUpload", () => {
     const conflicting = JSON.stringify({
       providers: [
         providerFixture(),
-        providerFixture({ modelId: "other", baseUrl: "https://different.example.com/v1" }),
+        providerFixture({
+          modelId: "other",
+          baseUrl: "https://different.example.com/v1",
+          capability: undefined,
+        }),
       ],
     });
 
@@ -226,7 +243,10 @@ describe("parseGatewayConfigUpload", () => {
     // Review finding on #3031: applying one provider's stated value to a provider that omitted
     // it would silently rewrite the second provider's connection.
     const mixed = JSON.stringify({
-      providers: [providerFixture(), providerFixture({ modelId: "other", baseUrl: undefined })],
+      providers: [
+        providerFixture(),
+        providerFixture({ modelId: "other", baseUrl: undefined, capability: undefined }),
+      ],
     });
 
     expect(parseGatewayConfigUpload(mixed)).toEqual({ outcome: "invalid" });
@@ -234,7 +254,12 @@ describe("parseGatewayConfigUpload", () => {
 
   it("treats identical repeated scalars as one connection", () => {
     const fields = fieldsOf(
-      JSON.stringify({ providers: [providerFixture(), providerFixture({ modelId: "second" })] }),
+      JSON.stringify({
+        providers: [
+          providerFixture(),
+          providerFixture({ modelId: "second", capability: undefined }),
+        ],
+      }),
     );
 
     expect(fields.baseUrl).toBe("https://llm-gateway.example.com/v1");
@@ -319,6 +344,133 @@ describe("parseGatewayConfigUpload", () => {
     });
 
     expect(parseGatewayConfigUpload(ocr)).toEqual({ outcome: "unsupportedKind" });
+  });
+
+  it("derives the output voice from uniform profiles without a reduction", () => {
+    const fields = fieldsOf(
+      JSON.stringify({
+        providers: [
+          providerFixture(),
+          voiceProviderFixture(
+            "keiko-tts",
+            { supportsSpeechOutput: true },
+            { voiceProfiles: [{ persona: "neutral", voiceId: "nova" }] },
+          ),
+        ],
+      }),
+    );
+
+    expect(fields.voiceOutputVoiceId).toBe("nova");
+    expect(fields.voiceProfilesReduced).toBe(false);
+  });
+
+  it("fills unclaimed speech roles from a multi-role realtime provider", () => {
+    // Review finding on #3031: the setup route merges roles sharing one model id — excluding a
+    // realtime provider from the speech roles it advertises would silently remove Dictate and
+    // Read-aloud support on save.
+    const fields = fieldsOf(
+      JSON.stringify({
+        providers: [
+          providerFixture(),
+          voiceProviderFixture(
+            "keiko-realtime",
+            {
+              supportsSpeechInput: true,
+              supportsSpeechOutput: true,
+              supportsRealtimeVoice: true,
+              realtimeTranscriptionModel: "keiko-realtime-stt",
+            },
+            { voiceProfiles: [{ persona: "neutral", voiceId: "ash" }] },
+          ),
+        ],
+      }),
+    );
+
+    expect(fields.voiceModelId).toBe("keiko-realtime");
+    expect(fields.voiceSpeechOutputModelId).toBe("keiko-realtime");
+    expect(fields.voiceRealtimeModelId).toBe("keiko-realtime");
+    expect(fields.voiceOutputVoiceId).toBe("ash");
+  });
+
+  it("never fills speech roles from a SKIPPED realtime provider", () => {
+    // The skipped realtime lives on a different connection — its speech flags must not leak
+    // into fields that submit against the imported voice connection.
+    const fields = fieldsOf(
+      JSON.stringify({
+        providers: [
+          providerFixture(),
+          voiceProviderFixture("keiko-stt", { supportsSpeechInput: true }),
+          voiceProviderFixture(
+            "keiko-realtime",
+            { supportsSpeechOutput: true, supportsRealtimeVoice: true },
+            { baseUrl: "https://llm-gateway.example.com/v1" },
+          ),
+        ],
+      }),
+    );
+
+    expect(fields.voiceRealtimeSkipped).toBe(true);
+    expect(fields.voiceSpeechOutputModelId).toBeUndefined();
+    expect(fields.voiceModelId).toBe("keiko-stt");
+  });
+
+  it("carries a uniform non-default voice locality into the form", () => {
+    const fields = fieldsOf(
+      JSON.stringify({
+        providers: [
+          providerFixture(),
+          voiceProviderFixture("keiko-stt", {
+            supportsSpeechInput: true,
+            voiceProviderLocality: "customer-hosted",
+          }),
+        ],
+      }),
+    );
+
+    expect(fields.voiceProviderLocality).toBe("customer-hosted");
+  });
+
+  it("refuses voice providers that disagree on locality", () => {
+    const split = JSON.stringify({
+      providers: [
+        providerFixture(),
+        voiceProviderFixture("keiko-stt", {
+          supportsSpeechInput: true,
+          voiceProviderLocality: "customer-hosted",
+        }),
+        // Absent locality means the production default — a DIFFERENT locality than above.
+        voiceProviderFixture("keiko-tts", { supportsSpeechOutput: true }),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(split)).toEqual({ outcome: "invalid" });
+  });
+
+  it("tolerates the exact circuit breaker the setup route rebuilds and refuses a tuned one", () => {
+    // Review finding on #3031: the route rebuilds {5, 30000, 2}; different values would be
+    // silently replaced behind a success message.
+    const matching = JSON.stringify({
+      providers: [providerFixture()],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    });
+    expect(parseGatewayConfigUpload(matching).outcome).toBe("fields");
+
+    const tuned = JSON.stringify({
+      providers: [providerFixture()],
+      circuitBreaker: { failureThreshold: 9, cooldownMs: 30_000, halfOpenProbes: 2 },
+    });
+    expect(parseGatewayConfigUpload(tuned)).toEqual({ outcome: "unsupportedSetting" });
+
+    const extra = JSON.stringify({
+      providers: [providerFixture()],
+      circuitBreaker: {
+        failureThreshold: 5,
+        cooldownMs: 30_000,
+        halfOpenProbes: 2,
+        surprise: true,
+      },
+    });
+    expect(parseGatewayConfigUpload(extra)).toEqual({ outcome: "unsupportedSetting" });
   });
 
   it("refuses two providers claiming the same voice role", () => {
@@ -522,7 +674,53 @@ describe("parseGatewayConfigUpload", () => {
     [
       "a control-character model id",
       JSON.stringify({
-        providers: [providerFixture({ modelId: "bad id", capability: undefined })],
+        providers: [providerFixture({ modelId: "bad\u0000id", capability: undefined })],
+      }),
+    ],
+    [
+      "an inline capability whose id names a different model",
+      JSON.stringify({
+        providers: [providerFixture({ capability: { id: "other-model", kind: "chat" } })],
+      }),
+    ],
+    [
+      "a non-array voiceProfiles block",
+      JSON.stringify({
+        providers: [providerFixture({ voiceProfiles: "alloy", capability: undefined })],
+      }),
+    ],
+    [
+      "a voice profile without a voice id",
+      JSON.stringify({
+        providers: [
+          providerFixture({ voiceProfiles: [{ persona: "neutral" }], capability: undefined }),
+        ],
+      }),
+    ],
+    [
+      "an unknown voice locality",
+      JSON.stringify({
+        providers: [
+          providerFixture(),
+          voiceProviderFixture("keiko-stt", {
+            supportsSpeechInput: true,
+            voiceProviderLocality: "on-the-moon",
+          }),
+        ],
+      }),
+    ],
+    [
+      "a present non-object figma block",
+      JSON.stringify({ providers: [providerFixture()], figma: null }),
+    ],
+    [
+      "a present non-object circuit breaker",
+      JSON.stringify({ providers: [providerFixture()], circuitBreaker: "default" }),
+    ],
+    [
+      "a voice-only configuration the setup form cannot save",
+      JSON.stringify({
+        providers: [voiceProviderFixture("keiko-stt", { supportsSpeechInput: true })],
       }),
     ],
   ])("refuses %s", (_label, serialized) => {

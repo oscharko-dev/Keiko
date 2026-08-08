@@ -15,12 +15,14 @@ interface UploadState {
   readonly issue: "invalid" | "fileTooLarge" | "unsupportedKind" | "unsupportedSetting" | undefined;
   readonly appliedCount: number | undefined;
   readonly realtimeSkipped: boolean;
+  readonly profilesReduced: boolean;
 }
 
 const INITIAL_STATE: UploadState = {
   issue: undefined,
   appliedCount: undefined,
   realtimeSkipped: false,
+  profilesReduced: false,
 };
 
 async function handleUploadedFile(
@@ -43,7 +45,7 @@ async function handleUploadedFile(
     // this path owns it and must leave it false (review finding on #3031; the flag's contract is
     // "a read for the CURRENT token is in flight").
     onReadPendingChange?.(false);
-    setState({ issue: "fileTooLarge", appliedCount: undefined, realtimeSkipped: false });
+    setState({ ...INITIAL_STATE, issue: "fileTooLarge" });
     return;
   }
   // The dialog must not submit a half-applied snapshot while the read is in flight (review
@@ -78,11 +80,11 @@ function applyReadOutcome(
     result = undefined;
   }
   if (result === undefined || result.outcome === "invalid") {
-    setState({ issue: "invalid", appliedCount: undefined, realtimeSkipped: false });
+    setState({ ...INITIAL_STATE, issue: "invalid" });
     return;
   }
   if (result.outcome !== "fields") {
-    setState({ issue: result.outcome, appliedCount: undefined, realtimeSkipped: false });
+    setState({ ...INITIAL_STATE, issue: result.outcome });
     return;
   }
   try {
@@ -92,13 +94,14 @@ function applyReadOutcome(
     // page's error channel (never an unhandled rejection out of a void handler) and show the
     // honest failed state instead of a success count.
     window.reportError(error);
-    setState({ issue: "invalid", appliedCount: undefined, realtimeSkipped: false });
+    setState({ ...INITIAL_STATE, issue: "invalid" });
     return;
   }
   setState({
     issue: undefined,
     appliedCount: appliedGatewayConfigFieldCount(result.fields),
     realtimeSkipped: result.fields.voiceRealtimeSkipped,
+    profilesReduced: result.fields.voiceProfilesReduced,
   });
 }
 
@@ -164,6 +167,7 @@ function GatewayConfigUploadStatus({ state }: { readonly state: UploadState }): 
     <output className={styles["cmp-config-upload-applied"]}>
       {t("gatewaySetup.upload.applied", { count: state.appliedCount })}
       {state.realtimeSkipped ? ` ${t("gatewaySetup.upload.realtimeSkipped")}` : null}
+      {state.profilesReduced ? ` ${t("gatewaySetup.upload.voiceProfilesReduced")}` : null}
     </output>
   );
 }
