@@ -65,7 +65,7 @@ under an unpredictable name, so no pre-created symlink at a guessable path can c
   # RETURNED, not swallowed by the echo, so a pasted script can tell a transport failure from a
   # completed diagnostic.
   probe() {
-    curl -s -o /dev/null -w "%{http_code}\n" --max-time 30 --config "$1"
+    curl -q -s -o /dev/null -w "%{http_code}\n" --max-time 30 --config "$1"
     probe_status=$?
     if [ "$probe_status" -ne 0 ]; then
       echo "transport failure (curl exit $probe_status)"
@@ -217,7 +217,10 @@ Count the aliases the key can see:
   unset KEY HOST HDR
   # A TRANSPORT failure fails the command (category by exit code, no hostname) instead of
   # reaching node as empty input and being reported as a parse failure.
-  http_code=$(curl -s -o "$KEIKO_BODY" -w '%{http_code}' --max-time 30 --max-filesize 2000000 \
+  # -q FIRST: curl reads ~/.curlrc even when --config is given, and a default `verbose` or
+  # `trace` there would print the Authorization header this block works to keep hidden
+  # (review finding on #3042).
+  http_code=$(curl -q -s -o "$KEIKO_BODY" -w '%{http_code}' --max-time 30 --max-filesize 2000000 \
     --config "$KEIKO_CFG")
   curl_status=$?
   if [ "$curl_status" -ne 0 ]; then
@@ -227,13 +230,18 @@ Count the aliases the key can see:
   # The HTTP status accompanies an unreadable body: curl does not fail on 4xx, so a key sent on
   # the header this proxy ignores would otherwise look like a malformed model list rather than
   # an auth answer (review finding on #3042). The status is a number — still body-free.
-  node -e 'const fs=require("node:fs");const MAX=2_000_000;const [f,code]=process.argv.slice(1);let n;if(fs.statSync(f).size<=MAX){try{const p=JSON.parse(fs.readFileSync(f,"utf8"));if(Array.isArray(p?.data))n=p.data.length;}catch{}}console.log(n===undefined?`unreadable response (HTTP ${code}, not a JSON model list)`:n);' "$KEIKO_BODY" "$http_code"
+  # Counts DISTINCT ids from a 2xx body only — parseModelDiscovery deduplicates by id before
+  # applying MAX_DISCOVERED_MODELS, so the raw array length would overstate what Keiko keeps
+  # (review finding on #3042).
+  node -e 'const fs=require("node:fs");const MAX=2_000_000;const [f,code]=process.argv.slice(1);let n;if(code.startsWith("2")&&fs.statSync(f).size<=MAX){try{const p=JSON.parse(fs.readFileSync(f,"utf8"));if(Array.isArray(p?.data))n=new Set(p.data.filter((e)=>e&&typeof e.id==="string").map((e)=>e.id)).size;}catch{}}console.log(n===undefined?`unreadable response (HTTP ${code}, not a JSON model list)`:n);' "$KEIKO_BODY" "$http_code"
 )
 ```
 
 The cap is KEIKO's own discovery bound (MAX_DISCOVERED_MODELS), applied AFTER the response
-arrives — this direct call bypasses it, so a count ABOVE 100 is exactly the proof that Keiko
-will truncate the list; a count of 100 or less means every alias the key can see fits.
+arrives — this direct call bypasses it. A DISTINCT-ID count above 100 therefore means Keiko
+will truncate; 100 or fewer means every alias the key can see fits. The number is an upper
+bound on what Keiko keeps, not an exact prediction: `parseModelDiscovery` additionally drops
+entries it cannot classify before applying the cap, so the kept set can be smaller.
 
 **Resolution**
 
