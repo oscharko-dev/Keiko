@@ -61,15 +61,27 @@ under an unpredictable name, so no pre-created symlink at a guessable path can c
   printf 'url = "https://%s/v1/models"\nheader = "x-litellm-key: Bearer %s"\n' "$HOST" "$KEY" \
     > "$KEIKO_CFG_LLK"
   unset KEY HOST
-  # curl exit codes: 6 = DNS, 7 = connect, 35 = TLS handshake, 28 = timeout.
+  # curl exit codes: 6 = DNS, 7 = connect, 28 = timeout, 35 = TLS handshake. The status is
+  # RETURNED, not swallowed by the echo, so a pasted script can tell a transport failure from a
+  # completed diagnostic.
   probe() {
-    curl -s -o /dev/null -w "%{http_code}\n" --config "$1" ||
-      echo "transport failure (curl exit $?)"
+    curl -s -o /dev/null -w "%{http_code}\n" --max-time 30 --config "$1"
+    probe_status=$?
+    if [ "$probe_status" -ne 0 ]; then
+      echo "transport failure (curl exit $probe_status)"
+    fi
+    return "$probe_status"
   }
   # Standard header (expect 200):
   probe "$KEIKO_CFG_STD"
+  standard_status=$?
   # Custom header (expect 401/403 while litellm_key_header_name is unconfigured):
   probe "$KEIKO_CFG_LLK"
+  custom_status=$?
+  if [ "$standard_status" -ne 0 ]; then
+    exit "$standard_status"
+  fi
+  exit "$custom_status"
 )
 ```
 
@@ -186,23 +198,36 @@ Count the aliases the key can see:
 # grep reports 1 regardless of how many aliases the key can actually see. Only the count is
 # printed — the response body itself never reaches the terminal, and a data member that is not
 # an ARRAY (a string, or an object carrying a length property) reports the same fixed message
-# rather than echoing upstream content. Self-contained subshell, as above.
+# rather than echoing upstream content. The download is BOUNDED in bytes and time, so a
+# misconfigured or hostile proxy cannot fill the disk or the reader's memory, mirroring the
+# capped reader the production discovery path uses. Self-contained subshell, as above.
 (
   umask 077
   KEIKO_CFG="$(mktemp)"; KEIKO_BODY="$(mktemp)"
   trap 'rm -f "$KEIKO_CFG" "$KEIKO_BODY"' EXIT
   trap 'rm -f "$KEIKO_CFG" "$KEIKO_BODY"; exit 130' INT TERM
   read -rs -p 'Proxy host (not echoed): ' HOST; echo
+  # The proxy may be configured to read the custom header (see the header-selection entry
+  # above); the count must work on both. The header NAME is not a secret.
+  read -r -p 'Key header [authorization|x-litellm-key]: ' HDR
+  HDR="${HDR:-authorization}"
   read -rs -p 'Paste gateway key (not echoed): ' KEY; echo
-  printf 'url = "https://%s/v1/models"\nheader = "Authorization: Bearer %s"\n' "$HOST" "$KEY" \
+  printf 'url = "https://%s/v1/models"\nheader = "%s: Bearer %s"\n' "$HOST" "$HDR" "$KEY" \
     > "$KEIKO_CFG"
-  unset KEY HOST
-  # The body goes to a temp file so a TRANSPORT failure fails the command (category by exit
-  # code, no hostname) instead of reaching node as empty input and being reported as a parse
-  # failure.
-  curl -s -o "$KEIKO_BODY" --config "$KEIKO_CFG" ||
-    { echo "transport failure (curl exit $?)"; exit 1; }
-  node -e 'const d=require("node:fs").readFileSync(process.argv[1],"utf8");let n;try{const p=JSON.parse(d);if(Array.isArray(p?.data))n=p.data.length;}catch{}console.log(n===undefined?"unreadable response (not a JSON model list)":n);' "$KEIKO_BODY"
+  unset KEY HOST HDR
+  # A TRANSPORT failure fails the command (category by exit code, no hostname) instead of
+  # reaching node as empty input and being reported as a parse failure.
+  http_code=$(curl -s -o "$KEIKO_BODY" -w '%{http_code}' --max-time 30 --max-filesize 2000000 \
+    --config "$KEIKO_CFG")
+  curl_status=$?
+  if [ "$curl_status" -ne 0 ]; then
+    echo "transport failure (curl exit $curl_status)"
+    exit "$curl_status"
+  fi
+  # The HTTP status accompanies an unreadable body: curl does not fail on 4xx, so a key sent on
+  # the header this proxy ignores would otherwise look like a malformed model list rather than
+  # an auth answer (review finding on #3042). The status is a number — still body-free.
+  node -e 'const fs=require("node:fs");const MAX=2_000_000;const [f,code]=process.argv.slice(1);let n;if(fs.statSync(f).size<=MAX){try{const p=JSON.parse(fs.readFileSync(f,"utf8"));if(Array.isArray(p?.data))n=p.data.length;}catch{}}console.log(n===undefined?`unreadable response (HTTP ${code}, not a JSON model list)`:n);' "$KEIKO_BODY" "$http_code"
 )
 ```
 
