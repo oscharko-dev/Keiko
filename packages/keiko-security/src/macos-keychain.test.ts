@@ -82,6 +82,7 @@ describe("readMacosKeychainSecret", () => {
     const read = readMacosKeychainSecret("svc", "acct", {
       executable: ANSWERS,
       platform: "darwin",
+      timeoutMs: 30_000,
     });
     expect(read).toEqual({
       kind: "found",
@@ -118,13 +119,27 @@ describe("readMacosKeychainSecret", () => {
     }
   }, 60_000);
 
-  it("defaults the platform and the bound when only the executable is supplied", () => {
-    // Exercises the production defaults for platform and timeout against a controlled fixture, so
-    // no test ever reaches the host keychain. On darwin the fixture answers "no such item"; on any
-    // other host the tier reports itself unavailable without spawning at all.
+  it("defaults the platform when the platform option is omitted", () => {
+    // Exercises the production platform default against a controlled fixture (the bound comes
+    // from the load-proof test budget), so no test ever reaches the host keychain. On darwin the
+    // fixture answers "no such item"; on any other host the tier reports itself unavailable
+    // without spawning at all.
     const read = readMacosKeychainSecret("svc", "acct", { executable: REFUSES, timeoutMs: 30_000 });
     expect(read.kind).toBe(process.platform === "darwin" ? "absent" : "unavailable");
   });
+
+  it("applies the production spawn bound when timeoutMs is omitted", () => {
+    // The one call that really omits timeoutMs runs against the HANGING fixture on purpose: a
+    // fast fixture would flake on a saturated runner (the incident this file hardens against),
+    // while the hang deterministically proves the production bound fires — the call returns
+    // unavailable after ~KEYCHAIN_SPAWN_TIMEOUT_MS instead of waiting 30s for the fixture.
+    const started = process.hrtime.bigint();
+    const read = readMacosKeychainSecret("svc", "acct", { executable: HANGS, platform: "darwin" });
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    expect(elapsedMs).toBeGreaterThanOrEqual(KEYCHAIN_SPAWN_TIMEOUT_MS - 100);
+    expect(elapsedMs).toBeLessThan(15_000);
+    expect(read).toEqual({ kind: "unavailable" });
+  }, 20_000);
 });
 
 describe("writeMacosKeychainSecret", () => {
@@ -209,10 +224,11 @@ describe("writeMacosKeychainSecret", () => {
     expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(1_000);
   });
 
-  it("honours a caller-supplied executable while defaulting the rest", () => {
-    // Only `executable` is supplied, so the platform and the bound come from the production
-    // defaults. On darwin the fake answers and the store reports success; elsewhere the tier is
-    // unavailable and reports failure. Either way it returns a boolean promptly and never throws.
+  it("honours a caller-supplied executable while defaulting the platform", () => {
+    // Only `executable` (plus the load-proof test budget) is supplied, so the platform comes
+    // from the production default. On darwin the fake answers and the store reports success;
+    // elsewhere the tier is unavailable and reports failure. Either way it returns a boolean
+    // promptly and never throws.
     const started = process.hrtime.bigint();
     const stored = writeMacosKeychainSecret("svc", "acct", "secret", {
       executable: ANSWERS,
@@ -221,4 +237,18 @@ describe("writeMacosKeychainSecret", () => {
     expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(5_000);
     expect(stored).toBe(process.platform === "darwin");
   });
+
+  it("applies the production spawn bound to writes when timeoutMs is omitted", () => {
+    // Same rationale as the read-side omitted-timeout pin: the hanging fixture makes the
+    // production default deterministic — the write gives up after ~KEYCHAIN_SPAWN_TIMEOUT_MS.
+    const started = process.hrtime.bigint();
+    const stored = writeMacosKeychainSecret("svc", "acct", "secret", {
+      executable: HANGS,
+      platform: "darwin",
+    });
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    expect(elapsedMs).toBeGreaterThanOrEqual(KEYCHAIN_SPAWN_TIMEOUT_MS - 100);
+    expect(elapsedMs).toBeLessThan(15_000);
+    expect(stored).toBe(false);
+  }, 20_000);
 });
