@@ -159,6 +159,12 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     for (const [needle, answer] of overrides.answers ?? []) {
       if (joined.includes(needle)) return { status: 0, stdout: answer, stderr: "" };
     }
+    if (joined.startsWith("api repos/{owner}/{repo}/git/ref/tags/")) {
+      // Default: the requested tag does not exist as a remote git ref — a 404-style gh failure,
+      // so every pre-existing scenario keeps meaning what it meant before the ref lookup existed
+      // (review finding on #3037). Tests that need an existing ref override this answer.
+      return { status: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" };
+    }
     if (joined.startsWith("run download")) {
       const dir = args[args.indexOf("--dir") + 1];
       const artifact = args[args.indexOf("--name") + 1];
@@ -326,6 +332,119 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     expect(
       recorded.some((line) => line.startsWith(`gh release edit ${currentTag} --draft=false`)),
     ).toBe(true);
+  });
+
+  it("plan-only over an interrupted draft mutates nothing and states the pending recovery", () => {
+    // Review finding on #3037: the draft deletion used to run before the plan-only branch, so a
+    // --plan-only PREVIEW of a recovery permanently deleted the interrupted draft. A plan-only
+    // run must mutate nothing — it states that publishing would delete and recreate the draft.
+    const recorded = [];
+    const stdout = [];
+    const overrides = {
+      answers: [
+        [
+          "api repos/{owner}/{repo}/releases",
+          JSON.stringify([{ tag_name: previousTag }, { tag_name: currentTag }]),
+        ],
+        [`release view ${currentTag}`, '{"isDraft":true}'],
+      ],
+    };
+    const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      stdout.push(String(chunk));
+      return true;
+    });
+    try {
+      withHostPlatform("darwin", () =>
+        withProcessRunner(ghDouble(recorded, overrides), () =>
+          runPortablePrerelease(["--plan-only", "--run-id", "42", "--tag", currentTag]),
+        ),
+      );
+    } finally {
+      write.mockRestore();
+    }
+
+    expect(recorded.some((line) => line.startsWith("gh release delete"))).toBe(false);
+    expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+    expect(stdout.join("")).toContain(
+      `the interrupted draft ${currentTag} would be deleted and recreated`,
+    );
+  });
+
+  it("refuses when the tag already exists as a git ref at a different commit", () => {
+    // Review finding on #3037: `gh release create --target` binds only a tag that does NOT yet
+    // exist — an existing tag ref wins silently and the fresh assets would attach to that tag's
+    // OLD commit. The old code published exactly that; the remote ref is now resolved first and
+    // a mismatch refuses before anything is created.
+    const recorded = [];
+    const overrides = {
+      answers: [
+        [
+          `git/ref/tags/${currentTag}`,
+          '{"ref":"refs/tags/x","object":{"type":"commit","sha":"0ldc0mm17"}}',
+        ],
+      ],
+    };
+
+    expect(() =>
+      withHostPlatform("darwin", () =>
+        withProcessRunner(ghDouble(recorded, overrides), () =>
+          runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
+        ),
+      ),
+    ).toThrowError(/already exists as a git ref at 0ldc0mm17/u);
+    expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+  });
+
+  it("proceeds when the existing tag ref already points at the built commit", () => {
+    const recorded = [];
+    const overrides = {
+      answers: [[`git/ref/tags/${currentTag}`, '{"object":{"type":"commit","sha":"b2e3900a"}}']],
+    };
+    withHostPlatform("darwin", () =>
+      withProcessRunner(ghDouble(recorded, overrides), () =>
+        runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
+      ),
+    );
+
+    expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(true);
+  });
+
+  it("peels an annotated tag ref and proceeds when it seals the built commit", () => {
+    // An annotated tag ref points at a TAG object, not the commit — without the peel the
+    // comparison would judge the tag object's own sha and wrongly refuse a matching tag.
+    const recorded = [];
+    const overrides = {
+      answers: [
+        [`git/ref/tags/${currentTag}`, '{"object":{"type":"tag","sha":"a66tag0b"}}'],
+        ["git/tags/a66tag0b", '{"object":{"type":"commit","sha":"b2e3900a"}}'],
+      ],
+    };
+    withHostPlatform("darwin", () =>
+      withProcessRunner(ghDouble(recorded, overrides), () =>
+        runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
+      ),
+    );
+
+    expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(true);
+  });
+
+  it("refuses an annotated tag ref that peels to a different commit", () => {
+    const recorded = [];
+    const overrides = {
+      answers: [
+        [`git/ref/tags/${currentTag}`, '{"object":{"type":"tag","sha":"a66tag0b"}}'],
+        ["git/tags/a66tag0b", '{"object":{"type":"commit","sha":"0ther5ha"}}'],
+      ],
+    };
+
+    expect(() =>
+      withHostPlatform("darwin", () =>
+        withProcessRunner(ghDouble(recorded, overrides), () =>
+          runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
+        ),
+      ),
+    ).toThrowError(/already exists as a git ref at 0ther5ha/u);
+    expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
   });
 
   it("still refuses a tag that exists as a PUBLISHED release", () => {

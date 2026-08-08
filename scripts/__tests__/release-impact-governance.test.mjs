@@ -580,6 +580,31 @@ describe("release-impact governance", () => {
       expect(messages(result)).toContain("on a line of its own");
     });
 
+    it("rejects a phrase on a CommonMark indented code line (four spaces or a tab)", () => {
+      // Review finding on #3037: a four-space-indented (or tab-indented) line is an indented
+      // CODE BLOCK — a documented example, exactly like a fenced one. Trimming before judging
+      // erased the indentation and let the example approve a publish.
+      const phrase = approvalPhrase();
+      const fourSpaces = validateWith(
+        approvalComment({ body: `The gate expects:\n\n    ${phrase}` }),
+      );
+      expect(fourSpaces.ok).toBe(false);
+      expect(messages(fourSpaces)).toContain("on a line of its own");
+
+      const tabbed = validateWith(approvalComment({ body: `The gate expects:\n\n\t${phrase}` }));
+      expect(tabbed.ok).toBe(false);
+      expect(messages(tabbed)).toContain("on a line of its own");
+    });
+
+    it("accepts a phrase indented by up to three spaces (paragraph, not code)", () => {
+      // The CommonMark boundary sits at four: up to three leading spaces is ordinary paragraph
+      // indentation, so the owner's statement still stands on a plain line of its own.
+      const result = validateWith(approvalComment({ body: `   ${approvalPhrase()}` }));
+
+      expect(messages(result)).not.toContain("approvalReference");
+      expect(result.ok).toBe(true);
+    });
+
     it("accepts a real standalone phrase even when a fenced example precedes it", () => {
       // The fence toggles closed again: a documented example above must not poison the owner's
       // actual approval line below it.

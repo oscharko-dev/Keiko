@@ -19,7 +19,10 @@
  * 5. The release is created as a DRAFT PRERELEASE with provenance (source commit + workflow run
  *    id) in the body; the previous beta of the same version gets a superseded pointer prepended,
  *    and only then does the draft go public — an interrupted run leaves a resumable draft that
- *    the next run deletes and recreates, never a live release missing its superseded pointer.
+ *    the next PUBLISHING run deletes and recreates (a plan-only run only reports the pending
+ *    recovery), never a live release missing its superseded pointer. Before creating, the tag is
+ *    resolved as a remote git ref: an existing ref not at the built commit refuses, because
+ *    `gh release create --target` binds only a tag that does not yet exist.
  *
  * The evaluation lane is never publishable to npm and never promoted to `latest` here; this
  * script owns only the GitHub prerelease surface. `release:publish` owns npm.
@@ -495,14 +498,59 @@ function publishDraftRelease(tag) {
 /**
  * Draft-first publishing makes an interrupted run resumable: a DRAFT carrying the target tag is
  * the remnant of a run that died between create and the final --draft=false publish — it was
- * never public, so it is deleted and the release is recreated fresh. A PUBLISHED release keeps
- * the historical refusal: a live tag is never recreated (review finding on #3037).
+ * never public, so the publish path deletes it and recreates the release fresh. A PUBLISHED
+ * release keeps the historical refusal: a live tag is never recreated (review finding on #3037).
+ * The check is read-only on purpose: the deletion itself happens only on the actual publish path
+ * — a --plan-only preview of a recovery must never destroy the draft it previews (review finding
+ * on #3037).
  */
-function deleteDraftOrRefuseExistingTag(tag) {
+function assertExistingTagIsResumableDraft(tag) {
   const { isDraft } = ghJson(["release", "view", tag, "--json", "isDraft"]);
   if (isDraft !== true) fail(`release ${tag} already exists.`);
+}
+
+function deleteInterruptedDraft(tag) {
   gh(["release", "delete", tag, "--yes"]);
   log(`deleted the interrupted draft ${tag}; recreating it.`);
+}
+
+/**
+ * `gh release create --target` binds the release to the built commit ONLY while the tag does not
+ * yet exist as a git ref — an existing ref wins silently and the fresh assets would attach to
+ * that tag's OLD commit. The remote ref is therefore resolved first: absent (404) proceeds
+ * exactly as before, a ref whose (peeled) commit is the built commit proceeds, anything else
+ * refuses before creating (review finding on #3037).
+ */
+function assertTagRefMatchesBuiltCommit(tag, commitSha) {
+  const ref = readRemoteTagRef(tag);
+  if (ref === undefined) return;
+  const resolved = peelTagRefToCommit(ref);
+  if (resolved !== commitSha) {
+    fail(
+      `tag ${tag} already exists as a git ref at ${resolved}, not the built commit ${commitSha} — creating the release would attach the new assets to that old commit; delete or move the tag first.`,
+    );
+  }
+  log(`tag ${tag} already points at the built commit ${commitSha}; proceeding.`);
+}
+
+function readRemoteTagRef(tag) {
+  const args = ["api", `repos/{owner}/{repo}/git/ref/tags/${tag}`];
+  const result = processRunner(resolveHostExecutable("gh"), args, {});
+  if (result.error !== undefined) fail(`gh could not spawn: ${result.error.message}`);
+  if (result.status === 0) return JSON.parse(result.stdout ?? "");
+  // Only an absent ref (404) may proceed — any other lookup failure refuses, never guesses.
+  if (String(result.stderr ?? "").includes("Not Found")) return undefined;
+  fail(`gh ${args.join(" ")} exited ${String(result.status)}: ${result.stderr}`);
+  return undefined;
+}
+
+/** An annotated tag ref points at a TAG object, not a commit — peel (bounded) to the commit. */
+function peelTagRefToCommit(ref) {
+  let object = ref.object;
+  for (let depth = 0; depth < 5 && object.type === "tag"; depth += 1) {
+    object = ghJson(["api", `repos/{owner}/{repo}/git/tags/${object.sha}`]).object;
+  }
+  return object.sha;
 }
 
 function markPreviousSuperseded(previousTag, tag, repository) {
@@ -526,7 +574,8 @@ export function runPortablePrerelease(argv) {
   const repository = repositorySlug();
   const tags = existingReleaseTags();
   const tag = options.tag ?? nextBetaTag(version, tags);
-  if (tags.includes(tag)) deleteDraftOrRefuseExistingTag(tag);
+  const hasPendingDraft = tags.includes(tag);
+  if (hasPendingDraft) assertExistingTagIsResumableDraft(tag);
   const runId = options.runId ?? dispatchWorkflow(options.ref);
   log(`waiting for workflow run ${runId} ...`);
   const view = waitForRun(runId);
@@ -540,7 +589,18 @@ export function runPortablePrerelease(argv) {
   assertStagingJobsSucceeded(runId);
   const { workDir, publishDir } = downloadAssets(runId);
   try {
-    runPublishSteps({ workDir, publishDir, options, version, repository, tags, tag, runId, view });
+    runPublishSteps({
+      workDir,
+      publishDir,
+      options,
+      version,
+      repository,
+      tags,
+      tag,
+      runId,
+      view,
+      hasPendingDraft,
+    });
   } finally {
     // Refusals exit through fail() — the temp directory must not survive them, nor a plan-only
     // run (review findings on #3032).
@@ -558,6 +618,7 @@ function runPublishSteps({
   tag,
   runId,
   view,
+  hasPendingDraft,
 }) {
   const checksums = checksumLines(publishDir);
   const sealVerification = verifyMacosSeal(publishDir);
@@ -573,10 +634,17 @@ function runPublishSteps({
     previousTag,
   });
   if (options.planOnly) {
+    if (hasPendingDraft) {
+      log(
+        `PLAN-ONLY: the interrupted draft ${tag} would be deleted and recreated on publish (it was not touched).`,
+      );
+    }
     process.stdout.write(`${body}\n`);
     log(`PLAN-ONLY complete for ${tag} (nothing published).`);
     return;
   }
+  assertTagRefMatchesBuiltCommit(tag, view.headSha);
+  if (hasPendingDraft) deleteInterruptedDraft(tag);
   createRelease({ workDir, publishDir, tag, commitSha: view.headSha, version, body });
   markPreviousSuperseded(previousTag, tag, repository);
   publishDraftRelease(tag);

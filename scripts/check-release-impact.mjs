@@ -350,6 +350,14 @@ function closesFence(openFence, line, delimiter) {
   );
 }
 
+// Four-plus leading spaces or a tab make a CommonMark indented CODE BLOCK: like a fenced
+// example, an indented line documents the phrase and never grants the approval — so the RAW
+// line is judged before trimming, which would erase exactly that distinction (review finding on
+// #3037). Up to three leading spaces is ordinary paragraph indentation and stays eligible.
+function isIndentedCodeLine(rawLine) {
+  return rawLine.startsWith("\t") || rawLine.startsWith("    ");
+}
+
 function phraseStandsOnPlainLine(body, phrase) {
   let openFence;
   for (const rawLine of body.split("\n")) {
@@ -359,6 +367,7 @@ function phraseStandsOnPlainLine(body, phrase) {
       if (closesFence(openFence, line, delimiter)) openFence = undefined;
       continue;
     }
+    if (isIndentedCodeLine(rawLine)) continue;
     if (delimiter !== undefined) {
       openFence = delimiter;
       continue;
