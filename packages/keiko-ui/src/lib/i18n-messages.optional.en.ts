@@ -775,6 +775,63 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The realtime voice model uses its own endpoint and was not applied — add it in the voice settings after saving.",
   "gatewaySetup.upload.voiceProfilesReduced":
     "The file configures several output voices; the neutral voice was applied — the others can be reselected later.",
+  "gatewaySetup.badge.setup": "Model gateway setup",
+  "gatewaySetup.badge.update": "Credential update",
+  "gatewaySetup.voice.title": "Audio & Digital Voice",
+  "gatewaySetup.voice.description":
+    "Optional models for dictation, live conversation, and spoken answers.",
+  "gatewaySetup.voice.guidance":
+    "Configure only what you need: Dictate requires a speech-to-text deployment. Digital Voice requires a Realtime media deployment and its compatible live-transcription deployment. Read aloud requires a speech-output deployment. Deployment names are provider-specific. To replace an audio endpoint, re-enter a fresh credential and provider locality plus every role that should move; roles you omit stay on their stored connection.",
+  "gatewaySetup.voice.selectedCapabilities":
+    "Selected capabilities: Dictate {dictate} · Digital Voice {digitalVoice} · Read aloud {readAloud}.",
+  "gatewaySetup.voice.dictateDeployment": "Dictate · speech-to-text deployment",
+  "gatewaySetup.voice.realtimeDeployment": "Digital Voice · Realtime deployment",
+  "gatewaySetup.voice.realtimeTranscriptionDeployment":
+    "Digital Voice · live transcription deployment",
+  "gatewaySetup.voice.realtimeTranscriptionDeploymentPlaceholder":
+    "your-realtime-transcription-deployment",
+  "gatewaySetup.voice.realtimeTranscriptionRequiredLabel": "required with Realtime",
+  "gatewaySetup.voice.realtimeTranscriptionRequired":
+    "Enter the compatible live-transcription deployment for this Realtime deployment.",
+  "gatewaySetup.voice.realtimeRequired":
+    "A live-transcription deployment requires an explicit Realtime deployment.",
+  "gatewaySetup.voice.deploymentRequired":
+    "Enter at least one explicit voice deployment: speech-to-text, Realtime with live transcription, or speech output.",
+  "gatewaySetup.voice.endpointMigrationRequired":
+    "Replacing a stored audio endpoint requires a fresh credential, an explicitly selected provider locality, and at least one deployment role to move.",
+  "gatewaySetup.voice.semanticTurnDetection": "Semantic turn detection",
+  "gatewaySetup.voice.semanticTurnDetectionHint":
+    "Enable only when this Realtime deployment explicitly supports semantic VAD. Replacing the deployment resets this capability.",
+  "gatewaySetup.voice.speechOutputDeployment": "Read aloud · speech-output deployment",
+  "gatewaySetup.voice.outputVoice": "Output voice",
+  "gatewaySetup.voice.outputVoiceHint":
+    "required for Read Aloud; use an ID supported by the selected provider",
+  "gatewaySetup.voice.outputVoiceRequired":
+    "An explicit provider voice ID is required when a speech-output deployment is configured or replaced.",
+  "gatewaySetup.voice.endpointUrl": "Audio endpoint URL",
+  "gatewaySetup.voice.preserveExistingHint": "leave blank to keep",
+  "gatewaySetup.voice.endpointReplacePlaceholder":
+    "Replace together with credential, locality, and explicit target roles",
+  "gatewaySetup.voice.credential": "Audio credential",
+  "gatewaySetup.voice.credentialReplacePlaceholder":
+    "Only enter a value to replace the stored audio credential",
+  "gatewaySetup.voice.credentialPlaceholder": "Paste your audio credential",
+  "gatewaySetup.voice.authHeader": "Audio auth header",
+  "gatewaySetup.voice.authHeaderPreservePlaceholder": "Leave blank to keep stored header",
+  "gatewaySetup.voice.timeout": "Audio timeout (ms)",
+  "gatewaySetup.voice.timeoutPreservePlaceholder": "Leave blank to keep stored timeout",
+  "gatewaySetup.voice.storedAria": "Stored audio credentials",
+  "gatewaySetup.voice.audioModels": "Audio models",
+  "gatewaySetup.voice.updateSettings": "Update audio and Digital Voice settings",
+  "gatewaySetup.voice.success.audioAndFigma":
+    "Updated audio and Digital Voice settings and verified Figma access token. Reloading Keiko…",
+  "gatewaySetup.voice.success.gatewayAudioAndFigma":
+    "Updated model gateway, audio and Digital Voice settings, and verified Figma access token. Reloading Keiko…",
+  "gatewaySetup.voice.success.audio": "Updated audio and Digital Voice settings. Reloading Keiko…",
+  "gatewaySetup.voice.success.verifiedAudioAndFigma":
+    "{verified}, updated audio and Digital Voice settings, and verified Figma access token. Reloading Keiko…{skipped}",
+  "gatewaySetup.voice.success.verifiedAudio":
+    "{verified} and updated audio and Digital Voice settings. Reloading Keiko…{skipped}",
 } as const;
 
 export type OptionalWidgetMessageKey = keyof typeof OPTIONAL_WIDGET_EN_MESSAGES;
