@@ -3292,13 +3292,13 @@ describe("handleGatewaySetup", () => {
             modelId: "scan-ocr",
             baseUrl: "https://llm.example.com/v1",
             apiKey: "chat-token",
-            capability: ocrCapability("scan-ocr"),
+            capability: durableOcrCapability("scan-ocr"),
           },
           {
             modelId: "remote-ocr",
             baseUrl: "https://ocr.example.com",
             apiKey: "dedicated-ocr-token",
-            capability: ocrCapability("remote-ocr"),
+            capability: durableOcrCapability("remote-ocr"),
           },
         ],
         circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
@@ -3409,6 +3409,25 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  // Shared by the two durable-classification tests below (review finding on #3040).
+  const durableOcrCapability = (id: string): Record<string, unknown> => ({
+    id,
+    kind: "ocr-vision",
+    contextWindow: 32_000,
+    maxOutputTokens: 4_096,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    supportsImageInput: false,
+    supportsDocumentInput: true,
+    workflowEligible: false,
+    costClass: "low",
+    latencyClass: "fast",
+    throughputHint: "test ocr deployment",
+    preferredUseCases: ["Document OCR"],
+    knownLimitations: [],
+  });
+
   it("classifies stored-provider sharing from the persisted file, not the env-resolved runtime view", async () => {
     // Codex finding deferred on #3037: the preserve-mode rebuild judged connection sharing on the
     // RUNTIME GatewayConfig, which folds in transient per-model environment overrides
@@ -3416,26 +3435,9 @@ describe("handleGatewaySetup", () => {
     // durable file-level sharing relationship invisible, so a credential rotation restored the
     // same-connection OCR provider as "dedicated" with its already-dead token. Sharing is now
     // classified on the persisted configuration (vault-resolved, per-model overrides masked) —
-    // the same disk-vs-runtime rule withPersistedGatewayEgress draws for egress.
+    // the same disk-vs-runtime rule withDiskGatewayEgress draws for egress.
     const uiDir = await tempDir("keiko-gw-ui-durable-share-");
     const evidenceDir = await tempDir("keiko-gw-ev-durable-share-");
-    const ocrCapability = (id: string): Record<string, unknown> => ({
-      id,
-      kind: "ocr-vision",
-      contextWindow: 32_000,
-      maxOutputTokens: 4_096,
-      toolCalling: false,
-      structuredOutput: false,
-      streaming: false,
-      supportsImageInput: false,
-      supportsDocumentInput: true,
-      workflowEligible: false,
-      costClass: "low",
-      latencyClass: "fast",
-      throughputHint: "test ocr deployment",
-      preferredUseCases: ["Document OCR"],
-      knownLimitations: [],
-    });
     // The stored file: chat and scan-ocr SHARE one connection; remote-ocr owns a dedicated one.
     writeFileSync(
       join(uiDir, "keiko.config.json"),
@@ -3450,13 +3452,13 @@ describe("handleGatewaySetup", () => {
             modelId: "scan-ocr",
             baseUrl: "https://llm.example.com/v1",
             apiKey: "chat-token",
-            capability: ocrCapability("scan-ocr"),
+            capability: durableOcrCapability("scan-ocr"),
           },
           {
             modelId: "remote-ocr",
             baseUrl: "https://ocr.example.com",
             apiKey: "dedicated-ocr-token",
-            capability: ocrCapability("remote-ocr"),
+            capability: durableOcrCapability("remote-ocr"),
           },
         ],
         circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
@@ -3478,11 +3480,11 @@ describe("handleGatewaySetup", () => {
           modelIds.filter((modelId) => modelId !== "scan-ocr" && modelId !== "remote-ocr"),
         ),
     });
-    const savedConnections = (): ReadonlyMap<string, { apiKey: string }> =>
+    const savedConnections = (): ReadonlyMap<string, { apiKey: string; baseUrl: string }> =>
       new Map(
         (currentGatewayConfig(deps)?.providers ?? []).map((provider) => [
           provider.modelId,
-          { apiKey: provider.apiKey },
+          { apiKey: provider.apiKey, baseUrl: provider.baseUrl },
         ]),
       );
 
@@ -3493,8 +3495,16 @@ describe("handleGatewaySetup", () => {
     expect(rotated.status).toBe(200);
     // The old token dies with the rotation: the file-sharing OCR must follow it even though the
     // runtime view shows the chat provider on the overridden endpoint.
-    expect(savedConnections().get("scan-ocr")).toEqual({ apiKey: "example-rotated-token" });
-    expect(savedConnections().get("remote-ocr")).toEqual({ apiKey: "dedicated-ocr-token" });
+    // The shared OCR follows the VERIFIED connection (the runtime-inherited, overridden URL —
+    // the smoke test ran there), while the dedicated OCR keeps its own endpoint untouched.
+    expect(savedConnections().get("scan-ocr")).toEqual({
+      apiKey: "example-rotated-token",
+      baseUrl: "https://elsewhere.example.com/v1",
+    });
+    expect(savedConnections().get("remote-ocr")).toEqual({
+      apiKey: "dedicated-ocr-token",
+      baseUrl: "https://ocr.example.com",
+    });
 
     // Second rotation against the now-SEALED persisted file (apiKeys live in the vault after the
     // first save): the durable classification must resolve vault references, or every provider
@@ -3504,8 +3514,14 @@ describe("handleGatewaySetup", () => {
       deps,
     );
     expect(resealed.status).toBe(200);
-    expect(savedConnections().get("scan-ocr")).toEqual({ apiKey: "example-second-token" });
-    expect(savedConnections().get("remote-ocr")).toEqual({ apiKey: "dedicated-ocr-token" });
+    expect(savedConnections().get("scan-ocr")).toEqual({
+      apiKey: "example-second-token",
+      baseUrl: "https://elsewhere.example.com/v1",
+    });
+    expect(savedConnections().get("remote-ocr")).toEqual({
+      apiKey: "dedicated-ocr-token",
+      baseUrl: "https://ocr.example.com",
+    });
     deps.store.close();
   });
 
@@ -3528,23 +3544,7 @@ describe("handleGatewaySetup", () => {
             modelId: "scan-ocr",
             baseUrl: "https://llm.example.com/v1",
             apiKey: "chat-token",
-            capability: {
-              id: "scan-ocr",
-              kind: "ocr-vision",
-              contextWindow: 32_000,
-              maxOutputTokens: 4_096,
-              toolCalling: false,
-              structuredOutput: false,
-              streaming: false,
-              supportsImageInput: false,
-              supportsDocumentInput: true,
-              workflowEligible: false,
-              costClass: "low",
-              latencyClass: "fast",
-              throughputHint: "test ocr deployment",
-              preferredUseCases: ["Document OCR"],
-              knownLimitations: [],
-            },
+            capability: durableOcrCapability("scan-ocr"),
           },
         ],
         circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
