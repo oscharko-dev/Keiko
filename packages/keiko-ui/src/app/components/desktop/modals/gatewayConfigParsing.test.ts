@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_GATEWAY_CONFIG_BYTES,
   appliedGatewayConfigFieldCount,
   parseGatewayConfigUpload,
   type GatewayConfigUploadFields,
@@ -414,6 +415,14 @@ describe("parseGatewayConfigUpload", () => {
     );
 
     expect(fields.imageInputModelIds).toEqual(["gpt-5o"]);
+  });
+
+  it("refuses an oversized payload before parsing it", () => {
+    // Review finding on #3031: the upload control checks file.size, but the parser owns its own
+    // ceiling so no future call site can feed an unbounded payload into JSON.parse.
+    const oversized = `{"providers": [${" ".repeat(MAX_GATEWAY_CONFIG_BYTES)}]}`;
+
+    expect(parseGatewayConfigUpload(oversized)).toEqual({ outcome: "invalid" });
   });
 
   it("mirrors the setup route's 100-provider ceiling at upload time", () => {

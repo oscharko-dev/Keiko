@@ -67,7 +67,16 @@ function applyReadOutcome(
   onApply: (fields: GatewayConfigUploadFields) => void,
   setState: (state: UploadState) => void,
 ): void {
-  const result = serialized === undefined ? undefined : parseGatewayConfigUpload(serialized);
+  let result;
+  try {
+    result = serialized === undefined ? undefined : parseGatewayConfigUpload(serialized);
+  } catch (error) {
+    // The parser is written to never throw on hostile input — if it ever does, that is a
+    // programming error: report it through the page's error channel and show the honest
+    // failed state, exactly like a throwing apply callback below (review finding on #3031).
+    window.reportError(error);
+    result = undefined;
+  }
   if (result === undefined || result.outcome === "invalid") {
     setState({ issue: "invalid", appliedCount: undefined, realtimeSkipped: false });
     return;

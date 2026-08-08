@@ -539,6 +539,10 @@ function assembledFields(
 }
 
 export function parseGatewayConfigUpload(serialized: string): GatewayConfigUploadResult {
+  // Defence in depth: the upload control checks file.size before reading, but the parser owns
+  // its own ceiling so no future call site can feed an unbounded payload into JSON.parse
+  // (review finding on #3031).
+  if (serialized.length > MAX_GATEWAY_CONFIG_BYTES) return { outcome: "invalid" };
   const root = uploadRoot(serialized);
   if (root === undefined) return { outcome: "invalid" };
   const providers = parsedProviders(root.providers);
