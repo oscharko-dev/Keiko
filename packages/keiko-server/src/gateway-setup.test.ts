@@ -3261,23 +3261,6 @@ describe("handleGatewaySetup", () => {
         );
       },
     });
-    const ocrCapability = (id: string): Record<string, unknown> => ({
-      id,
-      kind: "ocr-vision",
-      contextWindow: 32_000,
-      maxOutputTokens: 4_096,
-      toolCalling: false,
-      structuredOutput: false,
-      streaming: false,
-      supportsImageInput: false,
-      supportsDocumentInput: true,
-      workflowEligible: false,
-      costClass: "low",
-      latencyClass: "fast",
-      throughputHint: "test ocr deployment",
-      preferredUseCases: ["Document OCR"],
-      knownLimitations: [],
-    });
     const gatewayConfig = deps.gatewayConfig;
     if (gatewayConfig === undefined) throw new Error("expected gateway config store");
     gatewayConfig.set(
