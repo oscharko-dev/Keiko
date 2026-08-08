@@ -218,6 +218,11 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     const createLine = recorded.find((line) => line.startsWith("gh release create"));
     expect(createLine).toContain("v0.3.0-beta.2");
     expect(createLine).toContain("--prerelease");
+    // The tag binds to the exact commit the workflow built, never a moving branch ref — assets
+    // and release source must agree even when the branch advanced mid-run (review finding on
+    // #3032).
+    expect(createLine).toContain("--target b2e3900a");
+    expect(createLine).not.toContain("--target dev");
     expect(createLine).toContain("keiko-macos-arm64.zip");
     expect(createLine).toContain("keiko-windows-x64-setup.exe");
     // The predecessor got the superseded pointer prepended.
@@ -240,6 +245,35 @@ describe("hermetic end-to-end (scripted gh double)", () => {
       ),
     ).toThrowError(/staging jobs failed/u);
     expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+  });
+
+  it("removes the temporary work directory on refusals and plan-only runs", () => {
+    // Review findings on #3032: fail() exits must not orphan the mkdtemp directory, and a
+    // plan-only run must clean up after itself as well.
+    const workDirOf = (recorded) => {
+      const download = recorded.find((line) => line.includes("run download"));
+      const parts = download.split(" ");
+      return pathModule.dirname(parts[parts.indexOf("--dir") + 1]);
+    };
+
+    const refusalRecorded = [];
+    const codesign = { status: 1, stderr: "generic verification failure" };
+    expect(() =>
+      withHostPlatform("darwin", () =>
+        withProcessRunner(ghDouble(refusalRecorded, { codesign }), () =>
+          runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+        ),
+      ),
+    ).toThrowError(/codesign/u);
+    expect(fsModule.existsSync(workDirOf(refusalRecorded))).toBe(false);
+
+    const planRecorded = [];
+    withHostPlatform("darwin", () =>
+      withProcessRunner(ghDouble(planRecorded), () =>
+        runPortablePrerelease(["--plan-only", "--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+      ),
+    );
+    expect(fsModule.existsSync(workDirOf(planRecorded))).toBe(false);
   });
 
   it("refuses a drifting publish set instead of shipping stray binaries", () => {

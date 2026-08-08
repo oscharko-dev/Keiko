@@ -344,8 +344,11 @@ function createRelease(input) {
     "create",
     input.tag,
     "--prerelease",
+    // The tag must point at the exact commit the workflow built — a branch target would drift
+    // whenever the branch advances mid-run or an older --run-id is reused, making the release's
+    // source and its assets disagree (review finding on #3032).
     "--target",
-    input.ref,
+    input.commitSha,
     "--title",
     `Keiko ${input.version} (${input.tag})`,
     "--notes-file",
@@ -385,6 +388,26 @@ export function runPortablePrerelease(argv) {
   }
   assertStagingJobsSucceeded(runId);
   const { workDir, publishDir } = downloadAssets(runId);
+  try {
+    runPublishSteps({ workDir, publishDir, options, version, repository, tags, tag, runId, view });
+  } finally {
+    // Refusals exit through fail() — the temp directory must not survive them, nor a plan-only
+    // run (review findings on #3032).
+    rmSync(workDir, { recursive: true, force: true });
+  }
+}
+
+function runPublishSteps({
+  workDir,
+  publishDir,
+  options,
+  version,
+  repository,
+  tags,
+  tag,
+  runId,
+  view,
+}) {
   const checksums = checksumLines(publishDir);
   const sealVerification = verifyMacosSeal(publishDir);
   const previousTag = previousBetaTag(tag, tags);
@@ -403,9 +426,8 @@ export function runPortablePrerelease(argv) {
     log(`PLAN-ONLY complete for ${tag} (nothing published).`);
     return;
   }
-  createRelease({ workDir, publishDir, tag, ref: options.ref, version, body });
+  createRelease({ workDir, publishDir, tag, commitSha: view.headSha, version, body });
   markPreviousSuperseded(previousTag, tag, repository);
-  rmSync(workDir, { recursive: true, force: true });
   log(`DONE - ${tag} is live with 4 verified assets.`);
 }
 
