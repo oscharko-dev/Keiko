@@ -61,6 +61,7 @@ const NO_VOICE_FIELDS = {
   voiceOutputVoiceId: undefined,
   voiceProfilesReduced: false,
   voiceProviderLocality: undefined,
+  voiceSupportsSpeechSynthesisInstructions: undefined,
   voiceRealtimeSkipped: false,
   voiceRetryTuningReset: false,
 } as const;
@@ -181,6 +182,7 @@ describe("parseGatewayConfigUpload", () => {
       voiceRealtimeModelId: undefined,
       voiceRealtimeTranscriptionModelId: undefined,
       voiceSemanticTurnDetection: undefined,
+      voiceSupportsSpeechSynthesisInstructions: false,
       // Three profiles carrying two voices reduce to the neutral persona's, stated.
       voiceOutputVoiceId: "alloy",
       voiceProfilesReduced: true,
@@ -685,6 +687,70 @@ describe("parseGatewayConfigUpload", () => {
     });
 
     expect(parseGatewayConfigUpload(split)).toEqual({ outcome: "invalid" });
+  });
+
+  it("carries speech-synthesis instruction support from an uploaded TTS capability", () => {
+    // Review finding on #3037: supportsSpeechSynthesisInstructions is a behavior-bearing
+    // canonical voice flag — the parser neither validated nor captured it, so the upload
+    // reported success and the rebuilt capability silently lost instruction support.
+    const fields = fieldsOf(
+      JSON.stringify({
+        providers: [
+          providerFixture(),
+          voiceProviderFixture("keiko-tts", {
+            supportsSpeechOutput: true,
+            supportsSpeechSynthesisInstructions: true,
+          }),
+        ],
+      }),
+    );
+
+    expect(fields.voiceSupportsSpeechSynthesisInstructions).toBe(true);
+  });
+
+  it("rejects synthesis instructions without speech output", () => {
+    // Canonical rule: supportsSpeechSynthesisInstructions requires supportsSpeechOutput.
+    const sttOnly = JSON.stringify({
+      providers: [
+        providerFixture(),
+        voiceProviderFixture("keiko-stt", {
+          supportsSpeechInput: true,
+          supportsSpeechSynthesisInstructions: true,
+        }),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(sttOnly)).toEqual({ outcome: "invalid" });
+  });
+
+  it("rejects a declared-false synthesis flag without speech output", () => {
+    // Codex finding on #3041: the canonical assertVoiceTuningInvariants checks field PRESENCE —
+    // supportsSpeechSynthesisInstructions: false without supportsSpeechOutput is refused by the
+    // product parser just like true; accepting it here reported success for a file the product
+    // cannot load and silently dropped the declaration on save.
+    const declaredFalse = JSON.stringify({
+      providers: [
+        providerFixture(),
+        voiceProviderFixture("keiko-stt", {
+          supportsSpeechInput: true,
+          supportsSpeechSynthesisInstructions: false,
+        }),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(declaredFalse)).toEqual({ outcome: "invalid" });
+  });
+
+  it("rejects synthesis instructions on a non-voice capability", () => {
+    const misplaced = JSON.stringify({
+      providers: [
+        providerFixture({
+          capability: { id: "gpt-5o", kind: "chat", supportsSpeechSynthesisInstructions: true },
+        }),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(misplaced)).toEqual({ outcome: "invalid" });
   });
 
   it("refuses a voice section whose connection has no base URL", () => {
