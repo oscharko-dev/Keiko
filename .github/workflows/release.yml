@@ -56,14 +56,7 @@ env:
 jobs:
   release-verify:
     name: Release verification
-    # A pushed PRERELEASE tag (SemVer: any "-" suffix, e.g. v0.3.0-beta.2) belongs to the
-    # portable-prerelease lane, which carries its own verification (built-commit version match,
-    # checksums, seal — scripts/release-portable-prerelease.mjs). Running the STABLE release
-    # verification against it fails on the exact-version tag check by design, so prerelease tag
-    # pushes are excluded here; workflow_dispatch behavior is unchanged.
-    if: >-
-      (github.event_name != 'workflow_dispatch' || !inputs.publish) &&
-      (github.event_name != 'push' || !contains(github.ref_name, '-'))
+    if: github.event_name != 'workflow_dispatch' || !inputs.publish
     runs-on: ubuntu-latest
     permissions:
       checks: read
@@ -85,23 +78,37 @@ jobs:
       - name: Validate release tag
         env:
           RELEASE_TAG: ${{ github.ref_name }}
+        # A stable tag must equal v<version> exactly. A GOVERNED beta prerelease tag
+        # (v<version>-beta.<n>, cut by scripts/release-portable-prerelease.mjs — ADR-0163 D9)
+        # is validated against the same package version, so a foreign, RC, or malformed
+        # hyphenated tag still fails closed instead of skipping verification entirely.
         run: |
           node <<'NODE'
           const { version } = require("./package.json");
           const releaseTag = process.env.RELEASE_TAG;
-          if (releaseTag !== `v${version}`) {
+          const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const beta = new RegExp(`^v${escaped}-beta\\.(?:0|[1-9][0-9]*)$`, "u");
+          if (releaseTag !== `v${version}` && !beta.test(releaseTag)) {
             throw new Error(`Release tag ${releaseTag} does not match package version ${version}.`);
           }
           NODE
+      # The remaining steps verify the STABLE release surface (required checks on the tagged
+      # SHA, npm manifest plan, portable approvals). Beta prerelease tags stop after the
+      # format validation above: their assets are verified by the portable-prerelease lane
+      # (built-commit version match, checksums, seal), not by the npm release surface.
       - name: Validate required-check workflow names
+        if: ${{ !contains(github.ref_name, '-') }}
         run: npm run check:release-required-workflows
       - name: Validate approved portable runtime inputs
+        if: ${{ !contains(github.ref_name, '-') }}
         run: npm run check:portable-approvals
       - name: Verify required checks for tagged SHA
+        if: ${{ !contains(github.ref_name, '-') }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: RELEASE_SHA="$(git rev-parse HEAD)" node scripts/verify-release-required-checks.mjs
       - name: Validate release manifest plan
+        if: ${{ !contains(github.ref_name, '-') }}
         run: npm run release:plan -- --tag beta
 
   publish:
