@@ -446,6 +446,8 @@ interface SetupVoiceCapabilities {
   readonly speechOutput: boolean;
   readonly realtime: boolean;
   readonly supportsSemanticTurnDetection?: boolean | undefined;
+  /** Submitted tri-state: true sets, false clears, undefined follows the stored template. */
+  readonly supportsSpeechSynthesisInstructions?: boolean | undefined;
   readonly realtimeTranscriptionModel?: string | undefined;
 }
 
@@ -454,6 +456,18 @@ function semanticTurnDetectionCapability(
 ): Pick<ModelCapability, "supportsSemanticTurnDetection"> {
   return capabilities.realtime && capabilities.supportsSemanticTurnDetection === true
     ? { supportsSemanticTurnDetection: true }
+    : {};
+}
+
+// Speech-synthesis instruction support is a behavior-bearing canonical flag bound to speech
+// output (the config parser requires supportsSpeechOutput) — it travels through the setup
+// contract exactly like semantic turn detection, or an uploaded declaration would be silently
+// lost on the rebuild (review finding on #3037).
+function speechSynthesisInstructionsCapability(
+  capabilities: SetupVoiceCapabilities,
+): Pick<ModelCapability, "supportsSpeechSynthesisInstructions"> {
+  return capabilities.speechOutput && capabilities.supportsSpeechSynthesisInstructions === true
+    ? { supportsSpeechSynthesisInstructions: true }
     : {};
 }
 
@@ -482,6 +496,7 @@ function createDefaultVoiceCapabilityForSetup(
     ...(capabilities.speechOutput ? { supportsSpeechOutput: true } : {}),
     ...(capabilities.realtime ? { supportsRealtimeVoice: true } : {}),
     ...semanticTurnDetectionCapability(capabilities),
+    ...speechSynthesisInstructionsCapability(capabilities),
     ...(capabilities.realtime && capabilities.realtimeTranscriptionModel !== undefined
       ? { realtimeTranscriptionModel: capabilities.realtimeTranscriptionModel }
       : {}),
@@ -861,6 +876,9 @@ function voiceCapabilities(capability: ModelCapability): SetupVoiceCapabilities 
     realtime: modelSupportsRealtimeVoice(capability),
     ...(capability.supportsSemanticTurnDetection === true
       ? { supportsSemanticTurnDetection: true }
+      : {}),
+    ...(capability.supportsSpeechSynthesisInstructions === true
+      ? { supportsSpeechSynthesisInstructions: true }
       : {}),
     ...(capability.realtimeTranscriptionModel === undefined
       ? {}
@@ -1751,7 +1769,8 @@ function hasVoiceProviderInput(raw: Record<string, unknown>): boolean {
   return (
     VOICE_PROVIDER_STRING_FIELDS.some((key) => hasNonBlankStringField(raw, key)) ||
     raw.voiceTimeoutMs !== undefined ||
-    raw.voiceSupportsSemanticTurnDetection !== undefined
+    raw.voiceSupportsSemanticTurnDetection !== undefined ||
+    raw.voiceSupportsSpeechSynthesisInstructions !== undefined
   );
 }
 
@@ -2410,6 +2429,17 @@ function validateExplicitVoiceRoles(
       ),
     };
   }
+  // Same canonical relationship for the speech-output tier (review finding on #3037).
+  if (raw.voiceSupportsSpeechSynthesisInstructions === true && roleIds.speechOutput === undefined) {
+    return {
+      status: 400,
+      body: errorBody(
+        "BAD_REQUEST",
+        "Speech-synthesis instructions require a Speech output deployment.",
+        correlationId,
+      ),
+    };
+  }
   return undefined;
 }
 
@@ -2636,7 +2666,9 @@ function configuredVoiceCapabilityFlags(
   return {
     ...(capabilities.speechInput ? { supportsSpeechInput: true } : {}),
     ...(capabilities.speechOutput ? { supportsSpeechOutput: true } : {}),
-    ...(capabilities.speechOutput && template.supportsSpeechSynthesisInstructions === true
+    ...(capabilities.speechOutput &&
+    (capabilities.supportsSpeechSynthesisInstructions ??
+      template.supportsSpeechSynthesisInstructions) === true
       ? { supportsSpeechSynthesisInstructions: true }
       : {}),
     ...(capabilities.realtime ? { supportsRealtimeVoice: true } : {}),
@@ -2723,23 +2755,27 @@ function providersForVoiceRoles(
   roleIds: VoiceRoleModelIds,
   defaults: SetupVoiceProviderDefaults,
   raw: Record<string, unknown>,
-  supportsSemanticTurnDetection: boolean,
+  options: VoiceSetupOptions,
   existingProviders: readonly SetupVoiceProvider[],
-  submittedEndpoint: VoiceProviderEndpointOptions | undefined,
 ): readonly SetupVoiceProvider[] {
   return [...voiceCapabilitiesByModel(roleIds)].map(([modelId, capabilities]) =>
     providerForVoiceRoles(
       modelId,
       {
         ...capabilities,
-        ...(capabilities.realtime && supportsSemanticTurnDetection
+        ...(capabilities.realtime && options.supportsSemanticTurnDetection
           ? { supportsSemanticTurnDetection: true }
+          : {}),
+        // The submitted tri-state travels to the speech-output deployment: true sets, false
+        // clears, undefined lets the stored template decide (review finding on #3037).
+        ...(capabilities.speechOutput && options.supportsSpeechSynthesisInstructions !== undefined
+          ? { supportsSpeechSynthesisInstructions: options.supportsSpeechSynthesisInstructions }
           : {}),
       },
       defaults,
       raw,
       existingProviders,
-      submittedEndpoint,
+      options.submittedEndpoint,
     ),
   );
 }
@@ -2995,6 +3031,7 @@ interface VoiceSetupOptions {
   readonly timeoutMs: number | undefined;
   readonly providerLocality: VoiceProviderLocality;
   readonly supportsSemanticTurnDetection: boolean;
+  readonly supportsSpeechSynthesisInstructions: boolean | undefined;
   readonly submittedEndpoint: VoiceProviderEndpointOptions | undefined;
 }
 
@@ -3009,17 +3046,23 @@ function parsedVoiceSetupOptions(
   const timeoutMs = optionalSetupPositiveInt(raw.voiceTimeoutMs, "voiceTimeoutMs");
   const providerLocality = setupVoiceProviderLocality(raw, existingCapability);
   const supportsSemanticTurnDetection = setupSemanticTurnDetection(raw, current, preserveExisting);
+  const speechSynthesisInstructions = optionalSetupBoolean(
+    raw.voiceSupportsSpeechSynthesisInstructions,
+    "voiceSupportsSpeechSynthesisInstructions",
+  );
   const submittedEndpoint = submittedVoiceEndpointOptions(raw);
   if (!apiKeyHeaderName.ok) return apiKeyHeaderName.routeError;
   if (!timeoutMs.ok) return timeoutMs.routeError;
   if (!providerLocality.ok) return providerLocality.routeError;
   if (!supportsSemanticTurnDetection.ok) return supportsSemanticTurnDetection.routeError;
+  if (!speechSynthesisInstructions.ok) return speechSynthesisInstructions.routeError;
   if (!submittedEndpoint.ok) return submittedEndpoint.routeError;
   return {
     apiKeyHeaderName: apiKeyHeaderName.value,
     timeoutMs: timeoutMs.value,
     providerLocality: providerLocality.value,
     supportsSemanticTurnDetection: supportsSemanticTurnDetection.value,
+    supportsSpeechSynthesisInstructions: speechSynthesisInstructions.value,
     submittedEndpoint: submittedEndpoint.value,
   };
 }
@@ -3067,9 +3110,8 @@ function readSetupVoiceProviders(
     roleIds as VoiceRoleModelIds,
     defaults,
     raw,
-    options.supportsSemanticTurnDetection,
+    options,
     existingVoiceProviders,
-    options.submittedEndpoint,
   );
   const providers = mergeUntouchedVoiceProviders(generatedProviders, existingVoiceProviders, raw);
   return validatedVoiceProviders(providers, env);

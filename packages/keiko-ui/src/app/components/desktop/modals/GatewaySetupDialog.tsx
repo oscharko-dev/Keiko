@@ -315,6 +315,7 @@ interface VoiceCredentialInputFields {
   readonly voiceSpeechOutputModelId: string;
   readonly voiceTimeoutMs: string;
   readonly voiceSemanticTurnDetectionConfigured: boolean;
+  readonly voiceSpeechSynthesisInstructionsConfigured: boolean;
   readonly voiceOutputVoiceIdConfigured: boolean;
   readonly voiceProviderLocalityConfigured: boolean;
 }
@@ -330,6 +331,7 @@ function hasVoiceCredentialInput(fields: VoiceCredentialInputFields): boolean {
     fields.voiceSpeechOutputModelId.trim() !== "" ||
     fields.voiceTimeoutMs.trim() !== "" ||
     fields.voiceSemanticTurnDetectionConfigured ||
+    fields.voiceSpeechSynthesisInstructionsConfigured ||
     fields.voiceOutputVoiceIdConfigured ||
     fields.voiceProviderLocalityConfigured
   );
@@ -477,6 +479,8 @@ interface VoiceCredentialPayloadInput {
   readonly voiceRealtimeTranscriptionModelId: string;
   readonly voiceSupportsSemanticTurnDetection: boolean;
   readonly voiceSemanticTurnDetectionConfigured: boolean;
+  readonly voiceSupportsSpeechSynthesisInstructions: boolean;
+  readonly voiceSpeechSynthesisInstructionsConfigured: boolean;
   readonly voiceSpeechOutputModelId: string;
   readonly voiceOutputVoiceId: string;
   readonly voiceOutputVoiceIdConfigured: boolean;
@@ -484,6 +488,24 @@ interface VoiceCredentialPayloadInput {
   readonly voiceProviderLocalityConfigured: boolean;
   readonly voiceTimeoutMs: number | undefined;
   readonly preserveExisting: boolean;
+}
+
+// Only an EXPLICIT tuning statement travels — true sets, false clears, unconfigured leaves the
+// stored template in charge; both flags are file-scoped exactly alike (#3037).
+function voiceTuningPayloadFields(
+  input: VoiceCredentialPayloadInput,
+): Pick<
+  GatewaySetupInput,
+  "voiceSupportsSemanticTurnDetection" | "voiceSupportsSpeechSynthesisInstructions"
+> {
+  return {
+    ...(input.voiceSemanticTurnDetectionConfigured
+      ? { voiceSupportsSemanticTurnDetection: input.voiceSupportsSemanticTurnDetection }
+      : {}),
+    ...(input.voiceSpeechSynthesisInstructionsConfigured
+      ? { voiceSupportsSpeechSynthesisInstructions: input.voiceSupportsSpeechSynthesisInstructions }
+      : {}),
+  };
 }
 
 function buildVoiceCredentialFields(
@@ -497,6 +519,7 @@ function buildVoiceCredentialFields(
   | "voiceRealtimeModelId"
   | "voiceRealtimeTranscriptionModelId"
   | "voiceSupportsSemanticTurnDetection"
+  | "voiceSupportsSpeechSynthesisInstructions"
   | "voiceSpeechOutputModelId"
   | "voiceOutputVoiceId"
   | "voiceProviderLocality"
@@ -521,9 +544,7 @@ function buildVoiceCredentialFields(
     ...(voiceRealtimeTranscriptionModelId === undefined
       ? {}
       : { voiceRealtimeTranscriptionModelId }),
-    ...(input.voiceSemanticTurnDetectionConfigured
-      ? { voiceSupportsSemanticTurnDetection: input.voiceSupportsSemanticTurnDetection }
-      : {}),
+    ...voiceTuningPayloadFields(input),
     ...(voiceSpeechOutputModelId === undefined ? {} : { voiceSpeechOutputModelId }),
     ...(voiceOutputVoiceId === undefined || !input.voiceOutputVoiceIdConfigured
       ? {}
@@ -555,6 +576,8 @@ interface GatewayFormFields {
   readonly voiceRealtimeTranscriptionModelId: string;
   readonly voiceSupportsSemanticTurnDetection: boolean;
   readonly voiceSemanticTurnDetectionConfigured: boolean;
+  readonly voiceSupportsSpeechSynthesisInstructions: boolean;
+  readonly voiceSpeechSynthesisInstructionsConfigured: boolean;
   readonly voiceSpeechOutputModelId: string;
   readonly voiceOutputVoiceId: string;
   readonly voiceOutputVoiceIdConfigured: boolean;
@@ -664,6 +687,8 @@ function voiceCredentialFieldsForMode(
     voiceRealtimeTranscriptionModelId: fields.voiceRealtimeTranscriptionModelId,
     voiceSupportsSemanticTurnDetection: fields.voiceSupportsSemanticTurnDetection,
     voiceSemanticTurnDetectionConfigured: fields.voiceSemanticTurnDetectionConfigured,
+    voiceSupportsSpeechSynthesisInstructions: fields.voiceSupportsSpeechSynthesisInstructions,
+    voiceSpeechSynthesisInstructionsConfigured: fields.voiceSpeechSynthesisInstructionsConfigured,
     voiceSpeechOutputModelId: fields.voiceSpeechOutputModelId,
     voiceOutputVoiceId: fields.voiceOutputVoiceId,
     voiceOutputVoiceIdConfigured: fields.voiceOutputVoiceIdConfigured,
@@ -2144,6 +2169,14 @@ export function GatewaySetupDialog({
   );
   const [voiceSemanticTurnDetectionConfigured, setVoiceSemanticTurnDetectionConfigured] =
     useState(false);
+  // No form control exists for speech-synthesis instruction support — the pair is file-scoped
+  // hidden state set by a config upload, cleared on a speech-output identity change (#3037).
+  const [voiceSupportsSpeechSynthesisInstructions, setVoiceSupportsSpeechSynthesisInstructions] =
+    useState(false);
+  const [
+    voiceSpeechSynthesisInstructionsConfigured,
+    setVoiceSpeechSynthesisInstructionsConfigured,
+  ] = useState(false);
   const [voiceSpeechOutputModelId, setVoiceSpeechOutputModelId] = useState("");
   const [voiceOutputVoiceId, setVoiceOutputVoiceId] = useState("");
   const [voiceOutputVoiceIdConfigured, setVoiceOutputVoiceIdConfigured] = useState(false);
@@ -2183,6 +2216,8 @@ export function GatewaySetupDialog({
   const resetSpeechOutputDependencies = (): void => {
     setVoiceOutputVoiceId("");
     setVoiceOutputVoiceIdConfigured(false);
+    setVoiceSupportsSpeechSynthesisInstructions(false);
+    setVoiceSpeechSynthesisInstructionsConfigured(false);
   };
 
   const resetEndpointDependencies = (
@@ -2432,6 +2467,11 @@ export function GatewaySetupDialog({
       setVoiceOutputVoiceId(fields.voiceOutputVoiceId ?? "");
       setVoiceOutputVoiceIdConfigured(fields.voiceOutputVoiceId !== undefined);
     }
+    // AFTER the speech-output role update above — its identity transition clears the pair.
+    if (fields.voiceSupportsSpeechSynthesisInstructions !== undefined) {
+      setVoiceSupportsSpeechSynthesisInstructions(fields.voiceSupportsSpeechSynthesisInstructions);
+      setVoiceSpeechSynthesisInstructionsConfigured(true);
+    }
     if (fields.voiceProviderLocality !== undefined) {
       setVoiceProviderLocality(fields.voiceProviderLocality);
       setVoiceProviderLocalityConfigured(true);
@@ -2492,6 +2532,8 @@ export function GatewaySetupDialog({
           voiceRealtimeTranscriptionModelId,
           voiceSupportsSemanticTurnDetection,
           voiceSemanticTurnDetectionConfigured,
+          voiceSupportsSpeechSynthesisInstructions,
+          voiceSpeechSynthesisInstructionsConfigured,
           importedVoiceEndpointStyle,
           importedVoiceApiVersion,
           importedVoiceRealtimeAuthMode,
@@ -2552,6 +2594,7 @@ export function GatewaySetupDialog({
     voiceSpeechOutputModelId,
     voiceTimeoutMs,
     voiceSemanticTurnDetectionConfigured,
+    voiceSpeechSynthesisInstructionsConfigured,
     voiceOutputVoiceIdConfigured,
     voiceProviderLocalityConfigured,
   });

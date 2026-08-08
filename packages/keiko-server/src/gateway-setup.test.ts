@@ -1070,6 +1070,74 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("persists speech-synthesis instruction support submitted with a Speech output deployment", async () => {
+    // Review finding on #3037: supportsSpeechSynthesisInstructions is a behavior-bearing
+    // canonical voice flag (config parser: requires supportsSpeechOutput), but the setup
+    // request had no field for it — an uploaded config declaring it reported success and the
+    // rebuilt capability silently lost instruction support.
+    const uiDir = await tempDir("keiko-gw-ui-synthesis-instructions-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-synthesis-instructions-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "chat-token",
+        voiceBaseUrl: "https://audio.example.com/v1",
+        voiceApiKey: "audio-token",
+        voiceSpeechOutputModelId: "speech-model",
+        voiceOutputVoiceId: "ash",
+        voiceSupportsSpeechSynthesisInstructions: true,
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const capability = currentGatewayConfig(deps)?.capabilities?.find(
+      (item) => item.id === "speech-model",
+    );
+    expect(capability?.supportsSpeechSynthesisInstructions).toBe(true);
+    deps.store.close();
+  });
+
+  it("rejects speech-synthesis instructions without a Speech output deployment", async () => {
+    // The canonical parser requires supportsSpeechOutput for the flag — accepting it against an
+    // STT-only submission would either fail deep in the provider validation with an opaque
+    // message or silently drop the declaration.
+    const uiDir = await tempDir("keiko-gw-ui-synthesis-no-tts-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-synthesis-no-tts-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "chat-token",
+        voiceBaseUrl: "https://audio.example.com/v1",
+        voiceApiKey: "audio-token",
+        voiceSpeechToTextModelId: "transcribe-model",
+        voiceSupportsSpeechSynthesisInstructions: true,
+      }),
+      deps,
+    );
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({
+      error: {
+        code: "BAD_REQUEST",
+        message: "Speech-synthesis instructions require a Speech output deployment.",
+      },
+    });
+    deps.store.close();
+  });
+
   it("persists the submitted voice endpoint protocol on a fresh setup", async () => {
     // A fresh save has no stored template, so without the explicit fields an Azure speech
     // endpoint would be persisted shapeless and every audio call would take the

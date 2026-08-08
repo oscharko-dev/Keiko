@@ -1545,6 +1545,69 @@ describe("GatewaySetupDialog", () => {
     expect(payload).not.toHaveProperty("workflowEligibleModelIds");
   });
 
+  it("submits imported speech-synthesis instruction support with the voice section", async () => {
+    // Review finding on #3037: the flag is behavior-bearing speech-output tuning — an uploaded
+    // declaration must ride the submit, or the rebuilt capability silently loses instruction
+    // support while the upload reported success.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.upload(
+      await screen.findByLabelText(/load keiko\.config\.json/i),
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "gpt-5o",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                capability: { id: "gpt-5o", kind: "chat" },
+              },
+              {
+                modelId: "keiko-tts",
+                baseUrl: "https://speech.example.com",
+                capability: {
+                  id: "keiko-tts",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsSpeechOutput: true,
+                  supportsSpeechSynthesisInstructions: true,
+                },
+                voiceProfiles: [{ persona: "neutral", voiceId: "ash" }],
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(/audio endpoint url/i)).toHaveValue(
+        "https://speech.example.com",
+      ),
+    );
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).toMatchObject({
+      voiceSpeechOutputModelId: "keiko-tts",
+      voiceSupportsSpeechSynthesisInstructions: true,
+    });
+  });
+
   it("submits the imported endpoint protocol while the form still points at the uploaded endpoint", async () => {
     // The positive branch of the URL binding: without a manual retype, the imported protocol
     // rides the submit verbatim (#3037).
