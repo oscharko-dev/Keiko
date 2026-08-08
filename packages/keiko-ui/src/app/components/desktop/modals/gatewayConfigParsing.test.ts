@@ -273,16 +273,86 @@ describe("parseGatewayConfigUpload", () => {
     expect(parseGatewayConfigUpload(mixed)).toEqual({ outcome: "invalid" });
   });
 
-  it("accepts supported header names case-insensitively", () => {
+  it("accepts supported header names case-insensitively and exposes the normalized name", () => {
     // The gateway normalizes header names to lower case — "API-Key" is the same supported
-    // header, not an unsupported one (review finding on #3031).
+    // header, not an unsupported one (review finding on #3031). The parser exposes the
+    // lowercase-normalized name: a deliberate contract strengthening, not a relaxation — the
+    // setup route lowercases on submit anyway, so the raw casing never survived a save.
     const fields = fieldsOf(
       JSON.stringify({
         providers: [providerFixture({ apiKeyHeaderName: "API-Key", capability: undefined })],
       }),
     );
 
-    expect(fields.apiKeyHeaderName).toBe("API-Key");
+    expect(fields.apiKeyHeaderName).toBe("api-key");
+  });
+
+  it("unifies API key header names case-insensitively across providers", () => {
+    // LiteLLM production audit: validation already lowercased for the support check, but the
+    // uniformity check compared raw strings — 'x-litellm-key' vs 'X-Litellm-Key' refused a
+    // valid LiteLLM file as invalid.
+    const fields = fieldsOf(
+      JSON.stringify({
+        providers: [
+          providerFixture({ apiKeyHeaderName: "x-litellm-key", capability: undefined }),
+          providerFixture({
+            modelId: "second",
+            apiKeyHeaderName: "X-Litellm-Key",
+            capability: undefined,
+          }),
+        ],
+      }),
+    );
+
+    expect(fields.apiKeyHeaderName).toBe("x-litellm-key");
+    expect(fields.deploymentNames).toEqual(["gpt-5o", "second"]);
+  });
+
+  it("accepts an explicit openai-compatible endpoint style on a generic provider", () => {
+    // LiteLLM production audit: LiteLLM-shaped files state the default explicitly — an explicit
+    // endpointStyle "openai-compatible" on a chat/embedding provider is behaviorally identical
+    // to the absent default and must not refuse the file. The Azure deployment style, unknown
+    // values, and a chat/embedding apiVersion keep refusing.
+    const explicitDefault = JSON.stringify({
+      providers: [providerFixture({ endpointStyle: "openai-compatible" })],
+    });
+    expect(parseGatewayConfigUpload(explicitDefault).outcome).toBe("fields");
+
+    const unknownStyle = JSON.stringify({
+      providers: [providerFixture({ endpointStyle: "grpc-transcode" })],
+    });
+    expect(parseGatewayConfigUpload(unknownStyle)).toEqual({ outcome: "unsupportedSetting" });
+
+    const orphanVersion = JSON.stringify({
+      providers: [
+        providerFixture({ endpointStyle: "openai-compatible", apiVersion: "2025-03-01-preview" }),
+      ],
+    });
+    expect(parseGatewayConfigUpload(orphanVersion)).toEqual({ outcome: "unsupportedSetting" });
+  });
+
+  it("unifies header names that differ only in case across providers", () => {
+    // KfQ finding on #3042: the gateway normalizes header names to lower case, so providers
+    // declaring "x-litellm-key" and "X-Litellm-Key" describe ONE connection — refusing the file
+    // as a scalar disagreement is a false refusal on exactly the LiteLLM-shaped files this
+    // feature exists for. The canonical form is submitted.
+    const fields = fieldsOf(
+      JSON.stringify({
+        providers: [
+          // UPPERCASE first on purpose: a parser that merely passed the first value through
+          // would yield "X-Litellm-Key" here, and one that compared raw strings would refuse
+          // the file — only real normalization produces the canonical form.
+          providerFixture({ apiKeyHeaderName: "X-Litellm-Key" }),
+          providerFixture({
+            modelId: "second",
+            apiKeyHeaderName: "x-litellm-key",
+            capability: undefined,
+          }),
+        ],
+      }),
+    );
+
+    expect(fields.apiKeyHeaderName).toBe("x-litellm-key");
   });
 
   it("treats identical repeated scalars as one connection", () => {
@@ -1098,6 +1168,14 @@ describe("parseGatewayConfigUpload", () => {
       "a control-character model id",
       JSON.stringify({
         providers: [providerFixture({ modelId: "bad\u0000id", capability: undefined })],
+      }),
+    ],
+    [
+      // LiteLLM production audit: a comma survives the import only to be silently split into two
+      // bogus ids by the dialog textarea's newline-and-comma splitter — fail closed here.
+      "a comma-carrying model id the dialog splitter would silently split",
+      JSON.stringify({
+        providers: [providerFixture({ modelId: "gpt-5o,mini", capability: undefined })],
       }),
     ],
     [

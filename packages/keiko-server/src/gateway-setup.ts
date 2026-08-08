@@ -29,6 +29,8 @@ import {
   selectSpeechToTextModel,
   toSafeObject,
   validateBaseUrl,
+  PROVIDER_ENDPOINT_STYLES,
+  REALTIME_AUTH_MODES,
   VOICE_PROVIDER_LOCALITIES,
 } from "@oscharko-dev/keiko-model-gateway";
 import { gatewayFetch, readJsonCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
@@ -297,6 +299,8 @@ function isAzureFoundryBaseUrl(baseUrl: string): boolean {
 }
 
 interface ProviderRawOptions {
+  /** True on preserve-mode rebuilds — stored-capability carry-overs are preserve semantics. */
+  readonly preserveExisting?: boolean | undefined;
   readonly timeoutMs?: number | undefined;
   readonly maxRetries?: number | undefined;
   readonly retryBaseDelayMs?: number | undefined;
@@ -309,6 +313,10 @@ interface ProviderRawOptions {
   readonly workflowEligibleModelIds?: readonly string[] | undefined;
 }
 
+// Capability reuse at the SAME endpoint is deliberate and pinned: it is how a readiness-verified
+// observation (recordVerifiedCapability → replaceModelCapability) survives a routine re-save,
+// which submits no preserveExisting flag. The mode gate belongs on the ENDPOINT-MOVE carry-over
+// below, where this URL match misses and nothing verified the stored value at the new endpoint.
 function existingCapabilityForSetup(
   current: GatewayConfig | undefined,
   modelId: string,
@@ -317,6 +325,22 @@ function existingCapabilityForSetup(
   const provider = current?.providers.find((candidate) => candidate.modelId === modelId);
   if (provider === undefined || !sameBaseUrlIdentity(provider.baseUrl, baseUrl)) return undefined;
   return current?.capabilities?.find((candidate) => candidate.id === modelId);
+}
+
+// A chat capability the stored config DISABLED stays disabled until re-verified: when the
+// endpoint moves, sameBaseUrlIdentity breaks and the URL-matched `existing` misses, and without
+// this carry-over a stored toolCalling: false silently flipped back to the default true for
+// every non-Mistral model — the setup smoke test never probes tool calling, so nothing verified
+// the flip (#3037 follow-up). The sanctioned re-enable path is unchanged: the readiness endpoint
+// (replaceModelCapability, gated on a fresh observation), or live discovery metadata, which
+// overrides this restriction with fresh evidence exactly as it overrides a URL-matched stored
+// value. The kind guard keeps a corrected embedding-to-chat deployment on the chat default.
+function storedToolCallingRestriction(
+  current: GatewayConfig | undefined,
+  modelId: string,
+): Partial<ModelCapability> {
+  const stored = current?.capabilities?.find((candidate) => candidate.id === modelId);
+  return stored?.kind === "chat" && !stored.toolCalling ? { toolCalling: false } : {};
 }
 
 function codingUseCases(capability: ModelCapability): readonly string[] {
@@ -366,11 +390,21 @@ function applyMistralSetupDefaults(
   capability: ModelCapability,
   toolCallingKnown: boolean,
 ): ModelCapability {
+  // The note and the disabled default are CHAT semantics ("until endpoint readiness verifies
+  // it"): an embedding or OCR deployment has no tool calling to verify, and its correct
+  // toolCalling: false must not attract a chat explanation (review finding on #3042).
+  if (capability.kind !== "chat") return capability;
   if (!modelId.toLowerCase().includes("mistral")) return capability;
   const knownLimitations = capability.knownLimitations.filter(
     (limitation) => limitation !== MISTRAL_TOOL_CALLING_LIMITATION,
   );
-  if (toolCallingKnown) return { ...capability, knownLimitations };
+  // Only a VERIFIED toolCalling: true retires the limitation note. While tool calling stays
+  // disabled the note travels with it (deduplicated) — the old unconditional strip drifted the
+  // stored explanation out of the config on every preserve rebuild even though the restriction
+  // itself survived (#3037 follow-up).
+  if (toolCallingKnown && capability.toolCalling) {
+    return { ...capability, knownLimitations };
+  }
   return {
     ...capability,
     toolCalling: false,
@@ -392,7 +426,13 @@ function createDefaultSetupCapability(
   const discovered = options.modelMetadata?.[modelId];
   const capability: ModelCapability = {
     ...baseCapability,
-    ...existing,
+    // The endpoint-move restriction is PRESERVE semantics: a fresh replacement deliberately
+    // treats stored capabilities as absent, like every stored list on this route (review
+    // finding on #3042).
+    ...(existing ??
+      (options.preserveExisting === true
+        ? storedToolCallingRestriction(options.current, modelId)
+        : {})),
     ...discoveredCapabilityFields(discovered),
     id: modelId,
     kind: baseCapability.kind,
@@ -1135,7 +1175,12 @@ async function fetchDiscoveryJson(
     ...(egress !== undefined ? { egress } : {}),
   });
   if (!response.ok) {
-    throw new Error(`model discovery returned HTTP ${String(response.status)}`);
+    // The classifier (`setupCandidateError` via `setupHttpStatus`) reads the status as an error
+    // property; carrying it only inside the message left a 401/403 discovery — a wrong or
+    // model-restricted proxy key — as the generic body-free 502 (LiteLLM production audit).
+    throw Object.assign(new Error(`model discovery returned HTTP ${String(response.status)}`), {
+      httpStatus: response.status,
+    });
   }
   try {
     return await readJsonCapped(response);
@@ -1338,10 +1383,63 @@ function validateSetupConnection(
   }
 }
 
+/**
+ * Classification evidence captured from a swallowed per-model probe failure — exactly the
+ * code/status pair `setupCandidateError` reads, never probe messages or response bodies
+ * (LiteLLM production audit: an all-probes auth failure must classify as a credential failure
+ * instead of the generic body-free 502).
+ */
+interface ProbeFailureEvidence {
+  readonly code: string | undefined;
+  readonly httpStatus: number | undefined;
+}
+
+const PROBE_FAILURE_UNCLASSIFIED = 0;
+
+function probeCodeSeverity(code: string | undefined): number {
+  if (code === ERROR_CODES.AUTHENTICATION) return 4;
+  if (code === ERROR_CODES.RATE_LIMIT) return 3;
+  if (code !== undefined && SETUP_NETWORK_ERROR_CODES.has(code)) return 2;
+  if (code === ERROR_CODES.UNKNOWN_MODEL) return 1;
+  return PROBE_FAILURE_UNCLASSIFIED;
+}
+
+function probeStatusSeverity(status: number | undefined): number {
+  if (status === 401 || status === 403) return 4;
+  if (status === 429) return 3;
+  if (status === 404) return 1;
+  return PROBE_FAILURE_UNCLASSIFIED;
+}
+
+// Mirrors `setupCandidateError`'s precedence: a recognized code classifies first, the HTTP
+// status classifies only when the code does not.
+function probeFailureSeverity(evidence: ProbeFailureEvidence): number {
+  const codeSeverity = probeCodeSeverity(evidence.code);
+  return codeSeverity === PROBE_FAILURE_UNCLASSIFIED
+    ? probeStatusSeverity(evidence.httpStatus)
+    : codeSeverity;
+}
+
+function mostSevereProbeFailure(
+  failures: readonly ProbeFailureEvidence[],
+): ProbeFailureEvidence | undefined {
+  let worst: ProbeFailureEvidence | undefined;
+  let worstSeverity = PROBE_FAILURE_UNCLASSIFIED;
+  for (const failure of failures) {
+    const severity = probeFailureSeverity(failure);
+    if (severity > worstSeverity) {
+      worst = failure;
+      worstSeverity = severity;
+    }
+  }
+  return worst;
+}
+
 async function passingCandidates(
   candidates: readonly string[],
   probe: (modelId: string) => Promise<void>,
   concurrency: number,
+  failures?: ProbeFailureEvidence[],
 ): Promise<readonly string[]> {
   const tested = new Array<string | undefined>(candidates.length).fill(undefined);
   let next = 0;
@@ -1356,15 +1454,31 @@ async function passingCandidates(
       try {
         await probe(modelId);
         tested[index] = modelId;
-      } catch {
+      } catch (error) {
         // Probe rejection is the documented signal that this candidate is not
-        // chat-callable. We drop it silently so healthy peers still surface.
+        // chat-callable. We drop it silently so healthy peers still surface — capturing only
+        // the classification code/status as evidence for the all-rejected aggregate.
+        failures?.push({ code: setupErrorCode(error), httpStatus: setupHttpStatus(error) });
       }
     }
   }
   const workerCount = Math.max(1, Math.min(concurrency, candidates.length));
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
   return tested.filter((modelId): modelId is string => modelId !== undefined);
+}
+
+// The aggregate keeps the exact historic message; additionally it carries the most severe
+// classified code/status observed across the per-model probe failures so `setupCandidateError`
+// maps an all-probes auth or rate-limit failure onto its existing guidance instead of the
+// generic body-free 502 (LiteLLM production audit).
+function allProbesFailedError(failures: readonly ProbeFailureEvidence[]): Error {
+  const error = new Error("no discovered model accepted the chat-completions smoke test");
+  const worst = mostSevereProbeFailure(failures);
+  if (worst === undefined) return error;
+  return Object.assign(error, {
+    ...(worst.code === undefined ? {} : { code: worst.code }),
+    ...(worst.httpStatus === undefined ? {} : { httpStatus: worst.httpStatus }),
+  });
 }
 
 // Issue #144: pure smoke-test loop extracted from `defaultGatewaySetupTester`
@@ -1381,9 +1495,10 @@ export async function smokeTestCandidates(
   probe: (modelId: string) => Promise<void>,
   concurrency: number,
 ): Promise<readonly string[]> {
-  const accepted = await passingCandidates(candidates, probe, concurrency);
+  const failures: ProbeFailureEvidence[] = [];
+  const accepted = await passingCandidates(candidates, probe, concurrency, failures);
   if (accepted.length === 0) {
-    throw new Error("no discovered model accepted the chat-completions smoke test");
+    throw allProbesFailedError(failures);
   }
   return accepted;
 }
@@ -1484,6 +1599,7 @@ function persistGatewayConfig(
 
 interface SetupRequest {
   readonly correlationId: string | undefined;
+  readonly preserveExisting: boolean;
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
@@ -1706,15 +1822,10 @@ const VOICE_CONNECTION_MUTATION_FIELDS = [
   "voiceRealtimeAuthMode",
 ] as const;
 
-const VOICE_ENDPOINT_STYLES: readonly NonNullable<ModelProviderConfig["endpointStyle"]>[] = [
-  "openai-compatible",
-  "azure-openai-deployment",
-];
-
-const VOICE_REALTIME_AUTH_MODES: readonly NonNullable<ModelProviderConfig["realtimeAuthMode"]>[] = [
-  "api-key",
-  "ephemeral-session",
-];
+// The endpoint-protocol wire values come from the contract seam — one compiler-checked source
+// shared with the model gateway's parser and the UI upload parser (#3037 follow-up).
+const VOICE_ENDPOINT_STYLES = PROVIDER_ENDPOINT_STYLES;
+const VOICE_REALTIME_AUTH_MODES = REALTIME_AUTH_MODES;
 
 function parseVoiceEndpointEnum<T extends string>(
   value: unknown,
@@ -3027,13 +3138,23 @@ function setupVoiceProviderDefaults(
   providerLocality: VoiceProviderLocality,
   existing: ModelProviderConfig | undefined,
 ): SetupVoiceProviderDefaults {
+  // The inherited provider's endpoint protocol (style, api version, realtime auth mode) is bound
+  // to ITS base URL: it may seed the connection defaults only under the same URL-identity rule
+  // the per-role template branch enforces. Without the guard, a preserve-mode move to a new host
+  // (e.g. Azure -> LiteLLM) stamped the OLD provider's Azure protocol onto every role that had no
+  // per-role template (LiteLLM production audit). Submitted endpoint fields still override these
+  // defaults downstream (#3037).
+  const inheritedEndpoint =
+    existing !== undefined && sameBaseUrlIdentity(connection.baseUrl, existing.baseUrl)
+      ? voiceProviderTemplateEndpoint(existing, {})
+      : {};
   return {
     ...connection,
     apiKeyHeaderName,
     timeoutMs: timeoutMs ?? existing?.timeoutMs,
     maxRetries: existing?.maxRetries ?? 1,
     retryBaseDelayMs: existing?.retryBaseDelayMs ?? 500,
-    ...voiceProviderTemplateEndpoint(existing, {}),
+    ...inheritedEndpoint,
     providerLocality,
   };
 }
@@ -3289,6 +3410,7 @@ function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | Route
   const resolved = resolveSetupModelLists(input.modelLists, input.current, input.preserveExisting);
   return {
     correlationId: input.correlationId,
+    preserveExisting: input.preserveExisting,
     ...input.credentials,
     timeoutMs: input.timeoutMs,
     deploymentNames: resolved.deploymentNames,
@@ -3395,6 +3517,7 @@ interface VerifiedSetup {
 }
 
 interface SetupVerificationInput {
+  readonly preserveExisting: boolean;
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
@@ -3590,6 +3713,7 @@ function finalRawConfigForSetup(
 ): Record<string, unknown> {
   const configuredModelIds = mergeChatAndEmbeddingModelIds(testedModelIds, embeddingModelIds);
   const rawConfig = buildRawConfig(input.baseUrl, input.apiKey, configuredModelIds, {
+    preserveExisting: input.preserveExisting,
     apiKeyHeaderName: input.apiKeyHeaderName,
     imageInputModelIds,
     responseFormatModelIds,
@@ -4031,6 +4155,7 @@ async function trySetupCandidate(
   current: GatewayConfig | undefined,
 ): Promise<RouteResult> {
   const verified = await verifySetupCandidate({
+    preserveExisting: request.preserveExisting,
     baseUrl,
     apiKey: request.apiKey,
     apiKeyHeaderName: request.apiKeyHeaderName,

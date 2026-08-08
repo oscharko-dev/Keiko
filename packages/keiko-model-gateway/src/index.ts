@@ -107,6 +107,10 @@ export {
 
 export { CAPABILITY_DATA } from "./capabilities.data.js";
 
+// Endpoint-protocol wire values live in the contract seam (#3037 follow-up); re-exported here so
+// gateway consumers keep one import surface.
+export { PROVIDER_ENDPOINT_STYLES, REALTIME_AUTH_MODES } from "@oscharko-dev/keiko-contracts";
+
 export {
   apiKeyHeaderValue,
   DEFAULT_API_KEY_HEADER_NAME,

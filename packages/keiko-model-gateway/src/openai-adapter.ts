@@ -101,15 +101,18 @@ type ChatRequestMessageContent =
 // GEN-AI-GATEWAY-002 (RB-4): honor Azure deployment routing for chat providers instead of silently
 // misrouting an Azure-configured provider to the OpenAI-compatible path. Mirrors the voice adapters'
 // joinAzureDeploymentUrl. `apiVersion` is guaranteed present for the azure style by config-time
-// validation (assertProviderEndpointVersion enforces the biconditional).
+// validation (assertProviderEndpointVersion enforces the biconditional). Both branches trim a
+// trailing slash first, exactly like the sibling adapters — a file/env-authored base URL ending in
+// "/" otherwise yields '//chat/completions', which LiteLLM answers with a 404 (LiteLLM production
+// audit).
 function chatCompletionsUrl(config: ModelProviderConfig): string {
+  const trimmed = config.baseUrl.endsWith("/") ? config.baseUrl.slice(0, -1) : config.baseUrl;
   if (config.endpointStyle === "azure-openai-deployment") {
-    const trimmed = config.baseUrl.endsWith("/") ? config.baseUrl.slice(0, -1) : config.baseUrl;
     return `${trimmed}/openai/deployments/${encodeURIComponent(
       config.modelId,
     )}/chat/completions?api-version=${encodeURIComponent(config.apiVersion ?? "")}`;
   }
-  return `${config.baseUrl}/chat/completions`;
+  return `${trimmed}/chat/completions`;
 }
 
 function buildMessageContent(

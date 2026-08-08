@@ -81,6 +81,32 @@ export const VOICE_PROVIDER_LOCALITIES: readonly VoiceProviderLocality[] = [
   "local-only",
 ] as const;
 
+// ─── Provider endpoint protocol (wire-value unions, #3037 follow-up) ───────────
+// How a provider endpoint speaks: the OpenAI-compatible path shape (LiteLLM, OpenAI, most
+// gateways) or the Azure deployment-path shape (which additionally requires an apiVersion).
+// These literals live in the contract seam so the UI upload parser, the server setup route, and
+// the model gateway validate against ONE source. The value arrays derive from Record<Union, true>
+// tables: adding a union member without registering its value — or a value without its member —
+// fails to compile in both directions.
+export type ProviderEndpointStyle = "openai-compatible" | "azure-openai-deployment";
+export type RealtimeAuthMode = "api-key" | "ephemeral-session";
+
+const PROVIDER_ENDPOINT_STYLE_TABLE: Record<ProviderEndpointStyle, true> = {
+  "openai-compatible": true,
+  "azure-openai-deployment": true,
+};
+export const PROVIDER_ENDPOINT_STYLES = Object.keys(
+  PROVIDER_ENDPOINT_STYLE_TABLE,
+) as readonly ProviderEndpointStyle[];
+
+const REALTIME_AUTH_MODE_TABLE: Record<RealtimeAuthMode, true> = {
+  "api-key": true,
+  "ephemeral-session": true,
+};
+export const REALTIME_AUTH_MODES = Object.keys(
+  REALTIME_AUTH_MODE_TABLE,
+) as readonly RealtimeAuthMode[];
+
 // ─── Product voice persona (Issue #1557, Epic #1556, ADR-0094 D1) ──────────────
 // A `VoicePersona` is a PRODUCT-level voice identity the operator offers to the end user — "what
 // the assistant sounds like." It is deliberately distinct from `VoiceProfile` (the capability

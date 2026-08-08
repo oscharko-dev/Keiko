@@ -12,7 +12,12 @@ import {
   type GroundingLimits,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { VOICE_PERSONAS, VOICE_PROVIDER_LOCALITIES } from "./types.js";
-import { isVoiceCapability, modelSupportsSpeechOutput } from "@oscharko-dev/keiko-contracts";
+import {
+  PROVIDER_ENDPOINT_STYLES,
+  REALTIME_AUTH_MODES,
+  isVoiceCapability,
+  modelSupportsSpeechOutput,
+} from "@oscharko-dev/keiko-contracts";
 import { outboundTargetBlockedReason } from "./egress-policy.js";
 import { projectSafeCapabilities, type SafeModelCapability } from "./model-selection.js";
 import type {
@@ -56,11 +61,8 @@ const BEARER_API_KEY_HEADER_NAME_SET = new Set<string>([
   DEFAULT_API_KEY_HEADER_NAME,
   "x-litellm-key",
 ]);
-const PROVIDER_ENDPOINT_STYLES: readonly ProviderEndpointStyle[] = [
-  "openai-compatible",
-  "azure-openai-deployment",
-];
-const REALTIME_AUTH_MODES: readonly RealtimeAuthMode[] = ["api-key", "ephemeral-session"];
+// The endpoint-protocol value arrays come from the contract seam — one source for the UI upload
+// parser, the server setup route, and this parser (#3037 follow-up).
 const OUTPUT_TOKEN_PARAMETERS: readonly OutputTokenParameter[] = [
   "max_tokens",
   "max_completion_tokens",
