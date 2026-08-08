@@ -210,9 +210,15 @@ The release stabilization flow uses a dedicated branch for release-only hardenin
 
 The tag verification job is dependency-free after checkout and Node setup:
 
-1. Validate that the tag name matches `package.json`.
+1. Validate that the tag name matches `package.json` (exact match, or the governed portable
+   beta format `v<version>-beta.<n>` layered over the package version).
 2. Verify required GitHub checks for the tagged SHA.
 3. Run `npm run release:plan -- --tag beta`.
+
+Steps 2-3 (and the portable-approvals and required-workflow-name validations) run only for
+EXACT tags. For a governed portable beta tag the job records the portable-beta judgement and
+ends after step 1 — a green `Release verification` on a `v<version>-beta.<n>` tag attests the
+tag format only; the beta's assets are verified by the portable-prerelease lane itself.
 
 The release plan validates version consistency, publish manifests, and release-impact metadata
 without relying on `node_modules`, so the tag job can fail fast on metadata drift. It also prints
