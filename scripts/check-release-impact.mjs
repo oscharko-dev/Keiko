@@ -438,12 +438,15 @@ function containerContextLine(line, state) {
 function approvalContextLine(rawLine, state) {
   const line = rawLine.trim();
   const delimiter = fenceDelimiter(line);
-  if (htmlCommentContextLine(line, state)) return true;
-  if (htmlBlockContextLine(line, state)) return true;
+  // The OPEN FENCE is judged first: fenced content is opaque, so an unclosed `<!--` (or any
+  // other marker) inside a fence must not open comment/block state that would outlive the fence
+  // (review finding on #3037).
   if (state.openFence !== undefined) {
     if (closesFence(state.openFence, line, delimiter)) state.openFence = undefined;
     return true;
   }
+  if (htmlCommentContextLine(line, state)) return true;
+  if (htmlBlockContextLine(line, state)) return true;
   if (line === "") {
     state.inContainer = false;
     state.inHtmlBlock = false;

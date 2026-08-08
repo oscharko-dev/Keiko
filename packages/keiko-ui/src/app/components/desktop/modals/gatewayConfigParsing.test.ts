@@ -536,14 +536,22 @@ describe("parseGatewayConfigUpload", () => {
     // Mirrors validateBaseUrl (review finding on #3037): absolute http(s) only, plaintext http
     // only for loopback — a malformed or off-loopback-http URL would fail Test & Save after a
     // reported upload success.
-    for (const badUrl of ["not a URL", "http://litellm.internal/v1", "https://x.example/v1?q=1"]) {
+    for (const badUrl of [
+      "not a URL",
+      "http://litellm.internal/v1",
+      "https://x.example/v1?q=1",
+      "https://user:pass@x.example/v1",
+      "https://x.example/v1#frag",
+    ]) {
       const refused = JSON.stringify({ providers: [providerFixture({ baseUrl: badUrl })] });
       expect(parseGatewayConfigUpload(refused)).toEqual({ outcome: "invalid" });
     }
-    const loopback = fieldsOf(
-      JSON.stringify({ providers: [providerFixture({ baseUrl: "http://127.0.0.1:4000/v1" })] }),
-    );
-    expect(loopback.baseUrl).toBe("http://127.0.0.1:4000/v1");
+    for (const goodUrl of ["http://127.0.0.1:4000/v1", "http://127.255.255.255/v1"]) {
+      const loopback = fieldsOf(
+        JSON.stringify({ providers: [providerFixture({ baseUrl: goodUrl })] }),
+      );
+      expect(loopback.baseUrl).toBe(goodUrl);
+    }
   });
 
   it("refuses a provider carrying a secret reference the form cannot apply", () => {

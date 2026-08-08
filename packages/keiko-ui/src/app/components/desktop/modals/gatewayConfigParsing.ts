@@ -363,6 +363,15 @@ function readVoiceProfiles(value: unknown): {
 // Mirrors the canonical validateBaseUrl shape rules: absolute http(s), plaintext http only for
 // loopback hosts, no credentials, query, or fragment — a malformed URL would turn a reported
 // upload success into a guaranteed Test & Save failure (review finding on #3037).
+// Mirrors validateBaseUrl's loopback set: localhost, ::1 (bracketed or not), and every
+// well-formed IPv4 address in 127.0.0.0/8 (review finding on #3037).
+function isLoopbackHost(hostname: string): boolean {
+  if (hostname === "localhost" || hostname === "::1" || hostname === "[::1]") return true;
+  const octets = hostname.split(".");
+  if (octets.length !== 4 || octets[0] !== "127") return false;
+  return octets.every((octet) => /^\d{1,3}$/u.test(octet) && Number(octet) <= 255);
+}
+
 function representableBaseUrl(value: string | undefined): boolean {
   if (value === undefined) return true;
   let url: URL;
@@ -371,8 +380,7 @@ function representableBaseUrl(value: string | undefined): boolean {
   } catch {
     return false;
   }
-  const loopback = new Set(["127.0.0.1", "localhost", "[::1]"]);
-  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback.has(url.hostname))) {
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopbackHost(url.hostname))) {
     return false;
   }
   return url.username === "" && url.password === "" && url.search === "" && url.hash === "";

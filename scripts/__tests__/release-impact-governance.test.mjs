@@ -670,6 +670,13 @@ describe("release-impact governance", () => {
 
       const inline = validateWith(approvalComment({ body: `<!-- note -->\n\n${phrase}` }));
       expect(inline.ok).toBe(true);
+
+      // Ordering pin: an UNCLOSED comment inside a fence is fenced content — the fence check
+      // runs first, so the comment state never opens and the phrase after the fence approves.
+      const fencedComment = validateWith(
+        approvalComment({ body: `\`\`\`\n<!-- example\n\`\`\`\n\n${phrase}` }),
+      );
+      expect(fencedComment.ok).toBe(true);
     });
 
     it("rejects a phrase that appears only inside a blockquote", () => {
