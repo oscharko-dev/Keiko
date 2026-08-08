@@ -34,6 +34,10 @@ async function handleUploadedFile(
   const token = sequence.current + 1;
   sequence.current = token;
   if (file.size > MAX_GATEWAY_CONFIG_BYTES) {
+    // The token advanced, so any older read is now stale and will never clear the pending flag —
+    // this path owns it and must leave it false (review finding on #3031; the flag's contract is
+    // "a read for the CURRENT token is in flight").
+    onReadPendingChange?.(false);
     setState({ issue: "fileTooLarge", appliedCount: undefined });
     return;
   }
