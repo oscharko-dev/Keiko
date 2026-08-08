@@ -1163,7 +1163,13 @@ describe("handleGatewaySetup", () => {
     );
 
     expect(result.status).toBe(400);
-    expect(JSON.stringify(result.body)).toContain("apiVersion is required");
+    expect(result.body).toMatchObject({
+      error: {
+        code: "BAD_REQUEST",
+        message:
+          'providers[0].apiVersion is required when providers[0].endpointStyle is "azure-openai-deployment"',
+      },
+    });
     deps.store.close();
   });
 
