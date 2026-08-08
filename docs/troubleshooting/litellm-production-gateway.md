@@ -44,9 +44,11 @@ under an unpredictable name, so no pre-created symlink at a guessable path can c
 # One SUBSHELL per diagnostic: the trap, the temp files and the exit status all stay inside it,
 # so a signal handler may terminate without closing an interactive shell, no later block can
 # clobber this cleanup, and the block reports its own status when pasted into a script.
-# Neither the credential NOR the production hostname reaches shell history or a process
-# listing: both are read without echo into a 0600 curl config file, and curl's argv carries
-# only --config (review findings on #3042).
+# Neither the credential NOR the production hostname reaches shell history, a process listing,
+# or the terminal: both are read without echo into a 0600 curl config file, curl's argv carries
+# only --config, and curl runs with -s (never -S) so a failed lookup cannot print
+# "Could not resolve host: <hostname>" — the exit CODE carries the category instead
+# (review findings on #3042).
 (
   umask 077
   KEIKO_CFG_STD="$(mktemp)"; KEIKO_CFG_LLK="$(mktemp)"
@@ -59,12 +61,15 @@ under an unpredictable name, so no pre-created symlink at a guessable path can c
   printf 'url = "https://%s/v1/models"\nheader = "x-litellm-key: Bearer %s"\n' "$HOST" "$KEY" \
     > "$KEIKO_CFG_LLK"
   unset KEY HOST
-  # -S keeps transport failures visible: without it a DNS/TLS/connection error prints a bare
-  # "000" that is indistinguishable from an auth answer.
+  # curl exit codes: 6 = DNS, 7 = connect, 35 = TLS handshake, 28 = timeout.
+  probe() {
+    curl -s -o /dev/null -w "%{http_code}\n" --config "$1" ||
+      echo "transport failure (curl exit $?)"
+  }
   # Standard header (expect 200):
-  curl -sS -o /dev/null -w "%{http_code}\n" --config "$KEIKO_CFG_STD"
+  probe "$KEIKO_CFG_STD"
   # Custom header (expect 401/403 while litellm_key_header_name is unconfigured):
-  curl -sS -o /dev/null -w "%{http_code}\n" --config "$KEIKO_CFG_LLK"
+  probe "$KEIKO_CFG_LLK"
 )
 ```
 
@@ -179,9 +184,9 @@ Count the aliases the key can see:
 ```bash
 # Count ENTRIES, not lines: /v1/models is usually a single compact JSON line, on which a line
 # grep reports 1 regardless of how many aliases the key can actually see. Only the count is
-# printed — the response body itself never reaches the terminal. Self-contained subshell, as
-# above: config file, trap and status stay inside it, and neither the key nor the hostname
-# appears in history or in curl's process arguments.
+# printed — the response body itself never reaches the terminal, and a data member that is not
+# an ARRAY (a string, or an object carrying a length property) reports the same fixed message
+# rather than echoing upstream content. Self-contained subshell, as above.
 (
   umask 077
   KEIKO_CFG="$(mktemp)"; KEIKO_BODY="$(mktemp)"
@@ -192,12 +197,12 @@ Count the aliases the key can see:
   printf 'url = "https://%s/v1/models"\nheader = "Authorization: Bearer %s"\n' "$HOST" "$KEY" \
     > "$KEIKO_CFG"
   unset KEY HOST
-  # The body goes to a temp file so a TRANSPORT failure surfaces as a curl error (and a non-zero
-  # exit) instead of reaching node as empty input and being reported as a parse failure. A
-  # non-JSON body (HTML error page, plaintext provider diagnostic) is never echoed: the parse
-  # failure prints a fixed, body-free message instead of the offending content.
-  curl -sS -o "$KEIKO_BODY" --config "$KEIKO_CFG" &&
-    node -e 'const d=require("node:fs").readFileSync(process.argv[1],"utf8");try{console.log(JSON.parse(d).data.length);}catch{console.log("unreadable response (not a JSON model list)");}' "$KEIKO_BODY"
+  # The body goes to a temp file so a TRANSPORT failure fails the command (category by exit
+  # code, no hostname) instead of reaching node as empty input and being reported as a parse
+  # failure.
+  curl -s -o "$KEIKO_BODY" --config "$KEIKO_CFG" ||
+    { echo "transport failure (curl exit $?)"; exit 1; }
+  node -e 'const d=require("node:fs").readFileSync(process.argv[1],"utf8");let n;try{const p=JSON.parse(d);if(Array.isArray(p?.data))n=p.data.length;}catch{}console.log(n===undefined?"unreadable response (not a JSON model list)":n);' "$KEIKO_BODY"
 )
 ```
 
