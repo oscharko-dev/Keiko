@@ -19,14 +19,13 @@
   <img alt="TypeScript" src="https://img.shields.io/badge/language-TypeScript-3178C6.svg?logo=typescript&logoColor=white">
   <img alt="Local first" src="https://img.shields.io/badge/runtime-local--first-1F2937.svg">
   <a href="https://sonarcloud.io/summary/new_code?id=oscharko-dev_Keiko"><img alt="SonarCloud Quality Gate" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=alert_status"></a>
-  <a href="https://github.com/oscharko-dev/Keiko-for-Quality"><img alt="Reviewed by Keiko for Quality" src="https://raw.githubusercontent.com/oscharko-dev/Keiko-for-Quality/1869ec1ce1f4fa465d5a0d512f11f18b76ba9a9c/.github/assets/kq/badge-reviewed.svg" height="20"></a>
 </p>
 
 <!-- Review-record card, rendered on a schedule by Keiko-for-Quality's quality-cards workflow
      from GitHub API data. When quality.keiko.dev is deployed, only the URLs below change to
      https://quality.keiko.dev/widget/oscharko-dev/Keiko.svg . -->
 <p align="center">
-  <a href="https://github.com/oscharko-dev/Keiko/pulls?q=is%3Apr"><picture>
+  <a href="https://github.com/oscharko-dev/Keiko-for-Quality"><picture>
     <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/oscharko-dev/Keiko-for-Quality/quality-cards/cards/oscharko-dev/Keiko-light.svg">
     <img src="https://raw.githubusercontent.com/oscharko-dev/Keiko-for-Quality/quality-cards/cards/oscharko-dev/Keiko.svg" width="340" alt="Reviewed by Keiko for Quality — run, finding and acted-on numbers for this repository">
   </picture></a>
