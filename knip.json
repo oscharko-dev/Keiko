@@ -56,5 +56,6 @@
         "src/**/testing/fake-lsp-server.mjs!"
       ]
     }
-  }
+  },
+  "ignoreUnresolved": ["/usr/bin/codesign"]
 }

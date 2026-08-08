@@ -116,6 +116,7 @@
     "test:release:smoke": "npm run test:e2e:smoke",
     "release:plan": "node scripts/release-publish.mjs --plan-only",
     "release:publish": "node scripts/release-publish.mjs",
+    "release:prerelease": "node scripts/release-portable-prerelease.mjs",
     "eval:prompt-enhancer": "npm run build:packages && vitest run packages/keiko-evaluations/src/promptEnhancer",
     "eval:voice-acoustic": "npm run build:packages && node -e \"import('./packages/keiko-evaluations/dist/index.js').then(({ VoiceAcousticEval }) => { const scorecard = VoiceAcousticEval.runVoiceAcousticEvaluation(); console.log(VoiceAcousticEval.renderVoiceAcousticSummary(scorecard)); process.exitCode = scorecard.summary.goNoGo === 'GO' ? 0 : 1; })\"",
     "dev:start": "node scripts/dev-start.mjs",
