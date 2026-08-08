@@ -496,6 +496,7 @@ describe("release-impact governance", () => {
         }),
       );
 
+      expect(result.ok).toBe(false);
       expect(messages(result)).toContain(
         "approvalReference comment must belong to the referenced issue",
       );
@@ -504,6 +505,7 @@ describe("release-impact governance", () => {
     it("rejects a comment without the entry-bound approval phrase", () => {
       const result = validateWith(approvalComment({ body: "Looks good to me." }));
 
+      expect(result.ok).toBe(false);
       expect(messages(result)).toContain("approvalReference comment must carry");
       // The demanded phrase binds to the exact entry under validation — package name AND version
       // come from the record being approved, never from a second manifest read.

@@ -1441,6 +1441,58 @@ describe("GatewaySetupDialog", () => {
     expect(screen.getByLabelText(/api token/i)).toHaveValue("");
   });
 
+  it("replaces the hidden embedding kinds when a corrected file is uploaded", async () => {
+    // Hidden imported state is file-scoped: after a corrected re-upload declares model-x as
+    // CHAT, the submit must not still assert the FIRST file's embedding kind — the server
+    // would classify the corrected deployment as embedding without a chat probe (#3037).
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    const upload = await screen.findByLabelText(/load keiko\.config\.json/i);
+    const configFile = (capabilityKind: string): File =>
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "gpt-5o",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                capability: { id: "gpt-5o", kind: "chat" },
+              },
+              {
+                modelId: "model-x",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                capability: { id: "model-x", kind: capabilityKind },
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      );
+
+    await userEvent.upload(upload, configFile("embedding"));
+    await waitFor(() =>
+      expect(screen.getByLabelText(/base url/i)).toHaveValue("https://llm-gateway.example.com/v1"),
+    );
+    await userEvent.upload(upload, configFile("chat"));
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).not.toHaveProperty("embeddingModelIds");
+  });
+
   it("fills the voice section from an uploaded configuration and states a skipped realtime", async () => {
     // The owner's persisted keiko.config.json: STT/TTS on a dedicated speech endpoint, realtime
     // sharing the gateway endpoint — the speech pair imports, the realtime skip is stated.

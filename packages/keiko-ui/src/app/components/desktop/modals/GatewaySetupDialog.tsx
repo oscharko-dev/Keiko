@@ -2369,8 +2369,10 @@ export function GatewaySetupDialog({
     }
     // Imported embedding kinds ride along invisibly — they assert the kind to the setup route
     // so a fresh save cannot chat-probe an embedding out of the config (review finding on #3037).
-    if (fields.embeddingModelIds !== undefined)
-      setImportedEmbeddingModelIds(fields.embeddingModelIds);
+    // Unlike the VISIBLE fields (which the user can see and correct), hidden imported state is
+    // strictly file-scoped: every successful upload REPLACES it, or a corrected second upload
+    // would still submit the previous file's kind declarations (review finding on #3037).
+    setImportedEmbeddingModelIds(fields.embeddingModelIds ?? []);
     if (fields.figmaAccessToken !== undefined) setFigmaAccessToken(fields.figmaAccessToken);
     applyUploadedVoiceConfig(fields);
   }
@@ -2419,14 +2421,15 @@ export function GatewaySetupDialog({
 
   // The endpoint protocol rides along invisibly and is persisted verbatim by the setup route —
   // without it a fresh save of an Azure speech endpoint loses its deployment URL shape (#3037).
+  // Hidden imported state is file-scoped: when the file speaks about the voice connection at
+  // all, its protocol declaration REPLACES the previous upload's (a corrected re-upload without
+  // a style must clear the stale one); a file with no voice section leaves the visible voice
+  // fields — and therefore the protocol that belongs to them — untouched.
   function applyUploadedVoiceEndpoint(fields: GatewayConfigUploadFields): void {
-    if (fields.voiceEndpointStyle !== undefined) {
-      setImportedVoiceEndpointStyle(fields.voiceEndpointStyle);
-    }
-    if (fields.voiceApiVersion !== undefined) setImportedVoiceApiVersion(fields.voiceApiVersion);
-    if (fields.voiceRealtimeAuthMode !== undefined) {
-      setImportedVoiceRealtimeAuthMode(fields.voiceRealtimeAuthMode);
-    }
+    if (fields.voiceBaseUrl === undefined) return;
+    setImportedVoiceEndpointStyle(fields.voiceEndpointStyle ?? "");
+    setImportedVoiceApiVersion(fields.voiceApiVersion ?? "");
+    setImportedVoiceRealtimeAuthMode(fields.voiceRealtimeAuthMode ?? "");
   }
 
   async function submit(event: FormSubmitEvent): Promise<void> {
