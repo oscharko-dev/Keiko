@@ -67,6 +67,12 @@ const VOICE_LOCALITIES: ReadonlySet<VoiceProviderLocality> = new Set([
  * changing retry-isolation behavior (review finding on #3031).
  */
 const REBUILT_CIRCUIT_BREAKER = { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 };
+/**
+ * The rebuild writes exactly these retry values onto generic providers; a file tuning them
+ * differently would be silently rewritten on save (review finding on #3031). Voice providers
+ * are exempt — the voice route inherits their stored retry tuning.
+ */
+const REBUILT_GENERIC_RETRY = { maxRetries: 2, retryBaseDelayMs: 500 };
 const CAPABILITY_FLAG_KEYS = [
   "supportsImageInput",
   "workflowEligible",
@@ -258,6 +264,11 @@ function capabilityFlagsMatchKind(value: Record<string, unknown>, kind: string):
   if (kind !== "chat" && chatOnly.some((flag) => value[flag] === true)) return false;
   if (kind !== "voice" && voiceOnly.some((flag) => value[flag] === true)) return false;
   if (kind !== "voice" && value.realtimeTranscriptionModel !== undefined) return false;
+  // Semantic turn detection is a realtime capability — tuning it without realtime support is
+  // corrupted input the route would silently drop (review finding on #3031).
+  if (value.supportsSemanticTurnDetection === true && value.supportsRealtimeVoice !== true) {
+    return false;
+  }
   return true;
 }
 
@@ -328,6 +339,16 @@ function providerConnectionScalars(value: Record<string, unknown>): ConnectionSc
     apiKeyHeaderName: header.value,
     timeoutMs: timeout.value,
   };
+}
+
+/** Present retry tuning must equal what the rebuild writes — or the file refuses (generic only). */
+function retryTuningRepresentable(value: Record<string, unknown>): boolean {
+  const expectedKeys = Object.keys(
+    REBUILT_GENERIC_RETRY,
+  ) as readonly (keyof typeof REBUILT_GENERIC_RETRY)[];
+  return expectedKeys.every(
+    (key) => value[key] === undefined || value[key] === REBUILT_GENERIC_RETRY[key],
+  );
 }
 
 function parsedProvider(value: unknown): ParsedProvider | undefined {
@@ -456,6 +477,20 @@ function carriesUnsupportedGenericSetting(
   );
 }
 
+function carriesUnrepresentableRetryTuning(
+  rawProviders: unknown,
+  genericIds: ReadonlySet<string>,
+): boolean {
+  if (!Array.isArray(rawProviders)) return false;
+  return rawProviders.some(
+    (entry) =>
+      objectRecord(entry) &&
+      typeof entry.modelId === "string" &&
+      genericIds.has(entry.modelId.trim()) &&
+      !retryTuningRepresentable(entry),
+  );
+}
+
 /** Flag lists derive from CHAT capabilities only: the setup route smoke-tests chat candidates and
  * rejects non-chat ids in either list AFTER a reported upload success (review finding on #3031). */
 function chatFlaggedIds(
@@ -502,6 +537,15 @@ function voiceRoles(partition: PartitionedProviders): VoiceRoles | undefined {
       !entry.capability.speechInput && !entry.capability.speechOutput && !entry.capability.realtime,
   );
   if (roleless) return undefined;
+  // Voice profiles belong to speech-output-capable providers; a profile block on an STT-only
+  // provider is corrupted input the route would silently drop (review finding on #3031).
+  const orphanedProfiles = withCapability.some(
+    (entry) =>
+      entry.provider.voiceProfiles !== undefined &&
+      !entry.capability.speechOutput &&
+      !entry.capability.realtime,
+  );
+  if (orphanedProfiles) return undefined;
   const stt = singleRole(
     withCapability.filter((entry) => entry.capability.speechInput && !entry.capability.realtime),
   );
@@ -721,7 +765,11 @@ function circuitBreakerOutcome(value: unknown): "representable" | "invalid" | "u
   const expectedKeys = Object.keys(
     REBUILT_CIRCUIT_BREAKER,
   ) as readonly (keyof typeof REBUILT_CIRCUIT_BREAKER)[];
-  const matches = expectedKeys.every((key) => value[key] === REBUILT_CIRCUIT_BREAKER[key]);
+  // An omitted key means the rebuilt default — only a PRESENT differing value is unrepresentable
+  // (review finding on #3031).
+  const matches = expectedKeys.every(
+    (key) => value[key] === undefined || value[key] === REBUILT_CIRCUIT_BREAKER[key],
+  );
   // Object.hasOwn, not `in`: an inherited name like `toString` must count as an extra key.
   const noExtraKeys = Object.keys(value).every((key) =>
     Object.hasOwn(REBUILT_CIRCUIT_BREAKER, key),
@@ -806,13 +854,25 @@ export function parseGatewayConfigUpload(serialized: string): GatewayConfigUploa
   // A voice-only file cannot be saved: Test & Save requires the main gateway connection, so a
   // "successful" load would leave the form permanently unsubmittable (review finding on #3031).
   if (resolved.partition.generic.length === 0) return { outcome: "invalid" };
-  const genericIds = new Set(resolved.partition.generic.map((provider) => provider.modelId));
+  const unrepresentable = unrepresentableSettingOutcome(root, resolved.partition);
+  if (unrepresentable !== undefined) return unrepresentable;
+  return assembledFields(root, resolved.partition);
+}
+
+function unrepresentableSettingOutcome(
+  root: Record<string, unknown>,
+  partition: PartitionedProviders,
+): GatewayConfigUploadResult | undefined {
+  const genericIds = new Set(partition.generic.map((provider) => provider.modelId));
   if (carriesUnsupportedGenericSetting(root.providers, genericIds)) {
+    return { outcome: "unsupportedSetting" };
+  }
+  if (carriesUnrepresentableRetryTuning(root.providers, genericIds)) {
     return { outcome: "unsupportedSetting" };
   }
   const circuitBreaker = circuitBreakerOutcome(root.circuitBreaker);
   if (circuitBreaker !== "representable") return { outcome: circuitBreaker };
-  return assembledFields(root, resolved.partition);
+  return undefined;
 }
 
 /** How many form fields an upload fills — the number the status line reports. */

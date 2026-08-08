@@ -13,7 +13,7 @@ function providerFixture(overrides: Record<string, unknown> = {}): Record<string
     apiKeyHeaderName: "api-key",
     timeoutMs: 30_000,
     maxRetries: 2,
-    retryBaseDelayMs: 250,
+    retryBaseDelayMs: 500,
     capability: {
       id: "gpt-5o",
       kind: "chat",
@@ -543,6 +543,13 @@ describe("parseGatewayConfigUpload", () => {
       },
     });
     expect(parseGatewayConfigUpload(prototypeKey)).toEqual({ outcome: "unsupportedSetting" });
+
+    // Omitted keys mean the rebuilt defaults — a partial block that only restates them imports.
+    const partial = JSON.stringify({
+      providers: [providerFixture()],
+      circuitBreaker: { failureThreshold: 5 },
+    });
+    expect(parseGatewayConfigUpload(partial).outcome).toBe("fields");
   });
 
   it("refuses two providers claiming the same voice role", () => {
@@ -691,9 +698,26 @@ describe("parseGatewayConfigUpload", () => {
     });
 
     expect(parseGatewayConfigUpload(azure)).toEqual({ outcome: "unsupportedSetting" });
-    // Retry tuning stays tolerated: it changes no endpoint or protocol.
-    const retries = JSON.stringify({ providers: [providerFixture({ maxRetries: 7 })] });
-    expect(parseGatewayConfigUpload(retries).outcome).toBe("fields");
+    // Retry tuning matching what the rebuild writes stays representable; a DIFFERENT value
+    // would be silently rewritten on save and refuses instead (review finding on #3031).
+    const matching = JSON.stringify({
+      providers: [providerFixture({ maxRetries: 2, retryBaseDelayMs: 500 })],
+    });
+    expect(parseGatewayConfigUpload(matching).outcome).toBe("fields");
+    const tunedRetries = JSON.stringify({ providers: [providerFixture({ maxRetries: 7 })] });
+    expect(parseGatewayConfigUpload(tunedRetries)).toEqual({ outcome: "unsupportedSetting" });
+    // Voice providers keep their stored tuning through the voice route — exempt.
+    const voiceTuned = JSON.stringify({
+      providers: [
+        providerFixture(),
+        voiceProviderFixture(
+          "keiko-stt",
+          { supportsSpeechInput: true },
+          { maxRetries: 1, retryBaseDelayMs: 500 },
+        ),
+      ],
+    });
+    expect(parseGatewayConfigUpload(voiceTuned).outcome).toBe("fields");
   });
 
   it.each([
@@ -823,6 +847,31 @@ describe("parseGatewayConfigUpload", () => {
       "an unsupported API key header name",
       JSON.stringify({
         providers: [providerFixture({ apiKeyHeaderName: "x-custom", capability: undefined })],
+      }),
+    ],
+    [
+      "semantic turn detection without realtime support",
+      JSON.stringify({
+        providers: [
+          voiceProviderFixture("keiko-stt", {
+            supportsSpeechInput: true,
+            supportsSemanticTurnDetection: true,
+          }),
+          providerFixture(),
+        ],
+      }),
+    ],
+    [
+      "voice profiles on a provider without an output role",
+      JSON.stringify({
+        providers: [
+          providerFixture(),
+          voiceProviderFixture(
+            "keiko-stt",
+            { supportsSpeechInput: true },
+            { voiceProfiles: [{ persona: "neutral", voiceId: "alloy" }] },
+          ),
+        ],
       }),
     ],
     [
