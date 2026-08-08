@@ -194,13 +194,22 @@ export function nextBetaTag(version, existingTags) {
   return `${prefix}${String(next)}`;
 }
 
+/**
+ * The GREATEST existing beta below the tag being published — not merely index minus one: a
+ * --tag override may skip numbers (beta.9 after beta.1), and the still-live latest beta must
+ * carry the superseded pointer regardless of the gap (review finding on #3037).
+ */
 export function previousBetaTag(tag, existingTags) {
   const match = /^(?<prefix>v.+-beta\.)(?<index>\d+)$/u.exec(tag);
   if (match?.groups === undefined) return undefined;
-  const previous = Number.parseInt(match.groups.index, 10) - 1;
-  if (previous < 0) return undefined;
-  const candidate = `${match.groups.prefix}${String(previous)}`;
-  return existingTags.includes(candidate) ? candidate : undefined;
+  const { prefix } = match.groups;
+  const current = Number.parseInt(match.groups.index, 10);
+  const lower = existingTags
+    .filter((candidate) => candidate.startsWith(prefix))
+    .map((candidate) => Number.parseInt(candidate.slice(prefix.length), 10))
+    .filter((index) => Number.isInteger(index) && index >= 0 && index < current);
+  if (lower.length === 0) return undefined;
+  return `${prefix}${String(Math.max(...lower))}`;
 }
 
 function rootVersion() {

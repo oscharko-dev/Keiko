@@ -362,9 +362,25 @@ function isIndentedCodeLine(rawLine) {
 // CONTEXT (fenced, indented code, blockquote or its CommonMark lazy continuation — a non-blank
 // line directly after a "> ..." line still renders inside the quote; only a blank line ends it)
 // rather than a plain top-level line (review findings on #3037).
+// An HTML comment renders NOTHING — a phrase inside `<!-- ... -->` is invisible on GitHub and
+// must never approve (review finding on #3037). Single-line comments never equal the bare
+// phrase; only the multi-line block state needs tracking.
+function htmlCommentContextLine(line, state) {
+  if (state.inHtmlComment) {
+    if (line.includes("-->")) state.inHtmlComment = false;
+    return true;
+  }
+  if (line.includes("<!--") && !line.includes("-->")) {
+    state.inHtmlComment = true;
+    return true;
+  }
+  return false;
+}
+
 function approvalContextLine(rawLine, state) {
   const line = rawLine.trim();
   const delimiter = fenceDelimiter(line);
+  if (htmlCommentContextLine(line, state)) return true;
   if (state.openFence !== undefined) {
     if (closesFence(state.openFence, line, delimiter)) state.openFence = undefined;
     return true;
@@ -386,7 +402,7 @@ function approvalContextLine(rawLine, state) {
 }
 
 function phraseStandsOnPlainLine(body, phrase) {
-  const state = { openFence: undefined, inBlockquote: false };
+  const state = { openFence: undefined, inBlockquote: false, inHtmlComment: false };
   for (const rawLine of body.split("\n")) {
     if (approvalContextLine(rawLine, state)) continue;
     if (rawLine.trim() === phrase) return true;

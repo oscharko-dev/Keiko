@@ -3296,8 +3296,8 @@ describe("handleGatewaySetup", () => {
       deps,
     );
     expect(cleared.status).toBe(200);
-    expect(savedOcr().get("scan-ocr")?.kind).toBe("ocr-vision");
-    expect(savedOcr().get("remote-ocr")?.kind).toBe("ocr-vision");
+    expect(savedOcr().get("scan-ocr")).toMatchObject({ kind: "ocr-vision" });
+    expect(savedOcr().get("remote-ocr")).toMatchObject({ kind: "ocr-vision" });
     // The stored OCR deployments are never chat-probed — they have no chat protocol to answer.
     expect(probedModelIds).not.toContain("scan-ocr");
     expect(probedModelIds).not.toContain("remote-ocr");
@@ -3310,8 +3310,8 @@ describe("handleGatewaySetup", () => {
       deps,
     );
     expect(rotated.status).toBe(200);
-    expect(savedOcr().get("scan-ocr")?.apiKey).toBe("example-rotated-token");
-    expect(savedOcr().get("remote-ocr")?.apiKey).toBe("dedicated-ocr-token");
+    expect(savedOcr().get("scan-ocr")).toMatchObject({ apiKey: "example-rotated-token" });
+    expect(savedOcr().get("remote-ocr")).toMatchObject({ apiKey: "dedicated-ocr-token" });
 
     // Rotating the credential together with the authentication header must move BOTH onto the
     // restored same-endpoint OCR provider — the fresh token in the obsolete header would break
@@ -3336,7 +3336,34 @@ describe("handleGatewaySetup", () => {
       apiKey: "example-header-rotated-token",
       apiKeyHeaderName: "x-litellm-key",
     });
-    expect(savedHeaders.get("remote-ocr")?.apiKeyHeaderName).not.toBe("x-litellm-key");
+    expect(savedHeaders.get("remote-ocr")).not.toMatchObject({ apiKeyHeaderName: "x-litellm-key" });
+
+    // Moving the gateway endpoint takes every shared-connection provider along — URL, token,
+    // and header travel together, because the old connection dies with the update; the
+    // dedicated-endpoint OCR keeps its own connection untouched (review finding on #3037).
+    const moved = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://moved-llm.example.com/v1",
+        apiKey: "moved-token",
+      }),
+      deps,
+    );
+    expect(moved.status).toBe(200);
+    const movedConnections = new Map(
+      (currentGatewayConfig(deps)?.providers ?? []).map((provider) => [
+        provider.modelId,
+        { baseUrl: provider.baseUrl, apiKey: provider.apiKey },
+      ]),
+    );
+    expect(movedConnections.get("scan-ocr")).toEqual({
+      baseUrl: "https://moved-llm.example.com/v1",
+      apiKey: "moved-token",
+    });
+    expect(movedConnections.get("remote-ocr")).toEqual({
+      baseUrl: "https://ocr.example.com",
+      apiKey: "dedicated-ocr-token",
+    });
 
     // An explicitly submitted deployment list is authoritative: OCR restoration applies only to
     // inherited deployments, so omitting the OCR ids here REMOVES them (review finding on #3031).

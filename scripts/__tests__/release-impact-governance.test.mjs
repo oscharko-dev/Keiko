@@ -586,6 +586,20 @@ describe("release-impact governance", () => {
       expect(separated.ok).toBe(true);
     });
 
+    it("rejects a phrase hidden inside an HTML comment", () => {
+      // Review finding on #3037: `<!-- ... -->` renders NOTHING on GitHub — an invisible phrase
+      // must never authorize a publish. A real phrase after a CLOSED comment still approves.
+      const phrase = approvalPhrase();
+      const hidden = validateWith(approvalComment({ body: `<!--\n${phrase}\n-->` }));
+      expect(hidden.ok).toBe(false);
+      expect(messages(hidden)).toContain("on a line of its own");
+
+      const afterComment = validateWith(
+        approvalComment({ body: `<!--\nexample\n-->\n\n${phrase}` }),
+      );
+      expect(afterComment.ok).toBe(true);
+    });
+
     it("rejects a phrase that appears only inside a blockquote", () => {
       // Review finding on #3037: a quoted line ("> Approved-for-publish: ...") cites the phrase,
       // typically while discussing it — it is not the owner's own standalone statement.

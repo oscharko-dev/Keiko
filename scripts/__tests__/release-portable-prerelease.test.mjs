@@ -60,11 +60,19 @@ describe("beta tag arithmetic", () => {
     );
   });
 
-  it("finds the direct predecessor only when it exists", () => {
+  it("finds the greatest existing lower beta as the predecessor", () => {
     expect(previousBetaTag("v0.3.0-beta.2", ["v0.3.0-beta.1"])).toBe("v0.3.0-beta.1");
+    // A --tag override may skip numbers — the still-live latest beta must still be superseded
+    // (review finding on #3037).
+    expect(previousBetaTag("v0.3.0-beta.9", ["v0.3.0-beta.1"])).toBe("v0.3.0-beta.1");
+    expect(previousBetaTag("v0.3.0-beta.9", ["v0.3.0-beta.1", "v0.3.0-beta.4", "v0.2.15"])).toBe(
+      "v0.3.0-beta.4",
+    );
     expect(previousBetaTag("v0.3.0-beta.0", ["v0.2.15"])).toBeUndefined();
     expect(previousBetaTag("v0.3.0-beta.2", [])).toBeUndefined();
     expect(previousBetaTag("v0.3.0", ["v0.3.0-beta.1"])).toBeUndefined();
+    // A higher existing beta is never "previous" for a lower tag.
+    expect(previousBetaTag("v0.3.0-beta.2", ["v0.3.0-beta.4"])).toBeUndefined();
   });
 });
 

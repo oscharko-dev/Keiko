@@ -3550,12 +3550,11 @@ function finalRawConfigForSetup(
 // rule as the endpoint-change token guard).
 function sharesStoredGatewayConnection(
   provider: ModelProviderConfig,
-  gatewayBaseUrl: string,
   storedPrimary: ModelProviderConfig | undefined,
 ): boolean {
   return (
     storedPrimary !== undefined &&
-    sameBaseUrlIdentity(provider.baseUrl, gatewayBaseUrl) &&
+    sameBaseUrlIdentity(provider.baseUrl, storedPrimary.baseUrl) &&
     provider.apiKey === storedPrimary.apiKey &&
     (provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME) ===
       (storedPrimary.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME)
@@ -3568,17 +3567,18 @@ function storedDedicatedProviderRaw(
   gateway: { readonly baseUrl: string; readonly apiKey: string; readonly apiKeyHeaderName: string },
   storedPrimary: ModelProviderConfig | undefined,
 ): Record<string, unknown> {
-  const sharedGatewayConnection = sharesStoredGatewayConnection(
-    provider,
-    gateway.baseUrl,
-    storedPrimary,
-  );
+  // Sharing is judged against the STORED primary connection — a provider that rode the old
+  // gateway follows it wherever the setup moves it (URL, credential, AND header), because the
+  // old connection dies with the update; a provider with its own connection keeps every field
+  // (review findings on #3031/#3037 — the newly verified details never travel to a connection
+  // they were not tested against).
+  const sharedGatewayConnection = sharesStoredGatewayConnection(provider, storedPrimary);
   const apiKeyHeaderName = sharedGatewayConnection
     ? gateway.apiKeyHeaderName
     : provider.apiKeyHeaderName;
   return {
     modelId: provider.modelId,
-    baseUrl: provider.baseUrl,
+    baseUrl: sharedGatewayConnection ? gateway.baseUrl : provider.baseUrl,
     apiKey: sharedGatewayConnection ? gateway.apiKey : provider.apiKey,
     ...(apiKeyHeaderName === undefined ? {} : { apiKeyHeaderName }),
     ...(provider.endpointStyle === undefined ? {} : { endpointStyle: provider.endpointStyle }),
