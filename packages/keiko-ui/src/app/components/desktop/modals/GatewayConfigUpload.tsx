@@ -24,6 +24,35 @@ const INITIAL_STATE: UploadState = { issue: undefined, appliedCount: undefined }
  * the same form state (and therefore the same validation and one-time token test) as manual
  * input — the upload can never bypass what typing could not.
  */
+async function handleUploadedFile(
+  event: ChangeEvent<HTMLInputElement>,
+  onApply: (fields: GatewayConfigUploadFields) => void,
+  setState: (state: UploadState) => void,
+): Promise<void> {
+  const file = event.target.files?.[0];
+  // Same file again must re-trigger onChange after a fix-and-retry.
+  event.target.value = "";
+  if (file === undefined) return;
+  if (file.size > MAX_GATEWAY_CONFIG_BYTES) {
+    setState({ issue: "fileTooLarge", appliedCount: undefined });
+    return;
+  }
+  let fields;
+  try {
+    fields = parseGatewayConfigUpload(await file.text());
+  } catch {
+    // A read failure (revoked permission, vanished file) is the same user outcome as an
+    // unreadable configuration — reported, never an unhandled rejection.
+    fields = undefined;
+  }
+  if (fields === undefined) {
+    setState({ issue: "invalid", appliedCount: undefined });
+    return;
+  }
+  onApply(fields);
+  setState({ issue: undefined, appliedCount: appliedGatewayConfigFieldCount(fields) });
+}
+
 export function GatewayConfigUpload({
   disabled,
   onApply,
@@ -34,38 +63,25 @@ export function GatewayConfigUpload({
   const t = useTranslate();
   const [state, setState] = useState<UploadState>(INITIAL_STATE);
 
-  async function handleFile(event: ChangeEvent<HTMLInputElement>): Promise<void> {
-    const file = event.target.files?.[0];
-    // Same file again must re-trigger onChange after a fix-and-retry.
-    event.target.value = "";
-    if (file === undefined) return;
-    if (file.size > MAX_GATEWAY_CONFIG_BYTES) {
-      setState({ issue: "fileTooLarge", appliedCount: undefined });
-      return;
-    }
-    const fields = parseGatewayConfigUpload(await file.text());
-    if (fields === undefined) {
-      setState({ issue: "invalid", appliedCount: undefined });
-      return;
-    }
-    onApply(fields);
-    setState({ issue: undefined, appliedCount: appliedGatewayConfigFieldCount(fields) });
-  }
-
   return (
     <section className={styles["cmp-config-upload"]} aria-labelledby="gw-config-upload-title">
       <div>
         <h3 id="gw-config-upload-title">{t("gatewaySetup.upload.title")}</h3>
         <p>{t("gatewaySetup.upload.hint")}</p>
       </div>
-      <label className={styles["cmp-config-upload-action"]}>
+      <label
+        className={[
+          styles["cmp-config-upload-action"],
+          ...(disabled ? [styles["cmp-config-upload-action-disabled"]] : []),
+        ].join(" ")}
+      >
         {t("gatewaySetup.upload.action")}
         <input
           type="file"
           accept="application/json,.json"
           className="visually-hidden"
           disabled={disabled}
-          onChange={(event) => void handleFile(event)}
+          onChange={(event) => void handleUploadedFile(event, onApply, setState)}
         />
       </label>
       <GatewayConfigUploadStatus state={state} />

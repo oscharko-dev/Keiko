@@ -91,7 +91,9 @@
   outline-offset: 2px;
 }
 
-.cmp-config-upload-action:has(input:disabled) {
+/* Explicit class toggle instead of :has(input:disabled): the disabled look must not depend on
+   selector support the deployed browser may lack. */
+.cmp-config-upload-action-disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }
