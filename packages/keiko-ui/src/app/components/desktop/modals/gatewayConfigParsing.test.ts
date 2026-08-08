@@ -532,6 +532,21 @@ describe("parseGatewayConfigUpload", () => {
     expect(parseGatewayConfigUpload(orphanVersion)).toEqual({ outcome: "invalid" });
   });
 
+  it("rejects a voice locality on a non-voice capability", () => {
+    // The canonical parser rejects a chat/embedding capability carrying voiceProviderLocality
+    // (assertNoVoiceFieldsForNonVoiceKind) — reporting upload success would hand the route a
+    // file it refuses, silently discarding the field (#3037).
+    const misplaced = JSON.stringify({
+      providers: [
+        providerFixture({
+          capability: { id: "gpt-5o", kind: "chat", voiceProviderLocality: "azure-foundry" },
+        }),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(misplaced)).toEqual({ outcome: "invalid" });
+  });
+
   it("rejects voice profiles on a realtime-only provider", () => {
     // The canonical gateway parser requires supportsSpeechOutput for a voiceProfiles block; a
     // realtime-only carrier is a configuration the product rejects, so reporting upload success

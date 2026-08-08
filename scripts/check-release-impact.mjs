@@ -355,7 +355,16 @@ function closesFence(openFence, line, delimiter) {
 // line is judged before trimming, which would erase exactly that distinction (review finding on
 // #3037). Up to three leading spaces is ordinary paragraph indentation and stays eligible.
 function isIndentedCodeLine(rawLine) {
-  return rawLine.startsWith("\t") || rawLine.startsWith("    ");
+  // Tabs expand to the next 4-column stop (CommonMark), so " \t" reaches column 4 exactly like
+  // four spaces — indentation is judged in COLUMNS, not characters (review finding on #3037).
+  let columns = 0;
+  for (const char of rawLine) {
+    if (char === " ") columns += 1;
+    else if (char === "\t") columns += 4 - (columns % 4);
+    else break;
+    if (columns >= 4) return true;
+  }
+  return false;
 }
 
 // One walker step: mutates the fence/blockquote state and reports whether the line is Markdown

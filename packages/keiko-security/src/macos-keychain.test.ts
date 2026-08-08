@@ -28,7 +28,10 @@ afterAll(() => {
 
 // `sleep` stands for a real `security` blocked on a macOS unlock dialog: it returns nothing until a
 // human acts. The bounded spawn kills it, so no child outlives the test.
-const HANGS = fakeSecurity("sleep 30");
+// `exec` REPLACES the shell with sleep, so the spawn timeout's kill reaches the hanging process
+// itself — a plain `sleep 30` would fork a child the timeout cannot reach, leaking an orphaned
+// sleep across later suites (review finding on #3037).
+const HANGS = fakeSecurity("exec sleep 30");
 const ANSWERS = fakeSecurity("printf %s AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
 // Measured against the shipped binary: 44 is errSecItemNotFound, 1 is an unknown subcommand.
 const REFUSES = fakeSecurity("exit 44");

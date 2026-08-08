@@ -307,6 +307,11 @@ function parsedCapability(value: unknown, expectedId?: string): ParsedCapability
   if (!transcription.ok) return undefined;
   const locality = readLocality(value.voiceProviderLocality);
   if (!locality.ok) return undefined;
+  // Voice-tier fields belong to voice capabilities only — the canonical parser rejects a chat or
+  // embedding capability carrying voiceProviderLocality (assertNoVoiceFieldsForNonVoiceKind), so
+  // accepting it here would report success for a file the product refuses, silently discarding
+  // the field on save (review finding on #3037).
+  if (kind !== "voice" && locality.value !== undefined) return undefined;
   return {
     kind,
     supportsImageInput: value.supportsImageInput === true,

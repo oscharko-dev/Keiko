@@ -195,6 +195,28 @@ export function nextBetaTag(version, existingTags) {
 }
 
 /**
+ * A --tag override must not publish BELOW an existing higher beta: the newest GitHub release
+ * would then be an older number, and the actual highest beta would never receive a superseded
+ * pointer — the prerelease lineage must stay monotonic (review finding on #3037). Resuming the
+ * highest beta's own interrupted draft stays allowed (equal is not below).
+ */
+export function assertTagKeepsBetaSequenceMonotonic(tag, existingTags) {
+  const match = /^(?<prefix>v.+-beta\.)(?<index>\d+)$/u.exec(tag);
+  if (match?.groups === undefined) return;
+  const { prefix } = match.groups;
+  const current = Number.parseInt(match.groups.index, 10);
+  const higher = existingTags
+    .filter((candidate) => candidate.startsWith(prefix))
+    .map((candidate) => Number.parseInt(candidate.slice(prefix.length), 10))
+    .filter((index) => Number.isInteger(index) && index > current);
+  if (higher.length > 0) {
+    fail(
+      `tag ${tag} is below the existing ${prefix}${String(Math.max(...higher))} — publishing a lower beta would leave the highest release unsuperseded.`,
+    );
+  }
+}
+
+/**
  * The GREATEST existing beta below the tag being published — not merely index minus one: a
  * --tag override may skip numbers (beta.9 after beta.1), and the still-live latest beta must
  * carry the superseded pointer regardless of the gap (review finding on #3037).
@@ -639,6 +661,7 @@ export function runPortablePrerelease(argv) {
   const repository = repositorySlug();
   const tags = existingReleaseTags();
   const tag = options.tag ?? nextBetaTag(version, tags);
+  assertTagKeepsBetaSequenceMonotonic(tag, tags);
   const hasPendingDraft = tags.includes(tag);
   if (hasPendingDraft) assertExistingTagIsResumableDraft(tag);
   const runId = options.runId ?? dispatchWorkflow(options.ref);

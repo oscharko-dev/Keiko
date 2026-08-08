@@ -794,6 +794,29 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     ).toThrowError(/already exists/u);
   });
 
+  it("refuses a --tag override below the highest existing beta", () => {
+    // Review finding on #3037: publishing beta.5 while beta.9 exists would make the NEWEST
+    // release an older number and leave the real highest beta unsuperseded — the prerelease
+    // lineage must stay monotonic. Resuming the highest beta's own draft stays allowed.
+    const lowTag = `v${localVersion}-beta.5`;
+    const overrides = {
+      answers: [
+        [
+          "api repos/{owner}/{repo}/releases",
+          JSON.stringify([{ tag_name: `v${localVersion}-beta.9` }]),
+        ],
+      ],
+    };
+
+    expect(() =>
+      withHostPlatform("darwin", () =>
+        withProcessRunner(ghDouble([], overrides), () =>
+          runPortablePrerelease(["--run-id", "42", "--tag", lowTag]),
+        ),
+      ),
+    ).toThrowError(/below the existing v.+-beta\.9/u);
+  });
+
   it("refuses a supplied run built from another branch", () => {
     // Review finding on #3037: --run-id could name a successful evaluation run of an UNMERGED
     // feature branch whose package version matches the local checkout — every downstream check

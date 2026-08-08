@@ -586,6 +586,19 @@ describe("release-impact governance", () => {
       expect(separated.ok).toBe(true);
     });
 
+    it("rejects a space-prefixed tab indent as indented code", () => {
+      // Review finding on #3037: CommonMark expands a tab to the next 4-column stop, so
+      // " \t<phrase>" reaches column 4 exactly like four spaces and renders as indented code —
+      // indentation is judged in columns, not characters. Three plain spaces stay a paragraph.
+      const phrase = approvalPhrase();
+      const spaceTab = validateWith(approvalComment({ body: ` \t${phrase}` }));
+      expect(spaceTab.ok).toBe(false);
+      expect(messages(spaceTab)).toContain("on a line of its own");
+
+      const threeSpaces = validateWith(approvalComment({ body: `   ${phrase}` }));
+      expect(threeSpaces.ok).toBe(true);
+    });
+
     it("rejects a phrase hidden inside an HTML comment", () => {
       // Review finding on #3037: `<!-- ... -->` renders NOTHING on GitHub — an invisible phrase
       // must never authorize a publish. A real phrase after a CLOSED comment still approves.
