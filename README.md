@@ -29,6 +29,12 @@
   <a href="https://sonarcloud.io/summary/new_code?id=oscharko-dev_Keiko"><img alt="SonarCloud Quality Gate" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=vulnerabilities"></a>
 </p>
 
+<p align="center">
+  <a href="https://sonarcloud.io/project/overview?id=oscharko-dev_Keiko"><picture>
+    <img src="https://sonarcloud.io/images/project_badges/sonarcloud-highlight.svg" width="340" alt="Scanned on SonarQube Cloud badge">
+  </picture></a>
+</p>
+
 <!-- Review-record card, rendered on a schedule by Keiko-for-Quality's quality-cards workflow
      from GitHub API data. When quality.keiko.dev is deployed, only the URLs below change to
      https://quality.keiko.dev/widget/oscharko-dev/Keiko.svg . -->
