@@ -2463,6 +2463,20 @@ describe("portable runtime package scripts", () => {
     expect(source).toContain(
       'run("/usr/bin/codesign", ["--verify", "--deep", "--strict", appRoot]);',
     );
+    // Nested code signs before the outer seal (inside-out): x86_64 Mach-Os are NOT linker-signed,
+    // and codesign refuses to seal a bundle over unsigned subcomponents (measured on
+    // macos-15-intel). The order below is what makes the seal possible on Intel at all.
+    const systemExtensionSign = source.indexOf(
+      "SystemExtensions",
+      source.indexOf("function sealMacosAppBundle"),
+    );
+    const managerSign = source.indexOf('"KeikoSystemExtensionManager"', systemExtensionSign);
+    const outerSeal = source.indexOf(
+      'run("/usr/bin/codesign", ["--force", "--sign", "-", appRoot]);',
+    );
+    expect(systemExtensionSign).toBeGreaterThan(-1);
+    expect(systemExtensionSign).toBeLessThan(managerSign);
+    expect(managerSign).toBeLessThan(outerSeal);
   });
 
   it("validates the staged app package surface before archive assembly", () => {

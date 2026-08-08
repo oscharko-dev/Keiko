@@ -2392,6 +2392,24 @@ function sealMacosAppBundle(target, payloadRoot, hooks) {
     return;
   }
   requireDarwinBuilder(target, "sealing");
+  // Inside-out, nested code first. The arm64 linker ad-hoc signs every Mach-O at link time, but
+  // the x86_64 one does not, and codesign refuses to seal a bundle over unsigned subcomponents —
+  // measured on macos-15-intel: "code object is not signed at all — In subcomponent:
+  // …/KeikoSystemExtensionManager". Signing these two here is digest-safe: they are bound by the
+  // outer seal and the install-time identity, both computed after this step, and NOT by the
+  // nativeHelpers digests, which cover only the supervisor executable staged under Resources.
+  run("/usr/bin/codesign", [
+    "--force",
+    "--sign",
+    "-",
+    join(appRoot, "Contents", "Library", "SystemExtensions", MACOS_SYSTEM_EXTENSION_ID),
+  ]);
+  run("/usr/bin/codesign", [
+    "--force",
+    "--sign",
+    "-",
+    join(appRoot, "Contents", "MacOS", "KeikoSystemExtensionManager"),
+  ]);
   run("/usr/bin/codesign", ["--force", "--sign", "-", appRoot]);
 }
 

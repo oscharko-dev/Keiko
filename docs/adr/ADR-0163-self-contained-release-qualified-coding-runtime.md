@@ -305,7 +305,11 @@ shipped: its first customer double-click found three dead ends, each of which is
    producer therefore seals `Keiko.app` ad-hoc (asserting no author, making the bundle internally
    consistent) after the final activation-manifest write, and runs `codesign --verify --deep
    --strict` as the last payload-affecting step so any later mutation fails staging instead of the
-   customer journey. The Developer ID lane later replaces this seal with the real signature.
+   customer journey. Sealing is inside-out: the arm64 linker ad-hoc signs every Mach-O at link
+   time but the x86_64 one does not, and `codesign` refuses to seal over unsigned subcomponents,
+   so the nested system-extension bundle and the extension manager are ad-hoc signed first
+   (digest-safe: both are bound by the outer seal and the install-time identity, computed after
+   this step). The Developer ID lane later replaces all of these seals with real signatures.
 3. *A double-click failure is visible.* The native launcher marks its child tree with
    `KEIKO_PORTABLE_UI_LAUNCH=1`; only under that exact marker does a failed portable setup or
    launch raise a native alert carrying the recorded stderr reason. Terminals, CI and test runners
