@@ -2423,9 +2423,11 @@ export function GatewaySetupDialog({
     applyUploadedVoiceConnection(fields);
     applyUploadedVoiceRoles(fields);
     // After the speech-output update above — its identity transition clears the output voice.
-    if (fields.voiceOutputVoiceId !== undefined) {
-      setVoiceOutputVoiceId(fields.voiceOutputVoiceId);
-      setVoiceOutputVoiceIdConfigured(true);
+    // File-scoped like the roles: a voice section that dropped the profile clears the field and
+    // its configured flag, or Test & Save would silently persist the removed profile (#3037).
+    if (fields.voiceBaseUrl !== undefined || fields.voiceOutputVoiceId !== undefined) {
+      setVoiceOutputVoiceId(fields.voiceOutputVoiceId ?? "");
+      setVoiceOutputVoiceIdConfigured(fields.voiceOutputVoiceId !== undefined);
     }
     if (fields.voiceProviderLocality !== undefined) {
       setVoiceProviderLocality(fields.voiceProviderLocality);

@@ -808,6 +808,35 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     ).toThrowError(/already exists/u);
   });
 
+  it("resumes the interrupted draft by default instead of allocating the next beta", () => {
+    // Review finding on #3037: a crash between create and publish leaves beta.N as a draft; an
+    // ordinary retry WITHOUT --tag counted that draft as existing, allocated N+1, picked the
+    // still-private N as predecessor, and left the live N-1 unsuperseded. The default now
+    // resumes the highest existing beta when it is a draft.
+    const recorded = [];
+    const overrides = {
+      answers: [
+        [`release view ${currentTag}`, '{"isDraft":true}'],
+        [
+          "api repos/{owner}/{repo}/releases",
+          JSON.stringify([{ tag_name: previousTag }, { tag_name: currentTag }]),
+        ],
+      ],
+    };
+    withHostPlatform("darwin", () =>
+      withProcessRunner(ghDouble(recorded, overrides), () =>
+        runPortablePrerelease(["--run-id", "42"]),
+      ),
+    );
+
+    // The resumed draft is deleted and recreated under ITS tag — not the next number.
+    expect(recorded.some((line) => line.startsWith(`gh release delete ${currentTag}`))).toBe(true);
+    const createLine = recorded.find((line) => line.startsWith("gh release create"));
+    expect(createLine).toContain(currentTag);
+    // The live predecessor still gets its superseding pointer.
+    expect(recorded.some((line) => line.startsWith(`gh release edit ${previousTag}`))).toBe(true);
+  });
+
   it("refuses a --tag override below the highest existing beta", () => {
     // Review finding on #3037: publishing beta.5 while beta.9 exists would make the NEWEST
     // release an older number and leave the real highest beta unsuperseded — the prerelease

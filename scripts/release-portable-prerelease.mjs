@@ -200,6 +200,28 @@ export function nextBetaTag(version, existingTags) {
  * pointer — the prerelease lineage must stay monotonic (review finding on #3037). Resuming the
  * highest beta's own interrupted draft stays allowed (equal is not below).
  */
+/**
+ * An ordinary retry after a crash between create and publish must RESUME the interrupted draft,
+ * not allocate the next number: the draft counts as an existing tag, so nextBetaTag would skip
+ * to N+1, pick the still-private N as predecessor, and leave the live N-1 unsuperseded (review
+ * finding on #3037). Only when the highest existing beta is a PUBLISHED release does the default
+ * advance past it.
+ */
+function defaultTagWithDraftResume(version, tags) {
+  const next = nextBetaTag(version, tags);
+  const highest = previousBetaTag(next, tags);
+  if (highest !== undefined && releaseIsDraft(highest)) {
+    log(`resuming the interrupted draft ${highest} instead of allocating ${next}.`);
+    return highest;
+  }
+  return next;
+}
+
+function releaseIsDraft(tag) {
+  const { isDraft } = ghJson(["release", "view", tag, "--json", "isDraft"]);
+  return isDraft === true;
+}
+
 export function assertTagKeepsBetaSequenceMonotonic(tag, existingTags) {
   const match = /^(?<prefix>v.+-beta\.)(?<index>\d+)$/u.exec(tag);
   if (match?.groups === undefined) return;
@@ -660,7 +682,7 @@ export function runPortablePrerelease(argv) {
   const version = rootVersion();
   const repository = repositorySlug();
   const tags = existingReleaseTags();
-  const tag = options.tag ?? nextBetaTag(version, tags);
+  const tag = options.tag ?? defaultTagWithDraftResume(version, tags);
   assertTagKeepsBetaSequenceMonotonic(tag, tags);
   const hasPendingDraft = tags.includes(tag);
   if (hasPendingDraft) assertExistingTagIsResumableDraft(tag);

@@ -1666,6 +1666,65 @@ describe("GatewaySetupDialog", () => {
     );
   });
 
+  it("clears a removed voice profile on a corrected upload", async () => {
+    // Review finding on #3037: the corrected file keeps the TTS role but drops voiceProfiles —
+    // the previous output voice (and its configured flag) must not survive invisibly.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    const upload = await screen.findByLabelText(/load keiko\.config\.json/i);
+    const voiceFile = (withProfile: boolean): File =>
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "gpt-5o",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                capability: { id: "gpt-5o", kind: "chat" },
+              },
+              {
+                modelId: "keiko-tts",
+                baseUrl: "https://voice.example.com",
+                ...(withProfile
+                  ? { voiceProfiles: [{ persona: "neutral", voiceId: "nova" }] }
+                  : {}),
+                capability: { id: "keiko-tts", kind: "voice", supportsSpeechOutput: true },
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      );
+
+    await userEvent.upload(upload, voiceFile(true));
+    await waitFor(() =>
+      expect(screen.getByLabelText(/audio endpoint url/i)).toHaveValue("https://voice.example.com"),
+    );
+    await userEvent.upload(upload, voiceFile(false));
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    // The stale profile is GONE (the field cleared with its configured flag), so the form now
+    // demands a voice for the kept TTS role VISIBLY instead of silently persisting the removed
+    // profile — the honest outcome of the correction.
+    expect(setupGateway).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/provider voice id is required/i);
+    expect(screen.getByLabelText(/output voice/i)).toHaveValue("");
+  });
+
   it("clears the imported endpoint protocol when the user retypes the voice endpoint", async () => {
     // The protocol belongs to the imported connection: after the user manually replaces the
     // uploaded Azure speech endpoint with an OpenAI-compatible one, the submit must not carry

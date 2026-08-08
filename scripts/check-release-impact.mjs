@@ -433,7 +433,7 @@ function approvalContextLine(rawLine, state) {
     return true;
   }
   if (line === "") {
-    state.inBlockquote = false;
+    state.inContainer = false;
     state.inHtmlBlock = false;
     return true;
   }
@@ -442,8 +442,12 @@ function approvalContextLine(rawLine, state) {
     state.openFence = delimiter;
     return true;
   }
-  if (line.startsWith(">") || state.inBlockquote) {
-    state.inBlockquote = true;
+  // Blockquotes AND list items share the paragraph-continuation rule: a non-blank line directly
+  // after them still renders inside the container (lazy continuation), so an instructional
+  // "- To approve, use:" list can never smuggle the marker (review finding on #3037). Only a
+  // blank line ends the container.
+  if (line.startsWith(">") || /^(?:[-*+]|\d{1,9}[.)])\s/u.test(line) || state.inContainer) {
+    state.inContainer = true;
     return true;
   }
   return false;
@@ -452,7 +456,7 @@ function approvalContextLine(rawLine, state) {
 function phraseStandsOnPlainLine(body, phrase) {
   const state = {
     openFence: undefined,
-    inBlockquote: false,
+    inContainer: false,
     inHtmlComment: false,
     inHtmlPre: false,
     inHtmlBlock: false,

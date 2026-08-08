@@ -613,6 +613,20 @@ describe("release-impact governance", () => {
       expect(afterComment.ok).toBe(true);
     });
 
+    it("rejects a marker nested in a list item, including its lazy continuation", () => {
+      // Review finding on #3037: "- To approve, use:" followed by the (indented or lazy)
+      // marker keeps the marker inside the list item — only a blank line ends the container.
+      const phrase = approvalPhrase();
+      const indented = validateWith(approvalComment({ body: `- To approve, use:\n  ${phrase}` }));
+      expect(indented.ok).toBe(false);
+
+      const lazy = validateWith(approvalComment({ body: `1. Steps:\n${phrase}` }));
+      expect(lazy.ok).toBe(false);
+
+      const afterList = validateWith(approvalComment({ body: `- checklist item\n\n${phrase}` }));
+      expect(afterList.ok).toBe(true);
+    });
+
     it("rejects a phrase inside raw-HTML blocks", () => {
       // Review finding on #3037: <pre> renders its content as a code example (blank lines
       // included, until the closing tag); any other "<"-opened block runs to the next blank
