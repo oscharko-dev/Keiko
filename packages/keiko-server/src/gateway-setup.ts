@@ -427,9 +427,12 @@ function providerRaw(
     apiKeyHeaderName: options.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
     capability: {
       ...defaultCapability,
-      ...(options.imageInputModelIds?.includes(modelId) === true
-        ? { supportsImageInput: true }
-        : {}),
+      // The provided list is authoritative, not additive: a model absent from it loses a stored
+      // supportsImageInput flag, which is what lets an update ever REMOVE image capability
+      // (review finding on #3031 — previously true could never be cleared).
+      ...(options.imageInputModelIds === undefined
+        ? {}
+        : { supportsImageInput: options.imageInputModelIds.includes(modelId) }),
       ...(supportsResponseFormat ? { structuredOutput: true, supportsResponseFormat: true } : {}),
     },
     timeoutMs: options.timeoutMs ?? 30_000,
@@ -1124,9 +1127,12 @@ function parseDeploymentNames(value: unknown): readonly string[] | RouteResult {
   return names;
 }
 
-function parseImageInputModelIds(value: unknown): readonly string[] | RouteResult {
+function parseImageInputModelIds(value: unknown): readonly string[] | undefined | RouteResult {
+  // Absent and explicitly empty are different statements: absent inherits the stored set in
+  // update mode, an explicit empty list clears it — exactly like the workflow-eligible field
+  // (review finding on #3031).
   if (value === undefined) {
-    return [];
+    return undefined;
   }
   const values = deploymentNameValues(value);
   if (values === undefined) {
@@ -1359,6 +1365,8 @@ interface SetupRequest {
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
+  /** True when the request stated the list explicitly — discovery must not re-add models then. */
+  readonly imageInputModelIdsProvided: boolean;
   readonly workflowEligibleModelIds: readonly string[];
   readonly workflowEligibleModelIdsConfigured: boolean;
   readonly voiceProviders: readonly SetupVoiceProvider[];
@@ -1369,7 +1377,8 @@ interface SetupRequest {
 
 interface SetupModelLists {
   readonly deploymentNames: readonly string[];
-  readonly imageInputModelIds: readonly string[];
+  /** `undefined` = the field was absent; an explicit empty list clears the image-capable set. */
+  readonly imageInputModelIds: readonly string[] | undefined;
   readonly workflowEligibleModelIds: readonly string[];
 }
 
@@ -2810,11 +2819,17 @@ function readSetupVoiceProviders(
   return validatedVoiceProviders(providers, env);
 }
 
+interface ResolvedSetupModelLists {
+  readonly deploymentNames: readonly string[];
+  readonly imageInputModelIds: readonly string[];
+  readonly workflowEligibleModelIds: readonly string[];
+}
+
 function resolveSetupModelLists(
   modelLists: SetupModelLists,
   current: GatewayConfig | undefined,
   preserveExisting: boolean,
-): SetupModelLists {
+): ResolvedSetupModelLists {
   const existing = preserveExisting ? current : undefined;
   return {
     deploymentNames:
@@ -2822,9 +2837,8 @@ function resolveSetupModelLists(
         ? existing.providers.map((item) => item.modelId)
         : modelLists.deploymentNames,
     imageInputModelIds:
-      existing !== undefined && modelLists.imageInputModelIds.length === 0
-        ? currentImageInputModelIds(existing)
-        : modelLists.imageInputModelIds,
+      modelLists.imageInputModelIds ??
+      (existing === undefined ? [] : currentImageInputModelIds(existing)),
     workflowEligibleModelIds: modelLists.workflowEligibleModelIds,
   };
 }
@@ -2871,7 +2885,9 @@ function setupRequiresGatewayVerification(
     hasNonBlankStringField(raw, "apiKey") ||
     hasNonBlankStringField(raw, "apiKeyHeaderName") ||
     hasNonEmptyListField(raw, "deploymentNames") ||
-    hasNonEmptyListField(raw, "imageInputModelIds")
+    // Present-but-empty counts: an explicit empty image list CLEARS stored capability, which must
+    // flow through the verified rebuild, not the settings-only patch (review finding on #3031).
+    hasListField(raw, "imageInputModelIds")
   );
 }
 
@@ -2909,6 +2925,7 @@ function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | Route
     timeoutMs: input.timeoutMs,
     deploymentNames: resolved.deploymentNames,
     imageInputModelIds: resolved.imageInputModelIds,
+    imageInputModelIdsProvided: hasListField(input.raw, "imageInputModelIds"),
     workflowEligibleModelIds: resolved.workflowEligibleModelIds,
     workflowEligibleModelIdsConfigured: hasListField(input.raw, "workflowEligibleModelIds"),
     voiceProviders: input.voiceProviders,
@@ -3006,6 +3023,8 @@ interface SetupVerificationInput {
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
+  /** True when the request stated the list explicitly — discovery must not re-add models then. */
+  readonly imageInputModelIdsProvided: boolean;
   readonly workflowEligibleModelIds: readonly string[] | undefined;
   readonly voiceProviders: readonly SetupVoiceProvider[];
   readonly tester: GatewaySetupTester;
@@ -3200,7 +3219,9 @@ function finalRawConfigForTestedSetup(
 ): Record<string, unknown> {
   const imageInputModelIds = testedImageInputModelIds(
     input.imageInputModelIds,
-    candidateModels.imageInputModelIds,
+    // An explicitly provided list is authoritative: discovery and current-config candidates must
+    // not re-add models the request just removed (review finding on #3031).
+    input.imageInputModelIdsProvided ? [] : candidateModels.imageInputModelIds,
     testResult.testedModelIds,
   );
   return finalRawConfigForSetup(
@@ -3499,6 +3520,7 @@ async function trySetupCandidate(
     timeoutMs: request.timeoutMs,
     deploymentNames: request.deploymentNames,
     imageInputModelIds: request.imageInputModelIds,
+    imageInputModelIdsProvided: request.imageInputModelIdsProvided,
     workflowEligibleModelIds: request.workflowEligibleModelIdsConfigured
       ? request.workflowEligibleModelIds
       : undefined,

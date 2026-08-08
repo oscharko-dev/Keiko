@@ -45,8 +45,10 @@ describe("GatewaySetupDialog", () => {
     await waitFor(() => expect(baseUrl).toHaveFocus());
 
     // The config-upload control sits between the theme toggle and Base URL in the tab order.
+    // It loads as its own chunk, so wait for it to mount before walking the trap.
+    const uploadInput = await screen.findByLabelText(/load keiko\.config\.json/i);
     await user.tab({ shift: true });
-    expect(screen.getByLabelText(/load keiko\.config\.json/i)).toHaveFocus();
+    expect(uploadInput).toHaveFocus();
 
     await user.tab();
     expect(baseUrl).toHaveFocus();

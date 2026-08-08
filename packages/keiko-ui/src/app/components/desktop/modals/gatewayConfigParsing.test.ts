@@ -178,6 +178,41 @@ describe("parseGatewayConfigUpload", () => {
     expect(parseGatewayConfigUpload(orphan)).toEqual({ outcome: "invalid" });
   });
 
+  it("rejects a present-but-malformed inline capability instead of treating it as absent", () => {
+    // Review finding on #3031: the production parser rejects the same corrupted shape; only a
+    // truly ABSENT capability field means "no declaration".
+    const malformed = JSON.stringify({
+      providers: [providerFixture({ capability: "not-an-object" })],
+    });
+
+    expect(parseGatewayConfigUpload(malformed)).toEqual({ outcome: "invalid" });
+  });
+
+  it("mirrors the setup route's 100-provider ceiling at upload time", () => {
+    // Review finding on #3031: an oversized file must fail here, not at Test & Save after a
+    // reported success.
+    const oversized = JSON.stringify({
+      providers: Array.from({ length: 101 }, (_, index) =>
+        providerFixture({ modelId: `model-${String(index)}`, capability: undefined }),
+      ),
+    });
+
+    expect(parseGatewayConfigUpload(oversized)).toEqual({ outcome: "invalid" });
+  });
+
+  it("refuses provider settings the form cannot represent with an honest outcome", () => {
+    // Review finding on #3031: endpoint style / API version / output token parameter would be
+    // silently rebuilt with defaults — a changed runtime configuration behind a success message.
+    const azure = JSON.stringify({
+      providers: [providerFixture({ endpointStyle: "azure-openai-deployment" })],
+    });
+
+    expect(parseGatewayConfigUpload(azure)).toEqual({ outcome: "unsupportedSetting" });
+    // Retry tuning stays tolerated: it changes no endpoint or protocol.
+    const retries = JSON.stringify({ providers: [providerFixture({ maxRetries: 7 })] });
+    expect(parseGatewayConfigUpload(retries).outcome).toBe("fields");
+  });
+
   it.each([
     ["not JSON at all", "{ nope"],
     ["a JSON scalar", JSON.stringify("hello")],
@@ -208,7 +243,7 @@ describe("parseGatewayConfigUpload", () => {
             apiKeyHeaderName: ["Authorization"],
             timeoutMs: -5,
             apiKey: { steal: true },
-            capability: "not-an-object",
+            capability: undefined,
           }),
         ],
       }),

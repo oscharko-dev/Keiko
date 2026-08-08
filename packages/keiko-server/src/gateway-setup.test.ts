@@ -2780,6 +2780,59 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("distinguishes an explicitly empty image list from an absent one in update mode", async () => {
+    // Review finding on #3031: the wire must be able to say "no image-capable models" — an
+    // explicit empty list clears the stored set, while an absent field keeps inheriting it,
+    // exactly like the workflow-eligible field.
+    const uiDir = await tempDir("keiko-gw-ui-image-empty-");
+    const evidenceDir = await tempDir("keiko-gw-ev-image-empty-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["vision-chat"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const first = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com",
+        apiKey: "example-secret-token",
+        imageInputModelIds: ["vision-chat"],
+      }),
+      deps,
+    );
+    expect(first.status).toBe(200);
+
+    const savedImageFlags = (): readonly boolean[] => {
+      const saved = JSON.parse(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")) as {
+        readonly providers: readonly {
+          readonly capability: { readonly supportsImageInput: boolean };
+        }[];
+      };
+      return saved.providers.map((provider) => provider.capability.supportsImageInput);
+    };
+    expect(savedImageFlags()).toEqual([true]);
+
+    // Absent field: the stored image-capable set survives the update untouched.
+    const inherited = await handleGatewaySetup(
+      ctx({ preserveExisting: true, timeoutMs: 90_000 }),
+      deps,
+    );
+    expect(inherited.status).toBe(200);
+    expect(savedImageFlags()).toEqual([true]);
+
+    // Explicit empty list: the stored image-capable set clears.
+    const cleared = await handleGatewaySetup(
+      ctx({ preserveExisting: true, imageInputModelIds: [] }),
+      deps,
+    );
+    expect(cleared.status).toBe(200);
+    expect(savedImageFlags()).toEqual([false]);
+    deps.store.close();
+  });
+
   it("does not store image-input capability claims for models that fail setup testing", async () => {
     const uiDir = await tempDir("keiko-gw-ui-image-input-fail-");
     const evidenceDir = await tempDir("keiko-gw-ev-image-input-fail-");

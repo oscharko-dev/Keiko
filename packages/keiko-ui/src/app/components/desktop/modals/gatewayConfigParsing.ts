@@ -12,6 +12,14 @@ export const MAX_GATEWAY_CONFIG_BYTES = 256 * 1024;
 
 /** The provider kinds the generic deployment list can represent (contract: ModelKind). */
 const REPRESENTABLE_KINDS = new Set(["chat", "embedding"]);
+/** Mirrors the setup route's MAX_DEPLOYMENT_NAMES so an oversized file fails here, not at Test & Save. */
+const MAX_IMPORT_PROVIDERS = 100;
+/** Provider settings the setup form has no field for — importing would silently change runtime behavior. */
+const UNSUPPORTED_PROVIDER_SETTINGS = [
+  "endpointStyle",
+  "apiVersion",
+  "outputTokenParameter",
+] as const;
 const KNOWN_KINDS = new Set(["chat", "embedding", "ocr-vision", "voice"]);
 
 export interface GatewayConfigUploadFields {
@@ -33,7 +41,8 @@ export interface GatewayConfigUploadFields {
 export type GatewayConfigUploadResult =
   | { readonly outcome: "fields"; readonly fields: GatewayConfigUploadFields }
   | { readonly outcome: "invalid" }
-  | { readonly outcome: "unsupportedKind" };
+  | { readonly outcome: "unsupportedKind" }
+  | { readonly outcome: "unsupportedSetting" };
 
 interface ParsedProvider {
   readonly modelId: string;
@@ -75,6 +84,9 @@ function parsedProvider(value: unknown): ParsedProvider | undefined {
   if (!objectRecord(value)) return undefined;
   const modelId = optionalString(value.modelId);
   if (modelId === undefined) return undefined;
+  // A capability that is PRESENT but not an object is corrupted input, not an absent field — the
+  // production parser rejects the same shape (review finding on #3031).
+  if (value.capability !== undefined && !objectRecord(value.capability)) return undefined;
   return {
     modelId,
     baseUrl: optionalString(value.baseUrl),
@@ -96,6 +108,21 @@ function parsedProviders(value: unknown): readonly ParsedProvider[] | undefined 
     providers.push(provider);
   }
   return providers;
+}
+
+/**
+ * The form has no field for these, and the setup route would rebuild the provider with defaults —
+ * a silently changed runtime configuration presented as a successful load (review finding on
+ * #3031). Retry tuning (maxRetries, retryBaseDelayMs) stays tolerated: the form has no field for
+ * it either, but it does not change which endpoint or protocol the connection speaks.
+ */
+function carriesUnsupportedProviderSetting(providers: unknown): boolean {
+  if (!Array.isArray(providers)) return false;
+  return providers.some(
+    (entry) =>
+      objectRecord(entry) &&
+      UNSUPPORTED_PROVIDER_SETTINGS.some((setting) => entry[setting] !== undefined),
+  );
 }
 
 function parsedTopLevelCapabilities(
@@ -233,28 +260,51 @@ function conflictFreeScalars(providers: readonly ParsedProvider[]):
   return { baseUrl, apiKey, apiKeyHeaderName: header, timeoutMs: timeout };
 }
 
-export function parseGatewayConfigUpload(serialized: string): GatewayConfigUploadResult {
-  let root: unknown;
-  try {
-    root = JSON.parse(serialized);
-  } catch {
-    return { outcome: "invalid" };
-  }
-  if (!objectRecord(root)) return { outcome: "invalid" };
-  const providers = parsedProviders(root.providers);
-  if (providers === undefined) return { outcome: "invalid" };
+function capabilitiesForUpload(
+  root: Record<string, unknown>,
+  providers: readonly ParsedProvider[],
+):
+  | {
+      readonly outcome: "capabilities";
+      readonly capabilities: ReadonlyMap<string, ParsedCapability>;
+    }
+  | { readonly outcome: "invalid" }
+  | { readonly outcome: "unsupportedKind" } {
   const topLevel = parsedTopLevelCapabilities(root.capabilities);
   if (topLevel === undefined) return { outcome: "invalid" };
   const capabilities = effectiveCapabilities(providers, topLevel);
   if (capabilities === undefined) return { outcome: "invalid" };
   if (!knownKinds(capabilities)) return { outcome: "invalid" };
   if (unrepresentableKind(capabilities)) return { outcome: "unsupportedKind" };
+  return { outcome: "capabilities", capabilities };
+}
+
+function uploadRoot(serialized: string): Record<string, unknown> | undefined {
+  let root: unknown;
+  try {
+    root = JSON.parse(serialized);
+  } catch {
+    return undefined;
+  }
+  return objectRecord(root) ? root : undefined;
+}
+
+export function parseGatewayConfigUpload(serialized: string): GatewayConfigUploadResult {
+  const root = uploadRoot(serialized);
+  if (root === undefined) return { outcome: "invalid" };
+  const providers = parsedProviders(root.providers);
+  if (providers === undefined || providers.length > MAX_IMPORT_PROVIDERS) {
+    return { outcome: "invalid" };
+  }
+  if (carriesUnsupportedProviderSetting(root.providers)) return { outcome: "unsupportedSetting" };
+  const resolved = capabilitiesForUpload(root, providers);
+  if (resolved.outcome !== "capabilities") return resolved;
   const scalars = conflictFreeScalars(providers);
   if (scalars === undefined) return { outcome: "invalid" };
   const figma = objectRecord(root.figma) ? optionalString(root.figma.accessToken) : undefined;
   return {
     outcome: "fields",
-    fields: fieldsFrom(providers, capabilities, { ...scalars, figmaAccessToken: figma }),
+    fields: fieldsFrom(providers, resolved.capabilities, { ...scalars, figmaAccessToken: figma }),
   };
 }
 

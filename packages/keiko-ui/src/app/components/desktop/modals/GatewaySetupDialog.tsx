@@ -23,9 +23,16 @@ import { Icons } from "../Icons";
 import KeikoSelect from "../KeikoSelect";
 import { useTheme } from "../hooks/useTheme";
 import { NATIVE_BLOCK_STYLE } from "../native-element-styles";
+import dynamic from "next/dynamic";
 import { notifyGatewayConfigUpdated } from "../widgets/shared/gatewaySetupBus";
-import { GatewayConfigUpload } from "./GatewayConfigUpload";
 import type { GatewayConfigUploadFields } from "./gatewayConfigParsing";
+
+// The upload path (control + fail-closed parser) is not first-paint-critical: loading it as its
+// own chunk keeps the setup page inside the static-export first-load budget (bundle gate).
+const GatewayConfigUpload = dynamic(
+  () => import("./GatewayConfigUpload").then((mod) => mod.GatewayConfigUpload),
+  { ssr: false, loading: () => null },
+);
 import styles from "./GatewaySetupDialog.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
@@ -501,6 +508,7 @@ interface GatewayFormFields {
   readonly timeoutMs: string;
   readonly deploymentNames: string;
   readonly imageInputModelIds: string;
+  readonly imageInputModelIdsConfigured: boolean;
   readonly workflowEligibleModelIds: string;
   readonly workflowEligibleModelIdsConfigured: boolean;
   readonly voiceBaseUrl: string;
@@ -559,7 +567,7 @@ function buildSetupGatewayPayload(
     ...(derived.parsedTimeoutMs === undefined ? {} : { timeoutMs: derived.parsedTimeoutMs }),
     deploymentNames: derived.parsedDeploymentNames,
     preserveExisting: fields.preserveExisting,
-    ...(derived.parsedImageInputModelIds.length === 0
+    ...(derived.parsedImageInputModelIds.length === 0 && !fields.imageInputModelIdsConfigured
       ? {}
       : { imageInputModelIds: derived.parsedImageInputModelIds }),
     ...(!fields.workflowEligibleModelIdsConfigured
@@ -757,6 +765,7 @@ async function performGatewaySubmission(
   const submittedGatewaySettings =
     submittedGatewayCredentials ||
     derived.parsedTimeoutMs !== undefined ||
+    fields.imageInputModelIdsConfigured ||
     fields.workflowEligibleModelIdsConfigured;
   const submittedFigmaCredential = fields.figmaAccessToken.trim() !== "";
   const result = await setupGateway(
@@ -2042,6 +2051,8 @@ export function GatewaySetupDialog({
   const [workflowEligibleModelIds, setWorkflowEligibleModelIds] = useState(() =>
     preserveExisting ? storedWorkflowEligibleModelIds(storedModels) : "",
   );
+  const [imageInputModelIdsConfigured, setImageInputModelIdsConfigured] = useState(false);
+  const [uploadReadPending, setUploadReadPending] = useState(false);
   const [workflowEligibleModelIdsConfigured, setWorkflowEligibleModelIdsConfigured] =
     useState(false);
   const [voiceBaseUrl, setVoiceBaseUrl] = useState("");
@@ -2278,6 +2289,7 @@ export function GatewaySetupDialog({
     // field exactly like manual emptying would (review finding on #3031); only an undefined list
     // (the file never speaks about the flag) leaves the field untouched.
     if (fields.imageInputModelIds !== undefined) {
+      setImageInputModelIdsConfigured(true);
       setImageInputModelIds(fields.imageInputModelIds.join("\n"));
     }
     if (fields.workflowEligibleModelIds !== undefined) {
@@ -2307,6 +2319,7 @@ export function GatewaySetupDialog({
           timeoutMs,
           deploymentNames,
           imageInputModelIds,
+          imageInputModelIdsConfigured,
           workflowEligibleModelIds,
           workflowEligibleModelIdsConfigured,
           voiceBaseUrl,
@@ -2390,7 +2403,7 @@ export function GatewaySetupDialog({
   });
   const hasFigmaCredentialInput = figmaAccessToken.trim() !== "";
   const canSubmit = computeCanSubmit({
-    busy,
+    busy: busy || uploadReadPending,
     success,
     requiresGatewayCredentials,
     baseUrl,
@@ -2421,7 +2434,10 @@ export function GatewaySetupDialog({
       deploymentNames={deploymentNames}
       setDeploymentNames={setDeploymentNames}
       imageInputModelIds={imageInputModelIds}
-      setImageInputModelIds={setImageInputModelIds}
+      setImageInputModelIds={(value): void => {
+        setImageInputModelIdsConfigured(true);
+        setImageInputModelIds(value);
+      }}
       workflowEligibleModelIds={workflowEligibleModelIds}
       setWorkflowEligibleModelIds={(value): void => {
         setWorkflowEligibleModelIdsConfigured(true);
@@ -2507,6 +2523,7 @@ export function GatewaySetupDialog({
           <GatewayConfigUpload
             disabled={busy || success !== undefined}
             onApply={applyUploadedConfig}
+            onReadPendingChange={setUploadReadPending}
           />
 
           <GatewayModelSection

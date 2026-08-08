@@ -12,7 +12,7 @@ import {
 import styles from "./GatewaySetupDialog.module.css";
 
 interface UploadState {
-  readonly issue: "invalid" | "fileTooLarge" | "unsupportedKind" | undefined;
+  readonly issue: "invalid" | "fileTooLarge" | "unsupportedKind" | "unsupportedSetting" | undefined;
   readonly appliedCount: number | undefined;
 }
 
@@ -23,6 +23,7 @@ async function handleUploadedFile(
   onApply: (fields: GatewayConfigUploadFields) => void,
   setState: (state: UploadState) => void,
   sequence: { current: number },
+  onReadPendingChange?: (pending: boolean) => void,
 ): Promise<void> {
   const file = event.target.files?.[0];
   // Same file again must re-trigger onChange after a fix-and-retry.
@@ -36,6 +37,9 @@ async function handleUploadedFile(
     setState({ issue: "fileTooLarge", appliedCount: undefined });
     return;
   }
+  // The dialog must not submit a half-applied snapshot while the read is in flight (review
+  // finding on #3031).
+  onReadPendingChange?.(true);
   let serialized;
   try {
     serialized = await file.text();
@@ -45,13 +49,22 @@ async function handleUploadedFile(
     serialized = undefined;
   }
   if (sequence.current !== token) return;
+  onReadPendingChange?.(false);
+  applyReadOutcome(serialized, onApply, setState);
+}
+
+function applyReadOutcome(
+  serialized: string | undefined,
+  onApply: (fields: GatewayConfigUploadFields) => void,
+  setState: (state: UploadState) => void,
+): void {
   const result = serialized === undefined ? undefined : parseGatewayConfigUpload(serialized);
   if (result === undefined || result.outcome === "invalid") {
     setState({ issue: "invalid", appliedCount: undefined });
     return;
   }
-  if (result.outcome === "unsupportedKind") {
-    setState({ issue: "unsupportedKind", appliedCount: undefined });
+  if (result.outcome !== "fields") {
+    setState({ issue: result.outcome, appliedCount: undefined });
     return;
   }
   onApply(result.fields);
@@ -67,9 +80,12 @@ async function handleUploadedFile(
 export function GatewayConfigUpload({
   disabled,
   onApply,
+  onReadPendingChange,
 }: {
   readonly disabled: boolean;
   readonly onApply: (fields: GatewayConfigUploadFields) => void;
+  /** True while a selected file is still being read — the dialog blocks submission meanwhile. */
+  readonly onReadPendingChange?: ((pending: boolean) => void) | undefined;
 }): ReactNode {
   const t = useTranslate();
   const [state, setState] = useState<UploadState>(INITIAL_STATE);
@@ -93,7 +109,9 @@ export function GatewayConfigUpload({
           accept="application/json,.json"
           className="visually-hidden"
           disabled={disabled}
-          onChange={(event) => void handleUploadedFile(event, onApply, setState, sequence)}
+          onChange={(event) =>
+            void handleUploadedFile(event, onApply, setState, sequence, onReadPendingChange)
+          }
         />
       </label>
       <GatewayConfigUploadStatus state={state} />
