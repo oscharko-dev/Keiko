@@ -1,11 +1,48 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   BETA_INDEX,
   GOVERNED_BETA_TAG_RE,
   isAcceptedReleaseTag,
   isExactReleaseTag,
   isGovernedBetaTag,
+  rootPackageVersion,
+  runReleaseTagContractCli,
 } from "../release-tag-contract.mjs";
+
+const REPO_VERSION = JSON.parse(
+  readFileSync(resolve(import.meta.dirname, "..", "..", "package.json"), "utf8"),
+).version;
+
+/** Captures the CLI's operator-facing surface: both streams and the resulting exit code. */
+function runCli(argv, env = {}) {
+  const out = [];
+  const err = [];
+  const stdout = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+    out.push(String(chunk));
+    return true;
+  });
+  const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    err.push(String(chunk));
+    return true;
+  });
+  const previousTag = process.env.RELEASE_TAG;
+  const previousExitCode = process.exitCode;
+  process.exitCode = undefined;
+  if (env.RELEASE_TAG === undefined) delete process.env.RELEASE_TAG;
+  else process.env.RELEASE_TAG = env.RELEASE_TAG;
+  try {
+    runReleaseTagContractCli(argv);
+    return { exitCode: process.exitCode, stdout: out.join(""), stderr: err.join("") };
+  } finally {
+    process.exitCode = previousExitCode;
+    if (previousTag === undefined) delete process.env.RELEASE_TAG;
+    else process.env.RELEASE_TAG = previousTag;
+    stdout.mockRestore();
+    stderr.mockRestore();
+  }
+}
 
 describe("release tag contract", () => {
   it("accepts the exact tag for a stable version", () => {
@@ -50,5 +87,48 @@ describe("release tag contract", () => {
     expect(new RegExp(`^${BETA_INDEX}$`, "u").test("0")).toBe(true);
     expect(new RegExp(`^${BETA_INDEX}$`, "u").test("00")).toBe(false);
     expect(new RegExp(`^${BETA_INDEX}$`, "u").test("12")).toBe(true);
+  });
+});
+
+describe("release tag contract CLI", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("accepts the repository's own exact tag and reports it", () => {
+    const result = runCli([`v${REPO_VERSION}`]);
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stdout).toContain("PASS");
+    expect(result.stderr).toBe("");
+  });
+
+  it("accepts a governed beta tag passed through RELEASE_TAG", () => {
+    // The workflow step sets the env; the argument form is the operator's.
+    const result = runCli([], { RELEASE_TAG: `v${REPO_VERSION}-beta.2` });
+    expect(result.exitCode).toBeUndefined();
+    expect(result.stdout).toContain("PASS");
+  });
+
+  it("refuses a leading-zero beta index with a non-zero exit", () => {
+    const result = runCli([`v${REPO_VERSION}-beta.00`]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("does not match package version");
+    expect(result.stderr).toContain("without a leading-zero index");
+  });
+
+  it("refuses a foreign version", () => {
+    const result = runCli(["v99.99.99"]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("FAIL");
+  });
+
+  it("refuses a missing tag with usage guidance", () => {
+    const result = runCli([]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("pass the tag as an argument or RELEASE_TAG");
+  });
+
+  it("reads the version from the repository manifest", () => {
+    expect(rootPackageVersion(resolve(import.meta.dirname, "..", ".."))).toBe(REPO_VERSION);
   });
 });

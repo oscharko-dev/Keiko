@@ -54,8 +54,12 @@ export function rootPackageVersion(repoRoot = process.cwd()) {
   return manifest.version;
 }
 
-/** CLI: `node scripts/release-tag-contract.mjs <tag>` — exits non-zero on a refused tag. */
-function main(argv) {
+/**
+ * CLI: `node scripts/release-tag-contract.mjs <tag>` — exits non-zero on a refused tag.
+ * Exported so the suite exercises the operator-facing path (messages and exit code) directly,
+ * rather than only the predicates behind it.
+ */
+export function runReleaseTagContractCli(argv) {
   const tag = argv[0] ?? process.env.RELEASE_TAG;
   if (typeof tag !== "string" || tag.length === 0) {
     process.stderr.write("release-tag-contract: pass the tag as an argument or RELEASE_TAG.\n");
@@ -77,5 +81,5 @@ function main(argv) {
 const invokedDirectly =
   process.argv[1] !== undefined && import.meta.url.endsWith(process.argv[1].replaceAll("\\", "/"));
 if (invokedDirectly) {
-  main(process.argv.slice(2));
+  runReleaseTagContractCli(process.argv.slice(2));
 }
