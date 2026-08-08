@@ -54,13 +54,18 @@ under an unpredictable name, so no pre-created symlink at a guessable path can c
   KEIKO_CFG_STD="$(mktemp)"; KEIKO_CFG_LLK="$(mktemp)"
   trap 'rm -f "$KEIKO_CFG_STD" "$KEIKO_CFG_LLK"' EXIT
   trap 'rm -f "$KEIKO_CFG_STD" "$KEIKO_CFG_LLK"; exit 130' INT TERM
+  # curl config values are double-quoted, so a backslash or quote inside a key or host would
+  # change the generated header instead of being sent — escape both (the escaper keeps the
+  # value out of any process argument list: printf is a builtin, sed reads stdin).
+  esc() { printf '%s' "$1" | sed 's/[\\"]/\\&/g'; }
   read -rs -p 'Proxy host (not echoed): ' HOST; echo
   read -rs -p 'Paste gateway key (not echoed): ' KEY; echo
-  printf 'url = "https://%s/v1/models"\nheader = "Authorization: Bearer %s"\n' "$HOST" "$KEY" \
-    > "$KEIKO_CFG_STD"
-  printf 'url = "https://%s/v1/models"\nheader = "x-litellm-key: Bearer %s"\n' "$HOST" "$KEY" \
-    > "$KEIKO_CFG_LLK"
-  unset KEY HOST
+  HOST_ESC="$(esc "$HOST")"; KEY_ESC="$(esc "$KEY")"
+  printf 'url = "https://%s/v1/models"\nheader = "Authorization: Bearer %s"\n' \
+    "$HOST_ESC" "$KEY_ESC" > "$KEIKO_CFG_STD"
+  printf 'url = "https://%s/v1/models"\nheader = "x-litellm-key: Bearer %s"\n' \
+    "$HOST_ESC" "$KEY_ESC" > "$KEIKO_CFG_LLK"
+  unset KEY HOST KEY_ESC HOST_ESC
   # curl exit codes: 6 = DNS, 7 = connect, 28 = timeout, 35 = TLS handshake. The status is
   # RETURNED, not swallowed by the echo, so a pasted script can tell a transport failure from a
   # completed diagnostic.
@@ -206,14 +211,24 @@ Count the aliases the key can see:
   KEIKO_CFG="$(mktemp)"; KEIKO_BODY="$(mktemp)"
   trap 'rm -f "$KEIKO_CFG" "$KEIKO_BODY"' EXIT
   trap 'rm -f "$KEIKO_CFG" "$KEIKO_BODY"; exit 130' INT TERM
+  esc() { printf '%s' "$1" | sed 's/[\\"]/\\&/g'; }
   read -rs -p 'Proxy host (not echoed): ' HOST; echo
   # The proxy may be configured to read the custom header (see the header-selection entry
-  # above); the count must work on both. The header NAME is not a secret.
+  # above); the count must work on both. The header NAME is not a secret, but it IS
+  # allowlisted — a typo would otherwise produce a header no proxy reads and an unexplained
+  # auth answer (review finding on #3042).
   read -r -p 'Key header [authorization|x-litellm-key]: ' HDR
   HDR="${HDR:-authorization}"
+  case "$HDR" in
+    authorization | x-litellm-key) ;;
+    *)
+      echo "unsupported key header: choose authorization or x-litellm-key"
+      exit 2
+      ;;
+  esac
   read -rs -p 'Paste gateway key (not echoed): ' KEY; echo
-  printf 'url = "https://%s/v1/models"\nheader = "%s: Bearer %s"\n' "$HOST" "$HDR" "$KEY" \
-    > "$KEIKO_CFG"
+  printf 'url = "https://%s/v1/models"\nheader = "%s: Bearer %s"\n' \
+    "$(esc "$HOST")" "$HDR" "$(esc "$KEY")" > "$KEIKO_CFG"
   unset KEY HOST HDR
   # A TRANSPORT failure fails the command (category by exit code, no hostname) instead of
   # reaching node as empty input and being reported as a parse failure.
