@@ -233,10 +233,15 @@ int main(void) {
     return 1;
   }
   /* The one signal that a human double-clicked the app: only with it set does the portable CLI
-   * surface a launch failure as a native alert. Terminals, CI, and tests never set it, so they
-   * stay dialog-free by construction. The marker is inherited by the whole launched tree, which
-   * is harmless — it asserts how the process was started, not what it may do. */
-  setenv("KEIKO_PORTABLE_UI_LAUNCH", "1", 1);
+   * surface a launch failure as a native alert. A Finder launch has no controlling terminal, so
+   * stderr is not a tty; running this same binary from a shell (the troubleshooting runbook's
+   * diagnostic step) keeps a tty and stays dialog-free — stderr already carries the reason there.
+   * CI and test runners never exec this binary at all. The marker is inherited by the whole
+   * launched tree, which is harmless — it asserts how the process was started, not what it may
+   * do. */
+  if (!isatty(STDERR_FILENO)) {
+    setenv("KEIKO_PORTABLE_UI_LAUNCH", "1", 1);
+  }
   execl(
     node,
     node,

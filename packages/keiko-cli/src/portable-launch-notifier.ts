@@ -26,7 +26,16 @@ export type PortableFailureNotifierFn = (message: string, env: EnvSource) => voi
 export interface PortableFailureNotifierDeps {
   readonly platform?: (() => NodeJS.Platform) | undefined;
   readonly runAlert?: ((script: string) => void) | undefined;
+  /**
+   * Receives one fixed, content-free line when the alert itself cannot be shown. The CLI wires
+   * this to stderr: there is no operator diagnostic sink on this pre-server surface, and the
+   * primary launch diagnosis is already on stderr — this line only keeps the notifier's own
+   * failure from being silent.
+   */
+  readonly reportAlertFailure?: ((line: string) => void) | undefined;
 }
+
+const ALERT_FAILURE_LINE = "keiko portable launch: the failure alert could not be shown\n";
 
 /** Kept to displayable text: AppleScript-quoted, control-free, bounded. */
 function alertScript(message: string): string {
@@ -58,7 +67,11 @@ type DetachedAlertSpawn = (
 ) => DetachedAlertChild;
 
 /** Exported for its direct test; production callers go through notifyPortableLaunchFailure. */
-export function runDetachedAlert(script: string, spawnFn: DetachedAlertSpawn = spawn): void {
+export function runDetachedAlert(
+  script: string,
+  spawnFn: DetachedAlertSpawn = spawn,
+  reportAlertFailure: (line: string) => void = defaultAlertFailureReport,
+): void {
   const child = spawnFn(OSASCRIPT_EXECUTABLE, ["-e", script], {
     detached: true,
     env: {},
@@ -67,9 +80,15 @@ export function runDetachedAlert(script: string, spawnFn: DetachedAlertSpawn = s
   });
   child.on("error", () => {
     // Best-effort by contract: the launch failure already carries the diagnosis on stderr, and a
-    // notifier that cannot spawn (no osascript, denied automation) must not replace it.
+    // notifier that cannot spawn (no osascript, denied automation) must not replace it — but its
+    // own failure is recorded with a fixed, content-free line rather than swallowed.
+    reportAlertFailure(ALERT_FAILURE_LINE);
   });
   child.unref();
+}
+
+function defaultAlertFailureReport(line: string): void {
+  process.stderr.write(line);
 }
 
 export function notifyPortableLaunchFailure(
@@ -81,9 +100,16 @@ export function notifyPortableLaunchFailure(
   const platform = deps.platform ?? ((): NodeJS.Platform => process.platform);
   if (platform() !== "darwin") return;
   const text = message.trim() === "" ? "The portable launch failed without a reason." : message;
+  const reportAlertFailure = deps.reportAlertFailure ?? defaultAlertFailureReport;
   try {
-    (deps.runAlert ?? runDetachedAlert)(alertScript(text));
+    const runAlert =
+      deps.runAlert ??
+      ((script: string): void => {
+        runDetachedAlert(script, undefined, reportAlertFailure);
+      });
+    runAlert(alertScript(text));
   } catch {
-    // Best-effort by contract — see runDetachedAlert.
+    // Best-effort by contract — see runDetachedAlert; the fixed line below is the evidence.
+    reportAlertFailure(ALERT_FAILURE_LINE);
   }
 }

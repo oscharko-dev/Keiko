@@ -34,6 +34,29 @@ describe("notifyPortableLaunchFailure", () => {
     expect(scripts[0]?.length ?? Number.POSITIVE_INFINITY).toBeLessThan(600);
   });
 
+  it.each([
+    [400, true],
+    [401, false],
+  ])(
+    "truncates exactly at the 400-character display ceiling (%d displayable characters)",
+    (length, tailSurvives) => {
+      // The exact boundary: the 400th displayable character survives, the 401st is cut. The
+      // message ends in "Z", which appears nowhere in the alert's fixed prefix or suffix, so its
+      // presence in the script tells exactly which side of the ceiling was kept.
+      const scripts: string[] = [];
+
+      notifyPortableLaunchFailure("x".repeat(length - 1) + "Z", UI_LAUNCH, {
+        platform: () => "darwin",
+        runAlert: (script) => {
+          scripts.push(script);
+        },
+      });
+
+      expect(scripts).toHaveLength(1);
+      expect(scripts[0]?.includes("Z")).toBe(tailSurvives);
+    },
+  );
+
   it("substitutes a fixed text for an empty failure message", () => {
     const scripts: string[] = [];
 
@@ -79,15 +102,22 @@ describe("notifyPortableLaunchFailure", () => {
     expect(shown).toBe(false);
   });
 
-  it("swallows an alert runner failure instead of replacing the diagnosis", () => {
+  it("records a synchronous alert failure with the fixed line instead of swallowing it", () => {
+    const reported: string[] = [];
+
     expect(() => {
       notifyPortableLaunchFailure("reason", UI_LAUNCH, {
         platform: () => "darwin",
         runAlert: () => {
           throw new Error("no WindowServer");
         },
+        reportAlertFailure: (line) => {
+          reported.push(line);
+        },
       });
     }).not.toThrow();
+
+    expect(reported).toEqual(["keiko portable launch: the failure alert could not be shown\n"]);
   });
 
   it("reads the host platform when no platform seam is injected", () => {
@@ -108,20 +138,27 @@ describe("notifyPortableLaunchFailure", () => {
 describe("runDetachedAlert", () => {
   it("spawns the bounded detached osascript contract and detaches from it", () => {
     const calls: unknown[][] = [];
+    const reported: string[] = [];
     let errorHandler: ((error: Error) => void) | undefined;
     let unreferenced = false;
 
-    runDetachedAlert("display alert", (command, args, options) => {
-      calls.push([command, args, options]);
-      return {
-        on: (_event, listener): void => {
-          errorHandler = listener;
-        },
-        unref: (): void => {
-          unreferenced = true;
-        },
-      };
-    });
+    runDetachedAlert(
+      "display alert",
+      (command, args, options) => {
+        calls.push([command, args, options]);
+        return {
+          on: (_event, listener): void => {
+            errorHandler = listener;
+          },
+          unref: (): void => {
+            unreferenced = true;
+          },
+        };
+      },
+      (line) => {
+        reported.push(line);
+      },
+    );
 
     expect(calls).toEqual([
       [
@@ -131,11 +168,12 @@ describe("runDetachedAlert", () => {
       ],
     ]);
     expect(unreferenced).toBe(true);
-    // The error listener must exist and must swallow: an unhandled 'error' event would crash the
-    // CLI process the alert exists to explain.
+    // The error listener must exist and must not throw — an unhandled 'error' event would crash
+    // the CLI process the alert exists to explain — and it must record the fixed failure line.
     expect(errorHandler).toBeDefined();
     expect(() => {
       errorHandler?.(new Error("spawn ENOENT"));
     }).not.toThrow();
+    expect(reported).toEqual(["keiko portable launch: the failure alert could not be shown\n"]);
   });
 });

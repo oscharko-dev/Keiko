@@ -47,12 +47,11 @@ export {
   type ProductionRuntimeBackendResolver,
   type QualifiedProductionRuntimeRun,
 } from "./coding-runtime/productionCodingRuntimeResolver.js";
-export {
-  portableInstallCarriesReleaseSignature,
-  type PortableRuntimeCommandOptions,
-  type PortableRuntimeCommandResult,
-  type PortableRuntimeCommandRunner,
-} from "./coding-runtime/productionPortableCodingRuntime.js";
+// The command-runner seam types stay module-internal on purpose: they are server-owned shapes,
+// and the launch surface consuming this probe needs only the function (reviewer finding on
+// #3026 — cross-package types belong in contracts, and this seam is not a cross-package
+// contract).
+export { portableInstallCarriesReleaseSignature } from "./coding-runtime/productionPortableCodingRuntime.js";
 export {
   createUpdateLocalStateManager,
   type CreateUpdateSnapshotInput,

@@ -88,6 +88,19 @@ describe("activateMacosPortableRuntime", () => {
     expect(managerExecuted).toBe(false);
   });
 
+  it("fails closed to unavailable when the signature probe itself rejects", async () => {
+    // A rejected probe (or failed lazy server load) must resolve to the fail-closed value, never
+    // escape the MacosRuntimeActivation contract as a rejection (#3026 review finding).
+    const fixture = activationFixture();
+
+    await expect(
+      activateMacosPortableRuntime(fixture.layout, "macos-arm64", {
+        carriesReleaseSignature: () => Promise.reject(new Error("probe unavailable")),
+        runManager: () => Promise.resolve({ ok: true, stdout: "active\n", stderr: "" }),
+      }),
+    ).resolves.toBe("unavailable");
+  });
+
   it("lets the platform anchor decide before any manager result", async () => {
     // Even a manager that would report "active" must not upgrade an unsigned install: the waiver
     // is the platform's answer, not the artifact's.

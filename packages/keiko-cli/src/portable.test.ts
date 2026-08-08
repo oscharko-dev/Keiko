@@ -1577,6 +1577,53 @@ describe("runPortableCli", () => {
     expect(registration(stateDir)).toMatchObject({ status: "setup-failed", updateEligible: false });
   });
 
+  it.each([
+    // Unparseable JSON fails closed before adoption is even considered (the read itself throws);
+    // a parseable record with an unknown schema reaches the adoption gate and must be treated as
+    // an existing registration, not a pristine first run — treating it as absent would let
+    // corrupting one file reopen adoption over a tampered root (#3026 review finding).
+    ["unparseable JSON", "{ corrupted\n", undefined],
+    [
+      "schema-invalid record",
+      '{"schemaVersion":999}\n',
+      "existing same-path managed install root is not attested",
+    ],
+  ] as const)(
+    "never adopts over a malformed existing registration (%s)",
+    async (_label, stateBytes, expectedMessage) => {
+      const root = tempRoot();
+      const home = join(root, "home");
+      const managedRoot = join(home, "PortableApps", "Keiko");
+      const stateDir = join(root, "state");
+      const c = capture();
+      writeWindowsFixture(managedRoot);
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(join(stateDir, "portable-install-state.json"), stateBytes);
+
+      const code = await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          managedRoot,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        c.io,
+        windowsPortableEnv(home),
+        { homedir: () => home, now: () => NOW },
+      );
+
+      expect(code).toBe(1);
+      if (expectedMessage !== undefined) expect(c.err()).toContain(expectedMessage);
+      // Neither shape may ever have attested the root.
+      expect(c.out()).not.toContain("ready at managed root");
+    },
+  );
+
   it("never re-binds an existing registration to different same-path bytes", async () => {
     // The relocated #2966 pin, half two: once a registration exists, a same-path root whose
     // identity no longer matches it stays refused — this is exactly what detects

@@ -526,6 +526,13 @@ export async function runPortableCli(
     options.command === "setup"
       ? setupPortable({ ...options, env }, trackedIo, r.now()).code
       : await launchPortable(options, trackedIo, env, r);
-  if (code !== 0) (deps.notifyFailureFn ?? notifyPortableLaunchFailure)(lastError, env);
+  if (code !== 0) {
+    const notify =
+      deps.notifyFailureFn ??
+      ((message: string, notifyEnv: EnvSource): void => {
+        notifyPortableLaunchFailure(message, notifyEnv, { reportAlertFailure: io.err });
+      });
+    notify(lastError, env);
+  }
   return code;
 }

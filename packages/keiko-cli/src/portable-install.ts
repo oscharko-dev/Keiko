@@ -23,6 +23,7 @@ import {
   registrationMatches,
   writeFailedRegistration,
   writeManagedRegistration,
+  hasPortableInstallRegistration,
   readPortableInstallRegistration,
   type PortableInstallRegistration,
 } from "./portable-registration.js";
@@ -622,8 +623,11 @@ function assertSamePathSetupAttested(options: SetupPortableOptions): void {
   // relaxed: adoption never happens over an EXISTING registration — re-binding a recorded install
   // identity to different bytes at the same path stays refused below, which is exactly what
   // detects post-attestation tampering — and validation is never waived, because setup continues
-  // into validatePortableRoot and attests only what passes it.
-  if (readPortableInstallRegistration(options.stateDir) === undefined) return;
+  // into validatePortableRoot and attests only what passes it. Presence is checked by FILE, not
+  // by parse result: a malformed registration is an existing record in an untrusted state, and
+  // treating it as pristine would let corrupting the state file reopen adoption over a tampered
+  // root (fail closed; reviewer finding on #3026).
+  if (!hasPortableInstallRegistration(options.stateDir)) return;
   throw new Error("existing same-path managed install root is not attested");
 }
 

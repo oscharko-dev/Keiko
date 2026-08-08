@@ -116,8 +116,11 @@ export async function activateMacosPortableRuntime(
   deps: MacosActivationDeps = {},
 ): Promise<MacosRuntimeActivation> {
   const carriesReleaseSignature = deps.carriesReleaseSignature ?? platformCarriesReleaseSignature;
-  if (!(await carriesReleaseSignature(layout.resourceRoot, target))) return "waived-unsigned";
   try {
+    // Inside the try on purpose: a rejected probe (or a failed lazy server load) must resolve to
+    // the fail-closed "unavailable", never escape the MacosRuntimeActivation contract as a
+    // rejection.
+    if (!(await carriesReleaseSignature(layout.resourceRoot, target))) return "waived-unsigned";
     const manager = activationManagerPath(
       layout,
       deps.verifyImmutableOwnership ?? immutableRootOwnedActivationPath,
