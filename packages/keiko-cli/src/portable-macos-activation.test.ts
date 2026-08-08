@@ -27,11 +27,12 @@ afterEach(() => {
 });
 
 describe("activateMacosPortableRuntime", () => {
-  it("accepts only the manager's closed active result", async () => {
+  it("accepts only the manager's closed active result on a release-signed install", async () => {
     const fixture = activationFixture();
     const calls: string[][] = [];
 
-    const active = await activateMacosPortableRuntime(fixture.layout, {
+    const activation = await activateMacosPortableRuntime(fixture.layout, "macos-arm64", {
+      carriesReleaseSignature: () => true,
       verifyImmutableOwnership: () => true,
       runManager: (path, cwd) => {
         calls.push([path, cwd]);
@@ -39,8 +40,45 @@ describe("activateMacosPortableRuntime", () => {
       },
     });
 
-    expect(active).toBe(true);
+    expect(activation).toBe("active");
     expect(calls).toEqual([[fixture.manager, fixture.layout.installRoot]]);
+  });
+
+  it("waives containment for an install without a release signature and never probes the manager", async () => {
+    // The v0.3.0-beta.0 incident: an unsigned evaluation install can never load its Endpoint
+    // Security extension, so requiring activation turned every double-click into a silent exit 1.
+    const fixture = activationFixture();
+    const probed: string[][] = [];
+    let managerExecuted = false;
+
+    const activation = await activateMacosPortableRuntime(fixture.layout, "macos-arm64", {
+      carriesReleaseSignature: (installRoot, target) => {
+        probed.push([installRoot, target]);
+        return false;
+      },
+      runManager: () => {
+        managerExecuted = true;
+        return Promise.resolve({ ok: true, stdout: "active\n", stderr: "" });
+      },
+    });
+
+    expect(activation).toBe("waived-unsigned");
+    expect(probed).toEqual([[fixture.layout.installRoot, "macos-arm64"]]);
+    expect(managerExecuted).toBe(false);
+  });
+
+  it("lets the platform anchor decide before any manager result", async () => {
+    // Even a manager that would report "active" must not upgrade an unsigned install: the waiver
+    // is the platform's answer, not the artifact's.
+    const fixture = activationFixture();
+
+    const activation = await activateMacosPortableRuntime(fixture.layout, "macos-arm64", {
+      carriesReleaseSignature: () => false,
+      verifyImmutableOwnership: () => true,
+      runManager: () => Promise.resolve({ ok: true, stdout: "active\n", stderr: "" }),
+    });
+
+    expect(activation).toBe("waived-unsigned");
   });
 
   it.each([
@@ -51,11 +89,12 @@ describe("activateMacosPortableRuntime", () => {
     const fixture = activationFixture();
 
     await expect(
-      activateMacosPortableRuntime(fixture.layout, {
+      activateMacosPortableRuntime(fixture.layout, "macos-arm64", {
+        carriesReleaseSignature: () => true,
         verifyImmutableOwnership: () => true,
         runManager: () => Promise.resolve(result),
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBe("unavailable");
   });
 
   it("rejects a linked activation manager before execution", async () => {
@@ -66,7 +105,8 @@ describe("activateMacosPortableRuntime", () => {
     writeFileSync(outside, "outside\n");
     symlinkSync(outside, fixture.manager);
 
-    const active = await activateMacosPortableRuntime(fixture.layout, {
+    const activation = await activateMacosPortableRuntime(fixture.layout, "macos-arm64", {
+      carriesReleaseSignature: () => true,
       verifyImmutableOwnership: () => true,
       runManager: () => {
         executed = true;
@@ -74,7 +114,7 @@ describe("activateMacosPortableRuntime", () => {
       },
     });
 
-    expect(active).toBe(false);
+    expect(activation).toBe("unavailable");
     expect(executed).toBe(false);
   });
 
@@ -82,7 +122,8 @@ describe("activateMacosPortableRuntime", () => {
     const fixture = activationFixture();
     let executed = false;
 
-    const active = await activateMacosPortableRuntime(fixture.layout, {
+    const activation = await activateMacosPortableRuntime(fixture.layout, "macos-arm64", {
+      carriesReleaseSignature: () => true,
       verifyImmutableOwnership: () => false,
       runManager: () => {
         executed = true;
@@ -90,7 +131,7 @@ describe("activateMacosPortableRuntime", () => {
       },
     });
 
-    expect(active).toBe(false);
+    expect(activation).toBe("unavailable");
     expect(executed).toBe(false);
   });
 
@@ -98,14 +139,15 @@ describe("activateMacosPortableRuntime", () => {
     const fixture = activationFixture();
     let executed = false;
 
-    const active = await activateMacosPortableRuntime(fixture.layout, {
+    const activation = await activateMacosPortableRuntime(fixture.layout, "macos-arm64", {
+      carriesReleaseSignature: () => true,
       runManager: () => {
         executed = true;
         return Promise.resolve({ ok: true, stdout: "active\n", stderr: "" });
       },
     });
 
-    expect(active).toBe(false);
+    expect(activation).toBe("unavailable");
     expect(executed).toBe(false);
   });
 });

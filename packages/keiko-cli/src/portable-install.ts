@@ -613,9 +613,18 @@ function recordPreLockSetupFailure(
 function assertSamePathSetupAttested(options: SetupPortableOptions): void {
   const sourceInstallRoot = layoutFor(options.target, options.portableRoot).installRoot;
   if (!sameRealPath(sourceInstallRoot, options.managedRoot)) return;
-  if (attestedManagedInstall(options.target, options.managedRoot, options.stateDir) === undefined) {
-    throw new Error("existing same-path managed install root is not attested");
+  if (attestedManagedInstall(options.target, options.managedRoot, options.stateDir) !== undefined) {
+    return;
   }
+  // Owner-approved in-place adoption (0.3.0-beta.1): the canonical macOS install gesture drags
+  // the bundle to /Applications BEFORE the first launch, so a pristine state dir plus a root that
+  // passes full validation is a first run, not an attack. The #2966 pin is relocated, not
+  // relaxed: adoption never happens over an EXISTING registration — re-binding a recorded install
+  // identity to different bytes at the same path stays refused below, which is exactly what
+  // detects post-attestation tampering — and validation is never waived, because setup continues
+  // into validatePortableRoot and attests only what passes it.
+  if (readPortableInstallRegistration(options.stateDir) === undefined) return;
+  throw new Error("existing same-path managed install root is not attested");
 }
 
 export function recoverableFailedManagedRoot(

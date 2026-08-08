@@ -48,6 +48,12 @@ export {
   type QualifiedProductionRuntimeRun,
 } from "./coding-runtime/productionCodingRuntimeResolver.js";
 export {
+  portableInstallCarriesReleaseSignature,
+  type PortableRuntimeCommandOptions,
+  type PortableRuntimeCommandResult,
+  type PortableRuntimeCommandRunner,
+} from "./coding-runtime/productionPortableCodingRuntime.js";
+export {
   createUpdateLocalStateManager,
   type CreateUpdateSnapshotInput,
   type UpdateLocalStateRepairResult,

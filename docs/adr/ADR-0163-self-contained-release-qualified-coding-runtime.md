@@ -286,6 +286,40 @@ native backend and its `windows-job-object` containment are unchanged and real. 
 guarantee is given up on either platform; what is given up is platform provenance on both, and
 descendant containment on macOS only.
 
+**How an unsigned install launches at all (first-run mechanics).** Amended after v0.3.0-beta.0
+shipped: its first customer double-click found three dead ends, each of which is now governed here.
+
+1. *Launch-time containment activation follows the platform anchor, not the artifact.* `portable
+   launch` on macOS asks the platform's own verifier — the same release-signature probe that guards
+   the lane downgrade above — whether the install carries a release signature. Signed: the strict
+   activation contract is unchanged; the root-owned immutable manager must report `active` or the
+   launch refuses. Unsigned: activation is **waived** (`waived-unsigned`), because an Endpoint
+   Security extension can never load without an Apple-entitled signature, and requiring it turned
+   an impossible precondition into a permanent, silent launch failure. The waiver is announced on
+   stdout, and the declared-lane honesty (`functional-not-platform-qualified`) is unchanged. The
+   anchor deliberately stays outside the artifact: a declaration file must not be able to waive the
+   verification that would detect its own rewrite.
+2. *The staged app bundle carries an ad-hoc resource seal.* Every Mach-O ships individually
+   signed, but Gatekeeper judges the bundle: a signed main executable inside a seal-less bundle is
+   reported as "damaged" — a verdict with **no** "Open Anyway" recovery at all. The staging
+   producer therefore seals `Keiko.app` ad-hoc (asserting no author, making the bundle internally
+   consistent) after the final activation-manifest write, and runs `codesign --verify --deep
+   --strict` as the last payload-affecting step so any later mutation fails staging instead of the
+   customer journey. The Developer ID lane later replaces this seal with the real signature.
+3. *A double-click failure is visible.* The native launcher marks its child tree with
+   `KEIKO_PORTABLE_UI_LAUNCH=1`; only under that exact marker does a failed portable setup or
+   launch raise a native alert carrying the recorded stderr reason. Terminals, CI and test runners
+   never set the marker — a TTY heuristic is explicitly rejected, since it cannot tell a Finder
+   launch from a test runner exercising failure paths.
+4. *A pristine same-path install is adopted, never refused (owner decision, platform-neutral).*
+   The canonical install gesture moves the bundle to the managed location BEFORE the first launch.
+   When the portable root IS the managed root, no registration of any status exists, and the root
+   passes the complete portable-root validation, setup attests it in place and launches. The
+   original same-path pin (#2966) is relocated, not relaxed: adoption over an EXISTING
+   registration stays refused — re-binding a recorded install identity to different bytes at the
+   same path is exactly the shape of post-attestation tampering — and an unvalidated root records
+   a failure and is never attested.
+
 **How the runtime identity stays bound.** No platform seal binds the evaluation activation document.
 Its only bindings are its own internal consistency, the disk re-hash of both native helpers, and the
 sidecar payload re-inspection at discovery AND again at launch. The synthesized qualification
@@ -323,9 +357,11 @@ green. This is the class audit finding F-01 closed, and it must not be reintrodu
 - Fresh installs no longer depend on update-only metadata.
 - Windows activation is tied to the exact shipped Job Object backend instead of a writable JSON
   receipt.
-- macOS explicitly pays the one-time administrator, System Extension, and Full Disk Access approval
-  cost when those permissions are not preapproved, and cannot start the product runtime until the
-  extension is active.
+- A release-signed macOS install explicitly pays the one-time administrator, System Extension, and
+  Full Disk Access approval cost when those permissions are not preapproved, and cannot start the
+  product runtime until the extension is active. An unsigned D9 evaluation install waives that
+  activation (`waived-unsigned`) because the platform itself rules the extension out; it starts
+  with the weaker, honestly declared containment instead.
 - A future Keiko Native distribution may replace the portable host and onboarding surface, but it
   cannot weaken the same Endpoint Security entitlement, user/MDM approval, tree ownership, Model
   Gateway, or authority invariants.

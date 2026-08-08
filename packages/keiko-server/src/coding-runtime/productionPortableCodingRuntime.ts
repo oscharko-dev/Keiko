@@ -183,10 +183,29 @@ function honouredLane(
 ): PortableRuntimeLane | undefined {
   const declared = artifactDeclaredLane(activation);
   if (declared === undefined) return undefined;
-  if (declared === "evaluation-unqualified" && releaseSignedInstall(root, target, input)) {
+  if (
+    declared === "evaluation-unqualified" &&
+    releaseSignedInstall(root, target, input.commandRunner)
+  ) {
     return undefined;
   }
   return declared;
+}
+
+/**
+ * Public form of the release-signature anchor for other launch surfaces. The portable launcher
+ * uses it to decide whether platform runtime containment can exist at all: an install that carries
+ * no release signature can never load its Endpoint Security extension, so requiring activation
+ * there turns an impossible precondition into a permanent silent launch failure. The fail-closed
+ * direction is unchanged — a probe that cannot answer reports "signed", which keeps every strict
+ * requirement in force.
+ */
+export function portableInstallCarriesReleaseSignature(
+  root: string,
+  target: UpdatePortableTarget,
+  commandRunner?: PortableRuntimeCommandRunner,
+): boolean {
+  return releaseSignedInstall(root, target, commandRunner);
 }
 
 /**
@@ -209,14 +228,14 @@ function honouredLane(
 function releaseSignedInstall(
   root: string,
   target: UpdatePortableTarget,
-  input: PortableOpenCodeDiscoveryInput,
+  commandRunner: PortableRuntimeCommandRunner | undefined,
 ): boolean {
   const signedCode = releaseSignedCodePath(root, target);
   // No signable code where a real install always has some: there is no release seal to downgrade
   // FROM, so this is not the attack this predicate guards. Discovery's own checks still apply.
   if (signedCode === undefined) return false;
   try {
-    const run = input.commandRunner ?? runPortableRuntimeCommand;
+    const run = commandRunner ?? runPortableRuntimeCommand;
     if (target === "windows-x64") {
       return (
         windowsSignerIdentity(signedCode, (command, args, options) =>

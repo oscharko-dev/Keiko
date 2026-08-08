@@ -134,6 +134,9 @@ static int run_launcher(keiko_launcher_buffers *buffers) {
     return 1;
   }
 
+  /* Same double-click marker as the macOS launcher: the portable CLI surfaces launch failures
+   * visibly only when a human started the app through this binary. Inherited by the child. */
+  SetEnvironmentVariableW(L"KEIKO_PORTABLE_UI_LAUNCH", L"1");
   STARTUPINFOW startup;
   PROCESS_INFORMATION process;
   ZeroMemory(&startup, sizeof(startup));
@@ -229,6 +232,11 @@ int main(void) {
   if (!join_path(cli, sizeof(cli), app_root, "/Contents/Resources/app/dist/cli/index.js")) {
     return 1;
   }
+  /* The one signal that a human double-clicked the app: only with it set does the portable CLI
+   * surface a launch failure as a native alert. Terminals, CI, and tests never set it, so they
+   * stay dialog-free by construction. The marker is inherited by the whole launched tree, which
+   * is harmless — it asserts how the process was started, not what it may do. */
+  setenv("KEIKO_PORTABLE_UI_LAUNCH", "1", 1);
   execl(
     node,
     node,
