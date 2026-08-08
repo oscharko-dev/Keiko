@@ -84,6 +84,7 @@ export function parseArgs(argv) {
 
 let processRunner = spawnSyncRunner;
 let hostPlatform = process.platform;
+let sleeper = atomicsSleep;
 
 /** Test seam: pretend to run on another platform for a callback's duration. */
 export function withHostPlatform(platform, callback) {
@@ -107,11 +108,23 @@ export function withProcessRunner(runner, callback) {
   }
 }
 
+/** Test seam: replace the blocking sleeper so polling paths run hermetically without waiting. */
+export function withSleeper(replacement, callback) {
+  const previous = sleeper;
+  sleeper = replacement;
+  try {
+    return callback();
+  } finally {
+    sleeper = previous;
+  }
+}
+
 function spawnSyncRunner(command, args, options = {}) {
   return spawnSync(command, args, { cwd: repoRoot, encoding: "utf8", ...options });
 }
 
-function run(command, args, options = {}) {
+/** Exported for the hermetic suite: the spawn/exit failure paths must stay provable. */
+export function run(command, args, options = {}) {
   const result = processRunner(command, args, options);
   if (result.error !== undefined) fail(`${command} could not spawn: ${result.error.message}`);
   if (result.status !== 0) {
@@ -183,9 +196,13 @@ function dispatchWorkflow(ref) {
   return String(runs[0].databaseId);
 }
 
-function sleep(milliseconds) {
+function atomicsSleep(milliseconds) {
   const shared = new SharedArrayBuffer(4);
   Atomics.wait(new Int32Array(shared), 0, 0, milliseconds);
+}
+
+function sleep(milliseconds) {
+  sleeper(milliseconds);
 }
 
 function waitForRun(runId) {

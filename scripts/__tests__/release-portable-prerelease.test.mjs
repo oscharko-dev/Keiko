@@ -8,9 +8,11 @@ import {
   parseArgs,
   previousBetaTag,
   releaseBody,
+  run,
   runPortablePrerelease,
   withHostPlatform,
   withProcessRunner,
+  withSleeper,
 } from "../release-portable-prerelease.mjs";
 
 function realSpawn(command, args, options) {
@@ -124,6 +126,13 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     return (command, args, options = {}) => {
       const line = [command.split("/").pop(), ...args].join(" ");
       recorded.push(line);
+      if (command.endsWith("cp") && overrides.strayOnCopy === true) {
+        const result = realSpawn(command, args, options);
+        // A corrupted copy step drops an extra file next to the target — the publish-set guard
+        // must catch exactly this class.
+        writeFileSync(join(pathModule.dirname(args.at(-1)), "stray.bin"), "stray");
+        return result;
+      }
       if (command.endsWith("mkdir") || command.endsWith("cp") || command.endsWith("sh")) {
         return realSpawn(command, args, options);
       }
@@ -141,12 +150,16 @@ describe("hermetic end-to-end (scripted gh double)", () => {
 
   function ghAnswer(args, overrides) {
     const joined = args.join(" ");
+    for (const [needle, answer] of overrides.answers ?? []) {
+      if (joined.includes(needle)) return { status: 0, stdout: answer, stderr: "" };
+    }
     if (joined.startsWith("run download")) {
       const dir = args[args.indexOf("--dir") + 1];
       const artifact = args[args.indexOf("--name") + 1];
-      mkdirSync(dir, { recursive: true });
+      const target = overrides.nestArtifacts === true ? join(dir, "nested") : dir;
+      mkdirSync(target, { recursive: true });
       for (const file of artifactFiles(artifact, overrides)) {
-        writeFileSync(join(dir, file), `fixture bytes for ${file}`);
+        writeFileSync(join(target, file), `fixture bytes for ${file}`);
       }
       return { status: 0, stdout: "", stderr: "" };
     }
@@ -164,6 +177,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     const answers = [
       ["repo view", '{"nameWithOwner":"oscharko-dev/Keiko"}'],
       ["api repos/{owner}/{repo}/releases", '[{"tag_name":"v0.3.0-beta.1"}]'],
+      ["run list --workflow", '[{"databaseId":42,"status":"in_progress"}]'],
       [
         "--json status,conclusion,headSha",
         '{"status":"completed","conclusion":"success","headSha":"b2e3900a"}',
@@ -278,5 +292,197 @@ describe("hermetic end-to-end (scripted gh double)", () => {
 
     expect(recorded.some((line) => line.includes("codesign"))).toBe(false);
     expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+  });
+
+  it("dispatches the evaluation workflow when no run id is given", () => {
+    const recorded = [];
+    const waits = [];
+    withSleeper(
+      (ms) => waits.push(ms),
+      () =>
+        withHostPlatform("darwin", () =>
+          withProcessRunner(ghDouble(recorded), () =>
+            runPortablePrerelease(["--tag", "v0.3.0-beta.2"]),
+          ),
+        ),
+    );
+
+    expect(recorded.some((line) => line.startsWith("gh workflow run"))).toBe(true);
+    expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(true);
+    // The dispatch waits once for the run to exist — through the seam, not a real wall-clock.
+    expect(waits.length).toBeGreaterThan(0);
+  });
+
+  it("refuses a tag that already exists", () => {
+    expect(() =>
+      withProcessRunner(ghDouble([]), () =>
+        runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.1"]),
+      ),
+    ).toThrowError(/already exists/u);
+  });
+
+  it("refuses to publish from a cancelled run", () => {
+    const overrides = {
+      answers: [
+        [
+          "--json status,conclusion,headSha",
+          '{"status":"completed","conclusion":"cancelled","headSha":"x"}',
+        ],
+      ],
+    };
+
+    expect(() =>
+      withProcessRunner(ghDouble([], overrides), () =>
+        runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+      ),
+    ).toThrowError(/concluded cancelled/u);
+  });
+
+  it("polls a still-running workflow through the sleeper seam", () => {
+    const recorded = [];
+    const waits = [];
+    let polls = 0;
+    // The static answer table cannot flip mid-run, so this double answers the status poll by
+    // call count: still running first, then completed.
+    const doubleBase = ghDouble(recorded, {});
+    const polling = (command, args, options) => {
+      if (args.join(" ").includes("--json status,conclusion,headSha")) {
+        polls += 1;
+        return {
+          status: 0,
+          stdout:
+            polls === 1
+              ? '{"status":"in_progress"}'
+              : '{"status":"completed","conclusion":"success","headSha":"b2e3900a"}',
+          stderr: "",
+        };
+      }
+      return doubleBase(command, args, options);
+    };
+    withSleeper(
+      (ms) => waits.push(ms),
+      () =>
+        withHostPlatform("darwin", () =>
+          withProcessRunner(polling, () =>
+            runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+          ),
+        ),
+    );
+
+    expect(polls).toBeGreaterThan(1);
+    expect(waits.length).toBeGreaterThan(0);
+  });
+
+  it("publishes a first beta without touching a predecessor", () => {
+    const recorded = [];
+    const overrides = { answers: [["api repos/{owner}/{repo}/releases", "[]"]] };
+    withHostPlatform("darwin", () =>
+      withProcessRunner(ghDouble(recorded, overrides), () =>
+        runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.0"]),
+      ),
+    );
+
+    expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(true);
+    expect(recorded.some((line) => line.startsWith("gh release edit"))).toBe(false);
+  });
+
+  it("leaves an already-superseded predecessor untouched", () => {
+    const recorded = [];
+    const overrides = {
+      answers: [
+        ["api repos/oscharko-dev/Keiko/releases/tags/", '{"body":"> **Superseded by x.**"}'],
+      ],
+    };
+    withHostPlatform("darwin", () =>
+      withProcessRunner(ghDouble(recorded, overrides), () =>
+        runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+      ),
+    );
+
+    expect(recorded.some((line) => line.startsWith("gh release edit"))).toBe(false);
+  });
+
+  it("finds staged assets nested one directory deep in an artifact", () => {
+    const recorded = [];
+    withHostPlatform("darwin", () =>
+      withProcessRunner(ghDouble(recorded, { nestArtifacts: true }), () =>
+        runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+      ),
+    );
+
+    expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(true);
+  });
+
+  it("refuses a stray extra file in the assembled publish set", () => {
+    const recorded = [];
+
+    expect(() =>
+      withHostPlatform("darwin", () =>
+        withProcessRunner(ghDouble(recorded, { strayOnCopy: true }), () =>
+          runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+        ),
+      ),
+    ).toThrowError(/publish set must be exactly/u);
+  });
+
+  it("refuses when the staging job set is incomplete", () => {
+    const jobs = goodJobs().slice(1);
+
+    expect(() =>
+      withHostPlatform("darwin", () =>
+        withProcessRunner(ghDouble([], { jobs }), () =>
+          runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+        ),
+      ),
+    ).toThrowError(/expected 3 staging jobs/u);
+  });
+
+  it("refuses a failing codesign verdict that is not the damaged signature", () => {
+    const codesign = { status: 1, stderr: "generic verification failure" };
+
+    expect(() =>
+      withHostPlatform("darwin", () =>
+        withProcessRunner(ghDouble([], { codesign }), () =>
+          runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+        ),
+      ),
+    ).toThrowError(/codesign --verify --deep --strict failed/u);
+  });
+
+  it("refuses unusable arguments with the documented usage line", () => {
+    expect(() => runPortablePrerelease(["--bogus"])).toThrowError(/usage: /u);
+  });
+});
+
+describe("run (process seam)", () => {
+  it("returns stdout from a real local process through the default runner", () => {
+    expect(run("/bin/echo", ["hermetic"])).toContain("hermetic");
+  });
+
+  it("surfaces a spawn error and a non-zero exit as refusals", () => {
+    expect(() =>
+      withProcessRunner(
+        () => ({ error: new Error("boom") }),
+        () => run("x", []),
+      ),
+    ).toThrowError(/could not spawn: boom/u);
+    expect(() =>
+      withProcessRunner(
+        () => ({ status: 3, stderr: "sad" }),
+        () => run("x", ["y"]),
+      ),
+    ).toThrowError(/exited 3/u);
+  });
+});
+
+describe("CLI shim", () => {
+  it("exits 1 with the usage line when invoked directly with unusable flags", () => {
+    const result = realSpawn(process.execPath, [
+      "scripts/release-portable-prerelease.mjs",
+      "--bogus",
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("usage: release-portable-prerelease");
   });
 });
