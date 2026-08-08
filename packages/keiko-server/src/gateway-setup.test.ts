@@ -3508,6 +3508,69 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("keeps parser-required per-model protocol overrides while masking connection identity", async () => {
+    // Codex finding on #3040: masking the ENTIRE KEIKO_MODEL_* namespace broke the durable parse
+    // for a stored Azure provider whose apiVersion arrives via KEIKO_MODEL_<ID>_API_VERSION —
+    // ConfigInvalidError, silent fallback to the env-resolved runtime view, and the
+    // misclassification this change exists to fix came back exactly when a URL override was also
+    // present. Only the CONNECTION-IDENTITY fields (base URL, api key, header) are masked now;
+    // protocol overrides cannot skew sharing and stay available to the parser.
+    const uiDir = await tempDir("keiko-gw-ui-durable-protocol-");
+    const evidenceDir = await tempDir("keiko-gw-ev-durable-protocol-");
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://azure.example.com/v1",
+            apiKey: "chat-token",
+            endpointStyle: "azure-openai-deployment",
+          },
+          {
+            modelId: "scan-ocr",
+            baseUrl: "https://azure.example.com/v1",
+            apiKey: "chat-token",
+            endpointStyle: "azure-openai-deployment",
+            capability: durableOcrCapability("scan-ocr"),
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {
+        ...VAULT_ENV,
+        // The parser REQUIRES an api version for the deployment style — supplied only via env,
+        // together with the style override the same operator ships (the probe candidates carry
+        // no file style, so version-without-style would refuse the whole setup).
+        KEIKO_MODEL_EXAMPLE_CHAT_ENDPOINT_STYLE: "azure-openai-deployment",
+        KEIKO_MODEL_EXAMPLE_CHAT_API_VERSION: "2025-04-01-preview",
+        KEIKO_MODEL_SCAN_OCR_ENDPOINT_STYLE: "azure-openai-deployment",
+        KEIKO_MODEL_SCAN_OCR_API_VERSION: "2025-04-01-preview",
+        // And the transient identity override that hid the sharing relationship.
+        KEIKO_MODEL_EXAMPLE_CHAT_BASE_URL: "https://elsewhere.example.com/v1",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve(modelIds.filter((modelId) => modelId !== "scan-ocr")),
+    });
+
+    const rotated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "example-rotated-token" }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const scanOcr = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "scan-ocr",
+    );
+    expect(scanOcr?.apiKey).toBe("example-rotated-token");
+    deps.store.close();
+  });
+
   it("keeps a transient credential override from declassifying file-level sharing", async () => {
     // Same class, credential axis: KEIKO_MODEL_<ID>_API_KEY on the chat provider made the
     // runtime primary's credential diverge from the stored file, so every file-sharing provider

@@ -4034,13 +4034,20 @@ function withDiskGatewayEgress(
   return withPersistedGatewayEgress(withoutEgress, storagePath, deps);
 }
 
-// Per-model environment overrides (KEIKO_MODEL_<ID>_*) are TRANSIENT operator state layered over
-// the stored file at parse time. Masking exactly that namespace recovers the durable connection
-// identities; global fallbacks stay, because they apply to every provider uniformly and cannot
-// make one provider's stored connection diverge from another's.
+// Per-model CONNECTION-IDENTITY overrides (base URL, api key, credential header) are the
+// TRANSIENT operator state that can hide a durable file-level sharing relationship — exactly the
+// three fields sharesStoredGatewayConnection compares. Only they are masked. Per-model PROTOCOL
+// overrides (API version, endpoint style, ...) stay: they cannot skew connection identity, and a
+// stored Azure provider whose apiVersion arrives only via env NEEDS them to parse at all —
+// masking the whole namespace made the durable parse fail and silently fall back to the
+// misclassified runtime view (review finding on #3040). Global fallbacks stay too: they apply to
+// every provider uniformly and cannot make one stored connection diverge from another's.
+const PER_MODEL_CONNECTION_OVERRIDE_RE =
+  /^KEIKO_MODEL_.+_(?:BASE_URL|API_KEY|API_KEY_HEADER_NAME)$/u;
+
 function withoutPerModelEnvOverrides(env: EnvSource): EnvSource {
   return Object.fromEntries(
-    Object.entries(env).filter(([name]) => !name.startsWith("KEIKO_MODEL_")),
+    Object.entries(env).filter(([name]) => !PER_MODEL_CONNECTION_OVERRIDE_RE.test(name)),
   );
 }
 
