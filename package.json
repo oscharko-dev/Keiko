@@ -217,7 +217,7 @@
   "overrides": {
     "undici": "7.29.0",
     "fast-uri": "3.1.5",
-    "postcss": "8.5.23",
+    "postcss": "8.5.25",
     "sharp": "npm:empty-npm-package@1.0.0",
     "@monaco-editor/loader": "1.7.0",
     "dompurify": "3.4.13",
