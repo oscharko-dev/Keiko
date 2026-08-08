@@ -170,13 +170,10 @@ still requires an operator dispatch with `portable_assets_run_id` pointing at th
   prerelease versions such as `v0.3.0-rc.1` over `0.3.0-rc.1`) runs the full verification —
   exact npm prereleases publish through this workflow.
 - Governed PORTABLE beta tag pushes (`v<version>-beta.<n>` layered over the package version,
-  cut by `scripts/release-portable-prerelease.mjs`) run every commit-based validation — tag
-  format against the package version, workflow-name validation, portable approvals, and the
-  release plan — and skip exactly ONE step: the required-check lookup, which derives its
-  contexts from the release-branch protection surface a dev-based prerelease has no
-  relationship with. Their assets are verified by the portable-prerelease lane itself
-  (built-commit version match, checksums, macOS seal — ADR-0163 D9). Any other hyphenated `v*`
-  tag (a non-exact RC, a foreign version, malformed) fails the validation.
+  cut by `scripts/release-portable-prerelease.mjs`) run the SAME full verification — no step is
+  skipped. Their assets carry the prerelease lane's own checks in addition (built-commit
+  version match, checksums, macOS seal — ADR-0163 D9). Any other hyphenated `v*` tag (a
+  non-exact RC, a foreign version, malformed) fails the tag validation.
 - Manual `workflow_dispatch` with `publish: false` runs the same verification job.
 - Manual `workflow_dispatch` with `publish: true` enables the publish job only when the selected ref is a tag that starts with `v` and the same tag/SHA already has a successful tag-push release verification run.
 - Manual publishes require an explicit npm dist-tag. The default is `beta`.
@@ -217,12 +214,11 @@ The tag verification job is dependency-free after checkout and Node setup:
 2. Verify required GitHub checks for the tagged SHA.
 3. Run `npm run release:plan -- --tag beta`.
 
-Only step 2 is skipped for a governed portable beta tag: it derives the required contexts from
-the release-branch protection surface, which a dev-based prerelease has no relationship with.
-Step 1, step 3, and the portable-approval and workflow-name validations run for EVERY tag, so a
-green `Release verification` on a `v<version>-beta.<n>` tag attests tag/version consistency,
-approved runtime inputs, and release-plan validity — but not the required checks of the release
-branch; the beta's assets are verified by the portable-prerelease lane itself.
+Every step runs for EVERY accepted tag, governed portable betas included: the required-check
+lookup resolves its contexts from `RELEASE_REQUIRED_CHECKS` (set at workflow level) rather than
+from branch protection, so it evaluates them directly on the tagged SHA — a dev-based
+prerelease commit included. A green `Release verification` therefore attests the same thing for
+a beta tag as for a stable one.
 
 The release plan validates version consistency, publish manifests, and release-impact metadata
 without relying on `node_modules`, so the tag job can fail fast on metadata drift. It also prints

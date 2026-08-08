@@ -76,45 +76,34 @@ jobs:
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Validate release tag
-        id: release-tag
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-        # A tag equal to v<version> is EXACT — full verification, even when the package version
-        # itself is a prerelease (an exact npm prerelease tag is not the portable exception). A
-        # GOVERNED portable beta tag (v<version>-beta.<n> LAYERED OVER the package version, cut
-        # by scripts/release-portable-prerelease.mjs — ADR-0163 D9) is validated against the
-        # same package version and recorded as the portable exception; any other hyphenated tag
-        # fails closed instead of skipping verification.
+        # Two shapes are accepted, both bound to the CURRENT package version: an EXACT tag
+        # (v<version>, including an npm prerelease version) and the governed portable beta tag
+        # (v<version>-beta.<n> layered over it, cut by scripts/release-portable-prerelease.mjs —
+        # ADR-0163 D9). Anything else — a foreign version, a non-exact RC, a malformed index —
+        # fails closed. Only this format check ever needed to change: every verification step
+        # below runs for BOTH shapes (review findings on #3043).
         run: |
           node <<'NODE'
-          const { appendFileSync } = require("node:fs");
           const { version } = require("./package.json");
           const releaseTag = process.env.RELEASE_TAG;
           const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
           const beta = new RegExp(`^v${escaped}-beta\\.(?:0|[1-9][0-9]*)$`, "u");
-          const exact = releaseTag === `v${version}`;
-          if (!exact && !beta.test(releaseTag)) {
+          if (releaseTag !== `v${version}` && !beta.test(releaseTag)) {
             throw new Error(`Release tag ${releaseTag} does not match package version ${version}.`);
           }
-          appendFileSync(process.env.GITHUB_OUTPUT, `portable-beta=${String(!exact)}\n`);
           NODE
-      # Every commit-based validation runs for EVERY tag, portable betas included: workflow-name
-      # validation, approved runtime inputs, and the release plan are properties of the commit
-      # and pass for a dev-based prerelease (verified by running all three against a beta tag).
-      # A directly pushed beta tag therefore still faces version-consistency, approval, and
-      # workflow-name verification — the exception does not hand it a free pass (review finding
-      # on #3043).
+      # EVERY verification step runs for EVERY accepted tag, portable betas included — there is
+      # no skip. The required-check lookup resolves its contexts from RELEASE_REQUIRED_CHECKS
+      # (set at workflow level), so it never queries branch protection and passes on a dev-based
+      # prerelease commit; verified against the real v0.3.0-beta.2 commit (review finding on
+      # #3043).
       - name: Validate required-check workflow names
         run: npm run check:release-required-workflows
       - name: Validate approved portable runtime inputs
         run: npm run check:portable-approvals
-      # The ONLY step the portable exception skips: it derives the required contexts from the
-      # RELEASE_BASE_BRANCH protection surface, which a dev-based prerelease has no relationship
-      # with (the script fails closed with "Branch not found" there). The beta's assets carry
-      # their own verification through the prerelease lane — built-commit version match,
-      # checksums, macOS seal (ADR-0163 D9).
       - name: Verify required checks for tagged SHA
-        if: ${{ steps.release-tag.outputs.portable-beta != 'true' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: RELEASE_SHA="$(git rev-parse HEAD)" node scripts/verify-release-required-checks.mjs
