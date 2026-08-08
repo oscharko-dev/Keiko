@@ -25,7 +25,7 @@
      from GitHub API data. When quality.keiko.dev is deployed, only the URLs below change to
      https://quality.keiko.dev/widget/oscharko-dev/Keiko.svg . -->
 <p align="center">
-  <a href="https://github.com/oscharko-dev/Keiko/pulls?q=is%3Apr"><picture>
+  <a href="https://github.com/oscharko-dev/Keiko-for-Quality"><picture>
     <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/oscharko-dev/Keiko-for-Quality/quality-cards/cards/oscharko-dev/Keiko-light.svg">
     <img src="https://raw.githubusercontent.com/oscharko-dev/Keiko-for-Quality/quality-cards/cards/oscharko-dev/Keiko.svg" width="340" alt="Reviewed by Keiko for Quality — run, finding and acted-on numbers for this repository">
   </picture></a>
