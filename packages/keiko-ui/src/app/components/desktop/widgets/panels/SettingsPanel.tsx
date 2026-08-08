@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import {
@@ -53,7 +54,6 @@ import {
   VOICE_PERSONA_STORAGE_KEY,
   writeVoicePersonaPreference,
 } from "../../hooks/useVoiceDialogMode";
-import { GatewaySetupDialog } from "../../modals/GatewaySetupDialog";
 import { Toggle } from "../shared/Toggle";
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
@@ -91,6 +91,14 @@ import {
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import editorStyles from "./EditorSettingsPanel.module.css";
+
+// The gateway setup dialog is reached only by an explicit gesture (`setupOpen`), exactly like the
+// shell's own gesture-only modals (ADR-0042 D3.6) — a static import here pulled the whole dialog
+// (and the config-upload import surface behind it) into the first-load chunk.
+const GatewaySetupDialog = dynamic(
+  () => import("../../modals/GatewaySetupDialog").then((mod) => mod.GatewaySetupDialog),
+  { ssr: false, loading: () => null },
+);
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CopyIcon = Icons.copy;
