@@ -687,6 +687,31 @@ describe("parseGatewayConfigUpload", () => {
     expect(parseGatewayConfigUpload(split)).toEqual({ outcome: "invalid" });
   });
 
+  it("refuses a voice section whose connection has no base URL", () => {
+    // KfQ finding on #3037: a voice provider without baseUrl parsed into role ids with
+    // voiceBaseUrl undefined — the dialog's file-scoped replacement semantics key on
+    // voiceBaseUrl, so the roles would apply while the voice section counted as absent. The
+    // canonical parser requires baseUrl on every provider and the product's sealed file always
+    // carries it; a voice section without a connectable endpoint is corrupted input.
+    const noUrl = JSON.stringify({
+      providers: [
+        providerFixture(),
+        {
+          modelId: "keiko-stt",
+          apiKeyHeaderName: "api-key",
+          capability: {
+            id: "keiko-stt",
+            kind: "voice",
+            supportsSpeechInput: true,
+            voiceProviderLocality: "azure-foundry",
+          },
+        },
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(noUrl)).toEqual({ outcome: "invalid" });
+  });
+
   it("refuses a voice capability that declares no locality", () => {
     // The canonical parser requires voiceProviderLocality on every voice capability
     // (resolveVoiceKindFields) — substituting the production default would silently rewrite a

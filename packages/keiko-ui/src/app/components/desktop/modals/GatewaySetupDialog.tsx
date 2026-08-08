@@ -2407,11 +2407,14 @@ export function GatewaySetupDialog({
   // When the file carries a voice section, its role set REPLACES the form's roles — a corrected
   // upload that removed a role must not leave the previous deployment visible, or Test & Save
   // would silently re-add it (review finding on #3037). A file with no voice section leaves the
-  // fields untouched, like every other absent statement.
+  // fields untouched, like every other absent statement. The parser guarantees the gate is
+  // whole: a voice section always carries voiceBaseUrl (a section without one is refused as
+  // invalid), so role ids can never arrive while the section counts as absent (KfQ finding on
+  // #3037).
   function applyUploadedVoiceRoles(fields: GatewayConfigUploadFields): void {
     const speaksAboutVoice = fields.voiceBaseUrl !== undefined;
     const applyRole = (value: string | undefined, set: (next: string) => void): void => {
-      if (speaksAboutVoice || value !== undefined) set(value ?? "");
+      if (speaksAboutVoice) set(value ?? "");
     };
     applyRole(fields.voiceModelId, setVoiceModelId);
     applyRole(fields.voiceRealtimeModelId, updateVoiceRealtimeModelId);

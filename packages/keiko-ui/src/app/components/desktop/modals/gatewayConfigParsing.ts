@@ -791,6 +791,12 @@ function voiceFields(partition: PartitionedProviders): VoiceFields | undefined {
   if (roles === undefined) return undefined;
   const resolved = resolvedVoiceConnection(roles);
   if (resolved === undefined) return undefined;
+  // A voice section must name its endpoint: the canonical parser requires baseUrl on every
+  // provider and the product's sealed file always carries it. Importing role ids while
+  // voiceBaseUrl stays undefined would split the dialog's file-scoped replacement semantics,
+  // which key on voiceBaseUrl to decide whether the file speaks about voice at all (KfQ finding
+  // on #3037).
+  if (partition.voice.length > 0 && resolved.connection.baseUrl === undefined) return undefined;
   const realtime = resolved.realtimeSkipped ? undefined : roles.realtime;
   const { stt, tts } = effectiveSpeechRoles(roles, realtime);
   const outputVoice = outputVoiceFromProfiles(tts?.provider.voiceProfiles);
