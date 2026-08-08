@@ -790,4 +790,64 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "searchPanel.status.searchingRoots": "Workspace-Roots werden durchsucht…",
   "searchPanel.status.selectWorkspace": "Vor der Suche einen Workspace auswählen.",
   "searchPanel.symbol.enclosingSuffix": " in {enclosing}",
+  "gatewaySetup.badge.setup": "Modell-Gateway-Einrichtung",
+  "gatewaySetup.badge.update": "Zugangsdaten aktualisieren",
+  "gatewaySetup.voice.title": "Audio & Digital Voice",
+  "gatewaySetup.voice.description":
+    "Optionale Modelle für Diktat, Live-Unterhaltungen und vorgelesene Antworten.",
+  "gatewaySetup.voice.guidance":
+    "Konfiguriere nur, was du brauchst: Diktieren benötigt ein Speech-to-Text-Deployment. Digital Voice benötigt ein Realtime-Media-Deployment und das damit kompatible Live-Transkriptions-Deployment. Vorlesen benötigt ein Speech-Output-Deployment. Deployment-Namen sind anbieterspezifisch. Um einen Audio-Endpunkt zu ersetzen, gib neue Zugangsdaten und die Anbieter-Lokalität sowie jede zu verschiebende Rolle erneut an; ausgelassene Rollen behalten ihre gespeicherte Verbindung.",
+  "gatewaySetup.voice.selectedCapabilities":
+    "Ausgewählte Funktionen: Diktieren {dictate} · Digital Voice {digitalVoice} · Vorlesen {readAloud}.",
+  "gatewaySetup.voice.dictateDeployment": "Diktieren · Speech-to-Text-Deployment",
+  "gatewaySetup.voice.realtimeDeployment": "Digital Voice · Realtime-Deployment",
+  "gatewaySetup.voice.realtimeTranscriptionDeployment":
+    "Digital Voice · Live-Transkriptions-Deployment",
+  "gatewaySetup.voice.realtimeTranscriptionDeploymentPlaceholder":
+    "ihr-realtime-transkriptions-deployment",
+  "gatewaySetup.voice.realtimeTranscriptionRequiredLabel": "mit Realtime erforderlich",
+  "gatewaySetup.voice.realtimeTranscriptionRequired":
+    "Gib das kompatible Live-Transkriptions-Deployment für dieses Realtime-Deployment ein.",
+  "gatewaySetup.voice.realtimeRequired":
+    "Ein Live-Transkriptions-Deployment erfordert ein ausdrückliches Realtime-Deployment.",
+  "gatewaySetup.voice.deploymentRequired":
+    "Gib mindestens ein ausdrückliches Voice-Deployment an: Speech-to-Text, Realtime mit Live-Transkription oder Speech Output.",
+  "gatewaySetup.voice.endpointMigrationRequired":
+    "Zum Ersetzen eines gespeicherten Audio-Endpunkts sind neue Zugangsdaten, eine ausdrücklich gewählte Anbieter-Lokalität und mindestens eine zu verschiebende Deployment-Rolle erforderlich.",
+  "gatewaySetup.voice.semanticTurnDetection": "Semantische Turn-Ende-Erkennung (Semantic VAD)",
+  "gatewaySetup.voice.semanticTurnDetectionHint":
+    "Nur aktivieren, wenn dieses Realtime-Deployment Semantic VAD ausdrücklich unterstützt. Beim Austausch des Deployments wird diese Funktion zurückgesetzt.",
+  "gatewaySetup.voice.speechOutputDeployment": "Vorlesen · Speech-Output-Deployment",
+  "gatewaySetup.voice.outputVoice": "Ausgabestimme",
+  "gatewaySetup.voice.outputVoiceHint":
+    "für Vorlesen erforderlich; verwende eine vom gewählten Anbieter unterstützte ID",
+  "gatewaySetup.voice.outputVoiceRequired":
+    "Beim Konfigurieren oder Austauschen eines Speech-Output-Deployments ist eine ausdrückliche Anbieter-Stimmen-ID erforderlich.",
+  "gatewaySetup.voice.endpointUrl": "Audio-Endpunkt-URL",
+  "gatewaySetup.voice.preserveExistingHint": "leer lassen, um den gespeicherten Wert beizubehalten",
+  "gatewaySetup.voice.endpointReplacePlaceholder":
+    "Mit Zugangsdaten, Lokalität und ausdrücklichen Zielrollen ersetzen",
+  "gatewaySetup.voice.credential": "Audio-Zugangsdaten",
+  "gatewaySetup.voice.credentialReplacePlaceholder":
+    "Nur ausfüllen, um die gespeicherten Audio-Zugangsdaten zu ersetzen",
+  "gatewaySetup.voice.credentialPlaceholder": "Audio-Zugangsdaten einfügen",
+  "gatewaySetup.voice.authHeader": "Audio-Authentifizierungs-Header",
+  "gatewaySetup.voice.authHeaderPreservePlaceholder":
+    "Leer lassen, um den gespeicherten Header beizubehalten",
+  "gatewaySetup.voice.timeout": "Audio-Zeitlimit (ms)",
+  "gatewaySetup.voice.timeoutPreservePlaceholder":
+    "Leer lassen, um das gespeicherte Zeitlimit beizubehalten",
+  "gatewaySetup.voice.storedAria": "Gespeicherte Audio-Zugangsdaten",
+  "gatewaySetup.voice.audioModels": "Audio-Modelle",
+  "gatewaySetup.voice.updateSettings": "Audio- und Digital-Voice-Einstellungen aktualisieren",
+  "gatewaySetup.voice.success.audioAndFigma":
+    "Audio- und Digital-Voice-Einstellungen aktualisiert und Figma-Zugriffstoken verifiziert. Keiko wird neu geladen…",
+  "gatewaySetup.voice.success.gatewayAudioAndFigma":
+    "Modell-Gateway-, Audio- und Digital-Voice-Einstellungen aktualisiert und Figma-Zugriffstoken verifiziert. Keiko wird neu geladen…",
+  "gatewaySetup.voice.success.audio":
+    "Audio- und Digital-Voice-Einstellungen aktualisiert. Keiko wird neu geladen…",
+  "gatewaySetup.voice.success.verifiedAudioAndFigma":
+    "{verified}, Audio- und Digital-Voice-Einstellungen aktualisiert und Figma-Zugriffstoken verifiziert. Keiko wird neu geladen…{skipped}",
+  "gatewaySetup.voice.success.verifiedAudio":
+    "{verified} und Audio- sowie Digital-Voice-Einstellungen aktualisiert. Keiko wird neu geladen…{skipped}",
 } satisfies OptionalWidgetMessageCatalog;
