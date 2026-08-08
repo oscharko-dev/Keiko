@@ -19,6 +19,14 @@
   <img alt="TypeScript" src="https://img.shields.io/badge/language-TypeScript-3178C6.svg?logo=typescript&logoColor=white">
   <img alt="Local first" src="https://img.shields.io/badge/runtime-local--first-1F2937.svg">
   <a href="https://sonarcloud.io/summary/new_code?id=oscharko-dev_Keiko"><img alt="SonarCloud Quality Gate" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=alert_status"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=oscharko-dev_Keiko"><img alt="SonarCloud Quality Gate" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=ncloc"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=oscharko-dev_Keiko"><img alt="SonarCloud Quality Gate" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=coverage"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=oscharko-dev_Keiko"><img alt="SonarCloud Quality Gate" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=duplicated_lines_density"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=oscharko-dev_Keiko"><img alt="SonarCloud Quality Gate" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=reliability_rating"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=oscharko-dev_Keiko"><img alt="SonarCloud Quality Gate" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=security_rating"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=oscharko-dev_Keiko"><img alt="SonarCloud Quality Gate" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=sqale_rating"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=oscharko-dev_Keiko"><img alt="SonarCloud Quality Gate" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=sqale_index"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=oscharko-dev_Keiko"><img alt="SonarCloud Quality Gate" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=vulnerabilities"></a>
 </p>
 
 <!-- Review-record card, rendered on a schedule by Keiko-for-Quality's quality-cards workflow
