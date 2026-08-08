@@ -98,24 +98,27 @@ jobs:
           }
           appendFileSync(process.env.GITHUB_OUTPUT, `portable-beta=${String(!exact)}\n`);
           NODE
-      # The remaining steps verify the STABLE release surface (required checks on the tagged
-      # SHA, npm manifest plan, portable approvals). Only the PORTABLE beta exception recorded
-      # by the tag validation skips them — an exact tag over a prerelease package version runs
-      # everything, because exact npm prereleases publish through this verification (review
-      # finding on #3043). Portable beta assets are verified by the prerelease lane itself.
+      # Every commit-based validation runs for EVERY tag, portable betas included: workflow-name
+      # validation, approved runtime inputs, and the release plan are properties of the commit
+      # and pass for a dev-based prerelease (verified by running all three against a beta tag).
+      # A directly pushed beta tag therefore still faces version-consistency, approval, and
+      # workflow-name verification — the exception does not hand it a free pass (review finding
+      # on #3043).
       - name: Validate required-check workflow names
-        if: ${{ steps.release-tag.outputs.portable-beta != 'true' }}
         run: npm run check:release-required-workflows
       - name: Validate approved portable runtime inputs
-        if: ${{ steps.release-tag.outputs.portable-beta != 'true' }}
         run: npm run check:portable-approvals
+      # The ONLY step the portable exception skips: it derives the required contexts from the
+      # RELEASE_BASE_BRANCH protection surface, which a dev-based prerelease has no relationship
+      # with (the script fails closed with "Branch not found" there). The beta's assets carry
+      # their own verification through the prerelease lane — built-commit version match,
+      # checksums, macOS seal (ADR-0163 D9).
       - name: Verify required checks for tagged SHA
         if: ${{ steps.release-tag.outputs.portable-beta != 'true' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: RELEASE_SHA="$(git rev-parse HEAD)" node scripts/verify-release-required-checks.mjs
       - name: Validate release manifest plan
-        if: ${{ steps.release-tag.outputs.portable-beta != 'true' }}
         run: npm run release:plan -- --tag beta
 
   publish:

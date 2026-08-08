@@ -215,10 +215,12 @@ The tag verification job is dependency-free after checkout and Node setup:
 2. Verify required GitHub checks for the tagged SHA.
 3. Run `npm run release:plan -- --tag beta`.
 
-Steps 2-3 (and the portable-approvals and required-workflow-name validations) run only for
-EXACT tags. For a governed portable beta tag the job records the portable-beta judgement and
-ends after step 1 — a green `Release verification` on a `v<version>-beta.<n>` tag attests the
-tag format only; the beta's assets are verified by the portable-prerelease lane itself.
+Only step 2 is skipped for a governed portable beta tag: it derives the required contexts from
+the release-branch protection surface, which a dev-based prerelease has no relationship with.
+Step 1, step 3, and the portable-approval and workflow-name validations run for EVERY tag, so a
+green `Release verification` on a `v<version>-beta.<n>` tag attests tag/version consistency,
+approved runtime inputs, and release-plan validity — but not the required checks of the release
+branch; the beta's assets are verified by the portable-prerelease lane itself.
 
 The release plan validates version consistency, publish manifests, and release-impact metadata
 without relying on `node_modules`, so the tag job can fail fast on metadata drift. It also prints
