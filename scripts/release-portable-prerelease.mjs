@@ -46,6 +46,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
+// The tag shape lives in ONE place, shared with the Release verification workflow that
+// validates the pushed tag — restating it here would let this lane mint a tag the workflow
+// then rejects (review finding on #3043).
+import { BETA_INDEX, GOVERNED_BETA_TAG_RE } from "./release-tag-contract.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const WORKFLOW_PATH = ".github/workflows/portable-assets.yml";
@@ -223,7 +227,9 @@ function releaseIsDraft(tag) {
 }
 
 export function assertTagKeepsBetaSequenceMonotonic(tag, existingTags) {
-  const match = /^(?<prefix>v.+-beta\.)(?<index>\d+)$/u.exec(tag);
+  const match = new RegExp(String.raw`^(?<prefix>v.+-beta\.)(?<index>${BETA_INDEX})$`, "u").exec(
+    tag,
+  );
   if (match?.groups === undefined) return;
   const { prefix } = match.groups;
   const current = Number.parseInt(match.groups.index, 10);
@@ -244,7 +250,9 @@ export function assertTagKeepsBetaSequenceMonotonic(tag, existingTags) {
  * carry the superseded pointer regardless of the gap (review finding on #3037).
  */
 export function previousBetaTag(tag, existingTags) {
-  const match = /^(?<prefix>v.+-beta\.)(?<index>\d+)$/u.exec(tag);
+  const match = new RegExp(String.raw`^(?<prefix>v.+-beta\.)(?<index>${BETA_INDEX})$`, "u").exec(
+    tag,
+  );
   if (match?.groups === undefined) return undefined;
   const { prefix } = match.groups;
   const current = Number.parseInt(match.groups.index, 10);
@@ -413,7 +421,7 @@ function assertRunMatchesRelease(commitSha, version, tag) {
       `the workflow head commit ${commitSha} builds version ${built} but the local checkout is ${version}; refusing to publish another version's assets.`,
     );
   }
-  const match = /^v(?<version>.+)-beta\.\d+$/u.exec(tag);
+  const match = new RegExp(String.raw`^v(?<version>.+)-beta\.${BETA_INDEX}$`, "u").exec(tag);
   if (match?.groups?.version !== built) {
     fail(`tag ${tag} does not name the built version ${built} (expected v${built}-beta.<n>).`);
   }
@@ -730,6 +738,13 @@ export function runPortablePrerelease(argv) {
     return;
   }
   const version = rootVersion();
+  // Refuse a malformed --tag BEFORE any remote call: the Release verification regex rejects a
+  // leading-zero beta index, so the lane must never mint one (review finding on #3043).
+  if (options.tag !== undefined && !GOVERNED_BETA_TAG_RE.test(options.tag)) {
+    fail(
+      `tag ${options.tag} does not match the governed beta tag shape v<version>-beta.<n> (no leading-zero beta index) — the Release verification would reject its push.`,
+    );
+  }
   const repository = repositorySlug();
   const tags = existingReleaseTags();
   const tag = options.tag ?? defaultTagWithDraftResume(version, tags);
