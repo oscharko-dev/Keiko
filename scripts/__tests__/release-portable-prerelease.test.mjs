@@ -213,7 +213,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
       ["run list --workflow", '[{"databaseId":42,"status":"in_progress"}]'],
       [
         "--json status,conclusion,headSha",
-        '{"status":"completed","conclusion":"success","headSha":"b2e3900a"}',
+        '{"status":"completed","conclusion":"success","headSha":"b2e3900a","event":"workflow_dispatch","headBranch":"dev"}',
       ],
       ["api repos/oscharko-dev/Keiko/releases/tags/", '{"body":"old beta.1 body"}'],
       // An existing tag is a PUBLISHED release unless a test overrides it to a draft — the
@@ -786,12 +786,50 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     ).toThrowError(/already exists/u);
   });
 
+  it("refuses a supplied run built from another branch", () => {
+    // Review finding on #3037: --run-id could name a successful evaluation run of an UNMERGED
+    // feature branch whose package version matches the local checkout — every downstream check
+    // passed and fresh branch bytes published publicly. The run must be a workflow_dispatch on
+    // exactly the requested ref.
+    const overrides = {
+      answers: [
+        [
+          "--json status,conclusion,headSha",
+          '{"status":"completed","conclusion":"success","headSha":"b2e3900a","event":"workflow_dispatch","headBranch":"feat/unmerged"}',
+        ],
+      ],
+    };
+
+    expect(() =>
+      withProcessRunner(ghDouble([], overrides), () =>
+        runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
+      ),
+    ).toThrowError(/built branch feat\/unmerged, not the requested ref dev/u);
+  });
+
+  it("refuses a supplied run that was not a workflow_dispatch", () => {
+    const overrides = {
+      answers: [
+        [
+          "--json status,conclusion,headSha",
+          '{"status":"completed","conclusion":"success","headSha":"b2e3900a","event":"push","headBranch":"dev"}',
+        ],
+      ],
+    };
+
+    expect(() =>
+      withProcessRunner(ghDouble([], overrides), () =>
+        runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
+      ),
+    ).toThrowError(/is a push run, not the workflow_dispatch/u);
+  });
+
   it("refuses to publish from a cancelled run", () => {
     const overrides = {
       answers: [
         [
           "--json status,conclusion,headSha",
-          '{"status":"completed","conclusion":"cancelled","headSha":"x"}',
+          '{"status":"completed","conclusion":"cancelled","headSha":"x","event":"workflow_dispatch","headBranch":"dev"}',
         ],
       ],
     };
@@ -818,7 +856,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
           stdout:
             polls === 1
               ? '{"status":"in_progress"}'
-              : '{"status":"completed","conclusion":"success","headSha":"b2e3900a"}',
+              : '{"status":"completed","conclusion":"success","headSha":"b2e3900a","event":"workflow_dispatch","headBranch":"dev"}',
           stderr: "",
         };
       }

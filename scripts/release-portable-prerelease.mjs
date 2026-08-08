@@ -278,11 +278,36 @@ function sleep(milliseconds) {
   sleeper(milliseconds);
 }
 
-function waitForRun(runId) {
+/**
+ * A supplied --run-id may name ANY historical run — including a successful evaluation build of
+ * an unmerged feature branch whose package version happens to match the local checkout, which
+ * would pass every downstream check and publish fresh branch bytes publicly. The run must be a
+ * workflow_dispatch on exactly the requested ref (review finding on #3037); the dispatch path
+ * satisfies this by construction.
+ */
+function assertRunBelongsToRequestedRef(view, runId, ref) {
+  if (view.event !== "workflow_dispatch") {
+    fail(`run ${runId} is a ${view.event} run, not the workflow_dispatch this script requires.`);
+  }
+  if (view.headBranch !== ref) {
+    fail(`run ${runId} built branch ${view.headBranch}, not the requested ref ${ref}.`);
+  }
+}
+
+function waitForRun(runId, ref) {
   const startedAt = Date.now();
   for (;;) {
-    const view = ghJson(["run", "view", runId, "--json", "status,conclusion,headSha"]);
-    if (view.status === "completed") return view;
+    const view = ghJson([
+      "run",
+      "view",
+      runId,
+      "--json",
+      "status,conclusion,headSha,event,headBranch",
+    ]);
+    if (view.status === "completed") {
+      assertRunBelongsToRequestedRef(view, runId, ref);
+      return view;
+    }
     if (Date.now() - startedAt > MAX_WAIT_MS) fail(`run ${runId} did not complete within an hour.`);
     sleep(POLL_INTERVAL_MS);
   }
@@ -609,7 +634,7 @@ export function runPortablePrerelease(argv) {
   if (hasPendingDraft) assertExistingTagIsResumableDraft(tag);
   const runId = options.runId ?? dispatchWorkflow(options.ref);
   log(`waiting for workflow run ${runId} ...`);
-  const view = waitForRun(runId);
+  const view = waitForRun(runId, options.ref);
   // A "failure" conclusion is still publishable on purpose: the run-level conclusion aggregates
   // non-gating lanes (the evaluation lane may fail), while the jobs that actually produce the
   // published assets are separately and strictly asserted by assertStagingJobsSucceeded below.

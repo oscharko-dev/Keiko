@@ -720,8 +720,23 @@ function currentOcrModelIds(config: GatewayConfig | undefined): readonly string[
  * provider's — embeddings sharing the gateway connection keep following rotations and endpoint
  * moves through the normal rebuild.
  */
+// The stored MAIN gateway provider: the first provider that is not a voice deployment. Array
+// order is not a contract — a valid stored file may list a dedicated voice provider first, and
+// treating position zero as the primary would break the connection-identity comparison: an
+// embedding that shared the CHAT gateway would classify as dedicated and be restored with its
+// obsolete credential after a rotation (review finding on #3037).
+function storedPrimaryGatewayProvider(
+  config: GatewayConfig | undefined,
+): ModelProviderConfig | undefined {
+  return config?.providers.find(
+    (provider) =>
+      config.capabilities?.find((capability) => capability.id === provider.modelId)?.kind !==
+      "voice",
+  );
+}
+
 function currentDedicatedEmbeddingModelIds(config: GatewayConfig | undefined): readonly string[] {
-  const primary = config?.providers.at(0);
+  const primary = storedPrimaryGatewayProvider(config);
   if (config === undefined || primary === undefined) return [];
   const embeddingIds = new Set(currentEmbeddingModelIds(config));
   const primaryHeader = primary.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
@@ -3602,7 +3617,14 @@ function applyStoredDedicatedProviders(
     const provider = current.providers.find((item) => item.modelId === modelId);
     const capability = current.capabilities?.find((item) => item.id === modelId);
     if (provider === undefined || capability === undefined) return [];
-    return [storedDedicatedProviderRaw(provider, capability, gateway, current.providers.at(0))];
+    return [
+      storedDedicatedProviderRaw(
+        provider,
+        capability,
+        gateway,
+        storedPrimaryGatewayProvider(current),
+      ),
+    ];
   });
   if (restored.length === 0) return rawConfig;
   return { ...rawConfig, providers: [...providers, ...restored] };

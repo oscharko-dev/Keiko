@@ -358,22 +358,38 @@ function isIndentedCodeLine(rawLine) {
   return rawLine.startsWith("\t") || rawLine.startsWith("    ");
 }
 
+// One walker step: mutates the fence/blockquote state and reports whether the line is Markdown
+// CONTEXT (fenced, indented code, blockquote or its CommonMark lazy continuation — a non-blank
+// line directly after a "> ..." line still renders inside the quote; only a blank line ends it)
+// rather than a plain top-level line (review findings on #3037).
+function approvalContextLine(rawLine, state) {
+  const line = rawLine.trim();
+  const delimiter = fenceDelimiter(line);
+  if (state.openFence !== undefined) {
+    if (closesFence(state.openFence, line, delimiter)) state.openFence = undefined;
+    return true;
+  }
+  if (line === "") {
+    state.inBlockquote = false;
+    return true;
+  }
+  if (isIndentedCodeLine(rawLine)) return true;
+  if (delimiter !== undefined) {
+    state.openFence = delimiter;
+    return true;
+  }
+  if (line.startsWith(">") || state.inBlockquote) {
+    state.inBlockquote = true;
+    return true;
+  }
+  return false;
+}
+
 function phraseStandsOnPlainLine(body, phrase) {
-  let openFence;
+  const state = { openFence: undefined, inBlockquote: false };
   for (const rawLine of body.split("\n")) {
-    const line = rawLine.trim();
-    const delimiter = fenceDelimiter(line);
-    if (openFence !== undefined) {
-      if (closesFence(openFence, line, delimiter)) openFence = undefined;
-      continue;
-    }
-    if (isIndentedCodeLine(rawLine)) continue;
-    if (delimiter !== undefined) {
-      openFence = delimiter;
-      continue;
-    }
-    if (line.startsWith(">")) continue;
-    if (line === phrase) return true;
+    if (approvalContextLine(rawLine, state)) continue;
+    if (rawLine.trim() === phrase) return true;
   }
   return false;
 }

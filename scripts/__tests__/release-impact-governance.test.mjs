@@ -570,6 +570,22 @@ describe("release-impact governance", () => {
       expect(messages(shorterInsideLonger)).toContain("on a line of its own");
     });
 
+    it("rejects a lazy blockquote continuation carrying the phrase", () => {
+      // Review finding on #3037 (CommonMark lazy continuation): a non-blank line directly after
+      // a "> ..." line still renders INSIDE the blockquote — an instructional quote followed
+      // immediately by the phrase must not authorize a publish. A blank line ends the quote, so
+      // the same phrase separated by one empty line approves.
+      const phrase = approvalPhrase();
+      const lazy = validateWith(approvalComment({ body: `> Example approval marker:\n${phrase}` }));
+      expect(lazy.ok).toBe(false);
+      expect(messages(lazy)).toContain("on a line of its own");
+
+      const separated = validateWith(
+        approvalComment({ body: `> Example approval marker:\n\n${phrase}` }),
+      );
+      expect(separated.ok).toBe(true);
+    });
+
     it("rejects a phrase that appears only inside a blockquote", () => {
       // Review finding on #3037: a quoted line ("> Approved-for-publish: ...") cites the phrase,
       // typically while discussing it — it is not the owner's own standalone statement.

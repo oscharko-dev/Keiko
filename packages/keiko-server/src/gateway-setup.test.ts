@@ -3350,6 +3350,71 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("classifies the stored primary by capability, not by array position", async () => {
+    // Review finding on #3037: a valid stored file may list a dedicated voice provider FIRST.
+    // Position-zero primary derivation then compared the embedding against the VOICE connection,
+    // classified the chat-sharing embedding as dedicated, and restored it verbatim with its
+    // obsolete credential after a rotation — the save succeeded and embedding calls died once
+    // the old token was revoked.
+    const uiDir = await tempDir("keiko-gw-ui-primary-order-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-primary-order-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "keiko-stt",
+            baseUrl: "https://voice.example.com",
+            apiKey: "voice-token",
+            capability: {
+              id: "keiko-stt",
+              kind: "voice",
+              supportsSpeechInput: true,
+              voiceProviderLocality: "azure-foundry",
+            },
+          },
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "text-embedding-3-large",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            capability: { id: "text-embedding-3-large", kind: "embedding" },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const rotated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "rotated-token" }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const embedding = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "text-embedding-3-large",
+    );
+    // The chat-sharing embedding follows the rotation; the voice provider keeps its own token.
+    expect(embedding?.apiKey).toBe("rotated-token");
+    const voice = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "keiko-stt",
+    );
+    expect(voice?.apiKey).toBe("voice-token");
+    deps.store.close();
+  });
+
   it("keeps runtime-only egress out of the persisted config on a rebuild", async () => {
     // Review finding on #3037: `current.egress` is the RUNTIME aggregate — environment-derived
     // proxy/CA/private-network settings included. Persisting it would keep an env opt-in active
