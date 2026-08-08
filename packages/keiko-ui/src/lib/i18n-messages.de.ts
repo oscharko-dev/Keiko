@@ -230,21 +230,6 @@ export const DE_MESSAGES = {
   "common.advanced": "erweitert",
   "gatewaySetup.badge.setup": "Modell-Gateway-Einrichtung",
   "gatewaySetup.badge.update": "Zugangsdaten aktualisieren",
-  "gatewaySetup.upload.title": "Konfigurationsdatei laden",
-  "gatewaySetup.upload.hint":
-    "Du hast eine keiko.config.json? Lade sie und alle enthaltenen Felder werden ausgefüllt — die Datei bleibt auf diesem Rechner, und was sie nicht enthält (etwa den API-Token), ergänzt du unten.",
-  "gatewaySetup.upload.action": "keiko.config.json laden",
-  "gatewaySetup.upload.applied": "Konfiguration geladen — {count} Feld(er) unten ausgefüllt.",
-  "gatewaySetup.upload.invalid": "Diese Datei ist keine lesbare Keiko-Konfiguration.",
-  "gatewaySetup.upload.fileTooLarge": "Diese Datei überschreitet die unterstützten 256 KB.",
-  "gatewaySetup.upload.unsupportedSetting":
-    "Diese Datei setzt Chat- oder Embedding-Provider-Optionen (Endpoint-Stil, API-Version oder Output-Token-Parameter), die dieser Upload nicht abbilden kann — trage diese Verbindung manuell ein.",
-  "gatewaySetup.upload.unsupportedKind":
-    "Diese Datei enthält OCR-Provider, die dieser Upload nicht ausfüllen kann — trage diesen Abschnitt manuell ein und entferne ihn aus der Datei.",
-  "gatewaySetup.upload.realtimeSkipped":
-    "Das Realtime-Sprachmodell nutzt einen eigenen Endpoint und wurde nicht übernommen — ergänze es nach dem Speichern über die Sprach-Einstellungen.",
-  "gatewaySetup.upload.voiceProfilesReduced":
-    "Die Datei konfiguriert mehrere Ausgabestimmen; übernommen wurde die neutrale Stimme — die übrigen lassen sich später neu wählen.",
   "gatewaySetup.loading.title": "Modell-Gateway-Einrichtung wird vorbereitet",
   "gatewaySetup.loading.description":
     "Die lokalen Einrichtungsfelder werden geladen. Es wurde noch keine Anbieteranfrage gestartet.",

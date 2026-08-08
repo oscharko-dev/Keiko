@@ -471,6 +471,18 @@ describe("parseGatewayConfigUpload", () => {
       },
     });
     expect(parseGatewayConfigUpload(extra)).toEqual({ outcome: "unsupportedSetting" });
+
+    // An inherited prototype name must count as an extra key too (review finding on #3031).
+    const prototypeKey = JSON.stringify({
+      providers: [providerFixture()],
+      circuitBreaker: {
+        failureThreshold: 5,
+        cooldownMs: 30_000,
+        halfOpenProbes: 2,
+        toString: "sneaky",
+      },
+    });
+    expect(parseGatewayConfigUpload(prototypeKey)).toEqual({ outcome: "unsupportedSetting" });
   });
 
   it("refuses two providers claiming the same voice role", () => {
@@ -577,6 +589,16 @@ describe("parseGatewayConfigUpload", () => {
     expect(parseGatewayConfigUpload(oversized)).toEqual({ outcome: "invalid" });
   });
 
+  it("measures the payload ceiling in bytes, not UTF-16 units", () => {
+    // Review finding on #3031: "€" is one UTF-16 unit but three UTF-8 bytes, so a multi-byte
+    // payload can stay under the string-length check while exceeding the byte ceiling.
+    const units = Math.floor(MAX_GATEWAY_CONFIG_BYTES / 3) + 100;
+    const multiByte = `{"providers": "${"€".repeat(units)}"}`;
+
+    expect(multiByte.length).toBeLessThan(MAX_GATEWAY_CONFIG_BYTES);
+    expect(parseGatewayConfigUpload(multiByte)).toEqual({ outcome: "invalid" });
+  });
+
   it("mirrors the setup route's 100-provider ceiling at upload time", () => {
     // Review finding on #3031: an oversized file must fail here, not at Test & Save after a
     // reported success.
@@ -587,6 +609,16 @@ describe("parseGatewayConfigUpload", () => {
     });
 
     expect(parseGatewayConfigUpload(oversized)).toEqual({ outcome: "invalid" });
+  });
+
+  it("refuses top-level policy blocks the rebuild would silently drop", () => {
+    // Review finding on #3031 (P1): grounding, reranker, and egress have no setup field — a
+    // "successful" load followed by a save would persist the providers WITHOUT the uploaded
+    // retrieval, reranking, or egress policy.
+    for (const block of ["grounding", "reranker", "egress"]) {
+      const carrying = JSON.stringify({ providers: [providerFixture()], [block]: {} });
+      expect(parseGatewayConfigUpload(carrying)).toEqual({ outcome: "unsupportedSetting" });
+    }
   });
 
   it("refuses generic provider settings the form cannot represent with an honest outcome", () => {
@@ -721,6 +753,31 @@ describe("parseGatewayConfigUpload", () => {
       "a voice-only configuration the setup form cannot save",
       JSON.stringify({
         providers: [voiceProviderFixture("keiko-stt", { supportsSpeechInput: true })],
+      }),
+    ],
+    [
+      "an unknown voice-profile persona",
+      JSON.stringify({
+        providers: [
+          providerFixture({
+            voiceProfiles: [{ persona: "robotic", voiceId: "alloy" }],
+            capability: undefined,
+          }),
+        ],
+      }),
+    ],
+    [
+      "a duplicated voice-profile persona",
+      JSON.stringify({
+        providers: [
+          providerFixture({
+            voiceProfiles: [
+              { persona: "neutral", voiceId: "alloy" },
+              { persona: "neutral", voiceId: "nova" },
+            ],
+            capability: undefined,
+          }),
+        ],
       }),
     ],
   ])("refuses %s", (_label, serialized) => {

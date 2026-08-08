@@ -2957,7 +2957,13 @@ function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | Route
     imageInputModelIds: resolved.imageInputModelIds,
     imageInputModelIdsProvided: hasListField(input.raw, "imageInputModelIds"),
     storedEmbeddingModelIds: input.preserveExisting ? currentEmbeddingModelIds(input.current) : [],
-    storedOcrModelIds: input.preserveExisting ? currentOcrModelIds(input.current) : [],
+    // OCR restoration applies only to INHERITED deployments: an explicitly submitted deployment
+    // list is authoritative, and restoring an omitted OCR provider would make it impossible to
+    // remove through the setup (review finding on #3031).
+    storedOcrModelIds:
+      input.preserveExisting && !hasNonEmptyListField(input.raw, "deploymentNames")
+        ? currentOcrModelIds(input.current)
+        : [],
     workflowEligibleModelIds: resolved.workflowEligibleModelIds,
     workflowEligibleModelIdsConfigured: hasListField(input.raw, "workflowEligibleModelIds"),
     voiceProviders: input.voiceProviders,
@@ -3254,17 +3260,24 @@ function finalRawConfigForSetup(
     ),
     input.current,
     input.storedOcrModelIds,
+    { baseUrl: input.baseUrl, apiKey: input.apiKey },
   );
 }
 
 function storedOcrProviderRaw(
   provider: ModelProviderConfig,
   capability: ModelCapability,
+  gateway: { readonly baseUrl: string; readonly apiKey: string },
 ): Record<string, unknown> {
+  // An OCR provider on the SAME endpoint as the gateway follows a credential rotation — the old
+  // token dies with the rotation. A different endpoint keeps its own credential: the freshly
+  // verified gateway token must never travel to a URL it was not tested against (review finding
+  // on #3031, same rule as the endpoint-change token guard).
+  const sharesGatewayEndpoint = sameBaseUrlIdentity(provider.baseUrl, gateway.baseUrl);
   return {
     modelId: provider.modelId,
     baseUrl: provider.baseUrl,
-    apiKey: provider.apiKey,
+    apiKey: sharesGatewayEndpoint ? gateway.apiKey : provider.apiKey,
     ...(provider.apiKeyHeaderName === undefined
       ? {}
       : { apiKeyHeaderName: provider.apiKeyHeaderName }),
@@ -3290,6 +3303,7 @@ function applyStoredOcrProviders(
   rawConfig: Record<string, unknown>,
   current: GatewayConfig | undefined,
   storedOcrModelIds: readonly string[],
+  gateway: { readonly baseUrl: string; readonly apiKey: string },
 ): Record<string, unknown> {
   if (storedOcrModelIds.length === 0 || current === undefined) return rawConfig;
   const providers: unknown[] = Array.isArray(rawConfig.providers) ? rawConfig.providers : [];
@@ -3303,7 +3317,7 @@ function applyStoredOcrProviders(
     const provider = current.providers.find((item) => item.modelId === modelId);
     const capability = current.capabilities?.find((item) => item.id === modelId);
     if (provider === undefined || capability === undefined) return [];
-    return [storedOcrProviderRaw(provider, capability)];
+    return [storedOcrProviderRaw(provider, capability, gateway)];
   });
   if (restored.length === 0) return rawConfig;
   return { ...rawConfig, providers: [...providers, ...restored] };

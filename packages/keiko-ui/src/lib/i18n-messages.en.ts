@@ -220,21 +220,6 @@ export const EN_MESSAGES = {
   "common.advanced": "advanced",
   "gatewaySetup.badge.setup": "Model gateway setup",
   "gatewaySetup.badge.update": "Credential update",
-  "gatewaySetup.upload.title": "Load a configuration file",
-  "gatewaySetup.upload.hint":
-    "Have a keiko.config.json? Load it to fill in every field it covers — the file stays on this machine, and anything it does not contain (such as the API token) you add below.",
-  "gatewaySetup.upload.action": "Load keiko.config.json",
-  "gatewaySetup.upload.applied": "Configuration loaded — {count} field(s) filled in below.",
-  "gatewaySetup.upload.invalid": "This file is not a readable Keiko configuration.",
-  "gatewaySetup.upload.fileTooLarge": "This file exceeds the supported 256 KB.",
-  "gatewaySetup.upload.unsupportedSetting":
-    "This file sets chat or embedding provider options (endpoint style, API version, or output token parameter) this upload cannot represent — enter that connection manually.",
-  "gatewaySetup.upload.unsupportedKind":
-    "This file contains OCR providers this upload cannot fill in — enter that section manually and remove it from the file.",
-  "gatewaySetup.upload.realtimeSkipped":
-    "The realtime voice model uses its own endpoint and was not applied — add it in the voice settings after saving.",
-  "gatewaySetup.upload.voiceProfilesReduced":
-    "The file configures several output voices; the neutral voice was applied — the others can be reselected later.",
   "gatewaySetup.loading.title": "Preparing model gateway setup",
   "gatewaySetup.loading.description":
     "Loading the local setup controls. No provider request has been started.",

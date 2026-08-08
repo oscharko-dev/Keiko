@@ -759,6 +759,22 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "searchPanel.status.searchingRoots": "Searching workspace roots...",
   "searchPanel.status.selectWorkspace": "Select a workspace before searching.",
   "searchPanel.symbol.enclosingSuffix": " in {enclosing}",
+  "gatewaySetup.upload.title": "Load a configuration file",
+  "gatewaySetup.upload.hint":
+    "Already have a keiko.config.json? Load it and every field it carries is filled in — the file stays on this machine, and anything it does not carry (like the API token) you add below.",
+  "gatewaySetup.upload.action": "Load keiko.config.json",
+  "gatewaySetup.upload.appliedOne": "Configuration loaded — 1 field filled in below.",
+  "gatewaySetup.upload.appliedMany": "Configuration loaded — {count} fields filled in below.",
+  "gatewaySetup.upload.invalid": "This file is not a readable Keiko configuration.",
+  "gatewaySetup.upload.fileTooLarge": "This file exceeds the supported 256 KB.",
+  "gatewaySetup.upload.unsupportedSetting":
+    "This file carries settings this upload cannot represent — chat/embedding provider options (endpoint style, API version, output token parameter, realtime auth mode, voice profiles), a tuned circuit breaker, or a policy block such as grounding, reranker, or egress. Enter that configuration manually.",
+  "gatewaySetup.upload.unsupportedKind":
+    "This file contains OCR providers this upload cannot fill in — enter that section manually and remove it from the file.",
+  "gatewaySetup.upload.realtimeSkipped":
+    "The realtime voice model uses its own endpoint and was not applied — add it in the voice settings after saving.",
+  "gatewaySetup.upload.voiceProfilesReduced":
+    "The file configures several output voices; the neutral voice was applied — the others can be reselected later.",
 } as const;
 
 export type OptionalWidgetMessageKey = keyof typeof OPTIONAL_WIDGET_EN_MESSAGES;

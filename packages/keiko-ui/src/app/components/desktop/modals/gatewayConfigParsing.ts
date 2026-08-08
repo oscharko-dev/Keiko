@@ -35,7 +35,15 @@ const UNSUPPORTED_GENERIC_PROVIDER_SETTINGS = [
   "realtimeAuthMode",
   "voiceProfiles",
 ] as const;
+/**
+ * Top-level blocks the setup form can represent. A file carrying `grounding`, `reranker`,
+ * `egress`, or any other policy block would be persisted WITHOUT it by the rebuild — loading and
+ * saving must never silently change retrieval, reranking, or egress behavior (review finding on
+ * #3031).
+ */
+const REPRESENTABLE_ROOT_KEYS = new Set(["providers", "capabilities", "circuitBreaker", "figma"]);
 const KNOWN_KINDS = new Set(["chat", "embedding", "ocr-vision", "voice"]);
+const VOICE_PERSONAS = new Set(["male", "female", "neutral"]);
 /** The provider kinds SOME setup field can represent; `ocr-vision` has none. */
 const REPRESENTABLE_KINDS = new Set(["chat", "embedding", "voice"]);
 const VOICE_LOCALITIES: ReadonlySet<VoiceProviderLocality> = new Set([
@@ -252,6 +260,7 @@ function readVoiceProfiles(value: unknown): {
   if (value === undefined) return { ok: true, value: undefined };
   if (!Array.isArray(value)) return { ok: false, value: undefined };
   const profiles: ParsedVoiceProfile[] = [];
+  const seenPersonas = new Set<string>();
   for (const entry of value) {
     if (!objectRecord(entry)) return { ok: false, value: undefined };
     const persona = readString(entry.persona);
@@ -259,6 +268,12 @@ function readVoiceProfiles(value: unknown): {
     if (persona.value === undefined || voiceId.value === undefined) {
       return { ok: false, value: undefined };
     }
+    // The production parser requires a known persona and rejects duplicates — a corrupted
+    // mapping must not silently pick an arbitrary voice on save (review finding on #3031).
+    if (!VOICE_PERSONAS.has(persona.value) || seenPersonas.has(persona.value)) {
+      return { ok: false, value: undefined };
+    }
+    seenPersonas.add(persona.value);
     profiles.push({ persona: persona.value, voiceId: voiceId.value });
   }
   return { ok: true, value: profiles };
@@ -666,7 +681,10 @@ function circuitBreakerOutcome(value: unknown): "representable" | "invalid" | "u
     REBUILT_CIRCUIT_BREAKER,
   ) as readonly (keyof typeof REBUILT_CIRCUIT_BREAKER)[];
   const matches = expectedKeys.every((key) => value[key] === REBUILT_CIRCUIT_BREAKER[key]);
-  const noExtraKeys = Object.keys(value).every((key) => key in REBUILT_CIRCUIT_BREAKER);
+  // Object.hasOwn, not `in`: an inherited name like `toString` must count as an extra key.
+  const noExtraKeys = Object.keys(value).every((key) =>
+    Object.hasOwn(REBUILT_CIRCUIT_BREAKER, key),
+  );
   return matches && noExtraKeys ? "representable" : "unsupportedSetting";
 }
 
@@ -720,13 +738,24 @@ function assembledFields(
   };
 }
 
+/**
+ * Defence in depth: the upload control checks file.size before reading, but the parser owns its
+ * own ceiling so no future call site can feed an unbounded payload into JSON.parse (review
+ * findings on #3031). UTF-16 length under-counts multi-byte UTF-8, so the cheap length check is
+ * only the fast reject (bytes >= length always) and the byte-accurate measurement decides.
+ */
+function exceedsByteCeiling(serialized: string): boolean {
+  if (serialized.length > MAX_GATEWAY_CONFIG_BYTES) return true;
+  return new TextEncoder().encode(serialized).length > MAX_GATEWAY_CONFIG_BYTES;
+}
+
 export function parseGatewayConfigUpload(serialized: string): GatewayConfigUploadResult {
-  // Defence in depth: the upload control checks file.size before reading, but the parser owns
-  // its own ceiling so no future call site can feed an unbounded payload into JSON.parse
-  // (review finding on #3031).
-  if (serialized.length > MAX_GATEWAY_CONFIG_BYTES) return { outcome: "invalid" };
+  if (exceedsByteCeiling(serialized)) return { outcome: "invalid" };
   const root = uploadRoot(serialized);
   if (root === undefined) return { outcome: "invalid" };
+  if (!Object.keys(root).every((key) => REPRESENTABLE_ROOT_KEYS.has(key))) {
+    return { outcome: "unsupportedSetting" };
+  }
   const providers = parsedProviders(root.providers);
   if (providers === undefined || providers.length > MAX_IMPORT_PROVIDERS) {
     return { outcome: "invalid" };

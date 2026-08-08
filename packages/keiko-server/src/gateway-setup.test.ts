@@ -2917,8 +2917,27 @@ describe("handleGatewaySetup", () => {
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewaySetupTester: (_config, modelIds) => {
         probedModelIds.push(...modelIds);
-        return Promise.resolve(modelIds.filter((modelId) => modelId !== "scan-ocr"));
+        return Promise.resolve(
+          modelIds.filter((modelId) => modelId !== "scan-ocr" && modelId !== "remote-ocr"),
+        );
       },
+    });
+    const ocrCapability = (id: string): Record<string, unknown> => ({
+      id,
+      kind: "ocr-vision",
+      contextWindow: 32_000,
+      maxOutputTokens: 4_096,
+      toolCalling: false,
+      structuredOutput: false,
+      streaming: false,
+      supportsImageInput: false,
+      supportsDocumentInput: true,
+      workflowEligible: false,
+      costClass: "low",
+      latencyClass: "fast",
+      throughputHint: "test ocr deployment",
+      preferredUseCases: ["Document OCR"],
+      knownLimitations: [],
     });
     const gatewayConfig = deps.gatewayConfig;
     if (gatewayConfig === undefined) throw new Error("expected gateway config store");
@@ -2934,23 +2953,13 @@ describe("handleGatewaySetup", () => {
             modelId: "scan-ocr",
             baseUrl: "https://llm.example.com/v1",
             apiKey: "chat-token",
-            capability: {
-              id: "scan-ocr",
-              kind: "ocr-vision",
-              contextWindow: 32_000,
-              maxOutputTokens: 4_096,
-              toolCalling: false,
-              structuredOutput: false,
-              streaming: false,
-              supportsImageInput: false,
-              supportsDocumentInput: true,
-              workflowEligible: false,
-              costClass: "low",
-              latencyClass: "fast",
-              throughputHint: "test ocr deployment",
-              preferredUseCases: ["Document OCR"],
-              knownLimitations: [],
-            },
+            capability: ocrCapability("scan-ocr"),
+          },
+          {
+            modelId: "remote-ocr",
+            baseUrl: "https://ocr.example.com",
+            apiKey: "dedicated-ocr-token",
+            capability: ocrCapability("remote-ocr"),
           },
         ],
         circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
@@ -2958,21 +2967,52 @@ describe("handleGatewaySetup", () => {
       true,
     );
 
+    // Persisted credentials live in the vault, so token assertions go through the loaded
+    // configuration exactly like the other rotation tests in this file.
+    const savedOcr = (): ReadonlyMap<string, { kind?: string; apiKey?: string }> => {
+      const config = currentGatewayConfig(deps);
+      return new Map(
+        (config?.providers ?? []).map((provider) => [
+          provider.modelId,
+          {
+            kind: config?.capabilities?.find((item) => item.id === provider.modelId)?.kind,
+            apiKey: provider.apiKey,
+          },
+        ]),
+      );
+    };
+
     const cleared = await handleGatewaySetup(
       ctx({ preserveExisting: true, imageInputModelIds: [] }),
       deps,
     );
     expect(cleared.status).toBe(200);
-    const saved = JSON.parse(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")) as {
-      readonly providers: readonly {
-        readonly modelId: string;
-        readonly capability?: { readonly kind: string };
-      }[];
-    };
-    const ocrProvider = saved.providers.find((provider) => provider.modelId === "scan-ocr");
-    expect(ocrProvider?.capability?.kind).toBe("ocr-vision");
-    // The stored OCR deployment is never chat-probed — it has no chat protocol to answer.
+    expect(savedOcr().get("scan-ocr")?.kind).toBe("ocr-vision");
+    expect(savedOcr().get("remote-ocr")?.kind).toBe("ocr-vision");
+    // The stored OCR deployments are never chat-probed — they have no chat protocol to answer.
     expect(probedModelIds).not.toContain("scan-ocr");
+    expect(probedModelIds).not.toContain("remote-ocr");
+
+    // Rotating the gateway token refreshes the same-endpoint OCR credential with it (the old
+    // token dies with the rotation) while a dedicated-endpoint OCR keeps its own — the fresh
+    // token must never travel to a URL it was not tested against (review finding on #3031).
+    const rotated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "example-rotated-token" }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    expect(savedOcr().get("scan-ocr")?.apiKey).toBe("example-rotated-token");
+    expect(savedOcr().get("remote-ocr")?.apiKey).toBe("dedicated-ocr-token");
+
+    // An explicitly submitted deployment list is authoritative: OCR restoration applies only to
+    // inherited deployments, so omitting the OCR ids here REMOVES them (review finding on #3031).
+    const replaced = await handleGatewaySetup(
+      ctx({ preserveExisting: true, deploymentNames: ["example-chat"] }),
+      deps,
+    );
+    expect(replaced.status).toBe(200);
+    expect(savedOcr().get("scan-ocr")).toBeUndefined();
+    expect(savedOcr().get("remote-ocr")).toBeUndefined();
     deps.store.close();
   });
 

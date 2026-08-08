@@ -2,7 +2,10 @@
 
 import { useRef, useState, type ChangeEvent, type ReactNode } from "react";
 
-import { useTranslate } from "@/lib/i18n";
+// The upload control lives behind the setup dialog's dynamic boundary, so its copy comes from
+// the lazily-loaded optional widget catalog — never the eager first-load catalogs (the
+// initial-page gzip ceiling, ADR-0042 D3.6).
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import {
   MAX_GATEWAY_CONFIG_BYTES,
   appliedGatewayConfigFieldCount,
@@ -121,7 +124,7 @@ export function GatewayConfigUpload({
   /** True while a selected file is still being read — the dialog blocks submission meanwhile. */
   readonly onReadPendingChange?: ((pending: boolean) => void) | undefined;
 }): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   const [state, setState] = useState<UploadState>(INITIAL_STATE);
   const sequence = useRef(0);
 
@@ -154,7 +157,7 @@ export function GatewayConfigUpload({
 }
 
 function GatewayConfigUploadStatus({ state }: { readonly state: UploadState }): ReactNode {
-  const t = useTranslate();
+  const t = useOptionalWidgetTranslate();
   if (state.issue !== undefined) {
     return (
       <div className={styles["cmp-config-upload-alert"]} role="alert">
@@ -165,7 +168,9 @@ function GatewayConfigUploadStatus({ state }: { readonly state: UploadState }): 
   if (state.appliedCount === undefined) return null;
   return (
     <output className={styles["cmp-config-upload-applied"]}>
-      {t("gatewaySetup.upload.applied", { count: state.appliedCount })}
+      {state.appliedCount === 1
+        ? t("gatewaySetup.upload.appliedOne")
+        : t("gatewaySetup.upload.appliedMany", { count: state.appliedCount })}
       {state.realtimeSkipped ? ` ${t("gatewaySetup.upload.realtimeSkipped")}` : null}
       {state.profilesReduced ? ` ${t("gatewaySetup.upload.voiceProfilesReduced")}` : null}
     </output>
