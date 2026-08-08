@@ -41,27 +41,27 @@ lists record arguments). `read -rs` keeps the key off the screen, and `mktemp` c
 under an unpredictable name, so no pre-created symlink at a guessable path can capture it:
 
 ```bash
-umask 077
-LITELLM_HOST=your-proxy.example.com
-KEIKO_HDR="$(mktemp)"; KEIKO_HDR_LLK="$(mktemp)"
-# The trap covers an interrupted run; the explicit rm at the end of THIS block covers the
-# sequential case — a later block reassigns KEIKO_HDR and replaces the trap, which would
-# otherwise strand these files (review finding on #3042).
-# A signal handler must TERMINATE: cleaning up and returning would let the shell resume and
-# recreate the just-deleted path non-exclusively on the next write (review finding on #3042).
-trap 'rm -f "$KEIKO_HDR" "$KEIKO_HDR_LLK"' EXIT
-trap 'rm -f "$KEIKO_HDR" "$KEIKO_HDR_LLK"; exit 130' INT TERM
-read -rs -p 'Paste gateway key (not echoed): ' KEY; echo
-printf 'Authorization: Bearer %s\n' "$KEY" > "$KEIKO_HDR"
-printf 'x-litellm-key: Bearer %s\n' "$KEY" > "$KEIKO_HDR_LLK"
-unset KEY
-# -S keeps transport failures visible: without it a DNS/TLS/connection error prints a bare
-# "000" that is indistinguishable from an auth answer.
-# Standard header (expect 200):
-curl -sS -o /dev/null -w "%{http_code}\n" -H @"$KEIKO_HDR" "https://$LITELLM_HOST/v1/models"
-# Custom header (expect 401/403 while litellm_key_header_name is unconfigured):
-curl -sS -o /dev/null -w "%{http_code}\n" -H @"$KEIKO_HDR_LLK" "https://$LITELLM_HOST/v1/models"
-rm -f "$KEIKO_HDR" "$KEIKO_HDR_LLK"; trap - EXIT INT TERM
+# One SUBSHELL per diagnostic: the trap, the temp files and the exit status all stay inside it,
+# so a signal handler may terminate without closing an interactive shell, no later block can
+# clobber this cleanup, and the block reports its own status when pasted into a script (review
+# findings on #3042).
+(
+  umask 077
+  LITELLM_HOST=your-proxy.example.com
+  KEIKO_HDR="$(mktemp)"; KEIKO_HDR_LLK="$(mktemp)"
+  trap 'rm -f "$KEIKO_HDR" "$KEIKO_HDR_LLK"' EXIT
+  trap 'rm -f "$KEIKO_HDR" "$KEIKO_HDR_LLK"; exit 130' INT TERM
+  read -rs -p 'Paste gateway key (not echoed): ' KEY; echo
+  printf 'Authorization: Bearer %s\n' "$KEY" > "$KEIKO_HDR"
+  printf 'x-litellm-key: Bearer %s\n' "$KEY" > "$KEIKO_HDR_LLK"
+  unset KEY
+  # -S keeps transport failures visible: without it a DNS/TLS/connection error prints a bare
+  # "000" that is indistinguishable from an auth answer.
+  # Standard header (expect 200):
+  curl -sS -o /dev/null -w "%{http_code}\n" -H @"$KEIKO_HDR" "https://$LITELLM_HOST/v1/models"
+  # Custom header (expect 401/403 while litellm_key_header_name is unconfigured):
+  curl -sS -o /dev/null -w "%{http_code}\n" -H @"$KEIKO_HDR_LLK" "https://$LITELLM_HOST/v1/models"
+)
 ```
 
 If the first call returns 200 and the second an auth status, the proxy has no
@@ -175,26 +175,25 @@ Count the aliases the key can see:
 ```bash
 # Count ENTRIES, not lines: /v1/models is usually a single compact JSON line, on which a line
 # grep reports 1 regardless of how many aliases the key can actually see. Only the count is
-# printed — the response body itself never reaches the terminal. Self-contained: the header
-# file is created exclusively here and removed on exit.
-umask 077
-LITELLM_HOST=your-proxy.example.com
-# Both temp files and the cleanup exist BEFORE the key is accepted: an interruption between
-# writing the credential and installing a trap would otherwise strand it (review finding on
-# #3042).
-KEIKO_HDR="$(mktemp)"; KEIKO_BODY="$(mktemp)"
-trap 'rm -f "$KEIKO_HDR" "$KEIKO_BODY"' EXIT
-trap 'rm -f "$KEIKO_HDR" "$KEIKO_BODY"; exit 130' INT TERM
-read -rs -p 'Paste gateway key (not echoed): ' KEY; echo
-printf 'Authorization: Bearer %s\n' "$KEY" > "$KEIKO_HDR"; unset KEY
-# The body goes to a temp file so a TRANSPORT failure surfaces as a curl error (and a non-zero
-# exit) instead of reaching node as empty input and being reported as a parse failure. A
-# non-JSON body (HTML error page, plaintext provider diagnostic) is never echoed: the parse
-# failure prints a fixed, body-free message instead of the offending content.
-curl -sS -o "$KEIKO_BODY" -H @"$KEIKO_HDR" "https://$LITELLM_HOST/v1/models" &&
-  node -e 'const d=require("node:fs").readFileSync(process.argv[1],"utf8");try{console.log(JSON.parse(d).data.length);}catch{console.log("unreadable response (not a JSON model list)");}' "$KEIKO_BODY"
-# Immediate cleanup, independent of any trap a later block installs.
-rm -f "$KEIKO_HDR" "$KEIKO_BODY"; trap - EXIT INT TERM
+# printed — the response body itself never reaches the terminal. Self-contained subshell, as
+# above: temp files, trap and status stay inside it.
+(
+  umask 077
+  LITELLM_HOST=your-proxy.example.com
+  # Both temp files and the cleanup exist BEFORE the key is accepted: an interruption between
+  # writing the credential and installing a trap would otherwise strand it.
+  KEIKO_HDR="$(mktemp)"; KEIKO_BODY="$(mktemp)"
+  trap 'rm -f "$KEIKO_HDR" "$KEIKO_BODY"' EXIT
+  trap 'rm -f "$KEIKO_HDR" "$KEIKO_BODY"; exit 130' INT TERM
+  read -rs -p 'Paste gateway key (not echoed): ' KEY; echo
+  printf 'Authorization: Bearer %s\n' "$KEY" > "$KEIKO_HDR"; unset KEY
+  # The body goes to a temp file so a TRANSPORT failure surfaces as a curl error (and a non-zero
+  # exit) instead of reaching node as empty input and being reported as a parse failure. A
+  # non-JSON body (HTML error page, plaintext provider diagnostic) is never echoed: the parse
+  # failure prints a fixed, body-free message instead of the offending content.
+  curl -sS -o "$KEIKO_BODY" -H @"$KEIKO_HDR" "https://$LITELLM_HOST/v1/models" &&
+    node -e 'const d=require("node:fs").readFileSync(process.argv[1],"utf8");try{console.log(JSON.parse(d).data.length);}catch{console.log("unreadable response (not a JSON model list)");}' "$KEIKO_BODY"
+)
 ```
 
 The cap is KEIKO's own discovery bound (MAX_DISCOVERED_MODELS), applied AFTER the response
