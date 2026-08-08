@@ -423,6 +423,18 @@ function htmlCommentContextLine(line, state) {
   return true;
 }
 
+// Blockquotes AND list items share the paragraph-continuation rule: a non-blank line directly
+// after them still renders inside the container (lazy continuation), so an instructional
+// "- To approve, use:" list can never smuggle the marker (review finding on #3037). Only a
+// blank line ends the container.
+function containerContextLine(line, state) {
+  if (line.startsWith(">") || /^(?:[-*+]|\d{1,9}[.)])\s/u.test(line) || state.inContainer) {
+    state.inContainer = true;
+    return true;
+  }
+  return false;
+}
+
 function approvalContextLine(rawLine, state) {
   const line = rawLine.trim();
   const delimiter = fenceDelimiter(line);
@@ -442,14 +454,7 @@ function approvalContextLine(rawLine, state) {
     state.openFence = delimiter;
     return true;
   }
-  // Blockquotes AND list items share the paragraph-continuation rule: a non-blank line directly
-  // after them still renders inside the container (lazy continuation), so an instructional
-  // "- To approve, use:" list can never smuggle the marker (review finding on #3037). Only a
-  // blank line ends the container.
-  if (line.startsWith(">") || /^(?:[-*+]|\d{1,9}[.)])\s/u.test(line) || state.inContainer) {
-    state.inContainer = true;
-    return true;
-  }
+  if (containerContextLine(line, state)) return true;
   return false;
 }
 
