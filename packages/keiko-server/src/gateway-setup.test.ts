@@ -2969,7 +2969,7 @@ describe("handleGatewaySetup", () => {
 
     // Persisted credentials live in the vault, so token assertions go through the loaded
     // configuration exactly like the other rotation tests in this file.
-    const savedOcr = (): ReadonlyMap<string, { kind?: string; apiKey?: string }> => {
+    const savedOcr = (): ReadonlyMap<string, { kind: string | undefined; apiKey: string }> => {
       const config = currentGatewayConfig(deps);
       return new Map(
         (config?.providers ?? []).map((provider) => [
