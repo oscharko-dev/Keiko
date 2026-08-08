@@ -3,6 +3,7 @@
 import {
   useEffect,
   useId,
+  useCallback,
   useRef,
   useState,
   type ClipboardEvent,
@@ -17,7 +18,13 @@ import {
   selectSpeechOutputCapability,
 } from "@oscharko-dev/keiko-contracts";
 import { ApiError, setupGateway, type GatewaySetupInput } from "@/lib/api";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { useTranslate, type MessageValues } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n-messages.en";
+import {
+  OPTIONAL_WIDGET_EN_MESSAGES,
+  type OptionalWidgetMessageKey,
+} from "@/lib/i18n-messages.optional.en";
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import type { ModelCapability, VoiceProviderLocality } from "@/lib/types";
 import { Icons } from "../Icons";
 import KeikoSelect from "../KeikoSelect";
@@ -25,6 +32,30 @@ import { useTheme } from "../hooks/useTheme";
 import { NATIVE_BLOCK_STYLE } from "../native-element-styles";
 import { notifyGatewayConfigUpdated } from "../widgets/shared/gatewaySetupBus";
 import styles from "./GatewaySetupDialog.module.css";
+
+/**
+ * The dialog is loaded only through next/dynamic boundaries, so its own copy lives in the
+ * lazily-loaded optional widget catalog (initial-page gzip ceiling, ADR-0042 D3.6) while a
+ * handful of shared keys (common.*, rail.*) stay in the eager catalog. This translator serves
+ * both: membership in the optional EN catalog — the key source of truth for both locales —
+ * decides the route, so no prefix guessing and no double bookkeeping at the call sites.
+ */
+type GatewaySetupTranslate = (
+  key: MessageKey | OptionalWidgetMessageKey,
+  values?: MessageValues,
+) => string;
+
+function useGatewaySetupTranslate(): GatewaySetupTranslate {
+  const tGlobal = useTranslate();
+  const tOptional = useOptionalWidgetTranslate();
+  return useCallback(
+    (key: MessageKey | OptionalWidgetMessageKey, values?: MessageValues): string =>
+      key in OPTIONAL_WIDGET_EN_MESSAGES
+        ? tOptional(key as OptionalWidgetMessageKey, values)
+        : tGlobal(key as MessageKey, values),
+    [tGlobal, tOptional],
+  );
+}
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CubeIcon = Icons.cube;
@@ -179,7 +210,7 @@ function voiceCapabilitySelected(
 }
 
 function voiceCapabilityStatus(
-  t: I18nTranslate,
+  t: GatewaySetupTranslate,
   replacementModelId: string,
   preserveExisting: boolean,
   storedModels: readonly ModelCapability[],
@@ -523,7 +554,7 @@ interface GatewayFormFields {
 
 function endpointMigrationValidationError(
   fields: GatewayFormFields,
-  t: I18nTranslate,
+  t: GatewaySetupTranslate,
 ): string | undefined {
   if (!fields.preserveExisting || !fields.hasStoredVoiceProvider) return undefined;
   if (fields.voiceBaseUrl.trim() === "") return undefined;
@@ -597,21 +628,27 @@ function voiceCredentialFieldsForMode(
   });
 }
 
-function figmaOnlyMessage(t: I18nTranslate, mode: GatewaySuccessMode): string {
+function figmaOnlyMessage(t: GatewaySetupTranslate, mode: GatewaySuccessMode): string {
   if (mode === "voice") {
     return t("gatewaySetup.voice.success.audioAndFigma");
   }
   return "Verified Figma access token. Reloading Keiko…";
 }
 
-function figmaAndGatewaySettingsMessage(t: I18nTranslate, mode: GatewaySuccessMode): string {
+function figmaAndGatewaySettingsMessage(
+  t: GatewaySetupTranslate,
+  mode: GatewaySuccessMode,
+): string {
   if (mode === "voice") {
     return t("gatewaySetup.voice.success.gatewayAudioAndFigma");
   }
   return "Updated model gateway settings and verified Figma access token. Reloading Keiko…";
 }
 
-function noFigmaNoGatewayCredentialsMessage(t: I18nTranslate, mode: GatewaySuccessMode): string {
+function noFigmaNoGatewayCredentialsMessage(
+  t: GatewaySetupTranslate,
+  mode: GatewaySuccessMode,
+): string {
   if (mode === "voice") {
     return t("gatewaySetup.voice.success.audio");
   }
@@ -619,7 +656,7 @@ function noFigmaNoGatewayCredentialsMessage(t: I18nTranslate, mode: GatewaySucce
 }
 
 function figmaAndVerifiedModelsMessage(
-  t: I18nTranslate,
+  t: GatewaySetupTranslate,
   mode: GatewaySuccessMode,
   verifiedModelSummary: string,
   skippedSummary: string,
@@ -634,7 +671,7 @@ function figmaAndVerifiedModelsMessage(
 }
 
 function verifiedModelsMessage(
-  t: I18nTranslate,
+  t: GatewaySetupTranslate,
   mode: GatewaySuccessMode,
   verifiedModelSummary: string,
   skippedSummary: string,
@@ -649,7 +686,7 @@ function verifiedModelsMessage(
 }
 
 interface ResolveSuccessMessageInput {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly submittedFigmaCredential: boolean;
   readonly submittedGatewaySettings: boolean;
   readonly submittedGatewayCredentials: boolean;
@@ -689,7 +726,7 @@ type GatewaySubmissionOutcome =
 
 async function performGatewaySubmission(
   fields: GatewayFormFields,
-  t: I18nTranslate,
+  t: GatewaySetupTranslate,
 ): Promise<GatewaySubmissionOutcome> {
   const parsedDeploymentNames = deploymentNamesFromInput(fields.deploymentNames);
   const foundryError = validateFoundryDeploymentNames(fields.baseUrl, parsedDeploymentNames);
@@ -989,7 +1026,7 @@ function GatewayImageInputModelsField({
 }
 
 interface GatewayWorkflowEligibleModelsFieldProps extends GatewayImageInputModelsFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
 }
 
 function GatewayWorkflowEligibleModelsField({
@@ -1017,7 +1054,7 @@ function GatewayWorkflowEligibleModelsField({
 }
 
 interface GatewayFieldsSectionProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
   readonly busy: boolean;
   readonly success: string | undefined;
@@ -1181,7 +1218,7 @@ function GatewayModelSection({
 }
 
 interface VoiceGuidanceNoteProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
   readonly storedModels: readonly ModelCapability[];
   readonly voiceModelId: string;
@@ -1229,7 +1266,7 @@ function VoiceGuidanceNote({
 }
 
 interface VoiceDictateDeploymentFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly value: string;
   readonly disabled: boolean;
   readonly onChange: Dispatch<SetStateAction<string>>;
@@ -1260,7 +1297,7 @@ function VoiceDictateDeploymentField({
 }
 
 interface VoiceRealtimeDeploymentFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly value: string;
   readonly disabled: boolean;
   readonly onChange: Dispatch<SetStateAction<string>>;
@@ -1326,7 +1363,7 @@ function VoiceRealtimeTranscriptionDeploymentField({
 }
 
 interface VoiceSpeechOutputDeploymentFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly value: string;
   readonly disabled: boolean;
   readonly onChange: Dispatch<SetStateAction<string>>;
@@ -1360,7 +1397,7 @@ function VoiceSpeechOutputDeploymentField({
 }
 
 interface VoiceOutputVoiceFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly value: string;
   readonly disabled: boolean;
   readonly onChange: Dispatch<SetStateAction<string>>;
@@ -1426,7 +1463,7 @@ function VoiceProviderLocalityField({
 }
 
 interface VoiceEndpointUrlFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
   readonly value: string;
   readonly disabled: boolean;
@@ -1468,7 +1505,7 @@ function VoiceEndpointUrlField({
 }
 
 interface VoiceCredentialFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
   readonly value: string;
   readonly disabled: boolean;
@@ -1508,7 +1545,7 @@ function VoiceCredentialField({
 }
 
 interface VoiceAuthHeaderFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
   readonly value: string;
   readonly disabled: boolean;
@@ -1542,7 +1579,7 @@ function VoiceAuthHeaderField({
 }
 
 interface VoiceTimeoutFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
   readonly value: string;
   readonly disabled: boolean;
@@ -1577,7 +1614,7 @@ function VoiceTimeoutField({
 }
 
 interface VoiceDeploymentFieldsProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
   readonly storedModels: readonly ModelCapability[];
   readonly voiceModelId: string;
@@ -1601,7 +1638,7 @@ interface VoiceDeploymentFieldsProps {
 }
 
 interface VoiceSemanticTurnDetectionFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly checked: boolean;
   readonly disabled: boolean;
   readonly onChange: (enabled: boolean) => void;
@@ -1693,7 +1730,7 @@ function VoiceDeploymentFields(props: VoiceDeploymentFieldsProps): ReactNode {
 }
 
 interface VoiceConnectionFieldsProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
   readonly voiceBaseUrl: string;
   readonly setVoiceBaseUrl: Dispatch<SetStateAction<string>>;
@@ -1744,7 +1781,7 @@ function VoiceConnectionFields(props: VoiceConnectionFieldsProps): ReactNode {
 }
 
 interface VoiceFieldsSectionProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly busy: boolean;
   readonly success: string | undefined;
   readonly preserveExisting: boolean;
@@ -1823,7 +1860,7 @@ function VoiceFieldsSection(props: VoiceFieldsSectionProps): ReactNode {
 }
 
 interface VoiceStoredCredentialsProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly voiceModelNames: readonly string[];
   readonly fields: ReactNode;
 }
@@ -1862,7 +1899,7 @@ function VoiceStoredCredentials({
 }
 
 interface VoiceModelSectionProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
   readonly voiceModelNames: readonly string[];
   readonly fields: ReactNode;
@@ -2023,7 +2060,7 @@ export function GatewaySetupDialog({
   readonly storedApiKeyHeaderName?: string | undefined;
   readonly storedModels?: readonly ModelCapability[] | undefined;
 }): ReactNode {
-  const t = useTranslate();
+  const t = useGatewaySetupTranslate();
   const { theme, toggle: toggleTheme } = useTheme();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const voiceProviderLocalityLabelId = useId();
