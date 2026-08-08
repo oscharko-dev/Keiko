@@ -200,15 +200,25 @@ function validatePublishApprovalReference(review, index, failures) {
   if (process.env.KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE !== "1") return;
   const reference = review.approvalReference;
   const parsed = parseGithubReviewReference(reference);
-  if (parsed === undefined) {
-    failures.push(
-      failure(
-        `entries[${String(index)}].review.approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> for publish.`,
-      ),
-    );
+  if (parsed !== undefined) {
+    validateGithubReviewApproval(parsed, index, failures);
     return;
   }
-  validateGithubReviewApproval(parsed, index, failures);
+  // Owner-directed second evidence form (2026-08-08): GitHub refuses self-approval of one's own
+  // pull requests, so a solo release owner can never mint the pr-review artifact. The
+  // issue-comment form keeps the gate's intent — a durable, GitHub-verified approval artifact by
+  // an allowed release owner — and is held to the same strictness: verified through the GitHub
+  // API, author allow-listed, and bound to the exact package version by a literal phrase.
+  const comment = parseGithubIssueCommentReference(reference);
+  if (comment !== undefined) {
+    validateGithubIssueCommentApproval(comment, index, failures);
+    return;
+  }
+  failures.push(
+    failure(
+      `entries[${String(index)}].review.approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> or github-issue-comment:<owner>/<repo>#<issue>#<comment> for publish.`,
+    ),
+  );
 }
 
 function parseGithubReviewReference(reference) {
@@ -219,6 +229,79 @@ function parseGithubReviewReference(reference) {
     pullRequest: match[2],
     review: match[3],
   };
+}
+
+function parseGithubIssueCommentReference(reference) {
+  const match = /^github-issue-comment:([^#/\s]+\/[^#/\s]+)#(\d+)#(\d+)$/u.exec(reference);
+  if (match === null) return undefined;
+  return {
+    repository: match[1],
+    issue: match[2],
+    comment: match[3],
+  };
+}
+
+/** The literal, version-bound phrase an approval comment must carry. */
+function publishApprovalPhrase() {
+  const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+  return `Approved-for-publish: ${manifest.name}@${manifest.version}`;
+}
+
+function validateGithubIssueCommentApproval(reference, index, failures) {
+  const repository = currentRepository();
+  if (repository === undefined || reference.repository !== repository) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference must reference the current GitHub repository.`,
+      ),
+    );
+    return;
+  }
+  const comment = readGithubIssueComment(reference);
+  if (comment === undefined) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference could not be verified through GitHub.`,
+      ),
+    );
+    return;
+  }
+  validateGithubIssueCommentState(comment, reference, index, failures);
+}
+
+function validateGithubIssueCommentState(comment, reference, index, failures) {
+  const issueUrl = typeof comment.issue_url === "string" ? comment.issue_url : "";
+  if (!issueUrl.endsWith(`/issues/${reference.issue}`)) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference comment must belong to the referenced issue.`,
+      ),
+    );
+  }
+  const phrase = publishApprovalPhrase();
+  if (typeof comment.body !== "string" || !comment.body.includes(phrase)) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference comment must contain "${phrase}".`,
+      ),
+    );
+  }
+  const allowedLogins = allowedReleaseOwnerLogins();
+  if (allowedLogins.length === 0) {
+    failures.push(failure("KEIKO_RELEASE_OWNER_GITHUB_LOGINS must list allowed release owners."));
+    return;
+  }
+  if (!allowedLogins.includes(comment.user?.login)) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference comment author must be an allowed release owner.`,
+      ),
+    );
+  }
+}
+
+function readGithubIssueComment(reference) {
+  return readGithubResource(`repos/${reference.repository}/issues/comments/${reference.comment}`);
 }
 
 function validateGithubReviewApproval(reference, index, failures) {
@@ -264,7 +347,12 @@ function githubRepositoryFromRemote(remoteUrl) {
 }
 
 function readGithubReview(reference) {
-  const path = `repos/${reference.repository}/pulls/${reference.pullRequest}/reviews/${reference.review}`;
+  return readGithubResource(
+    `repos/${reference.repository}/pulls/${reference.pullRequest}/reviews/${reference.review}`,
+  );
+}
+
+function readGithubResource(path) {
   let executable;
   try {
     executable = resolveHostExecutable("gh");

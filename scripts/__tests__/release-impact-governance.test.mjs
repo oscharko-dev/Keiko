@@ -382,7 +382,7 @@ describe("release-impact governance", () => {
 
     expect(result.ok).toBe(false);
     expect(messages(result)).toContain(
-      "approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> for publish",
+      "approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> or github-issue-comment:<owner>/<repo>#<issue>#<comment> for publish",
     );
   });
 
@@ -395,6 +395,33 @@ describe("release-impact governance", () => {
               approvalReference: "github-pr-review:fake-owner/fake-repo#999999#888888",
               humanApproved: true,
               rationale: "Fake approval must not satisfy publish trust.",
+              reviewedAt: "2026-06-30",
+              reviewer: "release-owner",
+              status: "reviewed",
+            },
+          }),
+        ]),
+        rootManifest(),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(messages(result)).toContain(
+      "approvalReference must reference the current GitHub repository",
+    );
+  });
+
+  it("rejects issue-comment publish approvals outside the current repository", () => {
+    // The owner-directed second evidence form is held to the same strictness as the pr-review
+    // form: a comment in a foreign repository can never satisfy publish trust.
+    const result = withEnv("KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE", "1", () =>
+      validateReleaseImpactCatalog(
+        catalog([
+          entry({
+            review: {
+              approvalReference: "github-issue-comment:fake-owner/fake-repo#2802#123456",
+              humanApproved: true,
+              rationale: "Foreign comment approval must not satisfy publish trust.",
               reviewedAt: "2026-06-30",
               reviewer: "release-owner",
               status: "reviewed",

@@ -895,7 +895,7 @@
         "reviewer": "release-owner",
         "reviewedAt": "2026-08-07",
         "humanApproved": true,
-        "approvalReference": "github-pr-review:oscharko-dev/Keiko#PENDING#PENDING",
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5225214175",
         "rationale": "The maintainer explicitly commissioned the 0.3.0 release in the local session and directed the portable delivery scope (bundled Node.js and OpenCode sidecar for macOS and Windows). The entry covers the release-readiness audit programme tracked in epic #2802 and the implementation waves merged into dev. The approval reference is backfilled from the release owner's APPROVED review on the version-bump pull request before any publish gate consumes it."
       }
     },
