@@ -609,6 +609,8 @@ export interface GatewaySetupInput {
   readonly timeoutMs?: number | undefined;
   readonly deploymentNames?: readonly string[] | undefined;
   readonly imageInputModelIds?: readonly string[] | undefined;
+  /** Embedding-kind ids a config upload asserts so a fresh setup never chat-probes them. */
+  readonly embeddingModelIds?: readonly string[] | undefined;
   readonly workflowEligibleModelIds?: readonly string[] | undefined;
   readonly voiceBaseUrl?: string | undefined;
   readonly voiceApiKey?: string | undefined;
@@ -622,6 +624,10 @@ export interface GatewaySetupInput {
   readonly voiceOutputVoiceId?: string | undefined;
   readonly voiceProviderLocality?: string | undefined;
   readonly voiceTimeoutMs?: number | undefined;
+  /** Voice endpoint protocol imported from a config upload, persisted verbatim (#3037). */
+  readonly voiceEndpointStyle?: string | undefined;
+  readonly voiceApiVersion?: string | undefined;
+  readonly voiceRealtimeAuthMode?: string | undefined;
   readonly figmaAccessToken?: string | undefined;
   readonly preserveExisting?: boolean | undefined;
 }

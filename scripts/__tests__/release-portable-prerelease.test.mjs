@@ -243,8 +243,8 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     // BOTH macOS seals were verified on the darwin host before anything published, and the
     // release body names what was verified (review finding on #3037).
     expect(
-      recorded.filter((line) => line.includes("codesign --verify --deep --strict")).length,
-    ).toBe(2);
+      recorded.filter((line) => line.includes("codesign --verify --deep --strict")),
+    ).toHaveLength(2);
     const bodyLine = recorded.find((line) => line.startsWith("release-body: "));
     expect(bodyLine).toContain(
       "macOS seal verification: verified (keiko-macos-arm64.zip, keiko-macos-x64.zip).",
@@ -365,8 +365,8 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
     // Both bundles were extracted and judged — the x64 seal is evidence, not a bystander.
     expect(
-      recorded.filter((line) => line.includes("codesign --verify --deep --strict")).length,
-    ).toBe(2);
+      recorded.filter((line) => line.includes("codesign --verify --deep --strict")),
+    ).toHaveLength(2);
   });
 
   it("states the skipped seal verification out loud on a non-darwin host", () => {

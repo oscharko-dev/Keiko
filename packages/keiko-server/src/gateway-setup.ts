@@ -1640,6 +1640,9 @@ const VOICE_PROVIDER_STRING_FIELDS = [
   "voiceSpeechOutputModelId",
   "voiceOutputVoiceId",
   "voiceProviderLocality",
+  "voiceEndpointStyle",
+  "voiceApiVersion",
+  "voiceRealtimeAuthMode",
 ] as const;
 
 const VOICE_CONNECTION_MUTATION_FIELDS = [
@@ -1648,6 +1651,73 @@ const VOICE_CONNECTION_MUTATION_FIELDS = [
   "voiceApiKeyHeaderName",
   "voiceProviderLocality",
 ] as const;
+
+const VOICE_ENDPOINT_STYLES: readonly NonNullable<ModelProviderConfig["endpointStyle"]>[] = [
+  "openai-compatible",
+  "azure-openai-deployment",
+];
+
+const VOICE_REALTIME_AUTH_MODES: readonly NonNullable<ModelProviderConfig["realtimeAuthMode"]>[] = [
+  "api-key",
+  "ephemeral-session",
+];
+
+function parseVoiceEndpointEnum<T extends string>(
+  value: unknown,
+  field: string,
+  allowed: readonly T[],
+): SetupParseResult<T | undefined> {
+  if (value === undefined) {
+    return acceptedSetupValue(undefined);
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) return acceptedSetupValue(undefined);
+    if (allowed.includes(trimmed as T)) return acceptedSetupValue(trimmed as T);
+  }
+  return rejectedSetupValue({
+    status: 400,
+    body: errorBody("BAD_REQUEST", `${field} is not supported.`),
+  });
+}
+
+// The submitted endpoint protocol wins over any inherited template: a caller that states how the
+// endpoint speaks (e.g. an uploaded config with an Azure deployment-path voice endpoint) must not
+// have that declaration silently replaced by a stored provider's shape — and a fresh setup has no
+// template at all, so without these fields an Azure voice endpoint would be persisted as
+// OpenAI-compatible and every audio call would take the wrong URL shape. The style/apiVersion
+// pairing rule is enforced downstream by the parseGatewayConfig validation in
+// validateVoiceProviderConnection, which fails the whole setup closed.
+function submittedVoiceEndpointOptions(
+  raw: Record<string, unknown>,
+): SetupParseResult<VoiceProviderEndpointOptions | undefined> {
+  const endpointStyle = parseVoiceEndpointEnum(
+    raw.voiceEndpointStyle,
+    "voiceEndpointStyle",
+    VOICE_ENDPOINT_STYLES,
+  );
+  if (!endpointStyle.ok) return endpointStyle;
+  const realtimeAuthMode = parseVoiceEndpointEnum(
+    raw.voiceRealtimeAuthMode,
+    "voiceRealtimeAuthMode",
+    VOICE_REALTIME_AUTH_MODES,
+  );
+  if (!realtimeAuthMode.ok) return realtimeAuthMode;
+  const apiVersion = optionalSetupSecret(raw.voiceApiVersion, "voiceApiVersion");
+  if (!apiVersion.ok) return apiVersion;
+  if (
+    endpointStyle.value === undefined &&
+    apiVersion.value === undefined &&
+    realtimeAuthMode.value === undefined
+  ) {
+    return acceptedSetupValue(undefined);
+  }
+  return acceptedSetupValue({
+    ...(endpointStyle.value === undefined ? {} : { endpointStyle: endpointStyle.value }),
+    ...(apiVersion.value === undefined ? {} : { apiVersion: apiVersion.value }),
+    ...(realtimeAuthMode.value === undefined ? {} : { realtimeAuthMode: realtimeAuthMode.value }),
+  });
+}
 
 function hasVoiceProviderInput(raw: Record<string, unknown>): boolean {
   return (
@@ -2431,6 +2501,7 @@ function voiceProviderConnection(
   raw: Record<string, unknown>,
   defaults: SetupVoiceProviderDefaults,
   template: SetupVoiceProvider | undefined,
+  submittedEndpoint: VoiceProviderEndpointOptions | undefined,
 ): SetupVoiceProviderDefaults {
   const baseUrl = submittedOrTemplateString(
     raw,
@@ -2453,7 +2524,7 @@ function voiceProviderConnection(
     ),
     maxRetries: template?.maxRetries ?? defaults.maxRetries,
     retryBaseDelayMs: template?.retryBaseDelayMs ?? defaults.retryBaseDelayMs,
-    ...voiceConnectionEndpointOptions(baseUrl, template, defaults),
+    ...voiceConnectionEndpointOptions(baseUrl, template, defaults, submittedEndpoint),
     providerLocality: submittedOrTemplateValue(
       raw.voiceProviderLocality,
       template?.providerLocality,
@@ -2466,11 +2537,13 @@ function voiceConnectionEndpointOptions(
   baseUrl: string,
   template: SetupVoiceProvider | undefined,
   defaults: SetupVoiceProviderDefaults,
+  submitted: VoiceProviderEndpointOptions | undefined,
 ): VoiceProviderEndpointOptions {
-  if (template !== undefined && !sameBaseUrlIdentity(baseUrl, template.baseUrl)) {
-    return {};
-  }
-  return voiceProviderTemplateEndpoint(template, defaults);
+  const inherited =
+    template !== undefined && !sameBaseUrlIdentity(baseUrl, template.baseUrl)
+      ? {}
+      : voiceProviderTemplateEndpoint(template, defaults);
+  return { ...inherited, ...submitted };
 }
 
 function submittedOrTemplateString(
@@ -2590,10 +2663,11 @@ function providerForVoiceRoles(
   defaults: SetupVoiceProviderDefaults,
   raw: Record<string, unknown>,
   existingProviders: readonly SetupVoiceProvider[],
+  submittedEndpoint: VoiceProviderEndpointOptions | undefined,
 ): SetupVoiceProvider {
   const existing = existingProviders.find((provider) => provider.modelId === modelId);
   const template = voiceProviderTemplate(modelId, capabilities, existingProviders);
-  const connection = voiceProviderConnection(raw, defaults, template);
+  const connection = voiceProviderConnection(raw, defaults, template, submittedEndpoint);
   const capabilityTemplate =
     template !== undefined && sameBaseUrlIdentity(connection.baseUrl, template.baseUrl)
       ? template
@@ -2619,6 +2693,7 @@ function providersForVoiceRoles(
   raw: Record<string, unknown>,
   supportsSemanticTurnDetection: boolean,
   existingProviders: readonly SetupVoiceProvider[],
+  submittedEndpoint: VoiceProviderEndpointOptions | undefined,
 ): readonly SetupVoiceProvider[] {
   return [...voiceCapabilitiesByModel(roleIds)].map(([modelId, capabilities]) =>
     providerForVoiceRoles(
@@ -2632,6 +2707,7 @@ function providersForVoiceRoles(
       defaults,
       raw,
       existingProviders,
+      submittedEndpoint,
     ),
   );
 }
@@ -2882,6 +2958,40 @@ function validatedVoiceProviders(
   return validateVoiceProviders(providers, env) ?? providers;
 }
 
+interface VoiceSetupOptions {
+  readonly apiKeyHeaderName: string;
+  readonly timeoutMs: number | undefined;
+  readonly providerLocality: VoiceProviderLocality;
+  readonly supportsSemanticTurnDetection: boolean;
+  readonly submittedEndpoint: VoiceProviderEndpointOptions | undefined;
+}
+
+function parsedVoiceSetupOptions(
+  raw: Record<string, unknown>,
+  existing: ModelProviderConfig | undefined,
+  existingCapability: ModelCapability | undefined,
+  current: GatewayConfig | undefined,
+  preserveExisting: boolean,
+): VoiceSetupOptions | RouteResult {
+  const apiKeyHeaderName = setupVoiceApiKeyHeaderName(raw, existing, preserveExisting);
+  const timeoutMs = optionalSetupPositiveInt(raw.voiceTimeoutMs, "voiceTimeoutMs");
+  const providerLocality = setupVoiceProviderLocality(raw, existingCapability);
+  const supportsSemanticTurnDetection = setupSemanticTurnDetection(raw, current, preserveExisting);
+  const submittedEndpoint = submittedVoiceEndpointOptions(raw);
+  if (!apiKeyHeaderName.ok) return apiKeyHeaderName.routeError;
+  if (!timeoutMs.ok) return timeoutMs.routeError;
+  if (!providerLocality.ok) return providerLocality.routeError;
+  if (!supportsSemanticTurnDetection.ok) return supportsSemanticTurnDetection.routeError;
+  if (!submittedEndpoint.ok) return submittedEndpoint.routeError;
+  return {
+    apiKeyHeaderName: apiKeyHeaderName.value,
+    timeoutMs: timeoutMs.value,
+    providerLocality: providerLocality.value,
+    supportsSemanticTurnDetection: supportsSemanticTurnDetection.value,
+    submittedEndpoint: submittedEndpoint.value,
+  };
+}
+
 function readSetupVoiceProviders(
   raw: Record<string, unknown>,
   env: EnvSource,
@@ -2897,14 +3007,14 @@ function readSetupVoiceProviders(
   const existingCapability = currentVoiceCapability(current, existing?.modelId);
   const roleIds = voiceRoleModelIds(raw, current, preserveExisting, correlationId);
   const connection = setupVoiceConnection(raw, existing, preserveExisting);
-  const apiKeyHeaderName = setupVoiceApiKeyHeaderName(raw, existing, preserveExisting);
-  const timeoutMs = optionalSetupPositiveInt(raw.voiceTimeoutMs, "voiceTimeoutMs");
-  const providerLocality = setupVoiceProviderLocality(raw, existingCapability);
-  const supportsSemanticTurnDetection = setupSemanticTurnDetection(raw, current, preserveExisting);
-  if (!apiKeyHeaderName.ok) return apiKeyHeaderName.routeError;
-  if (!timeoutMs.ok) return timeoutMs.routeError;
-  if (!providerLocality.ok) return providerLocality.routeError;
-  if (!supportsSemanticTurnDetection.ok) return supportsSemanticTurnDetection.routeError;
+  const options = parsedVoiceSetupOptions(
+    raw,
+    existing,
+    existingCapability,
+    current,
+    preserveExisting,
+  );
+  if (isRouteResult(options)) return options;
   const routeError = firstRouteResult([
     validateVoiceEndpointUpdate(raw, current, preserveExisting, correlationId),
     validateVoiceConnectionUpdate(raw, current, preserveExisting, correlationId),
@@ -2916,17 +3026,18 @@ function readSetupVoiceProviders(
   }
   const defaults = setupVoiceProviderDefaults(
     connection as { readonly baseUrl: string; readonly apiKey: string },
-    apiKeyHeaderName.value,
-    timeoutMs.value,
-    providerLocality.value,
+    options.apiKeyHeaderName,
+    options.timeoutMs,
+    options.providerLocality,
     existing,
   );
   const generatedProviders = providersForVoiceRoles(
     roleIds as VoiceRoleModelIds,
     defaults,
     raw,
-    supportsSemanticTurnDetection.value,
+    options.supportsSemanticTurnDetection,
     existingVoiceProviders,
+    options.submittedEndpoint,
   );
   const providers = mergeUntouchedVoiceProviders(generatedProviders, existingVoiceProviders, raw);
   return validatedVoiceProviders(providers, env);
@@ -3040,6 +3151,32 @@ interface SetupRequestAssembly {
   readonly voiceProviders: readonly SetupVoiceProvider[];
 }
 
+// Verbatim restoration applies only to INHERITED deployments: an explicitly submitted
+// deployment list is authoritative, and restoring an omitted provider would make it
+// impossible to remove through the setup (review findings on #3031). Stored voice deployments
+// never belong in the chat probe either: a succeeding probe would persist a DUPLICATE provider
+// next to the restored voice entry.
+function storedRestoreListsForSetup(
+  input: SetupRequestAssembly,
+): Pick<
+  SetupRequest,
+  | "storedEmbeddingModelIds"
+  | "storedOcrModelIds"
+  | "storedDedicatedEmbeddingModelIds"
+  | "storedVoiceModelIds"
+> {
+  const inheritedDeployments =
+    input.preserveExisting && !hasNonEmptyListField(input.raw, "deploymentNames");
+  return {
+    storedEmbeddingModelIds: input.preserveExisting ? currentEmbeddingModelIds(input.current) : [],
+    storedOcrModelIds: inheritedDeployments ? currentOcrModelIds(input.current) : [],
+    storedDedicatedEmbeddingModelIds: inheritedDeployments
+      ? currentDedicatedEmbeddingModelIds(input.current)
+      : [],
+    storedVoiceModelIds: inheritedDeployments ? currentVoiceModelIds(input.current) : [],
+  };
+}
+
 function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | RouteResult {
   const voiceModelIdError = validateVoiceModelIdSeparation(
     input.voiceProviders,
@@ -3056,25 +3193,8 @@ function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | Route
     deploymentNames: resolved.deploymentNames,
     imageInputModelIds: resolved.imageInputModelIds,
     imageInputModelIdsProvided: hasListField(input.raw, "imageInputModelIds"),
-    storedEmbeddingModelIds: input.preserveExisting ? currentEmbeddingModelIds(input.current) : [],
     submittedEmbeddingModelIds: input.modelLists.embeddingModelIds ?? [],
-    // Verbatim restoration applies only to INHERITED deployments: an explicitly submitted
-    // deployment list is authoritative, and restoring an omitted provider would make it
-    // impossible to remove through the setup (review findings on #3031).
-    storedOcrModelIds:
-      input.preserveExisting && !hasNonEmptyListField(input.raw, "deploymentNames")
-        ? currentOcrModelIds(input.current)
-        : [],
-    storedDedicatedEmbeddingModelIds:
-      input.preserveExisting && !hasNonEmptyListField(input.raw, "deploymentNames")
-        ? currentDedicatedEmbeddingModelIds(input.current)
-        : [],
-    // Stored voice deployments never belong in the chat probe: a succeeding probe would persist
-    // a DUPLICATE provider next to the restored voice entry (review finding on #3031).
-    storedVoiceModelIds:
-      input.preserveExisting && !hasNonEmptyListField(input.raw, "deploymentNames")
-        ? currentVoiceModelIds(input.current)
-        : [],
+    ...storedRestoreListsForSetup(input),
     workflowEligibleModelIds: resolved.workflowEligibleModelIds,
     workflowEligibleModelIdsConfigured: hasListField(input.raw, "workflowEligibleModelIds"),
     voiceProviders: input.voiceProviders,
@@ -3394,34 +3514,54 @@ function finalRawConfigForSetup(
     ),
     input.current,
     [...input.storedOcrModelIds, ...input.storedDedicatedEmbeddingModelIds],
-    { baseUrl: input.baseUrl, apiKey: input.apiKey },
+    {
+      baseUrl: input.baseUrl,
+      apiKey: input.apiKey,
+      apiKeyHeaderName: input.apiKeyHeaderName,
+    },
+  );
+}
+
+// A provider that SHARED the stored gateway connection (same endpoint AND same credential)
+// follows a credential rotation — the old token dies with the rotation, and the token must keep
+// travelling in the header the rebuilt gateway providers now use, or the restored provider would
+// send the fresh credential through the obsolete header (review finding on #3037). A provider
+// with its own credential or endpoint keeps both: the freshly verified gateway connection details
+// must never travel to a connection they were not tested against (review findings on #3031, same
+// rule as the endpoint-change token guard).
+function sharesStoredGatewayConnection(
+  provider: ModelProviderConfig,
+  gatewayBaseUrl: string,
+  storedPrimary: ModelProviderConfig | undefined,
+): boolean {
+  return (
+    storedPrimary !== undefined &&
+    sameBaseUrlIdentity(provider.baseUrl, gatewayBaseUrl) &&
+    provider.apiKey === storedPrimary.apiKey &&
+    (provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME) ===
+      (storedPrimary.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME)
   );
 }
 
 function storedDedicatedProviderRaw(
   provider: ModelProviderConfig,
   capability: ModelCapability,
-  gateway: { readonly baseUrl: string; readonly apiKey: string },
+  gateway: { readonly baseUrl: string; readonly apiKey: string; readonly apiKeyHeaderName: string },
   storedPrimary: ModelProviderConfig | undefined,
 ): Record<string, unknown> {
-  // A provider that SHARED the stored gateway connection (same endpoint AND same credential)
-  // follows a credential rotation — the old token dies with the rotation. A provider with its
-  // own credential or endpoint keeps it: the freshly verified gateway token must never travel
-  // to a connection it was not tested against (review findings on #3031, same rule as the
-  // endpoint-change token guard).
-  const sharedGatewayConnection =
-    storedPrimary !== undefined &&
-    sameBaseUrlIdentity(provider.baseUrl, gateway.baseUrl) &&
-    provider.apiKey === storedPrimary.apiKey &&
-    (provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME) ===
-      (storedPrimary.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME);
+  const sharedGatewayConnection = sharesStoredGatewayConnection(
+    provider,
+    gateway.baseUrl,
+    storedPrimary,
+  );
+  const apiKeyHeaderName = sharedGatewayConnection
+    ? gateway.apiKeyHeaderName
+    : provider.apiKeyHeaderName;
   return {
     modelId: provider.modelId,
     baseUrl: provider.baseUrl,
     apiKey: sharedGatewayConnection ? gateway.apiKey : provider.apiKey,
-    ...(provider.apiKeyHeaderName === undefined
-      ? {}
-      : { apiKeyHeaderName: provider.apiKeyHeaderName }),
+    ...(apiKeyHeaderName === undefined ? {} : { apiKeyHeaderName }),
     ...(provider.endpointStyle === undefined ? {} : { endpointStyle: provider.endpointStyle }),
     ...(provider.apiVersion === undefined ? {} : { apiVersion: provider.apiVersion }),
     ...(provider.outputTokenParameter === undefined
@@ -3444,7 +3584,7 @@ function applyStoredDedicatedProviders(
   rawConfig: Record<string, unknown>,
   current: GatewayConfig | undefined,
   restoredModelIds: readonly string[],
-  gateway: { readonly baseUrl: string; readonly apiKey: string },
+  gateway: { readonly baseUrl: string; readonly apiKey: string; readonly apiKeyHeaderName: string },
 ): Record<string, unknown> {
   if (restoredModelIds.length === 0 || current === undefined) return rawConfig;
   const providers: unknown[] = Array.isArray(rawConfig.providers) ? rawConfig.providers : [];
@@ -3855,6 +3995,37 @@ function setupCandidateError(error: unknown): string {
   return bodyFreeVerificationFailure();
 }
 
+function withWorkflowEligibilityPatch(request: SetupRequest, config: GatewayConfig): GatewayConfig {
+  if (!request.workflowEligibleModelIdsConfigured) return config;
+  return {
+    ...config,
+    capabilities: listConfiguredCapabilities(config).map((capability) => ({
+      ...capability,
+      ...workflowCapabilityFields(
+        capability.id,
+        capability,
+        capability,
+        request.workflowEligibleModelIds,
+      ),
+    })),
+  };
+}
+
+// Image flags patch in place for clears and shrinks — only NEW image claims take the verified
+// rebuild (review findings on #3031/#3037). Same shape as the workflow-eligibility patch.
+function withImageFlagPatch(request: SetupRequest, config: GatewayConfig): GatewayConfig {
+  if (!request.imageInputModelIdsProvided) return config;
+  return {
+    ...config,
+    capabilities: listConfiguredCapabilities(config).map((capability) => ({
+      ...capability,
+      ...(capability.kind === "chat"
+        ? { supportsImageInput: request.imageInputModelIds.includes(capability.id) }
+        : {}),
+    })),
+  };
+}
+
 function saveExistingConfigUpdate(
   request: SetupRequest,
   current: GatewayConfig,
@@ -3863,33 +4034,10 @@ function saveExistingConfigUpdate(
 ): RouteResult {
   const workflowEligibilityError = validateWorkflowEligibleModelIds(request, current);
   if (workflowEligibilityError !== undefined) return workflowEligibilityError;
-  const withWorkflowPatch = request.workflowEligibleModelIdsConfigured
-    ? {
-        ...current,
-        capabilities: listConfiguredCapabilities(current).map((capability) => ({
-          ...capability,
-          ...workflowCapabilityFields(
-            capability.id,
-            capability,
-            capability,
-            request.workflowEligibleModelIds,
-          ),
-        })),
-      }
-    : current;
-  // Image flags patch in place for clears and shrinks — only NEW image claims take the verified
-  // rebuild (review findings on #3031/#3037). Same shape as the workflow-eligibility patch.
-  const updatedCurrent = request.imageInputModelIdsProvided
-    ? {
-        ...withWorkflowPatch,
-        capabilities: listConfiguredCapabilities(withWorkflowPatch).map((capability) => ({
-          ...capability,
-          ...(capability.kind === "chat"
-            ? { supportsImageInput: request.imageInputModelIds.includes(capability.id) }
-            : {}),
-        })),
-      }
-    : withWorkflowPatch;
+  const updatedCurrent = withImageFlagPatch(
+    request,
+    withWorkflowEligibilityPatch(request, current),
+  );
   const rawConfig = applyVoiceProviders(
     rawConfigFromCurrent(updatedCurrent, request.figmaAccessToken, request.timeoutMs),
     request.voiceProviders,

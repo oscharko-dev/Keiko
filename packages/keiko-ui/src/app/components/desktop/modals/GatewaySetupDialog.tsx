@@ -32,34 +32,16 @@ import { useTheme } from "../hooks/useTheme";
 import { NATIVE_BLOCK_STYLE } from "../native-element-styles";
 import dynamic from "next/dynamic";
 import { notifyGatewayConfigUpdated } from "../widgets/shared/gatewaySetupBus";
+import { DynamicChunkLoadFailure } from "../DynamicChunkLoadFailure";
 import type { GatewayConfigUploadFields } from "./gatewayConfigParsing";
 
-// A failed upload-chunk load must not make the feature silently disappear from an otherwise
-// working dialog — surface the redacted error and a retry (review finding on #3031).
-function GatewayConfigUploadLoadFailure({
-  error,
-  retry,
-}: {
-  readonly error?: Error | null | undefined;
-  readonly retry?: (() => void) | null | undefined;
-}): ReactNode {
-  const t = useTranslate();
-  if (!error) return null;
-  return (
-    <div role="alert">
-      {t("gatewaySetup.loading.error")}{" "}
-      <button type="button" onClick={retry ?? ((): void => window.location.reload())}>
-        {t("common.retry")}
-      </button>
-    </div>
-  );
-}
-
 // The upload path (control + fail-closed parser) is not first-paint-critical: loading it as its
-// own chunk keeps the setup page inside the static-export first-load budget (bundle gate).
+// own chunk keeps the setup page inside the static-export first-load budget (bundle gate). A
+// failed upload-chunk load must not make the feature silently disappear from an otherwise
+// working dialog — the shared fallback surfaces the redacted error and a retry (#3031).
 const GatewayConfigUpload = dynamic(
   () => import("./GatewayConfigUpload").then((mod) => mod.GatewayConfigUpload),
-  { ssr: false, loading: GatewayConfigUploadLoadFailure },
+  { ssr: false, loading: DynamicChunkLoadFailure },
 );
 import styles from "./GatewaySetupDialog.module.css";
 
@@ -579,6 +561,10 @@ interface GatewayFormFields {
   readonly voiceProviderLocality: VoiceProviderLocality;
   readonly voiceProviderLocalityConfigured: boolean;
   readonly voiceTimeoutMs: string;
+  /** Voice endpoint protocol imported from a config upload (empty = nothing imported). */
+  readonly importedVoiceEndpointStyle: string;
+  readonly importedVoiceApiVersion: string;
+  readonly importedVoiceRealtimeAuthMode: string;
   readonly figmaAccessToken: string;
   readonly preserveExisting: boolean;
   readonly hasStoredVoiceProvider: boolean;
@@ -609,6 +595,23 @@ function realtimeTranscriptionRequired(fields: GatewayFormFields): boolean {
   return submittedRealtime !== fields.storedRealtimeModelId;
 }
 
+// The imported endpoint protocol rides only on a submit that actually carries the imported voice
+// connection — sending it alone would activate the server's voice path with no voice fields.
+function importedVoiceEndpointPayload(fields: GatewayFormFields): Partial<GatewaySetupInput> {
+  if (fields.voiceBaseUrl.trim() === "") return {};
+  return {
+    ...(fields.importedVoiceEndpointStyle === ""
+      ? {}
+      : { voiceEndpointStyle: fields.importedVoiceEndpointStyle }),
+    ...(fields.importedVoiceApiVersion === ""
+      ? {}
+      : { voiceApiVersion: fields.importedVoiceApiVersion }),
+    ...(fields.importedVoiceRealtimeAuthMode === ""
+      ? {}
+      : { voiceRealtimeAuthMode: fields.importedVoiceRealtimeAuthMode }),
+  };
+}
+
 function buildSetupGatewayPayload(
   fields: GatewayFormFields,
   derived: DerivedSubmitFields,
@@ -627,6 +630,7 @@ function buildSetupGatewayPayload(
     ...(fields.importedEmbeddingModelIds.length === 0
       ? {}
       : { embeddingModelIds: fields.importedEmbeddingModelIds }),
+    ...importedVoiceEndpointPayload(fields),
     ...(!fields.workflowEligibleModelIdsConfigured
       ? {}
       : { workflowEligibleModelIds: derived.parsedWorkflowEligibleModelIds }),
@@ -2116,6 +2120,9 @@ export function GatewaySetupDialog({
   );
   const [imageInputModelIdsConfigured, setImageInputModelIdsConfigured] = useState(false);
   const [importedEmbeddingModelIds, setImportedEmbeddingModelIds] = useState<readonly string[]>([]);
+  const [importedVoiceEndpointStyle, setImportedVoiceEndpointStyle] = useState("");
+  const [importedVoiceApiVersion, setImportedVoiceApiVersion] = useState("");
+  const [importedVoiceRealtimeAuthMode, setImportedVoiceRealtimeAuthMode] = useState("");
   const [uploadReadPending, setUploadReadPending] = useState(false);
   const [workflowEligibleModelIdsConfigured, setWorkflowEligibleModelIdsConfigured] =
     useState(false);
@@ -2407,6 +2414,19 @@ export function GatewaySetupDialog({
     if (fields.voiceSemanticTurnDetection !== undefined) {
       updateVoiceSemanticTurnDetection(fields.voiceSemanticTurnDetection);
     }
+    applyUploadedVoiceEndpoint(fields);
+  }
+
+  // The endpoint protocol rides along invisibly and is persisted verbatim by the setup route —
+  // without it a fresh save of an Azure speech endpoint loses its deployment URL shape (#3037).
+  function applyUploadedVoiceEndpoint(fields: GatewayConfigUploadFields): void {
+    if (fields.voiceEndpointStyle !== undefined) {
+      setImportedVoiceEndpointStyle(fields.voiceEndpointStyle);
+    }
+    if (fields.voiceApiVersion !== undefined) setImportedVoiceApiVersion(fields.voiceApiVersion);
+    if (fields.voiceRealtimeAuthMode !== undefined) {
+      setImportedVoiceRealtimeAuthMode(fields.voiceRealtimeAuthMode);
+    }
   }
 
   async function submit(event: FormSubmitEvent): Promise<void> {
@@ -2441,6 +2461,9 @@ export function GatewaySetupDialog({
           voiceRealtimeTranscriptionModelId,
           voiceSupportsSemanticTurnDetection,
           voiceSemanticTurnDetectionConfigured,
+          importedVoiceEndpointStyle,
+          importedVoiceApiVersion,
+          importedVoiceRealtimeAuthMode,
           voiceSpeechOutputModelId,
           voiceOutputVoiceId,
           voiceOutputVoiceIdConfigured,

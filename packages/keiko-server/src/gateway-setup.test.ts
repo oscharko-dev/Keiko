@@ -919,6 +919,10 @@ describe("handleGatewaySetup", () => {
     expect(JSON.stringify(hijacked.body)).toContain(
       "Replacing an audio endpoint requires a fresh audio credential.",
     );
+    const preserved = requiredGatewayConfig(deps);
+    expect(preserved.providers.find((provider) => provider.modelId === "keiko-stt")?.baseUrl).toBe(
+      "https://voice-gateway.example.com/openai/v1",
+    );
     deps.store.close();
   });
 
@@ -1063,6 +1067,103 @@ describe("handleGatewaySetup", () => {
         message: "Semantic turn detection requires a Realtime voice deployment.",
       },
     });
+    deps.store.close();
+  });
+
+  it("persists the submitted voice endpoint protocol on a fresh setup", async () => {
+    // A fresh save has no stored template, so without the explicit fields an Azure speech
+    // endpoint would be persisted shapeless and every audio call would take the
+    // OpenAI-compatible URL form instead of the deployment path (#3037).
+    const uiDir = await tempDir("keiko-gw-ui-voice-endpoint-style-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-endpoint-style-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "chat-token",
+        voiceBaseUrl: "https://speech.cognitiveservices.example.com",
+        voiceApiKey: "audio-token",
+        voiceSpeechToTextModelId: "transcribe-model",
+        voiceEndpointStyle: "azure-openai-deployment",
+        voiceApiVersion: "2025-03-01-preview",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const saved = requiredGatewayConfig(deps);
+    const voiceProvider = saved.providers.find(
+      (provider) => provider.modelId === "transcribe-model",
+    );
+    expect(voiceProvider?.endpointStyle).toBe("azure-openai-deployment");
+    expect(voiceProvider?.apiVersion).toBe("2025-03-01-preview");
+    deps.store.close();
+  });
+
+  it("rejects an unsupported voiceEndpointStyle instead of persisting it", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-voice-endpoint-bad-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-endpoint-bad-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "chat-token",
+        voiceBaseUrl: "https://speech.cognitiveservices.example.com",
+        voiceApiKey: "audio-token",
+        voiceSpeechToTextModelId: "transcribe-model",
+        voiceEndpointStyle: "soap-rpc",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({
+      error: { code: "BAD_REQUEST", message: "voiceEndpointStyle is not supported." },
+    });
+    deps.store.close();
+  });
+
+  it("fails closed when the submitted endpoint style demands an api version", async () => {
+    // The style/apiVersion pairing rule lives in the shared config parser; the setup path must
+    // surface it as a 400 instead of persisting a provider the gateway cannot call.
+    const uiDir = await tempDir("keiko-gw-ui-voice-endpoint-pair-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-endpoint-pair-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "chat-token",
+        voiceBaseUrl: "https://speech.cognitiveservices.example.com",
+        voiceApiKey: "audio-token",
+        voiceSpeechToTextModelId: "transcribe-model",
+        voiceEndpointStyle: "azure-openai-deployment",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toContain("apiVersion is required");
     deps.store.close();
   });
 
@@ -2896,7 +2997,7 @@ describe("handleGatewaySetup", () => {
     ]);
     expect(
       config?.capabilities?.every(
-        (capability) => capability.kind !== "chat" || capability.supportsImageInput === false,
+        (capability) => capability.kind !== "chat" || !capability.supportsImageInput,
       ),
     ).toBe(true);
     deps.store.close();
@@ -3147,6 +3248,31 @@ describe("handleGatewaySetup", () => {
     expect(savedOcr().get("scan-ocr")?.apiKey).toBe("example-rotated-token");
     expect(savedOcr().get("remote-ocr")?.apiKey).toBe("dedicated-ocr-token");
 
+    // Rotating the credential together with the authentication header must move BOTH onto the
+    // restored same-endpoint OCR provider — the fresh token in the obsolete header would break
+    // OCR after an otherwise successful save (review finding on #3037). The dedicated-endpoint
+    // OCR keeps its own header exactly like its own token.
+    const rotatedHeader = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        apiKey: "example-header-rotated-token",
+        apiKeyHeaderName: "x-litellm-key",
+      }),
+      deps,
+    );
+    expect(rotatedHeader.status).toBe(200);
+    const savedHeaders = new Map(
+      (currentGatewayConfig(deps)?.providers ?? []).map((provider) => [
+        provider.modelId,
+        { apiKey: provider.apiKey, apiKeyHeaderName: provider.apiKeyHeaderName },
+      ]),
+    );
+    expect(savedHeaders.get("scan-ocr")).toEqual({
+      apiKey: "example-header-rotated-token",
+      apiKeyHeaderName: "x-litellm-key",
+    });
+    expect(savedHeaders.get("remote-ocr")?.apiKeyHeaderName).not.toBe("x-litellm-key");
+
     // An explicitly submitted deployment list is authoritative: OCR restoration applies only to
     // inherited deployments, so omitting the OCR ids here REMOVES them (review finding on #3031).
     const replaced = await handleGatewaySetup(
@@ -3216,7 +3342,8 @@ describe("handleGatewaySetup", () => {
     const config = currentGatewayConfig(deps);
     expect(config?.reranker?.modelId).toBe("rerank-1");
     expect(config?.reranker?.apiKey).toBe("rerank-token");
-    expect(config?.egress?.httpProxy).toContain("proxy.example.com:3128");
+    // The parser normalizes the proxy URL (trailing slash) — pin the normalized value exactly.
+    expect(config?.egress?.httpProxy).toBe("http://proxy.example.com:3128/");
     const embedding = config?.providers.find(
       (provider) => provider.modelId === "own-key-embedding",
     );

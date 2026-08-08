@@ -118,6 +118,8 @@ describe("parseGatewayConfigUpload", () => {
             "keiko-tts",
             { supportsSpeechOutput: true },
             {
+              endpointStyle: "azure-openai-deployment",
+              apiVersion: "2025-03-01-preview",
               voiceProfiles: [
                 { persona: "male", voiceId: "alloy" },
                 { persona: "female", voiceId: "nova" },
@@ -160,6 +162,11 @@ describe("parseGatewayConfigUpload", () => {
       voiceTimeoutMs: "120000",
       voiceModelId: "keiko-stt",
       voiceSpeechOutputModelId: "keiko-tts",
+      // The speech pair's Azure deployment protocol imports verbatim; the SKIPPED realtime
+      // provider's realtimeAuthMode must not ride along (#3037).
+      voiceEndpointStyle: "azure-openai-deployment",
+      voiceApiVersion: "2025-03-01-preview",
+      voiceRealtimeAuthMode: undefined,
       // The realtime provider lives on a different connection than the speech pair; one submit
       // holds one voice connection, so it is skipped LOUDLY, never silently.
       voiceRealtimeModelId: undefined,
@@ -424,6 +431,74 @@ describe("parseGatewayConfigUpload", () => {
 
     expect(fields.voiceOutputVoiceId).toBe("nova");
     expect(fields.voiceProfilesReduced).toBe(false);
+  });
+
+  it("refuses a voice connection whose providers disagree on the endpoint protocol", () => {
+    // One submit carries ONE protocol per voice connection; importing would silently rewrite
+    // the provider that declared the other shape (#3037).
+    const mixed = JSON.stringify({
+      providers: [
+        providerFixture(),
+        voiceProviderFixture(
+          "keiko-stt",
+          { supportsSpeechInput: true },
+          { endpointStyle: "azure-openai-deployment", apiVersion: "2025-03-01-preview" },
+        ),
+        voiceProviderFixture("keiko-tts", { supportsSpeechOutput: true }),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(mixed)).toEqual({ outcome: "invalid" });
+  });
+
+  it("refuses an endpoint style the gateway does not speak", () => {
+    const unknownStyle = JSON.stringify({
+      providers: [
+        providerFixture(),
+        voiceProviderFixture(
+          "keiko-stt",
+          { supportsSpeechInput: true },
+          { endpointStyle: "soap-rpc" },
+        ),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(unknownStyle)).toEqual({ outcome: "invalid" });
+  });
+
+  it("refuses an api version outside the Azure deployment shape", () => {
+    // The canonical parser binds apiVersion to endpointStyle "azure-openai-deployment"; a file
+    // violating that pairing is one the product itself refuses to load.
+    const orphanVersion = JSON.stringify({
+      providers: [
+        providerFixture(),
+        voiceProviderFixture(
+          "keiko-stt",
+          { supportsSpeechInput: true },
+          { apiVersion: "2025-03-01-preview" },
+        ),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(orphanVersion)).toEqual({ outcome: "invalid" });
+  });
+
+  it("rejects voice profiles on a realtime-only provider", () => {
+    // The canonical gateway parser requires supportsSpeechOutput for a voiceProfiles block; a
+    // realtime-only carrier is a configuration the product rejects, so reporting upload success
+    // for it would hand the user a file the route cannot save (#3037).
+    const realtimeOnly = JSON.stringify({
+      providers: [
+        providerFixture(),
+        voiceProviderFixture(
+          "keiko-realtime",
+          { supportsRealtimeVoice: true },
+          { voiceProfiles: [{ persona: "neutral", voiceId: "ash" }] },
+        ),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(realtimeOnly)).toEqual({ outcome: "invalid" });
   });
 
   it("fills unclaimed speech roles from a multi-role realtime provider", () => {
