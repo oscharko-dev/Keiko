@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   validateReleaseImpactCatalog,
   validateReleaseImpactRoot,
+  withGithubResourceReader,
 } from "../check-release-impact.mjs";
 
 function rootManifest(overrides = {}) {
@@ -382,7 +383,7 @@ describe("release-impact governance", () => {
 
     expect(result.ok).toBe(false);
     expect(messages(result)).toContain(
-      "approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> for publish",
+      "approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> or github-issue-comment:<owner>/<repo>#<issue>#<comment> for publish",
     );
   });
 
@@ -409,6 +410,197 @@ describe("release-impact governance", () => {
     expect(messages(result)).toContain(
       "approvalReference must reference the current GitHub repository",
     );
+  });
+
+  it("rejects issue-comment publish approvals outside the current repository", () => {
+    // The owner-directed second evidence form is held to the same strictness as the pr-review
+    // form: a comment in a foreign repository can never satisfy publish trust.
+    const result = withEnv("KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE", "1", () =>
+      validateReleaseImpactCatalog(
+        catalog([
+          entry({
+            review: {
+              approvalReference: "github-issue-comment:fake-owner/fake-repo#2802#123456",
+              humanApproved: true,
+              rationale: "Foreign comment approval must not satisfy publish trust.",
+              reviewedAt: "2026-06-30",
+              reviewer: "release-owner",
+              status: "reviewed",
+            },
+          }),
+        ]),
+        rootManifest(),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(messages(result)).toContain(
+      "approvalReference must reference the current GitHub repository",
+    );
+  });
+
+  describe("issue-comment publish approvals (hermetic, injected GitHub reader)", () => {
+    const REFERENCE = "github-issue-comment:oscharko-dev/Keiko#2802#4242";
+
+    function commentEntry() {
+      return entry({
+        review: {
+          approvalReference: REFERENCE,
+          humanApproved: true,
+          rationale: "Owner-recorded issue-comment approval.",
+          reviewedAt: "2026-08-08",
+          reviewer: "release-owner",
+          status: "reviewed",
+        },
+      });
+    }
+
+    function approvalComment(overrides = {}) {
+      const manifest = rootManifest();
+      return {
+        issue_url: "https://api.github.com/repos/oscharko-dev/Keiko/issues/2802",
+        body: `Approved-for-publish: ${manifest.name}@${manifest.version}`,
+        user: { login: "release-owner-login" },
+        ...overrides,
+      };
+    }
+
+    function validateWith(comment) {
+      return withEnv("KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE", "1", () =>
+        withEnv("KEIKO_RELEASE_OWNER_GITHUB_LOGINS", "release-owner-login", () =>
+          withEnv("GITHUB_REPOSITORY", "oscharko-dev/Keiko", () =>
+            withGithubResourceReader(
+              () => comment,
+              () => validateReleaseImpactCatalog(catalog([commentEntry()]), rootManifest()),
+            ),
+          ),
+        ),
+      );
+    }
+
+    it("accepts a verified owner comment carrying the entry-bound approval phrase", () => {
+      const result = validateWith(approvalComment());
+
+      expect(messages(result)).not.toContain("approvalReference");
+    });
+
+    it("rejects a comment that belongs to a different issue", () => {
+      const result = validateWith(
+        approvalComment({
+          issue_url: "https://api.github.com/repos/oscharko-dev/Keiko/issues/999",
+        }),
+      );
+
+      expect(messages(result)).toContain(
+        "approvalReference comment must belong to the referenced issue",
+      );
+    });
+
+    it("rejects a comment without the entry-bound approval phrase", () => {
+      const result = validateWith(approvalComment({ body: "Looks good to me." }));
+
+      expect(messages(result)).toContain("approvalReference comment must carry");
+      // The demanded phrase binds to the exact entry under validation — package name AND version
+      // come from the record being approved, never from a second manifest read.
+      const manifest = rootManifest();
+      expect(messages(result)).toContain(
+        `Approved-for-publish: ${manifest.name}@${manifest.version}`,
+      );
+    });
+
+    it("rejects a comment authored outside the release-owner allow-list", () => {
+      const result = validateWith(approvalComment({ user: { login: "somebody-else" } }));
+
+      expect(messages(result)).toContain(
+        "approvalReference comment author must be an allowed release owner",
+      );
+    });
+
+    it("fails closed when the comment cannot be read from GitHub", () => {
+      const result = validateWith(undefined);
+
+      expect(messages(result)).toContain("approvalReference could not be verified through GitHub");
+    });
+
+    it("rejects a comment that only QUOTES the phrase inside a denial", () => {
+      // Review finding on #3028: a substring match would read "DO NOT use Approved-for-publish:
+      // ..." as an affirmative approval. The phrase must stand on a line of its own.
+      const manifest = rootManifest();
+      const denial = validateWith(
+        approvalComment({
+          body: `DO NOT use Approved-for-publish: ${manifest.name}@${manifest.version} yet.`,
+        }),
+      );
+      expect(messages(denial)).toContain("on a line of its own");
+
+      const inline = validateWith(
+        approvalComment({
+          body: `I think Approved-for-publish: ${manifest.name}@${manifest.version} applies.`,
+        }),
+      );
+      expect(messages(inline)).toContain("on a line of its own");
+    });
+
+    it("rejects one issue-comment artifact reused by two catalog records", () => {
+      // Review finding on #3028: copying an existing owner approval into a newly appended entry
+      // would smuggle unreviewed metadata past the gate.
+      const second = {
+        ...commentEntry(),
+        id: "2026-06-30-keiko-0.2.11-second-record",
+        defaultPatchNotes: false,
+      };
+      const result = withEnv("KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE", "1", () =>
+        withEnv("KEIKO_RELEASE_OWNER_GITHUB_LOGINS", "release-owner-login", () =>
+          withEnv("GITHUB_REPOSITORY", "oscharko-dev/Keiko", () =>
+            withGithubResourceReader(
+              () => approvalComment(),
+              () => validateReleaseImpactCatalog(catalog([commentEntry(), second]), rootManifest()),
+            ),
+          ),
+        ),
+      );
+
+      expect(messages(result)).toContain(
+        "one approval artifact cannot authorize two catalog records",
+      );
+    });
+
+    it("never re-fetches historical approvals for a past release", () => {
+      // Review finding on #3028: GitHub comments are mutable — a later edit or deletion of a
+      // historical approval must not brick every future publish of an append-only catalog. Only
+      // the release being published NOW is verified live.
+      const historical = {
+        ...commentEntry(),
+        id: "2026-05-01-keiko-0.2.9-historical-record",
+        packageVersion: "0.2.9",
+        releaseTag: "v0.2.9",
+        defaultPatchNotes: false,
+        review: {
+          ...commentEntry().review,
+          approvalReference: "github-issue-comment:oscharko-dev/Keiko#2802#9999",
+        },
+      };
+      const fetchedPaths = [];
+      const result = withEnv("KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE", "1", () =>
+        withEnv("KEIKO_RELEASE_OWNER_GITHUB_LOGINS", "release-owner-login", () =>
+          withEnv("GITHUB_REPOSITORY", "oscharko-dev/Keiko", () =>
+            withGithubResourceReader(
+              (path) => {
+                fetchedPaths.push(path);
+                return approvalComment();
+              },
+              () =>
+                validateReleaseImpactCatalog(catalog([commentEntry(), historical]), rootManifest()),
+            ),
+          ),
+        ),
+      );
+
+      expect(fetchedPaths.some((path) => path.includes("9999"))).toBe(false);
+      expect(messages(result)).not.toContain("9999");
+      // The CURRENT release's artifact was still verified live.
+      expect(fetchedPaths.some((path) => path.includes("4242"))).toBe(true);
+    });
   });
 
   it("requires exception metadata for critical or manual-review one-click updates", () => {

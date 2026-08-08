@@ -895,8 +895,8 @@
         "reviewer": "release-owner",
         "reviewedAt": "2026-08-07",
         "humanApproved": true,
-        "approvalReference": "github-pr-review:oscharko-dev/Keiko#PENDING#PENDING",
-        "rationale": "The maintainer explicitly commissioned the 0.3.0 release in the local session and directed the portable delivery scope (bundled Node.js and OpenCode sidecar for macOS and Windows). The entry covers the release-readiness audit programme tracked in epic #2802 and the implementation waves merged into dev. The approval reference is backfilled from the release owner's APPROVED review on the version-bump pull request before any publish gate consumes it."
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5225214175",
+        "rationale": "The maintainer explicitly commissioned the 0.3.0 release in the local session and directed the portable delivery scope (bundled Node.js and OpenCode sidecar for macOS and Windows). The entry covers the release-readiness audit programme tracked in epic #2802 and the implementation waves merged into dev. The approval evidence is the release owner's authored comment on the epic issue #2802 (comment 5225214175), carrying the version-bound phrase 'Approved-for-publish: @oscharko-dev/keiko@0.3.0' on a line of its own; the publish gate verifies the comment, its issue binding, the phrase, and the allow-listed author through the GitHub API (GitHub refuses self-approval of one's own pull request, so the solo owner cannot mint a PR-review artifact)."
       }
     },
     {

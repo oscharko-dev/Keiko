@@ -193,22 +193,49 @@ function validateReview(entry, index, failures) {
   if (review.status !== "reviewed" || review.humanApproved !== true) {
     failures.push(failure(`entries[${String(index)}] must have human release-owner review.`));
   }
-  validatePublishApprovalReference(review, index, failures);
+  validatePublishApprovalReference(entry, review, index, failures);
 }
 
-function validatePublishApprovalReference(review, index, failures) {
+/**
+ * Structural half of the approval evidence: every retained entry must carry a well-formed
+ * reference. The LIVE GitHub verification runs only for the release currently being published
+ * (see validateApprovalReferenceLive) — historical approvals are mutable GitHub artifacts, and a
+ * later edit or deletion must never brick every future publish of an append-only catalog
+ * (review finding on #3028).
+ */
+function validatePublishApprovalReference(entry, review, index, failures) {
   if (process.env.KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE !== "1") return;
   const reference = review.approvalReference;
-  const parsed = parseGithubReviewReference(reference);
-  if (parsed === undefined) {
+  if (
+    parseGithubReviewReference(reference) === undefined &&
+    parseGithubIssueCommentReference(reference) === undefined
+  ) {
     failures.push(
       failure(
-        `entries[${String(index)}].review.approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> for publish.`,
+        `entries[${String(index)}].review.approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> or github-issue-comment:<owner>/<repo>#<issue>#<comment> for publish.`,
       ),
     );
+  }
+}
+
+/** Live GitHub verification of the approval artifact for the release being published NOW. */
+function validateApprovalReferenceLive(entry, index, failures) {
+  if (process.env.KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE !== "1") return;
+  const reference = objectRecord(entry.review) ? entry.review.approvalReference : undefined;
+  const parsed = parseGithubReviewReference(reference);
+  if (parsed !== undefined) {
+    validateGithubReviewApproval(parsed, index, failures);
     return;
   }
-  validateGithubReviewApproval(parsed, index, failures);
+  // Owner-directed second evidence form (2026-08-08): GitHub refuses self-approval of one's own
+  // pull requests, so a solo release owner can never mint the pr-review artifact. The
+  // issue-comment form keeps the gate's intent — a durable, GitHub-verified approval artifact by
+  // an allowed release owner — and is held to the same strictness: verified through the GitHub
+  // API, author allow-listed, and bound to the exact package version by a literal phrase.
+  const comment = parseGithubIssueCommentReference(reference);
+  if (comment !== undefined) {
+    validateGithubIssueCommentApproval(entry, comment, index, failures);
+  }
 }
 
 function parseGithubReviewReference(reference) {
@@ -219,6 +246,88 @@ function parseGithubReviewReference(reference) {
     pullRequest: match[2],
     review: match[3],
   };
+}
+
+function parseGithubIssueCommentReference(reference) {
+  const match = /^github-issue-comment:([^#/\s]+\/[^#/\s]+)#(\d+)#(\d+)$/u.exec(reference);
+  if (match === null) return undefined;
+  return {
+    repository: match[1],
+    issue: match[2],
+    comment: match[3],
+  };
+}
+
+/**
+ * The literal, version-bound phrase an approval comment must carry. Derived from the catalog
+ * entry under validation — the record being approved — never re-read from disk, so the phrase can
+ * only ever bind to the exact package identity the gate is judging.
+ */
+function publishApprovalPhrase(entry) {
+  return `Approved-for-publish: ${String(entry.packageName)}@${String(entry.packageVersion)}`;
+}
+
+function validateGithubIssueCommentApproval(entry, reference, index, failures) {
+  const repository = currentRepository();
+  if (repository === undefined || reference.repository !== repository) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference must reference the current GitHub repository.`,
+      ),
+    );
+    return;
+  }
+  const comment = readGithubIssueComment(reference);
+  if (comment === undefined) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference could not be verified through GitHub.`,
+      ),
+    );
+    return;
+  }
+  validateGithubIssueCommentState(entry, comment, reference, index, failures);
+}
+
+function validateGithubIssueCommentState(entry, comment, reference, index, failures) {
+  const issueUrl = typeof comment.issue_url === "string" ? comment.issue_url : "";
+  if (!issueUrl.endsWith(`/issues/${reference.issue}`)) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference comment must belong to the referenced issue.`,
+      ),
+    );
+  }
+  const phrase = publishApprovalPhrase(entry);
+  // The phrase must stand on a line of its own: a substring match would accept a comment that
+  // QUOTES the marker in a denial ("DO NOT use Approved-for-publish: ...") as an affirmative
+  // approval (review finding on #3028).
+  const standsAlone =
+    typeof comment.body === "string" &&
+    comment.body.split("\n").some((line) => line.trim() === phrase);
+  if (!standsAlone) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference comment must carry "${phrase}" on a line of its own.`,
+      ),
+    );
+  }
+  const allowedLogins = allowedReleaseOwnerLogins();
+  if (allowedLogins.length === 0) {
+    failures.push(failure("KEIKO_RELEASE_OWNER_GITHUB_LOGINS must list allowed release owners."));
+    return;
+  }
+  if (!allowedLogins.includes(comment.user?.login)) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference comment author must be an allowed release owner.`,
+      ),
+    );
+  }
+}
+
+function readGithubIssueComment(reference) {
+  return readGithubResource(`repos/${reference.repository}/issues/comments/${reference.comment}`);
 }
 
 function validateGithubReviewApproval(reference, index, failures) {
@@ -264,7 +373,29 @@ function githubRepositoryFromRemote(remoteUrl) {
 }
 
 function readGithubReview(reference) {
-  const path = `repos/${reference.repository}/pulls/${reference.pullRequest}/reviews/${reference.review}`;
+  return readGithubResource(
+    `repos/${reference.repository}/pulls/${reference.pullRequest}/reviews/${reference.review}`,
+  );
+}
+
+let githubResourceReader = readGithubResourceFromHost;
+
+/** Test seam: swap the GitHub reader for a callback's duration, always restoring it. */
+export function withGithubResourceReader(reader, callback) {
+  const previous = githubResourceReader;
+  githubResourceReader = reader;
+  try {
+    return callback();
+  } finally {
+    githubResourceReader = previous;
+  }
+}
+
+function readGithubResource(path) {
+  return githubResourceReader(path);
+}
+
+function readGithubResourceFromHost(path) {
   let executable;
   try {
     executable = resolveHostExecutable("gh");
@@ -524,11 +655,35 @@ function validateCatalogShape(catalog, failures) {
 function validateDuplicates(entries, failures) {
   const ids = new Set();
   const defaultNotes = new Map();
+  const approvalReferences = new Map();
   for (const [index, entry] of entries.entries()) {
     if (!objectRecord(entry)) continue;
     recordUniqueId(entry, index, ids, failures);
     recordDefaultPatchNotes(entry, index, defaultNotes, failures);
+    recordUniqueApprovalReference(entry, index, approvalReferences, failures);
   }
+}
+
+/**
+ * One issue-comment approval artifact authorizes exactly one catalog record: copying an existing
+ * owner comment reference into a newly appended entry would smuggle unreviewed metadata past the
+ * publish gate (review finding on #3028). Scoped to the issue-comment form deliberately —
+ * unchanged staging contracts reuse their historical PR-review reference across versions by
+ * documented practice (see the 0.3.0 staging-contract entry's rationale).
+ */
+function recordUniqueApprovalReference(entry, index, approvalReferences, failures) {
+  const reference = objectRecord(entry.review) ? entry.review.approvalReference : undefined;
+  if (!nonEmptyString(reference) || !reference.startsWith("github-issue-comment:")) return;
+  const previous = approvalReferences.get(reference);
+  if (previous !== undefined) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference duplicates entries[${String(previous)}] — one approval artifact cannot authorize two catalog records.`,
+      ),
+    );
+    return;
+  }
+  approvalReferences.set(reference, index);
 }
 
 function validateCorrectionReferences(entries, failures) {
@@ -627,9 +782,11 @@ function validateCurrentPackage(catalog, rootManifest, failures) {
     );
     return;
   }
-  for (const entry of current) {
+  catalog.entries.forEach((entry, index) => {
+    if (!currentPackageEntry(entry, rootManifest)) return;
     validateCurrentEntry(entry, rootManifest, failures);
-  }
+    validateApprovalReferenceLive(entry, index, failures);
+  });
 }
 
 // Stable versions publish under the latest dist-tag; prerelease versions (semver with a
