@@ -187,14 +187,19 @@ describe("hermetic end-to-end (scripted gh double)", () => {
   }
 
   // Default git-ref answers: the atomic tag POST succeeds (the ref did not exist), and a tag-ref
-  // lookup 404s — so every pre-existing scenario keeps meaning what it meant before the ref
-  // handling existed. Conflict scenarios override via `failures`/`answers` (#3037).
+  // lookup finds the tag at the built commit — the publication-boundary recheck runs on EVERY
+  // publish, so the default mirrors what ensureTagRefAtBuiltCommit just guaranteed. Moved-tag
+  // and vanished-tag scenarios override via `failures`/`answers` (#3037).
   function defaultGhRefAnswer(joined) {
     if (joined.startsWith("api --method POST repos/{owner}/{repo}/git/refs")) {
       return { status: 0, stdout: "{}", stderr: "" };
     }
     if (joined.startsWith("api repos/{owner}/{repo}/git/ref/tags/")) {
-      return { status: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" };
+      return {
+        status: 0,
+        stdout: '{"ref":"refs/tags/x","object":{"type":"commit","sha":"b2e3900a"}}',
+        stderr: "",
+      };
     }
     return undefined;
   }
@@ -233,8 +238,11 @@ describe("hermetic end-to-end (scripted gh double)", () => {
       ["run list --workflow", '[{"databaseId":42,"status":"in_progress"}]'],
       [
         "--json status,conclusion,headSha",
-        '{"status":"completed","conclusion":"success","headSha":"b2e3900a","event":"workflow_dispatch","headBranch":"dev"}',
+        '{"status":"completed","conclusion":"success","headSha":"b2e3900a","event":"workflow_dispatch","headBranch":"dev","workflowDatabaseId":7}',
       ],
+      // The portable-assets workflow's database id, resolved from its path — supplied-run
+      // binding compares the run's workflowDatabaseId against it (#3037).
+      ["actions/workflows/portable-assets.yml", '{"id":7}'],
       ["api repos/oscharko-dev/Keiko/releases/tags/", '{"body":"old beta.1 body"}'],
       // An existing tag is a PUBLISHED release unless a test overrides it to a draft — the
       // published case must keep the historical refusal (review finding on #3037).
@@ -898,12 +906,77 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     ).toThrowError(/is a push run, not the workflow_dispatch/u);
   });
 
+  it("refuses a supplied run from a different workflow on the same branch", () => {
+    // Review finding on #3037: another workflow_dispatch workflow on the requested branch can
+    // expose identically named staging jobs and artifacts — the ref/event checks alone would
+    // publish its bytes. The run must belong to the portable-assets workflow itself, compared
+    // by database id resolved from the workflow path.
+    const overrides = {
+      answers: [
+        [
+          "--json status,conclusion,headSha",
+          '{"status":"completed","conclusion":"success","headSha":"b2e3900a","event":"workflow_dispatch","headBranch":"dev","workflowDatabaseId":999}',
+        ],
+      ],
+    };
+
+    expect(() =>
+      withProcessRunner(ghDouble([], overrides), () =>
+        runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
+      ),
+    ).toThrowError(/belongs to workflow 999, not \.github\/workflows\/portable-assets\.yml/u);
+  });
+
+  it("refuses to publish when the tag moved after the draft was created", () => {
+    // Review finding on #3037: a draft's tag stays mutable until publication and --verify-tag
+    // at create time only proves existence — the publication boundary re-reads the ref and
+    // refuses when it no longer points at the built commit.
+    const recorded = [];
+    const overrides = {
+      answers: [
+        [
+          "api repos/{owner}/{repo}/git/ref/tags/",
+          '{"ref":"refs/tags/x","object":{"type":"commit","sha":"deadbeef"}}',
+        ],
+      ],
+    };
+
+    expect(() =>
+      withHostPlatform("darwin", () =>
+        withProcessRunner(ghDouble(recorded, overrides), () =>
+          runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
+        ),
+      ),
+    ).toThrowError(/moved to deadbeef after the draft was created/u);
+    // The draft was created but never went public — it remains resumable, nothing was exposed.
+    expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(true);
+    expect(recorded.some((line) => line.includes("--draft=false"))).toBe(false);
+  });
+
+  it("refuses to publish when the tag vanished before publication", () => {
+    // The release was created without --target, so publishing over a vanished tag would re-mint
+    // it at the default branch head — the built-commit binding would silently break.
+    const recorded = [];
+    const overrides = {
+      failures: [["api repos/{owner}/{repo}/git/ref/tags/", "gh: Not Found (HTTP 404)"]],
+    };
+
+    expect(() =>
+      withHostPlatform("darwin", () =>
+        withProcessRunner(ghDouble(recorded, overrides), () =>
+          runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
+        ),
+      ),
+    ).toThrowError(/vanished before publication/u);
+    expect(recorded.some((line) => line.includes("--draft=false"))).toBe(false);
+  });
+
   it("refuses to publish from a cancelled run", () => {
     const overrides = {
       answers: [
         [
           "--json status,conclusion,headSha",
-          '{"status":"completed","conclusion":"cancelled","headSha":"x","event":"workflow_dispatch","headBranch":"dev"}',
+          '{"status":"completed","conclusion":"cancelled","headSha":"x","event":"workflow_dispatch","headBranch":"dev","workflowDatabaseId":7}',
         ],
       ],
     };
@@ -930,7 +1003,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
           stdout:
             polls === 1
               ? '{"status":"in_progress"}'
-              : '{"status":"completed","conclusion":"success","headSha":"b2e3900a","event":"workflow_dispatch","headBranch":"dev"}',
+              : '{"status":"completed","conclusion":"success","headSha":"b2e3900a","event":"workflow_dispatch","headBranch":"dev","workflowDatabaseId":7}',
           stderr: "",
         };
       }

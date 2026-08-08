@@ -297,13 +297,26 @@ function capabilityFlagsMatchKind(value: Record<string, unknown>, kind: string):
   ];
   if (kind !== "chat" && chatOnly.some((flag) => value[flag] === true)) return false;
   if (kind !== "voice" && voiceOnly.some((flag) => value[flag] === true)) return false;
-  if (kind !== "voice" && value.realtimeTranscriptionModel !== undefined) return false;
-  // Semantic turn detection is a realtime capability — tuning it without realtime support is
-  // corrupted input the route would silently drop (review finding on #3031).
-  if (value.supportsSemanticTurnDetection === true && value.supportsRealtimeVoice !== true) {
+  if (!realtimeTuningMatchesSupport(value)) return false;
+  // The canonical parser requires an explicit locality on every voice capability
+  // (resolveVoiceKindFields) — defaulting an absent one would silently rewrite a file the
+  // product itself refuses to load (review finding on #3037).
+  if (kind === "voice" && value.voiceProviderLocality === undefined) return false;
+  return true;
+}
+
+/**
+ * Realtime-scoped tuning requires realtime support (canonical assertVoiceTuningInvariants). A
+ * transcription model without supportsRealtimeVoice also covers every non-voice kind, where the
+ * flag can never be true — the form would otherwise report success and silently drop the model,
+ * because only a realtime provider carries it into the voice fields; semantic turn detection is
+ * the same class (review findings on #3031/#3037).
+ */
+function realtimeTuningMatchesSupport(value: Record<string, unknown>): boolean {
+  if (value.realtimeTranscriptionModel !== undefined && value.supportsRealtimeVoice !== true) {
     return false;
   }
-  return true;
+  return !(value.supportsSemanticTurnDetection === true && value.supportsRealtimeVoice !== true);
 }
 
 function parsedCapability(value: unknown, expectedId?: string): ParsedCapability | undefined {
@@ -736,17 +749,17 @@ function outputVoiceFromProfiles(profiles: readonly ParsedVoiceProfile[] | undef
 
 /**
  * The locality of every imported voice provider must agree — the form has one locality select.
- * An absent declaration means the production default (`azure-foundry`), exactly as the setup
- * route reads it back (review finding on #3031).
+ * Every parsed voice capability carries an explicit locality (parsedCapability refuses an
+ * absent one, mirroring the canonical resolveVoiceKindFields requirement), so no default is
+ * substituted here — a drifted undefined would surface as a disagreement, never as a silent
+ * rewrite (review findings on #3031/#3037).
  */
 function uniformVoiceLocality(imported: readonly VoiceRoleProvider[]): {
   readonly ok: boolean;
   readonly value: VoiceProviderLocality | undefined;
 } {
   if (imported.length === 0) return { ok: true, value: undefined };
-  const localities = new Set(
-    imported.map((entry) => entry.capability.voiceProviderLocality ?? "azure-foundry"),
-  );
+  const localities = new Set(imported.map((entry) => entry.capability.voiceProviderLocality));
   if (localities.size > 1) return { ok: false, value: undefined };
   return { ok: true, value: [...localities][0] };
 }

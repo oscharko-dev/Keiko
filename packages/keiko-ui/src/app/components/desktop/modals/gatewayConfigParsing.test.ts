@@ -34,7 +34,15 @@ function voiceProviderFixture(
     baseUrl: "https://voice.example.com",
     apiKeyHeaderName: "api-key",
     timeoutMs: 120_000,
-    capability: { id: modelId, kind: "voice", ...capabilityOverrides },
+    // The canonical parser requires voiceProviderLocality on every voice capability
+    // (resolveVoiceKindFields) — the fixture mirrors a file the product can actually load;
+    // the absent-locality refusal pin overrides it away explicitly (#3037).
+    capability: {
+      id: modelId,
+      kind: "voice",
+      voiceProviderLocality: "azure-foundry",
+      ...capabilityOverrides,
+    },
     ...providerOverrides,
   };
 }
@@ -671,12 +679,47 @@ describe("parseGatewayConfigUpload", () => {
           supportsSpeechInput: true,
           voiceProviderLocality: "customer-hosted",
         }),
-        // Absent locality means the production default — a DIFFERENT locality than above.
+        // The fixture's default locality (azure-foundry) — a DIFFERENT locality than above.
         voiceProviderFixture("keiko-tts", { supportsSpeechOutput: true }),
       ],
     });
 
     expect(parseGatewayConfigUpload(split)).toEqual({ outcome: "invalid" });
+  });
+
+  it("refuses a voice capability that declares no locality", () => {
+    // The canonical parser requires voiceProviderLocality on every voice capability
+    // (resolveVoiceKindFields) — substituting the production default would silently rewrite a
+    // file the product itself refuses to load (#3037).
+    const missingLocality = JSON.stringify({
+      providers: [
+        providerFixture(),
+        voiceProviderFixture("keiko-stt", {
+          supportsSpeechInput: true,
+          voiceProviderLocality: undefined,
+        }),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(missingLocality)).toEqual({ outcome: "invalid" });
+  });
+
+  it("refuses a transcription model on a voice capability without realtime support", () => {
+    // The canonical parser rejects realtimeTranscriptionModel unless supportsRealtimeVoice is
+    // true (assertVoiceTuningInvariants) — accepting it here would report success and then
+    // silently drop the transcription model, because only a realtime provider carries it into
+    // the form fields (#3037).
+    const speechOnly = JSON.stringify({
+      providers: [
+        providerFixture(),
+        voiceProviderFixture("keiko-stt", {
+          supportsSpeechInput: true,
+          realtimeTranscriptionModel: "keiko-realtime-stt",
+        }),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(speechOnly)).toEqual({ outcome: "invalid" });
   });
 
   it("tolerates the exact circuit breaker the setup route rebuilds and refuses a tuned one", () => {

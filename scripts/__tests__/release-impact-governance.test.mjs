@@ -570,6 +570,32 @@ describe("release-impact governance", () => {
       expect(messages(shorterInsideLonger)).toContain("on a line of its own");
     });
 
+    it("rejects an over-indented closing fence posing as a closer", () => {
+      // Review finding on #3037: CommonMark allows at most three columns of indentation before
+      // a closing fence — four-plus columns (or a tab) make the would-be closer fenced CONTENT.
+      // Trimming before judging closed the fence early and let the column-zero phrase that
+      // follows approve while GitHub still renders it inside the fence.
+      const phrase = approvalPhrase();
+      const overIndentedCloser = validateWith(
+        approvalComment({ body: `\`\`\`\n    \`\`\`\n${phrase}\n\`\`\`` }),
+      );
+      expect(overIndentedCloser.ok).toBe(false);
+      expect(messages(overIndentedCloser)).toContain("on a line of its own");
+
+      const tabbedCloser = validateWith(
+        approvalComment({ body: `\`\`\`\n\t\`\`\`\n${phrase}\n\`\`\`` }),
+      );
+      expect(tabbedCloser.ok).toBe(false);
+      expect(messages(tabbedCloser)).toContain("on a line of its own");
+
+      // A closer indented up to three spaces IS a closer (CommonMark) — the phrase after the
+      // closed fence stands on a plain line and approves.
+      const threeSpaceCloser = validateWith(
+        approvalComment({ body: `\`\`\`\nexample\n   \`\`\`\n\n${phrase}` }),
+      );
+      expect(threeSpaceCloser.ok).toBe(true);
+    });
+
     it("rejects a lazy blockquote continuation carrying the phrase", () => {
       // Review finding on #3037 (CommonMark lazy continuation): a non-blank line directly after
       // a "> ..." line still renders INSIDE the blockquote — an instructional quote followed

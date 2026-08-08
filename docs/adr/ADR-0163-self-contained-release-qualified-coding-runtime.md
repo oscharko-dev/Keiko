@@ -81,7 +81,12 @@ own manifest, never an argument a caller supplies:
 1. **Plain staging** (`staging` / `unverified-staging`) — the default output of every manual
    dispatch. It is unsigned, unqualified, and **not activatable**: the runtime refuses it.
 2. **Evaluation** (`evaluation` / `evaluation-unqualified`) — the explicitly requested, unsigned but
-   **activatable** lane defined in D9. It is never publishable.
+   **activatable** lane defined in D9. It never enters the stable release bundle, and it is never
+   published by default or as a side effect. It IS the payload of the explicitly labeled beta
+   **prereleases** cut by `scripts/release-portable-prerelease.mjs` under the owner-approved 0.3.0
+   beta program (owner decision, amended after v0.3.0-beta.0 shipped — the same amendment that
+   governs the first-run mechanics in D9): draft-first, checksummed, provenance-pinned to the
+   producing workflow run, superseded-chain-linked, and macOS-sealed since v0.3.0-beta.1.
 3. **Production** (`production` / `verified-production`) — the only lane that can produce a
    production-available runtime.
 

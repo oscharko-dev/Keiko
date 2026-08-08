@@ -442,7 +442,13 @@ function approvalContextLine(rawLine, state) {
   // other marker) inside a fence must not open comment/block state that would outlive the fence
   // (review finding on #3037).
   if (state.openFence !== undefined) {
-    if (closesFence(state.openFence, line, delimiter)) state.openFence = undefined;
+    // CommonMark allows at most three columns of indentation before a closing fence — a
+    // four-plus-column (or tabbed) would-be closer is fenced CONTENT, so it is judged on the
+    // RAW line: trimming first would close the fence early and let the next column-zero line
+    // approve while GitHub still renders it fenced (review finding on #3037).
+    if (!isIndentedCodeLine(rawLine) && closesFence(state.openFence, line, delimiter)) {
+      state.openFence = undefined;
+    }
     return true;
   }
   if (htmlCommentContextLine(line, state)) return true;

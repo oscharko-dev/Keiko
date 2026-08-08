@@ -1810,6 +1810,36 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("rejects an unscoped endpoint-protocol update across heterogeneous audio endpoints", async () => {
+    // Review finding on #3037: voiceEndpointStyle/voiceApiVersion submitted WITHOUT a base URL
+    // or explicit role ids bypassed the heterogeneous-connection guard (which was keyed on
+    // voiceBaseUrl) and the submitted protocol spread onto EVERY role template — an Azure
+    // deployment-path protocol written onto an OpenAI-compatible realtime endpoint breaks every
+    // subsequent call. Protocol changes are connection mutations: unscoped ones are refused
+    // exactly like credential rotations across different connections.
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-protocol-scope-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-protocol-scope-"), "keiko-ui.db"),
+    });
+    seedSeparatedVoiceGateway(deps);
+    const before = requiredGatewayConfig(deps);
+
+    const result = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceEndpointStyle: "azure-openai-deployment",
+        voiceApiVersion: "2025-04-01-preview",
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(requiredGatewayConfig(deps)).toEqual(before);
+    deps.store.close();
+  });
+
   it.each(["different-credentials", "different-headers"] as const)(
     "rejects an unscoped credential rotation across same-endpoint %s",
     async (mode) => {

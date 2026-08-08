@@ -342,15 +342,31 @@ function sleep(milliseconds) {
  * A supplied --run-id may name ANY historical run — including a successful evaluation build of
  * an unmerged feature branch whose package version happens to match the local checkout, which
  * would pass every downstream check and publish fresh branch bytes publicly. The run must be a
- * workflow_dispatch on exactly the requested ref (review finding on #3037); the dispatch path
- * satisfies this by construction.
+ * workflow_dispatch on exactly the requested ref AND a run of the portable-assets workflow
+ * itself — another workflow_dispatch workflow on the same branch can expose identically named
+ * staging jobs and artifacts, and its bytes must never bind (review findings on #3037). The
+ * workflow is compared by database id resolved from WORKFLOW_PATH, not by display name, so a
+ * renamed or impostor workflow cannot satisfy the check. The dispatch path satisfies all of
+ * this by construction.
  */
+function portableWorkflowDatabaseId() {
+  const workflowFile = WORKFLOW_PATH.split("/").at(-1);
+  const workflow = ghJson(["api", `repos/{owner}/{repo}/actions/workflows/${workflowFile}`]);
+  return workflow.id;
+}
+
 function assertRunBelongsToRequestedRef(view, runId, ref) {
   if (view.event !== "workflow_dispatch") {
     fail(`run ${runId} is a ${view.event} run, not the workflow_dispatch this script requires.`);
   }
   if (view.headBranch !== ref) {
     fail(`run ${runId} built branch ${view.headBranch}, not the requested ref ${ref}.`);
+  }
+  const workflowId = portableWorkflowDatabaseId();
+  if (view.workflowDatabaseId !== workflowId) {
+    fail(
+      `run ${runId} belongs to workflow ${String(view.workflowDatabaseId)}, not ${WORKFLOW_PATH} (${String(workflowId)}); refusing to publish another workflow's assets.`,
+    );
   }
 }
 
@@ -362,7 +378,7 @@ function waitForRun(runId, ref) {
       "view",
       runId,
       "--json",
-      "status,conclusion,headSha,event,headBranch",
+      "status,conclusion,headSha,event,headBranch,workflowDatabaseId",
     ]);
     if (view.status === "completed") {
       assertRunBelongsToRequestedRef(view, runId, ref);
@@ -574,8 +590,35 @@ function createRelease(input) {
   log(`created draft ${input.tag} (not public yet).`);
 }
 
-/** Publishing is the LAST step: the draft goes public only after the supersede edit landed. */
-function publishDraftRelease(tag) {
+/**
+ * Publishing is the LAST step: the draft goes public only after the supersede edit landed. The
+ * tag ref is revalidated against the built commit HERE, at the publication boundary — a draft's
+ * tag stays mutable until publication, and `--verify-tag` at create time only proved the tag
+ * EXISTED, so a tag moved between create and publish would expose assets and provenance under a
+ * commit they were not built from. Unlike the create-conflict check, an ABSENT ref also refuses:
+ * the release was created without `--target`, so publishing over a vanished tag would re-mint it
+ * at the repository's default branch head, not the built commit. The recheck narrows the window
+ * to the single edit call below; it cannot close it entirely without server-side atomicity
+ * (review finding on #3037).
+ */
+function assertTagRefStillAtBuiltCommit(tag, commitSha) {
+  const ref = readRemoteTagRef(tag);
+  if (ref === undefined) {
+    fail(
+      `tag ${tag} vanished before publication — publishing now would re-mint it at the default branch head, not the built commit ${commitSha}; recreate the tag first.`,
+    );
+    return;
+  }
+  const resolved = peelTagRefToCommit(ref);
+  if (resolved !== commitSha) {
+    fail(
+      `tag ${tag} moved to ${resolved} after the draft was created and no longer points at the built commit ${commitSha} — publishing would expose assets and provenance under a commit they were not built from.`,
+    );
+  }
+}
+
+function publishDraftRelease(tag, commitSha) {
+  assertTagRefStillAtBuiltCommit(tag, commitSha);
   gh(["release", "edit", tag, "--draft=false"]);
   log(`published ${tag}.`);
 }
@@ -764,7 +807,7 @@ function runPublishSteps({
   if (hasPendingDraft) deleteInterruptedDraft(tag);
   createRelease({ workDir, publishDir, tag, commitSha: view.headSha, version, body });
   markPreviousSuperseded(previousTag, tag, repository);
-  publishDraftRelease(tag);
+  publishDraftRelease(tag, view.headSha);
   log(`DONE - ${tag} is live with 4 verified assets.`);
 }
 

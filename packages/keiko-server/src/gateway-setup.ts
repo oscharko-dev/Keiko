@@ -1672,6 +1672,12 @@ const VOICE_CONNECTION_MUTATION_FIELDS = [
   "voiceApiKey",
   "voiceApiKeyHeaderName",
   "voiceProviderLocality",
+  // The endpoint PROTOCOL is part of the connection: submitted without a base URL or explicit
+  // role targets it would spread onto every role template, writing e.g. an Azure deployment
+  // protocol onto an OpenAI-compatible realtime endpoint (review finding on #3037).
+  "voiceEndpointStyle",
+  "voiceApiVersion",
+  "voiceRealtimeAuthMode",
 ] as const;
 
 const VOICE_ENDPOINT_STYLES: readonly NonNullable<ModelProviderConfig["endpointStyle"]>[] = [
@@ -2193,8 +2199,12 @@ function explicitEndpointMigrationError(
   return undefined;
 }
 
+// Every connection mutation except a plain base-URL move (which validateVoiceEndpointUpdate
+// owns): credentials, header, locality, AND the endpoint protocol — an unscoped protocol change
+// across heterogeneous connections must refuse exactly like an unscoped credential rotation
+// (review finding on #3037).
 function hasNonEndpointVoiceConnectionMutation(raw: Record<string, unknown>): boolean {
-  return ["voiceApiKey", "voiceApiKeyHeaderName", "voiceProviderLocality"].some((key) =>
+  return VOICE_CONNECTION_MUTATION_FIELDS.filter((key) => key !== "voiceBaseUrl").some((key) =>
     hasNonBlankStringField(raw, key),
   );
 }

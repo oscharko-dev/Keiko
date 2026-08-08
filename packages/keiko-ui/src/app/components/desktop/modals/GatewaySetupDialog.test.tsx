@@ -1577,7 +1577,12 @@ describe("GatewaySetupDialog", () => {
                 baseUrl: "https://speech.example.com",
                 endpointStyle: "azure-openai-deployment",
                 apiVersion: "2025-03-01-preview",
-                capability: { id: "keiko-stt", kind: "voice", supportsSpeechInput: true },
+                capability: {
+                  id: "keiko-stt",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsSpeechInput: true,
+                },
               },
             ],
           }),
@@ -1633,14 +1638,24 @@ describe("GatewaySetupDialog", () => {
               {
                 modelId: "keiko-stt",
                 baseUrl: "https://voice.example.com",
-                capability: { id: "keiko-stt", kind: "voice", supportsSpeechInput: true },
+                capability: {
+                  id: "keiko-stt",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsSpeechInput: true,
+                },
               },
               ...(withTts
                 ? [
                     {
                       modelId: "keiko-tts",
                       baseUrl: "https://voice.example.com",
-                      capability: { id: "keiko-tts", kind: "voice", supportsSpeechOutput: true },
+                      capability: {
+                        id: "keiko-tts",
+                        kind: "voice",
+                        voiceProviderLocality: "azure-foundry",
+                        supportsSpeechOutput: true,
+                      },
                     },
                   ]
                 : []),
@@ -1699,7 +1714,12 @@ describe("GatewaySetupDialog", () => {
                 ...(withProfile
                   ? { voiceProfiles: [{ persona: "neutral", voiceId: "nova" }] }
                   : {}),
-                capability: { id: "keiko-tts", kind: "voice", supportsSpeechOutput: true },
+                capability: {
+                  id: "keiko-tts",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsSpeechOutput: true,
+                },
               },
             ],
           }),
@@ -1758,7 +1778,12 @@ describe("GatewaySetupDialog", () => {
                 baseUrl: "https://speech.example.com",
                 endpointStyle: "azure-openai-deployment",
                 apiVersion: "2025-03-01-preview",
-                capability: { id: "keiko-stt", kind: "voice", supportsSpeechInput: true },
+                capability: {
+                  id: "keiko-stt",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsSpeechInput: true,
+                },
               },
             ],
           }),
@@ -1811,14 +1836,24 @@ describe("GatewaySetupDialog", () => {
                 baseUrl: "https://voice.example.com",
                 apiKeyHeaderName: "api-key",
                 timeoutMs: 120_000,
-                capability: { id: "keiko-stt", kind: "voice", supportsSpeechInput: true },
+                capability: {
+                  id: "keiko-stt",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsSpeechInput: true,
+                },
               },
               {
                 modelId: "keiko-tts",
                 baseUrl: "https://voice.example.com",
                 apiKeyHeaderName: "api-key",
                 timeoutMs: 120_000,
-                capability: { id: "keiko-tts", kind: "voice", supportsSpeechOutput: true },
+                capability: {
+                  id: "keiko-tts",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsSpeechOutput: true,
+                },
               },
               {
                 modelId: "keiko-realtime",
@@ -1828,6 +1863,7 @@ describe("GatewaySetupDialog", () => {
                 capability: {
                   id: "keiko-realtime",
                   kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
                   supportsRealtimeVoice: true,
                   realtimeTranscriptionModel: "keiko-realtime-stt",
                 },
