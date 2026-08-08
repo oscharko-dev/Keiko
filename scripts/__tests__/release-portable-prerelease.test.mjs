@@ -154,25 +154,35 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     };
   }
 
-  function ghAnswer(args, overrides) {
-    const joined = args.join(" ");
+  // Scripted per-test outcomes: `failures` matches win (status 1 with the given stderr), then
+  // `answers` (status 0 with the given stdout) — the double stays a pure lookup.
+  function scriptedGhAnswer(joined, overrides) {
     for (const [needle, failure] of overrides.failures ?? []) {
       if (joined.includes(needle)) return { status: 1, stdout: "", stderr: failure };
     }
     for (const [needle, answer] of overrides.answers ?? []) {
       if (joined.includes(needle)) return { status: 0, stdout: answer, stderr: "" };
     }
+    return undefined;
+  }
+
+  // Default git-ref answers: the atomic tag POST succeeds (the ref did not exist), and a tag-ref
+  // lookup 404s — so every pre-existing scenario keeps meaning what it meant before the ref
+  // handling existed. Conflict scenarios override via `failures`/`answers` (#3037).
+  function defaultGhRefAnswer(joined) {
     if (joined.startsWith("api --method POST repos/{owner}/{repo}/git/refs")) {
-      // Default: the atomic tag creation succeeds — the ref did not exist. Conflict scenarios
-      // override via `failures` with the API's "Reference already exists" error (#3037).
       return { status: 0, stdout: "{}", stderr: "" };
     }
     if (joined.startsWith("api repos/{owner}/{repo}/git/ref/tags/")) {
-      // Default: the requested tag does not exist as a remote git ref — a 404-style gh failure,
-      // so every pre-existing scenario keeps meaning what it meant before the ref lookup existed
-      // (review finding on #3037). Tests that need an existing ref override this answer.
       return { status: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" };
     }
+    return undefined;
+  }
+
+  function ghAnswer(args, overrides) {
+    const joined = args.join(" ");
+    const scripted = scriptedGhAnswer(joined, overrides) ?? defaultGhRefAnswer(joined);
+    if (scripted !== undefined) return scripted;
     if (joined.startsWith("run download")) {
       const dir = args[args.indexOf("--dir") + 1];
       const artifact = args[args.indexOf("--name") + 1];
