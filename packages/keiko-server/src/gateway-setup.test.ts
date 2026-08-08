@@ -3016,6 +3016,104 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("preserves reranker, egress, and a same-endpoint embedding's own credential through rebuilds", async () => {
+    // Review findings on #3031 (P1): the rebuild copied only grounding and figma from the
+    // current configuration — a configured reranker vanished and the persisted config lost its
+    // egress topology after restart. And an embedding sharing the gateway URL but carrying its
+    // OWN credential was rebuilt with the gateway-wide token. Dedicated identity now compares
+    // the full stored connection, and every untouched top-level block survives.
+    const uiDir = await tempDir("keiko-gw-ui-blocks-");
+    const evidenceDir = await tempDir("keiko-gw-ev-blocks-");
+    const probedModelIds: string[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => {
+        probedModelIds.push(...modelIds);
+        return Promise.resolve(modelIds.filter((modelId) => modelId !== "own-key-embedding"));
+      },
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "own-key-embedding",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "embedding-only-token",
+            capability: { id: "own-key-embedding", kind: "embedding" },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        reranker: {
+          modelId: "rerank-1",
+          baseUrl: "https://rerank.example.com",
+          apiKey: "rerank-token",
+          timeoutMs: 10_000,
+        },
+        egress: { httpProxy: "http://proxy.example.com:3128" },
+      }),
+      true,
+    );
+
+    const cleared = await handleGatewaySetup(
+      ctx({ preserveExisting: true, imageInputModelIds: [] }),
+      deps,
+    );
+    expect(cleared.status).toBe(200);
+    const config = currentGatewayConfig(deps);
+    expect(config?.reranker?.modelId).toBe("rerank-1");
+    expect(config?.reranker?.apiKey).toBe("rerank-token");
+    expect(config?.egress?.httpProxy).toContain("proxy.example.com:3128");
+    const embedding = config?.providers.find(
+      (provider) => provider.modelId === "own-key-embedding",
+    );
+    expect(embedding?.apiKey).toBe("embedding-only-token");
+    expect(probedModelIds).not.toContain("own-key-embedding");
+    deps.store.close();
+  });
+
+  it("keeps stored voice deployments out of the chat probe during inherited rebuilds", async () => {
+    // Review finding on #3031: inherited deploymentNames carried stored voice ids into the chat
+    // probe — a succeeding probe persisted a DUPLICATE provider for the voice model id, a
+    // failing one misreported a restored voice model as skipped.
+    const uiDir = await tempDir("keiko-gw-ui-voice-probe-");
+    const evidenceDir = await tempDir("keiko-gw-ev-voice-probe-");
+    const probedModelIds: string[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => {
+        probedModelIds.push(...modelIds);
+        return Promise.resolve(modelIds);
+      },
+    });
+    seedSeparatedVoiceGateway(deps);
+
+    const cleared = await handleGatewaySetup(
+      ctx({ preserveExisting: true, imageInputModelIds: [] }),
+      deps,
+    );
+    expect(cleared.status).toBe(200);
+    const config = currentGatewayConfig(deps);
+    const voiceIds = ["stt-low", "tts-low", "realtime-low"];
+    for (const voiceId of voiceIds) {
+      expect(probedModelIds).not.toContain(voiceId);
+      expect(config?.providers.filter((provider) => provider.modelId === voiceId)).toHaveLength(1);
+    }
+    deps.store.close();
+  });
+
   it("preserves a dedicated-endpoint embedding provider through preserve-mode rebuilds", async () => {
     // Review finding on #3031 (P1): the rebuild wrote every embedding onto the setup-wide
     // connection, silently migrating an embedding that lives on its OWN endpoint (with its own

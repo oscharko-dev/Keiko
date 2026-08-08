@@ -241,11 +241,32 @@ function knownCapabilityKind(value: unknown): string | undefined {
   return typeof value === "string" && KNOWN_KINDS.has(value) ? value : undefined;
 }
 
+/**
+ * A flag may only be TRUE on the kind that owns it (chat: image/workflow; voice: the speech
+ * roles) — the canonical parser rejects cross-kind declarations, and setup would silently drop
+ * or rewrite them on save (review finding on #3031). False/absent stays tolerated everywhere:
+ * the persisted product configuration writes explicit false onto every kind.
+ */
+function capabilityFlagsMatchKind(value: Record<string, unknown>, kind: string): boolean {
+  const chatOnly = ["supportsImageInput", "workflowEligible"];
+  const voiceOnly = [
+    "supportsSpeechInput",
+    "supportsSpeechOutput",
+    "supportsRealtimeVoice",
+    "supportsSemanticTurnDetection",
+  ];
+  if (kind !== "chat" && chatOnly.some((flag) => value[flag] === true)) return false;
+  if (kind !== "voice" && voiceOnly.some((flag) => value[flag] === true)) return false;
+  if (kind !== "voice" && value.realtimeTranscriptionModel !== undefined) return false;
+  return true;
+}
+
 function parsedCapability(value: unknown, expectedId?: string): ParsedCapability | undefined {
   if (!objectRecord(value) || !capabilityFlagsAreBooleans(value)) return undefined;
   if (!capabilityIdMatches(value, expectedId)) return undefined;
   const kind = knownCapabilityKind(value.kind);
   if (kind === undefined) return undefined;
+  if (!capabilityFlagsMatchKind(value, kind)) return undefined;
   const transcription = readTranscriptionModel(value.realtimeTranscriptionModel);
   if (!transcription.ok) return undefined;
   const locality = readLocality(value.voiceProviderLocality);
@@ -653,11 +674,12 @@ function fieldsFrom(
   voice: VoiceFields,
   figmaAccessToken: string | undefined,
 ): GatewayConfigUploadFields {
-  // A file with no chat/embedding capability record never speaks about the flags; a file with
-  // any speaks — and an empty result must clear the form field like manual emptying would
-  // (review finding on #3031).
+  // Only a CHAT capability can speak about the chat flag lists: an embedding-only declaration
+  // must not clear stored chat image/workflow flags the file never mentioned (review finding on
+  // #3031). When a chat capability speaks, an empty result still clears the field like manual
+  // emptying would.
   const speaksAboutFlags = [...partition.capabilities.values()].some(
-    (capability) => capability.kind !== "voice",
+    (capability) => capability.kind === "chat",
   );
   return {
     figmaAccessToken,

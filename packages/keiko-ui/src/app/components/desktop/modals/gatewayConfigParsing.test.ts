@@ -320,10 +320,28 @@ describe("parseGatewayConfigUpload", () => {
     expect(fields.imageInputModelIds).toEqual([]);
   });
 
-  it("derives the flag lists from chat capabilities only", () => {
-    // Review finding on #3031: the setup route smoke-tests chat candidates only, so an
-    // embedding id in either list would fail Test & Save AFTER a reported upload success —
-    // production ignores the flags on non-chat capabilities, and the importer must agree.
+  it("refuses cross-kind TRUE flags and derives the flag lists from chat capabilities", () => {
+    // Review findings on #3031 (superseding the earlier ignore-behavior): a flag may only be
+    // TRUE on the kind that owns it — the canonical parser rejects an embedding claiming image
+    // or workflow support, and setup would silently rewrite it on save.
+    const crossKind = JSON.stringify({
+      providers: [
+        providerFixture(),
+        providerFixture({
+          modelId: "text-embed",
+          capability: {
+            id: "text-embed",
+            kind: "embedding",
+            supportsImageInput: true,
+            workflowEligible: true,
+          },
+        }),
+      ],
+    });
+    expect(parseGatewayConfigUpload(crossKind)).toEqual({ outcome: "invalid" });
+
+    // Explicit FALSE stays tolerated on every kind — the persisted product configuration
+    // writes it — and the flag lists still derive from chat capabilities alone.
     const fields = fieldsOf(
       JSON.stringify({
         providers: [
@@ -333,16 +351,46 @@ describe("parseGatewayConfigUpload", () => {
             capability: {
               id: "text-embed",
               kind: "embedding",
-              supportsImageInput: true,
-              workflowEligible: true,
+              supportsImageInput: false,
+              workflowEligible: false,
             },
           }),
         ],
       }),
     );
-
     expect(fields.imageInputModelIds).toEqual(["gpt-5o"]);
     expect(fields.workflowEligibleModelIds).toEqual(["gpt-5o"]);
+  });
+
+  it("keeps the flag lists silent when no chat capability speaks", () => {
+    // Review finding on #3031: an embedding-only declaration made speaksAboutFlags true and
+    // cleared stored chat image/workflow flags the file never mentioned.
+    const fields = fieldsOf(
+      JSON.stringify({
+        providers: [
+          providerFixture({ capability: undefined }),
+          providerFixture({
+            modelId: "text-embed",
+            capability: { id: "text-embed", kind: "embedding" },
+          }),
+        ],
+      }),
+    );
+
+    expect(fields.imageInputModelIds).toBeUndefined();
+    expect(fields.workflowEligibleModelIds).toBeUndefined();
+  });
+
+  it("refuses a chat capability claiming a voice role", () => {
+    const speakingChat = JSON.stringify({
+      providers: [
+        providerFixture({
+          capability: { id: "gpt-5o", kind: "chat", supportsSpeechInput: true },
+        }),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(speakingChat)).toEqual({ outcome: "invalid" });
   });
 
   it("refuses OCR providers the setup form cannot represent", () => {

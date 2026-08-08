@@ -713,23 +713,35 @@ function currentOcrModelIds(config: GatewayConfig | undefined): readonly string[
 }
 
 /**
- * Stored embedding providers that live on their OWN endpoint: the rebuild writes every derived
- * embedding onto the setup-wide connection, which would silently migrate these to the chat
- * gateway (review finding on #3031). They are restored verbatim instead, like stored OCR.
+ * Stored embedding providers with their OWN connection: the rebuild writes every derived
+ * embedding onto the setup-wide connection, which would silently migrate a different endpoint
+ * OR overwrite a distinct same-endpoint credential with the gateway token (review findings on
+ * #3031). Dedicated means the FULL stored connection identity differs from the stored primary
+ * provider's — embeddings sharing the gateway connection keep following rotations and endpoint
+ * moves through the normal rebuild.
  */
-function currentDedicatedEmbeddingModelIds(
-  config: GatewayConfig | undefined,
-  gatewayBaseUrl: string,
-): readonly string[] {
+function currentDedicatedEmbeddingModelIds(config: GatewayConfig | undefined): readonly string[] {
+  const primary = config?.providers.at(0);
+  if (config === undefined || primary === undefined) return [];
   const embeddingIds = new Set(currentEmbeddingModelIds(config));
+  const primaryHeader = primary.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
+  return config.providers
+    .filter((provider) => {
+      if (!embeddingIds.has(provider.modelId)) return false;
+      const sharesConnection =
+        sameBaseUrlIdentity(provider.baseUrl, primary.baseUrl) &&
+        provider.apiKey === primary.apiKey &&
+        (provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME) === primaryHeader;
+      return !sharesConnection;
+    })
+    .map((provider) => provider.modelId);
+}
+
+function currentVoiceModelIds(config: GatewayConfig | undefined): readonly string[] {
   return (
-    config?.providers
-      .filter(
-        (provider) =>
-          embeddingIds.has(provider.modelId) &&
-          !sameBaseUrlIdentity(provider.baseUrl, gatewayBaseUrl),
-      )
-      .map((provider) => provider.modelId) ?? []
+    config?.capabilities
+      ?.filter((capability) => isVoiceCapability(capability))
+      .map((capability) => capability.id) ?? []
   );
 }
 
@@ -1419,11 +1431,14 @@ interface SetupRequest {
    */
   readonly storedOcrModelIds: readonly string[];
   /**
-   * Stored embedding ids on a DIFFERENT endpoint than the gateway connection — rebuilt
-   * embeddings land on the setup-wide connection, so these are restored verbatim instead
-   * (review finding on #3031). Empty outside inherited-deployment preserve mode.
+   * Stored embedding ids whose FULL connection identity differs from the stored primary
+   * provider's — rebuilt embeddings land on the setup-wide connection, so these are restored
+   * verbatim instead (review findings on #3031). Empty outside inherited-deployment preserve
+   * mode.
    */
   readonly storedDedicatedEmbeddingModelIds: readonly string[];
+  /** Stored voice ids excluded from the chat probe — restored by applyVoiceProviders. */
+  readonly storedVoiceModelIds: readonly string[];
   readonly workflowEligibleModelIds: readonly string[];
   readonly workflowEligibleModelIdsConfigured: boolean;
   readonly voiceProviders: readonly SetupVoiceProvider[];
@@ -2993,7 +3008,13 @@ function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | Route
         : [],
     storedDedicatedEmbeddingModelIds:
       input.preserveExisting && !hasNonEmptyListField(input.raw, "deploymentNames")
-        ? currentDedicatedEmbeddingModelIds(input.current, input.credentials.baseUrl)
+        ? currentDedicatedEmbeddingModelIds(input.current)
+        : [],
+    // Stored voice deployments never belong in the chat probe: a succeeding probe would persist
+    // a DUPLICATE provider next to the restored voice entry (review finding on #3031).
+    storedVoiceModelIds:
+      input.preserveExisting && !hasNonEmptyListField(input.raw, "deploymentNames")
+        ? currentVoiceModelIds(input.current)
         : [],
     workflowEligibleModelIds: resolved.workflowEligibleModelIds,
     workflowEligibleModelIdsConfigured: hasListField(input.raw, "workflowEligibleModelIds"),
@@ -3098,8 +3119,10 @@ interface SetupVerificationInput {
   readonly storedEmbeddingModelIds: readonly string[];
   /** Stored `ocr-vision` ids restored verbatim instead of probed — see {@link SetupRequest}. */
   readonly storedOcrModelIds: readonly string[];
-  /** Dedicated-endpoint embedding ids restored verbatim — see {@link SetupRequest}. */
+  /** Dedicated-connection embedding ids restored verbatim — see {@link SetupRequest}. */
   readonly storedDedicatedEmbeddingModelIds: readonly string[];
+  /** Stored voice ids excluded from the chat probe — see {@link SetupRequest}. */
+  readonly storedVoiceModelIds: readonly string[];
   readonly workflowEligibleModelIds: readonly string[] | undefined;
   readonly voiceProviders: readonly SetupVoiceProvider[];
   readonly tester: GatewaySetupTester;
@@ -3246,7 +3269,13 @@ async function candidateModelIdsForSetup(
     return candidateModelsFromDeploymentNames(
       input.deploymentNames,
       input.storedEmbeddingModelIds,
-      [...input.storedOcrModelIds, ...input.storedDedicatedEmbeddingModelIds],
+      [
+        ...input.storedOcrModelIds,
+        ...input.storedDedicatedEmbeddingModelIds,
+        // Voice ids leave the candidate set too, but applyVoiceProviders restores them — they
+        // must not join the verbatim-restore list below.
+        ...input.storedVoiceModelIds,
+      ],
     );
   }
   return normalizeDiscoveryResult(
@@ -3280,7 +3309,12 @@ function finalRawConfigForSetup(
   });
   const rawConfigWithOptionalBlocks = {
     ...rawConfig,
+    // Every top-level block the rebuild does not itself produce survives from the current
+    // configuration — a reranker or egress topology must not vanish because an unrelated
+    // capability was updated (review finding on #3031).
     ...(input.current?.grounding === undefined ? {} : { grounding: input.current.grounding }),
+    ...(input.current?.reranker === undefined ? {} : { reranker: input.current.reranker }),
+    ...(input.current?.egress === undefined ? {} : { egress: input.current.egress }),
     ...(input.figmaAccessToken === undefined
       ? {}
       : { figma: { accessToken: input.figmaAccessToken } }),
@@ -3302,16 +3336,23 @@ function storedDedicatedProviderRaw(
   provider: ModelProviderConfig,
   capability: ModelCapability,
   gateway: { readonly baseUrl: string; readonly apiKey: string },
+  storedPrimary: ModelProviderConfig | undefined,
 ): Record<string, unknown> {
-  // An OCR provider on the SAME endpoint as the gateway follows a credential rotation — the old
-  // token dies with the rotation. A different endpoint keeps its own credential: the freshly
-  // verified gateway token must never travel to a URL it was not tested against (review finding
-  // on #3031, same rule as the endpoint-change token guard).
-  const sharesGatewayEndpoint = sameBaseUrlIdentity(provider.baseUrl, gateway.baseUrl);
+  // A provider that SHARED the stored gateway connection (same endpoint AND same credential)
+  // follows a credential rotation — the old token dies with the rotation. A provider with its
+  // own credential or endpoint keeps it: the freshly verified gateway token must never travel
+  // to a connection it was not tested against (review findings on #3031, same rule as the
+  // endpoint-change token guard).
+  const sharedGatewayConnection =
+    storedPrimary !== undefined &&
+    sameBaseUrlIdentity(provider.baseUrl, gateway.baseUrl) &&
+    provider.apiKey === storedPrimary.apiKey &&
+    (provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME) ===
+      (storedPrimary.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME);
   return {
     modelId: provider.modelId,
     baseUrl: provider.baseUrl,
-    apiKey: sharesGatewayEndpoint ? gateway.apiKey : provider.apiKey,
+    apiKey: sharedGatewayConnection ? gateway.apiKey : provider.apiKey,
     ...(provider.apiKeyHeaderName === undefined
       ? {}
       : { apiKeyHeaderName: provider.apiKeyHeaderName }),
@@ -3351,7 +3392,7 @@ function applyStoredDedicatedProviders(
     const provider = current.providers.find((item) => item.modelId === modelId);
     const capability = current.capabilities?.find((item) => item.id === modelId);
     if (provider === undefined || capability === undefined) return [];
-    return [storedDedicatedProviderRaw(provider, capability, gateway)];
+    return [storedDedicatedProviderRaw(provider, capability, gateway, current.providers.at(0))];
   });
   if (restored.length === 0) return rawConfig;
   return { ...rawConfig, providers: [...providers, ...restored] };
@@ -3678,6 +3719,7 @@ async function trySetupCandidate(
     storedEmbeddingModelIds: request.storedEmbeddingModelIds,
     storedOcrModelIds: request.storedOcrModelIds,
     storedDedicatedEmbeddingModelIds: request.storedDedicatedEmbeddingModelIds,
+    storedVoiceModelIds: request.storedVoiceModelIds,
     workflowEligibleModelIds: request.workflowEligibleModelIdsConfigured
       ? request.workflowEligibleModelIds
       : undefined,

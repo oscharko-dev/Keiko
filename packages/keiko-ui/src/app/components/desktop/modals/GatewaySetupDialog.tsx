@@ -27,11 +27,32 @@ import dynamic from "next/dynamic";
 import { notifyGatewayConfigUpdated } from "../widgets/shared/gatewaySetupBus";
 import type { GatewayConfigUploadFields } from "./gatewayConfigParsing";
 
+// A failed upload-chunk load must not make the feature silently disappear from an otherwise
+// working dialog — surface the redacted error and a retry (review finding on #3031).
+function GatewayConfigUploadLoadFailure({
+  error,
+  retry,
+}: {
+  readonly error?: Error | null | undefined;
+  readonly retry?: (() => void) | null | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  if (!error) return null;
+  return (
+    <div role="alert">
+      {t("gatewaySetup.loading.error")}{" "}
+      <button type="button" onClick={retry ?? ((): void => window.location.reload())}>
+        {t("common.retry")}
+      </button>
+    </div>
+  );
+}
+
 // The upload path (control + fail-closed parser) is not first-paint-critical: loading it as its
 // own chunk keeps the setup page inside the static-export first-load budget (bundle gate).
 const GatewayConfigUpload = dynamic(
   () => import("./GatewayConfigUpload").then((mod) => mod.GatewayConfigUpload),
-  { ssr: false, loading: () => null },
+  { ssr: false, loading: GatewayConfigUploadLoadFailure },
 );
 import styles from "./GatewaySetupDialog.module.css";
 
