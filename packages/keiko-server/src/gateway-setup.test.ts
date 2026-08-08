@@ -3637,13 +3637,17 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
-  it("falls back to the runtime view when the persisted file is unparseable", async () => {
-    // The documented fail-safe of durableStoredGatewayConfig: a corrupt stored file must not
-    // fail the setup — classification degrades to the env-resolved runtime view (exactly the
-    // pre-change behavior) and the rotation still completes.
+  it("falls back to the runtime view when the persisted file is not a valid gateway config", async () => {
+    // The documented fail-safe of durableStoredGatewayConfig: a stored file the gateway parser
+    // refuses must not fail the setup — classification degrades to the env-resolved runtime
+    // view (exactly the pre-change behavior) and the rotation still completes. The file stays
+    // VALID JSON on purpose: byte-corrupt JSON is refused by the separate egress-preservation
+    // guard (persistedGatewayEgress fails a preserve-mode save closed rather than risk dropping
+    // a persisted egress block it cannot read — review finding on #3040).
     const uiDir = await tempDir("keiko-gw-ui-durable-corrupt-");
     const evidenceDir = await tempDir("keiko-gw-ev-durable-corrupt-");
-    writeFileSync(join(uiDir, "keiko.config.json"), "{ not json", "utf8");
+    const schemaInvalid = JSON.stringify({ providers: [{ modelId: "half-a-provider" }] });
+    writeFileSync(join(uiDir, "keiko.config.json"), schemaInvalid, "utf8");
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
@@ -3657,6 +3661,9 @@ describe("handleGatewaySetup", () => {
       deps,
     );
     expect(fresh.status).toBe(200);
+    // The fresh save rewrote the file with valid content — break it AGAIN so the rotation's
+    // durable parse actually takes the GatewayError fallback (review finding on #3040).
+    writeFileSync(join(uiDir, "keiko.config.json"), schemaInvalid, "utf8");
 
     const rotated = await handleGatewaySetup(
       ctx({ preserveExisting: true, apiKey: "example-rotated-token" }),
