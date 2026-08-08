@@ -315,24 +315,29 @@ interface VoiceCredentialInputFields {
   readonly voiceSpeechOutputModelId: string;
   readonly voiceTimeoutMs: string;
   readonly voiceSemanticTurnDetectionConfigured: boolean;
+  readonly voiceSpeechSynthesisInstructionsConfigured: boolean;
   readonly voiceOutputVoiceIdConfigured: boolean;
   readonly voiceProviderLocalityConfigured: boolean;
 }
 
 function hasVoiceCredentialInput(fields: VoiceCredentialInputFields): boolean {
-  return (
-    fields.voiceBaseUrl.trim() !== "" ||
-    fields.voiceApiKey.trim() !== "" ||
-    fields.voiceApiKeyHeaderName.trim() !== "" ||
-    fields.voiceModelId.trim() !== "" ||
-    fields.voiceRealtimeModelId.trim() !== "" ||
-    fields.voiceRealtimeTranscriptionModelId.trim() !== "" ||
-    fields.voiceSpeechOutputModelId.trim() !== "" ||
-    fields.voiceTimeoutMs.trim() !== "" ||
-    fields.voiceSemanticTurnDetectionConfigured ||
-    fields.voiceOutputVoiceIdConfigured ||
-    fields.voiceProviderLocalityConfigured
-  );
+  const textInputs = [
+    fields.voiceBaseUrl,
+    fields.voiceApiKey,
+    fields.voiceApiKeyHeaderName,
+    fields.voiceModelId,
+    fields.voiceRealtimeModelId,
+    fields.voiceRealtimeTranscriptionModelId,
+    fields.voiceSpeechOutputModelId,
+    fields.voiceTimeoutMs,
+  ];
+  const configuredFlags = [
+    fields.voiceSemanticTurnDetectionConfigured,
+    fields.voiceSpeechSynthesisInstructionsConfigured,
+    fields.voiceOutputVoiceIdConfigured,
+    fields.voiceProviderLocalityConfigured,
+  ];
+  return textInputs.some((value) => value.trim() !== "") || configuredFlags.includes(true);
 }
 
 function hasExplicitVoiceDeployment(fields: VoiceCredentialInputFields): boolean {
@@ -477,6 +482,8 @@ interface VoiceCredentialPayloadInput {
   readonly voiceRealtimeTranscriptionModelId: string;
   readonly voiceSupportsSemanticTurnDetection: boolean;
   readonly voiceSemanticTurnDetectionConfigured: boolean;
+  readonly voiceSupportsSpeechSynthesisInstructions: boolean;
+  readonly voiceSpeechSynthesisInstructionsConfigured: boolean;
   readonly voiceSpeechOutputModelId: string;
   readonly voiceOutputVoiceId: string;
   readonly voiceOutputVoiceIdConfigured: boolean;
@@ -484,6 +491,24 @@ interface VoiceCredentialPayloadInput {
   readonly voiceProviderLocalityConfigured: boolean;
   readonly voiceTimeoutMs: number | undefined;
   readonly preserveExisting: boolean;
+}
+
+// Only an EXPLICIT tuning statement travels — true sets, false clears, unconfigured leaves the
+// stored template in charge; both flags are file-scoped exactly alike (#3037).
+function voiceTuningPayloadFields(
+  input: VoiceCredentialPayloadInput,
+): Pick<
+  GatewaySetupInput,
+  "voiceSupportsSemanticTurnDetection" | "voiceSupportsSpeechSynthesisInstructions"
+> {
+  return {
+    ...(input.voiceSemanticTurnDetectionConfigured
+      ? { voiceSupportsSemanticTurnDetection: input.voiceSupportsSemanticTurnDetection }
+      : {}),
+    ...(input.voiceSpeechSynthesisInstructionsConfigured
+      ? { voiceSupportsSpeechSynthesisInstructions: input.voiceSupportsSpeechSynthesisInstructions }
+      : {}),
+  };
 }
 
 function buildVoiceCredentialFields(
@@ -497,6 +522,7 @@ function buildVoiceCredentialFields(
   | "voiceRealtimeModelId"
   | "voiceRealtimeTranscriptionModelId"
   | "voiceSupportsSemanticTurnDetection"
+  | "voiceSupportsSpeechSynthesisInstructions"
   | "voiceSpeechOutputModelId"
   | "voiceOutputVoiceId"
   | "voiceProviderLocality"
@@ -521,9 +547,7 @@ function buildVoiceCredentialFields(
     ...(voiceRealtimeTranscriptionModelId === undefined
       ? {}
       : { voiceRealtimeTranscriptionModelId }),
-    ...(input.voiceSemanticTurnDetectionConfigured
-      ? { voiceSupportsSemanticTurnDetection: input.voiceSupportsSemanticTurnDetection }
-      : {}),
+    ...voiceTuningPayloadFields(input),
     ...(voiceSpeechOutputModelId === undefined ? {} : { voiceSpeechOutputModelId }),
     ...(voiceOutputVoiceId === undefined || !input.voiceOutputVoiceIdConfigured
       ? {}
@@ -555,6 +579,8 @@ interface GatewayFormFields {
   readonly voiceRealtimeTranscriptionModelId: string;
   readonly voiceSupportsSemanticTurnDetection: boolean;
   readonly voiceSemanticTurnDetectionConfigured: boolean;
+  readonly voiceSupportsSpeechSynthesisInstructions: boolean;
+  readonly voiceSpeechSynthesisInstructionsConfigured: boolean;
   readonly voiceSpeechOutputModelId: string;
   readonly voiceOutputVoiceId: string;
   readonly voiceOutputVoiceIdConfigured: boolean;
@@ -664,6 +690,8 @@ function voiceCredentialFieldsForMode(
     voiceRealtimeTranscriptionModelId: fields.voiceRealtimeTranscriptionModelId,
     voiceSupportsSemanticTurnDetection: fields.voiceSupportsSemanticTurnDetection,
     voiceSemanticTurnDetectionConfigured: fields.voiceSemanticTurnDetectionConfigured,
+    voiceSupportsSpeechSynthesisInstructions: fields.voiceSupportsSpeechSynthesisInstructions,
+    voiceSpeechSynthesisInstructionsConfigured: fields.voiceSpeechSynthesisInstructionsConfigured,
     voiceSpeechOutputModelId: fields.voiceSpeechOutputModelId,
     voiceOutputVoiceId: fields.voiceOutputVoiceId,
     voiceOutputVoiceIdConfigured: fields.voiceOutputVoiceIdConfigured,
@@ -2144,6 +2172,19 @@ export function GatewaySetupDialog({
   );
   const [voiceSemanticTurnDetectionConfigured, setVoiceSemanticTurnDetectionConfigured] =
     useState(false);
+  // No form control exists for speech-synthesis instruction support — the pair is file-scoped
+  // hidden state set by a config upload, cleared on a speech-output identity change (#3037).
+  const [voiceSupportsSpeechSynthesisInstructions, setVoiceSupportsSpeechSynthesisInstructions] =
+    useState(false);
+  const [
+    voiceSpeechSynthesisInstructionsConfigured,
+    setVoiceSpeechSynthesisInstructionsConfigured,
+  ] = useState(false);
+  // The model id the imported flag is BOUND to — a fresh dialog's identity ref never commits,
+  // so the binding, not the ref transition, invalidates the flag when the user retypes the
+  // speech-output deployment (review finding on #3041).
+  const [voiceSpeechSynthesisInstructionsModelId, setVoiceSpeechSynthesisInstructionsModelId] =
+    useState("");
   const [voiceSpeechOutputModelId, setVoiceSpeechOutputModelId] = useState("");
   const [voiceOutputVoiceId, setVoiceOutputVoiceId] = useState("");
   const [voiceOutputVoiceIdConfigured, setVoiceOutputVoiceIdConfigured] = useState(false);
@@ -2183,6 +2224,12 @@ export function GatewaySetupDialog({
   const resetSpeechOutputDependencies = (): void => {
     setVoiceOutputVoiceId("");
     setVoiceOutputVoiceIdConfigured(false);
+    // An EXPLICIT clear, not an omission: the replacement model's template at the same endpoint
+    // is the OLD provider's rawCapability, so an omitted field would re-inherit instruction
+    // support onto a deployment that never declared it (review finding on #3041).
+    setVoiceSupportsSpeechSynthesisInstructions(false);
+    setVoiceSpeechSynthesisInstructionsConfigured(true);
+    setVoiceSpeechSynthesisInstructionsModelId("");
   };
 
   const resetEndpointDependencies = (
@@ -2240,6 +2287,20 @@ export function GatewaySetupDialog({
       resetSpeechOutputDependencies,
       false,
     );
+    invalidateDivergedSynthesisBinding(next);
+  };
+
+  // Instruction support is a property of the exact deployment the file declared it for — a
+  // diverging id turns the configured flag into an EXPLICIT clear, or the server template at
+  // the same endpoint would re-inherit it onto the replacement model (review finding on #3041).
+  const invalidateDivergedSynthesisBinding = (next: string): void => {
+    if (
+      voiceSpeechSynthesisInstructionsConfigured &&
+      voiceSupportsSpeechSynthesisInstructions &&
+      next.trim() !== voiceSpeechSynthesisInstructionsModelId
+    ) {
+      setVoiceSupportsSpeechSynthesisInstructions(false);
+    }
   };
 
   const commitVoiceSpeechOutputModelId = (): void => {
@@ -2422,6 +2483,30 @@ export function GatewaySetupDialog({
     applyRole(fields.voiceSpeechOutputModelId, updateVoiceSpeechOutputModelId);
   }
 
+  // AFTER the speech-output role update — file-scoped like the roles: a voice section that says
+  // nothing about synthesis support resets the hidden pair, or a fresh dialog whose identity ref
+  // never committed would submit a stale configured true without a speech-output role and make
+  // the corrected file unsavable (review finding on #3041).
+  function applyUploadedSynthesisSupport(fields: GatewayConfigUploadFields): void {
+    if (
+      fields.voiceBaseUrl === undefined &&
+      fields.voiceSupportsSpeechSynthesisInstructions === undefined
+    ) {
+      return;
+    }
+    setVoiceSupportsSpeechSynthesisInstructions(
+      fields.voiceSupportsSpeechSynthesisInstructions ?? false,
+    );
+    setVoiceSpeechSynthesisInstructionsConfigured(
+      fields.voiceSupportsSpeechSynthesisInstructions !== undefined,
+    );
+    setVoiceSpeechSynthesisInstructionsModelId(
+      fields.voiceSupportsSpeechSynthesisInstructions !== undefined
+        ? (fields.voiceSpeechOutputModelId ?? "")
+        : "",
+    );
+  }
+
   function applyUploadedVoiceConfig(fields: GatewayConfigUploadFields): void {
     applyUploadedVoiceConnection(fields);
     applyUploadedVoiceRoles(fields);
@@ -2432,6 +2517,7 @@ export function GatewaySetupDialog({
       setVoiceOutputVoiceId(fields.voiceOutputVoiceId ?? "");
       setVoiceOutputVoiceIdConfigured(fields.voiceOutputVoiceId !== undefined);
     }
+    applyUploadedSynthesisSupport(fields);
     if (fields.voiceProviderLocality !== undefined) {
       setVoiceProviderLocality(fields.voiceProviderLocality);
       setVoiceProviderLocalityConfigured(true);
@@ -2492,6 +2578,8 @@ export function GatewaySetupDialog({
           voiceRealtimeTranscriptionModelId,
           voiceSupportsSemanticTurnDetection,
           voiceSemanticTurnDetectionConfigured,
+          voiceSupportsSpeechSynthesisInstructions,
+          voiceSpeechSynthesisInstructionsConfigured,
           importedVoiceEndpointStyle,
           importedVoiceApiVersion,
           importedVoiceRealtimeAuthMode,
@@ -2552,6 +2640,7 @@ export function GatewaySetupDialog({
     voiceSpeechOutputModelId,
     voiceTimeoutMs,
     voiceSemanticTurnDetectionConfigured,
+    voiceSpeechSynthesisInstructionsConfigured,
     voiceOutputVoiceIdConfigured,
     voiceProviderLocalityConfigured,
   });

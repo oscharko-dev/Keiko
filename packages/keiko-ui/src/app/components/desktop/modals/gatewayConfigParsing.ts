@@ -91,6 +91,7 @@ const CAPABILITY_FLAG_KEYS = [
   "supportsSpeechOutput",
   "supportsRealtimeVoice",
   "supportsSemanticTurnDetection",
+  "supportsSpeechSynthesisInstructions",
 ] as const;
 
 export interface GatewayConfigUploadFields {
@@ -130,6 +131,8 @@ export interface GatewayConfigUploadFields {
   readonly voiceRealtimeTranscriptionModelId: string | undefined;
   /** `undefined` when the file carries no realtime voice capability to speak about it. */
   readonly voiceSemanticTurnDetection: boolean | undefined;
+  /** `undefined` when the file carries no speech-output provider to speak about it. */
+  readonly voiceSupportsSpeechSynthesisInstructions: boolean | undefined;
   /** Derived from the speech-output provider's voice profiles — see voiceProfilesReduced. */
   readonly voiceOutputVoiceId: string | undefined;
   /**
@@ -190,6 +193,7 @@ interface ParsedCapability {
   readonly speechOutput: boolean;
   readonly realtime: boolean;
   readonly semanticTurnDetection: boolean;
+  readonly speechSynthesisInstructions: boolean;
   readonly realtimeTranscriptionModel: string | undefined;
   readonly voiceProviderLocality: VoiceProviderLocality | undefined;
 }
@@ -294,6 +298,7 @@ function capabilityFlagsMatchKind(value: Record<string, unknown>, kind: string):
     "supportsSpeechOutput",
     "supportsRealtimeVoice",
     "supportsSemanticTurnDetection",
+    "supportsSpeechSynthesisInstructions",
   ];
   if (kind !== "chat" && chatOnly.some((flag) => value[flag] === true)) return false;
   if (kind !== "voice" && voiceOnly.some((flag) => value[flag] === true)) return false;
@@ -314,6 +319,14 @@ function capabilityFlagsMatchKind(value: Record<string, unknown>, kind: string):
  */
 function realtimeTuningMatchesSupport(value: Record<string, unknown>): boolean {
   if (value.realtimeTranscriptionModel !== undefined && value.supportsRealtimeVoice !== true) {
+    return false;
+  }
+  // Synthesis instructions are speech-output tuning — the canonical parser checks field
+  // PRESENCE (a declared false without speech output refuses too, review finding on #3041).
+  if (
+    value.supportsSpeechSynthesisInstructions !== undefined &&
+    value.supportsSpeechOutput !== true
+  ) {
     return false;
   }
   return !(value.supportsSemanticTurnDetection === true && value.supportsRealtimeVoice !== true);
@@ -342,6 +355,7 @@ function parsedCapability(value: unknown, expectedId?: string): ParsedCapability
     speechOutput: value.supportsSpeechOutput === true,
     realtime: value.supportsRealtimeVoice === true,
     semanticTurnDetection: value.supportsSemanticTurnDetection === true,
+    speechSynthesisInstructions: value.supportsSpeechSynthesisInstructions === true,
     realtimeTranscriptionModel: transcription.value,
     voiceProviderLocality: locality.value,
   };
@@ -678,6 +692,7 @@ interface VoiceFields {
   readonly voiceRealtimeModelId: string | undefined;
   readonly voiceRealtimeTranscriptionModelId: string | undefined;
   readonly voiceSemanticTurnDetection: boolean | undefined;
+  readonly voiceSupportsSpeechSynthesisInstructions: boolean | undefined;
   readonly voiceOutputVoiceId: string | undefined;
   readonly voiceProfilesReduced: boolean;
   readonly voiceProviderLocality: VoiceProviderLocality | undefined;
@@ -786,17 +801,24 @@ function definedVoiceProviders(
   return [...new Set(entries)].filter((entry): entry is VoiceRoleProvider => entry !== undefined);
 }
 
+// A voice section must name its endpoint: the canonical parser requires baseUrl on every
+// provider and the product's sealed file always carries it. Importing role ids while
+// voiceBaseUrl stays undefined would split the dialog's file-scoped replacement semantics,
+// which key on voiceBaseUrl to decide whether the file speaks about voice at all (KfQ finding
+// on #3037).
+function voiceSectionLacksBaseUrl(
+  partition: PartitionedProviders,
+  connection: ConnectionScalars,
+): boolean {
+  return partition.voice.length > 0 && connection.baseUrl === undefined;
+}
+
 function voiceFields(partition: PartitionedProviders): VoiceFields | undefined {
   const roles = voiceRoles(partition);
   if (roles === undefined) return undefined;
   const resolved = resolvedVoiceConnection(roles);
   if (resolved === undefined) return undefined;
-  // A voice section must name its endpoint: the canonical parser requires baseUrl on every
-  // provider and the product's sealed file always carries it. Importing role ids while
-  // voiceBaseUrl stays undefined would split the dialog's file-scoped replacement semantics,
-  // which key on voiceBaseUrl to decide whether the file speaks about voice at all (KfQ finding
-  // on #3037).
-  if (partition.voice.length > 0 && resolved.connection.baseUrl === undefined) return undefined;
+  if (voiceSectionLacksBaseUrl(partition, resolved.connection)) return undefined;
   const realtime = resolved.realtimeSkipped ? undefined : roles.realtime;
   const { stt, tts } = effectiveSpeechRoles(roles, realtime);
   const outputVoice = outputVoiceFromProfiles(tts?.provider.voiceProfiles);
@@ -807,6 +829,9 @@ function voiceFields(partition: PartitionedProviders): VoiceFields | undefined {
     endpoint: resolved.endpoint,
     voiceModelId: stt?.provider.modelId,
     voiceSpeechOutputModelId: tts?.provider.modelId,
+    // Behavior-bearing speech-output tuning travels with the TTS role — dropping it would
+    // report success and silently lose instruction support (review finding on #3037).
+    voiceSupportsSpeechSynthesisInstructions: tts?.capability.speechSynthesisInstructions,
     ...realtimeVoiceFields(realtime),
     voiceOutputVoiceId: outputVoice.voiceId,
     voiceProfilesReduced: outputVoice.reduced,
@@ -936,6 +961,7 @@ function fieldsFrom(
     voiceRealtimeModelId: voice.voiceRealtimeModelId,
     voiceRealtimeTranscriptionModelId: voice.voiceRealtimeTranscriptionModelId,
     voiceSemanticTurnDetection: voice.voiceSemanticTurnDetection,
+    voiceSupportsSpeechSynthesisInstructions: voice.voiceSupportsSpeechSynthesisInstructions,
     voiceOutputVoiceId: voice.voiceOutputVoiceId,
     voiceProfilesReduced: voice.voiceProfilesReduced,
     voiceProviderLocality: voice.voiceProviderLocality,
