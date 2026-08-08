@@ -121,6 +121,12 @@ describe("encoded publishing lessons (source pins)", () => {
 describe("hermetic end-to-end (scripted gh double)", () => {
   const { mkdirSync, writeFileSync } = fsModule;
   const { join } = pathModule;
+  // The fixture tags derive from the checkout's real version: the script binds the release to
+  // the version at the BUILT commit and to the local checkout, so hardcoded tags would turn the
+  // whole suite red on the next version bump (review finding on #3037).
+  const localVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
+  const previousTag = `v${localVersion}-beta.1`;
+  const currentTag = `v${localVersion}-beta.2`;
 
   function ghDouble(recorded, overrides = {}) {
     return (command, args, options = {}) => {
@@ -176,7 +182,10 @@ describe("hermetic end-to-end (scripted gh double)", () => {
   function staticGhAnswer(joined) {
     const answers = [
       ["repo view", '{"nameWithOwner":"oscharko-dev/Keiko"}'],
-      ["api repos/{owner}/{repo}/releases", '[{"tag_name":"v0.3.0-beta.1"}]'],
+      ["api repos/{owner}/{repo}/releases", JSON.stringify([{ tag_name: previousTag }])],
+      // The manifest at the BUILT commit, served through the GitHub contents API: by default it
+      // agrees with the local checkout; the red paths override it (review finding on #3037).
+      ["contents/package.json", JSON.stringify({ version: localVersion })],
       ["run list --workflow", '[{"databaseId":42,"status":"in_progress"}]'],
       [
         "--json status,conclusion,headSha",
@@ -211,22 +220,25 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     const recorded = [];
     withHostPlatform("darwin", () =>
       withProcessRunner(ghDouble(recorded), () =>
-        runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+        runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
       ),
     );
 
     const createLine = recorded.find((line) => line.startsWith("gh release create"));
-    expect(createLine).toContain("v0.3.0-beta.2");
+    expect(createLine).toContain(currentTag);
     expect(createLine).toContain("--prerelease");
     // The tag binds to the exact commit the workflow built, never a moving branch ref — assets
     // and release source must agree even when the branch advanced mid-run (review finding on
     // #3032).
     expect(createLine).toContain("--target b2e3900a");
     expect(createLine).not.toContain("--target dev");
+    // The built commit's manifest was read at the exact head sha the run reports — the version
+    // binding judges the BUILT commit, not the local checkout alone (review finding on #3037).
+    expect(recorded.some((line) => line.includes("contents/package.json?ref=b2e3900a"))).toBe(true);
     expect(createLine).toContain("keiko-macos-arm64.zip");
     expect(createLine).toContain("keiko-windows-x64-setup.exe");
     // The predecessor got the superseded pointer prepended.
-    expect(recorded.some((line) => line.startsWith("gh release edit v0.3.0-beta.1"))).toBe(true);
+    expect(recorded.some((line) => line.startsWith(`gh release edit ${previousTag}`))).toBe(true);
     // The seal was verified on the darwin host before anything published.
     expect(recorded.some((line) => line.includes("codesign --verify --deep --strict"))).toBe(true);
   });
@@ -240,7 +252,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     expect(() =>
       withHostPlatform("darwin", () =>
         withProcessRunner(ghDouble(recorded, { jobs }), () =>
-          runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+          runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
         ),
       ),
     ).toThrowError(/staging jobs failed/u);
@@ -261,7 +273,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     expect(() =>
       withHostPlatform("darwin", () =>
         withProcessRunner(ghDouble(refusalRecorded, { codesign }), () =>
-          runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+          runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
         ),
       ),
     ).toThrowError(/codesign/u);
@@ -270,7 +282,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     const planRecorded = [];
     withHostPlatform("darwin", () =>
       withProcessRunner(ghDouble(planRecorded), () =>
-        runPortablePrerelease(["--plan-only", "--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+        runPortablePrerelease(["--plan-only", "--run-id", "42", "--tag", currentTag]),
       ),
     );
     expect(fsModule.existsSync(workDirOf(planRecorded))).toBe(false);
@@ -292,7 +304,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     expect(() =>
       withHostPlatform("darwin", () =>
         withProcessRunner(ghDouble(recorded, overrides), () =>
-          runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+          runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
         ),
       ),
     ).toThrowError(/artifact is missing the expected asset/u);
@@ -314,7 +326,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     expect(() =>
       withHostPlatform("darwin", () =>
         withProcessRunner(ghDouble(recorded, { codesign }), () =>
-          runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+          runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
         ),
       ),
     ).toThrowError(/damaged/u);
@@ -325,7 +337,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     const recorded = [];
     withHostPlatform("linux", () =>
       withProcessRunner(ghDouble(recorded), () =>
-        runPortablePrerelease(["--plan-only", "--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+        runPortablePrerelease(["--plan-only", "--run-id", "42", "--tag", currentTag]),
       ),
     );
 
@@ -333,29 +345,100 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
   });
 
-  it("dispatches the evaluation workflow when no run id is given", () => {
+  it("dispatches and binds to the run created by this dispatch, never a pre-existing one", () => {
     const recorded = [];
     const waits = [];
+    let listCalls = 0;
+    // The static answer table cannot flip mid-run, so this double answers the run list by call
+    // count: only the pre-existing run 41 before the dispatch, run 43 joining it afterwards. Run
+    // 41 stays FIRST in the post-dispatch list — the old `--limit 1` selection would pick it and
+    // publish another run's assets (review finding on #3037).
+    const doubleBase = ghDouble(recorded, {});
+    const flipping = (command, args, options) => {
+      if (args.join(" ").startsWith("run list")) {
+        listCalls += 1;
+        return {
+          status: 0,
+          stdout: listCalls === 1 ? '[{"databaseId":41}]' : '[{"databaseId":41},{"databaseId":43}]',
+          stderr: "",
+        };
+      }
+      return doubleBase(command, args, options);
+    };
     withSleeper(
       (ms) => waits.push(ms),
       () =>
         withHostPlatform("darwin", () =>
-          withProcessRunner(ghDouble(recorded), () =>
-            runPortablePrerelease(["--tag", "v0.3.0-beta.2"]),
-          ),
+          withProcessRunner(flipping, () => runPortablePrerelease(["--tag", currentTag])),
         ),
     );
 
     expect(recorded.some((line) => line.startsWith("gh workflow run"))).toBe(true);
+    // Only the id that was absent from the pre-dispatch set is the dispatched run.
+    expect(recorded.some((line) => line.startsWith("gh run view 43 "))).toBe(true);
+    expect(recorded.some((line) => line.startsWith("gh run view 41"))).toBe(false);
     expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(true);
-    // The dispatch waits once for the run to exist — through the seam, not a real wall-clock.
+    // The dispatch waits for the run to exist — through the seam, not a real wall-clock.
     expect(waits.length).toBeGreaterThan(0);
+  });
+
+  it("refuses when the dispatched run never appears instead of guessing at an existing run", () => {
+    const recorded = [];
+    const waits = [];
+    // The static run list never changes: the pre-dispatch run 42 stays the only entry, so no run
+    // attributable to THIS dispatch ever appears — a bounded refusal, never a guess.
+    expect(() =>
+      withSleeper(
+        (ms) => waits.push(ms),
+        () =>
+          withProcessRunner(ghDouble(recorded), () => runPortablePrerelease(["--tag", currentTag])),
+      ),
+    ).toThrowError(/did not appear/u);
+
+    expect(recorded.some((line) => line.startsWith("gh workflow run"))).toBe(true);
+    expect(recorded.some((line) => line.startsWith("gh run view"))).toBe(false);
+    expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+    // Every poll waited through the seam; the attempts are bounded, not a hang.
+    expect(waits.length).toBeGreaterThan(1);
+  });
+
+  it("refuses a run whose built commit carries a different package version", () => {
+    // With --run-id an operator can point at any older run — a v<version>-beta.N release must
+    // never carry another package version's assets (review finding on #3037).
+    const recorded = [];
+    const overrides = { answers: [["contents/package.json", '{"version":"0.0.0-other"}']] };
+
+    expect(() =>
+      withHostPlatform("darwin", () =>
+        withProcessRunner(ghDouble(recorded, overrides), () =>
+          runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
+        ),
+      ),
+    ).toThrowError(`builds version 0.0.0-other but the local checkout is ${localVersion}`);
+    // The refusal names both versions and happens before any asset is even downloaded.
+    expect(recorded.some((line) => line.startsWith("gh run download"))).toBe(false);
+    expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+  });
+
+  it("refuses a --tag that does not name the built version", () => {
+    const recorded = [];
+
+    expect(() =>
+      withHostPlatform("darwin", () =>
+        withProcessRunner(ghDouble(recorded), () =>
+          runPortablePrerelease(["--run-id", "42", "--tag", "v9.9.9-beta.0"]),
+        ),
+      ),
+    ).toThrowError(
+      `tag v9.9.9-beta.0 does not name the built version ${localVersion} (expected v${localVersion}-beta.<n>)`,
+    );
+    expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
   });
 
   it("refuses a tag that already exists", () => {
     expect(() =>
       withProcessRunner(ghDouble([]), () =>
-        runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.1"]),
+        runPortablePrerelease(["--run-id", "42", "--tag", previousTag]),
       ),
     ).toThrowError(/already exists/u);
   });
@@ -372,7 +455,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
 
     expect(() =>
       withProcessRunner(ghDouble([], overrides), () =>
-        runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+        runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
       ),
     ).toThrowError(/concluded cancelled/u);
   });
@@ -403,7 +486,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
       () =>
         withHostPlatform("darwin", () =>
           withProcessRunner(polling, () =>
-            runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+            runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
           ),
         ),
     );
@@ -417,7 +500,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     const overrides = { answers: [["api repos/{owner}/{repo}/releases", "[]"]] };
     withHostPlatform("darwin", () =>
       withProcessRunner(ghDouble(recorded, overrides), () =>
-        runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.0"]),
+        runPortablePrerelease(["--run-id", "42", "--tag", `v${localVersion}-beta.0`]),
       ),
     );
 
@@ -434,7 +517,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     };
     withHostPlatform("darwin", () =>
       withProcessRunner(ghDouble(recorded, overrides), () =>
-        runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+        runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
       ),
     );
 
@@ -445,7 +528,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     const recorded = [];
     withHostPlatform("darwin", () =>
       withProcessRunner(ghDouble(recorded, { nestArtifacts: true }), () =>
-        runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+        runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
       ),
     );
 
@@ -458,7 +541,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     expect(() =>
       withHostPlatform("darwin", () =>
         withProcessRunner(ghDouble(recorded, { strayOnCopy: true }), () =>
-          runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+          runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
         ),
       ),
     ).toThrowError(/publish set must be exactly/u);
@@ -470,7 +553,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     expect(() =>
       withHostPlatform("darwin", () =>
         withProcessRunner(ghDouble([], { jobs }), () =>
-          runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+          runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
         ),
       ),
     ).toThrowError(/expected 3 staging jobs/u);
@@ -482,7 +565,7 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     expect(() =>
       withHostPlatform("darwin", () =>
         withProcessRunner(ghDouble([], { codesign }), () =>
-          runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+          runPortablePrerelease(["--run-id", "42", "--tag", currentTag]),
         ),
       ),
     ).toThrowError(/codesign --verify --deep --strict failed/u);

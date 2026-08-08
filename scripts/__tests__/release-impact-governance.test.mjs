@@ -541,6 +541,44 @@ describe("release-impact governance", () => {
       expect(messages(inline)).toContain("on a line of its own");
     });
 
+    it("rejects a phrase that appears only inside a Markdown code fence", () => {
+      // Review finding on #3037: a fenced example ("here is what the gate expects") documents
+      // the phrase — it never grants the approval. Backtick and tilde fences alike.
+      const manifest = rootManifest();
+      const phrase = `Approved-for-publish: ${manifest.name}@${manifest.version}`;
+      const backtickFenced = validateWith(
+        approvalComment({ body: `The gate expects:\n\n\`\`\`\n${phrase}\n\`\`\`` }),
+      );
+      expect(messages(backtickFenced)).toContain("on a line of its own");
+
+      const tildeFenced = validateWith(approvalComment({ body: `~~~\n${phrase}\n~~~` }));
+      expect(messages(tildeFenced)).toContain("on a line of its own");
+    });
+
+    it("rejects a phrase that appears only inside a blockquote", () => {
+      // Review finding on #3037: a quoted line ("> Approved-for-publish: ...") cites the phrase,
+      // typically while discussing it — it is not the owner's own standalone statement.
+      const manifest = rootManifest();
+      const phrase = `Approved-for-publish: ${manifest.name}@${manifest.version}`;
+      const result = validateWith(approvalComment({ body: `Quoting:\n\n> ${phrase}\n\nHm.` }));
+
+      expect(messages(result)).toContain("on a line of its own");
+    });
+
+    it("accepts a real standalone phrase even when a fenced example precedes it", () => {
+      // The fence toggles closed again: a documented example above must not poison the owner's
+      // actual approval line below it.
+      const manifest = rootManifest();
+      const phrase = `Approved-for-publish: ${manifest.name}@${manifest.version}`;
+      const result = validateWith(
+        approvalComment({
+          body: `The gate expects:\n\n\`\`\`\n${phrase}\n\`\`\`\n\nAnd here it is for real:\n\n${phrase}`,
+        }),
+      );
+
+      expect(messages(result)).not.toContain("approvalReference");
+    });
+
     it("rejects one issue-comment artifact reused by two catalog records", () => {
       // Review finding on #3028: copying an existing owner approval into a newly appended entry
       // would smuggle unreviewed metadata past the gate.

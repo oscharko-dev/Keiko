@@ -54,6 +54,8 @@ const PUBLISH_ASSETS = [
 const DAMAGED_SIGNATURE_TEXT = "code has no resources but signature indicates they must be present";
 const POLL_INTERVAL_MS = 30_000;
 const MAX_WAIT_MS = 60 * 60 * 1000;
+const DISPATCH_FIND_INTERVAL_MS = 10_000;
+const DISPATCH_FIND_ATTEMPTS = 30;
 
 class PrereleaseFailure extends Error {}
 
@@ -183,11 +185,7 @@ function existingReleaseTags() {
   );
 }
 
-function dispatchWorkflow(ref) {
-  gh(["workflow", "run", WORKFLOW_PATH, "--ref", ref, "-f", "evaluation_build=true"]);
-  log(`dispatched ${WORKFLOW_PATH} on ${ref} (evaluation_build=true)`);
-  // The freshly dispatched run needs a moment to exist before it can be found.
-  sleep(10_000);
+function listWorkflowRunIds(ref) {
   const runs = ghJson([
     "run",
     "list",
@@ -196,12 +194,33 @@ function dispatchWorkflow(ref) {
     "--branch",
     ref,
     "--limit",
-    "1",
+    "50",
     "--json",
-    "databaseId,status",
+    "databaseId",
   ]);
-  if (runs.length === 0) fail("the dispatched workflow run could not be found.");
-  return String(runs[0].databaseId);
+  return runs.map((run) => String(run.databaseId));
+}
+
+/**
+ * The newest list entry is NOT necessarily the run this dispatch created — a previous or
+ * concurrent run can sit at the top of the list. Only a run id that did not exist BEFORE the
+ * dispatch can be the one just created, so the pre-dispatch id set is captured first and the
+ * poll waits for an id outside it (review finding on #3037).
+ */
+function dispatchWorkflow(ref) {
+  const before = new Set(listWorkflowRunIds(ref));
+  gh(["workflow", "run", WORKFLOW_PATH, "--ref", ref, "-f", "evaluation_build=true"]);
+  log(`dispatched ${WORKFLOW_PATH} on ${ref} (evaluation_build=true)`);
+  for (let attempt = 0; attempt < DISPATCH_FIND_ATTEMPTS; attempt += 1) {
+    // The freshly dispatched run needs a moment to exist before it can be found.
+    sleep(DISPATCH_FIND_INTERVAL_MS);
+    const created = listWorkflowRunIds(ref).find((id) => !before.has(id));
+    if (created !== undefined) return created;
+  }
+  fail(
+    `the dispatched workflow run did not appear within ${String(DISPATCH_FIND_ATTEMPTS)} polls; refusing to guess at an existing run.`,
+  );
+  return "";
 }
 
 function atomicsSleep(milliseconds) {
@@ -220,6 +239,36 @@ function waitForRun(runId) {
     if (view.status === "completed") return view;
     if (Date.now() - startedAt > MAX_WAIT_MS) fail(`run ${runId} did not complete within an hour.`);
     sleep(POLL_INTERVAL_MS);
+  }
+}
+
+/** The package version at the exact commit the workflow built, read through the GitHub API. */
+function builtVersion(commitSha) {
+  const manifest = ghJson([
+    "api",
+    `repos/{owner}/{repo}/contents/package.json?ref=${commitSha}`,
+    "-H",
+    "Accept: application/vnd.github.raw+json",
+  ]);
+  return String(manifest.version);
+}
+
+/**
+ * The release is bound to the BUILT commit, not the local checkout: with --run-id an operator can
+ * point at any older run, so a v<version>-beta.N release could otherwise carry another package
+ * version's assets. The version at the run's head commit must match the local checkout, and the
+ * selected tag must name exactly that version (review finding on #3037).
+ */
+function assertRunMatchesRelease(commitSha, version, tag) {
+  const built = builtVersion(commitSha);
+  if (built !== version) {
+    fail(
+      `the workflow head commit ${commitSha} builds version ${built} but the local checkout is ${version}; refusing to publish another version's assets.`,
+    );
+  }
+  const match = /^v(?<version>.+)-beta\.\d+$/u.exec(tag);
+  if (match?.groups?.version !== built) {
+    fail(`tag ${tag} does not name the built version ${built} (expected v${built}-beta.<n>).`);
   }
 }
 
@@ -407,6 +456,7 @@ export function runPortablePrerelease(argv) {
   if (view.conclusion !== "success" && view.conclusion !== "failure") {
     fail(`run ${runId} concluded ${view.conclusion}; refusing to publish from it.`);
   }
+  assertRunMatchesRelease(view.headSha, version, tag);
   assertStagingJobsSucceeded(runId);
   const { workDir, publishDir } = downloadAssets(runId);
   try {

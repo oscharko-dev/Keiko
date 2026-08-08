@@ -303,8 +303,7 @@ function validateGithubIssueCommentState(entry, comment, reference, index, failu
   // QUOTES the marker in a denial ("DO NOT use Approved-for-publish: ...") as an affirmative
   // approval (review finding on #3028).
   const standsAlone =
-    typeof comment.body === "string" &&
-    comment.body.split("\n").some((line) => line.trim() === phrase);
+    typeof comment.body === "string" && phraseStandsOnPlainLine(comment.body, phrase);
   if (!standsAlone) {
     failures.push(
       failure(
@@ -324,6 +323,26 @@ function validateGithubIssueCommentState(entry, comment, reference, index, failu
       ),
     );
   }
+}
+
+/**
+ * True only when the phrase stands on a plain Markdown line of its own: outside every code fence
+ * and outside every blockquote. A fenced example ("```\nApproved-for-publish: ...\n```") or a
+ * quoted line ("> Approved-for-publish: ...") documents the phrase — it never grants the approval
+ * (review finding on #3037).
+ */
+function phraseStandsOnPlainLine(body, phrase) {
+  let inFence = false;
+  for (const rawLine of body.split("\n")) {
+    const line = rawLine.trim();
+    if (line.startsWith("```") || line.startsWith("~~~")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence || line.startsWith(">")) continue;
+    if (line === phrase) return true;
+  }
+  return false;
 }
 
 function readGithubIssueComment(reference) {
