@@ -1028,9 +1028,26 @@ async function assembleStageForTest(
       buildRuntimeSupervisor: writeRuntimeSupervisorFixture,
       buildSecureReadHelper: writeSecureReadHelperFixture,
       preparePackageSurface: preparePackageSurfaceForTest,
+      sealMacosAppBundle: writeMacosSealFixture,
       stageUsearchAddon: writeUsearchAddonFixture,
+      verifyMacosAppBundleSeal: verifyMacosSealFixture,
     },
   );
+}
+
+// The fixture mirrors what the real ad-hoc seal leaves behind: a `_CodeSignature/CodeResources`
+// inside the bundle. Its verify counterpart fails exactly like `codesign --verify` would when the
+// seal is missing, so a staging reorder that drops or skips the seal fails these tests too.
+function writeMacosSealFixture(appRoot) {
+  const sealDir = join(appRoot, "Contents", "_CodeSignature");
+  mkdirSync(sealDir, { recursive: true });
+  writeFileSync(join(sealDir, "CodeResources"), "fixture ad-hoc seal\n");
+}
+
+function verifyMacosSealFixture(appRoot) {
+  if (!existsSync(join(appRoot, "Contents", "_CodeSignature", "CodeResources"))) {
+    throw new Error("fixture seal verification failed: bundle carries no seal");
+  }
 }
 
 function writePrimaryLauncherFixture(target, destination) {
@@ -2414,6 +2431,54 @@ describe("portable runtime package scripts", () => {
     expect(source).not.toContain('["install"');
   });
 
+  it("seals the macOS bundle after the activation manifest and verifies it after the final write", () => {
+    // Ordering is the whole guarantee: a seal created before the activation write ships a bundle
+    // whose seal does not cover the manifest, and a shipped ZIP created before the seal ships the
+    // beta.0 "damaged" bundle again. The final platform verification must stay the last
+    // payload-affecting step so any later mutation fails staging instead of the customer journey.
+    const source = readFileSync("scripts/stage-portable-runtime.mjs", "utf8");
+    const firstActivationWrite = source.indexOf(
+      "const firstActivation = writeRuntimeActivationManifest(",
+    );
+    const seal = source.indexOf("sealMacosAppBundle(target, paths.payloadRoot, hooks);");
+    const shippedArchive = source.indexOf(
+      "const manifestInput = await manifestInputFor(options, target, paths, tarball, staged);",
+    );
+    const finalActivationWrite = source.indexOf(
+      "const finalActivation = writeRuntimeActivationManifest(",
+    );
+    const sealVerification = source.indexOf(
+      "verifyMacosAppBundleSeal(target, paths.payloadRoot, hooks);",
+    );
+
+    expect(firstActivationWrite).toBeGreaterThan(-1);
+    expect(firstActivationWrite).toBeLessThan(seal);
+    expect(seal).toBeLessThan(shippedArchive);
+    expect(shippedArchive).toBeLessThan(finalActivationWrite);
+    expect(finalActivationWrite).toBeLessThan(sealVerification);
+    expect(source).toContain(
+      'fail("runtime activation manifest changed after the app bundle was sealed");',
+    );
+    expect(source).toContain('run("/usr/bin/codesign", ["--force", "--sign", "-", appRoot]);');
+    expect(source).toContain(
+      'run("/usr/bin/codesign", ["--verify", "--deep", "--strict", appRoot]);',
+    );
+    // Nested code signs before the outer seal (inside-out): x86_64 Mach-Os are NOT linker-signed,
+    // and codesign refuses to seal a bundle over unsigned subcomponents (measured on
+    // macos-15-intel). The order below is what makes the seal possible on Intel at all.
+    const systemExtensionSign = source.indexOf(
+      "SystemExtensions",
+      source.indexOf("function sealMacosAppBundle"),
+    );
+    const managerSign = source.indexOf('"KeikoSystemExtensionManager"', systemExtensionSign);
+    const outerSeal = source.indexOf(
+      'run("/usr/bin/codesign", ["--force", "--sign", "-", appRoot]);',
+    );
+    expect(systemExtensionSign).toBeGreaterThan(-1);
+    expect(systemExtensionSign).toBeLessThan(managerSign);
+    expect(managerSign).toBeLessThan(outerSeal);
+  });
+
   it("validates the staged app package surface before archive assembly", () => {
     const dir = tempDir();
     const appRoot = join(dir, "app");
@@ -2870,6 +2935,13 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
     const assetPath = join(root, "keiko-macos-arm64.zip");
     const manifestPath = join(root, "manifest", "portable-manifest.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    // v0.3.0-beta.0 regression: an app bundle without a resource seal is what Gatekeeper reports
+    // as "damaged" — with no "Open Anyway" path at all. The staged bundle must carry its seal.
+    expect(
+      existsSync(
+        join(root, "payload", "Keiko", "Keiko.app", "Contents", "_CodeSignature", "CodeResources"),
+      ),
+    ).toBe(true);
     expect(manifest.nativeAddons).toMatchObject([
       {
         name: "usearch",
@@ -3265,6 +3337,9 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
     expect(existsSync(join(runtimeRoot, "LICENSE"))).toBe(true);
     expect(existsSync(join(runtimeRoot, "NOTICE"))).toBe(true);
     expect(existsSync(join(sidecarRoot, "opencode.cmd"))).toBe(true);
+    // The macOS bundle seal must never touch a Windows stage: a seal hook invoked here would
+    // conjure a phantom Keiko.app into the payload.
+    expect(existsSync(join(outDir, "windows-x64", "payload", "Keiko", "Keiko.app"))).toBe(false);
     expect(
       JSON.parse(
         readFileSync(

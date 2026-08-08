@@ -774,5 +774,6 @@ well as setting `KEIKO_QUALITY_ENABLED`. The cost arithmetic itself is in
 - [HTML Manual Knowledge Pod refresh runbook](./html-manual-pod-refresh.md) — refresh-specific troubleshooting and operational guidance.
 - [Atlassian connector troubleshooting runbook](./atlassian-connector.md) — verify statuses, sync and write degradation reasons, and enterprise proxy/CA failures for the Atlassian connector.
 - [Native OS file/folder dialog runbook](./native-file-dialog.md) — unsupported platforms, macOS privacy (TCC) read limits, and Windows interactive-session requirements for Browse.
+- [macOS portable first-launch runbook](./macos-portable-first-launch.md) — the "damaged" Gatekeeper verdict, silent double-click exits, and same-path adoption for hand-moved bundles.
 
 For new entries, follow the [troubleshooting entry template](./_template.md).

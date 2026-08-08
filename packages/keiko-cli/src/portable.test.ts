@@ -1512,7 +1512,10 @@ describe("runPortableCli", () => {
     expect(readFileSync(join(managedRoot, "important.txt"), "utf8")).toBe("preserve me\n");
   });
 
-  it("refuses to attest an unregistered existing root through same-path setup", async () => {
+  it("adopts a pristine, fully validated root in place through same-path setup", async () => {
+    // Owner-approved for 0.3.0-beta.1: the canonical install gesture moves the bundle to the
+    // managed location BEFORE the first launch. With no registration at all, a root that passes
+    // full validation is a first run and gets attested in place.
     const root = tempRoot();
     const home = join(root, "home");
     const managedRoot = join(home, "PortableApps", "Keiko");
@@ -1537,14 +1540,150 @@ describe("runPortableCli", () => {
       { homedir: () => home, now: () => NOW },
     );
 
+    expect(code).toBe(0);
+    expect(c.out()).toContain("Keiko portable setup ready at managed root.");
+    expect(registration(stateDir)).toMatchObject({ status: "managed", updateEligible: true });
+  });
+
+  it("never adopts an unvalidated same-path root", async () => {
+    // The relocated #2966 pin, half one: adoption goes through the complete portable-root
+    // validation, so a root whose manifest is broken records a failure and is never attested.
+    const root = tempRoot();
+    const home = join(root, "home");
+    const managedRoot = join(home, "PortableApps", "Keiko");
+    const stateDir = join(root, "state");
+    const c = capture();
+    writeWindowsFixture(managedRoot);
+    writeFileSync(join(managedRoot, ".portable", "setup-manifest.json"), "{ not json\n");
+
+    const code = await runPortableCli(
+      [
+        "setup",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        managedRoot,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      c.io,
+      windowsPortableEnv(home),
+      { homedir: () => home, now: () => NOW },
+    );
+
     expect(code).toBe(1);
-    expect(c.err()).toContain("existing same-path managed install root is not attested");
     expect(registration(stateDir)).toMatchObject({ status: "setup-failed", updateEligible: false });
   });
 
+  it.each([
+    // Unparseable JSON fails closed before adoption is even considered (the read itself throws);
+    // a parseable record with an unknown schema reaches the adoption gate and must be treated as
+    // an existing registration, not a pristine first run — treating it as absent would let
+    // corrupting one file reopen adoption over a tampered root (#3026 review finding).
+    ["unparseable JSON", "{ corrupted\n", undefined],
+    [
+      "schema-invalid record",
+      '{"schemaVersion":999}\n',
+      "existing same-path managed install root is not attested",
+    ],
+  ] as const)(
+    "never adopts over a malformed existing registration (%s)",
+    async (_label, stateBytes, expectedMessage) => {
+      const root = tempRoot();
+      const home = join(root, "home");
+      const managedRoot = join(home, "PortableApps", "Keiko");
+      const stateDir = join(root, "state");
+      const c = capture();
+      writeWindowsFixture(managedRoot);
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(join(stateDir, "portable-install-state.json"), stateBytes);
+
+      const code = await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          managedRoot,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        c.io,
+        windowsPortableEnv(home),
+        { homedir: () => home, now: () => NOW },
+      );
+
+      expect(code).toBe(1);
+      if (expectedMessage !== undefined) expect(c.err()).toContain(expectedMessage);
+      // Neither shape may ever have attested the root.
+      expect(c.out()).not.toContain("ready at managed root");
+    },
+  );
+
+  it("never re-binds an existing registration to different same-path bytes", async () => {
+    // The relocated #2966 pin, half two: once a registration exists, a same-path root whose
+    // identity no longer matches it stays refused — this is exactly what detects
+    // post-attestation tampering, and adoption must never open it.
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const managedRoot = join(home, "PortableApps", "Keiko");
+    const stateDir = join(root, "state");
+    const env = windowsPortableEnv(home);
+    writeWindowsFixture(source);
+
+    expect(
+      await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          managedRoot,
+          "--state-dir",
+          stateDir,
+        ],
+        capture().io,
+        env,
+        { homedir: () => home, now: () => NOW },
+      ),
+    ).toBe(0);
+    expect(registration(stateDir)).toMatchObject({ status: "managed" });
+    writeFileSync(join(managedRoot, "Keiko.exe"), "tampered launcher bytes");
+
+    const c = capture();
+    const code = await runPortableCli(
+      [
+        "setup",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        managedRoot,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      c.io,
+      env,
+      { homedir: () => home, now: () => NOW },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("existing same-path managed install root is not attested");
+  });
+
   it.each(["setup", "launch"] as const)(
-    "refuses unregistered macOS parent and Resources aliases during %s",
+    "adopts pristine macOS parent and Resources aliases in place during %s",
     async (command) => {
+      // The alias spellings resolve to the same install root, so they follow the same
+      // owner-approved first-run adoption as the direct bundle path.
       for (const alias of ["parent", "resources"] as const) {
         const root = tempRoot();
         const home = join(root, "home");
@@ -1553,6 +1692,7 @@ describe("runPortableCli", () => {
         const portableRoot =
           alias === "parent" ? sourceRoot : join(managedRoot, "Contents", "Resources");
         const stateDir = join(root, `state-${command}-${alias}`);
+        const lifecycleStarts: string[] = [];
         const c = capture();
 
         const code = await runPortableCli(
@@ -1569,15 +1709,22 @@ describe("runPortableCli", () => {
           ],
           c.io,
           {},
-          { homedir: () => home, now: () => NOW },
+          {
+            homedir: () => home,
+            now: () => NOW,
+            activateMacosRuntimeFn: () => Promise.resolve("waived-unsigned" as const),
+            lifecycleFn: (_command, _args, _io, _env, deps) => {
+              lifecycleStarts.push(deps.cwd);
+              return Promise.resolve(0);
+            },
+          },
         );
 
-        expect(code).toBe(1);
-        expect(c.err()).toContain("existing same-path managed install root is not attested");
-        expect(registration(stateDir)).toMatchObject({
-          status: "setup-failed",
-          updateEligible: false,
-        });
+        expect(code).toBe(0);
+        expect(registration(stateDir)).toMatchObject({ status: "managed", updateEligible: true });
+        expect(lifecycleStarts).toEqual(
+          command === "launch" ? [join(managedRoot, "Contents", "Resources", "app")] : [],
+        );
       }
     },
   );
@@ -1976,7 +2123,7 @@ describe("runPortableCli", () => {
         homedir: () => home,
         activateMacosRuntimeFn: () => {
           events.push("activate");
-          return Promise.resolve(true);
+          return Promise.resolve("active" as const);
         },
         lifecycleFn: () => {
           events.push("start");
@@ -2015,7 +2162,7 @@ describe("runPortableCli", () => {
       {},
       {
         homedir: () => home,
-        activateMacosRuntimeFn: () => Promise.resolve(false),
+        activateMacosRuntimeFn: () => Promise.resolve("unavailable" as const),
         lifecycleFn: () => {
           started = true;
           return Promise.resolve(0);
@@ -2026,6 +2173,114 @@ describe("runPortableCli", () => {
     expect(code).toBe(1);
     expect(started).toBe(false);
     expect(c.err()).toContain("macOS runtime activation is incomplete");
+  });
+
+  it("launches a macOS install whose containment is waived for the missing release signature", async () => {
+    // The v0.3.0-beta.0 incident, pinned at the launch layer: the strict activation requirement
+    // turned every double-click of the unsigned evaluation install into a silent exit 1. A waived
+    // activation must start the server and must say what was waived.
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = writePortableFixture(join(root, "bootstrap"), "macos-x64");
+    const managedRoot = managedRootForTarget(home, "macos-x64");
+    const stateDir = join(root, "state");
+    const c = capture();
+    let started = false;
+
+    await runPortableCli(
+      portableLaunchArgs("macos-x64", source, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        now: () => NOW,
+        spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+      },
+    );
+
+    const code = await runPortableCli(
+      portableLaunchArgs("macos-x64", managedRoot, managedRoot, stateDir),
+      c.io,
+      {},
+      {
+        homedir: () => home,
+        activateMacosRuntimeFn: () => Promise.resolve("waived-unsigned" as const),
+        lifecycleFn: () => {
+          started = true;
+          return Promise.resolve(0);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(started).toBe(true);
+    expect(c.out()).toContain("containment is waived");
+  });
+
+  it("surfaces a failed launch through the failure notifier with the launch environment", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = writePortableFixture(join(root, "bootstrap"), "macos-x64");
+    const managedRoot = managedRootForTarget(home, "macos-x64");
+    const stateDir = join(root, "state");
+    const launchEnv = { KEIKO_PORTABLE_UI_LAUNCH: "1" };
+    const notified: [string, unknown][] = [];
+
+    await runPortableCli(
+      portableLaunchArgs("macos-x64", source, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        now: () => NOW,
+        spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+      },
+    );
+
+    const code = await runPortableCli(
+      portableLaunchArgs("macos-x64", managedRoot, managedRoot, stateDir),
+      capture().io,
+      launchEnv,
+      {
+        homedir: () => home,
+        activateMacosRuntimeFn: () => Promise.resolve("unavailable" as const),
+        lifecycleFn: () => Promise.resolve(0),
+        notifyFailureFn: (message, env) => {
+          notified.push([message, env]);
+        },
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(notified).toEqual([
+      ["keiko portable launch: macOS runtime activation is incomplete\n", launchEnv],
+    ]);
+  });
+
+  it("does not raise the failure notifier for a successful launch", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = writePortableFixture(join(root, "bootstrap"), "macos-x64");
+    const managedRoot = managedRootForTarget(home, "macos-x64");
+    const stateDir = join(root, "state");
+    let notified = false;
+
+    const code = await runPortableCli(
+      portableLaunchArgs("macos-x64", source, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        now: () => NOW,
+        spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+        notifyFailureFn: () => {
+          notified = true;
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(notified).toBe(false);
   });
 
   it.each(["windows-x64", "macos-arm64", "macos-x64"] as const)(
@@ -2061,7 +2316,7 @@ describe("runPortableCli", () => {
         {
           homedir: () => home,
           now: () => new Date("2026-07-07T00:00:00.000Z"),
-          activateMacosRuntimeFn: () => Promise.resolve(true),
+          activateMacosRuntimeFn: () => Promise.resolve("active" as const),
           lifecycleFn: (command) => {
             events.push(command);
             return Promise.resolve(0);
@@ -2200,7 +2455,7 @@ describe("runPortableCli", () => {
       {
         homedir: () => home,
         now: () => new Date("2026-07-07T00:00:00.000Z"),
-        activateMacosRuntimeFn: () => Promise.resolve(true),
+        activateMacosRuntimeFn: () => Promise.resolve("active" as const),
         lifecycleFn: (command) => {
           events.push(command);
           return Promise.resolve(0);
@@ -2264,7 +2519,7 @@ describe("runPortableCli", () => {
       {
         homedir: () => home,
         now: () => new Date("2026-07-07T00:00:00.000Z"),
-        activateMacosRuntimeFn: () => Promise.resolve(true),
+        activateMacosRuntimeFn: () => Promise.resolve("active" as const),
         lifecycleFn: (command) => {
           events.push(command);
           return Promise.resolve(0);
@@ -2308,7 +2563,7 @@ describe("runPortableCli", () => {
       {},
       {
         homedir: () => home,
-        activateMacosRuntimeFn: () => Promise.resolve(true),
+        activateMacosRuntimeFn: () => Promise.resolve("active" as const),
         lifecycleFn: (command) => {
           events.push(command);
           return Promise.resolve(0);
@@ -2416,7 +2671,7 @@ describe("runPortableCli", () => {
     expect(c.err()).toContain("portable registration refused unknown artifact");
   });
 
-  it("refuses an unregistered same-path portable root during launch", async () => {
+  it("adopts and launches a pristine same-path portable root", async () => {
     const root = tempRoot();
     const home = join(root, "home");
     const managedRoot = join(home, "managed", "Keiko");
@@ -2449,11 +2704,11 @@ describe("runPortableCli", () => {
       },
     );
 
-    expect(code).toBe(1);
-    expect(lifecycleStarts).toEqual([]);
+    expect(code).toBe(0);
+    expect(lifecycleStarts).toEqual([join(managedRoot, "app")]);
     expect(registration(stateDir)).toMatchObject({
-      status: "setup-failed",
-      updateEligible: false,
+      status: "managed",
+      updateEligible: true,
     });
   });
 
