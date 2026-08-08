@@ -613,6 +613,24 @@ describe("release-impact governance", () => {
       expect(afterComment.ok).toBe(true);
     });
 
+    it("rejects a phrase inside raw-HTML blocks", () => {
+      // Review finding on #3037: <pre> renders its content as a code example (blank lines
+      // included, until the closing tag); any other "<"-opened block runs to the next blank
+      // line. Neither may approve; a phrase after the closed/ended block still approves.
+      const phrase = approvalPhrase();
+      const pre = validateWith(approvalComment({ body: `<pre>\n${phrase}\n</pre>` }));
+      expect(pre.ok).toBe(false);
+
+      const preWithBlank = validateWith(approvalComment({ body: `<pre>\n\n${phrase}\n</pre>` }));
+      expect(preWithBlank.ok).toBe(false);
+
+      const divNoBlank = validateWith(approvalComment({ body: `<div>\n${phrase}` }));
+      expect(divNoBlank.ok).toBe(false);
+
+      const afterBlock = validateWith(approvalComment({ body: `<div>note</div>\n\n${phrase}` }));
+      expect(afterBlock.ok).toBe(true);
+    });
+
     it("rejects a close-then-reopen comment line hiding the phrase", () => {
       // Review finding on #3037: "--> <!--" on one line closes a comment AND opens the next, so
       // the following phrase still renders invisibly — every marker on the line is walked in

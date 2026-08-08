@@ -367,6 +367,31 @@ function isIndentedCodeLine(rawLine) {
   return false;
 }
 
+// Raw-HTML blocks render as code or markup, never as an affirmative statement: a phrase inside
+// <pre>/<script>/<style>/<textarea> (CommonMark HTML block type 1 — runs to its closing tag,
+// blank lines included) or any other "<"-opened block (types 6/7 — run to the next blank line)
+// must never approve (review finding on #3037).
+function htmlBlockContextLine(line, state) {
+  if (state.inHtmlPre) {
+    if (/<\/(?:pre|script|style|textarea)>/iu.test(line)) state.inHtmlPre = false;
+    return true;
+  }
+  if (/^<(?:pre|script|style|textarea)\b/iu.test(line)) {
+    if (!/<\/(?:pre|script|style|textarea)>/iu.test(line)) state.inHtmlPre = true;
+    return true;
+  }
+  if (state.inHtmlBlock) {
+    // A blank line ends a type-6/7 block; the blank itself is still block context.
+    if (line === "") state.inHtmlBlock = false;
+    return true;
+  }
+  if (line.startsWith("<")) {
+    state.inHtmlBlock = true;
+    return true;
+  }
+  return false;
+}
+
 // One walker step: mutates the fence/blockquote state and reports whether the line is Markdown
 // CONTEXT (fenced, indented code, blockquote or its CommonMark lazy continuation — a non-blank
 // line directly after a "> ..." line still renders inside the quote; only a blank line ends it)
@@ -402,12 +427,14 @@ function approvalContextLine(rawLine, state) {
   const line = rawLine.trim();
   const delimiter = fenceDelimiter(line);
   if (htmlCommentContextLine(line, state)) return true;
+  if (htmlBlockContextLine(line, state)) return true;
   if (state.openFence !== undefined) {
     if (closesFence(state.openFence, line, delimiter)) state.openFence = undefined;
     return true;
   }
   if (line === "") {
     state.inBlockquote = false;
+    state.inHtmlBlock = false;
     return true;
   }
   if (isIndentedCodeLine(rawLine)) return true;
@@ -423,7 +450,13 @@ function approvalContextLine(rawLine, state) {
 }
 
 function phraseStandsOnPlainLine(body, phrase) {
-  const state = { openFence: undefined, inBlockquote: false, inHtmlComment: false };
+  const state = {
+    openFence: undefined,
+    inBlockquote: false,
+    inHtmlComment: false,
+    inHtmlPre: false,
+    inHtmlBlock: false,
+  };
   for (const rawLine of body.split("\n")) {
     if (approvalContextLine(rawLine, state)) continue;
     if (rawLine.trim() === phrase) return true;

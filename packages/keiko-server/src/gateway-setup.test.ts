@@ -3336,7 +3336,9 @@ describe("handleGatewaySetup", () => {
       apiKey: "example-header-rotated-token",
       apiKeyHeaderName: "x-litellm-key",
     });
-    expect(savedHeaders.get("remote-ocr")).not.toMatchObject({ apiKeyHeaderName: "x-litellm-key" });
+    // The dedicated OCR keeps its own header — pinned positively (the fixture stores no header,
+    // so the parser's bearer default "authorization" is the exact preserved value).
+    expect(savedHeaders.get("remote-ocr")).toMatchObject({ apiKeyHeaderName: "authorization" });
 
     // Moving the gateway endpoint takes every shared-connection provider along — URL, token,
     // and header travel together, because the old connection dies with the update; the
@@ -3439,6 +3441,64 @@ describe("handleGatewaySetup", () => {
       (provider) => provider.modelId === "keiko-stt",
     );
     expect(voice?.apiKey).toBe("voice-token");
+    deps.store.close();
+  });
+
+  it("derives the primary from the chat role even when a dedicated provider is listed first", async () => {
+    // Review finding on #3037: the first NON-VOICE provider can itself be a dedicated embedding
+    // — using its connection as the primary misclassified every chat-sharing provider as
+    // dedicated, restoring them with revoked credentials after a rotation.
+    const uiDir = await tempDir("keiko-gw-ui-primary-chat-role-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-primary-chat-role-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "dedicated-embed",
+            baseUrl: "https://embed.example.com",
+            apiKey: "dedicated-embed-token",
+            capability: { id: "dedicated-embed", kind: "embedding" },
+          },
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "shared-embed",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            capability: { id: "shared-embed", kind: "embedding" },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const rotated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "rotated-token" }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const tokens = new Map(
+      (currentGatewayConfig(deps)?.providers ?? []).map((provider) => [
+        provider.modelId,
+        provider.apiKey,
+      ]),
+    );
+    // The chat-sharing embedding follows the rotation; the dedicated one keeps its own token.
+    expect(tokens.get("shared-embed")).toBe("rotated-token");
+    expect(tokens.get("dedicated-embed")).toBe("dedicated-embed-token");
     deps.store.close();
   });
 

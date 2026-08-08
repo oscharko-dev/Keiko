@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { spawnSync as realSpawnSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import {
+  assertTagKeepsBetaSequenceMonotonic,
   nextBetaTag,
   parseArgs,
   previousBetaTag,
@@ -57,6 +58,17 @@ describe("beta tag arithmetic", () => {
     expect(nextBetaTag("0.3.0", [])).toBe("v0.3.0-beta.0");
     expect(nextBetaTag("0.3.0", ["v0.3.0-beta.0", "v0.3.0-beta.1", "v0.2.15"])).toBe(
       "v0.3.0-beta.2",
+    );
+  });
+
+  it("allows resuming the highest existing beta while refusing anything below it", () => {
+    // Boundary of the monotonicity guard: equal is not below (draft resumption), strictly
+    // higher existing betas refuse (review finding on #3037).
+    expect(() =>
+      assertTagKeepsBetaSequenceMonotonic("v0.3.0-beta.9", ["v0.3.0-beta.9"]),
+    ).not.toThrow();
+    expect(() => assertTagKeepsBetaSequenceMonotonic("v0.3.0-beta.8", ["v0.3.0-beta.9"])).toThrow(
+      /below the existing v0\.3\.0-beta\.9/u,
     );
   });
 
@@ -269,14 +281,16 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     // is bound ATOMICALLY through a git/refs POST before the release exists, with the create
     // only verifying the tag is still there (review findings on #3032/#3037; relocated from the
     // former --target pin, which bound only a not-yet-existing tag).
-    expect(
-      recorded.some(
-        (line) =>
-          line.includes("git/refs") &&
-          line.includes(`ref=refs/tags/${currentTag}`) &&
-          line.includes("sha=b2e3900a"),
-      ),
-    ).toBe(true);
+    const tagPostIndex = recorded.findIndex(
+      (line) =>
+        line.includes("git/refs") &&
+        line.includes(`ref=refs/tags/${currentTag}`) &&
+        line.includes("sha=b2e3900a"),
+    );
+    // ORDER is the property: the tag binds to the built commit BEFORE the release exists, so
+    // --verify-tag cannot re-bind assets to a moved tag (review finding on #3037).
+    expect(tagPostIndex).toBeGreaterThanOrEqual(0);
+    expect(tagPostIndex).toBeLessThan(recorded.indexOf(createLine));
     expect(createLine).toContain("--verify-tag");
     expect(createLine).not.toContain("--target");
     // The built commit's manifest was read at the exact head sha the run reports — the version

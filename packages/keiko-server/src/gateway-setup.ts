@@ -728,11 +728,18 @@ function currentOcrModelIds(config: GatewayConfig | undefined): readonly string[
 function storedPrimaryGatewayProvider(
   config: GatewayConfig | undefined,
 ): ModelProviderConfig | undefined {
-  return config?.providers.find(
-    (provider) =>
-      config.capabilities?.find((capability) => capability.id === provider.modelId)?.kind !==
-      "voice",
-  );
+  const kindOf = (provider: ModelProviderConfig): string | undefined =>
+    config?.capabilities?.find((capability) => capability.id === provider.modelId)?.kind;
+  // The primary is the MAIN CHAT connection (an absent capability entry defaults to chat) — the
+  // first non-voice provider is not enough, because a dedicated embedding or OCR provider may
+  // be listed first and its connection would misclassify every chat-sharing provider as
+  // dedicated (review finding on #3037). Voice-only stores have no chat primary and no
+  // restoration comparisons to make.
+  const chat = config?.providers.find((provider) => {
+    const kind = kindOf(provider);
+    return kind === undefined || kind === "chat";
+  });
+  return chat ?? config?.providers.find((provider) => kindOf(provider) !== "voice");
 }
 
 function currentDedicatedEmbeddingModelIds(config: GatewayConfig | undefined): readonly string[] {

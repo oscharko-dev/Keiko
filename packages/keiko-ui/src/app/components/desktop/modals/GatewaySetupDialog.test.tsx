@@ -1602,6 +1602,70 @@ describe("GatewaySetupDialog", () => {
     });
   });
 
+  it("removes a voice role the corrected upload no longer declares", async () => {
+    // Review finding on #3037: a corrected file on the SAME voice endpoint that dropped the TTS
+    // role must not leave the previous deployment visible — Test & Save would silently re-add
+    // the removed role. A file with a voice section REPLACES the role set.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    const upload = await screen.findByLabelText(/load keiko\.config\.json/i);
+    const voiceFile = (withTts: boolean): File =>
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "gpt-5o",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                capability: { id: "gpt-5o", kind: "chat" },
+              },
+              {
+                modelId: "keiko-stt",
+                baseUrl: "https://voice.example.com",
+                capability: { id: "keiko-stt", kind: "voice", supportsSpeechInput: true },
+              },
+              ...(withTts
+                ? [
+                    {
+                      modelId: "keiko-tts",
+                      baseUrl: "https://voice.example.com",
+                      capability: { id: "keiko-tts", kind: "voice", supportsSpeechOutput: true },
+                    },
+                  ]
+                : []),
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      );
+
+    await userEvent.upload(upload, voiceFile(true));
+    await waitFor(() =>
+      expect(screen.getByLabelText(/audio endpoint url/i)).toHaveValue("https://voice.example.com"),
+    );
+    await userEvent.upload(upload, voiceFile(false));
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).not.toHaveProperty(
+      "voiceSpeechOutputModelId",
+    );
+  });
+
   it("clears the imported endpoint protocol when the user retypes the voice endpoint", async () => {
     // The protocol belongs to the imported connection: after the user manually replaces the
     // uploaded Azure speech endpoint with an OpenAI-compatible one, the submit must not carry

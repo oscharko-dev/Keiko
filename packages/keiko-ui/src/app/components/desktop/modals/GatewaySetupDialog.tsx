@@ -2404,18 +2404,24 @@ export function GatewaySetupDialog({
     if (fields.voiceTimeoutMs !== undefined) setVoiceTimeoutMs(fields.voiceTimeoutMs);
   }
 
+  // When the file carries a voice section, its role set REPLACES the form's roles — a corrected
+  // upload that removed a role must not leave the previous deployment visible, or Test & Save
+  // would silently re-add it (review finding on #3037). A file with no voice section leaves the
+  // fields untouched, like every other absent statement.
+  function applyUploadedVoiceRoles(fields: GatewayConfigUploadFields): void {
+    const speaksAboutVoice = fields.voiceBaseUrl !== undefined;
+    const applyRole = (value: string | undefined, set: (next: string) => void): void => {
+      if (speaksAboutVoice || value !== undefined) set(value ?? "");
+    };
+    applyRole(fields.voiceModelId, setVoiceModelId);
+    applyRole(fields.voiceRealtimeModelId, updateVoiceRealtimeModelId);
+    applyRole(fields.voiceRealtimeTranscriptionModelId, setVoiceRealtimeTranscriptionModelId);
+    applyRole(fields.voiceSpeechOutputModelId, updateVoiceSpeechOutputModelId);
+  }
+
   function applyUploadedVoiceConfig(fields: GatewayConfigUploadFields): void {
     applyUploadedVoiceConnection(fields);
-    if (fields.voiceModelId !== undefined) setVoiceModelId(fields.voiceModelId);
-    if (fields.voiceRealtimeModelId !== undefined) {
-      updateVoiceRealtimeModelId(fields.voiceRealtimeModelId);
-    }
-    if (fields.voiceRealtimeTranscriptionModelId !== undefined) {
-      setVoiceRealtimeTranscriptionModelId(fields.voiceRealtimeTranscriptionModelId);
-    }
-    if (fields.voiceSpeechOutputModelId !== undefined) {
-      updateVoiceSpeechOutputModelId(fields.voiceSpeechOutputModelId);
-    }
+    applyUploadedVoiceRoles(fields);
     // After the speech-output update above — its identity transition clears the output voice.
     if (fields.voiceOutputVoiceId !== undefined) {
       setVoiceOutputVoiceId(fields.voiceOutputVoiceId);
