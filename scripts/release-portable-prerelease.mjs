@@ -24,7 +24,15 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -349,7 +357,9 @@ export function releaseBody(input) {
 
 function createRelease(input) {
   const bodyPath = join(input.workDir, "release-body.md");
-  run("/bin/sh", ["-c", "cat > " + JSON.stringify(bodyPath)], { input: input.body });
+  // A direct fs write — never a shell — so no file name ever reaches a command line
+  // (CodeQL js/shell-command-injection-from-environment on #3037).
+  writeFileSync(bodyPath, input.body);
   gh([
     "release",
     "create",
