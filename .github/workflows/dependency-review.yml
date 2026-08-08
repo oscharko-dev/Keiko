@@ -34,7 +34,7 @@ jobs:
           fail-on-scopes: development, runtime, unknown
           allow-licenses: >-
             0BSD, Apache-2.0, BSD-2-Clause, BSD-3-Clause, BlueOak-1.0.0, CC-BY-4.0,
-            CC0-1.0, ISC, MIT, Python-2.0, Unlicense, WTFPL
+            CC0-1.0, ISC, MIT, MIT-0, Python-2.0, Unlicense, WTFPL
           # The licence allowlist stays permissive-only: every copyleft licence is refused by
           # default, and `allow-licenses` is NOT scope-aware, so admitting LGPL there would admit it
           # for runtime dependencies too. The exception is therefore taken per PACKAGE, which is what
