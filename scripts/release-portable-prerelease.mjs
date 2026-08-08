@@ -47,9 +47,10 @@ const DAMAGED_SIGNATURE_TEXT = "code has no resources but signature indicates th
 const POLL_INTERVAL_MS = 30_000;
 const MAX_WAIT_MS = 60 * 60 * 1000;
 
+class PrereleaseFailure extends Error {}
+
 function fail(message) {
-  process.stderr.write(`release-portable-prerelease: FAIL - ${message}\n`);
-  process.exit(1);
+  throw new PrereleaseFailure(`release-portable-prerelease: FAIL - ${message}`);
 }
 
 function log(message) {
@@ -81,13 +82,42 @@ export function parseArgs(argv) {
   return options;
 }
 
+let processRunner = spawnSyncRunner;
+let hostPlatform = process.platform;
+
+/** Test seam: pretend to run on another platform for a callback's duration. */
+export function withHostPlatform(platform, callback) {
+  const previous = hostPlatform;
+  hostPlatform = platform;
+  try {
+    return callback();
+  } finally {
+    hostPlatform = previous;
+  }
+}
+
+/** Test seam: swap the process runner for a callback's duration, always restoring it. */
+export function withProcessRunner(runner, callback) {
+  const previous = processRunner;
+  processRunner = runner;
+  try {
+    return callback();
+  } finally {
+    processRunner = previous;
+  }
+}
+
+function spawnSyncRunner(command, args, options = {}) {
+  return spawnSync(command, args, { cwd: repoRoot, encoding: "utf8", ...options });
+}
+
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { cwd: repoRoot, encoding: "utf8", ...options });
+  const result = processRunner(command, args, options);
   if (result.error !== undefined) fail(`${command} could not spawn: ${result.error.message}`);
   if (result.status !== 0) {
     fail(`${command} ${args.join(" ")} exited ${String(result.status)}: ${result.stderr}`);
   }
-  return result.stdout;
+  return result.stdout ?? "";
 }
 
 function gh(args, options = {}) {
@@ -231,7 +261,7 @@ function checksumLines(publishDir) {
  * host states the skip out loud instead of implying coverage.
  */
 function verifyMacosSeal(publishDir) {
-  if (process.platform !== "darwin") {
+  if (hostPlatform !== "darwin") {
     log(
       "WARNING: macOS seal verification did not run (non-darwin host) — verify the arm64 asset on a Mac before announcing the release.",
     );
@@ -240,9 +270,7 @@ function verifyMacosSeal(publishDir) {
   const extractDir = join(publishDir, "..", "seal-check");
   run("/usr/bin/unzip", ["-q", join(publishDir, "keiko-macos-arm64.zip"), "-d", extractDir]);
   const app = join(extractDir, "Keiko", "Keiko.app");
-  const result = spawnSync("/usr/bin/codesign", ["--verify", "--deep", "--strict", app], {
-    encoding: "utf8",
-  });
+  const result = processRunner("/usr/bin/codesign", ["--verify", "--deep", "--strict", app], {});
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   if (output.includes(DAMAGED_SIGNATURE_TEXT)) {
     fail(`the arm64 bundle is unsealed (the beta.0 "damaged" regression): ${output.trim()}`);
@@ -319,8 +347,8 @@ function markPreviousSuperseded(previousTag, tag, repository) {
   log(`marked ${previousTag} as superseded.`);
 }
 
-function main() {
-  const options = parseArgs(process.argv.slice(2));
+export function runPortablePrerelease(argv) {
+  const options = parseArgs(argv);
   if (options === undefined) {
     fail(
       "usage: release-portable-prerelease [--ref dev] [--tag vX.Y.Z-beta.N] [--run-id id] [--plan-only]",
@@ -366,4 +394,11 @@ function main() {
 
 const invokedDirectly =
   process.argv[1] !== undefined && import.meta.url.endsWith(process.argv[1].replaceAll("\\", "/"));
-if (invokedDirectly) main();
+if (invokedDirectly) {
+  try {
+    runPortablePrerelease(process.argv.slice(2));
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  }
+}

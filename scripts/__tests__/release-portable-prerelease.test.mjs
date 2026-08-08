@@ -1,11 +1,21 @@
+import * as fsModule from "node:fs";
+import * as pathModule from "node:path";
 import { readFileSync } from "node:fs";
+import { spawnSync as realSpawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
   nextBetaTag,
   parseArgs,
   previousBetaTag,
   releaseBody,
+  runPortablePrerelease,
+  withHostPlatform,
+  withProcessRunner,
 } from "../release-portable-prerelease.mjs";
+
+function realSpawn(command, args, options) {
+  return realSpawnSync(command, args, { encoding: "utf8", ...options });
+}
 
 describe("parseArgs", () => {
   it("defaults to a plan-free dev dispatch", () => {
@@ -103,5 +113,170 @@ describe("encoded publishing lessons (source pins)", () => {
   it("creates the release as a prerelease and marks the predecessor superseded", () => {
     expect(source).toContain('"--prerelease"');
     expect(source).toContain("markPreviousSuperseded");
+  });
+});
+
+describe("hermetic end-to-end (scripted gh double)", () => {
+  const { mkdirSync, writeFileSync } = fsModule;
+  const { join } = pathModule;
+
+  function ghDouble(recorded, overrides = {}) {
+    return (command, args, options = {}) => {
+      const line = [command.split("/").pop(), ...args].join(" ");
+      recorded.push(line);
+      if (command.endsWith("mkdir") || command.endsWith("cp") || command.endsWith("sh")) {
+        return realSpawn(command, args, options);
+      }
+      if (command === "/usr/bin/unzip") {
+        const dir = args[args.indexOf("-d") + 1];
+        mkdirSync(join(dir, "Keiko", "Keiko.app", "Contents"), { recursive: true });
+        return { status: 0, stdout: "", stderr: "" };
+      }
+      if (command === "/usr/bin/codesign") {
+        return overrides.codesign ?? { status: 0, stdout: "", stderr: "" };
+      }
+      return ghAnswer(args, overrides);
+    };
+  }
+
+  function ghAnswer(args, overrides) {
+    const joined = args.join(" ");
+    if (joined.startsWith("run download")) {
+      const dir = args[args.indexOf("--dir") + 1];
+      const artifact = args[args.indexOf("--name") + 1];
+      mkdirSync(dir, { recursive: true });
+      for (const file of artifactFiles(artifact, overrides)) {
+        writeFileSync(join(dir, file), `fixture bytes for ${file}`);
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (joined.includes("--json jobs")) {
+      return {
+        status: 0,
+        stdout: JSON.stringify({ jobs: overrides.jobs ?? goodJobs() }),
+        stderr: "",
+      };
+    }
+    return { status: 0, stdout: staticGhAnswer(joined), stderr: "" };
+  }
+
+  function staticGhAnswer(joined) {
+    const answers = [
+      ["repo view", '{"nameWithOwner":"oscharko-dev/Keiko"}'],
+      ["api repos/{owner}/{repo}/releases", '[{"tag_name":"v0.3.0-beta.1"}]'],
+      [
+        "--json status,conclusion,headSha",
+        '{"status":"completed","conclusion":"success","headSha":"b2e3900a"}',
+      ],
+      ["api repos/oscharko-dev/Keiko/releases/tags/", '{"body":"old beta.1 body"}'],
+    ];
+    for (const [needle, answer] of answers) {
+      if (joined.includes(needle)) return answer;
+    }
+    return "";
+  }
+
+  function goodJobs() {
+    return [
+      { name: "Stage portable asset (windows-x64)", conclusion: "success" },
+      { name: "Stage portable asset (macos-arm64)", conclusion: "success" },
+      { name: "Stage portable asset (macos-x64)", conclusion: "success" },
+      { name: "Authorize production signing", conclusion: "skipped" },
+    ];
+  }
+
+  function artifactFiles(artifact, overrides) {
+    if (overrides.artifactFiles?.[artifact] !== undefined) return overrides.artifactFiles[artifact];
+    if (artifact.includes("windows"))
+      return ["keiko-windows-x64.zip", "keiko-windows-x64-setup.exe"];
+    if (artifact.includes("arm64")) return ["keiko-macos-arm64.zip"];
+    return ["keiko-macos-x64.zip"];
+  }
+
+  it("publishes the four verified assets with checksums, provenance, and the supersede pointer", () => {
+    const recorded = [];
+    withHostPlatform("darwin", () =>
+      withProcessRunner(ghDouble(recorded), () =>
+        runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+      ),
+    );
+
+    const createLine = recorded.find((line) => line.startsWith("gh release create"));
+    expect(createLine).toContain("v0.3.0-beta.2");
+    expect(createLine).toContain("--prerelease");
+    expect(createLine).toContain("keiko-macos-arm64.zip");
+    expect(createLine).toContain("keiko-windows-x64-setup.exe");
+    // The predecessor got the superseded pointer prepended.
+    expect(recorded.some((line) => line.startsWith("gh release edit v0.3.0-beta.1"))).toBe(true);
+    // The seal was verified on the darwin host before anything published.
+    expect(recorded.some((line) => line.includes("codesign --verify --deep --strict"))).toBe(true);
+  });
+
+  it("refuses to publish when a staging job failed", () => {
+    const recorded = [];
+    const jobs = goodJobs().map((job, index) =>
+      index === 1 ? { ...job, conclusion: "failure" } : job,
+    );
+
+    expect(() =>
+      withHostPlatform("darwin", () =>
+        withProcessRunner(ghDouble(recorded, { jobs }), () =>
+          runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+        ),
+      ),
+    ).toThrowError(/staging jobs failed/u);
+    expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+  });
+
+  it("refuses a drifting publish set instead of shipping stray binaries", () => {
+    const recorded = [];
+    const overrides = {
+      artifactFiles: {
+        "portable-stage-windows-x64-evaluation-unsigned": [
+          "keiko-windows-x64.zip",
+          "keiko-windows-x64-setup.exe",
+          "keiko-macos-arm64.zip",
+        ],
+        "portable-stage-macos-arm64-evaluation-unsigned": [],
+      },
+    };
+
+    expect(() =>
+      withHostPlatform("darwin", () =>
+        withProcessRunner(ghDouble(recorded, overrides), () =>
+          runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+        ),
+      ),
+    ).toThrowError(/artifact is missing the expected asset/u);
+  });
+
+  it("refuses the beta.0 damaged-bundle signature text before publishing", () => {
+    const recorded = [];
+    const codesign = {
+      status: 1,
+      stdout: "",
+      stderr: "code has no resources but signature indicates they must be present",
+    };
+
+    expect(() =>
+      withHostPlatform("darwin", () =>
+        withProcessRunner(ghDouble(recorded, { codesign }), () =>
+          runPortablePrerelease(["--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+        ),
+      ),
+    ).toThrowError(/damaged/u);
+    expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+  });
+
+  it("states the skipped seal verification out loud on a non-darwin host", () => {
+    const recorded = [];
+    withHostPlatform("linux", () =>
+      withProcessRunner(ghDouble(recorded), () =>
+        runPortablePrerelease(["--plan-only", "--run-id", "42", "--tag", "v0.3.0-beta.2"]),
+      ),
+    );
+
+    expect(recorded.some((line) => line.includes("codesign"))).toBe(false);
+    expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
   });
 });
