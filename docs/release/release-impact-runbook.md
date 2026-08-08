@@ -22,7 +22,12 @@ Every release-impacting issue and PR must record:
 - User action required and remediation.
 - Release-owner review evidence, including an `approvalReference` that points to the issue, PR, or release approval record.
 
-Before publish, `release:publish` and `prepublishOnly` require a machine-checkable approval reference in the form `github-pr-review:<owner>/<repo>#<pr>#<review>`. The referenced review must exist in the current GitHub repository, be `APPROVED`, and come from a login listed in `KEIKO_RELEASE_OWNER_GITHUB_LOGINS`. Issue references are acceptable while metadata is being prepared, but they are not sufficient to publish.
+Before publish, `release:publish` and `prepublishOnly` require a machine-checkable approval reference in one of two forms, both verified through the GitHub API and both bound to a login listed in `KEIKO_RELEASE_OWNER_GITHUB_LOGINS`:
+
+- `github-pr-review:<owner>/<repo>#<pr>#<review>` — the referenced review must exist in the current GitHub repository and be `APPROVED`.
+- `github-issue-comment:<owner>/<repo>#<issue>#<comment>` — the referenced comment must exist on the referenced issue in the current GitHub repository, be authored by an allowed release owner, and carry the literal phrase `Approved-for-publish: <package-name>@<version>` for the exact root package version being published **on a line of its own, starting at column zero** (no leading whitespace — indentation makes the line a documented example, never a grant), outside any Markdown code fence and outside any blockquote. A phrase merely embedded in a sentence, quoted in a denial, shown inside a fenced example, or cited on a `>` blockquote line documents the phrase — it never grants the approval. This form exists because GitHub refuses self-approval of one's own pull requests, which a solo release owner can never satisfy; it carries the same intent — a durable, GitHub-verified owner approval artifact — at the same strictness (owner decision, 2026-08-08).
+
+Bare issue references without a verified approval comment are acceptable while metadata is being prepared, but they are not sufficient to publish.
 
 User findings stay reporter-simple. Reporters provide reproduction and impact; maintainers or agents fill the normalized release-impact triage block after confirming the defect and intended fix.
 

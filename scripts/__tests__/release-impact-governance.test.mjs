@@ -5,8 +5,10 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  publishApprovalPhrase,
   validateReleaseImpactCatalog,
   validateReleaseImpactRoot,
+  withGithubResourceReader,
 } from "../check-release-impact.mjs";
 
 function rootManifest(overrides = {}) {
@@ -382,7 +384,7 @@ describe("release-impact governance", () => {
 
     expect(result.ok).toBe(false);
     expect(messages(result)).toContain(
-      "approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> for publish",
+      "approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> or github-issue-comment:<owner>/<repo>#<issue>#<comment> for publish",
     );
   });
 
@@ -409,6 +411,411 @@ describe("release-impact governance", () => {
     expect(messages(result)).toContain(
       "approvalReference must reference the current GitHub repository",
     );
+  });
+
+  it("rejects issue-comment publish approvals outside the current repository", () => {
+    // The owner-directed second evidence form is held to the same strictness as the pr-review
+    // form: a comment in a foreign repository can never satisfy publish trust.
+    const result = withEnv("KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE", "1", () =>
+      validateReleaseImpactCatalog(
+        catalog([
+          entry({
+            review: {
+              approvalReference: "github-issue-comment:fake-owner/fake-repo#2802#123456",
+              humanApproved: true,
+              rationale: "Foreign comment approval must not satisfy publish trust.",
+              reviewedAt: "2026-06-30",
+              reviewer: "release-owner",
+              status: "reviewed",
+            },
+          }),
+        ]),
+        rootManifest(),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(messages(result)).toContain(
+      "approvalReference must reference the current GitHub repository",
+    );
+  });
+
+  describe("issue-comment publish approvals (hermetic, injected GitHub reader)", () => {
+    const REFERENCE = "github-issue-comment:oscharko-dev/Keiko#2802#4242";
+
+    function commentEntry() {
+      return entry({
+        review: {
+          approvalReference: REFERENCE,
+          humanApproved: true,
+          rationale: "Owner-recorded issue-comment approval.",
+          reviewedAt: "2026-08-08",
+          reviewer: "release-owner",
+          status: "reviewed",
+        },
+      });
+    }
+
+    // The fixture phrase derives from the exported production template applied to the entry under
+    // validation — never a hand-rebuilt copy that could drift silently (review finding on #3037).
+    const approvalPhrase = () => publishApprovalPhrase(commentEntry());
+
+    function approvalComment(overrides = {}) {
+      return {
+        issue_url: "https://api.github.com/repos/oscharko-dev/Keiko/issues/2802",
+        body: approvalPhrase(),
+        user: { login: "release-owner-login" },
+        ...overrides,
+      };
+    }
+
+    function validateWith(comment) {
+      return withEnv("KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE", "1", () =>
+        withEnv("KEIKO_RELEASE_OWNER_GITHUB_LOGINS", "release-owner-login", () =>
+          withEnv("GITHUB_REPOSITORY", "oscharko-dev/Keiko", () =>
+            withGithubResourceReader(
+              () => comment,
+              () => validateReleaseImpactCatalog(catalog([commentEntry()]), rootManifest()),
+            ),
+          ),
+        ),
+      );
+    }
+
+    it("accepts a verified owner comment carrying the entry-bound approval phrase", () => {
+      const result = validateWith(approvalComment());
+
+      expect(messages(result)).not.toContain("approvalReference");
+      expect(result.ok).toBe(true);
+    });
+
+    it("rejects a comment that belongs to a different issue", () => {
+      const result = validateWith(
+        approvalComment({
+          issue_url: "https://api.github.com/repos/oscharko-dev/Keiko/issues/999",
+        }),
+      );
+
+      expect(result.ok).toBe(false);
+      expect(messages(result)).toContain(
+        "approvalReference comment must belong to the referenced issue",
+      );
+    });
+
+    it("rejects a comment without the entry-bound approval phrase", () => {
+      const result = validateWith(approvalComment({ body: "Looks good to me." }));
+
+      expect(result.ok).toBe(false);
+      expect(messages(result)).toContain("approvalReference comment must carry");
+      // The demanded phrase binds to the exact entry under validation — package name AND version
+      // come from the record being approved, never from a second manifest read.
+      expect(messages(result)).toContain(approvalPhrase());
+    });
+
+    it("rejects a comment authored outside the release-owner allow-list", () => {
+      const result = validateWith(approvalComment({ user: { login: "somebody-else" } }));
+
+      expect(messages(result)).toContain(
+        "approvalReference comment author must be an allowed release owner",
+      );
+    });
+
+    it("fails closed when the comment cannot be read from GitHub", () => {
+      const result = validateWith(undefined);
+
+      expect(messages(result)).toContain("approvalReference could not be verified through GitHub");
+    });
+
+    it("rejects a comment that only QUOTES the phrase inside a denial", () => {
+      // Review finding on #3028: a substring match would read "DO NOT use Approved-for-publish:
+      // ..." as an affirmative approval. The phrase must stand on a line of its own.
+      const denial = validateWith(approvalComment({ body: `DO NOT use ${approvalPhrase()} yet.` }));
+      expect(messages(denial)).toContain("on a line of its own");
+
+      const inline = validateWith(
+        approvalComment({ body: `I think ${approvalPhrase()} applies.` }),
+      );
+      expect(messages(inline)).toContain("on a line of its own");
+    });
+
+    it("rejects a phrase that appears only inside a Markdown code fence", () => {
+      // Review finding on #3037: a fenced example ("here is what the gate expects") documents
+      // the phrase — it never grants the approval. Backtick and tilde fences alike.
+      const phrase = approvalPhrase();
+      const backtickFenced = validateWith(
+        approvalComment({ body: `The gate expects:\n\n\`\`\`\n${phrase}\n\`\`\`` }),
+      );
+      expect(messages(backtickFenced)).toContain("on a line of its own");
+
+      const tildeFenced = validateWith(approvalComment({ body: `~~~\n${phrase}\n~~~` }));
+      expect(messages(tildeFenced)).toContain("on a line of its own");
+    });
+
+    it("rejects a mismatched fence delimiter posing as a closer", () => {
+      // Review finding on #3037: a fence closes only on the SAME marker at the same-or-greater
+      // length (CommonMark) — a `~~~` line inside a backtick fence, or a shorter ``` inside a
+      // ```` fence, is fenced CONTENT. Treating either as a closer would let the fenced example
+      // that follows it approve a publish.
+      const phrase = approvalPhrase();
+      const tildeInsideBackticks = validateWith(
+        approvalComment({ body: `\`\`\`\n~~~\n${phrase}\n\`\`\`` }),
+      );
+      expect(tildeInsideBackticks.ok).toBe(false);
+      expect(messages(tildeInsideBackticks)).toContain("on a line of its own");
+
+      const shorterInsideLonger = validateWith(
+        approvalComment({ body: `\`\`\`\`\n\`\`\`\n${phrase}\n\`\`\`\`` }),
+      );
+      expect(shorterInsideLonger.ok).toBe(false);
+      expect(messages(shorterInsideLonger)).toContain("on a line of its own");
+    });
+
+    it("rejects an over-indented closing fence posing as a closer", () => {
+      // Review finding on #3037: CommonMark allows at most three columns of indentation before
+      // a closing fence — four-plus columns (or a tab) make the would-be closer fenced CONTENT.
+      // Trimming before judging closed the fence early and let the column-zero phrase that
+      // follows approve while GitHub still renders it inside the fence.
+      const phrase = approvalPhrase();
+      const overIndentedCloser = validateWith(
+        approvalComment({ body: `\`\`\`\n    \`\`\`\n${phrase}\n\`\`\`` }),
+      );
+      expect(overIndentedCloser.ok).toBe(false);
+      expect(messages(overIndentedCloser)).toContain("on a line of its own");
+
+      const tabbedCloser = validateWith(
+        approvalComment({ body: `\`\`\`\n\t\`\`\`\n${phrase}\n\`\`\`` }),
+      );
+      expect(tabbedCloser.ok).toBe(false);
+      expect(messages(tabbedCloser)).toContain("on a line of its own");
+
+      // A closer indented up to three spaces IS a closer (CommonMark) — the phrase after the
+      // closed fence stands on a plain line and approves.
+      const threeSpaceCloser = validateWith(
+        approvalComment({ body: `\`\`\`\nexample\n   \`\`\`\n\n${phrase}` }),
+      );
+      expect(threeSpaceCloser.ok).toBe(true);
+    });
+
+    it("rejects a lazy blockquote continuation carrying the phrase", () => {
+      // Review finding on #3037 (CommonMark lazy continuation): a non-blank line directly after
+      // a "> ..." line still renders INSIDE the blockquote — an instructional quote followed
+      // immediately by the phrase must not authorize a publish. A blank line ends the quote, so
+      // the same phrase separated by one empty line approves.
+      const phrase = approvalPhrase();
+      const lazy = validateWith(approvalComment({ body: `> Example approval marker:\n${phrase}` }));
+      expect(lazy.ok).toBe(false);
+      expect(messages(lazy)).toContain("on a line of its own");
+
+      const separated = validateWith(
+        approvalComment({ body: `> Example approval marker:\n\n${phrase}` }),
+      );
+      expect(separated.ok).toBe(true);
+    });
+
+    it("rejects a space-prefixed tab indent as indented code", () => {
+      // Review finding on #3037: CommonMark expands a tab to the next 4-column stop, so
+      // " \t<phrase>" reaches column 4 exactly like four spaces and renders as indented code —
+      // indentation is judged in columns, not characters. Three plain spaces stay a paragraph.
+      const phrase = approvalPhrase();
+      const spaceTab = validateWith(approvalComment({ body: ` \t${phrase}` }));
+      expect(spaceTab.ok).toBe(false);
+      expect(messages(spaceTab)).toContain("on a line of its own");
+
+      // STRENGTHENED (review finding on #3037): the marker must start at column zero — ANY
+      // leading indentation can be list-item continuation context, so it never approves now.
+      const threeSpaces = validateWith(approvalComment({ body: `   ${phrase}` }));
+      expect(threeSpaces.ok).toBe(false);
+    });
+
+    it("rejects a phrase hidden inside an HTML comment", () => {
+      // Review finding on #3037: `<!-- ... -->` renders NOTHING on GitHub — an invisible phrase
+      // must never authorize a publish. A real phrase after a CLOSED comment still approves.
+      const phrase = approvalPhrase();
+      const hidden = validateWith(approvalComment({ body: `<!--\n${phrase}\n-->` }));
+      expect(hidden.ok).toBe(false);
+      expect(messages(hidden)).toContain("on a line of its own");
+
+      const afterComment = validateWith(
+        approvalComment({ body: `<!--\nexample\n-->\n\n${phrase}` }),
+      );
+      expect(afterComment.ok).toBe(true);
+    });
+
+    it("rejects an indented marker in a list item's blank-separated child paragraph", () => {
+      // Review finding on #3037: "- Example approval:" + blank line + a two-space-indented
+      // marker is a SECOND paragraph inside the same list item. Column-zero anchoring makes the
+      // whole indentation class unreachable; the unindented phrase after the list approves.
+      const phrase = approvalPhrase();
+      const child = validateWith(approvalComment({ body: `- Example approval:\n\n  ${phrase}` }));
+      expect(child.ok).toBe(false);
+
+      const plain = validateWith(approvalComment({ body: `- Example approval:\n\n${phrase}` }));
+      expect(plain.ok).toBe(true);
+    });
+
+    it("rejects a marker nested in a list item, including its lazy continuation", () => {
+      // Review finding on #3037: "- To approve, use:" followed by the (indented or lazy)
+      // marker keeps the marker inside the list item — only a blank line ends the container.
+      const phrase = approvalPhrase();
+      const indented = validateWith(approvalComment({ body: `- To approve, use:\n  ${phrase}` }));
+      expect(indented.ok).toBe(false);
+
+      const lazy = validateWith(approvalComment({ body: `1. Steps:\n${phrase}` }));
+      expect(lazy.ok).toBe(false);
+
+      const afterList = validateWith(approvalComment({ body: `- checklist item\n\n${phrase}` }));
+      expect(afterList.ok).toBe(true);
+    });
+
+    it("rejects a phrase inside raw-HTML blocks", () => {
+      // Review finding on #3037: <pre> renders its content as a code example (blank lines
+      // included, until the closing tag); any other "<"-opened block runs to the next blank
+      // line. Neither may approve; a phrase after the closed/ended block still approves.
+      const phrase = approvalPhrase();
+      const pre = validateWith(approvalComment({ body: `<pre>\n${phrase}\n</pre>` }));
+      expect(pre.ok).toBe(false);
+
+      const preWithBlank = validateWith(approvalComment({ body: `<pre>\n\n${phrase}\n</pre>` }));
+      expect(preWithBlank.ok).toBe(false);
+
+      const divNoBlank = validateWith(approvalComment({ body: `<div>\n${phrase}` }));
+      expect(divNoBlank.ok).toBe(false);
+
+      const afterBlock = validateWith(approvalComment({ body: `<div>note</div>\n\n${phrase}` }));
+      expect(afterBlock.ok).toBe(true);
+    });
+
+    it("rejects a close-then-reopen comment line hiding the phrase", () => {
+      // Review finding on #3037: "--> <!--" on one line closes a comment AND opens the next, so
+      // the following phrase still renders invisibly — every marker on the line is walked in
+      // order. An INLINE comment line leaves no open state: the phrase after it approves.
+      const phrase = approvalPhrase();
+      const reopened = validateWith(approvalComment({ body: `<!--\nx --> <!--\n${phrase}\n-->` }));
+      expect(reopened.ok).toBe(false);
+      expect(messages(reopened)).toContain("on a line of its own");
+
+      const inline = validateWith(approvalComment({ body: `<!-- note -->\n\n${phrase}` }));
+      expect(inline.ok).toBe(true);
+
+      // Ordering pin: an UNCLOSED comment inside a fence is fenced content — the fence check
+      // runs first, so the comment state never opens and the phrase after the fence approves.
+      const fencedComment = validateWith(
+        approvalComment({ body: `\`\`\`\n<!-- example\n\`\`\`\n\n${phrase}` }),
+      );
+      expect(fencedComment.ok).toBe(true);
+    });
+
+    it("rejects a phrase that appears only inside a blockquote", () => {
+      // Review finding on #3037: a quoted line ("> Approved-for-publish: ...") cites the phrase,
+      // typically while discussing it — it is not the owner's own standalone statement.
+      const result = validateWith(
+        approvalComment({ body: `Quoting:\n\n> ${approvalPhrase()}\n\nHm.` }),
+      );
+
+      expect(messages(result)).toContain("on a line of its own");
+    });
+
+    it("rejects a phrase on a CommonMark indented code line (four spaces or a tab)", () => {
+      // Review finding on #3037: a four-space-indented (or tab-indented) line is an indented
+      // CODE BLOCK — a documented example, exactly like a fenced one. Trimming before judging
+      // erased the indentation and let the example approve a publish.
+      const phrase = approvalPhrase();
+      const fourSpaces = validateWith(
+        approvalComment({ body: `The gate expects:\n\n    ${phrase}` }),
+      );
+      expect(fourSpaces.ok).toBe(false);
+      expect(messages(fourSpaces)).toContain("on a line of its own");
+
+      const tabbed = validateWith(approvalComment({ body: `The gate expects:\n\n\t${phrase}` }));
+      expect(tabbed.ok).toBe(false);
+      expect(messages(tabbed)).toContain("on a line of its own");
+    });
+
+    it("rejects any leading indentation on the marker (strengthened to column zero)", () => {
+      // STRENGTHENED relocation of the former three-space paragraph tolerance (review finding
+      // on #3037): leading indentation can be list-item continuation context, so the marker
+      // must start at column zero. Trailing whitespace stays tolerated.
+      const indented = validateWith(approvalComment({ body: `   ${approvalPhrase()}` }));
+      expect(indented.ok).toBe(false);
+
+      const trailing = validateWith(approvalComment({ body: `${approvalPhrase()}  ` }));
+      expect(trailing.ok).toBe(true);
+    });
+
+    it("accepts a real standalone phrase even when a fenced example precedes it", () => {
+      // The fence toggles closed again: a documented example above must not poison the owner's
+      // actual approval line below it.
+      const phrase = approvalPhrase();
+      const result = validateWith(
+        approvalComment({
+          body: `The gate expects:\n\n\`\`\`\n${phrase}\n\`\`\`\n\nAnd here it is for real:\n\n${phrase}`,
+        }),
+      );
+
+      expect(messages(result)).not.toContain("approvalReference");
+      expect(result.ok).toBe(true);
+    });
+
+    it("rejects one issue-comment artifact reused by two catalog records", () => {
+      // Review finding on #3028: copying an existing owner approval into a newly appended entry
+      // would smuggle unreviewed metadata past the gate.
+      const second = {
+        ...commentEntry(),
+        id: "2026-06-30-keiko-0.2.11-second-record",
+        defaultPatchNotes: false,
+      };
+      const result = withEnv("KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE", "1", () =>
+        withEnv("KEIKO_RELEASE_OWNER_GITHUB_LOGINS", "release-owner-login", () =>
+          withEnv("GITHUB_REPOSITORY", "oscharko-dev/Keiko", () =>
+            withGithubResourceReader(
+              () => approvalComment(),
+              () => validateReleaseImpactCatalog(catalog([commentEntry(), second]), rootManifest()),
+            ),
+          ),
+        ),
+      );
+
+      expect(messages(result)).toContain(
+        "one approval artifact cannot authorize two catalog records",
+      );
+    });
+
+    it("never re-fetches historical approvals for a past release", () => {
+      // Review finding on #3028: GitHub comments are mutable — a later edit or deletion of a
+      // historical approval must not brick every future publish of an append-only catalog. Only
+      // the release being published NOW is verified live.
+      const historical = {
+        ...commentEntry(),
+        id: "2026-05-01-keiko-0.2.9-historical-record",
+        packageVersion: "0.2.9",
+        releaseTag: "v0.2.9",
+        defaultPatchNotes: false,
+        review: {
+          ...commentEntry().review,
+          approvalReference: "github-issue-comment:oscharko-dev/Keiko#2802#9999",
+        },
+      };
+      const fetchedPaths = [];
+      const result = withEnv("KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE", "1", () =>
+        withEnv("KEIKO_RELEASE_OWNER_GITHUB_LOGINS", "release-owner-login", () =>
+          withEnv("GITHUB_REPOSITORY", "oscharko-dev/Keiko", () =>
+            withGithubResourceReader(
+              (path) => {
+                fetchedPaths.push(path);
+                return approvalComment();
+              },
+              () =>
+                validateReleaseImpactCatalog(catalog([commentEntry(), historical]), rootManifest()),
+            ),
+          ),
+        ),
+      );
+
+      expect(fetchedPaths.some((path) => path.includes("9999"))).toBe(false);
+      expect(messages(result)).not.toContain("9999");
+      // The CURRENT release's artifact was still verified live.
+      expect(fetchedPaths.some((path) => path.includes("4242"))).toBe(true);
+    });
   });
 
   it("requires exception metadata for critical or manual-review one-click updates", () => {

@@ -193,22 +193,49 @@ function validateReview(entry, index, failures) {
   if (review.status !== "reviewed" || review.humanApproved !== true) {
     failures.push(failure(`entries[${String(index)}] must have human release-owner review.`));
   }
-  validatePublishApprovalReference(review, index, failures);
+  validatePublishApprovalReference(entry, review, index, failures);
 }
 
-function validatePublishApprovalReference(review, index, failures) {
+/**
+ * Structural half of the approval evidence: every retained entry must carry a well-formed
+ * reference. The LIVE GitHub verification runs only for the release currently being published
+ * (see validateApprovalReferenceLive) — historical approvals are mutable GitHub artifacts, and a
+ * later edit or deletion must never brick every future publish of an append-only catalog
+ * (review finding on #3028).
+ */
+function validatePublishApprovalReference(entry, review, index, failures) {
   if (process.env.KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE !== "1") return;
   const reference = review.approvalReference;
-  const parsed = parseGithubReviewReference(reference);
-  if (parsed === undefined) {
+  if (
+    parseGithubReviewReference(reference) === undefined &&
+    parseGithubIssueCommentReference(reference) === undefined
+  ) {
     failures.push(
       failure(
-        `entries[${String(index)}].review.approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> for publish.`,
+        `entries[${String(index)}].review.approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> or github-issue-comment:<owner>/<repo>#<issue>#<comment> for publish.`,
       ),
     );
+  }
+}
+
+/** Live GitHub verification of the approval artifact for the release being published NOW. */
+function validateApprovalReferenceLive(entry, index, failures) {
+  if (process.env.KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE !== "1") return;
+  const reference = objectRecord(entry.review) ? entry.review.approvalReference : undefined;
+  const parsed = parseGithubReviewReference(reference);
+  if (parsed !== undefined) {
+    validateGithubReviewApproval(parsed, index, failures);
     return;
   }
-  validateGithubReviewApproval(parsed, index, failures);
+  // Owner-directed second evidence form (2026-08-08): GitHub refuses self-approval of one's own
+  // pull requests, so a solo release owner can never mint the pr-review artifact. The
+  // issue-comment form keeps the gate's intent — a durable, GitHub-verified approval artifact by
+  // an allowed release owner — and is held to the same strictness: verified through the GitHub
+  // API, author allow-listed, and bound to the exact package version by a literal phrase.
+  const comment = parseGithubIssueCommentReference(reference);
+  if (comment !== undefined) {
+    validateGithubIssueCommentApproval(entry, comment, index, failures);
+  }
 }
 
 function parseGithubReviewReference(reference) {
@@ -219,6 +246,247 @@ function parseGithubReviewReference(reference) {
     pullRequest: match[2],
     review: match[3],
   };
+}
+
+function parseGithubIssueCommentReference(reference) {
+  const match = /^github-issue-comment:([^#/\s]+\/[^#/\s]+)#(\d+)#(\d+)$/u.exec(reference);
+  if (match === null) return undefined;
+  return {
+    repository: match[1],
+    issue: match[2],
+    comment: match[3],
+  };
+}
+
+/**
+ * The literal, version-bound phrase an approval comment must carry. Derived from the catalog
+ * entry under validation — the record being approved — never re-read from disk, so the phrase can
+ * only ever bind to the exact package identity the gate is judging. Exported so test fixtures
+ * derive the phrase from this producer instead of hand-rebuilding the template (review finding on
+ * #3037).
+ */
+export function publishApprovalPhrase(entry) {
+  return `Approved-for-publish: ${String(entry.packageName)}@${String(entry.packageVersion)}`;
+}
+
+function validateGithubIssueCommentApproval(entry, reference, index, failures) {
+  const repository = currentRepository();
+  if (repository === undefined || reference.repository !== repository) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference must reference the current GitHub repository.`,
+      ),
+    );
+    return;
+  }
+  const comment = readGithubIssueComment(reference);
+  if (comment === undefined) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference could not be verified through GitHub.`,
+      ),
+    );
+    return;
+  }
+  validateGithubIssueCommentState(entry, comment, reference, index, failures);
+}
+
+function validateGithubIssueCommentState(entry, comment, reference, index, failures) {
+  const issueUrl = typeof comment.issue_url === "string" ? comment.issue_url : "";
+  if (!issueUrl.endsWith(`/issues/${reference.issue}`)) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference comment must belong to the referenced issue.`,
+      ),
+    );
+  }
+  const phrase = publishApprovalPhrase(entry);
+  // The phrase must stand on a line of its own: a substring match would accept a comment that
+  // QUOTES the marker in a denial ("DO NOT use Approved-for-publish: ...") as an affirmative
+  // approval (review finding on #3028).
+  const standsAlone =
+    typeof comment.body === "string" && phraseStandsOnPlainLine(comment.body, phrase);
+  if (!standsAlone) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference comment must carry "${phrase}" on a line of its own.`,
+      ),
+    );
+  }
+  const allowedLogins = allowedReleaseOwnerLogins();
+  if (allowedLogins.length === 0) {
+    failures.push(failure("KEIKO_RELEASE_OWNER_GITHUB_LOGINS must list allowed release owners."));
+    return;
+  }
+  if (!allowedLogins.includes(comment.user?.login)) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference comment author must be an allowed release owner.`,
+      ),
+    );
+  }
+}
+
+/**
+ * True only when the phrase stands on a plain Markdown line of its own: outside every code fence
+ * and outside every blockquote. A fenced example ("```\nApproved-for-publish: ...\n```") or a
+ * quoted line ("> Approved-for-publish: ...") documents the phrase — it never grants the approval
+ * (review finding on #3037).
+ */
+function fenceDelimiter(line) {
+  const match = /^(`{3,}|~{3,})/u.exec(line);
+  return match?.[1];
+}
+
+// A fence closes only on the SAME marker type at the same-or-greater length with nothing after
+// it (CommonMark) — a `~~~` line inside a backtick fence is fenced CONTENT, not a closer, and
+// treating it as one would let a fenced example approve a publish.
+function closesFence(openFence, line, delimiter) {
+  return (
+    delimiter !== undefined &&
+    delimiter[0] === openFence[0] &&
+    delimiter.length >= openFence.length &&
+    line.slice(delimiter.length).trim() === ""
+  );
+}
+
+// Four-plus leading spaces or a tab make a CommonMark indented CODE BLOCK: like a fenced
+// example, an indented line documents the phrase and never grants the approval — so the RAW
+// line is judged before trimming, which would erase exactly that distinction (review finding on
+// #3037). Up to three leading spaces is ordinary paragraph indentation and stays eligible.
+function isIndentedCodeLine(rawLine) {
+  // Tabs expand to the next 4-column stop (CommonMark), so " \t" reaches column 4 exactly like
+  // four spaces — indentation is judged in COLUMNS, not characters (review finding on #3037).
+  let columns = 0;
+  for (const char of rawLine) {
+    if (char === " ") columns += 1;
+    else if (char === "\t") columns += 4 - (columns % 4);
+    else break;
+    if (columns >= 4) return true;
+  }
+  return false;
+}
+
+// Raw-HTML blocks render as code or markup, never as an affirmative statement: a phrase inside
+// <pre>/<script>/<style>/<textarea> (CommonMark HTML block type 1 — runs to its closing tag,
+// blank lines included) or any other "<"-opened block (types 6/7 — run to the next blank line)
+// must never approve (review finding on #3037).
+function htmlBlockContextLine(line, state) {
+  if (state.inHtmlPre) {
+    if (/<\/(?:pre|script|style|textarea)>/iu.test(line)) state.inHtmlPre = false;
+    return true;
+  }
+  if (/^<(?:pre|script|style|textarea)\b/iu.test(line)) {
+    if (!/<\/(?:pre|script|style|textarea)>/iu.test(line)) state.inHtmlPre = true;
+    return true;
+  }
+  if (state.inHtmlBlock) {
+    // A blank line ends a type-6/7 block; the blank itself is still block context.
+    if (line === "") state.inHtmlBlock = false;
+    return true;
+  }
+  if (line.startsWith("<")) {
+    state.inHtmlBlock = true;
+    return true;
+  }
+  return false;
+}
+
+// One walker step: mutates the fence/blockquote state and reports whether the line is Markdown
+// CONTEXT (fenced, indented code, blockquote or its CommonMark lazy continuation — a non-blank
+// line directly after a "> ..." line still renders inside the quote; only a blank line ends it)
+// rather than a plain top-level line (review findings on #3037).
+// An HTML comment renders NOTHING — a phrase inside `<!-- ... -->` is invisible on GitHub and
+// must never approve (review finding on #3037). Single-line comments never equal the bare
+// phrase; only the multi-line block state needs tracking.
+function htmlCommentContextLine(line, state) {
+  const isContext = state.inHtmlComment || line.includes("<!--") || line.includes("-->");
+  if (!isContext) return false;
+  // Walk EVERY marker on the line in order — a single "-->" followed by "<!--" closes one
+  // comment and opens the next, so judging only the first marker would end the comment state
+  // while GitHub still renders the following lines invisibly (review finding on #3037). A line
+  // carrying any marker is never the bare phrase itself, so context lines always skip.
+  let index = 0;
+  for (;;) {
+    if (state.inHtmlComment) {
+      const close = line.indexOf("-->", index);
+      if (close === -1) break;
+      state.inHtmlComment = false;
+      index = close + 3;
+    } else {
+      const open = line.indexOf("<!--", index);
+      if (open === -1) break;
+      state.inHtmlComment = true;
+      index = open + 4;
+    }
+  }
+  return true;
+}
+
+// Blockquotes AND list items share the paragraph-continuation rule: a non-blank line directly
+// after them still renders inside the container (lazy continuation), so an instructional
+// "- To approve, use:" list can never smuggle the marker (review finding on #3037). Only a
+// blank line ends the container.
+function containerContextLine(line, state) {
+  if (line.startsWith(">") || /^(?:[-*+]|\d{1,9}[.)])\s/u.test(line) || state.inContainer) {
+    state.inContainer = true;
+    return true;
+  }
+  return false;
+}
+
+function approvalContextLine(rawLine, state) {
+  const line = rawLine.trim();
+  const delimiter = fenceDelimiter(line);
+  // The OPEN FENCE is judged first: fenced content is opaque, so an unclosed `<!--` (or any
+  // other marker) inside a fence must not open comment/block state that would outlive the fence
+  // (review finding on #3037).
+  if (state.openFence !== undefined) {
+    // CommonMark allows at most three columns of indentation before a closing fence — a
+    // four-plus-column (or tabbed) would-be closer is fenced CONTENT, so it is judged on the
+    // RAW line: trimming first would close the fence early and let the next column-zero line
+    // approve while GitHub still renders it fenced (review finding on #3037).
+    if (!isIndentedCodeLine(rawLine) && closesFence(state.openFence, line, delimiter)) {
+      state.openFence = undefined;
+    }
+    return true;
+  }
+  if (htmlCommentContextLine(line, state)) return true;
+  if (htmlBlockContextLine(line, state)) return true;
+  if (line === "") {
+    state.inContainer = false;
+    state.inHtmlBlock = false;
+    return true;
+  }
+  if (isIndentedCodeLine(rawLine)) return true;
+  if (delimiter !== undefined) {
+    state.openFence = delimiter;
+    return true;
+  }
+  if (containerContextLine(line, state)) return true;
+  return false;
+}
+
+function phraseStandsOnPlainLine(body, phrase) {
+  const state = {
+    openFence: undefined,
+    inContainer: false,
+    inHtmlComment: false,
+    inHtmlPre: false,
+    inHtmlBlock: false,
+  };
+  for (const rawLine of body.split("\n")) {
+    if (approvalContextLine(rawLine, state)) continue;
+    // The marker must start at COLUMN ZERO: any leading indentation can place it inside a list
+    // item's child paragraph or other continuation context (review finding on #3037) — the
+    // documented contract is an unindented line of its own.
+    if (rawLine.trimEnd() === phrase) return true;
+  }
+  return false;
+}
+
+function readGithubIssueComment(reference) {
+  return readGithubResource(`repos/${reference.repository}/issues/comments/${reference.comment}`);
 }
 
 function validateGithubReviewApproval(reference, index, failures) {
@@ -264,7 +532,29 @@ function githubRepositoryFromRemote(remoteUrl) {
 }
 
 function readGithubReview(reference) {
-  const path = `repos/${reference.repository}/pulls/${reference.pullRequest}/reviews/${reference.review}`;
+  return readGithubResource(
+    `repos/${reference.repository}/pulls/${reference.pullRequest}/reviews/${reference.review}`,
+  );
+}
+
+let githubResourceReader = readGithubResourceFromHost;
+
+/** Test seam: swap the GitHub reader for a callback's duration, always restoring it. */
+export function withGithubResourceReader(reader, callback) {
+  const previous = githubResourceReader;
+  githubResourceReader = reader;
+  try {
+    return callback();
+  } finally {
+    githubResourceReader = previous;
+  }
+}
+
+function readGithubResource(path) {
+  return githubResourceReader(path);
+}
+
+function readGithubResourceFromHost(path) {
   let executable;
   try {
     executable = resolveHostExecutable("gh");
@@ -524,11 +814,35 @@ function validateCatalogShape(catalog, failures) {
 function validateDuplicates(entries, failures) {
   const ids = new Set();
   const defaultNotes = new Map();
+  const approvalReferences = new Map();
   for (const [index, entry] of entries.entries()) {
     if (!objectRecord(entry)) continue;
     recordUniqueId(entry, index, ids, failures);
     recordDefaultPatchNotes(entry, index, defaultNotes, failures);
+    recordUniqueApprovalReference(entry, index, approvalReferences, failures);
   }
+}
+
+/**
+ * One issue-comment approval artifact authorizes exactly one catalog record: copying an existing
+ * owner comment reference into a newly appended entry would smuggle unreviewed metadata past the
+ * publish gate (review finding on #3028). Scoped to the issue-comment form deliberately —
+ * unchanged staging contracts reuse their historical PR-review reference across versions by
+ * documented practice (see the 0.3.0 staging-contract entry's rationale).
+ */
+function recordUniqueApprovalReference(entry, index, approvalReferences, failures) {
+  const reference = objectRecord(entry.review) ? entry.review.approvalReference : undefined;
+  if (!nonEmptyString(reference) || !reference.startsWith("github-issue-comment:")) return;
+  const previous = approvalReferences.get(reference);
+  if (previous !== undefined) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference duplicates entries[${String(previous)}] — one approval artifact cannot authorize two catalog records.`,
+      ),
+    );
+    return;
+  }
+  approvalReferences.set(reference, index);
 }
 
 function validateCorrectionReferences(entries, failures) {
@@ -627,9 +941,11 @@ function validateCurrentPackage(catalog, rootManifest, failures) {
     );
     return;
   }
-  for (const entry of current) {
+  catalog.entries.forEach((entry, index) => {
+    if (!currentPackageEntry(entry, rootManifest)) return;
     validateCurrentEntry(entry, rootManifest, failures);
-  }
+    validateApprovalReferenceLive(entry, index, failures);
+  });
 }
 
 // Stable versions publish under the latest dist-tag; prerelease versions (semver with a

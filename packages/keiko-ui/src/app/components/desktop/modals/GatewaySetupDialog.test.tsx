@@ -44,8 +44,11 @@ describe("GatewaySetupDialog", () => {
     const baseUrl = screen.getByLabelText(/base url/i);
     await waitFor(() => expect(baseUrl).toHaveFocus());
 
+    // The config-upload control sits between the theme toggle and Base URL in the tab order.
+    // It loads as its own chunk, so wait for it to mount before walking the trap.
+    const uploadInput = await screen.findByLabelText(/load keiko\.config\.json/i);
     await user.tab({ shift: true });
-    expect(screen.getByRole("button", { name: /light mode/i })).toHaveFocus();
+    expect(uploadInput).toHaveFocus();
 
     await user.tab();
     expect(baseUrl).toHaveFocus();
@@ -1387,6 +1390,513 @@ describe("GatewaySetupDialog", () => {
 
     // C186: after the failure the controls re-enable and focus returns to Base URL.
     await waitFor(() => expect(screen.getByLabelText(/base url/i)).toHaveFocus());
+  });
+
+  it("fills the form from an uploaded keiko.config.json and reports the applied count", async () => {
+    render(<GatewaySetupDialog />);
+
+    // The upload control loads as its own chunk — wait for it to mount instead of relying on
+    // an earlier test having warmed the chunk (that ordering is not a contract).
+    const upload = await screen.findByLabelText(/load keiko\.config\.json/i);
+    await userEvent.upload(
+      upload,
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "gpt-5o",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                apiKeyHeaderName: "api-key",
+                timeoutMs: 30_000,
+                capability: {
+                  id: "gpt-5o",
+                  kind: "chat",
+                  supportsImageInput: true,
+                  workflowEligible: true,
+                },
+              },
+              {
+                modelId: "text-embed",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                apiKeyHeaderName: "api-key",
+                timeoutMs: 30_000,
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      ),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/base url/i)).toHaveValue("https://llm-gateway.example.com/v1"),
+    );
+    expect(screen.getByLabelText(/api key header/i)).toHaveValue("api-key");
+    expect(screen.getByLabelText(/request timeout/i)).toHaveValue("30000");
+    expect(screen.getByLabelText(/deployment names/i)).toHaveValue("gpt-5o\ntext-embed");
+    expect(screen.getByText(/configuration loaded — 6 field/i)).toBeInTheDocument();
+    // The token was not in the file: manual entry (and the one-time token test) still applies.
+    expect(screen.getByLabelText(/api token/i)).toHaveValue("");
+  });
+
+  it("replaces the hidden embedding kinds when a corrected file is uploaded", async () => {
+    // Hidden imported state is file-scoped: after a corrected re-upload declares model-x as
+    // CHAT, the submit must not still assert the FIRST file's embedding kind — the server
+    // would classify the corrected deployment as embedding without a chat probe (#3037).
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    const upload = await screen.findByLabelText(/load keiko\.config\.json/i);
+    const configFile = (capabilityKind: string): File =>
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "gpt-5o",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                capability: { id: "gpt-5o", kind: "chat" },
+              },
+              {
+                modelId: "model-x",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                capability: { id: "model-x", kind: capabilityKind },
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      );
+
+    await userEvent.upload(upload, configFile("embedding"));
+    await waitFor(() =>
+      expect(screen.getByLabelText(/base url/i)).toHaveValue("https://llm-gateway.example.com/v1"),
+    );
+    await userEvent.upload(upload, configFile("chat"));
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).not.toHaveProperty("embeddingModelIds");
+  });
+
+  it("resets the invisible configured flags when a corrected file stays silent about them", async () => {
+    // File 1 declares an explicit EMPTY image list (a clear request); the corrected file 2 says
+    // nothing about the flag lists. A stale invisible configured flag would turn the submit into
+    // a stored-flag clear file 2 never asked for (#3037).
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    const upload = await screen.findByLabelText(/load keiko\.config\.json/i);
+    const fileOf = (payload: Record<string, unknown>): File =>
+      new File([JSON.stringify(payload)], "keiko.config.json", { type: "application/json" });
+
+    await userEvent.upload(
+      upload,
+      fileOf({
+        providers: [
+          {
+            modelId: "gpt-5o",
+            baseUrl: "https://llm-gateway.example.com/v1",
+            capability: { id: "gpt-5o", kind: "chat", supportsImageInput: false },
+          },
+        ],
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(/base url/i)).toHaveValue("https://llm-gateway.example.com/v1"),
+    );
+    // The corrected file carries no capability records — it never speaks about the flag lists.
+    await userEvent.upload(
+      upload,
+      fileOf({
+        providers: [{ modelId: "gpt-5o", baseUrl: "https://llm-gateway.example.com/v1" }],
+      }),
+    );
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(setupGateway).mock.calls[0]?.[0];
+    expect(payload).not.toHaveProperty("imageInputModelIds");
+    expect(payload).not.toHaveProperty("workflowEligibleModelIds");
+  });
+
+  it("submits the imported endpoint protocol while the form still points at the uploaded endpoint", async () => {
+    // The positive branch of the URL binding: without a manual retype, the imported protocol
+    // rides the submit verbatim (#3037).
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.upload(
+      await screen.findByLabelText(/load keiko\.config\.json/i),
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "gpt-5o",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                capability: { id: "gpt-5o", kind: "chat" },
+              },
+              {
+                modelId: "keiko-stt",
+                baseUrl: "https://speech.example.com",
+                endpointStyle: "azure-openai-deployment",
+                apiVersion: "2025-03-01-preview",
+                capability: {
+                  id: "keiko-stt",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsSpeechInput: true,
+                },
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(/audio endpoint url/i)).toHaveValue(
+        "https://speech.example.com",
+      ),
+    );
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).toMatchObject({
+      voiceEndpointStyle: "azure-openai-deployment",
+      voiceApiVersion: "2025-03-01-preview",
+    });
+  });
+
+  it("removes a voice role the corrected upload no longer declares", async () => {
+    // Review finding on #3037: a corrected file on the SAME voice endpoint that dropped the TTS
+    // role must not leave the previous deployment visible — Test & Save would silently re-add
+    // the removed role. A file with a voice section REPLACES the role set.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    const upload = await screen.findByLabelText(/load keiko\.config\.json/i);
+    const voiceFile = (withTts: boolean): File =>
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "gpt-5o",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                capability: { id: "gpt-5o", kind: "chat" },
+              },
+              {
+                modelId: "keiko-stt",
+                baseUrl: "https://voice.example.com",
+                capability: {
+                  id: "keiko-stt",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsSpeechInput: true,
+                },
+              },
+              ...(withTts
+                ? [
+                    {
+                      modelId: "keiko-tts",
+                      baseUrl: "https://voice.example.com",
+                      capability: {
+                        id: "keiko-tts",
+                        kind: "voice",
+                        voiceProviderLocality: "azure-foundry",
+                        supportsSpeechOutput: true,
+                      },
+                    },
+                  ]
+                : []),
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      );
+
+    await userEvent.upload(upload, voiceFile(true));
+    await waitFor(() =>
+      expect(screen.getByLabelText(/audio endpoint url/i)).toHaveValue("https://voice.example.com"),
+    );
+    await userEvent.upload(upload, voiceFile(false));
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).not.toHaveProperty(
+      "voiceSpeechOutputModelId",
+    );
+  });
+
+  it("clears a removed voice profile on a corrected upload", async () => {
+    // Review finding on #3037: the corrected file keeps the TTS role but drops voiceProfiles —
+    // the previous output voice (and its configured flag) must not survive invisibly.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    const upload = await screen.findByLabelText(/load keiko\.config\.json/i);
+    const voiceFile = (withProfile: boolean): File =>
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "gpt-5o",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                capability: { id: "gpt-5o", kind: "chat" },
+              },
+              {
+                modelId: "keiko-tts",
+                baseUrl: "https://voice.example.com",
+                ...(withProfile
+                  ? { voiceProfiles: [{ persona: "neutral", voiceId: "nova" }] }
+                  : {}),
+                capability: {
+                  id: "keiko-tts",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsSpeechOutput: true,
+                },
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      );
+
+    await userEvent.upload(upload, voiceFile(true));
+    await waitFor(() =>
+      expect(screen.getByLabelText(/audio endpoint url/i)).toHaveValue("https://voice.example.com"),
+    );
+    await userEvent.upload(upload, voiceFile(false));
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    // The stale profile is GONE (the field cleared with its configured flag), so the form now
+    // demands a voice for the kept TTS role VISIBLY instead of silently persisting the removed
+    // profile — the honest outcome of the correction.
+    expect(setupGateway).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/provider voice id is required/i);
+    expect(screen.getByLabelText(/output voice/i)).toHaveValue("");
+  });
+
+  it("clears the imported endpoint protocol when the user retypes the voice endpoint", async () => {
+    // The protocol belongs to the imported connection: after the user manually replaces the
+    // uploaded Azure speech endpoint with an OpenAI-compatible one, the submit must not carry
+    // the stale deployment-path declaration onto the new endpoint (#3037).
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.upload(
+      await screen.findByLabelText(/load keiko\.config\.json/i),
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "gpt-5o",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                capability: { id: "gpt-5o", kind: "chat" },
+              },
+              {
+                modelId: "keiko-stt",
+                baseUrl: "https://speech.example.com",
+                endpointStyle: "azure-openai-deployment",
+                apiVersion: "2025-03-01-preview",
+                capability: {
+                  id: "keiko-stt",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsSpeechInput: true,
+                },
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(/audio endpoint url/i)).toHaveValue(
+        "https://speech.example.com",
+      ),
+    );
+
+    const endpointField = screen.getByLabelText(/audio endpoint url/i);
+    await userEvent.clear(endpointField);
+    await userEvent.type(endpointField, "https://openai-voice.example.com/v1");
+    // The identity transition reset the role fields — resupply role and credential manually.
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
+    await userEvent.type(screen.getByLabelText(/dictate.*speech-to-text deployment/i), "stt-x");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(setupGateway).mock.calls[0]?.[0];
+    expect(payload).not.toHaveProperty("voiceEndpointStyle");
+    expect(payload).not.toHaveProperty("voiceApiVersion");
+  });
+
+  it("fills the voice section from an uploaded configuration and states a skipped realtime", async () => {
+    // The owner's persisted keiko.config.json: STT/TTS on a dedicated speech endpoint, realtime
+    // sharing the gateway endpoint — the speech pair imports, the realtime skip is stated.
+    render(<GatewaySetupDialog />);
+
+    await userEvent.upload(
+      await screen.findByLabelText(/load keiko\.config\.json/i),
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "gpt-5o",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                apiKeyHeaderName: "api-key",
+                timeoutMs: 120_000,
+                capability: { id: "gpt-5o", kind: "chat" },
+              },
+              {
+                modelId: "keiko-stt",
+                baseUrl: "https://voice.example.com",
+                apiKeyHeaderName: "api-key",
+                timeoutMs: 120_000,
+                capability: {
+                  id: "keiko-stt",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsSpeechInput: true,
+                },
+              },
+              {
+                modelId: "keiko-tts",
+                baseUrl: "https://voice.example.com",
+                apiKeyHeaderName: "api-key",
+                timeoutMs: 120_000,
+                capability: {
+                  id: "keiko-tts",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsSpeechOutput: true,
+                },
+              },
+              {
+                modelId: "keiko-realtime",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                apiKeyHeaderName: "api-key",
+                timeoutMs: 120_000,
+                capability: {
+                  id: "keiko-realtime",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsRealtimeVoice: true,
+                  realtimeTranscriptionModel: "keiko-realtime-stt",
+                },
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      ),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/audio endpoint url/i)).toHaveValue("https://voice.example.com"),
+    );
+    expect(screen.getByLabelText(/speech-to-text deployment/i)).toHaveValue("keiko-stt");
+    expect(screen.getByLabelText(/speech-output deployment/i)).toHaveValue("keiko-tts");
+    // The realtime provider lives on a different connection — skipped and SAID, never silent.
+    expect(screen.getByLabelText(/digital voice · realtime deployment/i)).toHaveValue("");
+    expect(screen.getByText(/realtime voice model uses its own endpoint/i)).toBeInTheDocument();
+  });
+
+  it("rejects an unreadable configuration upload with a visible alert and no field changes", async () => {
+    render(<GatewaySetupDialog />);
+
+    await userEvent.upload(
+      await screen.findByLabelText(/load keiko\.config\.json/i),
+      new File(["{ not json"], "keiko.config.json", { type: "application/json" }),
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/not a readable keiko configuration/i);
+    expect(screen.getByLabelText(/base url/i)).toHaveValue("");
   });
 });
 

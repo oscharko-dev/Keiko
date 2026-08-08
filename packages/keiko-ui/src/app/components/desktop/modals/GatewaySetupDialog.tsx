@@ -30,7 +30,19 @@ import { Icons } from "../Icons";
 import KeikoSelect from "../KeikoSelect";
 import { useTheme } from "../hooks/useTheme";
 import { NATIVE_BLOCK_STYLE } from "../native-element-styles";
+import dynamic from "next/dynamic";
 import { notifyGatewayConfigUpdated } from "../widgets/shared/gatewaySetupBus";
+import { DynamicChunkLoadFailure } from "../DynamicChunkLoadFailure";
+import type { GatewayConfigUploadFields } from "./gatewayConfigParsing";
+
+// The upload path (control + fail-closed parser) is not first-paint-critical: loading it as its
+// own chunk keeps the setup page inside the static-export first-load budget (bundle gate). A
+// failed upload-chunk load must not make the feature silently disappear from an otherwise
+// working dialog — the shared fallback surfaces the redacted error and a retry (#3031).
+const GatewayConfigUpload = dynamic(
+  () => import("./GatewayConfigUpload").then((mod) => mod.GatewayConfigUpload),
+  { ssr: false, loading: DynamicChunkLoadFailure },
+);
 import styles from "./GatewaySetupDialog.module.css";
 
 /**
@@ -530,6 +542,9 @@ interface GatewayFormFields {
   readonly timeoutMs: string;
   readonly deploymentNames: string;
   readonly imageInputModelIds: string;
+  readonly imageInputModelIdsConfigured: boolean;
+  /** Imported embedding-kind ids asserted to the setup route (empty when nothing was imported). */
+  readonly importedEmbeddingModelIds: readonly string[];
   readonly workflowEligibleModelIds: string;
   readonly workflowEligibleModelIdsConfigured: boolean;
   readonly voiceBaseUrl: string;
@@ -546,6 +561,12 @@ interface GatewayFormFields {
   readonly voiceProviderLocality: VoiceProviderLocality;
   readonly voiceProviderLocalityConfigured: boolean;
   readonly voiceTimeoutMs: string;
+  /** Voice endpoint protocol imported from a config upload (empty = nothing imported). */
+  readonly importedVoiceEndpointStyle: string;
+  readonly importedVoiceApiVersion: string;
+  readonly importedVoiceRealtimeAuthMode: string;
+  /** The uploaded endpoint URL the imported protocol is bound to. */
+  readonly importedVoiceEndpointBaseUrl: string;
   readonly figmaAccessToken: string;
   readonly preserveExisting: boolean;
   readonly hasStoredVoiceProvider: boolean;
@@ -576,6 +597,27 @@ function realtimeTranscriptionRequired(fields: GatewayFormFields): boolean {
   return submittedRealtime !== fields.storedRealtimeModelId;
 }
 
+// The imported endpoint protocol rides only on a submit that still points at EXACTLY the
+// uploaded endpoint — a manually retyped URL must not inherit the file's protocol, and sending
+// the protocol alone would activate the server's voice path with no voice fields.
+function importedVoiceEndpointPayload(fields: GatewayFormFields): Partial<GatewaySetupInput> {
+  const submittedBaseUrl = fields.voiceBaseUrl.trim();
+  if (submittedBaseUrl === "" || submittedBaseUrl !== fields.importedVoiceEndpointBaseUrl) {
+    return {};
+  }
+  return {
+    ...(fields.importedVoiceEndpointStyle === ""
+      ? {}
+      : { voiceEndpointStyle: fields.importedVoiceEndpointStyle }),
+    ...(fields.importedVoiceApiVersion === ""
+      ? {}
+      : { voiceApiVersion: fields.importedVoiceApiVersion }),
+    ...(fields.importedVoiceRealtimeAuthMode === ""
+      ? {}
+      : { voiceRealtimeAuthMode: fields.importedVoiceRealtimeAuthMode }),
+  };
+}
+
 function buildSetupGatewayPayload(
   fields: GatewayFormFields,
   derived: DerivedSubmitFields,
@@ -588,9 +630,13 @@ function buildSetupGatewayPayload(
     ...(derived.parsedTimeoutMs === undefined ? {} : { timeoutMs: derived.parsedTimeoutMs }),
     deploymentNames: derived.parsedDeploymentNames,
     preserveExisting: fields.preserveExisting,
-    ...(derived.parsedImageInputModelIds.length === 0
+    ...(derived.parsedImageInputModelIds.length === 0 && !fields.imageInputModelIdsConfigured
       ? {}
       : { imageInputModelIds: derived.parsedImageInputModelIds }),
+    ...(fields.importedEmbeddingModelIds.length === 0
+      ? {}
+      : { embeddingModelIds: fields.importedEmbeddingModelIds }),
+    ...importedVoiceEndpointPayload(fields),
     ...(!fields.workflowEligibleModelIdsConfigured
       ? {}
       : { workflowEligibleModelIds: derived.parsedWorkflowEligibleModelIds }),
@@ -792,6 +838,7 @@ async function performGatewaySubmission(
   const submittedGatewaySettings =
     submittedGatewayCredentials ||
     derived.parsedTimeoutMs !== undefined ||
+    fields.imageInputModelIdsConfigured ||
     fields.workflowEligibleModelIdsConfigured;
   const submittedFigmaCredential = fields.figmaAccessToken.trim() !== "";
   const result = await setupGateway(
@@ -2077,6 +2124,13 @@ export function GatewaySetupDialog({
   const [workflowEligibleModelIds, setWorkflowEligibleModelIds] = useState(() =>
     preserveExisting ? storedWorkflowEligibleModelIds(storedModels) : "",
   );
+  const [imageInputModelIdsConfigured, setImageInputModelIdsConfigured] = useState(false);
+  const [importedEmbeddingModelIds, setImportedEmbeddingModelIds] = useState<readonly string[]>([]);
+  const [importedVoiceEndpointStyle, setImportedVoiceEndpointStyle] = useState("");
+  const [importedVoiceApiVersion, setImportedVoiceApiVersion] = useState("");
+  const [importedVoiceRealtimeAuthMode, setImportedVoiceRealtimeAuthMode] = useState("");
+  const [importedVoiceEndpointBaseUrl, setImportedVoiceEndpointBaseUrl] = useState("");
+  const [uploadReadPending, setUploadReadPending] = useState(false);
   const [workflowEligibleModelIdsConfigured, setWorkflowEligibleModelIdsConfigured] =
     useState(false);
   const [voiceBaseUrl, setVoiceBaseUrl] = useState("");
@@ -2303,6 +2357,109 @@ export function GatewaySetupDialog({
     }
   }, [apiKey, baseUrl, busy, error, preserveExisting]);
 
+  function applyUploadedConfig(fields: GatewayConfigUploadFields): void {
+    if (fields.baseUrl !== undefined) setBaseUrl(fields.baseUrl);
+    if (fields.apiKey !== undefined) setApiKey(fields.apiKey);
+    if (fields.apiKeyHeaderName !== undefined) setApiKeyHeaderName(fields.apiKeyHeaderName);
+    if (fields.timeoutMs !== undefined) setTimeoutMs(fields.timeoutMs);
+    if (fields.deploymentNames.length > 0) setDeploymentNames(fields.deploymentNames.join("\n"));
+    // A defined-but-empty flag list is the file explicitly declaring "none" and must clear the
+    // field exactly like manual emptying would (review finding on #3031); only an undefined list
+    // (the file never speaks about the flag) leaves the field untouched.
+    // The CONFIGURED flags are invisible state and therefore file-scoped like every other hidden
+    // import: each upload states whether THIS file speaks about the flag lists. The visible
+    // textarea values persist unless the file replaces them (the user can see and correct
+    // those), but a stale invisible flag from an earlier file's explicit empty list would turn
+    // the next submit into a stored-flag clear the current file never asked for (#3037).
+    setImageInputModelIdsConfigured(fields.imageInputModelIds !== undefined);
+    if (fields.imageInputModelIds !== undefined) {
+      setImageInputModelIds(fields.imageInputModelIds.join("\n"));
+    }
+    setWorkflowEligibleModelIdsConfigured(fields.workflowEligibleModelIds !== undefined);
+    if (fields.workflowEligibleModelIds !== undefined) {
+      setWorkflowEligibleModelIds(fields.workflowEligibleModelIds.join("\n"));
+    }
+    // Imported embedding kinds ride along invisibly — they assert the kind to the setup route
+    // so a fresh save cannot chat-probe an embedding out of the config (review finding on #3037).
+    // Unlike the VISIBLE fields (which the user can see and correct), hidden imported state is
+    // strictly file-scoped: every successful upload REPLACES it, or a corrected second upload
+    // would still submit the previous file's kind declarations (review finding on #3037).
+    setImportedEmbeddingModelIds(fields.embeddingModelIds ?? []);
+    if (fields.figmaAccessToken !== undefined) setFigmaAccessToken(fields.figmaAccessToken);
+    applyUploadedVoiceConfig(fields);
+  }
+
+  /**
+   * Voice fields apply through the SAME update wrappers typing uses, in typing order: the base
+   * URL first (its identity transition resets the dependent role fields), the realtime id before
+   * its transcription id (the realtime transition clears the transcription), and the semantic
+   * turn detection flag last so the file's explicit declaration wins over inherited defaults.
+   */
+  function applyUploadedVoiceConnection(fields: GatewayConfigUploadFields): void {
+    if (fields.voiceBaseUrl !== undefined) updateVoiceBaseUrl(fields.voiceBaseUrl);
+    if (fields.voiceApiKey !== undefined) setVoiceApiKey(fields.voiceApiKey);
+    if (fields.voiceApiKeyHeaderName !== undefined) {
+      setVoiceApiKeyHeaderName(fields.voiceApiKeyHeaderName);
+    }
+    if (fields.voiceTimeoutMs !== undefined) setVoiceTimeoutMs(fields.voiceTimeoutMs);
+  }
+
+  // When the file carries a voice section, its role set REPLACES the form's roles — a corrected
+  // upload that removed a role must not leave the previous deployment visible, or Test & Save
+  // would silently re-add it (review finding on #3037). A file with no voice section leaves the
+  // fields untouched, like every other absent statement. The parser guarantees the gate is
+  // whole: a voice section always carries voiceBaseUrl (a section without one is refused as
+  // invalid), so role ids can never arrive while the section counts as absent (KfQ finding on
+  // #3037).
+  function applyUploadedVoiceRoles(fields: GatewayConfigUploadFields): void {
+    const speaksAboutVoice = fields.voiceBaseUrl !== undefined;
+    const applyRole = (value: string | undefined, set: (next: string) => void): void => {
+      if (speaksAboutVoice) set(value ?? "");
+    };
+    applyRole(fields.voiceModelId, setVoiceModelId);
+    applyRole(fields.voiceRealtimeModelId, updateVoiceRealtimeModelId);
+    applyRole(fields.voiceRealtimeTranscriptionModelId, setVoiceRealtimeTranscriptionModelId);
+    applyRole(fields.voiceSpeechOutputModelId, updateVoiceSpeechOutputModelId);
+  }
+
+  function applyUploadedVoiceConfig(fields: GatewayConfigUploadFields): void {
+    applyUploadedVoiceConnection(fields);
+    applyUploadedVoiceRoles(fields);
+    // After the speech-output update above — its identity transition clears the output voice.
+    // File-scoped like the roles: a voice section that dropped the profile clears the field and
+    // its configured flag, or Test & Save would silently persist the removed profile (#3037).
+    if (fields.voiceBaseUrl !== undefined || fields.voiceOutputVoiceId !== undefined) {
+      setVoiceOutputVoiceId(fields.voiceOutputVoiceId ?? "");
+      setVoiceOutputVoiceIdConfigured(fields.voiceOutputVoiceId !== undefined);
+    }
+    if (fields.voiceProviderLocality !== undefined) {
+      setVoiceProviderLocality(fields.voiceProviderLocality);
+      setVoiceProviderLocalityConfigured(true);
+    }
+    if (fields.voiceSemanticTurnDetection !== undefined) {
+      updateVoiceSemanticTurnDetection(fields.voiceSemanticTurnDetection);
+    }
+    applyUploadedVoiceEndpoint(fields);
+  }
+
+  // The endpoint protocol rides along invisibly and is persisted verbatim by the setup route —
+  // without it a fresh save of an Azure speech endpoint loses its deployment URL shape (#3037).
+  // Hidden imported state is file-scoped: when the file speaks about the voice connection at
+  // all, its protocol declaration REPLACES the previous upload's (a corrected re-upload without
+  // a style must clear the stale one); a file with no voice section leaves the visible voice
+  // fields — and therefore the protocol that belongs to them — untouched.
+  function applyUploadedVoiceEndpoint(fields: GatewayConfigUploadFields): void {
+    if (fields.voiceBaseUrl === undefined) return;
+    setImportedVoiceEndpointStyle(fields.voiceEndpointStyle ?? "");
+    setImportedVoiceApiVersion(fields.voiceApiVersion ?? "");
+    setImportedVoiceRealtimeAuthMode(fields.voiceRealtimeAuthMode ?? "");
+    // The protocol is BOUND to the uploaded endpoint URL: the payload submits it only while the
+    // form still points at exactly that endpoint, so a manually retyped URL can never inherit
+    // the file's deployment-path shape (#3037). Trimmed with the same trim the submit-time
+    // comparison applies — an untrimmed stored URL would silently drop the protocol.
+    setImportedVoiceEndpointBaseUrl(fields.voiceBaseUrl.trim());
+  }
+
   async function submit(event: FormSubmitEvent): Promise<void> {
     event.preventDefault();
     if (busy) return;
@@ -2323,6 +2480,8 @@ export function GatewaySetupDialog({
           timeoutMs,
           deploymentNames,
           imageInputModelIds,
+          imageInputModelIdsConfigured,
+          importedEmbeddingModelIds,
           workflowEligibleModelIds,
           workflowEligibleModelIdsConfigured,
           voiceBaseUrl,
@@ -2333,6 +2492,10 @@ export function GatewaySetupDialog({
           voiceRealtimeTranscriptionModelId,
           voiceSupportsSemanticTurnDetection,
           voiceSemanticTurnDetectionConfigured,
+          importedVoiceEndpointStyle,
+          importedVoiceApiVersion,
+          importedVoiceRealtimeAuthMode,
+          importedVoiceEndpointBaseUrl,
           voiceSpeechOutputModelId,
           voiceOutputVoiceId,
           voiceOutputVoiceIdConfigured,
@@ -2406,7 +2569,7 @@ export function GatewaySetupDialog({
   });
   const hasFigmaCredentialInput = figmaAccessToken.trim() !== "";
   const canSubmit = computeCanSubmit({
-    busy,
+    busy: busy || uploadReadPending,
     success,
     requiresGatewayCredentials,
     baseUrl,
@@ -2437,7 +2600,10 @@ export function GatewaySetupDialog({
       deploymentNames={deploymentNames}
       setDeploymentNames={setDeploymentNames}
       imageInputModelIds={imageInputModelIds}
-      setImageInputModelIds={setImageInputModelIds}
+      setImageInputModelIds={(value): void => {
+        setImageInputModelIdsConfigured(true);
+        setImageInputModelIds(value);
+      }}
       workflowEligibleModelIds={workflowEligibleModelIds}
       setWorkflowEligibleModelIds={(value): void => {
         setWorkflowEligibleModelIdsConfigured(true);
@@ -2519,6 +2685,12 @@ export function GatewaySetupDialog({
             <h1 id="gw-setup-title">{dialogCopy.title}</h1>
             <p id="gw-setup-desc">{dialogCopy.description}</p>
           </div>
+
+          <GatewayConfigUpload
+            disabled={busy || success !== undefined}
+            onApply={applyUploadedConfig}
+            onReadPendingChange={setUploadReadPending}
+          />
 
           <GatewayModelSection
             preserveExisting={preserveExisting}

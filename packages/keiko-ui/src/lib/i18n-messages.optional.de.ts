@@ -790,6 +790,24 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "searchPanel.status.searchingRoots": "Workspace-Roots werden durchsucht…",
   "searchPanel.status.selectWorkspace": "Vor der Suche einen Workspace auswählen.",
   "searchPanel.symbol.enclosingSuffix": " in {enclosing}",
+  "gatewaySetup.upload.title": "Konfigurationsdatei laden",
+  "gatewaySetup.upload.hint":
+    "Du hast eine keiko.config.json? Lade sie und alle enthaltenen Felder werden ausgefüllt — die Datei bleibt auf diesem Rechner, und was sie nicht enthält (etwa den API-Token), ergänzt du unten.",
+  "gatewaySetup.upload.action": "keiko.config.json laden",
+  "gatewaySetup.upload.appliedOne": "Konfiguration geladen — 1 Feld unten ausgefüllt.",
+  "gatewaySetup.upload.appliedMany": "Konfiguration geladen — {count} Felder unten ausgefüllt.",
+  "gatewaySetup.upload.invalid": "Diese Datei ist keine lesbare Keiko-Konfiguration.",
+  "gatewaySetup.upload.fileTooLarge": "Diese Datei überschreitet die unterstützten 256 KB.",
+  "gatewaySetup.upload.unsupportedSetting":
+    "Diese Datei enthält Einstellungen, die dieser Upload nicht abbilden kann — Chat-/Embedding-Provider-Optionen (Endpoint-Stil, API-Version, Output-Token-Parameter, Realtime-Auth-Modus, Voice-Profile), einen angepassten Circuit-Breaker oder einen Policy-Block wie Grounding, Reranker oder Egress. Trage diese Konfiguration manuell ein.",
+  "gatewaySetup.upload.unsupportedKind":
+    "Diese Datei enthält OCR-Provider, die dieser Upload nicht ausfüllen kann — trage diesen Abschnitt manuell ein und entferne ihn aus der Datei.",
+  "gatewaySetup.upload.realtimeSkipped":
+    "Das Realtime-Sprachmodell nutzt einen eigenen Endpoint und wurde nicht übernommen — ergänze es nach dem Speichern über die Sprach-Einstellungen.",
+  "gatewaySetup.upload.voiceProfilesReduced":
+    "Die Datei konfiguriert mehrere Ausgabestimmen; übernommen wurde die neutrale Stimme — die übrigen lassen sich später neu wählen.",
+  "gatewaySetup.upload.voiceRetryTuningReset":
+    "Die Datei stimmt Sprach-Wiederholversuche ab, die dieses Formular nicht übernehmen kann — beim Speichern gilt das Standard-Wiederholverhalten.",
   "gatewaySetup.badge.setup": "Modell-Gateway-Einrichtung",
   "gatewaySetup.badge.update": "Zugangsdaten aktualisieren",
   "gatewaySetup.voice.title": "Audio & Digital Voice",
