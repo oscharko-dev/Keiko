@@ -551,6 +551,25 @@ describe("release-impact governance", () => {
       expect(messages(tildeFenced)).toContain("on a line of its own");
     });
 
+    it("rejects a mismatched fence delimiter posing as a closer", () => {
+      // Review finding on #3037: a fence closes only on the SAME marker at the same-or-greater
+      // length (CommonMark) — a `~~~` line inside a backtick fence, or a shorter ``` inside a
+      // ```` fence, is fenced CONTENT. Treating either as a closer would let the fenced example
+      // that follows it approve a publish.
+      const phrase = approvalPhrase();
+      const tildeInsideBackticks = validateWith(
+        approvalComment({ body: `\`\`\`\n~~~\n${phrase}\n\`\`\`` }),
+      );
+      expect(tildeInsideBackticks.ok).toBe(false);
+      expect(messages(tildeInsideBackticks)).toContain("on a line of its own");
+
+      const shorterInsideLonger = validateWith(
+        approvalComment({ body: `\`\`\`\`\n\`\`\`\n${phrase}\n\`\`\`\`` }),
+      );
+      expect(shorterInsideLonger.ok).toBe(false);
+      expect(messages(shorterInsideLonger)).toContain("on a line of its own");
+    });
+
     it("rejects a phrase that appears only inside a blockquote", () => {
       // Review finding on #3037: a quoted line ("> Approved-for-publish: ...") cites the phrase,
       // typically while discussing it — it is not the owner's own standalone statement.

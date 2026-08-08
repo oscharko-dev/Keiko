@@ -565,6 +565,8 @@ interface GatewayFormFields {
   readonly importedVoiceEndpointStyle: string;
   readonly importedVoiceApiVersion: string;
   readonly importedVoiceRealtimeAuthMode: string;
+  /** The uploaded endpoint URL the imported protocol is bound to. */
+  readonly importedVoiceEndpointBaseUrl: string;
   readonly figmaAccessToken: string;
   readonly preserveExisting: boolean;
   readonly hasStoredVoiceProvider: boolean;
@@ -595,10 +597,14 @@ function realtimeTranscriptionRequired(fields: GatewayFormFields): boolean {
   return submittedRealtime !== fields.storedRealtimeModelId;
 }
 
-// The imported endpoint protocol rides only on a submit that actually carries the imported voice
-// connection — sending it alone would activate the server's voice path with no voice fields.
+// The imported endpoint protocol rides only on a submit that still points at EXACTLY the
+// uploaded endpoint — a manually retyped URL must not inherit the file's protocol, and sending
+// the protocol alone would activate the server's voice path with no voice fields.
 function importedVoiceEndpointPayload(fields: GatewayFormFields): Partial<GatewaySetupInput> {
-  if (fields.voiceBaseUrl.trim() === "") return {};
+  const submittedBaseUrl = fields.voiceBaseUrl.trim();
+  if (submittedBaseUrl === "" || submittedBaseUrl !== fields.importedVoiceEndpointBaseUrl) {
+    return {};
+  }
   return {
     ...(fields.importedVoiceEndpointStyle === ""
       ? {}
@@ -2123,6 +2129,7 @@ export function GatewaySetupDialog({
   const [importedVoiceEndpointStyle, setImportedVoiceEndpointStyle] = useState("");
   const [importedVoiceApiVersion, setImportedVoiceApiVersion] = useState("");
   const [importedVoiceRealtimeAuthMode, setImportedVoiceRealtimeAuthMode] = useState("");
+  const [importedVoiceEndpointBaseUrl, setImportedVoiceEndpointBaseUrl] = useState("");
   const [uploadReadPending, setUploadReadPending] = useState(false);
   const [workflowEligibleModelIdsConfigured, setWorkflowEligibleModelIdsConfigured] =
     useState(false);
@@ -2430,6 +2437,10 @@ export function GatewaySetupDialog({
     setImportedVoiceEndpointStyle(fields.voiceEndpointStyle ?? "");
     setImportedVoiceApiVersion(fields.voiceApiVersion ?? "");
     setImportedVoiceRealtimeAuthMode(fields.voiceRealtimeAuthMode ?? "");
+    // The protocol is BOUND to the uploaded endpoint URL: the payload submits it only while the
+    // form still points at exactly that endpoint, so a manually retyped URL can never inherit
+    // the file's deployment-path shape (#3037).
+    setImportedVoiceEndpointBaseUrl(fields.voiceBaseUrl);
   }
 
   async function submit(event: FormSubmitEvent): Promise<void> {
@@ -2467,6 +2478,7 @@ export function GatewaySetupDialog({
           importedVoiceEndpointStyle,
           importedVoiceApiVersion,
           importedVoiceRealtimeAuthMode,
+          importedVoiceEndpointBaseUrl,
           voiceSpeechOutputModelId,
           voiceOutputVoiceId,
           voiceOutputVoiceIdConfigured,

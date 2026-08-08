@@ -122,7 +122,9 @@ describe("hermetic end-to-end (scripted gh double)", () => {
   // The fixture tags derive from the checkout's real version: the script binds the release to
   // the version at the BUILT commit and to the local checkout, so hardcoded tags would turn the
   // whole suite red on the next version bump (review finding on #3037).
-  const localVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
+  const localVersion = JSON.parse(
+    readFileSync(pathModule.resolve(import.meta.dirname, "..", "..", "package.json"), "utf8"),
+  ).version;
   const previousTag = `v${localVersion}-beta.1`;
   const currentTag = `v${localVersion}-beta.2`;
 

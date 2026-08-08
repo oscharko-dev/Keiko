@@ -3041,6 +3041,65 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("lets an explicit deployment list turn a stored embedding back into chat", async () => {
+    // Review finding on #3037: unioning the STORED embedding kinds over an explicitly submitted
+    // deployment list made a mis-kinded embedding permanent — a corrected upload declaring the
+    // model as chat could never get it chat-probed again. Stored kinds apply to INHERITED
+    // deployments only, like every other stored restore list.
+    const uiDir = await tempDir("keiko-gw-ui-embed-correct-");
+    const probedModelIds: string[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-embed-correct-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => {
+        probedModelIds.push(...modelIds);
+        return Promise.resolve(modelIds);
+      },
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "model-x",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            capability: { id: "model-x", kind: "embedding" },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    // The corrected upload submits an EXPLICIT deployment list declaring model-x as chat (no
+    // embedding assertion) — the stored embedding kind must not override it.
+    const corrected = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        apiKey: "rotated-token",
+        deploymentNames: ["example-chat-model", "model-x"],
+      }),
+      deps,
+    );
+    expect(corrected.status).toBe(200);
+    expect(probedModelIds).toContain("model-x");
+    const savedKind = currentGatewayConfig(deps)?.capabilities?.find(
+      (capability) => capability.id === "model-x",
+    )?.kind;
+    expect(savedKind).toBe("chat");
+    deps.store.close();
+  });
+
   it("honours client-asserted embedding kinds on a FRESH setup", async () => {
     // Review finding on #3037 (P1): on first setup there is no stored kind, so an imported
     // embedding whose id defies the name heuristic was chat-probed and dropped (or persisted as
@@ -3282,6 +3341,58 @@ describe("handleGatewaySetup", () => {
     expect(replaced.status).toBe(200);
     expect(savedOcr().get("scan-ocr")).toBeUndefined();
     expect(savedOcr().get("remote-ocr")).toBeUndefined();
+    deps.store.close();
+  });
+
+  it("keeps runtime-only egress out of the persisted config on a rebuild", async () => {
+    // Review finding on #3037: `current.egress` is the RUNTIME aggregate — environment-derived
+    // proxy/CA/private-network settings included. Persisting it would keep an env opt-in active
+    // from disk after the environment is cleared; only what the stored file declares survives,
+    // while the running process keeps the aggregate.
+    const uiDir = await tempDir("keiko-gw-ui-egress-runtime-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-egress-runtime-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const initial = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm.example.com/v1", apiKey: "chat-token" }),
+      deps,
+    );
+    expect(initial.status).toBe(200);
+    const storagePath = deps.gatewayConfig?.storagePath ?? "";
+    expect(readFileSync(storagePath, "utf8")).not.toContain("egress");
+
+    // An environment-derived egress aggregate exists on the RUNTIME config only.
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        egress: { httpsProxy: "http://env-proxy.internal.example:8443" },
+      }),
+      true,
+    );
+
+    const rotated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "rotated-token" }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.egress?.httpsProxy).toBe(
+      "http://env-proxy.internal.example:8443/",
+    );
+    expect(readFileSync(storagePath, "utf8")).not.toContain("env-proxy.internal.example");
     deps.store.close();
   });
 

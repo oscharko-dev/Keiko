@@ -333,15 +333,37 @@ function validateGithubIssueCommentState(entry, comment, reference, index, failu
  * quoted line ("> Approved-for-publish: ...") documents the phrase — it never grants the approval
  * (review finding on #3037).
  */
+function fenceDelimiter(line) {
+  const match = /^(`{3,}|~{3,})/u.exec(line);
+  return match?.[1];
+}
+
+// A fence closes only on the SAME marker type at the same-or-greater length with nothing after
+// it (CommonMark) — a `~~~` line inside a backtick fence is fenced CONTENT, not a closer, and
+// treating it as one would let a fenced example approve a publish.
+function closesFence(openFence, line, delimiter) {
+  return (
+    delimiter !== undefined &&
+    delimiter[0] === openFence[0] &&
+    delimiter.length >= openFence.length &&
+    line.slice(delimiter.length).trim() === ""
+  );
+}
+
 function phraseStandsOnPlainLine(body, phrase) {
-  let inFence = false;
+  let openFence;
   for (const rawLine of body.split("\n")) {
     const line = rawLine.trim();
-    if (line.startsWith("```") || line.startsWith("~~~")) {
-      inFence = !inFence;
+    const delimiter = fenceDelimiter(line);
+    if (openFence !== undefined) {
+      if (closesFence(openFence, line, delimiter)) openFence = undefined;
       continue;
     }
-    if (inFence || line.startsWith(">")) continue;
+    if (delimiter !== undefined) {
+      openFence = delimiter;
+      continue;
+    }
+    if (line.startsWith(">")) continue;
     if (line === phrase) return true;
   }
   return false;

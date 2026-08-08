@@ -3168,7 +3168,11 @@ function storedRestoreListsForSetup(
   const inheritedDeployments =
     input.preserveExisting && !hasNonEmptyListField(input.raw, "deploymentNames");
   return {
-    storedEmbeddingModelIds: input.preserveExisting ? currentEmbeddingModelIds(input.current) : [],
+    // Stored embedding kinds follow the same inherited-only rule as every other stored list: an
+    // explicitly submitted deployment list is authoritative, and unioning the stored kinds over
+    // it would make it impossible for a corrected upload to turn a mis-kinded embedding back
+    // into a chat deployment (review finding on #3037).
+    storedEmbeddingModelIds: inheritedDeployments ? currentEmbeddingModelIds(input.current) : [],
     storedOcrModelIds: inheritedDeployments ? currentOcrModelIds(input.current) : [],
     storedDedicatedEmbeddingModelIds: inheritedDeployments
       ? currentDedicatedEmbeddingModelIds(input.current)
@@ -3940,9 +3944,34 @@ async function trySetupCandidate(
   });
   const workflowEligibilityError = validateWorkflowEligibleModelIds(request, verified.config);
   if (workflowEligibilityError !== undefined) return workflowEligibilityError;
-  persistGatewayConfig(verified.rawConfig, gatewayConfig.storagePath, deps);
+  persistGatewayConfig(
+    current === undefined
+      ? verified.rawConfig
+      : withDiskGatewayEgress(verified.rawConfig, gatewayConfig.storagePath, deps),
+    gatewayConfig.storagePath,
+    deps,
+  );
   gatewayConfig.set(verified.config, true);
   return setupSuccessResult(verified.config, verified.testedModelIds, verified.skippedModelIds);
+}
+
+// The runtime aggregate in `current.egress` can carry ENVIRONMENT-derived egress (proxy, CA
+// bundle, private-network opt-in). On a preserve-mode rebuild only what the stored file itself
+// declares may reach disk — persisting the aggregate would keep an env opt-in active from disk
+// after the environment is cleared (review finding on #3037; the settings-only path draws the
+// same distinction through withPersistedGatewayEgress). A FRESH setup skips this entirely: its
+// raw config carries no current-egress copy, and the storage path may still be the operator's
+// bootstrap config file whose config-file-only egress must not be re-persisted by the UI. The
+// runtime config handed to gatewayConfig.set keeps the full aggregate either way — behavior in
+// the running process is unchanged.
+function withDiskGatewayEgress(
+  raw: Record<string, unknown>,
+  storagePath: string,
+  deps: UiHandlerDeps,
+): Record<string, unknown> {
+  const withoutEgress = { ...raw };
+  delete withoutEgress.egress;
+  return withPersistedGatewayEgress(withoutEgress, storagePath, deps);
 }
 
 function validateWorkflowEligibleModelIds(
