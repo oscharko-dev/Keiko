@@ -53,12 +53,27 @@ describe("parseArgs", () => {
   );
 });
 
+function ghDoubleStub() {
+  return () => ({ status: 0, stdout: "{}", stderr: "" });
+}
+
 describe("beta tag arithmetic", () => {
   it("starts at beta.0 and increments past the highest existing beta", () => {
     expect(nextBetaTag("0.3.0", [])).toBe("v0.3.0-beta.0");
     expect(nextBetaTag("0.3.0", ["v0.3.0-beta.0", "v0.3.0-beta.1", "v0.2.15"])).toBe(
       "v0.3.0-beta.2",
     );
+  });
+
+  it("refuses a --tag override whose beta index the release verification would reject", () => {
+    // Review finding on #3043: the script accepted \d+ (v0.3.0-beta.00 included) while the
+    // Release verification regex requires (0|[1-9][0-9]*) — the lane could publish a tag whose
+    // own verification run then stays red. One format, owned here.
+    expect(() =>
+      withProcessRunner(ghDoubleStub(), () =>
+        runPortablePrerelease(["--tag", "v0.3.0-beta.00", "--plan-only"]),
+      ),
+    ).toThrowError(/beta index|does not match the governed beta tag shape/u);
   });
 
   it("allows resuming the highest existing beta while refusing anything below it", () => {
