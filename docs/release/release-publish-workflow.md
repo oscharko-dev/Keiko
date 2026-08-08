@@ -166,11 +166,15 @@ still requires an operator dispatch with `portable_assets_run_id` pointing at th
 ## Triggering
 
 - Stable tag pushes (`v<version>`, no prerelease suffix) run the full release verification job.
-- Governed beta prerelease tag pushes (`v<version>-beta.<n>`, cut by
-  `scripts/release-portable-prerelease.mjs`) run the tag-format validation against the package
-  version and stop there: their assets are verified by the portable-prerelease lane itself
-  (built-commit version match, checksums, macOS seal — ADR-0163 D9), not by the npm release
-  surface. Any other hyphenated `v*` tag (RC, foreign version, malformed) fails the validation.
+- An EXACT tag over the current package version (`v<package.json version>`, including npm
+  prerelease versions such as `v0.3.0-rc.1` over `0.3.0-rc.1`) runs the full verification —
+  exact npm prereleases publish through this workflow.
+- Governed PORTABLE beta tag pushes (`v<version>-beta.<n>` layered over the package version,
+  cut by `scripts/release-portable-prerelease.mjs`) run the tag-format validation against the
+  package version and stop there: their assets are verified by the portable-prerelease lane
+  itself (built-commit version match, checksums, macOS seal — ADR-0163 D9), not by the npm
+  release surface. Any other hyphenated `v*` tag (a non-exact RC, a foreign version, malformed)
+  fails the validation.
 - Manual `workflow_dispatch` with `publish: false` runs the same verification job.
 - Manual `workflow_dispatch` with `publish: true` enables the publish job only when the selected ref is a tag that starts with `v` and the same tag/SHA already has a successful tag-push release verification run.
 - Manual publishes require an explicit npm dist-tag. The default is `beta`.
