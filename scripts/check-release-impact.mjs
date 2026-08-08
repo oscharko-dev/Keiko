@@ -193,10 +193,10 @@ function validateReview(entry, index, failures) {
   if (review.status !== "reviewed" || review.humanApproved !== true) {
     failures.push(failure(`entries[${String(index)}] must have human release-owner review.`));
   }
-  validatePublishApprovalReference(review, index, failures);
+  validatePublishApprovalReference(entry, review, index, failures);
 }
 
-function validatePublishApprovalReference(review, index, failures) {
+function validatePublishApprovalReference(entry, review, index, failures) {
   if (process.env.KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE !== "1") return;
   const reference = review.approvalReference;
   const parsed = parseGithubReviewReference(reference);
@@ -211,7 +211,7 @@ function validatePublishApprovalReference(review, index, failures) {
   // API, author allow-listed, and bound to the exact package version by a literal phrase.
   const comment = parseGithubIssueCommentReference(reference);
   if (comment !== undefined) {
-    validateGithubIssueCommentApproval(comment, index, failures);
+    validateGithubIssueCommentApproval(entry, comment, index, failures);
     return;
   }
   failures.push(
@@ -241,13 +241,16 @@ function parseGithubIssueCommentReference(reference) {
   };
 }
 
-/** The literal, version-bound phrase an approval comment must carry. */
-function publishApprovalPhrase() {
-  const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
-  return `Approved-for-publish: ${manifest.name}@${manifest.version}`;
+/**
+ * The literal, version-bound phrase an approval comment must carry. Derived from the catalog
+ * entry under validation — the record being approved — never re-read from disk, so the phrase can
+ * only ever bind to the exact package identity the gate is judging.
+ */
+function publishApprovalPhrase(entry) {
+  return `Approved-for-publish: ${String(entry.packageName)}@${String(entry.packageVersion)}`;
 }
 
-function validateGithubIssueCommentApproval(reference, index, failures) {
+function validateGithubIssueCommentApproval(entry, reference, index, failures) {
   const repository = currentRepository();
   if (repository === undefined || reference.repository !== repository) {
     failures.push(
@@ -266,10 +269,10 @@ function validateGithubIssueCommentApproval(reference, index, failures) {
     );
     return;
   }
-  validateGithubIssueCommentState(comment, reference, index, failures);
+  validateGithubIssueCommentState(entry, comment, reference, index, failures);
 }
 
-function validateGithubIssueCommentState(comment, reference, index, failures) {
+function validateGithubIssueCommentState(entry, comment, reference, index, failures) {
   const issueUrl = typeof comment.issue_url === "string" ? comment.issue_url : "";
   if (!issueUrl.endsWith(`/issues/${reference.issue}`)) {
     failures.push(
@@ -278,7 +281,7 @@ function validateGithubIssueCommentState(comment, reference, index, failures) {
       ),
     );
   }
-  const phrase = publishApprovalPhrase();
+  const phrase = publishApprovalPhrase(entry);
   if (typeof comment.body !== "string" || !comment.body.includes(phrase)) {
     failures.push(
       failure(
@@ -352,7 +355,24 @@ function readGithubReview(reference) {
   );
 }
 
+let githubResourceReader = readGithubResourceFromHost;
+
+/** Test seam: swap the GitHub reader for a callback's duration, always restoring it. */
+export function withGithubResourceReader(reader, callback) {
+  const previous = githubResourceReader;
+  githubResourceReader = reader;
+  try {
+    return callback();
+  } finally {
+    githubResourceReader = previous;
+  }
+}
+
 function readGithubResource(path) {
+  return githubResourceReader(path);
+}
+
+function readGithubResourceFromHost(path) {
   let executable;
   try {
     executable = resolveHostExecutable("gh");

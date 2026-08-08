@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   validateReleaseImpactCatalog,
   validateReleaseImpactRoot,
+  withGithubResourceReader,
 } from "../check-release-impact.mjs";
 
 function rootManifest(overrides = {}) {
@@ -436,6 +437,90 @@ describe("release-impact governance", () => {
     expect(messages(result)).toContain(
       "approvalReference must reference the current GitHub repository",
     );
+  });
+
+  describe("issue-comment publish approvals (hermetic, injected GitHub reader)", () => {
+    const REFERENCE = "github-issue-comment:oscharko-dev/Keiko#2802#4242";
+
+    function commentEntry() {
+      return entry({
+        review: {
+          approvalReference: REFERENCE,
+          humanApproved: true,
+          rationale: "Owner-recorded issue-comment approval.",
+          reviewedAt: "2026-08-08",
+          reviewer: "release-owner",
+          status: "reviewed",
+        },
+      });
+    }
+
+    function approvalComment(overrides = {}) {
+      const manifest = rootManifest();
+      return {
+        issue_url: "https://api.github.com/repos/oscharko-dev/Keiko/issues/2802",
+        body: `Approved-for-publish: ${manifest.name}@${manifest.version}`,
+        user: { login: "release-owner-login" },
+        ...overrides,
+      };
+    }
+
+    function validateWith(comment) {
+      return withEnv("KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE", "1", () =>
+        withEnv("KEIKO_RELEASE_OWNER_GITHUB_LOGINS", "release-owner-login", () =>
+          withEnv("GITHUB_REPOSITORY", "oscharko-dev/Keiko", () =>
+            withGithubResourceReader(
+              () => comment,
+              () => validateReleaseImpactCatalog(catalog([commentEntry()]), rootManifest()),
+            ),
+          ),
+        ),
+      );
+    }
+
+    it("accepts a verified owner comment carrying the entry-bound approval phrase", () => {
+      const result = validateWith(approvalComment());
+
+      expect(messages(result)).not.toContain("approvalReference");
+    });
+
+    it("rejects a comment that belongs to a different issue", () => {
+      const result = validateWith(
+        approvalComment({
+          issue_url: "https://api.github.com/repos/oscharko-dev/Keiko/issues/999",
+        }),
+      );
+
+      expect(messages(result)).toContain(
+        "approvalReference comment must belong to the referenced issue",
+      );
+    });
+
+    it("rejects a comment without the entry-bound approval phrase", () => {
+      const result = validateWith(approvalComment({ body: "Looks good to me." }));
+
+      expect(messages(result)).toContain("approvalReference comment must contain");
+      // The demanded phrase binds to the exact entry under validation — package name AND version
+      // come from the record being approved, never from a second manifest read.
+      const manifest = rootManifest();
+      expect(messages(result)).toContain(
+        `Approved-for-publish: ${manifest.name}@${manifest.version}`,
+      );
+    });
+
+    it("rejects a comment authored outside the release-owner allow-list", () => {
+      const result = validateWith(approvalComment({ user: { login: "somebody-else" } }));
+
+      expect(messages(result)).toContain(
+        "approvalReference comment author must be an allowed release owner",
+      );
+    });
+
+    it("fails closed when the comment cannot be read from GitHub", () => {
+      const result = validateWith(undefined);
+
+      expect(messages(result)).toContain("approvalReference could not be verified through GitHub");
+    });
   });
 
   it("requires exception metadata for critical or manual-review one-click updates", () => {
