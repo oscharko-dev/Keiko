@@ -2297,6 +2297,35 @@ export function GatewaySetupDialog({
       setWorkflowEligibleModelIds(fields.workflowEligibleModelIds.join("\n"));
     }
     if (fields.figmaAccessToken !== undefined) setFigmaAccessToken(fields.figmaAccessToken);
+    applyUploadedVoiceConfig(fields);
+  }
+
+  /**
+   * Voice fields apply through the SAME update wrappers typing uses, in typing order: the base
+   * URL first (its identity transition resets the dependent role fields), the realtime id before
+   * its transcription id (the realtime transition clears the transcription), and the semantic
+   * turn detection flag last so the file's explicit declaration wins over inherited defaults.
+   */
+  function applyUploadedVoiceConfig(fields: GatewayConfigUploadFields): void {
+    if (fields.voiceBaseUrl !== undefined) updateVoiceBaseUrl(fields.voiceBaseUrl);
+    if (fields.voiceApiKey !== undefined) setVoiceApiKey(fields.voiceApiKey);
+    if (fields.voiceApiKeyHeaderName !== undefined) {
+      setVoiceApiKeyHeaderName(fields.voiceApiKeyHeaderName);
+    }
+    if (fields.voiceTimeoutMs !== undefined) setVoiceTimeoutMs(fields.voiceTimeoutMs);
+    if (fields.voiceModelId !== undefined) setVoiceModelId(fields.voiceModelId);
+    if (fields.voiceRealtimeModelId !== undefined) {
+      updateVoiceRealtimeModelId(fields.voiceRealtimeModelId);
+    }
+    if (fields.voiceRealtimeTranscriptionModelId !== undefined) {
+      setVoiceRealtimeTranscriptionModelId(fields.voiceRealtimeTranscriptionModelId);
+    }
+    if (fields.voiceSpeechOutputModelId !== undefined) {
+      updateVoiceSpeechOutputModelId(fields.voiceSpeechOutputModelId);
+    }
+    if (fields.voiceSemanticTurnDetection !== undefined) {
+      updateVoiceSemanticTurnDetection(fields.voiceSemanticTurnDetection);
+    }
   }
 
   async function submit(event: FormSubmitEvent): Promise<void> {

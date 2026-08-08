@@ -228,9 +228,11 @@ export const EN_MESSAGES = {
   "gatewaySetup.upload.invalid": "This file is not a readable Keiko configuration.",
   "gatewaySetup.upload.fileTooLarge": "This file exceeds the supported 256 KB.",
   "gatewaySetup.upload.unsupportedSetting":
-    "This file sets provider options (endpoint style, API version, or output token parameter) this upload cannot represent — enter that connection manually.",
+    "This file sets chat or embedding provider options (endpoint style, API version, or output token parameter) this upload cannot represent — enter that connection manually.",
   "gatewaySetup.upload.unsupportedKind":
-    "This file contains voice or OCR providers this upload cannot fill in — enter those sections manually and remove them from the file.",
+    "This file contains OCR providers this upload cannot fill in — enter that section manually and remove it from the file.",
+  "gatewaySetup.upload.realtimeSkipped":
+    "The realtime voice model uses its own endpoint and was not applied — add it in the voice settings after saving.",
   "gatewaySetup.loading.title": "Preparing model gateway setup",
   "gatewaySetup.loading.description":
     "Loading the local setup controls. No provider request has been started.",

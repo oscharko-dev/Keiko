@@ -23,6 +23,35 @@ function providerFixture(overrides: Record<string, unknown> = {}): Record<string
   };
 }
 
+function voiceProviderFixture(
+  modelId: string,
+  capabilityOverrides: Record<string, unknown>,
+  providerOverrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    modelId,
+    baseUrl: "https://voice.example.com",
+    apiKeyHeaderName: "api-key",
+    timeoutMs: 120_000,
+    capability: { id: modelId, kind: "voice", ...capabilityOverrides },
+    ...providerOverrides,
+  };
+}
+
+/** The voice fields of a file that carries no voice provider at all. */
+const NO_VOICE_FIELDS = {
+  voiceBaseUrl: undefined,
+  voiceApiKey: undefined,
+  voiceApiKeyHeaderName: undefined,
+  voiceTimeoutMs: undefined,
+  voiceModelId: undefined,
+  voiceSpeechOutputModelId: undefined,
+  voiceRealtimeModelId: undefined,
+  voiceRealtimeTranscriptionModelId: undefined,
+  voiceSemanticTurnDetection: undefined,
+  voiceRealtimeSkipped: false,
+} as const;
+
 function fieldsOf(serialized: string): GatewayConfigUploadFields {
   const result = parseGatewayConfigUpload(serialized);
   if (result.outcome !== "fields") throw new Error(`expected fields, got ${result.outcome}`);
@@ -41,7 +70,6 @@ describe("parseGatewayConfigUpload", () => {
           }),
         ],
         circuitBreaker: { failureThreshold: 5, cooldownMs: 1_000, halfOpenProbes: 1 },
-        capabilities: [{ id: "text-embed", kind: "embedding", supportsImageInput: true }],
       }),
     );
 
@@ -51,10 +79,125 @@ describe("parseGatewayConfigUpload", () => {
       apiKeyHeaderName: "api-key",
       timeoutMs: "30000",
       deploymentNames: ["gpt-5o", "text-embed"],
-      imageInputModelIds: ["gpt-5o", "text-embed"],
+      imageInputModelIds: ["gpt-5o"],
       workflowEligibleModelIds: ["gpt-5o"],
       figmaAccessToken: undefined,
+      ...NO_VOICE_FIELDS,
     });
+  });
+
+  it("loads the persisted product configuration shape: chat, embedding, and voice together", () => {
+    // THE file this feature exists for: the owner's persisted keiko.config.json — two chat
+    // models, one embedding, an STT/TTS pair on a dedicated speech endpoint, and a realtime
+    // provider sharing the gateway endpoint (sequential voice updates produce exactly this).
+    const fields = fieldsOf(
+      JSON.stringify({
+        providers: [
+          providerFixture({ timeoutMs: 120_000 }),
+          providerFixture({
+            modelId: "large-chat",
+            timeoutMs: 120_000,
+            capability: { id: "large-chat", kind: "chat" },
+          }),
+          providerFixture({
+            modelId: "text-embed",
+            timeoutMs: 120_000,
+            capability: { id: "text-embed", kind: "embedding" },
+          }),
+          voiceProviderFixture(
+            "keiko-stt",
+            { supportsSpeechInput: true },
+            { endpointStyle: "azure-openai-deployment", apiVersion: "2025-03-01-preview" },
+          ),
+          voiceProviderFixture(
+            "keiko-tts",
+            { supportsSpeechOutput: true },
+            { voiceProfiles: [{ persona: "male", voiceId: "alloy" }] },
+          ),
+          voiceProviderFixture(
+            "keiko-realtime",
+            {
+              supportsSpeechInput: true,
+              supportsSpeechOutput: true,
+              supportsRealtimeVoice: true,
+              supportsSemanticTurnDetection: true,
+              realtimeTranscriptionModel: "keiko-realtime-stt",
+            },
+            {
+              baseUrl: "https://llm-gateway.example.com/v1",
+              realtimeAuthMode: "ephemeral-session",
+            },
+          ),
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 1_000, halfOpenProbes: 1 },
+      }),
+    );
+
+    expect(fields).toEqual({
+      baseUrl: "https://llm-gateway.example.com/v1",
+      apiKey: undefined,
+      apiKeyHeaderName: "api-key",
+      timeoutMs: "120000",
+      deploymentNames: ["gpt-5o", "large-chat", "text-embed"],
+      imageInputModelIds: ["gpt-5o"],
+      workflowEligibleModelIds: ["gpt-5o"],
+      figmaAccessToken: undefined,
+      voiceBaseUrl: "https://voice.example.com",
+      voiceApiKey: undefined,
+      voiceApiKeyHeaderName: "api-key",
+      voiceTimeoutMs: "120000",
+      voiceModelId: "keiko-stt",
+      voiceSpeechOutputModelId: "keiko-tts",
+      // The realtime provider lives on a different connection than the speech pair; one submit
+      // holds one voice connection, so it is skipped LOUDLY, never silently.
+      voiceRealtimeModelId: undefined,
+      voiceRealtimeTranscriptionModelId: undefined,
+      voiceSemanticTurnDetection: undefined,
+      voiceRealtimeSkipped: true,
+    });
+    expect(appliedGatewayConfigFieldCount(fields)).toBe(11);
+  });
+
+  it("imports all three voice roles when they share one connection", () => {
+    const fields = fieldsOf(
+      JSON.stringify({
+        providers: [
+          providerFixture(),
+          voiceProviderFixture("keiko-stt", { supportsSpeechInput: true }),
+          voiceProviderFixture("keiko-tts", { supportsSpeechOutput: true }),
+          voiceProviderFixture("keiko-realtime", {
+            supportsRealtimeVoice: true,
+            supportsSemanticTurnDetection: true,
+            realtimeTranscriptionModel: "keiko-realtime-stt",
+          }),
+        ],
+      }),
+    );
+
+    expect(fields.voiceModelId).toBe("keiko-stt");
+    expect(fields.voiceSpeechOutputModelId).toBe("keiko-tts");
+    expect(fields.voiceRealtimeModelId).toBe("keiko-realtime");
+    expect(fields.voiceRealtimeTranscriptionModelId).toBe("keiko-realtime-stt");
+    expect(fields.voiceSemanticTurnDetection).toBe(true);
+    expect(fields.voiceRealtimeSkipped).toBe(false);
+  });
+
+  it("imports a realtime-only voice section on its own connection", () => {
+    const fields = fieldsOf(
+      JSON.stringify({
+        providers: [
+          providerFixture(),
+          voiceProviderFixture("keiko-realtime", {
+            supportsRealtimeVoice: true,
+            realtimeTranscriptionModel: "keiko-realtime-stt",
+          }),
+        ],
+      }),
+    );
+
+    expect(fields.voiceBaseUrl).toBe("https://voice.example.com");
+    expect(fields.voiceRealtimeModelId).toBe("keiko-realtime");
+    expect(fields.voiceRealtimeSkipped).toBe(false);
   });
 
   it("passes an optional per-provider apiKey through for prefill", () => {
@@ -76,6 +219,16 @@ describe("parseGatewayConfigUpload", () => {
     });
 
     expect(parseGatewayConfigUpload(conflicting)).toEqual({ outcome: "invalid" });
+  });
+
+  it("rejects a mix of a stated connection scalar and an omitted one", () => {
+    // Review finding on #3031: applying one provider's stated value to a provider that omitted
+    // it would silently rewrite the second provider's connection.
+    const mixed = JSON.stringify({
+      providers: [providerFixture(), providerFixture({ modelId: "other", baseUrl: undefined })],
+    });
+
+    expect(parseGatewayConfigUpload(mixed)).toEqual({ outcome: "invalid" });
   });
 
   it("treats identical repeated scalars as one connection", () => {
@@ -129,17 +282,78 @@ describe("parseGatewayConfigUpload", () => {
     expect(fields.imageInputModelIds).toEqual([]);
   });
 
-  it("refuses voice and OCR providers the generic deployment list cannot represent", () => {
-    // Review finding on #3031: dedicated setup fields exist for these kinds; importing them as
-    // generic deployments would persist the wrong capability kind.
-    const voice = JSON.stringify({
+  it("derives the flag lists from chat capabilities only", () => {
+    // Review finding on #3031: the setup route smoke-tests chat candidates only, so an
+    // embedding id in either list would fail Test & Save AFTER a reported upload success —
+    // production ignores the flags on non-chat capabilities, and the importer must agree.
+    const fields = fieldsOf(
+      JSON.stringify({
+        providers: [
+          providerFixture(),
+          providerFixture({
+            modelId: "text-embed",
+            capability: {
+              id: "text-embed",
+              kind: "embedding",
+              supportsImageInput: true,
+              workflowEligible: true,
+            },
+          }),
+        ],
+      }),
+    );
+
+    expect(fields.imageInputModelIds).toEqual(["gpt-5o"]);
+    expect(fields.workflowEligibleModelIds).toEqual(["gpt-5o"]);
+  });
+
+  it("refuses OCR providers the setup form cannot represent", () => {
+    // Review finding on #3031: no setup field exists for ocr-vision; importing it as a generic
+    // deployment would persist the wrong capability kind.
+    const ocr = JSON.stringify({
       providers: [
         providerFixture(),
-        providerFixture({ modelId: "tts", capability: { id: "tts", kind: "voice" } }),
+        providerFixture({ modelId: "ocr", capability: { id: "ocr", kind: "ocr-vision" } }),
       ],
     });
 
-    expect(parseGatewayConfigUpload(voice)).toEqual({ outcome: "unsupportedKind" });
+    expect(parseGatewayConfigUpload(ocr)).toEqual({ outcome: "unsupportedKind" });
+  });
+
+  it("refuses two providers claiming the same voice role", () => {
+    const duplicated = JSON.stringify({
+      providers: [
+        providerFixture(),
+        voiceProviderFixture("stt-one", { supportsSpeechInput: true }),
+        voiceProviderFixture("stt-two", { supportsSpeechInput: true }),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(duplicated)).toEqual({ outcome: "invalid" });
+  });
+
+  it("refuses a voice provider that declares no role at all", () => {
+    const roleless = JSON.stringify({
+      providers: [providerFixture(), voiceProviderFixture("mystery-voice", {})],
+    });
+
+    expect(parseGatewayConfigUpload(roleless)).toEqual({ outcome: "invalid" });
+  });
+
+  it("refuses speech providers that disagree on their connection", () => {
+    const split = JSON.stringify({
+      providers: [
+        providerFixture(),
+        voiceProviderFixture("keiko-stt", { supportsSpeechInput: true }),
+        voiceProviderFixture(
+          "keiko-tts",
+          { supportsSpeechOutput: true },
+          { baseUrl: "https://other-voice.example.com" },
+        ),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(split)).toEqual({ outcome: "invalid" });
   });
 
   it("carries a supported Figma credential through for prefill", () => {
@@ -178,14 +392,28 @@ describe("parseGatewayConfigUpload", () => {
     expect(parseGatewayConfigUpload(orphan)).toEqual({ outcome: "invalid" });
   });
 
-  it("rejects a present-but-malformed inline capability instead of treating it as absent", () => {
-    // Review finding on #3031: the production parser rejects the same corrupted shape; only a
-    // truly ABSENT capability field means "no declaration".
-    const malformed = JSON.stringify({
-      providers: [providerFixture({ capability: "not-an-object" })],
-    });
+  it("tolerates capability metadata fields the form does not read", () => {
+    // The persisted product configuration carries context windows, cost classes, and hints —
+    // they must not fail the strict flag validation.
+    const fields = fieldsOf(
+      JSON.stringify({
+        providers: [providerFixture()],
+        capabilities: [
+          {
+            id: "gpt-5o",
+            kind: "chat",
+            contextWindow: 128_000,
+            maxOutputTokens: 16_384,
+            toolCalling: true,
+            costClass: "low",
+            supportsImageInput: true,
+            workflowEligible: true,
+          },
+        ],
+      }),
+    );
 
-    expect(parseGatewayConfigUpload(malformed)).toEqual({ outcome: "invalid" });
+    expect(fields.imageInputModelIds).toEqual(["gpt-5o"]);
   });
 
   it("mirrors the setup route's 100-provider ceiling at upload time", () => {
@@ -200,9 +428,11 @@ describe("parseGatewayConfigUpload", () => {
     expect(parseGatewayConfigUpload(oversized)).toEqual({ outcome: "invalid" });
   });
 
-  it("refuses provider settings the form cannot represent with an honest outcome", () => {
-    // Review finding on #3031: endpoint style / API version / output token parameter would be
-    // silently rebuilt with defaults — a changed runtime configuration behind a success message.
+  it("refuses generic provider settings the form cannot represent with an honest outcome", () => {
+    // Review finding on #3031: endpoint style / API version / output token parameter on a chat
+    // or embedding provider would be silently rebuilt with defaults — a changed runtime
+    // configuration behind a success message. Voice providers are exempt: the voice setup route
+    // regenerates their endpoint details itself.
     const azure = JSON.stringify({
       providers: [providerFixture({ endpointStyle: "azure-openai-deployment" })],
     });
@@ -230,35 +460,67 @@ describe("parseGatewayConfigUpload", () => {
         providers: [providerFixture({ capability: { id: "gpt-5o", kind: "quantum" } })],
       }),
     ],
-  ])("refuses %s", (_label, serialized) => {
-    expect(parseGatewayConfigUpload(serialized)).toEqual({ outcome: "invalid" });
-  });
-
-  it("ignores hostile non-string and out-of-range scalar values instead of applying them", () => {
-    const fields = fieldsOf(
+    [
+      "a capability without a kind",
+      JSON.stringify({
+        providers: [providerFixture({ capability: { id: "gpt-5o", supportsImageInput: true } })],
+      }),
+    ],
+    [
+      "a non-boolean capability flag",
       JSON.stringify({
         providers: [
           providerFixture({
-            baseUrl: 42,
-            apiKeyHeaderName: ["Authorization"],
-            timeoutMs: -5,
-            apiKey: { steal: true },
-            capability: undefined,
+            capability: { id: "gpt-5o", kind: "chat", supportsImageInput: "yes" },
           }),
         ],
       }),
-    );
-
-    expect(fields).toEqual({
-      baseUrl: undefined,
-      apiKey: undefined,
-      apiKeyHeaderName: undefined,
-      timeoutMs: undefined,
-      deploymentNames: ["gpt-5o"],
-      imageInputModelIds: undefined,
-      workflowEligibleModelIds: undefined,
-      figmaAccessToken: undefined,
-    });
+    ],
+    [
+      "a present-but-malformed inline capability",
+      JSON.stringify({ providers: [providerFixture({ capability: "not-an-object" })] }),
+    ],
+    [
+      "a non-string baseUrl",
+      JSON.stringify({ providers: [providerFixture({ baseUrl: 42, capability: undefined })] }),
+    ],
+    [
+      "a blank present baseUrl",
+      JSON.stringify({ providers: [providerFixture({ baseUrl: "   ", capability: undefined })] }),
+    ],
+    [
+      "a non-string header name",
+      JSON.stringify({
+        providers: [providerFixture({ apiKeyHeaderName: ["api-key"], capability: undefined })],
+      }),
+    ],
+    [
+      "a non-positive timeout",
+      JSON.stringify({ providers: [providerFixture({ timeoutMs: -5, capability: undefined })] }),
+    ],
+    [
+      "a non-string apiKey",
+      JSON.stringify({
+        providers: [providerFixture({ apiKey: { steal: true }, capability: undefined })],
+      }),
+    ],
+    [
+      "an oversized model id",
+      JSON.stringify({
+        providers: [providerFixture({ modelId: "m".repeat(161), capability: undefined })],
+      }),
+    ],
+    [
+      "a control-character model id",
+      JSON.stringify({
+        providers: [providerFixture({ modelId: "bad id", capability: undefined })],
+      }),
+    ],
+  ])("refuses %s", (_label, serialized) => {
+    // Review findings on #3031: a PRESENT but malformed value must refuse the file — converting
+    // it to silence would report a hostile or corrupted file as successfully loaded, and an
+    // unusable model id would fail Test & Save after a reported success.
+    expect(parseGatewayConfigUpload(serialized)).toEqual({ outcome: "invalid" });
   });
 });
 

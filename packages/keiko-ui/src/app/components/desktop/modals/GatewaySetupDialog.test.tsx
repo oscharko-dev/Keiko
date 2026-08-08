@@ -1407,9 +1407,19 @@ describe("GatewaySetupDialog", () => {
                 baseUrl: "https://llm-gateway.example.com/v1",
                 apiKeyHeaderName: "api-key",
                 timeoutMs: 30_000,
-                capability: { id: "gpt-5o", supportsImageInput: true, workflowEligible: true },
+                capability: {
+                  id: "gpt-5o",
+                  kind: "chat",
+                  supportsImageInput: true,
+                  workflowEligible: true,
+                },
               },
-              { modelId: "text-embed" },
+              {
+                modelId: "text-embed",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                apiKeyHeaderName: "api-key",
+                timeoutMs: 30_000,
+              },
             ],
           }),
         ],
@@ -1427,6 +1437,68 @@ describe("GatewaySetupDialog", () => {
     expect(screen.getByText(/configuration loaded — 6 field/i)).toBeInTheDocument();
     // The token was not in the file: manual entry (and the one-time token test) still applies.
     expect(screen.getByLabelText(/api token/i)).toHaveValue("");
+  });
+
+  it("fills the voice section from an uploaded configuration and states a skipped realtime", async () => {
+    // The owner's persisted keiko.config.json: STT/TTS on a dedicated speech endpoint, realtime
+    // sharing the gateway endpoint — the speech pair imports, the realtime skip is stated.
+    render(<GatewaySetupDialog />);
+
+    await userEvent.upload(
+      screen.getByLabelText(/load keiko\.config\.json/i),
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "gpt-5o",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                apiKeyHeaderName: "api-key",
+                timeoutMs: 120_000,
+                capability: { id: "gpt-5o", kind: "chat" },
+              },
+              {
+                modelId: "keiko-stt",
+                baseUrl: "https://voice.example.com",
+                apiKeyHeaderName: "api-key",
+                timeoutMs: 120_000,
+                capability: { id: "keiko-stt", kind: "voice", supportsSpeechInput: true },
+              },
+              {
+                modelId: "keiko-tts",
+                baseUrl: "https://voice.example.com",
+                apiKeyHeaderName: "api-key",
+                timeoutMs: 120_000,
+                capability: { id: "keiko-tts", kind: "voice", supportsSpeechOutput: true },
+              },
+              {
+                modelId: "keiko-realtime",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                apiKeyHeaderName: "api-key",
+                timeoutMs: 120_000,
+                capability: {
+                  id: "keiko-realtime",
+                  kind: "voice",
+                  supportsRealtimeVoice: true,
+                  realtimeTranscriptionModel: "keiko-realtime-stt",
+                },
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      ),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/audio endpoint url/i)).toHaveValue("https://voice.example.com"),
+    );
+    expect(screen.getByLabelText(/speech-to-text deployment/i)).toHaveValue("keiko-stt");
+    expect(screen.getByLabelText(/speech-output deployment/i)).toHaveValue("keiko-tts");
+    // The realtime provider lives on a different connection — skipped and SAID, never silent.
+    expect(screen.getByLabelText(/digital voice · realtime deployment/i)).toHaveValue("");
+    expect(screen.getByText(/realtime voice model uses its own endpoint/i)).toBeInTheDocument();
   });
 
   it("rejects an unreadable configuration upload with a visible alert and no field changes", async () => {

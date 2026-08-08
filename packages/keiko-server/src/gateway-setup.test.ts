@@ -2833,6 +2833,75 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("preserves stored embedding kinds through preserve-mode rebuilds despite the name heuristic", async () => {
+    // Review finding on #3031 (P1): a preserve-mode rebuild inherits the stored deployment ids
+    // and reclassifies them by name. A stored embedding provider whose id the heuristic misses
+    // (discovery classified it at its own setup time) would be probed as chat, fail the probe,
+    // and vanish from the rebuilt config while the user changed something unrelated. Stored
+    // capability kinds are authoritative for preserved deployments.
+    const uiDir = await tempDir("keiko-gw-ui-embed-kind-");
+    const evidenceDir = await tempDir("keiko-gw-ev-embed-kind-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () =>
+        Promise.resolve({
+          modelIds: ["example-chat", "vectorizer-v2"],
+          chatModelIds: ["example-chat"],
+          embeddingModelIds: ["vectorizer-v2"],
+        }),
+      // A realistic chat probe: an embedding endpoint cannot answer it, so a misclassified
+      // embedding id would be dropped as "failed", not rejected loudly.
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve(modelIds.filter((modelId) => modelId !== "vectorizer-v2")),
+    });
+
+    const first = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(first.status).toBe(200);
+
+    const savedKinds = (): readonly (readonly string[])[] => {
+      const saved = JSON.parse(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")) as {
+        readonly providers: readonly {
+          readonly modelId: string;
+          readonly capability: { readonly kind: string };
+        }[];
+      };
+      return saved.providers.map((provider) => [provider.modelId, provider.capability.kind]);
+    };
+    expect(savedKinds()).toEqual([
+      ["example-chat", "chat"],
+      ["vectorizer-v2", "embedding"],
+    ]);
+
+    // Clearing image capability rebuilds with inherited deployments — the embedding survives.
+    const cleared = await handleGatewaySetup(
+      ctx({ preserveExisting: true, imageInputModelIds: [] }),
+      deps,
+    );
+    expect(cleared.status).toBe(200);
+    expect(savedKinds()).toEqual([
+      ["example-chat", "chat"],
+      ["vectorizer-v2", "embedding"],
+    ]);
+
+    // Same class: rotating the credential also rebuilds with inherited deployments.
+    const rotated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "example-rotated-token" }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    expect(savedKinds()).toEqual([
+      ["example-chat", "chat"],
+      ["vectorizer-v2", "embedding"],
+    ]);
+    deps.store.close();
+  });
+
   it("does not store image-input capability claims for models that fail setup testing", async () => {
     const uiDir = await tempDir("keiko-gw-ui-image-input-fail-");
     const evidenceDir = await tempDir("keiko-gw-ev-image-input-fail-");

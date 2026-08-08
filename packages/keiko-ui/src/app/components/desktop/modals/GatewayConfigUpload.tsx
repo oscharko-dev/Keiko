@@ -14,9 +14,14 @@ import styles from "./GatewaySetupDialog.module.css";
 interface UploadState {
   readonly issue: "invalid" | "fileTooLarge" | "unsupportedKind" | "unsupportedSetting" | undefined;
   readonly appliedCount: number | undefined;
+  readonly realtimeSkipped: boolean;
 }
 
-const INITIAL_STATE: UploadState = { issue: undefined, appliedCount: undefined };
+const INITIAL_STATE: UploadState = {
+  issue: undefined,
+  appliedCount: undefined,
+  realtimeSkipped: false,
+};
 
 async function handleUploadedFile(
   event: ChangeEvent<HTMLInputElement>,
@@ -38,7 +43,7 @@ async function handleUploadedFile(
     // this path owns it and must leave it false (review finding on #3031; the flag's contract is
     // "a read for the CURRENT token is in flight").
     onReadPendingChange?.(false);
-    setState({ issue: "fileTooLarge", appliedCount: undefined });
+    setState({ issue: "fileTooLarge", appliedCount: undefined, realtimeSkipped: false });
     return;
   }
   // The dialog must not submit a half-applied snapshot while the read is in flight (review
@@ -64,11 +69,11 @@ function applyReadOutcome(
 ): void {
   const result = serialized === undefined ? undefined : parseGatewayConfigUpload(serialized);
   if (result === undefined || result.outcome === "invalid") {
-    setState({ issue: "invalid", appliedCount: undefined });
+    setState({ issue: "invalid", appliedCount: undefined, realtimeSkipped: false });
     return;
   }
   if (result.outcome !== "fields") {
-    setState({ issue: result.outcome, appliedCount: undefined });
+    setState({ issue: result.outcome, appliedCount: undefined, realtimeSkipped: false });
     return;
   }
   try {
@@ -78,10 +83,14 @@ function applyReadOutcome(
     // page's error channel (never an unhandled rejection out of a void handler) and show the
     // honest failed state instead of a success count.
     window.reportError(error);
-    setState({ issue: "invalid", appliedCount: undefined });
+    setState({ issue: "invalid", appliedCount: undefined, realtimeSkipped: false });
     return;
   }
-  setState({ issue: undefined, appliedCount: appliedGatewayConfigFieldCount(result.fields) });
+  setState({
+    issue: undefined,
+    appliedCount: appliedGatewayConfigFieldCount(result.fields),
+    realtimeSkipped: result.fields.voiceRealtimeSkipped,
+  });
 }
 
 /**
@@ -145,6 +154,7 @@ function GatewayConfigUploadStatus({ state }: { readonly state: UploadState }): 
   return (
     <output className={styles["cmp-config-upload-applied"]}>
       {t("gatewaySetup.upload.applied", { count: state.appliedCount })}
+      {state.realtimeSkipped ? ` ${t("gatewaySetup.upload.realtimeSkipped")}` : null}
     </output>
   );
 }

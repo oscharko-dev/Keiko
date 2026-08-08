@@ -696,6 +696,14 @@ function currentImageInputModelIds(config: GatewayConfig | undefined): readonly 
   );
 }
 
+function currentEmbeddingModelIds(config: GatewayConfig | undefined): readonly string[] {
+  return (
+    config?.capabilities
+      ?.filter((capability) => capability.kind === "embedding")
+      .map((capability) => capability.id) ?? []
+  );
+}
+
 // `supportedVoicePersonas` is DERIVED at parse time from a provider's `voiceProfiles` (Issue #1557,
 // ADR-0094 D2 / HAZARD-3). It must NOT be persisted: the strict top-level `capabilities` parser
 // rejects it as an unrecognised input key, and re-deriving it on reload keeps a single source of
@@ -1367,6 +1375,13 @@ interface SetupRequest {
   readonly imageInputModelIds: readonly string[];
   /** True when the request stated the list explicitly — discovery must not re-add models then. */
   readonly imageInputModelIdsProvided: boolean;
+  /**
+   * Model ids whose stored capability kind is `embedding` — authoritative over the name
+   * heuristic when a preserve-mode rebuild re-verifies inherited or resubmitted deployments
+   * (review finding on #3031: a misclassified stored embedding fails the chat probe and
+   * silently vanishes). Empty outside preserve mode.
+   */
+  readonly storedEmbeddingModelIds: readonly string[];
   readonly workflowEligibleModelIds: readonly string[];
   readonly workflowEligibleModelIdsConfigured: boolean;
   readonly voiceProviders: readonly SetupVoiceProvider[];
@@ -2926,6 +2941,7 @@ function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | Route
     deploymentNames: resolved.deploymentNames,
     imageInputModelIds: resolved.imageInputModelIds,
     imageInputModelIdsProvided: hasListField(input.raw, "imageInputModelIds"),
+    storedEmbeddingModelIds: input.preserveExisting ? currentEmbeddingModelIds(input.current) : [],
     workflowEligibleModelIds: resolved.workflowEligibleModelIds,
     workflowEligibleModelIdsConfigured: hasListField(input.raw, "workflowEligibleModelIds"),
     voiceProviders: input.voiceProviders,
@@ -3025,6 +3041,8 @@ interface SetupVerificationInput {
   readonly imageInputModelIds: readonly string[];
   /** True when the request stated the list explicitly — discovery must not re-add models then. */
   readonly imageInputModelIdsProvided: boolean;
+  /** Stored embedding ids that override the name heuristic — see {@link SetupRequest}. */
+  readonly storedEmbeddingModelIds: readonly string[];
   readonly workflowEligibleModelIds: readonly string[] | undefined;
   readonly voiceProviders: readonly SetupVoiceProvider[];
   readonly tester: GatewaySetupTester;
@@ -3140,8 +3158,14 @@ function normalizeDiscoveryResult(result: GatewayModelDiscoveryOutput): SetupCan
 
 function candidateModelsFromDeploymentNames(
   deploymentNames: readonly string[],
+  storedEmbeddingModelIds: readonly string[],
 ): SetupCandidateModels {
-  const embeddingModelIds = embeddingModelIdsFromDeployments(deploymentNames);
+  // Stored kinds win over the name heuristic: a preserve-mode rebuild must not chat-probe a
+  // verified embedding deployment out of the config (review finding on #3031).
+  const storedEmbeddingSet = new Set(storedEmbeddingModelIds);
+  const embeddingModelIds = deploymentNames.filter(
+    (modelId) => storedEmbeddingSet.has(modelId) || isLikelyEmbeddingModelId(modelId),
+  );
   const embeddingSet = new Set(embeddingModelIds);
   return {
     modelIds: deploymentNames,
@@ -3157,7 +3181,7 @@ async function candidateModelIdsForSetup(
   validationConfig: GatewayConfig,
 ): Promise<SetupCandidateModels> {
   if (input.deploymentNames.length > 0) {
-    return candidateModelsFromDeploymentNames(input.deploymentNames);
+    return candidateModelsFromDeploymentNames(input.deploymentNames, input.storedEmbeddingModelIds);
   }
   return normalizeDiscoveryResult(
     await input.discovery(
@@ -3521,6 +3545,7 @@ async function trySetupCandidate(
     deploymentNames: request.deploymentNames,
     imageInputModelIds: request.imageInputModelIds,
     imageInputModelIdsProvided: request.imageInputModelIdsProvided,
+    storedEmbeddingModelIds: request.storedEmbeddingModelIds,
     workflowEligibleModelIds: request.workflowEligibleModelIdsConfigured
       ? request.workflowEligibleModelIds
       : undefined,
