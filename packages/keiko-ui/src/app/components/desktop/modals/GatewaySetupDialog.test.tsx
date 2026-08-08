@@ -1395,7 +1395,9 @@ describe("GatewaySetupDialog", () => {
   it("fills the form from an uploaded keiko.config.json and reports the applied count", async () => {
     render(<GatewaySetupDialog />);
 
-    const upload = screen.getByLabelText(/load keiko\.config\.json/i);
+    // The upload control loads as its own chunk — wait for it to mount instead of relying on
+    // an earlier test having warmed the chunk (that ordering is not a contract).
+    const upload = await screen.findByLabelText(/load keiko\.config\.json/i);
     await userEvent.upload(
       upload,
       new File(
@@ -1445,7 +1447,7 @@ describe("GatewaySetupDialog", () => {
     render(<GatewaySetupDialog />);
 
     await userEvent.upload(
-      screen.getByLabelText(/load keiko\.config\.json/i),
+      await screen.findByLabelText(/load keiko\.config\.json/i),
       new File(
         [
           JSON.stringify({
@@ -1505,7 +1507,7 @@ describe("GatewaySetupDialog", () => {
     render(<GatewaySetupDialog />);
 
     await userEvent.upload(
-      screen.getByLabelText(/load keiko\.config\.json/i),
+      await screen.findByLabelText(/load keiko\.config\.json/i),
       new File(["{ not json"], "keiko.config.json", { type: "application/json" }),
     );
 
