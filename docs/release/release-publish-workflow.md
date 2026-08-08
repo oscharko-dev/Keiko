@@ -267,7 +267,7 @@ The script:
 - requires `HEAD` to match `v<package.json version>` for stable `latest` publishes,
 - rejects `--allow-untagged` when `--tag latest` is selected,
 - rejects credential-bearing registry URLs before logging or release-note generation,
-- requires publish-time release-impact approval evidence to resolve to an approved GitHub PR review from `KEIKO_RELEASE_OWNER_GITHUB_LOGINS`,
+- requires publish-time release-impact approval evidence to resolve through GitHub to an artifact authored by `KEIKO_RELEASE_OWNER_GITHUB_LOGINS` — either an approved PR review (`github-pr-review:`) or, for the solo-owner case where GitHub refuses self-approval, an owner-authored issue comment (`github-issue-comment:`) carrying the version-bound `Approved-for-publish:` phrase on a line of its own (see the release-impact runbook for both forms),
 - requires a clean tracked working tree,
 - runs the `prepack` release gate,
 - publishes or reuses the root package only; private runtime workspaces are bundled inside it,
