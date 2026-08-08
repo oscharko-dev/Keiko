@@ -46,6 +46,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
+// The tag shape lives in ONE place, shared with the Release verification workflow that
+// validates the pushed tag — restating it here would let this lane mint a tag the workflow
+// then rejects (review finding on #3043).
+import { BETA_INDEX, GOVERNED_BETA_TAG_RE } from "./release-tag-contract.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const WORKFLOW_PATH = ".github/workflows/portable-assets.yml";
@@ -182,12 +186,6 @@ function gh(args, options = {}) {
 function ghJson(args) {
   return JSON.parse(gh(args));
 }
-
-// ONE governed beta index shape, identical to the Release verification regex in
-// .github/workflows/release.yml: leading-zero indices are refused everywhere, or the lane
-// could publish a tag whose own verification run stays red (review finding on #3043).
-const BETA_INDEX = "(?:0|[1-9][0-9]*)";
-const GOVERNED_BETA_TAG_RE = new RegExp(String.raw`^v.+-beta\.${BETA_INDEX}$`, "u");
 
 /** The next free beta number for the version: v<version>-beta.<n>. */
 export function nextBetaTag(version, existingTags) {

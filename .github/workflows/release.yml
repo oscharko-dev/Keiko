@@ -78,22 +78,13 @@ jobs:
       - name: Validate release tag
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-        # Two shapes are accepted, both bound to the CURRENT package version: an EXACT tag
-        # (v<version>, including an npm prerelease version) and the governed portable beta tag
-        # (v<version>-beta.<n> layered over it, cut by scripts/release-portable-prerelease.mjs —
-        # ADR-0163 D9). Anything else — a foreign version, a non-exact RC, a malformed index —
-        # fails closed. Only this format check ever needed to change: every verification step
-        # below runs for BOTH shapes (review findings on #3043).
-        run: |
-          node <<'NODE'
-          const { version } = require("./package.json");
-          const releaseTag = process.env.RELEASE_TAG;
-          const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          const beta = new RegExp(`^v${escaped}-beta\\.(?:0|[1-9][0-9]*)$`, "u");
-          if (releaseTag !== `v${version}` && !beta.test(releaseTag)) {
-            throw new Error(`Release tag ${releaseTag} does not match package version ${version}.`);
-          }
-          NODE
+        # The tag shape has ONE owner, scripts/release-tag-contract.mjs, which the producing
+        # prerelease script imports as well — restating the syntax here would let the lane mint
+        # a tag whose verification then stays red (review findings on #3043). Two shapes pass:
+        # the EXACT tag (v<version>, an npm prerelease version included) and the governed
+        # portable beta (v<version>-beta.<n> layered over it, ADR-0163 D9). Dependency-free, so
+        # it runs before any install. Every verification step below runs for BOTH shapes.
+        run: node scripts/release-tag-contract.mjs "$RELEASE_TAG"
       # EVERY verification step runs for EVERY accepted tag, portable betas included — there is
       # no skip. The required-check lookup resolves its contexts from RELEASE_REQUIRED_CHECKS
       # (set at workflow level), so it never queries branch protection and passes on a dev-based
