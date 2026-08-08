@@ -762,6 +762,16 @@ describe("parseGatewayConfigUpload", () => {
       JSON.stringify({ providers: [providerFixture()], circuitBreaker: "default" }),
     ],
     [
+      "a duplicated top-level capability id",
+      JSON.stringify({
+        providers: [providerFixture()],
+        capabilities: [
+          { id: "gpt-5o", kind: "chat", supportsImageInput: true },
+          { id: "gpt-5o", kind: "chat", supportsImageInput: false },
+        ],
+      }),
+    ],
+    [
       "an unsupported API key header name",
       JSON.stringify({
         providers: [providerFixture({ apiKeyHeaderName: "x-custom", capability: undefined })],

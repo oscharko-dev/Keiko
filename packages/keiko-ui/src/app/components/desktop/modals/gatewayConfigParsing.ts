@@ -351,6 +351,9 @@ function parsedTopLevelCapabilities(
     const id = readString(entry.id);
     const capability = parsedCapability(entry);
     if (id.value === undefined || capability === undefined) return undefined;
+    // A duplicated capability id would silently overwrite the earlier declaration — corrupted
+    // input, refused like every other malformed record (review finding on #3031).
+    if (byId.has(id.value)) return undefined;
     byId.set(id.value, capability);
   }
   return byId;
