@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { existsSync, writeFileSync } from "node:fs";
+import { basename, dirname } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildPortableEvaluationManifest } from "../lib/portable-evaluation-manifest.mjs";
+import { writeZipArchiveEntries } from "../lib/zip-archive.mjs";
 import {
   collectEvaluationArtifactDigests,
   downloadJsonAsset,
@@ -607,48 +608,90 @@ describe("collectEvaluationArtifactDigests", () => {
     { name: "artifact-b", id: 7002 },
   ];
 
-  function listingAnswer(artifacts) {
-    return { status: 0, stdout: JSON.stringify({ artifacts }) };
+  function recordAnswer(declared, overrides = {}) {
+    return {
+      status: 0,
+      stdout: JSON.stringify({
+        name: declared.name,
+        expired: false,
+        workflow_run: { id: 42 },
+        ...overrides,
+      }),
+    };
   }
 
-  function listedAsDeclared() {
-    return DECLARED.map((artifact) => ({ ...artifact, expired: false }));
-  }
-
-  function ghThatWrites(layout, failFor, listed = listedAsDeclared()) {
+  function ghRecords(overrides = {}) {
     return (args) => {
-      if (args[0] === "api") return listingAnswer(listed);
-      const name = args[args.indexOf("--name") + 1];
-      const dir = args[args.indexOf("--dir") + 1];
-      if (name === failFor) return { status: 1 };
-      const target = layout === "nested" ? join(dir, "inner") : dir;
-      mkdirSync(target, { recursive: true });
-      writeFileSync(join(target, `${name}.zip`), `bytes of ${name}`);
+      const id = Number(String(args[1]).split("/").at(-1));
+      const declared = DECLARED.find((artifact) => artifact.id === id);
+      if (declared === undefined) return { status: 1, stdout: "" };
+      return recordAnswer(declared, overrides[id] ?? {});
+    };
+  }
+
+  function zipFetcher(layout, failFor) {
+    return (artifactId, destination) => {
+      const declared = DECLARED.find((artifact) => artifact.id === artifactId);
+      if (declared.name === failFor) return { status: 1 };
+      const prefix = layout === "nested" ? "inner/" : "";
+      writeZipArchiveEntries(destination, [
+        { name: `${prefix}${declared.name}.zip`, data: `bytes of ${declared.name}` },
+      ]);
       return { status: 0 };
     };
   }
 
-  it.each([["flat"], ["nested"]])("hashes every file in a %s artifact layout", (layout) => {
-    // gh places files at the artifact root or one directory deeper depending on how the artifact
-    // was uploaded. Reading only the top level would report an unreadable run and refuse a
-    // perfectly good release.
+  it.each([["flat"], ["nested"]])(
+    "hashes every entry of a %s artifact archive fetched by immutable id",
+    (layout) => {
+      const digests = collectEvaluationArtifactDigests(
+        {
+          gh: ghRecords(),
+          fetchArtifactZip: zipFetcher(layout),
+          hashFile: (path) => `hash:${basename(path)}`,
+        },
+        "42",
+        DECLARED,
+      );
+
+      expect([...digests.entries()]).toEqual([
+        ["artifact-a.zip", "hash:artifact-a.zip"],
+        ["artifact-b.zip", "hash:artifact-b.zip"],
+      ]);
+    },
+  );
+
+  it("keeps verifying the original evidence when the run gains replacement artifacts", () => {
+    // THE rerun pin: artifact ids are immutable, so nothing here may consult the run's MUTABLE
+    // artifact listing — that is exactly the shape a rerun breaks. A listing call throws and
+    // fails this test loudly.
     const digests = collectEvaluationArtifactDigests(
-      { gh: ghThatWrites(layout), hashFile: (path) => `hash:${basename(path)}` },
+      {
+        gh: (args) => {
+          if (String(args[1]).includes("/artifacts?")) {
+            throw new Error("the collector must not consult the run's mutable artifact listing");
+          }
+          return ghRecords()(args);
+        },
+        fetchArtifactZip: zipFetcher("flat"),
+        hashFile: (path) => `hash:${basename(path)}`,
+      },
       "42",
       DECLARED,
     );
 
-    expect([...digests.entries()]).toEqual([
-      ["artifact-a.zip", "hash:artifact-a.zip"],
-      ["artifact-b.zip", "hash:artifact-b.zip"],
-    ]);
+    expect(digests.size).toBe(2);
   });
 
-  it("returns an empty map when any artifact cannot be downloaded", () => {
+  it("returns an empty map when any artifact archive cannot be fetched", () => {
     // Empty means unreadable, and the caller refuses on it — a partial set must never look like a
     // complete one with a missing entry.
     const digests = collectEvaluationArtifactDigests(
-      { gh: ghThatWrites("flat", "artifact-b"), hashFile: () => "unused" },
+      {
+        gh: ghRecords(),
+        fetchArtifactZip: zipFetcher("flat", "artifact-b"),
+        hashFile: () => "unused",
+      },
       "42",
       DECLARED,
     );
@@ -657,37 +700,16 @@ describe("collectEvaluationArtifactDigests", () => {
   });
 
   it.each([
-    [
-      "carries a different id (a rerun's replacement)",
-      [
-        { name: "artifact-a", id: 9999, expired: false },
-        { name: "artifact-b", id: 7002, expired: false },
-      ],
-    ],
-    [
-      "is expired",
-      [
-        { name: "artifact-a", id: 7001, expired: true },
-        { name: "artifact-b", id: 7002, expired: false },
-      ],
-    ],
-    [
-      "appears twice in the listing",
-      [
-        ...DECLARED.map((artifact) => ({ ...artifact, expired: false })),
-        { name: "artifact-a", id: 7003, expired: false },
-      ],
-    ],
-    ["is missing from the listing", [{ name: "artifact-b", id: 7002, expired: false }]],
-  ])("refuses before downloading when a declared artifact %s", (_label, listed) => {
-    // The declared immutable ids are what a rerun cannot reproduce; any disagreement with the
-    // run's current listing refuses before a byte is fetched.
-    let downloads = 0;
+    ["answers with another name", { 7001: { name: "artifact-renamed" } }],
+    ["belongs to another run", { 7001: { workflow_run: { id: 43 } } }],
+    ["is expired", { 7001: { expired: true } }],
+  ])("refuses before fetching when the declared artifact record %s", (_label, overrides) => {
+    let fetches = 0;
     const digests = collectEvaluationArtifactDigests(
       {
-        gh: (args) => {
-          if (args[0] === "api") return listingAnswer(listed);
-          downloads += 1;
+        gh: ghRecords(overrides),
+        fetchArtifactZip: () => {
+          fetches += 1;
           return { status: 1 };
         },
         hashFile: () => "unused",
@@ -697,16 +719,47 @@ describe("collectEvaluationArtifactDigests", () => {
     );
 
     expect(digests.size).toBe(0);
-    expect(downloads).toBe(0);
+    expect(fetches).toBe(0);
+  });
+
+  it("refuses an artifact record that cannot be read", () => {
+    const digests = collectEvaluationArtifactDigests(
+      {
+        gh: () => ({ status: 1, stdout: "" }),
+        fetchArtifactZip: () => ({ status: 0 }),
+        hashFile: () => "unused",
+      },
+      "42",
+      DECLARED,
+    );
+
+    expect(digests.size).toBe(0);
+  });
+
+  it("refuses a malformed artifact archive", () => {
+    const digests = collectEvaluationArtifactDigests(
+      {
+        gh: ghRecords(),
+        fetchArtifactZip: (_artifactId, destination) => {
+          writeFileSync(destination, "not a zip archive");
+          return { status: 0 };
+        },
+        hashFile: () => "unused",
+      },
+      "42",
+      DECLARED,
+    );
+
+    expect(digests.size).toBe(0);
   });
 
   it("leaves no temporary directory behind", () => {
     const roots = [];
     collectEvaluationArtifactDigests(
       {
-        gh: (args) => {
-          if (args[0] === "api") return listingAnswer(listedAsDeclared());
-          roots.push(dirname(args[args.indexOf("--dir") + 1]));
+        gh: ghRecords(),
+        fetchArtifactZip: (_artifactId, destination) => {
+          roots.push(dirname(destination));
           return { status: 1 };
         },
         hashFile: () => "unused",
@@ -771,16 +824,20 @@ describe("commit binding and ambiguous evidence", () => {
     const digests = collectEvaluationArtifactDigests(
       {
         gh: (args) => {
-          if (args[0] === "api") {
-            return {
-              status: 0,
-              stdout: JSON.stringify({
-                artifacts: declared.map((artifact) => ({ ...artifact, expired: false })),
-              }),
-            };
-          }
-          const dir = args[args.indexOf("--dir") + 1];
-          writeFileSync(join(dir, "keiko-macos-x64.zip"), "bytes");
+          const id = Number(String(args[1]).split("/").at(-1));
+          const match = declared.find((artifact) => artifact.id === id);
+          if (match === undefined) return { status: 1, stdout: "" };
+          return {
+            status: 0,
+            stdout: JSON.stringify({
+              name: match.name,
+              expired: false,
+              workflow_run: { id: 42 },
+            }),
+          };
+        },
+        fetchArtifactZip: (_artifactId, destination) => {
+          writeZipArchiveEntries(destination, [{ name: "keiko-macos-x64.zip", data: "bytes" }]);
           return { status: 0 };
         },
         hashFile: () => {

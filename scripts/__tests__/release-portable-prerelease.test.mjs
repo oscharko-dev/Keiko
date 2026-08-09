@@ -527,6 +527,46 @@ describe("hermetic end-to-end (scripted gh double)", () => {
       }
     });
 
+    it("refuses a public release from a run that did not conclude entirely successfully", () => {
+      // The npm publisher re-verifies the recorded run and requires conclusion "success"; a
+      // lenient producer would mint a customer-visible release the documented promotion step can
+      // never accept (Codex finding on #3054). Betas keep the job-scoped rule.
+      const recorded = [];
+      expect(() =>
+        publicRun(recorded, {
+          answers: [
+            ["compare/dev...", JSON.stringify({ status: "behind" })],
+            [
+              "--json status,conclusion,headSha",
+              JSON.stringify({
+                status: "completed",
+                conclusion: "failure",
+                headSha: "b2e3900a",
+                event: "workflow_dispatch",
+                headBranch: "dev",
+                workflowDatabaseId: 7,
+                attempt: 1,
+              }),
+            ],
+          ],
+        }),
+      ).toThrow(/a public release requires an entirely successful run/u);
+      expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+      expect(recorded.some((line) => line.includes("git/refs"))).toBe(false);
+    });
+
+    it("encodes the release-source branch as one path parameter", () => {
+      // A branch like release/0.3 embedded raw splits into two path segments, 404s, and silently
+      // hands release authority to the default branch (Codex finding on #3054).
+      const recorded = [];
+      publicRun(recorded, {
+        releaseBranchExists: true,
+        answers: [["compare/release%2F0.3...", JSON.stringify({ status: "behind" })]],
+      });
+      expect(recorded.some((line) => line.includes("branches/release%2F0.3"))).toBe(true);
+      expect(recorded.some((line) => line.includes("compare/release%2F0.3..."))).toBe(true);
+    });
+
     it("refuses when the release-owner allowlist does not resolve", () => {
       const recorded = [];
       const saved = process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;

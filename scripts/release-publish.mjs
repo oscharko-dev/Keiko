@@ -226,11 +226,33 @@ const portableGate = portableReleaseGate({
   },
   setupAssetName: WINDOWS_PORTABLE_SETUP_ASSET_NAME,
   snapshot: githubReleaseSnapshot,
-  collectRunArtifactDigests: (runId, names) =>
-    collectEvaluationArtifactDigests({ gh, hashFile: sha256FileSync }, runId, names),
+  collectRunArtifactDigests: (runId, artifacts) =>
+    collectEvaluationArtifactDigests(
+      { gh, fetchArtifactZip: fetchRunArtifactZip, hashFile: sha256FileSync },
+      runId,
+      artifacts,
+    ),
   targets: PORTABLE_TARGETS,
   verifyBytes: runPortableDownloadSmoke,
 });
+
+/**
+ * Binary-safe by construction: the shared gh seam decodes stdout as utf8, which would corrupt a
+ * zip stream, so this port spawns gh with buffer output, an explicit size ceiling, and writes
+ * the bytes untouched. Downloading by immutable artifact id is what keeps a rerun of the
+ * referenced workflow from substituting or blocking the recorded evidence (Codex finding on
+ * #3054).
+ */
+function fetchRunArtifactZip(artifactId, destination) {
+  const result = spawnSync(
+    "gh",
+    ["api", `repos/${githubRepository()}/actions/artifacts/${String(artifactId)}/zip`],
+    { cwd: repoRoot, encoding: "buffer", maxBuffer: maxPortableArchiveBytes, env: process.env },
+  );
+  if (result.error !== undefined || result.status !== 0) return { status: 1 };
+  writeFileSync(destination, result.stdout);
+  return { status: 0 };
+}
 
 function verifyPrepublishedStableRelease(rootManifest, options) {
   if (!stableLatestRelease(rootManifest, options) || options.dryRun) return false;

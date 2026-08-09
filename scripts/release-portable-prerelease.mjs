@@ -902,9 +902,12 @@ function publicReleaseSourceBranch(repository) {
  * definitive 404 answers "absent"; anything else refuses.
  */
 function branchExists(repository, branch) {
+  // Encoded as ONE path parameter: a branch like release/0.3 embedded raw would split into two
+  // path segments, 404, and silently hand release authority to the default branch while the
+  // configured branch was alive (Codex finding on #3054).
   const result = processRunner(
     resolveHostExecutable("gh"),
-    ["api", `repos/${repository}/branches/${branch}`],
+    ["api", `repos/${repository}/branches/${encodeURIComponent(branch)}`],
     { cwd: repoRoot, encoding: "utf8" },
   );
   if (result.error !== undefined) fail(`gh could not spawn: ${result.error.message}`);
@@ -932,7 +935,11 @@ function branchExists(repository, branch) {
 function assertPublicReleaseSourceIsApproved(commitSha, repository) {
   assertPublisherCheckoutMatches(commitSha);
   const branch = publicReleaseSourceBranch(repository);
-  const compare = ghJson(["api", `repos/${repository}/compare/${branch}...${commitSha}`]);
+  // The basehead is one path segment; an unencoded slash in the branch name would split it.
+  const compare = ghJson([
+    "api",
+    `repos/${repository}/compare/${encodeURIComponent(branch)}...${commitSha}`,
+  ]);
   if (compare.status !== "identical" && compare.status !== "behind") {
     fail(
       `commit ${commitSha} is not contained in ${branch} (compare status "${compare.status}") — a public release must be cut from integrated source, never from an unmerged branch.`,
@@ -1088,9 +1095,17 @@ export function runPortablePrerelease(argv) {
   const runId = options.runId ?? dispatchWorkflow(options.ref);
   log(`waiting for workflow run ${runId} ...`);
   const view = waitForRun(runId, options.ref);
-  // A "failure" conclusion is still publishable on purpose: the run-level conclusion aggregates
-  // non-gating lanes (the evaluation lane may fail), while the jobs that actually produce the
-  // published assets are separately and strictly asserted by assertStagingJobsSucceeded below.
+  // For a BETA a "failure" conclusion is still publishable on purpose: the run-level conclusion
+  // aggregates non-gating lanes, while the jobs that actually produce the published assets are
+  // separately and strictly asserted by assertStagingJobsSucceeded below. A PUBLIC release
+  // demands overall success: the npm publisher re-verifies the recorded run and requires
+  // conclusion "success", so a lenient producer here would mint a customer-visible release the
+  // documented promotion step can never accept (Codex finding on #3054).
+  if (options.publicRelease && view.conclusion !== "success") {
+    fail(
+      `run ${runId} concluded ${view.conclusion}; a public release requires an entirely successful run — rerun the workflow and publish from a green run.`,
+    );
+  }
   if (view.conclusion !== "success" && view.conclusion !== "failure") {
     fail(`run ${runId} concluded ${view.conclusion}; refusing to publish from it.`);
   }

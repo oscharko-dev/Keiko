@@ -7,7 +7,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import yauzl from "yauzl";
 
-import { writeZipArchiveEntries, writeZipArchiveFromDirectory } from "../lib/zip-archive.mjs";
+import {
+  readZipArchiveEntries,
+  writeZipArchiveEntries,
+  writeZipArchiveFromDirectory,
+} from "../lib/zip-archive.mjs";
 
 const temporaryRoots = [];
 
@@ -225,5 +229,57 @@ describe("portable ZIP archive writer", () => {
     expect(() =>
       writeZipArchiveFromDirectory(source, join(root, "default.zip"), { rootName: "Keiko" }),
     ).toThrow("ZIP source contains an unsupported entry");
+  });
+});
+
+describe("readZipArchiveEntries", () => {
+  it("round-trips what the writer produced, nested names and binary bytes included", () => {
+    const root = temporaryRoot();
+    const archivePath = join(root, "round-trip.zip");
+    const records = [
+      { name: "flat.txt", data: "flat bytes" },
+      { name: "inner/nested.bin", data: Buffer.from([0, 1, 2, 250, 251, 255]) },
+    ];
+    writeZipArchiveEntries(archivePath, records);
+
+    const entries = readZipArchiveEntries(archivePath);
+
+    expect(entries.map((entry) => entry.name)).toEqual(["flat.txt", "inner/nested.bin"]);
+    expect(entries[0].data.toString("utf8")).toBe("flat bytes");
+    expect([...entries[1].data]).toEqual([0, 1, 2, 250, 251, 255]);
+  });
+
+  it("refuses bytes that are not a ZIP archive", () => {
+    const root = temporaryRoot();
+    const archivePath = join(root, "not-a-zip.zip");
+    writeFileSync(archivePath, "just some text");
+
+    expect(() => readZipArchiveEntries(archivePath)).toThrow(/no end-of-central-directory/u);
+  });
+
+  it("refuses an entry whose bytes were tampered after writing", () => {
+    // The declared CRC and size are load-bearing: a flipped byte in the compressed stream must
+    // refuse, never answer with silently different content.
+    const root = temporaryRoot();
+    const archivePath = join(root, "tampered.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "file.txt", data: "original content bytes" }]);
+    const bytes = readFileSync(archivePath);
+    // The compressed stream begins after the 30-byte local header plus the 8-byte entry name.
+    bytes[30 + "file.txt".length + 2] ^= 0xff;
+    writeFileSync(archivePath, bytes);
+
+    expect(() => readZipArchiveEntries(archivePath)).toThrow();
+  });
+
+  it("refuses an archive whose entry names escape the extraction root", () => {
+    // The writer's own traversal rule guards the reader too: a hostile archive must not be able
+    // to name a path outside where it is being extracted.
+    const root = temporaryRoot();
+    const archivePath = join(root, "hostile.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "../evil.txt", data: "escape" }], {
+      allowUnsafeEntryNames: true,
+    });
+
+    expect(() => readZipArchiveEntries(archivePath)).toThrow(/unsafe/u);
   });
 });

@@ -52,7 +52,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -513,12 +513,19 @@ function portableUpdateEligibility() {
 }
 
 // Shared prologue injected into each stub: append-only call log + tiny JSON state file
-// so a stub can flip "published"/"tagged" as the orchestrator drives it.
+// so a stub can flip "published"/"tagged" as the orchestrator drives it. The real ZIP writer is
+// imported so the artifact-by-id endpoint can answer with archives the production reader
+// actually parses.
+const ZIP_ARCHIVE_LIB_URL = pathToFileURL(
+  resolve(fileURLToPath(import.meta.url), "..", "..", "lib", "zip-archive.mjs"),
+).href;
+
 function stubPrologue(logFile, stateFile) {
   return [
     'import { Buffer } from "node:buffer";',
     'import { createHash } from "node:crypto";',
     'import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";',
+    `import { writeZipArchiveEntries } from ${JSON.stringify(ZIP_ARCHIVE_LIB_URL)};`,
     `const LOG = ${JSON.stringify(logFile)};`,
     `const STATE = ${JSON.stringify(stateFile)};`,
     `const VERSION = ${JSON.stringify(RELEASE_VERSION)};`,
@@ -542,10 +549,32 @@ function ghStubBody() {
     "  process.exit(0);",
     "}",
     'if (sub === "api") {',
-    // The artifact listing must answer before the generic runs branch: its URL also contains
-    // /actions/runs/, and the collector refuses when declared ids disagree with it.
-    '  if (argv[1] && argv[1].includes("/artifacts?per_page")) {',
-    "    writeFileSync(1, JSON.stringify({ artifacts: state().runArtifactListing || [] }));",
+    // Artifact-by-id endpoints: the record probe and the binary zip download. Answered before
+    // the generic runs branch, and refusing when the fixture marks the run's artifacts
+    // unavailable.
+    '  if (argv[1] && argv[1].includes("/actions/artifacts/")) {',
+    "    if (state().runArtifactsUnavailable) process.exit(1);",
+    "    const artifactId = Number(argv[1].split('/artifacts/')[1].split('/')[0]);",
+    "    const listed = (state().runArtifactListing || []).find((entry) => entry.id === artifactId);",
+    "    if (!listed) process.exit(1);",
+    '    if (argv[1].endsWith("/zip")) {',
+    "      const wanted = (state().uploadedAssets || []).filter((asset) => {",
+    "        if (listed.name.includes('windows')) return asset.name.startsWith('keiko-windows-');",
+    "        if (listed.name.includes('arm64')) return asset.name === 'keiko-macos-arm64.zip';",
+    "        return asset.name === 'keiko-macos-x64.zip';",
+    "      });",
+    "      const prefix = state().nestRunArtifacts ? 'nested/' : '';",
+    "      const records = wanted.map((asset) => {",
+    "        let bytes = Buffer.from(asset.content || '', 'base64');",
+    "        if (state().tamperRunArtifacts) bytes = Buffer.concat([bytes, Buffer.from('x')]);",
+    "        return { name: prefix + asset.name, data: bytes };",
+    "      });",
+    "      const zipPath = LOG + '.artifact-' + artifactId + '.zip';",
+    "      writeZipArchiveEntries(zipPath, records);",
+    "      writeFileSync(1, readFileSync(zipPath));",
+    "      process.exit(0);",
+    "    }",
+    "    writeFileSync(1, JSON.stringify({ name: listed.name, expired: listed.expired === true, workflow_run: { id: Number(state().workflowRunId || 31300595709) } }));",
     "    process.exit(0);",
     "  }",
     '  if (argv[1] && argv[1].includes("/actions/runs/")) {',
