@@ -248,6 +248,20 @@ const VOICE_PROVIDER_LOCALITIES: ReadonlySet<VoiceProviderLocality> = new Set([
 // state how the new host speaks, or the save is refused rather than silently degrading an Azure
 // deployment-path endpoint to the OpenAI-compatible URL shape (review finding on #3042). The
 // empty option is what an unstated protocol looks like on a fresh or non-Azure setup.
+function voiceRealtimeAuthModeSections(
+  t: GatewaySetupTranslate,
+): readonly [{ readonly options: readonly { readonly value: string; readonly label: string }[] }] {
+  return [
+    {
+      options: [
+        { value: "", label: t("gatewaySetup.voice.endpointStyle.unstated") },
+        { value: "api-key", label: t("gatewaySetup.voice.realtimeAuthMode.apiKey") },
+        { value: "ephemeral-session", label: t("gatewaySetup.voice.realtimeAuthMode.ephemeral") },
+      ],
+    },
+  ];
+}
+
 function voiceEndpointStyleSections(
   t: GatewaySetupTranslate,
 ): readonly [{ readonly options: readonly { readonly value: string; readonly label: string }[] }] {
@@ -336,6 +350,7 @@ interface VoiceCredentialInputFields {
   readonly voiceBaseUrl: string;
   readonly voiceEndpointStyle: string;
   readonly voiceApiVersion: string;
+  readonly voiceRealtimeAuthMode: string;
   readonly voiceApiKey: string;
   readonly voiceApiKeyHeaderName: string;
   readonly voiceModelId: string;
@@ -358,6 +373,7 @@ function hasVoiceCredentialInput(fields: VoiceCredentialInputFields): boolean {
     // canonical "name a deployment" error instead of being ignored.
     fields.voiceEndpointStyle,
     fields.voiceApiVersion,
+    fields.voiceRealtimeAuthMode,
     fields.voiceApiKey,
     fields.voiceApiKeyHeaderName,
     fields.voiceModelId,
@@ -628,6 +644,7 @@ interface GatewayFormFields {
   /** Operator-stated audio endpoint protocol (visible fields) — empty means "not stated". */
   readonly voiceEndpointStyle: string;
   readonly voiceApiVersion: string;
+  readonly voiceRealtimeAuthMode: string;
   /**
    * The audio URL an UPLOADED protocol was declared for; empty once the operator states the
    * protocol themselves. A fresh dialog never commits an endpoint identity, so the binding —
@@ -745,6 +762,9 @@ function statedVoiceProtocolFields(fields: GatewayFormFields): Partial<GatewaySe
     ...(fields.voiceApiVersion.trim() === ""
       ? {}
       : { voiceApiVersion: fields.voiceApiVersion.trim() }),
+    ...(fields.voiceRealtimeAuthMode === ""
+      ? {}
+      : { voiceRealtimeAuthMode: fields.voiceRealtimeAuthMode }),
   };
 }
 
@@ -1649,6 +1669,45 @@ interface VoiceEndpointStyleFieldProps {
   readonly onChange: (next: string) => void;
 }
 
+interface VoiceRealtimeAuthModeFieldProps {
+  readonly labelId: string;
+  readonly value: string;
+  readonly disabled: boolean;
+  readonly onChange: (next: string) => void;
+}
+
+// The server refuses an audio endpoint move that leaves a declared realtime auth mode unstated,
+// so the operator needs a way to state it: without this control the mode could only ever come
+// from a config upload, and a manual move of an ephemeral-session provider was impossible
+// (review finding on #3048).
+function VoiceRealtimeAuthModeField({
+  labelId,
+  value,
+  disabled,
+  onChange,
+}: VoiceRealtimeAuthModeFieldProps): ReactNode {
+  const t = useGatewaySetupTranslate();
+  return (
+    <div className="gw-field">
+      <span id={labelId}>
+        {t("gatewaySetup.voice.realtimeAuthMode.label")}{" "}
+        <span className="dlg-opt">{t("gatewaySetup.voice.protocol.optional")}</span>
+      </span>
+      <KeikoSelect
+        ariaLabelledBy={labelId}
+        menuTitle={t("gatewaySetup.voice.realtimeAuthMode.label")}
+        sections={voiceRealtimeAuthModeSections(t)}
+        showMenuHeader={false}
+        triggerClassName="gw-input gw-provider-locality-select"
+        menuClassName="gw-provider-locality-menu"
+        value={value}
+        disabled={disabled}
+        onValueChange={onChange}
+      />
+    </div>
+  );
+}
+
 function VoiceEndpointStyleField({
   labelId,
   value,
@@ -1873,6 +1932,9 @@ interface VoiceDeploymentFieldsProps {
   readonly setVoiceOutputVoiceId: Dispatch<SetStateAction<string>>;
   readonly voiceProviderLocalityLabelId: string;
   readonly voiceEndpointStyleLabelId: string;
+  readonly voiceRealtimeAuthModeLabelId: string;
+  readonly voiceRealtimeAuthMode: string;
+  readonly setVoiceRealtimeAuthMode: (next: string) => void;
   readonly voiceEndpointStyle: string;
   readonly setVoiceEndpointStyle: (next: string) => void;
   readonly voiceApiVersion: string;
@@ -1981,6 +2043,12 @@ function VoiceDeploymentFields(props: VoiceDeploymentFieldsProps): ReactNode {
         disabled={props.disabled}
         onChange={props.setVoiceApiVersion}
       />
+      <VoiceRealtimeAuthModeField
+        labelId={props.voiceRealtimeAuthModeLabelId}
+        value={props.voiceRealtimeAuthMode}
+        disabled={props.disabled}
+        onChange={props.setVoiceRealtimeAuthMode}
+      />
     </>
   );
 }
@@ -2058,6 +2126,9 @@ interface VoiceFieldsSectionProps {
   readonly setVoiceOutputVoiceId: Dispatch<SetStateAction<string>>;
   readonly voiceProviderLocalityLabelId: string;
   readonly voiceEndpointStyleLabelId: string;
+  readonly voiceRealtimeAuthModeLabelId: string;
+  readonly voiceRealtimeAuthMode: string;
+  readonly setVoiceRealtimeAuthMode: (next: string) => void;
   readonly voiceEndpointStyle: string;
   readonly setVoiceEndpointStyle: (next: string) => void;
   readonly voiceApiVersion: string;
@@ -2073,6 +2144,40 @@ interface VoiceFieldsSectionProps {
   readonly setVoiceApiKeyHeaderName: Dispatch<SetStateAction<string>>;
   readonly voiceTimeoutMs: string;
   readonly setVoiceTimeoutMs: Dispatch<SetStateAction<string>>;
+}
+
+// The endpoint-protocol and locality props travel as one group: they describe the same thing (how
+// this audio connection speaks), and forwarding them individually pushed VoiceFieldsSection past
+// the 50-line bar the keiko-ui suppression register only lets shrink.
+function voiceEndpointProtocolProps(
+  props: VoiceFieldsSectionProps,
+): Pick<
+  VoiceDeploymentFieldsProps,
+  | "voiceProviderLocalityLabelId"
+  | "voiceEndpointStyleLabelId"
+  | "voiceRealtimeAuthModeLabelId"
+  | "voiceRealtimeAuthMode"
+  | "setVoiceRealtimeAuthMode"
+  | "voiceEndpointStyle"
+  | "setVoiceEndpointStyle"
+  | "voiceApiVersion"
+  | "setVoiceApiVersion"
+  | "voiceProviderLocality"
+  | "setVoiceProviderLocality"
+> {
+  return {
+    voiceProviderLocalityLabelId: props.voiceProviderLocalityLabelId,
+    voiceEndpointStyleLabelId: props.voiceEndpointStyleLabelId,
+    voiceRealtimeAuthModeLabelId: props.voiceRealtimeAuthModeLabelId,
+    voiceRealtimeAuthMode: props.voiceRealtimeAuthMode,
+    setVoiceRealtimeAuthMode: props.setVoiceRealtimeAuthMode,
+    voiceEndpointStyle: props.voiceEndpointStyle,
+    setVoiceEndpointStyle: props.setVoiceEndpointStyle,
+    voiceApiVersion: props.voiceApiVersion,
+    setVoiceApiVersion: props.setVoiceApiVersion,
+    voiceProviderLocality: props.voiceProviderLocality,
+    setVoiceProviderLocality: props.setVoiceProviderLocality,
+  };
 }
 
 function VoiceFieldsSection(props: VoiceFieldsSectionProps): ReactNode {
@@ -2097,14 +2202,7 @@ function VoiceFieldsSection(props: VoiceFieldsSectionProps): ReactNode {
         commitVoiceSpeechOutputModelId={props.commitVoiceSpeechOutputModelId}
         voiceOutputVoiceId={props.voiceOutputVoiceId}
         setVoiceOutputVoiceId={props.setVoiceOutputVoiceId}
-        voiceProviderLocalityLabelId={props.voiceProviderLocalityLabelId}
-        voiceEndpointStyleLabelId={props.voiceEndpointStyleLabelId}
-        voiceEndpointStyle={props.voiceEndpointStyle}
-        setVoiceEndpointStyle={props.setVoiceEndpointStyle}
-        voiceApiVersion={props.voiceApiVersion}
-        setVoiceApiVersion={props.setVoiceApiVersion}
-        voiceProviderLocality={props.voiceProviderLocality}
-        setVoiceProviderLocality={props.setVoiceProviderLocality}
+        {...voiceEndpointProtocolProps(props)}
         disabled={disabled}
       />
       <VoiceConnectionFields
@@ -2331,6 +2429,7 @@ export function GatewaySetupDialog({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const voiceProviderLocalityLabelId = useId();
   const voiceEndpointStyleLabelId = useId();
+  const voiceRealtimeAuthModeLabelId = useId();
   const baseUrlRef = useRef<HTMLInputElement>(null);
   const figmaAccessTokenRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
@@ -2370,6 +2469,11 @@ export function GatewaySetupDialog({
   // supply it and the pair would be rejected outright.
   const statedStyleKeepsApiVersion = (next: string): boolean =>
     next === "azure-openai-deployment" || (next === "" && preserveExisting);
+  const [voiceRealtimeAuthMode, setVoiceRealtimeAuthMode] = useState("");
+  const stateVoiceRealtimeAuthMode = (next: string): void => {
+    setVoiceRealtimeAuthMode(next);
+    bindStatedVoiceProtocol();
+  };
   const stateVoiceEndpointStyle = (next: string): void => {
     setVoiceEndpointStyle(next);
     if (!statedStyleKeepsApiVersion(next)) setVoiceApiVersion("");
@@ -2464,9 +2568,17 @@ export function GatewaySetupDialog({
     // refuses otherwise), so it can never travel silently (review finding on #3042). The binding
     // is part of that state — leaving it behind would point at an endpoint no field describes
     // any more (review finding on #3048).
-    setVoiceEndpointStyle("");
-    setVoiceApiVersion("");
-    setVoiceProtocolBoundBaseUrl("");
+    // Returning to the UPLOADED endpoint restores what that file declared for it, the same way
+    // the stored endpoint restores its own template below. Clearing unconditionally meant undoing
+    // an edit left the original Azure URL without its deployment-path protocol — the save then
+    // succeeded on the OpenAI-compatible shape (review finding on #3048).
+    const restoresUploadedEndpoint =
+      importedVoiceEndpointBaseUrl !== "" &&
+      canonicalVoiceEndpointIdentity(nextBaseUrl) ===
+        canonicalVoiceEndpointIdentity(importedVoiceEndpointBaseUrl);
+    setVoiceEndpointStyle(restoresUploadedEndpoint ? importedVoiceEndpointStyle : "");
+    setVoiceApiVersion(restoresUploadedEndpoint ? importedVoiceApiVersion : "");
+    setVoiceProtocolBoundBaseUrl(restoresUploadedEndpoint ? importedVoiceEndpointBaseUrl : "");
     setVoiceModelId("");
     setVoiceRealtimeModelId("");
     setVoiceSpeechOutputModelId("");
@@ -2828,6 +2940,7 @@ export function GatewaySetupDialog({
           importedVoiceEndpointStyle,
           importedVoiceApiVersion,
           voiceEndpointStyle,
+          voiceRealtimeAuthMode,
           voiceApiVersion,
           voiceProtocolBoundBaseUrl,
           importedVoiceRealtimeAuthMode,
@@ -2882,6 +2995,7 @@ export function GatewaySetupDialog({
     voiceBaseUrl,
     voiceEndpointStyle,
     voiceApiVersion,
+    voiceRealtimeAuthMode,
     voiceApiKey,
     voiceApiKeyHeaderName,
     voiceModelId,
@@ -2974,6 +3088,9 @@ export function GatewaySetupDialog({
       setVoiceOutputVoiceId={updateVoiceOutputVoiceId}
       voiceProviderLocalityLabelId={voiceProviderLocalityLabelId}
       voiceEndpointStyleLabelId={voiceEndpointStyleLabelId}
+      voiceRealtimeAuthModeLabelId={voiceRealtimeAuthModeLabelId}
+      voiceRealtimeAuthMode={voiceRealtimeAuthMode}
+      setVoiceRealtimeAuthMode={stateVoiceRealtimeAuthMode}
       voiceEndpointStyle={voiceEndpointStyle}
       setVoiceEndpointStyle={stateVoiceEndpointStyle}
       voiceApiVersion={voiceApiVersion}

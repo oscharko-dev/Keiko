@@ -1874,13 +1874,46 @@ describe("GatewaySetupDialog", () => {
     await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
     await userEvent.click(screen.getByRole("option", { name: "Not stated" }));
 
-    expect(screen.getByLabelText(/audio api version/i)).toHaveValue("");
+    await waitFor(() => expect(screen.getByLabelText(/audio api version/i)).toHaveValue(""));
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
 
     await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
     const payload = vi.mocked(setupGateway).mock.calls[0]?.[0] ?? {};
     expect(payload).not.toHaveProperty("voiceApiVersion");
     expect(payload).not.toHaveProperty("voiceEndpointStyle");
+  });
+
+  it("lets the operator state the realtime auth mode the server now demands", async () => {
+    // Review finding on #3048: the server refuses an audio endpoint move that leaves a declared
+    // realtime auth mode unstated, but the dialog exposed no control for it — the mode could
+    // only come from a config upload, so a manual move of an ephemeral-session provider was
+    // impossible. A guard the UI cannot satisfy is a dead end, not a guard.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "internal-chat",
+      testedModelIds: ["internal-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedModels={[modelCapability("internal-chat"), semanticRealtimeCapability("stored-rt")]}
+      />,
+    );
+    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByRole("combobox", { name: /realtime authentication/i }));
+    await userEvent.click(screen.getByRole("option", { name: "Ephemeral session token" }));
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).toMatchObject({
+      voiceRealtimeAuthMode: "ephemeral-session",
+    });
   });
 
   it("drops the api version when the operator leaves the Azure deployment path", async () => {
