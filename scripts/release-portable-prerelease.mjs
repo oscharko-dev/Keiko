@@ -840,6 +840,51 @@ function selectReleaseTag(options, version, tags) {
   return options.tag ?? defaultTagWithDraftResume(version, tags);
 }
 
+/** The integration branch a public release may be cut from; nothing else is an approved source. */
+const PUBLIC_RELEASE_SOURCE_BRANCH = "dev";
+
+/**
+ * A beta prerelease may be cut from any ref — that is what a prerelease is for. A PUBLIC release
+ * becomes the Latest download a customer installs, so its bytes must come from integrated,
+ * gate-verified source. Without this, `--public-release --ref feat/anything` published an unmerged
+ * feature branch as the stable release: the ref check only compared the run's head branch to the
+ * caller's own argument, and the tag-push verification in the workflow runs AFTER this script has
+ * already created the tag and the release (Codex finding on #3054).
+ *
+ * Two independent conditions, both evaluated before the tag is minted:
+ * the built commit must be reachable from the integration branch (it is merged, not a side
+ * branch), and every required check must have concluded successfully on that exact commit.
+ */
+function assertPublicReleaseSourceIsApproved(commitSha, repository) {
+  const compare = ghJson([
+    "api",
+    `repos/${repository}/compare/${PUBLIC_RELEASE_SOURCE_BRANCH}...${commitSha}`,
+  ]);
+  if (compare.status !== "identical" && compare.status !== "behind") {
+    fail(
+      `commit ${commitSha} is not contained in ${PUBLIC_RELEASE_SOURCE_BRANCH} (compare status "${compare.status}") — a public release must be cut from integrated source, never from an unmerged branch.`,
+    );
+  }
+  assertRequiredChecksPassed(commitSha, repository);
+  log(`public release source verified: ${commitSha} is in ${PUBLIC_RELEASE_SOURCE_BRANCH}.`);
+}
+
+function assertRequiredChecksPassed(commitSha, repository) {
+  const result = processRunner(process.execPath, ["scripts/verify-release-required-checks.mjs"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: { ...process.env, RELEASE_SHA: commitSha, GITHUB_REPOSITORY: repository },
+  });
+  if (result.error !== undefined) {
+    fail(`could not verify required checks: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    fail(
+      `required checks have not passed on ${commitSha}; refusing to publish it as the latest release.\n${String(result.stdout ?? "")}${String(result.stderr ?? "")}`,
+    );
+  }
+}
+
 export function runPortablePrerelease(argv) {
   const options = parseArgs(argv);
   if (options === undefined) {
@@ -868,6 +913,9 @@ export function runPortablePrerelease(argv) {
   }
   assertRunMatchesRelease(view.headSha, version, tag, options.publicRelease);
   assertStagingJobsSucceeded(runId);
+  // Before the tag is minted, not after: the workflow's own tag-push verification cannot help
+  // here because it only starts once this script has already created the tag and the release.
+  if (options.publicRelease) assertPublicReleaseSourceIsApproved(view.headSha, repository);
   const { workDir, publishDir } = downloadAssets(runId);
   try {
     runPublishSteps({

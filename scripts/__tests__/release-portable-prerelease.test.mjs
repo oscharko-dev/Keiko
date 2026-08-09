@@ -210,6 +210,14 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     return (command, args) => {
       const line = [command.split("/").pop(), ...args].join(" ");
       recorded.push(line);
+      // The required-checks verifier is spawned through the same process seam as gh, so the
+      // double answers it here: success unless a test scripts a failure for it.
+      if (line.includes("verify-release-required-checks")) {
+        const scripted = (overrides.failures ?? []).find(([needle]) => line.includes(needle));
+        return scripted === undefined
+          ? { status: 0, stdout: "", stderr: "" }
+          : { status: 1, stdout: "", stderr: scripted[1] };
+      }
       if (line.startsWith("gh release create")) {
         // The notes file dies with the temp directory — snapshot the rendered release body while
         // it still exists, so tests can assert what the published surface actually said.
@@ -328,6 +336,56 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     if (artifact.includes("arm64")) return ["keiko-macos-arm64.zip"];
     return ["keiko-macos-x64.zip"];
   }
+
+  describe("public release source gate", () => {
+    // A beta may be cut from any ref; that is what a prerelease is for. A PUBLIC release becomes
+    // the Latest download a customer installs, so its bytes must come from integrated,
+    // gate-verified source. The workflow's own tag-push verification cannot answer this: it only
+    // starts once this script has already minted the tag and created the release.
+    function publicRun(recorded, overrides = {}) {
+      return withHostPlatform("darwin", () =>
+        withProcessRunner(ghDouble(recorded, overrides), () =>
+          runPortablePrerelease(["--run-id", "42", "--public-release"]),
+        ),
+      );
+    }
+
+    it("refuses a commit that is not contained in the integration branch", () => {
+      const recorded = [];
+      expect(() =>
+        publicRun(recorded, {
+          answers: [["compare/dev...", JSON.stringify({ status: "diverged" })]],
+        }),
+      ).toThrow(/not contained in dev/u);
+      expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+      expect(recorded.some((line) => line.includes("git/refs"))).toBe(false);
+    });
+
+    it("refuses a commit whose required checks have not passed", () => {
+      const recorded = [];
+      expect(() =>
+        publicRun(recorded, {
+          answers: [["compare/dev...", JSON.stringify({ status: "behind" })]],
+          failures: [["verify-release-required-checks", "ci is failing"]],
+        }),
+      ).toThrow(/required checks have not passed/u);
+      expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+    });
+
+    it("publishes at the exact stable tag as the latest release once the source is approved", () => {
+      const recorded = [];
+      publicRun(recorded, {
+        answers: [["compare/dev...", JSON.stringify({ status: "behind" })]],
+      });
+
+      const createLine = recorded.find((line) => line.startsWith("gh release create"));
+      expect(createLine).toContain(`v${localVersion}`);
+      expect(createLine).toContain("--latest");
+      expect(createLine).not.toContain("--prerelease");
+      // The evidence the npm publisher re-verifies before it promotes the dist-tag.
+      expect(createLine).toContain("keiko-portable-evaluation-manifest.json");
+    });
+  });
 
   it("publishes the four verified assets with checksums, provenance, and the supersede pointer", () => {
     const recorded = [];

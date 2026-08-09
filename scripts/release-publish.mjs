@@ -186,6 +186,11 @@ function portableUploadEnabled(options) {
   return !options.skipGithubRelease && !options.dryRun;
 }
 
+/** A run that actually publishes, as opposed to previewing what a publish would do. */
+function livePublish(options) {
+  return !options.planOnly && !options.dryRun;
+}
+
 // A stable `latest` release must offer the customer downloads — that requirement did not move.
 // What moved is WHERE it is answered. The old gate demanded a qualified asset MANIFEST as a
 // publish INPUT, which only the Developer-ID/Azure-signed production lane can produce; the
@@ -224,23 +229,54 @@ function missingPortableDownloads(remoteAssets) {
  * re-downloading each file over the same URL a customer uses (Codex and CodeRabbit findings on
  * #3054: a name and a non-zero size authorize nothing).
  */
-function ensureStableLatestDownloads(rootManifest, options, releaseInfo, uploadedHere) {
+function ensureStableLatestDownloads(rootManifest, options, releaseInfo) {
   if (!stableLatestRelease(rootManifest, options) || options.dryRun) return;
-  if (releaseInfo === undefined) {
-    fail("a stable latest publish must attach its portable downloads to the GitHub Release.");
-  }
-  const remoteAssets = githubReleaseSnapshot(releaseInfo).assets;
-  const missing = missingPortableDownloads(remoteAssets);
+  const missing = missingPortableDownloads(githubReleaseSnapshot(releaseInfo).assets);
   if (missing.length > 0) {
     fail(
       `GitHub release ${releaseInfo.tag} is missing portable downloads: ${missing.join(", ")}. ` +
         "A stable latest release must carry every portable download before npm publishes it.",
     );
   }
-  if (!uploadedHere) verifyPrepublishedDownloads(releaseInfo, remoteAssets);
   console.log(
-    `release-publish: ${releaseInfo.tag} carries all ${String(PORTABLE_DOWNLOAD_ASSET_NAMES.length)} verified portable downloads.`,
+    `release-publish: ${releaseInfo.tag} carries all ${String(PORTABLE_DOWNLOAD_ASSET_NAMES.length)} portable downloads this run uploaded and verified.`,
   );
+}
+
+/**
+ * The no-upload half: a stable `latest` publish whose downloads the governed evaluation lane
+ * already published. Read-only and taken BEFORE anything customer-visible is created or edited, so
+ * a run that cannot prove the release leaves the repository exactly as it found it.
+ */
+function verifyPrepublishedStableRelease(rootManifest, options) {
+  if (!stableLatestRelease(rootManifest, options) || options.dryRun) return;
+  const repo = githubRepository();
+  const tag = releaseTag(rootManifest.version);
+  const releaseInfo = { repo, tag };
+  const snapshot = gh(["api", `repos/${repo}/releases/tags/${tag}`]);
+  if (snapshot.status !== 0) {
+    fail(
+      `a stable latest publish needs GitHub release ${tag} to already carry its portable downloads, ` +
+        "and that release does not exist. Publish it first with " +
+        "`node scripts/release-portable-prerelease.mjs --public-release`.",
+    );
+  }
+  let remoteAssets;
+  try {
+    const release = JSON.parse(snapshot.stdout);
+    remoteAssets = isRecord(release) && Array.isArray(release.assets) ? release.assets : undefined;
+  } catch {
+    remoteAssets = undefined;
+  }
+  if (remoteAssets === undefined) fail(`GitHub release ${tag} did not report an asset array.`);
+  const missing = missingPortableDownloads(remoteAssets);
+  if (missing.length > 0) {
+    fail(
+      `GitHub release ${tag} is missing portable downloads: ${missing.join(", ")}. ` +
+        "A stable latest release must carry every portable download before npm publishes it.",
+    );
+  }
+  verifyPrepublishedDownloads(releaseInfo, remoteAssets);
 }
 
 /** Reads and shape-validates the evaluation manifest asset the governed lane published. */
@@ -718,17 +754,26 @@ function loadPortableAssets(rootManifest, options) {
   // dist-tag with nothing to point a customer at; refused here rather than after the gates so the
   // run fails in seconds instead of at the end (the same combination is refused again by
   // ensureStableLatestDownloads, which is the authority once the release exists).
-  if (stableLatestRelease(rootManifest, options) && options.skipGithubRelease) {
+  if (
+    stableLatestRelease(rootManifest, options) &&
+    options.skipGithubRelease &&
+    livePublish(options)
+  ) {
     fail(
       "a stable latest publish must publish its GitHub Release; --skip-github-release is not accepted.",
     );
   }
   if (!suppliesManifest) return [];
   // A stable `latest` release that DOES carry assets is still held to the qualified-run
-  // provenance: the same run, attempt, tag, source SHA and workflow that built them.
-  const qualification = stableLatestRelease(rootManifest, options)
-    ? requiredPortableQualification(rootManifest)
-    : undefined;
+  // provenance: the same run, attempt, tag, source SHA and workflow that built them. Only a LIVE
+  // publish, though — that provenance lives in `KEIKO_PORTABLE_ASSETS_*`, which exists only inside
+  // the release workflow, so demanding it in plan-only and dry-run modes made a local release
+  // preview fail before it could render its notes even with a perfectly valid manifest (Codex
+  // finding on #3054). Those modes still run the full structural manifest validation below.
+  const qualification =
+    stableLatestRelease(rootManifest, options) && livePublish(options)
+      ? requiredPortableQualification(rootManifest)
+      : undefined;
   return portableAssetsFromManifest(
     resolve(options.portableAssetsManifest),
     rootManifest,
@@ -1871,19 +1916,21 @@ ensureTrackedTreeIsClean();
 const { cleanup, env: npmEnv, hasToken } = createNpmEnvironment(options.registry);
 try {
   runReleaseGates();
-  // A stable `latest` release is created BEFORE npm publishes, even with nothing to upload here,
-  // so its downloads can be verified while the dist-tag is still private (a release created after
-  // publish would let `latest` exist for a window with no downloads behind it).
-  const releaseNeededUpFront =
-    portableAssets.length > 0 || stableLatestRelease(rootManifest, options);
+  // A stable `latest` release must be proven complete BEFORE npm learns the dist-tag. When this
+  // run has nothing to upload, that proof is taken from the release the governed evaluation lane
+  // already published, and it is taken FIRST — creating the release up front would leave a public,
+  // empty Latest release behind whenever the verification then failed, which also blocks the
+  // evaluation lane from recreating that tag (Codex finding on #3054).
+  const uploadsAssets = portableAssets.length > 0;
+  if (!uploadsAssets) verifyPrepublishedStableRelease(rootManifest, options);
   const releaseInfo =
-    releaseNeededUpFront && portableUploadEnabled(options)
+    (uploadsAssets || stableLatestRelease(rootManifest, options)) && portableUploadEnabled(options)
       ? ensureGithubRelease(rootPackage, options, githubReleaseNotes)
       : undefined;
-  if (releaseInfo !== undefined) {
+  if (releaseInfo !== undefined && uploadsAssets) {
     publishPortableReleaseAssets(options, portableAssets, releaseInfo);
+    ensureStableLatestDownloads(rootManifest, options, releaseInfo);
   }
-  ensureStableLatestDownloads(rootManifest, options, releaseInfo, portableAssets.length > 0);
   for (const pkg of workspacePackages) {
     publishPackage(pkg, npmEnv, options, hasToken);
   }

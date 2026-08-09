@@ -1053,6 +1053,36 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain("is missing portable downloads");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+      // And it leaves nothing customer-visible behind. Creating the release before proving it
+      // would publish an empty Latest release advertising downloads that are not there, and the
+      // evaluation lane could then no longer create that tag — it refuses a non-draft release.
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","create"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","edit"'))).toBe(false);
+    });
+
+    it("previews a stable latest plan without the workflow-only qualification environment", () => {
+      // A local `release:plan` has no KEIKO_PORTABLE_ASSETS_* environment — that exists only
+      // inside the release workflow. Demanding it here made a preview fail before rendering its
+      // notes even with a valid manifest, which is not what a preview is for (Codex finding on
+      // #3054). The structural manifest validation still runs.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        extraArgs: ["--plan-only"],
+        qualificationEnv: {
+          KEIKO_PORTABLE_ASSETS_ARTIFACT_NAME: undefined,
+          KEIKO_PORTABLE_ASSETS_REPOSITORY: undefined,
+          KEIKO_PORTABLE_ASSETS_RUN_ATTEMPT: undefined,
+          KEIKO_PORTABLE_ASSETS_RUN_ID: undefined,
+          KEIKO_PORTABLE_ASSETS_SOURCE_SHA: undefined,
+          KEIKO_PORTABLE_ASSETS_TAG: undefined,
+          KEIKO_PORTABLE_ASSETS_WORKFLOW_PATH: undefined,
+        },
+      });
+
+      expect(lastRun.status).toBe(0);
+      expect(lastRun.stdout).toContain("PLAN-ONLY complete");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
     it("publishes a stable latest release whose downloads the evaluation lane already uploaded", () => {
