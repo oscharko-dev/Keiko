@@ -245,18 +245,21 @@ Count the aliases the key can see:
   # The HTTP status accompanies an unreadable body: curl does not fail on 4xx, so a key sent on
   # the header this proxy ignores would otherwise look like a malformed model list rather than
   # an auth answer (review finding on #3042). The status is a number — still body-free.
-  # Counts DISTINCT ids from a 2xx body only — parseModelDiscovery deduplicates by id before
-  # applying MAX_DISCOVERED_MODELS, so the raw array length would overstate what Keiko keeps
-  # (review finding on #3042).
-  node -e 'const fs=require("node:fs");const MAX=2_000_000;const [f,code]=process.argv.slice(1);let n;if(code.startsWith("2")&&fs.statSync(f).size<=MAX){try{const p=JSON.parse(fs.readFileSync(f,"utf8"));if(Array.isArray(p?.data))n=new Set(p.data.filter((e)=>e&&typeof e.id==="string").map((e)=>e.id)).size;}catch{}}console.log(n===undefined?`unreadable response (HTTP ${code}, not a JSON model list)`:n);' "$KEIKO_BODY" "$http_code"
+  # Counts ids the way discovery reads them: from a 2xx body only, taking the first usable of
+  # id / model_name / model / deployment_name / deploymentName, TRIMMED, bounded in length, and
+  # deduplicated — modelIdFromKnownFields does exactly that before MAX_DISCOVERED_MODELS applies
+  # (review findings on #3042).
+  node -e 'const fs=require("node:fs");const MAX=2_000_000;const F=["id","model_name","model","deployment_name","deploymentName"];const [f,code]=process.argv.slice(1);const pick=(e)=>{for(const k of F){const v=e?.[k];if(typeof v==="string"){const t=v.trim();if(t.length>0&&t.length<=160)return t;}}return undefined;};let n;if(code.startsWith("2")&&fs.statSync(f).size<=MAX){try{const p=JSON.parse(fs.readFileSync(f,"utf8"));if(Array.isArray(p?.data))n=new Set(p.data.map(pick).filter((id)=>id!==undefined)).size;}catch{}}console.log(n===undefined?`unreadable response (HTTP ${code}, not a JSON model list)`:n);' "$KEIKO_BODY" "$http_code"
 )
 ```
 
 The cap is KEIKO's own discovery bound (MAX_DISCOVERED_MODELS), applied AFTER the response
-arrives — this direct call bypasses it. A DISTINCT-ID count above 100 therefore means Keiko
-will truncate; 100 or fewer means every alias the key can see fits. The number is an upper
-bound on what Keiko keeps, not an exact prediction: `parseModelDiscovery` additionally drops
-entries it cannot classify before applying the cap, so the kept set can be smaller.
+arrives — this direct call bypasses it. The number is an UPPER BOUND on what Keiko keeps, in
+the direction that matters: 100 or fewer means nothing is truncated, full stop. Above 100 it
+is a strong indication, not a proof, because `parseModelDiscovery` still drops entries whose
+declared mode the gateway does not accept for chat or embedding before the cap applies — so a
+raw 120 can end up as 90 kept. Confirm truncation by comparing this number with the deployment
+list Keiko itself shows after a successful save: exactly 100 there is the cap in action.
 
 **Resolution**
 
