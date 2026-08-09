@@ -670,7 +670,6 @@ interface GatewayFormFields {
 // deployment-path endpoint saved as the OpenAI-compatible shape (review finding on #3048).
 function movedImportRequiresProtocol(fields: GatewayFormFields): boolean {
   if (fields.preserveExisting) return false;
-  if (fields.importedVoiceEndpointStyle === "") return false;
   const submitted = fields.voiceBaseUrl.trim();
   if (submitted === "") return false;
   if (
@@ -679,7 +678,14 @@ function movedImportRequiresProtocol(fields: GatewayFormFields): boolean {
   ) {
     return false;
   }
-  return fields.voiceEndpointStyle === "";
+  // Each declared piece is restated on its own: a file can declare the realtime auth mode with
+  // no endpoint style, and restating the style says nothing about the mode. Treating the style
+  // as sufficient let an ephemeral-session provider move to a host nobody stated it for (review
+  // finding on #3048).
+  return [
+    [fields.importedVoiceEndpointStyle, fields.voiceEndpointStyle],
+    [fields.importedVoiceRealtimeAuthMode, fields.voiceRealtimeAuthMode],
+  ].some(([imported, stated]) => imported !== "" && stated === "");
 }
 
 function endpointMigrationValidationError(

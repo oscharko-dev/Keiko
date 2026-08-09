@@ -2085,6 +2085,60 @@ describe("GatewaySetupDialog", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /test & save/i })).toBeEnabled());
   });
 
+  it("refuses a moved import whose realtime auth mode is the only unstated piece", async () => {
+    // Review finding on #3048: the fresh-mode requirement keyed off the endpoint style alone, so
+    // a file declaring only realtimeAuthMode — or one whose style was restated while the mode was
+    // not — moved hosts with the mode silently dropped.
+    render(<GatewaySetupDialog />);
+    await userEvent.upload(
+      await screen.findByLabelText(/load keiko\.config\.json/i),
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "gpt-5o",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                capability: { id: "gpt-5o", kind: "chat" },
+              },
+              {
+                modelId: "realtime-voice",
+                baseUrl: "https://voice.example.com",
+                realtimeAuthMode: "ephemeral-session",
+                capability: {
+                  id: "realtime-voice",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsRealtimeVoice: true,
+                  realtimeTranscriptionModel: "realtime-transcription",
+                },
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(/audio endpoint url/i)).toHaveValue("https://voice.example.com"),
+    );
+
+    await userEvent.clear(screen.getByLabelText(/audio endpoint url/i));
+    await userEvent.type(
+      screen.getByLabelText(/audio endpoint url/i),
+      "https://new-voice.example.com",
+    );
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /replacing a stored audio endpoint/i,
+    );
+  });
+
   it("drops a hand-edited imported protocol when the audio endpoint then moves", async () => {
     // Review finding on #3048: stating the protocol by hand released the uploaded URL binding
     // outright, and in a FRESH dialog the endpoint identity ref is still undefined after an
