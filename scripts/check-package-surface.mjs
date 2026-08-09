@@ -110,6 +110,12 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
+/** Reproduces JavaScript's DEFAULT string sort (UTF-16 code units) with an explicit intent. */
+function compareByCodeUnit(left, right) {
+  if (left < right) return -1;
+  return left > right ? 1 : 0;
+}
+
 function stableValue(value) {
   if (Array.isArray(value)) {
     return value.map((entry) => stableValue(entry));
@@ -250,7 +256,12 @@ async function assertRootPublicApiContract(paths) {
   const url = pathToFileURL(resolve("dist/index.js")).href;
   const currentContract = {
     packageExports,
-    runtimeExports: Object.keys(await import(url)).sort((a, b) => a.localeCompare(b)),
+    // Code-unit order, NOT localeCompare: the architecture pin
+    // (tests/architecture/root-package-surface-contract.test.ts) asserts the allowlist equals
+    // [...].sort(), which orders uppercase before lowercase. A locale sort wrote a file this
+    // gate accepted and that pin rejected (review finding on #3042). The comparator is explicit
+    // so the intent is stated rather than inherited from the default.
+    runtimeExports: Object.keys(await import(url)).sort(compareByCodeUnit),
     declarationExports: collectTypeExports(resolve("dist/index.d.ts")),
   };
   if (WRITE_CONTRACT) {
@@ -405,8 +416,7 @@ function collectSourceInputs() {
   for (const file of readdirSync(".")) {
     if (/^tsconfig\..*\.json$/.test(file)) inputs.push(file);
   }
-  inputs.push(...walkFiles("src", new Set(["dist", "node_modules"])));
-  inputs.push("scripts/build-ui.mjs");
+  inputs.push(...walkFiles("src", new Set(["dist", "node_modules"])), "scripts/build-ui.mjs");
   for (const entry of readdirSync("packages", { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const dir = join("packages", entry.name);

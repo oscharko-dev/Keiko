@@ -32,7 +32,11 @@ export function requestGatewayReadinessChatCompletion(
     ...body,
     ...(stream === true ? { stream: true, stream_options: { include_usage: true } } : {}),
   });
-  return gatewayFetch(`${provider.baseUrl}/chat/completions`, {
+  // Trim a trailing slash before joining, exactly like the sibling adapters — a file/env-authored
+  // base URL ending in "/" otherwise yields '//chat/completions', which LiteLLM answers with a
+  // 404 (LiteLLM production audit).
+  const trimmed = provider.baseUrl.endsWith("/") ? provider.baseUrl.slice(0, -1) : provider.baseUrl;
+  return gatewayFetch(`${trimmed}/chat/completions`, {
     method: "POST",
     headers: providerHeaders(provider),
     body: requestBody,

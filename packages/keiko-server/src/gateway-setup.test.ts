@@ -1199,6 +1199,200 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("never attaches the Mistral tool-calling note to an embedding capability", async () => {
+    // Review finding on #3042: the note is CHAT-specific ("until endpoint readiness verifies
+    // it"), but the Mistral defaults ran on every model id containing "mistral". A stored
+    // mistral-embed rebuilt at the same endpoint is a known embedding whose toolCalling: false
+    // is correct by kind — appending the chat note there is misleading metadata a routine save
+    // must not introduce.
+    const uiDir = await tempDir("keiko-gw-ui-mistral-embed-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-mistral-embed-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "mistral-embed",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            capability: {
+              id: "mistral-embed",
+              kind: "embedding",
+              contextWindow: 8_192,
+              maxOutputTokens: 0,
+              toolCalling: false,
+              structuredOutput: false,
+              streaming: false,
+              supportsImageInput: false,
+              supportsDocumentInput: false,
+              workflowEligible: false,
+              costClass: "low",
+              latencyClass: "fast",
+              throughputHint: "embedding deployment",
+              preferredUseCases: ["Embeddings"],
+              knownLimitations: [],
+            },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    // A credential rotation takes the VERIFIED rebuild path, where the setup capability
+    // defaults (and the Mistral note) are applied — the settings-only path never reaches them.
+    const saved = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        apiKey: "example-rotated-token",
+        deploymentNames: ["example-chat", "mistral-embed"],
+        embeddingModelIds: ["mistral-embed"],
+      }),
+      deps,
+    );
+    expect(saved.status).toBe(200);
+    const capability = currentGatewayConfig(deps)?.capabilities?.find(
+      (item) => item.id === "mistral-embed",
+    );
+    expect(capability?.kind).toBe("embedding");
+    expect(capability?.knownLimitations ?? []).not.toContain(
+      "Tool calling is disabled by default for Mistral deployments until endpoint readiness verifies it",
+    );
+    deps.store.close();
+  });
+
+  it("keeps a stored disabled streaming across a preserve-mode endpoint move", async () => {
+    // Review finding on #3042: the endpoint-move carry-over preserved only toolCalling, so a
+    // readiness-recorded streaming: false was restored to the permissive chat default (true)
+    // at the new endpoint — and the setup smoke test performs buffered chat only, so nothing
+    // observed streaming there. Both permissive defaults must survive the move.
+    const uiDir = await tempDir("keiko-gw-ui-streaming-move-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-streaming-move-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://old.example.com/v1",
+            apiKey: "old-token",
+            capability: {
+              id: "example-chat",
+              kind: "chat",
+              contextWindow: 128_000,
+              maxOutputTokens: 4_096,
+              toolCalling: true,
+              structuredOutput: true,
+              streaming: false,
+              supportsImageInput: false,
+              supportsDocumentInput: false,
+              workflowEligible: false,
+              costClass: "low",
+              latencyClass: "fast",
+              throughputHint: "t",
+              preferredUseCases: ["Chat"],
+              knownLimitations: [],
+            },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const moved = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://new.example.com/v1",
+        apiKey: "new-token",
+        deploymentNames: ["example-chat"],
+      }),
+      deps,
+    );
+    expect(moved.status).toBe(200);
+    const capability = currentGatewayConfig(deps)?.capabilities?.find(
+      (item) => item.id === "example-chat",
+    );
+    expect(capability?.streaming).toBe(false);
+    deps.store.close();
+  });
+
+  it("does not carry a stored disabled toolCalling into a non-preserving fresh setup", async () => {
+    // Review finding on #3042: the endpoint-move restriction is PRESERVE semantics — a fresh
+    // replacement (preserveExisting omitted) deliberately treats stored capabilities as absent
+    // like every stored list on this route, so the same deployment id on a new endpoint starts
+    // from the chat default until verification says otherwise.
+    const uiDir = await tempDir("keiko-gw-ui-fresh-toolcalling-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-fresh-toolcalling-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://old.example.com/v1",
+            apiKey: "old-token",
+            capability: {
+              id: "example-chat",
+              kind: "chat",
+              contextWindow: 128_000,
+              maxOutputTokens: 4_096,
+              toolCalling: false,
+              structuredOutput: true,
+              streaming: true,
+              supportsImageInput: false,
+              supportsDocumentInput: false,
+              workflowEligible: false,
+              costClass: "low",
+              latencyClass: "fast",
+              throughputHint: "t",
+              preferredUseCases: ["Chat"],
+              knownLimitations: [],
+            },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const replaced = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://new.example.com/v1",
+        apiKey: "new-token",
+        deploymentNames: ["example-chat"],
+      }),
+      deps,
+    );
+    expect(replaced.status).toBe(200);
+    const capability = currentGatewayConfig(deps)?.capabilities?.find(
+      (item) => item.id === "example-chat",
+    );
+    expect(capability?.toolCalling).toBe(true);
+    deps.store.close();
+  });
+
   it("persists the submitted voice endpoint protocol on a fresh setup", async () => {
     // A fresh save has no stored template, so without the explicit fields an Azure speech
     // endpoint would be persisted shapeless and every audio call would take the
@@ -1298,6 +1492,70 @@ describe("handleGatewaySetup", () => {
         message:
           'providers[0].apiVersion is required when providers[0].endpointStyle is "azure-openai-deployment"',
       },
+    });
+    deps.store.close();
+  });
+
+  it("keeps the inherited endpoint protocol off a new role added at a moved base URL", async () => {
+    // LiteLLM production audit: a preserve-mode update that moves voice to a NEW base URL while
+    // adding a role the old config never had inherited the OLD provider's Azure
+    // endpointStyle/apiVersion through the connection defaults — the template branch enforces the
+    // same-URL identity rule, and the defaults must apply the exact same rule.
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-moved-endpoint-protocol-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-moved-endpoint-protocol-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "azure-stt",
+            baseUrl: "https://speech.cognitiveservices.example.com",
+            apiKey: "azure-audio-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+            capability: {
+              kind: "voice",
+              supportsSpeechInput: true,
+              voiceProviderLocality: "azure-foundry",
+            },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const result = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://litellm.example.com/v1",
+        voiceApiKey: "litellm-audio-token",
+        voiceProviderLocality: "customer-hosted",
+        voiceSpeechOutputModelId: "litellm-tts",
+        voiceOutputVoiceId: "alloy",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const after = requiredGatewayConfig(deps);
+    const ttsProvider = requiredProvider(after, "litellm-tts");
+    expect(ttsProvider.baseUrl).toBe("https://litellm.example.com/v1");
+    expect(ttsProvider.endpointStyle).toBeUndefined();
+    expect(ttsProvider.apiVersion).toBeUndefined();
+    // The untouched STT role keeps its Azure protocol on the old endpoint.
+    expect(requiredProvider(after, "azure-stt")).toMatchObject({
+      baseUrl: "https://speech.cognitiveservices.example.com",
+      endpointStyle: "azure-openai-deployment",
+      apiVersion: "2025-03-01-preview",
     });
     deps.store.close();
   });
@@ -3370,6 +3628,143 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("keeps a stored disabled tool calling through an endpoint move", async () => {
+    // #3037 follow-up: on an endpoint move the URL-matched `existing` misses and the composed
+    // capability fell back to the chat default toolCalling: true — silently re-enabling a
+    // capability the owner disabled, with nothing probing it (the setup smoke test never
+    // exercises tool calling). The stored restriction now survives for ANY chat model until the
+    // readiness endpoint re-verifies it with a fresh observation.
+    const uiDir = await tempDir("keiko-gw-ui-toolcalling-move-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-toolcalling-move-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const chatCapability = (id: string, toolCalling: boolean): Record<string, unknown> => ({
+      id,
+      kind: "chat",
+      contextWindow: 128_000,
+      maxOutputTokens: 8_192,
+      toolCalling,
+      structuredOutput: false,
+      streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: false,
+      costClass: "medium",
+      latencyClass: "standard",
+      throughputHint: "test chat deployment",
+      preferredUseCases: ["Chat"],
+      knownLimitations: [],
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "custom-llm",
+            baseUrl: "https://old-endpoint.example.com/v1",
+            apiKey: "old-token",
+            capability: chatCapability("custom-llm", false),
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const moved = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://new-endpoint.example.com/v1",
+        apiKey: "fresh-token",
+        deploymentNames: ["custom-llm"],
+      }),
+      deps,
+    );
+
+    expect(moved.status).toBe(200);
+    expect(requiredCapability(requiredGatewayConfig(deps), "custom-llm").toolCalling).toBe(false);
+    deps.store.close();
+  });
+
+  it("keeps the Mistral limitation note while tool calling stays disabled", async () => {
+    // #3037 follow-up: applyMistralSetupDefaults stripped the limitation note on EVERY preserve
+    // rebuild even while toolCalling stayed false — the stored explanation drifted out of the
+    // config on each credential rotation. The note now travels with the disabled state,
+    // deduplicated, and only a verified toolCalling: true retires it (pinned below by the
+    // readiness re-enable test).
+    const note =
+      "Tool calling is disabled by default for Mistral deployments until endpoint readiness verifies it";
+    const uiDir = await tempDir("keiko-gw-ui-mistral-note-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-mistral-note-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "Mistral-Large-3",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            capability: {
+              id: "Mistral-Large-3",
+              kind: "chat",
+              contextWindow: 128_000,
+              maxOutputTokens: 8_192,
+              toolCalling: false,
+              structuredOutput: false,
+              streaming: true,
+              supportsImageInput: false,
+              supportsDocumentInput: false,
+              workflowEligible: false,
+              costClass: "medium",
+              latencyClass: "standard",
+              throughputHint: "test chat deployment",
+              preferredUseCases: ["Chat"],
+              knownLimitations: [note],
+            },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const noteCount = (): number =>
+      requiredCapability(requiredGatewayConfig(deps), "Mistral-Large-3").knownLimitations.filter(
+        (limitation) => limitation === note,
+      ).length;
+
+    const rotated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "rotated-token" }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    expect(requiredCapability(requiredGatewayConfig(deps), "Mistral-Large-3").toolCalling).toBe(
+      false,
+    );
+    expect(noteCount()).toBe(1);
+
+    // A second rotation must neither drop nor duplicate the note.
+    const again = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "second-rotated-token" }),
+      deps,
+    );
+    expect(again.status).toBe(200);
+    expect(noteCount()).toBe(1);
+    deps.store.close();
+  });
+
   it("restores stored OCR providers verbatim through preserve-mode rebuilds", async () => {
     // Review finding on #3031 (P1): the rebuild only re-derives chat and embedding providers, so
     // a stored ocr-vision provider was chat-probed and silently dropped (or reclassified) by an
@@ -4484,6 +4879,97 @@ describe("handleGatewaySetup", () => {
     expect(JSON.stringify(result.body)).not.toContain("provider body hidden");
     expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
     deps.store.close();
+  });
+
+  it("classifies a plain 401 discovery response as a credential failure", async () => {
+    // LiteLLM production audit: a wrong or model-restricted proxy key surfaced as the generic
+    // body-free 502 because fetchDiscoveryJson threw a plain Error with the status only inside
+    // the message string. The PRODUCTION function must attach the HTTP status for the
+    // classifier — the mock deliberately returns unmodified 401 Responses.
+    const uiDir = await tempDir("keiko-gw-ui-discovery-401-");
+    const evidenceDir = await tempDir("keiko-gw-ev-discovery-401-");
+    const originalFetch = globalThis.fetch;
+    const fakeFetch: typeof fetch = () =>
+      Promise.resolve(
+        new Response(JSON.stringify({ error: { message: "private upstream key details" } }), {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    globalThis.fetch = fakeFetch;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...MOCK_FETCH_EGRESS_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" }),
+        deps,
+      );
+      expect(result.status).toBe(502);
+      expect(JSON.stringify(result.body)).toContain("provider rejected the credential");
+      expect(JSON.stringify(result.body)).not.toContain("private upstream key details");
+      expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
+    } finally {
+      globalThis.fetch = originalFetch;
+      deps.store.close();
+    }
+  });
+
+  it("classifies an all-probes-failed smoke test by its most severe probe failure", async () => {
+    // LiteLLM production audit: a model-restricted key passes /models discovery but 401s every
+    // chat probe — the aggregate "no model accepted" error reached the classifier as a plain
+    // Error, so the operator saw the generic body-free 502 instead of the credential guidance.
+    const uiDir = await tempDir("keiko-gw-ui-probes-401-");
+    const evidenceDir = await tempDir("keiko-gw-ev-probes-401-");
+    const originalFetch = globalThis.fetch;
+    const fakeFetch: typeof fetch = (url) => {
+      const href = fetchInputUrl(url);
+      if (href.endsWith("/model/info")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: { message: "not found" } }), {
+            status: 404,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      if (href.endsWith("/models")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: [{ id: "restricted-chat" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ error: { message: "key lacks model access" } }), {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    };
+    globalThis.fetch = fakeFetch;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...MOCK_FETCH_EGRESS_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" }),
+        deps,
+      );
+      expect(result.status).toBe(502);
+      expect(JSON.stringify(result.body)).toContain("provider rejected the credential");
+      expect(JSON.stringify(result.body)).not.toContain("key lacks model access");
+      expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
+    } finally {
+      globalThis.fetch = originalFetch;
+      deps.store.close();
+    }
   });
 
   it.each([
@@ -5897,6 +6383,27 @@ describe("smokeTestCandidates", () => {
         2,
       ),
     ).rejects.toThrow("no discovered model accepted the chat-completions smoke test");
+  });
+
+  it("carries the most severe classified probe failure on the all-rejected error", async () => {
+    // LiteLLM production audit: the aggregate reaches setupCandidateError, which classifies by
+    // code/httpStatus — as a plain Error every all-probes failure surfaced as the generic 502.
+    // Only classification evidence (code/status) is captured, never probe messages or bodies.
+    await expect(
+      smokeTestCandidates(
+        ["test-chat-1", "test-chat-2"],
+        (modelId) =>
+          Promise.reject(
+            modelId === "test-chat-1"
+              ? Object.assign(new Error("model missing"), { httpStatus: 404 })
+              : Object.assign(new Error("denied"), { httpStatus: 403 }),
+          ),
+        2,
+      ),
+    ).rejects.toMatchObject({
+      message: "no discovered model accepted the chat-completions smoke test",
+      httpStatus: 403,
+    });
   });
 
   it("respects the concurrency cap (peak in-flight <= 2 with 5 candidates)", async () => {

@@ -39,6 +39,11 @@ MemoriaViva mode-aware capture issues are covered in the dedicated
 for "capture did not run in mode X", Journal-visibility questions, and the autonomy control not
 persisting across a reload.
 
+LiteLLM production-gateway issues are covered in the dedicated
+[LiteLLM Production Gateway](litellm-production-gateway.md) entry. Use that page for
+`x-litellm-key` authentication, `PROXY_BLOCKED_BY_POLICY` on a local proxy, `max_tokens`
+rejections on reasoning aliases, and truncated discovery on large multi-team proxies.
+
 ## Severity scale
 
 The severity field on each entry uses the following scale. It is a

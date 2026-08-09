@@ -1790,12 +1790,15 @@ export type {
   VoiceCapabilityResolution,
   VoiceProviderAvailability,
 } from "./gateway.js";
+export type { ProviderEndpointStyle, RealtimeAuthMode } from "./gateway.js";
 export {
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
   GATEWAY_TEMPERATURE_RANGE,
   GATEWAY_TOP_P_RANGE,
   INFILLING_ALIGNMENTS,
   MODEL_COST_RANK,
+  PROVIDER_ENDPOINT_STYLES,
+  REALTIME_AUTH_MODES,
   VOICE_PROVIDER_LOCALITIES,
   VOICE_PERSONAS,
   assertValidGatewaySamplingParameters,

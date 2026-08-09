@@ -119,6 +119,10 @@ export {
   UPDATE_PREFLIGHT_SEVERITIES,
 } from "@oscharko-dev/keiko-contracts";
 
+// ─── Provider endpoint protocol (wire-value unions, #3037 follow-up) ─────────────────
+export type { ProviderEndpointStyle, RealtimeAuthMode } from "@oscharko-dev/keiko-contracts";
+export { PROVIDER_ENDPOINT_STYLES, REALTIME_AUTH_MODES } from "@oscharko-dev/keiko-contracts";
+
 // ─── Editor completion gateway wire shapes (Issue #1199, contracts root barrel) ─────
 export type {
   EditorCompletionWireTriggerKind,

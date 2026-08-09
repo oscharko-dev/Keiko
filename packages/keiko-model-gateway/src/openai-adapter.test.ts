@@ -127,6 +127,21 @@ describe("OpenAiAdapter.call", () => {
     expect(seenUrl).toBe("https://provider.example/v1/chat/completions");
   });
 
+  it("trims a trailing slash from the base URL before joining /chat/completions", async () => {
+    // LiteLLM production audit: a file/env-authored 'https://litellm.example.com/v1/' produced
+    // '/v1//chat/completions', which LiteLLM answers with a 404 — every sibling adapter
+    // (embedding, tts, stt, rerank, realtime) trims the trailing slash before joining.
+    let seenUrl = "";
+    const adapter = adapterWith((url) => {
+      if (typeof url === "string") seenUrl = url;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(REQUEST, { ...CONFIG, baseUrl: "https://provider.example/v1/" });
+    expect(seenUrl).toBe("https://provider.example/v1/chat/completions");
+  });
+
   it("RB-4 (GEN-AI-GATEWAY-002): routes an Azure-configured chat provider to its deployment URL", async () => {
     let seenUrl = "";
     const adapter = adapterWith((url) => {

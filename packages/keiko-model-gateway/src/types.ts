@@ -8,6 +8,8 @@ import type {
   ModelCapability,
   NormalizedResponse,
   GatewayRequest,
+  ProviderEndpointStyle,
+  RealtimeAuthMode,
   VoicePersona,
 } from "@oscharko-dev/keiko-contracts";
 import type { GroundingLimits } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -75,8 +77,11 @@ export interface VoicePersonaVoice {
   readonly voiceId: string;
 }
 
-export type ProviderEndpointStyle = "openai-compatible" | "azure-openai-deployment";
-export type RealtimeAuthMode = "api-key" | "ephemeral-session";
+// The endpoint-protocol unions moved to the contract seam so the UI upload parser and the server
+// setup route validate against the same wire values without importing this package (#3037
+// follow-up; ADR-0019 keeps keiko-ui off the gateway package). Re-exported here so every
+// existing consumer keeps its import path.
+export type { ProviderEndpointStyle, RealtimeAuthMode };
 export type OutputTokenParameter = "max_tokens" | "max_completion_tokens";
 
 export interface ModelProviderConfig {

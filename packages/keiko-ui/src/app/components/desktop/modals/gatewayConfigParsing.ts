@@ -14,6 +14,7 @@
  * output voice.
  */
 
+import { PROVIDER_ENDPOINT_STYLES, REALTIME_AUTH_MODES } from "@/lib/types";
 import type { VoiceProviderLocality } from "@/lib/types";
 
 export const MAX_GATEWAY_CONFIG_BYTES = 256 * 1024;
@@ -39,6 +40,7 @@ const SUPPORTED_API_KEY_HEADER_NAMES = new Set([
  * verbatim through the voice setup fields (#3037), and profiles map to the output voice.
  * Retry tuning (maxRetries, retryBaseDelayMs) stays tolerated everywhere: the form has no field
  * for it either, but it does not change which endpoint or protocol the connection speaks.
+ * `endpointStyle` is checked value-aware instead (see unsupportedGenericEndpointStyle).
  */
 /**
  * A secret REFERENCE is a credential source the form cannot carry (the token field takes a
@@ -50,12 +52,23 @@ const SUPPORTED_API_KEY_HEADER_NAMES = new Set([
 const UNSUPPORTED_CREDENTIAL_REFERENCE = "apiKeySecretRef";
 
 const UNSUPPORTED_GENERIC_PROVIDER_SETTINGS = [
-  "endpointStyle",
   "apiVersion",
   "outputTokenParameter",
   "realtimeAuthMode",
   "voiceProfiles",
 ] as const;
+
+/**
+ * An explicit `endpointStyle: "openai-compatible"` on a chat/embedding provider is behaviorally
+ * identical to the absent default — LiteLLM-shaped files state the default explicitly, and
+ * refusing it would reject exactly the files this feature exists for (LiteLLM production
+ * audit). The Azure deployment style and unknown values keep refusing: the setup form cannot
+ * represent a generic provider that speaks a different endpoint shape.
+ */
+function unsupportedGenericEndpointStyle(value: unknown): boolean {
+  if (value === undefined) return false;
+  return !(typeof value === "string" && value.trim() === "openai-compatible");
+}
 /**
  * Top-level blocks the setup form can represent. A file carrying `grounding`, `reranker`,
  * `egress`, or any other policy block would be persisted WITHOUT it by the rebuild — loading and
@@ -202,9 +215,15 @@ function objectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Mirrors the setup route's model-id constraints (length bound, no control characters). */
+/**
+ * Mirrors the setup route's model-id constraints (length bound, no control characters). A comma
+ * is additionally refused fail-closed: it would survive the import only to be silently split
+ * into two bogus ids by the dialog textarea's newline-and-comma splitter (LiteLLM production
+ * audit).
+ */
 function usableModelId(id: string): boolean {
   if (id.length === 0 || id.length > MAX_IMPORT_MODEL_ID_LENGTH) return false;
+  if (id.includes(",")) return false;
   for (const character of id) {
     const code = character.codePointAt(0) ?? 0;
     if (code <= 31 || code === 127) return false;
@@ -429,7 +448,10 @@ function providerConnectionScalars(value: Record<string, unknown>): ConnectionSc
   return {
     baseUrl: baseUrl.value,
     apiKey: apiKey.value,
-    apiKeyHeaderName: header.value,
+    // Lowercase-normalized: the gateway treats header names case-insensitively and the setup
+    // route lowercases on submit, so raw casing must neither fail the uniformity check
+    // ('x-litellm-key' vs 'X-Litellm-Key' — LiteLLM production audit) nor leak into the form.
+    apiKeyHeaderName: header.value?.toLowerCase(),
     timeoutMs: timeout.value,
   };
 }
@@ -588,7 +610,8 @@ function carriesUnsupportedGenericSetting(
       objectRecord(entry) &&
       typeof entry.modelId === "string" &&
       ((genericIds.has(entry.modelId.trim()) &&
-        UNSUPPORTED_GENERIC_PROVIDER_SETTINGS.some((setting) => entry[setting] !== undefined)) ||
+        (UNSUPPORTED_GENERIC_PROVIDER_SETTINGS.some((setting) => entry[setting] !== undefined) ||
+          unsupportedGenericEndpointStyle(entry.endpointStyle))) ||
         // A secret reference refuses on EVERY provider kind — no form field can carry it.
         entry[UNSUPPORTED_CREDENTIAL_REFERENCE] !== undefined),
   );
@@ -853,8 +876,10 @@ interface VoiceEndpointScalars {
   readonly realtimeAuthMode: string | undefined;
 }
 
-const VOICE_ENDPOINT_STYLES = new Set(["openai-compatible", "azure-openai-deployment"]);
-const VOICE_REALTIME_AUTH_MODES = new Set(["api-key", "ephemeral-session"]);
+// The endpoint-protocol wire values come from the contract seam — the same compiler-checked
+// source the server setup route and the model gateway validate against (#3037 follow-up).
+const VOICE_ENDPOINT_STYLES = new Set<string>(PROVIDER_ENDPOINT_STYLES);
+const VOICE_REALTIME_AUTH_MODES = new Set<string>(REALTIME_AUTH_MODES);
 
 /**
  * The endpoint protocol of the imported voice connection. The setup route persists these fields
