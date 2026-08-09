@@ -1916,6 +1916,46 @@ describe("GatewaySetupDialog", () => {
     });
   });
 
+  it("clears a typed api version when the style returns to Not stated", async () => {
+    // Review finding on #3048: "Not stated" kept a typed version in preserve mode on the theory
+    // that the stored template might be Azure. If the stored style is openai-compatible the
+    // server pairs the submitted version against it and refuses the save — and when the template
+    // IS Azure it supplies the version along with the style, so keeping it buys nothing.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "internal-chat",
+      testedModelIds: ["internal-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedModels={[modelCapability("internal-chat"), semanticRealtimeCapability("stored-rt")]}
+      />,
+    );
+    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
+    await userEvent.click(screen.getByRole("option", { name: "Azure deployment path" }));
+    await userEvent.type(screen.getByLabelText(/audio api version/i), "2025-04-01-preview");
+    await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
+    await userEvent.click(screen.getByRole("option", { name: "Not stated" }));
+
+    await waitFor(() => expect(screen.getByLabelText(/audio api version/i)).toHaveValue(""));
+    await userEvent.click(screen.getByRole("combobox", { name: /realtime authentication/i }));
+    await userEvent.click(screen.getByRole("option", { name: "API key" }));
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(setupGateway).mock.calls[0]?.[0] ?? {};
+    expect(payload).not.toHaveProperty("voiceApiVersion");
+    expect(payload).not.toHaveProperty("voiceEndpointStyle");
+  });
+
   it("drops the api version when the operator leaves the Azure deployment path", async () => {
     // Review finding on #3048: an api version paired with openai-compatible is exactly what the
     // gateway parser refuses, so leaving it behind turned a protocol correction into a 400 the

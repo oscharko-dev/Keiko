@@ -688,21 +688,6 @@ function realtimeTranscriptionRequired(fields: GatewayFormFields): boolean {
   return submittedRealtime !== fields.storedRealtimeModelId;
 }
 
-// The imported endpoint protocol rides only on a submit that still points at EXACTLY the
-// uploaded endpoint — a manually retyped URL must not inherit the file's protocol, and sending
-// the protocol alone would activate the server's voice path with no voice fields.
-function importedVoiceEndpointPayload(fields: GatewayFormFields): Partial<GatewaySetupInput> {
-  const submittedBaseUrl = fields.voiceBaseUrl.trim();
-  if (submittedBaseUrl === "" || submittedBaseUrl !== fields.importedVoiceEndpointBaseUrl) {
-    return {};
-  }
-  return {
-    ...(fields.importedVoiceRealtimeAuthMode === ""
-      ? {}
-      : { voiceRealtimeAuthMode: fields.importedVoiceRealtimeAuthMode }),
-  };
-}
-
 /**
  * Mirrors the gateway's canonicalBaseUrlIdentity: an endpoint is the SAME endpoint across
  * trailing slashes and case-insensitive origin spelling, so a semantics-preserving edit must not
@@ -822,7 +807,6 @@ function buildSetupGatewayPayload(
     ...(fields.importedEmbeddingModelIds.length === 0
       ? {}
       : { embeddingModelIds: fields.importedEmbeddingModelIds }),
-    ...importedVoiceEndpointPayload(fields),
     ...statedVoiceEndpointPayload(fields),
     ...importedEndpointPayload(fields),
     ...(!fields.workflowEligibleModelIdsConfigured
@@ -2499,13 +2483,12 @@ export function GatewaySetupDialog({
     setVoiceProtocolBoundBaseUrl(voiceBaseUrl.trim());
   };
   // An api version belongs to the Azure deployment path alone — the gateway parser refuses the
-  // pair — so a style that cannot end up being that path drops the version with it, instead of
-  // returning a 400 the operator has to decode and clear by hand (review findings on #3048).
-  // "Not stated" is the case that depends on the mode: in preserve mode the effective style can
-  // still come from the stored template, so the version stays; a fresh setup has no template to
-  // supply it and the pair would be rejected outright.
-  const statedStyleKeepsApiVersion = (next: string): boolean =>
-    next === "azure-openai-deployment" || (next === "" && preserveExisting);
+  // pair — so any style but that path drops the version with it, instead of returning a 400 the
+  // operator has to decode and clear by hand (review findings on #3048). "Not stated" clears it
+  // too, in BOTH modes: it means "inherit the stored protocol", and the stored template supplies
+  // the version along with the style. Keeping a typed version there submitted it with no style,
+  // which the server then paired against an inherited openai-compatible and refused.
+  const statedStyleKeepsApiVersion = (next: string): boolean => next === "azure-openai-deployment";
   const [voiceRealtimeAuthMode, setVoiceRealtimeAuthMode] = useState("");
   const stateVoiceRealtimeAuthMode = (next: string): void => {
     setVoiceRealtimeAuthMode(next);
