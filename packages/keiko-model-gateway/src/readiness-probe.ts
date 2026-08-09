@@ -1,4 +1,4 @@
-import { apiKeyHeaderValue, DEFAULT_API_KEY_HEADER_NAME } from "./config.js";
+import { apiKeyHeaderValue, DEFAULT_API_KEY_HEADER_NAME, trimTrailingSlash } from "./config.js";
 import { gatewayFetch } from "./http.js";
 import type { GatewayConfig, ModelProviderConfig } from "./types.js";
 
@@ -35,7 +35,7 @@ export function requestGatewayReadinessChatCompletion(
   // Trim a trailing slash before joining, exactly like the sibling adapters — a file/env-authored
   // base URL ending in "/" otherwise yields '//chat/completions', which LiteLLM answers with a
   // 404 (LiteLLM production audit).
-  const trimmed = provider.baseUrl.endsWith("/") ? provider.baseUrl.slice(0, -1) : provider.baseUrl;
+  const trimmed = trimTrailingSlash(provider.baseUrl);
   return gatewayFetch(`${trimmed}/chat/completions`, {
     method: "POST",
     headers: providerHeaders(provider),

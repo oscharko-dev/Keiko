@@ -17,7 +17,7 @@ import {
   TransportError,
   type GatewayEgressErrorCode,
 } from "@oscharko-dev/keiko-security/errors/gateway";
-import { apiKeyHeaderValue, DEFAULT_API_KEY_HEADER_NAME } from "./config.js";
+import { apiKeyHeaderValue, DEFAULT_API_KEY_HEADER_NAME, trimTrailingSlash } from "./config.js";
 import {
   gatewayFetch,
   OutboundHttpEgressError,
@@ -106,7 +106,7 @@ type ChatRequestMessageContent =
 // "/" otherwise yields '//chat/completions', which LiteLLM answers with a 404 (LiteLLM production
 // audit).
 function chatCompletionsUrl(config: ModelProviderConfig): string {
-  const trimmed = config.baseUrl.endsWith("/") ? config.baseUrl.slice(0, -1) : config.baseUrl;
+  const trimmed = trimTrailingSlash(config.baseUrl);
   if (config.endpointStyle === "azure-openai-deployment") {
     return `${trimmed}/openai/deployments/${encodeURIComponent(
       config.modelId,

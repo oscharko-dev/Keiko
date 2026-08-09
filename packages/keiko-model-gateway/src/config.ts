@@ -652,6 +652,17 @@ function isLoopbackHost(hostname: string): boolean {
   return isIP(hostname) === 4 && hostname.startsWith("127.");
 }
 
+/**
+ * Removes ONE trailing slash before a path is joined onto a base URL. A file- or env-authored
+ * base URL ending in "/" otherwise yields "//chat/completions", which LiteLLM answers with a
+ * 404 (LiteLLM production audit). Deliberately not a normalizer: it strips a single trailing
+ * slash and returns everything else untouched, which is exactly what each adapter's inline
+ * expression did before this became their single owner (review finding on #3042).
+ */
+export function trimTrailingSlash(value: string): string {
+  return value.endsWith("/") ? value.slice(0, -1) : value;
+}
+
 // eslint-disable-next-line complexity -- URL policy validation intentionally enumerates each reject reason for operator clarity.
 export function validateBaseUrl(
   baseUrl: string,

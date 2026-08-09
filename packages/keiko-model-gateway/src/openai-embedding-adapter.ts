@@ -2,7 +2,7 @@
 // dependency), mirroring openai-adapter.ts. Surfaces only structural status
 // information; the raw provider body never escapes this module.
 
-import { apiKeyHeaderValue } from "./config.js";
+import { apiKeyHeaderValue, trimTrailingSlash } from "./config.js";
 import {
   gatewayFetch,
   OutboundHttpEgressError,
@@ -160,7 +160,7 @@ function joinUrl(request: {
   readonly endpointStyle?: ProviderEndpointStyle | undefined;
   readonly apiVersion?: string | undefined;
 }): string {
-  const trimmed = request.endpoint.endsWith("/") ? request.endpoint.slice(0, -1) : request.endpoint;
+  const trimmed = trimTrailingSlash(request.endpoint);
   if (request.endpointStyle === "azure-openai-deployment") {
     return `${trimmed}/openai/deployments/${encodeURIComponent(
       request.modelId,
