@@ -218,6 +218,16 @@ const portableGate = portableReleaseGate({
  * Workflow-run artifacts cannot be rewritten after the run, which is exactly why the digests are
  * taken from there rather than from the manifest sitting next to the assets being verified.
  */
+function artifactFiles(root, depth = 1) {
+  const found = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const path = join(root, entry.name);
+    if (entry.isFile()) found.push([entry.name, path]);
+    else if (entry.isDirectory() && depth > 0) found.push(...artifactFiles(path, depth - 1));
+  }
+  return found;
+}
+
 function collectEvaluationArtifactDigests(runId, artifactNames) {
   const root = mkdtempSync(join(tmpdir(), "keiko-run-artifacts-"));
   const digests = new Map();
@@ -235,9 +245,10 @@ function collectEvaluationArtifactDigests(runId, artifactNames) {
         target,
       ]);
       if (result.status !== 0) return new Map();
-      for (const file of readdirSync(target, { withFileTypes: true })) {
-        if (file.isFile()) digests.set(file.name, sha256FileSync(join(target, file.name)));
-      }
+      // `gh run download` places the files directly in the target or one directory deeper,
+      // depending on how the artifact was uploaded — the producer resolves them the same way, and
+      // reading only the top level would refuse a perfectly good release.
+      for (const [name, path] of artifactFiles(target)) digests.set(name, sha256FileSync(path));
     }
     return digests;
   } finally {

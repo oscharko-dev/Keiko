@@ -518,7 +518,7 @@ function stubPrologue(logFile, stateFile) {
   return [
     'import { Buffer } from "node:buffer";',
     'import { createHash } from "node:crypto";',
-    'import { appendFileSync, readFileSync, writeFileSync } from "node:fs";',
+    'import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";',
     `const LOG = ${JSON.stringify(logFile)};`,
     `const STATE = ${JSON.stringify(stateFile)};`,
     `const VERSION = ${JSON.stringify(RELEASE_VERSION)};`,
@@ -565,10 +565,14 @@ function ghStubBody() {
     "    if (artifact.includes('arm64')) return asset.name === 'keiko-macos-arm64.zip';",
     "    return asset.name === 'keiko-macos-x64.zip';",
     "  });",
+    // gh run download may nest the files one directory deep; the publisher must find them either
+    // way, so the stub reproduces the nested layout.
+    "  const target = current.nestRunArtifacts ? dir + '/nested' : dir;",
+    "  if (current.nestRunArtifacts) mkdirSync(target, { recursive: true });",
     "  for (const asset of wanted) {",
     "    let bytes = Buffer.from(asset.content || '', 'base64');",
     "    if (current.tamperRunArtifacts) bytes = Buffer.concat([bytes, Buffer.from('x')]);",
-    "    writeFileSync(dir + '/' + asset.name, bytes);",
+    "    writeFileSync(target + '/' + asset.name, bytes);",
     "  }",
     "  process.exit(0);",
     "}",
@@ -1180,6 +1184,21 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain("downloaded portable asset bytes do not match");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("finds the run's artifacts when gh nests them one directory deep", () => {
+      // `gh run download` places files directly in the target or one level deeper depending on how
+      // the artifact was uploaded. Reading only the top level would refuse a perfectly good
+      // release — the producer resolves them the same way.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { ...prepublishedEvaluationState(), nestRunArtifacts: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.stderr).toBe("");
+      expect(lastRun.status).toBe(0);
+      expect(lastRun.stdout).toContain("match their evidence");
     });
 
     it("refuses prepublished downloads that are not the bytes their workflow run produced", () => {
