@@ -305,11 +305,16 @@ interface ProviderRawOptions {
   readonly maxRetries?: number | undefined;
   readonly retryBaseDelayMs?: number | undefined;
   readonly apiKeyHeaderName?: string | undefined;
+  /** Generic endpoint protocol, persisted VERBATIM — see setupEndpointProtocol (#3042). */
+  readonly endpointStyle?: string | undefined;
+  readonly apiVersion?: string | undefined;
   readonly imageInputModelIds?: readonly string[] | undefined;
   readonly responseFormatModelIds?: readonly string[] | undefined;
   readonly embeddingModelIds?: readonly string[] | undefined;
   readonly modelMetadata?: Readonly<Record<string, GatewayDiscoveredModelMetadata>> | undefined;
   readonly current?: GatewayConfig | undefined;
+  /** The durable stored view — the protocol of record for capability identity (see #3046). */
+  readonly stored?: GatewayConfig | undefined;
   readonly workflowEligibleModelIds?: readonly string[] | undefined;
 }
 
@@ -317,13 +322,76 @@ interface ProviderRawOptions {
 // observation (recordVerifiedCapability → replaceModelCapability) survives a routine re-save,
 // which submits no preserveExisting flag. The mode gate belongs on the ENDPOINT-MOVE carry-over
 // below, where this URL match misses and nothing verified the stored value at the new endpoint.
+// The protocol the adapter actually speaks: an absent endpoint style IS the OpenAI-compatible
+// shape, so the two spellings must compare equal wherever a protocol CHANGE is the question.
+function effectiveEndpointStyle(style: string | undefined): string {
+  return style ?? "openai-compatible";
+}
+
+function storedProviderForModel(
+  stored: GatewayConfig | undefined,
+  modelId: string,
+): ModelProviderConfig | undefined {
+  return stored?.providers.find((candidate) => candidate.modelId === modelId);
+}
+
+// What the adapter will send AFTER the save: the statement if there is one, else what the file
+// declares, else what the environment already resolves the provider to. Falling through to the
+// resolved provider is what keeps a plain rotation — which states nothing — comparing equal.
+function effectiveSubmittedProtocol(
+  protocol: {
+    readonly submitted: {
+      readonly endpointStyle?: string | undefined;
+      readonly apiVersion?: string | undefined;
+    };
+    readonly durable: ModelProviderConfig | undefined;
+  },
+  provider: ModelProviderConfig,
+): { readonly endpointStyle: string | undefined; readonly apiVersion: string | undefined } {
+  return {
+    endpointStyle:
+      protocol.submitted.endpointStyle ?? protocol.durable?.endpointStyle ?? provider.endpointStyle,
+    apiVersion:
+      protocol.submitted.apiVersion ?? protocol.durable?.apiVersion ?? provider.apiVersion,
+  };
+}
+
 function existingCapabilityForSetup(
   current: GatewayConfig | undefined,
   modelId: string,
   baseUrl: string,
+  protocol: {
+    readonly submitted: {
+      readonly endpointStyle?: string | undefined;
+      readonly apiVersion?: string | undefined;
+    };
+    readonly durable: ModelProviderConfig | undefined;
+  },
 ): ModelCapability | undefined {
   const provider = current?.providers.find((candidate) => candidate.modelId === modelId);
   if (provider === undefined || !sameBaseUrlIdentity(provider.baseUrl, baseUrl)) return undefined;
+  // Both sides are the EFFECTIVE protocol — what the adapter will actually send. The durable
+  // view alone was not enough: with the file silent and KEIKO_DEFAULT_* resolving `current` to
+  // Azure, an explicit switch to openai-compatible compared undefined against openai-compatible
+  // and read as unchanged, keeping observations made over the deployment path (review finding on
+  // #3046). Completing the submitted side with the same defaults keeps a plain rotation — which
+  // states nothing — comparing equal.
+  const submitted = effectiveSubmittedProtocol(protocol, provider);
+  // The protocol is part of the endpoint's identity: the deployment path and the api version
+  // change the request route, so streaming, tool calling and image observations made over the
+  // old one prove nothing about the new one. The setup probe performs buffered chat only and
+  // reverifies none of them, so a reused capability would advertise unverified behavior (review
+  // finding on #3046). Unchanged protocol, unchanged identity — a rotation still keeps them.
+  // An absent style and an explicit "openai-compatible" are the SAME protocol — the adapter sends
+  // the identical request shape — so a same-URL import that merely spells the default out must
+  // not discard verified observations (review finding on #3046).
+  if (
+    effectiveEndpointStyle(provider.endpointStyle) !==
+      effectiveEndpointStyle(submitted.endpointStyle) ||
+    provider.apiVersion !== submitted.apiVersion
+  ) {
+    return undefined;
+  }
   return current?.capabilities?.find((candidate) => candidate.id === modelId);
 }
 
@@ -432,7 +500,14 @@ function createDefaultSetupCapability(
     embeddingModelIds?.includes(modelId) === true
       ? createDefaultEmbeddingCapability(modelId)
       : createDefaultChatCapability(modelId);
-  const existing = existingCapabilityForSetup(options.current, modelId, baseUrl);
+  const existing = existingCapabilityForSetup(options.current, modelId, baseUrl, {
+    submitted: options,
+    // The protocol of record is the DURABLE one, which is what the rebuild persists. Comparing
+    // against the env-RESOLVED view made a plain rotation look like a protocol change whenever
+    // KEIKO_DEFAULT_* supplied a tuple the file never declared, discarding verified observations
+    // for nothing (review finding on #3046).
+    durable: storedProviderForModel(options.stored, modelId),
+  });
   const discovered = options.modelMetadata?.[modelId];
   const capability: ModelCapability = {
     ...baseCapability,
@@ -460,6 +535,17 @@ function createDefaultSetupCapability(
   );
 }
 
+// The generic endpoint protocol persists VERBATIM — absent fields stay absent so the runtime
+// default layering is unchanged (#3042).
+function genericEndpointProtocolRaw(
+  options: ProviderRawOptions,
+): Pick<Record<string, unknown>, string> {
+  return {
+    ...(options.endpointStyle === undefined ? {} : { endpointStyle: options.endpointStyle }),
+    ...(options.apiVersion === undefined ? {} : { apiVersion: options.apiVersion }),
+  };
+}
+
 function providerRaw(
   modelId: string,
   baseUrl: string,
@@ -478,6 +564,7 @@ function providerRaw(
     baseUrl,
     apiKey,
     apiKeyHeaderName: options.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+    ...genericEndpointProtocolRaw(options),
     capability: {
       ...defaultCapability,
       // The provided list is authoritative, not additive: a model absent from it loses a stored
@@ -821,7 +908,12 @@ function currentDedicatedEmbeddingModelIds(config: GatewayConfig | undefined): r
       const sharesConnection =
         sameBaseUrlIdentity(provider.baseUrl, primary.baseUrl) &&
         provider.apiKey === primary.apiKey &&
-        (provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME) === primaryHeader;
+        (provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME) === primaryHeader &&
+        // A provider that deliberately spoke a DIFFERENT protocol over the same connection is
+        // dedicated for this purpose: rebuilding it with the setup-wide protocol would put an
+        // unprobed request shape on it (review finding on #3046, the embedding twin of the
+        // restored-provider rule).
+        spokeStoredGatewayProtocol(provider, primary);
       return !sharesConnection;
     })
     .map((provider) => provider.modelId);
@@ -1375,12 +1467,20 @@ function validateSetupConnection(
   apiKey: string,
   apiKeyHeaderName: string,
   env: EnvSource,
+  protocol: {
+    readonly endpointStyle?: string | undefined;
+    readonly apiVersion?: string | undefined;
+  } = {},
 ): RouteResult | undefined {
   const linkLocalError = validateLinkLocalGatewayBaseUrl(baseUrl, env);
   if (linkLocalError !== undefined) return linkLocalError;
   try {
     parseGatewayConfig(
-      buildRawConfig(baseUrl, apiKey, ["setup-validation"], { apiKeyHeaderName }),
+      buildRawConfig(baseUrl, apiKey, ["setup-validation"], {
+        apiKeyHeaderName,
+        ...(protocol.endpointStyle === undefined ? {} : { endpointStyle: protocol.endpointStyle }),
+        ...(protocol.apiVersion === undefined ? {} : { apiVersion: protocol.apiVersion }),
+      }),
       env,
       linkLocalGatewayOverrideOptions(env),
     );
@@ -1613,6 +1713,9 @@ interface SetupRequest {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
+  /** Generic endpoint protocol — see {@link SetupGatewayCredentials} (#3042). */
+  readonly endpointStyle: string | undefined;
+  readonly apiVersion: string | undefined;
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
@@ -1669,6 +1772,17 @@ interface SetupGatewayCredentials {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
+  /**
+   * The generic endpoint PROTOCOL of the setup-wide connection (#3042): submitted values win
+   * (an uploaded LiteLLM config declares openai-compatible explicitly and a server-side
+   * KEIKO_DEFAULT_ENDPOINT_STYLE must not override the file's statement after save); absent
+   * values inherit from the stored primary only while the connection stays on the same
+   * endpoint, so a persisted style survives a credential rotation but never travels to a moved
+   * endpoint it was not declared for. The style/apiVersion pairing is enforced by the canonical
+   * parser on the validation and candidate configs downstream.
+   */
+  readonly endpointStyle: string | undefined;
+  readonly apiVersion: string | undefined;
 }
 
 interface SetupVoiceProvider {
@@ -1833,11 +1947,14 @@ const VOICE_CONNECTION_MUTATION_FIELDS = [
 ] as const;
 
 // The endpoint-protocol wire values come from the contract seam — one compiler-checked source
-// shared with the model gateway's parser and the UI upload parser (#3037 follow-up).
-const VOICE_ENDPOINT_STYLES = PROVIDER_ENDPOINT_STYLES;
+// shared with the model gateway's parser and the UI upload parser (#3037 follow-up). One list
+// for BOTH sections on purpose: an endpoint protocol is a property of the connection, not of
+// voice. The former voice-prefixed name made a reviewer read the generic check added in #3046
+// as a voice-only whitelist, so the shared names carry no section here.
+const ENDPOINT_STYLE_VALUES = PROVIDER_ENDPOINT_STYLES;
 const VOICE_REALTIME_AUTH_MODES = REALTIME_AUTH_MODES;
 
-function parseVoiceEndpointEnum<T extends string>(
+function parseEndpointEnum<T extends string>(
   value: unknown,
   field: string,
   allowed: readonly T[],
@@ -1866,13 +1983,13 @@ function parseVoiceEndpointEnum<T extends string>(
 function submittedVoiceEndpointOptions(
   raw: Record<string, unknown>,
 ): SetupParseResult<VoiceProviderEndpointOptions | undefined> {
-  const endpointStyle = parseVoiceEndpointEnum(
+  const endpointStyle = parseEndpointEnum(
     raw.voiceEndpointStyle,
     "voiceEndpointStyle",
-    VOICE_ENDPOINT_STYLES,
+    ENDPOINT_STYLE_VALUES,
   );
   if (!endpointStyle.ok) return endpointStyle;
-  const realtimeAuthMode = parseVoiceEndpointEnum(
+  const realtimeAuthMode = parseEndpointEnum(
     raw.voiceRealtimeAuthMode,
     "voiceRealtimeAuthMode",
     VOICE_REALTIME_AUTH_MODES,
@@ -1954,10 +2071,6 @@ function shouldPreserveExisting(
   current: GatewayConfig | undefined,
 ): boolean {
   return raw.preserveExisting === true && current !== undefined;
-}
-
-function firstProvider(current: GatewayConfig | undefined): ModelProviderConfig | undefined {
-  return current?.providers[0];
 }
 
 function currentSpeechInputProvider(
@@ -2069,9 +2182,16 @@ function readSetupGatewayCredentials(
   raw: Record<string, unknown>,
   env: EnvSource,
   current: GatewayConfig | undefined,
+  stored: GatewayConfig | undefined,
   preserveExisting: boolean,
 ): SetupGatewayCredentials | RouteResult {
-  const provider = firstProvider(current);
+  // The MAIN gateway connection, not position zero: array order is not a contract, and a valid
+  // stored file may list a dedicated voice provider first. Reading the connection — URL, token,
+  // header and endpoint protocol — off that provider inherited the voice endpoint's values for
+  // the generic gateway; for the protocol it dropped a stored Azure declaration on an otherwise
+  // unchanged rotation (review finding on #3046). Same selection the sharing classification
+  // already uses (#3037).
+  const provider = storedPrimaryGatewayProvider(current);
   if (
     inheritedTokenForChangedEndpoint(
       raw,
@@ -2093,11 +2213,137 @@ function readSetupGatewayCredentials(
     return apiKeyHeaderResult.routeError;
   }
   const apiKeyHeaderName = apiKeyHeaderResult.value;
-  const invalidConnection = validateSetupConnection(baseUrl, apiKey, apiKeyHeaderName, env);
+  const protocol = durableSetupEndpointProtocol(
+    raw,
+    { stored, current },
+    baseUrl,
+    preserveExisting,
+  );
+  if ("status" in protocol) {
+    return protocol;
+  }
+  // The probe carries the protocol the setup will actually persist. Validating a protocol-free
+  // provider let the environment fill the gap: on a server that sets only
+  // KEIKO_DEFAULT_ENDPOINT_STYLE, every probe became an Azure provider with no api version and
+  // the canonical pairing rejected EVERY setup request, whatever the operator submitted
+  // (found while pinning the env-completed tuple, review findings on #3046).
+  const invalidConnection = validateSetupConnection(
+    baseUrl,
+    apiKey,
+    apiKeyHeaderName,
+    env,
+    protocol,
+  );
   if (invalidConnection !== undefined) {
     return invalidConnection;
   }
-  return { baseUrl, apiKey, apiKeyHeaderName };
+  return { baseUrl, apiKey, apiKeyHeaderName, ...protocol };
+}
+
+// Inheritance reads the DURABLE file, not the env-resolved view: a protocol that only exists
+// because KEIKO_DEFAULT_* or a KEIKO_MODEL_* override is set was never declared in the file, and
+// a rotation that inherited it would seal the transient value in — removing the override
+// afterwards would no longer restore the file's own behavior (review finding on #3046, the same
+// disk-vs-runtime rule the sharing classification draws). The connection fields stay on the
+// runtime view: they are what the smoke test actually verifies.
+function durableSetupEndpointProtocol(
+  raw: Record<string, unknown>,
+  views: {
+    readonly stored: GatewayConfig | undefined;
+    readonly current: GatewayConfig | undefined;
+  },
+  baseUrl: string,
+  preserveExisting: boolean,
+): Pick<SetupGatewayCredentials, "endpointStyle" | "apiVersion"> | RouteResult {
+  const durable = views.stored ?? views.current;
+  return setupEndpointProtocol(
+    raw,
+    storedPrimaryGatewayProvider(durable),
+    baseUrl,
+    preserveExisting,
+  );
+}
+
+// See SetupGatewayCredentials: submitted protocol wins, absent inherits from the stored primary
+// only on the SAME endpoint (a persisted style survives rotations, never travels to a moved
+// endpoint), and everything else stays undefined so the runtime default layering is unchanged.
+function setupEndpointProtocol(
+  raw: Record<string, unknown>,
+  provider: ModelProviderConfig | undefined,
+  baseUrl: string,
+  preserveExisting: boolean,
+): Pick<SetupGatewayCredentials, "endpointStyle" | "apiVersion"> | RouteResult {
+  const endpointStyle = parseEndpointEnum(
+    raw.endpointStyle,
+    "endpointStyle",
+    ENDPOINT_STYLE_VALUES,
+  );
+  if (!endpointStyle.ok) return endpointStyle.routeError;
+  const apiVersion = optionalSetupSecret(raw.apiVersion, "apiVersion");
+  if (!apiVersion.ok) return apiVersion.routeError;
+  // The submitted protocol is ATOMIC: stating a style replaces the whole protocol, so an
+  // inherited api version can never pair with it — switching an Azure provider to
+  // openai-compatible on the same URL would otherwise build a mixed protocol the canonical
+  // parser refuses, failing the save instead of performing it (review finding on #3046).
+  if (endpointStyle.value !== undefined) {
+    return pairedEndpointProtocol(endpointStyle.value, apiVersion.value);
+  }
+  const inheritable =
+    preserveExisting && provider !== undefined && sameBaseUrlIdentity(baseUrl, provider.baseUrl);
+  return pairedEndpointProtocol(
+    inheritable ? provider.endpointStyle : undefined,
+    apiVersion.value ?? (inheritable ? provider.apiVersion : undefined),
+  );
+}
+
+// The canonical pairing, checked on the EFFECTIVE protocol rather than on the submitted fields:
+// an api version belongs to the Azure deployment path alone. Without this the config parser threw
+// during verification and the operator got an opaque 502 "credentials could not be verified" for
+// what is a request problem — a submitted version with no style at all, or a submitted version
+// over an inherited openai-compatible style (review finding on #3046). Bumping the version of an
+// endpoint whose stored style IS the deployment path stays legal: that is the same pair.
+// The canonical api-version shape, mirroring the model gateway's own parser (ADR-0019 keeps the
+// two packages apart, so the rule is mirrored and pinned on both sides rather than imported).
+const SETUP_API_VERSION_RE = /^\d{4}-\d{2}-\d{2}(?:-preview)?$/u;
+
+function pairedEndpointProtocol(
+  endpointStyle: string | undefined,
+  apiVersion: string | undefined,
+): Pick<SetupGatewayCredentials, "endpointStyle" | "apiVersion"> | RouteResult {
+  if (apiVersion !== undefined && endpointStyle !== "azure-openai-deployment") {
+    return {
+      status: 400,
+      body: errorBody(
+        "GATEWAY_API_VERSION_REQUIRES_AZURE_ENDPOINT",
+        'apiVersion requires endpointStyle to be "azure-openai-deployment".',
+      ),
+    };
+  }
+  // The canonical SHAPE, checked here for the same reason as the pairing: a malformed version
+  // threw inside the candidate loop and surfaced as an opaque 502 for what is a malformed
+  // request (review finding on #3046).
+  if (apiVersion !== undefined && !SETUP_API_VERSION_RE.test(apiVersion)) {
+    return {
+      status: 400,
+      body: errorBody(
+        "GATEWAY_API_VERSION_INVALID",
+        "apiVersion must be YYYY-MM-DD or YYYY-MM-DD-preview.",
+      ),
+    };
+  }
+  // The other direction of the same canonical rule: the deployment path cannot be requested
+  // without the version that builds its URL. Left unnamed it threw inside the candidate loop and
+  // surfaced as the same misleading 502 (review finding on #3046).
+  if (endpointStyle === "azure-openai-deployment" && apiVersion === undefined) {
+    return {
+      status: 400,
+      body: errorBody(
+        "GATEWAY_AZURE_ENDPOINT_REQUIRES_API_VERSION",
+        'endpointStyle "azure-openai-deployment" requires an apiVersion.',
+      ),
+    };
+  }
+  return { endpointStyle, apiVersion };
 }
 
 function validateVoiceProviderConnection(
@@ -3351,6 +3597,10 @@ function setupRequiresGatewayVerification(
     hasNonBlankStringField(raw, "baseUrl") ||
     hasNonBlankStringField(raw, "apiKey") ||
     hasNonBlankStringField(raw, "apiKeyHeaderName") ||
+    // The endpoint PROTOCOL only reaches the providers through the rebuild; without this the
+    // settings-only path accepted a protocol change and dropped it (review finding on #3046).
+    hasNonBlankStringField(raw, "endpointStyle") ||
+    hasNonBlankStringField(raw, "apiVersion") ||
     hasNonEmptyListField(raw, "deploymentNames") ||
     imageListRequiresVerification(raw, modelLists, current)
   );
@@ -3454,7 +3704,7 @@ function readSetupRequest(
     return setupObjectBodyRequiredResult(correlationId);
   }
   const preserveExisting = shouldPreserveExisting(raw, current);
-  const credentials = readSetupGatewayCredentials(raw, env, current, preserveExisting);
+  const credentials = readSetupGatewayCredentials(raw, env, current, stored, preserveExisting);
   if (isRouteResult(credentials)) {
     return credentials;
   }
@@ -3531,6 +3781,9 @@ interface SetupVerificationInput {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
+  /** Generic endpoint protocol — see {@link SetupGatewayCredentials} (#3042). */
+  readonly endpointStyle: string | undefined;
+  readonly apiVersion: string | undefined;
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
@@ -3612,6 +3865,8 @@ function testedImageInputModelIds(
 function validationConfigForSetup(input: SetupVerificationInput): GatewayConfig {
   const validationRawConfig = buildRawConfig(input.baseUrl, input.apiKey, ["setup-validation"], {
     apiKeyHeaderName: input.apiKeyHeaderName,
+    endpointStyle: input.endpointStyle,
+    apiVersion: input.apiVersion,
     imageInputModelIds: input.imageInputModelIds,
     timeoutMs: input.timeoutMs,
   });
@@ -3725,11 +3980,14 @@ function finalRawConfigForSetup(
   const rawConfig = buildRawConfig(input.baseUrl, input.apiKey, configuredModelIds, {
     preserveExisting: input.preserveExisting,
     apiKeyHeaderName: input.apiKeyHeaderName,
+    endpointStyle: input.endpointStyle,
+    apiVersion: input.apiVersion,
     imageInputModelIds,
     responseFormatModelIds,
     embeddingModelIds,
     modelMetadata,
     current: input.current,
+    stored: input.stored,
     workflowEligibleModelIds: input.workflowEligibleModelIds,
     timeoutMs: input.timeoutMs,
   });
@@ -3761,8 +4019,22 @@ function finalRawConfigForSetup(
       baseUrl: input.baseUrl,
       apiKey: input.apiKey,
       apiKeyHeaderName: input.apiKeyHeaderName,
+      endpointStyle: input.endpointStyle,
+      apiVersion: input.apiVersion,
     },
   );
+}
+
+// The gateway connection a restored provider may follow: endpoint, credential, header AND the
+// protocol spoken over it.
+interface SetupGatewayConnection {
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly apiKeyHeaderName: string;
+  // The raw submitted value: this record is fed to the config parser, which is what validates
+  // the protocol — the same path genericEndpointProtocolRaw already takes.
+  readonly endpointStyle?: string | undefined;
+  readonly apiVersion?: string | undefined;
 }
 
 // A provider that SHARED the stored gateway connection (same endpoint AND same credential)
@@ -3785,10 +4057,43 @@ function sharesStoredGatewayConnection(
   );
 }
 
+// Only a provider that SPOKE the gateway's protocol follows it to a new one. One that
+// deliberately used a different valid protocol over the same connection keeps its own: the new
+// request shape was never verified for it (review finding on #3046).
+function spokeStoredGatewayProtocol(
+  provider: ModelProviderConfig,
+  storedPrimary: ModelProviderConfig | undefined,
+): boolean {
+  return (
+    storedPrimary !== undefined &&
+    provider.endpointStyle === storedPrimary.endpointStyle &&
+    provider.apiVersion === storedPrimary.apiVersion
+  );
+}
+
+// The endpoint PROTOCOL is part of the connection, not a private property of the provider: a
+// restored provider that follows the gateway's URL, token and header must speak the same way, or
+// one shared connection ends up carrying two protocols and the restored provider keeps requesting
+// the obsolete route (review finding on #3046).
+function restoredProviderProtocolRaw(
+  provider: ModelProviderConfig,
+  gateway: SetupGatewayConnection,
+  storedPrimary: ModelProviderConfig | undefined,
+  sharedGatewayConnection: boolean,
+): Record<string, unknown> {
+  const follows = sharedGatewayConnection && spokeStoredGatewayProtocol(provider, storedPrimary);
+  const endpointStyle = follows ? gateway.endpointStyle : provider.endpointStyle;
+  const apiVersion = follows ? gateway.apiVersion : provider.apiVersion;
+  return {
+    ...(endpointStyle === undefined ? {} : { endpointStyle }),
+    ...(apiVersion === undefined ? {} : { apiVersion }),
+  };
+}
+
 function storedDedicatedProviderRaw(
   provider: ModelProviderConfig,
   capability: ModelCapability,
-  gateway: { readonly baseUrl: string; readonly apiKey: string; readonly apiKeyHeaderName: string },
+  gateway: SetupGatewayConnection,
   storedPrimary: ModelProviderConfig | undefined,
 ): Record<string, unknown> {
   // Sharing is judged against the STORED primary connection — a provider that rode the old
@@ -3805,8 +4110,7 @@ function storedDedicatedProviderRaw(
     baseUrl: sharedGatewayConnection ? gateway.baseUrl : provider.baseUrl,
     apiKey: sharedGatewayConnection ? gateway.apiKey : provider.apiKey,
     ...(apiKeyHeaderName === undefined ? {} : { apiKeyHeaderName }),
-    ...(provider.endpointStyle === undefined ? {} : { endpointStyle: provider.endpointStyle }),
-    ...(provider.apiVersion === undefined ? {} : { apiVersion: provider.apiVersion }),
+    ...restoredProviderProtocolRaw(provider, gateway, storedPrimary, sharedGatewayConnection),
     ...(provider.outputTokenParameter === undefined
       ? {}
       : { outputTokenParameter: provider.outputTokenParameter }),
@@ -3827,7 +4131,7 @@ function applyStoredDedicatedProviders(
   rawConfig: Record<string, unknown>,
   current: GatewayConfig | undefined,
   restoredModelIds: readonly string[],
-  gateway: { readonly baseUrl: string; readonly apiKey: string; readonly apiKeyHeaderName: string },
+  gateway: SetupGatewayConnection,
 ): Record<string, unknown> {
   if (restoredModelIds.length === 0 || current === undefined) return rawConfig;
   const providers: unknown[] = Array.isArray(rawConfig.providers) ? rawConfig.providers : [];
@@ -3885,6 +4189,25 @@ function finalRawConfigForTestedSetup(
   );
 }
 
+// One retry (not zero) so a single transient blip — 429 rate-limit, brief timeout, momentary
+// content-filter — does not permanently exclude an otherwise-working model from the setup and
+// brand it to the user as incompatible. Still bounded so setup latency stays predictable. The
+// probe carries the submitted endpoint protocol so an Azure deployment path (or an explicit
+// openai-compatible declaration under an env default) is exercised exactly as it will persist.
+function candidateProbeOptions(
+  input: SetupVerificationInput,
+  smokeTimeoutMs: number,
+): ProviderRawOptions {
+  return {
+    apiKeyHeaderName: input.apiKeyHeaderName,
+    endpointStyle: input.endpointStyle,
+    apiVersion: input.apiVersion,
+    timeoutMs: smokeTimeoutMs,
+    maxRetries: 1,
+    imageInputModelIds: input.imageInputModelIds,
+  };
+}
+
 async function verifySetupCandidate(input: SetupVerificationInput): Promise<VerifiedSetup> {
   // Defence-in-depth: never send the credential to a candidate URL that has not passed the same
   // scheme/credential/loopback validation as the originally submitted base URL.
@@ -3899,15 +4222,7 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
     input.baseUrl,
     input.apiKey,
     candidateModels.chatModelIds,
-    {
-      apiKeyHeaderName: input.apiKeyHeaderName,
-      timeoutMs: smokeTimeoutMs,
-      // One retry (not zero) so a single transient blip — 429 rate-limit, brief timeout, momentary
-      // content-filter — does not permanently exclude an otherwise-working model from the setup and
-      // brand it to the user as incompatible. Still bounded so setup latency stays predictable.
-      maxRetries: 1,
-      imageInputModelIds: input.imageInputModelIds,
-    },
+    candidateProbeOptions(input, smokeTimeoutMs),
   );
   const candidateConfig = parseGatewayConfig(
     withInheritedEgress(candidateRawConfig, input.egress),
@@ -4169,6 +4484,8 @@ async function trySetupCandidate(
     baseUrl,
     apiKey: request.apiKey,
     apiKeyHeaderName: request.apiKeyHeaderName,
+    endpointStyle: request.endpointStyle,
+    apiVersion: request.apiVersion,
     timeoutMs: request.timeoutMs,
     deploymentNames: request.deploymentNames,
     imageInputModelIds: request.imageInputModelIds,
@@ -4254,16 +4571,103 @@ function durableStoredGatewayConfig(
 ): GatewayConfig | undefined {
   if (current === undefined || !existsSync(storagePath)) return current;
   try {
-    return loadConfigFromFile(storagePath, withoutPerModelEnvOverrides(deps.env), {
+    const parsed = loadConfigFromFile(storagePath, withoutPerModelEnvOverrides(deps.env), {
       ...linkLocalGatewayOverrideOptions(deps.env),
       secretResolver: createProviderSecretResolver({
         configPath: storagePath,
         env: deps.env,
       }),
     });
+    // Inside the success path on purpose: on a fall-back the returned config is the RUNTIME one,
+    // and rewriting it from a file the parser just rejected would apply records from an invalid
+    // configuration to a valid view (review finding on #3046).
+    return withFileDeclaredProtocol(parsed, storagePath);
   } catch (error) {
     if (error instanceof GatewayError) return current;
     throw error;
+  }
+}
+
+// What the FILE itself declares as each provider's protocol. `durableStoredGatewayConfig` parses
+// with the environment applied — deliberately, because a stored Azure provider whose api version
+// arrives only through KEIKO_MODEL_<ID>_API_VERSION needs it to parse at all (#3040) — so the
+// parsed protocol can be an env value the file never contained. Inheriting THAT on a rotation
+// would seal a transient default into the sealed config, and removing the variable afterwards
+// would no longer restore the file's own behavior (review finding on #3046). Correcting after
+// the parse keeps the #3040 fix intact: nothing is masked, only the values the file does not
+// declare are dropped from the durable view.
+function withFileDeclaredProtocol(
+  config: GatewayConfig | undefined,
+  storagePath: string,
+): GatewayConfig | undefined {
+  if (config === undefined || !existsSync(storagePath)) return config;
+  const declared = fileDeclaredProviderRecords(storagePath);
+  if (declared === undefined) return config;
+  return {
+    ...config,
+    providers: config.providers.map((provider) => {
+      const raw = declared.get(provider.modelId);
+      if (raw === undefined) return provider;
+      // The FILE's own value wins over the resolved one: a KEIKO_MODEL_<ID>_API_VERSION that
+      // overrides a DECLARED version would otherwise be sealed in by a rotation just as an
+      // undeclared one would (review finding on #3046). An unrecognised declared style is left
+      // as parsed — the parser is the authority on what a style may be.
+      return { ...provider, ...fileDeclaredProtocol(raw, provider) };
+    }),
+  };
+}
+
+// The protocol the FILE declares, kept COHERENT. Each half falls back to the resolved value when
+// the other half is declared and the canonical pairing needs it: a file that declares the Azure
+// deployment path and takes its required version from KEIKO_MODEL_<ID>_API_VERSION is only valid
+// with that version, and a file that declares the version while the style arrives through
+// KEIKO_DEFAULT_ENDPOINT_STYLE is only valid with that style. Dropping the env half of either
+// pair left the durable view incoherent, and inheritance then rejected a routine credential
+// rotation with 400 (review findings on #3046 — the same coherence argument that stopped #3040
+// from masking that namespace at parse time).
+function fileDeclaredProtocol(
+  raw: Record<string, unknown>,
+  provider: ModelProviderConfig,
+): Pick<ModelProviderConfig, "endpointStyle" | "apiVersion"> {
+  const style = declaredEndpointStyle(raw.endpointStyle, provider.endpointStyle);
+  const version = typeof raw.apiVersion === "string" ? raw.apiVersion : undefined;
+  if (style === "azure-openai-deployment" && version === undefined) {
+    return { endpointStyle: style, apiVersion: provider.apiVersion };
+  }
+  if (version !== undefined && style === undefined) {
+    return { endpointStyle: provider.endpointStyle, apiVersion: version };
+  }
+  return { endpointStyle: style, apiVersion: version };
+}
+
+// An unrecognised declared style is left as parsed — the parser is the authority on what a style
+// may be.
+function declaredEndpointStyle(
+  raw: unknown,
+  resolved: ModelProviderConfig["endpointStyle"],
+): ModelProviderConfig["endpointStyle"] {
+  if (typeof raw !== "string") return undefined;
+  const declared = PROVIDER_ENDPOINT_STYLES.find((style) => style === raw);
+  return declared ?? resolved;
+}
+
+function fileDeclaredProviderRecords(
+  storagePath: string,
+): ReadonlyMap<string, Record<string, unknown>> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(storagePath, "utf8"));
+    if (!isRecord(parsed) || !Array.isArray(parsed.providers)) return undefined;
+    return new Map(
+      parsed.providers.flatMap((entry) =>
+        isRecord(entry) && typeof entry.modelId === "string"
+          ? ([[entry.modelId, entry]] as const)
+          : [],
+      ),
+    );
+  } catch {
+    // An unreadable or malformed file leaves the durable view exactly as parsed — the same
+    // fall-back durableStoredGatewayConfig makes for that state.
+    return undefined;
   }
 }
 
@@ -4395,11 +4799,17 @@ async function verifyAndSaveExistingConfigUpdate(
 function shouldRequireDeploymentNames(
   request: SetupRequest,
   baseUrlCandidates: readonly string[],
+  env: EnvSource,
 ): boolean {
-  return (
-    request.deploymentNames.length === 0 &&
-    baseUrlCandidates.some((baseUrl) => isAzureFoundryBaseUrl(baseUrl))
-  );
+  if (request.deploymentNames.length !== 0) return false;
+  // The deployment path IS the requirement: a classic Azure OpenAI host on that path cannot be
+  // discovered through generic /models, so without this it failed at discovery instead of naming
+  // the missing deployments (review finding on #3046). The EFFECTIVE style decides — a request
+  // that omits the field still lands on the deployment path when KEIKO_DEFAULT_ENDPOINT_STYLE
+  // says so, and discovery would fail exactly the same way.
+  const effectiveStyle = request.endpointStyle ?? env.KEIKO_DEFAULT_ENDPOINT_STYLE;
+  if (effectiveStyle === "azure-openai-deployment") return true;
+  return baseUrlCandidates.some((baseUrl) => isAzureFoundryBaseUrl(baseUrl));
 }
 
 async function verifyAndSaveGatewaySetup(
@@ -4415,7 +4825,7 @@ async function verifyAndSaveGatewaySetup(
     return figmaFailure;
   }
   const baseUrlCandidates = candidateBaseUrls(request.baseUrl);
-  if (shouldRequireDeploymentNames(request, baseUrlCandidates)) {
+  if (shouldRequireDeploymentNames(request, baseUrlCandidates, deps.env)) {
     return deploymentNamesRequiredResult();
   }
   const errors: string[] = [];

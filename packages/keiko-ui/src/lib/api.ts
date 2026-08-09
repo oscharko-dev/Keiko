@@ -615,6 +615,9 @@ export interface GatewaySetupInput {
   readonly voiceBaseUrl?: string | undefined;
   readonly voiceApiKey?: string | undefined;
   readonly voiceApiKeyHeaderName?: string | undefined;
+  /** Generic endpoint protocol, persisted verbatim on rebuilt providers (#3042). */
+  readonly endpointStyle?: string | undefined;
+  readonly apiVersion?: string | undefined;
   readonly voiceModelId?: string | undefined;
   readonly voiceSpeechToTextModelId?: string | undefined;
   readonly voiceRealtimeModelId?: string | undefined;
