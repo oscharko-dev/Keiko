@@ -1758,6 +1758,9 @@ describe("handleGatewaySetup", () => {
       deps,
     );
 
+    // The outcome, not just the absence of one message: without the status assertion this pin
+    // would pass on any other refusal (review findings on #3048).
+    expect(movedOutput.status).toBe(200);
     expect(JSON.stringify(movedOutput.body ?? {})).not.toContain("realtime auth mode");
     deps.store.close();
   });

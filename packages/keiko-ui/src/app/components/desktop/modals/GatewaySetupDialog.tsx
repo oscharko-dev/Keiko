@@ -664,57 +664,18 @@ interface GatewayFormFields {
   readonly storedRealtimeModelId: string | undefined;
 }
 
-// A FRESH dialog has no server-side migration guard — that rule only runs in preserve mode — so
-// the dialog carries the same requirement itself: an uploaded protocol was declared for the
-// uploaded host, and moving the endpoint away from it without restating leaves an Azure
-// deployment-path endpoint saved as the OpenAI-compatible shape (review finding on #3048).
-function movedImportRequiresProtocol(fields: GatewayFormFields): boolean {
-  // The condition is "no server-side migration guard will run", not "fresh dialog": that guard
-  // needs a STORED voice provider, so a preserve-mode setup that has none — the first audio
-  // configuration on an existing gateway — is just as unguarded (review finding on #3048).
-  if (fields.preserveExisting && fields.hasStoredVoiceProvider) return false;
-  const submitted = fields.voiceBaseUrl.trim();
-  if (submitted === "") return false;
-  if (
-    canonicalEndpointIdentity(submitted) ===
-    canonicalEndpointIdentity(fields.importedVoiceEndpointBaseUrl)
-  ) {
-    return false;
-  }
-  // Each declared piece is restated on its own: a file can declare the realtime auth mode with
-  // no endpoint style, and restating the style says nothing about the mode. Treating the style
-  // as sufficient let an ephemeral-session provider move to a host nobody stated it for (review
-  // finding on #3048).
-  return [
-    [fields.importedVoiceEndpointStyle, fields.voiceEndpointStyle],
-    [fields.importedVoiceRealtimeAuthMode, fields.voiceRealtimeAuthMode],
-  ].some(([imported, stated]) => imported !== "" && stated === "");
-}
-
-// The canonical pairing, checked before the request leaves the dialog: the deployment path needs
-// the version that builds its URL, and the server answers the pair with a 400 the operator then
-// has to decode. The exception is a RETAINED endpoint — a blank audio URL in preserve mode keeps
-// the stored one, and restating its own Azure style there inherits the stored version
-// server-side, so demanding it back would refuse a supported correction (review findings on
-// #3048).
-function statedAzureEndpointLacksApiVersion(fields: GatewayFormFields): boolean {
-  if (fields.voiceEndpointStyle !== "azure-openai-deployment") return false;
-  if (fields.voiceApiVersion.trim() !== "") return false;
-  const retainsStoredEndpoint =
-    fields.preserveExisting && fields.hasStoredVoiceProvider && fields.voiceBaseUrl.trim() === "";
-  return !retainsStoredEndpoint;
-}
-
+// The endpoint PROTOCOL policy is the server's, not the dialog's. Four review rounds on #3048
+// each corrected a client-side rule that had guessed wrong, because the dialog cannot see the
+// stored provider's protocol: whether a restatement is required, and whether an api version can
+// be inherited, both depend on it. The server can see it, decides on the whole request, and
+// answers with named errors (GATEWAY_AZURE_ENDPOINT_REQUIRES_API_VERSION,
+// GATEWAY_API_VERSION_REQUIRES_AZURE_ENDPOINT, and the migration restatement rules). What stays
+// here is the dialog's own job: which fields are visible, what an upload hydrates, and what an
+// endpoint change clears or restores.
 function endpointMigrationValidationError(
   fields: GatewayFormFields,
   t: GatewaySetupTranslate,
 ): string | undefined {
-  if (movedImportRequiresProtocol(fields)) {
-    return t("gatewaySetup.voice.endpointProtocolRestatementRequired");
-  }
-  if (statedAzureEndpointLacksApiVersion(fields)) {
-    return t("gatewaySetup.voice.azureEndpointRequiresApiVersion");
-  }
   if (!fields.preserveExisting || !fields.hasStoredVoiceProvider) return undefined;
   if (fields.voiceBaseUrl.trim() === "") return undefined;
   if (
@@ -1737,62 +1698,41 @@ interface VoiceEndpointStyleFieldProps {
   readonly onChange: (next: string) => void;
 }
 
-interface VoiceRealtimeAuthModeFieldProps {
+interface VoiceProtocolSelectFieldProps {
   readonly labelId: string;
+  readonly labelKey: MessageKey | OptionalWidgetMessageKey;
+  readonly sections: (
+    t: GatewaySetupTranslate,
+  ) => readonly [
+    { readonly options: readonly { readonly value: string; readonly label: string }[] },
+  ];
   readonly value: string;
   readonly disabled: boolean;
   readonly onChange: (next: string) => void;
 }
 
-// The server refuses an audio endpoint move that leaves a declared realtime auth mode unstated,
-// so the operator needs a way to state it: without this control the mode could only ever come
-// from a config upload, and a manual move of an ephemeral-session provider was impossible
-// (review finding on #3048).
-function VoiceRealtimeAuthModeField({
+// The endpoint style and the realtime auth mode are the same control with a different option
+// list: one optional protocol select, labelled by its own catalog key. The server refuses an
+// audio endpoint move that leaves either unstated, so the operator needs a way to state both
+// (review findings on #3048).
+function VoiceProtocolSelectField({
   labelId,
+  labelKey,
+  sections,
   value,
   disabled,
   onChange,
-}: VoiceRealtimeAuthModeFieldProps): ReactNode {
+}: VoiceProtocolSelectFieldProps): ReactNode {
   const t = useGatewaySetupTranslate();
   return (
     <div className="gw-field">
       <span id={labelId}>
-        {t("gatewaySetup.voice.realtimeAuthMode.label")}{" "}
-        <span className="dlg-opt">{t("gatewaySetup.voice.protocol.optional")}</span>
+        {t(labelKey)} <span className="dlg-opt">{t("gatewaySetup.voice.protocol.optional")}</span>
       </span>
       <KeikoSelect
         ariaLabelledBy={labelId}
-        menuTitle={t("gatewaySetup.voice.realtimeAuthMode.label")}
-        sections={voiceRealtimeAuthModeSections(t)}
-        showMenuHeader={false}
-        triggerClassName="gw-input gw-provider-locality-select"
-        menuClassName="gw-provider-locality-menu"
-        value={value}
-        disabled={disabled}
-        onValueChange={onChange}
-      />
-    </div>
-  );
-}
-
-function VoiceEndpointStyleField({
-  labelId,
-  value,
-  disabled,
-  onChange,
-}: VoiceEndpointStyleFieldProps): ReactNode {
-  const t = useGatewaySetupTranslate();
-  return (
-    <div className="gw-field">
-      <span id={labelId}>
-        {t("gatewaySetup.voice.endpointStyle.label")}{" "}
-        <span className="dlg-opt">{t("gatewaySetup.voice.protocol.optional")}</span>
-      </span>
-      <KeikoSelect
-        ariaLabelledBy={labelId}
-        menuTitle={t("gatewaySetup.voice.endpointStyle.label")}
-        sections={voiceEndpointStyleSections(t)}
+        menuTitle={t(labelKey)}
+        sections={sections(t)}
         showMenuHeader={false}
         triggerClassName="gw-input gw-provider-locality-select"
         menuClassName="gw-provider-locality-menu"
@@ -2100,8 +2040,10 @@ function VoiceDeploymentFields(props: VoiceDeploymentFieldsProps): ReactNode {
         disabled={props.disabled}
         onChange={props.setVoiceProviderLocality}
       />
-      <VoiceEndpointStyleField
+      <VoiceProtocolSelectField
         labelId={props.voiceEndpointStyleLabelId}
+        labelKey="gatewaySetup.voice.endpointStyle.label"
+        sections={voiceEndpointStyleSections}
         value={props.voiceEndpointStyle}
         disabled={props.disabled}
         onChange={props.setVoiceEndpointStyle}
@@ -2111,8 +2053,10 @@ function VoiceDeploymentFields(props: VoiceDeploymentFieldsProps): ReactNode {
         disabled={props.disabled}
         onChange={props.setVoiceApiVersion}
       />
-      <VoiceRealtimeAuthModeField
+      <VoiceProtocolSelectField
         labelId={props.voiceRealtimeAuthModeLabelId}
+        labelKey="gatewaySetup.voice.realtimeAuthMode.label"
+        sections={voiceRealtimeAuthModeSections}
         value={props.voiceRealtimeAuthMode}
         disabled={props.disabled}
         onChange={props.setVoiceRealtimeAuthMode}
@@ -2750,10 +2694,15 @@ export function GatewaySetupDialog({
     canonicalEndpointIdentity(nextBaseUrl) ===
       canonicalEndpointIdentity(importedVoiceEndpointBaseUrl);
 
+  // Only fields the reset EMPTIED come back. An operator who corrected the imported protocol by
+  // hand and then made an equivalent URL edit would otherwise have their correction overwritten
+  // by the file's value (review finding on #3048).
   const restoreUploadedVoiceProtocol = (): void => {
-    setVoiceEndpointStyle(importedVoiceEndpointStyle);
-    setVoiceApiVersion(importedVoiceApiVersion);
-    setVoiceRealtimeAuthMode(importedVoiceRealtimeAuthMode);
+    setVoiceEndpointStyle((current) => (current === "" ? importedVoiceEndpointStyle : current));
+    setVoiceApiVersion((current) => (current === "" ? importedVoiceApiVersion : current));
+    setVoiceRealtimeAuthMode((current) =>
+      current === "" ? importedVoiceRealtimeAuthMode : current,
+    );
     setVoiceProtocolBoundBaseUrl(importedVoiceEndpointBaseUrl);
   };
 

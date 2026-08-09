@@ -1984,7 +1984,7 @@ describe("GatewaySetupDialog", () => {
     await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
     await userEvent.click(screen.getByRole("option", { name: "OpenAI-compatible" }));
 
-    expect(screen.getByLabelText(/audio api version/i)).toHaveValue("");
+    await waitFor(() => expect(screen.getByLabelText(/audio api version/i)).toHaveValue(""));
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
 
     await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
@@ -2192,86 +2192,6 @@ describe("GatewaySetupDialog", () => {
     });
   });
 
-  it("refuses an Azure audio endpoint stated without its api version", async () => {
-    // Review finding on #3048: a stated deployment path with a blank version is the pair the
-    // gateway parser refuses, and the dialog let it leave — the operator got a 400 to decode.
-    // The endpoint is STATED here: restating the style against a retained stored endpoint (a
-    // blank audio URL) legitimately inherits the stored version and is exempt.
-    render(
-      <GatewaySetupDialog
-        preserveExisting
-        storedModels={[modelCapability("internal-chat"), semanticRealtimeCapability("stored-rt")]}
-      />,
-    );
-    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
-    await userEvent.type(
-      screen.getByLabelText(/audio endpoint url/i),
-      "https://new-voice.example.com",
-    );
-    await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
-    await userEvent.click(screen.getByRole("option", { name: "Azure deployment path" }));
-    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
-
-    expect(setupGateway).not.toHaveBeenCalled();
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      /azure deployment path requires an audio api version/i,
-    );
-  });
-
-  it("refuses a moved import whose realtime auth mode is the only unstated piece", async () => {
-    // Review finding on #3048: the fresh-mode requirement keyed off the endpoint style alone, so
-    // a file declaring only realtimeAuthMode — or one whose style was restated while the mode was
-    // not — moved hosts with the mode silently dropped.
-    render(<GatewaySetupDialog />);
-    await userEvent.upload(
-      await screen.findByLabelText(/load keiko\.config\.json/i),
-      new File(
-        [
-          JSON.stringify({
-            providers: [
-              {
-                modelId: "gpt-5o",
-                baseUrl: "https://llm-gateway.example.com/v1",
-                capability: { id: "gpt-5o", kind: "chat" },
-              },
-              {
-                modelId: "realtime-voice",
-                baseUrl: "https://voice.example.com",
-                realtimeAuthMode: "ephemeral-session",
-                capability: {
-                  id: "realtime-voice",
-                  kind: "voice",
-                  voiceProviderLocality: "azure-foundry",
-                  supportsRealtimeVoice: true,
-                  realtimeTranscriptionModel: "realtime-transcription",
-                },
-              },
-            ],
-          }),
-        ],
-        "keiko.config.json",
-        { type: "application/json" },
-      ),
-    );
-    await waitFor(() =>
-      expect(screen.getByLabelText(/audio endpoint url/i)).toHaveValue("https://voice.example.com"),
-    );
-
-    await userEvent.clear(screen.getByLabelText(/audio endpoint url/i));
-    await userEvent.type(
-      screen.getByLabelText(/audio endpoint url/i),
-      "https://new-voice.example.com",
-    );
-    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
-    await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
-    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
-
-    expect(setupGateway).not.toHaveBeenCalled();
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      /replacing a stored audio endpoint/i,
-    );
-  });
-
   it("drops a hand-edited imported protocol when the audio endpoint then moves", async () => {
     // Review finding on #3048: stating the protocol by hand released the uploaded URL binding
     // outright, and in a FRESH dialog the endpoint identity ref is still undefined after an
@@ -2353,13 +2273,14 @@ describe("GatewaySetupDialog", () => {
     await userEvent.type(screen.getByLabelText(/output voice/i), "ash");
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
 
-    // The protocol cannot travel — and since #3048 the operator is told so instead of the save
-    // quietly succeeding without it. A fresh dialog has no server-side migration guard, so the
-    // dialog refuses the move itself.
-    expect(setupGateway).not.toHaveBeenCalled();
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      /replacing a stored audio endpoint/i,
-    );
+    // The protocol cannot travel to the new host. With no STORED voice provider there is no
+    // stored protocol to lose — the file declared one for a host the operator moved away from —
+    // so the payload simply omits it, and the visible fields are there to state a new one.
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(setupGateway).mock.calls[0]?.[0] ?? {};
+    expect(payload).toMatchObject({ voiceBaseUrl: "https://new-voice.example.com" });
+    expect(payload).not.toHaveProperty("voiceEndpointStyle");
+    expect(payload).not.toHaveProperty("voiceApiVersion");
   });
 
   it("submits the imported endpoint protocol while the form still points at the uploaded endpoint", async () => {
@@ -2624,12 +2545,10 @@ describe("GatewaySetupDialog", () => {
     await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
 
-    // The imported protocol still cannot reach the retyped endpoint; since #3048 the move is
-    // refused outright rather than saved without it, so the operator restates or goes back.
-    expect(setupGateway).not.toHaveBeenCalled();
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      /replacing a stored audio endpoint/i,
-    );
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(setupGateway).mock.calls[0]?.[0];
+    expect(payload).not.toHaveProperty("voiceEndpointStyle");
+    expect(payload).not.toHaveProperty("voiceApiVersion");
   });
 
   it("fills the voice section from an uploaded configuration and states a skipped realtime", async () => {
