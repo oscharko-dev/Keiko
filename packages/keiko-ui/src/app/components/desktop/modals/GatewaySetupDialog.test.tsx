@@ -1841,6 +1841,48 @@ describe("GatewaySetupDialog", () => {
     });
   });
 
+  it("drops an orphaned api version when a fresh setup states no protocol", async () => {
+    // Review finding on #3048: "Not stated" was left alone so the stored template could still
+    // supply the Azure style — but a FRESH setup has no template. The submit then carried an api
+    // version with no style, the one pair the gateway parser refuses, and the operator had to
+    // find and clear the field by hand.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://llm-gateway.example.com/v1");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.type(screen.getByLabelText(/audio endpoint url/i), "https://voice.example.com");
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
+    await userEvent.type(
+      screen.getByLabelText(/read aloud.*speech-output deployment/i),
+      "azure-tts",
+    );
+    await userEvent.type(screen.getByLabelText(/output voice/i), "ash");
+    await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
+    await userEvent.click(screen.getByRole("option", { name: "Azure deployment path" }));
+    await userEvent.type(screen.getByLabelText(/audio api version/i), "2025-04-01-preview");
+    await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
+    await userEvent.click(screen.getByRole("option", { name: "Not stated" }));
+
+    expect(screen.getByLabelText(/audio api version/i)).toHaveValue("");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(setupGateway).mock.calls[0]?.[0] ?? {};
+    expect(payload).not.toHaveProperty("voiceApiVersion");
+    expect(payload).not.toHaveProperty("voiceEndpointStyle");
+  });
+
   it("drops the api version when the operator leaves the Azure deployment path", async () => {
     // Review finding on #3048: an api version paired with openai-compatible is exactly what the
     // gateway parser refuses, so leaving it behind turned a protocol correction into a 400 the

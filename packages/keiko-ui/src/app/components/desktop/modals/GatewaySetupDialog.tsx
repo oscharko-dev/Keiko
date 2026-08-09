@@ -1648,11 +1648,12 @@ function VoiceEndpointStyleField({
   return (
     <div className="gw-field">
       <span id={labelId}>
-        Audio endpoint style <span className="dlg-opt">optional</span>
+        {t("gatewaySetup.voice.endpointStyle.label")}{" "}
+        <span className="dlg-opt">{t("gatewaySetup.voice.protocol.optional")}</span>
       </span>
       <KeikoSelect
         ariaLabelledBy={labelId}
-        menuTitle="Audio endpoint style"
+        menuTitle={t("gatewaySetup.voice.endpointStyle.label")}
         sections={voiceEndpointStyleSections(t)}
         showMenuHeader={false}
         triggerClassName="gw-input gw-provider-locality-select"
@@ -1676,7 +1677,7 @@ function VoiceApiVersionField({ value, disabled, onChange }: VoiceApiVersionFiel
   return (
     <label className="gw-field">
       <span>
-        Audio API version{" "}
+        {t("gatewaySetup.voice.apiVersion.label")}{" "}
         <span className="dlg-opt">{t("gatewaySetup.voice.apiVersion.azureOnly")}</span>
       </span>
       <input
@@ -2350,13 +2351,17 @@ export function GatewaySetupDialog({
   const bindStatedVoiceProtocol = (): void => {
     setVoiceProtocolBoundBaseUrl(voiceBaseUrl.trim());
   };
+  // An api version belongs to the Azure deployment path alone — the gateway parser refuses the
+  // pair — so a style that cannot end up being that path drops the version with it, instead of
+  // returning a 400 the operator has to decode and clear by hand (review findings on #3048).
+  // "Not stated" is the case that depends on the mode: in preserve mode the effective style can
+  // still come from the stored template, so the version stays; a fresh setup has no template to
+  // supply it and the pair would be rejected outright.
+  const statedStyleKeepsApiVersion = (next: string): boolean =>
+    next === "azure-openai-deployment" || (next === "" && preserveExisting);
   const stateVoiceEndpointStyle = (next: string): void => {
     setVoiceEndpointStyle(next);
-    if (next === "openai-compatible") setVoiceApiVersion("");
-    // An api version belongs to the Azure deployment path alone — the gateway parser rejects the
-    // pair — so switching to openai-compatible drops the version with it instead of returning a
-    // 400 the operator has to decode (review finding on #3048). "Not stated" leaves it: the
-    // effective style may still come from the stored template, which the server validates.
+    if (!statedStyleKeepsApiVersion(next)) setVoiceApiVersion("");
     bindStatedVoiceProtocol();
   };
   const stateVoiceApiVersion: Dispatch<SetStateAction<string>> = (value): void => {

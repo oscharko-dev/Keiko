@@ -830,6 +830,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Ein Live-Transkriptions-Deployment erfordert ein ausdrückliches Realtime-Deployment.",
   "gatewaySetup.voice.deploymentRequired":
     "Gib mindestens ein ausdrückliches Voice-Deployment an: Speech-to-Text, Realtime mit Live-Transkription oder Speech Output.",
+  "gatewaySetup.voice.endpointStyle.label": "Audio-Endpunkt-Stil",
+  "gatewaySetup.voice.apiVersion.label": "Audio-API-Version",
+  "gatewaySetup.voice.protocol.optional": "optional",
   "gatewaySetup.voice.endpointStyle.unstated": "Nicht angegeben",
   "gatewaySetup.voice.endpointStyle.openaiCompatible": "OpenAI-kompatibel",
   "gatewaySetup.voice.endpointStyle.azureDeploymentPath": "Azure-Deployment-Pfad",
