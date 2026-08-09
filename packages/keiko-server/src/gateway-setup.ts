@@ -324,9 +324,24 @@ function existingCapabilityForSetup(
   current: GatewayConfig | undefined,
   modelId: string,
   baseUrl: string,
+  protocol: {
+    readonly endpointStyle?: string | undefined;
+    readonly apiVersion?: string | undefined;
+  },
 ): ModelCapability | undefined {
   const provider = current?.providers.find((candidate) => candidate.modelId === modelId);
   if (provider === undefined || !sameBaseUrlIdentity(provider.baseUrl, baseUrl)) return undefined;
+  // The protocol is part of the endpoint's identity: the deployment path and the api version
+  // change the request route, so streaming, tool calling and image observations made over the
+  // old one prove nothing about the new one. The setup probe performs buffered chat only and
+  // reverifies none of them, so a reused capability would advertise unverified behavior (review
+  // finding on #3046). Unchanged protocol, unchanged identity — a rotation still keeps them.
+  if (
+    provider.endpointStyle !== protocol.endpointStyle ||
+    provider.apiVersion !== protocol.apiVersion
+  ) {
+    return undefined;
+  }
   return current?.capabilities?.find((candidate) => candidate.id === modelId);
 }
 
@@ -435,7 +450,7 @@ function createDefaultSetupCapability(
     embeddingModelIds?.includes(modelId) === true
       ? createDefaultEmbeddingCapability(modelId)
       : createDefaultChatCapability(modelId);
-  const existing = existingCapabilityForSetup(options.current, modelId, baseUrl);
+  const existing = existingCapabilityForSetup(options.current, modelId, baseUrl, options);
   const discovered = options.modelMetadata?.[modelId];
   const capability: ModelCapability = {
     ...baseCapability,
@@ -2097,6 +2112,7 @@ function readSetupGatewayCredentials(
   raw: Record<string, unknown>,
   env: EnvSource,
   current: GatewayConfig | undefined,
+  stored: GatewayConfig | undefined,
   preserveExisting: boolean,
 ): SetupGatewayCredentials | RouteResult {
   // The MAIN gateway connection, not position zero: array order is not a contract, and a valid
@@ -2131,11 +2147,40 @@ function readSetupGatewayCredentials(
   if (invalidConnection !== undefined) {
     return invalidConnection;
   }
-  const protocol = setupEndpointProtocol(raw, provider, baseUrl, preserveExisting);
+  const protocol = durableSetupEndpointProtocol(
+    raw,
+    { stored, current },
+    baseUrl,
+    preserveExisting,
+  );
   if ("status" in protocol) {
     return protocol;
   }
   return { baseUrl, apiKey, apiKeyHeaderName, ...protocol };
+}
+
+// Inheritance reads the DURABLE file, not the env-resolved view: a protocol that only exists
+// because KEIKO_DEFAULT_* or a KEIKO_MODEL_* override is set was never declared in the file, and
+// a rotation that inherited it would seal the transient value in — removing the override
+// afterwards would no longer restore the file's own behavior (review finding on #3046, the same
+// disk-vs-runtime rule the sharing classification draws). The connection fields stay on the
+// runtime view: they are what the smoke test actually verifies.
+function durableSetupEndpointProtocol(
+  raw: Record<string, unknown>,
+  views: {
+    readonly stored: GatewayConfig | undefined;
+    readonly current: GatewayConfig | undefined;
+  },
+  baseUrl: string,
+  preserveExisting: boolean,
+): Pick<SetupGatewayCredentials, "endpointStyle" | "apiVersion"> | RouteResult {
+  const durable = views.stored ?? views.current;
+  return setupEndpointProtocol(
+    raw,
+    storedPrimaryGatewayProvider(durable),
+    baseUrl,
+    preserveExisting,
+  );
 }
 
 // See SetupGatewayCredentials: submitted protocol wins, absent inherits from the stored primary
@@ -3528,7 +3573,7 @@ function readSetupRequest(
     return setupObjectBodyRequiredResult(correlationId);
   }
   const preserveExisting = shouldPreserveExisting(raw, current);
-  const credentials = readSetupGatewayCredentials(raw, env, current, preserveExisting);
+  const credentials = readSetupGatewayCredentials(raw, env, current, stored, preserveExisting);
   if (isRouteResult(credentials)) {
     return credentials;
   }
@@ -3842,8 +3887,22 @@ function finalRawConfigForSetup(
       baseUrl: input.baseUrl,
       apiKey: input.apiKey,
       apiKeyHeaderName: input.apiKeyHeaderName,
+      endpointStyle: input.endpointStyle,
+      apiVersion: input.apiVersion,
     },
   );
+}
+
+// The gateway connection a restored provider may follow: endpoint, credential, header AND the
+// protocol spoken over it.
+interface SetupGatewayConnection {
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly apiKeyHeaderName: string;
+  // The raw submitted value: this record is fed to the config parser, which is what validates
+  // the protocol — the same path genericEndpointProtocolRaw already takes.
+  readonly endpointStyle?: string | undefined;
+  readonly apiVersion?: string | undefined;
 }
 
 // A provider that SHARED the stored gateway connection (same endpoint AND same credential)
@@ -3869,7 +3928,7 @@ function sharesStoredGatewayConnection(
 function storedDedicatedProviderRaw(
   provider: ModelProviderConfig,
   capability: ModelCapability,
-  gateway: { readonly baseUrl: string; readonly apiKey: string; readonly apiKeyHeaderName: string },
+  gateway: SetupGatewayConnection,
   storedPrimary: ModelProviderConfig | undefined,
 ): Record<string, unknown> {
   // Sharing is judged against the STORED primary connection — a provider that rode the old
@@ -3881,13 +3940,19 @@ function storedDedicatedProviderRaw(
   const apiKeyHeaderName = sharedGatewayConnection
     ? gateway.apiKeyHeaderName
     : provider.apiKeyHeaderName;
+  // The endpoint PROTOCOL is part of the connection, not a private property of the provider: a
+  // restored provider that follows the gateway's URL, token and header must speak the same way,
+  // or one shared connection ends up carrying two protocols and the restored provider keeps
+  // requesting the obsolete route (review finding on #3046).
+  const endpointStyle = sharedGatewayConnection ? gateway.endpointStyle : provider.endpointStyle;
+  const apiVersion = sharedGatewayConnection ? gateway.apiVersion : provider.apiVersion;
   return {
     modelId: provider.modelId,
     baseUrl: sharedGatewayConnection ? gateway.baseUrl : provider.baseUrl,
     apiKey: sharedGatewayConnection ? gateway.apiKey : provider.apiKey,
     ...(apiKeyHeaderName === undefined ? {} : { apiKeyHeaderName }),
-    ...(provider.endpointStyle === undefined ? {} : { endpointStyle: provider.endpointStyle }),
-    ...(provider.apiVersion === undefined ? {} : { apiVersion: provider.apiVersion }),
+    ...(endpointStyle === undefined ? {} : { endpointStyle }),
+    ...(apiVersion === undefined ? {} : { apiVersion }),
     ...(provider.outputTokenParameter === undefined
       ? {}
       : { outputTokenParameter: provider.outputTokenParameter }),
@@ -3908,7 +3973,7 @@ function applyStoredDedicatedProviders(
   rawConfig: Record<string, unknown>,
   current: GatewayConfig | undefined,
   restoredModelIds: readonly string[],
-  gateway: { readonly baseUrl: string; readonly apiKey: string; readonly apiKeyHeaderName: string },
+  gateway: SetupGatewayConnection,
 ): Record<string, unknown> {
   if (restoredModelIds.length === 0 || current === undefined) return rawConfig;
   const providers: unknown[] = Array.isArray(rawConfig.providers) ? rawConfig.providers : [];
@@ -4361,6 +4426,57 @@ function durableStoredGatewayConfig(
   }
 }
 
+// What the FILE itself declares as each provider's protocol. `durableStoredGatewayConfig` parses
+// with the environment applied — deliberately, because a stored Azure provider whose api version
+// arrives only through KEIKO_MODEL_<ID>_API_VERSION needs it to parse at all (#3040) — so the
+// parsed protocol can be an env value the file never contained. Inheriting THAT on a rotation
+// would seal a transient default into the sealed config, and removing the variable afterwards
+// would no longer restore the file's own behavior (review finding on #3046). Correcting after
+// the parse keeps the #3040 fix intact: nothing is masked, only the values the file does not
+// declare are dropped from the durable view.
+function withFileDeclaredProtocol(
+  config: GatewayConfig | undefined,
+  storagePath: string,
+): GatewayConfig | undefined {
+  if (config === undefined || !existsSync(storagePath)) return config;
+  const declared = fileDeclaredProviderRecords(storagePath);
+  if (declared === undefined) return config;
+  return {
+    ...config,
+    providers: config.providers.map((provider) => {
+      const raw = declared.get(provider.modelId);
+      if (raw === undefined) return provider;
+      return {
+        ...provider,
+        ...(typeof raw.endpointStyle === "string"
+          ? {}
+          : { endpointStyle: undefined as ModelProviderConfig["endpointStyle"] }),
+        ...(typeof raw.apiVersion === "string" ? {} : { apiVersion: undefined }),
+      };
+    }),
+  };
+}
+
+function fileDeclaredProviderRecords(
+  storagePath: string,
+): ReadonlyMap<string, Record<string, unknown>> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(storagePath, "utf8"));
+    if (!isRecord(parsed) || !Array.isArray(parsed.providers)) return undefined;
+    return new Map(
+      parsed.providers.flatMap((entry) =>
+        isRecord(entry) && typeof entry.modelId === "string"
+          ? ([[entry.modelId, entry]] as const)
+          : [],
+      ),
+    );
+  } catch {
+    // An unreadable or malformed file leaves the durable view exactly as parsed — the same
+    // fall-back durableStoredGatewayConfig makes for that state.
+    return undefined;
+  }
+}
+
 function validateWorkflowEligibleModelIds(
   request: SetupRequest,
   config: GatewayConfig,
@@ -4548,7 +4664,10 @@ export async function handleGatewaySetup(
   }
   const { gatewayConfig } = deps;
   const current = currentGatewayConfig(deps);
-  const stored = durableStoredGatewayConfig(current, gatewayConfig.storagePath, deps);
+  const stored = withFileDeclaredProtocol(
+    durableStoredGatewayConfig(current, gatewayConfig.storagePath, deps),
+    gatewayConfig.storagePath,
+  );
   const bodyResult = await readJsonSetupBody(ctx);
   if ("status" in bodyResult) {
     return bodyResult;
