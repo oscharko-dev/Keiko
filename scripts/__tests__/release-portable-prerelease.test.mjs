@@ -533,6 +533,25 @@ describe("hermetic end-to-end (scripted gh double)", () => {
       }
     });
 
+    it("refuses a public release on a non-darwin host instead of skipping the seal proof", () => {
+      // A beta reports the skip to a tester; a PUBLIC release asserts sealed bundles to a
+      // customer, so a seal that never ran must refuse — the beta.0 "damaged" regression must
+      // not reach the Latest release through a non-darwin publisher (Codex finding on #3054).
+      const recorded = [];
+      expect(() =>
+        withHostPlatform("linux", () =>
+          withProcessRunner(
+            ghDouble(recorded, {
+              answers: [["compare/dev...", JSON.stringify({ status: "behind" })]],
+            }),
+            () => runPortablePrerelease(["--run-id", "42", "--public-release"]),
+          ),
+        ),
+      ).toThrow(/must not assert seals it never proved/u);
+      expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+      expect(recorded.some((line) => line.includes("git/refs"))).toBe(false);
+    });
+
     it("keeps an allowlist the environment already provides", () => {
       const recorded = [];
       const saved = process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;

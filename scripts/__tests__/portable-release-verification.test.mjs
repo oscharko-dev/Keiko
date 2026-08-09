@@ -57,10 +57,13 @@ function evidence(assets, overrides = {}) {
   };
 }
 
+const RELEASE_ID = 987654321;
+
 function release(assets, { withEvidence = true } = {}) {
   return {
     // The release-by-tag endpoint always reports both flags; the gate requires them to be
     // exactly false, so the fixture states the published stable shape explicitly.
+    id: RELEASE_ID,
     draft: false,
     prerelease: false,
     assets: withEvidence
@@ -95,6 +98,7 @@ function verify(overrides = {}) {
     workflowPath: WORKFLOW_PATH,
     expectedNames: EXPECTED_NAMES,
     release: pick("release", release(assets)),
+    readLatestRelease: () => pick("latest", { id: RELEASE_ID }),
     readManifest: () => pick("manifest", evidence(assets)),
     readRun: () => pick("run", goodRun()),
   });
@@ -149,6 +153,7 @@ describe("prepublishedReleaseFailures", () => {
       workflowPath: WORKFLOW_PATH,
       expectedNames: EXPECTED_NAMES,
       release: release(downloads().slice(1)),
+      readLatestRelease: () => ({ id: RELEASE_ID }),
       readManifest: () => {
         throw new Error("evidence must not be read when a download is missing");
       },
@@ -221,6 +226,7 @@ describe("prepublishedReleaseFailures", () => {
       workflowPath: WORKFLOW_PATH,
       expectedNames: EXPECTED_NAMES,
       release: release(published),
+      readLatestRelease: () => ({ id: RELEASE_ID }),
       readManifest: () => evidence(assets),
       readRun: () => goodRun(),
     });
@@ -439,6 +445,9 @@ describe("portableReleaseGate", () => {
       },
       gh: (args) => {
         const path = args[1];
+        if (path.includes("/releases/latest")) {
+          return { status: 0, stdout: JSON.stringify(overrides.latest ?? { id: RELEASE_ID }) };
+        }
         if (path.includes("/releases/tags/")) {
           return {
             status: 0,
@@ -618,6 +627,7 @@ describe("commit binding and ambiguous evidence", () => {
       expectedNames: EXPECTED_NAMES,
       sourceCommitSha: "b".repeat(40),
       release: release(assets),
+      readLatestRelease: () => ({ id: RELEASE_ID }),
       readManifest: () => evidence(assets),
       readRun: () => goodRun(),
     });
@@ -635,6 +645,7 @@ describe("commit binding and ambiguous evidence", () => {
       expectedNames: EXPECTED_NAMES,
       sourceCommitSha: SOURCE_COMMIT,
       release: release(assets),
+      readLatestRelease: () => ({ id: RELEASE_ID }),
       readManifest: () => evidence(assets),
       readRun: () => goodRun(),
     });
@@ -687,6 +698,18 @@ describe("published stable shape", () => {
     });
 
     expect(result.failures.join(" ")).toContain("only the published stable release");
+    expect(result.expectedDownloads).toEqual([]);
+  });
+
+  it.each([
+    ["names a different release", { id: RELEASE_ID + 1 }],
+    ["cannot be read", undefined],
+  ])("refuses a release when the Latest badge %s", (_label, latest) => {
+    // draft:false/prerelease:false cannot say which release GitHub DIRECTS customers to — the
+    // npm latest dist-tag and GitHub's Latest release must name the same bytes.
+    const result = verify({ latest });
+
+    expect(result.failures.join(" ")).toContain("does not own the Latest badge");
     expect(result.expectedDownloads).toEqual([]);
   });
 

@@ -571,8 +571,17 @@ function writeEvaluationManifest(workDir, input) {
  * #3037). A failure in either archive refuses the publish. Only darwin can execute codesign; any
  * other host states the skip out loud instead of implying coverage.
  */
-function verifyMacosSeal(publishDir) {
+function verifyMacosSeal(publishDir, publicRelease = false) {
   if (hostPlatform !== "darwin") {
+    // A beta may ship with the check reported as skipped — a tester reads that line. A PUBLIC
+    // release asserts sealed bundles to a customer, so a seal that was never proven must refuse
+    // rather than warn: the beta.0 "damaged" regression must not be able to reach the Latest
+    // release through a non-darwin publisher (Codex finding on #3054).
+    if (publicRelease) {
+      fail(
+        "macOS seal verification cannot run on a non-darwin host, and a public release must not assert seals it never proved — publish from a Mac.",
+      );
+    }
     log(
       "WARNING: macOS seal verification did not run (non-darwin host) — verify both macOS assets on a Mac before announcing the release.",
     );
@@ -1151,7 +1160,7 @@ function runPublishSteps(input) {
     tag,
     repository,
     checksums: checksumLines(digests),
-    sealVerification: verifyMacosSeal(publishDir),
+    sealVerification: verifyMacosSeal(publishDir, options.publicRelease),
     commitSha: view.headSha,
     runId,
     previousTag,

@@ -81,6 +81,8 @@ export function releaseReaders({ gh, downloadJson }) {
   return {
     readRelease: (repository, tag) =>
       jsonFromCommand(gh(["api", `repos/${repository}/releases/tags/${tag}`])),
+    readLatestRelease: (repository) =>
+      jsonFromCommand(gh(["api", `repos/${repository}/releases/latest`])),
     readRun: (repository, runId) => {
       const view = jsonFromCommand(gh(["api", `repos/${repository}/actions/runs/${runId}`]));
       return isRecord(view) ? view : undefined;
@@ -193,39 +195,47 @@ export function portableAssetInputFailure({ suppliesManifest, skipGithubRelease,
 }
 
 /**
- * @param input.release       the GitHub release payload, or undefined when it does not exist
- * @param input.readManifest  (url) => parsed JSON, or undefined when it cannot be read
- * @param input.readRun       (repository, runId) => run view, or undefined when it cannot be read
+ * The refusals decided from the release SURFACE alone, before any evidence is read. Returns the
+ * operator message, or undefined when the surface is a published stable Latest release carrying
+ * every expected download.
+ *
+ * The draft/prerelease flags and the Latest badge are separate checks on purpose: a
+ * prerelease-flagged payload still resolves from the release-by-tag endpoint with every asset in
+ * place, and a stable-flagged release can still have lost the Latest badge to another release —
+ * the npm latest dist-tag and GitHub's Latest release must name the same bytes (Codex findings
+ * on #3054).
+ */
+function stableReleaseSurfaceFailure(input, release) {
+  const { tag, repository, expectedNames } = input;
+  if (!isRecord(release) || !Array.isArray(release.assets)) {
+    return `GitHub release ${tag} does not exist or reported no assets. A stable latest publish needs it to already carry its portable downloads — publish it first with \`node scripts/release-portable-prerelease.mjs --public-release\`.`;
+  }
+  if (release.draft !== false || release.prerelease !== false) {
+    return `GitHub release ${tag} is a draft or marked as a prerelease; only the published stable release may authorize the latest dist-tag.`;
+  }
+  const latest = input.readLatestRelease(repository);
+  if (!isRecord(latest) || latest.id !== release.id) {
+    return `GitHub release ${tag} does not own the Latest badge (the latest release could not be read or names a different release); a stable latest promotion requires GitHub to present ${tag} as its Latest release.`;
+  }
+  const missing = missingPortableDownloads(release.assets, expectedNames);
+  if (missing.length > 0) {
+    return `GitHub release ${tag} is missing portable downloads: ${missing.join(", ")}.`;
+  }
+  return undefined;
+}
+
+/**
+ * @param input.release            the GitHub release payload, or undefined when it does not exist
+ * @param input.readLatestRelease  (repository) => the latest-release payload, or undefined
+ * @param input.readManifest       (url) => parsed JSON, or undefined when it cannot be read
+ * @param input.readRun            (repository, runId) => run view, or undefined when it cannot be read
  * @returns {{failures: string[], expectedDownloads: object[]}}
  */
 export function prepublishedReleaseFailures(input) {
   const { tag, repository, workflowPath, expectedNames, release, readManifest, readRun } = input;
-  if (!isRecord(release) || !Array.isArray(release.assets)) {
-    return {
-      failures: [
-        `GitHub release ${tag} does not exist or reported no assets. A stable latest publish needs it to already carry its portable downloads — publish it first with \`node scripts/release-portable-prerelease.mjs --public-release\`.`,
-      ],
-      expectedDownloads: [],
-    };
-  }
-  // Only a published stable release may authorize `latest`. A draft or prerelease-flagged payload
-  // still resolves from the release-by-tag endpoint with every asset in place, so without this
-  // check a manually assembled prerelease could promote npm `latest` while GitHub's own surface
-  // never presents it as the stable Latest release (Codex finding on #3054).
-  if (release.draft !== false || release.prerelease !== false) {
-    return {
-      failures: [
-        `GitHub release ${tag} is a draft or marked as a prerelease; only the published stable release may authorize the latest dist-tag.`,
-      ],
-      expectedDownloads: [],
-    };
-  }
-  const missing = missingPortableDownloads(release.assets, expectedNames);
-  if (missing.length > 0) {
-    return {
-      failures: [`GitHub release ${tag} is missing portable downloads: ${missing.join(", ")}.`],
-      expectedDownloads: [],
-    };
+  const surfaceFailure = stableReleaseSurfaceFailure(input, release);
+  if (surfaceFailure !== undefined) {
+    return { failures: [surfaceFailure], expectedDownloads: [] };
   }
   const asset = evidenceAsset(release.assets);
   if (asset === undefined) {
@@ -306,6 +316,7 @@ export function portableReleaseGate(ports) {
         expectedNames,
         sourceCommitSha,
         release,
+        readLatestRelease: readers.readLatestRelease,
         readManifest: readers.readManifest,
         readRun: readers.readRun,
       });

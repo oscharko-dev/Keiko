@@ -546,6 +546,12 @@ function ghStubBody() {
     "    writeFileSync(1, JSON.stringify(state().workflowRun || {}));",
     "    process.exit(0);",
     "  }",
+    '  if (argv[1] && argv[1].includes("/releases/latest")) {',
+    // Which release GitHub presents as Latest. By default the same release the by-tag read
+    // answers with; a test can hand the badge to another release to prove the refusal.
+    "    writeFileSync(1, JSON.stringify({ id: state().latestBadgeElsewhere ? 111 : 987654321 }));",
+    "    process.exit(0);",
+    "  }",
     '  if (argv[1] && argv[1].includes("/releases/tags/")) {',
     // The release-by-tag endpoint always reports both flags; the prepublished gate requires the
     // published stable shape, so the double states it the way the real API does.
@@ -1176,6 +1182,20 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
 
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain(PORTABLE_EVALUATION_MANIFEST_ASSET_NAME);
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses a prepublished release when another release owns the Latest badge", () => {
+      // The npm latest dist-tag and GitHub's Latest release must name the same bytes; a stable
+      // release that lost the badge to another release must not promote (Codex finding on #3054).
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { ...prepublishedEvaluationState(), latestBadgeElsewhere: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("does not own the Latest badge");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
