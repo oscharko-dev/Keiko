@@ -1708,6 +1708,60 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("keeps the inherited version when the Azure style is merely restated", async () => {
+    // The mirror of the atomic rule (review finding on #3048): only a switch AWAY from the
+    // deployment path discards the inherited version. Restating the same style needs it, and
+    // dropping it rejected the restatement for the opposite reason.
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-restate-protocol-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-voice-restate-protocol-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "azure-stt",
+            baseUrl: "https://speech.cognitiveservices.example.com",
+            apiKey: "azure-audio-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+            capability: {
+              kind: "voice",
+              supportsSpeechInput: true,
+              voiceProviderLocality: "azure-foundry",
+            },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const restated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://speech.cognitiveservices.example.com",
+        voiceApiKey: "rotated-audio-token",
+        voiceSpeechToTextModelId: "azure-stt",
+        voiceEndpointStyle: "azure-openai-deployment",
+      }),
+      deps,
+    );
+
+    expect(restated.status).toBe(200);
+    const stt = requiredProvider(requiredGatewayConfig(deps), "azure-stt");
+    expect(stt.endpointStyle).toBe("azure-openai-deployment");
+    expect(stt.apiVersion).toBe("2025-03-01-preview");
+    deps.store.close();
+  });
+
   it("keeps the inherited endpoint protocol off a new role added at a moved base URL", async () => {
     // LiteLLM production audit: a preserve-mode update that moves voice to a NEW base URL while
     // adding a role the old config never had inherited the OLD provider's Azure

@@ -695,12 +695,20 @@ function stripTrailingSlashes(value: string): string {
 // those spellings as a move and dropped a still-visible protocol; a fresh setup has no stored
 // template to recover it from, so the save succeeded with the wrong URL shape (review finding
 // on #3048).
+const CHAT_COMPLETIONS_SUFFIX = "/chat/completions";
+
 function canonicalVoiceEndpointIdentity(raw: string): string {
   const trimmed = stripTrailingSlashes(raw.trim());
+  // The server's normalizeBaseUrl also strips a terminal /chat/completions before comparing, so
+  // trimming an imported URL down to the endpoint the server derives is not a move — reading it
+  // as one cleared the deployments and the protocol (review finding on #3048).
+  const normalized = trimmed.endsWith(CHAT_COMPLETIONS_SUFFIX)
+    ? stripTrailingSlashes(trimmed.slice(0, -CHAT_COMPLETIONS_SUFFIX.length))
+    : trimmed;
   try {
-    return stripTrailingSlashes(new URL(trimmed).href);
+    return stripTrailingSlashes(new URL(normalized).href);
   } catch {
-    return trimmed;
+    return normalized;
   }
 }
 

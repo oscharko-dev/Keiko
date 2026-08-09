@@ -1950,7 +1950,7 @@ describe("GatewaySetupDialog", () => {
               },
               {
                 modelId: "azure-tts",
-                baseUrl: "https://voice.example.com",
+                baseUrl: "https://voice.example.com/chat/completions",
                 endpointStyle: "azure-openai-deployment",
                 apiVersion: "2025-04-01-preview",
                 capability: {
@@ -1968,11 +1968,18 @@ describe("GatewaySetupDialog", () => {
       ),
     );
     await waitFor(() =>
-      expect(screen.getByLabelText(/audio endpoint url/i)).toHaveValue("https://voice.example.com"),
+      expect(screen.getByLabelText(/audio endpoint url/i)).toHaveValue(
+        "https://voice.example.com/chat/completions",
+      ),
     );
 
-    // Same endpoint, different spelling.
-    await userEvent.type(screen.getByLabelText(/audio endpoint url/i), "/");
+    // Same endpoint, different spelling: the operator selects the field and pastes the URL
+    // without the /chat/completions suffix the server's normalizeBaseUrl strips before comparing
+    // (review findings on #3048). Pasting is one replacement, which is what an equivalent edit
+    // looks like — typed character by character it passes through genuinely different endpoints
+    // on the way, and resetting there is correct.
+    await userEvent.tripleClick(screen.getByLabelText(/audio endpoint url/i));
+    await userEvent.paste("https://voice.example.com/");
     await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
     await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
     await userEvent.type(screen.getByLabelText(/output voice/i), "ash");

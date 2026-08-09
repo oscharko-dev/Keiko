@@ -2747,12 +2747,15 @@ function voiceConnectionEndpointOptions(
     template !== undefined && !sameBaseUrlIdentity(baseUrl, template.baseUrl)
       ? {}
       : voiceProviderTemplateEndpoint(template, defaults);
-  // The submitted STYLE replaces the whole protocol, exactly as it does on the generic side: a
-  // spread merge let a stored Azure api version survive a switch to openai-compatible, and the
-  // canonical parser refuses that pair — so a protocol correction the UI showed as accepted came
-  // back a 400 the operator had to decode (review finding on #3048).
+  // A submitted style that LEAVES the deployment path replaces the whole protocol: a spread merge
+  // let a stored Azure api version survive a switch to openai-compatible, and the canonical
+  // parser refuses that pair. Restating the SAME Azure style keeps the inherited version — it is
+  // still the version that pair needs, and discarding it rejected the restatement for the
+  // opposite reason (review findings on #3048).
   const base =
-    submitted?.endpointStyle === undefined ? inherited : withoutInheritedApiVersion(inherited);
+    submitted?.endpointStyle === undefined || submitted.endpointStyle === "azure-openai-deployment"
+      ? inherited
+      : withoutInheritedApiVersion(inherited);
   return { ...base, ...submitted };
 }
 
