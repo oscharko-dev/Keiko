@@ -839,6 +839,7 @@ function runPublish({
   portableAssets = true,
   portableFixtureOptions = {},
   qualificationEnv = {},
+  extraArgs = [],
 }) {
   const binDir = mkdtempSync(join(tmpdir(), "keiko-release-publish-stub-"));
   const portableDir = mkdtempSync(join(tmpdir(), "keiko-portable-assets-fixture-"));
@@ -888,11 +889,15 @@ function runPublish({
     );
   }
 
-  const result = spawnSync(process.execPath, ["scripts/release-publish.mjs", "--tag", "latest"], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    env,
-  });
+  const result = spawnSync(
+    process.execPath,
+    ["scripts/release-publish.mjs", "--tag", "latest", ...extraArgs],
+    {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env,
+    },
+  );
 
   const calls = readFileSync(logFile, "utf8")
     .split("\n")
@@ -952,7 +957,31 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       lastRun = undefined;
     });
 
-    it("fails stable latest publishing before npm publish when portable assets are missing", () => {
+    it("publishes a stable latest release that carries no portable assets", () => {
+      // 0.3.0 ships from the evaluation lane by release-owner decision, so a stable dist-tag can
+      // no longer demand Developer-ID-signed portable assets — that demand refused every stable
+      // release the project can produce. The invariant this pin used to carry moved rather than
+      // disappeared: when a manifest IS supplied, the qualified-run provenance below is still
+      // enforced, and the release notes advertise downloads only when they exist.
+      const viewBody = [
+        '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write("0.0.1\\n"); process.exit(0); }',
+      ].join("\n");
+
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody),
+        initState: { published: false, tagged: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.stderr).not.toContain("portable-assets-manifest");
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+    });
+
+    it("refuses to skip the GitHub Release when portable assets are supplied", () => {
+      // Announcing downloads that are never uploaded is the failure this replaces: supplying a
+      // manifest and skipping the release would publish an npm dist-tag whose notes point at
+      // assets that do not exist.
       const viewBody = [
         '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
         '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
@@ -961,15 +990,15 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       lastRun = runPublish({
         npmBody: npmStub(viewBody, { failOnPublish: true }),
         initState: { published: true, tagged: true },
-        portableAssets: false,
+        portableAssets: true,
+        extraArgs: ["--skip-github-release"],
       });
 
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain(
-        "stable latest publishes require --portable-assets-manifest",
+        "a publish that supplies portable assets must attach them to the GitHub Release.",
       );
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
-      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
     });
 
     it.each([

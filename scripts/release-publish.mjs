@@ -181,19 +181,18 @@ function portableUploadEnabled(options) {
   return !options.skipGithubRelease && !options.dryRun;
 }
 
-// A stable `latest` release attaches portable assets when they exist, and does not demand them.
-// 0.3.0 ships from the EVALUATION lane by release-owner decision: those bundles are sealed
-// (`codesign --verify --deep --strict` passes) but carry no Developer ID and no Azure trusted
-// publisher, which is a deliberate scope choice for the first public release, not a defect.
-// Coupling the npm dist-tag to Developer-ID-signed assets made that decision unimplementable —
-// the owner-approved release-impact entry, which `check:release-impact:publish` verifies live
-// against the GitHub API before this point, is what authorizes the release.
-function stablePortableAssetsRequired() {
-  return false;
-}
+// Portable assets are ATTACHED when supplied and never demanded. 0.3.0 ships from the EVALUATION
+// lane by release-owner decision: those bundles are sealed (`codesign --verify --deep --strict`
+// passes) but carry no Developer ID and no Azure trusted publisher, a deliberate scope choice for
+// the first public release. Demanding signed assets for a stable dist-tag made that decision
+// unimplementable — every stable `latest` publish the project can currently produce was refused.
+// What did NOT change: authorization (`check:release-impact:publish` verifies the release owner's
+// approval live against the GitHub API before this point) and, whenever a manifest IS supplied,
+// the full qualified-run provenance and digest verification below.
 
-function portableReleasePromotionEnabled(rootManifest, options) {
-  return stableLatestRelease(rootManifest, options);
+// Release notes advertise portable downloads only when the release actually carries them.
+function portableReleasePromotionEnabled(rootManifest, options, portableAssets) {
+  return stableLatestRelease(rootManifest, options) && portableAssets.length > 0;
 }
 
 function normalizeRegistry(options) {
@@ -551,16 +550,17 @@ function containedLocalPath(root, relativePath, label, failures) {
 }
 
 function loadPortableAssets(rootManifest, options) {
-  if (stablePortableAssetsRequired(rootManifest, options) && options.skipGithubRelease) {
-    fail("stable latest publishes must attach portable GitHub Release Assets.");
+  const suppliesManifest =
+    typeof options.portableAssetsManifest === "string" && options.portableAssetsManifest !== "";
+  // Supplying assets and then skipping the GitHub Release would publish an npm dist-tag whose
+  // announced downloads do not exist: still refused, for stable and prerelease alike.
+  if (suppliesManifest && options.skipGithubRelease) {
+    fail("a publish that supplies portable assets must attach them to the GitHub Release.");
   }
-  if (typeof options.portableAssetsManifest !== "string" || options.portableAssetsManifest === "") {
-    if (stablePortableAssetsRequired(rootManifest, options)) {
-      fail("stable latest publishes require --portable-assets-manifest.");
-    }
-    return [];
-  }
-  const qualification = stablePortableAssetsRequired(rootManifest, options)
+  if (!suppliesManifest) return [];
+  // A stable `latest` release that DOES carry assets is still held to the qualified-run
+  // provenance: the same run, attempt, tag, source SHA and workflow that built them.
+  const qualification = stableLatestRelease(rootManifest, options)
     ? requiredPortableQualification(rootManifest)
     : undefined;
   return portableAssetsFromManifest(
@@ -1086,12 +1086,16 @@ function withPublishApprovalRequirement(enabled, callback) {
   }
 }
 
-function releaseNotes(rootManifest, options) {
+function releaseNotes(rootManifest, options, portableAssets) {
   const catalog = readReleaseImpactCatalog();
   const result = withPublishApprovalRequirement(!options.planOnly, () =>
     renderReleaseImpactNotes(catalog, rootManifest, {
       ...options,
-      portableReleasePromotion: portableReleasePromotionEnabled(rootManifest, options),
+      portableReleasePromotion: portableReleasePromotionEnabled(
+        rootManifest,
+        options,
+        portableAssets,
+      ),
     }),
   );
   if (!result.ok) {
@@ -1687,8 +1691,9 @@ run("npm", ["run", "check:publish-manifests"], { stdio: "inherit" });
 run("npm", ["run", options.planOnly ? "check:release-impact" : "check:release-impact:publish"], {
   stdio: "inherit",
 });
-const githubReleaseNotes = releaseNotes(rootManifest, options);
+// Assets first: the notes may only advertise portable downloads this release actually carries.
 const portableAssets = loadPortableAssets(rootManifest, options);
+const githubReleaseNotes = releaseNotes(rootManifest, options, portableAssets);
 
 if (options.planOnly) {
   printReleaseNotesPreview(githubReleaseNotes);
