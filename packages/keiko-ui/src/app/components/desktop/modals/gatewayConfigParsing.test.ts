@@ -1368,6 +1368,23 @@ describe("appliedGatewayConfigFieldCount", () => {
     expect(parseGatewayConfigUpload(splitVersion)).toEqual({ outcome: "invalid" });
   });
 
+  it("refuses a malformed Azure api version on a generic provider", () => {
+    // The canonical parser requires YYYY-MM-DD or YYYY-MM-DD-preview; accepting "not-a-date"
+    // here reports success for a file Test & Save then refuses (review finding on #3046). The
+    // voice endpoint already mirrors this rule — the generic one must too.
+    const malformed = JSON.stringify({
+      providers: [
+        providerFixture({
+          baseUrl: "https://resource.example.com",
+          endpointStyle: "azure-openai-deployment",
+          apiVersion: "not-a-date",
+        }),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(malformed)).toEqual({ outcome: "invalid" });
+  });
+
   it("still refuses an unknown generic endpoint style", () => {
     const unknown = JSON.stringify({
       providers: [providerFixture({ endpointStyle: "bogus-style" })],

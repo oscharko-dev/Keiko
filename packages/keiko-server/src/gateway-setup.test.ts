@@ -6248,6 +6248,101 @@ describe("handleGatewaySetup", () => {
     expect(afterMove?.apiVersion).toBeUndefined();
     deps.store.close();
   });
+  it("replaces the stored protocol atomically when a new style is submitted", async () => {
+    // Review finding on #3046: a submitted style with an inherited api version is a MIXED
+    // protocol the canonical parser refuses (a version requires the Azure style), so switching
+    // an Azure provider to openai-compatible on the same URL failed the save instead of
+    // replacing the protocol. The submitted protocol is a unit.
+    const uiDir = await tempDir("keiko-gw-ui-protocol-atomic-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-protocol-atomic-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "azure-chat",
+            baseUrl: "https://resource.example.com",
+            apiKey: "azure-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const switched = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://resource.example.com",
+        apiKey: "azure-token",
+        deploymentNames: ["azure-chat"],
+        endpointStyle: "openai-compatible",
+      }),
+      deps,
+    );
+    expect(switched.status).toBe(200);
+    const saved = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "azure-chat",
+    );
+    expect(saved?.endpointStyle).toBe("openai-compatible");
+    expect(saved?.apiVersion).toBeUndefined();
+    deps.store.close();
+  });
+
+  it("verifies and saves a protocol-only preserve-mode update", async () => {
+    // Review finding on #3046: with only endpointStyle/apiVersion submitted, the request took
+    // the settings-only path, which never rebuilds providers — the protocol change was accepted
+    // and silently dropped.
+    const uiDir = await tempDir("keiko-gw-ui-protocol-only-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-protocol-only-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "azure-chat",
+            baseUrl: "https://resource.example.com",
+            apiKey: "azure-token",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const protocolOnly = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        endpointStyle: "azure-openai-deployment",
+        apiVersion: "2025-04-01-preview",
+      }),
+      deps,
+    );
+    expect(protocolOnly.status).toBe(200);
+    const saved = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "azure-chat",
+    );
+    expect(saved?.endpointStyle).toBe("azure-openai-deployment");
+    expect(saved?.apiVersion).toBe("2025-04-01-preview");
+    deps.store.close();
+  });
+
   it("rejects an unsupported generic endpoint style", async () => {
     const uiDir = await tempDir("keiko-gw-ui-generic-style-bad-");
     const deps = buildUiHandlerDeps({

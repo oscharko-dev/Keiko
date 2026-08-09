@@ -2150,10 +2150,17 @@ function setupEndpointProtocol(
   if (!endpointStyle.ok) return endpointStyle.routeError;
   const apiVersion = optionalSetupSecret(raw.apiVersion, "apiVersion");
   if (!apiVersion.ok) return apiVersion.routeError;
+  // The submitted protocol is ATOMIC: stating a style replaces the whole protocol, so an
+  // inherited api version can never pair with it — switching an Azure provider to
+  // openai-compatible on the same URL would otherwise build a mixed protocol the canonical
+  // parser refuses, failing the save instead of performing it (review finding on #3046).
+  if (endpointStyle.value !== undefined) {
+    return { endpointStyle: endpointStyle.value, apiVersion: apiVersion.value };
+  }
   const inheritable =
     preserveExisting && provider !== undefined && sameBaseUrlIdentity(baseUrl, provider.baseUrl);
   return {
-    endpointStyle: endpointStyle.value ?? (inheritable ? provider.endpointStyle : undefined),
+    endpointStyle: inheritable ? provider.endpointStyle : undefined,
     apiVersion: apiVersion.value ?? (inheritable ? provider.apiVersion : undefined),
   };
 }
@@ -3409,6 +3416,10 @@ function setupRequiresGatewayVerification(
     hasNonBlankStringField(raw, "baseUrl") ||
     hasNonBlankStringField(raw, "apiKey") ||
     hasNonBlankStringField(raw, "apiKeyHeaderName") ||
+    // The endpoint PROTOCOL only reaches the providers through the rebuild; without this the
+    // settings-only path accepted a protocol change and dropped it (review finding on #3046).
+    hasNonBlankStringField(raw, "endpointStyle") ||
+    hasNonBlankStringField(raw, "apiVersion") ||
     hasNonEmptyListField(raw, "deploymentNames") ||
     imageListRequiresVerification(raw, modelLists, current)
   );

@@ -648,11 +648,39 @@ function importedVoiceEndpointPayload(fields: GatewayFormFields): Partial<Gatewa
   };
 }
 
-// The imported GENERIC protocol rides only on a submit that still points at EXACTLY the
-// uploaded gateway URL — a manually retyped URL must not inherit the file's protocol (#3042).
+/**
+ * Mirrors the gateway's canonicalBaseUrlIdentity: an endpoint is the SAME endpoint across
+ * trailing slashes and case-insensitive origin spelling, so a semantics-preserving edit must not
+ * throw the uploaded protocol away (review finding on #3046). Anything the URL parser rejects
+ * falls back to the trimmed text, which keeps the comparison total.
+ */
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
+function canonicalEndpointIdentity(raw: string): string {
+  const trimmed = raw.trim();
+  try {
+    return stripTrailingSlashes(new URL(trimmed).href);
+  } catch {
+    return stripTrailingSlashes(trimmed);
+  }
+}
+
+// The imported GENERIC protocol rides only on a submit that still points at the uploaded gateway
+// endpoint — a manually retyped URL must not inherit the file's protocol (#3042), while an edit
+// that does not change the endpoint's identity keeps it (#3046).
 function importedEndpointPayload(fields: GatewayFormFields): Partial<GatewaySetupInput> {
   const submittedBaseUrl = fields.baseUrl.trim();
-  if (submittedBaseUrl === "" || submittedBaseUrl !== fields.importedEndpointBaseUrl) {
+  if (
+    submittedBaseUrl === "" ||
+    canonicalEndpointIdentity(submittedBaseUrl) !==
+      canonicalEndpointIdentity(fields.importedEndpointBaseUrl)
+  ) {
     return {};
   }
   return {

@@ -1071,7 +1071,11 @@ function uniformGenericEndpointProtocol(
   if (!endpointStyle.ok || !apiVersion.ok) return undefined;
   // The canonical pairing rule, mirrored: the Azure deployment style REQUIRES an api version,
   // and an api version requires the Azure style — carrying an unpairable protocol would report
-  // upload success for a file the save then refuses (#3042).
+  // upload success for a file the save then refuses (#3042). The version SHAPE is mirrored too
+  // (API_VERSION_RE), like the voice endpoint already does (review finding on #3046).
+  if (apiVersion.value !== undefined && !AZURE_API_VERSION_RE.test(apiVersion.value)) {
+    return undefined;
+  }
   if (endpointStyle.value === "azure-openai-deployment" && apiVersion.value === undefined) {
     return undefined;
   }

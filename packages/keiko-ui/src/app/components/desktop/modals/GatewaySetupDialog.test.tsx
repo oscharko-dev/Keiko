@@ -2199,6 +2199,57 @@ describe("GatewaySetupDialog", () => {
     expect(payload).not.toHaveProperty("apiVersion");
   });
 
+  it("keeps the imported generic protocol across a semantics-preserving URL edit", async () => {
+    // Review finding on #3046: the binding compared raw strings, so adding or removing a
+    // trailing slash — the same endpoint by the gateway's own sameBaseUrlIdentity rule — threw
+    // the uploaded protocol away and produced a save without it.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "azure-chat",
+      testedModelIds: ["azure-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.upload(
+      await screen.findByLabelText(/load keiko\.config\.json/i),
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "azure-chat",
+                baseUrl: "https://resource.example.com/openai",
+                endpointStyle: "azure-openai-deployment",
+                apiVersion: "2025-04-01-preview",
+                capability: { id: "azure-chat", kind: "chat" },
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(/base url/i)).toHaveValue("https://resource.example.com/openai"),
+    );
+    await userEvent.type(screen.getByLabelText(/base url/i), "/");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).toMatchObject({
+      endpointStyle: "azure-openai-deployment",
+      apiVersion: "2025-04-01-preview",
+    });
+  });
+
   it("drops the imported generic protocol when the user retypes the gateway URL", async () => {
     vi.mocked(setupGateway).mockResolvedValueOnce({
       ok: true,
