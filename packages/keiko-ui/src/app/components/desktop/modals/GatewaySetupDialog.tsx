@@ -2586,12 +2586,13 @@ export function GatewaySetupDialog({
   // fields — and therefore the protocol that belongs to them — untouched.
   // Twin of the voice binding below: the generic protocol is BOUND to the uploaded gateway
   // URL and cleared when the file carries none, so a stale binding cannot outlive a corrected
-  // re-upload (#3042).
+  // re-upload (#3042). The generic binding is file-scoped without exception — a file that
+  // states no gateway URL states no protocol either, and returning early here would leave the
+  // PREVIOUS file's style bound to a URL the form still holds, riding the next submit unseen.
   function applyUploadedGenericEndpoint(fields: GatewayConfigUploadFields): void {
-    if (fields.baseUrl === undefined) return;
-    setImportedEndpointStyle(fields.endpointStyle ?? "");
-    setImportedApiVersion(fields.apiVersion ?? "");
-    setImportedEndpointBaseUrl(fields.baseUrl.trim());
+    setImportedEndpointStyle(fields.baseUrl === undefined ? "" : (fields.endpointStyle ?? ""));
+    setImportedApiVersion(fields.baseUrl === undefined ? "" : (fields.apiVersion ?? ""));
+    setImportedEndpointBaseUrl(fields.baseUrl?.trim() ?? "");
   }
 
   function applyUploadedVoiceEndpoint(fields: GatewayConfigUploadFields): void {

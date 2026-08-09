@@ -2199,6 +2199,63 @@ describe("GatewaySetupDialog", () => {
     expect(payload).not.toHaveProperty("apiVersion");
   });
 
+  it("drops a previous file's generic protocol when the next upload declares none", async () => {
+    // Review finding on #3046: applyUploadedGenericEndpoint returned early for a file that
+    // states no gateway URL, leaving the PREVIOUS file's protocol and its URL binding in state.
+    // The visible URL field still held the old URL, so the binding matched and the stale
+    // protocol rode the submit of a file that never mentioned one. A file with no URL states
+    // no protocol either.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "azure-chat",
+      testedModelIds: ["azure-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+    const upload = async (providers: readonly Record<string, unknown>[]): Promise<void> => {
+      await userEvent.upload(
+        await screen.findByLabelText(/load keiko\.config\.json/i),
+        new File([JSON.stringify({ providers })], "keiko.config.json", {
+          type: "application/json",
+        }),
+      );
+    };
+
+    await upload([
+      {
+        modelId: "azure-chat",
+        baseUrl: "https://resource.example.com",
+        endpointStyle: "azure-openai-deployment",
+        apiVersion: "2025-04-01-preview",
+        capability: { id: "azure-chat", kind: "chat" },
+      },
+    ]);
+    await waitFor(() =>
+      expect(screen.getByLabelText(/base url/i)).toHaveValue("https://resource.example.com"),
+    );
+
+    // The corrected file lists the deployment but states no connection at all — the URL is
+    // supplied by the operator, and with it the protocol that belongs to it.
+    await upload([{ modelId: "plain-chat", capability: { id: "plain-chat", kind: "chat" } }]);
+    await waitFor(() =>
+      expect(screen.getByLabelText(/deployment names/i)).toHaveValue("plain-chat"),
+    );
+    expect(screen.getByLabelText(/base url/i)).toHaveValue("https://resource.example.com");
+
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(setupGateway).mock.calls[0]?.[0] ?? {};
+    expect(payload).not.toHaveProperty("endpointStyle");
+    expect(payload).not.toHaveProperty("apiVersion");
+  });
+
   it("keeps the imported generic protocol across a semantics-preserving URL edit", async () => {
     // Review finding on #3046: the binding compared raw strings, so adding or removing a
     // trailing slash — the same endpoint by the gateway's own sameBaseUrlIdentity rule — threw
