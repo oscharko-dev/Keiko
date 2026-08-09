@@ -475,6 +475,21 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   reference-machine performance evidence run outside the PR critical path; fast OSS duplicate,
   secret, and deterministic performance proxies run inside `ci` in parallel.
 
+- **A Keiko for Quality finding thread is resolved by whoever answers it, and never silently.**
+  The resolution carries one of exactly two things: a **fix reference** (the commit or the changed
+  line that repaired it), or an **evidenced refutation** — what the finding claimed, and the guard,
+  line, or call that disproves it. Resolving a finding thread without a reply is prohibited, for
+  every agent, every human, and every script, including one that only waits for a merge. The
+  reviewer resolves its own coverage notices; nobody resolves its findings but the person answering.
+
+  This is not etiquette, it is the measurement. The precision gate grades each finding by the first
+  non-reviewer reply on its thread and drops unanswered threads from the rate entirely, so a silent
+  resolve does not record a neutral result — it removes the finding from the sample in a direction
+  nobody can reconstruct afterwards. A resolved thread is also invisible to the reviewer's own
+  duplicate suppression, so the finding returns on the next push: silence re-publishes the comment
+  it was meant to clear. A refutation is worth more than a resolve — it is the only signal that
+  teaches the reviewer not to make that claim again.
+
 - **GitHub Actions are pinned to full 40-hex commit SHAs** with a version comment. A tag or
   branch ref (`@v4`) fails the pinned-SHA step of `workflow hygiene`. Keep the SHA-plus-comment
   format.
