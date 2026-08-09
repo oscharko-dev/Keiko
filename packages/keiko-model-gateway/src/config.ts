@@ -575,14 +575,22 @@ function resolveProviderEndpointStyle(
 
 function resolveProviderApiVersion(
   rawValue: unknown,
-  path: string,
+  providerPath: string,
   modelId: string,
   env: EnvSource,
+  endpointStyle: ProviderEndpointStyle | undefined,
 ): string | undefined {
+  const path = `${providerPath}.apiVersion`;
   const token = envModelToken(modelId);
   const perModelName = `KEIKO_MODEL_${token}_API_VERSION`;
   const perModel = env[perModelName];
-  const defaultValue = env.KEIKO_DEFAULT_API_VERSION;
+  // The GLOBAL default applies only where an api version is meaningful: a provider whose
+  // resolved style is not the Azure deployment path must not inherit it, or one
+  // KEIKO_DEFAULT_API_VERSION would make every explicitly openai-compatible provider on the
+  // same server unparseable through the pairing rule below (review finding on #3042 —
+  // per-model and file values stay authoritative and still fail the pairing loudly).
+  const defaultValue =
+    endpointStyle === "azure-openai-deployment" ? env.KEIKO_DEFAULT_API_VERSION : undefined;
   const value = resolvePerModelValue(perModel, rawValue, defaultValue);
   if (value === undefined || value === "") {
     return undefined;
@@ -1273,7 +1281,7 @@ function parseProviderConfig(
     modelId,
     env,
   );
-  const apiVersion = resolveProviderApiVersion(raw.apiVersion, `${path}.apiVersion`, modelId, env);
+  const apiVersion = resolveProviderApiVersion(raw.apiVersion, path, modelId, env, endpointStyle);
   assertProviderEndpointVersion(endpointStyle, apiVersion, path);
   const realtimeAuthMode = resolveRealtimeAuthMode(
     raw.realtimeAuthMode,

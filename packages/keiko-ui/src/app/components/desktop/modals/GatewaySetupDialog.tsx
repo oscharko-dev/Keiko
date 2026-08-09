@@ -192,7 +192,7 @@ function endpointIdentity(
   // The identity is CANONICAL, like the server's: a trailing slash or a differently-cased
   // hostname is the same endpoint, so retyping one must not reset the deployments and the
   // protocol as though the operator had moved hosts (review finding on #3048).
-  if (submitted !== "") return canonicalVoiceEndpointIdentity(submitted);
+  if (submitted !== "") return canonicalEndpointIdentity(submitted);
   return preserveExisting && hasStoredVoiceProvider ? STORED_VOICE_ENDPOINT_IDENTITY : undefined;
 }
 
@@ -654,6 +654,10 @@ interface GatewayFormFields {
   readonly importedVoiceRealtimeAuthMode: string;
   /** The uploaded endpoint URL the imported protocol is bound to. */
   readonly importedVoiceEndpointBaseUrl: string;
+  /** Generic endpoint protocol imported from a config upload, bound to its gateway URL (#3042). */
+  readonly importedEndpointStyle: string;
+  readonly importedApiVersion: string;
+  readonly importedEndpointBaseUrl: string;
   readonly figmaAccessToken: string;
   readonly preserveExisting: boolean;
   readonly hasStoredVoiceProvider: boolean;
@@ -699,6 +703,12 @@ function importedVoiceEndpointPayload(fields: GatewayFormFields): Partial<Gatewa
   };
 }
 
+/**
+ * Mirrors the gateway's canonicalBaseUrlIdentity: an endpoint is the SAME endpoint across
+ * trailing slashes and case-insensitive origin spelling, so a semantics-preserving edit must not
+ * throw the uploaded protocol away (review finding on #3046). Anything the URL parser rejects
+ * falls back to the trimmed text, which keeps the comparison total.
+ */
 function stripTrailingSlashes(value: string): string {
   let end = value.length;
   while (end > 0 && value[end - 1] === "/") {
@@ -707,26 +717,52 @@ function stripTrailingSlashes(value: string): string {
   return value.slice(0, end);
 }
 
-// The server compares audio endpoints through `sameBaseUrlIdentity`, so a trailing slash or a
-// hostname retyped in a different case is the SAME endpoint. A raw string comparison here read
-// those spellings as a move and dropped a still-visible protocol; a fresh setup has no stored
-// template to recover it from, so the save succeeded with the wrong URL shape (review finding
-// on #3048).
 const CHAT_COMPLETIONS_SUFFIX = "/chat/completions";
 
-function canonicalVoiceEndpointIdentity(raw: string): string {
+// The server's normalizeBaseUrl also drops a terminal /chat/completions before comparing, so
+// trimming an imported URL down to the endpoint the server would derive is NOT an endpoint
+// change. A narrower client copy read it as one and dropped the imported protocol (review
+// findings on #3046 and #3048). The rule is mirrored rather than imported: keiko-ui may not
+// depend on keiko-model-gateway (ADR-0019), and the shape is pinned on both sides.
+function normalizedEndpoint(raw: string): string {
   const trimmed = stripTrailingSlashes(raw.trim());
-  // The server's normalizeBaseUrl also strips a terminal /chat/completions before comparing, so
-  // trimming an imported URL down to the endpoint the server derives is not a move — reading it
-  // as one cleared the deployments and the protocol (review finding on #3048).
-  const normalized = trimmed.endsWith(CHAT_COMPLETIONS_SUFFIX)
+  return trimmed.endsWith(CHAT_COMPLETIONS_SUFFIX)
     ? stripTrailingSlashes(trimmed.slice(0, -CHAT_COMPLETIONS_SUFFIX.length))
     : trimmed;
+}
+
+// ONE identity for both sections: the generic gateway and the audio endpoint are compared by the
+// same server rule (`sameBaseUrlIdentity`), so they are compared by the same rule here.
+function canonicalEndpointIdentity(raw: string): string {
+  const normalized = normalizedEndpoint(raw);
   try {
     return stripTrailingSlashes(new URL(normalized).href);
   } catch {
     return normalized;
   }
+}
+
+// The imported GENERIC protocol rides only on a submit that still points at the uploaded gateway
+// endpoint — a manually retyped URL must not inherit the file's protocol (#3042), while an edit
+// that does not change the endpoint's identity keeps it (#3046).
+function importedEndpointPayload(fields: GatewayFormFields): Partial<GatewaySetupInput> {
+  const submittedBaseUrl = fields.baseUrl.trim();
+  if (submittedBaseUrl === "") return {};
+  // An empty binding means the file declared a protocol but left the URL to the operator, so it
+  // applies to whatever endpoint is entered — the same "unbound" rule the voice twin uses. The
+  // imported values always come from the CURRENT file, so this can never resurrect an earlier
+  // upload's protocol (review findings on #3046).
+  if (
+    fields.importedEndpointBaseUrl !== "" &&
+    canonicalEndpointIdentity(submittedBaseUrl) !==
+      canonicalEndpointIdentity(fields.importedEndpointBaseUrl)
+  ) {
+    return {};
+  }
+  return {
+    ...(fields.importedEndpointStyle === "" ? {} : { endpointStyle: fields.importedEndpointStyle }),
+    ...(fields.importedApiVersion === "" ? {} : { apiVersion: fields.importedApiVersion }),
+  };
 }
 
 // The VISIBLE protocol fields are the operator's own statement, so they ride a manual endpoint
@@ -748,8 +784,8 @@ function statedVoiceEndpointPayload(fields: GatewayFormFields): Partial<GatewayS
   // uploaded URL for an import, the URL in the form for a hand statement (#3042, #3048).
   if (
     fields.voiceProtocolBoundBaseUrl !== "" &&
-    canonicalVoiceEndpointIdentity(fields.voiceProtocolBoundBaseUrl) !==
-      canonicalVoiceEndpointIdentity(submittedBaseUrl)
+    canonicalEndpointIdentity(fields.voiceProtocolBoundBaseUrl) !==
+      canonicalEndpointIdentity(submittedBaseUrl)
   ) {
     return {};
   }
@@ -788,6 +824,7 @@ function buildSetupGatewayPayload(
       : { embeddingModelIds: fields.importedEmbeddingModelIds }),
     ...importedVoiceEndpointPayload(fields),
     ...statedVoiceEndpointPayload(fields),
+    ...importedEndpointPayload(fields),
     ...(!fields.workflowEligibleModelIdsConfigured
       ? {}
       : { workflowEligibleModelIds: derived.parsedWorkflowEligibleModelIds }),
@@ -2485,6 +2522,9 @@ export function GatewaySetupDialog({
   };
   const [importedVoiceRealtimeAuthMode, setImportedVoiceRealtimeAuthMode] = useState("");
   const [importedVoiceEndpointBaseUrl, setImportedVoiceEndpointBaseUrl] = useState("");
+  const [importedEndpointStyle, setImportedEndpointStyle] = useState("");
+  const [importedApiVersion, setImportedApiVersion] = useState("");
+  const [importedEndpointBaseUrl, setImportedEndpointBaseUrl] = useState("");
   const [uploadReadPending, setUploadReadPending] = useState(false);
   const [workflowEligibleModelIdsConfigured, setWorkflowEligibleModelIdsConfigured] =
     useState(false);
@@ -2574,8 +2614,8 @@ export function GatewaySetupDialog({
     // succeeded on the OpenAI-compatible shape (review finding on #3048).
     const restoresUploadedEndpoint =
       importedVoiceEndpointBaseUrl !== "" &&
-      canonicalVoiceEndpointIdentity(nextBaseUrl) ===
-        canonicalVoiceEndpointIdentity(importedVoiceEndpointBaseUrl);
+      canonicalEndpointIdentity(nextBaseUrl) ===
+        canonicalEndpointIdentity(importedVoiceEndpointBaseUrl);
     setVoiceEndpointStyle(restoresUploadedEndpoint ? importedVoiceEndpointStyle : "");
     setVoiceApiVersion(restoresUploadedEndpoint ? importedVoiceApiVersion : "");
     // The realtime auth mode is protocol too and was declared for the OLD host: leaving it while
@@ -2794,6 +2834,11 @@ export function GatewaySetupDialog({
     setImportedEmbeddingModelIds(fields.embeddingModelIds ?? []);
     if (fields.figmaAccessToken !== undefined) setFigmaAccessToken(fields.figmaAccessToken);
     applyUploadedVoiceConfig(fields);
+    // GENERIC state, so it is applied here rather than inside the voice helper: every sibling in
+    // there returns early when the file carries no voice section, and one added to the voice
+    // entry point would silently reintroduce the stale-binding defect this function exists to
+    // fix (review finding on #3046).
+    applyUploadedGenericEndpoint(fields);
   }
 
   /**
@@ -2880,6 +2925,17 @@ export function GatewaySetupDialog({
   // all, its protocol declaration REPLACES the previous upload's (a corrected re-upload without
   // a style must clear the stale one); a file with no voice section leaves the visible voice
   // fields — and therefore the protocol that belongs to them — untouched.
+  // Twin of the voice binding below: the generic protocol is BOUND to the uploaded gateway
+  // URL and cleared when the file carries none, so a stale binding cannot outlive a corrected
+  // re-upload (#3042). The generic binding is file-scoped without exception — a file that
+  // states no gateway URL states no protocol either, and returning early here would leave the
+  // PREVIOUS file's style bound to a URL the form still holds, riding the next submit unseen.
+  function applyUploadedGenericEndpoint(fields: GatewayConfigUploadFields): void {
+    setImportedEndpointStyle(fields.endpointStyle ?? "");
+    setImportedApiVersion(fields.apiVersion ?? "");
+    setImportedEndpointBaseUrl(fields.baseUrl?.trim() ?? "");
+  }
+
   function applyUploadedVoiceEndpoint(fields: GatewayConfigUploadFields): void {
     if (fields.voiceBaseUrl === undefined) return;
     // The uploaded protocol lands in the VISIBLE fields, where the operator can see and change
@@ -2953,6 +3009,9 @@ export function GatewaySetupDialog({
           voiceProtocolBoundBaseUrl,
           importedVoiceRealtimeAuthMode,
           importedVoiceEndpointBaseUrl,
+          importedEndpointStyle,
+          importedApiVersion,
+          importedEndpointBaseUrl,
           voiceSpeechOutputModelId,
           voiceOutputVoiceId,
           voiceOutputVoiceIdConfigured,

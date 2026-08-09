@@ -6500,6 +6500,994 @@ describe("handleGatewaySetup", () => {
       deps.store.close();
     }
   });
+  it("persists an explicitly submitted generic endpoint style over the environment default", async () => {
+    // Codex finding on #3042: the setup request had no generic endpointStyle field, so an
+    // uploaded LiteLLM config declaring openai-compatible was rebuilt style-less and a server
+    // running KEIKO_DEFAULT_ENDPOINT_STYLE=azure-openai-deployment resolved the env default —
+    // wrong URL shape after a reported upload success.
+    const uiDir = await tempDir("keiko-gw-ui-generic-style-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-generic-style-"),
+      env: {
+        ...VAULT_ENV,
+        KEIKO_DEFAULT_ENDPOINT_STYLE: "azure-openai-deployment",
+        KEIKO_DEFAULT_API_VERSION: "2025-04-01-preview",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "chat-token",
+        endpointStyle: "openai-compatible",
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const provider = currentGatewayConfig(deps)?.providers.find(
+      (item) => item.modelId === "example-chat-model",
+    );
+    expect(provider?.endpointStyle).toBe("openai-compatible");
+    // The default api version is azure-only: an openai-compatible provider must not carry it,
+    // which is the half of the override this test exists for (review finding on #3046).
+    expect(provider?.apiVersion).toBeUndefined();
+    deps.store.close();
+  });
+  it("persists a submitted Azure endpoint style with its api version on generic providers", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-generic-azure-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-generic-azure-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://resource.example.com",
+        apiKey: "azure-token",
+        deploymentNames: ["azure-chat"],
+        endpointStyle: "azure-openai-deployment",
+        apiVersion: "2025-04-01-preview",
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const provider = currentGatewayConfig(deps)?.providers.find(
+      (item) => item.modelId === "azure-chat",
+    );
+    expect(provider?.endpointStyle).toBe("azure-openai-deployment");
+    expect(provider?.apiVersion).toBe("2025-04-01-preview");
+    deps.store.close();
+  });
+  it("moves a shared restored provider onto the new gateway protocol", async () => {
+    // Review finding on #3046: the restored provider followed the shared connection's URL, token
+    // and header but kept its own endpointStyle, so one connection ended up carrying two
+    // protocols and the restored provider kept requesting the obsolete route.
+    const uiDir = await tempDir("keiko-gw-ui-shared-protocol-");
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+          },
+          {
+            modelId: "scan-ocr",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+            capability: durableOcrCapability("scan-ocr"),
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-shared-protocol-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve(modelIds.filter((modelId) => modelId !== "scan-ocr")),
+    });
+
+    const updated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        apiKey: "rotated-token",
+        endpointStyle: "openai-compatible",
+      }),
+      deps,
+    );
+    expect(updated.status).toBe(200);
+    const byId = new Map(
+      (currentGatewayConfig(deps)?.providers ?? []).map((provider) => [provider.modelId, provider]),
+    );
+    expect(byId.get("example-chat")?.endpointStyle).toBe("openai-compatible");
+    expect(byId.get("scan-ocr")?.endpointStyle).toBe("openai-compatible");
+    expect(byId.get("scan-ocr")?.apiVersion).toBeUndefined();
+    deps.store.close();
+  });
+
+  it("leaves a restored provider that spoke its own protocol alone", async () => {
+    // Review finding on #3046: making a shared provider follow the gateway's protocol went one
+    // step too far. A provider on the same URL, credential and header that deliberately used a
+    // DIFFERENT valid protocol had its own overwritten by a rotation, even though the gateway's
+    // request shape was never verified for it.
+    const uiDir = await tempDir("keiko-gw-ui-own-protocol-");
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+          },
+          {
+            modelId: "scan-ocr",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            endpointStyle: "openai-compatible",
+            capability: durableOcrCapability("scan-ocr"),
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-own-protocol-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve(modelIds.filter((modelId) => modelId !== "scan-ocr")),
+    });
+
+    const rotated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "rotated-token" }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const ocr = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "scan-ocr",
+    );
+    // It follows the dead credential, because that is the connection it shared…
+    expect(ocr?.apiKey).toBe("rotated-token");
+    // …but keeps the protocol it chose.
+    expect(ocr?.endpointStyle).toBe("openai-compatible");
+    expect(ocr?.apiVersion).toBeUndefined();
+    deps.store.close();
+  });
+
+  it("validates the connection with the protocol the setup will persist", async () => {
+    // Found while pinning the env-completed tuple (review findings on #3046): the connection
+    // probe parsed a provider with NO protocol, so on a server that sets only
+    // KEIKO_DEFAULT_ENDPOINT_STYLE the environment turned every probe into an Azure provider
+    // with no api version and the canonical pairing rejected EVERY setup request — including one
+    // that explicitly submits a protocol of its own.
+    const uiDir = await tempDir("keiko-gw-ui-probe-protocol-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-probe-protocol-"),
+      env: { ...VAULT_ENV, KEIKO_DEFAULT_ENDPOINT_STYLE: "azure-openai-deployment" },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "chat-token",
+        deploymentNames: ["example-chat"],
+        endpointStyle: "openai-compatible",
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const saved = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "example-chat",
+    );
+    expect(saved?.endpointStyle).toBe("openai-compatible");
+    // …and the environment must not complete the tuple it was told not to use.
+    expect(saved?.apiVersion).toBeUndefined();
+    deps.store.close();
+  });
+
+  it("rotates a declared api version whose style comes from the environment", async () => {
+    // Review finding on #3046, the inverse of the pin below: a file that declares apiVersion
+    // while KEIKO_DEFAULT_ENDPOINT_STYLE supplies the Azure style is a valid completed tuple, and
+    // clearing the env half left a version with no style — rejected on the next rotation.
+    const uiDir = await tempDir("keiko-gw-ui-env-style-");
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            apiVersion: "2025-03-01-preview",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-env-style-"),
+      env: { ...VAULT_ENV, KEIKO_DEFAULT_ENDPOINT_STYLE: "azure-openai-deployment" },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const rotated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "rotated-token",
+        deploymentNames: ["example-chat"],
+      }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const saved = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "example-chat",
+    );
+    expect(saved?.apiVersion).toBe("2025-03-01-preview");
+    deps.store.close();
+  });
+
+  it("discards observations when an import switches away from an env-resolved Azure tuple", async () => {
+    // Review finding on #3046: comparing the DURABLE view against the submitted one read a file
+    // that declares nothing while KEIKO_DEFAULT_* resolves Azure as "unchanged" when the request
+    // explicitly switched to openai-compatible — so observations made over the deployment path
+    // survived onto a different request shape.
+    const uiDir = await tempDir("keiko-gw-ui-env-switch-");
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            capability: { kind: "chat", supportsDocumentInput: true },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-env-switch-"),
+      env: {
+        ...VAULT_ENV,
+        KEIKO_DEFAULT_ENDPOINT_STYLE: "azure-openai-deployment",
+        KEIKO_DEFAULT_API_VERSION: "2025-04-01-preview",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const switched = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "chat-token",
+        deploymentNames: ["example-chat"],
+        endpointStyle: "openai-compatible",
+      }),
+      deps,
+    );
+    expect(switched.status).toBe(200);
+    const capability = currentGatewayConfig(deps)?.capabilities?.find(
+      (entry) => entry.id === "example-chat",
+    );
+    expect(capability).toMatchObject({ supportsDocumentInput: false });
+    deps.store.close();
+  });
+
+  it("keeps observations when an import only spells out the default protocol", async () => {
+    // Review finding on #3046: a stored provider with no endpointStyle and a same-URL import that
+    // declares "openai-compatible" are the SAME protocol — the adapter sends the identical
+    // request shape — but the raw comparison read it as a change and discarded verified
+    // observations the setup probe never re-establishes.
+    const uiDir = await tempDir("keiko-gw-ui-default-protocol-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-default-protocol-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "plain-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            capability: { kind: "chat", supportsDocumentInput: true },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const imported = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "chat-token",
+        deploymentNames: ["plain-chat"],
+        endpointStyle: "openai-compatible",
+      }),
+      deps,
+    );
+    expect(imported.status).toBe(200);
+    const capability = currentGatewayConfig(deps)?.capabilities?.find(
+      (entry) => entry.id === "plain-chat",
+    );
+    expect(capability).toMatchObject({ supportsDocumentInput: true });
+    deps.store.close();
+  });
+
+  it("requires deployments when the environment puts the setup on the Azure path", async () => {
+    // Review finding on #3046: the guard read the RAW request style, so a fresh setup that omits
+    // the field while KEIKO_DEFAULT_ENDPOINT_STYLE supplies the deployment path fell through to
+    // generic /models discovery and failed there instead of naming the missing deployments.
+    const uiDir = await tempDir("keiko-gw-ui-env-deployments-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-env-deployments-"),
+      env: {
+        ...VAULT_ENV,
+        KEIKO_DEFAULT_ENDPOINT_STYLE: "azure-openai-deployment",
+        KEIKO_DEFAULT_API_VERSION: "2025-04-01-preview",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://my-azure.openai.azure.com", apiKey: "azure-token" }),
+      deps,
+    );
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "GATEWAY_DEPLOYMENTS_REQUIRED" } });
+    deps.store.close();
+  });
+
+  it("leaves a dedicated embedding that spoke its own protocol alone", async () => {
+    // Review finding on #3046: an embedding sharing the primary's URL, credential and header but
+    // deliberately using a different valid protocol was classified as sharing, so a same-URL
+    // protocol update rebuilt it with a request shape nothing probed for it.
+    const uiDir = await tempDir("keiko-gw-ui-embed-protocol-");
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+          },
+          {
+            modelId: "embed-small",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            endpointStyle: "openai-compatible",
+            capability: { kind: "embedding", dimensions: 1536 },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-embed-protocol-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve(modelIds.filter((modelId) => modelId !== "embed-small")),
+    });
+
+    const rotated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "rotated-token" }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const embedding = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "embed-small",
+    );
+    expect(embedding?.endpointStyle).toBe("openai-compatible");
+    expect(embedding?.apiVersion).toBeUndefined();
+    deps.store.close();
+  });
+
+  it("rotates a declared Azure endpoint whose required version comes from the environment", async () => {
+    // Review finding on #3046: dropping every undeclared protocol value from the durable view
+    // left a file that DECLARES azure-openai-deployment and takes its required version from
+    // KEIKO_MODEL_<ID>_API_VERSION carrying azure with no version — and inheritance then
+    // rejected a routine credential rotation with 400. Only a version the pair does not need is
+    // dropped.
+    const uiDir = await tempDir("keiko-gw-ui-env-version-");
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            endpointStyle: "azure-openai-deployment",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-env-version-"),
+      env: { ...VAULT_ENV, KEIKO_MODEL_EXAMPLE_CHAT_API_VERSION: "2025-04-01-preview" },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const rotated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "rotated-token",
+        deploymentNames: ["example-chat"],
+      }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const saved = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "example-chat",
+    );
+    expect(saved?.endpointStyle).toBe("azure-openai-deployment");
+    deps.store.close();
+  });
+
+  it("keeps verified observations when a rotation only re-resolves an env protocol", async () => {
+    // Review finding on #3046: comparing the capability identity against the env-RESOLVED view
+    // made a plain rotation look like a protocol change whenever KEIKO_DEFAULT_* supplied a
+    // tuple the file never declared — discarding verified observations for nothing.
+    const uiDir = await tempDir("keiko-gw-ui-env-capability-");
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            capability: { kind: "chat", supportsDocumentInput: true },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-env-capability-"),
+      env: {
+        ...VAULT_ENV,
+        KEIKO_DEFAULT_ENDPOINT_STYLE: "azure-openai-deployment",
+        KEIKO_DEFAULT_API_VERSION: "2025-04-01-preview",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const rotated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "rotated-token",
+        deploymentNames: ["example-chat"],
+      }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const capability = currentGatewayConfig(deps)?.capabilities?.find(
+      (entry) => entry.id === "example-chat",
+    );
+    expect(capability).toMatchObject({ supportsDocumentInput: true });
+    deps.store.close();
+  });
+
+  it("never seals an environment-supplied protocol into the stored file", async () => {
+    // Review finding on #3046: inheritance read the env-RESOLVED view, so a rotation wrote a
+    // protocol the file never declared into the sealed config — removing the variable afterwards
+    // no longer restored the file's own behavior.
+    const uiDir = await tempDir("keiko-gw-ui-env-protocol-");
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-env-protocol-"),
+      env: {
+        ...VAULT_ENV,
+        KEIKO_DEFAULT_ENDPOINT_STYLE: "azure-openai-deployment",
+        KEIKO_DEFAULT_API_VERSION: "2025-04-01-preview",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const rotated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "rotated-token",
+        deploymentNames: ["example-chat"],
+      }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const saved: unknown = JSON.parse(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8"));
+    const providers = (saved as { providers: readonly Record<string, unknown>[] }).providers;
+    const chat = providers.find((provider) => provider.modelId === "example-chat");
+    expect(chat).toBeDefined();
+    expect(chat).not.toHaveProperty("endpointStyle");
+    expect(chat).not.toHaveProperty("apiVersion");
+    deps.store.close();
+  });
+
+  it("does not reuse verified chat observations across a protocol change", async () => {
+    // Review finding on #3046: capability reuse keyed on modelId and base URL only, so a
+    // same-URL protocol change kept observations made over the OLD request route. The setup
+    // probe performs buffered chat and reverifies none of them.
+    const uiDir = await tempDir("keiko-gw-ui-protocol-capability-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-protocol-capability-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "azure-chat",
+            baseUrl: "https://resource.example.com",
+            apiKey: "azure-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+            capability: { kind: "chat", supportsDocumentInput: true },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const changed = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://resource.example.com",
+        apiKey: "azure-token",
+        deploymentNames: ["azure-chat"],
+        endpointStyle: "openai-compatible",
+      }),
+      deps,
+    );
+    expect(changed.status).toBe(200);
+    const capability = currentGatewayConfig(deps)?.capabilities?.find(
+      (entry) => entry.id === "azure-chat",
+    );
+    expect(capability?.kind).toBe("chat");
+    // supportsDocumentInput defaults to false and has no authoritative request list, so it can
+    // only be true here by REUSING the stored capability — which is what a protocol change must
+    // stop doing.
+    expect(capability).toMatchObject({ supportsDocumentInput: false });
+    deps.store.close();
+  });
+
+  it("inherits the generic protocol from the primary chat provider, not from position zero", async () => {
+    // Review finding on #3046: the inheritance compared against providers[0]. Array order is not
+    // a contract — a valid stored file may list a dedicated voice provider first — so a stored
+    // Azure chat endpoint lost its protocol on an unchanged-endpoint rotation, and the gateway
+    // was reprobed and persisted with the wrong shape.
+    const uiDir = await tempDir("keiko-gw-ui-generic-primary-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-generic-primary-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "keiko-stt",
+            baseUrl: "https://speech.example.com",
+            apiKey: "voice-token",
+            capability: {
+              kind: "voice",
+              supportsSpeechInput: true,
+              voiceProviderLocality: "customer-hosted",
+            },
+          },
+          {
+            modelId: "azure-chat",
+            baseUrl: "https://resource.example.com",
+            apiKey: "azure-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const rotated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://resource.example.com",
+        apiKey: "rotated-token",
+        deploymentNames: ["azure-chat"],
+      }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const afterRotation = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "azure-chat",
+    );
+    expect(afterRotation?.endpointStyle).toBe("azure-openai-deployment");
+    expect(afterRotation?.apiVersion).toBe("2025-03-01-preview");
+    deps.store.close();
+  });
+  it("requires deployment names when the submitted protocol IS the Azure deployment path", async () => {
+    // Review finding on #3046: the requirement keyed only off a *.services.ai.azure.com
+    // hostname. Now that the protocol can be stated explicitly, a classic Azure OpenAI host on
+    // the deployment path with no deployments fell through to generic /models discovery and
+    // failed there instead of naming what was missing.
+    const uiDir = await tempDir("keiko-gw-ui-azure-style-deployments-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-azure-style-deployments-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://my-azure.openai.azure.com",
+        apiKey: "azure-token",
+        endpointStyle: "azure-openai-deployment",
+        apiVersion: "2025-04-01-preview",
+      }),
+      deps,
+    );
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "GATEWAY_DEPLOYMENTS_REQUIRED" } });
+    deps.store.close();
+  });
+  it("inherits a stored generic protocol on the SAME endpoint and drops it on a move", async () => {
+    // Both branches of the inheritance guard (review finding on #3046): a protocol was declared
+    // for one endpoint, so it survives a credential rotation there and must NOT follow the
+    // connection to a different host, where nothing declared it.
+    const uiDir = await tempDir("keiko-gw-ui-generic-inherit-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-generic-inherit-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "azure-chat",
+            baseUrl: "https://resource.example.com",
+            apiKey: "azure-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    // SAME endpoint, protocol omitted: the stored declaration still applies.
+    const rotated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://resource.example.com",
+        apiKey: "rotated-token",
+        deploymentNames: ["azure-chat"],
+      }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const afterRotation = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "azure-chat",
+    );
+    expect(afterRotation?.endpointStyle).toBe("azure-openai-deployment");
+    expect(afterRotation?.apiVersion).toBe("2025-03-01-preview");
+
+    // DIFFERENT endpoint, protocol omitted: nothing declared it for the new host.
+    const moved = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://other-resource.example.com",
+        apiKey: "moved-token",
+        deploymentNames: ["azure-chat"],
+      }),
+      deps,
+    );
+    expect(moved.status).toBe(200);
+    const afterMove = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "azure-chat",
+    );
+    expect(afterMove?.baseUrl).toBe("https://other-resource.example.com");
+    expect(afterMove?.endpointStyle).toBeUndefined();
+    expect(afterMove?.apiVersion).toBeUndefined();
+    deps.store.close();
+  });
+  it("replaces the stored protocol atomically when a new style is submitted", async () => {
+    // Review finding on #3046: a submitted style with an inherited api version is a MIXED
+    // protocol the canonical parser refuses (a version requires the Azure style), so switching
+    // an Azure provider to openai-compatible on the same URL failed the save instead of
+    // replacing the protocol. The submitted protocol is a unit.
+    const uiDir = await tempDir("keiko-gw-ui-protocol-atomic-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-protocol-atomic-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "azure-chat",
+            baseUrl: "https://resource.example.com",
+            apiKey: "azure-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const switched = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://resource.example.com",
+        apiKey: "azure-token",
+        deploymentNames: ["azure-chat"],
+        endpointStyle: "openai-compatible",
+      }),
+      deps,
+    );
+    expect(switched.status).toBe(200);
+    const saved = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "azure-chat",
+    );
+    expect(saved?.endpointStyle).toBe("openai-compatible");
+    expect(saved?.apiVersion).toBeUndefined();
+    deps.store.close();
+  });
+
+  it("verifies and saves a protocol-only preserve-mode update", async () => {
+    // Review finding on #3046: with only endpointStyle/apiVersion submitted, the request took
+    // the settings-only path, which never rebuilds providers — the protocol change was accepted
+    // and silently dropped.
+    const uiDir = await tempDir("keiko-gw-ui-protocol-only-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-protocol-only-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "azure-chat",
+            baseUrl: "https://resource.example.com",
+            apiKey: "azure-token",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const protocolOnly = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        endpointStyle: "azure-openai-deployment",
+        apiVersion: "2025-04-01-preview",
+      }),
+      deps,
+    );
+    expect(protocolOnly.status).toBe(200);
+    const saved = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "azure-chat",
+    );
+    expect(saved?.endpointStyle).toBe("azure-openai-deployment");
+    expect(saved?.apiVersion).toBe("2025-04-01-preview");
+    // A protocol-only update changes the protocol and nothing else — without this the test would
+    // pass over a rebuild that dropped the connection (review finding on #3046).
+    expect(saved?.baseUrl).toBe("https://resource.example.com");
+    expect(saved?.apiKey).toBe("azure-token");
+    deps.store.close();
+  });
+
+  it("names the pairing when an api version has no Azure endpoint to belong to", async () => {
+    // Review finding on #3046: an api version with no style (fresh) or over an inherited
+    // openai-compatible style built a pair the canonical parser refuses. The throw surfaced as an
+    // opaque 502 "credentials could not be verified", which is a request problem reported as an
+    // upstream one. Bumping the version of a stored Azure endpoint stays legal — same pair.
+    const uiDir = await tempDir("keiko-gw-ui-orphan-version-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-orphan-version-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const orphan = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "chat-token",
+        deploymentNames: ["example-chat"],
+        apiVersion: "2025-04-01-preview",
+      }),
+      deps,
+    );
+    expect(orphan.status).toBe(400);
+    expect(orphan.body).toMatchObject({
+      error: { code: "GATEWAY_API_VERSION_REQUIRES_AZURE_ENDPOINT" },
+    });
+
+    // The other direction of the same rule: the deployment path needs the version that builds
+    // its URL, and left unnamed it produced the same misleading 502.
+    const styleWithoutVersion = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "chat-token",
+        deploymentNames: ["example-chat"],
+        endpointStyle: "azure-openai-deployment",
+      }),
+      deps,
+    );
+    expect(styleWithoutVersion.status).toBe(400);
+    expect(styleWithoutVersion.body).toMatchObject({
+      error: { code: "GATEWAY_AZURE_ENDPOINT_REQUIRES_API_VERSION" },
+    });
+
+    // A malformed version is a malformed request, not an upstream failure.
+    const malformed = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "chat-token",
+        deploymentNames: ["example-chat"],
+        endpointStyle: "azure-openai-deployment",
+        apiVersion: "not-a-date",
+      }),
+      deps,
+    );
+    expect(malformed.status).toBe(400);
+    expect(malformed.body).toMatchObject({ error: { code: "GATEWAY_API_VERSION_INVALID" } });
+
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "azure-chat",
+            baseUrl: "https://resource.example.com",
+            apiKey: "azure-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+    // The legal case the blunt "reject apiVersion without endpointStyle" rule would have broken.
+    const bumped = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://resource.example.com",
+        apiKey: "azure-token",
+        deploymentNames: ["azure-chat"],
+        apiVersion: "2025-04-01-preview",
+      }),
+      deps,
+    );
+    expect(bumped.status).toBe(200);
+    const saved = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "azure-chat",
+    );
+    expect(saved?.endpointStyle).toBe("azure-openai-deployment");
+    expect(saved?.apiVersion).toBe("2025-04-01-preview");
+    deps.store.close();
+  });
+
+  it("rejects an unsupported generic endpoint style", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-generic-style-bad-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-generic-style-bad-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "chat-token",
+        deploymentNames: ["example-chat"],
+        endpointStyle: "bogus-style",
+      }),
+      deps,
+    );
+    expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    deps.store.close();
+  });
 });
 
 // Issue #144: discovery-normalization seam tests. Synthetic generic IDs only —
