@@ -2150,6 +2150,55 @@ describe("GatewaySetupDialog", () => {
       apiVersion: "2025-04-01-preview",
     });
   });
+  it("omits the imported generic protocol when the gateway URL is left empty", async () => {
+    // The other branch of the URL binding (review finding on #3046): a preserve-mode submit
+    // that states no gateway URL inherits the stored connection, so the uploaded protocol has
+    // no endpoint to apply to and must not ride along.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "azure-chat",
+      testedModelIds: ["azure-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog preserveExisting storedModels={[modelCapability("azure-chat")]} />);
+
+    await userEvent.upload(
+      await screen.findByLabelText(/load keiko\.config\.json/i),
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "azure-chat",
+                baseUrl: "https://resource.example.com",
+                endpointStyle: "azure-openai-deployment",
+                apiVersion: "2025-04-01-preview",
+                capability: { id: "azure-chat", kind: "chat" },
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(/base url/i)).toHaveValue("https://resource.example.com"),
+    );
+    await userEvent.clear(screen.getByLabelText(/base url/i));
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(setupGateway).mock.calls[0]?.[0] ?? {};
+    expect(payload).not.toHaveProperty("endpointStyle");
+    expect(payload).not.toHaveProperty("apiVersion");
+  });
+
   it("drops the imported generic protocol when the user retypes the gateway URL", async () => {
     vi.mocked(setupGateway).mockResolvedValueOnce({
       ok: true,

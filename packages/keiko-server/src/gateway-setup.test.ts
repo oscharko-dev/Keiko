@@ -6122,6 +6122,153 @@ describe("handleGatewaySetup", () => {
       deps.store.close();
     }
   });
+  it("persists an explicitly submitted generic endpoint style over the environment default", async () => {
+    // Codex finding on #3042: the setup request had no generic endpointStyle field, so an
+    // uploaded LiteLLM config declaring openai-compatible was rebuilt style-less and a server
+    // running KEIKO_DEFAULT_ENDPOINT_STYLE=azure-openai-deployment resolved the env default —
+    // wrong URL shape after a reported upload success.
+    const uiDir = await tempDir("keiko-gw-ui-generic-style-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-generic-style-"),
+      env: {
+        ...VAULT_ENV,
+        KEIKO_DEFAULT_ENDPOINT_STYLE: "azure-openai-deployment",
+        KEIKO_DEFAULT_API_VERSION: "2025-04-01-preview",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "chat-token",
+        endpointStyle: "openai-compatible",
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const provider = currentGatewayConfig(deps)?.providers.find(
+      (item) => item.modelId === "example-chat-model",
+    );
+    expect(provider?.endpointStyle).toBe("openai-compatible");
+    deps.store.close();
+  });
+  it("persists a submitted Azure endpoint style with its api version on generic providers", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-generic-azure-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-generic-azure-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://resource.example.com",
+        apiKey: "azure-token",
+        deploymentNames: ["azure-chat"],
+        endpointStyle: "azure-openai-deployment",
+        apiVersion: "2025-04-01-preview",
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const provider = currentGatewayConfig(deps)?.providers.find(
+      (item) => item.modelId === "azure-chat",
+    );
+    expect(provider?.endpointStyle).toBe("azure-openai-deployment");
+    expect(provider?.apiVersion).toBe("2025-04-01-preview");
+    deps.store.close();
+  });
+  it("inherits a stored generic protocol on the SAME endpoint and drops it on a move", async () => {
+    // Both branches of the inheritance guard (review finding on #3046): a protocol was declared
+    // for one endpoint, so it survives a credential rotation there and must NOT follow the
+    // connection to a different host, where nothing declared it.
+    const uiDir = await tempDir("keiko-gw-ui-generic-inherit-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-generic-inherit-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "azure-chat",
+            baseUrl: "https://resource.example.com",
+            apiKey: "azure-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    // SAME endpoint, protocol omitted: the stored declaration still applies.
+    const rotated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://resource.example.com",
+        apiKey: "rotated-token",
+        deploymentNames: ["azure-chat"],
+      }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const afterRotation = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "azure-chat",
+    );
+    expect(afterRotation?.endpointStyle).toBe("azure-openai-deployment");
+    expect(afterRotation?.apiVersion).toBe("2025-03-01-preview");
+
+    // DIFFERENT endpoint, protocol omitted: nothing declared it for the new host.
+    const moved = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://other-resource.example.com",
+        apiKey: "moved-token",
+        deploymentNames: ["azure-chat"],
+      }),
+      deps,
+    );
+    expect(moved.status).toBe(200);
+    const afterMove = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "azure-chat",
+    );
+    expect(afterMove?.baseUrl).toBe("https://other-resource.example.com");
+    expect(afterMove?.endpointStyle).toBeUndefined();
+    expect(afterMove?.apiVersion).toBeUndefined();
+    deps.store.close();
+  });
+  it("rejects an unsupported generic endpoint style", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-generic-style-bad-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-generic-style-bad-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "chat-token",
+        deploymentNames: ["example-chat"],
+        endpointStyle: "bogus-style",
+      }),
+      deps,
+    );
+    expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    deps.store.close();
+  });
 });
 
 // Issue #144: discovery-normalization seam tests. Synthetic generic IDs only —
@@ -6523,88 +6670,6 @@ describe("rawConfigFromCurrent — voice persona persistence round-trip", () => 
     const reloaded = parseGatewayConfig(rawConfigFromCurrent(config, undefined));
 
     expect(reloaded.reranker).toEqual(config.reranker);
-  });
-
-  it("persists an explicitly submitted generic endpoint style over the environment default", async () => {
-    // Codex finding on #3042: the setup request had no generic endpointStyle field, so an
-    // uploaded LiteLLM config declaring openai-compatible was rebuilt style-less and a server
-    // running KEIKO_DEFAULT_ENDPOINT_STYLE=azure-openai-deployment resolved the env default —
-    // wrong URL shape after a reported upload success.
-    const uiDir = await tempDir("keiko-gw-ui-generic-style-");
-    const deps = buildUiHandlerDeps({
-      configPath: undefined,
-      evidenceDir: await tempDir("keiko-gw-ev-generic-style-"),
-      env: {
-        ...VAULT_ENV,
-        KEIKO_DEFAULT_ENDPOINT_STYLE: "azure-openai-deployment",
-        KEIKO_DEFAULT_API_VERSION: "2025-04-01-preview",
-      },
-      uiDbPath: join(uiDir, "keiko-ui.db"),
-      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
-      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
-    });
-    const result = await handleGatewaySetup(
-      ctx({
-        baseUrl: "https://llm-gateway.example.com/v1",
-        apiKey: "chat-token",
-        endpointStyle: "openai-compatible",
-      }),
-      deps,
-    );
-    expect(result.status).toBe(200);
-    const provider = currentGatewayConfig(deps)?.providers.find(
-      (item) => item.modelId === "example-chat-model",
-    );
-    expect(provider?.endpointStyle).toBe("openai-compatible");
-    deps.store.close();
-  });
-  it("persists a submitted Azure endpoint style with its api version on generic providers", async () => {
-    const uiDir = await tempDir("keiko-gw-ui-generic-azure-");
-    const deps = buildUiHandlerDeps({
-      configPath: undefined,
-      evidenceDir: await tempDir("keiko-gw-ev-generic-azure-"),
-      env: { ...VAULT_ENV },
-      uiDbPath: join(uiDir, "keiko-ui.db"),
-      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
-    });
-    const result = await handleGatewaySetup(
-      ctx({
-        baseUrl: "https://resource.example.com",
-        apiKey: "azure-token",
-        deploymentNames: ["azure-chat"],
-        endpointStyle: "azure-openai-deployment",
-        apiVersion: "2025-04-01-preview",
-      }),
-      deps,
-    );
-    expect(result.status).toBe(200);
-    const provider = currentGatewayConfig(deps)?.providers.find(
-      (item) => item.modelId === "azure-chat",
-    );
-    expect(provider?.endpointStyle).toBe("azure-openai-deployment");
-    expect(provider?.apiVersion).toBe("2025-04-01-preview");
-    deps.store.close();
-  });
-  it("rejects an unsupported generic endpoint style", async () => {
-    const uiDir = await tempDir("keiko-gw-ui-generic-style-bad-");
-    const deps = buildUiHandlerDeps({
-      configPath: undefined,
-      evidenceDir: await tempDir("keiko-gw-ev-generic-style-bad-"),
-      env: { ...VAULT_ENV },
-      uiDbPath: join(uiDir, "keiko-ui.db"),
-      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
-    });
-    const result = await handleGatewaySetup(
-      ctx({
-        baseUrl: "https://llm-gateway.example.com/v1",
-        apiKey: "chat-token",
-        deploymentNames: ["example-chat"],
-        endpointStyle: "bogus-style",
-      }),
-      deps,
-    );
-    expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
-    deps.store.close();
   });
 
   it("preserves an explicit output-token parameter override on reload", () => {

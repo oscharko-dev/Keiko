@@ -1342,6 +1342,32 @@ describe("appliedGatewayConfigFieldCount", () => {
 
     expect(parseGatewayConfigUpload(split)).toEqual({ outcome: "invalid" });
   });
+  it("refuses generic providers that disagree on the api version alone", () => {
+    // The uniformity check has two axes; the split-style fixture above never reaches the second
+    // one. Two Azure providers with DIFFERENT valid versions must refuse too (review finding on
+    // #3046) — one form holds one connection, and silently picking a version would send half
+    // the deployments to an API contract they were not configured for.
+    const splitVersion = JSON.stringify({
+      providers: [
+        providerFixture({
+          modelId: "azure-a",
+          baseUrl: "https://resource.example.com",
+          endpointStyle: "azure-openai-deployment",
+          apiVersion: "2025-03-01-preview",
+        }),
+        providerFixture({
+          modelId: "azure-b",
+          baseUrl: "https://resource.example.com",
+          endpointStyle: "azure-openai-deployment",
+          apiVersion: "2025-04-01-preview",
+          capability: undefined,
+        }),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(splitVersion)).toEqual({ outcome: "invalid" });
+  });
+
   it("still refuses an unknown generic endpoint style", () => {
     const unknown = JSON.stringify({
       providers: [providerFixture({ endpointStyle: "bogus-style" })],
