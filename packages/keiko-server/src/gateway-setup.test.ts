@@ -6295,6 +6295,53 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("rotates a declared Azure endpoint whose required version comes from the environment", async () => {
+    // Review finding on #3046: dropping every undeclared protocol value from the durable view
+    // left a file that DECLARES azure-openai-deployment and takes its required version from
+    // KEIKO_MODEL_<ID>_API_VERSION carrying azure with no version — and inheritance then
+    // rejected a routine credential rotation with 400. Only a version the pair does not need is
+    // dropped.
+    const uiDir = await tempDir("keiko-gw-ui-env-version-");
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            endpointStyle: "azure-openai-deployment",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-env-version-"),
+      env: { ...VAULT_ENV, KEIKO_MODEL_EXAMPLE_CHAT_API_VERSION: "2025-04-01-preview" },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const rotated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "rotated-token",
+        deploymentNames: ["example-chat"],
+      }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const saved = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "example-chat",
+    );
+    expect(saved?.endpointStyle).toBe("azure-openai-deployment");
+    deps.store.close();
+  });
+
   it("keeps verified observations when a rotation only re-resolves an env protocol", async () => {
     // Review finding on #3046: comparing the capability identity against the env-RESOLVED view
     // made a plain rotation look like a protocol change whenever KEIKO_DEFAULT_* supplied a
@@ -6738,6 +6785,20 @@ describe("handleGatewaySetup", () => {
     expect(styleWithoutVersion.body).toMatchObject({
       error: { code: "GATEWAY_AZURE_ENDPOINT_REQUIRES_API_VERSION" },
     });
+
+    // A malformed version is a malformed request, not an upstream failure.
+    const malformed = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "chat-token",
+        deploymentNames: ["example-chat"],
+        endpointStyle: "azure-openai-deployment",
+        apiVersion: "not-a-date",
+      }),
+      deps,
+    );
+    expect(malformed.status).toBe(400);
+    expect(malformed.body).toMatchObject({ error: { code: "GATEWAY_API_VERSION_INVALID" } });
 
     const gatewayConfig = deps.gatewayConfig;
     if (gatewayConfig === undefined) throw new Error("expected gateway config store");

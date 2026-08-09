@@ -2241,6 +2241,10 @@ function setupEndpointProtocol(
 // what is a request problem — a submitted version with no style at all, or a submitted version
 // over an inherited openai-compatible style (review finding on #3046). Bumping the version of an
 // endpoint whose stored style IS the deployment path stays legal: that is the same pair.
+// The canonical api-version shape, mirroring the model gateway's own parser (ADR-0019 keeps the
+// two packages apart, so the rule is mirrored and pinned on both sides rather than imported).
+const SETUP_API_VERSION_RE = /^\d{4}-\d{2}-\d{2}(?:-preview)?$/u;
+
 function pairedEndpointProtocol(
   endpointStyle: ModelProviderConfig["endpointStyle"] | undefined,
   apiVersion: string | undefined,
@@ -2251,6 +2255,18 @@ function pairedEndpointProtocol(
       body: errorBody(
         "GATEWAY_API_VERSION_REQUIRES_AZURE_ENDPOINT",
         'apiVersion requires endpointStyle to be "azure-openai-deployment".',
+      ),
+    };
+  }
+  // The canonical SHAPE, checked here for the same reason as the pairing: a malformed version
+  // threw inside the candidate loop and surfaced as an opaque 502 for what is a malformed
+  // request (review finding on #3046).
+  if (apiVersion !== undefined && !SETUP_API_VERSION_RE.test(apiVersion)) {
+    return {
+      status: 400,
+      body: errorBody(
+        "GATEWAY_API_VERSION_INVALID",
+        "apiVersion must be YYYY-MM-DD or YYYY-MM-DD-preview.",
       ),
     };
   }
@@ -4531,12 +4547,11 @@ function withFileDeclaredProtocol(
       // overrides a DECLARED version would otherwise be sealed in by a rotation just as an
       // undeclared one would (review finding on #3046). An unrecognised declared style is left
       // as parsed — the parser is the authority on what a style may be.
+      const endpointStyle = declaredEndpointStyle(raw.endpointStyle, provider.endpointStyle);
       return {
         ...provider,
-        endpointStyle: declaredEndpointStyle(raw.endpointStyle, provider.endpointStyle),
-        ...(typeof raw.apiVersion === "string"
-          ? { apiVersion: raw.apiVersion }
-          : { apiVersion: undefined }),
+        endpointStyle,
+        apiVersion: declaredApiVersion(raw.apiVersion, provider.apiVersion, endpointStyle),
       };
     }),
   };
@@ -4549,6 +4564,20 @@ function declaredEndpointStyle(
   if (typeof raw !== "string") return undefined;
   const declared = PROVIDER_ENDPOINT_STYLES.find((style) => style === raw);
   return declared ?? resolved;
+}
+
+// A file that declares the Azure deployment path and takes its REQUIRED version from
+// KEIKO_MODEL_<ID>_API_VERSION is coherent only with that version — the same reason #3040 stopped
+// masking the per-model namespace. Dropping it as "not declared" would leave the durable view
+// carrying azure with no version, and inheritance would then reject a routine rotation with 400
+// (review finding on #3046). Only a version the pair does not need is dropped.
+function declaredApiVersion(
+  raw: unknown,
+  resolved: string | undefined,
+  endpointStyle: ModelProviderConfig["endpointStyle"],
+): string | undefined {
+  if (typeof raw === "string") return raw;
+  return endpointStyle === "azure-openai-deployment" ? resolved : undefined;
 }
 
 function fileDeclaredProviderRecords(
