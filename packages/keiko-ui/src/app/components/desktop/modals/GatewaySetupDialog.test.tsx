@@ -2085,6 +2085,73 @@ describe("GatewaySetupDialog", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /test & save/i })).toBeEnabled());
   });
 
+  it("keeps a deliberate Not stated across an equivalent URL edit", async () => {
+    // Review finding on #3048: the restore filled any EMPTY protocol field, which cannot tell a
+    // field the reset cleared from one the operator deliberately unstated — an equivalent URL
+    // edit then undid their own choice by putting the file's Azure style back.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+    await userEvent.upload(
+      await screen.findByLabelText(/load keiko\.config\.json/i),
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "gpt-5o",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                capability: { id: "gpt-5o", kind: "chat" },
+              },
+              {
+                modelId: "azure-tts",
+                baseUrl: "https://voice.example.com",
+                endpointStyle: "azure-openai-deployment",
+                apiVersion: "2025-04-01-preview",
+                capability: {
+                  id: "azure-tts",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsSpeechOutput: true,
+                },
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(/audio endpoint url/i)).toHaveValue("https://voice.example.com"),
+    );
+
+    // The operator decides this endpoint speaks the default shape after all…
+    await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
+    await userEvent.click(screen.getByRole("option", { name: "Not stated" }));
+    // …and then makes an edit the server reads as the same endpoint.
+    await userEvent.type(screen.getByLabelText(/audio endpoint url/i), "/");
+
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
+    await userEvent.type(screen.getByLabelText(/output voice/i), "ash");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(setupGateway).mock.calls[0]?.[0] ?? {};
+    expect(payload).not.toHaveProperty("voiceEndpointStyle");
+    expect(payload).not.toHaveProperty("voiceApiVersion");
+  });
+
   it("restores the imported protocol when the endpoint edit is typed back", async () => {
     // Review finding on #3048: typing back to the uploaded URL never leaves the committed
     // identity, so no transition fires and the restore inside the reset was never reached — the

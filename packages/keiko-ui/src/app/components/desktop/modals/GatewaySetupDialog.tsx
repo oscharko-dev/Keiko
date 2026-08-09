@@ -2694,15 +2694,16 @@ export function GatewaySetupDialog({
     canonicalEndpointIdentity(nextBaseUrl) ===
       canonicalEndpointIdentity(importedVoiceEndpointBaseUrl);
 
-  // Only fields the reset EMPTIED come back. An operator who corrected the imported protocol by
-  // hand and then made an equivalent URL edit would otherwise have their correction overwritten
-  // by the file's value (review finding on #3048).
+  // Only what the RESET cleared comes back, and the binding is what says so: the reset empties
+  // it, while any hand statement — including choosing "Not stated" or clearing the version —
+  // rebinds to the URL in the form. Testing the fields for emptiness could not tell a cleared
+  // field from a deliberately unstated one, so an equivalent URL edit undid the operator's own
+  // choice (review findings on #3048).
   const restoreUploadedVoiceProtocol = (): void => {
-    setVoiceEndpointStyle((current) => (current === "" ? importedVoiceEndpointStyle : current));
-    setVoiceApiVersion((current) => (current === "" ? importedVoiceApiVersion : current));
-    setVoiceRealtimeAuthMode((current) =>
-      current === "" ? importedVoiceRealtimeAuthMode : current,
-    );
+    if (voiceProtocolBoundBaseUrl !== "") return;
+    setVoiceEndpointStyle(importedVoiceEndpointStyle);
+    setVoiceApiVersion(importedVoiceApiVersion);
+    setVoiceRealtimeAuthMode(importedVoiceRealtimeAuthMode);
     setVoiceProtocolBoundBaseUrl(importedVoiceEndpointBaseUrl);
   };
 
