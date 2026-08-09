@@ -25,14 +25,14 @@
     "node": ">=24.18.0 <25"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "0.3.0",
-    "@oscharko-dev/keiko-evaluations": "0.3.0",
-    "@oscharko-dev/keiko-evidence": "0.3.0",
-    "@oscharko-dev/keiko-harness": "0.3.0",
-    "@oscharko-dev/keiko-model-gateway": "0.3.0",
-    "@oscharko-dev/keiko-verification": "0.3.0",
-    "@oscharko-dev/keiko-workflows": "0.3.0",
-    "@oscharko-dev/keiko-workspace": "0.3.0"
+    "@oscharko-dev/keiko-contracts": "0.3.1",
+    "@oscharko-dev/keiko-evaluations": "0.3.1",
+    "@oscharko-dev/keiko-evidence": "0.3.1",
+    "@oscharko-dev/keiko-harness": "0.3.1",
+    "@oscharko-dev/keiko-model-gateway": "0.3.1",
+    "@oscharko-dev/keiko-verification": "0.3.1",
+    "@oscharko-dev/keiko-workflows": "0.3.1",
+    "@oscharko-dev/keiko-workspace": "0.3.1"
   },
   "private": true
 }

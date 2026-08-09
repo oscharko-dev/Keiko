@@ -22,8 +22,8 @@
   "dependencies": {
     "@monaco-editor/react": "4.7.0",
     "@noble/hashes": "2.2.0",
-    "@oscharko-dev/keiko-contracts": "0.3.0",
-    "@oscharko-dev/keiko-editor": "0.3.0",
+    "@oscharko-dev/keiko-contracts": "0.3.1",
+    "@oscharko-dev/keiko-editor": "0.3.1",
     "diff": "9.0.0",
     "monaco-editor": "0.55.1",
     "next": "16.2.12",
