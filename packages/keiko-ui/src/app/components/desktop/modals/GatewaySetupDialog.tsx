@@ -245,17 +245,25 @@ const VOICE_PROVIDER_LOCALITIES: ReadonlySet<VoiceProviderLocality> = new Set([
 // state how the new host speaks, or the save is refused rather than silently degrading an Azure
 // deployment-path endpoint to the OpenAI-compatible URL shape (review finding on #3042). The
 // empty option is what an unstated protocol looks like on a fresh or non-Azure setup.
-const VOICE_ENDPOINT_STYLE_SECTIONS = [
-  {
-    options: [
-      { value: "", label: "Not stated" },
-      { value: "openai-compatible", label: "OpenAI-compatible" },
-      { value: "azure-openai-deployment", label: "Azure deployment path" },
-    ],
-  },
-] satisfies readonly [
-  { readonly options: readonly { readonly value: string; readonly label: string }[] },
-];
+function voiceEndpointStyleSections(
+  t: GatewaySetupTranslate,
+): readonly [{ readonly options: readonly { readonly value: string; readonly label: string }[] }] {
+  return [
+    {
+      options: [
+        { value: "", label: t("gatewaySetup.voice.endpointStyle.unstated") },
+        {
+          value: "openai-compatible",
+          label: t("gatewaySetup.voice.endpointStyle.openaiCompatible"),
+        },
+        {
+          value: "azure-openai-deployment",
+          label: t("gatewaySetup.voice.endpointStyle.azureDeploymentPath"),
+        },
+      ],
+    },
+  ];
+}
 
 const VOICE_PROVIDER_LOCALITY_SECTIONS = [
   {
@@ -1593,6 +1601,7 @@ function VoiceEndpointStyleField({
   disabled,
   onChange,
 }: VoiceEndpointStyleFieldProps): ReactNode {
+  const t = useGatewaySetupTranslate();
   return (
     <div className="gw-field">
       <span id={labelId}>
@@ -1601,7 +1610,7 @@ function VoiceEndpointStyleField({
       <KeikoSelect
         ariaLabelledBy={labelId}
         menuTitle="Audio endpoint style"
-        sections={VOICE_ENDPOINT_STYLE_SECTIONS}
+        sections={voiceEndpointStyleSections(t)}
         showMenuHeader={false}
         triggerClassName="gw-input gw-provider-locality-select"
         menuClassName="gw-provider-locality-menu"
@@ -1620,10 +1629,12 @@ interface VoiceApiVersionFieldProps {
 }
 
 function VoiceApiVersionField({ value, disabled, onChange }: VoiceApiVersionFieldProps): ReactNode {
+  const t = useGatewaySetupTranslate();
   return (
     <label className="gw-field">
       <span>
-        Audio API version <span className="dlg-opt">Azure deployment path only</span>
+        Audio API version{" "}
+        <span className="dlg-opt">{t("gatewaySetup.voice.apiVersion.azureOnly")}</span>
       </span>
       <input
         className="gw-input"
