@@ -63,6 +63,9 @@ import {
   buildPortableEvaluationManifest,
   PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
 } from "./lib/portable-evaluation-manifest.mjs";
+// release.yml owns the required-check list and check:release-required-workflows validates it —
+// this reader is the existing accessor, so the local lane cannot drift from the workflow.
+import { releaseRequiredChecks } from "./check-release-required-workflow-names.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const WORKFLOW_PATH = ".github/workflows/portable-assets.yml";
@@ -869,11 +872,37 @@ function assertPublicReleaseSourceIsApproved(commitSha, repository) {
   log(`public release source verified: ${commitSha} is in ${PUBLIC_RELEASE_SOURCE_BRANCH}.`);
 }
 
+/**
+ * The verifier is handed its inputs explicitly rather than left to its own defaults, because both
+ * of those defaults are wrong for a locally driven public release:
+ *
+ * - `RELEASE_REQUIRED_CHECKS` — without it the verifier reads the base branch's protection, whose
+ *   contexts include pull-request-only ones (`Review dependency diff`, `Socket Security: Pull
+ *   Request Alerts`) that a push commit never emits, so a healthy commit would look unverified.
+ *   The list is taken from `release.yml`, which already owns it and which
+ *   `check:release-required-workflows` already validates — restating it here would be a third copy
+ *   free to drift.
+ * - `GITHUB_TOKEN` — a local run authenticates through `gh`, not an env var. Unauthenticated
+ *   GitHub API calls would be rate-limited into a false failure.
+ */
+function requiredChecksEnvironment(commitSha, repository) {
+  const token =
+    process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? gh(["auth", "token"], {}).trim();
+  return {
+    ...process.env,
+    GITHUB_REPOSITORY: repository,
+    GITHUB_TOKEN: token,
+    RELEASE_BASE_BRANCH: PUBLIC_RELEASE_SOURCE_BRANCH,
+    RELEASE_REQUIRED_CHECKS: JSON.stringify(releaseRequiredChecks()),
+    RELEASE_SHA: commitSha,
+  };
+}
+
 function assertRequiredChecksPassed(commitSha, repository) {
   const result = processRunner(process.execPath, ["scripts/verify-release-required-checks.mjs"], {
     cwd: repoRoot,
     encoding: "utf8",
-    env: { ...process.env, RELEASE_SHA: commitSha, GITHUB_REPOSITORY: repository },
+    env: requiredChecksEnvironment(commitSha, repository),
   });
   if (result.error !== undefined) {
     fail(`could not verify required checks: ${result.error.message}`);
