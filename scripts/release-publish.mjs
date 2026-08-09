@@ -41,6 +41,7 @@ import {
 } from "./lib/portable-setup-companion.mjs";
 import {
   collectEvaluationArtifactDigests,
+  jsonFromCommand,
   portableReleaseGate,
 } from "./lib/portable-release-verification.mjs";
 
@@ -1176,6 +1177,21 @@ function printReleaseNotesPreview(notes) {
   console.log("-----END KEIKO RELEASE NOTES-----");
 }
 
+/**
+ * An interrupted `--public-release` deliberately leaves a resumable stable-tag DRAFT holding
+ * evaluation assets. Editing it here would keep it private while npm publishes, clobber only
+ * same-named assets, and leave the evaluation manifest beside qualified uploads — so a draft is
+ * refused outright; the evaluation lane owns resuming or deleting it (Codex finding on #3054).
+ * An unreadable answer is treated as a draft: fail closed.
+ */
+function refuseResumableDraft(existing, tag) {
+  if (jsonFromCommand(existing)?.isDraft !== false) {
+    fail(
+      `GitHub release ${tag} exists as a draft — an interrupted evaluation publish leaves one. Resume or delete it with scripts/release-portable-prerelease.mjs before publishing over this tag.`,
+    );
+  }
+}
+
 function ensureGithubRelease(rootPackage, options, notes) {
   const tag = releaseTag(rootPackage.version);
   if (options.skipGithubRelease || options.dryRun) {
@@ -1189,9 +1205,10 @@ function ensureGithubRelease(rootPackage, options, notes) {
   const prerelease = releaseIsPrerelease(rootPackage.version, options.tag);
   const latestArgs = options.tag === "latest" && !prerelease ? ["--latest"] : [];
   const prereleaseArgs = prerelease ? ["--prerelease"] : [];
-  const existing = gh(["release", "view", tag, "--repo", repo]);
+  const existing = gh(["release", "view", tag, "--repo", repo, "--json", "isDraft"]);
 
   if (existing.status === 0) {
+    refuseResumableDraft(existing, tag);
     console.log(`release-publish: GitHub release ${tag} exists; updating metadata.`);
     runGh([
       "release",

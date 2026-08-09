@@ -22,6 +22,12 @@ const EXPECTED = {
   assetNames: ASSET_NAMES,
 };
 
+const RUN_ARTIFACTS = [
+  { name: "portable-stage-windows-x64-evaluation-unsigned", id: 910001 },
+  { name: "portable-stage-macos-arm64-evaluation-unsigned", id: 910002 },
+  { name: "portable-stage-macos-x64-evaluation-unsigned", id: 910003 },
+];
+
 function manifest(overrides = {}) {
   const built = buildPortableEvaluationManifest({
     releaseTag: "v0.3.1",
@@ -29,6 +35,8 @@ function manifest(overrides = {}) {
     repository: "oscharko-dev/Keiko",
     workflowPath: ".github/workflows/portable-assets.yml",
     workflowRunId: 31300595709,
+    workflowRunAttempt: 1,
+    artifacts: RUN_ARTIFACTS,
     assets: ASSET_NAMES.map((assetName, index) => ({
       assetName,
       sizeBytes: 1024 + index,
@@ -87,7 +95,53 @@ describe("portable evaluation manifest", () => {
       "provenance.repository must be oscharko-dev/Keiko.",
       "provenance.workflowPath must be .github/workflows/portable-assets.yml.",
       "provenance.workflowRunId must be a numeric run id.",
+      "provenance.workflowRunAttempt must be a positive attempt number.",
+      "provenance.artifacts must list the run artifacts that carried the published bytes.",
     ]);
+  });
+
+  it("refuses provenance whose attempt or artifact identities are unusable", () => {
+    // A run id is reused across reruns; the attempt and the immutable artifact ids are what pin
+    // the exact execution and bytes, so evidence without them authorizes nothing.
+    expect(
+      portableEvaluationManifestFailures(
+        manifest({ provenance: { ...manifest().provenance, workflowRunAttempt: "0" } }),
+        EXPECTED,
+      ),
+    ).toContain("provenance.workflowRunAttempt must be a positive attempt number.");
+    expect(
+      portableEvaluationManifestFailures(
+        manifest({ provenance: { ...manifest().provenance, artifacts: [] } }),
+        EXPECTED,
+      ),
+    ).toContain(
+      "provenance.artifacts must list the run artifacts that carried the published bytes.",
+    );
+    expect(
+      portableEvaluationManifestFailures(
+        manifest({
+          provenance: {
+            ...manifest().provenance,
+            artifacts: [{ name: "portable-stage-windows-x64-evaluation-unsigned", id: 0 }],
+          },
+        }),
+        EXPECTED,
+      ),
+    ).toContain("every provenance artifact must carry a name and a positive numeric id.");
+    expect(
+      portableEvaluationManifestFailures(
+        manifest({
+          provenance: {
+            ...manifest().provenance,
+            artifacts: [
+              { name: "portable-stage-windows-x64-evaluation-unsigned", id: 1 },
+              { name: "portable-stage-windows-x64-evaluation-unsigned", id: 2 },
+            ],
+          },
+        }),
+        EXPECTED,
+      ),
+    ).toContain("provenance.artifacts must name each artifact exactly once.");
   });
 
   it("refuses a manifest that omits a published download", () => {

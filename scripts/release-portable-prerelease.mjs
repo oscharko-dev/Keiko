@@ -426,7 +426,7 @@ function waitForRun(runId, ref) {
       "view",
       runId,
       "--json",
-      "status,conclusion,headSha,event,headBranch,workflowDatabaseId",
+      "status,conclusion,headSha,event,headBranch,workflowDatabaseId,attempt",
     ]);
     if (view.status === "completed") {
       assertRunBelongsToRequestedRef(view, runId, ref);
@@ -1135,6 +1135,29 @@ function reportPlan(body, tag, hasPendingDraft) {
 }
 
 /**
+ * The immutable identities of the evaluation artifacts this run uploaded. Recorded in the
+ * evidence so the npm publisher can refuse a rerun's replacement artifacts: names survive a
+ * rerun, ids do not (Codex finding on #3054).
+ */
+function evaluationArtifactIdentities(runId) {
+  const listing = ghJson([
+    "api",
+    `repos/{owner}/{repo}/actions/runs/${String(runId)}/artifacts?per_page=100`,
+  ]);
+  const artifacts = Array.isArray(listing.artifacts) ? listing.artifacts : [];
+  return EVALUATION_ARTIFACTS.map((name) => {
+    const matches = artifacts.filter((artifact) => artifact.name === name);
+    const id = matches[0]?.id;
+    if (matches.length !== 1 || !Number.isSafeInteger(id) || id <= 0) {
+      fail(
+        `run ${String(runId)} does not list exactly one artifact named ${name} with a usable id.`,
+      );
+    }
+    return { name, id };
+  });
+}
+
+/**
  * Only a public release is ever promoted to npm `latest`, so only it needs the evidence the
  * publisher re-verifies before promotion. A beta carries its checksums in the body and nothing
  * more — it is never a promotion input.
@@ -1147,6 +1170,8 @@ function evaluationManifestFor(input) {
     repository: input.repository,
     workflowPath: WORKFLOW_PATH,
     workflowRunId: input.runId,
+    workflowRunAttempt: input.attempt,
+    artifacts: evaluationArtifactIdentities(input.runId),
     assets: input.digests,
   });
 }
@@ -1186,6 +1211,7 @@ function runPublishSteps(input) {
       tag,
       repository,
       runId,
+      attempt: view.attempt,
       digests,
       sourceCommitSha: view.headSha,
     }),

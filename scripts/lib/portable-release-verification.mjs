@@ -83,8 +83,13 @@ export function releaseReaders({ gh, downloadJson }) {
       jsonFromCommand(gh(["api", `repos/${repository}/releases/tags/${tag}`])),
     readLatestRelease: (repository) =>
       jsonFromCommand(gh(["api", `repos/${repository}/releases/latest`])),
-    readRun: (repository, runId) => {
-      const view = jsonFromCommand(gh(["api", `repos/${repository}/actions/runs/${runId}`]));
+    // Attempt-specific on purpose: the run id is reused across reruns, and the evidence speaks
+    // about ONE execution — a rerun must be able neither to substitute its conclusion nor to
+    // block the original attempt from verifying (Codex finding on #3054).
+    readRun: (repository, runId, attempt) => {
+      const view = jsonFromCommand(
+        gh(["api", `repos/${repository}/actions/runs/${runId}/attempts/${attempt}`]),
+      );
       return isRecord(view) ? view : undefined;
     },
     readManifest: (url) => downloadJson(url),
@@ -127,9 +132,10 @@ const MAX_EVALUATION_MANIFEST_BYTES = 1024 * 1024;
  */
 function runFailures(manifest, readRun, workflowPath) {
   const runId = manifest.provenance.workflowRunId;
-  const run = readRun(manifest.provenance.repository, runId);
+  const attempt = manifest.provenance.workflowRunAttempt;
+  const run = readRun(manifest.provenance.repository, runId, attempt);
   if (run === undefined) {
-    return [`evidence names workflow run ${runId}, which could not be read.`];
+    return [`evidence names workflow run ${runId} attempt ${attempt}, which could not be read.`];
   }
   return [
     [run.path === workflowPath, "must be a run of the portable assets workflow"],
@@ -137,7 +143,9 @@ function runFailures(manifest, readRun, workflowPath) {
     [run.conclusion === "success", "must have concluded successfully"],
   ]
     .filter(([satisfied]) => !satisfied)
-    .map(([, reason]) => `evidence names workflow run ${runId}, which ${reason}.`);
+    .map(
+      ([, reason]) => `evidence names workflow run ${runId} attempt ${attempt}, which ${reason}.`,
+    );
 }
 
 /**
@@ -230,6 +238,19 @@ function stableReleaseSurfaceFailure(input, release) {
   if (missing.length > 0) {
     return `GitHub release ${tag} is missing portable downloads: ${missing.join(", ")}.`;
   }
+  // Exactly the governed set, nothing else. A release writer could park an undeclared
+  // customer-shaped archive next to the four evidenced downloads, and every check so far would
+  // still pass while customers are offered an unreviewed executable (Codex finding on #3054).
+  // The evaluation lane publishes the four downloads plus the evidence manifest — any other
+  // asset makes this not the release the evidence describes.
+  const allowed = new Set([...expectedNames, PORTABLE_EVALUATION_MANIFEST_ASSET_NAME]);
+  const undeclared = release.assets
+    .filter(isRecord)
+    .map((asset) => asset.name)
+    .filter((name) => !allowed.has(name));
+  if (undeclared.length > 0) {
+    return `GitHub release ${tag} carries assets its evidence does not declare: ${undeclared.join(", ")}. A stable latest promotion accepts exactly the governed downloads plus their evidence.`;
+  }
   return undefined;
 }
 
@@ -278,6 +299,7 @@ export function prepublishedReleaseFailures(input) {
   return {
     ...declaredDownloads(manifest, release.assets, expectedNames),
     workflowRunId: manifest.provenance.workflowRunId,
+    runArtifacts: manifest.provenance.artifacts,
   };
 }
 
@@ -327,17 +349,18 @@ export function portableReleaseGate(ports) {
      */
     verifyPrepublished(tag, repository, workflowPath, sourceCommitSha) {
       const release = readers.readRelease(repository, tag);
-      const { failures, expectedDownloads, workflowRunId } = prepublishedReleaseFailures({
-        tag,
-        repository,
-        workflowPath,
-        expectedNames,
-        sourceCommitSha,
-        release,
-        readLatestRelease: readers.readLatestRelease,
-        readManifest: readers.readManifest,
-        readRun: readers.readRun,
-      });
+      const { failures, expectedDownloads, workflowRunId, runArtifacts } =
+        prepublishedReleaseFailures({
+          tag,
+          repository,
+          workflowPath,
+          expectedNames,
+          sourceCommitSha,
+          release,
+          readLatestRelease: readers.readLatestRelease,
+          readManifest: readers.readManifest,
+          readRun: readers.readRun,
+        });
       refuse(ports, "prepublished portable downloads are not usable", failures);
       // The evidence declares digests; the RUN proves them. Checked before the bytes are fetched,
       // so a forged manifest cannot even direct the download.
@@ -346,8 +369,9 @@ export function portableReleaseGate(ports) {
         "prepublished portable downloads are not the bytes their workflow run produced",
         runArtifactDigestFailures(
           expectedDownloads,
-          (names) => ports.collectRunArtifactDigests(workflowRunId, names),
+          (artifacts) => ports.collectRunArtifactDigests(workflowRunId, artifacts),
           evaluationArtifactNames(ports.targets),
+          runArtifacts,
         ),
       );
       ports.verifyBytes(release.assets, expectedDownloads);
@@ -374,10 +398,19 @@ function evaluationArtifactNames(targets) {
  * #3054). Workflow-run artifacts are not writable after the run, so hashing them is a source the
  * release surface cannot forge.
  *
- * @param collect (artifactNames) => Map<assetName, sha256> read from the run's artifacts
+ * @param collect (declaredArtifacts) => Map<fileName, sha256> read from the run's artifacts
  */
-function runArtifactDigestFailures(expectedDownloads, collect, artifactNames) {
-  const digests = collect(artifactNames);
+function runArtifactDigestFailures(expectedDownloads, collect, artifactNames, declaredArtifacts) {
+  // The evidence must speak about exactly the run's evaluation artifacts — fewer would skip
+  // bytes, extras would let a foreign artifact answer for a governed download.
+  const declaredNames = new Set((declaredArtifacts ?? []).map((artifact) => artifact.name));
+  const expectedSet = new Set(artifactNames);
+  const exact =
+    declaredNames.size === expectedSet.size && [...expectedSet].every((n) => declaredNames.has(n));
+  if (!exact) {
+    return ["the evidence does not declare exactly the run's evaluation artifacts."];
+  }
+  const digests = collect(declaredArtifacts);
   if (!(digests instanceof Map) || digests.size === 0) {
     return ["the referenced workflow run's evaluation artifacts could not be read."];
   }
@@ -418,11 +451,32 @@ function artifactFiles(root, prefix = "", depth = 1) {
  * An empty map means "unreadable", and the caller treats that as a refusal — never as an absent
  * objection.
  */
-export function collectEvaluationArtifactDigests({ gh, hashFile }, runId, artifactNames) {
+/**
+ * The declared identities must match what the run currently lists: exactly one artifact per
+ * declared name, carrying the declared immutable id, not expired. A rerun's replacement
+ * artifacts get NEW ids, so a rerun can neither substitute bytes nor make the name-based
+ * download below ambiguous — the mismatch refuses before anything is fetched (Codex finding on
+ * #3054).
+ */
+function runArtifactIdentitiesVerified(gh, runId, declaredArtifacts) {
+  const listing = jsonFromCommand(
+    gh(["api", `repos/{owner}/{repo}/actions/runs/${String(runId)}/artifacts?per_page=100`]),
+  );
+  if (!isRecord(listing) || !Array.isArray(listing.artifacts)) return false;
+  return declaredArtifacts.every((declared) => {
+    const matches = listing.artifacts.filter(
+      (artifact) => isRecord(artifact) && artifact.name === declared.name,
+    );
+    return matches.length === 1 && matches[0].id === declared.id && matches[0].expired !== true;
+  });
+}
+
+export function collectEvaluationArtifactDigests({ gh, hashFile }, runId, declaredArtifacts) {
+  if (!runArtifactIdentitiesVerified(gh, runId, declaredArtifacts)) return new Map();
   const root = mkdtempSync(join(tmpdir(), "keiko-run-artifacts-"));
   const digests = new Map();
   try {
-    for (const artifactName of artifactNames) {
+    for (const { name: artifactName } of declaredArtifacts) {
       const target = join(root, artifactName);
       mkdirSync(target, { recursive: true });
       const args = ["run", "download", String(runId), "--name", artifactName, "--dir", target];

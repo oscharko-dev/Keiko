@@ -22,6 +22,11 @@ const REPOSITORY = "oscharko-dev/Keiko";
 const WORKFLOW_PATH = ".github/workflows/portable-assets.yml";
 const SOURCE_COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const RUN_ID = "31300595709";
+const RUN_ATTEMPT = 1;
+const RUN_ARTIFACTS = ["windows-x64", "macos-arm64", "macos-x64"].map((target, index) => ({
+  name: `portable-stage-${target}-evaluation-unsigned`,
+  id: 910001 + index,
+}));
 const MANIFEST_URL = `https://github.com/${REPOSITORY}/releases/download/${TAG}/keiko-portable-evaluation-manifest.json`;
 const EXPECTED_NAMES = [
   "keiko-windows-x64.zip",
@@ -47,6 +52,8 @@ function evidence(assets, overrides = {}) {
       repository: REPOSITORY,
       workflowPath: WORKFLOW_PATH,
       workflowRunId: RUN_ID,
+      workflowRunAttempt: RUN_ATTEMPT,
+      artifacts: RUN_ARTIFACTS,
       assets: assets.map((asset) => ({
         assetName: asset.name,
         sizeBytes: asset.size,
@@ -170,6 +177,24 @@ describe("prepublishedReleaseFailures", () => {
 
     expect(result.failures.join(" ")).toContain("keiko-portable-evaluation-manifest.json");
     expect(result.failures.join(" ")).toContain("must never authorize the latest dist-tag");
+  });
+
+  it("refuses a release that carries assets its evidence does not declare", () => {
+    // A release writer could park an undeclared customer-shaped archive next to the four
+    // evidenced downloads; every name-presence check would still pass while customers are
+    // offered an unreviewed executable. Exactly the governed set, nothing else.
+    const assets = downloads();
+    const extra = release(assets);
+    extra.assets.push({
+      name: "keiko-macos-universal.zip",
+      size: 4096,
+      browser_download_url: `https://github.com/${REPOSITORY}/releases/download/${TAG}/keiko-macos-universal.zip`,
+    });
+    const result = verify({ release: extra });
+
+    expect(result.failures.join(" ")).toContain("assets its evidence does not declare");
+    expect(result.failures.join(" ")).toContain("keiko-macos-universal.zip");
+    expect(result.expectedDownloads).toEqual([]);
   });
 
   it.each([
@@ -302,20 +327,20 @@ describe("releaseReaders", () => {
     return { calls, readers };
   }
 
-  it("asks GitHub for the release by tag and the run by id", () => {
+  it("asks GitHub for the release by tag and the run attempt by id", () => {
     const { calls, readers } = readersWith({
       [`repos/${REPOSITORY}/releases/tags/${TAG}`]: { status: 0, stdout: '{"assets":[]}' },
-      [`repos/${REPOSITORY}/actions/runs/${RUN_ID}`]: {
+      [`repos/${REPOSITORY}/actions/runs/${RUN_ID}/attempts/${String(RUN_ATTEMPT)}`]: {
         status: 0,
         stdout: JSON.stringify(goodRun()),
       },
     });
 
     expect(readers.readRelease(REPOSITORY, TAG)).toEqual({ assets: [] });
-    expect(readers.readRun(REPOSITORY, RUN_ID)).toEqual(goodRun());
+    expect(readers.readRun(REPOSITORY, RUN_ID, RUN_ATTEMPT)).toEqual(goodRun());
     expect(calls).toEqual([
       `api repos/${REPOSITORY}/releases/tags/${TAG}`,
-      `api repos/${REPOSITORY}/actions/runs/${RUN_ID}`,
+      `api repos/${REPOSITORY}/actions/runs/${RUN_ID}/attempts/${String(RUN_ATTEMPT)}`,
     ]);
   });
 
@@ -323,15 +348,18 @@ describe("releaseReaders", () => {
     const { readers } = readersWith({});
 
     expect(readers.readRelease(REPOSITORY, TAG)).toBeUndefined();
-    expect(readers.readRun(REPOSITORY, RUN_ID)).toBeUndefined();
+    expect(readers.readRun(REPOSITORY, RUN_ID, RUN_ATTEMPT)).toBeUndefined();
   });
 
   it("refuses a run payload that is not an object", () => {
     const { readers } = readersWith({
-      [`repos/${REPOSITORY}/actions/runs/${RUN_ID}`]: { status: 0, stdout: "[]" },
+      [`repos/${REPOSITORY}/actions/runs/${RUN_ID}/attempts/${String(RUN_ATTEMPT)}`]: {
+        status: 0,
+        stdout: "[]",
+      },
     });
 
-    expect(readers.readRun(REPOSITORY, RUN_ID)).toBeUndefined();
+    expect(readers.readRun(REPOSITORY, RUN_ID, RUN_ATTEMPT)).toBeUndefined();
   });
 
   it("reads the evidence manifest through the injected downloader", () => {
@@ -510,17 +538,9 @@ describe("portableReleaseGate", () => {
 
     expect(gate.verifyPrepublished(TAG, REPOSITORY, WORKFLOW_PATH)).toBe(true);
     // The digests are taken from the referenced RUN's artifacts, which cannot be rewritten after
-    // the run, and only then are the published bytes fetched.
-    expect(events.artifactReads).toEqual([
-      {
-        runId: RUN_ID,
-        names: [
-          "portable-stage-windows-x64-evaluation-unsigned",
-          "portable-stage-macos-arm64-evaluation-unsigned",
-          "portable-stage-macos-x64-evaluation-unsigned",
-        ],
-      },
-    ]);
+    // the run, and only then are the published bytes fetched. The collector receives the
+    // evidence-declared immutable identities, not bare names.
+    expect(events.artifactReads).toEqual([{ runId: RUN_ID, names: RUN_ARTIFACTS }]);
     expect(events.verified).toEqual([EXPECTED_NAMES]);
     expect(events.logged.join(" ")).toContain("match their evidence");
     expect(events.failed).toEqual([]);
@@ -582,10 +602,22 @@ describe("portableReleaseGate", () => {
 });
 
 describe("collectEvaluationArtifactDigests", () => {
-  const NAMES = ["artifact-a", "artifact-b"];
+  const DECLARED = [
+    { name: "artifact-a", id: 7001 },
+    { name: "artifact-b", id: 7002 },
+  ];
 
-  function ghThatWrites(layout, failFor) {
+  function listingAnswer(artifacts) {
+    return { status: 0, stdout: JSON.stringify({ artifacts }) };
+  }
+
+  function listedAsDeclared() {
+    return DECLARED.map((artifact) => ({ ...artifact, expired: false }));
+  }
+
+  function ghThatWrites(layout, failFor, listed = listedAsDeclared()) {
     return (args) => {
+      if (args[0] === "api") return listingAnswer(listed);
       const name = args[args.indexOf("--name") + 1];
       const dir = args[args.indexOf("--dir") + 1];
       if (name === failFor) return { status: 1 };
@@ -603,7 +635,7 @@ describe("collectEvaluationArtifactDigests", () => {
     const digests = collectEvaluationArtifactDigests(
       { gh: ghThatWrites(layout), hashFile: (path) => `hash:${basename(path)}` },
       "42",
-      NAMES,
+      DECLARED,
     );
 
     expect([...digests.entries()]).toEqual([
@@ -618,10 +650,54 @@ describe("collectEvaluationArtifactDigests", () => {
     const digests = collectEvaluationArtifactDigests(
       { gh: ghThatWrites("flat", "artifact-b"), hashFile: () => "unused" },
       "42",
-      NAMES,
+      DECLARED,
     );
 
     expect(digests.size).toBe(0);
+  });
+
+  it.each([
+    [
+      "carries a different id (a rerun's replacement)",
+      [
+        { name: "artifact-a", id: 9999, expired: false },
+        { name: "artifact-b", id: 7002, expired: false },
+      ],
+    ],
+    [
+      "is expired",
+      [
+        { name: "artifact-a", id: 7001, expired: true },
+        { name: "artifact-b", id: 7002, expired: false },
+      ],
+    ],
+    [
+      "appears twice in the listing",
+      [
+        ...DECLARED.map((artifact) => ({ ...artifact, expired: false })),
+        { name: "artifact-a", id: 7003, expired: false },
+      ],
+    ],
+    ["is missing from the listing", [{ name: "artifact-b", id: 7002, expired: false }]],
+  ])("refuses before downloading when a declared artifact %s", (_label, listed) => {
+    // The declared immutable ids are what a rerun cannot reproduce; any disagreement with the
+    // run's current listing refuses before a byte is fetched.
+    let downloads = 0;
+    const digests = collectEvaluationArtifactDigests(
+      {
+        gh: (args) => {
+          if (args[0] === "api") return listingAnswer(listed);
+          downloads += 1;
+          return { status: 1 };
+        },
+        hashFile: () => "unused",
+      },
+      "42",
+      DECLARED,
+    );
+
+    expect(digests.size).toBe(0);
+    expect(downloads).toBe(0);
   });
 
   it("leaves no temporary directory behind", () => {
@@ -629,13 +705,14 @@ describe("collectEvaluationArtifactDigests", () => {
     collectEvaluationArtifactDigests(
       {
         gh: (args) => {
+          if (args[0] === "api") return listingAnswer(listedAsDeclared());
           roots.push(dirname(args[args.indexOf("--dir") + 1]));
           return { status: 1 };
         },
         hashFile: () => "unused",
       },
       "42",
-      NAMES,
+      DECLARED,
     );
 
     expect(roots).toHaveLength(1);
@@ -687,9 +764,21 @@ describe("commit binding and ambiguous evidence", () => {
     // the map answer with the wrong artifact's bytes, so a genuine disagreement is ambiguous
     // evidence and refuses rather than resolving itself.
     let call = 0;
+    const declared = [
+      { name: "artifact-a", id: 7001 },
+      { name: "artifact-b", id: 7002 },
+    ];
     const digests = collectEvaluationArtifactDigests(
       {
         gh: (args) => {
+          if (args[0] === "api") {
+            return {
+              status: 0,
+              stdout: JSON.stringify({
+                artifacts: declared.map((artifact) => ({ ...artifact, expired: false })),
+              }),
+            };
+          }
           const dir = args[args.indexOf("--dir") + 1];
           writeFileSync(join(dir, "keiko-macos-x64.zip"), "bytes");
           return { status: 0 };
@@ -700,7 +789,7 @@ describe("commit binding and ambiguous evidence", () => {
         },
       },
       "42",
-      ["artifact-a", "artifact-b"],
+      declared,
     );
 
     expect(digests.size).toBe(0);

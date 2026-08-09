@@ -542,6 +542,12 @@ function ghStubBody() {
     "  process.exit(0);",
     "}",
     'if (sub === "api") {',
+    // The artifact listing must answer before the generic runs branch: its URL also contains
+    // /actions/runs/, and the collector refuses when declared ids disagree with it.
+    '  if (argv[1] && argv[1].includes("/artifacts?per_page")) {',
+    "    writeFileSync(1, JSON.stringify({ artifacts: state().runArtifactListing || [] }));",
+    "    process.exit(0);",
+    "  }",
     '  if (argv[1] && argv[1].includes("/actions/runs/")) {',
     "    writeFileSync(1, JSON.stringify(state().workflowRun || {}));",
     "    process.exit(0);",
@@ -590,7 +596,12 @@ function ghStubBody() {
     "  }",
     "  process.exit(0);",
     "}",
-    'if (sub === "release" && argv[1] === "view") { process.exit(1); }',
+    // An existing release answers the isDraft probe; an interrupted evaluation publish leaves a
+    // resumable stable-tag DRAFT that the qualified upload path must refuse to edit over.
+    'if (sub === "release" && argv[1] === "view") {',
+    "  if (state().existingReleaseIsDraft) { writeFileSync(1, JSON.stringify({ isDraft: true })); process.exit(0); }",
+    "  process.exit(1);",
+    "}",
     'if (sub === "release" && argv[1] === "upload") {',
     "  const current = state();",
     "  if (current.failGhUpload) { process.stderr.write('portable upload failed\\n'); process.exit(42); }",
@@ -689,12 +700,19 @@ function prepublishedEvaluationState() {
       browser_download_url: `https://github.com/oscharko-dev/Keiko/releases/download/v${RELEASE_VERSION}/${name}`,
     };
   });
+  const runArtifacts = [
+    { name: "portable-stage-windows-x64-evaluation-unsigned", id: 700001 },
+    { name: "portable-stage-macos-arm64-evaluation-unsigned", id: 700002 },
+    { name: "portable-stage-macos-x64-evaluation-unsigned", id: 700003 },
+  ];
   const manifest = buildPortableEvaluationManifest({
     releaseTag: `v${RELEASE_VERSION}`,
     sourceCommitSha,
     repository: "oscharko-dev/Keiko",
     workflowPath: ".github/workflows/portable-assets.yml",
     workflowRunId,
+    workflowRunAttempt: 1,
+    artifacts: runArtifacts,
     assets: downloads.map((asset) => ({
       assetName: asset.name,
       sizeBytes: asset.size,
@@ -710,6 +728,7 @@ function prepublishedEvaluationState() {
       head_sha: sourceCommitSha,
       conclusion: "success",
     },
+    runArtifactListing: runArtifacts.map((artifact) => ({ ...artifact, expired: false })),
     uploadedAssets: [
       ...downloads,
       {
@@ -1723,6 +1742,21 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain("portable upload failed");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses to edit over a resumable stable-tag draft left by an interrupted evaluation publish", () => {
+      // Editing the draft would keep it private while npm publishes, clobber only same-named
+      // assets, and leave the evaluation manifest beside qualified uploads (Codex finding on
+      // #3054). The evaluation lane owns resuming or deleting its draft.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { existingReleaseIsDraft: true, published: false },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("exists as a draft");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","edit"'))).toBe(false);
     });
 
     it("rejects an unattested setup companion before release upload or npm publication", () => {

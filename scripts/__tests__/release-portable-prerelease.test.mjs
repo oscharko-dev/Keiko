@@ -357,7 +357,19 @@ describe("hermetic end-to-end (scripted gh double)", () => {
       ["run list --workflow", '[{"databaseId":42,"status":"in_progress"}]'],
       [
         "--json status,conclusion,headSha",
-        '{"status":"completed","conclusion":"success","headSha":"b2e3900a","event":"workflow_dispatch","headBranch":"dev","workflowDatabaseId":7}',
+        '{"status":"completed","conclusion":"success","headSha":"b2e3900a","event":"workflow_dispatch","headBranch":"dev","workflowDatabaseId":7,"attempt":1}',
+      ],
+      // The run's artifact listing: the public-release manifest records these immutable ids so
+      // the npm publisher can refuse a rerun's replacement artifacts.
+      [
+        "/artifacts?per_page",
+        JSON.stringify({
+          artifacts: [
+            { name: "portable-stage-macos-arm64-evaluation-unsigned", id: 700001, expired: false },
+            { name: "portable-stage-macos-x64-evaluation-unsigned", id: 700002, expired: false },
+            { name: "portable-stage-windows-x64-evaluation-unsigned", id: 700003, expired: false },
+          ],
+        }),
       ],
       // The portable-assets workflow's database id, resolved from its path — supplied-run
       // binding compares the run's workflowDatabaseId against it (#3037).

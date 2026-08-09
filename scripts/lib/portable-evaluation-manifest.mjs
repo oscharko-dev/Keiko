@@ -51,6 +51,15 @@ export function buildPortableEvaluationManifest(input) {
       repository: input.repository,
       workflowPath: input.workflowPath,
       workflowRunId: String(input.workflowRunId),
+      // A run id is reused across reruns; the attempt plus the immutable artifact ids pin the
+      // exact execution and the exact uploaded bytes this evidence speaks about, so a later
+      // rerun can neither substitute its own conclusion nor its own artifacts (Codex finding
+      // on #3054).
+      workflowRunAttempt: String(input.workflowRunAttempt),
+      artifacts: input.artifacts.map((artifact) => ({
+        name: artifact.name,
+        id: artifact.id,
+      })),
     },
     assets: input.assets.map((asset) => ({
       assetName: asset.assetName,
@@ -130,6 +139,15 @@ function bindingFailures(manifest, expected) {
         manifest.release?.sourceCommitSha === expected.sourceCommitSha,
       `release.sourceCommitSha must be the commit being released (${String(expected.sourceCommitSha)}).`,
     ],
+    ...provenanceBindingRules(manifest, expected),
+  ]
+    .filter(([satisfied]) => !satisfied)
+    .map(([, reason]) => reason);
+}
+
+/** The provenance half of the binding rules — split out to keep each rule set readable. */
+function provenanceBindingRules(manifest, expected) {
+  return [
     [
       manifest.provenance?.repository === expected.repository,
       `provenance.repository must be ${expected.repository}.`,
@@ -142,12 +160,41 @@ function bindingFailures(manifest, expected) {
       /^\d+$/u.test(manifest.provenance?.workflowRunId ?? ""),
       "provenance.workflowRunId must be a numeric run id.",
     ],
-  ]
-    .filter(([satisfied]) => !satisfied)
-    .map(([, reason]) => reason);
+    [
+      /^[1-9]\d*$/u.test(manifest.provenance?.workflowRunAttempt ?? ""),
+      "provenance.workflowRunAttempt must be a positive attempt number.",
+    ],
+  ];
+}
+
+/**
+ * The immutable identities of the run artifacts that carried the published bytes. Names alone
+ * cannot survive a rerun — GitHub reuses the run id and `gh run download` selects by name — so
+ * the verifier re-resolves these exact ids before it trusts any downloaded byte (Codex finding
+ * on #3054).
+ */
+function provenanceArtifactFailures(manifest) {
+  const artifacts = manifest.provenance?.artifacts;
+  if (!Array.isArray(artifacts) || artifacts.length === 0) {
+    return ["provenance.artifacts must list the run artifacts that carried the published bytes."];
+  }
+  const names = artifacts.filter(isRecord).map((artifact) => artifact.name);
+  const failures = artifacts.flatMap((artifact) =>
+    isRecord(artifact) && nonEmptyString(artifact.name) && positiveInteger(artifact.id)
+      ? []
+      : ["every provenance artifact must carry a name and a positive numeric id."],
+  );
+  if (new Set(names.filter(nonEmptyString)).size !== artifacts.length) {
+    failures.push("provenance.artifacts must name each artifact exactly once.");
+  }
+  return failures;
 }
 
 export function portableEvaluationManifestFailures(manifest, expected) {
   if (!isRecord(manifest)) return ["portable evaluation manifest must be a JSON object."];
-  return [...bindingFailures(manifest, expected), ...assetFailures(manifest, expected.assetNames)];
+  return [
+    ...bindingFailures(manifest, expected),
+    ...provenanceArtifactFailures(manifest),
+    ...assetFailures(manifest, expected.assetNames),
+  ];
 }
