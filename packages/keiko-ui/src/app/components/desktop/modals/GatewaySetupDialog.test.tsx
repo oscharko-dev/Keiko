@@ -1761,6 +1761,46 @@ describe("GatewaySetupDialog", () => {
     );
   });
 
+  it("submits an operator-stated audio endpoint style after a manual endpoint move", async () => {
+    // Review finding on #3042: moving an Azure voice endpoint by hand had no way to state the
+    // protocol for the new host, so the save either dropped it silently (before the server
+    // guard) or is refused (after it). The visible fields make the statement possible, and it
+    // rides the submit even though the URL no longer matches any uploaded endpoint.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://llm-gateway.example.com/v1");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.type(
+      screen.getByLabelText(/audio endpoint url/i),
+      "https://new-voice.example.com",
+    );
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
+    await userEvent.type(
+      screen.getByLabelText(/read aloud.*speech-output deployment/i),
+      "azure-tts",
+    );
+    await userEvent.type(screen.getByLabelText(/output voice/i), "ash");
+    await userEvent.type(screen.getByLabelText(/audio api version/i), "2025-04-01-preview");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).toMatchObject({
+      voiceBaseUrl: "https://new-voice.example.com",
+      voiceApiVersion: "2025-04-01-preview",
+    });
+  });
+
   it("submits the imported endpoint protocol while the form still points at the uploaded endpoint", async () => {
     // The positive branch of the URL binding: without a manual retype, the imported protocol
     // rides the submit verbatim (#3037).

@@ -2328,6 +2328,19 @@ function explicitEndpointMigrationError(
       correlationId,
     );
   }
+  // A stored protocol may not be inherited across a base-URL change (it was declared for the
+  // old host), and dropping it silently degrades an Azure deployment-path endpoint to the
+  // OpenAI-compatible URL shape — a save that succeeds and breaks every audio call. The
+  // migration must therefore RESTATE the protocol, exactly as it restates the credential, the
+  // locality and the roles (review finding on #3042).
+  if (migrations.some((target) => target.template?.endpointStyle !== undefined)) {
+    if (!hasNonBlankStringField(raw, "voiceEndpointStyle")) {
+      return endpointMigrationError(
+        "Replacing an audio endpoint requires an explicit endpoint style for the new host.",
+        correlationId,
+      );
+    }
+  }
   const replacements = explicitVoiceRoleReplacements(raw);
   if (migrations.some((target) => leavesImplicitRoleOnMigratedProvider(target, replacements))) {
     return endpointMigrationError(

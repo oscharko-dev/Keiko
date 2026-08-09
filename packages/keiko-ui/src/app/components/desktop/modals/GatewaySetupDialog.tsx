@@ -241,6 +241,22 @@ const VOICE_PROVIDER_LOCALITIES: ReadonlySet<VoiceProviderLocality> = new Set([
   "local-only",
 ]);
 
+// The audio endpoint PROTOCOL is operator-settable now: a manual endpoint move must be able to
+// state how the new host speaks, or the save is refused rather than silently degrading an Azure
+// deployment-path endpoint to the OpenAI-compatible URL shape (review finding on #3042). The
+// empty option is what an unstated protocol looks like on a fresh or non-Azure setup.
+const VOICE_ENDPOINT_STYLE_SECTIONS = [
+  {
+    options: [
+      { value: "", label: "Not stated" },
+      { value: "openai-compatible", label: "OpenAI-compatible" },
+      { value: "azure-openai-deployment", label: "Azure deployment path" },
+    ],
+  },
+] satisfies readonly [
+  { readonly options: readonly { readonly value: string; readonly label: string }[] },
+];
+
 const VOICE_PROVIDER_LOCALITY_SECTIONS = [
   {
     options: [
@@ -590,6 +606,15 @@ interface GatewayFormFields {
   /** Voice endpoint protocol imported from a config upload (empty = nothing imported). */
   readonly importedVoiceEndpointStyle: string;
   readonly importedVoiceApiVersion: string;
+  /** Operator-stated audio endpoint protocol (visible fields) — empty means "not stated". */
+  readonly voiceEndpointStyle: string;
+  readonly voiceApiVersion: string;
+  /**
+   * The audio URL an UPLOADED protocol was declared for; empty once the operator states the
+   * protocol themselves. A fresh dialog never commits an endpoint identity, so the binding —
+   * not an identity transition — is what keeps an uploaded protocol from riding a retyped URL.
+   */
+  readonly voiceProtocolBoundBaseUrl: string;
   readonly importedVoiceRealtimeAuthMode: string;
   /** The uploaded endpoint URL the imported protocol is bound to. */
   readonly importedVoiceEndpointBaseUrl: string;
@@ -632,15 +657,32 @@ function importedVoiceEndpointPayload(fields: GatewayFormFields): Partial<Gatewa
     return {};
   }
   return {
-    ...(fields.importedVoiceEndpointStyle === ""
-      ? {}
-      : { voiceEndpointStyle: fields.importedVoiceEndpointStyle }),
-    ...(fields.importedVoiceApiVersion === ""
-      ? {}
-      : { voiceApiVersion: fields.importedVoiceApiVersion }),
     ...(fields.importedVoiceRealtimeAuthMode === ""
       ? {}
       : { voiceRealtimeAuthMode: fields.importedVoiceRealtimeAuthMode }),
+  };
+}
+
+// The VISIBLE protocol fields are the operator's own statement, so they ride any submit that
+// carries a voice endpoint — including a manual endpoint move, which the server now refuses
+// without one. They are cleared whenever the audio endpoint identity changes, so a protocol can
+// never be inherited silently across a base-URL change (review finding on #3042).
+function statedVoiceEndpointPayload(fields: GatewayFormFields): Partial<GatewaySetupInput> {
+  const submittedBaseUrl = fields.voiceBaseUrl.trim();
+  if (submittedBaseUrl === "") return {};
+  // An uploaded protocol rides only while the form still points at the URL it was declared for;
+  // an operator-stated one carries no binding and applies to whatever endpoint is in the form.
+  if (
+    fields.voiceProtocolBoundBaseUrl !== "" &&
+    fields.voiceProtocolBoundBaseUrl !== submittedBaseUrl
+  ) {
+    return {};
+  }
+  return {
+    ...(fields.voiceEndpointStyle === "" ? {} : { voiceEndpointStyle: fields.voiceEndpointStyle }),
+    ...(fields.voiceApiVersion.trim() === ""
+      ? {}
+      : { voiceApiVersion: fields.voiceApiVersion.trim() }),
   };
 }
 
@@ -663,6 +705,7 @@ function buildSetupGatewayPayload(
       ? {}
       : { embeddingModelIds: fields.importedEmbeddingModelIds }),
     ...importedVoiceEndpointPayload(fields),
+    ...statedVoiceEndpointPayload(fields),
     ...(!fields.workflowEligibleModelIdsConfigured
       ? {}
       : { workflowEligibleModelIds: derived.parsedWorkflowEligibleModelIds }),
@@ -1537,6 +1580,62 @@ function VoiceProviderLocalityField({
   );
 }
 
+interface VoiceEndpointStyleFieldProps {
+  readonly labelId: string;
+  readonly value: string;
+  readonly disabled: boolean;
+  readonly onChange: (next: string) => void;
+}
+
+function VoiceEndpointStyleField({
+  labelId,
+  value,
+  disabled,
+  onChange,
+}: VoiceEndpointStyleFieldProps): ReactNode {
+  return (
+    <div className="gw-field">
+      <span id={labelId}>
+        Audio endpoint style <span className="dlg-opt">optional</span>
+      </span>
+      <KeikoSelect
+        ariaLabelledBy={labelId}
+        menuTitle="Audio endpoint style"
+        sections={VOICE_ENDPOINT_STYLE_SECTIONS}
+        showMenuHeader={false}
+        triggerClassName="gw-input gw-provider-locality-select"
+        menuClassName="gw-provider-locality-menu"
+        value={value}
+        disabled={disabled}
+        onValueChange={onChange}
+      />
+    </div>
+  );
+}
+
+interface VoiceApiVersionFieldProps {
+  readonly value: string;
+  readonly disabled: boolean;
+  readonly onChange: Dispatch<SetStateAction<string>>;
+}
+
+function VoiceApiVersionField({ value, disabled, onChange }: VoiceApiVersionFieldProps): ReactNode {
+  return (
+    <label className="gw-field">
+      <span>
+        Audio API version <span className="dlg-opt">Azure deployment path only</span>
+      </span>
+      <input
+        className="gw-input"
+        value={value}
+        disabled={disabled}
+        placeholder="2025-04-01-preview"
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
 interface VoiceEndpointUrlFieldProps {
   readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
@@ -1707,6 +1806,11 @@ interface VoiceDeploymentFieldsProps {
   readonly voiceOutputVoiceId: string;
   readonly setVoiceOutputVoiceId: Dispatch<SetStateAction<string>>;
   readonly voiceProviderLocalityLabelId: string;
+  readonly voiceEndpointStyleLabelId: string;
+  readonly voiceEndpointStyle: string;
+  readonly setVoiceEndpointStyle: (next: string) => void;
+  readonly voiceApiVersion: string;
+  readonly setVoiceApiVersion: Dispatch<SetStateAction<string>>;
   readonly voiceProviderLocality: VoiceProviderLocality;
   readonly setVoiceProviderLocality: Dispatch<SetStateAction<VoiceProviderLocality>>;
   readonly disabled: boolean;
@@ -1800,6 +1904,17 @@ function VoiceDeploymentFields(props: VoiceDeploymentFieldsProps): ReactNode {
         disabled={props.disabled}
         onChange={props.setVoiceProviderLocality}
       />
+      <VoiceEndpointStyleField
+        labelId={props.voiceEndpointStyleLabelId}
+        value={props.voiceEndpointStyle}
+        disabled={props.disabled}
+        onChange={props.setVoiceEndpointStyle}
+      />
+      <VoiceApiVersionField
+        value={props.voiceApiVersion}
+        disabled={props.disabled}
+        onChange={props.setVoiceApiVersion}
+      />
     </>
   );
 }
@@ -1876,6 +1991,11 @@ interface VoiceFieldsSectionProps {
   readonly voiceOutputVoiceId: string;
   readonly setVoiceOutputVoiceId: Dispatch<SetStateAction<string>>;
   readonly voiceProviderLocalityLabelId: string;
+  readonly voiceEndpointStyleLabelId: string;
+  readonly voiceEndpointStyle: string;
+  readonly setVoiceEndpointStyle: (next: string) => void;
+  readonly voiceApiVersion: string;
+  readonly setVoiceApiVersion: Dispatch<SetStateAction<string>>;
   readonly voiceProviderLocality: VoiceProviderLocality;
   readonly setVoiceProviderLocality: Dispatch<SetStateAction<VoiceProviderLocality>>;
   readonly voiceBaseUrl: string;
@@ -1912,6 +2032,11 @@ function VoiceFieldsSection(props: VoiceFieldsSectionProps): ReactNode {
         voiceOutputVoiceId={props.voiceOutputVoiceId}
         setVoiceOutputVoiceId={props.setVoiceOutputVoiceId}
         voiceProviderLocalityLabelId={props.voiceProviderLocalityLabelId}
+        voiceEndpointStyleLabelId={props.voiceEndpointStyleLabelId}
+        voiceEndpointStyle={props.voiceEndpointStyle}
+        setVoiceEndpointStyle={props.setVoiceEndpointStyle}
+        voiceApiVersion={props.voiceApiVersion}
+        setVoiceApiVersion={props.setVoiceApiVersion}
         voiceProviderLocality={props.voiceProviderLocality}
         setVoiceProviderLocality={props.setVoiceProviderLocality}
         disabled={disabled}
@@ -2139,6 +2264,7 @@ export function GatewaySetupDialog({
   const { theme, toggle: toggleTheme } = useTheme();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const voiceProviderLocalityLabelId = useId();
+  const voiceEndpointStyleLabelId = useId();
   const baseUrlRef = useRef<HTMLInputElement>(null);
   const figmaAccessTokenRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
@@ -2156,6 +2282,20 @@ export function GatewaySetupDialog({
   const [importedEmbeddingModelIds, setImportedEmbeddingModelIds] = useState<readonly string[]>([]);
   const [importedVoiceEndpointStyle, setImportedVoiceEndpointStyle] = useState("");
   const [importedVoiceApiVersion, setImportedVoiceApiVersion] = useState("");
+  const [voiceEndpointStyle, setVoiceEndpointStyle] = useState("");
+  const [voiceApiVersion, setVoiceApiVersion] = useState("");
+  const [voiceProtocolBoundBaseUrl, setVoiceProtocolBoundBaseUrl] = useState("");
+
+  // Stating the protocol by hand releases the uploaded URL binding: the operator is declaring it
+  // for the endpoint currently in the form (review finding on #3042).
+  const stateVoiceEndpointStyle = (next: string): void => {
+    setVoiceEndpointStyle(next);
+    setVoiceProtocolBoundBaseUrl("");
+  };
+  const stateVoiceApiVersion: Dispatch<SetStateAction<string>> = (value): void => {
+    setVoiceApiVersion(value);
+    setVoiceProtocolBoundBaseUrl("");
+  };
   const [importedVoiceRealtimeAuthMode, setImportedVoiceRealtimeAuthMode] = useState("");
   const [importedVoiceEndpointBaseUrl, setImportedVoiceEndpointBaseUrl] = useState("");
   const [uploadReadPending, setUploadReadPending] = useState(false);
@@ -2237,6 +2377,10 @@ export function GatewaySetupDialog({
     nextIdentity: ProviderIdentity | undefined,
   ): void => {
     const restoresStoredEndpoint = nextIdentity === STORED_VOICE_ENDPOINT_IDENTITY;
+    // The protocol was declared for the OLD host: a new endpoint must restate it (the save
+    // refuses otherwise), so it can never travel silently (review finding on #3042).
+    setVoiceEndpointStyle("");
+    setVoiceApiVersion("");
     setVoiceModelId("");
     setVoiceRealtimeModelId("");
     setVoiceSpeechOutputModelId("");
@@ -2536,6 +2680,11 @@ export function GatewaySetupDialog({
   // fields — and therefore the protocol that belongs to them — untouched.
   function applyUploadedVoiceEndpoint(fields: GatewayConfigUploadFields): void {
     if (fields.voiceBaseUrl === undefined) return;
+    // The uploaded protocol lands in the VISIBLE fields, where the operator can see and change
+    // it; the endpoint-identity reset above still clears it if the URL is retyped (#3042).
+    setVoiceEndpointStyle(fields.voiceEndpointStyle ?? "");
+    setVoiceApiVersion(fields.voiceApiVersion ?? "");
+    setVoiceProtocolBoundBaseUrl(fields.voiceBaseUrl.trim());
     setImportedVoiceEndpointStyle(fields.voiceEndpointStyle ?? "");
     setImportedVoiceApiVersion(fields.voiceApiVersion ?? "");
     setImportedVoiceRealtimeAuthMode(fields.voiceRealtimeAuthMode ?? "");
@@ -2582,6 +2731,9 @@ export function GatewaySetupDialog({
           voiceSpeechSynthesisInstructionsConfigured,
           importedVoiceEndpointStyle,
           importedVoiceApiVersion,
+          voiceEndpointStyle,
+          voiceApiVersion,
+          voiceProtocolBoundBaseUrl,
           importedVoiceRealtimeAuthMode,
           importedVoiceEndpointBaseUrl,
           voiceSpeechOutputModelId,
@@ -2723,6 +2875,11 @@ export function GatewaySetupDialog({
       voiceOutputVoiceId={voiceOutputVoiceId}
       setVoiceOutputVoiceId={updateVoiceOutputVoiceId}
       voiceProviderLocalityLabelId={voiceProviderLocalityLabelId}
+      voiceEndpointStyleLabelId={voiceEndpointStyleLabelId}
+      voiceEndpointStyle={voiceEndpointStyle}
+      setVoiceEndpointStyle={stateVoiceEndpointStyle}
+      voiceApiVersion={voiceApiVersion}
+      setVoiceApiVersion={stateVoiceApiVersion}
       voiceProviderLocality={voiceProviderLocality}
       setVoiceProviderLocality={updateVoiceProviderLocality}
       voiceBaseUrl={voiceBaseUrl}
