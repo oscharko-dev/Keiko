@@ -59,6 +59,10 @@ import { resolveHostExecutable } from "./lib/host-executable.mjs";
 // validates the pushed tag — restating it here would let this lane mint a tag the workflow
 // then rejects (review finding on #3043).
 import { BETA_INDEX, GOVERNED_BETA_TAG_RE, isExactReleaseTag } from "./release-tag-contract.mjs";
+import {
+  buildPortableEvaluationManifest,
+  PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
+} from "./lib/portable-evaluation-manifest.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const WORKFLOW_PATH = ".github/workflows/portable-assets.yml";
@@ -517,14 +521,35 @@ function findAssetFile(root, name) {
   return name;
 }
 
-function checksumLines(publishDir) {
+/** Name, size and SHA-256 of every published asset, measured from the verified local bytes. */
+function publishedAssetDigests(publishDir) {
   return PUBLISH_ASSETS.map((asset) => {
     const path = join(publishDir, asset.file);
     const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
     const size = statSync(path).size;
     log(`${asset.file}: sha256 ${digest} (${String(size)} bytes)`);
-    return `${digest}  ${asset.file}`;
+    return { assetName: asset.file, sha256: digest, sizeBytes: size };
   });
+}
+
+function checksumLines(digests) {
+  return digests.map((asset) => `${asset.sha256}  ${asset.assetName}`);
+}
+
+/**
+ * The evidence a public release needs and a beta does not: `release:publish` promotes the npm
+ * `latest` tag only after re-downloading every published download and matching its bytes against
+ * this manifest. Written here because this is the only place that has both the verified bytes and
+ * the run that produced them; a beta prerelease is never promoted, so it does not carry one.
+ */
+function writeEvaluationManifest(workDir, input) {
+  const manifest = buildPortableEvaluationManifest(input);
+  const path = join(workDir, PORTABLE_EVALUATION_MANIFEST_ASSET_NAME);
+  writeFileSync(path, `${JSON.stringify(manifest, undefined, 2)}\n`);
+  log(
+    `wrote ${PORTABLE_EVALUATION_MANIFEST_ASSET_NAME} binding 4 downloads to ${input.releaseTag}.`,
+  );
+  return path;
 }
 
 /**
@@ -654,6 +679,7 @@ function createRelease(input) {
     "--notes-file",
     bodyPath,
     ...PUBLISH_ASSETS.map((asset) => join(input.publishDir, asset.file)),
+    ...(input.evaluationManifestPath === undefined ? [] : [input.evaluationManifestPath]),
   ]);
   log(`created draft ${input.tag} (not public yet).`);
 }
@@ -877,27 +903,33 @@ function reportPlan(body, tag, hasPendingDraft) {
   log(`PLAN-ONLY complete for ${tag} (nothing published).`);
 }
 
-function runPublishSteps({
-  workDir,
-  publishDir,
-  options,
-  version,
-  repository,
-  tags,
-  tag,
-  runId,
-  view,
-  hasPendingDraft,
-}) {
-  const checksums = checksumLines(publishDir);
-  const sealVerification = verifyMacosSeal(publishDir);
-  const previousTag = previousBetaTag(tag, tags);
+/**
+ * Only a public release is ever promoted to npm `latest`, so only it needs the evidence the
+ * publisher re-verifies before promotion. A beta carries its checksums in the body and nothing
+ * more — it is never a promotion input.
+ */
+function evaluationManifestFor(input) {
+  if (!input.options.publicRelease) return undefined;
+  return writeEvaluationManifest(input.workDir, {
+    releaseTag: input.tag,
+    sourceCommitSha: input.sourceCommitSha,
+    repository: input.repository,
+    workflowPath: WORKFLOW_PATH,
+    workflowRunId: input.runId,
+    assets: input.digests,
+  });
+}
+
+function runPublishSteps(input) {
+  const { workDir, publishDir, options, repository, tag, runId, view, hasPendingDraft } = input;
+  const digests = publishedAssetDigests(publishDir);
+  const previousTag = previousBetaTag(tag, input.tags);
   const body = releaseBody({
-    version,
+    version: input.version,
     tag,
     repository,
-    checksums,
-    sealVerification,
+    checksums: checksumLines(digests),
+    sealVerification: verifyMacosSeal(publishDir),
     commitSha: view.headSha,
     runId,
     previousTag,
@@ -914,9 +946,18 @@ function runPublishSteps({
     publishDir,
     tag,
     commitSha: view.headSha,
-    version,
+    version: input.version,
     body,
     publicRelease: options.publicRelease,
+    evaluationManifestPath: evaluationManifestFor({
+      options,
+      workDir,
+      tag,
+      repository,
+      runId,
+      digests,
+      sourceCommitSha: view.headSha,
+    }),
   });
   markPreviousSuperseded(previousTag, tag, repository);
   publishDraftRelease(tag, view.headSha);

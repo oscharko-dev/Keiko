@@ -956,7 +956,7 @@
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
-      "oneClickEligible": true,
+      "oneClickEligible": false,
       "publishGates": [
         "version-consistency",
         "publish-manifests",
@@ -969,7 +969,7 @@
       "releaseNoteCategory": "fixes",
       "releaseNotePriority": "normal",
       "userVisibleChange": "behavioral",
-      "userVisibleSummary": "Keiko 0.3.1 is the first public download release. It carries the same product as 0.3.0 and republishes it under a usable tag: the 0.3.0 GitHub release was withdrawn during verification and GitHub keeps that tag immutable, so the downloadable packages ship as 0.3.1. Nothing has to be uninstalled or migrated. An older build left running only occupies the local port, and the new one says so on startup and names both ways out (stop it, or start on another port).",
+      "userVisibleSummary": "Keiko 0.3.1 is the first public download release. It carries the same product as 0.3.0 and republishes it under a usable tag: the 0.3.0 GitHub release was withdrawn during verification and GitHub keeps that tag immutable, so the downloadable packages ship as 0.3.1. Nothing has to be uninstalled or migrated. An older build left running only occupies the local port, and the new one says so on startup and names both ways out (stop it, or start on another port). The governed one-click update does not apply to this release: its portable evidence declares the evaluation signing status, and the updater accepts only production-signed, notarized portable artifacts. Install it from the GitHub Release download; the in-app update returns once the signed lane ships.",
       "affectedStateStores": ["ui-store-schema"],
       "stateImpact": [
         {

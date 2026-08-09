@@ -81,12 +81,24 @@ own manifest, never an argument a caller supplies:
 1. **Plain staging** (`staging` / `unverified-staging`) — the default output of every manual
    dispatch. It is unsigned, unqualified, and **not activatable**: the runtime refuses it.
 2. **Evaluation** (`evaluation` / `evaluation-unqualified`) — the explicitly requested, unsigned but
-   **activatable** lane defined in D9. It never enters the stable release bundle, and it is never
-   published by default or as a side effect. It IS the payload of the explicitly labeled beta
-   **prereleases** cut by `scripts/release-portable-prerelease.mjs` under the owner-approved 0.3.0
-   beta program (owner decision, amended after v0.3.0-beta.0 shipped — the same amendment that
-   governs the first-run mechanics in D9): draft-first, checksummed, provenance-pinned to the
+   **activatable** lane defined in D9. It never enters the signed production release bundle, and it
+   is never published by default or as a side effect. It IS the payload of the explicitly labeled
+   beta **prereleases** cut by `scripts/release-portable-prerelease.mjs` under the owner-approved
+   0.3.0 beta program (owner decision, amended after v0.3.0-beta.0 shipped — the same amendment
+   that governs the first-run mechanics in D9): draft-first, checksummed, provenance-pinned to the
    producing workflow run, superseded-chain-linked, and macOS-sealed since v0.3.0-beta.1.
+
+   **Amended 2026-08-09 (issue #2802), for the public download program.** The same payload, cut by
+   the same script under `--public-release`, is also the payload of Keiko's first public download
+   release at the exact stable tag. Publication remains explicit and never a side effect: it is one
+   deliberate invocation, the release-impact entry records the `evaluation` signing status, and the
+   release notes state it. Three bounds keep this from widening into "unsigned is production":
+   the release declares `oneClickEligible: false`, because the portable updater accepts only
+   `production` / `verified-production` evidence and must keep doing so; `release-publish.mjs`
+   verifies the published downloads against `keiko-portable-evaluation-manifest.json` and re-fetches
+   every byte before npm learns the `latest` dist-tag; and D9's waiver list below is unchanged —
+   signature, notarization and platform attestation stay waived, everything else stays mandatory.
+   ADR-0121 D1 carries the matching amendment.
 3. **Production** (`production` / `verified-production`) — the only lane that can produce a
    production-available runtime.
 
@@ -376,9 +388,12 @@ green. This is the class audit finding F-01 closed, and it must not be reintrodu
   Gateway, or authority invariants.
 - **Production** macOS artifacts cannot be emitted until the Apple Developer ID and separately
   granted Endpoint Security entitlement are provisioned. This is a release prerequisite, not a code
-  fallback. The D9 evaluation lane does not change that: it produces a runnable, downloadable
-  artifact for evaluation only, it is never publishable, and its macOS build carries weaker process
-  containment precisely because that entitlement is absent.
+  fallback. The D9 evaluation lane does not change that: what it publishes is an evaluation
+  artifact, never a production one, and its macOS build carries weaker process containment
+  precisely because that entitlement is absent. Since the 2026-08-09 amendment above it may be
+  published deliberately — as a beta prerelease, or as the public download release that declares
+  its `evaluation` status and stays ineligible for the governed one-click update — but it can never
+  be presented as, or promoted into, a production-signed artifact.
 - An evaluation build is honest about being one, everywhere an operator can see it: the artifact
   name, the manifest lane, the activation trust anchor, the readiness projection, and four UI
   surfaces.

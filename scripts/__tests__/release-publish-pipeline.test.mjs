@@ -61,6 +61,10 @@ import {
   PORTABLE_TARGETS,
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 } from "../portable-runtime.mjs";
+import {
+  buildPortableEvaluationManifest,
+  PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
+} from "../lib/portable-evaluation-manifest.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -533,6 +537,10 @@ function ghStubBody() {
     "  process.exit(0);",
     "}",
     'if (sub === "api") {',
+    '  if (argv[1] && argv[1].includes("/actions/runs/")) {',
+    "    writeFileSync(1, JSON.stringify(state().workflowRun || {}));",
+    "    process.exit(0);",
+    "  }",
     '  if (argv[1] && argv[1].includes("/releases/tags/")) {',
     "    writeFileSync(1, JSON.stringify({ id: 987654321, assets: state().uploadedAssets || [] }));",
     "    process.exit(0);",
@@ -610,6 +618,67 @@ function makeStub(binDir, name, body, logFile, stateFile) {
   const path = join(binDir, name);
   writeFileSync(path, `#!/usr/bin/env node\n${stubPrologue(logFile, stateFile)}${body}\n`, "utf8");
   chmodSync(path, 0o755);
+}
+
+function passthroughViewBody() {
+  return [
+    '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+    '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+  ].join("\n");
+}
+
+/**
+ * A release that the governed evaluation lane already published: the four downloads with real
+ * bytes, and the evaluation manifest that binds them to this tag, commit and workflow run. Digests
+ * are measured from the same bytes the stub `curl` serves, so the fixture cannot drift from what
+ * the publisher verifies.
+ */
+function prepublishedEvaluationState() {
+  const sourceCommitSha = HEAD_SHA;
+  const workflowRunId = "31300595709";
+  const downloads = PUBLISHED_DOWNLOAD_NAMES.map((name, index) => {
+    const content = Buffer.from(`prepublished ${name}\n`);
+    return {
+      id: 500000 + index,
+      name,
+      size: content.byteLength,
+      content: content.toString("base64"),
+      sha256: createHash("sha256").update(content).digest("hex"),
+      browser_download_url: `https://github.com/oscharko-dev/Keiko/releases/download/v${RELEASE_VERSION}/${name}`,
+    };
+  });
+  const manifest = buildPortableEvaluationManifest({
+    releaseTag: `v${RELEASE_VERSION}`,
+    sourceCommitSha,
+    repository: "oscharko-dev/Keiko",
+    workflowPath: ".github/workflows/portable-assets.yml",
+    workflowRunId,
+    assets: downloads.map((asset) => ({
+      assetName: asset.name,
+      sizeBytes: asset.size,
+      sha256: asset.sha256,
+    })),
+  });
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest, undefined, 2)}\n`);
+  return {
+    published: true,
+    tagged: true,
+    workflowRun: {
+      path: ".github/workflows/portable-assets.yml",
+      head_sha: sourceCommitSha,
+      conclusion: "success",
+    },
+    uploadedAssets: [
+      ...downloads,
+      {
+        id: 600000,
+        name: PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
+        size: manifestBytes.byteLength,
+        content: manifestBytes.toString("base64"),
+        browser_download_url: `https://github.com/oscharko-dev/Keiko/releases/download/v${RELEASE_VERSION}/${PORTABLE_EVALUATION_MANIFEST_ASSET_NAME}`,
+      },
+    ],
+  };
 }
 
 function curlStubBody() {
@@ -988,9 +1057,10 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
 
     it("publishes a stable latest release whose downloads the evaluation lane already uploaded", () => {
       // The release-owner-scoped path for the first public release: the governed evaluation lane
-      // publishes the four unsigned-but-sealed downloads onto the tag, and this run promotes the
-      // dist-tag without re-uploading anything. It must actually SUCCEED — an orchestrator that
-      // silently skipped publication would satisfy a weaker assertion while shipping nothing.
+      // publishes the four unsigned-but-sealed downloads onto the tag with the evidence that
+      // binds them, and this run promotes the dist-tag without re-uploading anything. It must
+      // actually SUCCEED — an orchestrator that silently skipped publication would satisfy a
+      // weaker assertion while shipping nothing.
       const viewBody = [
         '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
         '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
@@ -998,21 +1068,65 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
 
       lastRun = runPublish({
         npmBody: npmStub(viewBody, { failOnPublish: true }),
-        initState: {
-          published: true,
-          tagged: true,
-          uploadedAssets: PUBLISHED_DOWNLOAD_NAMES.map((name, index) => ({
-            id: 500000 + index,
-            name,
-            size: 1024,
-          })),
-        },
+        initState: prepublishedEvaluationState(),
         portableAssets: false,
       });
 
       expect(lastRun.status).toBe(0);
-      expect(lastRun.stdout).toContain("carries all 4 portable downloads");
+      expect(lastRun.stdout).toContain("match their evidence bytes for bytes");
       expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+    });
+
+    it("refuses prepublished downloads that carry no evaluation evidence", () => {
+      // A name and a non-zero size authorize nothing: without the manifest that binds these bytes
+      // to a tag, a commit and a successful workflow run, a stale or hand-uploaded file could
+      // promote the npm latest tag (Codex and CodeRabbit findings on #3054).
+      const state = prepublishedEvaluationState();
+      state.uploadedAssets = state.uploadedAssets.filter(
+        (asset) => asset.name !== PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
+      );
+
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: state,
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain(PORTABLE_EVALUATION_MANIFEST_ASSET_NAME);
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses prepublished downloads whose bytes do not match their evidence", () => {
+      // The evidence is only a claim until the bytes agree with it. Every download is re-fetched
+      // over the same unauthenticated URL a customer uses; one tampered byte must stop the
+      // promotion.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { ...prepublishedEvaluationState(), tamperRemoteDownloads: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("downloaded portable asset bytes do not match");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses prepublished downloads whose evidence names an unsuccessful workflow run", () => {
+      // Provenance that does not resolve to a successful run of the canonical workflow at the
+      // declared commit is not provenance.
+      const state = prepublishedEvaluationState();
+      state.workflowRun = { ...state.workflowRun, conclusion: "failure" };
+
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: state,
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("must have concluded successfully");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
     it("refuses to skip the GitHub Release when portable assets are supplied", () => {

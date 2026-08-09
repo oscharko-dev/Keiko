@@ -39,6 +39,10 @@ import {
   normalizePortableSetupCompanion,
   portableSetupCompanionRecord,
 } from "./lib/portable-setup-companion.mjs";
+import {
+  PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
+  portableEvaluationManifestFailures,
+} from "./lib/portable-evaluation-manifest.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const packageRegistryScope = scope.slice(0, -1);
@@ -201,71 +205,151 @@ const PORTABLE_DOWNLOAD_ASSET_NAMES = Object.freeze([
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 ]);
 
-/** Asset names on the release that are non-empty downloads, as GitHub reports them. */
-function uploadedDownloadNames(releaseInfo) {
-  return new Set(
-    githubReleaseSnapshot(releaseInfo)
-      .assets.filter((asset) => isRecord(asset) && Number(asset.size) > 0)
-      .map((asset) => asset.name),
+function missingPortableDownloads(remoteAssets) {
+  const present = new Set(
+    remoteAssets.filter((asset) => isRecord(asset) && Number(asset.size) > 0).map((a) => a.name),
   );
-}
-
-function missingPortableDownloads(releaseInfo) {
-  const present = uploadedDownloadNames(releaseInfo);
   return PORTABLE_DOWNLOAD_ASSET_NAMES.filter((name) => !present.has(name));
 }
 
 /**
- * Fails closed unless the release the customer will be pointed at carries every portable
- * download. Runs BEFORE npm publish so a release missing its downloads can never become the
- * `latest` a customer installs.
+ * Fails closed unless the release the customer will be pointed at carries every portable download
+ * AND those downloads are bound to reviewed evidence. Runs BEFORE npm publish so a release that
+ * cannot back its downloads can never become the `latest` a customer installs.
+ *
+ * `uploadedHere` means this run supplied a qualified manifest and already ran the full
+ * provenance, digest, rebinding and unauthenticated-download verification on the way up; the
+ * assets are re-counted rather than re-verified. Anything else was published by the governed
+ * evaluation lane, and its portable evaluation manifest is verified here — including
+ * re-downloading each file over the same URL a customer uses (Codex and CodeRabbit findings on
+ * #3054: a name and a non-zero size authorize nothing).
  */
-function ensureStableLatestDownloads(rootManifest, options, releaseInfo) {
+function ensureStableLatestDownloads(rootManifest, options, releaseInfo, uploadedHere) {
   if (!stableLatestRelease(rootManifest, options) || options.dryRun) return;
   if (releaseInfo === undefined) {
     fail("a stable latest publish must attach its portable downloads to the GitHub Release.");
   }
-  const missing = missingPortableDownloads(releaseInfo);
+  const remoteAssets = githubReleaseSnapshot(releaseInfo).assets;
+  const missing = missingPortableDownloads(remoteAssets);
   if (missing.length > 0) {
     fail(
       `GitHub release ${releaseInfo.tag} is missing portable downloads: ${missing.join(", ")}. ` +
         "A stable latest release must carry every portable download before npm publishes it.",
     );
   }
+  if (!uploadedHere) verifyPrepublishedDownloads(releaseInfo, remoteAssets);
   console.log(
-    `release-publish: ${releaseInfo.tag} carries all ${String(PORTABLE_DOWNLOAD_ASSET_NAMES.length)} portable downloads.`,
+    `release-publish: ${releaseInfo.tag} carries all ${String(PORTABLE_DOWNLOAD_ASSET_NAMES.length)} verified portable downloads.`,
   );
 }
 
-/**
- * Whether the release ALREADY carries the downloads, read before the notes are composed. Read-only
- * and best-effort: a missing release or an unreadable response simply means "not yet", and
- * `ensureStableLatestDownloads` is the authority that fails the publish.
- */
-function existingReleaseCarriesDownloads(rootManifest, options) {
-  if (options.dryRun || options.skipGithubRelease) return false;
-  const repo = process.env.GITHUB_REPOSITORY;
-  if (typeof repo !== "string" || repo === "") return false;
-  const snapshot = gh(["api", `repos/${repo}/releases/tags/${releaseTag(rootManifest.version)}`]);
-  if (snapshot.status !== 0) return false;
-  try {
-    const release = JSON.parse(snapshot.stdout);
-    if (!isRecord(release) || !Array.isArray(release.assets)) return false;
-    const present = new Set(
-      release.assets
-        .filter((asset) => isRecord(asset) && Number(asset.size) > 0)
-        .map((a) => a.name),
+/** Reads and shape-validates the evaluation manifest asset the governed lane published. */
+function prepublishedEvaluationManifest(releaseInfo, remoteAssets) {
+  const asset = remoteAssets.find(
+    (candidate) =>
+      isRecord(candidate) && candidate.name === PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
+  );
+  if (asset === undefined) {
+    fail(
+      `GitHub release ${releaseInfo.tag} carries portable downloads this run did not upload but no ${PORTABLE_EVALUATION_MANIFEST_ASSET_NAME}; ` +
+        "downloads without reviewed evidence must never authorize the latest dist-tag.",
     );
-    return PORTABLE_DOWNLOAD_ASSET_NAMES.every((name) => present.has(name));
-  } catch {
-    return false;
+  }
+  const manifest = downloadJsonAsset(asset.browser_download_url, releaseInfo);
+  const failures = portableEvaluationManifestFailures(manifest, {
+    releaseTag: releaseInfo.tag,
+    repository: process.env.GITHUB_REPOSITORY ?? "",
+    workflowPath: portableAssetsWorkflowPath,
+    assetNames: PORTABLE_DOWNLOAD_ASSET_NAMES,
+  });
+  if (failures.length > 0) {
+    fail(`portable evaluation manifest is not usable:\n  - ${failures.join("\n  - ")}`);
+  }
+  return manifest;
+}
+
+function downloadJsonAsset(url, releaseInfo) {
+  if (!validBrowserDownloadUrl(url)) {
+    fail(`${PORTABLE_EVALUATION_MANIFEST_ASSET_NAME} must expose an HTTPS browser_download_url.`);
+  }
+  const root = mkdtempSync(join(tmpdir(), "keiko-portable-evidence-"));
+  const destination = join(root, PORTABLE_EVALUATION_MANIFEST_ASSET_NAME);
+  try {
+    const result = commandResult(
+      "curl",
+      ["--fail", "--silent", "--show-error", "--location", "--output", destination, url],
+      { env: networkEnvironment() },
+    );
+    if (result.error !== undefined || result.status !== 0) {
+      fail(`could not download the portable evidence for ${releaseInfo.tag}.`);
+    }
+    return JSON.parse(readFileSync(destination, "utf8"));
+  } catch (error) {
+    if (error instanceof SyntaxError) fail("portable evaluation manifest is not valid JSON.");
+    throw error;
+  } finally {
+    rmSync(root, { force: true, recursive: true });
   }
 }
 
-// Release notes advertise portable downloads only when the release actually carries them.
-function portableReleasePromotionEnabled(rootManifest, options, portableAssets) {
-  if (!stableLatestRelease(rootManifest, options)) return false;
-  return portableAssets.length > 0 || existingReleaseCarriesDownloads(rootManifest, options);
+/**
+ * The manifest is only a claim until the bytes agree with it. Every download is fetched over the
+ * same unauthenticated URL a customer uses and must match the declared size and digest, and the
+ * run named in the provenance must be a real successful run of the canonical workflow at the
+ * declared commit — so a hand-uploaded or stale file cannot promote the dist-tag.
+ */
+function verifyPrepublishedDownloads(releaseInfo, remoteAssets) {
+  const manifest = prepublishedEvaluationManifest(releaseInfo, remoteAssets);
+  assertEvaluationRunProduced(manifest, releaseInfo);
+  const declared = new Map(manifest.assets.map((asset) => [asset.assetName, asset]));
+  const remoteByName = new Map(remoteAssets.map((asset) => [asset.name, asset]));
+  const expected = PORTABLE_DOWNLOAD_ASSET_NAMES.map((assetName) => {
+    const entry = declared.get(assetName);
+    if (remoteByName.get(assetName)?.size !== entry.sizeBytes) {
+      fail(`${assetName} on ${releaseInfo.tag} does not have the size its evidence declares.`);
+    }
+    return { assetName, expectedSize: entry.sizeBytes, expectedSha256: entry.sha256 };
+  });
+  runPortableDownloadSmoke(remoteAssets, expected);
+  console.log(
+    `release-publish: prepublished downloads on ${releaseInfo.tag} match their evidence bytes for bytes.`,
+  );
+}
+
+function assertEvaluationRunProduced(manifest, releaseInfo) {
+  const repo = manifest.provenance.repository;
+  const runId = manifest.provenance.workflowRunId;
+  const run = gh(["api", `repos/${repo}/actions/runs/${runId}`]);
+  if (run.status !== 0) fail(`portable evidence names workflow run ${runId}, which is unreadable.`);
+  let view;
+  try {
+    view = JSON.parse(run.stdout);
+  } catch {
+    return fail(`workflow run ${runId} metadata was invalid.`);
+  }
+  const failures = [
+    [view.path === portableAssetsWorkflowPath, "must be a run of the portable assets workflow"],
+    [view.head_sha === manifest.release.sourceCommitSha, "must be the declared source commit"],
+    [view.conclusion === "success", "must have concluded successfully"],
+  ]
+    .filter(([ok]) => !ok)
+    .map(([, reason]) => reason);
+  if (failures.length > 0) {
+    fail(
+      `portable evidence for ${releaseInfo.tag} names workflow run ${runId}, which ${failures.join(" and ")}.`,
+    );
+  }
+}
+
+/**
+ * Release notes advertise portable downloads exactly when the release is guaranteed to carry them.
+ * For a stable `latest` release that guarantee is now unconditional: ensureStableLatestDownloads
+ * fails the publish before npm learns the dist-tag unless all four downloads are present and
+ * evidence-bound, so the notes can no longer point at downloads that do not exist — the failure
+ * Codex raised on #3051. A prerelease never advertises them; it is not a promotion surface.
+ */
+function portableReleasePromotionEnabled(rootManifest, options) {
+  return stableLatestRelease(rootManifest, options);
 }
 
 function normalizeRegistry(options) {
@@ -1168,16 +1252,12 @@ function withPublishApprovalRequirement(enabled, callback) {
   }
 }
 
-function releaseNotes(rootManifest, options, portableAssets) {
+function releaseNotes(rootManifest, options) {
   const catalog = readReleaseImpactCatalog();
   const result = withPublishApprovalRequirement(!options.planOnly, () =>
     renderReleaseImpactNotes(catalog, rootManifest, {
       ...options,
-      portableReleasePromotion: portableReleasePromotionEnabled(
-        rootManifest,
-        options,
-        portableAssets,
-      ),
+      portableReleasePromotion: portableReleasePromotionEnabled(rootManifest, options),
     }),
   );
   if (!result.ok) {
@@ -1775,7 +1855,7 @@ run("npm", ["run", options.planOnly ? "check:release-impact" : "check:release-im
 });
 // Assets first: the notes may only advertise portable downloads this release actually carries.
 const portableAssets = loadPortableAssets(rootManifest, options);
-const githubReleaseNotes = releaseNotes(rootManifest, options, portableAssets);
+const githubReleaseNotes = releaseNotes(rootManifest, options);
 
 if (options.planOnly) {
   printReleaseNotesPreview(githubReleaseNotes);
@@ -1803,7 +1883,7 @@ try {
   if (releaseInfo !== undefined) {
     publishPortableReleaseAssets(options, portableAssets, releaseInfo);
   }
-  ensureStableLatestDownloads(rootManifest, options, releaseInfo);
+  ensureStableLatestDownloads(rootManifest, options, releaseInfo, portableAssets.length > 0);
   for (const pkg of workspacePackages) {
     publishPackage(pkg, npmEnv, options, hasToken);
   }

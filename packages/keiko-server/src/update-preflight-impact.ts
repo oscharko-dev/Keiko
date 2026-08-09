@@ -322,7 +322,14 @@ export function impactFromCatalog(
     return missingImpactResolution();
   }
   const matching = matchingImpactEntries(catalog, currentVersion, targetVersion);
-  const targetReviewed = matching.some((entry) => entry.packageVersion === targetVersion);
+  // The target needs metadata that describes the OPERATOR's update, not merely any reviewed
+  // record. Skipping internal records in the blocker aggregation below would otherwise let a
+  // target whose only reviewed record is internal machinery look fully approved: its
+  // ineligibility gets filtered out and no customer-facing record ever spoke for the target
+  // (Codex finding on #3054). Such a target is missing its metadata, which is what it reports.
+  const targetReviewed = matching.some(
+    (entry) => entry.packageVersion === targetVersion && describesOperatorUpdate(entry),
+  );
   if (matching.length === 0 || !targetReviewed) {
     return missingImpactResolution(targetReviewed);
   }

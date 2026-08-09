@@ -16,9 +16,11 @@ below. Do not publish packages and then manually remember the rest of the cleanu
    npm run release:publish -- --tag latest
    ```
 
-`scripts/release-publish.mjs` is the source of truth for the final publish. After the npm
-registry install smoke passes, it creates or updates the matching GitHub Release and marks
-stable `latest` publishes as GitHub's `Latest` release. If the GitHub Release is missing
+`scripts/release-publish.mjs` is the source of truth for the final publish. A stable `latest`
+release is created or updated BEFORE npm publishes, so its downloads can be verified while the
+dist-tag is still private; every other dist-tag creates or updates its GitHub Release after the
+npm registry install smoke passes. Stable `latest` publishes are marked as GitHub's `Latest`
+release. If the GitHub Release is missing
 after `release:publish` exits successfully, treat that as a script defect, not a manual
 follow-up.
 
@@ -49,12 +51,20 @@ the release itself and fails closed **before** npm learns the dist-tag. Two ways
 `--portable-assets-manifest` / `KEIKO_PORTABLE_ASSETS_MANIFEST` and this run uploads them, or the
 governed evaluation lane already published them onto the tag and this run only promotes it. Beta,
 next, plan-only, and dry-run executions do not require real portable files unless a manifest is
-supplied. When supplied, the manifest is validated before npm publish starts. For stable `latest`,
-the publisher then creates or updates the GitHub Release,
-uploads and verifies the three zero-id portable candidates, binds the uploaded manifest copies to the actual
-GitHub release id and archive asset ids, uploads the evidence assets, verifies unauthenticated
-full-download bytes by size and SHA-256, and only then proceeds to npm publication. A broken portable asset set therefore
-cannot produce a stable package release without matching GitHub Release Assets.
+supplied. When supplied, the manifest is validated before npm publish starts: for stable `latest`
+the publisher creates or updates the GitHub Release, uploads and verifies the three zero-id portable
+candidates, binds the uploaded manifest copies to the actual GitHub release id and archive asset
+ids, uploads the evidence assets, and verifies unauthenticated full-download bytes by size and
+SHA-256.
+
+When the downloads were already published by the governed evaluation lane, the publisher verifies
+them instead of uploading them: the release must carry
+`keiko-portable-evaluation-manifest.json`, whose declared tag, source commit, workflow path and
+per-asset digests are validated, whose named workflow run must be a successful run of the canonical
+portable-assets workflow at that commit, and whose four downloads are re-fetched over the same
+unauthenticated URL a customer uses and matched byte for byte. Either way npm publication happens
+only afterwards, so a broken or unevidenced portable asset set cannot produce a stable package
+release.
 
 The portable assets manifest is a content-free operator input:
 
@@ -245,8 +255,11 @@ Publish is intentionally off by default. To publish, a maintainer must:
 - set `publish` to `true`,
 - keep `npm_dist_tag` at `beta` for prereleases such as `0.3.0-beta.0`,
 - provide `portable_assets_run_id` and `portable_assets_artifact_name` for the reviewed portable
-  asset bundle when publishing the stable `latest` release,
-- provide the exact `portable_assets_run_attempt` recorded by that successful tag-push run,
+  asset bundle when this run is the one uploading the stable `latest` downloads; omit them when the
+  governed evaluation lane already published the four downloads onto the tag (the publisher
+  verifies their evidence and re-downloads every byte either way),
+- provide the exact `portable_assets_run_attempt` recorded by that successful tag-push run when you
+  supply a bundle,
 - optionally set `portable_assets_manifest` to the manifest path inside that bundle; otherwise it
   defaults to `portable-assets.json`.
 
