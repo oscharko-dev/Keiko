@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-local-knowledge",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal local-knowledge package: on-disk capsule store (node:sqlite + WAL) and capsule/source/CapsuleSet lifecycle CRUD for the Local Knowledge Connector (Epic #189, Issue #193). Not published independently.",

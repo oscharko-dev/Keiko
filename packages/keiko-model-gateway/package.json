@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-model-gateway",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: Keiko model gateway — provider abstraction, OpenAI-compatible adapter, capability registry, routing, resilience, TLS handling. Not published independently.",

@@ -190,7 +190,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("exposes the version constant pinned at 0.3.0", () => {
-    expect(KEIKO_CONTRACTS_VERSION).toBe("0.3.0");
+    expect(KEIKO_CONTRACTS_VERSION).toBe("0.3.1");
   });
 
   it("HARNESS_CODES.LIMIT_ITERATIONS is the canonical code string", () => {

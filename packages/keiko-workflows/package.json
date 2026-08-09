@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-workflows",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workflows package: reviewable developer-assist workflows (unit-test generation, bug investigation), prompts/parsers/guards/report rendering, apply-mode verification gating, and UI descriptors (ADR-0008 + ADR-0009 + ADR-0019). Not published independently.",

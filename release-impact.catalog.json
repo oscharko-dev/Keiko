@@ -800,7 +800,7 @@
       "remediation": "no-action-required",
       "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
-        "Every save is a restore point \u2014 browse, compare, and restore file history locally."
+        "Every save is a restore point — browse, compare, and restore file history locally."
       ],
       "internalOnly": false,
       "observableImpact": true,
@@ -945,6 +945,55 @@
         "approvalReference": "github-pr-review:oscharko-dev/Keiko#1717#4606286126",
         "rationale": "Issue #1948 is an internal staging contract for portable runtime artifacts. Each release version carries its own instance of this unchanged contract, as 0.2.14 and 0.2.15 did; the contract itself (program epic #1944, parent epic #1942, staging-only, the same three targets) is identical and its recorded release-owner approval remains PR review #4606286126. Staging is what this entry authorizes: it binds packed-package, bundled-runtime and manifest evidence before upload, and promotes no public portable release asset."
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.1",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.1",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "id": "2026-08-09-keiko-0.3.1-public-download",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "normal",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Keiko 0.3.1 is the first public download release. It carries the same product as 0.3.0 and republishes it under a usable tag: the 0.3.0 GitHub release was withdrawn during verification and GitHub keeps that tag immutable, so the downloadable packages ship as 0.3.1. Operators who already installed an earlier build must remove it before starting this one — an older Keiko.app holds the same local port and reports the same version, so the previous installation would keep answering.",
+      "affectedStateStores": ["ui-store-schema"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "No schema change relative to 0.3.0. A store created by 0.3.0 opens unchanged; a store from 0.2.x migrates forward exactly as 0.3.0 described.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "releaseNoteBullets": [
+        "First public download release: signed-free evaluation bundles for macOS (Apple Silicon and Intel) and Windows, with Node.js and the OpenCode sidecar included.",
+        "Load an existing keiko.config.json directly in the setup dialog instead of typing every field.",
+        "Remove older Keiko installations before starting: they hold the same local port and report the same version."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-09",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5230996334",
+        "rationale": "Republication of the 0.3.0 product under a usable release tag, directed by the release owner. The 0.3.0 GitHub release was withdrawn during verification and GitHub keeps that tag immutable, so the downloadable packages ship as 0.3.1. The approval evidence is the release owner's authored comment on epic #2802 (comment 5230996334) carrying the version-bound phrase on a line of its own; the publish gate verifies the comment, its issue binding, the phrase and the allow-listed author through the GitHub API."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required"
     }
   ]
 }
