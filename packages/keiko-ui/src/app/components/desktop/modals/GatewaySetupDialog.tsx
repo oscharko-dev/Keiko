@@ -2578,6 +2578,10 @@ export function GatewaySetupDialog({
         canonicalVoiceEndpointIdentity(importedVoiceEndpointBaseUrl);
     setVoiceEndpointStyle(restoresUploadedEndpoint ? importedVoiceEndpointStyle : "");
     setVoiceApiVersion(restoresUploadedEndpoint ? importedVoiceApiVersion : "");
+    // The realtime auth mode is protocol too and was declared for the OLD host: leaving it while
+    // the binding is emptied let it ride the submit to the new endpoint alone, which the server
+    // reads as a valid restatement (review finding on #3048).
+    setVoiceRealtimeAuthMode(restoresUploadedEndpoint ? importedVoiceRealtimeAuthMode : "");
     setVoiceProtocolBoundBaseUrl(restoresUploadedEndpoint ? importedVoiceEndpointBaseUrl : "");
     setVoiceModelId("");
     setVoiceRealtimeModelId("");

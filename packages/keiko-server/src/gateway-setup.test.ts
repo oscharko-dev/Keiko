@@ -1764,6 +1764,62 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("requires restatement when the move also renames the deployment", async () => {
+    // Raised on #3048 as a hole and pinned as the behaviour instead: the restatement rules read
+    // the template of the submitted deployment id, and `voiceProviderTemplate` falls back to the
+    // provider that currently HOLDS the role when the id is new — so a rename is still a
+    // migration of the stored Azure provider and still has to restate. This test was green
+    // before that was checked; it exists so the fallback cannot be removed silently.
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-renamed-role-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-voice-renamed-role-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "azure-stt",
+            baseUrl: "https://speech.cognitiveservices.example.com",
+            apiKey: "azure-audio-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+            capability: {
+              kind: "voice",
+              supportsSpeechInput: true,
+              voiceProviderLocality: "azure-foundry",
+            },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const renamedMove = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://new-voice.example.com",
+        voiceApiKey: "moved-voice-token",
+        voiceProviderLocality: "customer-hosted",
+        voiceSpeechToTextModelId: "renamed-stt",
+      }),
+      deps,
+    );
+
+    expect(renamedMove.status).toBe(400);
+    expect(JSON.stringify(renamedMove.body)).toContain(
+      "Replacing an audio endpoint requires an explicit endpoint style for the new host.",
+    );
+    deps.store.close();
+  });
+
   it("keeps the inherited version when the Azure style is merely restated", async () => {
     // The mirror of the atomic rule (review finding on #3048): only a switch AWAY from the
     // deployment path discards the inherited version. Restating the same style needs it, and
