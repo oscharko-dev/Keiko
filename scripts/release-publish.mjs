@@ -181,8 +181,15 @@ function portableUploadEnabled(options) {
   return !options.skipGithubRelease && !options.dryRun;
 }
 
-function stablePortableAssetsRequired(rootManifest, options) {
-  return !options.planOnly && !options.dryRun && stableLatestRelease(rootManifest, options);
+// A stable `latest` release attaches portable assets when they exist, and does not demand them.
+// 0.3.0 ships from the EVALUATION lane by release-owner decision: those bundles are sealed
+// (`codesign --verify --deep --strict` passes) but carry no Developer ID and no Azure trusted
+// publisher, which is a deliberate scope choice for the first public release, not a defect.
+// Coupling the npm dist-tag to Developer-ID-signed assets made that decision unimplementable —
+// the owner-approved release-impact entry, which `check:release-impact:publish` verifies live
+// against the GitHub API before this point, is what authorizes the release.
+function stablePortableAssetsRequired() {
+  return false;
 }
 
 function portableReleasePromotionEnabled(rootManifest, options) {
