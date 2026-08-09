@@ -335,6 +335,27 @@ function storedProviderForModel(
   return stored?.providers.find((candidate) => candidate.modelId === modelId);
 }
 
+// What the adapter will send AFTER the save: the statement if there is one, else what the file
+// declares, else what the environment already resolves the provider to. Falling through to the
+// resolved provider is what keeps a plain rotation — which states nothing — comparing equal.
+function effectiveSubmittedProtocol(
+  protocol: {
+    readonly submitted: {
+      readonly endpointStyle?: string | undefined;
+      readonly apiVersion?: string | undefined;
+    };
+    readonly durable: ModelProviderConfig | undefined;
+  },
+  provider: ModelProviderConfig,
+): { readonly endpointStyle: string | undefined; readonly apiVersion: string | undefined } {
+  return {
+    endpointStyle:
+      protocol.submitted.endpointStyle ?? protocol.durable?.endpointStyle ?? provider.endpointStyle,
+    apiVersion:
+      protocol.submitted.apiVersion ?? protocol.durable?.apiVersion ?? provider.apiVersion,
+  };
+}
+
 function existingCapabilityForSetup(
   current: GatewayConfig | undefined,
   modelId: string,
@@ -349,7 +370,13 @@ function existingCapabilityForSetup(
 ): ModelCapability | undefined {
   const provider = current?.providers.find((candidate) => candidate.modelId === modelId);
   if (provider === undefined || !sameBaseUrlIdentity(provider.baseUrl, baseUrl)) return undefined;
-  const of = protocol.durable ?? provider;
+  // Both sides are the EFFECTIVE protocol — what the adapter will actually send. The durable
+  // view alone was not enough: with the file silent and KEIKO_DEFAULT_* resolving `current` to
+  // Azure, an explicit switch to openai-compatible compared undefined against openai-compatible
+  // and read as unchanged, keeping observations made over the deployment path (review finding on
+  // #3046). Completing the submitted side with the same defaults keeps a plain rotation — which
+  // states nothing — comparing equal.
+  const submitted = effectiveSubmittedProtocol(protocol, provider);
   // The protocol is part of the endpoint's identity: the deployment path and the api version
   // change the request route, so streaming, tool calling and image observations made over the
   // old one prove nothing about the new one. The setup probe performs buffered chat only and
@@ -359,9 +386,9 @@ function existingCapabilityForSetup(
   // the identical request shape — so a same-URL import that merely spells the default out must
   // not discard verified observations (review finding on #3046).
   if (
-    effectiveEndpointStyle(of.endpointStyle) !==
-      effectiveEndpointStyle(protocol.submitted.endpointStyle) ||
-    of.apiVersion !== protocol.submitted.apiVersion
+    effectiveEndpointStyle(provider.endpointStyle) !==
+      effectiveEndpointStyle(submitted.endpointStyle) ||
+    provider.apiVersion !== submitted.apiVersion
   ) {
     return undefined;
   }

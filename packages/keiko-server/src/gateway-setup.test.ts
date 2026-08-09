@@ -6324,6 +6324,8 @@ describe("handleGatewaySetup", () => {
       (provider) => provider.modelId === "example-chat",
     );
     expect(saved?.endpointStyle).toBe("openai-compatible");
+    // …and the environment must not complete the tuple it was told not to use.
+    expect(saved?.apiVersion).toBeUndefined();
     deps.store.close();
   });
 
@@ -6369,6 +6371,57 @@ describe("handleGatewaySetup", () => {
       (provider) => provider.modelId === "example-chat",
     );
     expect(saved?.apiVersion).toBe("2025-03-01-preview");
+    deps.store.close();
+  });
+
+  it("discards observations when an import switches away from an env-resolved Azure tuple", async () => {
+    // Review finding on #3046: comparing the DURABLE view against the submitted one read a file
+    // that declares nothing while KEIKO_DEFAULT_* resolves Azure as "unchanged" when the request
+    // explicitly switched to openai-compatible — so observations made over the deployment path
+    // survived onto a different request shape.
+    const uiDir = await tempDir("keiko-gw-ui-env-switch-");
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            capability: { kind: "chat", supportsDocumentInput: true },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-env-switch-"),
+      env: {
+        ...VAULT_ENV,
+        KEIKO_DEFAULT_ENDPOINT_STYLE: "azure-openai-deployment",
+        KEIKO_DEFAULT_API_VERSION: "2025-04-01-preview",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const switched = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "chat-token",
+        deploymentNames: ["example-chat"],
+        endpointStyle: "openai-compatible",
+      }),
+      deps,
+    );
+    expect(switched.status).toBe(200);
+    const capability = currentGatewayConfig(deps)?.capabilities?.find(
+      (entry) => entry.id === "example-chat",
+    );
+    expect(capability).toMatchObject({ supportsDocumentInput: false });
     deps.store.close();
   });
 
