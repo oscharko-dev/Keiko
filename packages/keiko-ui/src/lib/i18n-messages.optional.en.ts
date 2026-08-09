@@ -802,6 +802,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gatewaySetup.voice.realtimeAuthMode.label": "Realtime authentication",
   "gatewaySetup.voice.realtimeAuthMode.apiKey": "API key",
   "gatewaySetup.voice.realtimeAuthMode.ephemeral": "Ephemeral session token",
+  "gatewaySetup.voice.endpointProtocolRestatementRequired":
+    "Replacing a stored audio endpoint requires restating its endpoint style and realtime authentication for the new host.",
+  "gatewaySetup.voice.azureEndpointRequiresApiVersion":
+    "The Azure deployment path requires an audio API version.",
   "gatewaySetup.voice.endpointStyle.label": "Audio endpoint style",
   "gatewaySetup.voice.apiVersion.label": "Audio API version",
   "gatewaySetup.voice.protocol.optional": "optional",

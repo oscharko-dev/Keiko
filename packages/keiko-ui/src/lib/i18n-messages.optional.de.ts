@@ -833,6 +833,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gatewaySetup.voice.realtimeAuthMode.label": "Realtime-Authentifizierung",
   "gatewaySetup.voice.realtimeAuthMode.apiKey": "API-Schlüssel",
   "gatewaySetup.voice.realtimeAuthMode.ephemeral": "Kurzlebiges Sitzungs-Token",
+  "gatewaySetup.voice.endpointProtocolRestatementRequired":
+    "Beim Ersetzen eines gespeicherten Audio-Endpunkts müssen Endpunkt-Stil und Realtime-Authentifizierung für den neuen Host erneut angegeben werden.",
+  "gatewaySetup.voice.azureEndpointRequiresApiVersion":
+    "Der Azure-Deployment-Pfad erfordert eine Audio-API-Version.",
   "gatewaySetup.voice.endpointStyle.label": "Audio-Endpunkt-Stil",
   "gatewaySetup.voice.apiVersion.label": "Audio-API-Version",
   "gatewaySetup.voice.protocol.optional": "optional",

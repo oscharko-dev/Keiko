@@ -669,7 +669,10 @@ interface GatewayFormFields {
 // uploaded host, and moving the endpoint away from it without restating leaves an Azure
 // deployment-path endpoint saved as the OpenAI-compatible shape (review finding on #3048).
 function movedImportRequiresProtocol(fields: GatewayFormFields): boolean {
-  if (fields.preserveExisting) return false;
+  // The condition is "no server-side migration guard will run", not "fresh dialog": that guard
+  // needs a STORED voice provider, so a preserve-mode setup that has none — the first audio
+  // configuration on an existing gateway — is just as unguarded (review finding on #3048).
+  if (fields.preserveExisting && fields.hasStoredVoiceProvider) return false;
   const submitted = fields.voiceBaseUrl.trim();
   if (submitted === "") return false;
   if (
@@ -693,7 +696,16 @@ function endpointMigrationValidationError(
   t: GatewaySetupTranslate,
 ): string | undefined {
   if (movedImportRequiresProtocol(fields)) {
-    return t("gatewaySetup.voice.endpointMigrationRequired");
+    return t("gatewaySetup.voice.endpointProtocolRestatementRequired");
+  }
+  // The canonical pairing, checked before the request leaves the dialog: the deployment path
+  // needs the version that builds its URL, and the server answers the pair with a 400 the
+  // operator then has to decode (review finding on #3048).
+  if (
+    fields.voiceEndpointStyle === "azure-openai-deployment" &&
+    fields.voiceApiVersion.trim() === ""
+  ) {
+    return t("gatewaySetup.voice.azureEndpointRequiresApiVersion");
   }
   if (!fields.preserveExisting || !fields.hasStoredVoiceProvider) return undefined;
   if (fields.voiceBaseUrl.trim() === "") return undefined;
@@ -2622,10 +2634,7 @@ export function GatewaySetupDialog({
     // the stored endpoint restores its own template below. Clearing unconditionally meant undoing
     // an edit left the original Azure URL without its deployment-path protocol — the save then
     // succeeded on the OpenAI-compatible shape (review finding on #3048).
-    const restoresUploadedEndpoint =
-      importedVoiceEndpointBaseUrl !== "" &&
-      canonicalEndpointIdentity(nextBaseUrl) ===
-        canonicalEndpointIdentity(importedVoiceEndpointBaseUrl);
+    const restoresUploadedEndpoint = restoresUploadedVoiceEndpoint(nextBaseUrl);
     setVoiceEndpointStyle(restoresUploadedEndpoint ? importedVoiceEndpointStyle : "");
     setVoiceApiVersion(restoresUploadedEndpoint ? importedVoiceApiVersion : "");
     // The realtime auth mode is protocol too and was declared for the OLD host: leaving it while
@@ -2721,6 +2730,23 @@ export function GatewaySetupDialog({
       () => resetEndpointDependencies(next, nextIdentity),
       false,
     );
+    // Typing back to the uploaded URL never leaves the committed identity, so no transition
+    // fires and the restore inside the reset is never reached — the protocol stayed cleared by
+    // the first divergent keystroke even though the endpoint is the original one again (review
+    // finding on #3048).
+    if (restoresUploadedVoiceEndpoint(next)) restoreUploadedVoiceProtocol();
+  };
+
+  const restoresUploadedVoiceEndpoint = (nextBaseUrl: string): boolean =>
+    importedVoiceEndpointBaseUrl !== "" &&
+    canonicalEndpointIdentity(nextBaseUrl) ===
+      canonicalEndpointIdentity(importedVoiceEndpointBaseUrl);
+
+  const restoreUploadedVoiceProtocol = (): void => {
+    setVoiceEndpointStyle(importedVoiceEndpointStyle);
+    setVoiceApiVersion(importedVoiceApiVersion);
+    setVoiceRealtimeAuthMode(importedVoiceRealtimeAuthMode);
+    setVoiceProtocolBoundBaseUrl(importedVoiceEndpointBaseUrl);
   };
 
   const commitVoiceBaseUrl = (): void => {

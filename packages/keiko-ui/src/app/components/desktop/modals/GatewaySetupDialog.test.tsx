@@ -2085,6 +2085,101 @@ describe("GatewaySetupDialog", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /test & save/i })).toBeEnabled());
   });
 
+  it("restores the imported protocol when the endpoint edit is typed back", async () => {
+    // Review finding on #3048: typing back to the uploaded URL never leaves the committed
+    // identity, so no transition fires and the restore inside the reset was never reached — the
+    // protocol stayed cleared by the first divergent keystroke.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+    await userEvent.upload(
+      await screen.findByLabelText(/load keiko\.config\.json/i),
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "gpt-5o",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                capability: { id: "gpt-5o", kind: "chat" },
+              },
+              {
+                modelId: "azure-tts",
+                baseUrl: "https://voice.example.com",
+                endpointStyle: "azure-openai-deployment",
+                apiVersion: "2025-04-01-preview",
+                capability: {
+                  id: "azure-tts",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsSpeechOutput: true,
+                },
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(/audio endpoint url/i)).toHaveValue("https://voice.example.com"),
+    );
+
+    // Edit away and type the original back, character by character.
+    await userEvent.clear(screen.getByLabelText(/audio endpoint url/i));
+    await userEvent.type(screen.getByLabelText(/audio endpoint url/i), "https://voice.example.com");
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/audio api version/i)).toHaveValue("2025-04-01-preview"),
+    );
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
+    // The deployments were reset by the divergent keystrokes on the way, so they are restated —
+    // the protocol is what the return to the uploaded endpoint brings back.
+    await userEvent.type(
+      screen.getByLabelText(/read aloud.*speech-output deployment/i),
+      "azure-tts",
+    );
+    await userEvent.type(screen.getByLabelText(/output voice/i), "ash");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).toMatchObject({
+      voiceEndpointStyle: "azure-openai-deployment",
+      voiceApiVersion: "2025-04-01-preview",
+    });
+  });
+
+  it("refuses an Azure audio endpoint stated without its api version", async () => {
+    // Review finding on #3048: a stated deployment path with a blank version is the pair the
+    // gateway parser refuses, and the dialog let it leave — the operator got a 400 to decode.
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedModels={[modelCapability("internal-chat"), semanticRealtimeCapability("stored-rt")]}
+      />,
+    );
+    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
+    await userEvent.click(screen.getByRole("option", { name: "Azure deployment path" }));
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /azure deployment path requires an audio api version/i,
+    );
+  });
+
   it("refuses a moved import whose realtime auth mode is the only unstated piece", async () => {
     // Review finding on #3048: the fresh-mode requirement keyed off the endpoint style alone, so
     // a file declaring only realtimeAuthMode — or one whose style was restated while the mode was
