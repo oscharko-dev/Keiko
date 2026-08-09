@@ -172,6 +172,35 @@ describe("prepublishedReleaseFailures", () => {
     expect(result.failures.join(" ")).toContain("must never authorize the latest dist-tag");
   });
 
+  it.each([
+    ["an absurdly large", 5 * 1024 * 1024],
+    ["a zero-byte", 0],
+  ])("refuses %s evidence asset without fetching it", (_label, size) => {
+    // Hostile evidence must produce a bounded refusal: the declared size is checked against the
+    // manifest ceiling BEFORE any bytes are downloaded or read.
+    const assets = downloads();
+    const bloated = release(assets);
+    const evidenceEntry = bloated.assets.find(
+      (asset) => asset.name === "keiko-portable-evaluation-manifest.json",
+    );
+    evidenceEntry.size = size;
+    const result = prepublishedReleaseFailures({
+      tag: TAG,
+      repository: REPOSITORY,
+      workflowPath: WORKFLOW_PATH,
+      expectedNames: EXPECTED_NAMES,
+      release: bloated,
+      readLatestRelease: () => ({ id: RELEASE_ID }),
+      readManifest: () => {
+        throw new Error("evidence must not be fetched when its size is out of bounds");
+      },
+      readRun: () => goodRun(),
+    });
+
+    expect(result.failures.join(" ")).toContain("refused without being fetched");
+    expect(result.expectedDownloads).toEqual([]);
+  });
+
   it("refuses evidence that cannot be read", () => {
     // An unreadable manifest is not a manifest; it must never be treated as an absent objection.
     const result = verify({ manifest: undefined });

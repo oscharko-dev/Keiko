@@ -112,6 +112,15 @@ function evidenceAsset(remoteAssets) {
 }
 
 /**
+ * The evaluation manifest is names, sizes, digests and identifiers — a few kilobytes. GitHub
+ * reports every asset's stored size, so an absurd evidence asset is refused BEFORE any bytes are
+ * fetched: hostile evidence must produce a bounded refusal, not unbounded temp storage and a
+ * synchronous read of whatever was uploaded (Codex finding on #3054). One mebibyte is two orders
+ * of magnitude above any real manifest and still a trivial download.
+ */
+const MAX_EVALUATION_MANIFEST_BYTES = 1024 * 1024;
+
+/**
  * Provenance is only provenance when it resolves. The named run must be a successful run of the
  * canonical portable-assets workflow at the exact commit the evidence declares — otherwise the
  * evidence names something that never built these bytes.
@@ -242,6 +251,15 @@ export function prepublishedReleaseFailures(input) {
     return {
       failures: [
         `GitHub release ${tag} carries portable downloads this run did not upload but no ${PORTABLE_EVALUATION_MANIFEST_ASSET_NAME}; downloads without reviewed evidence must never authorize the latest dist-tag.`,
+      ],
+      expectedDownloads: [],
+    };
+  }
+  const evidenceSize = Number(asset.size);
+  if (!(evidenceSize > 0 && evidenceSize <= MAX_EVALUATION_MANIFEST_BYTES)) {
+    return {
+      failures: [
+        `GitHub release ${tag} reports ${String(asset.size)} bytes for ${PORTABLE_EVALUATION_MANIFEST_ASSET_NAME}; a portable evaluation manifest is bounded at ${String(MAX_EVALUATION_MANIFEST_BYTES)} bytes, so it is refused without being fetched.`,
       ],
       expectedDownloads: [],
     };
