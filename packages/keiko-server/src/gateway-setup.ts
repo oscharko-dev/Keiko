@@ -2205,14 +2205,36 @@ function setupEndpointProtocol(
   // openai-compatible on the same URL would otherwise build a mixed protocol the canonical
   // parser refuses, failing the save instead of performing it (review finding on #3046).
   if (endpointStyle.value !== undefined) {
-    return { endpointStyle: endpointStyle.value, apiVersion: apiVersion.value };
+    return pairedEndpointProtocol(endpointStyle.value, apiVersion.value);
   }
   const inheritable =
     preserveExisting && provider !== undefined && sameBaseUrlIdentity(baseUrl, provider.baseUrl);
-  return {
-    endpointStyle: inheritable ? provider.endpointStyle : undefined,
-    apiVersion: apiVersion.value ?? (inheritable ? provider.apiVersion : undefined),
-  };
+  return pairedEndpointProtocol(
+    inheritable ? provider.endpointStyle : undefined,
+    apiVersion.value ?? (inheritable ? provider.apiVersion : undefined),
+  );
+}
+
+// The canonical pairing, checked on the EFFECTIVE protocol rather than on the submitted fields:
+// an api version belongs to the Azure deployment path alone. Without this the config parser threw
+// during verification and the operator got an opaque 502 "credentials could not be verified" for
+// what is a request problem — a submitted version with no style at all, or a submitted version
+// over an inherited openai-compatible style (review finding on #3046). Bumping the version of an
+// endpoint whose stored style IS the deployment path stays legal: that is the same pair.
+function pairedEndpointProtocol(
+  endpointStyle: ModelProviderConfig["endpointStyle"] | undefined,
+  apiVersion: string | undefined,
+): Pick<SetupGatewayCredentials, "endpointStyle" | "apiVersion"> | RouteResult {
+  if (apiVersion !== undefined && endpointStyle !== "azure-openai-deployment") {
+    return {
+      status: 400,
+      body: errorBody(
+        "GATEWAY_API_VERSION_REQUIRES_AZURE_ENDPOINT",
+        'apiVersion requires endpointStyle to be "azure-openai-deployment".',
+      ),
+    };
+  }
+  return { endpointStyle, apiVersion };
 }
 
 function validateVoiceProviderConnection(

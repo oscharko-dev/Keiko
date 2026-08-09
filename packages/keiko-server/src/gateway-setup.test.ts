@@ -6593,6 +6593,70 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("names the pairing when an api version has no Azure endpoint to belong to", async () => {
+    // Review finding on #3046: an api version with no style (fresh) or over an inherited
+    // openai-compatible style built a pair the canonical parser refuses. The throw surfaced as an
+    // opaque 502 "credentials could not be verified", which is a request problem reported as an
+    // upstream one. Bumping the version of a stored Azure endpoint stays legal — same pair.
+    const uiDir = await tempDir("keiko-gw-ui-orphan-version-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-orphan-version-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const orphan = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "chat-token",
+        deploymentNames: ["example-chat"],
+        apiVersion: "2025-04-01-preview",
+      }),
+      deps,
+    );
+    expect(orphan.status).toBe(400);
+    expect(orphan.body).toMatchObject({
+      error: { code: "GATEWAY_API_VERSION_REQUIRES_AZURE_ENDPOINT" },
+    });
+
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "azure-chat",
+            baseUrl: "https://resource.example.com",
+            apiKey: "azure-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+    // The legal case the blunt "reject apiVersion without endpointStyle" rule would have broken.
+    const bumped = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://resource.example.com",
+        apiKey: "azure-token",
+        deploymentNames: ["azure-chat"],
+        apiVersion: "2025-04-01-preview",
+      }),
+      deps,
+    );
+    expect(bumped.status).toBe(200);
+    const saved = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "azure-chat",
+    );
+    expect(saved?.endpointStyle).toBe("azure-openai-deployment");
+    expect(saved?.apiVersion).toBe("2025-04-01-preview");
+    deps.store.close();
+  });
+
   it("rejects an unsupported generic endpoint style", async () => {
     const uiDir = await tempDir("keiko-gw-ui-generic-style-bad-");
     const deps = buildUiHandlerDeps({
