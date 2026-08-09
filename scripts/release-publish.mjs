@@ -39,6 +39,7 @@ import {
   normalizePortableSetupCompanion,
   portableSetupCompanionRecord,
 } from "./lib/portable-setup-companion.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { PORTABLE_EVALUATION_MANIFEST_ASSET_NAME } from "./lib/portable-evaluation-manifest.mjs";
 import {
   collectEvaluationArtifactDigests,
@@ -245,7 +246,7 @@ const portableGate = portableReleaseGate({
  */
 function fetchRunArtifactZip(artifactId, destination) {
   const result = spawnSync(
-    "gh",
+    resolveHostExecutable("gh"),
     ["api", `repos/${githubRepository()}/actions/artifacts/${String(artifactId)}/zip`],
     { cwd: repoRoot, encoding: "buffer", maxBuffer: maxPortableArchiveBytes, env: process.env },
   );
