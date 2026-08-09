@@ -10,7 +10,7 @@
  * byte; it never decides that bytes are acceptable, because it never sees them.
  */
 
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { URL } from "node:url";
@@ -342,4 +342,40 @@ function runArtifactDigestFailures(expectedDownloads, collect, artifactNames) {
       ? []
       : [`${expected.assetName} does not match the bytes the referenced run produced.`];
   });
+}
+
+/** Every file in a downloaded artifact, whether gh placed it at the root or one level deeper. */
+function artifactFiles(root, depth = 1) {
+  const found = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const path = join(root, entry.name);
+    if (entry.isFile()) found.push([entry.name, path]);
+    else if (entry.isDirectory() && depth > 0) found.push(...artifactFiles(path, depth - 1));
+  }
+  return found;
+}
+
+/**
+ * SHA-256 of every file inside the referenced run's evaluation staging artifacts. Workflow-run
+ * artifacts cannot be rewritten after the run, which is exactly why the digests are taken from
+ * there rather than from a manifest sitting next to the assets being verified.
+ *
+ * An empty map means "unreadable", and the caller treats that as a refusal — never as an absent
+ * objection.
+ */
+export function collectEvaluationArtifactDigests({ gh, hashFile }, runId, artifactNames) {
+  const root = mkdtempSync(join(tmpdir(), "keiko-run-artifacts-"));
+  const digests = new Map();
+  try {
+    for (const artifactName of artifactNames) {
+      const target = join(root, artifactName);
+      mkdirSync(target, { recursive: true });
+      const args = ["run", "download", String(runId), "--name", artifactName, "--dir", target];
+      if (gh(args)?.status !== 0) return new Map();
+      for (const [name, path] of artifactFiles(target)) digests.set(name, hashFile(path));
+    }
+    return digests;
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
 }

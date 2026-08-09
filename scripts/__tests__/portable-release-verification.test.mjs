@@ -1,9 +1,10 @@
-import { existsSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildPortableEvaluationManifest } from "../lib/portable-evaluation-manifest.mjs";
 import {
+  collectEvaluationArtifactDigests,
   downloadJsonAsset,
   jsonFromCommand,
   livePublish,
@@ -535,5 +536,67 @@ describe("portableReleaseGate", () => {
     expect(
       gate.inputFailure({ suppliesManifest: true, skipGithubRelease: false, stableLatest: true }),
     ).toBeUndefined();
+  });
+});
+
+describe("collectEvaluationArtifactDigests", () => {
+  const NAMES = ["artifact-a", "artifact-b"];
+
+  function ghThatWrites(layout, failFor) {
+    return (args) => {
+      const name = args[args.indexOf("--name") + 1];
+      const dir = args[args.indexOf("--dir") + 1];
+      if (name === failFor) return { status: 1 };
+      const target = layout === "nested" ? join(dir, "inner") : dir;
+      mkdirSync(target, { recursive: true });
+      writeFileSync(join(target, `${name}.zip`), `bytes of ${name}`);
+      return { status: 0 };
+    };
+  }
+
+  it.each([["flat"], ["nested"]])("hashes every file in a %s artifact layout", (layout) => {
+    // gh places files at the artifact root or one directory deeper depending on how the artifact
+    // was uploaded. Reading only the top level would report an unreadable run and refuse a
+    // perfectly good release.
+    const digests = collectEvaluationArtifactDigests(
+      { gh: ghThatWrites(layout), hashFile: (path) => `hash:${basename(path)}` },
+      "42",
+      NAMES,
+    );
+
+    expect([...digests.entries()]).toEqual([
+      ["artifact-a.zip", "hash:artifact-a.zip"],
+      ["artifact-b.zip", "hash:artifact-b.zip"],
+    ]);
+  });
+
+  it("returns an empty map when any artifact cannot be downloaded", () => {
+    // Empty means unreadable, and the caller refuses on it — a partial set must never look like a
+    // complete one with a missing entry.
+    const digests = collectEvaluationArtifactDigests(
+      { gh: ghThatWrites("flat", "artifact-b"), hashFile: () => "unused" },
+      "42",
+      NAMES,
+    );
+
+    expect(digests.size).toBe(0);
+  });
+
+  it("leaves no temporary directory behind", () => {
+    const roots = [];
+    collectEvaluationArtifactDigests(
+      {
+        gh: (args) => {
+          roots.push(dirname(args[args.indexOf("--dir") + 1]));
+          return { status: 1 };
+        },
+        hashFile: () => "unused",
+      },
+      "42",
+      NAMES,
+    );
+
+    expect(roots).toHaveLength(1);
+    expect(roots.filter((root) => existsSync(root))).toEqual([]);
   });
 });

@@ -39,7 +39,10 @@ import {
   normalizePortableSetupCompanion,
   portableSetupCompanionRecord,
 } from "./lib/portable-setup-companion.mjs";
-import { portableReleaseGate } from "./lib/portable-release-verification.mjs";
+import {
+  collectEvaluationArtifactDigests,
+  portableReleaseGate,
+} from "./lib/portable-release-verification.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const packageRegistryScope = scope.slice(0, -1);
@@ -208,7 +211,8 @@ const portableGate = portableReleaseGate({
   },
   setupAssetName: WINDOWS_PORTABLE_SETUP_ASSET_NAME,
   snapshot: githubReleaseSnapshot,
-  collectRunArtifactDigests: collectEvaluationArtifactDigests,
+  collectRunArtifactDigests: (runId, names) =>
+    collectEvaluationArtifactDigests({ gh, hashFile: sha256FileSync }, runId, names),
   targets: PORTABLE_TARGETS,
   verifyBytes: runPortableDownloadSmoke,
 });
@@ -218,43 +222,6 @@ const portableGate = portableReleaseGate({
  * Workflow-run artifacts cannot be rewritten after the run, which is exactly why the digests are
  * taken from there rather than from the manifest sitting next to the assets being verified.
  */
-function artifactFiles(root, depth = 1) {
-  const found = [];
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    const path = join(root, entry.name);
-    if (entry.isFile()) found.push([entry.name, path]);
-    else if (entry.isDirectory() && depth > 0) found.push(...artifactFiles(path, depth - 1));
-  }
-  return found;
-}
-
-function collectEvaluationArtifactDigests(runId, artifactNames) {
-  const root = mkdtempSync(join(tmpdir(), "keiko-run-artifacts-"));
-  const digests = new Map();
-  try {
-    for (const artifactName of artifactNames) {
-      const target = join(root, artifactName);
-      mkdirSync(target, { recursive: true });
-      const result = gh([
-        "run",
-        "download",
-        String(runId),
-        "--name",
-        artifactName,
-        "--dir",
-        target,
-      ]);
-      if (result.status !== 0) return new Map();
-      // `gh run download` places the files directly in the target or one directory deeper,
-      // depending on how the artifact was uploaded — the producer resolves them the same way, and
-      // reading only the top level would refuse a perfectly good release.
-      for (const [name, path] of artifactFiles(target)) digests.set(name, sha256FileSync(path));
-    }
-    return digests;
-  } finally {
-    rmSync(root, { force: true, recursive: true });
-  }
-}
 
 function verifyPrepublishedStableRelease(rootManifest, options) {
   if (!stableLatestRelease(rootManifest, options) || options.dryRun) return false;
