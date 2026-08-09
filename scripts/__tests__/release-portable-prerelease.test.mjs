@@ -206,18 +206,50 @@ describe("hermetic end-to-end (scripted gh double)", () => {
   const previousTag = `v${localVersion}-beta.1`;
   const currentTag = `v${localVersion}-beta.2`;
 
+  /**
+   * The governance answers a public release needs: the checkout binding, the release-source branch
+   * lookup, and the two verifier subprocesses. Separated from the artifact/codesign double below
+   * so each stays readable.
+   */
+  function governanceAnswer(line, overrides) {
+    // The publisher checkout binding: by default this checkout IS the built commit and clean.
+    if (line.startsWith("git rev-parse HEAD")) {
+      return { status: 0, stdout: `${overrides.head ?? "b2e3900a"}\n`, stderr: "" };
+    }
+    if (line.startsWith("git status --porcelain")) {
+      return { status: 0, stdout: overrides.dirty ?? "", stderr: "" };
+    }
+    // The release base branch declared by release.yml does not exist in this repository, so the
+    // source branch resolves to the default branch — exactly what it does live.
+    if (line.includes("/branches/")) {
+      return { status: overrides.releaseBranchExists === true ? 0 : 1, stdout: "", stderr: "" };
+    }
+    return verifierAnswer(line, overrides);
+  }
+
+  /**
+   * The required-checks verifier and the live release-owner approval gate are spawned through the
+   * same process seam as gh, so they are answered here: success unless a test scripts a failure.
+   */
+  function verifierAnswer(line, overrides) {
+    if (
+      !line.includes("verify-release-required-checks") &&
+      !line.includes("check-release-impact")
+    ) {
+      return undefined;
+    }
+    const scripted = (overrides.failures ?? []).find(([needle]) => line.includes(needle));
+    return scripted === undefined
+      ? { status: 0, stdout: "", stderr: "" }
+      : { status: 1, stdout: "", stderr: scripted[1] };
+  }
+
   function ghDouble(recorded, overrides = {}) {
     return (command, args) => {
       const line = [command.split("/").pop(), ...args].join(" ");
       recorded.push(line);
-      // The required-checks verifier is spawned through the same process seam as gh, so the
-      // double answers it here: success unless a test scripts a failure for it.
-      if (line.includes("verify-release-required-checks")) {
-        const scripted = (overrides.failures ?? []).find(([needle]) => line.includes(needle));
-        return scripted === undefined
-          ? { status: 0, stdout: "", stderr: "" }
-          : { status: 1, stdout: "", stderr: scripted[1] };
-      }
+      const governance = governanceAnswer(line, overrides);
+      if (governance !== undefined) return governance;
       if (line.startsWith("gh release create")) {
         // The notes file dies with the temp directory — snapshot the rendered release body while
         // it still exists, so tests can assert what the published surface actually said.
@@ -257,6 +289,11 @@ describe("hermetic end-to-end (scripted gh double)", () => {
   // publish, so the default mirrors what ensureTagRefAtBuiltCommit just guaranteed. Moved-tag
   // and vanished-tag scenarios override via `failures`/`answers` (#3037).
   function defaultGhRefAnswer(joined) {
+    // The repository view, used to resolve the release source branch when release.yml's declared
+    // base branch does not exist.
+    if (joined === "api repos/oscharko-dev/Keiko") {
+      return { status: 0, stdout: '{"default_branch":"dev"}', stderr: "" };
+    }
     if (joined.startsWith("api --method POST repos/{owner}/{repo}/git/refs")) {
       return { status: 0, stdout: "{}", stderr: "" };
     }
@@ -369,6 +406,39 @@ describe("hermetic end-to-end (scripted gh double)", () => {
           failures: [["verify-release-required-checks", "ci is failing"]],
         }),
       ).toThrow(/required checks have not passed/u);
+      expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+    });
+
+    it("refuses to publish from a checkout that is not the built commit", () => {
+      // The required checks cover the built commit, not the code making the publication decision.
+      // A different checkout with the same package version would otherwise mint the stable tag and
+      // the Latest release from unverified local code.
+      const recorded = [];
+      expect(() => publicRun(recorded, { head: "0000000" })).toThrow(
+        /is at 0000000, not the built commit/u,
+      );
+      expect(recorded.some((line) => line.includes("git/refs"))).toBe(false);
+    });
+
+    it("refuses to publish from a dirty checkout", () => {
+      const recorded = [];
+      expect(() => publicRun(recorded, { dirty: " M scripts/release-publish.mjs\n" })).toThrow(
+        /uncommitted changes/u,
+      );
+      expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+    });
+
+    it("refuses to publish when the release-owner approval does not verify live", () => {
+      // This producer exposes the customer downloads BEFORE the npm publisher runs its own live
+      // approval check, so a stale or fabricated catalog approval would otherwise reach the public
+      // first. The same gate is brought forward rather than trusted from the catalog's own fields.
+      const recorded = [];
+      expect(() =>
+        publicRun(recorded, {
+          answers: [["compare/dev...", JSON.stringify({ status: "behind" })]],
+          failures: [["check-release-impact", "release-impact: FAIL - approval not verified"]],
+        }),
+      ).toThrow(/release-owner approval for this version did not verify/u);
       expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
     });
 

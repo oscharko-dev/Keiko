@@ -57,12 +57,28 @@ candidates, binds the uploaded manifest copies to the actual GitHub release id a
 ids, uploads the evidence assets, and verifies unauthenticated full-download bytes by size and
 SHA-256.
 
+Publishing that evaluation release is a prerequisite, not an implicit step. Run it from a clean
+checkout AT the built commit:
+
+```sh
+node scripts/release-portable-prerelease.mjs --ref dev --public-release
+```
+
+It refuses before minting anything unless the checkout is the built commit and clean, the commit is
+contained in the release source branch (`RELEASE_BASE_BRANCH` from `release.yml` when that branch
+exists, otherwise the default branch), every required check has passed on that exact commit, and
+the release owner's approval verifies live. It then publishes the four downloads plus
+`keiko-portable-evaluation-manifest.json` at `v<version>` as the Latest release, with both the
+first-launch instructions and the governed catalog notes in its body.
+
 When the downloads were already published by the governed evaluation lane, the publisher verifies
 them instead of uploading them: the release must carry
 `keiko-portable-evaluation-manifest.json`, whose declared tag, source commit, workflow path and
 per-asset digests are validated, whose named workflow run must be a successful run of the canonical
-portable-assets workflow at that commit, and whose four downloads are re-fetched over the same
-unauthenticated URL a customer uses and matched byte for byte. Either way npm publication happens
+portable-assets workflow at that commit. The declared digests are then checked against the
+artifacts that run actually produced — workflow artifacts cannot be rewritten after the run, so the
+evidence sitting next to the assets is never its own provenance — and only then are the four
+downloads re-fetched over the same unauthenticated URL a customer uses and matched byte for byte. Either way npm publication happens
 only afterwards, so a broken or unevidenced portable asset set cannot produce a stable package
 release.
 

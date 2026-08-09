@@ -78,9 +78,13 @@ const RELEASE_IMPACT_CATALOG = JSON.parse(
 const RELEASE_VERSION = ROOT_MANIFEST.version;
 // The exact download set a stable `latest` release must carry, derived from the same target
 // table the orchestrator uses — a restated list here could drift past a new target silently.
+// Derived from the same target table the orchestrator uses, deduplicated so a target table that
+// ever repeats a name cannot silently shorten the expected set.
 const PUBLISHED_DOWNLOAD_NAMES = [
-  ...PORTABLE_TARGETS.map((target) => target.assetName),
-  WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+  ...new Set([
+    ...PORTABLE_TARGETS.map((target) => target.assetName),
+    WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+  ]),
 ];
 const RELEASE_NAME = ROOT_MANIFEST.name;
 const RELEASE_SPEC = `${RELEASE_NAME}@${RELEASE_VERSION}`;
@@ -512,6 +516,7 @@ function portableUpdateEligibility() {
 // so a stub can flip "published"/"tagged" as the orchestrator drives it.
 function stubPrologue(logFile, stateFile) {
   return [
+    'import { Buffer } from "node:buffer";',
     'import { createHash } from "node:crypto";',
     'import { appendFileSync, readFileSync, writeFileSync } from "node:fs";',
     `const LOG = ${JSON.stringify(logFile)};`,
@@ -546,6 +551,25 @@ function ghStubBody() {
     "    process.exit(0);",
     "  }",
     '  process.stdout.write(JSON.stringify({ state: "APPROVED", user: { login: "release-owner" } }));',
+    "  process.exit(0);",
+    "}",
+    'if (sub === "run" && argv[1] === "download") {',
+    '  const dirIndex = argv.indexOf("--dir");',
+    '  const nameIndex = argv.indexOf("--name");',
+    "  const dir = dirIndex >= 0 ? argv[dirIndex + 1] : '';",
+    "  const artifact = nameIndex >= 0 ? argv[nameIndex + 1] : '';",
+    "  const current = state();",
+    "  if (current.runArtifactsUnavailable) process.exit(1);",
+    "  const wanted = (current.uploadedAssets || []).filter((asset) => {",
+    "    if (artifact.includes('windows')) return asset.name.startsWith('keiko-windows-');",
+    "    if (artifact.includes('arm64')) return asset.name === 'keiko-macos-arm64.zip';",
+    "    return asset.name === 'keiko-macos-x64.zip';",
+    "  });",
+    "  for (const asset of wanted) {",
+    "    let bytes = Buffer.from(asset.content || '', 'base64');",
+    "    if (current.tamperRunArtifacts) bytes = Buffer.concat([bytes, Buffer.from('x')]);",
+    "    writeFileSync(dir + '/' + asset.name, bytes);",
+    "  }",
     "  process.exit(0);",
     "}",
     'if (sub === "release" && argv[1] === "view") { process.exit(1); }',
@@ -1158,6 +1182,34 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
+    it("refuses prepublished downloads that are not the bytes their workflow run produced", () => {
+      // The whole point of the run binding: replacing the downloads AND the manifest that
+      // describes them is ONE action for anyone who can write release assets, so the evidence
+      // sitting next to the assets can never be its own provenance. Workflow-run artifacts are not
+      // writable after the run, so that is where the digests come from.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { ...prepublishedEvaluationState(), tamperRunArtifacts: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("not the bytes their workflow run produced");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses prepublished downloads when the producing run's artifacts cannot be read", () => {
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { ...prepublishedEvaluationState(), runArtifactsUnavailable: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("could not be read");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
     it("refuses prepublished downloads whose evidence names an unsuccessful workflow run", () => {
       // Provenance that does not resolve to a successful run of the canonical workflow at the
       // declared commit is not provenance.
@@ -1179,13 +1231,8 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       // Announcing downloads that are never uploaded is the failure this replaces: supplying a
       // manifest and skipping the release would publish an npm dist-tag whose notes point at
       // assets that do not exist.
-      const viewBody = [
-        '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
-        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
-      ].join("\n");
-
       lastRun = runPublish({
-        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
         initState: { published: true, tagged: true },
         portableAssets: true,
         extraArgs: ["--skip-github-release"],

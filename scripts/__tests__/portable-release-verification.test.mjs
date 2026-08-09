@@ -414,13 +414,13 @@ describe("portableDownloadAssetNames", () => {
 
 describe("portableReleaseGate", () => {
   const TARGETS = [
-    { assetName: "keiko-windows-x64.zip" },
-    { assetName: "keiko-macos-arm64.zip" },
-    { assetName: "keiko-macos-x64.zip" },
+    { assetName: "keiko-windows-x64.zip", platformTarget: "windows-x64" },
+    { assetName: "keiko-macos-arm64.zip", platformTarget: "macos-arm64" },
+    { assetName: "keiko-macos-x64.zip", platformTarget: "macos-x64" },
   ];
 
   function gateWith(overrides = {}) {
-    const events = { failed: [], logged: [], verified: [] };
+    const events = { artifactReads: [], failed: [], logged: [], verified: [] };
     const assets = downloads();
     const manifest = evidence(assets);
     const gate = portableReleaseGate({
@@ -442,6 +442,11 @@ describe("portableReleaseGate", () => {
         }
         return { status: 0, stdout: JSON.stringify(overrides.run ?? goodRun()) };
       },
+      collectRunArtifactDigests: (runId, names) => {
+        events.artifactReads.push({ runId, names });
+        if (overrides.artifactDigests !== undefined) return overrides.artifactDigests;
+        return new Map(assets.map((asset) => [asset.name, asset.sha256]));
+      },
       log: (message) => events.logged.push(message),
       setupAssetName: "keiko-windows-x64-setup.exe",
       snapshot: () => ({ assets: overrides.snapshotAssets ?? assets }),
@@ -461,6 +466,18 @@ describe("portableReleaseGate", () => {
     const { events, gate } = gateWith();
 
     expect(gate.verifyPrepublished(TAG, REPOSITORY, WORKFLOW_PATH)).toBe(true);
+    // The digests are taken from the referenced RUN's artifacts, which cannot be rewritten after
+    // the run, and only then are the published bytes fetched.
+    expect(events.artifactReads).toEqual([
+      {
+        runId: RUN_ID,
+        names: [
+          "portable-stage-windows-x64-evaluation-unsigned",
+          "portable-stage-macos-arm64-evaluation-unsigned",
+          "portable-stage-macos-x64-evaluation-unsigned",
+        ],
+      },
+    ]);
     expect(events.verified).toEqual([EXPECTED_NAMES]);
     expect(events.logged.join(" ")).toContain("match their evidence");
     expect(events.failed).toEqual([]);
@@ -484,6 +501,29 @@ describe("portableReleaseGate", () => {
     expect(() => short.gate.assertUploadedSetComplete({ tag: TAG, repo: REPOSITORY })).toThrow(
       /missing portable downloads: keiko-windows-x64\.zip/u,
     );
+  });
+
+  it.each([
+    ["the run's artifacts cannot be read", new Map(), "could not be read"],
+    [
+      "a download is absent from the run's artifacts",
+      new Map([["keiko-windows-x64.zip", "0".repeat(64)]]),
+      "is not among the artifacts the referenced run produced",
+    ],
+    [
+      "a download does not match the bytes the run produced",
+      new Map(downloads().map((asset) => [asset.name, "e".repeat(64)])),
+      "does not match the bytes the referenced run produced",
+    ],
+  ])("refuses when %s, before fetching anything", (_label, artifactDigests, reason) => {
+    // The release-hosted evidence must never be its own provenance: replacing the downloads AND
+    // the manifest that describes them is one action for anyone who can write release assets.
+    const { events, gate } = gateWith({ artifactDigests });
+
+    expect(() => gate.verifyPrepublished(TAG, REPOSITORY, WORKFLOW_PATH)).toThrow(
+      new RegExp(reason.replaceAll(" ", "\\s"), "u"),
+    );
+    expect(events.verified).toEqual([]);
   });
 
   it("carries the argument refusals through unchanged", () => {

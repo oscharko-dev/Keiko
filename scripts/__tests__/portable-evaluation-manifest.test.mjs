@@ -101,6 +101,18 @@ describe("portable evaluation manifest", () => {
     ]);
   });
 
+  it("refuses a manifest that declares the same asset twice", () => {
+    // Two entries for one name could carry different digests while every set-based check still
+    // balances — the publisher would then bind the download to whichever entry it happened to
+    // read first.
+    const duplicated = manifest();
+    duplicated.assets = [...duplicated.assets, { ...duplicated.assets[0], sha256: "b".repeat(64) }];
+
+    expect(portableEvaluationManifestFailures(duplicated, EXPECTED)).toContain(
+      "manifest declares the same asset more than once.",
+    );
+  });
+
   it("refuses a manifest that declares an asset the release does not publish", () => {
     const extra = manifest();
     extra.assets = [

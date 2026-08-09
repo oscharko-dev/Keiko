@@ -65,7 +65,13 @@ import {
 } from "./lib/portable-evaluation-manifest.mjs";
 // release.yml owns the required-check list and check:release-required-workflows validates it —
 // this reader is the existing accessor, so the local lane cannot drift from the workflow.
-import { releaseRequiredChecks } from "./check-release-required-workflow-names.mjs";
+import { envValue, releaseRequiredChecks } from "./check-release-required-workflow-names.mjs";
+// The governed release notes have ONE producer. A public release must carry them as well as the
+// install instructions; rendering a second set here would let the two drift (Codex finding on
+// #3054).
+import { renderReleaseImpactNotesFromRoot } from "./release-impact-notes.mjs";
+
+const RELEASE_WORKFLOW_PATH = ".github/workflows/release.yml";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const WORKFLOW_PATH = ".github/workflows/portable-assets.yml";
@@ -623,9 +629,27 @@ function releaseHeading(input) {
   ];
 }
 
+/**
+ * The reviewed catalog bullets for this version. A public release is the customer's only view of
+ * what changed, so it carries both: the install instructions this lane owns, and the governed
+ * notes `release:publish` would otherwise have written. A beta never carried them and still
+ * does not.
+ */
+function catalogNotesSection(input) {
+  if (!input.publicRelease) return [];
+  const rendered = renderReleaseImpactNotesFromRoot(repoRoot, { tag: "latest" });
+  if (!rendered.ok || rendered.notes.trim() === "") {
+    fail(
+      `the governed release notes for this version could not be rendered: ${(rendered.failures ?? []).join("; ")}`,
+    );
+  }
+  return ["## What changed", "", rendered.notes.trim(), ""];
+}
+
 export function releaseBody(input) {
   return [
     ...releaseHeading(input),
+    ...catalogNotesSection(input),
     "## Install on macOS",
     "",
     "1. Download and unzip; double-click `Keiko.app` inside the extracted folder (moving it to",
@@ -843,33 +867,102 @@ function selectReleaseTag(options, version, tags) {
   return options.tag ?? defaultTagWithDraftResume(version, tags);
 }
 
-/** The integration branch a public release may be cut from; nothing else is an approved source. */
-const PUBLIC_RELEASE_SOURCE_BRANCH = "dev";
+/**
+ * The branch a public release may be cut from. `release.yml` declares the release base branch, and
+ * that is the documented source once release-only fixes are stabilising on it; until that branch
+ * exists the repository's default branch IS the release source, which is how every release so far
+ * was cut (Codex finding on #3054). Hard-coding either one alone would reject a real release.
+ */
+function publicReleaseSourceBranch(repository) {
+  const declared = envValue(
+    readFileSync(join(repoRoot, RELEASE_WORKFLOW_PATH), "utf8"),
+    "RELEASE_BASE_BRANCH",
+  );
+  if (typeof declared === "string" && declared !== "" && branchExists(repository, declared)) {
+    return declared;
+  }
+  return ghJson(["api", `repos/${repository}`]).default_branch;
+}
+
+function branchExists(repository, branch) {
+  const result = processRunner(
+    resolveHostExecutable("gh"),
+    ["api", `repos/${repository}/branches/${branch}`],
+    { cwd: repoRoot, encoding: "utf8" },
+  );
+  return result.status === 0;
+}
 
 /**
- * A beta prerelease may be cut from any ref — that is what a prerelease is for. A PUBLIC release
- * becomes the Latest download a customer installs, so its bytes must come from integrated,
- * gate-verified source. Without this, `--public-release --ref feat/anything` published an unmerged
- * feature branch as the stable release: the ref check only compared the run's head branch to the
- * caller's own argument, and the tag-push verification in the workflow runs AFTER this script has
- * already created the tag and the release (Codex finding on #3054).
+ * A beta prerelease may be cut from any ref; that is what a prerelease is for. A PUBLIC release
+ * becomes the Latest download a customer installs, so everything about it must be verified before
+ * the tag exists — the workflow's own tag-push verification starts only after this script has
+ * already created the tag and the release (Codex findings on #3054).
  *
- * Two independent conditions, both evaluated before the tag is minted:
- * the built commit must be reachable from the integration branch (it is merged, not a side
- * branch), and every required check must have concluded successfully on that exact commit.
+ * Four independent conditions, all evaluated before anything public is minted:
+ * the local checkout must BE the built commit and be clean (the code making this decision is
+ * otherwise unverified), the built commit must be contained in the release source branch, every
+ * required check must have passed on that exact commit, and the release owner's approval for this
+ * version must verify live against the GitHub API — the same gate the npm publisher runs, brought
+ * forward, because this producer exposes the downloads first.
  */
 function assertPublicReleaseSourceIsApproved(commitSha, repository) {
-  const compare = ghJson([
-    "api",
-    `repos/${repository}/compare/${PUBLIC_RELEASE_SOURCE_BRANCH}...${commitSha}`,
-  ]);
+  assertPublisherCheckoutMatches(commitSha);
+  const branch = publicReleaseSourceBranch(repository);
+  const compare = ghJson(["api", `repos/${repository}/compare/${branch}...${commitSha}`]);
   if (compare.status !== "identical" && compare.status !== "behind") {
     fail(
-      `commit ${commitSha} is not contained in ${PUBLIC_RELEASE_SOURCE_BRANCH} (compare status "${compare.status}") — a public release must be cut from integrated source, never from an unmerged branch.`,
+      `commit ${commitSha} is not contained in ${branch} (compare status "${compare.status}") — a public release must be cut from integrated source, never from an unmerged branch.`,
     );
   }
-  assertRequiredChecksPassed(commitSha, repository);
-  log(`public release source verified: ${commitSha} is in ${PUBLIC_RELEASE_SOURCE_BRANCH}.`);
+  assertRequiredChecksPassed(commitSha, repository, branch);
+  assertReleaseOwnerApproved(repository);
+  log(`public release source verified: ${commitSha} is in ${branch}, checked and approved.`);
+}
+
+/**
+ * The publishing decision is made by the code in THIS checkout, and the required checks say
+ * nothing about it. A different or dirty tree with the same package version would otherwise mint
+ * the stable tag and the Latest release from unverified local code.
+ */
+function assertPublisherCheckoutMatches(commitSha) {
+  const head = run(resolveHostExecutable("git"), ["rev-parse", "HEAD"]).trim();
+  if (head !== commitSha) {
+    fail(
+      `the publishing checkout is at ${head}, not the built commit ${commitSha} — check out the built commit before publishing a public release.`,
+    );
+  }
+  const dirty = run(resolveHostExecutable("git"), ["status", "--porcelain"]).trim();
+  if (dirty !== "") {
+    fail(
+      "the publishing checkout has uncommitted changes — a public release must be cut from a clean tree.",
+    );
+  }
+}
+
+/**
+ * The live release-owner approval, run HERE rather than only in the npm publisher: this producer
+ * exposes the customer downloads first, so a stale or fabricated catalog approval would otherwise
+ * reach the public before any live check ran.
+ */
+function assertReleaseOwnerApproved(repository) {
+  const result = processRunner(
+    process.execPath,
+    ["scripts/check-release-impact.mjs", "--publish"],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: { ...process.env, GITHUB_REPOSITORY: repository },
+    },
+  );
+  if (result.error !== undefined) {
+    fail(`could not verify the release-owner approval: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    fail(
+      `the release-owner approval for this version did not verify; refusing to publish it as the latest release.\n${String(result.stdout ?? "")}${String(result.stderr ?? "")}`,
+    );
+  }
 }
 
 /**
@@ -877,32 +970,30 @@ function assertPublicReleaseSourceIsApproved(commitSha, repository) {
  * of those defaults are wrong for a locally driven public release:
  *
  * - `RELEASE_REQUIRED_CHECKS` — without it the verifier reads the base branch's protection, whose
- *   contexts include pull-request-only ones (`Review dependency diff`, `Socket Security: Pull
- *   Request Alerts`) that a push commit never emits, so a healthy commit would look unverified.
- *   The list is taken from `release.yml`, which already owns it and which
- *   `check:release-required-workflows` already validates — restating it here would be a third copy
- *   free to drift.
+ *   contexts include pull-request-only ones that a push commit never emits, so a healthy commit
+ *   would look unverified. The list comes from `release.yml`, which already owns it and which
+ *   `check:release-required-workflows` already validates.
  * - `GITHUB_TOKEN` — a local run authenticates through `gh`, not an env var. Unauthenticated
  *   GitHub API calls would be rate-limited into a false failure.
  */
-function requiredChecksEnvironment(commitSha, repository) {
+function requiredChecksEnvironment(commitSha, repository, branch) {
   const token =
     process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? gh(["auth", "token"], {}).trim();
   return {
     ...process.env,
     GITHUB_REPOSITORY: repository,
     GITHUB_TOKEN: token,
-    RELEASE_BASE_BRANCH: PUBLIC_RELEASE_SOURCE_BRANCH,
+    RELEASE_BASE_BRANCH: branch,
     RELEASE_REQUIRED_CHECKS: JSON.stringify(releaseRequiredChecks()),
     RELEASE_SHA: commitSha,
   };
 }
 
-function assertRequiredChecksPassed(commitSha, repository) {
+function assertRequiredChecksPassed(commitSha, repository, branch) {
   const result = processRunner(process.execPath, ["scripts/verify-release-required-checks.mjs"], {
     cwd: repoRoot,
     encoding: "utf8",
-    env: requiredChecksEnvironment(commitSha, repository),
+    env: requiredChecksEnvironment(commitSha, repository, branch),
   });
   if (result.error !== undefined) {
     fail(`could not verify required checks: ${result.error.message}`);

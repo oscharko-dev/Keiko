@@ -60,30 +60,45 @@ export function buildPortableEvaluationManifest(input) {
   };
 }
 
-function assetFailures(manifest, expectedAssetNames) {
-  const failures = [];
-  const assets = Array.isArray(manifest.assets) ? manifest.assets : [];
-  const names = new Set();
-  for (const asset of assets) {
-    if (!isRecord(asset) || !nonEmptyString(asset.assetName)) {
-      failures.push("every asset entry must name an asset.");
-      continue;
-    }
-    names.add(asset.assetName);
-    if (!positiveInteger(asset.sizeBytes)) {
-      failures.push(`${asset.assetName}.sizeBytes must be a positive integer.`);
-    }
-    if (!SHA256_RE.test(asset.sha256 ?? "")) {
-      failures.push(`${asset.assetName}.sha256 must be a lowercase SHA-256 digest.`);
-    }
+/** Every entry must name an asset and carry a usable size and digest. */
+function assetEntryFailures(asset) {
+  if (!isRecord(asset) || !nonEmptyString(asset.assetName)) {
+    return ["every asset entry must name an asset."];
   }
-  // Exactly the expected set — a manifest that omits a download could not bind it, and one that
-  // adds an entry would declare evidence for something the release does not publish.
+  return [
+    [positiveInteger(asset.sizeBytes), `${asset.assetName}.sizeBytes must be a positive integer.`],
+    [
+      SHA256_RE.test(asset.sha256 ?? ""),
+      `${asset.assetName}.sha256 must be a lowercase SHA-256 digest.`,
+    ],
+  ]
+    .filter(([satisfied]) => !satisfied)
+    .map(([, reason]) => reason);
+}
+
+/**
+ * Exactly the expected set, each name once. A manifest that omits a download could not bind it;
+ * one that adds an entry declares evidence for something the release does not publish; and a
+ * DUPLICATE would let one asset be declared twice with different digests while every set-based
+ * check still balanced (KfQ finding on #3054).
+ */
+function assetSetFailures(assets, expectedAssetNames) {
+  const declaredNames = assets.filter(isRecord).map((asset) => asset.assetName);
+  const names = new Set(declaredNames.filter(nonEmptyString));
+  const failures = [];
+  if (declaredNames.length !== new Set(declaredNames).size) {
+    failures.push("manifest declares the same asset more than once.");
+  }
   const missing = expectedAssetNames.filter((name) => !names.has(name));
   if (missing.length > 0) failures.push(`manifest does not declare ${missing.join(", ")}.`);
   const extra = [...names].filter((name) => !expectedAssetNames.includes(name));
   if (extra.length > 0) failures.push(`manifest declares unpublished assets: ${extra.join(", ")}.`);
   return failures;
+}
+
+function assetFailures(manifest, expectedAssetNames) {
+  const assets = Array.isArray(manifest.assets) ? manifest.assets : [];
+  return [...assets.flatMap(assetEntryFailures), ...assetSetFailures(assets, expectedAssetNames)];
 }
 
 /**

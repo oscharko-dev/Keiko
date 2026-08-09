@@ -234,7 +234,10 @@ export function prepublishedReleaseFailures(input) {
   if (manifestFailures.length > 0) return { failures: manifestFailures, expectedDownloads: [] };
   const provenanceFailures = runFailures(manifest, readRun, workflowPath);
   if (provenanceFailures.length > 0) return { failures: provenanceFailures, expectedDownloads: [] };
-  return declaredDownloads(manifest, release.assets, expectedNames);
+  return {
+    ...declaredDownloads(manifest, release.assets, expectedNames),
+    workflowRunId: manifest.provenance.workflowRunId,
+  };
 }
 
 /**
@@ -273,7 +276,7 @@ export function portableReleaseGate(ports) {
      */
     verifyPrepublished(tag, repository, workflowPath) {
       const release = readers.readRelease(repository, tag);
-      const { failures, expectedDownloads } = prepublishedReleaseFailures({
+      const { failures, expectedDownloads, workflowRunId } = prepublishedReleaseFailures({
         tag,
         repository,
         workflowPath,
@@ -287,9 +290,56 @@ export function portableReleaseGate(ports) {
           `prepublished portable downloads are not usable:\n  - ${failures.join("\n  - ")}`,
         );
       }
+      // The evidence declares digests; the RUN proves them. Checked before the bytes are fetched,
+      // so a forged manifest cannot even direct the download.
+      const producedFailures = runArtifactDigestFailures(
+        expectedDownloads,
+        (names) => ports.collectRunArtifactDigests(workflowRunId, names),
+        evaluationArtifactNames(ports.targets),
+      );
+      if (producedFailures.length > 0) {
+        ports.fail(
+          `prepublished portable downloads are not the bytes their workflow run produced:\n  - ${producedFailures.join("\n  - ")}`,
+        );
+      }
       ports.verifyBytes(release.assets, expectedDownloads);
       ports.log(`release-publish: prepublished downloads on ${tag} match their evidence.`);
       return true;
     },
   };
+}
+
+/**
+ * The evaluation staging artifacts of a portable-assets run, by target. Their names are the
+ * contract between the producing workflow and both publishers.
+ */
+function evaluationArtifactNames(targets) {
+  return targets.map((target) => `portable-stage-${target.platformTarget}-evaluation-unsigned`);
+}
+
+/**
+ * Binds the published downloads to the bytes the referenced workflow run actually produced.
+ *
+ * Without this the release-hosted evidence is its own provenance: anyone able to replace release
+ * assets could upload arbitrary downloads plus a self-authored manifest naming any successful run
+ * for that commit, and a later publish would promote those bytes to npm `latest` (Codex finding on
+ * #3054). Workflow-run artifacts are not writable after the run, so hashing them is a source the
+ * release surface cannot forge.
+ *
+ * @param collect (artifactNames) => Map<assetName, sha256> read from the run's artifacts
+ */
+function runArtifactDigestFailures(expectedDownloads, collect, artifactNames) {
+  const digests = collect(artifactNames);
+  if (!(digests instanceof Map) || digests.size === 0) {
+    return ["the referenced workflow run's evaluation artifacts could not be read."];
+  }
+  return expectedDownloads.flatMap((expected) => {
+    const produced = digests.get(expected.assetName);
+    if (produced === undefined) {
+      return [`${expected.assetName} is not among the artifacts the referenced run produced.`];
+    }
+    return produced === expected.expectedSha256
+      ? []
+      : [`${expected.assetName} does not match the bytes the referenced run produced.`];
+  });
 }

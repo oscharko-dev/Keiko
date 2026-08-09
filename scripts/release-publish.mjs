@@ -208,9 +208,42 @@ const portableGate = portableReleaseGate({
   },
   setupAssetName: WINDOWS_PORTABLE_SETUP_ASSET_NAME,
   snapshot: githubReleaseSnapshot,
+  collectRunArtifactDigests: collectEvaluationArtifactDigests,
   targets: PORTABLE_TARGETS,
   verifyBytes: runPortableDownloadSmoke,
 });
+
+/**
+ * SHA-256 of every publishable file inside the referenced run's evaluation staging artifacts.
+ * Workflow-run artifacts cannot be rewritten after the run, which is exactly why the digests are
+ * taken from there rather than from the manifest sitting next to the assets being verified.
+ */
+function collectEvaluationArtifactDigests(runId, artifactNames) {
+  const root = mkdtempSync(join(tmpdir(), "keiko-run-artifacts-"));
+  const digests = new Map();
+  try {
+    for (const artifactName of artifactNames) {
+      const target = join(root, artifactName);
+      mkdirSync(target, { recursive: true });
+      const result = gh([
+        "run",
+        "download",
+        String(runId),
+        "--name",
+        artifactName,
+        "--dir",
+        target,
+      ]);
+      if (result.status !== 0) return new Map();
+      for (const file of readdirSync(target, { withFileTypes: true })) {
+        if (file.isFile()) digests.set(file.name, sha256FileSync(join(target, file.name)));
+      }
+    }
+    return digests;
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
 
 function verifyPrepublishedStableRelease(rootManifest, options) {
   if (!stableLatestRelease(rootManifest, options) || options.dryRun) return false;
@@ -639,7 +672,10 @@ function portableQualificationFailures(qualification, rootManifest, head) {
   const repositoryMatches =
     typeof qualification.repository === "string" &&
     qualification.repository !== "" &&
-    qualification.repository === process.env.GITHUB_REPOSITORY;
+    // githubRepository() resolves the git remote when GITHUB_REPOSITORY is absent, so a local
+    // stable publish compares against the repository it is actually publishing from instead of
+    // against an empty string (Codex and CodeRabbit findings on #3054).
+    qualification.repository === githubRepository();
   const checks = [
     [/^[a-f0-9]{40}$/u.test(qualification.sourceSha ?? ""), "source SHA must be exact"],
     [qualification.tag === releaseTag(rootManifest.version), "stable tag must match release tag"],
