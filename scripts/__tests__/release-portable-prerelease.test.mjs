@@ -36,13 +36,33 @@ describe("parseArgs", () => {
       tag: undefined,
       runId: undefined,
       planOnly: false,
+      publicRelease: false,
     });
   });
 
-  it("accepts the four documented flags", () => {
+  it("accepts the documented flags", () => {
     expect(
       parseArgs(["--plan-only", "--ref", "dev", "--tag", "v0.3.0-beta.9", "--run-id", "42"]),
-    ).toEqual({ ref: "dev", tag: "v0.3.0-beta.9", runId: "42", planOnly: true });
+    ).toEqual({
+      ref: "dev",
+      tag: "v0.3.0-beta.9",
+      runId: "42",
+      planOnly: true,
+      publicRelease: false,
+    });
+    expect(parseArgs(["--public-release", "--run-id", "42"])).toEqual({
+      ref: "dev",
+      tag: undefined,
+      runId: "42",
+      planOnly: false,
+      publicRelease: true,
+    });
+  });
+
+  it("refuses a --tag override in public-release mode", () => {
+    // The public release IS the exact stable tag of the built version, so an override could only
+    // ever name a different release than the one being published. Refused, never ignored.
+    expect(parseArgs(["--public-release", "--tag", "v0.3.1-beta.0"])).toBeUndefined();
   });
 
   it.each([[["--unknown"]], [["--tag"]], [["--ref"]]])(
@@ -129,6 +149,29 @@ describe("releaseBody", () => {
 
   it("omits the supersede pointer for a first beta", () => {
     expect(releaseBody({ ...input, previousTag: undefined })).not.toContain("Supersedes");
+  });
+
+  it("states the unsigned status to a customer in public-release mode and keeps the install steps", () => {
+    // The public release must never quietly drop the honest signing statement: it is the reason
+    // the first launch needs an extra confirmation, and ADR-0121 D1 bounds the evaluation status
+    // on the condition that the notes state it. The prerelease-only sentence must not survive —
+    // this release IS publishable to npm latest.
+    const body = releaseBody({
+      ...input,
+      tag: "v0.3.1",
+      version: "0.3.1",
+      previousTag: undefined,
+      publicRelease: true,
+    });
+
+    expect(body).toContain("# Keiko 0.3.1");
+    expect(body).toContain("Unsigned evaluation build");
+    expect(body).not.toContain("Not publishable to npm latest");
+    expect(body).not.toContain("evaluation prerelease");
+    // The install steps a non-technical customer follows are the same ones the betas proved.
+    expect(body).toContain("Open Anyway");
+    expect(body).toContain("keiko-windows-x64-setup.exe");
+    expect(body).not.toContain("xattr");
   });
 });
 

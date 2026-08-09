@@ -25,8 +25,17 @@
  *    existing ref must already point at the built commit) and the create runs with --verify-tag,
  *    so a tag that moves or vanishes in between fails closed instead of re-binding the assets.
  *
- * The evaluation lane is never publishable to npm and never promoted to `latest` here; this
- * script owns only the GitHub prerelease surface. `release:publish` owns npm.
+ * `--public-release` publishes the SAME verified four-asset set at the exact stable tag
+ * `v<version>` as an ordinary release carrying the Latest badge, instead of a beta prerelease.
+ * Every check above applies unchanged — same lane, same artifacts, same seal verification, same
+ * atomic tag binding, same draft-first flow; what differs is the tag, the Latest/prerelease flag,
+ * and notes that state the unsigned evaluation status to a customer rather than to a tester. This
+ * is the release owner's scope decision for Keiko's first public download release, bounded by
+ * ADR-0121 D1 (the reviewed release-impact entry records the `evaluation` signing status).
+ *
+ * This script still owns only the GitHub Release surface; `release:publish` owns npm. Running it
+ * with `--public-release` is what puts the downloads on the tag that `release:publish` then
+ * verifies before it promotes the `latest` dist-tag.
  */
 
 import { spawnSync } from "node:child_process";
@@ -49,7 +58,7 @@ import { resolveHostExecutable } from "./lib/host-executable.mjs";
 // The tag shape lives in ONE place, shared with the Release verification workflow that
 // validates the pushed tag — restating it here would let this lane mint a tag the workflow
 // then rejects (review finding on #3043).
-import { BETA_INDEX, GOVERNED_BETA_TAG_RE } from "./release-tag-contract.mjs";
+import { BETA_INDEX, GOVERNED_BETA_TAG_RE, isExactReleaseTag } from "./release-tag-contract.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const WORKFLOW_PATH = ".github/workflows/portable-assets.yml";
@@ -89,13 +98,26 @@ const VALUE_FLAGS = new Map([
   ["--run-id", "runId"],
 ]);
 
+const BOOLEAN_FLAGS = new Map([
+  ["--plan-only", "planOnly"],
+  ["--public-release", "publicRelease"],
+]);
+
 export function parseArgs(argv) {
-  const options = { ref: "dev", tag: undefined, runId: undefined, planOnly: false };
+  const options = {
+    ref: "dev",
+    tag: undefined,
+    runId: undefined,
+    planOnly: false,
+    publicRelease: false,
+  };
   let index = 0;
   while (index < argv.length) {
     const value = argv[index];
     const field = VALUE_FLAGS.get(value);
-    if (value === "--plan-only") {
+    const flag = BOOLEAN_FLAGS.get(value);
+    if (flag !== undefined) {
+      options[flag] = true;
       index += 1;
     } else if (field !== undefined && argv[index + 1] !== undefined) {
       options[field] = argv[index + 1];
@@ -103,8 +125,11 @@ export function parseArgs(argv) {
     } else {
       return undefined;
     }
-    if (value === "--plan-only") options.planOnly = true;
   }
+  // In public-release mode this lane owns the tag: it is the exact stable tag of the built
+  // version, so a --tag override could only ever name a different release than the one being
+  // published. Refused rather than silently ignored.
+  if (options.publicRelease && options.tag !== undefined) return undefined;
   return options;
 }
 
@@ -414,12 +439,19 @@ function builtVersion(commitSha) {
  * version's assets. The version at the run's head commit must match the local checkout, and the
  * selected tag must name exactly that version (review finding on #3037).
  */
-function assertRunMatchesRelease(commitSha, version, tag) {
+function assertRunMatchesRelease(commitSha, version, tag, publicRelease) {
   const built = builtVersion(commitSha);
   if (built !== version) {
     fail(
       `the workflow head commit ${commitSha} builds version ${built} but the local checkout is ${version}; refusing to publish another version's assets.`,
     );
+  }
+  if (publicRelease) {
+    // The public release names the built version exactly — same binding, stable tag shape.
+    if (!isExactReleaseTag(tag, built)) {
+      fail(`tag ${tag} does not name the built version ${built} (expected v${built}).`);
+    }
+    return;
   }
   const match = new RegExp(String.raw`^v(?<version>.+)-beta\.${BETA_INDEX}$`, "u").exec(tag);
   if (match?.groups?.version !== built) {
@@ -532,7 +564,27 @@ function verifyMacosAssetSeal(publishDir, file) {
   log(`${file} bundle seal verified (codesign --verify --deep --strict).`);
 }
 
-export function releaseBody(input) {
+/**
+ * The heading and status paragraph. Both modes publish the SAME artifacts from the SAME evaluation
+ * lane and state the same waived signing honestly; they differ in what the release claims to be.
+ * ADR-0121 D1 bounds the public form: the reviewed release-impact entry records the `evaluation`
+ * signing status, and these notes state it with the first-launch steps it implies.
+ */
+function releaseHeading(input) {
+  if (input.publicRelease) {
+    return [
+      `# Keiko ${input.version}`,
+      "",
+      "Keiko's first public download release. Pick your platform below, unzip, and start it —",
+      "Node.js and the OpenCode sidecar are already inside; nothing else has to be installed.",
+      "",
+      "**Unsigned evaluation build (ADR-0121 D1, ADR-0163 D9).** The bundles are sealed, so macOS",
+      "will not report a damaged app, but they carry no Apple Developer ID, no notarization and no",
+      "Windows trusted publisher yet. That is why the first launch needs the one extra confirmation",
+      "described below. Every integrity digest, containment and provenance check stays enforced.",
+      "",
+    ];
+  }
   return [
     `# Keiko ${input.version} — evaluation prerelease ${input.tag}`,
     "",
@@ -540,6 +592,12 @@ export function releaseBody(input) {
     "attestation are waived and declared honestly everywhere; every integrity digest stays",
     "enforced. Not publishable to npm latest.",
     "",
+  ];
+}
+
+export function releaseBody(input) {
+  return [
+    ...releaseHeading(input),
     "## Install on macOS",
     "",
     "1. Download and unzip; double-click `Keiko.app` inside the extracted folder (moving it to",
@@ -584,7 +642,9 @@ function createRelease(input) {
     // transient supersede failure leaves a resumable draft, never a live release without its
     // pointer.
     "--draft",
-    "--prerelease",
+    // A public release claims the Latest badge; a beta stays a prerelease and never does. Stated
+    // explicitly in both directions so the flag can never be inherited from a previous release.
+    ...(input.publicRelease ? ["--latest"] : ["--prerelease"]),
     // The tag was already created ATOMICALLY at the built commit (ensureTagRefAtBuiltCommit) —
     // --verify-tag fails closed if it vanished in the remaining window instead of silently
     // minting a new one at whatever --target would resolve to (review finding on #3037).
@@ -729,25 +789,45 @@ function markPreviousSuperseded(previousTag, tag, repository) {
   log(`marked ${previousTag} as superseded.`);
 }
 
-export function runPortablePrerelease(argv) {
-  const options = parseArgs(argv);
-  if (options === undefined) {
+/**
+ * Both tag refusals that can be decided BEFORE any remote call. A public release is the exact
+ * stable tag of a stable version — a prerelease version could only produce a tag the Release
+ * verification rejects. A --tag override must already match the governed beta shape, whose regex
+ * rejects a leading-zero index, so the lane never mints a tag the workflow then refuses (review
+ * finding on #3043).
+ */
+function assertRequestedTagShapeIsMintable(options, version) {
+  if (options.publicRelease && version.includes("-")) {
     fail(
-      "usage: release-portable-prerelease [--ref dev] [--tag vX.Y.Z-beta.N] [--run-id id] [--plan-only]",
+      `--public-release requires a stable package version; the checkout is ${version}. Publish it as a beta prerelease instead.`,
     );
-    return;
   }
-  const version = rootVersion();
-  // Refuse a malformed --tag BEFORE any remote call: the Release verification regex rejects a
-  // leading-zero beta index, so the lane must never mint one (review finding on #3043).
   if (options.tag !== undefined && !GOVERNED_BETA_TAG_RE.test(options.tag)) {
     fail(
       `tag ${options.tag} does not match the governed beta tag shape v<version>-beta.<n> (no leading-zero beta index) — the Release verification would reject its push.`,
     );
   }
+}
+
+function selectReleaseTag(options, version, tags) {
+  if (options.publicRelease) return `v${version}`;
+  return options.tag ?? defaultTagWithDraftResume(version, tags);
+}
+
+export function runPortablePrerelease(argv) {
+  const options = parseArgs(argv);
+  if (options === undefined) {
+    fail(
+      "usage: release-portable-prerelease [--ref dev] [--tag vX.Y.Z-beta.N] [--run-id id] [--plan-only] [--public-release]\n" +
+        "  --public-release publishes v<version> as the latest release and takes no --tag.",
+    );
+    return;
+  }
+  const version = rootVersion();
+  assertRequestedTagShapeIsMintable(options, version);
   const repository = repositorySlug();
   const tags = existingReleaseTags();
-  const tag = options.tag ?? defaultTagWithDraftResume(version, tags);
+  const tag = selectReleaseTag(options, version, tags);
   assertTagKeepsBetaSequenceMonotonic(tag, tags);
   const hasPendingDraft = tags.includes(tag);
   if (hasPendingDraft) assertExistingTagIsResumableDraft(tag);
@@ -760,7 +840,7 @@ export function runPortablePrerelease(argv) {
   if (view.conclusion !== "success" && view.conclusion !== "failure") {
     fail(`run ${runId} concluded ${view.conclusion}; refusing to publish from it.`);
   }
-  assertRunMatchesRelease(view.headSha, version, tag);
+  assertRunMatchesRelease(view.headSha, version, tag, options.publicRelease);
   assertStagingJobsSucceeded(runId);
   const { workDir, publishDir } = downloadAssets(runId);
   try {
@@ -781,6 +861,20 @@ export function runPortablePrerelease(argv) {
     // run (review findings on #3032).
     rmSync(workDir, { recursive: true, force: true });
   }
+}
+
+/**
+ * A plan-only run reports what a publish WOULD do and touches nothing — including a pending draft
+ * it only previews (review finding on #3037).
+ */
+function reportPlan(body, tag, hasPendingDraft) {
+  if (hasPendingDraft) {
+    log(
+      `PLAN-ONLY: the interrupted draft ${tag} would be deleted and recreated on publish (it was not touched).`,
+    );
+  }
+  process.stdout.write(`${body}\n`);
+  log(`PLAN-ONLY complete for ${tag} (nothing published).`);
 }
 
 function runPublishSteps({
@@ -807,23 +901,28 @@ function runPublishSteps({
     commitSha: view.headSha,
     runId,
     previousTag,
+    publicRelease: options.publicRelease,
   });
   if (options.planOnly) {
-    if (hasPendingDraft) {
-      log(
-        `PLAN-ONLY: the interrupted draft ${tag} would be deleted and recreated on publish (it was not touched).`,
-      );
-    }
-    process.stdout.write(`${body}\n`);
-    log(`PLAN-ONLY complete for ${tag} (nothing published).`);
+    reportPlan(body, tag, hasPendingDraft);
     return;
   }
   ensureTagRefAtBuiltCommit(tag, view.headSha);
   if (hasPendingDraft) deleteInterruptedDraft(tag);
-  createRelease({ workDir, publishDir, tag, commitSha: view.headSha, version, body });
+  createRelease({
+    workDir,
+    publishDir,
+    tag,
+    commitSha: view.headSha,
+    version,
+    body,
+    publicRelease: options.publicRelease,
+  });
   markPreviousSuperseded(previousTag, tag, repository);
   publishDraftRelease(tag, view.headSha);
-  log(`DONE - ${tag} is live with 4 verified assets.`);
+  log(
+    `DONE - ${tag} is live with 4 verified assets${options.publicRelease ? " and is the latest release" : ""}.`,
+  );
 }
 
 const invokedDirectly =
