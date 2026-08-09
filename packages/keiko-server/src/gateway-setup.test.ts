@@ -6295,6 +6295,133 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("validates the connection with the protocol the setup will persist", async () => {
+    // Found while pinning the env-completed tuple (review findings on #3046): the connection
+    // probe parsed a provider with NO protocol, so on a server that sets only
+    // KEIKO_DEFAULT_ENDPOINT_STYLE the environment turned every probe into an Azure provider
+    // with no api version and the canonical pairing rejected EVERY setup request — including one
+    // that explicitly submits a protocol of its own.
+    const uiDir = await tempDir("keiko-gw-ui-probe-protocol-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-probe-protocol-"),
+      env: { ...VAULT_ENV, KEIKO_DEFAULT_ENDPOINT_STYLE: "azure-openai-deployment" },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "chat-token",
+        deploymentNames: ["example-chat"],
+        endpointStyle: "openai-compatible",
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const saved = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "example-chat",
+    );
+    expect(saved?.endpointStyle).toBe("openai-compatible");
+    deps.store.close();
+  });
+
+  it("rotates a declared api version whose style comes from the environment", async () => {
+    // Review finding on #3046, the inverse of the pin below: a file that declares apiVersion
+    // while KEIKO_DEFAULT_ENDPOINT_STYLE supplies the Azure style is a valid completed tuple, and
+    // clearing the env half left a version with no style — rejected on the next rotation.
+    const uiDir = await tempDir("keiko-gw-ui-env-style-");
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            apiVersion: "2025-03-01-preview",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-env-style-"),
+      env: { ...VAULT_ENV, KEIKO_DEFAULT_ENDPOINT_STYLE: "azure-openai-deployment" },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const rotated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "rotated-token",
+        deploymentNames: ["example-chat"],
+      }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const saved = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "example-chat",
+    );
+    expect(saved?.apiVersion).toBe("2025-03-01-preview");
+    deps.store.close();
+  });
+
+  it("leaves a dedicated embedding that spoke its own protocol alone", async () => {
+    // Review finding on #3046: an embedding sharing the primary's URL, credential and header but
+    // deliberately using a different valid protocol was classified as sharing, so a same-URL
+    // protocol update rebuilt it with a request shape nothing probed for it.
+    const uiDir = await tempDir("keiko-gw-ui-embed-protocol-");
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+          },
+          {
+            modelId: "embed-small",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            endpointStyle: "openai-compatible",
+            capability: { kind: "embedding", dimensions: 1536 },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-embed-protocol-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve(modelIds.filter((modelId) => modelId !== "embed-small")),
+    });
+
+    const rotated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "rotated-token" }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const embedding = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "embed-small",
+    );
+    expect(embedding?.endpointStyle).toBe("openai-compatible");
+    expect(embedding?.apiVersion).toBeUndefined();
+    deps.store.close();
+  });
+
   it("rotates a declared Azure endpoint whose required version comes from the environment", async () => {
     // Review finding on #3046: dropping every undeclared protocol value from the durable view
     // left a file that DECLARES azure-openai-deployment and takes its required version from

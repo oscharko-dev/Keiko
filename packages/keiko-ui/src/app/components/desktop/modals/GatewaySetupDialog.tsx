@@ -2516,6 +2516,11 @@ export function GatewaySetupDialog({
     setImportedEmbeddingModelIds(fields.embeddingModelIds ?? []);
     if (fields.figmaAccessToken !== undefined) setFigmaAccessToken(fields.figmaAccessToken);
     applyUploadedVoiceConfig(fields);
+    // GENERIC state, so it is applied here rather than inside the voice helper: every sibling in
+    // there returns early when the file carries no voice section, and one added to the voice
+    // entry point would silently reintroduce the stale-binding defect this function exists to
+    // fix (review finding on #3046).
+    applyUploadedGenericEndpoint(fields);
   }
 
   /**
@@ -2594,7 +2599,6 @@ export function GatewaySetupDialog({
       updateVoiceSemanticTurnDetection(fields.voiceSemanticTurnDetection);
     }
     applyUploadedVoiceEndpoint(fields);
-    applyUploadedGenericEndpoint(fields);
   }
 
   // The endpoint protocol rides along invisibly and is persisted verbatim by the setup route —

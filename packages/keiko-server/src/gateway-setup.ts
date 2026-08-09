@@ -322,7 +322,7 @@ interface ProviderRawOptions {
 // observation (recordVerifiedCapability → replaceModelCapability) survives a routine re-save,
 // which submits no preserveExisting flag. The mode gate belongs on the ENDPOINT-MOVE carry-over
 // below, where this URL match misses and nothing verified the stored value at the new endpoint.
-function storedPrimaryOrSelf(
+function storedProviderForModel(
   stored: GatewayConfig | undefined,
   modelId: string,
 ): ModelProviderConfig | undefined {
@@ -469,7 +469,7 @@ function createDefaultSetupCapability(
     // against the env-RESOLVED view made a plain rotation look like a protocol change whenever
     // KEIKO_DEFAULT_* supplied a tuple the file never declared, discarding verified observations
     // for nothing (review finding on #3046).
-    durable: storedPrimaryOrSelf(options.stored, modelId),
+    durable: storedProviderForModel(options.stored, modelId),
   });
   const discovered = options.modelMetadata?.[modelId];
   const capability: ModelCapability = {
@@ -871,7 +871,12 @@ function currentDedicatedEmbeddingModelIds(config: GatewayConfig | undefined): r
       const sharesConnection =
         sameBaseUrlIdentity(provider.baseUrl, primary.baseUrl) &&
         provider.apiKey === primary.apiKey &&
-        (provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME) === primaryHeader;
+        (provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME) === primaryHeader &&
+        // A provider that deliberately spoke a DIFFERENT protocol over the same connection is
+        // dedicated for this purpose: rebuilding it with the setup-wide protocol would put an
+        // unprobed request shape on it (review finding on #3046, the embedding twin of the
+        // restored-provider rule).
+        spokeStoredGatewayProtocol(provider, primary);
       return !sharesConnection;
     })
     .map((provider) => provider.modelId);
@@ -1425,12 +1430,20 @@ function validateSetupConnection(
   apiKey: string,
   apiKeyHeaderName: string,
   env: EnvSource,
+  protocol: {
+    readonly endpointStyle?: string | undefined;
+    readonly apiVersion?: string | undefined;
+  } = {},
 ): RouteResult | undefined {
   const linkLocalError = validateLinkLocalGatewayBaseUrl(baseUrl, env);
   if (linkLocalError !== undefined) return linkLocalError;
   try {
     parseGatewayConfig(
-      buildRawConfig(baseUrl, apiKey, ["setup-validation"], { apiKeyHeaderName }),
+      buildRawConfig(baseUrl, apiKey, ["setup-validation"], {
+        apiKeyHeaderName,
+        ...(protocol.endpointStyle === undefined ? {} : { endpointStyle: protocol.endpointStyle }),
+        ...(protocol.apiVersion === undefined ? {} : { apiVersion: protocol.apiVersion }),
+      }),
       env,
       linkLocalGatewayOverrideOptions(env),
     );
@@ -2163,10 +2176,6 @@ function readSetupGatewayCredentials(
     return apiKeyHeaderResult.routeError;
   }
   const apiKeyHeaderName = apiKeyHeaderResult.value;
-  const invalidConnection = validateSetupConnection(baseUrl, apiKey, apiKeyHeaderName, env);
-  if (invalidConnection !== undefined) {
-    return invalidConnection;
-  }
   const protocol = durableSetupEndpointProtocol(
     raw,
     { stored, current },
@@ -2175,6 +2184,21 @@ function readSetupGatewayCredentials(
   );
   if ("status" in protocol) {
     return protocol;
+  }
+  // The probe carries the protocol the setup will actually persist. Validating a protocol-free
+  // provider let the environment fill the gap: on a server that sets only
+  // KEIKO_DEFAULT_ENDPOINT_STYLE, every probe became an Azure provider with no api version and
+  // the canonical pairing rejected EVERY setup request, whatever the operator submitted
+  // (found while pinning the env-completed tuple, review findings on #3046).
+  const invalidConnection = validateSetupConnection(
+    baseUrl,
+    apiKey,
+    apiKeyHeaderName,
+    env,
+    protocol,
+  );
+  if (invalidConnection !== undefined) {
+    return invalidConnection;
   }
   return { baseUrl, apiKey, apiKeyHeaderName, ...protocol };
 }
@@ -4510,13 +4534,17 @@ function durableStoredGatewayConfig(
 ): GatewayConfig | undefined {
   if (current === undefined || !existsSync(storagePath)) return current;
   try {
-    return loadConfigFromFile(storagePath, withoutPerModelEnvOverrides(deps.env), {
+    const parsed = loadConfigFromFile(storagePath, withoutPerModelEnvOverrides(deps.env), {
       ...linkLocalGatewayOverrideOptions(deps.env),
       secretResolver: createProviderSecretResolver({
         configPath: storagePath,
         env: deps.env,
       }),
     });
+    // Inside the success path on purpose: on a fall-back the returned config is the RUNTIME one,
+    // and rewriting it from a file the parser just rejected would apply records from an invalid
+    // configuration to a valid view (review finding on #3046).
+    return withFileDeclaredProtocol(parsed, storagePath);
   } catch (error) {
     if (error instanceof GatewayError) return current;
     throw error;
@@ -4547,16 +4575,36 @@ function withFileDeclaredProtocol(
       // overrides a DECLARED version would otherwise be sealed in by a rotation just as an
       // undeclared one would (review finding on #3046). An unrecognised declared style is left
       // as parsed — the parser is the authority on what a style may be.
-      const endpointStyle = declaredEndpointStyle(raw.endpointStyle, provider.endpointStyle);
-      return {
-        ...provider,
-        endpointStyle,
-        apiVersion: declaredApiVersion(raw.apiVersion, provider.apiVersion, endpointStyle),
-      };
+      return { ...provider, ...fileDeclaredProtocol(raw, provider) };
     }),
   };
 }
 
+// The protocol the FILE declares, kept COHERENT. Each half falls back to the resolved value when
+// the other half is declared and the canonical pairing needs it: a file that declares the Azure
+// deployment path and takes its required version from KEIKO_MODEL_<ID>_API_VERSION is only valid
+// with that version, and a file that declares the version while the style arrives through
+// KEIKO_DEFAULT_ENDPOINT_STYLE is only valid with that style. Dropping the env half of either
+// pair left the durable view incoherent, and inheritance then rejected a routine credential
+// rotation with 400 (review findings on #3046 — the same coherence argument that stopped #3040
+// from masking that namespace at parse time).
+function fileDeclaredProtocol(
+  raw: Record<string, unknown>,
+  provider: ModelProviderConfig,
+): Pick<ModelProviderConfig, "endpointStyle" | "apiVersion"> {
+  const style = declaredEndpointStyle(raw.endpointStyle, provider.endpointStyle);
+  const version = typeof raw.apiVersion === "string" ? raw.apiVersion : undefined;
+  if (style === "azure-openai-deployment" && version === undefined) {
+    return { endpointStyle: style, apiVersion: provider.apiVersion };
+  }
+  if (version !== undefined && style === undefined) {
+    return { endpointStyle: provider.endpointStyle, apiVersion: version };
+  }
+  return { endpointStyle: style, apiVersion: version };
+}
+
+// An unrecognised declared style is left as parsed — the parser is the authority on what a style
+// may be.
 function declaredEndpointStyle(
   raw: unknown,
   resolved: ModelProviderConfig["endpointStyle"],
@@ -4564,20 +4612,6 @@ function declaredEndpointStyle(
   if (typeof raw !== "string") return undefined;
   const declared = PROVIDER_ENDPOINT_STYLES.find((style) => style === raw);
   return declared ?? resolved;
-}
-
-// A file that declares the Azure deployment path and takes its REQUIRED version from
-// KEIKO_MODEL_<ID>_API_VERSION is coherent only with that version — the same reason #3040 stopped
-// masking the per-model namespace. Dropping it as "not declared" would leave the durable view
-// carrying azure with no version, and inheritance would then reject a routine rotation with 400
-// (review finding on #3046). Only a version the pair does not need is dropped.
-function declaredApiVersion(
-  raw: unknown,
-  resolved: string | undefined,
-  endpointStyle: ModelProviderConfig["endpointStyle"],
-): string | undefined {
-  if (typeof raw === "string") return raw;
-  return endpointStyle === "azure-openai-deployment" ? resolved : undefined;
 }
 
 function fileDeclaredProviderRecords(
@@ -4787,10 +4821,7 @@ export async function handleGatewaySetup(
   }
   const { gatewayConfig } = deps;
   const current = currentGatewayConfig(deps);
-  const stored = withFileDeclaredProtocol(
-    durableStoredGatewayConfig(current, gatewayConfig.storagePath, deps),
-    gatewayConfig.storagePath,
-  );
+  const stored = durableStoredGatewayConfig(current, gatewayConfig.storagePath, deps);
   const bodyResult = await readJsonSetupBody(ctx);
   if ("status" in bodyResult) {
     return bodyResult;
