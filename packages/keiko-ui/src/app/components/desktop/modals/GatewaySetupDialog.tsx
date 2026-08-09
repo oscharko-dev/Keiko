@@ -189,7 +189,10 @@ function endpointIdentity(
   hasStoredVoiceProvider: boolean,
 ): ProviderIdentity | undefined {
   const submitted = value.trim();
-  if (submitted !== "") return submitted;
+  // The identity is CANONICAL, like the server's: a trailing slash or a differently-cased
+  // hostname is the same endpoint, so retyping one must not reset the deployments and the
+  // protocol as though the operator had moved hosts (review finding on #3048).
+  if (submitted !== "") return canonicalVoiceEndpointIdentity(submitted);
   return preserveExisting && hasStoredVoiceProvider ? STORED_VOICE_ENDPOINT_IDENTITY : undefined;
 }
 
@@ -2756,9 +2759,19 @@ export function GatewaySetupDialog({
   function applyUploadedVoiceEndpoint(fields: GatewayConfigUploadFields): void {
     if (fields.voiceBaseUrl === undefined) return;
     // The uploaded protocol lands in the VISIBLE fields, where the operator can see and change
-    // it; the endpoint-identity reset above still clears it if the URL is retyped (#3042).
+    // it; the endpoint-identity reset then clears it if the URL is retyped (#3042).
     setVoiceEndpointStyle(fields.voiceEndpointStyle ?? "");
     setVoiceApiVersion(fields.voiceApiVersion ?? "");
+    // Committing the identity is what makes that true. The upload sets the URL programmatically,
+    // so in a FRESH dialog the ref stayed undefined, transitionProviderIdentity never fired, and
+    // a move left the protocol standing in the visible fields while the payload silently dropped
+    // it — a save that looked Azure and persisted the OpenAI-compatible shape (review finding on
+    // #3048).
+    endpointIdentityRef.current = endpointIdentity(
+      fields.voiceBaseUrl,
+      preserveExisting,
+      storedVoiceProviderExists,
+    );
     setVoiceProtocolBoundBaseUrl(fields.voiceBaseUrl.trim());
     setImportedVoiceEndpointStyle(fields.voiceEndpointStyle ?? "");
     setImportedVoiceApiVersion(fields.voiceApiVersion ?? "");

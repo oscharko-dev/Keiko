@@ -2072,7 +2072,17 @@ describe("GatewaySetupDialog", () => {
     );
     await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
     await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
-    // A configured speech-output deployment requires an explicit output voice.
+    // The move now resets the endpoint's dependencies, so the deployment and its voice are
+    // restated for the new host exactly as an operator would have to — and the protocol fields
+    // are visibly empty rather than silently ignored.
+    expect(screen.getByLabelText(/audio api version/i)).toHaveValue("");
+    expect(screen.getByRole("combobox", { name: /audio endpoint style/i })).toHaveTextContent(
+      "Not stated",
+    );
+    await userEvent.type(
+      screen.getByLabelText(/read aloud.*speech-output deployment/i),
+      "azure-tts",
+    );
     await userEvent.type(screen.getByLabelText(/output voice/i), "ash");
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
 
