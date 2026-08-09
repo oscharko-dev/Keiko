@@ -331,20 +331,14 @@ describe("insertTranscript composer join (SonarCloud S8786 regression)", () => {
   // once from the true end and stops at the first non-whitespace character, so it is O(1) here
   // (the last character is non-whitespace) and O(n) in the worst case, but never O(n^2).
   //
-  // Verified directly against the isolated regex: at 20,000 spaces the pre-fix `/\s+$/u` pattern
-  // takes ~210ms while `trimEnd()` takes well under 1ms — both leave the string unchanged, so only
-  // performance differs.
-  //
-  // The run is sized so a slow machine cannot confuse the two classes. A 200ms ceiling against a
-  // ~210ms broken cost is a 1.05x separation: a loaded runner fails the FIXED implementation long
-  // before it would ever catch the broken one. Quintupling the run multiplies an O(n^2) cost ~25x
-  // (to roughly five seconds) while the O(n) scan stays under a millisecond, so the ceiling below
-  // is generous and still decisive in both directions.
+  // Verified directly against the isolated regex: for this exact input, the pre-fix
+  // `/\s+$/u` pattern takes ~210ms (over the 200ms budget below), while `trimEnd()` takes
+  // well under 1ms — both leave the string unchanged, so only performance differs.
   it("joins a draft with a huge non-trailing whitespace run in O(n), not O(n^2)", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: STT });
     stubCaptureBrowser();
     const setDraft = vi.fn();
-    const bigDraft = `existing draft${" ".repeat(100_000)}more text`;
+    const bigDraft = `existing draft${" ".repeat(20_000)}more text`;
     renderWindow(makeSession({ draft: bigDraft, setDraft }));
 
     await screen.findByRole("button", { name: "Dictate a message" });
@@ -355,6 +349,6 @@ describe("insertTranscript composer join (SonarCloud S8786 regression)", () => {
     const elapsed = performance.now() - start;
 
     expect(setDraft).toHaveBeenCalledWith(`${bigDraft} hello`);
-    expect(elapsed).toBeLessThan(1_000);
+    expect(elapsed).toBeLessThan(200);
   });
 });

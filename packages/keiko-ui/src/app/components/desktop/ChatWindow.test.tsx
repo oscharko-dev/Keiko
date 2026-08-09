@@ -3189,20 +3189,14 @@ describe("ChatWindow message copy", () => {
   // stripper directly. Empirically, the old shape took ~300ms at this input size on ordinary
   // hardware; the fixed implementation (matchAll + a bounded backward whitespace scan) is O(n)
   // and completes in low single-digit milliseconds.
-  //
-  // The input is sized so the two complexity classes cannot be confused by a slow machine. At
-  // 25,000 the old shape took ~300ms and the ceiling sat at 200ms — a 1.2x separation, so a loaded
-  // runner could fail the FIXED implementation. Quadrupling the input multiplies an O(n^2) cost
-  // ~16x (to roughly five seconds) while an O(n) one stays microseconds, which is why the ceiling
-  // can be generous and still decisive in both directions.
   it("strips citation markers from a huge non-matching whitespace run in O(n), not O(n^2)", () => {
-    const adversarial = `${"\n".repeat(100_000)}no marker here`;
+    const adversarial = `${"\n".repeat(25_000)}no marker here`;
     const start = performance.now();
     const result = copyableMessageText(adversarial);
     const elapsed = performance.now() - start;
 
     expect(result).toBe(adversarial);
-    expect(elapsed).toBeLessThan(1_000);
+    expect(elapsed).toBeLessThan(200);
   });
 
   describe("rootDisplayName", () => {
@@ -3219,21 +3213,17 @@ describe("ChatWindow message copy", () => {
 
     // SonarCloud S8786 regression — `/\/+$/u` is unanchored at the start, so a backtracking
     // engine retries a long slash run that never reaches the true end from every offset inside
-    // it (O(n^2)). Empirically, the old shape took ~225ms at 25,000 on ordinary hardware; the
-    // fixed implementation (a manual backward scan) is O(n) and measures 0.05ms even at 400,000.
-    //
-    // Sized so the classes cannot be confused by a slow machine: at 25,000 the ceiling sat 1.2x
-    // below the broken cost, close enough that a loaded runner could fail the FIXED code. At
-    // 400,000 the O(n^2) cost is ~256x its 25,000 value — tens of seconds — against a ceiling the
-    // O(n) implementation clears by four orders of magnitude.
+    // it (O(n^2)). Empirically, the old shape took ~225ms at this input size on ordinary
+    // hardware; the fixed implementation (a manual backward scan) is O(n) and completes in
+    // low single-digit milliseconds.
     it("trims a huge non-terminal slash run in O(n), not O(n^2)", () => {
-      const adversarial = `${"/".repeat(400_000)}x`;
+      const adversarial = `${"/".repeat(25_000)}x`;
       const start = performance.now();
       const result = rootDisplayName(adversarial);
       const elapsed = performance.now() - start;
 
       expect(result).toBe("x");
-      expect(elapsed).toBeLessThan(1_000);
+      expect(elapsed).toBeLessThan(200);
     });
   });
 
