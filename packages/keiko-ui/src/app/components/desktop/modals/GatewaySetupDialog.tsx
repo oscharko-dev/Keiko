@@ -664,10 +664,31 @@ interface GatewayFormFields {
   readonly storedRealtimeModelId: string | undefined;
 }
 
+// A FRESH dialog has no server-side migration guard — that rule only runs in preserve mode — so
+// the dialog carries the same requirement itself: an uploaded protocol was declared for the
+// uploaded host, and moving the endpoint away from it without restating leaves an Azure
+// deployment-path endpoint saved as the OpenAI-compatible shape (review finding on #3048).
+function movedImportRequiresProtocol(fields: GatewayFormFields): boolean {
+  if (fields.preserveExisting) return false;
+  if (fields.importedVoiceEndpointStyle === "") return false;
+  const submitted = fields.voiceBaseUrl.trim();
+  if (submitted === "") return false;
+  if (
+    canonicalEndpointIdentity(submitted) ===
+    canonicalEndpointIdentity(fields.importedVoiceEndpointBaseUrl)
+  ) {
+    return false;
+  }
+  return fields.voiceEndpointStyle === "";
+}
+
 function endpointMigrationValidationError(
   fields: GatewayFormFields,
   t: GatewaySetupTranslate,
 ): string | undefined {
+  if (movedImportRequiresProtocol(fields)) {
+    return t("gatewaySetup.voice.endpointMigrationRequired");
+  }
   if (!fields.preserveExisting || !fields.hasStoredVoiceProvider) return undefined;
   if (fields.voiceBaseUrl.trim() === "") return undefined;
   if (

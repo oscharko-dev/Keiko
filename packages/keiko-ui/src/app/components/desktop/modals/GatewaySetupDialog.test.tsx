@@ -2082,7 +2082,7 @@ describe("GatewaySetupDialog", () => {
     await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
     await userEvent.click(screen.getByRole("option", { name: "Azure deployment path" }));
 
-    expect(screen.getByRole("button", { name: /test & save/i })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: /test & save/i })).toBeEnabled());
   });
 
   it("drops a hand-edited imported protocol when the audio endpoint then moves", async () => {
@@ -2166,11 +2166,13 @@ describe("GatewaySetupDialog", () => {
     await userEvent.type(screen.getByLabelText(/output voice/i), "ash");
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
 
-    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
-    const payload = vi.mocked(setupGateway).mock.calls[0]?.[0] ?? {};
-    expect(payload).toMatchObject({ voiceBaseUrl: "https://new-voice.example.com" });
-    expect(payload).not.toHaveProperty("voiceEndpointStyle");
-    expect(payload).not.toHaveProperty("voiceApiVersion");
+    // The protocol cannot travel — and since #3048 the operator is told so instead of the save
+    // quietly succeeding without it. A fresh dialog has no server-side migration guard, so the
+    // dialog refuses the move itself.
+    expect(setupGateway).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /replacing a stored audio endpoint/i,
+    );
   });
 
   it("submits the imported endpoint protocol while the form still points at the uploaded endpoint", async () => {
@@ -2435,10 +2437,12 @@ describe("GatewaySetupDialog", () => {
     await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
 
-    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
-    const payload = vi.mocked(setupGateway).mock.calls[0]?.[0];
-    expect(payload).not.toHaveProperty("voiceEndpointStyle");
-    expect(payload).not.toHaveProperty("voiceApiVersion");
+    // The imported protocol still cannot reach the retyped endpoint; since #3048 the move is
+    // refused outright rather than saved without it, so the operator restates or goes back.
+    expect(setupGateway).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /replacing a stored audio endpoint/i,
+    );
   });
 
   it("fills the voice section from an uploaded configuration and states a skipped realtime", async () => {
