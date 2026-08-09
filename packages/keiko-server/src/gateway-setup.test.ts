@@ -6241,6 +6241,109 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("leaves a restored provider that spoke its own protocol alone", async () => {
+    // Review finding on #3046: making a shared provider follow the gateway's protocol went one
+    // step too far. A provider on the same URL, credential and header that deliberately used a
+    // DIFFERENT valid protocol had its own overwritten by a rotation, even though the gateway's
+    // request shape was never verified for it.
+    const uiDir = await tempDir("keiko-gw-ui-own-protocol-");
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+          },
+          {
+            modelId: "scan-ocr",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            endpointStyle: "openai-compatible",
+            capability: durableOcrCapability("scan-ocr"),
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-own-protocol-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve(modelIds.filter((modelId) => modelId !== "scan-ocr")),
+    });
+
+    const rotated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "rotated-token" }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const ocr = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "scan-ocr",
+    );
+    // It follows the dead credential, because that is the connection it shared…
+    expect(ocr?.apiKey).toBe("rotated-token");
+    // …but keeps the protocol it chose.
+    expect(ocr?.endpointStyle).toBe("openai-compatible");
+    expect(ocr?.apiVersion).toBeUndefined();
+    deps.store.close();
+  });
+
+  it("keeps verified observations when a rotation only re-resolves an env protocol", async () => {
+    // Review finding on #3046: comparing the capability identity against the env-RESOLVED view
+    // made a plain rotation look like a protocol change whenever KEIKO_DEFAULT_* supplied a
+    // tuple the file never declared — discarding verified observations for nothing.
+    const uiDir = await tempDir("keiko-gw-ui-env-capability-");
+    writeFileSync(
+      join(uiDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            capability: { kind: "chat", supportsDocumentInput: true },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-env-capability-"),
+      env: {
+        ...VAULT_ENV,
+        KEIKO_DEFAULT_ENDPOINT_STYLE: "azure-openai-deployment",
+        KEIKO_DEFAULT_API_VERSION: "2025-04-01-preview",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const rotated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "rotated-token",
+        deploymentNames: ["example-chat"],
+      }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const capability = currentGatewayConfig(deps)?.capabilities?.find(
+      (entry) => entry.id === "example-chat",
+    );
+    expect(capability).toMatchObject({ supportsDocumentInput: true });
+    deps.store.close();
+  });
+
   it("never seals an environment-supplied protocol into the stored file", async () => {
     // Review finding on #3046: inheritance read the env-RESOLVED view, so a rotation wrote a
     // protocol the file never declared into the sealed config — removing the variable afterwards
@@ -6618,6 +6721,22 @@ describe("handleGatewaySetup", () => {
     expect(orphan.status).toBe(400);
     expect(orphan.body).toMatchObject({
       error: { code: "GATEWAY_API_VERSION_REQUIRES_AZURE_ENDPOINT" },
+    });
+
+    // The other direction of the same rule: the deployment path needs the version that builds
+    // its URL, and left unnamed it produced the same misleading 502.
+    const styleWithoutVersion = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "chat-token",
+        deploymentNames: ["example-chat"],
+        endpointStyle: "azure-openai-deployment",
+      }),
+      deps,
+    );
+    expect(styleWithoutVersion.status).toBe(400);
+    expect(styleWithoutVersion.body).toMatchObject({
+      error: { code: "GATEWAY_AZURE_ENDPOINT_REQUIRES_API_VERSION" },
     });
 
     const gatewayConfig = deps.gatewayConfig;

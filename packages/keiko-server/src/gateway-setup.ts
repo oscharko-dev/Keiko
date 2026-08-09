@@ -313,6 +313,8 @@ interface ProviderRawOptions {
   readonly embeddingModelIds?: readonly string[] | undefined;
   readonly modelMetadata?: Readonly<Record<string, GatewayDiscoveredModelMetadata>> | undefined;
   readonly current?: GatewayConfig | undefined;
+  /** The durable stored view — the protocol of record for capability identity (see #3046). */
+  readonly stored?: GatewayConfig | undefined;
   readonly workflowEligibleModelIds?: readonly string[] | undefined;
 }
 
@@ -320,25 +322,36 @@ interface ProviderRawOptions {
 // observation (recordVerifiedCapability → replaceModelCapability) survives a routine re-save,
 // which submits no preserveExisting flag. The mode gate belongs on the ENDPOINT-MOVE carry-over
 // below, where this URL match misses and nothing verified the stored value at the new endpoint.
+function storedPrimaryOrSelf(
+  stored: GatewayConfig | undefined,
+  modelId: string,
+): ModelProviderConfig | undefined {
+  return stored?.providers.find((candidate) => candidate.modelId === modelId);
+}
+
 function existingCapabilityForSetup(
   current: GatewayConfig | undefined,
   modelId: string,
   baseUrl: string,
   protocol: {
-    readonly endpointStyle?: string | undefined;
-    readonly apiVersion?: string | undefined;
+    readonly submitted: {
+      readonly endpointStyle?: string | undefined;
+      readonly apiVersion?: string | undefined;
+    };
+    readonly durable: ModelProviderConfig | undefined;
   },
 ): ModelCapability | undefined {
   const provider = current?.providers.find((candidate) => candidate.modelId === modelId);
   if (provider === undefined || !sameBaseUrlIdentity(provider.baseUrl, baseUrl)) return undefined;
+  const of = protocol.durable ?? provider;
   // The protocol is part of the endpoint's identity: the deployment path and the api version
   // change the request route, so streaming, tool calling and image observations made over the
   // old one prove nothing about the new one. The setup probe performs buffered chat only and
   // reverifies none of them, so a reused capability would advertise unverified behavior (review
   // finding on #3046). Unchanged protocol, unchanged identity — a rotation still keeps them.
   if (
-    provider.endpointStyle !== protocol.endpointStyle ||
-    provider.apiVersion !== protocol.apiVersion
+    of.endpointStyle !== protocol.submitted.endpointStyle ||
+    of.apiVersion !== protocol.submitted.apiVersion
   ) {
     return undefined;
   }
@@ -450,7 +463,14 @@ function createDefaultSetupCapability(
     embeddingModelIds?.includes(modelId) === true
       ? createDefaultEmbeddingCapability(modelId)
       : createDefaultChatCapability(modelId);
-  const existing = existingCapabilityForSetup(options.current, modelId, baseUrl, options);
+  const existing = existingCapabilityForSetup(options.current, modelId, baseUrl, {
+    submitted: options,
+    // The protocol of record is the DURABLE one, which is what the rebuild persists. Comparing
+    // against the env-RESOLVED view made a plain rotation look like a protocol change whenever
+    // KEIKO_DEFAULT_* supplied a tuple the file never declared, discarding verified observations
+    // for nothing (review finding on #3046).
+    durable: storedPrimaryOrSelf(options.stored, modelId),
+  });
   const discovered = options.modelMetadata?.[modelId];
   const capability: ModelCapability = {
     ...baseCapability,
@@ -2234,6 +2254,18 @@ function pairedEndpointProtocol(
       ),
     };
   }
+  // The other direction of the same canonical rule: the deployment path cannot be requested
+  // without the version that builds its URL. Left unnamed it threw inside the candidate loop and
+  // surfaced as the same misleading 502 (review finding on #3046).
+  if (endpointStyle === "azure-openai-deployment" && apiVersion === undefined) {
+    return {
+      status: 400,
+      body: errorBody(
+        "GATEWAY_AZURE_ENDPOINT_REQUIRES_API_VERSION",
+        'endpointStyle "azure-openai-deployment" requires an apiVersion.',
+      ),
+    };
+  }
   return { endpointStyle, apiVersion };
 }
 
@@ -3878,6 +3910,7 @@ function finalRawConfigForSetup(
     embeddingModelIds,
     modelMetadata,
     current: input.current,
+    stored: input.stored,
     workflowEligibleModelIds: input.workflowEligibleModelIds,
     timeoutMs: input.timeoutMs,
   });
@@ -3947,6 +3980,39 @@ function sharesStoredGatewayConnection(
   );
 }
 
+// Only a provider that SPOKE the gateway's protocol follows it to a new one. One that
+// deliberately used a different valid protocol over the same connection keeps its own: the new
+// request shape was never verified for it (review finding on #3046).
+function spokeStoredGatewayProtocol(
+  provider: ModelProviderConfig,
+  storedPrimary: ModelProviderConfig | undefined,
+): boolean {
+  return (
+    storedPrimary !== undefined &&
+    provider.endpointStyle === storedPrimary.endpointStyle &&
+    provider.apiVersion === storedPrimary.apiVersion
+  );
+}
+
+// The endpoint PROTOCOL is part of the connection, not a private property of the provider: a
+// restored provider that follows the gateway's URL, token and header must speak the same way, or
+// one shared connection ends up carrying two protocols and the restored provider keeps requesting
+// the obsolete route (review finding on #3046).
+function restoredProviderProtocolRaw(
+  provider: ModelProviderConfig,
+  gateway: SetupGatewayConnection,
+  storedPrimary: ModelProviderConfig | undefined,
+  sharedGatewayConnection: boolean,
+): Record<string, unknown> {
+  const follows = sharedGatewayConnection && spokeStoredGatewayProtocol(provider, storedPrimary);
+  const endpointStyle = follows ? gateway.endpointStyle : provider.endpointStyle;
+  const apiVersion = follows ? gateway.apiVersion : provider.apiVersion;
+  return {
+    ...(endpointStyle === undefined ? {} : { endpointStyle }),
+    ...(apiVersion === undefined ? {} : { apiVersion }),
+  };
+}
+
 function storedDedicatedProviderRaw(
   provider: ModelProviderConfig,
   capability: ModelCapability,
@@ -3962,19 +4028,12 @@ function storedDedicatedProviderRaw(
   const apiKeyHeaderName = sharedGatewayConnection
     ? gateway.apiKeyHeaderName
     : provider.apiKeyHeaderName;
-  // The endpoint PROTOCOL is part of the connection, not a private property of the provider: a
-  // restored provider that follows the gateway's URL, token and header must speak the same way,
-  // or one shared connection ends up carrying two protocols and the restored provider keeps
-  // requesting the obsolete route (review finding on #3046).
-  const endpointStyle = sharedGatewayConnection ? gateway.endpointStyle : provider.endpointStyle;
-  const apiVersion = sharedGatewayConnection ? gateway.apiVersion : provider.apiVersion;
   return {
     modelId: provider.modelId,
     baseUrl: sharedGatewayConnection ? gateway.baseUrl : provider.baseUrl,
     apiKey: sharedGatewayConnection ? gateway.apiKey : provider.apiKey,
     ...(apiKeyHeaderName === undefined ? {} : { apiKeyHeaderName }),
-    ...(endpointStyle === undefined ? {} : { endpointStyle }),
-    ...(apiVersion === undefined ? {} : { apiVersion }),
+    ...restoredProviderProtocolRaw(provider, gateway, storedPrimary, sharedGatewayConnection),
     ...(provider.outputTokenParameter === undefined
       ? {}
       : { outputTokenParameter: provider.outputTokenParameter }),
@@ -4468,15 +4527,28 @@ function withFileDeclaredProtocol(
     providers: config.providers.map((provider) => {
       const raw = declared.get(provider.modelId);
       if (raw === undefined) return provider;
+      // The FILE's own value wins over the resolved one: a KEIKO_MODEL_<ID>_API_VERSION that
+      // overrides a DECLARED version would otherwise be sealed in by a rotation just as an
+      // undeclared one would (review finding on #3046). An unrecognised declared style is left
+      // as parsed — the parser is the authority on what a style may be.
       return {
         ...provider,
-        ...(typeof raw.endpointStyle === "string"
-          ? {}
-          : { endpointStyle: undefined as ModelProviderConfig["endpointStyle"] }),
-        ...(typeof raw.apiVersion === "string" ? {} : { apiVersion: undefined }),
+        endpointStyle: declaredEndpointStyle(raw.endpointStyle, provider.endpointStyle),
+        ...(typeof raw.apiVersion === "string"
+          ? { apiVersion: raw.apiVersion }
+          : { apiVersion: undefined }),
       };
     }),
   };
+}
+
+function declaredEndpointStyle(
+  raw: unknown,
+  resolved: ModelProviderConfig["endpointStyle"],
+): ModelProviderConfig["endpointStyle"] {
+  if (typeof raw !== "string") return undefined;
+  const declared = PROVIDER_ENDPOINT_STYLES.find((style) => style === raw);
+  return declared ?? resolved;
 }
 
 function fileDeclaredProviderRecords(
