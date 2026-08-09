@@ -14,7 +14,7 @@
 // audio, the provider URL, and the credential never escape. Every failure is a coded, content-free
 // `kind` so the BFF can map it to a deterministic, secret-free HTTP response.
 
-import { apiKeyHeaderValue } from "./config.js";
+import { apiKeyHeaderValue, trimTrailingSlash } from "./config.js";
 import {
   gatewayFetch,
   OutboundHttpEgressError,
@@ -109,12 +109,12 @@ const OUTBOUND_TTS_KINDS: Record<OutboundHttpEgressErrorCode, TextToSpeechErrorK
 };
 
 function joinOpenAiCompatibleUrl(endpoint: string): string {
-  const trimmed = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
+  const trimmed = trimTrailingSlash(endpoint);
   return `${trimmed}/audio/speech`;
 }
 
 function joinAzureDeploymentUrl(endpoint: string, modelId: string, apiVersion: string): string {
-  const trimmed = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
+  const trimmed = trimTrailingSlash(endpoint);
   return `${trimmed}/openai/deployments/${encodeURIComponent(
     modelId,
   )}/audio/speech?api-version=${encodeURIComponent(apiVersion)}`;

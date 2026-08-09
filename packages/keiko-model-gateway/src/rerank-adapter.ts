@@ -2,7 +2,7 @@
 // openai-embedding-adapter.ts: callers pass the already-resolved credential-tier endpoint and get
 // structural outcomes only. Raw provider payloads never escape this module.
 
-import { apiKeyHeaderValue } from "./config.js";
+import { apiKeyHeaderValue, trimTrailingSlash } from "./config.js";
 import {
   gatewayFetch,
   OutboundHttpEgressError,
@@ -87,7 +87,7 @@ function headerName(name: string | undefined): string {
 }
 
 function joinUrl(endpoint: string): string {
-  const trimmed = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
+  const trimmed = trimTrailingSlash(endpoint);
   return `${trimmed}/rerank`;
 }
 

@@ -11,7 +11,7 @@
 // provider body, the provider URL, and the credential never do.
 
 import { randomUUID } from "node:crypto";
-import { apiKeyHeaderValue } from "./config.js";
+import { apiKeyHeaderValue, trimTrailingSlash } from "./config.js";
 import {
   gatewayFetch,
   OutboundHttpEgressError,
@@ -102,12 +102,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function joinOpenAiCompatibleUrl(endpoint: string): string {
-  const trimmed = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
+  const trimmed = trimTrailingSlash(endpoint);
   return `${trimmed}/audio/transcriptions`;
 }
 
 function joinAzureDeploymentUrl(endpoint: string, modelId: string, apiVersion: string): string {
-  const trimmed = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
+  const trimmed = trimTrailingSlash(endpoint);
   return `${trimmed}/openai/deployments/${encodeURIComponent(
     modelId,
   )}/audio/transcriptions?api-version=${encodeURIComponent(apiVersion)}`;

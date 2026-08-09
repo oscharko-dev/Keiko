@@ -142,6 +142,20 @@ describe("OpenAiAdapter.call", () => {
     expect(seenUrl).toBe("https://provider.example/v1/chat/completions");
   });
 
+  it("keeps a base URL without a trailing slash unchanged", async () => {
+    // The other branch of the shared trimTrailingSlash helper: an over-trim would eat the last
+    // path character and route to '/v/chat/completions' (review finding on #3042).
+    let seenUrl = "";
+    const adapter = adapterWith((url) => {
+      if (typeof url === "string") seenUrl = url;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(REQUEST, { ...CONFIG, baseUrl: "https://provider.example/v1" });
+    expect(seenUrl).toBe("https://provider.example/v1/chat/completions");
+  });
+
   it("RB-4 (GEN-AI-GATEWAY-002): routes an Azure-configured chat provider to its deployment URL", async () => {
     let seenUrl = "";
     const adapter = adapterWith((url) => {

@@ -18,7 +18,7 @@
 // credential never do. SDP payloads are opaque, `secret-bearing` strings to this module
 // (voice-protocol.ts redaction class): they are never logged or persisted here.
 
-import { apiKeyHeaderValue } from "./config.js";
+import { apiKeyHeaderValue, trimTrailingSlash } from "./config.js";
 import { randomUUID } from "node:crypto";
 import {
   gatewayFetch,
@@ -189,12 +189,12 @@ function headerName(name: string | undefined): string {
 }
 
 function joinUrl(endpoint: string): string {
-  const trimmed = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
+  const trimmed = trimTrailingSlash(endpoint);
   return `${trimmed}/realtime/calls`;
 }
 
 function joinClientSecretsUrl(endpoint: string): string {
-  const trimmed = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
+  const trimmed = trimTrailingSlash(endpoint);
   return `${trimmed}/realtime/client_secrets`;
 }
 
