@@ -1091,20 +1091,36 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       // binds them, and this run promotes the dist-tag without re-uploading anything. It must
       // actually SUCCEED — an orchestrator that silently skipped publication would satisfy a
       // weaker assertion while shipping nothing.
+      // The version is NOT on the registry yet, so this run must genuinely publish it: an
+      // orchestrator that skipped publication would otherwise satisfy every other assertion here
+      // while shipping nothing.
       const viewBody = [
-        '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
-        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+        "  const s = state();",
+        '  if (argv.includes("version")) {',
+        "    if (!s.published) { process.stderr.write('npm error code E404\\n'); process.exit(1); }",
+        '    process.stdout.write(VERSION + "\\n"); process.exit(0);',
+        "  }",
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) {',
+        '    process.stdout.write((s.published ? VERSION : "0.0.1") + "\\n"); process.exit(0);',
+        "  }",
       ].join("\n");
 
       lastRun = runPublish({
-        npmBody: npmStub(viewBody, { failOnPublish: true }),
-        initState: prepublishedEvaluationState(),
+        npmBody: npmStub(viewBody),
+        initState: { ...prepublishedEvaluationState(), published: false },
         portableAssets: false,
       });
 
       expect(lastRun.status).toBe(0);
       expect(lastRun.stdout).toContain("match their evidence bytes for bytes");
       expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+      // And it leaves the release surface alone. That release already carries the Latest flag and
+      // the customer-facing install notes the evaluation lane wrote — first-launch steps,
+      // checksums, provenance. Rewriting its body with the generated catalog notes would replace
+      // exactly the guidance a non-technical customer needs. This run owns npm, not that release.
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","edit"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","create"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(true);
     });
 
     it("refuses prepublished downloads that carry no evaluation evidence", () => {

@@ -249,7 +249,7 @@ function ensureStableLatestDownloads(rootManifest, options, releaseInfo) {
  * a run that cannot prove the release leaves the repository exactly as it found it.
  */
 function verifyPrepublishedStableRelease(rootManifest, options) {
-  if (!stableLatestRelease(rootManifest, options) || options.dryRun) return;
+  if (!stableLatestRelease(rootManifest, options) || options.dryRun) return false;
   const repo = githubRepository();
   const tag = releaseTag(rootManifest.version);
   const releaseInfo = { repo, tag };
@@ -277,6 +277,7 @@ function verifyPrepublishedStableRelease(rootManifest, options) {
     );
   }
   verifyPrepublishedDownloads(releaseInfo, remoteAssets);
+  return true;
 }
 
 /** Reads and shape-validates the evaluation manifest asset the governed lane published. */
@@ -1922,12 +1923,16 @@ try {
   // empty Latest release behind whenever the verification then failed, which also blocks the
   // evaluation lane from recreating that tag (Codex finding on #3054).
   const uploadsAssets = portableAssets.length > 0;
-  if (!uploadsAssets) verifyPrepublishedStableRelease(rootManifest, options);
+  // A verified prepublished release is COMPLETE — the governed evaluation lane created it with the
+  // Latest flag and the customer-facing install notes (first-launch steps, checksums, provenance).
+  // Rewriting its body here with the generated catalog notes would replace exactly the guidance a
+  // non-technical customer needs. This run owns npm; that lane owns its release surface.
+  const prepublished = !uploadsAssets && verifyPrepublishedStableRelease(rootManifest, options);
   const releaseInfo =
-    (uploadsAssets || stableLatestRelease(rootManifest, options)) && portableUploadEnabled(options)
+    uploadsAssets && portableUploadEnabled(options)
       ? ensureGithubRelease(rootPackage, options, githubReleaseNotes)
       : undefined;
-  if (releaseInfo !== undefined && uploadsAssets) {
+  if (releaseInfo !== undefined) {
     publishPortableReleaseAssets(options, portableAssets, releaseInfo);
     ensureStableLatestDownloads(rootManifest, options, releaseInfo);
   }
@@ -1942,7 +1947,9 @@ try {
     }
   }
   runRegistrySmoke(rootPackage, options, npmEnv);
-  if (releaseInfo === undefined) {
+  // A prepublished release is already correct and already Latest; anything else still needs its
+  // GitHub Release created or refreshed after the registry smoke.
+  if (releaseInfo === undefined && !prepublished) {
     const finalReleaseInfo = ensureGithubRelease(rootPackage, options, githubReleaseNotes);
     publishPortableReleaseAssets(options, portableAssets, finalReleaseInfo);
   }
