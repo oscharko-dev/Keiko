@@ -2886,6 +2886,10 @@ export function GatewaySetupDialog({
     // it; the endpoint-identity reset then clears it if the URL is retyped (#3042).
     setVoiceEndpointStyle(fields.voiceEndpointStyle ?? "");
     setVoiceApiVersion(fields.voiceApiVersion ?? "");
+    // The auth mode is a visible field now, so it hydrates with its siblings: leaving it in the
+    // imported payload alone kept it on raw URL equality while the other two moved to the
+    // canonical binding, and an equivalent edit dropped it by itself (review finding on #3048).
+    setVoiceRealtimeAuthMode(fields.voiceRealtimeAuthMode ?? "");
     // Committing the identity is what makes that true. The upload sets the URL programmatically,
     // so in a FRESH dialog the ref stayed undefined, transitionProviderIdentity never fired, and
     // a move left the protocol standing in the visible fields while the payload silently dropped
