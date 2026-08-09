@@ -701,10 +701,11 @@ function canonicalVoiceEndpointIdentity(raw: string): string {
   }
 }
 
-// The VISIBLE protocol fields are the operator's own statement, so they ride any submit that
-// carries a voice endpoint — including a manual endpoint move, which the server now refuses
-// without one. They are cleared whenever the audio endpoint identity changes, so a protocol can
-// never be inherited silently across a base-URL change (review finding on #3042).
+// The VISIBLE protocol fields are the operator's own statement, so they ride a manual endpoint
+// move — which the server refuses without one — instead of being lost with it. What they never
+// do is travel to an endpoint nobody stated them for: every statement, uploaded or hand-made,
+// is bound to the endpoint it was made against, and the identity reset clears both the fields
+// and their binding (review findings on #3042 and #3048).
 function statedVoiceEndpointPayload(fields: GatewayFormFields): Partial<GatewaySetupInput> {
   const submittedBaseUrl = fields.voiceBaseUrl.trim();
   // A blank URL in preserve mode means "keep the stored endpoint", so a statement made against
