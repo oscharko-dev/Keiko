@@ -72,6 +72,12 @@ const RELEASE_IMPACT_CATALOG = JSON.parse(
   readFileSync(join(REPO_ROOT, "release-impact.catalog.json"), "utf8"),
 );
 const RELEASE_VERSION = ROOT_MANIFEST.version;
+// The exact download set a stable `latest` release must carry, derived from the same target
+// table the orchestrator uses — a restated list here could drift past a new target silently.
+const PUBLISHED_DOWNLOAD_NAMES = [
+  ...PORTABLE_TARGETS.map((target) => target.assetName),
+  WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+];
 const RELEASE_NAME = ROOT_MANIFEST.name;
 const RELEASE_SPEC = `${RELEASE_NAME}@${RELEASE_VERSION}`;
 
@@ -839,6 +845,7 @@ function runPublish({
   portableAssets = true,
   portableFixtureOptions = {},
   qualificationEnv = {},
+  extraArgs = [],
 }) {
   const binDir = mkdtempSync(join(tmpdir(), "keiko-release-publish-stub-"));
   const portableDir = mkdtempSync(join(tmpdir(), "keiko-portable-assets-fixture-"));
@@ -888,11 +895,15 @@ function runPublish({
     );
   }
 
-  const result = spawnSync(process.execPath, ["scripts/release-publish.mjs", "--tag", "latest"], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    env,
-  });
+  const result = spawnSync(
+    process.execPath,
+    ["scripts/release-publish.mjs", "--tag", "latest", ...extraArgs],
+    {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env,
+    },
+  );
 
   const calls = readFileSync(logFile, "utf8")
     .split("\n")
@@ -952,7 +963,62 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       lastRun = undefined;
     });
 
-    it("fails stable latest publishing before npm publish when portable assets are missing", () => {
+    it("refuses a stable latest publish whose GitHub release carries no downloads", () => {
+      // The requirement that a stable `latest` offers customer downloads did not move — WHERE it
+      // is answered did. It used to demand a qualified asset MANIFEST as a publish input, which
+      // only the Developer-ID/Azure-signed production lane can produce, so it refused every stable
+      // release this project can currently build. It is now answered against the release itself,
+      // which is strictly stronger: a well-formed manifest input proves nothing about whether the
+      // upload actually landed. npm must never learn `latest` for a release with nothing behind it.
+      const viewBody = [
+        '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write("0.0.1\\n"); process.exit(0); }',
+      ].join("\n");
+
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: false, tagged: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("is missing portable downloads");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("publishes a stable latest release whose downloads the evaluation lane already uploaded", () => {
+      // The release-owner-scoped path for the first public release: the governed evaluation lane
+      // publishes the four unsigned-but-sealed downloads onto the tag, and this run promotes the
+      // dist-tag without re-uploading anything. It must actually SUCCEED — an orchestrator that
+      // silently skipped publication would satisfy a weaker assertion while shipping nothing.
+      const viewBody = [
+        '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+      ].join("\n");
+
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: {
+          published: true,
+          tagged: true,
+          uploadedAssets: PUBLISHED_DOWNLOAD_NAMES.map((name, index) => ({
+            id: 500000 + index,
+            name,
+            size: 1024,
+          })),
+        },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(0);
+      expect(lastRun.stdout).toContain("carries all 4 portable downloads");
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+    });
+
+    it("refuses to skip the GitHub Release when portable assets are supplied", () => {
+      // Announcing downloads that are never uploaded is the failure this replaces: supplying a
+      // manifest and skipping the release would publish an npm dist-tag whose notes point at
+      // assets that do not exist.
       const viewBody = [
         '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
         '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
@@ -961,15 +1027,15 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       lastRun = runPublish({
         npmBody: npmStub(viewBody, { failOnPublish: true }),
         initState: { published: true, tagged: true },
-        portableAssets: false,
+        portableAssets: true,
+        extraArgs: ["--skip-github-release"],
       });
 
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain(
-        "stable latest publishes require --portable-assets-manifest",
+        "a publish that supplies portable assets must attach them to the GitHub Release.",
       );
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
-      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
     });
 
     it.each([

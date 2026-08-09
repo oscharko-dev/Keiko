@@ -30,6 +30,7 @@ import {
   readPortableManifest,
   validatePortableCandidateManifest,
   validatePortablePublishedManifest,
+  WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 } from "./portable-runtime.mjs";
 import { internalDependencyEntries, scope } from "./release-workspace-policy.mjs";
 import { renderReleaseImpactNotes } from "./release-impact-notes.mjs";
@@ -181,12 +182,90 @@ function portableUploadEnabled(options) {
   return !options.skipGithubRelease && !options.dryRun;
 }
 
-function stablePortableAssetsRequired(rootManifest, options) {
-  return !options.planOnly && !options.dryRun && stableLatestRelease(rootManifest, options);
+// A stable `latest` release must offer the customer downloads — that requirement did not move.
+// What moved is WHERE it is answered. The old gate demanded a qualified asset MANIFEST as a
+// publish INPUT, which only the Developer-ID/Azure-signed production lane can produce; the
+// release owner scoped the first public release to the unsigned EVALUATION lane (bundles that
+// are sealed — `codesign --verify --deep --strict` passes — but carry no Developer ID and no
+// Azure trusted publisher), so no stable `latest` publish this project can currently produce was
+// accepted. The requirement is now answered against REALITY instead: before npm learns the
+// `latest` dist-tag, the GitHub Release must actually carry all four downloads, whether this run
+// uploaded them from a qualified manifest or the governed evaluation lane published them first.
+// That is strictly stronger than checking an input — an input can be well-formed while the upload
+// silently fails — and it is what the customer-facing promise actually means.
+// Unchanged: authorization (`check:release-impact:publish` verifies the release owner's approval
+// live against the GitHub API before this point) and, whenever a manifest IS supplied, the full
+// qualified-run provenance and digest verification below.
+const PORTABLE_DOWNLOAD_ASSET_NAMES = Object.freeze([
+  ...PORTABLE_TARGETS.map((target) => target.assetName),
+  WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+]);
+
+/** Asset names on the release that are non-empty downloads, as GitHub reports them. */
+function uploadedDownloadNames(releaseInfo) {
+  return new Set(
+    githubReleaseSnapshot(releaseInfo)
+      .assets.filter((asset) => isRecord(asset) && Number(asset.size) > 0)
+      .map((asset) => asset.name),
+  );
 }
 
-function portableReleasePromotionEnabled(rootManifest, options) {
-  return stableLatestRelease(rootManifest, options);
+function missingPortableDownloads(releaseInfo) {
+  const present = uploadedDownloadNames(releaseInfo);
+  return PORTABLE_DOWNLOAD_ASSET_NAMES.filter((name) => !present.has(name));
+}
+
+/**
+ * Fails closed unless the release the customer will be pointed at carries every portable
+ * download. Runs BEFORE npm publish so a release missing its downloads can never become the
+ * `latest` a customer installs.
+ */
+function ensureStableLatestDownloads(rootManifest, options, releaseInfo) {
+  if (!stableLatestRelease(rootManifest, options) || options.dryRun) return;
+  if (releaseInfo === undefined) {
+    fail("a stable latest publish must attach its portable downloads to the GitHub Release.");
+  }
+  const missing = missingPortableDownloads(releaseInfo);
+  if (missing.length > 0) {
+    fail(
+      `GitHub release ${releaseInfo.tag} is missing portable downloads: ${missing.join(", ")}. ` +
+        "A stable latest release must carry every portable download before npm publishes it.",
+    );
+  }
+  console.log(
+    `release-publish: ${releaseInfo.tag} carries all ${String(PORTABLE_DOWNLOAD_ASSET_NAMES.length)} portable downloads.`,
+  );
+}
+
+/**
+ * Whether the release ALREADY carries the downloads, read before the notes are composed. Read-only
+ * and best-effort: a missing release or an unreadable response simply means "not yet", and
+ * `ensureStableLatestDownloads` is the authority that fails the publish.
+ */
+function existingReleaseCarriesDownloads(rootManifest, options) {
+  if (options.dryRun || options.skipGithubRelease) return false;
+  const repo = process.env.GITHUB_REPOSITORY;
+  if (typeof repo !== "string" || repo === "") return false;
+  const snapshot = gh(["api", `repos/${repo}/releases/tags/${releaseTag(rootManifest.version)}`]);
+  if (snapshot.status !== 0) return false;
+  try {
+    const release = JSON.parse(snapshot.stdout);
+    if (!isRecord(release) || !Array.isArray(release.assets)) return false;
+    const present = new Set(
+      release.assets
+        .filter((asset) => isRecord(asset) && Number(asset.size) > 0)
+        .map((a) => a.name),
+    );
+    return PORTABLE_DOWNLOAD_ASSET_NAMES.every((name) => present.has(name));
+  } catch {
+    return false;
+  }
+}
+
+// Release notes advertise portable downloads only when the release actually carries them.
+function portableReleasePromotionEnabled(rootManifest, options, portableAssets) {
+  if (!stableLatestRelease(rootManifest, options)) return false;
+  return portableAssets.length > 0 || existingReleaseCarriesDownloads(rootManifest, options);
 }
 
 function normalizeRegistry(options) {
@@ -544,16 +623,26 @@ function containedLocalPath(root, relativePath, label, failures) {
 }
 
 function loadPortableAssets(rootManifest, options) {
-  if (stablePortableAssetsRequired(rootManifest, options) && options.skipGithubRelease) {
-    fail("stable latest publishes must attach portable GitHub Release Assets.");
+  const suppliesManifest =
+    typeof options.portableAssetsManifest === "string" && options.portableAssetsManifest !== "";
+  // Supplying assets and then skipping the GitHub Release would publish an npm dist-tag whose
+  // announced downloads do not exist: still refused, for stable and prerelease alike.
+  if (suppliesManifest && options.skipGithubRelease) {
+    fail("a publish that supplies portable assets must attach them to the GitHub Release.");
   }
-  if (typeof options.portableAssetsManifest !== "string" || options.portableAssetsManifest === "") {
-    if (stablePortableAssetsRequired(rootManifest, options)) {
-      fail("stable latest publishes require --portable-assets-manifest.");
-    }
-    return [];
+  // A stable `latest` release IS the customer's download page. Skipping it would publish the
+  // dist-tag with nothing to point a customer at; refused here rather than after the gates so the
+  // run fails in seconds instead of at the end (the same combination is refused again by
+  // ensureStableLatestDownloads, which is the authority once the release exists).
+  if (stableLatestRelease(rootManifest, options) && options.skipGithubRelease) {
+    fail(
+      "a stable latest publish must publish its GitHub Release; --skip-github-release is not accepted.",
+    );
   }
-  const qualification = stablePortableAssetsRequired(rootManifest, options)
+  if (!suppliesManifest) return [];
+  // A stable `latest` release that DOES carry assets is still held to the qualified-run
+  // provenance: the same run, attempt, tag, source SHA and workflow that built them.
+  const qualification = stableLatestRelease(rootManifest, options)
     ? requiredPortableQualification(rootManifest)
     : undefined;
   return portableAssetsFromManifest(
@@ -1079,12 +1168,16 @@ function withPublishApprovalRequirement(enabled, callback) {
   }
 }
 
-function releaseNotes(rootManifest, options) {
+function releaseNotes(rootManifest, options, portableAssets) {
   const catalog = readReleaseImpactCatalog();
   const result = withPublishApprovalRequirement(!options.planOnly, () =>
     renderReleaseImpactNotes(catalog, rootManifest, {
       ...options,
-      portableReleasePromotion: portableReleasePromotionEnabled(rootManifest, options),
+      portableReleasePromotion: portableReleasePromotionEnabled(
+        rootManifest,
+        options,
+        portableAssets,
+      ),
     }),
   );
   if (!result.ok) {
@@ -1680,8 +1773,9 @@ run("npm", ["run", "check:publish-manifests"], { stdio: "inherit" });
 run("npm", ["run", options.planOnly ? "check:release-impact" : "check:release-impact:publish"], {
   stdio: "inherit",
 });
-const githubReleaseNotes = releaseNotes(rootManifest, options);
+// Assets first: the notes may only advertise portable downloads this release actually carries.
 const portableAssets = loadPortableAssets(rootManifest, options);
+const githubReleaseNotes = releaseNotes(rootManifest, options, portableAssets);
 
 if (options.planOnly) {
   printReleaseNotesPreview(githubReleaseNotes);
@@ -1697,13 +1791,19 @@ ensureTrackedTreeIsClean();
 const { cleanup, env: npmEnv, hasToken } = createNpmEnvironment(options.registry);
 try {
   runReleaseGates();
+  // A stable `latest` release is created BEFORE npm publishes, even with nothing to upload here,
+  // so its downloads can be verified while the dist-tag is still private (a release created after
+  // publish would let `latest` exist for a window with no downloads behind it).
+  const releaseNeededUpFront =
+    portableAssets.length > 0 || stableLatestRelease(rootManifest, options);
   const releaseInfo =
-    portableAssets.length > 0 && portableUploadEnabled(options)
+    releaseNeededUpFront && portableUploadEnabled(options)
       ? ensureGithubRelease(rootPackage, options, githubReleaseNotes)
       : undefined;
   if (releaseInfo !== undefined) {
     publishPortableReleaseAssets(options, portableAssets, releaseInfo);
   }
+  ensureStableLatestDownloads(rootManifest, options, releaseInfo);
   for (const pkg of workspacePackages) {
     publishPackage(pkg, npmEnv, options, hasToken);
   }

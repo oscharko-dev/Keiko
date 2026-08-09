@@ -1,9 +1,14 @@
+import { readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { runRuntimeSupervisorBuild } from "../build-runtime-supervisor.mjs";
+
+const rootPackageVersion = JSON.parse(
+  readFileSync(resolve(import.meta.dirname, "..", "..", "package.json"), "utf8"),
+).version;
 
 const temporaryRoots = [];
 
@@ -119,7 +124,11 @@ describe("runtime supervisor build", () => {
       ),
       "utf8",
     );
-    expect(plist).toContain("<string>0.3.0</string>");
+    // The version comes from the root manifest the builder substitutes into the template. A
+    // literal here would have to be edited by hand at every release bump, and a bump that
+    // forgot it would fail a green suite for a reason that has nothing to do with the
+    // substitution this test exists to prove (AGENTS.md: derive from the producer's input).
+    expect(plist).toContain(`<string>${rootPackageVersion}</string>`);
     expect(plist).not.toContain("__KEIKO_VERSION__");
   });
 

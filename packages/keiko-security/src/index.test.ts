@@ -45,7 +45,7 @@ import {
 } from "./index.js";
 
 describe("keiko-security package surface", () => {
-  it("exposes the version constant pinned at 0.1.0", () => {
+  it("exposes the version constant pinned at 0.3.1", () => {
     expect(KEIKO_SECURITY_VERSION).toBe("0.3.1");
   });
 

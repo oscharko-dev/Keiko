@@ -969,7 +969,7 @@
       "releaseNoteCategory": "fixes",
       "releaseNotePriority": "normal",
       "userVisibleChange": "behavioral",
-      "userVisibleSummary": "Keiko 0.3.1 is the first public download release. It carries the same product as 0.3.0 and republishes it under a usable tag: the 0.3.0 GitHub release was withdrawn during verification and GitHub keeps that tag immutable, so the downloadable packages ship as 0.3.1. Operators who already installed an earlier build must remove it before starting this one — an older Keiko.app holds the same local port and reports the same version, so the previous installation would keep answering.",
+      "userVisibleSummary": "Keiko 0.3.1 is the first public download release. It carries the same product as 0.3.0 and republishes it under a usable tag: the 0.3.0 GitHub release was withdrawn during verification and GitHub keeps that tag immutable, so the downloadable packages ship as 0.3.1. Nothing has to be uninstalled or migrated. An older build left running only occupies the local port, and the new one says so on startup and names both ways out (stop it, or start on another port).",
       "affectedStateStores": ["ui-store-schema"],
       "stateImpact": [
         {
@@ -980,9 +980,9 @@
         }
       ],
       "releaseNoteBullets": [
-        "First public download release: signed-free evaluation bundles for macOS (Apple Silicon and Intel) and Windows, with Node.js and the OpenCode sidecar included.",
+        "First public download release: unsigned evaluation bundles for macOS (Apple Silicon and Intel) and Windows, with Node.js and the OpenCode sidecar included. macOS needs one right-click - Open on first launch; Windows shows the SmartScreen notice.",
         "Load an existing keiko.config.json directly in the setup dialog instead of typing every field.",
-        "Remove older Keiko installations before starting: they hold the same local port and report the same version."
+        "Upgrading from 0.3.0 needs no migration. If an older Keiko is still running it holds the local port; stop it or start this one with --port."
       ],
       "review": {
         "status": "reviewed",

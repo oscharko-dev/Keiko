@@ -1532,6 +1532,50 @@ describe("update preflight service", () => {
     deps.store.close();
   });
 
+  it("keeps one-click readiness for an owner issue-comment approval the publish gate verifies", async () => {
+    // 0.3.1 is approved by an owner comment on the release epic, not a pull-request review: the
+    // 0.3.0 GitHub release was withdrawn during verification and its tag is immutable, so the
+    // republication carries the artifact form scripts/check-release-impact.mjs verifies live
+    // against the GitHub API. A runtime that accepted only `github-pr-review:` reported a release
+    // the publish gate had approved as missing reviewed metadata and withheld the governed update.
+    const catalog = {
+      ...baseCatalog(),
+      entries: baseCatalog().entries.map((entry) =>
+        entry.packageVersion === "0.2.11"
+          ? {
+              ...entry,
+              review: {
+                ...entry.review,
+                approvalReference: "github-issue-comment:oscharko-dev/Keiko#2802#5230996334",
+              },
+            }
+          : entry,
+      ),
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          tag_name: "v0.2.11",
+          name: "Keiko 0.2.11",
+          body: "- Public note",
+        }),
+      ) as typeof fetch;
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: catalog,
+    });
+
+    expect(report.impact).toBeDefined();
+    expect(report.blockers).not.toContainEqual(
+      expect.objectContaining({ code: "release-impact-missing" }),
+    );
+    deps.store.close();
+  });
+
   it("compares semver numerically instead of lexically", () => {
     expect(compareSemver("0.2.9", "0.2.10")).toBeLessThan(0);
     expect(compareSemver("0.2.10", "0.2.10")).toBe(0);
