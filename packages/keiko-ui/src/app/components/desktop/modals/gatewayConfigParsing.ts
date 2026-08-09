@@ -67,7 +67,7 @@ const UNSUPPORTED_GENERIC_PROVIDER_SETTINGS = [
  */
 function unknownGenericEndpointStyle(value: unknown): boolean {
   if (value === undefined) return false;
-  return !(typeof value === "string" && VOICE_ENDPOINT_STYLES.has(value.trim()));
+  return !(typeof value === "string" && ENDPOINT_STYLE_VALUES.has(value.trim()));
 }
 /**
  * Top-level blocks the setup form can represent. A file carrying `grounding`, `reranker`,
@@ -883,8 +883,10 @@ interface VoiceEndpointScalars {
 }
 
 // The endpoint-protocol wire values come from the contract seam — the same compiler-checked
-// source the server setup route and the model gateway validate against (#3037 follow-up).
-const VOICE_ENDPOINT_STYLES = new Set<string>(PROVIDER_ENDPOINT_STYLES);
+// source the server setup route and the model gateway validate against (#3037 follow-up). One
+// set for BOTH sections on purpose: a provider's endpoint protocol is not voice-specific, and a
+// voice-sounding name here made a reviewer read the generic check as a voice whitelist (#3046).
+const ENDPOINT_STYLE_VALUES = new Set<string>(PROVIDER_ENDPOINT_STYLES);
 const VOICE_REALTIME_AUTH_MODES = new Set<string>(REALTIME_AUTH_MODES);
 
 /**
@@ -899,7 +901,7 @@ const VOICE_REALTIME_AUTH_MODES = new Set<string>(REALTIME_AUTH_MODES);
 const AZURE_API_VERSION_RE = /^\d{4}-\d{2}-\d{2}(?:-preview)?$/u;
 
 function representableVoiceEndpoint(endpoint: VoiceEndpointScalars): boolean {
-  if (endpoint.endpointStyle !== undefined && !VOICE_ENDPOINT_STYLES.has(endpoint.endpointStyle)) {
+  if (endpoint.endpointStyle !== undefined && !ENDPOINT_STYLE_VALUES.has(endpoint.endpointStyle)) {
     return false;
   }
   if (

@@ -1862,11 +1862,14 @@ const VOICE_CONNECTION_MUTATION_FIELDS = [
 ] as const;
 
 // The endpoint-protocol wire values come from the contract seam — one compiler-checked source
-// shared with the model gateway's parser and the UI upload parser (#3037 follow-up).
-const VOICE_ENDPOINT_STYLES = PROVIDER_ENDPOINT_STYLES;
+// shared with the model gateway's parser and the UI upload parser (#3037 follow-up). One list
+// for BOTH sections on purpose: an endpoint protocol is a property of the connection, not of
+// voice. The former voice-prefixed name made a reviewer read the generic check added in #3046
+// as a voice-only whitelist, so the shared names carry no section here.
+const ENDPOINT_STYLE_VALUES = PROVIDER_ENDPOINT_STYLES;
 const VOICE_REALTIME_AUTH_MODES = REALTIME_AUTH_MODES;
 
-function parseVoiceEndpointEnum<T extends string>(
+function parseEndpointEnum<T extends string>(
   value: unknown,
   field: string,
   allowed: readonly T[],
@@ -1895,13 +1898,13 @@ function parseVoiceEndpointEnum<T extends string>(
 function submittedVoiceEndpointOptions(
   raw: Record<string, unknown>,
 ): SetupParseResult<VoiceProviderEndpointOptions | undefined> {
-  const endpointStyle = parseVoiceEndpointEnum(
+  const endpointStyle = parseEndpointEnum(
     raw.voiceEndpointStyle,
     "voiceEndpointStyle",
-    VOICE_ENDPOINT_STYLES,
+    ENDPOINT_STYLE_VALUES,
   );
   if (!endpointStyle.ok) return endpointStyle;
-  const realtimeAuthMode = parseVoiceEndpointEnum(
+  const realtimeAuthMode = parseEndpointEnum(
     raw.voiceRealtimeAuthMode,
     "voiceRealtimeAuthMode",
     VOICE_REALTIME_AUTH_MODES,
@@ -2142,10 +2145,10 @@ function setupEndpointProtocol(
   baseUrl: string,
   preserveExisting: boolean,
 ): Pick<SetupGatewayCredentials, "endpointStyle" | "apiVersion"> | RouteResult {
-  const endpointStyle = parseVoiceEndpointEnum(
+  const endpointStyle = parseEndpointEnum(
     raw.endpointStyle,
     "endpointStyle",
-    VOICE_ENDPOINT_STYLES,
+    ENDPOINT_STYLE_VALUES,
   );
   if (!endpointStyle.ok) return endpointStyle.routeError;
   const apiVersion = optionalSetupSecret(raw.apiVersion, "apiVersion");
