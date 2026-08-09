@@ -1708,6 +1708,62 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("requires the realtime auth mode to be restated when the audio endpoint moves", async () => {
+    // Review finding on #3048: the migration restated the endpoint STYLE but not the realtime
+    // auth mode, which is separate stored protocol — a provider can declare ephemeral-session
+    // with no style at all. Losing it sent Digital Voice down the plain API-key path instead of
+    // ephemeral-token negotiation: a save that succeeds and breaks every realtime session.
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-realtime-restate-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-voice-realtime-restate-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "realtime-voice",
+            baseUrl: "https://voice.example.com",
+            apiKey: "voice-token",
+            realtimeAuthMode: "ephemeral-session",
+            capability: {
+              kind: "voice",
+              supportsRealtimeVoice: true,
+              realtimeTranscriptionModel: "realtime-transcription",
+              voiceProviderLocality: "azure-foundry",
+            },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const moved = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://new-voice.example.com",
+        voiceApiKey: "moved-voice-token",
+        voiceProviderLocality: "azure-foundry",
+        voiceRealtimeModelId: "realtime-voice",
+        voiceRealtimeTranscriptionModelId: "realtime-transcription",
+      }),
+      deps,
+    );
+
+    expect(moved.status).toBe(400);
+    expect(JSON.stringify(moved.body)).toContain(
+      "Replacing an audio endpoint requires an explicit realtime auth mode for the new host.",
+    );
+    deps.store.close();
+  });
+
   it("keeps the inherited version when the Azure style is merely restated", async () => {
     // The mirror of the atomic rule (review finding on #3048): only a switch AWAY from the
     // deployment path discards the inherited version. Restating the same style needs it, and
