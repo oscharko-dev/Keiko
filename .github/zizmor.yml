@@ -90,8 +90,8 @@ rules:
       # step itself - dumping the full `set` output pollutes GITHUB_ENV with multi-line
       # values). Rewriting to pwsh/bash risks breaking the Windows production-signing
       # build and cannot be verified on this platform.
-      - portable-assets.yml:131
-      - portable-assets.yml:201
+      - portable-assets.yml:133
+      - portable-assets.yml:203
   adhoc-packages:
     ignore:
       # Publishing deliberately uses the separately reviewed npm version required by ADR-0130;
