@@ -1653,6 +1653,61 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("replaces the whole audio protocol when a new style is stated on the same endpoint", async () => {
+    // Review finding on #3048: the endpoint options were a spread merge, so a stored Azure api
+    // version survived a switch to openai-compatible on the SAME URL. The canonical parser
+    // refuses that pair, so a correction the dialog showed as accepted came back a 400. A stated
+    // style replaces the protocol, exactly as it does on the generic side.
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-atomic-protocol-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-voice-atomic-protocol-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "azure-stt",
+            baseUrl: "https://speech.cognitiveservices.example.com",
+            apiKey: "azure-audio-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+            capability: {
+              kind: "voice",
+              supportsSpeechInput: true,
+              voiceProviderLocality: "azure-foundry",
+            },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const result = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://speech.cognitiveservices.example.com",
+        voiceApiKey: "rotated-audio-token",
+        voiceSpeechToTextModelId: "azure-stt",
+        voiceEndpointStyle: "openai-compatible",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const stt = requiredProvider(requiredGatewayConfig(deps), "azure-stt");
+    expect(stt.endpointStyle).toBe("openai-compatible");
+    expect(stt.apiVersion).toBeUndefined();
+    deps.store.close();
+  });
+
   it("keeps the inherited endpoint protocol off a new role added at a moved base URL", async () => {
     // LiteLLM production audit: a preserve-mode update that moves voice to a NEW base URL while
     // adding a role the old config never had inherited the OLD provider's Azure

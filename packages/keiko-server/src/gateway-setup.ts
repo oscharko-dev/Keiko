@@ -2747,7 +2747,24 @@ function voiceConnectionEndpointOptions(
     template !== undefined && !sameBaseUrlIdentity(baseUrl, template.baseUrl)
       ? {}
       : voiceProviderTemplateEndpoint(template, defaults);
-  return { ...inherited, ...submitted };
+  // The submitted STYLE replaces the whole protocol, exactly as it does on the generic side: a
+  // spread merge let a stored Azure api version survive a switch to openai-compatible, and the
+  // canonical parser refuses that pair — so a protocol correction the UI showed as accepted came
+  // back a 400 the operator had to decode (review finding on #3048).
+  const base =
+    submitted?.endpointStyle === undefined ? inherited : withoutInheritedApiVersion(inherited);
+  return { ...base, ...submitted };
+}
+
+function withoutInheritedApiVersion(
+  options: VoiceProviderEndpointOptions,
+): VoiceProviderEndpointOptions {
+  return {
+    ...(options.endpointStyle === undefined ? {} : { endpointStyle: options.endpointStyle }),
+    ...(options.realtimeAuthMode === undefined
+      ? {}
+      : { realtimeAuthMode: options.realtimeAuthMode }),
+  };
 }
 
 function submittedOrTemplateString(
