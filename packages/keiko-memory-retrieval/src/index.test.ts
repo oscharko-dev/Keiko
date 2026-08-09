@@ -4,7 +4,7 @@ import * as api from "./index.js";
 
 describe("public API surface", () => {
   it("exports the pinned package version literal", () => {
-    expect(api.KEIKO_MEMORY_RETRIEVAL_VERSION).toBe("0.3.0");
+    expect(api.KEIKO_MEMORY_RETRIEVAL_VERSION).toBe("0.3.1");
   });
 
   it("exports the documented default constants with the documented values", () => {

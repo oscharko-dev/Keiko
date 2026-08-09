@@ -514,7 +514,7 @@ describe("packaged evaluation lane", () => {
 
     const drifted = portableInstall("evaluation");
     mutateActivation(drifted, (activation) => {
-      activation.product = { packageName: "@oscharko-dev/keiko", packageVersion: "0.3.0" };
+      activation.product = { packageName: "@oscharko-dev/keiko", packageVersion: "0.3.1" };
     });
     expect(discoverEvaluation(drifted)?.qualification.releaseReceipt).not.toBe(first);
   });

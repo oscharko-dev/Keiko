@@ -1535,7 +1535,7 @@ describe("update preflight service", () => {
   it("compares semver numerically instead of lexically", () => {
     expect(compareSemver("0.2.9", "0.2.10")).toBeLessThan(0);
     expect(compareSemver("0.2.10", "0.2.10")).toBe(0);
-    expect(compareSemver("0.3.0", "0.2.99")).toBeGreaterThan(0);
+    expect(compareSemver("0.3.1", "0.2.99")).toBeGreaterThan(0);
   });
 
   it("rejects malformed semver comparisons instead of lexically sorting them", () => {

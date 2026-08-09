@@ -990,10 +990,17 @@
         "reviewedAt": "2026-08-09",
         "humanApproved": true,
         "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5230996334",
-        "rationale": "Republication of the 0.3.0 product under a usable release tag, directed by the release owner. The 0.3.0 GitHub release was withdrawn during verification and GitHub keeps that tag immutable, so the downloadable packages ship as 0.3.1. The approval evidence is the release owner's authored comment on epic #2802 (comment 5230996334) carrying the version-bound phrase on a line of its own; the publish gate verifies the comment, its issue binding, the phrase and the allow-listed author through the GitHub API."
+        "rationale": "Republication of the 0.3.0 product under a usable release tag, directed by the release owner after the 0.3.0 GitHub release was withdrawn during verification and its tag became immutable. This single record also carries the portable runtime staging contract, unchanged from 0.3.0 (program epic and the same three targets, staging only): 0.3.1 is one release event with one owner approval, so splitting it across two records would need a second approval artifact for the same decision. The evidence is the release owner's authored comment on epic #2802 (comment 5230996334) carrying the version-bound publish phrase on a line of its own, verified live by the publish gate."
       },
       "userActionRequired": false,
-      "remediation": "no-action-required"
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      }
     }
   ]
 }
