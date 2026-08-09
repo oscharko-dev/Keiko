@@ -191,7 +191,7 @@ function blockersFromEntries(
   entries: readonly ReleaseImpactEntry[],
 ): readonly UpdatePreflightBlocker[] {
   return uniqueBlockers(
-    entries.filter(describesOperatorUpdate).flatMap((entry) => {
+    entries.flatMap((entry) => {
       const blockers: UpdatePreflightBlocker[] = [];
       if (!entry.oneClickEligible) {
         blockers.push(
@@ -321,25 +321,25 @@ export function impactFromCatalog(
   if (catalog === undefined) {
     return missingImpactResolution();
   }
-  const matching = matchingImpactEntries(catalog, currentVersion, targetVersion);
-  // The target needs metadata that describes the OPERATOR's update, not merely any reviewed
-  // record. Skipping internal records in the blocker aggregation below would otherwise let a
-  // target whose only reviewed record is internal machinery look fully approved: its
-  // ineligibility gets filtered out and no customer-facing record ever spoke for the target
-  // (Codex finding on #3054). Such a target is missing its metadata, which is what it reports.
-  const targetReviewed = matching.some(
-    (entry) => entry.packageVersion === targetVersion && describesOperatorUpdate(entry),
+  // The whole resolution speaks about the OPERATOR's update, so internal machinery records are
+  // filtered out ONCE, here, before any aggregation. A localized filter in the blocker path
+  // alone would still let an internal staging record shape the summary, the severity, and the
+  // supported-from floor of the operator report (Codex findings on #3054). A target whose only
+  // reviewed record is internal is missing its metadata, which is what it reports.
+  const operatorEntries = matchingImpactEntries(catalog, currentVersion, targetVersion).filter(
+    describesOperatorUpdate,
   );
-  if (matching.length === 0 || !targetReviewed) {
+  const targetReviewed = operatorEntries.some((entry) => entry.packageVersion === targetVersion);
+  if (!targetReviewed) {
     return missingImpactResolution(targetReviewed);
   }
-  const supportBlocker = supportedFromBlocker(matching, currentVersion);
+  const supportBlocker = supportedFromBlocker(operatorEntries, currentVersion);
   return {
-    impact: buildImpactSummary(matching),
+    impact: buildImpactSummary(operatorEntries),
     targetReviewed,
-    severity: severityFromEntries(matching),
+    severity: severityFromEntries(operatorEntries),
     blockers: uniqueBlockers([
-      ...blockersFromEntries(matching),
+      ...blockersFromEntries(operatorEntries),
       ...(supportBlocker !== undefined ? [supportBlocker] : []),
     ]),
   };

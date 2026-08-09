@@ -202,7 +202,20 @@ const portableGate = portableReleaseGate({
   fetchAssetToFile: (url, destination) =>
     commandResult(
       "curl",
-      ["--fail", "--silent", "--show-error", "--location", "--output", destination, url],
+      [
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--location",
+        // Bounded so a stalled endpoint cannot hang the publish run indefinitely.
+        "--connect-timeout",
+        "10",
+        "--max-time",
+        "120",
+        "--output",
+        destination,
+        url,
+      ],
       { env: networkEnvironment() },
     ),
   gh,
@@ -217,18 +230,15 @@ const portableGate = portableReleaseGate({
   verifyBytes: runPortableDownloadSmoke,
 });
 
-/**
- * SHA-256 of every publishable file inside the referenced run's evaluation staging artifacts.
- * Workflow-run artifacts cannot be rewritten after the run, which is exactly why the digests are
- * taken from there rather than from the manifest sitting next to the assets being verified.
- */
-
 function verifyPrepublishedStableRelease(rootManifest, options) {
   if (!stableLatestRelease(rootManifest, options) || options.dryRun) return false;
+  const head = commandResult("git", ["rev-parse", "HEAD"]);
+  if (head.status !== 0) fail("could not resolve the commit being released.");
   return portableGate.verifyPrepublished(
     releaseTag(rootManifest.version),
     githubRepository(),
     portableAssetsWorkflowPath,
+    head.stdout.trim(),
   );
 }
 

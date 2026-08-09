@@ -58,16 +58,19 @@ ids, uploads the evidence assets, and verifies unauthenticated full-download byt
 SHA-256.
 
 Publishing that evaluation release is a prerequisite, not an implicit step. Run it from a clean
-checkout AT the built commit:
+checkout AT the built commit, and dispatch the evaluation build from the ACTIVE release source
+branch — `RELEASE_BASE_BRANCH` from `release.yml` when that branch exists, otherwise the
+repository default branch (`dev` today, which is why the example says `dev`):
 
 ```sh
 node scripts/release-portable-prerelease.mjs --ref dev --public-release
 ```
 
-It refuses before minting anything unless the checkout is the built commit and clean, the commit is
-contained in the release source branch (`RELEASE_BASE_BRANCH` from `release.yml` when that branch
-exists, otherwise the default branch), every required check has passed on that exact commit, and
-the release owner's approval verifies live. It then publishes the four downloads plus
+Once release-only fixes land on a live `RELEASE_BASE_BRANCH`, pass that branch as `--ref`
+instead; a `dev` build would then either fail the containment check below or build the wrong
+commit. It refuses before minting anything unless the checkout is the built commit and clean, the
+commit is contained in that same resolved release source branch, every required check has passed
+on that exact commit, and the release owner's approval verifies live. It then publishes the four downloads plus
 `keiko-portable-evaluation-manifest.json` at `v<version>` as the Latest release, with both the
 first-launch instructions and the governed catalog notes in its body.
 

@@ -121,6 +121,16 @@ function bindingFailures(manifest, expected) {
       "release.sourceCommitSha must be an exact commit SHA.",
     ],
     [
+      // Self-declared is not bound: without comparing against the commit the publisher is
+      // actually releasing, a manually assembled release could ship portable bytes from one
+      // revision and npm packages from another, and the run check would happily agree with the
+      // manifest's own claim (Codex finding on #3054). When the caller knows its commit — the
+      // publisher always does — the two must be the same revision.
+      expected.sourceCommitSha === undefined ||
+        manifest.release?.sourceCommitSha === expected.sourceCommitSha,
+      `release.sourceCommitSha must be the commit being released (${String(expected.sourceCommitSha)}).`,
+    ],
+    [
       manifest.provenance?.repository === expected.repository,
       `provenance.repository must be ${expected.repository}.`,
     ],

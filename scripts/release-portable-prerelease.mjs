@@ -285,19 +285,21 @@ export function assertTagKeepsBetaSequenceMonotonic(tag, existingTags) {
 /**
  * The GREATEST existing beta below the tag being published — not merely index minus one: a
  * --tag override may skip numbers (beta.9 after beta.1), and the still-live latest beta must
- * carry the superseded pointer regardless of the gap (review finding on #3037).
+ * carry the superseded pointer regardless of the gap (review finding on #3037). The stable
+ * public tag supersedes every evaluation beta of its version, so for `v<version>` the answer
+ * is the greatest existing `v<version>-beta.<n>` — otherwise the last beta would keep
+ * presenting itself with no pointer to the stable Latest release (Codex finding on #3054).
  */
 export function previousBetaTag(tag, existingTags) {
   const match = new RegExp(String.raw`^(?<prefix>v.+-beta\.)(?<index>${BETA_INDEX})$`, "u").exec(
     tag,
   );
-  if (match?.groups === undefined) return undefined;
-  const { prefix } = match.groups;
-  const current = Number.parseInt(match.groups.index, 10);
+  const prefix = match?.groups === undefined ? `${tag}-beta.` : match.groups.prefix;
+  const bound = match?.groups === undefined ? Infinity : Number.parseInt(match.groups.index, 10);
   const lower = existingTags
     .filter((candidate) => candidate.startsWith(prefix))
     .map((candidate) => Number.parseInt(candidate.slice(prefix.length), 10))
-    .filter((index) => Number.isInteger(index) && index >= 0 && index < current);
+    .filter((index) => Number.isInteger(index) && index >= 0 && index < bound);
   if (lower.length === 0) return undefined;
   return `${prefix}${String(Math.max(...lower))}`;
 }
@@ -884,13 +886,25 @@ function publicReleaseSourceBranch(repository) {
   return ghJson(["api", `repos/${repository}`]).default_branch;
 }
 
+/**
+ * Absent is not the same as unknown. Treating every nonzero `gh` result as "the branch does not
+ * exist" would let an auth, rate-limit or network failure silently move release authority to the
+ * default branch while the configured release branch was alive (Codex finding on #3054). Only a
+ * definitive 404 answers "absent"; anything else refuses.
+ */
 function branchExists(repository, branch) {
   const result = processRunner(
     resolveHostExecutable("gh"),
     ["api", `repos/${repository}/branches/${branch}`],
     { cwd: repoRoot, encoding: "utf8" },
   );
-  return result.status === 0;
+  if (result.error !== undefined) fail(`gh could not spawn: ${result.error.message}`);
+  if (result.status === 0) return true;
+  if (String(result.stderr ?? "").includes("Not Found")) return false;
+  fail(
+    `the release branch lookup for ${branch} did not resolve (${String(result.stderr ?? "").trim()}) — refusing to guess which branch is the release source.`,
+  );
+  return false;
 }
 
 /**
@@ -940,6 +954,42 @@ function assertPublisherCheckoutMatches(commitSha) {
   }
 }
 
+/** The `{"value":"..."}` payload of a repository-variable read, or undefined when unusable. */
+function parsedVariableValue(stdout) {
+  try {
+    const { value } = JSON.parse(String(stdout ?? ""));
+    return typeof value === "string" && value.trim() !== "" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The allowlist naming who may approve a release. `.github/workflows/release.yml` injects it into
+ * the npm publisher's environment, but a local operator shell running the documented
+ * `--public-release` command does not carry it — and the approval verifier refuses EVERY approval
+ * over an empty allowlist, so the documented prerequisite would deterministically abort (Codex
+ * finding on #3054). When the environment does not provide it, resolve the same repository
+ * variable the workflow reads; an allowlist that does not resolve refuses rather than guessing.
+ */
+function releaseOwnerAllowlist(repository) {
+  const configured = process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;
+  if (typeof configured === "string" && configured.trim() !== "") return configured;
+  const result = processRunner(
+    resolveHostExecutable("gh"),
+    ["api", `repos/${repository}/actions/variables/KEIKO_RELEASE_OWNER_GITHUB_LOGINS`],
+    { cwd: repoRoot, encoding: "utf8" },
+  );
+  if (result.error !== undefined) fail(`gh could not spawn: ${result.error.message}`);
+  const value = result.status === 0 ? parsedVariableValue(result.stdout) : undefined;
+  if (value === undefined) {
+    fail(
+      "the release-owner allowlist did not resolve: set KEIKO_RELEASE_OWNER_GITHUB_LOGINS or grant this checkout a gh login that can read the repository variable — an empty allowlist would refuse every approval.",
+    );
+  }
+  return value;
+}
+
 /**
  * The live release-owner approval, run HERE rather than only in the npm publisher: this producer
  * exposes the customer downloads first, so a stale or fabricated catalog approval would otherwise
@@ -952,7 +1002,11 @@ function assertReleaseOwnerApproved(repository) {
     {
       cwd: repoRoot,
       encoding: "utf8",
-      env: { ...process.env, GITHUB_REPOSITORY: repository },
+      env: {
+        ...process.env,
+        GITHUB_REPOSITORY: repository,
+        KEIKO_RELEASE_OWNER_GITHUB_LOGINS: releaseOwnerAllowlist(repository),
+      },
     },
   );
   if (result.error !== undefined) {

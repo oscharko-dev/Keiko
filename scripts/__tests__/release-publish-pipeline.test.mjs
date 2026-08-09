@@ -547,7 +547,9 @@ function ghStubBody() {
     "    process.exit(0);",
     "  }",
     '  if (argv[1] && argv[1].includes("/releases/tags/")) {',
-    "    writeFileSync(1, JSON.stringify({ id: 987654321, assets: state().uploadedAssets || [] }));",
+    // The release-by-tag endpoint always reports both flags; the prepublished gate requires the
+    // published stable shape, so the double states it the way the real API does.
+    "    writeFileSync(1, JSON.stringify({ id: 987654321, draft: state().releaseDraft === true, prerelease: state().releasePrerelease === true, assets: state().uploadedAssets || [] }));",
     "    process.exit(0);",
     "  }",
     '  process.stdout.write(JSON.stringify({ state: "APPROVED", user: { login: "release-owner" } }));',
@@ -556,7 +558,11 @@ function ghStubBody() {
     'if (sub === "run" && argv[1] === "download") {',
     '  const dirIndex = argv.indexOf("--dir");',
     '  const nameIndex = argv.indexOf("--name");',
-    "  const dir = dirIndex >= 0 ? argv[dirIndex + 1] : '';",
+    // The production caller always passes --dir. If it ever stops, the double must refuse loudly
+    // rather than default anywhere: an empty dir would concatenate to filesystem-root paths, and
+    // a silent fallback would keep the suite green over the regression (KfQ findings on #3054).
+    "  if (dirIndex < 0 || !argv[dirIndex + 1]) { process.stderr.write('gh double: run download requires --dir\\n'); process.exit(1); }",
+    "  const dir = argv[dirIndex + 1];",
     "  const artifact = nameIndex >= 0 ? argv[nameIndex + 1] : '';",
     "  const current = state();",
     "  if (current.runArtifactsUnavailable) process.exit(1);",
@@ -1168,6 +1174,21 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
 
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain(PORTABLE_EVALUATION_MANIFEST_ASSET_NAME);
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses a prepublished release that is still marked as a prerelease", () => {
+      // The release-by-tag endpoint resolves prereleases with every asset in place, so without
+      // this refusal a manually assembled prerelease-flagged release could promote npm latest
+      // while GitHub never presents it as the stable Latest release (Codex finding on #3054).
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { ...prepublishedEvaluationState(), releasePrerelease: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("only the published stable release");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 

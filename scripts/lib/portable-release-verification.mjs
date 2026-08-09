@@ -208,6 +208,18 @@ export function prepublishedReleaseFailures(input) {
       expectedDownloads: [],
     };
   }
+  // Only a published stable release may authorize `latest`. A draft or prerelease-flagged payload
+  // still resolves from the release-by-tag endpoint with every asset in place, so without this
+  // check a manually assembled prerelease could promote npm `latest` while GitHub's own surface
+  // never presents it as the stable Latest release (Codex finding on #3054).
+  if (release.draft !== false || release.prerelease !== false) {
+    return {
+      failures: [
+        `GitHub release ${tag} is a draft or marked as a prerelease; only the published stable release may authorize the latest dist-tag.`,
+      ],
+      expectedDownloads: [],
+    };
+  }
   const missing = missingPortableDownloads(release.assets, expectedNames);
   if (missing.length > 0) {
     return {
@@ -230,6 +242,7 @@ export function prepublishedReleaseFailures(input) {
     repository,
     workflowPath,
     assetNames: expectedNames,
+    sourceCommitSha: input.sourceCommitSha,
   });
   if (manifestFailures.length > 0) return { failures: manifestFailures, expectedDownloads: [] };
   const provenanceFailures = runFailures(manifest, readRun, workflowPath);
@@ -238,6 +251,16 @@ export function prepublishedReleaseFailures(input) {
     ...declaredDownloads(manifest, release.assets, expectedNames),
     workflowRunId: manifest.provenance.workflowRunId,
   };
+}
+
+/**
+ * Reports failures and stops. `ports.fail` throws in production; a port that merely records must
+ * not let the caller carry on with values the failures just invalidated, so this throws too.
+ */
+function refuse(ports, summary, failures) {
+  if (failures.length === 0) return;
+  ports.fail(`${summary}:\n  - ${failures.join("\n  - ")}`);
+  throw new Error(`${summary}: ${failures.join("; ")}`);
 }
 
 /**
@@ -274,34 +297,30 @@ export function portableReleaseGate(ports) {
      * The governed evaluation lane already published these downloads. Read-only until it has
      * proven them, so a run that cannot leaves the repository exactly as it found it.
      */
-    verifyPrepublished(tag, repository, workflowPath) {
+    verifyPrepublished(tag, repository, workflowPath, sourceCommitSha) {
       const release = readers.readRelease(repository, tag);
       const { failures, expectedDownloads, workflowRunId } = prepublishedReleaseFailures({
         tag,
         repository,
         workflowPath,
         expectedNames,
+        sourceCommitSha,
         release,
         readManifest: readers.readManifest,
         readRun: readers.readRun,
       });
-      if (failures.length > 0) {
-        ports.fail(
-          `prepublished portable downloads are not usable:\n  - ${failures.join("\n  - ")}`,
-        );
-      }
+      refuse(ports, "prepublished portable downloads are not usable", failures);
       // The evidence declares digests; the RUN proves them. Checked before the bytes are fetched,
       // so a forged manifest cannot even direct the download.
-      const producedFailures = runArtifactDigestFailures(
-        expectedDownloads,
-        (names) => ports.collectRunArtifactDigests(workflowRunId, names),
-        evaluationArtifactNames(ports.targets),
+      refuse(
+        ports,
+        "prepublished portable downloads are not the bytes their workflow run produced",
+        runArtifactDigestFailures(
+          expectedDownloads,
+          (names) => ports.collectRunArtifactDigests(workflowRunId, names),
+          evaluationArtifactNames(ports.targets),
+        ),
       );
-      if (producedFailures.length > 0) {
-        ports.fail(
-          `prepublished portable downloads are not the bytes their workflow run produced:\n  - ${producedFailures.join("\n  - ")}`,
-        );
-      }
       ports.verifyBytes(release.assets, expectedDownloads);
       ports.log(`release-publish: prepublished downloads on ${tag} match their evidence.`);
       return true;
@@ -344,13 +363,20 @@ function runArtifactDigestFailures(expectedDownloads, collect, artifactNames) {
   });
 }
 
-/** Every file in a downloaded artifact, whether gh placed it at the root or one level deeper. */
-function artifactFiles(root, depth = 1) {
+/**
+ * Every file in a downloaded artifact, whether gh placed it at the root or one level deeper.
+ * Nested files keep their directory in the key: two artifacts can legitimately contain a file of
+ * the same name, and a name-only key would let the later one silently overwrite the earlier one's
+ * digest, so the map could answer with the wrong artifact's bytes (KfQ finding on #3054).
+ */
+function artifactFiles(root, prefix = "", depth = 1) {
   const found = [];
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     const path = join(root, entry.name);
-    if (entry.isFile()) found.push([entry.name, path]);
-    else if (entry.isDirectory() && depth > 0) found.push(...artifactFiles(path, depth - 1));
+    if (entry.isFile()) found.push([`${prefix}${entry.name}`, path]);
+    else if (entry.isDirectory() && depth > 0) {
+      found.push(...artifactFiles(path, `${prefix}${entry.name}/`, depth - 1));
+    }
   }
   return found;
 }
@@ -372,7 +398,15 @@ export function collectEvaluationArtifactDigests({ gh, hashFile }, runId, artifa
       mkdirSync(target, { recursive: true });
       const args = ["run", "download", String(runId), "--name", artifactName, "--dir", target];
       if (gh(args)?.status !== 0) return new Map();
-      for (const [name, path] of artifactFiles(target)) digests.set(name, hashFile(path));
+      for (const [key, path] of artifactFiles(target)) {
+        // The published downloads are matched by bare file name, so that is the key. A repeated
+        // name inside one run is ambiguous evidence, not something to resolve by last-write-wins.
+        const name = key.slice(key.lastIndexOf("/") + 1);
+        const digest = hashFile(path);
+        const previous = digests.get(name);
+        if (previous !== undefined && previous !== digest) return new Map();
+        digests.set(name, digest);
+      }
     }
     return digests;
   } finally {

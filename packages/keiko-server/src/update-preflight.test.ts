@@ -1596,6 +1596,12 @@ describe("update preflight service", () => {
           observableImpact: false,
           oneClickEligible: false,
           releaseNoteBullets: [],
+          // Attributes that would each leak into a different aggregation if the internal record
+          // reached it: the severity ceiling, the operator-facing entry list, and the
+          // supported-from floor (Codex finding on #3054 — one operator entry set, everywhere).
+          releaseNotePriority: "critical",
+          userActionRequired: true,
+          supportedFrom: ["0.2.11"],
         },
       ],
     };
@@ -1615,6 +1621,13 @@ describe("update preflight service", () => {
     expect(report.blockers).not.toContainEqual(
       expect.objectContaining({ code: "one-click-ineligible" }),
     );
+    // The internal record must be absent from the WHOLE operator resolution, not merely from
+    // blocker generation: no duplicated target entry in the report, no severity escalation, no
+    // support floor. Only the one customer-facing 0.2.11 record may speak for the target.
+    expect(
+      report.impact?.entries.filter((entry) => entry.packageVersion === "0.2.11"),
+    ).toHaveLength(1);
+    expect(report.severity).not.toBe("critical");
     deps.store.close();
   });
 

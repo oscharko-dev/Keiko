@@ -117,7 +117,13 @@ describe("beta tag arithmetic", () => {
     );
     expect(previousBetaTag("v0.3.0-beta.0", ["v0.2.15"])).toBeUndefined();
     expect(previousBetaTag("v0.3.0-beta.2", [])).toBeUndefined();
-    expect(previousBetaTag("v0.3.0", ["v0.3.0-beta.1"])).toBeUndefined();
+    // The stable public tag supersedes its greatest evaluation beta; without it the last beta
+    // stays live with no pointer to the stable Latest release (Codex finding on #3054).
+    expect(previousBetaTag("v0.3.0", ["v0.3.0-beta.1"])).toBe("v0.3.0-beta.1");
+    expect(previousBetaTag("v0.3.0", ["v0.3.0-beta.1", "v0.3.0-beta.4", "v0.2.15"])).toBe(
+      "v0.3.0-beta.4",
+    );
+    expect(previousBetaTag("v0.3.0", ["v0.2.15"])).toBeUndefined();
     // A higher existing beta is never "previous" for a lower tag.
     expect(previousBetaTag("v0.3.0-beta.2", ["v0.3.0-beta.4"])).toBeUndefined();
   });
@@ -220,9 +226,19 @@ describe("hermetic end-to-end (scripted gh double)", () => {
       return { status: 0, stdout: overrides.dirty ?? "", stderr: "" };
     }
     // The release base branch declared by release.yml does not exist in this repository, so the
-    // source branch resolves to the default branch — exactly what it does live.
+    // source branch resolves to the default branch — exactly what it does live. An ABSENT branch
+    // is a 404; the resolver refuses any other failure rather than guessing, so the double states
+    // which of the two it is answering.
     if (line.includes("/branches/")) {
-      return { status: overrides.releaseBranchExists === true ? 0 : 1, stdout: "", stderr: "" };
+      if (overrides.releaseBranchExists === true) return { status: 0, stdout: "{}", stderr: "" };
+      return { status: 1, stdout: "", stderr: overrides.branchLookupError ?? "gh: Not Found" };
+    }
+    // The release-owner allowlist comes from the repository variable the release workflow injects.
+    if (line.includes("/actions/variables/KEIKO_RELEASE_OWNER_GITHUB_LOGINS")) {
+      if (overrides.allowlistUnavailable === true) {
+        return { status: 1, stdout: "", stderr: "gh: HTTP 403" };
+      }
+      return { status: 0, stdout: '{"value":"release-owner"}', stderr: "" };
     }
     return verifierAnswer(line, overrides);
   }
@@ -442,6 +458,17 @@ describe("hermetic end-to-end (scripted gh double)", () => {
       expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
     });
 
+    it("refuses when the release-branch lookup does not resolve either way", () => {
+      // Absent is not the same as unknown. Treating an auth, rate-limit or network failure as
+      // "the release branch does not exist" would silently move release authority to the default
+      // branch while the configured one was alive.
+      const recorded = [];
+      expect(() =>
+        publicRun(recorded, { branchLookupError: "gh: API rate limit exceeded" }),
+      ).toThrow(/did not resolve/u);
+      expect(recorded.some((line) => line.includes("git/refs"))).toBe(false);
+    });
+
     it("publishes at the exact stable tag as the latest release once the source is approved", () => {
       const recorded = [];
       publicRun(recorded, {
@@ -454,6 +481,75 @@ describe("hermetic end-to-end (scripted gh double)", () => {
       expect(createLine).not.toContain("--prerelease");
       // The evidence the npm publisher re-verifies before it promotes the dist-tag.
       expect(createLine).toContain("keiko-portable-evaluation-manifest.json");
+    });
+
+    it("supersedes the greatest governed beta when the stable release goes public", () => {
+      // Without this the last evaluation beta keeps presenting itself with no pointer to the
+      // stable Latest release (Codex finding on #3054).
+      const recorded = [];
+      publicRun(recorded, {
+        answers: [["compare/dev...", JSON.stringify({ status: "behind" })]],
+      });
+
+      expect(recorded.some((line) => line.startsWith(`gh release edit ${previousTag}`))).toBe(true);
+    });
+
+    it("resolves the release-owner allowlist from the repository variable for a local run", () => {
+      // The workflow injects KEIKO_RELEASE_OWNER_GITHUB_LOGINS; a local operator shell does not.
+      // The producer resolves the same variable itself instead of letting the approval verifier
+      // refuse every approval over an empty allowlist (Codex finding on #3054).
+      const recorded = [];
+      const saved = process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;
+      delete process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;
+      try {
+        publicRun(recorded, {
+          answers: [["compare/dev...", JSON.stringify({ status: "behind" })]],
+        });
+        expect(
+          recorded.some((line) =>
+            line.includes("/actions/variables/KEIKO_RELEASE_OWNER_GITHUB_LOGINS"),
+          ),
+        ).toBe(true);
+      } finally {
+        if (saved !== undefined) process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS = saved;
+      }
+    });
+
+    it("refuses when the release-owner allowlist does not resolve", () => {
+      const recorded = [];
+      const saved = process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;
+      delete process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;
+      try {
+        expect(() =>
+          publicRun(recorded, {
+            answers: [["compare/dev...", JSON.stringify({ status: "behind" })]],
+            allowlistUnavailable: true,
+          }),
+        ).toThrow(/allowlist did not resolve/u);
+        expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+        expect(recorded.some((line) => line.includes("git/refs"))).toBe(false);
+      } finally {
+        if (saved !== undefined) process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS = saved;
+      }
+    });
+
+    it("keeps an allowlist the environment already provides", () => {
+      const recorded = [];
+      const saved = process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;
+      process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS = "release-owner";
+      try {
+        publicRun(recorded, {
+          answers: [["compare/dev...", JSON.stringify({ status: "behind" })]],
+        });
+        expect(
+          recorded.some((line) =>
+            line.includes("/actions/variables/KEIKO_RELEASE_OWNER_GITHUB_LOGINS"),
+          ),
+        ).toBe(false);
+      } finally {
+        if (saved === undefined) delete process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;
+        else process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS = saved;
+      }
     });
   });
 

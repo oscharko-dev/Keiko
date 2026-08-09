@@ -59,6 +59,10 @@ function evidence(assets, overrides = {}) {
 
 function release(assets, { withEvidence = true } = {}) {
   return {
+    // The release-by-tag endpoint always reports both flags; the gate requires them to be
+    // exactly false, so the fixture states the published stable shape explicitly.
+    draft: false,
+    prerelease: false,
     assets: withEvidence
       ? [
           ...assets,
@@ -598,5 +602,110 @@ describe("collectEvaluationArtifactDigests", () => {
 
     expect(roots).toHaveLength(1);
     expect(roots.filter((root) => existsSync(root))).toEqual([]);
+  });
+});
+
+describe("commit binding and ambiguous evidence", () => {
+  it("refuses evidence whose source commit is not the commit being released", () => {
+    // Self-declared is not bound. Without this, a manually assembled release could ship portable
+    // bytes from one revision and npm packages from another, and the workflow-run check would
+    // agree with the manifest's own claim about which revision that was.
+    const assets = downloads();
+    const result = prepublishedReleaseFailures({
+      tag: TAG,
+      repository: REPOSITORY,
+      workflowPath: WORKFLOW_PATH,
+      expectedNames: EXPECTED_NAMES,
+      sourceCommitSha: "b".repeat(40),
+      release: release(assets),
+      readManifest: () => evidence(assets),
+      readRun: () => goodRun(),
+    });
+
+    expect(result.failures.join(" ")).toContain("must be the commit being released");
+    expect(result.expectedDownloads).toEqual([]);
+  });
+
+  it("accepts evidence whose source commit is the commit being released", () => {
+    const assets = downloads();
+    const result = prepublishedReleaseFailures({
+      tag: TAG,
+      repository: REPOSITORY,
+      workflowPath: WORKFLOW_PATH,
+      expectedNames: EXPECTED_NAMES,
+      sourceCommitSha: SOURCE_COMMIT,
+      release: release(assets),
+      readManifest: () => evidence(assets),
+      readRun: () => goodRun(),
+    });
+
+    expect(result.failures).toEqual([]);
+  });
+
+  it("reports an unreadable run when two artifacts disagree about one file name", () => {
+    // Two artifacts may legitimately contain a file of the same name. Last-write-wins would let
+    // the map answer with the wrong artifact's bytes, so a genuine disagreement is ambiguous
+    // evidence and refuses rather than resolving itself.
+    let call = 0;
+    const digests = collectEvaluationArtifactDigests(
+      {
+        gh: (args) => {
+          const dir = args[args.indexOf("--dir") + 1];
+          writeFileSync(join(dir, "keiko-macos-x64.zip"), "bytes");
+          return { status: 0 };
+        },
+        hashFile: () => {
+          call += 1;
+          return call === 1 ? "a".repeat(64) : "b".repeat(64);
+        },
+      },
+      "42",
+      ["artifact-a", "artifact-b"],
+    );
+
+    expect(digests.size).toBe(0);
+  });
+});
+
+describe("published stable shape", () => {
+  // The release-by-tag endpoint resolves drafts and prereleases with every asset in place, so
+  // the flags themselves are load-bearing: without these refusals a manually assembled
+  // prerelease could authorize npm latest while GitHub never presents it as the stable release.
+  it.each([
+    ["a draft", { draft: true }],
+    ["marked as a prerelease", { prerelease: true }],
+  ])("refuses a release that is %s", (_label, flags) => {
+    const assets = downloads();
+    const result = prepublishedReleaseFailures({
+      tag: TAG,
+      repository: REPOSITORY,
+      workflowPath: WORKFLOW_PATH,
+      expectedNames: EXPECTED_NAMES,
+      release: { ...release(assets), ...flags },
+      readManifest: () => evidence(assets),
+      readRun: () => goodRun(),
+    });
+
+    expect(result.failures.join(" ")).toContain("only the published stable release");
+    expect(result.expectedDownloads).toEqual([]);
+  });
+
+  it("refuses a payload that omits the draft and prerelease flags entirely", () => {
+    // Absent is not published: a payload that never states the flags gets no benefit of doubt.
+    const assets = downloads();
+    const bare = { ...release(assets) };
+    delete bare.draft;
+    delete bare.prerelease;
+    const result = prepublishedReleaseFailures({
+      tag: TAG,
+      repository: REPOSITORY,
+      workflowPath: WORKFLOW_PATH,
+      expectedNames: EXPECTED_NAMES,
+      release: bare,
+      readManifest: () => evidence(assets),
+      readRun: () => goodRun(),
+    });
+
+    expect(result.failures.join(" ")).toContain("only the published stable release");
   });
 });
