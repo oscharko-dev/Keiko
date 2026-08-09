@@ -1576,6 +1576,48 @@ describe("update preflight service", () => {
     deps.store.close();
   });
 
+  it("does not let an internal staging record block the operator's update", async () => {
+    // A repository-machinery record (the portable runtime staging contract is the real one) is
+    // reviewed, internal, and deliberately not one-click eligible — it describes a build lane, not
+    // the product being updated. Aggregating its ineligibility into the operator's blockers made
+    // every such historical record permanently disable the governed update for anyone below its
+    // version. `releaseNoteBullets` already omits these records for the same reason.
+    const base = baseCatalog();
+    const customerEntry = base.entries.find((entry) => entry.packageVersion === "0.2.11");
+    if (customerEntry === undefined) throw new Error("fixture must carry a 0.2.11 entry");
+    const catalog: ReleaseImpactCatalog = {
+      ...base,
+      entries: [
+        ...base.entries,
+        {
+          ...customerEntry,
+          id: "0.2.11-internal-staging",
+          internalOnly: true,
+          observableImpact: false,
+          oneClickEligible: false,
+          releaseNoteBullets: [],
+        },
+      ],
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(
+        jsonResponse({ tag_name: "v0.2.11", name: "Keiko 0.2.11", body: "- Public note" }),
+      ) as typeof fetch;
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: catalog,
+    });
+
+    expect(report.blockers).not.toContainEqual(
+      expect.objectContaining({ code: "one-click-ineligible" }),
+    );
+    deps.store.close();
+  });
+
   it("compares semver numerically instead of lexically", () => {
     expect(compareSemver("0.2.9", "0.2.10")).toBeLessThan(0);
     expect(compareSemver("0.2.10", "0.2.10")).toBe(0);

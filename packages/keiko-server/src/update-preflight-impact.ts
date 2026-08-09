@@ -175,11 +175,23 @@ export function uniqueBlockers(
   return out;
 }
 
+/**
+ * An internal record with no observable impact describes repository machinery, not the product an
+ * operator is updating — the portable staging contract is one. It says nothing about whether the
+ * update may run, and `releaseNoteBullets` already omits it from what the operator is shown for
+ * exactly that reason. Aggregating its `oneClickEligible: false` into the operator's blockers made
+ * every historical staging record permanently disable the governed update for anyone below its
+ * version (Codex finding on #3054). The customer-facing records in the range still decide.
+ */
+function describesOperatorUpdate(entry: ReleaseImpactEntry): boolean {
+  return !entry.internalOnly || entry.observableImpact;
+}
+
 function blockersFromEntries(
   entries: readonly ReleaseImpactEntry[],
 ): readonly UpdatePreflightBlocker[] {
   return uniqueBlockers(
-    entries.flatMap((entry) => {
+    entries.filter(describesOperatorUpdate).flatMap((entry) => {
       const blockers: UpdatePreflightBlocker[] = [];
       if (!entry.oneClickEligible) {
         blockers.push(
