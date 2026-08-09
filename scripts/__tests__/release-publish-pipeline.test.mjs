@@ -1112,7 +1112,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       });
 
       expect(lastRun.status).toBe(0);
-      expect(lastRun.stdout).toContain("match their evidence bytes for bytes");
+      expect(lastRun.stdout).toContain("match their evidence");
       expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
       // And it leaves the release surface alone. That release already carries the Latest flag and
       // the customer-facing install notes the evaluation lane wrote — first-launch steps,
