@@ -34,15 +34,17 @@ import dynamic from "next/dynamic";
 import { notifyGatewayConfigUpdated } from "../widgets/shared/gatewaySetupBus";
 import { DynamicChunkLoadFailure } from "../DynamicChunkLoadFailure";
 import type { GatewayConfigUploadFields } from "./gatewayConfigParsing";
+import { GatewayConfigUpload } from "./GatewayConfigUpload";
 
 // The upload path (control + fail-closed parser) is not first-paint-critical: loading it as its
 // own chunk keeps the setup page inside the static-export first-load budget (bundle gate). A
 // failed upload-chunk load must not make the feature silently disappear from an otherwise
 // working dialog — the shared fallback surfaces the redacted error and a retry (#3031).
-const GatewayConfigUpload = dynamic(
-  () => import("./GatewayConfigUpload").then((mod) => mod.GatewayConfigUpload),
-  { ssr: false, loading: DynamicChunkLoadFailure },
-);
+// Imported directly, NOT through next/dynamic: this component sits inside a dialog that is
+// already behind a dynamic boundary, so deferring it again buys no initial-page bytes — and in
+// the static export the nested boundary never resolved. The `loading` fallback renders null
+// while it waits, so the upload control simply never appeared in the shipped app and no error
+// was visible anywhere (found by driving the packaged 0.3.0 build as an operator).
 import styles from "./GatewaySetupDialog.module.css";
 
 /**
