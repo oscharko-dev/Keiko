@@ -305,6 +305,9 @@ interface ProviderRawOptions {
   readonly maxRetries?: number | undefined;
   readonly retryBaseDelayMs?: number | undefined;
   readonly apiKeyHeaderName?: string | undefined;
+  /** Generic endpoint protocol, persisted VERBATIM — see setupEndpointProtocol (#3042). */
+  readonly endpointStyle?: string | undefined;
+  readonly apiVersion?: string | undefined;
   readonly imageInputModelIds?: readonly string[] | undefined;
   readonly responseFormatModelIds?: readonly string[] | undefined;
   readonly embeddingModelIds?: readonly string[] | undefined;
@@ -460,6 +463,17 @@ function createDefaultSetupCapability(
   );
 }
 
+// The generic endpoint protocol persists VERBATIM — absent fields stay absent so the runtime
+// default layering is unchanged (#3042).
+function genericEndpointProtocolRaw(
+  options: ProviderRawOptions,
+): Pick<Record<string, unknown>, string> {
+  return {
+    ...(options.endpointStyle === undefined ? {} : { endpointStyle: options.endpointStyle }),
+    ...(options.apiVersion === undefined ? {} : { apiVersion: options.apiVersion }),
+  };
+}
+
 function providerRaw(
   modelId: string,
   baseUrl: string,
@@ -478,6 +492,7 @@ function providerRaw(
     baseUrl,
     apiKey,
     apiKeyHeaderName: options.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+    ...genericEndpointProtocolRaw(options),
     capability: {
       ...defaultCapability,
       // The provided list is authoritative, not additive: a model absent from it loses a stored
@@ -1613,6 +1628,9 @@ interface SetupRequest {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
+  /** Generic endpoint protocol — see {@link SetupGatewayCredentials} (#3042). */
+  readonly endpointStyle: string | undefined;
+  readonly apiVersion: string | undefined;
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
@@ -1669,6 +1687,17 @@ interface SetupGatewayCredentials {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
+  /**
+   * The generic endpoint PROTOCOL of the setup-wide connection (#3042): submitted values win
+   * (an uploaded LiteLLM config declares openai-compatible explicitly and a server-side
+   * KEIKO_DEFAULT_ENDPOINT_STYLE must not override the file's statement after save); absent
+   * values inherit from the stored primary only while the connection stays on the same
+   * endpoint, so a persisted style survives a credential rotation but never travels to a moved
+   * endpoint it was not declared for. The style/apiVersion pairing is enforced by the canonical
+   * parser on the validation and candidate configs downstream.
+   */
+  readonly endpointStyle: string | undefined;
+  readonly apiVersion: string | undefined;
 }
 
 interface SetupVoiceProvider {
@@ -2097,7 +2126,36 @@ function readSetupGatewayCredentials(
   if (invalidConnection !== undefined) {
     return invalidConnection;
   }
-  return { baseUrl, apiKey, apiKeyHeaderName };
+  const protocol = setupEndpointProtocol(raw, provider, baseUrl, preserveExisting);
+  if ("status" in protocol) {
+    return protocol;
+  }
+  return { baseUrl, apiKey, apiKeyHeaderName, ...protocol };
+}
+
+// See SetupGatewayCredentials: submitted protocol wins, absent inherits from the stored primary
+// only on the SAME endpoint (a persisted style survives rotations, never travels to a moved
+// endpoint), and everything else stays undefined so the runtime default layering is unchanged.
+function setupEndpointProtocol(
+  raw: Record<string, unknown>,
+  provider: ModelProviderConfig | undefined,
+  baseUrl: string,
+  preserveExisting: boolean,
+): Pick<SetupGatewayCredentials, "endpointStyle" | "apiVersion"> | RouteResult {
+  const endpointStyle = parseVoiceEndpointEnum(
+    raw.endpointStyle,
+    "endpointStyle",
+    VOICE_ENDPOINT_STYLES,
+  );
+  if (!endpointStyle.ok) return endpointStyle.routeError;
+  const apiVersion = optionalSetupSecret(raw.apiVersion, "apiVersion");
+  if (!apiVersion.ok) return apiVersion.routeError;
+  const inheritable =
+    preserveExisting && provider !== undefined && sameBaseUrlIdentity(baseUrl, provider.baseUrl);
+  return {
+    endpointStyle: endpointStyle.value ?? (inheritable ? provider.endpointStyle : undefined),
+    apiVersion: apiVersion.value ?? (inheritable ? provider.apiVersion : undefined),
+  };
 }
 
 function validateVoiceProviderConnection(
@@ -3531,6 +3589,9 @@ interface SetupVerificationInput {
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName: string;
+  /** Generic endpoint protocol — see {@link SetupGatewayCredentials} (#3042). */
+  readonly endpointStyle: string | undefined;
+  readonly apiVersion: string | undefined;
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
@@ -3612,6 +3673,8 @@ function testedImageInputModelIds(
 function validationConfigForSetup(input: SetupVerificationInput): GatewayConfig {
   const validationRawConfig = buildRawConfig(input.baseUrl, input.apiKey, ["setup-validation"], {
     apiKeyHeaderName: input.apiKeyHeaderName,
+    endpointStyle: input.endpointStyle,
+    apiVersion: input.apiVersion,
     imageInputModelIds: input.imageInputModelIds,
     timeoutMs: input.timeoutMs,
   });
@@ -3725,6 +3788,8 @@ function finalRawConfigForSetup(
   const rawConfig = buildRawConfig(input.baseUrl, input.apiKey, configuredModelIds, {
     preserveExisting: input.preserveExisting,
     apiKeyHeaderName: input.apiKeyHeaderName,
+    endpointStyle: input.endpointStyle,
+    apiVersion: input.apiVersion,
     imageInputModelIds,
     responseFormatModelIds,
     embeddingModelIds,
@@ -3885,6 +3950,25 @@ function finalRawConfigForTestedSetup(
   );
 }
 
+// One retry (not zero) so a single transient blip — 429 rate-limit, brief timeout, momentary
+// content-filter — does not permanently exclude an otherwise-working model from the setup and
+// brand it to the user as incompatible. Still bounded so setup latency stays predictable. The
+// probe carries the submitted endpoint protocol so an Azure deployment path (or an explicit
+// openai-compatible declaration under an env default) is exercised exactly as it will persist.
+function candidateProbeOptions(
+  input: SetupVerificationInput,
+  smokeTimeoutMs: number,
+): ProviderRawOptions {
+  return {
+    apiKeyHeaderName: input.apiKeyHeaderName,
+    endpointStyle: input.endpointStyle,
+    apiVersion: input.apiVersion,
+    timeoutMs: smokeTimeoutMs,
+    maxRetries: 1,
+    imageInputModelIds: input.imageInputModelIds,
+  };
+}
+
 async function verifySetupCandidate(input: SetupVerificationInput): Promise<VerifiedSetup> {
   // Defence-in-depth: never send the credential to a candidate URL that has not passed the same
   // scheme/credential/loopback validation as the originally submitted base URL.
@@ -3899,15 +3983,7 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
     input.baseUrl,
     input.apiKey,
     candidateModels.chatModelIds,
-    {
-      apiKeyHeaderName: input.apiKeyHeaderName,
-      timeoutMs: smokeTimeoutMs,
-      // One retry (not zero) so a single transient blip — 429 rate-limit, brief timeout, momentary
-      // content-filter — does not permanently exclude an otherwise-working model from the setup and
-      // brand it to the user as incompatible. Still bounded so setup latency stays predictable.
-      maxRetries: 1,
-      imageInputModelIds: input.imageInputModelIds,
-    },
+    candidateProbeOptions(input, smokeTimeoutMs),
   );
   const candidateConfig = parseGatewayConfig(
     withInheritedEgress(candidateRawConfig, input.egress),
@@ -4169,6 +4245,8 @@ async function trySetupCandidate(
     baseUrl,
     apiKey: request.apiKey,
     apiKeyHeaderName: request.apiKeyHeaderName,
+    endpointStyle: request.endpointStyle,
+    apiVersion: request.apiVersion,
     timeoutMs: request.timeoutMs,
     deploymentNames: request.deploymentNames,
     imageInputModelIds: request.imageInputModelIds,

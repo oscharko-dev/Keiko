@@ -2102,6 +2102,102 @@ describe("GatewaySetupDialog", () => {
     expect(screen.getByText(/realtime voice model uses its own endpoint/i)).toBeInTheDocument();
   });
 
+  it("submits the imported generic endpoint protocol while the form points at the uploaded endpoint", async () => {
+    // #3042 follow-up: an explicit endpoint style in the file must ride the submit, or a
+    // server-side KEIKO_DEFAULT_ENDPOINT_STYLE resolves over the file's statement after save.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "azure-chat",
+      testedModelIds: ["azure-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.upload(
+      await screen.findByLabelText(/load keiko\.config\.json/i),
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "azure-chat",
+                baseUrl: "https://resource.example.com",
+                endpointStyle: "azure-openai-deployment",
+                apiVersion: "2025-04-01-preview",
+                capability: { id: "azure-chat", kind: "chat" },
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(/base url/i)).toHaveValue("https://resource.example.com"),
+    );
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).toMatchObject({
+      endpointStyle: "azure-openai-deployment",
+      apiVersion: "2025-04-01-preview",
+    });
+  });
+  it("drops the imported generic protocol when the user retypes the gateway URL", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "azure-chat",
+      testedModelIds: ["azure-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.upload(
+      await screen.findByLabelText(/load keiko\.config\.json/i),
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "azure-chat",
+                baseUrl: "https://resource.example.com",
+                endpointStyle: "azure-openai-deployment",
+                apiVersion: "2025-04-01-preview",
+                capability: { id: "azure-chat", kind: "chat" },
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(/base url/i)).toHaveValue("https://resource.example.com"),
+    );
+    await userEvent.clear(screen.getByLabelText(/base url/i));
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://other.example.com/v1");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(setupGateway).mock.calls[0]?.[0] ?? {};
+    expect(payload).not.toHaveProperty("endpointStyle");
+    expect(payload).not.toHaveProperty("apiVersion");
+  });
+
   it("rejects an unreadable configuration upload with a visible alert and no field changes", async () => {
     render(<GatewaySetupDialog />);
 

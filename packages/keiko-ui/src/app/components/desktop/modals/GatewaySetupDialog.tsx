@@ -593,6 +593,10 @@ interface GatewayFormFields {
   readonly importedVoiceRealtimeAuthMode: string;
   /** The uploaded endpoint URL the imported protocol is bound to. */
   readonly importedVoiceEndpointBaseUrl: string;
+  /** Generic endpoint protocol imported from a config upload, bound to its gateway URL (#3042). */
+  readonly importedEndpointStyle: string;
+  readonly importedApiVersion: string;
+  readonly importedEndpointBaseUrl: string;
   readonly figmaAccessToken: string;
   readonly preserveExisting: boolean;
   readonly hasStoredVoiceProvider: boolean;
@@ -644,6 +648,19 @@ function importedVoiceEndpointPayload(fields: GatewayFormFields): Partial<Gatewa
   };
 }
 
+// The imported GENERIC protocol rides only on a submit that still points at EXACTLY the
+// uploaded gateway URL — a manually retyped URL must not inherit the file's protocol (#3042).
+function importedEndpointPayload(fields: GatewayFormFields): Partial<GatewaySetupInput> {
+  const submittedBaseUrl = fields.baseUrl.trim();
+  if (submittedBaseUrl === "" || submittedBaseUrl !== fields.importedEndpointBaseUrl) {
+    return {};
+  }
+  return {
+    ...(fields.importedEndpointStyle === "" ? {} : { endpointStyle: fields.importedEndpointStyle }),
+    ...(fields.importedApiVersion === "" ? {} : { apiVersion: fields.importedApiVersion }),
+  };
+}
+
 function buildSetupGatewayPayload(
   fields: GatewayFormFields,
   derived: DerivedSubmitFields,
@@ -663,6 +680,7 @@ function buildSetupGatewayPayload(
       ? {}
       : { embeddingModelIds: fields.importedEmbeddingModelIds }),
     ...importedVoiceEndpointPayload(fields),
+    ...importedEndpointPayload(fields),
     ...(!fields.workflowEligibleModelIdsConfigured
       ? {}
       : { workflowEligibleModelIds: derived.parsedWorkflowEligibleModelIds }),
@@ -2158,6 +2176,9 @@ export function GatewaySetupDialog({
   const [importedVoiceApiVersion, setImportedVoiceApiVersion] = useState("");
   const [importedVoiceRealtimeAuthMode, setImportedVoiceRealtimeAuthMode] = useState("");
   const [importedVoiceEndpointBaseUrl, setImportedVoiceEndpointBaseUrl] = useState("");
+  const [importedEndpointStyle, setImportedEndpointStyle] = useState("");
+  const [importedApiVersion, setImportedApiVersion] = useState("");
+  const [importedEndpointBaseUrl, setImportedEndpointBaseUrl] = useState("");
   const [uploadReadPending, setUploadReadPending] = useState(false);
   const [workflowEligibleModelIdsConfigured, setWorkflowEligibleModelIdsConfigured] =
     useState(false);
@@ -2526,6 +2547,7 @@ export function GatewaySetupDialog({
       updateVoiceSemanticTurnDetection(fields.voiceSemanticTurnDetection);
     }
     applyUploadedVoiceEndpoint(fields);
+    applyUploadedGenericEndpoint(fields);
   }
 
   // The endpoint protocol rides along invisibly and is persisted verbatim by the setup route —
@@ -2534,6 +2556,16 @@ export function GatewaySetupDialog({
   // all, its protocol declaration REPLACES the previous upload's (a corrected re-upload without
   // a style must clear the stale one); a file with no voice section leaves the visible voice
   // fields — and therefore the protocol that belongs to them — untouched.
+  // Twin of the voice binding below: the generic protocol is BOUND to the uploaded gateway
+  // URL and cleared when the file carries none, so a stale binding cannot outlive a corrected
+  // re-upload (#3042).
+  function applyUploadedGenericEndpoint(fields: GatewayConfigUploadFields): void {
+    if (fields.baseUrl === undefined) return;
+    setImportedEndpointStyle(fields.endpointStyle ?? "");
+    setImportedApiVersion(fields.apiVersion ?? "");
+    setImportedEndpointBaseUrl(fields.baseUrl.trim());
+  }
+
   function applyUploadedVoiceEndpoint(fields: GatewayConfigUploadFields): void {
     if (fields.voiceBaseUrl === undefined) return;
     setImportedVoiceEndpointStyle(fields.voiceEndpointStyle ?? "");
@@ -2584,6 +2616,9 @@ export function GatewaySetupDialog({
           importedVoiceApiVersion,
           importedVoiceRealtimeAuthMode,
           importedVoiceEndpointBaseUrl,
+          importedEndpointStyle,
+          importedApiVersion,
+          importedEndpointBaseUrl,
           voiceSpeechOutputModelId,
           voiceOutputVoiceId,
           voiceOutputVoiceIdConfigured,

@@ -6525,6 +6525,88 @@ describe("rawConfigFromCurrent — voice persona persistence round-trip", () => 
     expect(reloaded.reranker).toEqual(config.reranker);
   });
 
+  it("persists an explicitly submitted generic endpoint style over the environment default", async () => {
+    // Codex finding on #3042: the setup request had no generic endpointStyle field, so an
+    // uploaded LiteLLM config declaring openai-compatible was rebuilt style-less and a server
+    // running KEIKO_DEFAULT_ENDPOINT_STYLE=azure-openai-deployment resolved the env default —
+    // wrong URL shape after a reported upload success.
+    const uiDir = await tempDir("keiko-gw-ui-generic-style-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-generic-style-"),
+      env: {
+        ...VAULT_ENV,
+        KEIKO_DEFAULT_ENDPOINT_STYLE: "azure-openai-deployment",
+        KEIKO_DEFAULT_API_VERSION: "2025-04-01-preview",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "chat-token",
+        endpointStyle: "openai-compatible",
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const provider = currentGatewayConfig(deps)?.providers.find(
+      (item) => item.modelId === "example-chat-model",
+    );
+    expect(provider?.endpointStyle).toBe("openai-compatible");
+    deps.store.close();
+  });
+  it("persists a submitted Azure endpoint style with its api version on generic providers", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-generic-azure-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-generic-azure-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://resource.example.com",
+        apiKey: "azure-token",
+        deploymentNames: ["azure-chat"],
+        endpointStyle: "azure-openai-deployment",
+        apiVersion: "2025-04-01-preview",
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const provider = currentGatewayConfig(deps)?.providers.find(
+      (item) => item.modelId === "azure-chat",
+    );
+    expect(provider?.endpointStyle).toBe("azure-openai-deployment");
+    expect(provider?.apiVersion).toBe("2025-04-01-preview");
+    deps.store.close();
+  });
+  it("rejects an unsupported generic endpoint style", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-generic-style-bad-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-generic-style-bad-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "chat-token",
+        deploymentNames: ["example-chat"],
+        endpointStyle: "bogus-style",
+      }),
+      deps,
+    );
+    expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    deps.store.close();
+  });
+
   it("preserves an explicit output-token parameter override on reload", () => {
     const config = parseGatewayConfig({
       ...voiceRaw,

@@ -309,10 +309,9 @@ describe("parseGatewayConfigUpload", () => {
   });
 
   it("accepts an explicit openai-compatible endpoint style on a generic provider", () => {
-    // LiteLLM production audit: LiteLLM-shaped files state the default explicitly — an explicit
-    // endpointStyle "openai-compatible" on a chat/embedding provider is behaviorally identical
-    // to the absent default and must not refuse the file. The Azure deployment style, unknown
-    // values, and a chat/embedding apiVersion keep refusing.
+    // LiteLLM production audit + #3042 follow-up: KNOWN styles travel through the form now.
+    // Unknown values keep refusing, and an UNPAIRABLE protocol (an api version without the
+    // Azure style) is canonical-invalid — the save would refuse it after a reported success.
     const explicitDefault = JSON.stringify({
       providers: [providerFixture({ endpointStyle: "openai-compatible" })],
     });
@@ -328,7 +327,7 @@ describe("parseGatewayConfigUpload", () => {
         providerFixture({ endpointStyle: "openai-compatible", apiVersion: "2025-03-01-preview" }),
       ],
     });
-    expect(parseGatewayConfigUpload(orphanVersion)).toEqual({ outcome: "unsupportedSetting" });
+    expect(parseGatewayConfigUpload(orphanVersion)).toEqual({ outcome: "invalid" });
   });
 
   it("unifies header names that differ only in case across providers", () => {
@@ -1066,15 +1065,15 @@ describe("parseGatewayConfigUpload", () => {
   });
 
   it("refuses generic provider settings the form cannot represent with an honest outcome", () => {
-    // Review finding on #3031: endpoint style / API version / output token parameter on a chat
-    // or embedding provider would be silently rebuilt with defaults — a changed runtime
-    // configuration behind a success message. Voice providers are exempt: the voice setup route
-    // regenerates their endpoint details itself.
+    // Review finding on #3031, narrowed by the #3042 follow-up: the endpoint protocol travels
+    // now, so only the settings the form still has no field for refuse — and an Azure style
+    // WITHOUT its api version is canonical-invalid rather than unsupported. Voice providers
+    // stay exempt: the voice setup route regenerates their endpoint details itself.
     const azure = JSON.stringify({
       providers: [providerFixture({ endpointStyle: "azure-openai-deployment" })],
     });
 
-    expect(parseGatewayConfigUpload(azure)).toEqual({ outcome: "unsupportedSetting" });
+    expect(parseGatewayConfigUpload(azure)).toEqual({ outcome: "invalid" });
     // Retry tuning matching what the rebuild writes stays representable; a DIFFERENT value
     // would be silently rewritten on save and refuses instead (review finding on #3031).
     const matching = JSON.stringify({
@@ -1299,6 +1298,58 @@ describe("parseGatewayConfigUpload", () => {
 });
 
 describe("appliedGatewayConfigFieldCount", () => {
+  it("carries an explicit generic endpoint style into the form fields", () => {
+    // Codex finding on #3042: the tolerated explicit openai-compatible was dropped, so a server
+    // running KEIKO_DEFAULT_ENDPOINT_STYLE=azure-openai-deployment resolved the env default
+    // over the file's statement after a reported upload success.
+    const fields = fieldsOf(
+      JSON.stringify({
+        providers: [providerFixture({ endpointStyle: "openai-compatible" })],
+      }),
+    );
+
+    expect(fields.endpointStyle).toBe("openai-compatible");
+    expect(fields.apiVersion).toBeUndefined();
+  });
+  it("carries a generic Azure endpoint style with its api version", () => {
+    const fields = fieldsOf(
+      JSON.stringify({
+        providers: [
+          providerFixture({
+            baseUrl: "https://resource.example.com",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-04-01-preview",
+          }),
+        ],
+      }),
+    );
+
+    expect(fields.endpointStyle).toBe("azure-openai-deployment");
+    expect(fields.apiVersion).toBe("2025-04-01-preview");
+  });
+  it("refuses generic providers that disagree on the endpoint protocol", () => {
+    // One form, one connection, one protocol — a split declaration cannot be represented.
+    const split = JSON.stringify({
+      providers: [
+        providerFixture({ modelId: "gpt-a", endpointStyle: "openai-compatible" }),
+        providerFixture({
+          modelId: "gpt-b",
+          endpointStyle: "azure-openai-deployment",
+          apiVersion: "2025-04-01-preview",
+        }),
+      ],
+    });
+
+    expect(parseGatewayConfigUpload(split)).toEqual({ outcome: "invalid" });
+  });
+  it("still refuses an unknown generic endpoint style", () => {
+    const unknown = JSON.stringify({
+      providers: [providerFixture({ endpointStyle: "bogus-style" })],
+    });
+
+    expect(parseGatewayConfigUpload(unknown)).toEqual({ outcome: "unsupportedSetting" });
+  });
+
   it("counts filled scalars, deployments, and every defined flag list — empty included", () => {
     const fields = fieldsOf(JSON.stringify({ providers: [providerFixture()] }));
 

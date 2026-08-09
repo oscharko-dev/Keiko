@@ -40,7 +40,8 @@ const SUPPORTED_API_KEY_HEADER_NAMES = new Set([
  * verbatim through the voice setup fields (#3037), and profiles map to the output voice.
  * Retry tuning (maxRetries, retryBaseDelayMs) stays tolerated everywhere: the form has no field
  * for it either, but it does not change which endpoint or protocol the connection speaks.
- * `endpointStyle` is checked value-aware instead (see unsupportedGenericEndpointStyle).
+ * KNOWN `endpointStyle`/`apiVersion` values travel through the form (#3042); unknown styles
+ * refuse (see unknownGenericEndpointStyle).
  */
 /**
  * A secret REFERENCE is a credential source the form cannot carry (the token field takes a
@@ -52,22 +53,21 @@ const SUPPORTED_API_KEY_HEADER_NAMES = new Set([
 const UNSUPPORTED_CREDENTIAL_REFERENCE = "apiKeySecretRef";
 
 const UNSUPPORTED_GENERIC_PROVIDER_SETTINGS = [
-  "apiVersion",
   "outputTokenParameter",
   "realtimeAuthMode",
   "voiceProfiles",
 ] as const;
 
 /**
- * An explicit `endpointStyle: "openai-compatible"` on a chat/embedding provider is behaviorally
- * identical to the absent default — LiteLLM-shaped files state the default explicitly, and
- * refusing it would reject exactly the files this feature exists for (LiteLLM production
- * audit). The Azure deployment style and unknown values keep refusing: the setup form cannot
- * represent a generic provider that speaks a different endpoint shape.
+ * KNOWN endpoint styles travel through the form into the setup request (#3042 follow-up: the
+ * explicit openai-compatible of a LiteLLM file must survive a server-side
+ * KEIKO_DEFAULT_ENDPOINT_STYLE, and Azure files carry their deployment style with the api
+ * version). Only an UNKNOWN style keeps refusing — the form cannot represent an endpoint shape
+ * the product does not speak.
  */
-function unsupportedGenericEndpointStyle(value: unknown): boolean {
+function unknownGenericEndpointStyle(value: unknown): boolean {
   if (value === undefined) return false;
-  return !(typeof value === "string" && value.trim() === "openai-compatible");
+  return !(typeof value === "string" && VOICE_ENDPOINT_STYLES.has(value.trim()));
 }
 /**
  * Top-level blocks the setup form can represent. A file carrying `grounding`, `reranker`,
@@ -111,6 +111,12 @@ export interface GatewayConfigUploadFields {
   readonly baseUrl: string | undefined;
   readonly apiKey: string | undefined;
   readonly apiKeyHeaderName: string | undefined;
+  /**
+   * The generic connection's endpoint protocol, submitted verbatim so an explicit declaration
+   * survives a server-side default (#3042). `undefined` when the file does not state it.
+   */
+  readonly endpointStyle: string | undefined;
+  readonly apiVersion: string | undefined;
   readonly timeoutMs: string | undefined;
   readonly deploymentNames: readonly string[];
   /**
@@ -611,7 +617,7 @@ function carriesUnsupportedGenericSetting(
       typeof entry.modelId === "string" &&
       ((genericIds.has(entry.modelId.trim()) &&
         (UNSUPPORTED_GENERIC_PROVIDER_SETTINGS.some((setting) => entry[setting] !== undefined) ||
-          unsupportedGenericEndpointStyle(entry.endpointStyle))) ||
+          unknownGenericEndpointStyle(entry.endpointStyle))) ||
         // A secret reference refuses on EVERY provider kind — no form field can carry it.
         entry[UNSUPPORTED_CREDENTIAL_REFERENCE] !== undefined),
   );
@@ -948,7 +954,10 @@ function timeoutField(timeoutMs: number | undefined): string | undefined {
 
 function fieldsFrom(
   partition: PartitionedProviders,
-  generic: ConnectionScalars,
+  generic: ConnectionScalars & {
+    readonly endpointStyle: string | undefined;
+    readonly apiVersion: string | undefined;
+  },
   voice: VoiceFields,
   figmaAccessToken: string | undefined,
   voiceRetryTuningReset: boolean,
@@ -965,6 +974,8 @@ function fieldsFrom(
     baseUrl: generic.baseUrl,
     apiKey: generic.apiKey,
     apiKeyHeaderName: generic.apiKeyHeaderName,
+    endpointStyle: generic.endpointStyle,
+    apiVersion: generic.apiVersion,
     timeoutMs: timeoutField(generic.timeoutMs),
     deploymentNames: unique(partition.generic.map((provider) => provider.modelId)),
     imageInputModelIds: speaksAboutFlags
@@ -1048,13 +1059,36 @@ function uploadRoot(serialized: string): Record<string, unknown> | undefined {
   return objectRecord(root) ? root : undefined;
 }
 
+// One form, one connection, one protocol: the generic providers must agree on the endpoint
+// style and api version, exactly like the voice section's uniform-endpoint rule (#3042).
+function uniformGenericEndpointProtocol(
+  providers: readonly ParsedProvider[],
+):
+  | { readonly endpointStyle: string | undefined; readonly apiVersion: string | undefined }
+  | undefined {
+  const endpointStyle = uniformScalar(providers.map((provider) => provider.endpointStyle));
+  const apiVersion = uniformScalar(providers.map((provider) => provider.apiVersion));
+  if (!endpointStyle.ok || !apiVersion.ok) return undefined;
+  // The canonical pairing rule, mirrored: the Azure deployment style REQUIRES an api version,
+  // and an api version requires the Azure style — carrying an unpairable protocol would report
+  // upload success for a file the save then refuses (#3042).
+  if (endpointStyle.value === "azure-openai-deployment" && apiVersion.value === undefined) {
+    return undefined;
+  }
+  if (endpointStyle.value !== "azure-openai-deployment" && apiVersion.value !== undefined) {
+    return undefined;
+  }
+  return { endpointStyle: endpointStyle.value, apiVersion: apiVersion.value };
+}
+
 function assembledFields(
   root: Record<string, unknown>,
   partition: PartitionedProviders,
 ): GatewayConfigUploadResult {
   const generic = uniformConnectionScalars(partition.generic);
+  const genericProtocol = uniformGenericEndpointProtocol(partition.generic);
   const voice = voiceFields(partition);
-  if (generic === undefined || voice === undefined) {
+  if (generic === undefined || genericProtocol === undefined || voice === undefined) {
     return { outcome: "invalid" };
   }
   // A PRESENT but non-object figma block is corrupted input, not an absent connector — the
@@ -1066,7 +1100,7 @@ function assembledFields(
     outcome: "fields",
     fields: fieldsFrom(
       partition,
-      generic,
+      { ...generic, ...genericProtocol },
       voice,
       figma.value,
       importedVoiceRetryTuningReset(root.providers, voice),
