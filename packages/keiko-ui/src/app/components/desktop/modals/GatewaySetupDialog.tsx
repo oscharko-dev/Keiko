@@ -662,12 +662,26 @@ function stripTrailingSlashes(value: string): string {
   return value.slice(0, end);
 }
 
+const CHAT_COMPLETIONS_SUFFIX = "/chat/completions";
+
+// The server's normalizeBaseUrl also drops a terminal /chat/completions before comparing, so
+// trimming an imported URL down to the endpoint the server would derive is NOT an endpoint
+// change. A narrower client copy read it as one and dropped the imported protocol (review
+// finding on #3046). The rule is mirrored rather than imported: keiko-ui may not depend on
+// keiko-model-gateway (ADR-0019), and the shape is pinned on both sides.
+function normalizedEndpoint(raw: string): string {
+  const trimmed = stripTrailingSlashes(raw.trim());
+  return trimmed.endsWith(CHAT_COMPLETIONS_SUFFIX)
+    ? stripTrailingSlashes(trimmed.slice(0, -CHAT_COMPLETIONS_SUFFIX.length))
+    : trimmed;
+}
+
 function canonicalEndpointIdentity(raw: string): string {
-  const trimmed = raw.trim();
+  const normalized = normalizedEndpoint(raw);
   try {
-    return stripTrailingSlashes(new URL(trimmed).href);
+    return stripTrailingSlashes(new URL(normalized).href);
   } catch {
-    return stripTrailingSlashes(trimmed);
+    return normalized;
   }
 }
 
@@ -676,8 +690,13 @@ function canonicalEndpointIdentity(raw: string): string {
 // that does not change the endpoint's identity keeps it (#3046).
 function importedEndpointPayload(fields: GatewayFormFields): Partial<GatewaySetupInput> {
   const submittedBaseUrl = fields.baseUrl.trim();
+  if (submittedBaseUrl === "") return {};
+  // An empty binding means the file declared a protocol but left the URL to the operator, so it
+  // applies to whatever endpoint is entered — the same "unbound" rule the voice twin uses. The
+  // imported values always come from the CURRENT file, so this can never resurrect an earlier
+  // upload's protocol (review findings on #3046).
   if (
-    submittedBaseUrl === "" ||
+    fields.importedEndpointBaseUrl !== "" &&
     canonicalEndpointIdentity(submittedBaseUrl) !==
       canonicalEndpointIdentity(fields.importedEndpointBaseUrl)
   ) {
@@ -2590,8 +2609,8 @@ export function GatewaySetupDialog({
   // states no gateway URL states no protocol either, and returning early here would leave the
   // PREVIOUS file's style bound to a URL the form still holds, riding the next submit unseen.
   function applyUploadedGenericEndpoint(fields: GatewayConfigUploadFields): void {
-    setImportedEndpointStyle(fields.baseUrl === undefined ? "" : (fields.endpointStyle ?? ""));
-    setImportedApiVersion(fields.baseUrl === undefined ? "" : (fields.apiVersion ?? ""));
+    setImportedEndpointStyle(fields.endpointStyle ?? "");
+    setImportedApiVersion(fields.apiVersion ?? "");
     setImportedEndpointBaseUrl(fields.baseUrl?.trim() ?? "");
   }
 

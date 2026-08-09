@@ -1988,10 +1988,6 @@ function shouldPreserveExisting(
   return raw.preserveExisting === true && current !== undefined;
 }
 
-function firstProvider(current: GatewayConfig | undefined): ModelProviderConfig | undefined {
-  return current?.providers[0];
-}
-
 function currentSpeechInputProvider(
   current: GatewayConfig | undefined,
 ): ModelProviderConfig | undefined {
@@ -2103,7 +2099,13 @@ function readSetupGatewayCredentials(
   current: GatewayConfig | undefined,
   preserveExisting: boolean,
 ): SetupGatewayCredentials | RouteResult {
-  const provider = firstProvider(current);
+  // The MAIN gateway connection, not position zero: array order is not a contract, and a valid
+  // stored file may list a dedicated voice provider first. Reading the connection — URL, token,
+  // header and endpoint protocol — off that provider inherited the voice endpoint's values for
+  // the generic gateway; for the protocol it dropped a stored Azure declaration on an otherwise
+  // unchanged rotation (review finding on #3046). Same selection the sharing classification
+  // already uses (#3037).
+  const provider = storedPrimaryGatewayProvider(current);
   if (
     inheritedTokenForChangedEndpoint(
       raw,
@@ -4488,10 +4490,12 @@ function shouldRequireDeploymentNames(
   request: SetupRequest,
   baseUrlCandidates: readonly string[],
 ): boolean {
-  return (
-    request.deploymentNames.length === 0 &&
-    baseUrlCandidates.some((baseUrl) => isAzureFoundryBaseUrl(baseUrl))
-  );
+  if (request.deploymentNames.length !== 0) return false;
+  // The deployment path IS the requirement: a classic Azure OpenAI host stated as
+  // azure-openai-deployment cannot be discovered through generic /models, so without this it
+  // failed at discovery instead of naming the missing deployments (review finding on #3046).
+  if (request.endpointStyle === "azure-openai-deployment") return true;
+  return baseUrlCandidates.some((baseUrl) => isAzureFoundryBaseUrl(baseUrl));
 }
 
 async function verifyAndSaveGatewaySetup(

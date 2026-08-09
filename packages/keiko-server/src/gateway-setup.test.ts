@@ -6182,6 +6182,90 @@ describe("handleGatewaySetup", () => {
     expect(provider?.apiVersion).toBe("2025-04-01-preview");
     deps.store.close();
   });
+  it("inherits the generic protocol from the primary chat provider, not from position zero", async () => {
+    // Review finding on #3046: the inheritance compared against providers[0]. Array order is not
+    // a contract — a valid stored file may list a dedicated voice provider first — so a stored
+    // Azure chat endpoint lost its protocol on an unchanged-endpoint rotation, and the gateway
+    // was reprobed and persisted with the wrong shape.
+    const uiDir = await tempDir("keiko-gw-ui-generic-primary-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-generic-primary-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "keiko-stt",
+            baseUrl: "https://speech.example.com",
+            apiKey: "voice-token",
+            capability: {
+              kind: "voice",
+              supportsSpeechInput: true,
+              voiceProviderLocality: "customer-hosted",
+            },
+          },
+          {
+            modelId: "azure-chat",
+            baseUrl: "https://resource.example.com",
+            apiKey: "azure-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const rotated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://resource.example.com",
+        apiKey: "rotated-token",
+        deploymentNames: ["azure-chat"],
+      }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const afterRotation = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "azure-chat",
+    );
+    expect(afterRotation?.endpointStyle).toBe("azure-openai-deployment");
+    expect(afterRotation?.apiVersion).toBe("2025-03-01-preview");
+    deps.store.close();
+  });
+  it("requires deployment names when the submitted protocol IS the Azure deployment path", async () => {
+    // Review finding on #3046: the requirement keyed only off a *.services.ai.azure.com
+    // hostname. Now that the protocol can be stated explicitly, a classic Azure OpenAI host on
+    // the deployment path with no deployments fell through to generic /models discovery and
+    // failed there instead of naming what was missing.
+    const uiDir = await tempDir("keiko-gw-ui-azure-style-deployments-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-azure-style-deployments-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://my-azure.openai.azure.com",
+        apiKey: "azure-token",
+        endpointStyle: "azure-openai-deployment",
+        apiVersion: "2025-04-01-preview",
+      }),
+      deps,
+    );
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "GATEWAY_DEPLOYMENTS_REQUIRED" } });
+    deps.store.close();
+  });
   it("inherits a stored generic protocol on the SAME endpoint and drops it on a move", async () => {
     // Both branches of the inheritance guard (review finding on #3046): a protocol was declared
     // for one endpoint, so it survives a credential rotation there and must NOT follow the
