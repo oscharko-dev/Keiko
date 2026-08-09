@@ -61,6 +61,10 @@ import {
   PORTABLE_TARGETS,
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 } from "../portable-runtime.mjs";
+import {
+  buildPortableEvaluationManifest,
+  PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
+} from "../lib/portable-evaluation-manifest.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -72,6 +76,16 @@ const RELEASE_IMPACT_CATALOG = JSON.parse(
   readFileSync(join(REPO_ROOT, "release-impact.catalog.json"), "utf8"),
 );
 const RELEASE_VERSION = ROOT_MANIFEST.version;
+// The exact download set a stable `latest` release must carry, derived from the same target
+// table the orchestrator uses — a restated list here could drift past a new target silently.
+// Derived from the same target table the orchestrator uses, deduplicated so a target table that
+// ever repeats a name cannot silently shorten the expected set.
+const PUBLISHED_DOWNLOAD_NAMES = [
+  ...new Set([
+    ...PORTABLE_TARGETS.map((target) => target.assetName),
+    WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+  ]),
+];
 const RELEASE_NAME = ROOT_MANIFEST.name;
 const RELEASE_SPEC = `${RELEASE_NAME}@${RELEASE_VERSION}`;
 
@@ -502,8 +516,9 @@ function portableUpdateEligibility() {
 // so a stub can flip "published"/"tagged" as the orchestrator drives it.
 function stubPrologue(logFile, stateFile) {
   return [
+    'import { Buffer } from "node:buffer";',
     'import { createHash } from "node:crypto";',
-    'import { appendFileSync, readFileSync, writeFileSync } from "node:fs";',
+    'import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";',
     `const LOG = ${JSON.stringify(logFile)};`,
     `const STATE = ${JSON.stringify(stateFile)};`,
     `const VERSION = ${JSON.stringify(RELEASE_VERSION)};`,
@@ -527,14 +542,68 @@ function ghStubBody() {
     "  process.exit(0);",
     "}",
     'if (sub === "api") {',
+    // The artifact listing must answer before the generic runs branch: its URL also contains
+    // /actions/runs/, and the collector refuses when declared ids disagree with it.
+    '  if (argv[1] && argv[1].includes("/artifacts?per_page")) {',
+    "    writeFileSync(1, JSON.stringify({ artifacts: state().runArtifactListing || [] }));",
+    "    process.exit(0);",
+    "  }",
+    '  if (argv[1] && argv[1].includes("/actions/runs/")) {',
+    "    writeFileSync(1, JSON.stringify(state().workflowRun || {}));",
+    "    process.exit(0);",
+    "  }",
+    '  if (argv[1] && argv[1].includes("/releases/latest")) {',
+    // Which release GitHub presents as Latest. By default the same release the by-tag read
+    // answers with; a test can hand the badge to another release to prove the refusal.
+    "    writeFileSync(1, JSON.stringify({ id: state().latestBadgeElsewhere ? 111 : 987654321 }));",
+    "    process.exit(0);",
+    "  }",
     '  if (argv[1] && argv[1].includes("/releases/tags/")) {',
-    "    writeFileSync(1, JSON.stringify({ id: 987654321, assets: state().uploadedAssets || [] }));",
+    // The release-by-tag endpoint always reports both flags; the prepublished gate requires the
+    // published stable shape, so the double states it the way the real API does.
+    "    writeFileSync(1, JSON.stringify({ id: 987654321, draft: state().releaseDraft === true, prerelease: state().releasePrerelease === true, assets: state().uploadedAssets || [] }));",
     "    process.exit(0);",
     "  }",
     '  process.stdout.write(JSON.stringify({ state: "APPROVED", user: { login: "release-owner" } }));',
     "  process.exit(0);",
     "}",
-    'if (sub === "release" && argv[1] === "view") { process.exit(1); }',
+    'if (sub === "run" && argv[1] === "download") {',
+    '  const dirIndex = argv.indexOf("--dir");',
+    '  const nameIndex = argv.indexOf("--name");',
+    // The production caller always passes --dir and --name. If it ever stops, the double must
+    // refuse loudly rather than default anywhere: an empty dir would concatenate to
+    // filesystem-root paths, and a silent fallback would keep the suite green over the
+    // regression (KfQ findings on #3054).
+    "  if (dirIndex < 0 || !argv[dirIndex + 1]) { process.stderr.write('gh double: run download requires --dir\\n'); process.exit(1); }",
+    "  if (nameIndex < 0 || !argv[nameIndex + 1]) { process.stderr.write('gh double: run download requires --name\\n'); process.exit(1); }",
+    "  const dir = argv[dirIndex + 1];",
+    "  const artifact = argv[nameIndex + 1];",
+    "  const current = state();",
+    "  if (current.runArtifactsUnavailable) process.exit(1);",
+    "  const wanted = (current.uploadedAssets || []).filter((asset) => {",
+    "    if (artifact.includes('windows')) return asset.name.startsWith('keiko-windows-');",
+    "    if (artifact.includes('arm64')) return asset.name === 'keiko-macos-arm64.zip';",
+    "    return asset.name === 'keiko-macos-x64.zip';",
+    "  });",
+    // gh run download may nest the files one directory deep; the publisher must find them either
+    // way, so the stub reproduces the nested layout.
+    "  const target = current.nestRunArtifacts ? dir + '/nested' : dir;",
+    "  if (current.nestRunArtifacts) mkdirSync(target, { recursive: true });",
+    "  for (const asset of wanted) {",
+    "    let bytes = Buffer.from(asset.content || '', 'base64');",
+    "    if (current.tamperRunArtifacts) bytes = Buffer.concat([bytes, Buffer.from('x')]);",
+    "    writeFileSync(target + '/' + asset.name, bytes);",
+    "  }",
+    "  process.exit(0);",
+    "}",
+    // An existing release answers the isDraft,assets probe. An interrupted evaluation publish
+    // leaves a resumable stable-tag DRAFT; a completed one leaves a published release carrying
+    // the evidence manifest — the qualified upload path must refuse to edit over either.
+    'if (sub === "release" && argv[1] === "view") {',
+    "  if (state().existingReleaseIsDraft) { writeFileSync(1, JSON.stringify({ isDraft: true, assets: [] })); process.exit(0); }",
+    "  if (state().existingEvaluationRelease) { writeFileSync(1, JSON.stringify({ isDraft: false, assets: [{ name: 'keiko-portable-evaluation-manifest.json' }] })); process.exit(0); }",
+    "  process.exit(1);",
+    "}",
     'if (sub === "release" && argv[1] === "upload") {',
     "  const current = state();",
     "  if (current.failGhUpload) { process.stderr.write('portable upload failed\\n'); process.exit(42); }",
@@ -604,6 +673,75 @@ function makeStub(binDir, name, body, logFile, stateFile) {
   const path = join(binDir, name);
   writeFileSync(path, `#!/usr/bin/env node\n${stubPrologue(logFile, stateFile)}${body}\n`, "utf8");
   chmodSync(path, 0o755);
+}
+
+function passthroughViewBody() {
+  return [
+    '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+    '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+  ].join("\n");
+}
+
+/**
+ * A release that the governed evaluation lane already published: the four downloads with real
+ * bytes, and the evaluation manifest that binds them to this tag, commit and workflow run. Digests
+ * are measured from the same bytes the stub `curl` serves, so the fixture cannot drift from what
+ * the publisher verifies.
+ */
+function prepublishedEvaluationState() {
+  const sourceCommitSha = HEAD_SHA;
+  const workflowRunId = "31300595709";
+  const downloads = PUBLISHED_DOWNLOAD_NAMES.map((name, index) => {
+    const content = Buffer.from(`prepublished ${name}\n`);
+    return {
+      id: 500000 + index,
+      name,
+      size: content.byteLength,
+      content: content.toString("base64"),
+      sha256: createHash("sha256").update(content).digest("hex"),
+      browser_download_url: `https://github.com/oscharko-dev/Keiko/releases/download/v${RELEASE_VERSION}/${name}`,
+    };
+  });
+  const runArtifacts = [
+    { name: "portable-stage-windows-x64-evaluation-unsigned", id: 700001 },
+    { name: "portable-stage-macos-arm64-evaluation-unsigned", id: 700002 },
+    { name: "portable-stage-macos-x64-evaluation-unsigned", id: 700003 },
+  ];
+  const manifest = buildPortableEvaluationManifest({
+    releaseTag: `v${RELEASE_VERSION}`,
+    sourceCommitSha,
+    repository: "oscharko-dev/Keiko",
+    workflowPath: ".github/workflows/portable-assets.yml",
+    workflowRunId,
+    workflowRunAttempt: 1,
+    artifacts: runArtifacts,
+    assets: downloads.map((asset) => ({
+      assetName: asset.name,
+      sizeBytes: asset.size,
+      sha256: asset.sha256,
+    })),
+  });
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest, undefined, 2)}\n`);
+  return {
+    published: true,
+    tagged: true,
+    workflowRun: {
+      path: ".github/workflows/portable-assets.yml",
+      head_sha: sourceCommitSha,
+      conclusion: "success",
+    },
+    runArtifactListing: runArtifacts.map((artifact) => ({ ...artifact, expired: false })),
+    uploadedAssets: [
+      ...downloads,
+      {
+        id: 600000,
+        name: PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
+        size: manifestBytes.byteLength,
+        content: manifestBytes.toString("base64"),
+        browser_download_url: `https://github.com/oscharko-dev/Keiko/releases/download/v${RELEASE_VERSION}/${PORTABLE_EVALUATION_MANIFEST_ASSET_NAME}`,
+      },
+    ],
+  };
 }
 
 function curlStubBody() {
@@ -839,6 +977,7 @@ function runPublish({
   portableAssets = true,
   portableFixtureOptions = {},
   qualificationEnv = {},
+  extraArgs = [],
 }) {
   const binDir = mkdtempSync(join(tmpdir(), "keiko-release-publish-stub-"));
   const portableDir = mkdtempSync(join(tmpdir(), "keiko-portable-assets-fixture-"));
@@ -888,11 +1027,15 @@ function runPublish({
     );
   }
 
-  const result = spawnSync(process.execPath, ["scripts/release-publish.mjs", "--tag", "latest"], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    env,
-  });
+  const result = spawnSync(
+    process.execPath,
+    ["scripts/release-publish.mjs", "--tag", "latest", ...extraArgs],
+    {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env,
+    },
+  );
 
   const calls = readFileSync(logFile, "utf8")
     .split("\n")
@@ -952,24 +1095,237 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       lastRun = undefined;
     });
 
-    it("fails stable latest publishing before npm publish when portable assets are missing", () => {
+    it("refuses a stable latest publish whose GitHub release carries no downloads", () => {
+      // The requirement that a stable `latest` offers customer downloads did not move — WHERE it
+      // is answered did. It used to demand a qualified asset MANIFEST as a publish input, which
+      // only the Developer-ID/Azure-signed production lane can produce, so it refused every stable
+      // release this project can currently build. It is now answered against the release itself,
+      // which is strictly stronger: a well-formed manifest input proves nothing about whether the
+      // upload actually landed. npm must never learn `latest` for a release with nothing behind it.
       const viewBody = [
         '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
-        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write("0.0.1\\n"); process.exit(0); }',
       ].join("\n");
 
       lastRun = runPublish({
         npmBody: npmStub(viewBody, { failOnPublish: true }),
-        initState: { published: true, tagged: true },
+        initState: { published: false, tagged: true },
         portableAssets: false,
       });
 
       expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("is missing portable downloads");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+      // And it leaves nothing customer-visible behind. Creating the release before proving it
+      // would publish an empty Latest release advertising downloads that are not there, and the
+      // evaluation lane could then no longer create that tag — it refuses a non-draft release.
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","create"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","edit"'))).toBe(false);
+    });
+
+    it("previews a stable latest plan without the workflow-only qualification environment", () => {
+      // A local `release:plan` has no KEIKO_PORTABLE_ASSETS_* environment — that exists only
+      // inside the release workflow. Demanding it here made a preview fail before rendering its
+      // notes even with a valid manifest, which is not what a preview is for (Codex finding on
+      // #3054). The structural manifest validation still runs.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        extraArgs: ["--plan-only"],
+        qualificationEnv: {
+          KEIKO_PORTABLE_ASSETS_ARTIFACT_NAME: undefined,
+          KEIKO_PORTABLE_ASSETS_REPOSITORY: undefined,
+          KEIKO_PORTABLE_ASSETS_RUN_ATTEMPT: undefined,
+          KEIKO_PORTABLE_ASSETS_RUN_ID: undefined,
+          KEIKO_PORTABLE_ASSETS_SOURCE_SHA: undefined,
+          KEIKO_PORTABLE_ASSETS_TAG: undefined,
+          KEIKO_PORTABLE_ASSETS_WORKFLOW_PATH: undefined,
+        },
+      });
+
+      expect(lastRun.status).toBe(0);
+      expect(lastRun.stdout).toContain("PLAN-ONLY complete");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("publishes a stable latest release whose downloads the evaluation lane already uploaded", () => {
+      // The release-owner-scoped path for the first public release: the governed evaluation lane
+      // publishes the four unsigned-but-sealed downloads onto the tag with the evidence that
+      // binds them, and this run promotes the dist-tag without re-uploading anything. It must
+      // actually SUCCEED — an orchestrator that silently skipped publication would satisfy a
+      // weaker assertion while shipping nothing.
+      // The version is NOT on the registry yet, so this run must genuinely publish it: an
+      // orchestrator that skipped publication would otherwise satisfy every other assertion here
+      // while shipping nothing.
+      const viewBody = [
+        "  const s = state();",
+        '  if (argv.includes("version")) {',
+        "    if (!s.published) { process.stderr.write('npm error code E404\\n'); process.exit(1); }",
+        '    process.stdout.write(VERSION + "\\n"); process.exit(0);',
+        "  }",
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) {',
+        '    process.stdout.write((s.published ? VERSION : "0.0.1") + "\\n"); process.exit(0);',
+        "  }",
+      ].join("\n");
+
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody),
+        initState: { ...prepublishedEvaluationState(), published: false },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(0);
+      expect(lastRun.stdout).toContain("match their evidence");
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+      // And it leaves the release surface alone. That release already carries the Latest flag and
+      // the customer-facing install notes the evaluation lane wrote — first-launch steps,
+      // checksums, provenance. Rewriting its body with the generated catalog notes would replace
+      // exactly the guidance a non-technical customer needs. This run owns npm, not that release.
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","edit"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","create"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(true);
+    });
+
+    it("refuses prepublished downloads that carry no evaluation evidence", () => {
+      // A name and a non-zero size authorize nothing: without the manifest that binds these bytes
+      // to a tag, a commit and a successful workflow run, a stale or hand-uploaded file could
+      // promote the npm latest tag (Codex and CodeRabbit findings on #3054).
+      const state = prepublishedEvaluationState();
+      state.uploadedAssets = state.uploadedAssets.filter(
+        (asset) => asset.name !== PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
+      );
+
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: state,
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain(PORTABLE_EVALUATION_MANIFEST_ASSET_NAME);
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses a prepublished release when another release owns the Latest badge", () => {
+      // The npm latest dist-tag and GitHub's Latest release must name the same bytes; a stable
+      // release that lost the badge to another release must not promote (Codex finding on #3054).
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { ...prepublishedEvaluationState(), latestBadgeElsewhere: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("does not own the Latest badge");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses a prepublished release that is still marked as a prerelease", () => {
+      // The release-by-tag endpoint resolves prereleases with every asset in place, so without
+      // this refusal a manually assembled prerelease-flagged release could promote npm latest
+      // while GitHub never presents it as the stable Latest release (Codex finding on #3054).
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { ...prepublishedEvaluationState(), releasePrerelease: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("only the published stable release");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses prepublished downloads whose bytes do not match their evidence", () => {
+      // The evidence is only a claim until the bytes agree with it. Every download is re-fetched
+      // over the same unauthenticated URL a customer uses; one tampered byte must stop the
+      // promotion.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { ...prepublishedEvaluationState(), tamperRemoteDownloads: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("downloaded portable asset bytes do not match");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("finds the run's artifacts when gh nests them one directory deep", () => {
+      // `gh run download` places files directly in the target or one level deeper depending on how
+      // the artifact was uploaded. Reading only the top level would refuse a perfectly good
+      // release — the producer resolves them the same way.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { ...prepublishedEvaluationState(), nestRunArtifacts: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.stderr).toBe("");
+      expect(lastRun.status).toBe(0);
+      expect(lastRun.stdout).toContain("match their evidence");
+    });
+
+    it("refuses prepublished downloads that are not the bytes their workflow run produced", () => {
+      // The whole point of the run binding: replacing the downloads AND the manifest that
+      // describes them is ONE action for anyone who can write release assets, so the evidence
+      // sitting next to the assets can never be its own provenance. Workflow-run artifacts are not
+      // writable after the run, so that is where the digests come from.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { ...prepublishedEvaluationState(), tamperRunArtifacts: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("not the bytes their workflow run produced");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses prepublished downloads when the producing run's artifacts cannot be read", () => {
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { ...prepublishedEvaluationState(), runArtifactsUnavailable: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("could not be read");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses prepublished downloads whose evidence names an unsuccessful workflow run", () => {
+      // Provenance that does not resolve to a successful run of the canonical workflow at the
+      // declared commit is not provenance.
+      const state = prepublishedEvaluationState();
+      state.workflowRun = { ...state.workflowRun, conclusion: "failure" };
+
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: state,
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("must have concluded successfully");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses to skip the GitHub Release when portable assets are supplied", () => {
+      // Announcing downloads that are never uploaded is the failure this replaces: supplying a
+      // manifest and skipping the release would publish an npm dist-tag whose notes point at
+      // assets that do not exist.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableAssets: true,
+        extraArgs: ["--skip-github-release"],
+      });
+
+      expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain(
-        "stable latest publishes require --portable-assets-manifest",
+        "a publish that supplies portable assets must attach them to the GitHub Release.",
       );
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
-      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
     });
 
     it.each([
@@ -1388,6 +1744,37 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain("portable upload failed");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses to upload qualified assets over a published evaluation release", () => {
+      // The evaluation lane's completed release is isDraft:false and carries the evidence
+      // manifest; clobbering it with production bytes would leave that evidence beside foreign
+      // downloads — a mixed-provenance surface (Codex finding on #3054).
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { existingEvaluationRelease: true, published: false },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("published by the evaluation lane");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","edit"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+    });
+
+    it("refuses to edit over a resumable stable-tag draft left by an interrupted evaluation publish", () => {
+      // Editing the draft would keep it private while npm publishes, clobber only same-named
+      // assets, and leave the evaluation manifest beside qualified uploads (Codex finding on
+      // #3054). The evaluation lane owns resuming or deleting its draft.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { existingReleaseIsDraft: true, published: false },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("exists as a draft");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","edit"'))).toBe(false);
     });
 
     it("rejects an unattested setup companion before release upload or npm publication", () => {

@@ -20,10 +20,12 @@ on:
         description: >-
           Stage an UNSIGNED evaluation runtime (verificationPolicy "evaluation"). The bundled
           OpenCode sidecar runs without Apple/Microsoft code signing; every digest, size,
-          containment and provenance check stays mandatory. Never part of the stable release
-          bundle (assembled only from push-tag production jobs); publishable solely as an
-          explicitly labeled beta PRERELEASE through scripts/release-portable-prerelease.mjs
-          (ADR-0163 D9, owner-approved beta program).
+          containment and provenance check stays mandatory. Never enters the reviewed
+          production bundle (assembled only from push-tag production jobs). Publishable through
+          scripts/release-portable-prerelease.mjs as an explicitly labeled beta PRERELEASE
+          (ADR-0163 D9), or — with the release owner's recorded approval — as the stable
+          public release via --public-release (ADR-0121 D1 records the evaluation signing
+          scope; the npm publisher re-verifies the published downloads before latest).
         type: boolean
         default: false
         required: false

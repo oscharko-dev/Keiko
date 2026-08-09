@@ -36,13 +36,33 @@ describe("parseArgs", () => {
       tag: undefined,
       runId: undefined,
       planOnly: false,
+      publicRelease: false,
     });
   });
 
-  it("accepts the four documented flags", () => {
+  it("accepts the documented flags", () => {
     expect(
       parseArgs(["--plan-only", "--ref", "dev", "--tag", "v0.3.0-beta.9", "--run-id", "42"]),
-    ).toEqual({ ref: "dev", tag: "v0.3.0-beta.9", runId: "42", planOnly: true });
+    ).toEqual({
+      ref: "dev",
+      tag: "v0.3.0-beta.9",
+      runId: "42",
+      planOnly: true,
+      publicRelease: false,
+    });
+    expect(parseArgs(["--public-release", "--run-id", "42"])).toEqual({
+      ref: "dev",
+      tag: undefined,
+      runId: "42",
+      planOnly: false,
+      publicRelease: true,
+    });
+  });
+
+  it("refuses a --tag override in public-release mode", () => {
+    // The public release IS the exact stable tag of the built version, so an override could only
+    // ever name a different release than the one being published. Refused, never ignored.
+    expect(parseArgs(["--public-release", "--tag", "v0.3.1-beta.0"])).toBeUndefined();
   });
 
   it.each([[["--unknown"]], [["--tag"]], [["--ref"]]])(
@@ -97,7 +117,13 @@ describe("beta tag arithmetic", () => {
     );
     expect(previousBetaTag("v0.3.0-beta.0", ["v0.2.15"])).toBeUndefined();
     expect(previousBetaTag("v0.3.0-beta.2", [])).toBeUndefined();
-    expect(previousBetaTag("v0.3.0", ["v0.3.0-beta.1"])).toBeUndefined();
+    // The stable public tag supersedes its greatest evaluation beta; without it the last beta
+    // stays live with no pointer to the stable Latest release (Codex finding on #3054).
+    expect(previousBetaTag("v0.3.0", ["v0.3.0-beta.1"])).toBe("v0.3.0-beta.1");
+    expect(previousBetaTag("v0.3.0", ["v0.3.0-beta.1", "v0.3.0-beta.4", "v0.2.15"])).toBe(
+      "v0.3.0-beta.4",
+    );
+    expect(previousBetaTag("v0.3.0", ["v0.2.15"])).toBeUndefined();
     // A higher existing beta is never "previous" for a lower tag.
     expect(previousBetaTag("v0.3.0-beta.2", ["v0.3.0-beta.4"])).toBeUndefined();
   });
@@ -129,6 +155,29 @@ describe("releaseBody", () => {
 
   it("omits the supersede pointer for a first beta", () => {
     expect(releaseBody({ ...input, previousTag: undefined })).not.toContain("Supersedes");
+  });
+
+  it("states the unsigned status to a customer in public-release mode and keeps the install steps", () => {
+    // The public release must never quietly drop the honest signing statement: it is the reason
+    // the first launch needs an extra confirmation, and ADR-0121 D1 bounds the evaluation status
+    // on the condition that the notes state it. The prerelease-only sentence must not survive —
+    // this release IS publishable to npm latest.
+    const body = releaseBody({
+      ...input,
+      tag: "v0.3.1",
+      version: "0.3.1",
+      previousTag: undefined,
+      publicRelease: true,
+    });
+
+    expect(body).toContain("# Keiko 0.3.1");
+    expect(body).toContain("Unsigned evaluation build");
+    expect(body).not.toContain("Not publishable to npm latest");
+    expect(body).not.toContain("evaluation prerelease");
+    // The install steps a non-technical customer follows are the same ones the betas proved.
+    expect(body).toContain("Open Anyway");
+    expect(body).toContain("keiko-windows-x64-setup.exe");
+    expect(body).not.toContain("xattr");
   });
 });
 
@@ -163,10 +212,60 @@ describe("hermetic end-to-end (scripted gh double)", () => {
   const previousTag = `v${localVersion}-beta.1`;
   const currentTag = `v${localVersion}-beta.2`;
 
+  /**
+   * The governance answers a public release needs: the checkout binding, the release-source branch
+   * lookup, and the two verifier subprocesses. Separated from the artifact/codesign double below
+   * so each stays readable.
+   */
+  function governanceAnswer(line, overrides) {
+    // The publisher checkout binding: by default this checkout IS the built commit and clean.
+    if (line.startsWith("git rev-parse HEAD")) {
+      return { status: 0, stdout: `${overrides.head ?? "b2e3900a"}\n`, stderr: "" };
+    }
+    if (line.startsWith("git status --porcelain")) {
+      return { status: 0, stdout: overrides.dirty ?? "", stderr: "" };
+    }
+    // The release base branch declared by release.yml does not exist in this repository, so the
+    // source branch resolves to the default branch — exactly what it does live. An ABSENT branch
+    // is a 404; the resolver refuses any other failure rather than guessing, so the double states
+    // which of the two it is answering.
+    if (line.includes("/branches/")) {
+      if (overrides.releaseBranchExists === true) return { status: 0, stdout: "{}", stderr: "" };
+      return { status: 1, stdout: "", stderr: overrides.branchLookupError ?? "gh: Not Found" };
+    }
+    // The release-owner allowlist comes from the repository variable the release workflow injects.
+    if (line.includes("/actions/variables/KEIKO_RELEASE_OWNER_GITHUB_LOGINS")) {
+      if (overrides.allowlistUnavailable === true) {
+        return { status: 1, stdout: "", stderr: "gh: HTTP 403" };
+      }
+      return { status: 0, stdout: '{"value":"release-owner"}', stderr: "" };
+    }
+    return verifierAnswer(line, overrides);
+  }
+
+  /**
+   * The required-checks verifier and the live release-owner approval gate are spawned through the
+   * same process seam as gh, so they are answered here: success unless a test scripts a failure.
+   */
+  function verifierAnswer(line, overrides) {
+    if (
+      !line.includes("verify-release-required-checks") &&
+      !line.includes("check-release-impact")
+    ) {
+      return undefined;
+    }
+    const scripted = (overrides.failures ?? []).find(([needle]) => line.includes(needle));
+    return scripted === undefined
+      ? { status: 0, stdout: "", stderr: "" }
+      : { status: 1, stdout: "", stderr: scripted[1] };
+  }
+
   function ghDouble(recorded, overrides = {}) {
     return (command, args) => {
       const line = [command.split("/").pop(), ...args].join(" ");
       recorded.push(line);
+      const governance = governanceAnswer(line, overrides);
+      if (governance !== undefined) return governance;
       if (line.startsWith("gh release create")) {
         // The notes file dies with the temp directory — snapshot the rendered release body while
         // it still exists, so tests can assert what the published surface actually said.
@@ -206,6 +305,11 @@ describe("hermetic end-to-end (scripted gh double)", () => {
   // publish, so the default mirrors what ensureTagRefAtBuiltCommit just guaranteed. Moved-tag
   // and vanished-tag scenarios override via `failures`/`answers` (#3037).
   function defaultGhRefAnswer(joined) {
+    // The repository view, used to resolve the release source branch when release.yml's declared
+    // base branch does not exist.
+    if (joined === "api repos/oscharko-dev/Keiko") {
+      return { status: 0, stdout: '{"default_branch":"dev"}', stderr: "" };
+    }
     if (joined.startsWith("api --method POST repos/{owner}/{repo}/git/refs")) {
       return { status: 0, stdout: "{}", stderr: "" };
     }
@@ -253,7 +357,19 @@ describe("hermetic end-to-end (scripted gh double)", () => {
       ["run list --workflow", '[{"databaseId":42,"status":"in_progress"}]'],
       [
         "--json status,conclusion,headSha",
-        '{"status":"completed","conclusion":"success","headSha":"b2e3900a","event":"workflow_dispatch","headBranch":"dev","workflowDatabaseId":7}',
+        '{"status":"completed","conclusion":"success","headSha":"b2e3900a","event":"workflow_dispatch","headBranch":"dev","workflowDatabaseId":7,"attempt":1}',
+      ],
+      // The run's artifact listing: the public-release manifest records these immutable ids so
+      // the npm publisher can refuse a rerun's replacement artifacts.
+      [
+        "/artifacts?per_page",
+        JSON.stringify({
+          artifacts: [
+            { name: "portable-stage-macos-arm64-evaluation-unsigned", id: 700001, expired: false },
+            { name: "portable-stage-macos-x64-evaluation-unsigned", id: 700002, expired: false },
+            { name: "portable-stage-windows-x64-evaluation-unsigned", id: 700003, expired: false },
+          ],
+        }),
       ],
       // The portable-assets workflow's database id, resolved from its path — supplied-run
       // binding compares the run's workflowDatabaseId against it (#3037).
@@ -285,6 +401,188 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     if (artifact.includes("arm64")) return ["keiko-macos-arm64.zip"];
     return ["keiko-macos-x64.zip"];
   }
+
+  describe("public release source gate", () => {
+    // A beta may be cut from any ref; that is what a prerelease is for. A PUBLIC release becomes
+    // the Latest download a customer installs, so its bytes must come from integrated,
+    // gate-verified source. The workflow's own tag-push verification cannot answer this: it only
+    // starts once this script has already minted the tag and created the release.
+    function publicRun(recorded, overrides = {}) {
+      return withHostPlatform("darwin", () =>
+        withProcessRunner(ghDouble(recorded, overrides), () =>
+          runPortablePrerelease(["--run-id", "42", "--public-release"]),
+        ),
+      );
+    }
+
+    it("refuses a commit that is not contained in the integration branch", () => {
+      const recorded = [];
+      expect(() =>
+        publicRun(recorded, {
+          answers: [["compare/dev...", JSON.stringify({ status: "diverged" })]],
+        }),
+      ).toThrow(/not contained in dev/u);
+      expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+      expect(recorded.some((line) => line.includes("git/refs"))).toBe(false);
+    });
+
+    it("refuses a commit whose required checks have not passed", () => {
+      const recorded = [];
+      expect(() =>
+        publicRun(recorded, {
+          answers: [["compare/dev...", JSON.stringify({ status: "behind" })]],
+          failures: [["verify-release-required-checks", "ci is failing"]],
+        }),
+      ).toThrow(/required checks have not passed/u);
+      expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+    });
+
+    it("refuses to publish from a checkout that is not the built commit", () => {
+      // The required checks cover the built commit, not the code making the publication decision.
+      // A different checkout with the same package version would otherwise mint the stable tag and
+      // the Latest release from unverified local code.
+      const recorded = [];
+      expect(() => publicRun(recorded, { head: "0000000" })).toThrow(
+        /is at 0000000, not the built commit/u,
+      );
+      expect(recorded.some((line) => line.includes("git/refs"))).toBe(false);
+    });
+
+    it("refuses to publish from a dirty checkout", () => {
+      const recorded = [];
+      expect(() => publicRun(recorded, { dirty: " M scripts/release-publish.mjs\n" })).toThrow(
+        /uncommitted changes/u,
+      );
+      expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+    });
+
+    it("refuses to publish when the release-owner approval does not verify live", () => {
+      // This producer exposes the customer downloads BEFORE the npm publisher runs its own live
+      // approval check, so a stale or fabricated catalog approval would otherwise reach the public
+      // first. The same gate is brought forward rather than trusted from the catalog's own fields.
+      const recorded = [];
+      expect(() =>
+        publicRun(recorded, {
+          answers: [["compare/dev...", JSON.stringify({ status: "behind" })]],
+          failures: [["check-release-impact", "release-impact: FAIL - approval not verified"]],
+        }),
+      ).toThrow(/release-owner approval for this version did not verify/u);
+      expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+    });
+
+    it("refuses when the release-branch lookup does not resolve either way", () => {
+      // Absent is not the same as unknown. Treating an auth, rate-limit or network failure as
+      // "the release branch does not exist" would silently move release authority to the default
+      // branch while the configured one was alive.
+      const recorded = [];
+      expect(() =>
+        publicRun(recorded, { branchLookupError: "gh: API rate limit exceeded" }),
+      ).toThrow(/did not resolve/u);
+      expect(recorded.some((line) => line.includes("git/refs"))).toBe(false);
+    });
+
+    it("publishes at the exact stable tag as the latest release once the source is approved", () => {
+      const recorded = [];
+      publicRun(recorded, {
+        answers: [["compare/dev...", JSON.stringify({ status: "behind" })]],
+      });
+
+      const createLine = recorded.find((line) => line.startsWith("gh release create"));
+      expect(createLine).toContain(`v${localVersion}`);
+      expect(createLine).toContain("--latest");
+      expect(createLine).not.toContain("--prerelease");
+      // The evidence the npm publisher re-verifies before it promotes the dist-tag.
+      expect(createLine).toContain("keiko-portable-evaluation-manifest.json");
+    });
+
+    it("supersedes the greatest governed beta when the stable release goes public", () => {
+      // Without this the last evaluation beta keeps presenting itself with no pointer to the
+      // stable Latest release (Codex finding on #3054).
+      const recorded = [];
+      publicRun(recorded, {
+        answers: [["compare/dev...", JSON.stringify({ status: "behind" })]],
+      });
+
+      expect(recorded.some((line) => line.startsWith(`gh release edit ${previousTag}`))).toBe(true);
+    });
+
+    it("resolves the release-owner allowlist from the repository variable for a local run", () => {
+      // The workflow injects KEIKO_RELEASE_OWNER_GITHUB_LOGINS; a local operator shell does not.
+      // The producer resolves the same variable itself instead of letting the approval verifier
+      // refuse every approval over an empty allowlist (Codex finding on #3054).
+      const recorded = [];
+      const saved = process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;
+      delete process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;
+      try {
+        publicRun(recorded, {
+          answers: [["compare/dev...", JSON.stringify({ status: "behind" })]],
+        });
+        expect(
+          recorded.some((line) =>
+            line.includes("/actions/variables/KEIKO_RELEASE_OWNER_GITHUB_LOGINS"),
+          ),
+        ).toBe(true);
+      } finally {
+        if (saved !== undefined) process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS = saved;
+      }
+    });
+
+    it("refuses when the release-owner allowlist does not resolve", () => {
+      const recorded = [];
+      const saved = process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;
+      delete process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;
+      try {
+        expect(() =>
+          publicRun(recorded, {
+            answers: [["compare/dev...", JSON.stringify({ status: "behind" })]],
+            allowlistUnavailable: true,
+          }),
+        ).toThrow(/allowlist did not resolve/u);
+        expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+        expect(recorded.some((line) => line.includes("git/refs"))).toBe(false);
+      } finally {
+        if (saved !== undefined) process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS = saved;
+      }
+    });
+
+    it("refuses a public release on a non-darwin host instead of skipping the seal proof", () => {
+      // A beta reports the skip to a tester; a PUBLIC release asserts sealed bundles to a
+      // customer, so a seal that never ran must refuse — the beta.0 "damaged" regression must
+      // not reach the Latest release through a non-darwin publisher (Codex finding on #3054).
+      const recorded = [];
+      expect(() =>
+        withHostPlatform("linux", () =>
+          withProcessRunner(
+            ghDouble(recorded, {
+              answers: [["compare/dev...", JSON.stringify({ status: "behind" })]],
+            }),
+            () => runPortablePrerelease(["--run-id", "42", "--public-release"]),
+          ),
+        ),
+      ).toThrow(/must not assert seals it never proved/u);
+      expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+      expect(recorded.some((line) => line.includes("git/refs"))).toBe(false);
+    });
+
+    it("keeps an allowlist the environment already provides", () => {
+      const recorded = [];
+      const saved = process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;
+      process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS = "release-owner";
+      try {
+        publicRun(recorded, {
+          answers: [["compare/dev...", JSON.stringify({ status: "behind" })]],
+        });
+        expect(
+          recorded.some((line) =>
+            line.includes("/actions/variables/KEIKO_RELEASE_OWNER_GITHUB_LOGINS"),
+          ),
+        ).toBe(false);
+      } finally {
+        if (saved === undefined) delete process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;
+        else process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS = saved;
+      }
+    });
+  });
 
   it("publishes the four verified assets with checksums, provenance, and the supersede pointer", () => {
     const recorded = [];

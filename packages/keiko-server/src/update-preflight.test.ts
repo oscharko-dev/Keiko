@@ -1532,10 +1532,109 @@ describe("update preflight service", () => {
     deps.store.close();
   });
 
+  it("keeps one-click readiness for an owner issue-comment approval the publish gate verifies", async () => {
+    // 0.3.1 is approved by an owner comment on the release epic, not a pull-request review: the
+    // 0.3.0 GitHub release was withdrawn during verification and its tag is immutable, so the
+    // republication carries the artifact form scripts/check-release-impact.mjs verifies live
+    // against the GitHub API. A runtime that accepted only `github-pr-review:` reported a release
+    // the publish gate had approved as missing reviewed metadata and withheld the governed update.
+    const catalog = {
+      ...baseCatalog(),
+      entries: baseCatalog().entries.map((entry) =>
+        entry.packageVersion === "0.2.11"
+          ? {
+              ...entry,
+              review: {
+                ...entry.review,
+                approvalReference: "github-issue-comment:oscharko-dev/Keiko#2802#5230996334",
+              },
+            }
+          : entry,
+      ),
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          tag_name: "v0.2.11",
+          name: "Keiko 0.2.11",
+          body: "- Public note",
+        }),
+      ) as typeof fetch;
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: catalog,
+    });
+
+    expect(report.impact).toBeDefined();
+    expect(report.blockers).not.toContainEqual(
+      expect.objectContaining({ code: "release-impact-missing" }),
+    );
+    deps.store.close();
+  });
+
+  it("does not let an internal staging record block the operator's update", async () => {
+    // A repository-machinery record (the portable runtime staging contract is the real one) is
+    // reviewed, internal, and deliberately not one-click eligible — it describes a build lane, not
+    // the product being updated. Aggregating its ineligibility into the operator's blockers made
+    // every such historical record permanently disable the governed update for anyone below its
+    // version. `releaseNoteBullets` already omits these records for the same reason.
+    const base = baseCatalog();
+    const customerEntry = base.entries.find((entry) => entry.packageVersion === "0.2.11");
+    if (customerEntry === undefined) throw new Error("fixture must carry a 0.2.11 entry");
+    const catalog: ReleaseImpactCatalog = {
+      ...base,
+      entries: [
+        ...base.entries,
+        {
+          ...customerEntry,
+          id: "0.2.11-internal-staging",
+          internalOnly: true,
+          observableImpact: false,
+          oneClickEligible: false,
+          releaseNoteBullets: [],
+          // Attributes that would each leak into a different aggregation if the internal record
+          // reached it: the severity ceiling, the operator-facing entry list, and the
+          // supported-from floor (Codex finding on #3054 — one operator entry set, everywhere).
+          releaseNotePriority: "critical",
+          userActionRequired: true,
+          supportedFrom: ["0.2.11"],
+        },
+      ],
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(
+        jsonResponse({ tag_name: "v0.2.11", name: "Keiko 0.2.11", body: "- Public note" }),
+      ) as typeof fetch;
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: catalog,
+    });
+
+    expect(report.blockers).not.toContainEqual(
+      expect.objectContaining({ code: "one-click-ineligible" }),
+    );
+    // The internal record must be absent from the WHOLE operator resolution, not merely from
+    // blocker generation: no duplicated target entry in the report, no severity escalation, no
+    // support floor. Only the one customer-facing 0.2.11 record may speak for the target.
+    expect(
+      report.impact?.entries.filter((entry) => entry.packageVersion === "0.2.11"),
+    ).toHaveLength(1);
+    expect(report.severity).not.toBe("critical");
+    deps.store.close();
+  });
+
   it("compares semver numerically instead of lexically", () => {
     expect(compareSemver("0.2.9", "0.2.10")).toBeLessThan(0);
     expect(compareSemver("0.2.10", "0.2.10")).toBe(0);
-    expect(compareSemver("0.3.0", "0.2.99")).toBeGreaterThan(0);
+    expect(compareSemver("0.3.1", "0.2.99")).toBeGreaterThan(0);
   });
 
   it("rejects malformed semver comparisons instead of lexically sorting them", () => {

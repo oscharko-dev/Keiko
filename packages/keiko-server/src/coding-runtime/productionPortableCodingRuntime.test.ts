@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts";
 import type { RuntimeQualificationReceipt } from "@oscharko-dev/keiko-sandbox";
 
 import { verifyPortableAttestedSidecars } from "../update-portable-sidecar-verification.js";
@@ -514,7 +515,13 @@ describe("packaged evaluation lane", () => {
 
     const drifted = portableInstall("evaluation");
     mutateActivation(drifted, (activation) => {
-      activation.product = { packageName: "@oscharko-dev/keiko", packageVersion: "0.3.0" };
+      // The drift injects the CURRENT product identity over the fixture's archived 0.2.15 one.
+      // Derived from the exported constant so a version bump cannot silently turn this into a
+      // no-op mutation (review findings on #3054).
+      activation.product = {
+        packageName: "@oscharko-dev/keiko",
+        packageVersion: KEIKO_PRODUCT_VERSION,
+      };
     });
     expect(discoverEvaluation(drifted)?.qualification.releaseReceipt).not.toBe(first);
   });

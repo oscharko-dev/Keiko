@@ -322,8 +322,18 @@ describe("release workflow portable asset manifest resolution", () => {
     }
   });
 
-  it("requires a reviewed artifact bundle for stable latest publishes", () => {
-    expect(() =>
+  it("defers the stable-latest asset requirement to the publisher instead of refusing here", () => {
+    // RELOCATED, not relaxed. This pin used to demand a reviewed bundle as a dispatch INPUT.
+    // That refused the publish job before release-publish.mjs could look at the release, and it
+    // was the weaker question: a well-formed input proves nothing about whether the upload
+    // landed. The invariant — a stable latest publish must be backed by reviewed portable
+    // assets — now lives in release-publish.mjs, which requires all four downloads to be present
+    // on the GitHub Release and, when this run did not upload them, verifies their evaluation
+    // manifest and re-downloads every byte before npm learns the dist-tag. Its pins are
+    // "refuses a stable latest publish whose GitHub release carries no downloads" and the
+    // prepublished-evidence pins in release-publish-pipeline.test.mjs. Assets that ARE handed in
+    // still pass the qualified-run binding proven by the tests below.
+    expect(
       resolvePortableAssetsManifest(
         {
           NPM_DIST_TAG: "latest",
@@ -333,7 +343,7 @@ describe("release workflow portable asset manifest resolution", () => {
         },
         root(),
       ),
-    ).toThrow("stable latest publishes require a reviewed portable asset bundle");
+    ).toBe("portable-assets.json");
   });
 
   it("rejects incomplete reviewed artifact bundle inputs", () => {

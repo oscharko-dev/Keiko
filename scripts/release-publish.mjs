@@ -30,6 +30,7 @@ import {
   readPortableManifest,
   validatePortableCandidateManifest,
   validatePortablePublishedManifest,
+  WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 } from "./portable-runtime.mjs";
 import { internalDependencyEntries, scope } from "./release-workspace-policy.mjs";
 import { renderReleaseImpactNotes } from "./release-impact-notes.mjs";
@@ -38,6 +39,12 @@ import {
   normalizePortableSetupCompanion,
   portableSetupCompanionRecord,
 } from "./lib/portable-setup-companion.mjs";
+import { PORTABLE_EVALUATION_MANIFEST_ASSET_NAME } from "./lib/portable-evaluation-manifest.mjs";
+import {
+  collectEvaluationArtifactDigests,
+  jsonFromCommand,
+  portableReleaseGate,
+} from "./lib/portable-release-verification.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const packageRegistryScope = scope.slice(0, -1);
@@ -181,10 +188,69 @@ function portableUploadEnabled(options) {
   return !options.skipGithubRelease && !options.dryRun;
 }
 
-function stablePortableAssetsRequired(rootManifest, options) {
-  return !options.planOnly && !options.dryRun && stableLatestRelease(rootManifest, options);
+// A stable `latest` release must offer the customer downloads — that requirement did not move.
+// What moved is WHERE it is answered. The old gate demanded a qualified asset MANIFEST as a
+// publish INPUT, which only the Developer-ID/Azure-signed production lane can produce; the release
+// owner scoped the first public release to the unsigned EVALUATION lane, so no stable `latest`
+// publish this project can currently produce was accepted. The requirement is now answered against
+// REALITY: before npm learns the dist-tag, the GitHub Release must carry all four downloads, and
+// downloads this run did not upload must be bound to evidence and re-fetched byte for byte.
+//
+// The decisions live in scripts/lib/portable-release-verification.mjs because THIS file only ever
+// runs as a spawned CLI — nothing defined here can be exercised in-process, so a gate written here
+// would be untestable by construction. What stays here is its process I/O.
+const portableGate = portableReleaseGate({
+  fail,
+  fetchAssetToFile: (url, destination) =>
+    commandResult(
+      "curl",
+      [
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--location",
+        // Bounded so a stalled endpoint cannot hang the publish run indefinitely.
+        "--connect-timeout",
+        "10",
+        "--max-time",
+        "120",
+        "--output",
+        destination,
+        url,
+      ],
+      { env: networkEnvironment() },
+    ),
+  gh,
+  log: (message) => {
+    console.log(message);
+  },
+  setupAssetName: WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+  snapshot: githubReleaseSnapshot,
+  collectRunArtifactDigests: (runId, names) =>
+    collectEvaluationArtifactDigests({ gh, hashFile: sha256FileSync }, runId, names),
+  targets: PORTABLE_TARGETS,
+  verifyBytes: runPortableDownloadSmoke,
+});
+
+function verifyPrepublishedStableRelease(rootManifest, options) {
+  if (!stableLatestRelease(rootManifest, options) || options.dryRun) return false;
+  const head = commandResult("git", ["rev-parse", "HEAD"]);
+  if (head.status !== 0) fail("could not resolve the commit being released.");
+  return portableGate.verifyPrepublished(
+    releaseTag(rootManifest.version),
+    githubRepository(),
+    portableAssetsWorkflowPath,
+    head.stdout.trim(),
+  );
 }
 
+/**
+ * Release notes advertise portable downloads exactly when the release is guaranteed to carry them.
+ * For a stable `latest` release that guarantee is now unconditional: ensureStableLatestDownloads
+ * fails the publish before npm learns the dist-tag unless all four downloads are present and
+ * evidence-bound, so the notes can no longer point at downloads that do not exist — the failure
+ * Codex raised on #3051. A prerelease never advertises them; it is not a promotion surface.
+ */
 function portableReleasePromotionEnabled(rootManifest, options) {
   return stableLatestRelease(rootManifest, options);
 }
@@ -544,18 +610,27 @@ function containedLocalPath(root, relativePath, label, failures) {
 }
 
 function loadPortableAssets(rootManifest, options) {
-  if (stablePortableAssetsRequired(rootManifest, options) && options.skipGithubRelease) {
-    fail("stable latest publishes must attach portable GitHub Release Assets.");
-  }
-  if (typeof options.portableAssetsManifest !== "string" || options.portableAssetsManifest === "") {
-    if (stablePortableAssetsRequired(rootManifest, options)) {
-      fail("stable latest publishes require --portable-assets-manifest.");
-    }
-    return [];
-  }
-  const qualification = stablePortableAssetsRequired(rootManifest, options)
-    ? requiredPortableQualification(rootManifest)
-    : undefined;
+  const suppliesManifest =
+    typeof options.portableAssetsManifest === "string" && options.portableAssetsManifest !== "";
+  // Supplying assets and then skipping the GitHub Release would publish an npm dist-tag whose
+  // announced downloads do not exist: still refused, for stable and prerelease alike.
+  const stableLatest = stableLatestRelease(rootManifest, options);
+  const live = !options.planOnly && !options.dryRun;
+  const inputFailure = portableGate.inputFailure({
+    suppliesManifest,
+    skipGithubRelease: options.skipGithubRelease === true,
+    stableLatest: stableLatest && live,
+  });
+  if (inputFailure !== undefined) fail(inputFailure);
+  if (!suppliesManifest) return [];
+  // A stable `latest` release that DOES carry assets is still held to the qualified-run
+  // provenance: the same run, attempt, tag, source SHA and workflow that built them. Only a LIVE
+  // publish, though — that provenance lives in `KEIKO_PORTABLE_ASSETS_*`, which exists only inside
+  // the release workflow, so demanding it in plan-only and dry-run modes made a local release
+  // preview fail before it could render its notes even with a perfectly valid manifest (Codex
+  // finding on #3054). Those modes still run the full structural manifest validation below.
+  const qualification =
+    stableLatest && live ? requiredPortableQualification(rootManifest) : undefined;
   return portableAssetsFromManifest(
     resolve(options.portableAssetsManifest),
     rootManifest,
@@ -587,7 +662,10 @@ function portableQualificationFailures(qualification, rootManifest, head) {
   const repositoryMatches =
     typeof qualification.repository === "string" &&
     qualification.repository !== "" &&
-    qualification.repository === process.env.GITHUB_REPOSITORY;
+    // githubRepository() resolves the git remote when GITHUB_REPOSITORY is absent, so a local
+    // stable publish compares against the repository it is actually publishing from instead of
+    // against an empty string (Codex and CodeRabbit findings on #3054).
+    qualification.repository === githubRepository();
   const checks = [
     [/^[a-f0-9]{40}$/u.test(qualification.sourceSha ?? ""), "source SHA must be exact"],
     [qualification.tag === releaseTag(rootManifest.version), "stable tag must match release tag"],
@@ -1100,6 +1178,30 @@ function printReleaseNotesPreview(notes) {
   console.log("-----END KEIKO RELEASE NOTES-----");
 }
 
+/**
+ * The releases this publisher must never edit over (Codex findings on #3054). An interrupted
+ * `--public-release` leaves a resumable stable-tag DRAFT; editing it would keep it private while
+ * npm publishes. A COMPLETED `--public-release` leaves a published release carrying the
+ * evaluation manifest; uploading qualified production assets over it would clobber only
+ * same-named files and leave that evidence beside foreign bytes — a mixed-provenance surface.
+ * Both belong to the evaluation lane: only the prepublished VERIFY path may touch such a tag.
+ * An unreadable answer refuses: fail closed.
+ */
+function refuseEvaluationOwnedRelease(existing, tag) {
+  const view = jsonFromCommand(existing);
+  if (view?.isDraft !== false) {
+    fail(
+      `GitHub release ${tag} exists as a draft — an interrupted evaluation publish leaves one. Resume or delete it with scripts/release-portable-prerelease.mjs before publishing over this tag.`,
+    );
+  }
+  const assets = Array.isArray(view.assets) ? view.assets : [];
+  if (assets.some((asset) => asset?.name === PORTABLE_EVALUATION_MANIFEST_ASSET_NAME)) {
+    fail(
+      `GitHub release ${tag} was published by the evaluation lane and carries its evidence manifest; editing or uploading over it would mix provenance. A qualified production publish needs its own version and tag.`,
+    );
+  }
+}
+
 function ensureGithubRelease(rootPackage, options, notes) {
   const tag = releaseTag(rootPackage.version);
   if (options.skipGithubRelease || options.dryRun) {
@@ -1113,9 +1215,10 @@ function ensureGithubRelease(rootPackage, options, notes) {
   const prerelease = releaseIsPrerelease(rootPackage.version, options.tag);
   const latestArgs = options.tag === "latest" && !prerelease ? ["--latest"] : [];
   const prereleaseArgs = prerelease ? ["--prerelease"] : [];
-  const existing = gh(["release", "view", tag, "--repo", repo]);
+  const existing = gh(["release", "view", tag, "--repo", repo, "--json", "isDraft,assets"]);
 
   if (existing.status === 0) {
+    refuseEvaluationOwnedRelease(existing, tag);
     console.log(`release-publish: GitHub release ${tag} exists; updating metadata.`);
     runGh([
       "release",
@@ -1680,8 +1783,9 @@ run("npm", ["run", "check:publish-manifests"], { stdio: "inherit" });
 run("npm", ["run", options.planOnly ? "check:release-impact" : "check:release-impact:publish"], {
   stdio: "inherit",
 });
-const githubReleaseNotes = releaseNotes(rootManifest, options);
+// Assets first: the notes may only advertise portable downloads this release actually carries.
 const portableAssets = loadPortableAssets(rootManifest, options);
+const githubReleaseNotes = releaseNotes(rootManifest, options);
 
 if (options.planOnly) {
   printReleaseNotesPreview(githubReleaseNotes);
@@ -1697,12 +1801,24 @@ ensureTrackedTreeIsClean();
 const { cleanup, env: npmEnv, hasToken } = createNpmEnvironment(options.registry);
 try {
   runReleaseGates();
+  // A stable `latest` release must be proven complete BEFORE npm learns the dist-tag. When this
+  // run has nothing to upload, that proof is taken from the release the governed evaluation lane
+  // already published, and it is taken FIRST — creating the release up front would leave a public,
+  // empty Latest release behind whenever the verification then failed, which also blocks the
+  // evaluation lane from recreating that tag (Codex finding on #3054).
+  const uploadsAssets = portableAssets.length > 0;
+  // A verified prepublished release is COMPLETE — the governed evaluation lane created it with the
+  // Latest flag and the customer-facing install notes (first-launch steps, checksums, provenance).
+  // Rewriting its body here with the generated catalog notes would replace exactly the guidance a
+  // non-technical customer needs. This run owns npm; that lane owns its release surface.
+  const prepublished = !uploadsAssets && verifyPrepublishedStableRelease(rootManifest, options);
   const releaseInfo =
-    portableAssets.length > 0 && portableUploadEnabled(options)
+    uploadsAssets && portableUploadEnabled(options)
       ? ensureGithubRelease(rootPackage, options, githubReleaseNotes)
       : undefined;
   if (releaseInfo !== undefined) {
     publishPortableReleaseAssets(options, portableAssets, releaseInfo);
+    portableGate.assertUploadedSetComplete(releaseInfo);
   }
   for (const pkg of workspacePackages) {
     publishPackage(pkg, npmEnv, options, hasToken);
@@ -1715,7 +1831,9 @@ try {
     }
   }
   runRegistrySmoke(rootPackage, options, npmEnv);
-  if (releaseInfo === undefined) {
+  // A prepublished release is already correct and already Latest; anything else still needs its
+  // GitHub Release created or refreshed after the registry smoke.
+  if (releaseInfo === undefined && !prepublished) {
     const finalReleaseInfo = ensureGithubRelease(rootPackage, options, githubReleaseNotes);
     publishPortableReleaseAssets(options, portableAssets, finalReleaseInfo);
   }

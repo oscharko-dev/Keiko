@@ -6,6 +6,11 @@
 //
 // PRE-FIX: a pre-created fresh lock file made applyReviewDecision retry 40×5ms then throw a write
 // conflict. POST-FIX: the ownerless lock is reclaimed and the decision persists.
+//
+// The reclaim tests count SLEEPS, not milliseconds. A wall-clock ceiling measures the runner, not
+// the code: it was widened from 250ms to 500ms after one flake and then failed at 1024ms on a
+// loaded runner, while a machine fast enough could pass it even after a partial regression toward
+// polling. Zero sleeps is the property itself, and it holds on any machine.
 
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -20,11 +25,6 @@ import {
 } from "../reviewStore.js";
 
 const RUN_ID = "run-lock-persistence-007";
-// Widened from 250ms: the reclaim path itself has no hard ceiling (file-stat/read scheduling under
-// CI load), and 250ms was observed to flake at ~278ms under load while still nowhere near the
-// deterministic ~200ms-plus-per-attempt-I/O floor of the busy-wait path this test distinguishes
-// from (40 attempts x 5ms sleep alone is 200ms, before any retry I/O overhead).
-const DEAD_LOCK_RECLAIM_BUDGET_MS = 500;
 const LIVE_LOCK_EXPECTED_POLLS = 40;
 const LIVE_LOCK_EXPECTED_SLEEPS = 39;
 const dirs: string[] = [];
@@ -58,32 +58,29 @@ afterEach(() => {
 });
 
 describe("withReviewArtifactLock — non-blocking reclaim (GEN-PERF-PERSISTENCE-007)", () => {
-  it("reclaims a fresh, ownerless lock instantly instead of busy-waiting all attempts", () => {
-    const evidenceDir = freshEvidenceDir();
-    // A FRESH lock file with no PID inside — no live owner.
-    const lockPath = reviewLockPath(evidenceDir);
-    writeFileSync(lockPath, "");
-
-    const start = performance.now();
-    approveRun(evidenceDir);
-    const elapsedMs = performance.now() - start;
-
-    // No 40x5ms busy-wait+conflict: reclaim stays comfortably below a user-visible stall.
-    expect(elapsedMs).toBeLessThan(DEAD_LOCK_RECLAIM_BUDGET_MS);
-    expect(loadRunReviewState(RUN_ID, evidenceDir)?.runState).toBe("approved");
-    expect(() => readFileSync(lockPath, "utf8")).toThrow();
-  });
-
-  it("reclaims a fresh lock whose recorded PID is not alive", () => {
+  it.each([
+    ["is ownerless", ""],
+    ["records a PID that is not alive", "2147483646\n"],
+  ])("reclaims a fresh lock that %s without busy-waiting once", (_label, lockContents) => {
     const evidenceDir = freshEvidenceDir();
     const lockPath = reviewLockPath(evidenceDir);
-    writeFileSync(lockPath, "2147483646\n");
+    writeFileSync(lockPath, lockContents);
+    const sleepSpy = vi.spyOn(Atomics, "wait");
 
-    const start = performance.now();
-    approveRun(evidenceDir);
-    expect(performance.now() - start).toBeLessThan(DEAD_LOCK_RECLAIM_BUDGET_MS);
-    expect(loadRunReviewState(RUN_ID, evidenceDir)?.runState).toBe("approved");
-    expect(() => readFileSync(lockPath, "utf8")).toThrow();
+    try {
+      approveRun(evidenceDir);
+
+      // ZERO sleeps is the invariant, stated exactly. The busy-wait path this distinguishes from
+      // sleeps LIVE_LOCK_EXPECTED_SLEEPS times, so any regression toward polling shows up as a
+      // non-zero count on the very first retry — a strictly tighter bound than the wall-clock
+      // ceiling this replaces, which measured the runner rather than the code and had to be
+      // widened once already before flaking again at 1024ms on a loaded runner.
+      expect(sleepSpy).not.toHaveBeenCalled();
+      expect(loadRunReviewState(RUN_ID, evidenceDir)?.runState).toBe("approved");
+      expect(() => readFileSync(lockPath, "utf8")).toThrow();
+    } finally {
+      sleepSpy.mockRestore();
+    }
   });
 
   it("leaves no lock file behind after a normal decision", () => {

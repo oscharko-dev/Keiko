@@ -63,7 +63,7 @@ function runtime(
 const HELPER_DIGEST = "b".repeat(64);
 const HELPER_COMMIT = "c".repeat(40);
 const HELPER_TREE = "d".repeat(64);
-const PACKAGE_VERSION = "0.3.0";
+const PACKAGE_VERSION = "0.3.1";
 
 /**
  * A complete, valid packaged secure-read manifest whose ONLY variable is the declared lane. Both

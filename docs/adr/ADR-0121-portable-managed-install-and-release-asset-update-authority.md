@@ -63,7 +63,28 @@ It does not create another platform target, payload authority, or update channel
 
 The three platform targets are release-blocking as a set, and the Windows setup companion is
 release-blocking for `windows-x64`. A stable release is not portable-complete when a required
-archive or companion is missing, unsigned, unnotarized where required, or unverified.
+archive or companion is missing, unnotarized where required, or unverified.
+
+**Where completeness is decided (amended 2026-08-09, issue #2802).** Release-blocking is answered
+against the published release, not against a publish input. Before npm learns the `latest`
+dist-tag, `scripts/release-publish.mjs` verifies that the GitHub Release actually carries all four
+downloads and fails closed otherwise. The earlier formulation demanded a qualified asset *manifest*
+as an input to the publish job, which is strictly weaker — a well-formed manifest proves nothing
+about whether the upload landed — and it was unsatisfiable for the release the owner had scoped,
+so it refused every stable release the project could build. Assets that ARE handed in still pass
+the full qualified-run provenance and digest binding; assets already on the tag are verified by
+presence and by the reviewed metadata bound to them.
+
+**Signing status for the 0.3.x public evaluation program (amended 2026-08-09, issue #2802).** A
+stable release may carry `evaluation` signing status: bundles that are sealed — `codesign --verify
+--deep --strict` passes, so macOS does not report a damaged app — but carry no Apple Developer ID,
+no notarization, and no Azure trusted publisher. This is the release owner's scope decision for
+Keiko's first public download release and it is bounded three ways: the status is recorded in the
+reviewed release-impact entry, the release notes state it together with the first-launch steps it
+implies (right-click → Open on macOS, the SmartScreen notice on Windows), and D7 is untouched —
+production signing credentials, their protected environments, and the signed-lane verification
+remain exactly as specified. When the signing subscriptions are in place, the production lane
+supersedes this status without a further amendment.
 
 Each asset must be accompanied by reviewed metadata that binds the artifact name, platform target,
 GitHub release id, release tag, asset id, asset name, size in bytes, Keiko version, bundled Node.js
@@ -402,6 +423,12 @@ Security review for implementation under this ADR must cover:
   exception for release-qualified macOS bundles. Administrator, System Extension, and Full Disk
   Access approval dialogs are part of the one-time first start; MDM may preinstall or preapprove
   them. Windows and every other system-managed path remain unchanged and fail closed.
+- **2026-08-09 — Issue #2802:** Amended D1 twice for Keiko's first public download release.
+  Portable completeness is now verified against the published GitHub Release before npm learns the
+  `latest` dist-tag, replacing the weaker demand for a qualified manifest as a publish input; and a
+  stable release may carry `evaluation` signing status (sealed, no Developer ID, no notarization,
+  no Azure trusted publisher) when the reviewed release-impact entry records it and the release
+  notes state it. D7 and the production signing lane are unchanged.
 - **2026-08-07 — ADR-0163 D9:** Amended D8's `workflow_dispatch` sentence. A dispatch run is no
   longer necessarily `unverified-staging`: an explicitly requested evaluation build produces
   `evaluation-unqualified`. Neither is attested and neither can reach `assemble`. D7 is unchanged

@@ -97,8 +97,8 @@ import type {
 } from "./index.js";
 
 describe("keiko-model-gateway package surface", () => {
-  it("exposes the version constant pinned at 0.1.0", () => {
-    expect(KEIKO_MODEL_GATEWAY_VERSION).toBe("0.3.0");
+  it("exposes the version constant pinned at 0.3.1", () => {
+    expect(KEIKO_MODEL_GATEWAY_VERSION).toBe("0.3.1");
   });
 
   it("exposes the capability registry as a frozen-shaped readonly array", () => {
