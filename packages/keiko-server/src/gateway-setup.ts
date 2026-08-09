@@ -322,6 +322,12 @@ interface ProviderRawOptions {
 // observation (recordVerifiedCapability → replaceModelCapability) survives a routine re-save,
 // which submits no preserveExisting flag. The mode gate belongs on the ENDPOINT-MOVE carry-over
 // below, where this URL match misses and nothing verified the stored value at the new endpoint.
+// The protocol the adapter actually speaks: an absent endpoint style IS the OpenAI-compatible
+// shape, so the two spellings must compare equal wherever a protocol CHANGE is the question.
+function effectiveEndpointStyle(style: string | undefined): string {
+  return style ?? "openai-compatible";
+}
+
 function storedProviderForModel(
   stored: GatewayConfig | undefined,
   modelId: string,
@@ -349,8 +355,12 @@ function existingCapabilityForSetup(
   // old one prove nothing about the new one. The setup probe performs buffered chat only and
   // reverifies none of them, so a reused capability would advertise unverified behavior (review
   // finding on #3046). Unchanged protocol, unchanged identity — a rotation still keeps them.
+  // An absent style and an explicit "openai-compatible" are the SAME protocol — the adapter sends
+  // the identical request shape — so a same-URL import that merely spells the default out must
+  // not discard verified observations (review finding on #3046).
   if (
-    of.endpointStyle !== protocol.submitted.endpointStyle ||
+    effectiveEndpointStyle(of.endpointStyle) !==
+      effectiveEndpointStyle(protocol.submitted.endpointStyle) ||
     of.apiVersion !== protocol.submitted.apiVersion
   ) {
     return undefined;
@@ -2270,7 +2280,7 @@ function setupEndpointProtocol(
 const SETUP_API_VERSION_RE = /^\d{4}-\d{2}-\d{2}(?:-preview)?$/u;
 
 function pairedEndpointProtocol(
-  endpointStyle: ModelProviderConfig["endpointStyle"] | undefined,
+  endpointStyle: string | undefined,
   apiVersion: string | undefined,
 ): Pick<SetupGatewayCredentials, "endpointStyle" | "apiVersion"> | RouteResult {
   if (apiVersion !== undefined && endpointStyle !== "azure-openai-deployment") {
@@ -4762,12 +4772,16 @@ async function verifyAndSaveExistingConfigUpdate(
 function shouldRequireDeploymentNames(
   request: SetupRequest,
   baseUrlCandidates: readonly string[],
+  env: EnvSource,
 ): boolean {
   if (request.deploymentNames.length !== 0) return false;
-  // The deployment path IS the requirement: a classic Azure OpenAI host stated as
-  // azure-openai-deployment cannot be discovered through generic /models, so without this it
-  // failed at discovery instead of naming the missing deployments (review finding on #3046).
-  if (request.endpointStyle === "azure-openai-deployment") return true;
+  // The deployment path IS the requirement: a classic Azure OpenAI host on that path cannot be
+  // discovered through generic /models, so without this it failed at discovery instead of naming
+  // the missing deployments (review finding on #3046). The EFFECTIVE style decides — a request
+  // that omits the field still lands on the deployment path when KEIKO_DEFAULT_ENDPOINT_STYLE
+  // says so, and discovery would fail exactly the same way.
+  const effectiveStyle = request.endpointStyle ?? env.KEIKO_DEFAULT_ENDPOINT_STYLE;
+  if (effectiveStyle === "azure-openai-deployment") return true;
   return baseUrlCandidates.some((baseUrl) => isAzureFoundryBaseUrl(baseUrl));
 }
 
@@ -4784,7 +4798,7 @@ async function verifyAndSaveGatewaySetup(
     return figmaFailure;
   }
   const baseUrlCandidates = candidateBaseUrls(request.baseUrl);
-  if (shouldRequireDeploymentNames(request, baseUrlCandidates)) {
+  if (shouldRequireDeploymentNames(request, baseUrlCandidates, deps.env)) {
     return deploymentNamesRequiredResult();
   }
   const errors: string[] = [];

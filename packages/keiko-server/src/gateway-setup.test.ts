@@ -6372,6 +6372,78 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("keeps observations when an import only spells out the default protocol", async () => {
+    // Review finding on #3046: a stored provider with no endpointStyle and a same-URL import that
+    // declares "openai-compatible" are the SAME protocol — the adapter sends the identical
+    // request shape — but the raw comparison read it as a change and discarded verified
+    // observations the setup probe never re-establishes.
+    const uiDir = await tempDir("keiko-gw-ui-default-protocol-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-default-protocol-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "plain-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            capability: { kind: "chat", supportsDocumentInput: true },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const imported = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "chat-token",
+        deploymentNames: ["plain-chat"],
+        endpointStyle: "openai-compatible",
+      }),
+      deps,
+    );
+    expect(imported.status).toBe(200);
+    const capability = currentGatewayConfig(deps)?.capabilities?.find(
+      (entry) => entry.id === "plain-chat",
+    );
+    expect(capability).toMatchObject({ supportsDocumentInput: true });
+    deps.store.close();
+  });
+
+  it("requires deployments when the environment puts the setup on the Azure path", async () => {
+    // Review finding on #3046: the guard read the RAW request style, so a fresh setup that omits
+    // the field while KEIKO_DEFAULT_ENDPOINT_STYLE supplies the deployment path fell through to
+    // generic /models discovery and failed there instead of naming the missing deployments.
+    const uiDir = await tempDir("keiko-gw-ui-env-deployments-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-env-deployments-"),
+      env: {
+        ...VAULT_ENV,
+        KEIKO_DEFAULT_ENDPOINT_STYLE: "azure-openai-deployment",
+        KEIKO_DEFAULT_API_VERSION: "2025-04-01-preview",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://my-azure.openai.azure.com", apiKey: "azure-token" }),
+      deps,
+    );
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "GATEWAY_DEPLOYMENTS_REQUIRED" } });
+    deps.store.close();
+  });
+
   it("leaves a dedicated embedding that spoke its own protocol alone", async () => {
     // Review finding on #3046: an embedding sharing the primary's URL, credential and header but
     // deliberately using a different valid protocol was classified as sharing, so a same-URL
