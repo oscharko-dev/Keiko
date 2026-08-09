@@ -20,8 +20,12 @@
 
 export const PORTABLE_EVALUATION_MANIFEST_ASSET_NAME = "keiko-portable-evaluation-manifest.json";
 
-/** The only verification policy this artifact may declare; the signed lane never uses it. */
-export const PORTABLE_EVALUATION_POLICY = "evaluation";
+/**
+ * The only verification policy this artifact may declare; the signed lane never uses it. Module
+ * scope on purpose — the producer stamps it and the validator requires it, both from here, so
+ * there is no caller that should be able to name a different policy.
+ */
+const PORTABLE_EVALUATION_POLICY = "evaluation";
 
 const SHA256_RE = /^[a-f0-9]{64}$/u;
 const COMMIT_RE = /^[a-f0-9]{40}$/u;
