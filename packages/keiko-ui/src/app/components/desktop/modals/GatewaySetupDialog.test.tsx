@@ -1791,14 +1791,118 @@ describe("GatewaySetupDialog", () => {
       "azure-tts",
     );
     await userEvent.type(screen.getByLabelText(/output voice/i), "ash");
+    // The selector is the feature under test: without this the assertion passed with the whole
+    // style control removed, and an api-version-without-style pair is what the server rejects
+    // (review findings on #3048).
+    await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
+    await userEvent.click(screen.getByRole("option", { name: "Azure deployment path" }));
     await userEvent.type(screen.getByLabelText(/audio api version/i), "2025-04-01-preview");
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
 
     await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
     expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).toMatchObject({
       voiceBaseUrl: "https://new-voice.example.com",
+      voiceEndpointStyle: "azure-openai-deployment",
       voiceApiVersion: "2025-04-01-preview",
     });
+  });
+
+  it("enables the save when a stored audio endpoint's protocol is the only correction", async () => {
+    // Review finding on #3048: hasVoiceCredentialInput never looked at the two protocol fields
+    // this PR exposes, so "Test & save" stayed disabled for the one edit they exist to allow —
+    // correcting the style or api version of an endpoint that is otherwise unchanged. The
+    // operator had to touch an unrelated field to unlock the save.
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedModels={[modelCapability("internal-chat"), semanticRealtimeCapability("stored-rt")]}
+      />,
+    );
+    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    expect(screen.getByRole("button", { name: /test & save/i })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
+    await userEvent.click(screen.getByRole("option", { name: "Azure deployment path" }));
+
+    expect(screen.getByRole("button", { name: /test & save/i })).toBeEnabled();
+  });
+
+  it("drops a hand-edited imported protocol when the audio endpoint then moves", async () => {
+    // Review finding on #3048: stating the protocol by hand released the uploaded URL binding
+    // outright, and in a FRESH dialog the endpoint identity ref is still undefined after an
+    // upload (the upload sets the URL programmatically), so the later URL change fired no
+    // reset. The old host's protocol then rode the submit to the new host — exactly the silent
+    // inheritance the binding exists to prevent. A manual statement now binds to the URL in the
+    // form at the moment it is made.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "gpt-5o",
+      testedModelIds: ["gpt-5o"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.upload(
+      await screen.findByLabelText(/load keiko\.config\.json/i),
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "gpt-5o",
+                baseUrl: "https://llm-gateway.example.com/v1",
+                capability: { id: "gpt-5o", kind: "chat" },
+              },
+              {
+                modelId: "azure-tts",
+                baseUrl: "https://old-voice.example.com",
+                endpointStyle: "azure-openai-deployment",
+                apiVersion: "2025-01-01-preview",
+                capability: {
+                  id: "azure-tts",
+                  kind: "voice",
+                  voiceProviderLocality: "azure-foundry",
+                  supportsSpeechOutput: true,
+                  outputVoiceId: "ash",
+                },
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(/audio endpoint url/i)).toHaveValue(
+        "https://old-voice.example.com",
+      ),
+    );
+
+    // A hand correction of the imported version, then the endpoint moves to a different host.
+    await userEvent.clear(screen.getByLabelText(/audio api version/i));
+    await userEvent.type(screen.getByLabelText(/audio api version/i), "2025-04-01-preview");
+    await userEvent.clear(screen.getByLabelText(/audio endpoint url/i));
+    await userEvent.type(
+      screen.getByLabelText(/audio endpoint url/i),
+      "https://new-voice.example.com",
+    );
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
+    // A configured speech-output deployment requires an explicit output voice.
+    await userEvent.type(screen.getByLabelText(/output voice/i), "ash");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(setupGateway).mock.calls[0]?.[0] ?? {};
+    expect(payload).toMatchObject({ voiceBaseUrl: "https://new-voice.example.com" });
+    expect(payload).not.toHaveProperty("voiceEndpointStyle");
+    expect(payload).not.toHaveProperty("voiceApiVersion");
   });
 
   it("submits the imported endpoint protocol while the form still points at the uploaded endpoint", async () => {

@@ -331,6 +331,8 @@ function dropDatasetOpenCounter(root: HTMLElement, countKey: string, flagAttribu
 
 interface VoiceCredentialInputFields {
   readonly voiceBaseUrl: string;
+  readonly voiceEndpointStyle: string;
+  readonly voiceApiVersion: string;
   readonly voiceApiKey: string;
   readonly voiceApiKeyHeaderName: string;
   readonly voiceModelId: string;
@@ -347,6 +349,12 @@ interface VoiceCredentialInputFields {
 function hasVoiceCredentialInput(fields: VoiceCredentialInputFields): boolean {
   const textInputs = [
     fields.voiceBaseUrl,
+    // The endpoint protocol is voice credential input like any other: without it the save stayed
+    // disabled for the one correction the visible fields exist to allow (review finding on
+    // #3048). In fresh mode this also makes a protocol stated with no deployment report the
+    // canonical "name a deployment" error instead of being ignored.
+    fields.voiceEndpointStyle,
+    fields.voiceApiVersion,
     fields.voiceApiKey,
     fields.voiceApiKeyHeaderName,
     fields.voiceModelId,
@@ -2297,15 +2305,23 @@ export function GatewaySetupDialog({
   const [voiceApiVersion, setVoiceApiVersion] = useState("");
   const [voiceProtocolBoundBaseUrl, setVoiceProtocolBoundBaseUrl] = useState("");
 
-  // Stating the protocol by hand releases the uploaded URL binding: the operator is declaring it
-  // for the endpoint currently in the form (review finding on #3042).
+  // Stating the protocol by hand REBINDS it to the endpoint currently in the form (review
+  // finding on #3042). Releasing the binding outright would reopen the hole it closes: after an
+  // upload the endpoint identity ref is still undefined in a fresh dialog — the upload sets the
+  // URL programmatically — so a later URL change fires no reset, and an unbound protocol would
+  // follow the operator to the new host (review finding on #3048). An empty URL binds to
+  // nothing, which is what a statement made before the endpoint is typed, or against the
+  // stored endpoint in preserve mode, has to mean.
+  const bindStatedVoiceProtocol = (): void => {
+    setVoiceProtocolBoundBaseUrl(voiceBaseUrl.trim());
+  };
   const stateVoiceEndpointStyle = (next: string): void => {
     setVoiceEndpointStyle(next);
-    setVoiceProtocolBoundBaseUrl("");
+    bindStatedVoiceProtocol();
   };
   const stateVoiceApiVersion: Dispatch<SetStateAction<string>> = (value): void => {
     setVoiceApiVersion(value);
-    setVoiceProtocolBoundBaseUrl("");
+    bindStatedVoiceProtocol();
   };
   const [importedVoiceRealtimeAuthMode, setImportedVoiceRealtimeAuthMode] = useState("");
   const [importedVoiceEndpointBaseUrl, setImportedVoiceEndpointBaseUrl] = useState("");
@@ -2795,6 +2811,8 @@ export function GatewaySetupDialog({
   const parsedWorkflowEligibleModelIds = deploymentNamesFromInput(workflowEligibleModelIds);
   const voiceCredentialInput = hasVoiceCredentialInput({
     voiceBaseUrl,
+    voiceEndpointStyle,
+    voiceApiVersion,
     voiceApiKey,
     voiceApiKeyHeaderName,
     voiceModelId,
