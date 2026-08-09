@@ -2557,6 +2557,44 @@ function endpointMigrationError(message: string, correlationId: string | undefin
   return { status: 400, body: errorBody("BAD_REQUEST", message, correlationId) };
 }
 
+// A stored protocol may not be inherited across a base-URL change (it was declared for the old
+// host), and dropping it silently degrades an Azure deployment-path endpoint to the
+// OpenAI-compatible URL shape — a save that succeeds and breaks every audio call. The migration
+// must RESTATE the protocol, exactly as it restates the credential, the locality and the roles
+// (review finding on #3042). The realtime auth mode is stored protocol too and is NOT implied by
+// the style: a provider can declare ephemeral-session with no style at all, and losing it sends
+// Digital Voice down the plain API-key path instead of ephemeral-token negotiation (review
+// finding on #3048).
+function unrestatedMigrationProtocolError(
+  raw: Record<string, unknown>,
+  migrations: readonly ExplicitVoiceRoleTarget[],
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  const restatements = [
+    {
+      declared: (target: ExplicitVoiceRoleTarget): boolean =>
+        target.template?.endpointStyle !== undefined,
+      field: "voiceEndpointStyle",
+      message: "Replacing an audio endpoint requires an explicit endpoint style for the new host.",
+    },
+    {
+      // Only when a REALTIME role is actually moving: a stored provider that combines Realtime
+      // with speech output declares the mode, but moving the speech-output role alone leaves
+      // Realtime where it is, and demanding a restatement there refuses a move the mode has
+      // nothing to do with (review finding on #3048).
+      declared: (target: ExplicitVoiceRoleTarget): boolean =>
+        target.role === "realtime" && target.template?.realtimeAuthMode !== undefined,
+      field: "voiceRealtimeAuthMode",
+      message:
+        "Replacing an audio endpoint requires an explicit realtime auth mode for the new host.",
+    },
+  ];
+  const missing = restatements.find(
+    (rule) => migrations.some(rule.declared) && !hasNonBlankStringField(raw, rule.field),
+  );
+  return missing === undefined ? undefined : endpointMigrationError(missing.message, correlationId);
+}
+
 function explicitEndpointMigrationError(
   raw: Record<string, unknown>,
   migrations: readonly ExplicitVoiceRoleTarget[],
@@ -2574,6 +2612,8 @@ function explicitEndpointMigrationError(
       correlationId,
     );
   }
+  const unrestatedProtocol = unrestatedMigrationProtocolError(raw, migrations, correlationId);
+  if (unrestatedProtocol !== undefined) return unrestatedProtocol;
   const replacements = explicitVoiceRoleReplacements(raw);
   if (migrations.some((target) => leavesImplicitRoleOnMigratedProvider(target, replacements))) {
     return endpointMigrationError(
@@ -2980,7 +3020,27 @@ function voiceConnectionEndpointOptions(
     template !== undefined && !sameBaseUrlIdentity(baseUrl, template.baseUrl)
       ? {}
       : voiceProviderTemplateEndpoint(template, defaults);
-  return { ...inherited, ...submitted };
+  // A submitted style that LEAVES the deployment path replaces the whole protocol: a spread merge
+  // let a stored Azure api version survive a switch to openai-compatible, and the canonical
+  // parser refuses that pair. Restating the SAME Azure style keeps the inherited version — it is
+  // still the version that pair needs, and discarding it rejected the restatement for the
+  // opposite reason (review findings on #3048).
+  const base =
+    submitted?.endpointStyle === undefined || submitted.endpointStyle === "azure-openai-deployment"
+      ? inherited
+      : withoutInheritedApiVersion(inherited);
+  return { ...base, ...submitted };
+}
+
+function withoutInheritedApiVersion(
+  options: VoiceProviderEndpointOptions,
+): VoiceProviderEndpointOptions {
+  return {
+    ...(options.endpointStyle === undefined ? {} : { endpointStyle: options.endpointStyle }),
+    ...(options.realtimeAuthMode === undefined
+      ? {}
+      : { realtimeAuthMode: options.realtimeAuthMode }),
+  };
 }
 
 function submittedOrTemplateString(

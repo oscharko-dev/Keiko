@@ -1393,6 +1393,163 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("refuses an audio endpoint move that leaves a stored protocol undefined", async () => {
+    // Codex finding on #3042: voiceConnectionEndpointOptions correctly refuses to carry a
+    // stored endpointStyle across a base-URL change, and the dialog submitted the protocol only
+    // while the form still pointed at an UPLOADED url — so a manual Azure-to-Azure move saved a
+    // voice provider with no style at all, and every audio call then took the OpenAI-compatible
+    // URL shape. The save must refuse instead of silently degrading the protocol.
+    const uiDir = await tempDir("keiko-gw-ui-voice-move-protocol-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-move-protocol-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "azure-tts",
+            baseUrl: "https://old-voice.example.com",
+            apiKey: "voice-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+            capability: {
+              id: "azure-tts",
+              kind: "voice",
+              contextWindow: 0,
+              maxOutputTokens: 0,
+              toolCalling: false,
+              structuredOutput: false,
+              streaming: false,
+              supportsImageInput: false,
+              supportsDocumentInput: false,
+              workflowEligible: false,
+              supportsSpeechOutput: true,
+              voiceProviderLocality: "azure-foundry",
+              costClass: "low",
+              latencyClass: "fast",
+              throughputHint: "azure voice deployment",
+              preferredUseCases: ["Speech output"],
+              knownLimitations: [],
+            },
+            voiceProfiles: [{ persona: "neutral", voiceId: "ash" }],
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const moved = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://new-voice.example.com",
+        voiceApiKey: "moved-voice-token",
+        voiceSpeechOutputModelId: "azure-tts",
+        voiceOutputVoiceId: "ash",
+        // The migration guard already demands an explicit locality; supplying it takes the
+        // request past that check so this pin exercises the PROTOCOL question behind it.
+        voiceProviderLocality: "azure-foundry",
+      }),
+      deps,
+    );
+
+    expect(moved).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(JSON.stringify(moved.body)).toMatch(/endpoint (style|protocol)/i);
+    // The stored provider keeps its protocol — nothing was degraded by the refusal.
+    const stored = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "azure-tts",
+    );
+    expect(stored?.endpointStyle).toBe("azure-openai-deployment");
+    deps.store.close();
+  });
+
+  it("accepts an audio endpoint move that states the protocol for the new host", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-voice-move-stated-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-move-stated-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "azure-tts",
+            baseUrl: "https://old-voice.example.com",
+            apiKey: "voice-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+            capability: {
+              id: "azure-tts",
+              kind: "voice",
+              contextWindow: 0,
+              maxOutputTokens: 0,
+              toolCalling: false,
+              structuredOutput: false,
+              streaming: false,
+              supportsImageInput: false,
+              supportsDocumentInput: false,
+              workflowEligible: false,
+              supportsSpeechOutput: true,
+              voiceProviderLocality: "azure-foundry",
+              costClass: "low",
+              latencyClass: "fast",
+              throughputHint: "azure voice deployment",
+              preferredUseCases: ["Speech output"],
+              knownLimitations: [],
+            },
+            voiceProfiles: [{ persona: "neutral", voiceId: "ash" }],
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const moved = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://new-voice.example.com",
+        voiceApiKey: "moved-voice-token",
+        voiceSpeechOutputModelId: "azure-tts",
+        voiceOutputVoiceId: "ash",
+        voiceProviderLocality: "azure-foundry",
+        voiceEndpointStyle: "azure-openai-deployment",
+        voiceApiVersion: "2025-04-01-preview",
+      }),
+      deps,
+    );
+
+    expect(moved.status).toBe(200);
+    const saved = currentGatewayConfig(deps)?.providers.find(
+      (provider) => provider.modelId === "azure-tts",
+    );
+    expect(saved?.baseUrl).toBe("https://new-voice.example.com");
+    expect(saved?.endpointStyle).toBe("azure-openai-deployment");
+    expect(saved?.apiVersion).toBe("2025-04-01-preview");
+    deps.store.close();
+  });
+
   it("persists the submitted voice endpoint protocol on a fresh setup", async () => {
     // A fresh save has no stored template, so without the explicit fields an Azure speech
     // endpoint would be persisted shapeless and every audio call would take the
@@ -1493,6 +1650,284 @@ describe("handleGatewaySetup", () => {
           'providers[0].apiVersion is required when providers[0].endpointStyle is "azure-openai-deployment"',
       },
     });
+    deps.store.close();
+  });
+
+  it("replaces the whole audio protocol when a new style is stated on the same endpoint", async () => {
+    // Review finding on #3048: the endpoint options were a spread merge, so a stored Azure api
+    // version survived a switch to openai-compatible on the SAME URL. The canonical parser
+    // refuses that pair, so a correction the dialog showed as accepted came back a 400. A stated
+    // style replaces the protocol, exactly as it does on the generic side.
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-atomic-protocol-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-voice-atomic-protocol-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "azure-stt",
+            baseUrl: "https://speech.cognitiveservices.example.com",
+            apiKey: "azure-audio-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+            capability: {
+              kind: "voice",
+              supportsSpeechInput: true,
+              voiceProviderLocality: "azure-foundry",
+            },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const result = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://speech.cognitiveservices.example.com",
+        voiceApiKey: "rotated-audio-token",
+        voiceSpeechToTextModelId: "azure-stt",
+        voiceEndpointStyle: "openai-compatible",
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const stt = requiredProvider(requiredGatewayConfig(deps), "azure-stt");
+    expect(stt.endpointStyle).toBe("openai-compatible");
+    expect(stt.apiVersion).toBeUndefined();
+    deps.store.close();
+  });
+
+  it("does not demand a realtime auth restatement when only speech output moves", async () => {
+    // Review finding on #3048: a stored provider that combines Realtime with speech output
+    // declares the auth mode, so moving the SPEECH-OUTPUT role alone was refused for a mode the
+    // move does not touch — Realtime stays where it is.
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-role-scope-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-voice-role-scope-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "multi-role-voice",
+            baseUrl: "https://voice.example.com",
+            apiKey: "voice-token",
+            realtimeAuthMode: "ephemeral-session",
+            capability: {
+              kind: "voice",
+              supportsRealtimeVoice: true,
+              supportsSpeechOutput: true,
+              realtimeTranscriptionModel: "realtime-transcription",
+              voiceProviderLocality: "azure-foundry",
+            },
+            voiceProfiles: [{ persona: "neutral", voiceId: "multi-role-voice" }],
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const movedOutput = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://tts.example.com",
+        voiceApiKey: "tts-token",
+        voiceProviderLocality: "customer-hosted",
+        voiceSpeechOutputModelId: "dedicated-tts",
+        voiceOutputVoiceId: "alloy",
+      }),
+      deps,
+    );
+
+    // The outcome, not just the absence of one message: without the status assertion this pin
+    // would pass on any other refusal (review findings on #3048).
+    expect(movedOutput.status).toBe(200);
+    expect(JSON.stringify(movedOutput.body ?? {})).not.toContain("realtime auth mode");
+    deps.store.close();
+  });
+
+  it("requires the realtime auth mode to be restated when the audio endpoint moves", async () => {
+    // Review finding on #3048: the migration restated the endpoint STYLE but not the realtime
+    // auth mode, which is separate stored protocol — a provider can declare ephemeral-session
+    // with no style at all. Losing it sent Digital Voice down the plain API-key path instead of
+    // ephemeral-token negotiation: a save that succeeds and breaks every realtime session.
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-realtime-restate-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-voice-realtime-restate-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "realtime-voice",
+            baseUrl: "https://voice.example.com",
+            apiKey: "voice-token",
+            realtimeAuthMode: "ephemeral-session",
+            capability: {
+              kind: "voice",
+              supportsRealtimeVoice: true,
+              realtimeTranscriptionModel: "realtime-transcription",
+              voiceProviderLocality: "azure-foundry",
+            },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const moved = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://new-voice.example.com",
+        voiceApiKey: "moved-voice-token",
+        voiceProviderLocality: "azure-foundry",
+        voiceRealtimeModelId: "realtime-voice",
+        voiceRealtimeTranscriptionModelId: "realtime-transcription",
+      }),
+      deps,
+    );
+
+    expect(moved.status).toBe(400);
+    expect(JSON.stringify(moved.body)).toContain(
+      "Replacing an audio endpoint requires an explicit realtime auth mode for the new host.",
+    );
+    deps.store.close();
+  });
+
+  it("requires restatement when the move also renames the deployment", async () => {
+    // Raised on #3048 as a hole and pinned as the behaviour instead: the restatement rules read
+    // the template of the submitted deployment id, and `voiceProviderTemplate` falls back to the
+    // provider that currently HOLDS the role when the id is new — so a rename is still a
+    // migration of the stored Azure provider and still has to restate. This test was green
+    // before that was checked; it exists so the fallback cannot be removed silently.
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-renamed-role-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-voice-renamed-role-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "azure-stt",
+            baseUrl: "https://speech.cognitiveservices.example.com",
+            apiKey: "azure-audio-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+            capability: {
+              kind: "voice",
+              supportsSpeechInput: true,
+              voiceProviderLocality: "azure-foundry",
+            },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const renamedMove = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://new-voice.example.com",
+        voiceApiKey: "moved-voice-token",
+        voiceProviderLocality: "customer-hosted",
+        voiceSpeechToTextModelId: "renamed-stt",
+      }),
+      deps,
+    );
+
+    expect(renamedMove.status).toBe(400);
+    expect(JSON.stringify(renamedMove.body)).toContain(
+      "Replacing an audio endpoint requires an explicit endpoint style for the new host.",
+    );
+    deps.store.close();
+  });
+
+  it("keeps the inherited version when the Azure style is merely restated", async () => {
+    // The mirror of the atomic rule (review finding on #3048): only a switch AWAY from the
+    // deployment path discards the inherited version. Restating the same style needs it, and
+    // dropping it rejected the restatement for the opposite reason.
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-restate-protocol-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-voice-restate-protocol-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "azure-stt",
+            baseUrl: "https://speech.cognitiveservices.example.com",
+            apiKey: "azure-audio-token",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2025-03-01-preview",
+            capability: {
+              kind: "voice",
+              supportsSpeechInput: true,
+              voiceProviderLocality: "azure-foundry",
+            },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const restated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://speech.cognitiveservices.example.com",
+        voiceApiKey: "rotated-audio-token",
+        voiceSpeechToTextModelId: "azure-stt",
+        voiceEndpointStyle: "azure-openai-deployment",
+      }),
+      deps,
+    );
+
+    expect(restated.status).toBe(200);
+    const stt = requiredProvider(requiredGatewayConfig(deps), "azure-stt");
+    expect(stt.endpointStyle).toBe("azure-openai-deployment");
+    expect(stt.apiVersion).toBe("2025-03-01-preview");
     deps.store.close();
   });
 

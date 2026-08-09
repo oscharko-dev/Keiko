@@ -799,6 +799,20 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "A live-transcription deployment requires an explicit Realtime deployment.",
   "gatewaySetup.voice.deploymentRequired":
     "Enter at least one explicit voice deployment: speech-to-text, Realtime with live transcription, or speech output.",
+  "gatewaySetup.voice.realtimeAuthMode.label": "Realtime authentication",
+  "gatewaySetup.voice.realtimeAuthMode.apiKey": "API key",
+  "gatewaySetup.voice.realtimeAuthMode.ephemeral": "Ephemeral session token",
+  "gatewaySetup.voice.endpointProtocolRestatementRequired":
+    "Replacing a stored audio endpoint requires restating its endpoint style and realtime authentication for the new host.",
+  "gatewaySetup.voice.azureEndpointRequiresApiVersion":
+    "The Azure deployment path requires an audio API version.",
+  "gatewaySetup.voice.endpointStyle.label": "Audio endpoint style",
+  "gatewaySetup.voice.apiVersion.label": "Audio API version",
+  "gatewaySetup.voice.protocol.optional": "optional",
+  "gatewaySetup.voice.endpointStyle.unstated": "Not stated",
+  "gatewaySetup.voice.endpointStyle.openaiCompatible": "OpenAI-compatible",
+  "gatewaySetup.voice.endpointStyle.azureDeploymentPath": "Azure deployment path",
+  "gatewaySetup.voice.apiVersion.azureOnly": "Azure deployment path only",
   "gatewaySetup.voice.endpointMigrationRequired":
     "Replacing a stored audio endpoint requires a fresh credential, an explicitly selected provider locality, and at least one deployment role to move.",
   "gatewaySetup.voice.semanticTurnDetection": "Semantic turn detection",

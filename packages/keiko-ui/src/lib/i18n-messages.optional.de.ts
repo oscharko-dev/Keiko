@@ -830,6 +830,20 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Ein Live-Transkriptions-Deployment erfordert ein ausdrückliches Realtime-Deployment.",
   "gatewaySetup.voice.deploymentRequired":
     "Gib mindestens ein ausdrückliches Voice-Deployment an: Speech-to-Text, Realtime mit Live-Transkription oder Speech Output.",
+  "gatewaySetup.voice.realtimeAuthMode.label": "Realtime-Authentifizierung",
+  "gatewaySetup.voice.realtimeAuthMode.apiKey": "API-Schlüssel",
+  "gatewaySetup.voice.realtimeAuthMode.ephemeral": "Kurzlebiges Sitzungs-Token",
+  "gatewaySetup.voice.endpointProtocolRestatementRequired":
+    "Beim Ersetzen eines gespeicherten Audio-Endpunkts müssen Endpunkt-Stil und Realtime-Authentifizierung für den neuen Host erneut angegeben werden.",
+  "gatewaySetup.voice.azureEndpointRequiresApiVersion":
+    "Der Azure-Deployment-Pfad erfordert eine Audio-API-Version.",
+  "gatewaySetup.voice.endpointStyle.label": "Audio-Endpunkt-Stil",
+  "gatewaySetup.voice.apiVersion.label": "Audio-API-Version",
+  "gatewaySetup.voice.protocol.optional": "optional",
+  "gatewaySetup.voice.endpointStyle.unstated": "Nicht angegeben",
+  "gatewaySetup.voice.endpointStyle.openaiCompatible": "OpenAI-kompatibel",
+  "gatewaySetup.voice.endpointStyle.azureDeploymentPath": "Azure-Deployment-Pfad",
+  "gatewaySetup.voice.apiVersion.azureOnly": "nur beim Azure-Deployment-Pfad",
   "gatewaySetup.voice.endpointMigrationRequired":
     "Zum Ersetzen eines gespeicherten Audio-Endpunkts sind neue Zugangsdaten, eine ausdrücklich gewählte Anbieter-Lokalität und mindestens eine zu verschiebende Deployment-Rolle erforderlich.",
   "gatewaySetup.voice.semanticTurnDetection": "Semantische Turn-Ende-Erkennung (Semantic VAD)",
