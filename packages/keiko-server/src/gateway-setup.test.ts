@@ -6153,6 +6153,9 @@ describe("handleGatewaySetup", () => {
       (item) => item.modelId === "example-chat-model",
     );
     expect(provider?.endpointStyle).toBe("openai-compatible");
+    // The default api version is azure-only: an openai-compatible provider must not carry it,
+    // which is the half of the override this test exists for (review finding on #3046).
+    expect(provider?.apiVersion).toBeUndefined();
     deps.store.close();
   });
   it("persists a submitted Azure endpoint style with its api version on generic providers", async () => {
@@ -6424,6 +6427,10 @@ describe("handleGatewaySetup", () => {
     );
     expect(saved?.endpointStyle).toBe("azure-openai-deployment");
     expect(saved?.apiVersion).toBe("2025-04-01-preview");
+    // A protocol-only update changes the protocol and nothing else — without this the test would
+    // pass over a rebuild that dropped the connection (review finding on #3046).
+    expect(saved?.baseUrl).toBe("https://resource.example.com");
+    expect(saved?.apiKey).toBe("azure-token");
     deps.store.close();
   });
 
