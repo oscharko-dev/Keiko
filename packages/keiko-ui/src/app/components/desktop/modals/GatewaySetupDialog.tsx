@@ -679,21 +679,55 @@ function importedVoiceEndpointPayload(fields: GatewayFormFields): Partial<Gatewa
   };
 }
 
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
+// The server compares audio endpoints through `sameBaseUrlIdentity`, so a trailing slash or a
+// hostname retyped in a different case is the SAME endpoint. A raw string comparison here read
+// those spellings as a move and dropped a still-visible protocol; a fresh setup has no stored
+// template to recover it from, so the save succeeded with the wrong URL shape (review finding
+// on #3048).
+function canonicalVoiceEndpointIdentity(raw: string): string {
+  const trimmed = stripTrailingSlashes(raw.trim());
+  try {
+    return stripTrailingSlashes(new URL(trimmed).href);
+  } catch {
+    return trimmed;
+  }
+}
+
 // The VISIBLE protocol fields are the operator's own statement, so they ride any submit that
 // carries a voice endpoint — including a manual endpoint move, which the server now refuses
 // without one. They are cleared whenever the audio endpoint identity changes, so a protocol can
 // never be inherited silently across a base-URL change (review finding on #3042).
 function statedVoiceEndpointPayload(fields: GatewayFormFields): Partial<GatewaySetupInput> {
   const submittedBaseUrl = fields.voiceBaseUrl.trim();
-  if (submittedBaseUrl === "") return {};
-  // An uploaded protocol rides only while the form still points at the URL it was declared for;
-  // an operator-stated one carries no binding and applies to whatever endpoint is in the form.
+  // A blank URL in preserve mode means "keep the stored endpoint", so a statement made against
+  // it is about that endpoint and must be submitted. An UPLOADED protocol carries the URL it was
+  // declared for and stays behind (review finding on #3048).
+  if (submittedBaseUrl === "") {
+    return fields.preserveExisting && fields.voiceProtocolBoundBaseUrl === ""
+      ? statedVoiceProtocolFields(fields)
+      : {};
+  }
+  // A protocol rides only while the form still points at the endpoint it was stated for — the
+  // uploaded URL for an import, the URL in the form for a hand statement (#3042, #3048).
   if (
     fields.voiceProtocolBoundBaseUrl !== "" &&
-    fields.voiceProtocolBoundBaseUrl !== submittedBaseUrl
+    canonicalVoiceEndpointIdentity(fields.voiceProtocolBoundBaseUrl) !==
+      canonicalVoiceEndpointIdentity(submittedBaseUrl)
   ) {
     return {};
   }
+  return statedVoiceProtocolFields(fields);
+}
+
+function statedVoiceProtocolFields(fields: GatewayFormFields): Partial<GatewaySetupInput> {
   return {
     ...(fields.voiceEndpointStyle === "" ? {} : { voiceEndpointStyle: fields.voiceEndpointStyle }),
     ...(fields.voiceApiVersion.trim() === ""
@@ -2317,6 +2351,11 @@ export function GatewaySetupDialog({
   };
   const stateVoiceEndpointStyle = (next: string): void => {
     setVoiceEndpointStyle(next);
+    if (next === "openai-compatible") setVoiceApiVersion("");
+    // An api version belongs to the Azure deployment path alone — the gateway parser rejects the
+    // pair — so switching to openai-compatible drops the version with it instead of returning a
+    // 400 the operator has to decode (review finding on #3048). "Not stated" leaves it: the
+    // effective style may still come from the stored template, which the server validates.
     bindStatedVoiceProtocol();
   };
   const stateVoiceApiVersion: Dispatch<SetStateAction<string>> = (value): void => {
@@ -2405,9 +2444,12 @@ export function GatewaySetupDialog({
   ): void => {
     const restoresStoredEndpoint = nextIdentity === STORED_VOICE_ENDPOINT_IDENTITY;
     // The protocol was declared for the OLD host: a new endpoint must restate it (the save
-    // refuses otherwise), so it can never travel silently (review finding on #3042).
+    // refuses otherwise), so it can never travel silently (review finding on #3042). The binding
+    // is part of that state — leaving it behind would point at an endpoint no field describes
+    // any more (review finding on #3048).
     setVoiceEndpointStyle("");
     setVoiceApiVersion("");
+    setVoiceProtocolBoundBaseUrl("");
     setVoiceModelId("");
     setVoiceRealtimeModelId("");
     setVoiceSpeechOutputModelId("");
