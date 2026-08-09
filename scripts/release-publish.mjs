@@ -39,6 +39,7 @@ import {
   normalizePortableSetupCompanion,
   portableSetupCompanionRecord,
 } from "./lib/portable-setup-companion.mjs";
+import { PORTABLE_EVALUATION_MANIFEST_ASSET_NAME } from "./lib/portable-evaluation-manifest.mjs";
 import {
   collectEvaluationArtifactDigests,
   jsonFromCommand,
@@ -1178,16 +1179,25 @@ function printReleaseNotesPreview(notes) {
 }
 
 /**
- * An interrupted `--public-release` deliberately leaves a resumable stable-tag DRAFT holding
- * evaluation assets. Editing it here would keep it private while npm publishes, clobber only
- * same-named assets, and leave the evaluation manifest beside qualified uploads — so a draft is
- * refused outright; the evaluation lane owns resuming or deleting it (Codex finding on #3054).
- * An unreadable answer is treated as a draft: fail closed.
+ * The releases this publisher must never edit over (Codex findings on #3054). An interrupted
+ * `--public-release` leaves a resumable stable-tag DRAFT; editing it would keep it private while
+ * npm publishes. A COMPLETED `--public-release` leaves a published release carrying the
+ * evaluation manifest; uploading qualified production assets over it would clobber only
+ * same-named files and leave that evidence beside foreign bytes — a mixed-provenance surface.
+ * Both belong to the evaluation lane: only the prepublished VERIFY path may touch such a tag.
+ * An unreadable answer refuses: fail closed.
  */
-function refuseResumableDraft(existing, tag) {
-  if (jsonFromCommand(existing)?.isDraft !== false) {
+function refuseEvaluationOwnedRelease(existing, tag) {
+  const view = jsonFromCommand(existing);
+  if (view?.isDraft !== false) {
     fail(
       `GitHub release ${tag} exists as a draft — an interrupted evaluation publish leaves one. Resume or delete it with scripts/release-portable-prerelease.mjs before publishing over this tag.`,
+    );
+  }
+  const assets = Array.isArray(view.assets) ? view.assets : [];
+  if (assets.some((asset) => asset?.name === PORTABLE_EVALUATION_MANIFEST_ASSET_NAME)) {
+    fail(
+      `GitHub release ${tag} was published by the evaluation lane and carries its evidence manifest; editing or uploading over it would mix provenance. A qualified production publish needs its own version and tag.`,
     );
   }
 }
@@ -1205,10 +1215,10 @@ function ensureGithubRelease(rootPackage, options, notes) {
   const prerelease = releaseIsPrerelease(rootPackage.version, options.tag);
   const latestArgs = options.tag === "latest" && !prerelease ? ["--latest"] : [];
   const prereleaseArgs = prerelease ? ["--prerelease"] : [];
-  const existing = gh(["release", "view", tag, "--repo", repo, "--json", "isDraft"]);
+  const existing = gh(["release", "view", tag, "--repo", repo, "--json", "isDraft,assets"]);
 
   if (existing.status === 0) {
-    refuseResumableDraft(existing, tag);
+    refuseEvaluationOwnedRelease(existing, tag);
     console.log(`release-publish: GitHub release ${tag} exists; updating metadata.`);
     runGh([
       "release",

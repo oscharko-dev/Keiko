@@ -596,10 +596,12 @@ function ghStubBody() {
     "  }",
     "  process.exit(0);",
     "}",
-    // An existing release answers the isDraft probe; an interrupted evaluation publish leaves a
-    // resumable stable-tag DRAFT that the qualified upload path must refuse to edit over.
+    // An existing release answers the isDraft,assets probe. An interrupted evaluation publish
+    // leaves a resumable stable-tag DRAFT; a completed one leaves a published release carrying
+    // the evidence manifest — the qualified upload path must refuse to edit over either.
     'if (sub === "release" && argv[1] === "view") {',
-    "  if (state().existingReleaseIsDraft) { writeFileSync(1, JSON.stringify({ isDraft: true })); process.exit(0); }",
+    "  if (state().existingReleaseIsDraft) { writeFileSync(1, JSON.stringify({ isDraft: true, assets: [] })); process.exit(0); }",
+    "  if (state().existingEvaluationRelease) { writeFileSync(1, JSON.stringify({ isDraft: false, assets: [{ name: 'keiko-portable-evaluation-manifest.json' }] })); process.exit(0); }",
     "  process.exit(1);",
     "}",
     'if (sub === "release" && argv[1] === "upload") {',
@@ -1742,6 +1744,22 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain("portable upload failed");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses to upload qualified assets over a published evaluation release", () => {
+      // The evaluation lane's completed release is isDraft:false and carries the evidence
+      // manifest; clobbering it with production bytes would leave that evidence beside foreign
+      // downloads — a mixed-provenance surface (Codex finding on #3054).
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { existingEvaluationRelease: true, published: false },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("published by the evaluation lane");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","edit"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
     });
 
     it("refuses to edit over a resumable stable-tag draft left by an interrupted evaluation publish", () => {
