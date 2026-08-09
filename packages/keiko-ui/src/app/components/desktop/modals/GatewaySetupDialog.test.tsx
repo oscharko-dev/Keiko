@@ -2160,9 +2160,21 @@ describe("GatewaySetupDialog", () => {
     });
   });
 
-  it("refuses an Azure audio endpoint stated without its api version", async () => {
-    // Review finding on #3048: a stated deployment path with a blank version is the pair the
-    // gateway parser refuses, and the dialog let it leave — the operator got a 400 to decode.
+  it("restates the Azure style against a retained endpoint without retyping the version", async () => {
+    // Review finding on #3048: the client pairing check was unconditional, so restating the
+    // stored endpoint's own Azure style — with the audio URL left blank, which keeps that
+    // endpoint — was refused for a version the server inherits.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "internal-chat",
+      testedModelIds: ["internal-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
     render(
       <GatewaySetupDialog
         preserveExisting
@@ -2170,6 +2182,32 @@ describe("GatewaySetupDialog", () => {
       />,
     );
     await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
+    await userEvent.click(screen.getByRole("option", { name: "Azure deployment path" }));
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).toMatchObject({
+      voiceEndpointStyle: "azure-openai-deployment",
+    });
+  });
+
+  it("refuses an Azure audio endpoint stated without its api version", async () => {
+    // Review finding on #3048: a stated deployment path with a blank version is the pair the
+    // gateway parser refuses, and the dialog let it leave — the operator got a 400 to decode.
+    // The endpoint is STATED here: restating the style against a retained stored endpoint (a
+    // blank audio URL) legitimately inherits the stored version and is exempt.
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedModels={[modelCapability("internal-chat"), semanticRealtimeCapability("stored-rt")]}
+      />,
+    );
+    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
+    await userEvent.type(
+      screen.getByLabelText(/audio endpoint url/i),
+      "https://new-voice.example.com",
+    );
     await userEvent.click(screen.getByRole("combobox", { name: /audio endpoint style/i }));
     await userEvent.click(screen.getByRole("option", { name: "Azure deployment path" }));
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));

@@ -1708,6 +1708,60 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("does not demand a realtime auth restatement when only speech output moves", async () => {
+    // Review finding on #3048: a stored provider that combines Realtime with speech output
+    // declares the auth mode, so moving the SPEECH-OUTPUT role alone was refused for a mode the
+    // move does not touch — Realtime stays where it is.
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-role-scope-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(await tempDir("keiko-gw-ui-voice-role-scope-"), "keiko-ui.db"),
+    });
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+          },
+          {
+            modelId: "multi-role-voice",
+            baseUrl: "https://voice.example.com",
+            apiKey: "voice-token",
+            realtimeAuthMode: "ephemeral-session",
+            capability: {
+              kind: "voice",
+              supportsRealtimeVoice: true,
+              supportsSpeechOutput: true,
+              realtimeTranscriptionModel: "realtime-transcription",
+              voiceProviderLocality: "azure-foundry",
+            },
+            voiceProfiles: [{ persona: "neutral", voiceId: "multi-role-voice" }],
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const movedOutput = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://tts.example.com",
+        voiceApiKey: "tts-token",
+        voiceProviderLocality: "customer-hosted",
+        voiceSpeechOutputModelId: "dedicated-tts",
+        voiceOutputVoiceId: "alloy",
+      }),
+      deps,
+    );
+
+    expect(JSON.stringify(movedOutput.body ?? {})).not.toContain("realtime auth mode");
+    deps.store.close();
+  });
+
   it("requires the realtime auth mode to be restated when the audio endpoint moves", async () => {
     // Review finding on #3048: the migration restated the endpoint STYLE but not the realtime
     // auth mode, which is separate stored protocol — a provider can declare ephemeral-session

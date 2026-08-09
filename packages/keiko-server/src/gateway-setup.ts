@@ -2578,8 +2578,12 @@ function unrestatedMigrationProtocolError(
       message: "Replacing an audio endpoint requires an explicit endpoint style for the new host.",
     },
     {
+      // Only when a REALTIME role is actually moving: a stored provider that combines Realtime
+      // with speech output declares the mode, but moving the speech-output role alone leaves
+      // Realtime where it is, and demanding a restatement there refuses a move the mode has
+      // nothing to do with (review finding on #3048).
       declared: (target: ExplicitVoiceRoleTarget): boolean =>
-        target.template?.realtimeAuthMode !== undefined,
+        target.role === "realtime" && target.template?.realtimeAuthMode !== undefined,
       field: "voiceRealtimeAuthMode",
       message:
         "Replacing an audio endpoint requires an explicit realtime auth mode for the new host.",

@@ -691,6 +691,20 @@ function movedImportRequiresProtocol(fields: GatewayFormFields): boolean {
   ].some(([imported, stated]) => imported !== "" && stated === "");
 }
 
+// The canonical pairing, checked before the request leaves the dialog: the deployment path needs
+// the version that builds its URL, and the server answers the pair with a 400 the operator then
+// has to decode. The exception is a RETAINED endpoint — a blank audio URL in preserve mode keeps
+// the stored one, and restating its own Azure style there inherits the stored version
+// server-side, so demanding it back would refuse a supported correction (review findings on
+// #3048).
+function statedAzureEndpointLacksApiVersion(fields: GatewayFormFields): boolean {
+  if (fields.voiceEndpointStyle !== "azure-openai-deployment") return false;
+  if (fields.voiceApiVersion.trim() !== "") return false;
+  const retainsStoredEndpoint =
+    fields.preserveExisting && fields.hasStoredVoiceProvider && fields.voiceBaseUrl.trim() === "";
+  return !retainsStoredEndpoint;
+}
+
 function endpointMigrationValidationError(
   fields: GatewayFormFields,
   t: GatewaySetupTranslate,
@@ -698,13 +712,7 @@ function endpointMigrationValidationError(
   if (movedImportRequiresProtocol(fields)) {
     return t("gatewaySetup.voice.endpointProtocolRestatementRequired");
   }
-  // The canonical pairing, checked before the request leaves the dialog: the deployment path
-  // needs the version that builds its URL, and the server answers the pair with a 400 the
-  // operator then has to decode (review finding on #3048).
-  if (
-    fields.voiceEndpointStyle === "azure-openai-deployment" &&
-    fields.voiceApiVersion.trim() === ""
-  ) {
+  if (statedAzureEndpointLacksApiVersion(fields)) {
     return t("gatewaySetup.voice.azureEndpointRequiresApiVersion");
   }
   if (!fields.preserveExisting || !fields.hasStoredVoiceProvider) return undefined;
