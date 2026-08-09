@@ -558,12 +558,14 @@ function ghStubBody() {
     'if (sub === "run" && argv[1] === "download") {',
     '  const dirIndex = argv.indexOf("--dir");',
     '  const nameIndex = argv.indexOf("--name");',
-    // The production caller always passes --dir. If it ever stops, the double must refuse loudly
-    // rather than default anywhere: an empty dir would concatenate to filesystem-root paths, and
-    // a silent fallback would keep the suite green over the regression (KfQ findings on #3054).
+    // The production caller always passes --dir and --name. If it ever stops, the double must
+    // refuse loudly rather than default anywhere: an empty dir would concatenate to
+    // filesystem-root paths, and a silent fallback would keep the suite green over the
+    // regression (KfQ findings on #3054).
     "  if (dirIndex < 0 || !argv[dirIndex + 1]) { process.stderr.write('gh double: run download requires --dir\\n'); process.exit(1); }",
+    "  if (nameIndex < 0 || !argv[nameIndex + 1]) { process.stderr.write('gh double: run download requires --name\\n'); process.exit(1); }",
     "  const dir = argv[dirIndex + 1];",
-    "  const artifact = nameIndex >= 0 ? argv[nameIndex + 1] : '';",
+    "  const artifact = argv[nameIndex + 1];",
     "  const current = state();",
     "  if (current.runArtifactsUnavailable) process.exit(1);",
     "  const wanted = (current.uploadedAssets || []).filter((asset) => {",
