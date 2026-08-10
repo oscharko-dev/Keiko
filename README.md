@@ -8,7 +8,8 @@
 
 <p align="center">
   The governed agentic workspace for professional knowledge work.<br />
-  Local-first. Human-controlled. It learns from experience.
+  Local-first. Human-controlled. It learns from experience.<br />
+  Manifest-producing surfaces emit redacted evidence for audit.
 </p>
 
 <p align="center">
@@ -40,7 +41,7 @@
 
 ---
 
-Keiko turns a repository, your documents and your models into one calm place to work: chat with the models you configure, understand a codebase, generate reviewable tests, investigate bugs, run verification — and keep a memory of what was learned along the way. Everything runs on your machine, every action stays within the authority you grant, and everything Keiko does leaves redacted evidence a human can review.
+Keiko turns a repository, your documents and your models into one calm place to work: chat with the models you configure, understand a codebase, generate reviewable tests, investigate bugs, run verification — and keep a memory of what was learned along the way. Everything runs on your machine, every action stays within the authority you grant, and manifest-producing surfaces emit redacted evidence for audit.
 
 ## What you get
 
@@ -88,6 +89,13 @@ Run it inside a project with a `package.json`; the UI opens at `http://127.0.0.1
 - Voice turns carry their attachments and document context; interrupting an answer cancels only that answer.
 - Governed Git delivery authenticates on every network path and tells offline apart from authentication failure.
 - First public download release: evaluation desktop packages for macOS and Windows with the OpenCode sidecar included.
+
+## Good to know
+
+- The CLI, the UI and the SDK share one product. Surface coverage is intentionally not identical. `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest.
+- The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
+- Keiko serves loopback only: `keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `keiko start --port <n>` sets the Port to bind (default: 1983).
+- The full operator reference lives in the [UI runbook](https://github.com/oscharko-dev/Keiko/blob/dev/docs/ui-runbook.md).
 
 ## Principles
 
