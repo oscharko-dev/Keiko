@@ -42,7 +42,11 @@ import {
 } from "./lib/portable-setup-companion.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { PORTABLE_EVALUATION_MANIFEST_ASSET_NAME } from "./lib/portable-evaluation-manifest.mjs";
-import { resolveReleaseOwnerAllowlist } from "./lib/release-owner-allowlist.mjs";
+import {
+  artifactDownloadOutcome,
+  provenancePublishArgs,
+  releaseImpactChildEnv,
+} from "./lib/npm-publish-preflight.mjs";
 import {
   collectEvaluationArtifactDigests,
   jsonFromCommand,
@@ -261,9 +265,12 @@ function fetchRunArtifactZip(artifactId, destination) {
       // bytes must respect the same archive ceiling every portable input honors.
       { cwd: repoRoot, stdio: ["ignore", fd, "pipe"], env: process.env, timeout: 900_000 },
     );
-    if (result.error !== undefined || result.status !== 0) return { status: 1 };
-    if (fstatSync(fd).size > maxPortableArchiveBytes) return { status: 1 };
-    return { status: 0 };
+    return artifactDownloadOutcome({
+      spawnError: result.error,
+      exitStatus: result.status,
+      landedBytes: fstatSync(fd).size,
+      maxBytes: maxPortableArchiveBytes,
+    });
   } finally {
     closeSync(fd);
   }
@@ -1662,25 +1669,6 @@ function publishPackageDryRun(pkg, npmEnv, options) {
   );
 }
 
-/**
- * npm can attest provenance only where an OIDC provider exists — GitHub Actions announces its
- * id-token endpoint through this environment value. Everywhere else the flag makes `npm publish`
- * fail outright, which turned the documented local operator publish into a dead end (the 0.3.1
- * outage). A token publish simply carries no provenance attestation, exactly like every release
- * before attestation existed.
- */
-function oidcTrustedPublishingAvailable() {
-  // The identity exchange needs BOTH values GitHub Actions issues under `id-token: write`;
-  // the request URL alone cannot mint a token (CodeRabbit finding on #3055).
-  const url = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
-  const token = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
-  return typeof url === "string" && url.length > 0 && typeof token === "string" && token.length > 0;
-}
-
-function provenancePublishArgs() {
-  return oidcTrustedPublishingAvailable() ? ["--provenance"] : [];
-}
-
 function publishPackageToRegistry(pkg, npmEnv, options) {
   console.log(`release-publish: PUBLISH ${pkg.spec} from ${pkg.packageDir}.`);
   run(
@@ -1694,7 +1682,7 @@ function publishPackageToRegistry(pkg, npmEnv, options) {
       options.tag,
       "--registry",
       options.registry,
-      ...provenancePublishArgs(),
+      ...provenancePublishArgs(process.env),
       "--ignore-scripts",
     ],
     { env: npmEnv, stdio: "inherit" },
@@ -1834,34 +1822,13 @@ run("npm", ["run", "check:publish-manifests"], { stdio: "inherit" });
 // the same way the workflow does before the child runs, so a local operator publish does not
 // abort on an environment value only CI used to carry (the 0.3.1 outage). Resolution failure is
 // only fatal where the approval itself is required — a live publish.
-const releaseImpactEnv = { ...process.env };
-if (!options.planOnly) {
-  const allowlist = resolveReleaseOwnerAllowlist({
-    configured: process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS,
-    repository: githubRepository(),
-    runGh: (args) => gh(args),
-  });
-  if (allowlist === undefined) {
-    fail(
-      "the release-owner allowlist did not resolve: set KEIKO_RELEASE_OWNER_GITHUB_LOGINS or grant this checkout a gh login that can read the repository variable.",
-    );
-  }
-  releaseImpactEnv.KEIKO_RELEASE_OWNER_GITHUB_LOGINS = allowlist;
-  releaseImpactEnv.GITHUB_REPOSITORY = releaseImpactEnv.GITHUB_REPOSITORY ?? githubRepository();
-  // The same preflight moment answers the auth question: a live publish that would only
-  // discover a missing npm auth path AFTER the twenty-minute gate chain wastes the whole run.
-  if (!options.dryRun) {
-    const oidcAvailable = oidcTrustedPublishingAvailable();
-    const tokenPresent = Boolean(
-      process.env.NODE_AUTH_TOKEN ?? process.env.NPM_TOKEN ?? loadDotEnvToken(),
-    );
-    if (!oidcAvailable && !tokenPresent) {
-      fail(
-        "no npm auth path is available: set NODE_AUTH_TOKEN or NPM_TOKEN (or a local .env), or run in CI where OIDC trusted publishing authenticates.",
-      );
-    }
-  }
-}
+const preparedChildEnv = releaseImpactChildEnv(options, process.env, {
+  gh,
+  githubRepository,
+  loadDotEnvToken,
+});
+if (preparedChildEnv.env === undefined) fail(preparedChildEnv.failure);
+const releaseImpactEnv = preparedChildEnv.env;
 run("npm", ["run", options.planOnly ? "check:release-impact" : "check:release-impact:publish"], {
   stdio: "inherit",
   env: releaseImpactEnv,

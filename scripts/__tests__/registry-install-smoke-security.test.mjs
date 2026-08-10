@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { provenancePublishArgs } from "../lib/npm-publish-preflight.mjs";
+
 const ROOT = join(import.meta.dirname, "..", "..");
 const ROOT_MANIFEST = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 
@@ -107,10 +109,24 @@ describe("release publish security posture", () => {
     // refusal message this replaces.
     expect(source).toContain('"strict-ssl=true"');
     expect(source).toContain('NPM_CONFIG_STRICT_SSL: "true"');
-    // Provenance is attested exactly where the OIDC exchange can succeed: both GitHub-issued
-    // values, and the flag goes through that single predicate.
-    expect(source).toContain("--provenance");
-    expect(source).toContain("ACTIONS_ID_TOKEN_REQUEST_TOKEN");
+    // The provenance pin RELOCATED with its owner again (0.3.2 coverage repair): the predicate
+    // moved into the in-process-testable preflight lib. Strengthened twice over: the publish
+    // path must route through the single predicate (source pin), and the predicate itself is
+    // held to its gating behavior — the flag appears exactly when BOTH GitHub-issued OIDC
+    // values exist, because the request URL alone cannot mint a token (CodeRabbit on #3063:
+    // substring presence cannot distinguish AND from OR).
+    expect(source).toContain("provenancePublishArgs(process.env)");
+    const url = "https://token.actions.example/exchange";
+    const token = "runner-issued-value";
+    expect(
+      provenancePublishArgs({
+        ACTIONS_ID_TOKEN_REQUEST_URL: url,
+        ACTIONS_ID_TOKEN_REQUEST_TOKEN: token,
+      }),
+    ).toEqual(["--provenance"]);
+    expect(provenancePublishArgs({ ACTIONS_ID_TOKEN_REQUEST_URL: url })).toEqual([]);
+    expect(provenancePublishArgs({ ACTIONS_ID_TOKEN_REQUEST_TOKEN: token })).toEqual([]);
+    expect(provenancePublishArgs({})).toEqual([]);
     expect(workflow).toMatch(/publish:[\s\S]*permissions:[\s\S]*id-token:\s*write/u);
   });
 });
