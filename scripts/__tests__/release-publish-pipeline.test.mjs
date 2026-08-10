@@ -1113,7 +1113,13 @@ const isDistTagView = (line) => isView(line) && line.includes("dist-tags.");
 const RELEASE_VERSION_IS_PRERELEASE = RELEASE_VERSION.includes("-");
 // An explicit empty value blocks release-publish's intentional local `.env` fallback, keeping the
 // no-token scenarios hermetic even when a developer has registry credentials in the repository.
-const NO_REGISTRY_TOKEN_ENV = { NODE_AUTH_TOKEN: undefined, NPM_TOKEN: "" };
+// These scenarios model CI trusted publishing, and CI always announces its OIDC endpoint — the
+// auth preflight refuses a run that has neither a token nor that signal.
+const NO_REGISTRY_TOKEN_ENV = {
+  NODE_AUTH_TOKEN: undefined,
+  NPM_TOKEN: "",
+  ACTIONS_ID_TOKEN_REQUEST_URL: "https://actions.example/token-request",
+};
 
 describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
   "release-publish pipeline (real orchestrator, stubbed npm/gh/git)",
@@ -1693,7 +1699,9 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       const publishLine = lastRun.calls.find((l) => l.startsWith('npm ["publish"'));
       expect(publishLine).toContain('"--access","public"');
       expect(publishLine).toContain('"--tag","latest"');
-      expect(publishLine).toContain('"--provenance"');
+      // A token publish carries no provenance attestation: npm can attest only where an OIDC
+      // provider exists, and the unconditional flag killed every local operator publish (0.3.1).
+      expect(publishLine).not.toContain('"--provenance"');
       expect(publishLine).toContain('"--ignore-scripts"');
       expect(publishLine).not.toContain('"--dry-run"');
 
@@ -1984,6 +1992,26 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.stdout).not.toContain("PASS -");
     });
 
+    it("refuses before any gate work when neither a token nor an OIDC endpoint exists", () => {
+      // The 0.3.1 operator runs discovered missing auth only after the twenty-minute gate chain;
+      // the preflight answers the question first.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: false },
+        portableAssets: false,
+        qualificationEnv: {
+          NODE_AUTH_TOKEN: undefined,
+          NPM_TOKEN: "",
+          ACTIONS_ID_TOKEN_REQUEST_URL: undefined,
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("no npm auth path is available");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["run","prepack"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
     it("publishes with no npm registry token configured, matching OIDC trusted publishing in CI", () => {
       // Unlike the shared npmStub() factory, model `publish` as ALSO fixing the dist-tag —
       // that is what real `npm publish --tag <tag>` does atomically on first publish. This
@@ -2021,7 +2049,10 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.status).toBe(0);
       expect(lastRun.stdout).toContain(`PUBLISH ${RELEASE_SPEC}`);
       expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
-      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(true);
+      const publishLine = lastRun.calls.find((l) => l.startsWith('npm ["publish"'));
+      expect(publishLine).toBeDefined();
+      // Where the OIDC endpoint exists, the publish attests provenance — and only there.
+      expect(publishLine).toContain('"--provenance"');
       // The whole point of this scenario: no dist-tag WRITE was needed or attempted.
       expect(lastRun.calls.some((l) => l.startsWith('npm ["dist-tag","add"'))).toBe(false);
     });

@@ -41,6 +41,7 @@ import {
 } from "./lib/portable-setup-companion.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { PORTABLE_EVALUATION_MANIFEST_ASSET_NAME } from "./lib/portable-evaluation-manifest.mjs";
+import { resolveReleaseOwnerAllowlist } from "./lib/release-owner-allowlist.mjs";
 import {
   collectEvaluationArtifactDigests,
   jsonFromCommand,
@@ -227,11 +228,12 @@ const portableGate = portableReleaseGate({
   },
   setupAssetName: WINDOWS_PORTABLE_SETUP_ASSET_NAME,
   snapshot: githubReleaseSnapshot,
-  collectRunArtifactDigests: (runId, artifacts) =>
+  collectRunArtifactDigests: (runId, artifacts, relevantAssetNames) =>
     collectEvaluationArtifactDigests(
       { gh, fetchArtifactZip: fetchRunArtifactZip, hashFile: sha256FileSync },
       runId,
       artifacts,
+      relevantAssetNames,
     ),
   targets: PORTABLE_TARGETS,
   verifyBytes: runPortableDownloadSmoke,
@@ -367,13 +369,6 @@ function loadDotEnvToken() {
   return undefined;
 }
 
-function readNpmStrictSsl() {
-  const configured = commandResult("npm", ["config", "get", "strict-ssl"]);
-  if (configured.status !== 0) return "true";
-  const value = configured.stdout.trim();
-  return value === "false" ? "false" : "true";
-}
-
 function authConfigKey(registry) {
   const url = new URL(registry);
   const path = url.pathname.endsWith("/") ? url.pathname : `${url.pathname}/`;
@@ -383,18 +378,16 @@ function authConfigKey(registry) {
 function createNpmEnvironment(registry) {
   const token = process.env.NODE_AUTH_TOKEN ?? process.env.NPM_TOKEN ?? loadDotEnvToken();
   const hasToken = token !== undefined && token.length > 0;
-  const strictSsl = process.env.NPM_CONFIG_STRICT_SSL ?? readNpmStrictSsl();
-  if (strictSsl !== "true") {
-    fail(
-      "npm strict-ssl=false is not allowed for release publishing; configure a CA bundle instead.",
-    );
-  }
   const tempDir = mkdtempSync(join(tmpdir(), "keiko-release-npm-"));
   const userConfig = join(tempDir, ".npmrc");
+  // The publish OWNS its transport policy: strict-ssl=true is stated in this temporary
+  // userconfig and re-stated through the environment below, so a user-level strict-ssl=false
+  // can neither weaken TLS for a release nor block one with a refusal an operator has to
+  // decode first (the 0.3.1 publish outage).
   const lines = [
     `registry=${registry}`,
     `${packageRegistryScope}:registry=${registry}`,
-    `strict-ssl=${strictSsl}`,
+    "strict-ssl=true",
   ];
   // No token in CI is expected, not an oversight: the release workflow authenticates
   // `npm publish` via OIDC trusted publishing instead. Leaving no _authToken line here is
@@ -409,6 +402,9 @@ function createNpmEnvironment(registry) {
     env: {
       ...process.env,
       NPM_CONFIG_USERCONFIG: userConfig,
+      // Environment beats userconfig in npm's precedence; without this a hostile or stale
+      // NPM_CONFIG_STRICT_SSL=false in the operator shell would silently override the line above.
+      NPM_CONFIG_STRICT_SSL: "true",
     },
     hasToken,
   };
@@ -1654,6 +1650,18 @@ function publishPackageDryRun(pkg, npmEnv, options) {
   );
 }
 
+/**
+ * npm can attest provenance only where an OIDC provider exists — GitHub Actions announces its
+ * id-token endpoint through this environment value. Everywhere else the flag makes `npm publish`
+ * fail outright, which turned the documented local operator publish into a dead end (the 0.3.1
+ * outage). A token publish simply carries no provenance attestation, exactly like every release
+ * before attestation existed.
+ */
+function provenancePublishArgs() {
+  const endpoint = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+  return typeof endpoint === "string" && endpoint.length > 0 ? ["--provenance"] : [];
+}
+
 function publishPackageToRegistry(pkg, npmEnv, options) {
   console.log(`release-publish: PUBLISH ${pkg.spec} from ${pkg.packageDir}.`);
   run(
@@ -1667,7 +1675,7 @@ function publishPackageToRegistry(pkg, npmEnv, options) {
       options.tag,
       "--registry",
       options.registry,
-      "--provenance",
+      ...provenancePublishArgs(),
       "--ignore-scripts",
     ],
     { env: npmEnv, stdio: "inherit" },
@@ -1803,8 +1811,41 @@ for (const pkg of publishPlan) {
 
 run("npm", ["run", "check:version-consistency"], { stdio: "inherit" });
 run("npm", ["run", "check:publish-manifests"], { stdio: "inherit" });
+// The publish-time approval verifier refuses every approval over an empty allowlist; resolve it
+// the same way the workflow does before the child runs, so a local operator publish does not
+// abort on an environment value only CI used to carry (the 0.3.1 outage). Resolution failure is
+// only fatal where the approval itself is required — a live publish.
+const releaseImpactEnv = { ...process.env };
+if (!options.planOnly) {
+  const allowlist = resolveReleaseOwnerAllowlist({
+    configured: process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS,
+    repository: githubRepository(),
+    runGh: (args) => gh(args),
+  });
+  if (allowlist === undefined) {
+    fail(
+      "the release-owner allowlist did not resolve: set KEIKO_RELEASE_OWNER_GITHUB_LOGINS or grant this checkout a gh login that can read the repository variable.",
+    );
+  }
+  releaseImpactEnv.KEIKO_RELEASE_OWNER_GITHUB_LOGINS = allowlist;
+  releaseImpactEnv.GITHUB_REPOSITORY = releaseImpactEnv.GITHUB_REPOSITORY ?? githubRepository();
+  // The same preflight moment answers the auth question: a live publish that would only
+  // discover a missing npm auth path AFTER the twenty-minute gate chain wastes the whole run.
+  if (!options.dryRun) {
+    const oidcAvailable = Boolean(process.env.ACTIONS_ID_TOKEN_REQUEST_URL);
+    const tokenPresent = Boolean(
+      process.env.NODE_AUTH_TOKEN ?? process.env.NPM_TOKEN ?? loadDotEnvToken(),
+    );
+    if (!oidcAvailable && !tokenPresent) {
+      fail(
+        "no npm auth path is available: set NODE_AUTH_TOKEN or NPM_TOKEN (or a local .env), or run in CI where OIDC trusted publishing authenticates.",
+      );
+    }
+  }
+}
 run("npm", ["run", options.planOnly ? "check:release-impact" : "check:release-impact:publish"], {
   stdio: "inherit",
+  env: releaseImpactEnv,
 });
 // Assets first: the notes may only advertise portable downloads this release actually carries.
 const portableAssets = loadPortableAssets(rootManifest, options);

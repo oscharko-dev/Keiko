@@ -137,7 +137,12 @@ jobs:
       - name: Ensure npm supports OIDC trusted publishing
         # The product runtime stays on its governed npm baseline above. Publishing uses the
         # separately reviewed exact npm version required by ADR-0130, never an unpinned tag.
-        run: npm install --global --ignore-scripts npm@11.18.0
+        # The EXACT governed npm (EXPECTED_PACKAGE_MANAGER in scripts/check-runtime-toolchain.mjs,
+        # >= 11.5.1 so OIDC trusted publishing works): prepack re-verifies the executed npm against
+        # that same constant, so any other version here kills every publish from the tag that
+        # freezes it (the 0.3.1 outage). scripts/__tests__/release-workflow-npm-pin.test.mjs holds
+        # the two in lockstep.
+        run: npm install --global --ignore-scripts npm@11.16.0
       - name: Install dependencies
         run: npm ci --ignore-scripts
       - name: Validate required-check workflow names

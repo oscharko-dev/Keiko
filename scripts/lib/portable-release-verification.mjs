@@ -370,7 +370,7 @@ export function portableReleaseGate(ports) {
         "prepublished portable downloads are not the bytes their workflow run produced",
         runArtifactDigestFailures(
           expectedDownloads,
-          (artifacts) => ports.collectRunArtifactDigests(workflowRunId, artifacts),
+          (artifacts, names) => ports.collectRunArtifactDigests(workflowRunId, artifacts, names),
           evaluationArtifactNames(ports.targets),
           runArtifacts,
         ),
@@ -411,7 +411,10 @@ function runArtifactDigestFailures(expectedDownloads, collect, artifactNames, de
   if (!exact) {
     return ["the evidence does not declare exactly the run's evaluation artifacts."];
   }
-  const digests = collect(declaredArtifacts);
+  const digests = collect(
+    declaredArtifacts,
+    expectedDownloads.map((expected) => expected.assetName),
+  );
   if (!(digests instanceof Map) || digests.size === 0) {
     return ["the referenced workflow run's evaluation artifacts could not be read."];
   }
@@ -484,11 +487,16 @@ function extractArtifactArchive(target, archivePath) {
   }
 }
 
-function artifactDigestsInto(digests, target, hashFile) {
+function artifactDigestsInto(digests, target, hashFile, relevantNames) {
   for (const [key, path] of artifactFiles(target)) {
-    // The published downloads are matched by bare file name, so that is the key. A repeated
-    // name inside one run is ambiguous evidence, not something to resolve by last-write-wins.
+    // The published downloads are matched by bare file name, so that is the key — and ONLY the
+    // names a download can be matched against belong in the map. Every staging artifact also
+    // carries per-target evidence files sharing one name across targets (SHA256SUMS.txt,
+    // sbom.cdx.json, …); treating those as ambiguity refused every real release while proving
+    // nothing (the 0.3.1 latest-promotion outage). A repeated RELEVANT name with disagreeing
+    // bytes is still ambiguous evidence, never resolved by last-write-wins.
     const name = key.slice(key.lastIndexOf("/") + 1);
+    if (!relevantNames.has(name)) continue;
     const digest = hashFile(path);
     const previous = digests.get(name);
     if (previous !== undefined && previous !== digest) return false;
@@ -501,9 +509,11 @@ export function collectEvaluationArtifactDigests(
   { gh, fetchArtifactZip, hashFile },
   runId,
   declaredArtifacts,
+  relevantAssetNames,
 ) {
   const root = mkdtempSync(join(tmpdir(), "keiko-run-artifacts-"));
   const digests = new Map();
+  const relevantNames = new Set(relevantAssetNames);
   try {
     for (const declared of declaredArtifacts) {
       if (!declaredArtifactRecordVerified(gh, runId, declared)) return new Map();
@@ -512,7 +522,7 @@ export function collectEvaluationArtifactDigests(
       const target = join(root, declared.name);
       mkdirSync(target, { recursive: true });
       extractArtifactArchive(target, archivePath);
-      if (!artifactDigestsInto(digests, target, hashFile)) return new Map();
+      if (!artifactDigestsInto(digests, target, hashFile, relevantNames)) return new Map();
     }
     return digests;
   } catch {

@@ -231,7 +231,13 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     // which of the two it is answering.
     if (line.includes("/branches/")) {
       if (overrides.releaseBranchExists === true) return { status: 0, stdout: "{}", stderr: "" };
-      return { status: 1, stdout: "", stderr: overrides.branchLookupError ?? "gh: Not Found" };
+      // The double answers with gh's REAL absence message: an invented "gh: Not Found" here let
+      // the production needle miss the live "(HTTP 404)" and refuse a genuine absence (0.3.1).
+      return {
+        status: 1,
+        stdout: "",
+        stderr: overrides.branchLookupError ?? "gh: Branch not found (HTTP 404)",
+      };
     }
     // The release-owner allowlist comes from the repository variable the release workflow injects.
     if (line.includes("/actions/variables/KEIKO_RELEASE_OWNER_GITHUB_LOGINS")) {

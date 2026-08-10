@@ -607,6 +607,7 @@ describe("collectEvaluationArtifactDigests", () => {
     { name: "artifact-a", id: 7001 },
     { name: "artifact-b", id: 7002 },
   ];
+  const RELEVANT = ["artifact-a.zip", "artifact-b.zip"];
 
   function recordAnswer(declared, overrides = {}) {
     return {
@@ -652,6 +653,7 @@ describe("collectEvaluationArtifactDigests", () => {
         },
         "42",
         DECLARED,
+        RELEVANT,
       );
 
       expect([...digests.entries()]).toEqual([
@@ -660,6 +662,37 @@ describe("collectEvaluationArtifactDigests", () => {
       ]);
     },
   );
+
+  it("ignores same-named evidence files across artifacts instead of refusing", () => {
+    // The 0.3.1 latest-promotion outage: every staging artifact carries per-target evidence
+    // files sharing one bare name (SHA256SUMS.txt, sbom.cdx.json, …) with different bytes.
+    // Only the published download names may enter the digest map — irrelevant collisions must
+    // not refuse a real release.
+    const digests = collectEvaluationArtifactDigests(
+      {
+        gh: ghRecords(),
+        fetchArtifactZip: (artifactId, destination) => {
+          const declared = DECLARED.find((artifact) => artifact.id === artifactId);
+          writeZipArchiveEntries(destination, [
+            { name: `${declared.name}.zip`, data: `bytes of ${declared.name}` },
+            { name: "evidence/SHA256SUMS.txt", data: `sums for ${declared.name}` },
+            { name: "evidence/sbom.cdx.json", data: `sbom for ${declared.name}` },
+            { name: "manifest/portable-manifest.json", data: `manifest for ${declared.name}` },
+          ]);
+          return { status: 0 };
+        },
+        hashFile: (path) => `hash:${basename(path)}`,
+      },
+      "42",
+      DECLARED,
+      RELEVANT,
+    );
+
+    expect([...digests.entries()]).toEqual([
+      ["artifact-a.zip", "hash:artifact-a.zip"],
+      ["artifact-b.zip", "hash:artifact-b.zip"],
+    ]);
+  });
 
   it("keeps verifying the original evidence when the run gains replacement artifacts", () => {
     // THE rerun pin: artifact ids are immutable, so nothing here may consult the run's MUTABLE
@@ -678,6 +711,7 @@ describe("collectEvaluationArtifactDigests", () => {
       },
       "42",
       DECLARED,
+      RELEVANT,
     );
 
     expect(digests.size).toBe(2);
@@ -694,6 +728,7 @@ describe("collectEvaluationArtifactDigests", () => {
       },
       "42",
       DECLARED,
+      RELEVANT,
     );
 
     expect(digests.size).toBe(0);
@@ -716,6 +751,7 @@ describe("collectEvaluationArtifactDigests", () => {
       },
       "42",
       DECLARED,
+      RELEVANT,
     );
 
     expect(digests.size).toBe(0);
@@ -731,6 +767,7 @@ describe("collectEvaluationArtifactDigests", () => {
       },
       "42",
       DECLARED,
+      RELEVANT,
     );
 
     expect(digests.size).toBe(0);
@@ -748,6 +785,7 @@ describe("collectEvaluationArtifactDigests", () => {
       },
       "42",
       DECLARED,
+      RELEVANT,
     );
 
     expect(digests.size).toBe(0);
@@ -766,6 +804,7 @@ describe("collectEvaluationArtifactDigests", () => {
       },
       "42",
       DECLARED,
+      RELEVANT,
     );
 
     expect(roots).toHaveLength(1);
@@ -847,6 +886,7 @@ describe("commit binding and ambiguous evidence", () => {
       },
       "42",
       declared,
+      ["keiko-macos-x64.zip"],
     );
 
     expect(digests.size).toBe(0);
