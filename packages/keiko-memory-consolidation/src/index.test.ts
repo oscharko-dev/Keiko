@@ -8,6 +8,8 @@
 
 import { describe, expect, it } from "vitest";
 
+import { createRequire } from "node:module";
+
 import * as Barrel from "./index.js";
 import type {
   ConsolidationJob,
@@ -37,13 +39,19 @@ import {
   type ConsolidationJobErrorCode,
 } from "./index.js";
 
+// The packaged manifest owns the version; a literal here re-states it and goes
+// stale on every release cut (KfQ findings on #3055).
+const { version: packageVersion } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
+
 function pin<T>(_value?: T): T | undefined {
   return undefined;
 }
 
 describe("public barrel", () => {
   it("exports the version constant", () => {
-    expect(KEIKO_MEMORY_CONSOLIDATION_VERSION).toBe("0.3.1");
+    expect(KEIKO_MEMORY_CONSOLIDATION_VERSION).toBe(packageVersion);
   });
 
   it("exports runConsolidation as a function", () => {

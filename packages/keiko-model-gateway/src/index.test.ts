@@ -5,6 +5,8 @@
 // only direct provider-SDK egress) makes the "stable public surface" guarantee load-bearing.
 
 import { describe, it, expect } from "vitest";
+
+import { createRequire } from "node:module";
 import * as gateway from "./index.js";
 import {
   KEIKO_MODEL_GATEWAY_VERSION,
@@ -96,9 +98,15 @@ import type {
   CompletionSelectionOptions,
 } from "./index.js";
 
+// The packaged manifest owns the version; a literal here re-states it and goes
+// stale on every release cut (KfQ findings on #3055).
+const { version: packageVersion } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
+
 describe("keiko-model-gateway package surface", () => {
-  it("exposes the version constant pinned at 0.3.1", () => {
-    expect(KEIKO_MODEL_GATEWAY_VERSION).toBe("0.3.1");
+  it("exposes the version constant pinned at the package version", () => {
+    expect(KEIKO_MODEL_GATEWAY_VERSION).toBe(packageVersion);
   });
 
   it("exposes the capability registry as a frozen-shaped readonly array", () => {

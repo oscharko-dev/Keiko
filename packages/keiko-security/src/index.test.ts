@@ -5,6 +5,8 @@
 // "stable public surface" guarantee load-bearing.
 
 import { describe, it, expect } from "vitest";
+
+import { createRequire } from "node:module";
 import {
   KEIKO_SECURITY_VERSION,
   redact,
@@ -44,9 +46,15 @@ import {
   errorRecord,
 } from "./index.js";
 
+// The packaged manifest owns the version; a literal here re-states it and goes
+// stale on every release cut (KfQ findings on #3055).
+const { version: packageVersion } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
+
 describe("keiko-security package surface", () => {
-  it("exposes the version constant pinned at 0.3.1", () => {
-    expect(KEIKO_SECURITY_VERSION).toBe("0.3.1");
+  it("exposes the version constant pinned at the package version", () => {
+    expect(KEIKO_SECURITY_VERSION).toBe(packageVersion);
   });
 
   it("exposes the redaction primitives as callable functions", () => {

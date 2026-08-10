@@ -1090,7 +1090,10 @@ const RELEASE_VERSION_IS_PRERELEASE = RELEASE_VERSION.includes("-");
 const NO_REGISTRY_TOKEN_ENV = {
   NODE_AUTH_TOKEN: undefined,
   NPM_TOKEN: "",
+  // Both values are required for npm's OIDC identity exchange; the URL alone cannot mint a
+  // token (CodeRabbit finding on #3055).
   ACTIONS_ID_TOKEN_REQUEST_URL: "https://actions.example/token-request",
+  ACTIONS_ID_TOKEN_REQUEST_TOKEN: "actions-oidc-request-bearer",
 };
 
 describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
@@ -1964,6 +1967,26 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.stdout).not.toContain("PASS -");
     });
 
+    it("treats a lone OIDC request URL as no auth path", () => {
+      // The identity exchange needs BOTH GitHub-issued values; a URL without its bearer cannot
+      // mint a token, and counting it as auth would fail twenty minutes later at npm publish.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: false },
+        portableAssets: false,
+        qualificationEnv: {
+          NODE_AUTH_TOKEN: undefined,
+          NPM_TOKEN: "",
+          ACTIONS_ID_TOKEN_REQUEST_URL: "https://actions.example/token-request",
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: undefined,
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("no npm auth path is available");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
     it("refuses before any gate work when neither a token nor an OIDC endpoint exists", () => {
       // The 0.3.1 operator runs discovered missing auth only after the twenty-minute gate chain;
       // the preflight answers the question first.
@@ -1975,6 +1998,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
           NODE_AUTH_TOKEN: undefined,
           NPM_TOKEN: "",
           ACTIONS_ID_TOKEN_REQUEST_URL: undefined,
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: undefined,
         },
       });
 

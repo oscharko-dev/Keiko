@@ -228,9 +228,10 @@ const portableGate = portableReleaseGate({
   },
   setupAssetName: WINDOWS_PORTABLE_SETUP_ASSET_NAME,
   snapshot: githubReleaseSnapshot,
-  collectRunArtifactDigests: (runId, artifacts, relevantAssetNames) =>
+  collectRunArtifactDigests: (repository, runId, artifacts, relevantAssetNames) =>
     collectEvaluationArtifactDigests(
       { gh, fetchArtifactZip: fetchRunArtifactZip, hashFile: sha256FileSync },
+      repository,
       runId,
       artifacts,
       relevantAssetNames,
@@ -1664,9 +1665,16 @@ function publishPackageDryRun(pkg, npmEnv, options) {
  * outage). A token publish simply carries no provenance attestation, exactly like every release
  * before attestation existed.
  */
+function oidcTrustedPublishingAvailable() {
+  // The identity exchange needs BOTH values GitHub Actions issues under `id-token: write`;
+  // the request URL alone cannot mint a token (CodeRabbit finding on #3055).
+  const url = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+  const token = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  return typeof url === "string" && url.length > 0 && typeof token === "string" && token.length > 0;
+}
+
 function provenancePublishArgs() {
-  const endpoint = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
-  return typeof endpoint === "string" && endpoint.length > 0 ? ["--provenance"] : [];
+  return oidcTrustedPublishingAvailable() ? ["--provenance"] : [];
 }
 
 function publishPackageToRegistry(pkg, npmEnv, options) {
@@ -1839,7 +1847,7 @@ if (!options.planOnly) {
   // The same preflight moment answers the auth question: a live publish that would only
   // discover a missing npm auth path AFTER the twenty-minute gate chain wastes the whole run.
   if (!options.dryRun) {
-    const oidcAvailable = Boolean(process.env.ACTIONS_ID_TOKEN_REQUEST_URL);
+    const oidcAvailable = oidcTrustedPublishingAvailable();
     const tokenPresent = Boolean(
       process.env.NODE_AUTH_TOKEN ?? process.env.NPM_TOKEN ?? loadDotEnvToken(),
     );

@@ -268,7 +268,51 @@ describe("readZipArchiveEntries", () => {
     bytes[30 + "file.txt".length + 2] ^= 0xff;
     writeFileSync(archivePath, bytes);
 
-    expect(() => readZipArchiveEntries(archivePath)).toThrow();
+    expect(() => readZipArchiveEntries(archivePath)).toThrow(
+      /does not match its declared size or checksum/u,
+    );
+  });
+
+  it("reads a stored (uncompressed) entry the way GitHub's artifact endpoint may pack one", () => {
+    // The writer always deflates, so the stored branch is exercised through hand-built bytes:
+    // method 0 with the raw data in place of the compressed stream, sizes and CRC adjusted.
+    const root = temporaryRoot();
+    const archivePath = join(root, "stored.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "file.txt", data: "stored bytes" }]);
+    const bytes = readFileSync(archivePath);
+    const data = Buffer.from("stored bytes");
+    const nameLength = "file.txt".length;
+    const localData = 30 + nameLength;
+    const compressed = bytes.subarray(localData, bytes.length - 22 - 46 - nameLength);
+    const stored = Buffer.concat([
+      bytes.subarray(0, localData),
+      data,
+      bytes.subarray(localData + compressed.byteLength),
+    ]);
+    const centralOffset = stored.length - 22 - 46 - nameLength;
+    stored.writeUInt16LE(0, 8); // local method: store
+    stored.writeUInt32LE(data.byteLength, 18); // local compressed size
+    stored.writeUInt16LE(0, centralOffset + 10); // central method: store
+    stored.writeUInt32LE(data.byteLength, centralOffset + 20); // central compressed size
+    stored.writeUInt32LE(centralOffset, stored.length - 22 + 16); // EOCD central offset
+    writeFileSync(archivePath, stored);
+
+    const entries = readZipArchiveEntries(archivePath);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].data.toString("utf8")).toBe("stored bytes");
+  });
+
+  it("refuses an entry using an unsupported compression method", () => {
+    const root = temporaryRoot();
+    const archivePath = join(root, "unsupported.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "file.txt", data: "bytes" }]);
+    const bytes = readFileSync(archivePath);
+    const centralOffset = bytes.length - 22 - 46 - "file.txt".length;
+    bytes.writeUInt16LE(12, centralOffset + 10); // bzip2: valid ZIP, unsupported here
+    writeFileSync(archivePath, bytes);
+
+    expect(() => readZipArchiveEntries(archivePath)).toThrow(/unsupported compression method/u);
   });
 
   it("refuses an archive whose entry names escape the extraction root", () => {

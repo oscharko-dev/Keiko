@@ -514,8 +514,8 @@ describe("portableReleaseGate", () => {
         }
         return { status: 0, stdout: JSON.stringify(overrides.run ?? goodRun()) };
       },
-      collectRunArtifactDigests: (runId, names) => {
-        events.artifactReads.push({ runId, names });
+      collectRunArtifactDigests: (repository, runId, names) => {
+        events.artifactReads.push({ repository, runId, names });
         if (overrides.artifactDigests !== undefined) return overrides.artifactDigests;
         return new Map(assets.map((asset) => [asset.name, asset.sha256]));
       },
@@ -541,7 +541,9 @@ describe("portableReleaseGate", () => {
     // The digests are taken from the referenced RUN's artifacts, which cannot be rewritten after
     // the run, and only then are the published bytes fetched. The collector receives the
     // evidence-declared immutable identities, not bare names.
-    expect(events.artifactReads).toEqual([{ runId: RUN_ID, names: RUN_ARTIFACTS }]);
+    expect(events.artifactReads).toEqual([
+      { repository: REPOSITORY, runId: RUN_ID, names: RUN_ARTIFACTS },
+    ]);
     expect(events.verified).toEqual([EXPECTED_NAMES]);
     expect(events.logged.join(" ")).toContain("match their evidence");
     expect(events.failed).toEqual([]);
@@ -651,6 +653,7 @@ describe("collectEvaluationArtifactDigests", () => {
           fetchArtifactZip: zipFetcher(layout),
           hashFile: (path) => `hash:${basename(path)}`,
         },
+        REPOSITORY,
         "42",
         DECLARED,
         RELEVANT,
@@ -683,6 +686,7 @@ describe("collectEvaluationArtifactDigests", () => {
         },
         hashFile: (path) => `hash:${basename(path)}`,
       },
+      REPOSITORY,
       "42",
       DECLARED,
       RELEVANT,
@@ -709,6 +713,7 @@ describe("collectEvaluationArtifactDigests", () => {
         fetchArtifactZip: zipFetcher("flat"),
         hashFile: (path) => `hash:${basename(path)}`,
       },
+      REPOSITORY,
       "42",
       DECLARED,
       RELEVANT,
@@ -726,6 +731,7 @@ describe("collectEvaluationArtifactDigests", () => {
         fetchArtifactZip: zipFetcher("flat", "artifact-b"),
         hashFile: () => "unused",
       },
+      REPOSITORY,
       "42",
       DECLARED,
       RELEVANT,
@@ -749,6 +755,7 @@ describe("collectEvaluationArtifactDigests", () => {
         },
         hashFile: () => "unused",
       },
+      REPOSITORY,
       "42",
       DECLARED,
       RELEVANT,
@@ -765,6 +772,7 @@ describe("collectEvaluationArtifactDigests", () => {
         fetchArtifactZip: () => ({ status: 0 }),
         hashFile: () => "unused",
       },
+      REPOSITORY,
       "42",
       DECLARED,
       RELEVANT,
@@ -783,6 +791,7 @@ describe("collectEvaluationArtifactDigests", () => {
         },
         hashFile: () => "unused",
       },
+      REPOSITORY,
       "42",
       DECLARED,
       RELEVANT,
@@ -802,6 +811,7 @@ describe("collectEvaluationArtifactDigests", () => {
         },
         hashFile: () => "unused",
       },
+      REPOSITORY,
       "42",
       DECLARED,
       RELEVANT,
@@ -884,6 +894,7 @@ describe("commit binding and ambiguous evidence", () => {
           return call === 1 ? "a".repeat(64) : "b".repeat(64);
         },
       },
+      REPOSITORY,
       "42",
       declared,
       ["keiko-macos-x64.zip"],

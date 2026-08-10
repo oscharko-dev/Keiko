@@ -370,7 +370,8 @@ export function portableReleaseGate(ports) {
         "prepublished portable downloads are not the bytes their workflow run produced",
         runArtifactDigestFailures(
           expectedDownloads,
-          (artifacts, names) => ports.collectRunArtifactDigests(workflowRunId, artifacts, names),
+          (artifacts, names) =>
+            ports.collectRunArtifactDigests(repository, workflowRunId, artifacts, names),
           evaluationArtifactNames(ports.targets),
           runArtifacts,
         ),
@@ -462,9 +463,12 @@ function artifactFiles(root, prefix = "", depth = 1) {
  * means a later rerun can neither substitute bytes nor block the original evidence from
  * verifying (Codex finding on #3054).
  */
-function declaredArtifactRecordVerified(gh, runId, declared) {
+function declaredArtifactRecordVerified(gh, repository, runId, declared) {
+  // Bound to the VERIFIED repository, never to the checkout's remote: `gh` expands the
+  // `{owner}/{repo}` placeholders from whatever origin the working copy points at, and the
+  // evidence speaks about exactly one repository (CodeRabbit finding on #3055).
   const record = jsonFromCommand(
-    gh(["api", `repos/{owner}/{repo}/actions/artifacts/${String(declared.id)}`]),
+    gh(["api", `repos/${repository}/actions/artifacts/${String(declared.id)}`]),
   );
   return (
     isRecord(record) &&
@@ -504,6 +508,7 @@ function artifactDigestsInto(digests, target, hashFile, relevantNames) {
 
 export function collectEvaluationArtifactDigests(
   { gh, fetchArtifactZip, hashFile },
+  repository,
   runId,
   declaredArtifacts,
   relevantAssetNames,
@@ -513,7 +518,7 @@ export function collectEvaluationArtifactDigests(
   const relevantNames = new Set(relevantAssetNames);
   try {
     for (const declared of declaredArtifacts) {
-      if (!declaredArtifactRecordVerified(gh, runId, declared)) return new Map();
+      if (!declaredArtifactRecordVerified(gh, repository, runId, declared)) return new Map();
       const archivePath = join(root, `${declared.name}.artifact.zip`);
       if (fetchArtifactZip(declared.id, archivePath)?.status !== 0) return new Map();
       const target = join(root, declared.name);

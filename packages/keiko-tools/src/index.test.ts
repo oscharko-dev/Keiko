@@ -5,6 +5,8 @@
 // only safe-tool-execution surface) makes the "stable public surface" guarantee load-bearing.
 
 import { describe, expect, it } from "vitest";
+
+import { createRequire } from "node:module";
 import * as tools from "./index.js";
 import type {
   ApplyDeps,
@@ -101,9 +103,15 @@ import type {
   EditorAgentToolOutput,
 } from "./index.js";
 
+// The packaged manifest owns the version; a literal here re-states it and goes
+// stale on every release cut (KfQ findings on #3055).
+const { version: packageVersion } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
+
 describe("keiko-tools public surface", () => {
   it("exposes the documented value barrel members", () => {
-    expect(tools.KEIKO_TOOLS_VERSION).toBe("0.3.1");
+    expect(tools.KEIKO_TOOLS_VERSION).toBe(packageVersion);
     // Frozen default tables (re-exported from contracts):
     expect(tools.DEFAULT_COMMAND_RULES).toBeDefined();
     expect(tools.DEFAULT_ENV_ALLOWLIST).toBeDefined();

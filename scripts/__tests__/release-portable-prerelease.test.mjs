@@ -3,6 +3,7 @@ import * as pathModule from "node:path";
 import { readFileSync } from "node:fs";
 import { spawnSync as realSpawnSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
+import { envValue } from "../check-release-required-workflow-names.mjs";
 import {
   assertTagKeepsBetaSequenceMonotonic,
   nextBetaTag,
@@ -565,14 +566,21 @@ describe("hermetic end-to-end (scripted gh double)", () => {
 
     it("encodes the release-source branch as one path parameter", () => {
       // A branch like release/0.3 embedded raw splits into two path segments, 404s, and silently
-      // hands release authority to the default branch (Codex finding on #3054).
+      // hands release authority to the default branch (Codex finding on #3054). The expected
+      // branch derives from release.yml itself — the resolver's single source — so renaming the
+      // release base branch cannot break this test for an unrelated reason.
+      const releaseWorkflow = readFileSync(
+        pathModule.resolve(import.meta.dirname, "..", "..", ".github", "workflows", "release.yml"),
+        "utf8",
+      );
+      const encodedBranch = encodeURIComponent(envValue(releaseWorkflow, "RELEASE_BASE_BRANCH"));
       const recorded = [];
       publicRun(recorded, {
         releaseBranchExists: true,
-        answers: [["compare/release%2F0.3...", JSON.stringify({ status: "behind" })]],
+        answers: [[`compare/${encodedBranch}...`, JSON.stringify({ status: "behind" })]],
       });
-      expect(recorded.some((line) => line.includes("branches/release%2F0.3"))).toBe(true);
-      expect(recorded.some((line) => line.includes("compare/release%2F0.3..."))).toBe(true);
+      expect(recorded.some((line) => line.includes(`branches/${encodedBranch}`))).toBe(true);
+      expect(recorded.some((line) => line.includes(`compare/${encodedBranch}...`))).toBe(true);
     });
 
     it("refuses when the release-owner allowlist does not resolve", () => {

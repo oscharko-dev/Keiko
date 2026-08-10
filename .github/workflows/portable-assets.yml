@@ -37,9 +37,41 @@ env:
   RELEASE_REQUIRED_CHECKS: '["ci","workflow hygiene","Analyze (actions)","Analyze (javascript-typescript)","Build, scan, SBOM, smoke","ui"]'
 
 jobs:
+  # The production signing lane must not start for a release the owner scoped to the EVALUATION
+  # lane (ADR-0163 D9 / ADR-0121 D1): its protected signing inputs are not provisioned there, so
+  # every evaluation-scoped stable tag used to leave a red run and a red signing deployment. The
+  # reviewed release-impact catalog at the tagged commit is the anchored source — a tag with no
+  # entry stays PRODUCTION so the strict lane remains the default.
+  release-scope:
+    name: Resolve release signing scope
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    outputs:
+      production: ${{ steps.scope.outputs.production }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Decide from the reviewed catalog at the tagged commit
+        id: scope
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          production="$(jq -r --arg tag "$RELEASE_TAG" '
+            [.entries[] | select(.releaseTag == $tag)] | last |
+            if . == null then "true"
+            elif (.portableRuntimeArtifactContract.stagingOnly // false) then "false"
+            else "true" end' release-impact.catalog.json)"
+          echo "production=$production" >> "$GITHUB_OUTPUT"
+          echo "release-scope: $RELEASE_TAG production=$production"
+
   production-signing-preflight:
     name: Authorize production signing
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+    needs: release-scope
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && needs.release-scope.outputs.production == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       checks: read
