@@ -322,23 +322,25 @@ Rules:
 ### Historical records, planning baselines, and delivery evidence
 
 These directories were previously reachable only through individual ADRs or not indexed at all
-(housekeeping 2026-08-10). They are records, not living contracts — the ADRs and gates stay
-authoritative.
+(housekeeping 2026-08-10). The first three are frozen records — for them the ADRs and gates stay
+authoritative; the remaining entries are living surfaces that simply lacked an index entry.
 
 - [historical/](historical/) - frozen Epic #270 Test-Intelligence → Quality-Intelligence
-  snapshots (baseline, parity matrix, compat contract, inventory).
+  snapshots (baseline, parity matrix with post-closure delivery notes, compat contract,
+  inventory).
 - [planning/](planning/) - historical editor architecture and multi-language planning baselines
   (superseded by the editor ADR cluster).
 - [context-engineering/decision-log.md](context-engineering/decision-log.md) - coordinator
-  decision log for the context-engineering milestone (ADR-0053..0056 context).
+  decision log for the context-engineering milestone (ADR-0052..0057 context).
 - [acceptance/](acceptance/) - code-task acceptance contribution contract and its generated
-  acceptance artifact (`npm run generate:code-task-acceptance`).
+  acceptance artifact (generator: `scripts/generate-code-task-acceptance.mjs`).
 - [pilot/](pilot/) - pilot go/no-go evaluation and pilot runbook (content pinned by
   `tests/pilot/`).
 - [relationship-engine/](relationship-engine/) - relationship storage/audit/UI specifications and
   closure evidence (ADR-0031..0033).
-- [release/](release/) - release readiness audits, portable launch and signing guides, and
-  release closeouts (wired into the release workflows).
+- [release/](release/) - live release engineering: readiness audits, portable launch and signing
+  operator contracts, dependency decision matrices, and release closeouts (wired into the
+  release workflows and required gates).
 
 ## Verification commands
 

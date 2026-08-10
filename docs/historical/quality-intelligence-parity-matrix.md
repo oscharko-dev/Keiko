@@ -816,3 +816,20 @@ This parity matrix and release-gate evidence are complete and ready for PR merge
 - `docs/historical/quality-intelligence-keiko-baseline.md` — Keiko reuse baseline (#362)
 - `docs/release/quality-intelligence-dependency-decision-matrix.md` — Supply-chain approval matrix (#287)
 - `docs/historical/quality-intelligence-test-intelligence-compatibility.md` — Standalone TI compatibility (#286)
+
+---
+
+## Post-closure delivery notes (2026-08-10)
+
+Carried from the retired `docs/migration/` snapshot of this matrix so the post-closure state
+stays with the retained record; the rows above intentionally keep their closure-gate wording.
+
+- **Row 12 — Judge calibration**: initially deferred from the closure slice; since delivered as
+  the adversarial test-quality judge (Epic #736, PR #843): capability-routed model-judge tier,
+  fail-soft, call-budgeted, fully audited
+  (`packages/keiko-server/src/qualityIntelligence/judgePort.ts` + the workflow judge stage).
+- **Row 13 — Figma / Jira live context normalization**: initially deferred; the Figma side has
+  since shipped (Epic #750): PAT-only read-only connector with deterministic clean Snapshot
+  ingestion as a QI source (`packages/keiko-quality-intelligence/src/domain/figma/` +
+  `figmaSnapshotAdapter.ts`/`figmaSnapshotRoutes.ts`). Jira/TMS export remains dry-run-only by
+  design (403 live-write guard).
