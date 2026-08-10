@@ -43,6 +43,8 @@ interface CapturedEditor {
   setModelValue: ReturnType<typeof vi.fn>;
   modelValue: () => string;
   pushUndoStop: ReturnType<typeof vi.fn>;
+  pushEditOperations: ReturnType<typeof vi.fn>;
+  pushStackElement: ReturnType<typeof vi.fn>;
   disposed: { action: boolean; cursor: boolean; selection: boolean };
 }
 
@@ -222,6 +224,14 @@ vi.mock("@monaco-editor/react", () => {
     getLineMaxColumn: (lineNumber: number) => number;
     onDidChangeContent: (listener: () => void) => { dispose: () => void };
     uri: { toString: () => string };
+    getFullModelRange: () => {
+      startLineNumber: number;
+      startColumn: number;
+      endLineNumber: number;
+      endColumn: number;
+    };
+    pushEditOperations: ReturnType<typeof vi.fn>;
+    pushStackElement: ReturnType<typeof vi.fn>;
   }
   interface MockState {
     container: { current: HTMLDivElement | null };
@@ -240,6 +250,8 @@ vi.mock("@monaco-editor/react", () => {
     executeEdits: ReturnType<typeof vi.fn>;
     setModelValue: ReturnType<typeof vi.fn>;
     pushUndoStop: ReturnType<typeof vi.fn>;
+    pushEditOperations: ReturnType<typeof vi.fn>;
+    pushStackElement: ReturnType<typeof vi.fn>;
     modelText: string;
     modelLanguage: string;
     modelVersion: number;
@@ -269,6 +281,8 @@ vi.mock("@monaco-editor/react", () => {
       executeEdits: vi.fn(),
       setModelValue: vi.fn(),
       pushUndoStop: vi.fn(() => true),
+      pushEditOperations: vi.fn(),
+      pushStackElement: vi.fn(),
       modelText: "",
       modelLanguage: "plaintext",
       modelVersion: 1,
@@ -294,6 +308,17 @@ vi.mock("@monaco-editor/react", () => {
       s.modelContentListener?.();
       s.onChange?.(text);
     });
+    s.pushEditOperations.mockImplementation(
+      (_cursorState: null, edits: readonly { readonly text: string }[]): null => {
+        const text = edits[0]?.text;
+        if (text === undefined) return null;
+        s.modelText = text;
+        s.modelVersion += 1;
+        s.modelContentListener?.();
+        s.onChange?.(text);
+        return null;
+      },
+    );
     s.fakeEditor = {
       addAction: (descriptor): { dispose: () => void } => {
         s.actionRuns.set(descriptor.id, descriptor.run);
@@ -355,6 +380,22 @@ vi.mock("@monaco-editor/react", () => {
           return { dispose: vi.fn() };
         },
         uri: { toString: (): string => "inmemory://test/src/a.ts" },
+        getFullModelRange: (): {
+          startLineNumber: number;
+          startColumn: number;
+          endLineNumber: number;
+          endColumn: number;
+        } => {
+          const lines = s.modelText.split("\n");
+          return {
+            startLineNumber: 1,
+            startColumn: 1,
+            endLineNumber: Math.max(1, lines.length),
+            endColumn: (lines.at(-1)?.length ?? 0) + 1,
+          };
+        },
+        pushEditOperations: s.pushEditOperations,
+        pushStackElement: s.pushStackElement,
       }),
       onDidChangeModel: (): { dispose: () => void } => ({ dispose: vi.fn() }),
       getContainerDomNode: (): HTMLElement => s.container.current ?? document.createElement("div"),
@@ -393,6 +434,8 @@ vi.mock("@monaco-editor/react", () => {
       setModelValue: s.setModelValue,
       modelValue: (): string => s.modelText,
       pushUndoStop: s.pushUndoStop,
+      pushEditOperations: s.pushEditOperations,
+      pushStackElement: s.pushStackElement,
       disposed: s.disposed,
     };
     return s;
@@ -529,6 +572,121 @@ describe("KeikoCodeEditor — controlled editing", () => {
     expect(origin).toBe("applied-patch");
   });
 
+  it("does not write a stale controlled value back over a fresh host edit (#3071 review)", async () => {
+    // The rename flow posts a host-edit request WITHOUT updating the host buffer state first, so
+    // in that commit `buffer.content.text` is still the pre-edit text. The controlled sync must
+    // not write that stale value back over the just-applied edit — doing so would put a
+    // new → old → new pair on the undo stack and the second keyboard undo would return to the
+    // edited text instead of moving further back.
+    const { rerender } = render(<KeikoCodeEditor {...baseProps({})} />);
+    await flushMount();
+    await waitFor(() => {
+      expect(captured.editor).not.toBeNull();
+    });
+    rerender(
+      <KeikoCodeEditor
+        {...baseProps({
+          hostEditRequest: {
+            id: "rename-3",
+            text: "const renamed = 3;\n",
+            origin: "applied-patch",
+          },
+        })}
+      />,
+    );
+    await waitFor(() => {
+      expect(captured.editor?.modelValue()).toBe("const renamed = 3;\n");
+    });
+    // The host edit is the only model write: no controlled-sync write-back of the stale buffer.
+    expect(captured.editor?.executeEdits).toHaveBeenCalledTimes(1);
+    expect(captured.editor?.pushEditOperations).not.toHaveBeenCalled();
+    expect(captured.editor?.setModelValue).not.toHaveBeenCalled();
+  });
+
+  it("syncs a later buffer update even while a handled host edit lingers in props (#3071 review)", async () => {
+    // A one-shot host-edit request may legitimately stay in props after it was handled. Its
+    // suppression of the controlled sync must expire once the host buffer has reconciled —
+    // otherwise a later external update (e.g. a file reload) never reaches the model while it
+    // still equals the old request text.
+    const lingering = {
+      id: "rename-4",
+      text: "const renamed = 4;\n",
+      origin: "applied-patch",
+    } as const;
+    const { rerender } = render(<KeikoCodeEditor {...baseProps({})} />);
+    await flushMount();
+    await waitFor(() => {
+      expect(captured.editor).not.toBeNull();
+    });
+    rerender(<KeikoCodeEditor {...baseProps({ hostEditRequest: lingering })} />);
+    await waitFor(() => {
+      expect(captured.editor?.modelValue()).toBe(lingering.text);
+    });
+    // The host reconciles (buffer catches up to the request text) with the request lingering…
+    rerender(
+      <KeikoCodeEditor
+        {...baseProps({
+          buffer: buildBuffer({ text: lingering.text }),
+          hostEditRequest: lingering,
+        })}
+      />,
+    );
+    // …then an external update arrives while the handled request is STILL in props. It must
+    // reach the model.
+    rerender(
+      <KeikoCodeEditor
+        {...baseProps({
+          buffer: buildBuffer({ text: "const reloaded = 5;\n" }),
+          hostEditRequest: lingering,
+        })}
+      />,
+    );
+    await waitFor(() => {
+      expect(captured.editor?.modelValue()).toBe("const reloaded = 5;\n");
+    });
+  });
+
+  it("skips a host edit request whose text the model already holds (#1394 pin)", async () => {
+    // The host updates its buffer state and posts the host-edit request in the same commit, so
+    // the controlled sync may have already written the exact text. Re-executing the whole-model
+    // replacement would add an empty undo stop: the first keyboard undo would appear to do
+    // nothing. The request must be a no-op instead.
+    // Mount first, with no pending request: once the editor ref exists, a host-edit effect run
+    // applies synchronously in its commit instead of polling on animation frames — so each
+    // rerender below has provably processed its request before the next one arrives.
+    const { rerender } = render(<KeikoCodeEditor {...baseProps({})} />);
+    await flushMount();
+    await waitFor(() => {
+      expect(captured.editor).not.toBeNull();
+    });
+    rerender(
+      <KeikoCodeEditor
+        {...baseProps({
+          hostEditRequest: { id: "noop-1", text: "const a = 1;\n", origin: "applied-patch" },
+        })}
+      />,
+    );
+    // A second request with genuinely different text anchors the end state: once it has
+    // executed, the counts below are final — exactly one execution, exactly one undo-stop pair.
+    rerender(
+      <KeikoCodeEditor
+        {...baseProps({
+          hostEditRequest: { id: "real-2", text: "const b = 2;\n", origin: "applied-patch" },
+        })}
+      />,
+    );
+    await waitFor(() => {
+      expect(captured.editor?.executeEdits).toHaveBeenCalledWith("keiko.host-edit", [
+        {
+          range: { startLineNumber: 1, startColumn: 1, endLineNumber: 2, endColumn: 1 },
+          text: "const b = 2;\n",
+        },
+      ]);
+    });
+    expect(captured.editor?.executeEdits).toHaveBeenCalledTimes(1);
+    expect(captured.editor?.pushUndoStop).toHaveBeenCalledTimes(2);
+  });
+
   it("does not apply a host edit request while read-only, and reports it via onRuntimeError (KEIKO-0032)", async () => {
     const onContentChange = vi.fn();
     const onRuntimeError = vi.fn();
@@ -588,7 +746,7 @@ describe("KeikoCodeEditor — controlled editing", () => {
     expect(origin).toBe("applied-patch");
   });
 
-  it("syncs host-controlled buffer changes into the retained Monaco model without echoing dirty edits", async () => {
+  it("syncs host-controlled buffer changes into the retained Monaco model undo-preservingly and without echoing dirty edits (#1394 pin)", async () => {
     const onContentChange = vi.fn();
     const { rerender } = render(<KeikoCodeEditor {...baseProps({ onContentChange })} />);
     await flushMount();
@@ -603,10 +761,24 @@ describe("KeikoCodeEditor — controlled editing", () => {
       />,
     );
 
+    // The same-document sync must go through the edit-operations API — one undo stop pair around
+    // one whole-model replacement — so an agent-applied edit stays reachable by a single keyboard
+    // undo. `model.setValue` would clear that history.
     await waitFor(() => {
-      expect(captured.editor?.setModelValue).toHaveBeenCalledWith("const a = 2;\n");
+      expect(captured.editor?.pushEditOperations).toHaveBeenCalledWith(
+        null,
+        [
+          {
+            range: { startLineNumber: 1, startColumn: 1, endLineNumber: 2, endColumn: 1 },
+            text: "const a = 2;\n",
+          },
+        ],
+        expect.any(Function),
+      );
       expect(captured.editor?.modelValue()).toBe("const a = 2;\n");
     });
+    expect(captured.editor?.pushStackElement).toHaveBeenCalledTimes(2);
+    expect(captured.editor?.setModelValue).not.toHaveBeenCalled();
     expect(onContentChange).not.toHaveBeenCalled();
   });
 
