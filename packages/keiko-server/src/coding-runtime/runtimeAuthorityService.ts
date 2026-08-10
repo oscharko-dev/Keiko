@@ -51,8 +51,11 @@ import { projectRuntimeAuthorityValue } from "./runtimeAuthorityProjection.js";
 // Child tool mutations may only ever run against a RUNNING run; operator admissions (follow-up
 // dispatch, abort, question answers) legitimately reach a paused run — sticky pause holds the
 // runtime, not the human.
-const RUNNING_ONLY: ReadonlySet<string> = new Set(["running"]);
-const OPERATOR_ADMISSIBLE_STATES: ReadonlySet<string> = new Set(["running", "paused"]);
+const RUNNING_ONLY: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set(["running"]);
+const OPERATOR_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
+  "running",
+  "paused",
+]);
 
 export interface CodingRuntimeTrustedContext {
   readonly operatorId: string;
@@ -407,7 +410,7 @@ export class CodingRuntimeAuthorityService {
 
   private revalidateCapabilityForStates(
     input: CodingRuntimeCapabilityRecheckInput,
-    admissibleStates: ReadonlySet<string>,
+    admissibleStates: ReadonlySet<CodingWorkbenchRuntimeStateName>,
   ): CodingRuntimeResolution {
     const authenticated = this.capabilities.authenticate(
       input.capability,
