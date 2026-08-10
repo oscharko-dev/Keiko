@@ -1,10 +1,10 @@
 # Local Runtime State Contract
 
 This document enumerates the local paths, environment variables, and durable stores that Keiko
-intentionally reads or writes at `0.3.1`. It is a current-state contract, not a historical rollout
-or compatibility playbook. 0.3.1 republishes the 0.3.0 product under a usable release tag and
-changes nothing this document describes: the durable paths, environment variables, and
-confidentiality controls below are unchanged from 0.3.0.
+intentionally reads or writes at `0.3.2`. It is a current-state contract, not a historical rollout
+or compatibility playbook. 0.3.2 completes the 0.3.1 publication with a repaired release pipeline
+and changes nothing this document describes: the durable paths, environment variables, and
+confidentiality controls below are unchanged from 0.3.0 through 0.3.1.
 
 ## Principles
 

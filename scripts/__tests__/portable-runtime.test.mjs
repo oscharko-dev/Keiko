@@ -3105,6 +3105,8 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       parentEpic: 1942,
       issue: 1948,
       stagingOnly: true,
+      // The explicit signing scope the portable-assets release-scope gate reads (ADR-0121).
+      signingScope: "evaluation",
       targets: ["windows-x64", "macos-arm64", "macos-x64"],
     });
     expect(
