@@ -41,6 +41,7 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { readJsonFile } from "./lib/json.mjs";
 
 const DEFAULT_MATRIX = "docs/release/quality-intelligence-dependency-decision-matrix.md";
 
@@ -136,10 +137,6 @@ function safeStat(path) {
   } catch {
     return null;
   }
-}
-
-function readJson(path) {
-  return JSON.parse(readFileSync(path, "utf8"));
 }
 
 function listEntries(dir) {
@@ -250,7 +247,7 @@ function nameMatchesForbidden(name) {
 }
 
 function checkRootManifestForbidden(rootManifestPath) {
-  const manifest = readJson(rootManifestPath);
+  const manifest = readJsonFile(rootManifestPath);
   const hits = [];
   const sections = manifestDependencySections(manifest, SCANNED_DEPENDENCY_SECTIONS);
   for (const { section, names } of sections) {
@@ -274,7 +271,7 @@ function checkWorkspaceManifestForbidden(packagesDir) {
     if (!entry.isDirectory()) continue;
     const manifestPath = join(packagesDir, entry.name, "package.json");
     if (!safeStat(manifestPath)?.isFile()) continue;
-    const manifest = readJson(manifestPath);
+    const manifest = readJsonFile(manifestPath);
     const sections = manifestDependencySections(manifest, SCANNED_DEPENDENCY_SECTIONS);
     for (const { section, names } of sections) {
       for (const name of names) {
@@ -313,7 +310,7 @@ function lifecycleHitsFromScripts(label, scripts) {
 function checkLifecycleHooks(rootManifestPath, packagesDir) {
   const hits = [];
   for (const { label, path } of listAllManifestPaths(rootManifestPath, packagesDir)) {
-    const manifest = readJson(path);
+    const manifest = readJsonFile(path);
     hits.push(...lifecycleHitsFromScripts(label, manifest.scripts));
   }
   return hits;
@@ -343,7 +340,7 @@ function telemetryHitsForManifest(label, manifest) {
 function checkTelemetryStrings(rootManifestPath, packagesDir) {
   const hits = [];
   for (const { label, path } of listAllManifestPaths(rootManifestPath, packagesDir)) {
-    hits.push(...telemetryHitsForManifest(label, readJson(path)));
+    hits.push(...telemetryHitsForManifest(label, readJsonFile(path)));
   }
   return hits;
 }
@@ -401,7 +398,7 @@ function addDependencyNamesFromManifest(manifest, seen) {
 function collectAllManifestDependencyNames(rootManifestPath, packagesDir) {
   const seen = new Set();
   for (const { path } of listAllManifestPaths(rootManifestPath, packagesDir)) {
-    addDependencyNamesFromManifest(readJson(path), seen);
+    addDependencyNamesFromManifest(readJsonFile(path), seen);
   }
   return seen;
 }
@@ -492,7 +489,7 @@ function externalRuntimeNamesFromManifest(manifest) {
 // externals are packed into the published tarball. Returns name -> { label, section } of the first
 // manifest that declared it.
 function collectPublishedRuntimeDependencies(rootManifestPath, packagesDir) {
-  const rootManifest = readJson(rootManifestPath);
+  const rootManifest = readJsonFile(rootManifestPath);
   const collected = new Map();
   const add = (name, label, section) => {
     if (!collected.has(name)) collected.set(name, { label, section });
@@ -507,7 +504,7 @@ function collectPublishedRuntimeDependencies(rootManifestPath, packagesDir) {
     const shortName = fullName.replace(/^@oscharko-dev\//, "");
     const manifestPath = join(packagesDir, shortName, "package.json");
     if (!safeStat(manifestPath)?.isFile()) continue;
-    for (const { name, section } of externalRuntimeNamesFromManifest(readJson(manifestPath))) {
+    for (const { name, section } of externalRuntimeNamesFromManifest(readJsonFile(manifestPath))) {
       add(name, shortName, section);
     }
   }

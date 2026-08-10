@@ -47,10 +47,12 @@ function writeJson(root, relative, value) {
 // Builds a mini-repo that PASSES every branch of the gate. Individual tests then mutate one
 // field to prove that the corresponding failure branch fires (and names the offender).
 function writeCleanRoot(root, { version = VERSION } = {}) {
-  // 1) Copy the script into <root>/scripts so its repoRoot === <root>.
+  // 1) Copy the script into <root>/scripts so its repoRoot === <root>, together with the shared
+  // helpers it imports relatively (scripts/lib/json.mjs since housekeeping wave 4).
   const scriptDir = join(root, "scripts");
-  mkdirSync(scriptDir, { recursive: true });
+  mkdirSync(join(scriptDir, "lib"), { recursive: true });
   copyFileSync(REAL_SCRIPT, join(scriptDir, "check-version-consistency.mjs"));
+  copyFileSync(join(REPO_ROOT, "scripts", "lib", "json.mjs"), join(scriptDir, "lib", "json.mjs"));
 
   // 2) Copy the two real root facade files byte-for-byte (pinned-hash + exact-listing checks).
   for (const relative of REAL_ROOT_SRC_FILES) {

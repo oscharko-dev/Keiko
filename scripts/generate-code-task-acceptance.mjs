@@ -3,11 +3,12 @@
 // validates against the contract, and writes the result. docs/acceptance/README.md explains the
 // pipeline; the pure projection is directly unit-tested at scripts/__tests__/code-task-acceptance.test.mjs.
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { buildCodeTaskAcceptanceContribution } from "./lib/code-task-acceptance.mjs";
+import { readJsonFile } from "./lib/json.mjs";
 
 function argument(name) {
   const index = process.argv.indexOf(`--${name}`);
@@ -17,12 +18,8 @@ function argument(name) {
   return process.argv[index + 1];
 }
 
-function readJson(path) {
-  return JSON.parse(readFileSync(resolve(path), "utf8"));
-}
-
-const descriptor = readJson(argument("descriptor"));
-const receipts = readJson(argument("receipts"));
+const descriptor = readJsonFile(argument("descriptor"));
+const receipts = readJsonFile(argument("receipts"));
 const sourceCommitSha = argument("commit");
 const sourceTreeSha = argument("tree");
 const cleanupRoot = resolve(argument("cleanup-root"));

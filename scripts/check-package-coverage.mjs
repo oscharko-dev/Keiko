@@ -1,18 +1,11 @@
 #!/usr/bin/env node
 
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  realpathSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, matchesGlob, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { KEIKO_REPOSITORY_GATE_CONTRACT } from "./sonar-quality-gate-contract.mjs";
+import { readJsonFile } from "./lib/json.mjs";
 
 // ADR-0158 D3: the constitutional 85 has exactly one definition. The package ratchet target and
 // SonarCloud's `new_coverage` condition are the same number by construction rather than by two
@@ -63,10 +56,6 @@ const BOOLEAN_OPTIONS = new Map([
   // ADR-0158 D2: evaluate lines, statements, branches and functions in one parse of the summaries.
   ["all-metrics", "allMetrics"],
 ]);
-
-function readJson(path) {
-  return JSON.parse(readFileSync(path, "utf8"));
-}
 
 function isPercent(value) {
   return Number.isFinite(value) && value >= 0 && value <= 100;
@@ -461,7 +450,7 @@ function loadCoverageSummaries(root, paths) {
     if (!existsSync(absolute)) {
       throw new Error(`Coverage summary not found: ${absolute}`);
     }
-    return readJson(absolute);
+    return readJsonFile(absolute);
   });
 }
 
@@ -757,7 +746,7 @@ function loadEvaluationContext(root, options) {
   });
   const filePercents = collectFilePercents(root, coverageSummaries);
   const existing =
-    options.baseline === undefined ? undefined : readJson(resolve(root, options.baseline));
+    options.baseline === undefined ? undefined : readJsonFile(resolve(root, options.baseline));
   const failures = baselineSchemaFailures(existing);
   if (failures.length > 0) {
     throw new Error(

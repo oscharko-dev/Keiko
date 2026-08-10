@@ -4,13 +4,13 @@ This guide is for teams validating Keiko before broader rollout.
 
 ## Prepare
 
-1. Install Node.js 22 or newer.
+1. Install Node.js 24.18.0 or newer within the 24 line (the product requires `>=24.18.0 <25`).
 2. Install Keiko in the project:
 
 ```bash
 npm install -D @oscharko-dev/keiko
 npx keiko init
-npm run keiko:start
+npx keiko start
 ```
 
 (Yarn, pnpm, and npx are also supported; see the [main README](../../README.md) for all package manager options.)
@@ -66,5 +66,9 @@ Stop the pilot and investigate before continuing if:
 - Credentials appear in output, logs, or evidence.
 - Keiko tries to modify blocked paths.
 - The UI exposes provider credentials to the browser.
-- A workflow applies changes without explicit user action.
+- A workflow acts outside the autonomy mode and Authority Envelope the local human selected —
+  for example, an edit or command in Ask-for-approval mode without a per-action approval, or any
+  action beyond the validated envelope in Supervised workspace or Full access mode. (Inside the
+  selected mode and envelope, acting without a per-action click is the product working as
+  designed.)
 - Verification runs commands outside the selected project boundary.

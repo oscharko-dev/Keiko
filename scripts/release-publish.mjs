@@ -53,6 +53,7 @@ import {
   portableReleaseGate,
 } from "./lib/portable-release-verification.mjs";
 import { sha256 } from "./lib/digest.mjs";
+import { readJsonFile } from "./lib/json.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const packageRegistryScope = scope.slice(0, -1);
@@ -104,10 +105,6 @@ function fail(message) {
 
 function readJson(relativePath) {
   return JSON.parse(readFileSync(join(repoRoot, relativePath), "utf8"));
-}
-
-function readJsonFile(path) {
-  return JSON.parse(readFileSync(path, "utf8"));
 }
 
 function readReleaseImpactCatalog() {
