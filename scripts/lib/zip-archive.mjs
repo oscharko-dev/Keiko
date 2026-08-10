@@ -351,7 +351,12 @@ function inflatedEntryData(compressed, entry) {
   if (entry.method === DEFLATE_METHOD) {
     // The declared size is the single-entry memory ceiling: without maxOutputLength a hostile
     // header could make inflate allocate gigabytes before the size check rejects the entry.
-    return inflateRawSync(compressed, { maxOutputLength: entry.size });
+    // Node >= 24.18 rejects maxOutputLength 0 outright, and staged artifacts legitimately carry
+    // empty files — an empty entry still gets its stream PROVEN empty through a 1-byte ceiling:
+    // a stream hiding real content behind a zero declaration overflows and refuses exactly as
+    // before (the 0.3.2 latest-promotion outage: every reader path threw ERR_OUT_OF_RANGE on
+    // the first empty entry and the refusal surfaced as "artifacts could not be read").
+    return inflateRawSync(compressed, { maxOutputLength: Math.max(entry.size, 1) });
   }
   if (entry.method === STORE_METHOD) return Buffer.from(compressed);
   throw new Error(`ZIP entry ${entry.rawName} uses an unsupported compression method`);

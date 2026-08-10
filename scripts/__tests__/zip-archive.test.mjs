@@ -337,6 +337,42 @@ describe("readZipArchiveEntries", () => {
     expect(() => readZipArchiveEntries(archivePath)).toThrow(/unsafe/u);
   });
 
+  it("reads an EMPTY entry through both readers — staged artifacts legitimately carry them", () => {
+    // Node >= 24.18 rejects inflate's maxOutputLength 0 outright, so a zero-size entry used to
+    // throw ERR_OUT_OF_RANGE in every reader path and the refusal surfaced as "the referenced
+    // workflow run's evaluation artifacts could not be read" (the 0.3.2 latest-promotion
+    // outage). An empty entry must read as empty, proven — not crash the collector.
+    const root = temporaryRoot();
+    const archivePath = join(root, "empty-entry.zip");
+    writeZipArchiveEntries(archivePath, [
+      { name: "empty.txt", data: "" },
+      { name: "full.txt", data: "content" },
+    ]);
+
+    const entries = readZipArchiveEntries(archivePath);
+    expect(entries.map((entry) => entry.name)).toEqual(["empty.txt", "full.txt"]);
+    expect(entries[0].data.byteLength).toBe(0);
+
+    const target = join(root, "out");
+    extractZipArchiveEntries(archivePath, target);
+    expect(readFileSync(join(target, "empty.txt"), "utf8")).toBe("");
+    expect(readFileSync(join(target, "full.txt"), "utf8")).toBe("content");
+  });
+
+  it("refuses a stream hiding content behind a zero size declaration", () => {
+    // The 1-byte ceiling that admits a legitimately empty entry must still refuse a stream that
+    // actually inflates to content — the declared size stays the memory ceiling, never trust.
+    const root = temporaryRoot();
+    const archivePath = join(root, "zero-declared.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "file.txt", data: "hidden content" }]);
+    const bytes = readFileSync(archivePath);
+    const centralOffset = centralDirectoryOffset(bytes);
+    bytes.writeUInt32LE(0, centralOffset + 24); // declared uncompressed size: 0
+    writeFileSync(archivePath, bytes);
+
+    expect(() => readZipArchiveEntries(archivePath)).toThrow();
+  });
+
   it("refuses a central directory whose entry signature is destroyed", () => {
     const root = temporaryRoot();
     const archivePath = join(root, "bad-central.zip");
