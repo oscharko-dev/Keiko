@@ -82,7 +82,9 @@ stable release may carry `evaluation` signing status: bundles that are sealed �
 --deep --strict` passes, so macOS does not report a damaged app — but carry no Apple Developer ID,
 no notarization, and no Azure trusted publisher. This is the release owner's scope decision for
 Keiko's first public download release and it is bounded three ways: the status is recorded in the
-reviewed release-impact entry, the release notes state it together with the first-launch steps it
+reviewed release-impact entry (explicitly, as `portableRuntimeArtifactContract.signingScope:
+"evaluation"` — the signal the portable-assets workflow reads to conclude its production signing
+lane as skipped rather than failed on such tags), the release notes state it together with the first-launch steps it
 implies (right-click → Open on macOS, the SmartScreen notice on Windows), and D7 is untouched —
 production signing credentials, their protected environments, and the signed-lane verification
 remain exactly as specified. When the signing subscriptions are in place, the production lane

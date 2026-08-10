@@ -40,8 +40,9 @@ jobs:
   # The production signing lane must not start for a release the owner scoped to the EVALUATION
   # lane (ADR-0163 D9 / ADR-0121 D1): its protected signing inputs are not provisioned there, so
   # every evaluation-scoped stable tag used to leave a red run and a red signing deployment. The
-  # reviewed release-impact catalog at the tagged commit is the anchored source — a tag with no
-  # entry stays PRODUCTION so the strict lane remains the default.
+  # reviewed release-impact catalog at the tagged commit is the anchored source, through the
+  # EXPLICIT portableRuntimeArtifactContract.signingScope field — a tag with no entry or no
+  # declared scope stays PRODUCTION so the strict lane remains the default.
   release-scope:
     name: Resolve release signing scope
     if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
@@ -63,7 +64,7 @@ jobs:
           production="$(jq -r --arg tag "$RELEASE_TAG" '
             [.entries[] | select(.releaseTag == $tag)] | last |
             if . == null then "true"
-            elif (.portableRuntimeArtifactContract.stagingOnly // false) then "false"
+            elif (.portableRuntimeArtifactContract.signingScope // "production") == "evaluation" then "false"
             else "true" end' release-impact.catalog.json)"
           echo "production=$production" >> "$GITHUB_OUTPUT"
           echo "release-scope: $RELEASE_TAG production=$production"
