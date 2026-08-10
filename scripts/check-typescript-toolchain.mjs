@@ -140,6 +140,16 @@ export function evaluateTypeScriptToolchain({
   return { compilerVersion, apiVersion, failures };
 }
 
+/** The two manifests the gate compares: the repository root and the pinned native compiler. */
+export function readToolchainManifests(root = repoRoot) {
+  return {
+    manifest: readJsonFile(join(root, "package.json")),
+    nativeManifest: readJsonFile(
+      join(root, "node_modules", "@typescript", "native", "package.json"),
+    ),
+  };
+}
+
 async function main() {
   let apiModule;
   try {
@@ -153,10 +163,7 @@ async function main() {
   let manifest;
   let nativeManifest;
   try {
-    manifest = readJsonFile(join(repoRoot, "package.json"));
-    nativeManifest = readJsonFile(
-      join(repoRoot, "node_modules", "@typescript", "native", "package.json"),
-    );
+    ({ manifest, nativeManifest } = readToolchainManifests());
   } catch {
     console.error(
       "typescript-toolchain: FAIL\n  - native compiler metadata is unavailable; run npm ci.",
