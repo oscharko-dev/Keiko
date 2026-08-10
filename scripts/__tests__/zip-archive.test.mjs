@@ -399,6 +399,19 @@ describe("extractZipArchiveEntries", () => {
     expect(() => extractZipArchiveEntries(archivePath, join(root, "out"))).toThrow(/truncated/u);
   });
 
+  it("refuses an entry that declares a size beyond the supported ceiling", () => {
+    // maxOutputLength alone would still admit a 4 GiB allocation from a hostile uint32 size.
+    const root = temporaryRoot();
+    const archivePath = join(root, "giant.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "file.txt", data: "bytes" }]);
+    const bytes = readFileSync(archivePath);
+    const centralOffset = bytes.length - 22 - 46 - "file.txt".length;
+    bytes.writeUInt32LE(0xfffffff0, centralOffset + 24); // declared uncompressed size ~4 GiB
+    writeFileSync(archivePath, bytes);
+
+    expect(() => readZipArchiveEntries(archivePath)).toThrow(/beyond the supported ceiling/u);
+  });
+
   it("refuses a hostile entry name before writing anything", () => {
     const root = temporaryRoot();
     const archivePath = join(root, "hostile-extract.zip");

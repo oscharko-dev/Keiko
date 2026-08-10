@@ -282,6 +282,9 @@ export function writeZipArchiveFromDirectory(sourceRoot, archivePath, options) {
 
 const END_OF_CENTRAL_DIRECTORY_MIN_BYTES = 22;
 const STORE_METHOD = 0;
+// No single entry may inflate beyond the portable archive ceiling — a hostile directory could
+// declare the uint32 maximum and make maxOutputLength alone admit a 4 GiB allocation.
+const MAX_ENTRY_BYTES = 2 * 1024 * 1024 * 1024;
 
 /**
  * The EOCD record sits at the very end, optionally followed by a comment of up to 0xffff bytes —
@@ -342,6 +345,9 @@ function centralEntryData(bytes, entry) {
 }
 
 function inflatedEntryData(compressed, entry) {
+  if (entry.size > MAX_ENTRY_BYTES) {
+    throw new Error(`ZIP entry ${entry.rawName} declares a size beyond the supported ceiling`);
+  }
   if (entry.method === DEFLATE_METHOD) {
     // The declared size is the single-entry memory ceiling: without maxOutputLength a hostile
     // header could make inflate allocate gigabytes before the size check rejects the entry.
