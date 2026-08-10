@@ -588,9 +588,10 @@ describe("CodingRuntimeAuthorityService", () => {
       ok: false,
       reason: "authority-resolution-failed",
     });
-    // The operator's own admissions (follow-up dispatch, abort, question answers) keep their
-    // authority while paused — the coordinator deliberately admits a follow-up task turn there,
-    // and holding it to running-only silently 403'd every paused follow-up (post-#2644 stall).
+    // The operator's own admissions (abort, question answers) keep their authority while
+    // paused — holding the run-record guard to running-only silently 403'd them post-#2644.
+    // Follow-up dispatch stays running-gated at the coordinator until the defer-until-resume
+    // design lands; this admission variant is about the operations that do not start a turn.
     expect(authority.revalidateCapabilityForOperatorAdmission(recheck)).toMatchObject({
       ok: true,
     });

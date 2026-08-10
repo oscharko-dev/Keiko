@@ -51,10 +51,14 @@ type PreparedRuntimeOperation =
     }
   | { readonly ok: false };
 
-const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
-  "running",
-  "paused",
-]);
+// Running-only for now, deliberately: pausing sets the orchestrator's flag but does not suspend
+// either runtime adapter, so a follow-up dispatched while paused would start a child turn whose
+// gateway and tool admissions are all running-only — the turn would fail and could settle the
+// run the operator meant to keep. Admitting a paused follow-up requires RETAINING it and
+// deferring adapter submission until Resume (a visible pending turn, not a hidden prompt queue);
+// that defer design is the named follow-up. Until then a paused follow-up answers an honest
+// invalid-intent instead of killing the run.
+const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set(["running"]);
 
 export class CodingRuntimeOperationCoordinator {
   private readonly replay = new RuntimeOperationReplayCoordinator();

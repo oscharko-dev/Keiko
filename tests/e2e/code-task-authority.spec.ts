@@ -503,6 +503,23 @@ test("#2386 authority: the workbench readiness surface is live, not static", asy
   await expect(page.getByRole("button", { name: "Start coding run" })).toHaveCount(0);
 });
 
+// A follow-up sent while PAUSED answers an honest refusal today: pausing does not suspend the
+// runtime adapters, so a dispatched turn would fail every running-only admission and could
+// settle the run. Retaining a paused follow-up and deferring adapter submission until Resume
+// (a visible pending turn) is the named follow-up design; until it lands, pause stays sticky
+// and the journey sends the instruction after Resume. Narrowing the product-wide policy while
+// paused leaves the live run's confirmed mode untouched, exactly like the widening attempt.
+async function provePausedFollowUpRefusalAndNarrowingImmunity(page: Page): Promise<void> {
+  await page.getByLabel("Task instructions").fill("Follow up: tighten the constant name");
+  await page.getByRole("button", { name: "Send follow-up" }).click();
+  await expect(workbench(page)).toHaveAttribute("data-state", "paused");
+  await requestAutonomyMode(page, /Ask for approval/u);
+  await expect(workbench(page).locator("[data-mode]")).toHaveAttribute(
+    "data-mode",
+    "supervised-coding",
+  );
+}
+
 // #2386 moved the default off full access; #2644 made the mode product-wide, so the default now
 // comes from the autonomy policy and lands one step NARROWER still — the Workbench reports the
 // server-confirmed mode instead of owning the selector. Never full access on a fresh install.
@@ -568,26 +585,17 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
     "supervised-coding",
   );
   await expect(workbench(page)).toHaveAttribute("data-state", "paused");
+  await provePausedFollowUpRefusalAndNarrowingImmunity(page);
 
-  // A follow-up drafted while paused is admitted as a new task turn — and must NOT auto-resume.
-  // It runs BEFORE the narrowing request below: since #2644 the mode is product-wide, so a
-  // narrowed policy would legitimately hold a NEW task turn for approval instead of admitting it.
+  await page.getByRole("button", { name: "Resume run" }).click();
+  await expect(workbench(page)).toHaveAttribute("data-state", "running");
+
+  // The follow-up is admitted as a new task turn on the RUNNING run — and must not disturb it.
   const taskSubmitted = timeline.getByText("Task submitted", { exact: true });
   const submittedBefore = await taskSubmitted.count();
   await page.getByLabel("Task instructions").fill("Follow up: tighten the constant name");
   await page.getByRole("button", { name: "Send follow-up" }).click();
   await expect(taskSubmitted).toHaveCount(submittedBefore + 1, { timeout: 90_000 });
-  await expect(workbench(page)).toHaveAttribute("data-state", "paused");
-
-  // Narrowing the product-wide policy while the run is paused leaves the live run's confirmed
-  // mode untouched, exactly like the widening attempt above.
-  await requestAutonomyMode(page, /Ask for approval/u);
-  await expect(workbench(page).locator("[data-mode]")).toHaveAttribute(
-    "data-mode",
-    "supervised-coding",
-  );
-
-  await page.getByRole("button", { name: "Resume run" }).click();
   await expect(workbench(page)).toHaveAttribute("data-state", "running");
 
   // #2478: revocation flips the questions surface to the honest re-pair state.
