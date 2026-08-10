@@ -1,8 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreDependencies": [
-    "@oscharko-dev/keiko-dev-sandbox",
-    "@stryker-mutator/vitest-runner",
     "axe-core",
     "@oscharko-dev/keiko-git",
     "@oscharko-dev/keiko-memory-consolidation",
@@ -10,16 +8,7 @@
     "@oscharko-dev/keiko-sandbox",
     "ws"
   ],
-  "ignoreBinaries": [
-    "pwsh",
-    "mkfifo",
-    "ldd",
-    "sqlite3",
-    "python3",
-    "ps",
-    "lsof",
-    "/usr/bin/codesign"
-  ],
+  "ignoreBinaries": ["pwsh", "mkfifo", "ldd", "sqlite3"],
   "workspaces": {
     ".": {
       "playwright": false,
@@ -39,14 +28,11 @@
         "tests/fixtures/**",
         "tests/e2e/fixtures/**",
         "packages/keiko-ui/public/**",
-        "docs/design-system/evidence/**",
-        "design-system/**",
-        "sandbox/**",
         "native/runtime-supervisor/**"
       ]
     },
     "packages/*": {
-      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+      "entry": ["src/*.ts!", "src/**/index.ts!"]
     },
     "packages/keiko-server": {
       "entry": [
@@ -55,7 +41,42 @@
         "src/**/index.ts!",
         "src/**/testing/fake-lsp-server.mjs!"
       ]
+    },
+    "packages/keiko-contracts": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-editor": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-evaluations": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-evidence": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-harness": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-local-knowledge": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-model-gateway": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-quality-intelligence": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-security": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-tools": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-ui": {
+      "entry": ["src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-workflows": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
     }
-  },
-  "ignoreUnresolved": ["/usr/bin/codesign"]
+  }
 }
