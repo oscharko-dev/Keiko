@@ -556,11 +556,6 @@ const FORMAT_ON_SAVE_CAPPED_MESSAGE =
   "Format-on-save stopped because the formatter hit a result limit and returned only part of the " +
   "reformat. Nothing was written. Turn format-on-save off to save this file unformatted.";
 const UTF8_ENCODER = new TextEncoder();
-/**
- * #2347 replaces this consumption seam with its server-resolved, minimum-wins capability result.
- * This slice deliberately cannot infer authorization from the browser-visible workspace root.
- */
-export const DEFAULT_DEBUG_CAPABILITY_ENABLED = false;
 
 /**
  * Out-parameter for `persist`: records the last text it optimistically adopted into the buffer.
