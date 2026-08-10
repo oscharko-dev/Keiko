@@ -39,6 +39,7 @@ jobs:
           - test:e2e:editor-baseline-1377
           - test:e2e:editor-layout-1375
           - test:e2e:editor-run-verification-2215
+          - test:e2e:editor-chat-2119
           # Issues #2852/#2867: these release-evidence journeys had silently rotted while present
           # only as npm scripts. Keep their current Workbench and editor contracts exercised.
           - test:e2e:coding-workbench-2253

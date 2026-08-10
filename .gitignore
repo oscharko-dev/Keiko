@@ -207,3 +207,6 @@ tests/memory-eval/scorecard.json
 # Vitest blob reports produced by a sharded coverage run and consumed by `--mergeReports`
 # (scripts test:coverage:packages:shard / :merge). Intermediate measurement evidence, never committed.
 .vitest-reports/
+
+# E2E runtime artifacts: the credential-vault store the journey server writes locally
+tests/e2e/fixtures/credentials/

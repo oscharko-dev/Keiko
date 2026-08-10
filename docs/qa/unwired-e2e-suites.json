@@ -7,20 +7,14 @@
     "test:e2e:coding-workbench-1991",
     "test:e2e:coding-workbench-1992",
     "test:e2e:coding-workbench-1994",
-    "test:e2e:coding-workbench-2257",
-    "test:e2e:editor-agent-1394",
     "test:e2e:editor-agent-docking-2122",
-    "test:e2e:editor-chat-2119",
     "test:e2e:editor-fidelity-1295",
     "test:e2e:editor-fidelity-1296",
-    "test:e2e:editor-governance-1395",
     "test:e2e:editor-perf",
-    "test:e2e:editor-provider-status-1382",
     "test:e2e:editor-source-control-2235",
     "test:e2e:managed-language-closeout-2282",
     "test:e2e:memoriaviva-m1",
     "test:e2e:task-binding-446",
-    "test:e2e:update-pr-1907",
     "test:e2e:update-ui-1696",
     "test:e2e:workspace-search-2090",
     "test:e2e:workspace-selection-2060"
@@ -31,7 +25,7 @@
     "playwright.issue-1405-human-loop.config.ts"
   ],
   "configsWithoutScriptReasons": {
-    "playwright.code-task-real-binary.config.ts": "Issue #2483 — drives code-task-authority.spec.ts against a staged, approved real OpenCode payload discovered through the production macOS dev-lane path, with no resolver/supervisor/KEIKO_OPENCODE_REAL_* seam to substitute. It requires that payload staged on the machine, so it is operator-run on a prepared checkout; a hosted runner has nothing to discover and the script could only ever fail.",
+    "playwright.code-task-real-binary.config.ts": "Issue #2483 \u2014 drives code-task-authority.spec.ts against a staged, approved real OpenCode payload discovered through the production macOS dev-lane path, with no resolver/supervisor/KEIKO_OPENCODE_REAL_* seam to substitute. It requires that payload staged on the machine, so it is operator-run on a prepared checkout; a hosted runner has nothing to discover and the script could only ever fail.",
     "playwright.issue-1405-human-loop.config.ts": "human-loop-1405.spec.ts renders a hand-authored HTML replica instead of driving the real app or the real AgentGateCard (open finding KEIKO-0140 / GEN-TEST-E2E-003). Giving it a script and a lane would gate on a fixture already known not to exercise the component it claims to cover. The script lands when that finding is repaired or the suite is rewritten."
   }
 }
