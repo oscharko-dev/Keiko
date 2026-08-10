@@ -329,6 +329,8 @@ test("denies sensitive-path and unauthorized agent writes and serves a redacted 
   expect(unauthorized.httpStatus).toBe(403);
   expect(unauthorized.status).toBe("conflict");
   expect(unauthorized.code).toBe("POLICY_DENIED");
+  // The denied write never reached the filesystem either: the target is byte-identical.
+  expect(readFileSync(join(root, RELATIVE_PATH), "utf8")).toBe(INITIAL_CONTENT);
 
   // Both decisions reach the served audit feed the recent-actions panel consumes — redacted.
   await assertRedactedGovernanceAudit(request, session.sessionId, { denied, unauthorized });
