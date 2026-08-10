@@ -48,6 +48,15 @@ import {
 import { verifyRuntimeReapReceipt, type RuntimeReapReceipt } from "./runtimeProcessSupervisor.js";
 import { projectRuntimeAuthorityValue } from "./runtimeAuthorityProjection.js";
 
+// Child tool mutations may only ever run against a RUNNING run; operator admissions (follow-up
+// dispatch, abort, question answers) legitimately reach a paused run — sticky pause holds the
+// runtime, not the human.
+const RUNNING_ONLY: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set(["running"]);
+const OPERATOR_ADMISSIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
+  "running",
+  "paused",
+]);
+
 export interface CodingRuntimeTrustedContext {
   readonly operatorId: string;
   readonly taskId: string;
@@ -381,6 +390,28 @@ export class CodingRuntimeAuthorityService {
   public revalidateCapabilityForMutation(
     input: CodingRuntimeCapabilityRecheckInput,
   ): CodingRuntimeResolution {
+    // A paused run must never execute a child mutation — running is the only admissible state
+    // for the tool path.
+    return this.revalidateCapabilityForStates(input, RUNNING_ONLY);
+  }
+
+  /**
+   * The operator-admission variant: dispatching a follow-up task turn, aborting, and answering
+   * questions are HUMAN operations the coordinator deliberately admits while the run is paused
+   * (sticky pause, no auto-resume). They carry the same capability, envelope, and live-facts
+   * revalidation as the tool path — only the admissible runtime states differ. Holding these to
+   * running-only silently 403'd every paused follow-up after #2644 unified the authority path.
+   */
+  public revalidateCapabilityForOperatorAdmission(
+    input: CodingRuntimeCapabilityRecheckInput,
+  ): CodingRuntimeResolution {
+    return this.revalidateCapabilityForStates(input, OPERATOR_ADMISSIBLE_STATES);
+  }
+
+  private revalidateCapabilityForStates(
+    input: CodingRuntimeCapabilityRecheckInput,
+    admissibleStates: ReadonlySet<CodingWorkbenchRuntimeStateName>,
+  ): CodingRuntimeResolution {
     const authenticated = this.capabilities.authenticate(
       input.capability,
       Date.parse(input.nowIso),
@@ -392,7 +423,7 @@ export class CodingRuntimeAuthorityService {
     }
     const reference = this.activeAuthorityRef;
     if (
-      this.runtimeState.state !== "running" ||
+      !admissibleStates.has(this.runtimeState.state) ||
       this.activeTreeBindingId === undefined ||
       this.runtimeState.runId !== reference?.runId ||
       !capabilityMatchesDelegation(authenticated.binding, reference, input)

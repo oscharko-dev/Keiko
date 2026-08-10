@@ -637,7 +637,10 @@ function runtimeAuthorityLive(
   minted: MintedRuntime,
   authority: CodingRuntimeAuthorityService,
 ): boolean {
-  const resolved = authority.revalidateCapabilityForMutation({
+  // Operator admission, not a child tool mutation: the guarded operations (follow-up dispatch,
+  // abort, question answers) are deliberately reachable while the run is paused — sticky pause
+  // holds the runtime, not the human. The tool facade keeps the running-only revalidation.
+  const resolved = authority.revalidateCapabilityForOperatorAdmission({
     capability: minted.toolFacadeCapability,
     adapterKind: adapterKind(context),
     liveFacts: productionRuntimeAuthorityFacts(input.workspaceAuthority, context),

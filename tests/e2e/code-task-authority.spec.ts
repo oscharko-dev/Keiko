@@ -503,6 +503,27 @@ test("#2386 authority: the workbench readiness surface is live, not static", asy
   await expect(page.getByRole("button", { name: "Start coding run" })).toHaveCount(0);
 });
 
+// #2386 moved the default off full access; #2644 made the mode product-wide, so the default now
+// comes from the autonomy policy and lands one step NARROWER still — the Workbench reports the
+// server-confirmed mode instead of owning the selector. Never full access on a fresh install.
+// This journey then proves a SUPERVISED run (see the header contract): under supervised-coding
+// the envelope allows workspace-contained edits and vetted verification without per-action
+// approval. Under the governed-assist default those admissions are ask-first, so the child's
+// edit and verification tool calls would be silently denied at the tool-facade authority —
+// exactly the post-#2644 stall this step repairs. The human raising the mode IS the product
+// flow; the widening-rejection step below still proves a LIVE run cannot be widened further.
+async function proveDefaultModeThenRaiseToSupervised(page: Page): Promise<void> {
+  await expect(workbench(page).locator("[data-mode]")).toHaveAttribute(
+    "data-mode",
+    "governed-assist",
+  );
+  await requestAutonomyMode(page, /Supervised workspace/u);
+  await expect(workbench(page).locator("[data-mode]")).toHaveAttribute(
+    "data-mode",
+    "supervised-coding",
+  );
+}
+
 test("#2386 authority: question, sticky pause, widening rejection, follow-up, settle", async ({
   page,
   request,
@@ -513,13 +534,7 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
   await registerTrustedRepositoryProject(page);
   await bindFixtureWorkspace(page);
 
-  // #2386 moved the default off full access; #2644 made the mode product-wide, so the default now
-  // comes from the autonomy policy and lands one step NARROWER still — the Workbench reports the
-  // server-confirmed mode instead of owning the selector. Never full access on a fresh install.
-  await expect(workbench(page).locator("[data-mode]")).toHaveAttribute(
-    "data-mode",
-    "governed-assist",
-  );
+  await proveDefaultModeThenRaiseToSupervised(page);
   await page.getByLabel("Task instructions").fill("Rename the authority constant under src/");
   const start = page.getByRole("button", { name: "Start coding run" });
   await expect(start).toBeEnabled();
@@ -545,22 +560,32 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
 
   // Widening past the server-confirmed effective mode while the run is live must not take effect;
   // the paused run keeps its authority. The selector now lives in Settings (#2644), so the proof is
-  // that requesting Full access there leaves the live run's confirmed mode untouched.
+  // that requesting Full access there leaves the live run's confirmed mode untouched — the
+  // supervised mode this journey raised to before starting.
   await requestAutonomyMode(page, /Full access/u);
   await expect(workbench(page).locator("[data-mode]")).toHaveAttribute(
     "data-mode",
-    "governed-assist",
+    "supervised-coding",
   );
   await expect(workbench(page)).toHaveAttribute("data-state", "paused");
-  await requestAutonomyMode(page, /Ask for approval/u);
 
   // A follow-up drafted while paused is admitted as a new task turn — and must NOT auto-resume.
+  // It runs BEFORE the narrowing request below: since #2644 the mode is product-wide, so a
+  // narrowed policy would legitimately hold a NEW task turn for approval instead of admitting it.
   const taskSubmitted = timeline.getByText("Task submitted", { exact: true });
   const submittedBefore = await taskSubmitted.count();
   await page.getByLabel("Task instructions").fill("Follow up: tighten the constant name");
   await page.getByRole("button", { name: "Send follow-up" }).click();
   await expect(taskSubmitted).toHaveCount(submittedBefore + 1, { timeout: 90_000 });
   await expect(workbench(page)).toHaveAttribute("data-state", "paused");
+
+  // Narrowing the product-wide policy while the run is paused leaves the live run's confirmed
+  // mode untouched, exactly like the widening attempt above.
+  await requestAutonomyMode(page, /Ask for approval/u);
+  await expect(workbench(page).locator("[data-mode]")).toHaveAttribute(
+    "data-mode",
+    "supervised-coding",
+  );
 
   await page.getByRole("button", { name: "Resume run" }).click();
   await expect(workbench(page)).toHaveAttribute("data-state", "running");
