@@ -264,8 +264,9 @@ async function openRealBinaryEditorBridge(page: Page): Promise<void> {
 // command is unavailable for the active root. The journey therefore registers the fixture
 // repository as a project BEFORE the run provisions its worktree — the exact call the folder
 // picker performs — and later asserts the inherited trust where the old palette step used to be.
+// Both engines need this: the vetted verification runs over trusted workspace scripts in the
+// scripted journey exactly as in the real-binary one.
 async function registerTrustedRepositoryProject(page: Page): Promise<void> {
-  if (!realBinaryJourney) return;
   const created = await page.request.post("/api/projects", {
     headers: { "x-keiko-csrf": "1" },
     data: { path: repositoryRoot, name: "Authority Fixture Repository" },
@@ -509,8 +510,8 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
   // #2478: the boot URL carries the launcher-minted pairing attestation; question text is served
   // only to this paired window from here on.
   await openWorkbench(page, launcherPairingFragment());
-  await bindFixtureWorkspace(page);
   await registerTrustedRepositoryProject(page);
+  await bindFixtureWorkspace(page);
 
   // #2386 moved the default off full access; #2644 made the mode product-wide, so the default now
   // comes from the autonomy policy and lands one step NARROWER still — the Workbench reports the

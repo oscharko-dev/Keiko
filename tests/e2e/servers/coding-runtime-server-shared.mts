@@ -337,6 +337,7 @@ function scriptedComposition(
     env,
     uiDbPath: join(bffStateRoot, "ui-db", "keiko-ui.db"),
     store: services.uiStore,
+    codingRuntimeSnapshotStore: services.codingRuntimeSnapshots,
     workspaceScriptTrust: services.workspaceScriptTrust,
     workspaceProvisioning: services.provisioning,
     workspaceLifecycle: services.lifecycle,
