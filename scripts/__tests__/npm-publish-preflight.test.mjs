@@ -101,6 +101,25 @@ describe("npmAuthPreflightFailure", () => {
       }),
     ).toMatch(/no npm auth path is available/u);
   });
+
+  it("falls through an empty token to the next auth source instead of falsely refusing", () => {
+    // A CI job exporting an unset secret yields "" — the chain must keep consulting the
+    // remaining sources (CodeRabbit finding on #3063).
+    expect(
+      npmAuthPreflightFailure({
+        dryRun: false,
+        env: { NODE_AUTH_TOKEN: "", NPM_TOKEN: "npm-token" },
+        dotEnvToken: () => undefined,
+      }),
+    ).toBeUndefined();
+    expect(
+      npmAuthPreflightFailure({
+        dryRun: false,
+        env: { NODE_AUTH_TOKEN: "", NPM_TOKEN: "" },
+        dotEnvToken: () => "dot-env-token",
+      }),
+    ).toBeUndefined();
+  });
 });
 
 describe("releaseOwnerPublishEnv", () => {

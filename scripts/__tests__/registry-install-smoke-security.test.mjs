@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { provenancePublishArgs } from "../lib/npm-publish-preflight.mjs";
+
 const ROOT = join(import.meta.dirname, "..", "..");
 const ROOT_MANIFEST = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 
@@ -108,17 +110,23 @@ describe("release publish security posture", () => {
     expect(source).toContain('"strict-ssl=true"');
     expect(source).toContain('NPM_CONFIG_STRICT_SSL: "true"');
     // The provenance pin RELOCATED with its owner again (0.3.2 coverage repair): the predicate
-    // moved into the in-process-testable preflight lib. Strengthened: the publish path must go
-    // through that single predicate, and the lib must gate the flag on BOTH GitHub-issued OIDC
-    // values — the request URL alone cannot mint a token.
-    const preflight = readFileSync(
-      join(ROOT, "scripts", "lib", "npm-publish-preflight.mjs"),
-      "utf8",
-    );
+    // moved into the in-process-testable preflight lib. Strengthened twice over: the publish
+    // path must route through the single predicate (source pin), and the predicate itself is
+    // held to its gating behavior — the flag appears exactly when BOTH GitHub-issued OIDC
+    // values exist, because the request URL alone cannot mint a token (CodeRabbit on #3063:
+    // substring presence cannot distinguish AND from OR).
     expect(source).toContain("provenancePublishArgs(process.env)");
-    expect(preflight).toContain("--provenance");
-    expect(preflight).toContain("ACTIONS_ID_TOKEN_REQUEST_URL");
-    expect(preflight).toContain("ACTIONS_ID_TOKEN_REQUEST_TOKEN");
+    const url = "https://token.actions.example/exchange";
+    const token = "runner-issued-value";
+    expect(
+      provenancePublishArgs({
+        ACTIONS_ID_TOKEN_REQUEST_URL: url,
+        ACTIONS_ID_TOKEN_REQUEST_TOKEN: token,
+      }),
+    ).toEqual(["--provenance"]);
+    expect(provenancePublishArgs({ ACTIONS_ID_TOKEN_REQUEST_URL: url })).toEqual([]);
+    expect(provenancePublishArgs({ ACTIONS_ID_TOKEN_REQUEST_TOKEN: token })).toEqual([]);
+    expect(provenancePublishArgs({})).toEqual([]);
     expect(workflow).toMatch(/publish:[\s\S]*permissions:[\s\S]*id-token:\s*write/u);
   });
 });

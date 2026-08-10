@@ -35,7 +35,10 @@ export function provenancePublishArgs(env) {
  */
 export function npmAuthPreflightFailure({ dryRun, env, dotEnvToken }) {
   if (dryRun || oidcTrustedPublishingAvailable(env)) return undefined;
-  if (env.NODE_AUTH_TOKEN ?? env.NPM_TOKEN ?? dotEnvToken()) return undefined;
+  // Falsy precedence, not nullish: a CI job exporting an unset secret yields an empty string,
+  // which must fall through to the next auth source instead of stopping the chain as a false
+  // refusal (CodeRabbit finding on #3063).
+  if (env.NODE_AUTH_TOKEN || env.NPM_TOKEN || dotEnvToken()) return undefined;
   return (
     "no npm auth path is available: set NODE_AUTH_TOKEN or NPM_TOKEN (or a local .env), " +
     "or run in CI where OIDC trusted publishing authenticates."

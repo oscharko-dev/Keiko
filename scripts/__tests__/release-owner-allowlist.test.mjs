@@ -48,6 +48,14 @@ describe("resolveReleaseOwnerAllowlist", () => {
         runGh: () => ({ status: 0, stdout: "", error: new Error("spawn gh ENOENT") }),
       }),
     ).toBeUndefined();
+    // The optional chaining on the result anticipates a seam returning nothing at all.
+    expect(
+      resolveReleaseOwnerAllowlist({
+        configured: undefined,
+        repository: "owner/repo",
+        runGh: () => undefined,
+      }),
+    ).toBeUndefined();
   });
 
   it("does not resolve over a malformed or empty variable payload", () => {
