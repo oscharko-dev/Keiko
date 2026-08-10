@@ -487,9 +487,9 @@ export interface MountEditor {
     // `setValue` (which clears that history) remains only the fallback for models without it.
     getFullModelRange?(): MonacoRange;
     pushEditOperations?(
-      beforeCursorState: null,
+      beforeCursorState: monaco.Selection[] | null,
       edits: { readonly range: MonacoRange; readonly text: string }[],
-      cursorStateComputer: () => null,
+      cursorStateComputer: () => monaco.Selection[] | null,
     ): unknown;
     pushStackElement?(): void;
   } | null;
