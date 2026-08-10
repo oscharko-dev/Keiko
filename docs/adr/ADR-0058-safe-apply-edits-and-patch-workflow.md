@@ -217,7 +217,7 @@ it must be added via the token-proposal-first path (ADR-0050).
 
 ### D5 — AC4 regression test
 
-A Playwright browser test in `tests/e2e/editor-agent-1394.spec.ts` verifies undo/redo
+A Playwright browser test in `tests/e2e/editor-agent-1394.spec.ts` verified undo/redo at the time of this decision. (Housekeeping 2026-08-10: the per-issue agent suites 1394/1395 were retired after months without a running lane; the consolidated `editor-baseline-1377` regression set and the code-task authority journey carry the editor and agent-changeset invariants today.) The original assertion verified undo/redo
 preservation. It loads the editor, posts a `applyTextEdits` agent action via the API, observes the
 content change, then calls `editor.trigger('keyboard', 'undo', null)` via `page.evaluate()` and
 asserts the text reverts. This is the only proof possible for the executeEdits/pushUndoStop claim
