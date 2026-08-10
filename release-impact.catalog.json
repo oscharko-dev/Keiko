@@ -1059,6 +1059,63 @@
         "signingScope": "evaluation",
         "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.3",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.3",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "id": "2026-08-10-keiko-0.3.3-public-download",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "normal",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Keiko 0.3.3 carries the same product as 0.3.2 and completes the npm publication both prior releases were denied: the byte-for-byte publish verifier crashed on the first empty file inside a build-run artifact (Node 24.18 rejects a zero inflate ceiling), so every governed promotion path refused with an unreadable-artifacts error while the GitHub release itself was intact. An empty entry now reads as proven empty - a stream hiding content behind a zero declaration still refuses - and the npm latest dist-tag finally follows the current release, so a plain npm install delivers today's Keiko instead of a 0.2.x build. Nothing has to be uninstalled or migrated; the governed one-click update still does not apply while the portable line ships with evaluation signing.",
+      "affectedStateStores": ["ui-store-schema"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "No schema change relative to 0.3.2. A store created by 0.3.x opens unchanged; a store from 0.2.x migrates forward exactly as 0.3.0 described.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "releaseNoteBullets": [
+        "npm installs follow the current release again: the latest dist-tag points at 0.3.3, so a plain npm install delivers today's Keiko.",
+        "The publish verifier reads legitimately empty files inside build-run artifacts instead of refusing the whole release; hostile zero-size declarations still fail closed.",
+        "Identical product surface to 0.3.2: the four verified portable downloads, the supervised coding runtime, and the product-first README."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-10",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5239029093",
+        "rationale": "Completion of the 0.3.1/0.3.2 release event: the v0.3.2 tag freezes the publish verifier defect (empty-entry inflate crash) inside the very code every governed promotion path must run, so no checkout of that tag can ever verify its own downloads. The owner explicitly sanctioned advancing the version number until the release chain completes; 0.3.3 carries the one-line verifier repair and is otherwise byte-identical in product surface to 0.3.2."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      }
     }
   ]
 }
