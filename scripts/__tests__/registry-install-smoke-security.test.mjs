@@ -100,8 +100,17 @@ describe("release publish security posture", () => {
     const source = readFileSync(join(ROOT, "scripts", "release-publish.mjs"), "utf8");
     const workflow = readFileSync(join(ROOT, ".github", "workflows", "release.yml"), "utf8");
 
-    expect(source).toContain("strict-ssl=false is not allowed");
+    // The TLS pin RELOCATED with its owner (0.3.2): enforcement moved from refusing a weakened
+    // user config to script-OWNED transport policy — the publish states strict-ssl=true in its
+    // temporary userconfig AND re-states it through the environment, so a user-level
+    // strict-ssl=false can neither weaken nor block a release. Strictly stronger than the
+    // refusal message this replaces.
+    expect(source).toContain('"strict-ssl=true"');
+    expect(source).toContain('NPM_CONFIG_STRICT_SSL: "true"');
+    // Provenance is attested exactly where the OIDC exchange can succeed: both GitHub-issued
+    // values, and the flag goes through that single predicate.
     expect(source).toContain("--provenance");
+    expect(source).toContain("ACTIONS_ID_TOKEN_REQUEST_TOKEN");
     expect(workflow).toMatch(/publish:[\s\S]*permissions:[\s\S]*id-token:\s*write/u);
   });
 });
