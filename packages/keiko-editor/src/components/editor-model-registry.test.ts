@@ -114,6 +114,71 @@ class CancelingDetachEditor extends FakeEditor {
   }
 }
 
+// A retained model with the edit-operations API: undo-preserving writes must use it instead of
+// `setValue` (which clears the undo history) whenever it is available (#3070).
+class UndoCapableModel implements RetainedEditorModel {
+  disposed = false;
+  readonly dispose = vi.fn(() => {
+    this.disposed = true;
+  });
+  readonly setValue = vi.fn((text: string): void => {
+    this.text = text;
+  });
+  readonly pushStackElement = vi.fn();
+  readonly pushEditOperations = vi.fn(
+    (_cursorState: null, edits: { readonly text: string }[]): null => {
+      const text = edits[0]?.text;
+      if (text !== undefined) this.text = text;
+      return null;
+    },
+  );
+
+  constructor(
+    readonly uri: RetainedEditorUri,
+    private text: string,
+  ) {}
+
+  getValue(): string {
+    return this.text;
+  }
+
+  isDisposed(): boolean {
+    return this.disposed;
+  }
+
+  getFullModelRange(): {
+    startLineNumber: number;
+    startColumn: number;
+    endLineNumber: number;
+    endColumn: number;
+  } {
+    const lines = this.text.split("\n");
+    return {
+      startLineNumber: 1,
+      startColumn: 1,
+      endLineNumber: Math.max(1, lines.length),
+      endColumn: (lines.at(-1)?.length ?? 0) + 1,
+    };
+  }
+}
+
+class UndoCapableNamespace implements RetainedEditorModelNamespace {
+  readonly created: UndoCapableModel[] = [];
+
+  createModel(text: string, _language: string, uri: RetainedEditorUri): RetainedEditorModel {
+    const model = new UndoCapableModel(uri, text);
+    this.created.push(model);
+    return model;
+  }
+
+  getModel(uri: RetainedEditorUri): RetainedEditorModel | null {
+    return (
+      this.created.find((model) => model.uri.toString() === uri.toString() && !model.disposed) ??
+      null
+    );
+  }
+}
+
 function uri(path: string): RetainedEditorUri {
   return new FakeUri(`keiko-editor://workspace/${path}`);
 }
@@ -143,6 +208,40 @@ function attach(
 }
 
 describe("EditorModelRegistry", () => {
+  it("re-attaches a clean retained model with newer text undo-preservingly, never via setValue (#3070)", () => {
+    // The editor unmounts across an agent-review accept and re-attaches with the host's newer
+    // buffer text. The retained model's undo history is the point of retention: the catch-up
+    // write must be one undoable whole-model operation — `setValue` silently discarded the
+    // stack, so a keyboard undo after the accept did nothing.
+    const registry = new EditorModelRegistry({ countBudget: 8, byteBudget: 1_000_000 });
+    const namespace = new UndoCapableNamespace();
+    const modelUri = uri("src/reviewed.ts");
+    const attachInput = {
+      key: "scope:/repo:src/reviewed.ts",
+      rootKey: "scope:/repo",
+      uri: modelUri,
+      language: "typescript",
+      sizeBytes: 32,
+      degraded: false,
+      viewStateKey: "pane:src/reviewed.ts",
+      namespace,
+      protection: UNPROTECTED_EDITOR_MODEL,
+    };
+    const firstEditor = new FakeEditor();
+    const first = registry.attach({ ...attachInput, editor: firstEditor, text: "original\n" });
+    first.detach();
+
+    const secondEditor = new FakeEditor();
+    const second = registry.attach({ ...attachInput, editor: secondEditor, text: "modified\n" });
+
+    expect(second.model).toBe(first.model);
+    const model = namespace.created[0];
+    expect(model?.getValue()).toBe("modified\n");
+    expect(model?.pushEditOperations).toHaveBeenCalledTimes(1);
+    expect(model?.pushStackElement).toHaveBeenCalledTimes(2);
+    expect(model?.setValue).not.toHaveBeenCalled();
+  });
+
   it("uses one live model per canonical identity and reference-counts split attachments", () => {
     const registry = new EditorModelRegistry({ countBudget: 8, byteBudget: 1_000_000 });
     const namespace = new FakeNamespace();
