@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
-import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readJsonFile } from "./lib/json.mjs";
 
 const EXPECTED_NODE_ENGINE = ">=24.18.0 <25";
 const EXPECTED_NODE_BASELINE = "24.18.0";
@@ -66,17 +67,13 @@ export function evaluateRuntimeToolchain(input, options) {
   return [...evaluateDeclaredToolchain(input), ...evaluateExecutedToolchain(input, options)];
 }
 
-function readJson(path) {
-  return JSON.parse(readFileSync(path, "utf8"));
-}
-
 export function readWorkspaceNodeEngines(root) {
   const packagesRoot = join(root, "packages");
   const engines = [];
   for (const entry of readdirSync(packagesRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     try {
-      const manifest = readJson(join(packagesRoot, entry.name, "package.json"));
+      const manifest = readJsonFile(join(packagesRoot, entry.name, "package.json"));
       engines.push({ name: manifest.name ?? entry.name, value: manifest.engines?.node });
     } catch {
       // Directories without package manifests are outside the workspace package graph.
@@ -100,7 +97,7 @@ export function readNpmVersionFromPath(pathValue, platform = process.platform) {
     const manifestPath = npmManifestPath(pathEntry, platform);
     if (manifestPath === undefined || !existsSync(manifestPath)) continue;
     try {
-      const version = readJson(manifestPath).version;
+      const version = readJsonFile(manifestPath).version;
       if (typeof version === "string" && VERSION_PATTERN.test(version)) return version;
     } catch {
       return undefined;
@@ -110,8 +107,8 @@ export function readNpmVersionFromPath(pathValue, platform = process.platform) {
 }
 
 export function runtimeInput(root) {
-  const manifest = readJson(join(root, "package.json"));
-  const approvals = readJson(join(root, "portable-runtime-approvals.json"));
+  const manifest = readJsonFile(join(root, "package.json"));
+  const approvals = readJsonFile(join(root, "portable-runtime-approvals.json"));
   return {
     rootNodeEngine: manifest.engines?.node,
     rootNpmEngine: manifest.engines?.npm,
