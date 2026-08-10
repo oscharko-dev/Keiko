@@ -185,7 +185,7 @@ async function installPortableWindows(
   const source = join(root, "portable-bootstrap");
   const env = windowsPortableEnv(home);
   const managedRoot = options.managedRoot ?? join(env.LOCALAPPDATA, "Programs", "Keiko");
-  const shortcut = join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.bat");
+  const shortcut = join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk");
   writePortableWindowsFixture(source);
   const c = makeIo();
   const code = await runPortableCli(
@@ -718,7 +718,7 @@ describe("runUninstallCli — portable managed install", () => {
     const programsDir = join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs");
     const outsidePrograms = join(root, "outside-programs");
     mkdirSync(outsidePrograms, { recursive: true });
-    const outsideShortcut = join(outsidePrograms, "Keiko.bat");
+    const outsideShortcut = join(outsidePrograms, "Keiko.lnk");
     writeFileSync(outsideShortcut, readFileSync(shortcut, "utf8"), "utf8");
     rmSync(programsDir, { recursive: true, force: true });
     symlinkSync(outsidePrograms, programsDir, "dir");

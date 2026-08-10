@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runPortableCli } from "./portable.js";
 import { windowsLauncher } from "./launcher-platforms.js";
 import { portableManagedSetupLockPath } from "./portable-install.js";
+import { parseWindowsStartMenuRegistration } from "./portable-maintenance.js";
 import { assertManagedRootAllowed } from "./portable-root-policy.js";
 import {
   readPortableInstallRegistration,
@@ -381,7 +382,7 @@ describe("runPortableCli", () => {
       "Windows",
       "Start Menu",
       "Programs",
-      "Keiko.bat",
+      "Keiko.lnk",
     );
     writeWindowsFixture(source);
     const c = capture();
@@ -407,7 +408,7 @@ describe("runPortableCli", () => {
 
     expect(code).toBe(0);
     expect(existsSync(shortcut)).toBe(true);
-    expect(readFileSync(shortcut, "utf8")).toContain(join(managedRoot, "Keiko.exe"));
+    expect(parseWindowsStartMenuRegistration(shortcut)).toBe(join(managedRoot, "Keiko.exe"));
   });
 
   it("promotes a Windows bootstrap payload into a managed root and records content-free state", async () => {
@@ -924,7 +925,7 @@ describe("runPortableCli", () => {
     ).toBe(0);
     const managedRegistration = registration(stateDir);
     writeFileSync(
-      join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.bat"),
+      join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk"),
       "foreign launcher\n",
     );
     const retry = capture();
@@ -1093,7 +1094,7 @@ describe("runPortableCli", () => {
     ).toBe(1);
     writeFailedRegistration("windows-x64", stateDir, NOW, "simulated setup failure");
     writeFileSync(
-      join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.bat"),
+      join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk"),
       "foreign launcher\n",
     );
     const oldMarker = join(managedRoot, "app", "dist", "old-install-marker.txt");
@@ -1136,7 +1137,7 @@ describe("runPortableCli", () => {
     expect(registration(stateDir).installRootIdentitySha256).toMatch(/^[0-9a-f]{64}$/u);
   });
 
-  it("refuses a canonical Windows launcher redirected to a foreign allowed root", async () => {
+  it("refuses a legacy Windows launcher redirected to a foreign allowed root", async () => {
     const root = tempRoot();
     const home = join(root, "home");
     const source = join(root, "bootstrap");
@@ -2645,7 +2646,7 @@ describe("runPortableCli", () => {
     const activeMarker = join(managedRoot, "app", "dist", "active.txt");
     writeFileSync(activeMarker, "old install marker\n");
     writeFileSync(
-      join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.bat"),
+      join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk"),
       "foreign launcher\n",
     );
     const c = capture();
@@ -2862,7 +2863,7 @@ describe("runPortableCli", () => {
     );
 
     expect(code).toBe(1);
-    expect(existsSync(join(outsidePrograms, "Keiko.bat"))).toBe(false);
+    expect(existsSync(join(outsidePrograms, "Keiko.lnk"))).toBe(false);
     expect(existsSync(managedRoot)).toBe(false);
     expect(c.err()).toContain("portable registration refused symlinked ancestor");
   });

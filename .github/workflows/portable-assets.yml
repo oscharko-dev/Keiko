@@ -142,25 +142,6 @@ jobs:
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
-      - name: Verify preinstalled 7z capability for staging
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # Official Windows runners provide 7-Zip. Staging must use that preinstalled tool and
-          # must never install, download, or globally mutate archive tooling.
-          $command = Get-Command -Name "7z" -CommandType Application -ErrorAction SilentlyContinue
-          if ($null -eq $command) {
-            throw "Required preinstalled Windows staging tool '7z' is unavailable; refusing to install or download tooling."
-          }
-
-          $versionOutput = @(& $command.Path i 2>&1)
-          $versionExitCode = $LASTEXITCODE
-          $versionEvidence = @($versionOutput | Select-Object -First 6)
-          if ($versionExitCode -ne 0 -or $versionEvidence.Count -eq 0) {
-            throw "Required preinstalled Windows staging tool '7z' did not provide version evidence."
-          }
-
-          $versionEvidence | ForEach-Object { Write-Host "Windows staging capability: $_" }
       - name: Configure MSVC environment for the native launcher
         if: runner.os == 'Windows'
         shell: cmd
@@ -168,6 +149,8 @@ jobs:
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
           rem Persist only the single-line MSVC toolchain variables the rc/cl compile needs. Dumping
           rem the full `set` output pollutes GITHUB_ENV with multi-line/malformed values.
+          if "%INCLUDE%"=="" exit /b 1
+          if "%LIB%"=="" exit /b 1
           echo PATH=%PATH%>> %GITHUB_ENV%
           echo INCLUDE=%INCLUDE%>> %GITHUB_ENV%
           echo LIB=%LIB%>> %GITHUB_ENV%
@@ -231,41 +214,16 @@ jobs:
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
-      - name: Verify preinstalled 7z capability for staging
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # Official Windows runners provide 7-Zip. Staging must use that preinstalled tool and
-          # must never install, download, or globally mutate archive tooling.
-          $command = Get-Command -Name "7z" -CommandType Application -ErrorAction SilentlyContinue
-          if ($null -eq $command) {
-            throw "Required preinstalled Windows staging tool '7z' is unavailable; refusing to install or download tooling."
-          }
-
-          $versionOutput = @(& $command.Path i 2>&1)
-          $versionExitCode = $LASTEXITCODE
-          $versionEvidence = @($versionOutput | Select-Object -First 6)
-          if ($versionExitCode -ne 0 -or $versionEvidence.Count -eq 0) {
-            throw "Required preinstalled Windows staging tool '7z' did not provide version evidence."
-          }
-
-          $versionEvidence | ForEach-Object { Write-Host "Windows staging capability: $_" }
       - name: Configure MSVC environment for the native launcher
-        shell: pwsh
+        shell: cmd
         run: |
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
-          $installation = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          if (-not $installation) { throw "Visual Studio C++ tools were not found" }
-          $vcvars = Join-Path $installation "VC/Auxiliary/Build/vcvars64.bat"
-          $vcvarsWrapper = Join-Path $env:RUNNER_TEMP "keiko-vcvars-env.cmd"
-          Set-Content -LiteralPath $vcvarsWrapper -Encoding ascii -Value "@call `"$vcvars`" >nul`r`n@set"
-          $environment = & cmd.exe /d /c $vcvarsWrapper
-          if ($LASTEXITCODE -ne 0) { throw "MSVC environment initialization failed" }
-          foreach ($name in @("PATH", "INCLUDE", "LIB", "LIBPATH")) {
-            $line = $environment | Where-Object { $_ -match "^$name=" } | Select-Object -First 1
-            if (-not $line) { throw "MSVC environment did not define $name" }
-            $line | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          }
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          if "%INCLUDE%"=="" exit /b 1
+          if "%LIB%"=="" exit /b 1
+          echo PATH=%PATH%>> %GITHUB_ENV%
+          echo INCLUDE=%INCLUDE%>> %GITHUB_ENV%
+          echo LIB=%LIB%>> %GITHUB_ENV%
+          echo LIBPATH=%LIBPATH%>> %GITHUB_ENV%
       - name: Install dependencies
         run: npm ci --ignore-scripts
       - name: Run executable secure-read adversarial harness

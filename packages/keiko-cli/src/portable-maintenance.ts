@@ -3,13 +3,17 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
   rmdirSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve, win32 as win32Path } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { parseWindowsLauncherContent, windowsLauncher } from "./launcher-platforms.js";
 import type { CliIo } from "./runner.js";
@@ -21,9 +25,30 @@ export type NativeRegistrationKind = "windows-start-menu" | "macos-system-applic
 interface RegistrationPlan {
   readonly kind: NativeRegistrationKind;
   readonly path: string;
-  readonly expectedContent: string | undefined;
-  readonly fileMode: number | undefined;
+  readonly artifact: RegistrationArtifact;
 }
+
+interface TextFileRegistrationArtifact {
+  readonly type: "text-file";
+  readonly expectedContent: string;
+  readonly fileMode: number;
+}
+
+interface WindowsShortcutRegistrationArtifact {
+  readonly type: "windows-shortcut";
+  readonly targetPath: string;
+  readonly workingDirectory: string;
+  readonly iconPath: string;
+}
+
+interface DirectoryRegistrationArtifact {
+  readonly type: "directory";
+}
+
+type RegistrationArtifact =
+  | TextFileRegistrationArtifact
+  | WindowsShortcutRegistrationArtifact
+  | DirectoryRegistrationArtifact;
 
 interface ManagedInstallScan {
   readonly files: readonly string[];
@@ -73,12 +98,39 @@ const MANAGED_INSTALL_RULES: Readonly<
   },
 };
 const WINDOWS_LAUNCHER_MAX_BYTES = 64 * 1024;
+const WINDOWS_SHORTCUT_MAX_BYTES = 128 * 1024;
+const DEFAULT_WINDOWS_ROOT = String.raw`C:\Windows`;
+const WINDOWS_SHORTCUT_FALLBACK_SCHEMA = "keiko-windows-shortcut-v1";
+
+const WINDOWS_SHORTCUT_SCRIPT = [
+  'var shell = WScript.CreateObject("WScript.Shell");',
+  "var mode = WScript.Arguments.Item(0);",
+  "var path = WScript.Arguments.Item(1);",
+  "var shortcut = shell.CreateShortcut(path);",
+  'if (mode === "create") {',
+  "  shortcut.TargetPath = WScript.Arguments.Item(2);",
+  '  shortcut.Arguments = "";',
+  "  shortcut.WorkingDirectory = WScript.Arguments.Item(3);",
+  "  shortcut.IconLocation = WScript.Arguments.Item(4);",
+  '  shortcut.Description = "Keiko";',
+  "  shortcut.Save();",
+  "} else {",
+  "  WScript.StdOut.WriteLine(shortcut.TargetPath);",
+  "  WScript.StdOut.WriteLine(shortcut.WorkingDirectory);",
+  "  WScript.StdOut.WriteLine(shortcut.IconLocation);",
+  "}",
+  "",
+].join("\r\n");
 
 function appDataDir(env: EnvSource, home: string): string {
   return env.APPDATA ?? join(home, "AppData", "Roaming");
 }
 
 export function windowsStartMenuRegistrationPath(env: EnvSource, home: string): string {
+  return join(appDataDir(env, home), "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk");
+}
+
+export function windowsLegacyStartMenuRegistrationPath(env: EnvSource, home: string): string {
   return join(appDataDir(env, home), "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.bat");
 }
 
@@ -88,11 +140,19 @@ export function parseWindowsStartMenuRegistration(path: string): string | undefi
     assertNoSymlinkAncestor(path);
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1) return undefined;
+    if (path.toLowerCase().endsWith(".lnk"))
+      return parseWindowsShortcutRegistration(path, stat.size);
     if (stat.size <= 0 || stat.size > WINDOWS_LAUNCHER_MAX_BYTES) return undefined;
     return parseWindowsLauncherContent(readFileSync(path, "utf8"));
   } catch {
     return undefined;
   }
+}
+
+function parseWindowsShortcutRegistration(path: string, size: number): string | undefined {
+  if (size <= 0 || size > WINDOWS_SHORTCUT_MAX_BYTES) return undefined;
+  const shortcut = readWindowsShortcut(path);
+  return shortcut?.targetPath;
 }
 
 function resolvedDefaultManagedRoot(target: PortableTarget, env: EnvSource, home: string): string {
@@ -134,17 +194,17 @@ function registrationPlans(
       ? {
           kind,
           path: windowsStartMenuRegistrationPath(env, home),
-          expectedContent: windowsLauncher.generateContent({
-            exe: layout.primaryLauncherPath,
-            port: undefined,
-          }),
-          fileMode: windowsLauncher.fileMode,
+          artifact: {
+            type: "windows-shortcut",
+            targetPath: layout.primaryLauncherPath,
+            workingDirectory: layout.installRoot,
+            iconPath: layout.primaryLauncherPath,
+          },
         }
       : {
           kind,
           path: resolvedDefaultManagedRoot(target, env, home),
-          expectedContent: undefined,
-          fileMode: undefined,
+          artifact: { type: "directory" },
         },
   );
 }
@@ -169,35 +229,251 @@ function assertNoSymlinkAncestor(path: string): void {
   }
 }
 
-function ensureFileArtifactSafe(plan: RegistrationPlan): "missing" | "managed" {
-  assertNoSymlinkAncestor(plan.path);
-  if (!existsSync(plan.path)) return "missing";
-  const stat = lstatSync(plan.path);
-  if (stat.isSymbolicLink()) {
-    throw new Error(`portable registration refused symlink at ${plan.path}`);
-  }
-  if (!stat.isFile()) {
-    throw new Error(`portable registration refused unknown artifact at ${plan.path}`);
-  }
-  if (stat.nlink > 1) {
-    throw new Error(`portable registration refused hardlink at ${plan.path}`);
-  }
-  if (readFileSync(plan.path, "utf8") !== plan.expectedContent) {
-    throw new Error(`portable registration refused unknown artifact at ${plan.path}`);
+function ensureTextFileArtifactSafe(
+  path: string,
+  artifact: TextFileRegistrationArtifact,
+): "missing" | "managed" {
+  const status = ensureRegularUnlinkedArtifact(path, WINDOWS_LAUNCHER_MAX_BYTES);
+  if (status === "missing") return "missing";
+  if (readFileSync(path, "utf8") !== artifact.expectedContent) {
+    throw new Error(`portable registration refused unknown artifact at ${path}`);
   }
   return "managed";
 }
 
-function writeFileArtifact(plan: RegistrationPlan): void {
-  if (plan.expectedContent === undefined || plan.fileMode === undefined) return;
-  const status = ensureFileArtifactSafe(plan);
-  if (status === "managed") return;
-  mkdirSync(dirname(plan.path), { recursive: true, mode: 0o755 });
-  writeFileSync(plan.path, plan.expectedContent, { encoding: "utf8", mode: plan.fileMode });
+function ensureRegularUnlinkedArtifact(path: string, maxBytes: number): "missing" | "managed" {
+  assertNoSymlinkAncestor(path);
+  if (!existsSync(path)) return "missing";
+  const stat = lstatSync(path);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`portable registration refused symlink at ${path}`);
+  }
+  if (!stat.isFile()) {
+    throw new Error(`portable registration refused unknown artifact at ${path}`);
+  }
+  if (stat.nlink > 1) {
+    throw new Error(`portable registration refused hardlink at ${path}`);
+  }
+  if (stat.size <= 0 || stat.size > maxBytes) {
+    throw new Error(`portable registration refused unknown artifact at ${path}`);
+  }
+  return "managed";
+}
+
+function ensureWindowsShortcutArtifactSafe(
+  path: string,
+  artifact: WindowsShortcutRegistrationArtifact,
+): "missing" | "managed" {
+  const status = ensureRegularUnlinkedArtifact(path, WINDOWS_SHORTCUT_MAX_BYTES);
+  if (status === "missing") return "missing";
+  const shortcut = readWindowsShortcut(path);
+  if (shortcut === undefined || !windowsShortcutMatches(shortcut, artifact)) {
+    throw new Error(`portable registration refused unknown artifact at ${path}`);
+  }
+  return "managed";
+}
+
+function ensureRegistrationArtifactSafe(plan: RegistrationPlan): "missing" | "managed" {
+  if (plan.artifact.type === "directory") return "managed";
+  if (plan.artifact.type === "windows-shortcut") {
+    return ensureWindowsShortcutArtifactSafe(plan.path, plan.artifact);
+  }
+  return ensureTextFileArtifactSafe(plan.path, plan.artifact);
+}
+
+function writeTextFileArtifact(path: string, artifact: TextFileRegistrationArtifact): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o755 });
+  writeFileSync(path, artifact.expectedContent, {
+    encoding: "utf8",
+    mode: artifact.fileMode,
+  });
   try {
-    chmodSync(plan.path, plan.fileMode);
+    chmodSync(path, artifact.fileMode);
   } catch {
     // Best-effort on non-POSIX filesystems.
+  }
+}
+
+function writeWindowsShortcutArtifact(
+  path: string,
+  artifact: WindowsShortcutRegistrationArtifact,
+): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o755 });
+  if (process.platform !== "win32") {
+    writeFileSync(path, windowsShortcutFallbackContent(artifact), "utf8");
+    return;
+  }
+  runWindowsShortcutCommand("create", path, artifact);
+}
+
+function writeRegistrationArtifact(plan: RegistrationPlan): void {
+  if (plan.artifact.type === "directory") return;
+  const status = ensureRegistrationArtifactSafe(plan);
+  if (status === "managed") return;
+  if (plan.artifact.type === "windows-shortcut") {
+    writeWindowsShortcutArtifact(plan.path, plan.artifact);
+  } else {
+    writeTextFileArtifact(plan.path, plan.artifact);
+  }
+  ensureRegistrationArtifactSafe(plan);
+}
+
+function windowsSystemRoot(env: EnvSource): string {
+  const root = env.SystemRoot ?? env.WINDIR ?? DEFAULT_WINDOWS_ROOT;
+  return win32Path.isAbsolute(root) ? root : DEFAULT_WINDOWS_ROOT;
+}
+
+function windowsCscriptExecutable(env: EnvSource): string {
+  return win32Path.join(windowsSystemRoot(env), "System32", "cscript.exe");
+}
+
+function windowsShortcutEnv(env: EnvSource): NodeJS.ProcessEnv {
+  const root = windowsSystemRoot(env);
+  return {
+    ...process.env,
+    ...env,
+    SystemRoot: root,
+    WINDIR: root,
+    ComSpec: win32Path.join(root, "System32", "cmd.exe"),
+  };
+}
+
+function runWindowsShortcutCommand(
+  mode: "create" | "read",
+  path: string,
+  artifact: WindowsShortcutRegistrationArtifact,
+): string {
+  const scriptRoot = mkdtempSync(join(tmpdir(), "keiko-shortcut-"));
+  const scriptPath = join(scriptRoot, "shortcut.js");
+  try {
+    writeFileSync(scriptPath, WINDOWS_SHORTCUT_SCRIPT, "utf8");
+    const args =
+      mode === "create"
+        ? [
+            "//Nologo",
+            "//E:JScript",
+            scriptPath,
+            mode,
+            path,
+            artifact.targetPath,
+            artifact.workingDirectory,
+            artifact.iconPath,
+          ]
+        : ["//Nologo", "//E:JScript", scriptPath, mode, path];
+    const result = spawnSync(windowsCscriptExecutable(process.env), args, {
+      encoding: "utf8",
+      env: windowsShortcutEnv(process.env),
+      shell: false,
+      stdio: "pipe",
+      windowsHide: true,
+    });
+    if (result.error !== undefined) throw result.error;
+    if (result.status !== 0 || result.stderr.length > 0) {
+      throw new Error(windowsShortcutFailure(result.stderr));
+    }
+    return result.stdout;
+  } finally {
+    rmSync(scriptRoot, { recursive: true, force: true });
+  }
+}
+
+function windowsShortcutFailure(stderr: string | null): string {
+  const detail = stderr?.trim();
+  return detail === undefined || detail.length === 0
+    ? "portable registration shortcut command failed"
+    : `portable registration shortcut command failed: ${detail}`;
+}
+
+function windowsShortcutFallbackContent(artifact: WindowsShortcutRegistrationArtifact): string {
+  return `${JSON.stringify({ schema: WINDOWS_SHORTCUT_FALLBACK_SCHEMA, ...artifact })}\n`;
+}
+
+function parseWindowsShortcutFallback(
+  path: string,
+): WindowsShortcutRegistrationArtifact | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+    const record = raw as Record<string, unknown>;
+    if (record.schema !== WINDOWS_SHORTCUT_FALLBACK_SCHEMA) return undefined;
+    if (typeof record.targetPath !== "string") return undefined;
+    if (typeof record.workingDirectory !== "string") return undefined;
+    if (typeof record.iconPath !== "string") return undefined;
+    return {
+      type: "windows-shortcut",
+      targetPath: record.targetPath,
+      workingDirectory: record.workingDirectory,
+      iconPath: record.iconPath,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function readWindowsShortcut(path: string): WindowsShortcutRegistrationArtifact | undefined {
+  if (process.platform !== "win32") return parseWindowsShortcutFallback(path);
+  try {
+    const output = runWindowsShortcutCommand("read", path, {
+      type: "windows-shortcut",
+      targetPath: "",
+      workingDirectory: "",
+      iconPath: "",
+    });
+    const [targetPath, workingDirectory, iconPath] = output.split(/\r?\n/u);
+    if (targetPath === undefined || workingDirectory === undefined || iconPath === undefined) {
+      return undefined;
+    }
+    return { type: "windows-shortcut", targetPath, workingDirectory, iconPath };
+  } catch {
+    return undefined;
+  }
+}
+
+function equivalentWindowsPath(left: string, right: string): boolean {
+  return win32Path.normalize(left).toLowerCase() === win32Path.normalize(right).toLowerCase();
+}
+
+function windowsShortcutMatches(
+  actual: WindowsShortcutRegistrationArtifact,
+  expected: WindowsShortcutRegistrationArtifact,
+): boolean {
+  return (
+    equivalentWindowsPath(actual.targetPath, expected.targetPath) &&
+    equivalentWindowsPath(actual.workingDirectory, expected.workingDirectory)
+  );
+}
+
+function legacyWindowsRegistrationPlan(
+  layout: PortableLayout,
+  env: EnvSource,
+  home: string,
+): RegistrationPlan {
+  return {
+    kind: "windows-start-menu",
+    path: windowsLegacyStartMenuRegistrationPath(env, home),
+    artifact: {
+      type: "text-file",
+      expectedContent: windowsLauncher.generateContent({
+        exe: layout.primaryLauncherPath,
+        port: undefined,
+      }),
+      fileMode: windowsLauncher.fileMode,
+    },
+  };
+}
+
+function removeLegacyWindowsRegistration(
+  layout: PortableLayout,
+  env: EnvSource,
+  home: string,
+  dryRun: boolean,
+  io: CliIo,
+): boolean {
+  const legacyPlan = legacyWindowsRegistrationPlan(layout, env, home);
+  try {
+    return removeVerifiedFileArtifact(legacyPlan, dryRun, io);
+  } catch {
+    return false;
   }
 }
 
@@ -209,13 +485,13 @@ export function installNativeRegistration(
   home: string,
 ): void {
   for (const plan of registrationPlans(layout, target, managedRoot, env, home)) {
-    writeFileArtifact(plan);
+    writeRegistrationArtifact(plan);
   }
 }
 
 function fileRegistrationStatus(plan: RegistrationPlan): "ok" | "missing" | "action-required" {
   try {
-    return ensureFileArtifactSafe(plan) === "managed" ? "ok" : "missing";
+    return ensureRegistrationArtifactSafe(plan) === "managed" ? "ok" : "missing";
   } catch {
     return "action-required";
   }
@@ -236,7 +512,7 @@ export function portableRegistrationHealth(
   let missing = 0;
   let actionRequired = 0;
   for (const plan of registrationPlans(layout, target, managedRoot, env, home)) {
-    const status = plan.expectedContent === undefined ? "ok" : fileRegistrationStatus(plan);
+    const status = fileRegistrationStatus(plan);
     if (status === "ok") ok += 1;
     else if (status === "missing") missing += 1;
     else actionRequired += 1;
@@ -253,9 +529,8 @@ export function repairUserLocalRegistration(
 ): number {
   let repaired = 0;
   for (const plan of registrationPlans(layout, target, managedRoot, env, home)) {
-    if (plan.expectedContent === undefined) continue;
     if (fileRegistrationStatus(plan) === "missing") {
-      writeFileArtifact(plan);
+      writeRegistrationArtifact(plan);
       repaired += 1;
     }
   }
@@ -263,7 +538,8 @@ export function repairUserLocalRegistration(
 }
 
 function removeVerifiedFileArtifact(plan: RegistrationPlan, dryRun: boolean, io: CliIo): boolean {
-  const status = ensureFileArtifactSafe(plan);
+  if (plan.artifact.type === "directory") return false;
+  const status = ensureRegistrationArtifactSafe(plan);
   if (status === "missing") return false;
   if (dryRun) {
     io.out(`would-remove: ${plan.path}\n`);
@@ -397,8 +673,10 @@ export function removePortableRegistrationArtifacts(
 ): number {
   let removed = 0;
   for (const plan of registrationPlans(layout, target, managedRoot, env, home)) {
-    if (plan.expectedContent === undefined) continue;
     removed += removeVerifiedFileArtifact(plan, dryRun, io) ? 1 : 0;
+  }
+  if (target === "windows-x64") {
+    removed += removeLegacyWindowsRegistration(layout, env, home, dryRun, io) ? 1 : 0;
   }
   return removed;
 }

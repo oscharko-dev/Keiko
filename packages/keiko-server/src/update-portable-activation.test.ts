@@ -1,7 +1,9 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   symlinkSync,
@@ -18,6 +20,7 @@ import {
   activationIdFor,
   capturePortableRegistration,
   readPortableActivationRecovery,
+  readWindowsPortableShortcutTarget,
 } from "./update-portable-activation-files.js";
 
 const TARGET_VERSION = "0.2.12";
@@ -42,7 +45,7 @@ function writeInstall(root: string, version: string): void {
   mkdirSync(join(root, "app"), { recursive: true });
   mkdirSync(join(root, ".portable"), { recursive: true });
   mkdirSync(join(root, "runtime", "node"), { recursive: true });
-  writeFileSync(join(root, "Keiko.exe"), `launcher-${version}`, "utf8");
+  copyFileSync(process.execPath, join(root, "Keiko.exe"));
   writeFileSync(join(root, "runtime", "node", "node.exe"), "node", "utf8");
   writeFileSync(
     join(root, "app", "package.json"),
@@ -93,6 +96,12 @@ async function makeInstall(): Promise<{
 
 function childProcess(): ChildProcess {
   return { unref: vi.fn() } as unknown as ChildProcess;
+}
+
+function filesUnder(root: string): readonly string[] {
+  return readdirSync(root, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name));
 }
 
 afterEach(async () => {
@@ -260,26 +269,29 @@ describe("portable update activation", () => {
     const packageRoot = join(managedRoot, "app");
     const stageRoot = join(dirname(managedRoot), ".keiko-portable-updates", "stage-1", "Keiko");
     const stateDir = join(home, ".keiko");
+    const activatorEnv = {
+      KEIKO_STATE_DIR: stateDir,
+      APPDATA: join(home, "AppData", "Roaming"),
+      LOCALAPPDATA: join(home, "AppData", "Local"),
+    };
     writeInstall(managedRoot, OLD_VERSION);
     writeInstall(stageRoot, TARGET_VERSION);
     const activator = createPortableUpdateActivator({
-      env: {
-        KEIKO_STATE_DIR: stateDir,
-        APPDATA: join(home, "AppData", "Roaming"),
-        LOCALAPPDATA: join(home, "AppData", "Local"),
-      },
+      env: activatorEnv,
       homedir: () => home,
       spawnFn: () => childProcess(),
       versionVerifier: () => Promise.resolve(true),
     });
 
-    await activator.activate({
+    const summary = await activator.activate({
       sessionId: "session-spaced-shortcut",
       targetVersion: TARGET_VERSION,
       stage: stageSummary(),
       runtimeFacts: { packageRoot, portableStateDir: stateDir },
     });
 
+    expect(summary.target).toBe(TARGET);
+    expect(summary.shortcutRefreshed).toBe(true);
     const shortcutPath = join(
       home,
       "AppData",
@@ -288,10 +300,11 @@ describe("portable update activation", () => {
       "Windows",
       "Start Menu",
       "Programs",
-      "Keiko.bat",
+      "Keiko.lnk",
     );
-    expect(readFileSync(shortcutPath, "utf8")).toBe(
-      `@start "" "${join(managedRoot, "Keiko.exe")}" start --open\r\n`,
+    expect(filesUnder(home).filter((path) => path.endsWith(".lnk"))).toContain(shortcutPath);
+    expect(readWindowsPortableShortcutTarget(shortcutPath, activatorEnv)).toBe(
+      join(managedRoot, "Keiko.exe"),
     );
   });
 

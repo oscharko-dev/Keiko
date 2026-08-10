@@ -57,6 +57,10 @@ static int quote_arg(wchar_t *out, size_t cap, const wchar_t *value) {
   return written > 0 && (size_t)written < cap;
 }
 
+static DWORD creation_flags_for_console_state(int has_console) {
+  return has_console ? 0 : CREATE_NO_WINDOW;
+}
+
 enum { KEIKO_PATH_CAP = 32768, KEIKO_COMMAND_CAP = 98304 };
 
 typedef struct {
@@ -136,11 +140,13 @@ static int run_launcher(keiko_launcher_buffers *buffers) {
 
   /* Same double-click marker as the macOS launcher: the portable CLI surfaces launch failures
    * visibly only when a human started the app through this binary, and the marker's contract must
-   * hold on every platform even though today's notifier renders only on macOS. A shell invocation
-   * owns a console window; an Explorer double-click of a windowed launcher does not. */
-  if (GetConsoleWindow() == NULL) {
+   * hold on every platform. A shell invocation owns a console window; an Explorer double-click of
+   * a windowed launcher does not. */
+  int has_console = GetConsoleWindow() != NULL;
+  if (!has_console) {
     SetEnvironmentVariableW(L"KEIKO_PORTABLE_UI_LAUNCH", L"1");
   }
+  DWORD creation_flags = creation_flags_for_console_state(has_console);
   STARTUPINFOW startup;
   PROCESS_INFORMATION process;
   ZeroMemory(&startup, sizeof(startup));
@@ -152,7 +158,7 @@ static int run_launcher(keiko_launcher_buffers *buffers) {
         NULL,
         NULL,
         FALSE,
-        0,
+        creation_flags,
         NULL,
         buffers->root,
         &startup,

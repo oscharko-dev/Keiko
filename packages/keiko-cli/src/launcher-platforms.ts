@@ -7,15 +7,16 @@
 // outside the strict `validateExecPath` allow-list. The Windows generator preserves that legacy
 // format for allow-listed paths and otherwise uses an ASCII-only PowerShell encoded-command
 // transport whose script contains only a base64-encoded executable path and fixed arguments. Its
-// parser accepts only content the generator reproduces byte-for-byte.
+// parser accepts only content the generator reproduces byte-for-byte. Portable-managed Windows
+// installs create a real `.lnk` Start Menu app shortcut in `portable-maintenance.ts`; this helper
+// remains for standalone `keiko launcher install` and legacy `.bat` recovery.
 //
 // PLATFORMS:
 //   - Linux:   `~/.local/share/applications/keiko.desktop` (XDG Desktop Entry, text).
 //   - macOS:   `~/Applications/Keiko Launcher.command` (bash script, chmod 0o755).
-//   - Windows: `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Keiko.bat` (.bat fallback,
-//              per ADR-0024 D8 trade-off). The .bat opens a brief cmd window before
-//              handing off to keiko; the binary `.lnk` format is out of scope for this
-//              release. The fallback is acceptable per spec §"Windows .lnk (binary format)".
+//   - Windows: `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Keiko.bat` for standalone
+//              launcher installs and legacy recovery. Portable-managed installs create
+//              `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Keiko.lnk`.
 
 import { Buffer } from "node:buffer";
 import { posix as posixPath, win32 as win32Path } from "node:path";
@@ -249,12 +250,10 @@ export const macosLauncher: PlatformLauncher = {
   },
 };
 
-// Windows .bat fallback (per ADR-0024 D8 trade-off, definitively chosen for this release).
-// A `.bat` opens a brief cmd window before launching keiko; the alternative — a binary
-// `.lnk` shortcut — would launch cleanly but requires emitting the MS-SHLLINK binary
-// shell-link format by hand, which is brittle and out of scope. The brief cmd window is
-// documented and acceptable for the pilot. `@start "" <exe> ...` detaches the keiko
-// process from the cmd window so the latter closes immediately after dispatch.
+// Legacy Windows .bat content for `keiko launcher install` and old portable registrations.
+// Portable-managed Windows installs create a real Start Menu `.lnk` in portable-maintenance.ts.
+// `@start "" <exe> ...` detaches the keiko process from the cmd window so the latter closes
+// immediately after dispatch.
 export const windowsLauncher: PlatformLauncher = {
   id: "win32",
   installDirFor: (homedir) =>

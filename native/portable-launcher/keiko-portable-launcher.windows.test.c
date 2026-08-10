@@ -27,5 +27,8 @@ int wmain(void) {
   assert(quote_arg(quoted, 32, L"C:\\Keiko") == 1);
   assert(wcscmp(quoted, L"\"C:\\Keiko\"") == 0);
   assert(quote_arg(quoted, 4, L"C:\\Keiko") == 0);
+
+  assert(creation_flags_for_console_state(1) == 0);
+  assert(creation_flags_for_console_state(0) == CREATE_NO_WINDOW);
   return 0;
 }

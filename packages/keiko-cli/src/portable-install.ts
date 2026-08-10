@@ -32,6 +32,7 @@ import {
   installNativeRegistration,
   parseWindowsStartMenuRegistration,
   removePortableManagedInstall,
+  windowsLegacyStartMenuRegistrationPath,
   windowsStartMenuRegistrationPath,
 } from "./portable-maintenance.js";
 import { assertManagedRootAllowed } from "./portable-root-policy.js";
@@ -690,11 +691,11 @@ export function recoverableFailedWindowsManagedRoot(
   env: EnvSource,
   home: string,
 ): string | undefined {
-  const registeredExe = parseWindowsStartMenuRegistration(
-    windowsStartMenuRegistrationPath(env, home),
-  );
-  if (registeredExe === undefined) return undefined;
-  return recoverableFailedManagedRoot("windows-x64", dirname(registeredExe), stateDir);
+  for (const registeredExe of windowsRegisteredLauncherTargets(env, home)) {
+    const recovered = recoverableFailedManagedRoot("windows-x64", dirname(registeredExe), stateDir);
+    if (recovered !== undefined) return recovered;
+  }
+  return undefined;
 }
 
 function canRecoverFailedManagedInstall(options: SetupPortableOptions): boolean {
@@ -1134,13 +1135,19 @@ function candidateManagedRoots(
   const hintedRoot = resolveManagedRootLocator(registration, home);
   if (hintedRoot !== undefined) roots.add(hintedRoot);
   if (target !== "windows-x64") return [...roots];
-  const registeredExe = parseWindowsStartMenuRegistration(
-    windowsStartMenuRegistrationPath(env, home),
-  );
-  if (registeredExe !== undefined) {
+  for (const registeredExe of windowsRegisteredLauncherTargets(env, home)) {
     roots.add(dirname(registeredExe));
   }
   return [...roots];
+}
+
+function windowsRegisteredLauncherTargets(env: EnvSource, home: string): readonly string[] {
+  return [
+    windowsStartMenuRegistrationPath(env, home),
+    windowsLegacyStartMenuRegistrationPath(env, home),
+  ]
+    .map((path) => parseWindowsStartMenuRegistration(path))
+    .filter((path): path is string => path !== undefined);
 }
 
 function resolveManagedRootLocator(

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { notifyPortableLaunchFailure, runDetachedAlert } from "./portable-launch-notifier.js";
+import {
+  notifyPortableLaunchFailure,
+  runDetachedAlert,
+  runDetachedWindowsAlert,
+} from "./portable-launch-notifier.js";
 
 const UI_LAUNCH = { KEIKO_PORTABLE_UI_LAUNCH: "1" };
 
@@ -70,6 +74,20 @@ describe("notifyPortableLaunchFailure", () => {
     expect(scripts[0]).toContain("The portable launch failed without a reason.");
   });
 
+  it("shows the recorded failure in a Windows alert for a double-click launch", () => {
+    const messages: string[] = [];
+    const env = { KEIKO_PORTABLE_UI_LAUNCH: "1", SystemRoot: String.raw`D:\Windows` };
+
+    notifyPortableLaunchFailure("keiko portable launch: failed\n", env, {
+      platform: () => "win32",
+      runWindowsAlert: (message) => {
+        messages.push(message);
+      },
+    });
+
+    expect(messages).toEqual(["keiko portable launch: failed\n"]);
+  });
+
   it.each([[{}], [{ KEIKO_PORTABLE_UI_LAUNCH: "true" }]])(
     "stays silent without the exact double-click marker",
     (env) => {
@@ -89,7 +107,7 @@ describe("notifyPortableLaunchFailure", () => {
     },
   );
 
-  it("stays silent on a non-darwin platform", () => {
+  it("stays silent on an unsupported platform", () => {
     let shown = false;
 
     notifyPortableLaunchFailure("reason", UI_LAUNCH, {
@@ -121,17 +139,20 @@ describe("notifyPortableLaunchFailure", () => {
   });
 
   it("reads the host platform when no platform seam is injected", () => {
-    // Deterministic per host: the alert seam fires exactly when the real platform is darwin. The
-    // runAlert seam keeps the test dialog-free either way.
+    // Deterministic per host: the alert seam fires exactly when the real platform supports a
+    // native dialog. Both alert seams keep the test dialog-free either way.
     let shown = false;
 
     notifyPortableLaunchFailure("reason", UI_LAUNCH, {
       runAlert: () => {
         shown = true;
       },
+      runWindowsAlert: () => {
+        shown = true;
+      },
     });
 
-    expect(shown).toBe(process.platform === "darwin");
+    expect(shown).toBe(process.platform === "darwin" || process.platform === "win32");
   });
 });
 
@@ -170,6 +191,66 @@ describe("runDetachedAlert", () => {
     expect(unreferenced).toBe(true);
     // The error listener must exist and must not throw — an unhandled 'error' event would crash
     // the CLI process the alert exists to explain — and it must record the fixed failure line.
+    expect(errorHandler).toBeDefined();
+    expect(() => {
+      errorHandler?.(new Error("spawn ENOENT"));
+    }).not.toThrow();
+    expect(reported).toEqual(["keiko portable launch: the failure alert could not be shown\n"]);
+  });
+});
+
+describe("runDetachedWindowsAlert", () => {
+  it("spawns the bounded detached PowerShell MessageBox contract and detaches from it", () => {
+    const calls: unknown[][] = [];
+    const reported: string[] = [];
+    let errorHandler: ((error: Error) => void) | undefined;
+    let unreferenced = false;
+
+    runDetachedWindowsAlert(
+      "can't start\r\nbecause",
+      { SystemRoot: String.raw`D:\Windows` },
+      (command, args, options) => {
+        calls.push([command, args, options]);
+        return {
+          on: (_event, listener): void => {
+            errorHandler = listener;
+          },
+          unref: (): void => {
+            unreferenced = true;
+          },
+        };
+      },
+      (line) => {
+        reported.push(line);
+      },
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[0]).toBe(
+      String.raw`D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+    );
+    expect(calls[0]?.[1]).toEqual([
+      "-NoLogo",
+      "-NoProfile",
+      "-Sta",
+      "-WindowStyle",
+      "Hidden",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      "Add-Type -AssemblyName PresentationFramework; " +
+        "[System.Windows.MessageBox]::Show('can''t startbecause', " +
+        "'Keiko could not start', 'OK', 'Error') | Out-Null",
+    ]);
+    expect(calls[0]?.[2]).toEqual({
+      detached: true,
+      env: {},
+      shell: false,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    expect(unreferenced).toBe(true);
     expect(errorHandler).toBeDefined();
     expect(() => {
       errorHandler?.(new Error("spawn ENOENT"));

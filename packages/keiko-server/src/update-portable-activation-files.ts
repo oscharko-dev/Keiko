@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
   linkSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -12,7 +14,8 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, isAbsolute, join, relative, resolve, win32 as win32Path } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type {
   UpdatePortableStagingSummary,
@@ -70,6 +73,28 @@ const REGISTRATION_ABSENT_SUFFIX = ".registration-absent";
 const RECOVERY_FILE = "portable-activation-recovery.json";
 const UPDATES_DIR = "updates";
 const WINDOWS_SHORTCUT_SAFE_PATH = /^[A-Za-z0-9_@ .()/\\:-]+$/u;
+const WINDOWS_SHORTCUT_FALLBACK_SCHEMA = "keiko-windows-shortcut-v1";
+const WINDOWS_SHORTCUT_MAX_BYTES = 128 * 1024;
+const DEFAULT_WINDOWS_ROOT = String.raw`C:\Windows`;
+
+const WINDOWS_SHORTCUT_SCRIPT = [
+  'var shell = WScript.CreateObject("WScript.Shell");',
+  "var mode = WScript.Arguments.Item(0);",
+  "var path = WScript.Arguments.Item(1);",
+  "var shortcut = shell.CreateShortcut(path);",
+  'if (mode === "create") {',
+  "  shortcut.TargetPath = WScript.Arguments.Item(2);",
+  '  shortcut.Arguments = "";',
+  "  shortcut.WorkingDirectory = WScript.Arguments.Item(3);",
+  "  shortcut.IconLocation = WScript.Arguments.Item(4);",
+  '  shortcut.Description = "Keiko";',
+  "  shortcut.Save();",
+  "} else {",
+  "  WScript.StdOut.WriteLine(shortcut.TargetPath);",
+  "  WScript.StdOut.WriteLine(shortcut.WorkingDirectory);",
+  "}",
+  "",
+].join("\r\n");
 
 export class PortableUpdateActivationError extends Error {
   public constructor(
@@ -581,6 +606,157 @@ export function refreshPortableRegistration(input: {
   }
 }
 
+interface WindowsShortcutArtifact {
+  readonly targetPath: string;
+  readonly workingDirectory: string;
+  readonly iconPath: string;
+}
+
+function windowsSystemRoot(env: EnvSource): string {
+  const root = env.SystemRoot ?? env.WINDIR ?? DEFAULT_WINDOWS_ROOT;
+  return win32Path.isAbsolute(root) ? root : DEFAULT_WINDOWS_ROOT;
+}
+
+function windowsCscriptExecutable(env: EnvSource): string {
+  return win32Path.join(windowsSystemRoot(env), "System32", "cscript.exe");
+}
+
+function windowsShortcutEnv(env: EnvSource): NodeJS.ProcessEnv {
+  const root = windowsSystemRoot(env);
+  return {
+    ...process.env,
+    ...env,
+    SystemRoot: root,
+    WINDIR: root,
+    ComSpec: win32Path.join(root, "System32", "cmd.exe"),
+  };
+}
+
+function windowsShortcutArgs(
+  mode: "create" | "read",
+  scriptPath: string,
+  path: string,
+  artifact: WindowsShortcutArtifact,
+): readonly string[] {
+  if (mode === "read") return ["//Nologo", "//E:JScript", scriptPath, mode, path];
+  return [
+    "//Nologo",
+    "//E:JScript",
+    scriptPath,
+    mode,
+    path,
+    artifact.targetPath,
+    artifact.workingDirectory,
+    artifact.iconPath,
+  ];
+}
+
+function runWindowsShortcutCommand(
+  mode: "create" | "read",
+  path: string,
+  artifact: WindowsShortcutArtifact,
+  env: EnvSource,
+): string {
+  const scriptRoot = mkdtempSync(join(tmpdir(), "keiko-shortcut-"));
+  const scriptPath = join(scriptRoot, "shortcut.js");
+  try {
+    writeFileSync(scriptPath, WINDOWS_SHORTCUT_SCRIPT, "utf8");
+    const result = spawnSync(
+      windowsCscriptExecutable(env),
+      windowsShortcutArgs(mode, scriptPath, path, artifact),
+      {
+        encoding: "utf8",
+        env: windowsShortcutEnv(env),
+        shell: false,
+        stdio: "pipe",
+        windowsHide: true,
+      },
+    );
+    if (result.error !== undefined) throw result.error;
+    if (result.status !== 0 || result.stderr.length > 0) {
+      throw new Error(windowsShortcutFailure(result.stderr));
+    }
+    return result.stdout;
+  } finally {
+    rmSync(scriptRoot, { recursive: true, force: true });
+  }
+}
+
+function windowsShortcutFailure(stderr: string | null): string {
+  const detail = stderr?.trim();
+  return detail === undefined || detail.length === 0
+    ? "portable activation shortcut command failed"
+    : `portable activation shortcut command failed: ${detail}`;
+}
+
+function shortcutFallbackContent(artifact: WindowsShortcutArtifact): string {
+  return `${JSON.stringify({ schema: WINDOWS_SHORTCUT_FALLBACK_SCHEMA, ...artifact })}\n`;
+}
+
+function parseShortcutFallback(path: string): WindowsShortcutArtifact | undefined {
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+    const record = raw as Record<string, unknown>;
+    if (record.schema !== WINDOWS_SHORTCUT_FALLBACK_SCHEMA) return undefined;
+    if (typeof record.targetPath !== "string") return undefined;
+    if (typeof record.workingDirectory !== "string") return undefined;
+    if (typeof record.iconPath !== "string") return undefined;
+    return {
+      targetPath: record.targetPath,
+      workingDirectory: record.workingDirectory,
+      iconPath: record.iconPath,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function readShortcut(path: string, env: EnvSource): WindowsShortcutArtifact | undefined {
+  if (process.platform !== "win32") return parseShortcutFallback(path);
+  try {
+    const output = runWindowsShortcutCommand(
+      "read",
+      path,
+      { targetPath: "", workingDirectory: "", iconPath: "" },
+      env,
+    );
+    const [targetPath, workingDirectory] = output.split(/\r?\n/u);
+    if (targetPath === undefined || workingDirectory === undefined) return undefined;
+    return { targetPath, workingDirectory, iconPath: "" };
+  } catch {
+    return undefined;
+  }
+}
+
+export function readWindowsPortableShortcutTarget(
+  path: string,
+  env: EnvSource = process.env,
+): string | undefined {
+  if (!existsSync(path)) return undefined;
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1) return undefined;
+  if (stat.size <= 0 || stat.size > WINDOWS_SHORTCUT_MAX_BYTES) return undefined;
+  return readShortcut(path, env)?.targetPath;
+}
+
+function sameWindowsPath(left: string, right: string): boolean {
+  return win32Path.normalize(left).toLowerCase() === win32Path.normalize(right).toLowerCase();
+}
+
+function shortcutMatches(path: string, artifact: WindowsShortcutArtifact, env: EnvSource): boolean {
+  const shortcut = readWindowsPortableShortcutTarget(path, env);
+  return shortcut !== undefined && sameWindowsPath(shortcut, artifact.targetPath);
+}
+
+function writeShortcut(path: string, artifact: WindowsShortcutArtifact, env: EnvSource): void {
+  if (process.platform !== "win32") {
+    writeFileSync(path, shortcutFallbackContent(artifact), "utf8");
+    return;
+  }
+  runWindowsShortcutCommand("create", path, artifact, env);
+}
+
 export function refreshPortableShortcut(input: {
   readonly target: UpdatePortableTarget;
   readonly layout: PortableActivationLayout;
@@ -590,14 +766,18 @@ export function refreshPortableShortcut(input: {
   if (input.target !== "windows-x64") return true;
   if (!WINDOWS_SHORTCUT_SAFE_PATH.test(input.layout.launcherPath)) return false;
   const root = input.env.APPDATA ?? join(input.home, "AppData", "Roaming");
-  const path = join(root, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.bat");
-  const content = `@start "" "${input.layout.launcherPath}" start --open\r\n`;
+  const path = join(root, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk");
+  const artifact = {
+    targetPath: input.layout.launcherPath,
+    workingDirectory: input.layout.installRoot,
+    iconPath: input.layout.launcherPath,
+  };
   if (existsSync(path) && lstatSync(path).isSymbolicLink()) return false;
-  if (existsSync(path) && statSync(path).isFile() && readFileSync(path, "utf8") !== content) {
+  if (existsSync(path) && statSync(path).isFile() && !shortcutMatches(path, artifact, input.env)) {
     return false;
   }
   mkdirSync(dirname(path), { recursive: true, mode: 0o755 });
-  writeFileSync(path, content, { encoding: "utf8", mode: 0o644 });
+  writeShortcut(path, artifact, input.env);
   return true;
 }
 

@@ -34,7 +34,11 @@ import {
   validatePortableStagingManifest,
   verifySha256File,
 } from "./portable-runtime.mjs";
-import { writeZipArchiveFromDirectory } from "./lib/zip-archive.mjs";
+import {
+  extractZipArchiveEntries,
+  readZipArchiveEntries,
+  writeZipArchiveFromDirectory,
+} from "./lib/zip-archive.mjs";
 import {
   usearchRuntimeApproval,
   usearchRuntimeTargetKey,
@@ -1037,23 +1041,21 @@ function assertTarSymlinkTargetSafe(entry, line, expectedRoot) {
 }
 
 export function createPortableZipAdapter(platform = process.platform, commandRunner = run) {
-  return platform === "win32"
-    ? createSevenZipAdapter(commandRunner)
-    : createInfoZipAdapter(commandRunner);
+  return platform === "win32" ? createNodeZipAdapter() : createInfoZipAdapter(commandRunner);
 }
 
-function createSevenZipAdapter(commandRunner) {
+function createNodeZipAdapter() {
   return {
     list(archivePath) {
-      const result = commandRunner("7z", ["l", "-slt", "-ba", archivePath]);
-      return parseSevenZipEntries(result.stdout);
+      return readZipArchiveEntries(archivePath).map((entry) => entry.name);
     },
     extract(archivePath, extractRoot) {
-      commandRunner("7z", ["x", "-y", `-o${extractRoot}`, archivePath]);
+      extractZipArchiveEntries(archivePath, extractRoot);
     },
     create(sourceRoot, entryName, archivePath) {
-      commandRunner("7z", ["a", "-tzip", "-mx=9", archivePath, entryName], {
-        cwd: sourceRoot,
+      writeZipArchiveFromDirectory(join(sourceRoot, entryName), archivePath, {
+        rootName: entryName,
+        followSymlinks: true,
       });
     },
   };
@@ -1085,62 +1087,6 @@ function assertInfoZipEntryTypesSafe(archivePath, commandRunner) {
     if (type === "d" || type === "-") continue;
     throw new Error("archive contains unsupported special-file entries");
   }
-}
-
-function parseSevenZipEntries(output) {
-  const records = sevenZipTechnicalRecords(output).filter((record) => "Folder" in record);
-  if (records.length === 0) throw new Error("7z did not report ZIP entries");
-  for (const record of records) assertSevenZipEntrySafe(record);
-  return records.map((record) => record.Path);
-}
-
-function sevenZipTechnicalRecords(output) {
-  return output
-    .split(/\r?\n\s*\r?\n/u)
-    .map(sevenZipTechnicalRecord)
-    .filter((record) => typeof record.Path === "string" && record.Path.length > 0);
-}
-
-function sevenZipTechnicalRecord(block) {
-  const record = {};
-  for (const line of block.split(/\r?\n/u)) {
-    const separator = line.indexOf(" = ");
-    if (separator <= 0) continue;
-    record[line.slice(0, separator)] = line.slice(separator + 3);
-  }
-  return record;
-}
-
-function assertSevenZipEntrySafe(record) {
-  const folder = record.Folder;
-  const unixType = sevenZipUnixEntryType(record.Attributes);
-  if (
-    (folder !== "+" && folder !== "-") ||
-    record.Encrypted === "+" ||
-    sevenZipTypeUnsupported(unixType) ||
-    sevenZipHasLinkMetadata(record) ||
-    sevenZipFolderTypeMismatch(folder, unixType)
-  ) {
-    throw new Error("archive contains unsupported special-file entries");
-  }
-}
-
-function sevenZipUnixEntryType(attributes) {
-  if (typeof attributes !== "string") return undefined;
-  return /(?:^|\s)([dlbcps-])[rwxStTs-]{9}(?:\s|$)/u.exec(attributes)?.[1];
-}
-
-function sevenZipTypeUnsupported(unixType) {
-  return unixType !== undefined && unixType !== "-" && unixType !== "d";
-}
-
-function sevenZipHasLinkMetadata(record) {
-  return "Symbolic Link" in record || "Hard Link" in record || "Alternate Stream" in record;
-}
-
-function sevenZipFolderTypeMismatch(folder, unixType) {
-  if (folder === "+") return unixType !== undefined && unixType !== "d";
-  return folder === "-" && unixType === "d";
 }
 
 function copySafeTreeContents(sourceRoot, destinationRoot) {

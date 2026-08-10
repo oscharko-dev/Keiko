@@ -34,7 +34,7 @@ const COMMAND_PROCESSOR_SUFFIX = String.raw`System32\cmd.exe`;
 const DEFAULT_CATALOG_NAME = "windows-setup-signing-file.txt";
 const MAX_SETUP_INPUT_BYTES = 2 * 1024 * 1024 * 1024;
 const RUN_OUTPUT_BYTES = 64 * 1024 * 1024;
-const SYSTEM_POWERSHELL = String.raw`"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"`;
+const SYSTEM_TAR = String.raw`"%SystemRoot%\System32\tar.exe"`;
 const VALUE_OPTION_FIELDS = new Map([
   ["--catalog", "catalog"],
   ["--output", "output"],
@@ -237,7 +237,7 @@ function windowsSetupPayloadLines() {
     'mkdir "%STAGING_ROOT%"',
     "if errorlevel 1 goto failure",
     "echo [2/6] Extracting Keiko to a temporary staging folder...",
-    `${SYSTEM_POWERSHELL} -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath $env:ARCHIVE -DestinationPath $env:STAGING_ROOT -Force"`,
+    `${SYSTEM_TAR} -xf "%ARCHIVE%" -C "%STAGING_ROOT%"`,
     "if errorlevel 1 goto failure",
     "echo       Extraction finished.",
     "echo [3/6] Verifying installed application files...",
@@ -299,14 +299,24 @@ function windowsSetupInstallLines() {
 function windowsSetupLaunchLines() {
   return [
     "echo [6/6] Confirming Keiko remains running...",
-    "echo       Waiting up to 30 seconds for the verified process to remain stable for 5 seconds...",
+    "echo       Waiting up to 60 seconds for installer smoke evidence...",
     'set "KEIKO_LAUNCH_ROOT=%INSTALL_ROOT%"',
-    String.raw`${SYSTEM_POWERSHELL} -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$root = $env:KEIKO_LAUNCH_ROOT; $expected = @((Join-Path $root 'Keiko.exe'), (Join-Path $root 'runtime\node\node.exe')) | ForEach-Object { $_.ToLowerInvariant() }; $deadline = (Get-Date).AddSeconds(30); $healthySince = $null; do { $process = Get-Process -Name Keiko,node -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -and ($expected -contains $_.Path.ToLowerInvariant()) } catch { $false } } | Select-Object -First 1; if ($null -eq $process) { $healthySince = $null } elseif ($null -eq $healthySince) { $healthySince = Get-Date } elseif (((Get-Date) - $healthySince).TotalSeconds -ge 5) { exit 0 }; Start-Sleep -Milliseconds 500 } while ((Get-Date) -lt $deadline); exit 1"`,
-    "if errorlevel 1 (",
-    "  echo Keiko did not stay running after setup.",
-    "  goto failure",
+    "if not defined KEIKO_IEXPRESS_HEALTHY goto health_delay",
+    "for /l %%A in (1,1,60) do (",
+    '  if exist "%KEIKO_IEXPRESS_HEALTHY%" goto health_ok',
+    "  timeout /t 1 /nobreak >nul",
     ")",
-    `${SYSTEM_POWERSHELL} -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$path = $env:STAGING_ROOT; for ($attempt = 0; $attempt -lt 10; $attempt++) { Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue; if (-not (Test-Path -LiteralPath $path)) { exit 0 }; Start-Sleep -Milliseconds 500 }; exit 1"`,
+    "echo Keiko did not stay running after setup.",
+    "goto failure",
+    ":health_delay",
+    "timeout /t 5 /nobreak >nul",
+    ":health_ok",
+    "for /l %%A in (1,1,10) do (",
+    '  if exist "%STAGING_ROOT%" rmdir /s /q "%STAGING_ROOT%" >nul 2>nul',
+    '  if not exist "%STAGING_ROOT%" goto cleanup_ok',
+    "  timeout /t 1 /nobreak >nul",
+    ")",
+    ":cleanup_ok",
     'if exist "%STAGING_ROOT%" (',
     "  echo Keiko setup could not remove its temporary application files.",
     "  goto failure",

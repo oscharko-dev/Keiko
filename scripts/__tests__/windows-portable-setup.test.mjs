@@ -85,7 +85,11 @@ describe("windows portable setup companion", () => {
     const windir = root();
     try {
       process.env.WINDIR = windir;
-      expect(iexpressPath()).toBe("iexpress.exe");
+      if (process.platform === "win32") {
+        expect(() => iexpressPath()).toThrow(/system IExpress executable is unavailable/u);
+      } else {
+        expect(iexpressPath()).toBe("iexpress.exe");
+      }
       mkdirSync(join(windir, "System32"), { recursive: true });
       writeFileSync(join(windir, "System32", "iexpress.exe"), "fixture");
       expect(iexpressPath()).toBe(join(windir, "System32", "iexpress.exe"));
@@ -163,7 +167,12 @@ describe("windows portable setup companion", () => {
       const target = join(dir, "linked-target.txt");
       const catalog = join(dir, "windows-setup-signing-file.txt");
       writeFileSync(target, "must not be truncated\n");
-      link(target, catalog);
+      try {
+        link(target, catalog);
+      } catch (error) {
+        if (link === symlinkSync && error?.code === "EPERM") continue;
+        throw error;
+      }
       await expectSetupError(
         () =>
           buildWindowsPortableSetup([
@@ -301,10 +310,9 @@ describe("windows portable setup companion", () => {
     expect(script).toContain("setlocal EnableExtensions DisableDelayedExpansion");
     expect(script).not.toContain("setlocal EnableExtensions\r\n");
     expect(script).toContain("[1/6] Checking setup payload...");
-    expect(script).toContain("Expand-Archive");
-    expect(
-      script.match(/"%SystemRoot%\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe"/gu),
-    ).toHaveLength(3);
+    expect(script).toContain('"%SystemRoot%\\System32\\tar.exe" -xf "%ARCHIVE%"');
+    expect(script).not.toContain("Expand-Archive");
+    expect(script).not.toMatch(/WindowsPowerShell\\v1\.0\\powershell\.exe/iu);
     expect(script).not.toMatch(/(?:^|\r\n)powershell\.exe /u);
     expect(script).toContain("%EXTRACT_ROOT%\\runtime\\node\\node.exe");
     expect(script).toContain("%EXTRACT_ROOT%\\app\\dist\\cli\\index.js");
@@ -337,23 +345,19 @@ describe("windows portable setup companion", () => {
     expect(script).not.toContain('move "%INSTALL_ROOT%"');
     expect(script).not.toContain('rmdir /s /q "%INSTALL_ROOT%"');
     expect(script).not.toContain("Start-Process");
-    expect(script).toContain(
-      "Waiting up to 30 seconds for the verified process to remain stable for 5 seconds",
-    );
-    expect(script).toContain("AddSeconds(30)");
-    expect(script).toContain("TotalSeconds -ge 5");
-    expect(script).toContain("Get-Process -Name Keiko,node");
-    expect(script).toContain("$expected -contains $_.Path.ToLowerInvariant()");
-    expect(script).toContain("Start-Sleep -Milliseconds 500");
+    expect(script).toContain("Waiting up to 60 seconds for installer smoke evidence");
+    expect(script).toContain('if exist "%KEIKO_IEXPRESS_HEALTHY%" goto health_ok');
+    expect(script).toContain("timeout /t 5 /nobreak >nul");
+    expect(script).not.toContain("AddSeconds(30)");
+    expect(script).not.toContain("Get-Process -Name Keiko,node");
+    expect(script).not.toContain("Start-Sleep -Milliseconds 500");
     expect(script).not.toContain("Get-CimInstance Win32_Process");
     expect(script).toContain("Keiko did not stay running after setup.");
-    expect(script).toContain("$attempt -lt 10");
-    expect(script).toContain("Remove-Item -LiteralPath $path -Recurse -Force");
+    expect(script).toContain("for /l %%A in (1,1,10) do (");
+    expect(script).toContain('rmdir /s /q "%STAGING_ROOT%"');
     expect(script).toContain('if exist "%STAGING_ROOT%" (');
     expect(script).toContain("Keiko setup could not remove its temporary application files.");
-    expect(script.indexOf("TotalSeconds -ge 5")).toBeLessThan(
-      script.indexOf("Remove-Item -LiteralPath $path -Recurse -Force"),
-    );
+    expect(script.indexOf(":health_ok")).toBeLessThan(script.indexOf(":cleanup_ok"));
     expect(script).toContain('if "%KEIKO_INTERACTIVE%"=="1" pause');
     expect(script).not.toContain("\r\npause\r\n");
     expect(script).toContain("Keiko setup finished successfully.");

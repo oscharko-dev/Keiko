@@ -368,6 +368,8 @@ function verifyNativeLauncherSource() {
   );
   if (!source.includes(String.raw`\\runtime\\node\\node.exe`))
     fail("Windows launcher does not use bundled Node");
+  if (!source.includes("CREATE_NO_WINDOW"))
+    fail("Windows launcher does not hide the bundled Node console on double-click");
   if (!source.includes("/Contents/Resources/runtime/node/bin/node"))
     fail("macOS launcher does not use bundled Node");
   if (!source.includes('"portable"') || !source.includes('"launch"'))
@@ -376,6 +378,7 @@ function verifyNativeLauncherSource() {
     fail("launcher source must not invoke package managers");
   return {
     windowsBundledNodePath: true,
+    windowsDoubleClickSuppressesNodeConsole: true,
     macosBundledNodePath: true,
     packageManagersBypassed: true,
     invokesPortableLaunch: true,

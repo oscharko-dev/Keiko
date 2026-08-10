@@ -21,6 +21,7 @@ import {
   windowsSetupInstallerScript,
   windowsSetupSed,
 } from "../build-windows-portable-setup.mjs";
+import { writeZipArchiveFromDirectory } from "../lib/zip-archive.mjs";
 import { WINDOWS_PORTABLE_SETUP_ASSET_NAME } from "../portable-runtime.mjs";
 import { windowsLauncher } from "../../packages/keiko-cli/src/launcher-platforms.ts";
 
@@ -104,22 +105,7 @@ function writePortableFixture(root, archivePath) {
   writeFileSync(join(portableRoot, "Keiko.exe"), portableExecutableFixture());
   copyFileSync(process.execPath, join(portableRoot, "runtime", "node", "node.exe"));
   writeFileSync(join(portableRoot, "app", "dist", "cli", "index.js"), fixtureCli(), "utf8");
-  run(
-    "powershell.exe",
-    [
-      "-NoLogo",
-      "-NoProfile",
-      "-Command",
-      "Compress-Archive -LiteralPath $env:KEIKO_FIXTURE_ROOT -DestinationPath $env:KEIKO_FIXTURE_ARCHIVE -Force",
-    ],
-    {
-      env: {
-        ...process.env,
-        KEIKO_FIXTURE_ARCHIVE: archivePath,
-        KEIKO_FIXTURE_ROOT: portableRoot,
-      },
-    },
-  );
+  writeZipArchiveFromDirectory(portableRoot, archivePath, { rootName: "Keiko" });
   assertNativeLauncherTransport(root);
 }
 
