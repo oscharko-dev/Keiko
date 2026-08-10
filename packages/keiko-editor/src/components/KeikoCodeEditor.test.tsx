@@ -577,22 +577,21 @@ describe("KeikoCodeEditor — controlled editing", () => {
     // the controlled sync may have already written the exact text. Re-executing the whole-model
     // replacement would add an empty undo stop: the first keyboard undo would appear to do
     // nothing. The request must be a no-op instead.
-    const { rerender } = render(
+    // Mount first, with no pending request: once the editor ref exists, a host-edit effect run
+    // applies synchronously in its commit instead of polling on animation frames — so each
+    // rerender below has provably processed its request before the next one arrives.
+    const { rerender } = render(<KeikoCodeEditor {...baseProps({})} />);
+    await flushMount();
+    await waitFor(() => {
+      expect(captured.editor).not.toBeNull();
+    });
+    rerender(
       <KeikoCodeEditor
         {...baseProps({
           hostEditRequest: { id: "noop-1", text: "const a = 1;\n", origin: "applied-patch" },
         })}
       />,
     );
-    // The request handler polls per animation frame until Monaco has mounted. Two frames after
-    // the mount flush, the identical-text request has provably been processed (a rerender any
-    // earlier would cancel it unprocessed and the test would assert nothing).
-    await flushMount();
-    await new Promise((resolve) => {
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(resolve);
-      });
-    });
     // A second request with genuinely different text anchors the end state: once it has
     // executed, the counts below are final — exactly one execution, exactly one undo-stop pair.
     rerender(

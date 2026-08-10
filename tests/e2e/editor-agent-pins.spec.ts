@@ -23,7 +23,13 @@
  * identical host edits) are already fixed and pinned in KeikoCodeEditor.test.tsx.
  */
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+// The changeset preflight compares `expectedContentHash` against a digest the patch inspector
+// derives through this exact export (keiko-tools/patch.ts) — the fixture calls the production
+// producer instead of restating its formula (AGENTS.md §7).
+import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import {
   cleanupEditorWorkspaces,
@@ -67,10 +73,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function sha256Hex(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
 async function registerProject(request: APIRequestContext, root: string): Promise<void> {
   // M11 (#2612/#2686): registering the folder as a project IS the local-human trust act; an
   // unregistered root cannot be resolved by the editor and falls back to the default project.
@@ -78,8 +80,9 @@ async function registerProject(request: APIRequestContext, root: string): Promis
     headers: MUTATION_HEADERS,
     data: { path: root, name: "Keiko editor agent pins E2E" },
   });
+  // Status only — response bodies never enter test diagnostics (redacted-evidence doctrine).
   if (!project.ok()) {
-    throw new Error(`Project setup failed (${String(project.status())}): ${await project.text()}`);
+    throw new Error(`Project setup failed with status ${String(project.status())}.`);
   }
 }
 
@@ -124,16 +127,22 @@ interface DirectActionOutcome {
   readonly code: string | undefined;
 }
 
+// Diagnostics stay body-free (redacted-evidence doctrine): status and byte count only — a
+// redaction regression must never surface raw payloads through a test failure message.
 function parseActionOutcome(httpStatus: number, raw: string): DirectActionOutcome {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new Error(`Action response is not JSON (${String(httpStatus)}): ${raw}`);
+    throw new Error(
+      `Action response is not JSON (status ${String(httpStatus)}, ${String(raw.length)} bytes).`,
+    );
   }
   const result = isRecord(parsed) && isRecord(parsed.result) ? parsed.result : undefined;
   if (result === undefined || typeof result.status !== "string") {
-    throw new Error(`Action response carries no result (${String(httpStatus)}): ${raw}`);
+    throw new Error(
+      `Action response carries no result (status ${String(httpStatus)}, ${String(raw.length)} bytes).`,
+    );
   }
   const conflict = isRecord(result.conflict) ? result.conflict : undefined;
   return {
@@ -218,6 +227,7 @@ test.afterAll(() => {
 });
 
 interface PinFixture {
+  readonly root: string;
   readonly workspace: Locator;
   readonly session: LiveEditorSession;
 }
@@ -239,42 +249,35 @@ async function openPinnedEditor(page: Page, request: APIRequestContext): Promise
   const workspace = await openEditorWorkspace(page);
   await expect(workspace.locator(".view-line").filter({ hasText: PINNED_LINE })).toBeVisible();
   const session = await waitForEditorSession(request, root);
-  return { workspace, session };
+  return { root, workspace, session };
 }
 
-test("denies sensitive-path and unauthorized agent writes and serves a redacted audit (#1395 pin)", async ({
-  page,
-  request,
-}) => {
-  test.setTimeout(120_000);
-  const pageErrors = collectPageErrors(page);
-  const { workspace, session } = await openPinnedEditor(page, request);
-
-  // A changeset targeting the always-on deny list is refused and never reaches the editor. The
-  // wire code is bounded (a conflict), and the governance reason lands in the audit ledger below.
-  const denied = await postDirectChangeset(request, session, {
-    patch: SENSITIVE_PATCH,
-    file: ENV_RELATIVE_PATH,
-    beforeContent: ENV_BEFORE,
-  });
-  expect(denied.httpStatus).toBeGreaterThanOrEqual(400);
-  expect(denied.status).not.toBe("queued");
-
-  // M11 fail-closed default: a contained write on the direct agent channel WITHOUT a registered
-  // Authority Envelope is denied as authority-missing — it must never quietly queue.
-  const unauthorized = await postDirectTextEdit(request, session, {
-    file: RELATIVE_PATH,
-    newText: `// ${CONTAINED_EDIT_MARKER}\n`,
-  });
-  expect(unauthorized.httpStatus).toBeGreaterThanOrEqual(400);
-  expect(unauthorized.status).not.toBe("queued");
-
-  // Both decisions are recorded in the served audit feed the recent-actions panel consumes.
+/**
+ * Assert the served audit feed carries both denial decisions as bounded metadata and nothing
+ * else. Failure evidence stays redacted (enums and counts only), and the redaction checks use
+ * boolean predicates so a regression cannot leak the payload into Playwright logs through the
+ * matcher output of this very assertion.
+ */
+async function assertRedactedGovernanceAudit(
+  request: APIRequestContext,
+  sessionId: string,
+  outcomes: { readonly denied: DirectActionOutcome; readonly unauthorized: DirectActionOutcome },
+): Promise<void> {
   await expect
-    .poll(async () => (await fetchAuditRecords(request, session.sessionId)).length)
+    .poll(async () => (await fetchAuditRecords(request, sessionId)).length)
     .toBeGreaterThanOrEqual(2);
-  const records = await fetchAuditRecords(request, session.sessionId);
-  const evidence = JSON.stringify({ denied, unauthorized, records });
+  const records = await fetchAuditRecords(request, sessionId);
+  const evidence = JSON.stringify({
+    ...outcomes,
+    recordCount: records.length,
+    dispositions: records.map((record) => ({
+      actionType: record.actionType,
+      disposition: record.disposition,
+      denyReason: record.denyReason,
+      conflictCode: record.conflictCode,
+      outcome: record.outcome,
+    })),
+  });
   const sensitive = records.find((record) => record.denyReason === "denied-sensitive-path");
   const failClosed = records.find((record) => record.denyReason === "authority-missing");
   expect(sensitive, evidence).toBeDefined();
@@ -283,12 +286,44 @@ test("denies sensitive-path and unauthorized agent writes and serves a redacted 
   expect(sensitive?.disposition).toBe("denied");
   expect(failClosed?.actionType).toBe("applyTextEdits");
   expect(failClosed?.disposition).toBe("denied");
-
-  // Redaction pin: the feed carries bounded metadata only — never edit content. This assertion
-  // fails if the audit ledger ever starts serving raw text from either denied action.
   const serialized = JSON.stringify(records);
-  expect(serialized).not.toContain(DENIED_SECRET);
-  expect(serialized).not.toContain(CONTAINED_EDIT_MARKER);
+  expect(serialized.includes(DENIED_SECRET)).toBe(false);
+  expect(serialized.includes(CONTAINED_EDIT_MARKER)).toBe(false);
+}
+
+test("denies sensitive-path and unauthorized agent writes and serves a redacted audit (#1395 pin)", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  const pageErrors = collectPageErrors(page);
+  const { root, workspace, session } = await openPinnedEditor(page, request);
+
+  // A changeset targeting the always-on deny list is refused with the exact bounded contract —
+  // 409 conflict OUT_OF_SCOPE — and the governance reason lands in the audit ledger below.
+  const denied = await postDirectChangeset(request, session, {
+    patch: SENSITIVE_PATCH,
+    file: ENV_RELATIVE_PATH,
+    beforeContent: ENV_BEFORE,
+  });
+  expect(denied.httpStatus).toBe(409);
+  expect(denied.status).toBe("conflict");
+  expect(denied.code).toBe("OUT_OF_SCOPE");
+  // The denied write never reached the filesystem: the deny-listed file is byte-identical.
+  expect(readFileSync(join(root, ENV_RELATIVE_PATH), "utf8")).toBe(ENV_BEFORE);
+
+  // M11 fail-closed default: a contained write on the direct agent channel WITHOUT a registered
+  // Authority Envelope is denied — 403 conflict POLICY_DENIED — it must never quietly queue.
+  const unauthorized = await postDirectTextEdit(request, session, {
+    file: RELATIVE_PATH,
+    newText: `// ${CONTAINED_EDIT_MARKER}\n`,
+  });
+  expect(unauthorized.httpStatus).toBe(403);
+  expect(unauthorized.status).toBe("conflict");
+  expect(unauthorized.code).toBe("POLICY_DENIED");
+
+  // Both decisions reach the served audit feed the recent-actions panel consumes — redacted.
+  await assertRedactedGovernanceAudit(request, session.sessionId, { denied, unauthorized });
 
   // The denials never mutated the mounted buffer.
   await expect(workspace.locator(".view-line").filter({ hasText: PINNED_LINE })).toBeVisible();
