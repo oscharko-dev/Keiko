@@ -373,6 +373,26 @@ describe("readZipArchiveEntries", () => {
     expect(() => readZipArchiveEntries(archivePath)).toThrow();
   });
 
+  it("refuses a SINGLE hidden byte behind a zero size declaration", () => {
+    // The sharpest edge of the 1-byte ceiling (KfQ finding on #3066): exactly one byte fits
+    // under the inflater's ceiling without overflowing, so the refusal must come from the
+    // declared-size/CRC agreement — a zero-size entry that inflates to anything is never empty.
+    const root = temporaryRoot();
+    const archivePath = join(root, "one-byte-hidden.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "file.txt", data: "X" }]);
+    const bytes = readFileSync(archivePath);
+    const centralOffset = centralDirectoryOffset(bytes);
+    bytes.writeUInt32LE(0, centralOffset + 24); // declared uncompressed size: 0
+    writeFileSync(archivePath, bytes);
+
+    expect(() => readZipArchiveEntries(archivePath)).toThrow(
+      /does not match its declared size or checksum/u,
+    );
+    expect(() => extractZipArchiveEntries(archivePath, join(root, "out"))).toThrow(
+      /does not match its declared size or checksum/u,
+    );
+  });
+
   it("refuses a central directory whose entry signature is destroyed", () => {
     const root = temporaryRoot();
     const archivePath = join(root, "bad-central.zip");
