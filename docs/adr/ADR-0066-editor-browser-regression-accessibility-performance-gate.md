@@ -20,7 +20,10 @@ _Housekeeping 2026-08-10: `editor-agent-1394.spec.ts` and `editor-agent-1395.spe
 after months without a running lane (see the retirement note in ADR-0058). The other suites listed
 above remain in place. Two invariants those suites carried — the browser undo/redo round-trip after
 an agent-applied edit and the denied-path governance/redaction proof — retired without a successor
-pin; restoring both as targeted pins is tracked follow-up work._
+pin. The denied-path proof is restored as a targeted pin in `tests/e2e/editor-agent-pins.spec.ts`
+(wired into the `e2e-extended` matrix); the undo/redo round-trip is blocked on a product defect —
+the undo history does not survive the agent-review remount — tracked in issue #3070 together with
+the ready test draft._
 
 This duplication has three costs. First, a change to the seeding contract (for example the workspace
 persistence key or the editor open sequence) must be edited in N places, and drifts silently when one

@@ -316,6 +316,17 @@ function emitHostEditFallback(
   );
 }
 
+// The controlled value sync may have already written this exact text (the host updates its
+// buffer state and the host-edit request in the same commit). Re-executing a whole-model
+// replacement with identical text would push a second, empty undo stop — a keyboard undo
+// would then appear to do nothing before restoring the pre-edit buffer (#1394 pin).
+function modelAlreadyHoldsHostEdit(
+  editor: NonNullable<EditorRefs["editorRef"]["current"]>,
+  text: string,
+): boolean {
+  return editor.getModel?.()?.getValue() === text;
+}
+
 function applyHostEditRequest(
   request: NonNullable<KeikoCodeEditorProps["hostEditRequest"]>,
   refs: EditorRefs,
@@ -328,6 +339,7 @@ function applyHostEditRequest(
     emitHostEditFallback(request, onContentChange);
     return;
   }
+  if (modelAlreadyHoldsHostEdit(editor, request.text)) return;
   programmaticChangeRef.current = { text: request.text, origin: request.origin };
   editor.pushUndoStop?.();
   const applied = editor.executeEdits("keiko.host-edit", [{ range, text: request.text }]);
@@ -384,6 +396,26 @@ function useHostEditRequest(
   ]);
 }
 
+type ControlledSyncModel = NonNullable<
+  ReturnType<NonNullable<NonNullable<EditorRefs["editorRef"]["current"]>["getModel"]>>
+>;
+
+// Same-document programmatic updates (an agent-applied edit, a format result, a restore) must
+// stay on the browser undo stack: one keyboard undo returns to the pre-update buffer (#1394
+// pin). `model.setValue` would clear that history, so it remains only the fallback for models
+// without an edit-operations API. Document switches never pass through here — they rebuild the
+// model via the file identity key.
+function writeControlledModelValue(model: ControlledSyncModel, expected: string): void {
+  const fullRange = model.getFullModelRange?.();
+  if (fullRange !== undefined && model.pushEditOperations !== undefined) {
+    model.pushStackElement?.();
+    model.pushEditOperations(null, [{ range: fullRange, text: expected }], () => null);
+    model.pushStackElement?.();
+  } else {
+    model.setValue?.(expected);
+  }
+}
+
 function useControlledModelValueSync(
   props: KeikoCodeEditorProps,
   refs: EditorRefs,
@@ -402,7 +434,7 @@ function useControlledModelValueSync(
       if (model === undefined || model === null) return false;
       if (model.getValue() === expected || model.setValue === undefined) return true;
       programmaticChangeRef.current = syncChange;
-      model.setValue(expected);
+      writeControlledModelValue(model, expected);
       queueMicrotask(() => {
         if (programmaticChangeRef.current === syncChange) programmaticChangeRef.current = null;
       });

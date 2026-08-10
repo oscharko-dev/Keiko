@@ -482,6 +482,16 @@ export interface MountEditor {
     readonly uri?: MonacoUriLike;
     getLineCount(): number;
     getLineMaxColumn(lineNumber: number): number;
+    // Undo-preserving programmatic writes (#1394 pin): the controlled value sync replaces the
+    // whole model through the edit-operations API so the update stays on the undo stack;
+    // `setValue` (which clears that history) remains only the fallback for models without it.
+    getFullModelRange?(): MonacoRange;
+    pushEditOperations?(
+      beforeCursorState: null,
+      edits: { readonly range: MonacoRange; readonly text: string }[],
+      cursorStateComputer: () => null,
+    ): unknown;
+    pushStackElement?(): void;
   } | null;
   getContainerDomNode(): HTMLElement;
   saveViewState(): unknown;
