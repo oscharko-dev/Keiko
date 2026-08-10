@@ -833,3 +833,28 @@ stays with the retained record; the rows above intentionally keep their closure-
   ingestion as a QI source (`packages/keiko-quality-intelligence/src/domain/figma/` +
   `figmaSnapshotAdapter.ts`/`figmaSnapshotRoutes.ts`). Jira/TMS export remains dry-run-only by
   design (403 live-write guard).
+- **Row 7 — Review governance + artifact lifecycle**: delivered (approve / reject /
+  request-changes with four-eyes) as per-candidate + run-level review state in a mutable
+  `<runId>.review.json` companion with incrementing audit counts
+  (`keiko-server/src/qualityIntelligence/{reviewStore.ts,reviewRoutes.ts}`,
+  `keiko-quality-intelligence/src/review/**`). Live-verified approve/reject persist.
+- **Row 8 — Enterprise export / TMS mapping**: delivered as local file adapters (csv /
+  spreadsheet-safe-csv / json / markdown / plain-text, plus binary pdf / zip-bundle) downloading a
+  same-origin blob; TMS adapters (jira-issues / qtest / xray / polarion / alm / quality-center)
+  are dry-run preview only, force approved-only, and 403 on real write until a connector is
+  configured — live-verified. The bundle attests redaction.
+- **Row 11 — Native UI surfaces**: delivered as a singleton Workspace hub window plus per-run
+  result cards on the canvas (`keiko-ui/.../widgets/quality-intelligence/**`); the Test
+  Intelligence Workbench is deliberately NOT embedded. Live-verified.
+
+**Closure-gate proof carried with the snapshot** — static gates all green (`typecheck`, `lint`,
+`arch:check`, `arch:check:negative`, `check:qi-supply-chain`, `check:package-surface`,
+`check:version-consistency`; root suite 5905 passing, `keiko-ui` suite 1067 passing), and the
+live proof against real Azure `gpt-oss-120b` (no mocks): requirements ingestion produced 31
+authored test cases with correct atom provenance; workspace-folder ingestion produced 15 grounded
+test cases; review approve/reject persisted with an incrementing audit trail; export covered
+local CSV (all + approved-only) plus a Jira dry-run preview with 403 on real TMS write;
+mid-generation cancellation settled `cancelled`; evidence persisted as `<runId>.qi.json` /
+`.candidates.json` / `.review.json` with zero Azure secret leakage; and the UI flow (rail icon →
+QI hub window → run → result card → review → export) ran entirely as Workspace-canvas windows
+with reopen deduping to one card.
