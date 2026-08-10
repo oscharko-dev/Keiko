@@ -397,18 +397,23 @@ function readAt(fd, position, length) {
 }
 
 /** The entry's proven bytes, read through the descriptor — never the whole archive. */
-function extractEntryData(fd, entry) {
+function extractEntryData(fd, entry, archiveSize) {
+  if (entry.localOffset + 30 > archiveSize) {
+    throw new Error(`ZIP entry ${entry.rawName} has a malformed local header`);
+  }
   const header = readAt(fd, entry.localOffset, 30);
   if (header.readUInt32LE(0) !== LOCAL_FILE_HEADER) {
     throw new Error(`ZIP entry ${entry.rawName} has a malformed local header`);
   }
   const nameLength = header.readUInt16LE(26);
   const extraLength = header.readUInt16LE(28);
-  const compressed = readAt(
-    fd,
-    entry.localOffset + 30 + nameLength + extraLength,
-    entry.compressedSize,
-  );
+  const dataStart = entry.localOffset + 30 + nameLength + extraLength;
+  // Bounds before allocation: the declared compressed size comes from the untrusted directory,
+  // and a value beyond the file must refuse as truncation instead of allocating gigabytes first.
+  if (dataStart + entry.compressedSize > archiveSize) {
+    throw new Error(`ZIP entry ${entry.rawName} is truncated`);
+  }
+  const compressed = readAt(fd, dataStart, entry.compressedSize);
   const data = inflatedEntryData(compressed, entry);
   if (data.byteLength !== entry.size || crc32(data) !== entry.checksum) {
     throw new Error(`ZIP entry ${entry.rawName} does not match its declared size or checksum`);
@@ -443,7 +448,7 @@ export function extractZipArchiveEntries(archivePath, targetRoot) {
       if (!entry.rawName.endsWith("/")) {
         const path = join(targetRoot, normalizedEntryName(entry.rawName));
         mkdirSync(dirname(path), { recursive: true });
-        writeFileSync(path, extractEntryData(fd, entry));
+        writeFileSync(path, extractEntryData(fd, entry, size));
       }
       offset = entry.next;
     }

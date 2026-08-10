@@ -385,6 +385,20 @@ describe("extractZipArchiveEntries", () => {
     expect(() => readZipArchiveEntries(archivePath)).toThrow();
   });
 
+  it("refuses an oversized declared compressed size before allocating", () => {
+    // The directory's compressedSize is untrusted; a value beyond the file must refuse as
+    // truncation instead of allocating the declared amount first.
+    const root = temporaryRoot();
+    const archivePath = join(root, "oversized.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "file.txt", data: "bytes" }]);
+    const bytes = readFileSync(archivePath);
+    const centralOffset = bytes.length - 22 - 46 - "file.txt".length;
+    bytes.writeUInt32LE(0xfffffff0, centralOffset + 20);
+    writeFileSync(archivePath, bytes);
+
+    expect(() => extractZipArchiveEntries(archivePath, join(root, "out"))).toThrow(/truncated/u);
+  });
+
   it("refuses a hostile entry name before writing anything", () => {
     const root = temporaryRoot();
     const archivePath = join(root, "hostile-extract.zip");

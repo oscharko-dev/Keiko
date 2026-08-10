@@ -185,8 +185,11 @@ function provenanceArtifactFailures(manifest) {
   }
   const names = artifacts.filter(isRecord).map((artifact) => artifact.name);
   const failures = artifacts.flatMap((artifact) =>
+    // The string check runs BEFORE the regex: test() would coerce a number like 123 into a
+    // matching token (KfQ finding on #3055).
     isRecord(artifact) &&
-    SAFE_ARTIFACT_NAME_RE.test(artifact.name ?? "") &&
+    typeof artifact.name === "string" &&
+    SAFE_ARTIFACT_NAME_RE.test(artifact.name) &&
     positiveInteger(artifact.id)
       ? []
       : ["every provenance artifact must carry a filesystem-safe name and a positive numeric id."],
