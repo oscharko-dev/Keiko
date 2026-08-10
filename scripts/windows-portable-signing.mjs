@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 import {
   existsSync,
@@ -31,6 +30,7 @@ import {
   assertWindowsProductionVerificationInput,
   WindowsVerificationInputError,
 } from "./windows-portable-verification-input.mjs";
+import { sha256 } from "./lib/digest.mjs";
 
 const MAX_PE_FILES = 4_096;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
@@ -89,10 +89,6 @@ export function validateAzureArtifactSigningConfig(env) {
   }
 }
 
-function sha256Bytes(bytes) {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
 function isPortableExecutable(path) {
   const size = statSync(path).size;
   if (size < 64) return false;
@@ -140,7 +136,7 @@ function inspectPayloadFile(root, path, name, entry, state) {
   if (/\.(?:dll|exe)$/iu.test(name) && !isPe) {
     fail("an executable-named payload file is not valid PE");
   }
-  if (isPe) state.peFiles.push({ relativePath, sha256: sha256Bytes(readFileSync(path)) });
+  if (isPe) state.peFiles.push({ relativePath, sha256: sha256(readFileSync(path)) });
 }
 
 function inventoryPeFiles(rootPath) {
@@ -448,7 +444,7 @@ export function bindRuntimeAttestation(stageRoot, manifest) {
   if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
     fail("runtime attestation carrier is invalid");
   }
-  attestation.shippedSha256 = sha256Bytes(readFileSync(path));
+  attestation.shippedSha256 = sha256(readFileSync(path));
   attestation.sizeBytes = entry.size;
   attestation.signing = {
     signatureKind: "authenticode",

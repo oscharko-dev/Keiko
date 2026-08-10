@@ -2,7 +2,6 @@
 
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   lstatSync,
   mkdirSync,
@@ -18,6 +17,7 @@ import { tmpdir } from "node:os";
 
 import { buildCompilerEnvironment } from "./build-secure-workspace-read.mjs";
 import { RUNTIME_QUALIFICATION_SUITE } from "./runtime-activation-manifest.mjs";
+import { sha256File } from "./lib/digest.mjs";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
@@ -33,10 +33,6 @@ export class WindowsRuntimeAttestationError extends Error {}
 
 function fail(message) {
   throw new WindowsRuntimeAttestationError(`windows-runtime-attestation: ${message}`);
-}
-
-function sha256(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 function readReceipt(path) {
@@ -126,7 +122,7 @@ export function generateWindowsRuntimeAttestation(
   const stageRoot = resolve(required(options, "stage-root"));
   const receipt = readReceipt(resolve(required(options, "receipt")));
   const activation = join(stageRoot, "payload", "Keiko", ".portable", "runtime-activation.json");
-  if (sha256(activation) !== receipt.activationManifestSha256) {
+  if (sha256File(activation) !== receipt.activationManifestSha256) {
     fail("qualification receipt activation binding is stale");
   }
   const destination = join(stageRoot, "payload", "Keiko", ...EXECUTABLE_RELATIVE_PATH.split("/"));
@@ -231,7 +227,7 @@ function bindCarrierManifest(stageRoot, destination) {
     schemaVersion: 1,
     carrierKind: "authenticode-executable",
     executablePath: EXECUTABLE_RELATIVE_PATH,
-    shippedSha256: sha256(destination),
+    shippedSha256: sha256File(destination),
     sizeBytes: entry.size,
     signing: {
       signatureKind: "authenticode",

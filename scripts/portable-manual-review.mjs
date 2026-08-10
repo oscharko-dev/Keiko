@@ -27,6 +27,7 @@ import {
   RUNTIME_QUALIFICATION_SUITE,
   runtimeActivationManifest,
 } from "./runtime-activation-manifest.mjs";
+import { sha256, sha256File } from "./lib/digest.mjs";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -620,10 +621,6 @@ function createHostileZip(workRoot, zipPath) {
   );
 }
 
-function sha256File(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
-
 function fileSize(path) {
   return statSync(path).size;
 }
@@ -633,7 +630,7 @@ function sidecarFiles(target) {
   const executableBytes = Buffer.from(
     target === "windows-x64" ? "manual-review-signed-pe-fixture\n" : "#!/bin/sh\n",
   );
-  const executableSha256 = sha256Bytes(executableBytes);
+  const executableSha256 = sha256(executableBytes);
   const approval = OPEN_CODE_APPROVAL;
   const archive = approval.archives[target];
   const sbom = {
@@ -672,10 +669,6 @@ function sidecarFiles(target) {
   ];
 }
 
-function sha256Bytes(bytes) {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
 const NATIVE_HELPER_NAMES = Object.freeze([
   "keiko-secure-workspace-read",
   "keiko-runtime-supervisor",
@@ -707,7 +700,7 @@ function nativeHelper(target, version, signingVerified, name) {
     sourcePath = `native/runtime-supervisor/${supervisorPlatform}`;
   }
   const bytes = nativeHelperBytes(target, name);
-  const digest = sha256Bytes(bytes);
+  const digest = sha256(bytes);
   const signing = componentSigningEvidence(target, signingVerified);
   return {
     name,
@@ -723,7 +716,7 @@ function nativeHelper(target, version, signingVerified, name) {
     source: {
       commitSha: "a".repeat(40),
       path: sourcePath,
-      treeSha256: sha256Bytes(
+      treeSha256: sha256(
         Buffer.from(
           `${secureRead ? "native/secure-workspace-read" : "native/runtime-supervisor"}\n`,
         ),
@@ -764,7 +757,7 @@ function sidecarRuntime(target, scenario) {
   const executablePath = target === "windows-x64" ? "bin/opencode.exe" : "bin/opencode";
   const executableFile = files.find((file) => file.path === executablePath);
   if (executableFile === undefined) fail("OpenCode executable fixture is missing");
-  const shippedExecutableSha256 = sha256Bytes(executableFile.bytes);
+  const shippedExecutableSha256 = sha256(executableFile.bytes);
   const shippedExecutableTreeSha256 = createHash("sha256")
     .update(`${executablePath}\0${shippedExecutableSha256}\0`)
     .digest("hex");
@@ -793,11 +786,11 @@ function sidecarRuntime(target, scenario) {
     sizeBytes: files.reduce((sum, file) => sum + file.bytes.length, 0),
     licenseEvidence: {
       path: `${root}/evidence/LICENSE`,
-      sha256: sha256Bytes(files[0].bytes),
+      sha256: sha256(files[0].bytes),
     },
     sbomEvidence: {
       path: `${root}/evidence/sbom.cdx.json`,
-      sha256: sha256Bytes(files[1].bytes),
+      sha256: sha256(files[1].bytes),
     },
     signing: sidecarSigningEvidence(target, shippedExecutableSha256, shippedExecutableTreeSha256),
   };

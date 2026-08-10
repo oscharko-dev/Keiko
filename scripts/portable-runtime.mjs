@@ -5,6 +5,7 @@ import {
   usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
+import { sha256 } from "./lib/digest.mjs";
 
 export const PORTABLE_MANIFEST_SCHEMA_VERSION = 1;
 export const WINDOWS_PORTABLE_SETUP_ASSET_NAME = "keiko-windows-x64-setup.exe";
@@ -2214,13 +2215,9 @@ export function hashDirectoryTree(root) {
   const hash = createHash("sha256");
   for (const file of listFiles(root)) {
     const rel = relative(root, file).split(sep).join("/");
-    hash.update(`${rel}\0${sha256Buffer(readFileSync(file))}\0`);
+    hash.update(`${rel}\0${sha256(readFileSync(file))}\0`);
   }
   return hash.digest("hex");
-}
-
-function sha256Buffer(buffer) {
-  return createHash("sha256").update(buffer).digest("hex");
 }
 
 function listFiles(root) {

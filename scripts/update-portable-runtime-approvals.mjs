@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, URL } from "node:url";
@@ -9,6 +8,7 @@ import {
   validatePortableRuntimeApprovals,
 } from "./portable-runtime-approvals.mjs";
 import { PORTABLE_TARGET_NAMES, portableTargetByName } from "./portable-runtime.mjs";
+import { sha256 } from "./lib/digest.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DOWNLOAD_TIMEOUT_MS = 300_000;
@@ -89,10 +89,6 @@ async function fetchBuffer(url, maxBytes, allowedFinalHosts, deps) {
   return readBoundedBody(response.body, maxBytes);
 }
 
-function sha256Hex(buffer) {
-  return createHash("sha256").update(buffer).digest("hex");
-}
-
 function nodeArchiveName(target, version) {
   const portable = portableTargetByName(target);
   const base = `node-v${version}-${portable.nodeArchiveTarget}`;
@@ -128,7 +124,7 @@ async function approvedOpencodeArchives(version, existingArchives, deps) {
     const payload = await fetchBuffer(url, ARCHIVE_MAX_BYTES, RELEASE_HOSTS, deps);
     archives[target] = {
       url,
-      sha256: sha256Hex(payload),
+      sha256: sha256(payload),
       sizeBytes: payload.byteLength,
       executableName: target === "windows-x64" ? "opencode.exe" : "opencode",
       executableTreeSha256: existingArchives[target].executableTreeSha256,
@@ -140,7 +136,7 @@ async function approvedOpencodeArchives(version, existingArchives, deps) {
 async function approvedOpencodeLicense(deps) {
   const url = `${OPENCODE_LICENSE_BASE}/${APPROVED_OPENCODE_COMMIT}/LICENSE`;
   const payload = await fetchBuffer(url, TEXT_MAX_BYTES, RAW_HOSTS, deps);
-  return { spdxId: "MIT", url, sha256: sha256Hex(payload) };
+  return { spdxId: "MIT", url, sha256: sha256(payload) };
 }
 
 function updatedOpencodeRuntime(existing, version, archives, license) {

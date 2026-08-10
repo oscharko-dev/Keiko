@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -9,6 +8,7 @@ import {
   RUNTIME_ACTIVATION_RELATIVE_PATH,
   RUNTIME_QUALIFICATION_SUITE,
 } from "./runtime-activation-manifest.mjs";
+import { sha256File } from "./lib/digest.mjs";
 
 const COMMIT = /^[a-f0-9]{40}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
@@ -50,10 +50,6 @@ function readJson(path, label) {
   }
 }
 
-function sha256(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
-
 function helperByName(activation, name) {
   const matches = Array.isArray(activation.nativeHelpers)
     ? activation.nativeHelpers.filter((helper) => helper?.name === name)
@@ -81,7 +77,7 @@ function componentDigest(resourceRoot, helper) {
     entry.isSymbolicLink() ||
     entry.nlink !== 1 ||
     entry.size !== helper.sizeBytes ||
-    sha256(path) !== helper.shippedSha256
+    sha256File(path) !== helper.shippedSha256
   ) {
     fail("activation helper bytes are invalid");
   }
@@ -158,7 +154,7 @@ export function qualificationReceiptFor(input) {
     suiteVersion: RUNTIME_QUALIFICATION_SUITE,
     platformTarget: input.target,
     sourceCommitSha: input.sourceCommitSha,
-    activationManifestSha256: sha256(input.activationPath),
+    activationManifestSha256: sha256File(input.activationPath),
     supervisorSha256: componentDigest(
       input.resourceRoot,
       helperByName(activation, "keiko-runtime-supervisor"),
@@ -212,7 +208,7 @@ export function assertSameExecutable(stagedPath, executionPath, label) {
     execution.isSymbolicLink() ||
     execution.nlink !== 1 ||
     staged.size !== execution.size ||
-    sha256(stagedPath) !== sha256(executionPath)
+    sha256File(stagedPath) !== sha256File(executionPath)
   ) {
     fail(`${label} bytes are invalid`);
   }
