@@ -225,6 +225,11 @@ export function functionalBffDeps(input: FunctionalBffDepsInput): UiHandlerDeps 
 export interface DiscoveryBffDepsInput {
   readonly stateRoot: string;
   readonly store?: Parameters<typeof buildUiHandlerDeps>[0]["store"];
+  // Required companion whenever `store` is injected: without it the assembly cannot build the
+  // coding-runtime control plane and the discovery journey refuses as unqualified.
+  readonly codingRuntimeSnapshotStore?: Parameters<
+    typeof buildUiHandlerDeps
+  >[0]["codingRuntimeSnapshotStore"];
   readonly workspaceScriptTrust?: Parameters<typeof buildUiHandlerDeps>[0]["workspaceScriptTrust"];
   readonly workspaceLifecycle: WorkspaceLifecycleService;
   readonly workspaceProvisioning?:
@@ -264,6 +269,9 @@ export function productionDiscoveryBffDeps(input: DiscoveryBffDepsInput): UiHand
     env,
     uiDbPath: join(input.stateRoot, "ui-db", "keiko-ui.db"),
     ...(input.store === undefined ? {} : { store: input.store }),
+    ...(input.codingRuntimeSnapshotStore === undefined
+      ? {}
+      : { codingRuntimeSnapshotStore: input.codingRuntimeSnapshotStore }),
     ...(input.workspaceScriptTrust === undefined
       ? {}
       : { workspaceScriptTrust: input.workspaceScriptTrust }),
