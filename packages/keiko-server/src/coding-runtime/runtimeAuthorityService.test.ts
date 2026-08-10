@@ -570,6 +570,32 @@ describe("CodingRuntimeAuthorityService", () => {
     });
   });
 
+  it("admits operator operations on a paused run while the tool path stays running-only", () => {
+    const authority = service();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+    const recheck = {
+      capability: minted.toolFacadeCapability,
+      adapterKind: "model-gateway-sidecar" as const,
+      liveFacts: facts(),
+      workspaceRoot: ROOT,
+      deploymentCeiling: "autonomous-delivery" as const,
+      nowIso: NOW,
+    };
+    expect(authority.pause(minted.authorityRef.runId, NOW)).toMatchObject({ ok: true });
+    // Sticky pause holds the RUNTIME: a paused run must never execute a child tool mutation.
+    expect(authority.revalidateCapabilityForMutation(recheck)).toEqual({
+      ok: false,
+      reason: "authority-resolution-failed",
+    });
+    // The operator's own admissions (follow-up dispatch, abort, question answers) keep their
+    // authority while paused — the coordinator deliberately admits a follow-up task turn there,
+    // and holding it to running-only silently 403'd every paused follow-up (post-#2644 stall).
+    expect(authority.revalidateCapabilityForOperatorAdmission(recheck)).toMatchObject({
+      ok: true,
+    });
+  });
+
   it("authenticates the server-private capability before live-fact and replay admission", () => {
     const authority = service();
     const minted = mint(authority);
