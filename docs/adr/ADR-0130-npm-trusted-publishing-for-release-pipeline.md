@@ -27,11 +27,11 @@ publishing's own prerequisites.
 
 Two prerequisites are not automatic:
 
-1. **npm CLI version.** Trusted publishing requires npm CLI `>= 11.5.1`. `actions/setup-node`
-   with `node-version: "22.x"` does not bundle a new-enough npm, and this repository's root
-   `packageManager`/`engines.npm` fields (`npm@10.9.8` / `>=10.9.0`) are older still. Bumping those
-   repo-wide fields would force every contributor and every other CI job onto a newer npm major
-   for a requirement that only the `publish` job actually has.
+1. **npm CLI version.** Trusted publishing requires npm CLI `>= 11.5.1`. Since the governed
+   toolchain moved to Node 24.18 / npm 11.16.0, the repository-wide `packageManager` and
+   `engines.npm` fields already satisfy that floor, and the publish job installs exactly that
+   governed version (`EXPECTED_PACKAGE_MANAGER`) rather than a separately maintained pin — the
+   two cannot drift apart again (amended 2026-08-10).
 2. **npm dist-tag operations are out of scope for trusted publishing.** npm's own documentation is
    explicit that the OIDC-derived credential authorizes `npm publish` (and `npm stage publish`)
    only; `npm dist-tag add`, `npm deprecate`, `npm unpublish`, and other registry-mutating commands
@@ -71,9 +71,8 @@ it — the original hand pin (`11.18.0`) did exactly that to the 0.3.1 CI publis
 still matches this repository's preference for reviewable pins over floating ranges rather than
 `npm@latest`, which would let an unreviewed npm major version land silently in the one job that
 talks to the public registry with write intent. The
-root `packageManager` and `engines.npm` fields are deliberately left unchanged — every other job
-and every contributor's local npm 10.9.x continues to work; only the publish job's own runner
-needs the newer CLI, and only for the duration of that job.
+pin equals the repository-wide governed npm, so the publish job runs the same CLI every
+contributor and every other CI job already uses.
 
 ### D3 — The classic-token fallback is kept, narrowly, for dist-tag repair only
 
@@ -197,3 +196,4 @@ reason other than a routine bump, increment the version and record it below.
 | Version | Date       | Change                                                                 |
 | ------- | ---------- | ----------------------------------------------------------------------- |
 | 1.0     | 2026-07-11 | Accepted: npm Trusted Publishing adopted for the release `publish` job. |
+| 1.1     | 2026-08-10 | Publish npm pin bound to the governed `EXPECTED_PACKAGE_MANAGER` (npm@11.16.0) with a lockstep test; stale 10.9.x/11.18.0 references removed. |

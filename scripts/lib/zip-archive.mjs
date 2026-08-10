@@ -342,9 +342,20 @@ function centralEntryData(bytes, entry) {
 }
 
 function inflatedEntryData(compressed, entry) {
-  if (entry.method === DEFLATE_METHOD) return inflateRawSync(compressed);
+  if (entry.method === DEFLATE_METHOD) {
+    // The declared size is the single-entry memory ceiling: without maxOutputLength a hostile
+    // header could make inflate allocate gigabytes before the size check rejects the entry.
+    return inflateRawSync(compressed, { maxOutputLength: entry.size });
+  }
   if (entry.method === STORE_METHOD) return Buffer.from(compressed);
   throw new Error(`ZIP entry ${entry.rawName} uses an unsupported compression method`);
+}
+
+/** ZIP64 archives signal themselves through sentinel values; both readers refuse them. */
+function assertZip32Directory(count, directoryOffset) {
+  if (count === 0xffff || directoryOffset === 0xffffffff) {
+    throw new Error("ZIP64 archives are not supported");
+  }
 }
 
 /**
@@ -359,6 +370,7 @@ export function readZipArchiveEntries(archivePath) {
   const count = bytes.readUInt16LE(end + 10);
   const records = [];
   let offset = bytes.readUInt32LE(end + 16);
+  assertZip32Directory(count, offset);
   for (let index = 0; index < count; index += 1) {
     const entry = readCentralEntry(bytes, offset);
     if (!entry.rawName.endsWith("/")) {
@@ -421,6 +433,7 @@ export function extractZipArchiveEntries(archivePath, targetRoot) {
     const eocdInTail = endOfCentralDirectoryOffset(tail);
     const count = tail.readUInt16LE(eocdInTail + 10);
     const directoryOffset = tail.readUInt32LE(eocdInTail + 16);
+    assertZip32Directory(count, directoryOffset);
     const directoryLength = size - tailLength + eocdInTail - directoryOffset;
     if (directoryLength < 0) throw new Error("ZIP central directory is malformed");
     const directory = readAt(fd, directoryOffset, directoryLength);

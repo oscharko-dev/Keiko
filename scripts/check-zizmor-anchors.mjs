@@ -43,6 +43,16 @@ const ANCHOR_SUBJECT = new Map([
     },
   ],
   [
+    "adhoc-packages",
+    {
+      description: "an ad-hoc global package installation step",
+      // zizmor anchors this audit at the `run:` line performing the install. The release.yml pin
+      // shifted twice in one day without any checker noticing until the required job went red
+      // (CodeRabbit finding on #3055) — the same failure mode the misfeature entry below records.
+      matches: (line) => /npm install --global/u.test(line),
+    },
+  ],
+  [
     "misfeature",
     {
       description: "a step's shell declaration",

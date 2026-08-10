@@ -345,6 +345,46 @@ describe("extractZipArchiveEntries", () => {
     expect([...readFileSync(join(target, "inner", "deep", "nested.bin"))]).toEqual([7, 0, 255]);
   });
 
+  it("refuses a truncated archive through the descriptor path", () => {
+    // The extractor has its own read path (readAt windows); a short file must refuse, never
+    // yield partial entries.
+    const root = temporaryRoot();
+    const archivePath = join(root, "truncated-extract.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "file.txt", data: "0123456789".repeat(50) }]);
+    const bytes = readFileSync(archivePath);
+    writeFileSync(archivePath, bytes.subarray(0, bytes.length - 30));
+
+    expect(() => extractZipArchiveEntries(archivePath, join(root, "out"))).toThrow();
+  });
+
+  it("refuses ZIP64 sentinel values in both readers", () => {
+    // 0xffff entries / 0xffffffff directory offset announce ZIP64 records neither reader
+    // understands; using them as literal values would misread the directory.
+    const root = temporaryRoot();
+    const archivePath = join(root, "zip64.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "file.txt", data: "bytes" }]);
+    const bytes = readFileSync(archivePath);
+    bytes.writeUInt16LE(0xffff, bytes.length - 22 + 10);
+    writeFileSync(archivePath, bytes);
+
+    expect(() => readZipArchiveEntries(archivePath)).toThrow(/ZIP64/u);
+    expect(() => extractZipArchiveEntries(archivePath, join(root, "out"))).toThrow(/ZIP64/u);
+  });
+
+  it("caps inflation at the declared entry size", () => {
+    // A hostile header may declare a small size for a stream that inflates far larger; the
+    // declared size is the memory ceiling and the mismatch refuses.
+    const root = temporaryRoot();
+    const archivePath = join(root, "overflow.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "file.txt", data: "A".repeat(4096) }]);
+    const bytes = readFileSync(archivePath);
+    const centralOffset = bytes.length - 22 - 46 - "file.txt".length;
+    bytes.writeUInt32LE(16, centralOffset + 24); // declared uncompressed size far below reality
+    writeFileSync(archivePath, bytes);
+
+    expect(() => readZipArchiveEntries(archivePath)).toThrow();
+  });
+
   it("refuses a hostile entry name before writing anything", () => {
     const root = temporaryRoot();
     const archivePath = join(root, "hostile-extract.zip");

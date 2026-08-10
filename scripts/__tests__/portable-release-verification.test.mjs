@@ -514,8 +514,8 @@ describe("portableReleaseGate", () => {
         }
         return { status: 0, stdout: JSON.stringify(overrides.run ?? goodRun()) };
       },
-      collectRunArtifactDigests: (repository, runId, names) => {
-        events.artifactReads.push({ repository, runId, names });
+      collectRunArtifactDigests: (repository, runId, artifacts, relevantNames) => {
+        events.artifactReads.push({ repository, runId, artifacts, relevantNames });
         if (overrides.artifactDigests !== undefined) return overrides.artifactDigests;
         return new Map(assets.map((asset) => [asset.name, asset.sha256]));
       },
@@ -542,7 +542,12 @@ describe("portableReleaseGate", () => {
     // the run, and only then are the published bytes fetched. The collector receives the
     // evidence-declared immutable identities, not bare names.
     expect(events.artifactReads).toEqual([
-      { repository: REPOSITORY, runId: RUN_ID, names: RUN_ARTIFACTS },
+      {
+        repository: REPOSITORY,
+        runId: RUN_ID,
+        artifacts: RUN_ARTIFACTS,
+        relevantNames: EXPECTED_NAMES,
+      },
     ]);
     expect(events.verified).toEqual([EXPECTED_NAMES]);
     expect(events.logged.join(" ")).toContain("match their evidence");

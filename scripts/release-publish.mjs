@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import {
   closeSync,
   copyFileSync,
+  fstatSync,
   chmodSync,
   existsSync,
   lstatSync,
@@ -256,9 +257,12 @@ function fetchRunArtifactZip(artifactId, destination) {
     const result = spawnSync(
       resolveHostExecutable("gh"),
       ["api", `repos/${githubRepository()}/actions/artifacts/${String(artifactId)}/zip`],
-      { cwd: repoRoot, stdio: ["ignore", fd, "pipe"], env: process.env },
+      // Bounded twice: a stalled transfer must not block publication forever, and the landed
+      // bytes must respect the same archive ceiling every portable input honors.
+      { cwd: repoRoot, stdio: ["ignore", fd, "pipe"], env: process.env, timeout: 900_000 },
     );
     if (result.error !== undefined || result.status !== 0) return { status: 1 };
+    if (fstatSync(fd).size > maxPortableArchiveBytes) return { status: 1 };
     return { status: 0 };
   } finally {
     closeSync(fd);
