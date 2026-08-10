@@ -603,6 +603,49 @@ describe("KeikoCodeEditor — controlled editing", () => {
     expect(captured.editor?.setModelValue).not.toHaveBeenCalled();
   });
 
+  it("syncs a later buffer update even while a handled host edit lingers in props (#3071 review)", async () => {
+    // A one-shot host-edit request may legitimately stay in props after it was handled. Its
+    // suppression of the controlled sync must expire once the host buffer has reconciled —
+    // otherwise a later external update (e.g. a file reload) never reaches the model while it
+    // still equals the old request text.
+    const lingering = {
+      id: "rename-4",
+      text: "const renamed = 4;\n",
+      origin: "applied-patch",
+    } as const;
+    const { rerender } = render(<KeikoCodeEditor {...baseProps({})} />);
+    await flushMount();
+    await waitFor(() => {
+      expect(captured.editor).not.toBeNull();
+    });
+    rerender(<KeikoCodeEditor {...baseProps({ hostEditRequest: lingering })} />);
+    await waitFor(() => {
+      expect(captured.editor?.modelValue()).toBe(lingering.text);
+    });
+    // The host reconciles (buffer catches up to the request text) with the request lingering…
+    rerender(
+      <KeikoCodeEditor
+        {...baseProps({
+          buffer: buildBuffer({ text: lingering.text }),
+          hostEditRequest: lingering,
+        })}
+      />,
+    );
+    // …then an external update arrives while the handled request is STILL in props. It must
+    // reach the model.
+    rerender(
+      <KeikoCodeEditor
+        {...baseProps({
+          buffer: buildBuffer({ text: "const reloaded = 5;\n" }),
+          hostEditRequest: lingering,
+        })}
+      />,
+    );
+    await waitFor(() => {
+      expect(captured.editor?.modelValue()).toBe("const reloaded = 5;\n");
+    });
+  });
+
   it("skips a host edit request whose text the model already holds (#1394 pin)", async () => {
     // The host updates its buffer state and posts the host-edit request in the same commit, so
     // the controlled sync may have already written the exact text. Re-executing the whole-model

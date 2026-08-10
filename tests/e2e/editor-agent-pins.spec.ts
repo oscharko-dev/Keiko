@@ -284,8 +284,12 @@ async function assertRedactedGovernanceAudit(
   expect(failClosed, evidence).toBeDefined();
   expect(sensitive?.actionType).toBe("applyChangeset");
   expect(sensitive?.disposition).toBe("denied");
+  expect(sensitive?.conflictCode).toBe("OUT_OF_SCOPE");
+  expect(sensitive?.outcome).toBe("conflict");
   expect(failClosed?.actionType).toBe("applyTextEdits");
   expect(failClosed?.disposition).toBe("denied");
+  expect(failClosed?.conflictCode).toBe("POLICY_DENIED");
+  expect(failClosed?.outcome).toBe("conflict");
   const serialized = JSON.stringify(records);
   expect(serialized.includes(DENIED_SECRET)).toBe(false);
   expect(serialized.includes(CONTAINED_EDIT_MARKER)).toBe(false);

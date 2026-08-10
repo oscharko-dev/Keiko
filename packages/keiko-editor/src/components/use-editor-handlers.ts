@@ -416,14 +416,30 @@ function writeControlledModelValue(model: ControlledSyncModel, expected: string)
   }
 }
 
+// The text of the host-edit request that currently owns the model transition, or undefined when
+// no request owns it. A request owns the transition from the commit that posts it until the host
+// buffer has reconciled once (`expected === request.text`); a handled one-shot request may
+// legitimately stay in props afterwards, so ownership must expire with the transition rather
+// than persist for the request's lifetime (#3071 review).
+function owningHostEditText(
+  reconciledIdRef: RefObject<string | null>,
+  hostEdit: KeikoCodeEditorProps["hostEditRequest"],
+  expected: string,
+): string | undefined {
+  if (hostEdit === undefined) return undefined;
+  if (expected === hostEdit.text) reconciledIdRef.current = hostEdit.id;
+  return reconciledIdRef.current === hostEdit.id ? undefined : hostEdit.text;
+}
+
 function useControlledModelValueSync(
   props: KeikoCodeEditorProps,
   refs: EditorRefs,
   programmaticChangeRef: ProgrammaticEditorChangeRef,
 ): void {
+  const reconciledHostEditIdRef = useRef<string | null>(null);
   useEffect(() => {
     const expected = props.buffer.content.text;
-    const hostEditText = props.hostEditRequest?.text;
+    const ownedText = owningHostEditText(reconciledHostEditIdRef, props.hostEditRequest, expected);
     const syncChange: ProgrammaticEditorChange =
       props.fileModel.lastChangeOrigin === null
         ? { text: expected, suppress: true }
@@ -438,7 +454,7 @@ function useControlledModelValueSync(
       // buffer state (`expected`) catches up on its own commit. Writing the stale `expected`
       // back now would put a new → old → new pair on the undo stack, so the second keyboard
       // undo would return to the host-edit text instead of moving further back (#3071 review).
-      if (hostEditText !== undefined && model.getValue() === hostEditText) return true;
+      if (ownedText !== undefined && model.getValue() === ownedText) return true;
       programmaticChangeRef.current = syncChange;
       writeControlledModelValue(model, expected);
       queueMicrotask(() => {
@@ -460,6 +476,7 @@ function useControlledModelValueSync(
     props.buffer.content.text,
     props.fileModel.identity.uri,
     props.fileModel.lastChangeOrigin,
+    props.hostEditRequest?.id,
     props.hostEditRequest?.text,
     refs,
   ]);
