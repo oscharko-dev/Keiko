@@ -6,7 +6,6 @@
 // license, and verifies both again. Product code repeats the binary check at every native load.
 
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
@@ -14,7 +13,6 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -28,6 +26,7 @@ import {
   usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
+import { sha256File } from "./lib/digest.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const LICENSE_ARCHIVE_PATH = "package/LICENSE";
@@ -51,12 +50,8 @@ export function fail(message, { error = console.error, exit = process.exit } = {
   exit(1);
 }
 
-function sha256Of(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
-
 function verify(path, expected, failWith = fail) {
-  const actual = sha256Of(path);
+  const actual = sha256File(path);
   if (actual !== expected) failWith(`checksum mismatch: expected ${expected}, got ${actual}`);
 }
 
@@ -88,7 +83,7 @@ export function isTrustedProvisionedUsearchFile(
     const entry = lstatSync(path);
     const parent = lstatSync(dirname(path));
     return (
-      trustedProvisionedEntries(entry, parent, currentUid) && sha256Of(path) === expectedSha256
+      trustedProvisionedEntries(entry, parent, currentUid) && sha256File(path) === expectedSha256
     );
   } catch {
     return false;

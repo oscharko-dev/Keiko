@@ -52,6 +52,7 @@ import {
   jsonFromCommand,
   portableReleaseGate,
 } from "./lib/portable-release-verification.mjs";
+import { sha256 } from "./lib/digest.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const packageRegistryScope = scope.slice(0, -1);
@@ -580,10 +581,6 @@ function sha256FileSync(path) {
   }
 }
 
-function sha256Text(value) {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 function containedPath(root, path) {
   const normalizedRoot = root.endsWith("/") ? root : `${root}/`;
   return path === root || path.startsWith(normalizedRoot);
@@ -1005,7 +1002,7 @@ function validateProvenanceStatement(target, stageRoot, manifest, failures) {
   );
   if (path === undefined || !existsSync(path)) return;
   const text = readFileSync(path, "utf8");
-  if (sha256Text(text) !== manifest.provenance?.provenanceStatementSha256) {
+  if (sha256(text) !== manifest.provenance?.provenanceStatementSha256) {
     failures.push(`${target.platformTarget}.provenance statement digest must match.`);
   }
   const statement = readEvidenceJson(

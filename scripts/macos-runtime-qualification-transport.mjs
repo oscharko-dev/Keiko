@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { sha256File } from "./lib/digest.mjs";
 
 const MAX_FILES = 100_000;
 const RECEIPT_SUFFIX =
@@ -32,10 +32,6 @@ function required(options, name) {
   return value;
 }
 
-function sha256(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
-
 function snapshotTree(root) {
   const resolvedRoot = resolve(root);
   const rootEntry = lstatSync(resolvedRoot);
@@ -51,7 +47,7 @@ function snapshotTree(root) {
       } else if (entry.isFile() && entry.nlink === 1) {
         files.push({
           path: relative(resolvedRoot, path).replaceAll("\\", "/"),
-          sha256: sha256(path),
+          sha256: sha256File(path),
           sizeBytes: entry.size,
         });
       } else {

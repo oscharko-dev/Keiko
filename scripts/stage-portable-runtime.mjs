@@ -40,6 +40,7 @@ import {
   usearchRuntimeTargetKey,
 } from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 import { writeRuntimeActivationManifest } from "./runtime-activation-manifest.mjs";
+import { sha256 } from "./lib/digest.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -388,7 +389,7 @@ function sidecarExecutableForSpec(spec, sourceRoot, executableSourcePath) {
   if (actualExecutableTreeSha256 !== executableTreeSha256) {
     fail("sidecar executable tree digest does not match independent approval");
   }
-  const executableSha256 = sha256Bytes(
+  const executableSha256 = sha256(
     readFileSync(resolveSidecarSourcePath(sourceRoot, executableSourcePath)),
   );
   return { executableTreeAlgorithm, executableTreeSha256, executableSha256 };
@@ -624,7 +625,7 @@ function sidecarDistributionMatches(reference, archive) {
 
 function hashExecutableTree(sourceRoot, executableRelativePath) {
   const executable = resolveSidecarSourcePath(sourceRoot, executableRelativePath);
-  const digest = sha256Bytes(readFileSync(executable));
+  const digest = sha256(readFileSync(executable));
   return createHash("sha256").update(`${executableRelativePath}\0${digest}\0`).digest("hex");
 }
 
@@ -637,7 +638,7 @@ function sidecarPlatformTarget(spec, target) {
 function sidecarEvidence(sourceRoot, sourcePath, payloadPath) {
   return {
     path: payloadPath,
-    sha256: sha256Bytes(readFileSync(resolveSidecarSourcePath(sourceRoot, sourcePath))),
+    sha256: sha256(readFileSync(resolveSidecarSourcePath(sourceRoot, sourcePath))),
   };
 }
 
@@ -817,10 +818,6 @@ function requiredSpecPositiveInteger(spec, key) {
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function sha256Bytes(buffer) {
-  return createHash("sha256").update(buffer).digest("hex");
 }
 
 function run(cmd, args, options = {}) {
@@ -1546,10 +1543,6 @@ function provenanceStatementFor(
   );
 }
 
-function sha256Text(text) {
-  return createHash("sha256").update(text).digest("hex");
-}
-
 function createZipArchive(payloadContainer, assetName, outRoot) {
   const assetPath = join(outRoot, assetName);
   writeZipArchiveFromDirectory(join(payloadContainer, "Keiko"), assetPath, {
@@ -1617,8 +1610,8 @@ function provisionedUsearchRuntime(target) {
   if (
     !existsSync(sourceBinary) ||
     !existsSync(sourceLicense) ||
-    sha256Bytes(readFileSync(sourceBinary)) !== approved.binarySha256 ||
-    sha256Bytes(readFileSync(sourceLicense)) !== approved.licenseSha256
+    sha256(readFileSync(sourceBinary)) !== approved.binarySha256 ||
+    sha256(readFileSync(sourceLicense)) !== approved.licenseSha256
   ) {
     fail("USearch runtime is absent or failed its pinned digest");
   }
@@ -1655,7 +1648,7 @@ export function stageUsearchAddon(
 ) {
   const runtime = resolveRuntime(target);
   const staged = stageUsearchFiles(resourceRoot, runtime, copyFile);
-  const shippedSha256 = sha256Bytes(readFileSync(staged.destination));
+  const shippedSha256 = sha256(readFileSync(staged.destination));
   if (shippedSha256 !== runtime.approved.binarySha256) {
     return failUsearchStaging(
       onFailure,
@@ -2351,7 +2344,7 @@ async function manifestInputFor(options, target, paths, tarball, staged) {
     staged.nativeHelpers,
     staged.nativeAddons,
   );
-  const provenanceSha256 = sha256Text(provenanceStatement);
+  const provenanceSha256 = sha256(provenanceStatement);
   return {
     manifest: manifestFor(
       options,

@@ -1,19 +1,14 @@
-import { createHash } from "node:crypto";
-import { Buffer } from "node:buffer";
 import { lstatSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, posix, relative, resolve } from "node:path";
 
 import { hashDirectoryTree, portableTargetByName, sha256File } from "./portable-runtime.mjs";
 import { writeRuntimeActivationManifest } from "./runtime-activation-manifest.mjs";
+import { sha256 } from "./lib/digest.mjs";
 
 export class PortableSignedArchiveError extends Error {}
 
 function fail(message) {
   throw new PortableSignedArchiveError(`portable-signed-archive: ${message}`);
-}
-
-function sha256Text(text) {
-  return createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");
 }
 
 function portablePath(root, path) {
@@ -82,7 +77,7 @@ function rebindNativeHelper(stageRoot, helper, resourceRoot) {
   if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
     fail("native helper is not a regular single-link file");
   }
-  helper.shippedSha256 = sha256Bytes(readFileSync(executable));
+  helper.shippedSha256 = sha256(readFileSync(executable));
   helper.sizeBytes = entry.size;
   const sbomPath = join(stageRoot, "evidence", "sbom.cdx.json");
   let sbom;
@@ -110,7 +105,7 @@ function rebindNativeAddon(stageRoot, manifest, resourceRoot) {
   if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
     fail("native addon is not a regular single-link file");
   }
-  addon.shippedSha256 = sha256Bytes(readFileSync(executable));
+  addon.shippedSha256 = sha256(readFileSync(executable));
   addon.sizeBytes = entry.size;
   const sbomPath = join(stageRoot, "evidence", "sbom.cdx.json");
   let sbom;
@@ -127,10 +122,6 @@ function rebindNativeAddon(stageRoot, manifest, resourceRoot) {
   writeFileSync(sbomPath, `${JSON.stringify(sbom, null, 2)}\n`);
 }
 
-function sha256Bytes(bytes) {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
 function rebindSidecarExecutable(sidecar, sidecarRoot, resourceRoot) {
   if (sidecar.executableTreeAlgorithm !== "keiko-directory-tree-sha256-v1") {
     fail("sidecar executable tree algorithm is unsupported");
@@ -140,8 +131,8 @@ function rebindSidecarExecutable(sidecar, sidecarRoot, resourceRoot) {
   if (executableRelativePath.startsWith("../") || posix.isAbsolute(executableRelativePath)) {
     fail("sidecar executable escapes its payload root");
   }
-  const shippedExecutableSha256 = sha256Bytes(readFileSync(executablePath));
-  const shippedExecutableTreeSha256 = sha256Text(
+  const shippedExecutableSha256 = sha256(readFileSync(executablePath));
+  const shippedExecutableTreeSha256 = sha256(
     `${executableRelativePath}\0${shippedExecutableSha256}\0`,
   );
   rewriteSidecarSbom(sidecar, resourceRoot, shippedExecutableSha256);
@@ -163,7 +154,7 @@ function rewriteSidecarSbom(sidecar, resourceRoot, shippedExecutableSha256) {
   assertSidecarSbomExecutableHash(component, shippedExecutableSha256);
   const text = `${JSON.stringify(sbom, null, 2)}\n`;
   writeFileSync(sbomPath, text);
-  sidecar.sbomEvidence.sha256 = sha256Text(text);
+  sidecar.sbomEvidence.sha256 = sha256(text);
 }
 
 function validatedSidecarSbomComponent(sbom, sidecar) {
@@ -265,7 +256,7 @@ export async function rebindExistingSignedArchive(
   const provenanceText = rebindProvenance(stageRoot, manifest, archiveSha256);
   manifest.artifact.sha256 = archiveSha256;
   manifest.artifact.sizeBytes = statSync(archivePath).size;
-  manifest.provenance.provenanceStatementSha256 = sha256Text(provenanceText);
+  manifest.provenance.provenanceStatementSha256 = sha256(provenanceText);
   rebindReviewedBinding(manifest, archiveSha256);
   writeFileSync(
     join(stageRoot, "evidence", "SHA256SUMS.txt"),
