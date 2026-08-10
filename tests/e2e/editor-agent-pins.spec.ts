@@ -289,6 +289,10 @@ async function assertRedactedGovernanceAudit(
   const serialized = JSON.stringify(records);
   expect(serialized.includes(DENIED_SECRET)).toBe(false);
   expect(serialized.includes(CONTAINED_EDIT_MARKER)).toBe(false);
+  // The preimage the sensitive patch removes is customer file content too — a regression that
+  // serves source context instead of the replacement text must fail the same way. The check
+  // uses the newline-free line so JSON escaping cannot mask a hit.
+  expect(serialized.includes("PLACEHOLDER=1")).toBe(false);
 }
 
 test("denies sensitive-path and unauthorized agent writes and serves a redacted audit (#1395 pin)", async ({
@@ -325,7 +329,11 @@ test("denies sensitive-path and unauthorized agent writes and serves a redacted 
   // Both decisions reach the served audit feed the recent-actions panel consumes — redacted.
   await assertRedactedGovernanceAudit(request, session.sessionId, { denied, unauthorized });
 
-  // The denials never mutated the mounted buffer.
+  // The denials never mutated the mounted buffer: the original line is visible AND the denied
+  // insertion is absent (an insert at (0,0) would keep the original line visible one row down).
   await expect(workspace.locator(".view-line").filter({ hasText: PINNED_LINE })).toBeVisible();
+  await expect(
+    workspace.locator(".view-line").filter({ hasText: CONTAINED_EDIT_MARKER }),
+  ).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });

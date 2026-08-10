@@ -572,6 +572,37 @@ describe("KeikoCodeEditor — controlled editing", () => {
     expect(origin).toBe("applied-patch");
   });
 
+  it("does not write a stale controlled value back over a fresh host edit (#3071 review)", async () => {
+    // The rename flow posts a host-edit request WITHOUT updating the host buffer state first, so
+    // in that commit `buffer.content.text` is still the pre-edit text. The controlled sync must
+    // not write that stale value back over the just-applied edit — doing so would put a
+    // new → old → new pair on the undo stack and the second keyboard undo would return to the
+    // edited text instead of moving further back.
+    const { rerender } = render(<KeikoCodeEditor {...baseProps({})} />);
+    await flushMount();
+    await waitFor(() => {
+      expect(captured.editor).not.toBeNull();
+    });
+    rerender(
+      <KeikoCodeEditor
+        {...baseProps({
+          hostEditRequest: {
+            id: "rename-3",
+            text: "const renamed = 3;\n",
+            origin: "applied-patch",
+          },
+        })}
+      />,
+    );
+    await waitFor(() => {
+      expect(captured.editor?.modelValue()).toBe("const renamed = 3;\n");
+    });
+    // The host edit is the only model write: no controlled-sync write-back of the stale buffer.
+    expect(captured.editor?.executeEdits).toHaveBeenCalledTimes(1);
+    expect(captured.editor?.pushEditOperations).not.toHaveBeenCalled();
+    expect(captured.editor?.setModelValue).not.toHaveBeenCalled();
+  });
+
   it("skips a host edit request whose text the model already holds (#1394 pin)", async () => {
     // The host updates its buffer state and posts the host-edit request in the same commit, so
     // the controlled sync may have already written the exact text. Re-executing the whole-model

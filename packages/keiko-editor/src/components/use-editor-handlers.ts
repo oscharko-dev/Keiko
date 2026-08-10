@@ -423,6 +423,7 @@ function useControlledModelValueSync(
 ): void {
   useEffect(() => {
     const expected = props.buffer.content.text;
+    const hostEditText = props.hostEditRequest?.text;
     const syncChange: ProgrammaticEditorChange =
       props.fileModel.lastChangeOrigin === null
         ? { text: expected, suppress: true }
@@ -433,6 +434,11 @@ function useControlledModelValueSync(
       const model = refs.editorRef.current?.getModel?.();
       if (model === undefined || model === null) return false;
       if (model.getValue() === expected || model.setValue === undefined) return true;
+      // A host-edit request that has just written the model owns this transition; the host's
+      // buffer state (`expected`) catches up on its own commit. Writing the stale `expected`
+      // back now would put a new → old → new pair on the undo stack, so the second keyboard
+      // undo would return to the host-edit text instead of moving further back (#3071 review).
+      if (hostEditText !== undefined && model.getValue() === hostEditText) return true;
       programmaticChangeRef.current = syncChange;
       writeControlledModelValue(model, expected);
       queueMicrotask(() => {
@@ -454,6 +460,7 @@ function useControlledModelValueSync(
     props.buffer.content.text,
     props.fileModel.identity.uri,
     props.fileModel.lastChangeOrigin,
+    props.hostEditRequest?.text,
     refs,
   ]);
 }
