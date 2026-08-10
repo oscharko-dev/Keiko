@@ -58,6 +58,7 @@ import {
 } from "../../../packages/keiko-server/src/editor/verificationRunner.js";
 import { createUiServer, UI_HOST } from "../../../packages/keiko-server/src/server.js";
 import { createInMemoryUiStore } from "../../../packages/keiko-server/src/store/index.js";
+import { createCodingRuntimeSnapshotStore } from "../../../packages/keiko-server/src/coding-runtime/codingRuntimeSnapshotStore.js";
 import { runMigrations } from "../../../packages/keiko-server/src/store/schema.js";
 import { buildActiveWorkspacePointerStoreOverDatabase } from "../../../packages/keiko-server/src/task-workspace/active-store.js";
 import { createWorkspaceLifecycleService } from "../../../packages/keiko-server/src/task-workspace/lifecycle.js";
@@ -77,6 +78,10 @@ interface JourneyWorkspaceServices {
   readonly reconciliation: ReturnType<typeof createWorkspaceReconciliationService>;
   readonly uiStore: ReturnType<typeof createInMemoryUiStore>;
   readonly workspaceScriptTrust: ReturnType<typeof createWorkspaceScriptTrustService>;
+  // Injecting `uiStore` into the BFF assembly suppresses its own persistence composition, so the
+  // journey must bring the snapshot-store companion or the coding-runtime control plane is never
+  // assembled and production discovery refuses as unqualified (the daily lane outage after #2835).
+  readonly codingRuntimeSnapshots: ReturnType<typeof createCodingRuntimeSnapshotStore>;
 }
 
 /**
@@ -190,7 +195,14 @@ function createWorkspaceServices(managedRoot: string): JourneyWorkspaceServices 
     mutex,
   });
   const reconciliation = createWorkspaceReconciliationService({ ...shared, activePointerStore });
-  return { provisioning, lifecycle, reconciliation, uiStore, workspaceScriptTrust };
+  return {
+    provisioning,
+    lifecycle,
+    reconciliation,
+    uiStore,
+    workspaceScriptTrust,
+    codingRuntimeSnapshots: createCodingRuntimeSnapshotStore(db),
+  };
 }
 
 function verificationRunner(fixtureLabel: string): Pick<VerificationRunnerManager, "runToReport"> {
@@ -396,6 +408,7 @@ function productionDiscoveryComposition(
   const deps = productionDiscoveryBffDeps({
     stateRoot: join(stateDir, "bff-state"),
     store: services.uiStore,
+    codingRuntimeSnapshotStore: services.codingRuntimeSnapshots,
     workspaceScriptTrust: services.workspaceScriptTrust,
     workspaceProvisioning: services.provisioning,
     workspaceLifecycle: services.lifecycle,
@@ -480,9 +493,15 @@ function assertProductionDiscovery(deps: UiHandlerDeps): void {
     deps.codingRuntimeHostQualified !== true ||
     deps.codingRuntimeUnavailableReason !== undefined
   ) {
-    throw new Error(
-      `real-binary-journey-unqualified:${String(deps.codingRuntimeUnavailableReason)}`,
-    );
+    // Name the actual composition state instead of losing it: an absent control plane carries NO
+    // unavailable reason (the assembly skipped it entirely — for months this rendered as the
+    // useless "unqualified:undefined"), while a present-but-unqualified host names its reason.
+    const reason =
+      deps.codingRuntimeUnavailableReason ??
+      (deps.codingRuntimeOrchestrator === undefined
+        ? "control-plane-absent (injected store without a codingRuntimeSnapshotStore companion?)"
+        : "unqualified-without-reason");
+    throw new Error(`real-binary-journey-unqualified:${reason}`);
   }
 }
 

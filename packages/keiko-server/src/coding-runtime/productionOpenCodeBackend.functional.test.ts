@@ -28,6 +28,7 @@ import {
 } from "../diagnostics-log.js";
 import { runMigrations } from "../store/schema.js";
 import { createInMemoryUiStore } from "../store/index.js";
+import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import { createVerificationRunnerManager } from "../editor/verificationRunner.js";
 import type { VerificationRunnerManager } from "../editor/verificationRunner.js";
 import { buildActiveWorkspacePointerStoreOverDatabase } from "../task-workspace/active-store.js";
@@ -161,6 +162,39 @@ describe("production OpenCode backend functional pipeline", () => {
     expect(snapshot).not.toContain(OVERSIZED_CALL_ID);
     await stopRun(pipeline.baseUrl, run.runId);
   }, 120_000);
+
+  it("keeps the coding-runtime control plane when a store is injected with its snapshot companion", async () => {
+    // The shared Playwright journey (tests/e2e/servers/coding-runtime-server-shared.mts) injects
+    // its own UiStore into this assembly. Injection suppresses the assembly's own persistence
+    // composition, and until the snapshot-store companion was wired through, that silently
+    // dropped the ENTIRE coding-runtime control plane: the scheduled real-binary lane refused
+    // daily as `real-binary-journey-unqualified:undefined` for two weeks after #2835. This pin
+    // runs in ordinary CI so that composition class can never again survive only in a
+    // scheduled lane.
+    const fixture = await setupWorkspace();
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const deps = productionDiscoveryBffDeps({
+      stateRoot: join(fixture.root, "bff-state-injected"),
+      store: createInMemoryUiStore(),
+      codingRuntimeSnapshotStore: createCodingRuntimeSnapshotStore(db),
+      workspaceLifecycle: fixture.lifecycle,
+      script: fixture.script,
+      uiPort: await reserveLoopbackPort(),
+    });
+    disposers.push(async () => {
+      await deps.codingRuntimeOrchestrator?.shutdown();
+      await deps.dispose?.();
+    });
+    // The control plane must exist: qualification is answered as a boolean, and an unqualified
+    // answer must carry its reason. An absent orchestrator next to an undefined reason is the
+    // silent no-control-plane state this pin forbids.
+    expect(deps.codingRuntimeOrchestrator).toBeDefined();
+    expect(typeof deps.codingRuntimeHostQualified).toBe("boolean");
+    if (deps.codingRuntimeHostQualified === false) {
+      expect(deps.codingRuntimeUnavailableReason).toBeDefined();
+    }
+  }, 60_000);
 
   it("drives the managed OpenCode composition end to end with a scripted child and model gateway", async () => {
     const fixture = await setupWorkspace();

@@ -50,7 +50,6 @@ const stateDir = authorityStateDir();
 const repositoryRoot = authorityRepositoryRoot(stateDir);
 const managedRoot = authorityManagedWorkspaceRoot(stateDir);
 const realBinaryJourney = process.env.KEIKO_E2E_REAL_BINARY === "1";
-const commandModifier = process.platform === "darwin" ? "Meta" : "Control";
 
 function workbench(page: Page): Locator {
   return page.locator('section[aria-label="Coding Workbench"][data-state]');
@@ -255,29 +254,34 @@ async function openRealBinaryEditorBridge(page: Page): Promise<void> {
     .getByRole("button", { name: "Close Coding Workbench window" })
     .click();
   await expect(codingWindow).toHaveCount(0);
-  await trustRealBinaryWorkspaceScripts(page);
+  await assertInheritedWorkspaceTrust(page);
 }
 
-async function trustRealBinaryWorkspaceScripts(page: Page): Promise<void> {
-  const trustResponse = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" &&
-      response.url().endsWith("/api/editor/verification/trust"),
-  );
-  const catalogRefresh = page.waitForResponse(
-    (response) =>
-      response.request().method() === "GET" &&
-      response.url().includes("/api/editor/verification/catalog?projectId="),
-  );
-  await page.keyboard.press(`${commandModifier}+Shift+KeyP`);
-  const query = page.getByRole("combobox", { name: "Command query" });
-  await expect(query).toBeVisible();
-  await query.fill(">Trust Workspace Scripts");
-  const command = page.getByRole("option").filter({ hasText: "Trust Workspace Scripts" }).first();
-  await expect(command).toBeVisible();
-  await command.click();
-  expect((await trustResponse).status()).toBe(200);
-  expect((await catalogRefresh).status()).toBe(200);
+// M11 (#2612/#2686) rebuilt workspace trust around user-facing projects: registering the folder
+// the human chose IS the explicit local-human trust act (`handleCreateProject` grants script
+// trust), provisioning derives that trust onto the managed worktree, managed worktrees are
+// deliberately absent from the trust panel, and the editor palette's `Trust Workspace Scripts`
+// command is unavailable for the active root. The journey therefore registers the fixture
+// repository as a project BEFORE the run provisions its worktree — the exact call the folder
+// picker performs — and later asserts the inherited trust where the old palette step used to be.
+async function registerTrustedRepositoryProject(page: Page): Promise<void> {
+  if (!realBinaryJourney) return;
+  const created = await page.request.post("/api/projects", {
+    headers: { "x-keiko-csrf": "1" },
+    data: { path: repositoryRoot, name: "Authority Fixture Repository" },
+  });
+  expect(created.status()).toBe(201);
+  const body = (await created.json()) as { readonly warning?: unknown };
+  // A registration that leaves the project restricted would silently break the derived worktree
+  // trust the rest of the journey depends on — surface it here, not as a 240s editor timeout.
+  expect(body.warning).toBeUndefined();
+}
+
+async function assertInheritedWorkspaceTrust(page: Page): Promise<void> {
+  // Provisioning derived the repository project's trust onto the managed worktree, so the editor
+  // must open trusted: no restricted-mode banner. The verification activity that follows is the
+  // deep proof — the typecheck script only runs over trusted workspace scripts.
+  await expect(page.getByTestId("workspace-trust-banner-editor")).toHaveCount(0);
 }
 
 async function reopenRealBinaryCodingWorkbench(page: Page): Promise<void> {
@@ -506,6 +510,7 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
   // only to this paired window from here on.
   await openWorkbench(page, launcherPairingFragment());
   await bindFixtureWorkspace(page);
+  await registerTrustedRepositoryProject(page);
 
   // #2386 moved the default off full access; #2644 made the mode product-wide, so the default now
   // comes from the autonomy policy and lands one step NARROWER still — the Workbench reports the

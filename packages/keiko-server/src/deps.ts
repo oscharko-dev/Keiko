@@ -837,6 +837,12 @@ export interface BuildHandlerDepsOptions {
   readonly uiDbPath?: string | undefined;
   // Optional injected UiStore (tests); a node store opened at the resolved path is built otherwise.
   readonly store?: UiStore | undefined;
+  // Companion to an injected `store`: the coding-runtime control plane is assembled only when a
+  // snapshot store exists, so a composition that injects a UiStore must inject this alongside it
+  // or it silently loses the entire coding runtime (the daily real-binary lane refused as
+  // `unqualified:undefined` for two weeks after #2835 injected a store without one). Ignored
+  // when no store is injected — the UI-database path composes its own over the shared handle.
+  readonly codingRuntimeSnapshotStore?: CodingRuntimeSnapshotStore | undefined;
   // Optional injected governed update session manager (tests); production creates the real
   // state-dir-backed updater session manager.
   readonly updateSession?: UpdateSessionManager | undefined;
@@ -1704,11 +1710,16 @@ interface ComposedPersistence {
   // Issue #446: the singleton active-workspace pointer store, composed over the SAME handle (schema.ts
   // §V8). Undefined when a UiStore is injected (tests supply their own lifecycle service).
   readonly activeWorkspacePointerStore: ActiveWorkspacePointerStore | undefined;
+  // The coding-runtime control plane is only assembled when this store exists, so an injected
+  // UiStore MUST be able to bring its own snapshot store along — otherwise the composition
+  // silently loses the entire coding runtime (the daily real-binary lane failed exactly this
+  // way for two weeks after #2835 injected a store without one).
   readonly codingRuntimeSnapshotStore: CodingRuntimeSnapshotStore | undefined;
 }
 
 function composePersistence(
   injected: UiStore | undefined,
+  injectedCodingRuntimeSnapshots: CodingRuntimeSnapshotStore | undefined,
   resolvedUiDbPath: string,
   redactString: (value: string) => string,
   env: EnvSource,
@@ -1720,7 +1731,7 @@ function composePersistence(
       relationship: undefined,
       workspaceInstanceStore: undefined,
       activeWorkspacePointerStore: undefined,
-      codingRuntimeSnapshotStore: undefined,
+      codingRuntimeSnapshotStore: injectedCodingRuntimeSnapshots,
     };
   }
   const db = openNodeUiDatabase(resolvedUiDbPath);
@@ -2943,6 +2954,7 @@ function buildPersistenceBundle(
 ): PersistenceBundle {
   const persistence = composePersistence(
     options.store,
+    options.codingRuntimeSnapshotStore,
     resolvedUiDbPath,
     redactString,
     options.env,
