@@ -1,10 +1,12 @@
 import { Buffer } from "node:buffer";
 import {
   closeSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   readdirSync,
   readlinkSync,
   realpathSync,
@@ -370,24 +372,69 @@ export function readZipArchiveEntries(archivePath) {
   return records;
 }
 
+/** Reads exactly `length` bytes at `position`, refusing a short file as truncation. */
+function readAt(fd, position, length) {
+  const buffer = Buffer.alloc(length);
+  let filled = 0;
+  while (filled < length) {
+    const got = readSync(fd, buffer, filled, length - filled, position + filled);
+    if (got === 0) throw new Error("ZIP archive is truncated");
+    filled += got;
+  }
+  return buffer;
+}
+
+/** The entry's proven bytes, read through the descriptor — never the whole archive. */
+function extractEntryData(fd, entry) {
+  const header = readAt(fd, entry.localOffset, 30);
+  if (header.readUInt32LE(0) !== LOCAL_FILE_HEADER) {
+    throw new Error(`ZIP entry ${entry.rawName} has a malformed local header`);
+  }
+  const nameLength = header.readUInt16LE(26);
+  const extraLength = header.readUInt16LE(28);
+  const compressed = readAt(
+    fd,
+    entry.localOffset + 30 + nameLength + extraLength,
+    entry.compressedSize,
+  );
+  const data = inflatedEntryData(compressed, entry);
+  if (data.byteLength !== entry.size || crc32(data) !== entry.checksum) {
+    throw new Error(`ZIP entry ${entry.rawName} does not match its declared size or checksum`);
+  }
+  return data;
+}
+
 /**
- * Extracts every file entry of the archive under the target root, ONE entry in memory at a time —
- * a staged runtime artifact expands to gigabytes, and materialising every inflated entry at once
- * (as readZipArchiveEntries does) holds the whole payload in memory (Codex finding on #3055).
- * Same contract otherwise: traversal-safe names, proven sizes and checksums, fail closed.
+ * Extracts every file entry of the archive under the target root through WINDOWED descriptor
+ * reads — the end-of-central-directory tail, the central directory, and then one entry's
+ * compressed stream at a time. A staged runtime artifact is hundreds of megabytes compressed and
+ * gigabytes inflated; neither the whole archive nor more than one inflated entry may live in
+ * memory at once (Codex findings on #3055). Same contract as the reader otherwise:
+ * traversal-safe names, proven sizes and checksums, fail closed.
  */
 export function extractZipArchiveEntries(archivePath, targetRoot) {
-  const bytes = readFileSync(archivePath);
-  const end = endOfCentralDirectoryOffset(bytes);
-  const count = bytes.readUInt16LE(end + 10);
-  let offset = bytes.readUInt32LE(end + 16);
-  for (let index = 0; index < count; index += 1) {
-    const entry = readCentralEntry(bytes, offset);
-    if (!entry.rawName.endsWith("/")) {
-      const path = join(targetRoot, normalizedEntryName(entry.rawName));
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, centralEntryData(bytes, entry));
+  const fd = openSync(archivePath, "r");
+  try {
+    const size = fstatSync(fd).size;
+    const tailLength = Math.min(size, END_OF_CENTRAL_DIRECTORY_MIN_BYTES + 0xffff);
+    const tail = readAt(fd, size - tailLength, tailLength);
+    const eocdInTail = endOfCentralDirectoryOffset(tail);
+    const count = tail.readUInt16LE(eocdInTail + 10);
+    const directoryOffset = tail.readUInt32LE(eocdInTail + 16);
+    const directoryLength = size - tailLength + eocdInTail - directoryOffset;
+    if (directoryLength < 0) throw new Error("ZIP central directory is malformed");
+    const directory = readAt(fd, directoryOffset, directoryLength);
+    let offset = 0;
+    for (let index = 0; index < count; index += 1) {
+      const entry = readCentralEntry(directory, offset);
+      if (!entry.rawName.endsWith("/")) {
+        const path = join(targetRoot, normalizedEntryName(entry.rawName));
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, extractEntryData(fd, entry));
+      }
+      offset = entry.next;
     }
-    offset = entry.next;
+  } finally {
+    closeSync(fd);
   }
 }

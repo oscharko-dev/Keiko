@@ -90,7 +90,7 @@ rules:
       # step itself - dumping the full `set` output pollutes GITHUB_ENV with multi-line
       # values). Rewriting to pwsh/bash risks breaking the Windows production-signing
       # build and cannot be verified on this platform.
-      - portable-assets.yml:146
+      - portable-assets.yml:165
       - portable-assets.yml:235
   adhoc-packages:
     ignore:

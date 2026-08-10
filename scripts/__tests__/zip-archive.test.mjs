@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import yauzl from "yauzl";
 
 import {
+  extractZipArchiveEntries,
   readZipArchiveEntries,
   writeZipArchiveEntries,
   writeZipArchiveFromDirectory,
@@ -325,5 +326,32 @@ describe("readZipArchiveEntries", () => {
     });
 
     expect(() => readZipArchiveEntries(archivePath)).toThrow(/unsafe/u);
+  });
+});
+
+describe("extractZipArchiveEntries", () => {
+  it("extracts nested entries to disk through windowed reads", () => {
+    const root = temporaryRoot();
+    const archivePath = join(root, "extract.zip");
+    writeZipArchiveEntries(archivePath, [
+      { name: "top.txt", data: "top bytes" },
+      { name: "inner/deep/nested.bin", data: Buffer.from([7, 0, 255]) },
+    ]);
+    const target = join(root, "out");
+
+    extractZipArchiveEntries(archivePath, target);
+
+    expect(readFileSync(join(target, "top.txt"), "utf8")).toBe("top bytes");
+    expect([...readFileSync(join(target, "inner", "deep", "nested.bin"))]).toEqual([7, 0, 255]);
+  });
+
+  it("refuses a hostile entry name before writing anything", () => {
+    const root = temporaryRoot();
+    const archivePath = join(root, "hostile-extract.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "../escape.txt", data: "escape" }], {
+      allowUnsafeEntryNames: true,
+    });
+
+    expect(() => extractZipArchiveEntries(archivePath, join(root, "out"))).toThrow(/unsafe/u);
   });
 });

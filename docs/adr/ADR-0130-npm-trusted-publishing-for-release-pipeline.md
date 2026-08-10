@@ -60,13 +60,17 @@ The `publish` job gains one step, immediately after `actions/setup-node` and bef
 
 ```yaml
 - name: Ensure npm supports OIDC trusted publishing
-  run: npm install --global npm@11.18.0
+  run: npm install --global npm@11.16.0
 ```
 
-`11.18.0` is pinned exactly (the latest npm 11.x release as of this decision), matching this
-repository's existing preference for exact, reviewable pins over floating ranges (the GitHub
-Actions SHA-pinning convention) rather than `npm@latest`, which would let an unreviewed npm major
-version land silently in the one job that talks to the public registry with write intent. The
+The pinned version is exactly the governed `EXPECTED_PACKAGE_MANAGER` from
+`scripts/check-runtime-toolchain.mjs` (`npm@11.16.0` as amended 2026-08-10, held in lockstep by
+`scripts/__tests__/release-workflow-npm-pin.test.mjs`): prepack re-verifies the executed npm
+against that same constant, so any other pin here kills every publish from the tag that freezes
+it — the original hand pin (`11.18.0`) did exactly that to the 0.3.1 CI publish. The exact pin
+still matches this repository's preference for reviewable pins over floating ranges rather than
+`npm@latest`, which would let an unreviewed npm major version land silently in the one job that
+talks to the public registry with write intent. The
 root `packageManager` and `engines.npm` fields are deliberately left unchanged — every other job
 and every contributor's local npm 10.9.x continues to work; only the publish job's own runner
 needs the newer CLI, and only for the duration of that job.
@@ -137,7 +141,7 @@ that secret.
 - The dist-tag repair path (D3) still depends on a classic token in the rare case it is needed.
   This is a deliberate, narrow, documented exception, not a silent gap: it fails closed with an
   actionable message rather than attempting an unauthenticated write.
-- npm CLI `11.18.0` is a minor/patch line ahead of the `10.9.8` this repository otherwise targets;
+- The pinned publish npm is a minor/patch line ahead of the npm this repository otherwise bundles;
   it is scoped to one job specifically to avoid introducing an untested npm major version into
   every other CI job and every contributor's local environment.
 

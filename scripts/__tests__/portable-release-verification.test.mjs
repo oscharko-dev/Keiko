@@ -635,7 +635,7 @@ describe("collectEvaluationArtifactDigests", () => {
   function zipFetcher(layout, failFor) {
     return (artifactId, destination) => {
       const declared = DECLARED.find((artifact) => artifact.id === artifactId);
-      if (declared.name === failFor) return { status: 1 };
+      if (declared === undefined || declared.name === failFor) return { status: 1 };
       const prefix = layout === "nested" ? "inner/" : "";
       writeZipArchiveEntries(destination, [
         { name: `${prefix}${declared.name}.zip`, data: `bytes of ${declared.name}` },
