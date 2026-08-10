@@ -3,6 +3,7 @@ import * as pathModule from "node:path";
 import { readFileSync } from "node:fs";
 import { spawnSync as realSpawnSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
+import { envValue } from "../check-release-required-workflow-names.mjs";
 import {
   assertTagKeepsBetaSequenceMonotonic,
   nextBetaTag,
@@ -231,7 +232,13 @@ describe("hermetic end-to-end (scripted gh double)", () => {
     // which of the two it is answering.
     if (line.includes("/branches/")) {
       if (overrides.releaseBranchExists === true) return { status: 0, stdout: "{}", stderr: "" };
-      return { status: 1, stdout: "", stderr: overrides.branchLookupError ?? "gh: Not Found" };
+      // The double answers with gh's REAL absence message: an invented "gh: Not Found" here let
+      // the production needle miss the live "(HTTP 404)" and refuse a genuine absence (0.3.1).
+      return {
+        status: 1,
+        stdout: "",
+        stderr: overrides.branchLookupError ?? "gh: Branch not found (HTTP 404)",
+      };
     }
     // The release-owner allowlist comes from the repository variable the release workflow injects.
     if (line.includes("/actions/variables/KEIKO_RELEASE_OWNER_GITHUB_LOGINS")) {
@@ -359,6 +366,8 @@ describe("hermetic end-to-end (scripted gh double)", () => {
         "--json status,conclusion,headSha",
         '{"status":"completed","conclusion":"success","headSha":"b2e3900a","event":"workflow_dispatch","headBranch":"dev","workflowDatabaseId":7,"attempt":1}',
       ],
+      // The attempt-coherence re-read after artifacts and bytes are gathered.
+      ["--json attempt", '{"attempt":1}'],
       // The run's artifact listing: the public-release manifest records these immutable ids so
       // the npm publisher can refuse a rerun's replacement artifacts.
       [
@@ -527,6 +536,53 @@ describe("hermetic end-to-end (scripted gh double)", () => {
       }
     });
 
+    it("refuses a public release from a run that did not conclude entirely successfully", () => {
+      // The npm publisher re-verifies the recorded run and requires conclusion "success"; a
+      // lenient producer would mint a customer-visible release the documented promotion step can
+      // never accept (Codex finding on #3054). Betas keep the job-scoped rule.
+      const recorded = [];
+      expect(() =>
+        publicRun(recorded, {
+          answers: [
+            ["compare/dev...", JSON.stringify({ status: "behind" })],
+            [
+              "--json status,conclusion,headSha",
+              JSON.stringify({
+                status: "completed",
+                conclusion: "failure",
+                headSha: "b2e3900a",
+                event: "workflow_dispatch",
+                headBranch: "dev",
+                workflowDatabaseId: 7,
+                attempt: 1,
+              }),
+            ],
+          ],
+        }),
+      ).toThrow(/a public release requires an entirely successful run/u);
+      expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
+      expect(recorded.some((line) => line.includes("git/refs"))).toBe(false);
+    });
+
+    it("encodes the release-source branch as one path parameter", () => {
+      // A branch like release/0.3 embedded raw splits into two path segments, 404s, and silently
+      // hands release authority to the default branch (Codex finding on #3054). The expected
+      // branch derives from release.yml itself — the resolver's single source — so renaming the
+      // release base branch cannot break this test for an unrelated reason.
+      const releaseWorkflow = readFileSync(
+        pathModule.resolve(import.meta.dirname, "..", "..", ".github", "workflows", "release.yml"),
+        "utf8",
+      );
+      const encodedBranch = encodeURIComponent(envValue(releaseWorkflow, "RELEASE_BASE_BRANCH"));
+      const recorded = [];
+      publicRun(recorded, {
+        releaseBranchExists: true,
+        answers: [[`compare/${encodedBranch}...`, JSON.stringify({ status: "behind" })]],
+      });
+      expect(recorded.some((line) => line.includes(`branches/${encodedBranch}`))).toBe(true);
+      expect(recorded.some((line) => line.includes(`compare/${encodedBranch}...`))).toBe(true);
+    });
+
     it("refuses when the release-owner allowlist does not resolve", () => {
       const recorded = [];
       const saved = process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;
@@ -562,6 +618,22 @@ describe("hermetic end-to-end (scripted gh double)", () => {
       ).toThrow(/must not assert seals it never proved/u);
       expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
       expect(recorded.some((line) => line.includes("git/refs"))).toBe(false);
+    });
+
+    it("refuses when the run moves to a new attempt while publishing", () => {
+      // Bytes, artifact ids and the recorded attempt must describe ONE execution: a rerun in the
+      // publish window would blend the old attempt number with the rerun's artifacts (Codex
+      // finding on #3055).
+      const recorded = [];
+      expect(() =>
+        publicRun(recorded, {
+          answers: [
+            ["compare/dev...", JSON.stringify({ status: "behind" })],
+            ["--json attempt", '{"attempt":2}'],
+          ],
+        }),
+      ).toThrow(/moved to attempt 2 while publishing/u);
+      expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
     });
 
     it("keeps an allowlist the environment already provides", () => {

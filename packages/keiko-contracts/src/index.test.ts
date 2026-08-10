@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+
+import { createRequire } from "node:module";
 import {
   KEIKO_CONTRACTS_VERSION,
   HARNESS_CODES,
@@ -183,14 +185,20 @@ import {
   isGitDeliveryPolicyDecisionOutcome,
 } from "./index.js";
 
+// The packaged manifest owns the version; a literal here re-states it and goes
+// stale on every release cut (KfQ findings on #3055).
+const { version: packageVersion } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
+
 describe("keiko-contracts package surface", () => {
   it("exports governed attachment MIME normalization through the package entrypoint", () => {
     expect(MAX_ATTACHMENT_MIME_BYTES).toBe(255);
     expect(normalizeAttachmentMime(" IMAGE/PNG ; charset=binary ")).toBe("image/png");
   });
 
-  it("exposes the version constant pinned at 0.3.1", () => {
-    expect(KEIKO_CONTRACTS_VERSION).toBe("0.3.1");
+  it("exposes the version constant pinned at the package version", () => {
+    expect(KEIKO_CONTRACTS_VERSION).toBe(packageVersion);
   });
 
   it("HARNESS_CODES.LIMIT_ITERATIONS is the canonical code string", () => {

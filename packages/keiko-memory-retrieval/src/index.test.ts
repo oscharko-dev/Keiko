@@ -1,10 +1,18 @@
 import { describe, expect, it } from "vitest";
 
+import { createRequire } from "node:module";
+
 import * as api from "./index.js";
+
+// The packaged manifest owns the version; a literal here re-states it and goes
+// stale on every release cut (KfQ findings on #3055).
+const { version: packageVersion } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
 
 describe("public API surface", () => {
   it("exports the pinned package version literal", () => {
-    expect(api.KEIKO_MEMORY_RETRIEVAL_VERSION).toBe("0.3.1");
+    expect(api.KEIKO_MEMORY_RETRIEVAL_VERSION).toBe(packageVersion);
   });
 
   it("exports the documented default constants with the documented values", () => {

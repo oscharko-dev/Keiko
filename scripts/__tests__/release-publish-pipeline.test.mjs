@@ -52,7 +52,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -513,12 +513,19 @@ function portableUpdateEligibility() {
 }
 
 // Shared prologue injected into each stub: append-only call log + tiny JSON state file
-// so a stub can flip "published"/"tagged" as the orchestrator drives it.
+// so a stub can flip "published"/"tagged" as the orchestrator drives it. The real ZIP writer is
+// imported so the artifact-by-id endpoint can answer with archives the production reader
+// actually parses.
+const ZIP_ARCHIVE_LIB_URL = pathToFileURL(
+  resolve(fileURLToPath(import.meta.url), "..", "..", "lib", "zip-archive.mjs"),
+).href;
+
 function stubPrologue(logFile, stateFile) {
   return [
     'import { Buffer } from "node:buffer";',
     'import { createHash } from "node:crypto";',
-    'import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";',
+    'import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";',
+    `import { writeZipArchiveEntries } from ${JSON.stringify(ZIP_ARCHIVE_LIB_URL)};`,
     `const LOG = ${JSON.stringify(logFile)};`,
     `const STATE = ${JSON.stringify(stateFile)};`,
     `const VERSION = ${JSON.stringify(RELEASE_VERSION)};`,
@@ -542,10 +549,33 @@ function ghStubBody() {
     "  process.exit(0);",
     "}",
     'if (sub === "api") {',
-    // The artifact listing must answer before the generic runs branch: its URL also contains
-    // /actions/runs/, and the collector refuses when declared ids disagree with it.
-    '  if (argv[1] && argv[1].includes("/artifacts?per_page")) {',
-    "    writeFileSync(1, JSON.stringify({ artifacts: state().runArtifactListing || [] }));",
+    // Artifact-by-id endpoints: the record probe and the binary zip download. Answered before
+    // the generic runs branch, and refusing when the fixture marks the run's artifacts
+    // unavailable.
+    '  if (argv[1] && argv[1].includes("/actions/artifacts/")) {',
+    "    if (state().runArtifactsUnavailable) process.exit(1);",
+    "    const artifactId = Number(argv[1].split('/artifacts/')[1].split('/')[0]);",
+    "    const listed = (state().runArtifactListing || []).find((entry) => entry.id === artifactId);",
+    "    if (!listed) process.exit(1);",
+    '    if (argv[1].endsWith("/zip")) {',
+    "      const wanted = (state().uploadedAssets || []).filter((asset) => {",
+    "        if (listed.name.includes('windows')) return asset.name.startsWith('keiko-windows-');",
+    "        if (listed.name.includes('arm64')) return asset.name === 'keiko-macos-arm64.zip';",
+    "        return asset.name === 'keiko-macos-x64.zip';",
+    "      });",
+    "      const prefix = state().nestRunArtifacts ? 'nested/' : '';",
+    "      const records = wanted.map((asset) => {",
+    "        let bytes = Buffer.from(asset.content || '', 'base64');",
+    "        if (state().tamperRunArtifacts) bytes = Buffer.concat([bytes, Buffer.from('x')]);",
+    "        return { name: prefix + asset.name, data: bytes };",
+    "      });",
+    "      const zipPath = LOG + '.artifact-' + artifactId + '.zip';",
+    "      writeZipArchiveEntries(zipPath, records);",
+    "      writeFileSync(1, readFileSync(zipPath));",
+    "      rmSync(zipPath, { force: true });",
+    "      process.exit(0);",
+    "    }",
+    "    writeFileSync(1, JSON.stringify({ name: listed.name, expired: listed.expired === true, workflow_run: { id: Number(state().workflowRunId || 31300595709) } }));",
     "    process.exit(0);",
     "  }",
     '  if (argv[1] && argv[1].includes("/actions/runs/")) {',
@@ -565,35 +595,6 @@ function ghStubBody() {
     "    process.exit(0);",
     "  }",
     '  process.stdout.write(JSON.stringify({ state: "APPROVED", user: { login: "release-owner" } }));',
-    "  process.exit(0);",
-    "}",
-    'if (sub === "run" && argv[1] === "download") {',
-    '  const dirIndex = argv.indexOf("--dir");',
-    '  const nameIndex = argv.indexOf("--name");',
-    // The production caller always passes --dir and --name. If it ever stops, the double must
-    // refuse loudly rather than default anywhere: an empty dir would concatenate to
-    // filesystem-root paths, and a silent fallback would keep the suite green over the
-    // regression (KfQ findings on #3054).
-    "  if (dirIndex < 0 || !argv[dirIndex + 1]) { process.stderr.write('gh double: run download requires --dir\\n'); process.exit(1); }",
-    "  if (nameIndex < 0 || !argv[nameIndex + 1]) { process.stderr.write('gh double: run download requires --name\\n'); process.exit(1); }",
-    "  const dir = argv[dirIndex + 1];",
-    "  const artifact = argv[nameIndex + 1];",
-    "  const current = state();",
-    "  if (current.runArtifactsUnavailable) process.exit(1);",
-    "  const wanted = (current.uploadedAssets || []).filter((asset) => {",
-    "    if (artifact.includes('windows')) return asset.name.startsWith('keiko-windows-');",
-    "    if (artifact.includes('arm64')) return asset.name === 'keiko-macos-arm64.zip';",
-    "    return asset.name === 'keiko-macos-x64.zip';",
-    "  });",
-    // gh run download may nest the files one directory deep; the publisher must find them either
-    // way, so the stub reproduces the nested layout.
-    "  const target = current.nestRunArtifacts ? dir + '/nested' : dir;",
-    "  if (current.nestRunArtifacts) mkdirSync(target, { recursive: true });",
-    "  for (const asset of wanted) {",
-    "    let bytes = Buffer.from(asset.content || '', 'base64');",
-    "    if (current.tamperRunArtifacts) bytes = Buffer.concat([bytes, Buffer.from('x')]);",
-    "    writeFileSync(target + '/' + asset.name, bytes);",
-    "  }",
     "  process.exit(0);",
     "}",
     // An existing release answers the isDraft,assets probe. An interrupted evaluation publish
@@ -1084,7 +1085,16 @@ const isDistTagView = (line) => isView(line) && line.includes("dist-tags.");
 const RELEASE_VERSION_IS_PRERELEASE = RELEASE_VERSION.includes("-");
 // An explicit empty value blocks release-publish's intentional local `.env` fallback, keeping the
 // no-token scenarios hermetic even when a developer has registry credentials in the repository.
-const NO_REGISTRY_TOKEN_ENV = { NODE_AUTH_TOKEN: undefined, NPM_TOKEN: "" };
+// These scenarios model CI trusted publishing, and CI always announces its OIDC endpoint — the
+// auth preflight refuses a run that has neither a token nor that signal.
+const NO_REGISTRY_TOKEN_ENV = {
+  NODE_AUTH_TOKEN: undefined,
+  NPM_TOKEN: "",
+  // Both values are required for npm's OIDC identity exchange; the URL alone cannot mint a
+  // token (CodeRabbit finding on #3055).
+  ACTIONS_ID_TOKEN_REQUEST_URL: "https://actions.example/token-request",
+  ACTIONS_ID_TOKEN_REQUEST_TOKEN: "actions-oidc-request-bearer",
+};
 
 describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
   "release-publish pipeline (real orchestrator, stubbed npm/gh/git)",
@@ -1664,7 +1674,9 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       const publishLine = lastRun.calls.find((l) => l.startsWith('npm ["publish"'));
       expect(publishLine).toContain('"--access","public"');
       expect(publishLine).toContain('"--tag","latest"');
-      expect(publishLine).toContain('"--provenance"');
+      // A token publish carries no provenance attestation: npm can attest only where an OIDC
+      // provider exists, and the unconditional flag killed every local operator publish (0.3.1).
+      expect(publishLine).not.toContain('"--provenance"');
       expect(publishLine).toContain('"--ignore-scripts"');
       expect(publishLine).not.toContain('"--dry-run"');
 
@@ -1955,6 +1967,47 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.stdout).not.toContain("PASS -");
     });
 
+    it("treats a lone OIDC request URL as no auth path", () => {
+      // The identity exchange needs BOTH GitHub-issued values; a URL without its bearer cannot
+      // mint a token, and counting it as auth would fail twenty minutes later at npm publish.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: false },
+        portableAssets: false,
+        qualificationEnv: {
+          NODE_AUTH_TOKEN: undefined,
+          NPM_TOKEN: "",
+          ACTIONS_ID_TOKEN_REQUEST_URL: "https://actions.example/token-request",
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: undefined,
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("no npm auth path is available");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses before any gate work when neither a token nor an OIDC endpoint exists", () => {
+      // The 0.3.1 operator runs discovered missing auth only after the twenty-minute gate chain;
+      // the preflight answers the question first.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: false },
+        portableAssets: false,
+        qualificationEnv: {
+          NODE_AUTH_TOKEN: undefined,
+          NPM_TOKEN: "",
+          ACTIONS_ID_TOKEN_REQUEST_URL: undefined,
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: undefined,
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("no npm auth path is available");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["run","prepack"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
     it("publishes with no npm registry token configured, matching OIDC trusted publishing in CI", () => {
       // Unlike the shared npmStub() factory, model `publish` as ALSO fixing the dist-tag —
       // that is what real `npm publish --tag <tag>` does atomically on first publish. This
@@ -1992,7 +2045,10 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.status).toBe(0);
       expect(lastRun.stdout).toContain(`PUBLISH ${RELEASE_SPEC}`);
       expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
-      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(true);
+      const publishLine = lastRun.calls.find((l) => l.startsWith('npm ["publish"'));
+      expect(publishLine).toBeDefined();
+      // Where the OIDC endpoint exists, the publish attests provenance — and only there.
+      expect(publishLine).toContain('"--provenance"');
       // The whole point of this scenario: no dist-tag WRITE was needed or attempted.
       expect(lastRun.calls.some((l) => l.startsWith('npm ["dist-tag","add"'))).toBe(false);
     });

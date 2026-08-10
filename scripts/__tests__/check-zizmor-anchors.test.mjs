@@ -18,7 +18,7 @@ const CONFIG = `rules:
       - ci.yml:4
   adhoc-packages:
     ignore:
-      - ci.yml:99
+      - ci.yml:6
 `;
 
 const CI = [
@@ -27,6 +27,7 @@ const CI = [
   "      uses: actions/cache@abc # v6",
   "        shell: cmd",
   "      run: echo",
+  "      run: npm install --global npm@11.16.0",
 ].join("\n");
 const OTHER = ["      uses: actions/cache@abc # v6"].join("\n");
 
@@ -38,7 +39,7 @@ describe("zizmor ignore anchors", () => {
       { rule: "cache-poisoning", file: "ci.yml", line: 3 },
       { rule: "cache-poisoning", file: "other.yml", line: 1 },
       { rule: "misfeature", file: "ci.yml", line: 4 },
-      { rule: "adhoc-packages", file: "ci.yml", line: 99 },
+      { rule: "adhoc-packages", file: "ci.yml", line: 6 },
     ]);
   });
 
@@ -82,9 +83,20 @@ describe("zizmor ignore anchors", () => {
   });
 
   it("leaves a rule it does not know how to position-check unenforced rather than wrong", () => {
-    expect(anchorFailures([{ rule: "adhoc-packages", file: "ci.yml", line: 99 }], read)).toEqual(
-      [],
+    expect(
+      anchorFailures([{ rule: "template-injection", file: "ci.yml", line: 99 }], read),
+    ).toEqual([]);
+  });
+
+  // The gap CodeRabbit named on #3055: the release.yml npm pin shifted twice in one day and no
+  // checker noticed until the required job was red. adhoc anchors are position-checked now.
+  it("fails a drifted adhoc-packages anchor and names the corrected line", () => {
+    const shifted = ["# inserted above the install step", ...CI.split("\n")].join("\n");
+    const failures = anchorFailures(
+      [{ rule: "adhoc-packages", file: "ci.yml", line: 6 }],
+      (file) => (file === "ci.yml" ? shifted : read(file)),
     );
+    expect(failures).toEqual([expect.stringContaining("ci.yml:7")]);
   });
 
   // The gap this map closed: `misfeature` anchors at a step's `shell:` line, and a drifted one made

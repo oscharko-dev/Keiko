@@ -7,7 +7,10 @@ import { fileURLToPath } from "node:url";
 const EXPECTED_NODE_ENGINE = ">=24.18.0 <25";
 const EXPECTED_NODE_BASELINE = "24.18.0";
 const EXPECTED_NPM_ENGINE = "11.16.0";
-const EXPECTED_PACKAGE_MANAGER = "npm@11.16.0";
+// Exported: release.yml pins its publish npm to this exact governed version, and the lockstep
+// test compares the workflow line against THIS constant — the 0.3.1 CI publish died on a drifted
+// hand-maintained pin (11.18.0) that the tag then froze forever.
+export const EXPECTED_PACKAGE_MANAGER = "npm@11.16.0";
 const VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)$/u;
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 

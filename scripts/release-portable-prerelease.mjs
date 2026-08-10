@@ -59,6 +59,7 @@ import { resolveHostExecutable } from "./lib/host-executable.mjs";
 // validates the pushed tag — restating it here would let this lane mint a tag the workflow
 // then rejects (review finding on #3043).
 import { BETA_INDEX, GOVERNED_BETA_TAG_RE, isExactReleaseTag } from "./release-tag-contract.mjs";
+import { resolveReleaseOwnerAllowlist } from "./lib/release-owner-allowlist.mjs";
 import {
   buildPortableEvaluationManifest,
   PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
@@ -902,14 +903,20 @@ function publicReleaseSourceBranch(repository) {
  * definitive 404 answers "absent"; anything else refuses.
  */
 function branchExists(repository, branch) {
+  // Encoded as ONE path parameter: a branch like release/0.3 embedded raw would split into two
+  // path segments, 404, and silently hand release authority to the default branch while the
+  // configured branch was alive (Codex finding on #3054).
   const result = processRunner(
     resolveHostExecutable("gh"),
-    ["api", `repos/${repository}/branches/${branch}`],
+    ["api", `repos/${repository}/branches/${encodeURIComponent(branch)}`],
     { cwd: repoRoot, encoding: "utf8" },
   );
   if (result.error !== undefined) fail(`gh could not spawn: ${result.error.message}`);
   if (result.status === 0) return true;
-  if (String(result.stderr ?? "").includes("Not Found")) return false;
+  // Matched on the HTTP status gh always embeds, not on prose: the live message is
+  // "Branch not found (HTTP 404)" while an earlier needle expected "Not Found", and the miss
+  // sent a genuine absence into the refusal branch (the 0.3.1 release outage).
+  if (/\(HTTP 404\)/u.test(String(result.stderr ?? ""))) return false;
   fail(
     `the release branch lookup for ${branch} did not resolve (${String(result.stderr ?? "").trim()}) — refusing to guess which branch is the release source.`,
   );
@@ -932,7 +939,11 @@ function branchExists(repository, branch) {
 function assertPublicReleaseSourceIsApproved(commitSha, repository) {
   assertPublisherCheckoutMatches(commitSha);
   const branch = publicReleaseSourceBranch(repository);
-  const compare = ghJson(["api", `repos/${repository}/compare/${branch}...${commitSha}`]);
+  // The basehead is one path segment; an unencoded slash in the branch name would split it.
+  const compare = ghJson([
+    "api",
+    `repos/${repository}/compare/${encodeURIComponent(branch)}...${commitSha}`,
+  ]);
   if (compare.status !== "identical" && compare.status !== "behind") {
     fail(
       `commit ${commitSha} is not contained in ${branch} (compare status "${compare.status}") — a public release must be cut from integrated source, never from an unmerged branch.`,
@@ -963,34 +974,18 @@ function assertPublisherCheckoutMatches(commitSha) {
   }
 }
 
-/** The `{"value":"..."}` payload of a repository-variable read, or undefined when unusable. */
-function parsedVariableValue(stdout) {
-  try {
-    const { value } = JSON.parse(String(stdout ?? ""));
-    return typeof value === "string" && value.trim() !== "" ? value : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /**
- * The allowlist naming who may approve a release. `.github/workflows/release.yml` injects it into
- * the npm publisher's environment, but a local operator shell running the documented
- * `--public-release` command does not carry it — and the approval verifier refuses EVERY approval
- * over an empty allowlist, so the documented prerequisite would deterministically abort (Codex
- * finding on #3054). When the environment does not provide it, resolve the same repository
- * variable the workflow reads; an allowlist that does not resolve refuses rather than guessing.
+ * The allowlist resolution has ONE owner in scripts/lib/release-owner-allowlist.mjs; this wrapper
+ * only binds it to this script's process seam and refusal semantics. An allowlist that does not
+ * resolve refuses rather than guessing.
  */
 function releaseOwnerAllowlist(repository) {
-  const configured = process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;
-  if (typeof configured === "string" && configured.trim() !== "") return configured;
-  const result = processRunner(
-    resolveHostExecutable("gh"),
-    ["api", `repos/${repository}/actions/variables/KEIKO_RELEASE_OWNER_GITHUB_LOGINS`],
-    { cwd: repoRoot, encoding: "utf8" },
-  );
-  if (result.error !== undefined) fail(`gh could not spawn: ${result.error.message}`);
-  const value = result.status === 0 ? parsedVariableValue(result.stdout) : undefined;
+  const value = resolveReleaseOwnerAllowlist({
+    configured: process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS,
+    repository,
+    runGh: (args) =>
+      processRunner(resolveHostExecutable("gh"), args, { cwd: repoRoot, encoding: "utf8" }),
+  });
   if (value === undefined) {
     fail(
       "the release-owner allowlist did not resolve: set KEIKO_RELEASE_OWNER_GITHUB_LOGINS or grant this checkout a gh login that can read the repository variable — an empty allowlist would refuse every approval.",
@@ -1088,9 +1083,17 @@ export function runPortablePrerelease(argv) {
   const runId = options.runId ?? dispatchWorkflow(options.ref);
   log(`waiting for workflow run ${runId} ...`);
   const view = waitForRun(runId, options.ref);
-  // A "failure" conclusion is still publishable on purpose: the run-level conclusion aggregates
-  // non-gating lanes (the evaluation lane may fail), while the jobs that actually produce the
-  // published assets are separately and strictly asserted by assertStagingJobsSucceeded below.
+  // For a BETA a "failure" conclusion is still publishable on purpose: the run-level conclusion
+  // aggregates non-gating lanes, while the jobs that actually produce the published assets are
+  // separately and strictly asserted by assertStagingJobsSucceeded below. A PUBLIC release
+  // demands overall success: the npm publisher re-verifies the recorded run and requires
+  // conclusion "success", so a lenient producer here would mint a customer-visible release the
+  // documented promotion step can never accept (Codex finding on #3054).
+  if (options.publicRelease && view.conclusion !== "success") {
+    fail(
+      `run ${runId} concluded ${view.conclusion}; a public release requires an entirely successful run — rerun the workflow and publish from a green run.`,
+    );
+  }
   if (view.conclusion !== "success" && view.conclusion !== "failure") {
     fail(`run ${runId} concluded ${view.conclusion}; refusing to publish from it.`);
   }
@@ -1158,12 +1161,30 @@ function evaluationArtifactIdentities(runId) {
 }
 
 /**
+ * The downloaded bytes, the listed artifact ids and the recorded attempt must all describe ONE
+ * execution. A rerun between the initial run view and this moment would hand the manifest the
+ * old attempt number with the rerun's artifacts and bytes — coherent-looking evidence about a
+ * mixture (Codex finding on #3055). Re-reading the attempt after everything else is gathered
+ * refuses that window.
+ */
+function assertRunAttemptUnchanged(runId, attempt) {
+  const view = ghJson(["run", "view", String(runId), "--json", "attempt"]);
+  if (view.attempt !== attempt) {
+    fail(
+      `run ${String(runId)} moved to attempt ${String(view.attempt)} while publishing (the evidence captured attempt ${String(attempt)}) — a rerun replaced the artifacts; restart the publish against the new run state.`,
+    );
+  }
+}
+
+/**
  * Only a public release is ever promoted to npm `latest`, so only it needs the evidence the
  * publisher re-verifies before promotion. A beta carries its checksums in the body and nothing
  * more — it is never a promotion input.
  */
 function evaluationManifestFor(input) {
   if (!input.options.publicRelease) return undefined;
+  const artifacts = evaluationArtifactIdentities(input.runId);
+  assertRunAttemptUnchanged(input.runId, input.attempt);
   return writeEvaluationManifest(input.workDir, {
     releaseTag: input.tag,
     sourceCommitSha: input.sourceCommitSha,
@@ -1171,7 +1192,7 @@ function evaluationManifestFor(input) {
     workflowPath: WORKFLOW_PATH,
     workflowRunId: input.runId,
     workflowRunAttempt: input.attempt,
-    artifacts: evaluationArtifactIdentities(input.runId),
+    artifacts,
     assets: input.digests,
   });
 }

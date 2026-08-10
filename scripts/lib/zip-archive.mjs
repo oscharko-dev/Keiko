@@ -1,20 +1,23 @@
 import { Buffer } from "node:buffer";
 import {
   closeSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   readdirSync,
   readlinkSync,
   realpathSync,
   renameSync,
   rmSync,
+  writeFileSync,
   writeSync,
   statSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { deflateRawSync } from "node:zlib";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
 
 const LOCAL_FILE_HEADER = 0x04034b50;
 const CENTRAL_DIRECTORY_HEADER = 0x02014b50;
@@ -275,4 +278,187 @@ export function writeZipArchiveFromDirectory(sourceRoot, archivePath, options) {
     preserveSymlinks: options.preserveSymlinks === true,
   });
   writeZipArchiveEntries(archivePath, records);
+}
+
+const END_OF_CENTRAL_DIRECTORY_MIN_BYTES = 22;
+const STORE_METHOD = 0;
+// No single entry may inflate beyond the portable archive ceiling — a hostile directory could
+// declare the uint32 maximum and make maxOutputLength alone admit a 4 GiB allocation.
+const MAX_ENTRY_BYTES = 2 * 1024 * 1024 * 1024;
+
+/**
+ * The EOCD record sits at the very end, optionally followed by a comment of up to 0xffff bytes —
+ * scanned backwards so a comment cannot hide it, and refused outright when absent.
+ */
+function endOfCentralDirectoryOffset(bytes) {
+  const earliest = Math.max(0, bytes.byteLength - END_OF_CENTRAL_DIRECTORY_MIN_BYTES - 0xffff);
+  for (
+    let offset = bytes.byteLength - END_OF_CENTRAL_DIRECTORY_MIN_BYTES;
+    offset >= earliest;
+    offset -= 1
+  ) {
+    if (bytes.readUInt32LE(offset) === END_OF_CENTRAL_DIRECTORY) return offset;
+  }
+  throw new Error("ZIP archive has no end-of-central-directory record");
+}
+
+function readCentralEntry(bytes, offset) {
+  if (offset + 46 > bytes.byteLength || bytes.readUInt32LE(offset) !== CENTRAL_DIRECTORY_HEADER) {
+    throw new Error("ZIP central directory entry is malformed");
+  }
+  const nameLength = bytes.readUInt16LE(offset + 28);
+  return {
+    method: bytes.readUInt16LE(offset + 10),
+    checksum: bytes.readUInt32LE(offset + 16),
+    compressedSize: bytes.readUInt32LE(offset + 20),
+    size: bytes.readUInt32LE(offset + 24),
+    localOffset: bytes.readUInt32LE(offset + 42),
+    rawName: bytes.subarray(offset + 46, offset + 46 + nameLength).toString("utf8"),
+    next:
+      offset + 46 + nameLength + bytes.readUInt16LE(offset + 30) + bytes.readUInt16LE(offset + 32),
+  };
+}
+
+/**
+ * The entry's bytes, decompressed and PROVEN: declared size and CRC-32 must both agree, so a
+ * truncated or tampered stream is a refusal, never partial content.
+ */
+function centralEntryData(bytes, entry) {
+  if (
+    entry.localOffset + 30 > bytes.byteLength ||
+    bytes.readUInt32LE(entry.localOffset) !== LOCAL_FILE_HEADER
+  ) {
+    throw new Error(`ZIP entry ${entry.rawName} has a malformed local header`);
+  }
+  const nameLength = bytes.readUInt16LE(entry.localOffset + 26);
+  const extraLength = bytes.readUInt16LE(entry.localOffset + 28);
+  const start = entry.localOffset + 30 + nameLength + extraLength;
+  const compressed = bytes.subarray(start, start + entry.compressedSize);
+  if (compressed.byteLength !== entry.compressedSize) {
+    throw new Error(`ZIP entry ${entry.rawName} is truncated`);
+  }
+  const data = inflatedEntryData(compressed, entry);
+  if (data.byteLength !== entry.size || crc32(data) !== entry.checksum) {
+    throw new Error(`ZIP entry ${entry.rawName} does not match its declared size or checksum`);
+  }
+  return data;
+}
+
+function inflatedEntryData(compressed, entry) {
+  if (entry.size > MAX_ENTRY_BYTES) {
+    throw new Error(`ZIP entry ${entry.rawName} declares a size beyond the supported ceiling`);
+  }
+  if (entry.method === DEFLATE_METHOD) {
+    // The declared size is the single-entry memory ceiling: without maxOutputLength a hostile
+    // header could make inflate allocate gigabytes before the size check rejects the entry.
+    return inflateRawSync(compressed, { maxOutputLength: entry.size });
+  }
+  if (entry.method === STORE_METHOD) return Buffer.from(compressed);
+  throw new Error(`ZIP entry ${entry.rawName} uses an unsupported compression method`);
+}
+
+/** ZIP64 archives signal themselves through sentinel values; both readers refuse them. */
+function assertZip32Directory(count, directoryOffset) {
+  if (count === 0xffff || directoryOffset === 0xffffffff) {
+    throw new Error("ZIP64 archives are not supported");
+  }
+}
+
+/**
+ * Every file entry of a ZIP32 archive — the writers above and GitHub's artifact endpoint both
+ * produce this shape. Directory markers are skipped; every file name passes the same
+ * traversal-safety rule the writer enforces, so a hostile archive cannot name a path outside
+ * its extraction root. Any structural disagreement throws: fail closed, never partial content.
+ */
+export function readZipArchiveEntries(archivePath) {
+  const bytes = readFileSync(archivePath);
+  const end = endOfCentralDirectoryOffset(bytes);
+  const count = bytes.readUInt16LE(end + 10);
+  const records = [];
+  let offset = bytes.readUInt32LE(end + 16);
+  assertZip32Directory(count, offset);
+  for (let index = 0; index < count; index += 1) {
+    const entry = readCentralEntry(bytes, offset);
+    if (!entry.rawName.endsWith("/")) {
+      records.push({
+        name: normalizedEntryName(entry.rawName),
+        data: centralEntryData(bytes, entry),
+      });
+    }
+    offset = entry.next;
+  }
+  return records;
+}
+
+/** Reads exactly `length` bytes at `position`, refusing a short file as truncation. */
+function readAt(fd, position, length) {
+  const buffer = Buffer.alloc(length);
+  let filled = 0;
+  while (filled < length) {
+    const got = readSync(fd, buffer, filled, length - filled, position + filled);
+    if (got === 0) throw new Error("ZIP archive is truncated");
+    filled += got;
+  }
+  return buffer;
+}
+
+/** The entry's proven bytes, read through the descriptor — never the whole archive. */
+function extractEntryData(fd, entry, archiveSize) {
+  if (entry.localOffset + 30 > archiveSize) {
+    throw new Error(`ZIP entry ${entry.rawName} has a malformed local header`);
+  }
+  const header = readAt(fd, entry.localOffset, 30);
+  if (header.readUInt32LE(0) !== LOCAL_FILE_HEADER) {
+    throw new Error(`ZIP entry ${entry.rawName} has a malformed local header`);
+  }
+  const nameLength = header.readUInt16LE(26);
+  const extraLength = header.readUInt16LE(28);
+  const dataStart = entry.localOffset + 30 + nameLength + extraLength;
+  // Bounds before allocation: the declared compressed size comes from the untrusted directory,
+  // and a value beyond the file must refuse as truncation instead of allocating gigabytes first.
+  if (dataStart + entry.compressedSize > archiveSize) {
+    throw new Error(`ZIP entry ${entry.rawName} is truncated`);
+  }
+  const compressed = readAt(fd, dataStart, entry.compressedSize);
+  const data = inflatedEntryData(compressed, entry);
+  if (data.byteLength !== entry.size || crc32(data) !== entry.checksum) {
+    throw new Error(`ZIP entry ${entry.rawName} does not match its declared size or checksum`);
+  }
+  return data;
+}
+
+/**
+ * Extracts every file entry of the archive under the target root through WINDOWED descriptor
+ * reads — the end-of-central-directory tail, the central directory, and then one entry's
+ * compressed stream at a time. A staged runtime artifact is hundreds of megabytes compressed and
+ * gigabytes inflated; neither the whole archive nor more than one inflated entry may live in
+ * memory at once (Codex findings on #3055). Same contract as the reader otherwise:
+ * traversal-safe names, proven sizes and checksums, fail closed.
+ */
+export function extractZipArchiveEntries(archivePath, targetRoot) {
+  const fd = openSync(archivePath, "r");
+  try {
+    const size = fstatSync(fd).size;
+    const tailLength = Math.min(size, END_OF_CENTRAL_DIRECTORY_MIN_BYTES + 0xffff);
+    const tail = readAt(fd, size - tailLength, tailLength);
+    const eocdInTail = endOfCentralDirectoryOffset(tail);
+    const count = tail.readUInt16LE(eocdInTail + 10);
+    const directoryOffset = tail.readUInt32LE(eocdInTail + 16);
+    assertZip32Directory(count, directoryOffset);
+    const directoryLength = size - tailLength + eocdInTail - directoryOffset;
+    if (directoryLength < 0) throw new Error("ZIP central directory is malformed");
+    const directory = readAt(fd, directoryOffset, directoryLength);
+    let offset = 0;
+    for (let index = 0; index < count; index += 1) {
+      const entry = readCentralEntry(directory, offset);
+      if (!entry.rawName.endsWith("/")) {
+        const path = join(targetRoot, normalizedEntryName(entry.rawName));
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, extractEntryData(fd, entry, size));
+      }
+      offset = entry.next;
+    }
+  } finally {
+    closeSync(fd);
+  }
 }

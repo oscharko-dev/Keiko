@@ -29,6 +29,11 @@ const PORTABLE_EVALUATION_POLICY = "evaluation";
 
 const SHA256_RE = /^[a-f0-9]{64}$/u;
 const COMMIT_RE = /^[a-f0-9]{40}$/u;
+// Declared artifact names reach filesystem paths and API paths in the verifier; the staging
+// artifact names are plain tokens, and anything else (separators, traversal, spaces) is hostile
+// evidence, refused at the validation layer that owns the manifest shape (CodeRabbit finding on
+// #3055).
+const SAFE_ARTIFACT_NAME_RE = /^[A-Za-z0-9._-]+$/u;
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -180,9 +185,14 @@ function provenanceArtifactFailures(manifest) {
   }
   const names = artifacts.filter(isRecord).map((artifact) => artifact.name);
   const failures = artifacts.flatMap((artifact) =>
-    isRecord(artifact) && nonEmptyString(artifact.name) && positiveInteger(artifact.id)
+    // The string check runs BEFORE the regex: test() would coerce a number like 123 into a
+    // matching token (KfQ finding on #3055).
+    isRecord(artifact) &&
+    typeof artifact.name === "string" &&
+    SAFE_ARTIFACT_NAME_RE.test(artifact.name) &&
+    positiveInteger(artifact.id)
       ? []
-      : ["every provenance artifact must carry a name and a positive numeric id."],
+      : ["every provenance artifact must carry a filesystem-safe name and a positive numeric id."],
   );
   if (new Set(names.filter(nonEmptyString)).size !== artifacts.length) {
     failures.push("provenance.artifacts must name each artifact exactly once.");

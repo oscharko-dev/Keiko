@@ -19,6 +19,7 @@ import {
   PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
   portableEvaluationManifestFailures,
 } from "./portable-evaluation-manifest.mjs";
+import { extractZipArchiveEntries } from "./zip-archive.mjs";
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -369,7 +370,8 @@ export function portableReleaseGate(ports) {
         "prepublished portable downloads are not the bytes their workflow run produced",
         runArtifactDigestFailures(
           expectedDownloads,
-          (artifacts) => ports.collectRunArtifactDigests(workflowRunId, artifacts),
+          (artifacts, names) =>
+            ports.collectRunArtifactDigests(repository, workflowRunId, artifacts, names),
           evaluationArtifactNames(ports.targets),
           runArtifacts,
         ),
@@ -410,7 +412,10 @@ function runArtifactDigestFailures(expectedDownloads, collect, artifactNames, de
   if (!exact) {
     return ["the evidence does not declare exactly the run's evaluation artifacts."];
   }
-  const digests = collect(declaredArtifacts);
+  const digests = collect(
+    declaredArtifacts,
+    expectedDownloads.map((expected) => expected.assetName),
+  );
   if (!(digests instanceof Map) || digests.size === 0) {
     return ["the referenced workflow run's evaluation artifacts could not be read."];
   }
@@ -452,46 +457,80 @@ function artifactFiles(root, prefix = "", depth = 1) {
  * objection.
  */
 /**
- * The declared identities must match what the run currently lists: exactly one artifact per
- * declared name, carrying the declared immutable id, not expired. A rerun's replacement
- * artifacts get NEW ids, so a rerun can neither substitute bytes nor make the name-based
- * download below ambiguous — the mismatch refuses before anything is fetched (Codex finding on
- * #3054).
+ * The declared identity must resolve as the run's own artifact: the immutable id answers with
+ * the declared name, belongs to the referenced run, and has not expired. Artifact ids survive
+ * reruns unchanged while replacement artifacts get NEW ids, so verifying and downloading BY ID
+ * means a later rerun can neither substitute bytes nor block the original evidence from
+ * verifying (Codex finding on #3054).
  */
-function runArtifactIdentitiesVerified(gh, runId, declaredArtifacts) {
-  const listing = jsonFromCommand(
-    gh(["api", `repos/{owner}/{repo}/actions/runs/${String(runId)}/artifacts?per_page=100`]),
+function declaredArtifactRecordVerified(gh, repository, runId, declared) {
+  // Bound to the VERIFIED repository, never to the checkout's remote: `gh` expands the
+  // `{owner}/{repo}` placeholders from whatever origin the working copy points at, and the
+  // evidence speaks about exactly one repository (CodeRabbit finding on #3055).
+  const record = jsonFromCommand(
+    gh(["api", `repos/${repository}/actions/artifacts/${String(declared.id)}`]),
   );
-  if (!isRecord(listing) || !Array.isArray(listing.artifacts)) return false;
-  return declaredArtifacts.every((declared) => {
-    const matches = listing.artifacts.filter(
-      (artifact) => isRecord(artifact) && artifact.name === declared.name,
-    );
-    return matches.length === 1 && matches[0].id === declared.id && matches[0].expired !== true;
-  });
+  return (
+    isRecord(record) &&
+    record.name === declared.name &&
+    String(record.workflow_run?.id ?? "") === String(runId) &&
+    record.expired !== true
+  );
 }
 
-export function collectEvaluationArtifactDigests({ gh, hashFile }, runId, declaredArtifacts) {
-  if (!runArtifactIdentitiesVerified(gh, runId, declaredArtifacts)) return new Map();
+/**
+ * Writes the archive's entries under the target root, one entry in memory at a time — a staged
+ * runtime artifact expands to gigabytes. The extractor enforces the traversal-safe entry-name
+ * rule and proves every entry against its declared size and CRC, so a hostile archive throws
+ * here instead of writing anywhere it should not.
+ */
+function extractArtifactArchive(target, archivePath) {
+  extractZipArchiveEntries(archivePath, target);
+}
+
+function artifactDigestsInto(digests, target, hashFile, relevantNames) {
+  for (const [key, path] of artifactFiles(target)) {
+    // The published downloads are matched by bare file name, so that is the key — and ONLY the
+    // names a download can be matched against belong in the map. Every staging artifact also
+    // carries per-target evidence files sharing one name across targets (SHA256SUMS.txt,
+    // sbom.cdx.json, …); treating those as ambiguity refused every real release while proving
+    // nothing (the 0.3.1 latest-promotion outage). A repeated RELEVANT name with disagreeing
+    // bytes is still ambiguous evidence, never resolved by last-write-wins.
+    const name = key.slice(key.lastIndexOf("/") + 1);
+    if (!relevantNames.has(name)) continue;
+    const digest = hashFile(path);
+    const previous = digests.get(name);
+    if (previous !== undefined && previous !== digest) return false;
+    digests.set(name, digest);
+  }
+  return true;
+}
+
+export function collectEvaluationArtifactDigests(
+  { gh, fetchArtifactZip, hashFile },
+  repository,
+  runId,
+  declaredArtifacts,
+  relevantAssetNames,
+) {
   const root = mkdtempSync(join(tmpdir(), "keiko-run-artifacts-"));
   const digests = new Map();
+  const relevantNames = new Set(relevantAssetNames);
   try {
-    for (const { name: artifactName } of declaredArtifacts) {
-      const target = join(root, artifactName);
+    for (const declared of declaredArtifacts) {
+      if (!declaredArtifactRecordVerified(gh, repository, runId, declared)) return new Map();
+      const archivePath = join(root, `${declared.name}.artifact.zip`);
+      if (fetchArtifactZip(declared.id, archivePath)?.status !== 0) return new Map();
+      const target = join(root, declared.name);
       mkdirSync(target, { recursive: true });
-      const args = ["run", "download", String(runId), "--name", artifactName, "--dir", target];
-      if (gh(args)?.status !== 0) return new Map();
-      for (const [key, path] of artifactFiles(target)) {
-        // The published downloads are matched by bare file name, so that is the key. A repeated
-        // name inside one run is ambiguous evidence, not something to resolve by last-write-wins.
-        const name = key.slice(key.lastIndexOf("/") + 1);
-        const digest = hashFile(path);
-        const previous = digests.get(name);
-        if (previous !== undefined && previous !== digest) return new Map();
-        digests.set(name, digest);
-      }
+      extractArtifactArchive(target, archivePath);
+      if (!artifactDigestsInto(digests, target, hashFile, relevantNames)) return new Map();
     }
     return digests;
+  } catch {
+    // A malformed or hostile archive throws in the reader; unreadable is a refusal, never an
+    // absent objection.
+    return new Map();
   } finally {
     rmSync(root, { force: true, recursive: true });
   }

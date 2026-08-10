@@ -127,7 +127,36 @@ describe("portable evaluation manifest", () => {
         }),
         EXPECTED,
       ),
-    ).toContain("every provenance artifact must carry a name and a positive numeric id.");
+    ).toContain(
+      "every provenance artifact must carry a filesystem-safe name and a positive numeric id.",
+    );
+    // A non-string name must refuse BEFORE the regex: test() would coerce a number like 123
+    // into a matching token.
+    expect(
+      portableEvaluationManifestFailures(
+        manifest({
+          provenance: { ...manifest().provenance, artifacts: [{ name: 123, id: 7 }] },
+        }),
+        EXPECTED,
+      ),
+    ).toContain(
+      "every provenance artifact must carry a filesystem-safe name and a positive numeric id.",
+    );
+    // Declared names reach filesystem and API paths in the verifier: separators and traversal
+    // are hostile evidence, refused here at the owning validation layer.
+    expect(
+      portableEvaluationManifestFailures(
+        manifest({
+          provenance: {
+            ...manifest().provenance,
+            artifacts: [{ name: "../escape", id: 7 }],
+          },
+        }),
+        EXPECTED,
+      ),
+    ).toContain(
+      "every provenance artifact must carry a filesystem-safe name and a positive numeric id.",
+    );
     expect(
       portableEvaluationManifestFailures(
         manifest({

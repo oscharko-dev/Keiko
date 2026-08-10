@@ -6,6 +6,8 @@
 // public surface" guarantee load-bearing.
 
 import { describe, expect, it } from "vitest";
+
+import { createRequire } from "node:module";
 import * as evidence from "./index.js";
 import type {
   AuditCode,
@@ -55,9 +57,15 @@ import type {
   WorkflowTerminalStatus,
 } from "./index.js";
 
+// The packaged manifest owns the version; a literal here re-states it and goes
+// stale on every release cut (KfQ findings on #3055).
+const { version: packageVersion } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
+
 describe("keiko-evidence public surface", () => {
   it("exposes the documented value barrel members", () => {
-    expect(evidence.KEIKO_EVIDENCE_VERSION).toBe("0.3.1");
+    expect(evidence.KEIKO_EVIDENCE_VERSION).toBe(packageVersion);
     // Builders and orchestration:
     expect(typeof evidence.buildEvidenceManifest).toBe("function");
     expect(typeof evidence.persistEvidence).toBe("function");
