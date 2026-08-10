@@ -10,6 +10,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  writeFileSync,
   writeSync,
   statSync,
 } from "node:fs";
@@ -367,4 +368,26 @@ export function readZipArchiveEntries(archivePath) {
     offset = entry.next;
   }
   return records;
+}
+
+/**
+ * Extracts every file entry of the archive under the target root, ONE entry in memory at a time —
+ * a staged runtime artifact expands to gigabytes, and materialising every inflated entry at once
+ * (as readZipArchiveEntries does) holds the whole payload in memory (Codex finding on #3055).
+ * Same contract otherwise: traversal-safe names, proven sizes and checksums, fail closed.
+ */
+export function extractZipArchiveEntries(archivePath, targetRoot) {
+  const bytes = readFileSync(archivePath);
+  const end = endOfCentralDirectoryOffset(bytes);
+  const count = bytes.readUInt16LE(end + 10);
+  let offset = bytes.readUInt32LE(end + 16);
+  for (let index = 0; index < count; index += 1) {
+    const entry = readCentralEntry(bytes, offset);
+    if (!entry.rawName.endsWith("/")) {
+      const path = join(targetRoot, normalizedEntryName(entry.rawName));
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, centralEntryData(bytes, entry));
+    }
+    offset = entry.next;
+  }
 }

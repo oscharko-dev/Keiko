@@ -247,14 +247,21 @@ const portableGate = portableReleaseGate({
  * #3054).
  */
 function fetchRunArtifactZip(artifactId, destination) {
-  const result = spawnSync(
-    resolveHostExecutable("gh"),
-    ["api", `repos/${githubRepository()}/actions/artifacts/${String(artifactId)}/zip`],
-    { cwd: repoRoot, encoding: "buffer", maxBuffer: maxPortableArchiveBytes, env: process.env },
-  );
-  if (result.error !== undefined || result.status !== 0) return { status: 1 };
-  writeFileSync(destination, result.stdout);
-  return { status: 0 };
+  // Streamed to the destination through a file descriptor: a staged runtime artifact is hundreds
+  // of megabytes, and capturing it in spawnSync's stdout buffer holds the whole archive in
+  // memory before a single byte lands on disk (Codex finding on #3055).
+  const fd = openSync(destination, "w", 0o600);
+  try {
+    const result = spawnSync(
+      resolveHostExecutable("gh"),
+      ["api", `repos/${githubRepository()}/actions/artifacts/${String(artifactId)}/zip`],
+      { cwd: repoRoot, stdio: ["ignore", fd, "pipe"], env: process.env },
+    );
+    if (result.error !== undefined || result.status !== 0) return { status: 1 };
+    return { status: 0 };
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function verifyPrepublishedStableRelease(rootManifest, options) {

@@ -524,7 +524,7 @@ function stubPrologue(logFile, stateFile) {
   return [
     'import { Buffer } from "node:buffer";',
     'import { createHash } from "node:crypto";',
-    'import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";',
+    'import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";',
     `import { writeZipArchiveEntries } from ${JSON.stringify(ZIP_ARCHIVE_LIB_URL)};`,
     `const LOG = ${JSON.stringify(logFile)};`,
     `const STATE = ${JSON.stringify(stateFile)};`,
@@ -572,6 +572,7 @@ function ghStubBody() {
     "      const zipPath = LOG + '.artifact-' + artifactId + '.zip';",
     "      writeZipArchiveEntries(zipPath, records);",
     "      writeFileSync(1, readFileSync(zipPath));",
+    "      rmSync(zipPath, { force: true });",
     "      process.exit(0);",
     "    }",
     "    writeFileSync(1, JSON.stringify({ name: listed.name, expired: listed.expired === true, workflow_run: { id: Number(state().workflowRunId || 31300595709) } }));",
@@ -594,35 +595,6 @@ function ghStubBody() {
     "    process.exit(0);",
     "  }",
     '  process.stdout.write(JSON.stringify({ state: "APPROVED", user: { login: "release-owner" } }));',
-    "  process.exit(0);",
-    "}",
-    'if (sub === "run" && argv[1] === "download") {',
-    '  const dirIndex = argv.indexOf("--dir");',
-    '  const nameIndex = argv.indexOf("--name");',
-    // The production caller always passes --dir and --name. If it ever stops, the double must
-    // refuse loudly rather than default anywhere: an empty dir would concatenate to
-    // filesystem-root paths, and a silent fallback would keep the suite green over the
-    // regression (KfQ findings on #3054).
-    "  if (dirIndex < 0 || !argv[dirIndex + 1]) { process.stderr.write('gh double: run download requires --dir\\n'); process.exit(1); }",
-    "  if (nameIndex < 0 || !argv[nameIndex + 1]) { process.stderr.write('gh double: run download requires --name\\n'); process.exit(1); }",
-    "  const dir = argv[dirIndex + 1];",
-    "  const artifact = argv[nameIndex + 1];",
-    "  const current = state();",
-    "  if (current.runArtifactsUnavailable) process.exit(1);",
-    "  const wanted = (current.uploadedAssets || []).filter((asset) => {",
-    "    if (artifact.includes('windows')) return asset.name.startsWith('keiko-windows-');",
-    "    if (artifact.includes('arm64')) return asset.name === 'keiko-macos-arm64.zip';",
-    "    return asset.name === 'keiko-macos-x64.zip';",
-    "  });",
-    // gh run download may nest the files one directory deep; the publisher must find them either
-    // way, so the stub reproduces the nested layout.
-    "  const target = current.nestRunArtifacts ? dir + '/nested' : dir;",
-    "  if (current.nestRunArtifacts) mkdirSync(target, { recursive: true });",
-    "  for (const asset of wanted) {",
-    "    let bytes = Buffer.from(asset.content || '', 'base64');",
-    "    if (current.tamperRunArtifacts) bytes = Buffer.concat([bytes, Buffer.from('x')]);",
-    "    writeFileSync(target + '/' + asset.name, bytes);",
-    "  }",
     "  process.exit(0);",
     "}",
     // An existing release answers the isDraft,assets probe. An interrupted evaluation publish

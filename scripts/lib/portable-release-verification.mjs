@@ -10,16 +10,16 @@
  * byte; it never decides that bytes are acceptable, because it never sees them.
  */
 
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { URL } from "node:url";
 
 import {
   PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
   portableEvaluationManifestFailures,
 } from "./portable-evaluation-manifest.mjs";
-import { readZipArchiveEntries } from "./zip-archive.mjs";
+import { extractZipArchiveEntries } from "./zip-archive.mjs";
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -475,16 +475,13 @@ function declaredArtifactRecordVerified(gh, runId, declared) {
 }
 
 /**
- * Writes the archive's entries under the target root. The reader enforces the traversal-safe
- * entry-name rule and proves every entry against its declared size and CRC, so a hostile
- * archive throws here instead of writing anywhere it should not.
+ * Writes the archive's entries under the target root, one entry in memory at a time — a staged
+ * runtime artifact expands to gigabytes. The extractor enforces the traversal-safe entry-name
+ * rule and proves every entry against its declared size and CRC, so a hostile archive throws
+ * here instead of writing anywhere it should not.
  */
 function extractArtifactArchive(target, archivePath) {
-  for (const entry of readZipArchiveEntries(archivePath)) {
-    const path = join(target, entry.name);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, entry.data);
-  }
+  extractZipArchiveEntries(archivePath, target);
 }
 
 function artifactDigestsInto(digests, target, hashFile, relevantNames) {

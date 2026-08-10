@@ -365,6 +365,8 @@ describe("hermetic end-to-end (scripted gh double)", () => {
         "--json status,conclusion,headSha",
         '{"status":"completed","conclusion":"success","headSha":"b2e3900a","event":"workflow_dispatch","headBranch":"dev","workflowDatabaseId":7,"attempt":1}',
       ],
+      // The attempt-coherence re-read after artifacts and bytes are gathered.
+      ["--json attempt", '{"attempt":1}'],
       // The run's artifact listing: the public-release manifest records these immutable ids so
       // the npm publisher can refuse a rerun's replacement artifacts.
       [
@@ -608,6 +610,22 @@ describe("hermetic end-to-end (scripted gh double)", () => {
       ).toThrow(/must not assert seals it never proved/u);
       expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
       expect(recorded.some((line) => line.includes("git/refs"))).toBe(false);
+    });
+
+    it("refuses when the run moves to a new attempt while publishing", () => {
+      // Bytes, artifact ids and the recorded attempt must describe ONE execution: a rerun in the
+      // publish window would blend the old attempt number with the rerun's artifacts (Codex
+      // finding on #3055).
+      const recorded = [];
+      expect(() =>
+        publicRun(recorded, {
+          answers: [
+            ["compare/dev...", JSON.stringify({ status: "behind" })],
+            ["--json attempt", '{"attempt":2}'],
+          ],
+        }),
+      ).toThrow(/moved to attempt 2 while publishing/u);
+      expect(recorded.some((line) => line.startsWith("gh release create"))).toBe(false);
     });
 
     it("keeps an allowlist the environment already provides", () => {

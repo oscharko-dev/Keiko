@@ -1161,12 +1161,30 @@ function evaluationArtifactIdentities(runId) {
 }
 
 /**
+ * The downloaded bytes, the listed artifact ids and the recorded attempt must all describe ONE
+ * execution. A rerun between the initial run view and this moment would hand the manifest the
+ * old attempt number with the rerun's artifacts and bytes — coherent-looking evidence about a
+ * mixture (Codex finding on #3055). Re-reading the attempt after everything else is gathered
+ * refuses that window.
+ */
+function assertRunAttemptUnchanged(runId, attempt) {
+  const view = ghJson(["run", "view", String(runId), "--json", "attempt"]);
+  if (view.attempt !== attempt) {
+    fail(
+      `run ${String(runId)} moved to attempt ${String(view.attempt)} while publishing (the evidence captured attempt ${String(attempt)}) — a rerun replaced the artifacts; restart the publish against the new run state.`,
+    );
+  }
+}
+
+/**
  * Only a public release is ever promoted to npm `latest`, so only it needs the evidence the
  * publisher re-verifies before promotion. A beta carries its checksums in the body and nothing
  * more — it is never a promotion input.
  */
 function evaluationManifestFor(input) {
   if (!input.options.publicRelease) return undefined;
+  const artifacts = evaluationArtifactIdentities(input.runId);
+  assertRunAttemptUnchanged(input.runId, input.attempt);
   return writeEvaluationManifest(input.workDir, {
     releaseTag: input.tag,
     sourceCommitSha: input.sourceCommitSha,
@@ -1174,7 +1192,7 @@ function evaluationManifestFor(input) {
     workflowPath: WORKFLOW_PATH,
     workflowRunId: input.runId,
     workflowRunAttempt: input.attempt,
-    artifacts: evaluationArtifactIdentities(input.runId),
+    artifacts,
     assets: input.digests,
   });
 }

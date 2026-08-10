@@ -55,8 +55,10 @@ Each stable release will expose exactly three platform-target archive assets:
 - `macos-x64`
 
 Those archives remain the authoritative portable payloads and update inputs. The macOS archives
-are the promoted macOS install surface. Windows stable releases additionally expose the signed
-`keiko-windows-x64-setup.exe` companion as the promoted ordinary-user Windows install surface; the
+are the promoted macOS install surface. Windows stable releases additionally expose the
+`keiko-windows-x64-setup.exe` companion as the promoted ordinary-user Windows install surface —
+production releases sign it; an `evaluation` release (below) ships it unsigned exactly as its
+archive and says so in the notes; the
 Windows ZIP remains the manual and troubleshooting fallback. The setup companion embeds the exact
 reviewed `windows-x64` archive and delegates installation and launch to the same portable lifecycle.
 It does not create another platform target, payload authority, or update channel.
@@ -94,9 +96,12 @@ alone is insufficient. Any mismatch fails closed before extraction. Artifact met
 operational evidence; it must not contain customer paths, credentials, prompts, model output,
 repository content, or raw logs.
 
-The Windows setup companion must be bound to the reviewed Windows archive name and digest, carry
-its own Authenticode chain and RFC3161 timestamp verification, and be proven as the only additional
-top-level PE after the Windows payload inventory is sealed.
+The Windows setup companion must be bound to the reviewed Windows archive name and digest and be
+proven as the only additional top-level PE after the Windows payload inventory is sealed. On a
+production-signed release it must additionally carry its own Authenticode chain and RFC3161
+timestamp verification; on an `evaluation` release those chains do not exist by definition — the
+companion's binding is its SHA-256 digest in the evaluation manifest, verified byte for byte
+before promotion, with the SmartScreen first-launch step stated in the release notes.
 
 ### D2 — Launchers stay thin
 
