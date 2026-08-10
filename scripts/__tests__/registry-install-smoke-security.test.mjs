@@ -107,10 +107,18 @@ describe("release publish security posture", () => {
     // refusal message this replaces.
     expect(source).toContain('"strict-ssl=true"');
     expect(source).toContain('NPM_CONFIG_STRICT_SSL: "true"');
-    // Provenance is attested exactly where the OIDC exchange can succeed: both GitHub-issued
-    // values, and the flag goes through that single predicate.
-    expect(source).toContain("--provenance");
-    expect(source).toContain("ACTIONS_ID_TOKEN_REQUEST_TOKEN");
+    // The provenance pin RELOCATED with its owner again (0.3.2 coverage repair): the predicate
+    // moved into the in-process-testable preflight lib. Strengthened: the publish path must go
+    // through that single predicate, and the lib must gate the flag on BOTH GitHub-issued OIDC
+    // values — the request URL alone cannot mint a token.
+    const preflight = readFileSync(
+      join(ROOT, "scripts", "lib", "npm-publish-preflight.mjs"),
+      "utf8",
+    );
+    expect(source).toContain("provenancePublishArgs(process.env)");
+    expect(preflight).toContain("--provenance");
+    expect(preflight).toContain("ACTIONS_ID_TOKEN_REQUEST_URL");
+    expect(preflight).toContain("ACTIONS_ID_TOKEN_REQUEST_TOKEN");
     expect(workflow).toMatch(/publish:[\s\S]*permissions:[\s\S]*id-token:\s*write/u);
   });
 });

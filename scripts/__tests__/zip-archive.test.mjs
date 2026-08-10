@@ -327,6 +327,47 @@ describe("readZipArchiveEntries", () => {
 
     expect(() => readZipArchiveEntries(archivePath)).toThrow(/unsafe/u);
   });
+
+  it("refuses a central directory whose entry signature is destroyed", () => {
+    const root = temporaryRoot();
+    const archivePath = join(root, "bad-central.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "file.txt", data: "bytes" }]);
+    const bytes = readFileSync(archivePath);
+    const centralOffset = bytes.length - 22 - 46 - "file.txt".length;
+    bytes.writeUInt32LE(0, centralOffset); // no longer a central-directory header
+    writeFileSync(archivePath, bytes);
+
+    expect(() => readZipArchiveEntries(archivePath)).toThrow(
+      /central directory entry is malformed/u,
+    );
+  });
+
+  it("refuses a local header the central directory points at wrongly", () => {
+    const root = temporaryRoot();
+    const archivePath = join(root, "bad-local.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "file.txt", data: "bytes" }]);
+    const bytes = readFileSync(archivePath);
+    const centralOffset = bytes.length - 22 - 46 - "file.txt".length;
+    // Point the entry's local offset at the central directory itself: in range, wrong signature.
+    bytes.writeUInt32LE(centralOffset, centralOffset + 42);
+    writeFileSync(archivePath, bytes);
+
+    expect(() => readZipArchiveEntries(archivePath)).toThrow(/malformed local header/u);
+  });
+
+  it("refuses a declared compressed size that overruns the archive bytes", () => {
+    const root = temporaryRoot();
+    const archivePath = join(root, "overrun.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "file.txt", data: "bytes" }]);
+    const bytes = readFileSync(archivePath);
+    const centralOffset = bytes.length - 22 - 46 - "file.txt".length;
+    // Still far below the file's byte length as a subarray START, but the declared length
+    // reaches past the end — the short window must refuse as truncation.
+    bytes.writeUInt32LE(bytes.length, centralOffset + 20);
+    writeFileSync(archivePath, bytes);
+
+    expect(() => readZipArchiveEntries(archivePath)).toThrow(/is truncated/u);
+  });
 });
 
 describe("extractZipArchiveEntries", () => {
@@ -420,5 +461,54 @@ describe("extractZipArchiveEntries", () => {
     });
 
     expect(() => extractZipArchiveEntries(archivePath, join(root, "out"))).toThrow(/unsafe/u);
+  });
+
+  it("refuses a local offset pointing past the archive through the descriptor path", () => {
+    const root = temporaryRoot();
+    const archivePath = join(root, "offset-past-end.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "file.txt", data: "bytes" }]);
+    const bytes = readFileSync(archivePath);
+    const centralOffset = bytes.length - 22 - 46 - "file.txt".length;
+    // The header window itself would cross the end of the file: refused before any read.
+    bytes.writeUInt32LE(bytes.length - 10, centralOffset + 42);
+    writeFileSync(archivePath, bytes);
+
+    expect(() => extractZipArchiveEntries(archivePath, join(root, "out"))).toThrow(
+      /malformed local header/u,
+    );
+  });
+
+  it("refuses a wrong local signature through the descriptor path", () => {
+    const root = temporaryRoot();
+    const archivePath = join(root, "wrong-signature.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "file.txt", data: "bytes" }]);
+    const bytes = readFileSync(archivePath);
+    const centralOffset = bytes.length - 22 - 46 - "file.txt".length;
+    // In range, but the bytes there are the central directory, not a local file header.
+    bytes.writeUInt32LE(centralOffset, centralOffset + 42);
+    writeFileSync(archivePath, bytes);
+
+    expect(() => extractZipArchiveEntries(archivePath, join(root, "out"))).toThrow(
+      /malformed local header/u,
+    );
+  });
+
+  it("refuses a tampered declared checksum through the descriptor path", () => {
+    // The in-memory reader already refuses tampered content; the extractor's own windowed
+    // read path must prove the same CRC agreement before a single byte lands on disk.
+    const root = temporaryRoot();
+    const archivePath = join(root, "wrong-checksum.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "file.txt", data: "checksum bytes" }]);
+    const bytes = readFileSync(archivePath);
+    const centralOffset = bytes.length - 22 - 46 - "file.txt".length;
+    bytes.writeUInt32LE(
+      (bytes.readUInt32LE(centralOffset + 16) ^ 0xffffffff) >>> 0,
+      centralOffset + 16,
+    );
+    writeFileSync(archivePath, bytes);
+
+    expect(() => extractZipArchiveEntries(archivePath, join(root, "out"))).toThrow(
+      /does not match its declared size or checksum/u,
+    );
   });
 });
