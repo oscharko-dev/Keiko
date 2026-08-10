@@ -82,6 +82,7 @@ import {
   attachRetainedEditorModel,
   EditorModelOwnershipError,
   updateRetainedEditorModelProtection,
+  writeRetainedEditorModelValue,
   type EditorModelProtection,
   type RetainedEditorModelAttachment,
   type RetainedEditorModel,
@@ -396,26 +397,6 @@ function useHostEditRequest(
   ]);
 }
 
-type ControlledSyncModel = NonNullable<
-  ReturnType<NonNullable<NonNullable<EditorRefs["editorRef"]["current"]>["getModel"]>>
->;
-
-// Same-document programmatic updates (an agent-applied edit, a format result, a restore) must
-// stay on the browser undo stack: one keyboard undo returns to the pre-update buffer (#1394
-// pin). `model.setValue` would clear that history, so it remains only the fallback for models
-// without an edit-operations API. Document switches never pass through here — they rebuild the
-// model via the file identity key.
-function writeControlledModelValue(model: ControlledSyncModel, expected: string): void {
-  const fullRange = model.getFullModelRange?.();
-  if (fullRange !== undefined && model.pushEditOperations !== undefined) {
-    model.pushStackElement?.();
-    model.pushEditOperations(null, [{ range: fullRange, text: expected }], () => null);
-    model.pushStackElement?.();
-  } else {
-    model.setValue?.(expected);
-  }
-}
-
 // The text of the host-edit request that currently owns the model transition, or undefined when
 // no request owns it. A request owns the transition from the commit that posts it until the host
 // buffer has reconciled once (`expected === request.text`); a handled one-shot request may
@@ -456,7 +437,10 @@ function useControlledModelValueSync(
       // undo would return to the host-edit text instead of moving further back (#3071 review).
       if (ownedText !== undefined && model.getValue() === ownedText) return true;
       programmaticChangeRef.current = syncChange;
-      writeControlledModelValue(model, expected);
+      // Same-document programmatic updates (an agent-applied edit, a format result, a restore)
+      // must stay on the browser undo stack (#1394 pin); document switches never pass through
+      // here — they rebuild the model via the file identity key.
+      writeRetainedEditorModelValue(model, expected);
       queueMicrotask(() => {
         if (programmaticChangeRef.current === syncChange) programmaticChangeRef.current = null;
       });

@@ -20,6 +20,58 @@ export interface RetainedEditorModel {
   setValue?(text: string): void;
   dispose(): void;
   isDisposed?(): boolean;
+  // Undo-preserving programmatic writes (#3070): the registry replaces retained content through
+  // the edit-operations API so the model's undo history survives; `setValue` (which clears that
+  // history) remains only the fallback for models without it.
+  getFullModelRange?(): RetainedEditorModelRange;
+  pushEditOperations?(
+    beforeCursorState: null,
+    edits: { readonly range: RetainedEditorModelRange; readonly text: string }[],
+    cursorStateComputer: () => null,
+  ): unknown;
+  pushStackElement?(): void;
+}
+
+export interface RetainedEditorModelRange {
+  readonly startLineNumber: number;
+  readonly startColumn: number;
+  readonly endLineNumber: number;
+  readonly endColumn: number;
+}
+
+// The minimal structural surface an undo-preserving whole-model write needs. Both the retained
+// registry models and the live editor's `getModel()` view satisfy it, so the controlled value
+// sync and the registry share one implementation.
+export interface UndoPreservingWritableModel {
+  getValue(): string;
+  setValue?(text: string): void;
+  getFullModelRange?(): RetainedEditorModelRange;
+  pushEditOperations?(
+    beforeCursorState: null,
+    edits: { readonly range: RetainedEditorModelRange; readonly text: string }[],
+    cursorStateComputer: () => null,
+  ): unknown;
+  pushStackElement?(): void;
+}
+
+/**
+ * Replace a model's content while preserving its undo history: one undo-stop pair around one
+ * whole-model edit operation, so a single keyboard undo returns to the pre-write buffer
+ * (#1394 pin, #3070). `setValue` — which clears the undo history — remains only the fallback
+ * for models without the edit-operations API.
+ */
+export function writeRetainedEditorModelValue(
+  model: UndoPreservingWritableModel,
+  text: string,
+): void {
+  const fullRange = model.getFullModelRange?.();
+  if (fullRange !== undefined && model.pushEditOperations !== undefined) {
+    model.pushStackElement?.();
+    model.pushEditOperations(null, [{ range: fullRange, text }], () => null);
+    model.pushStackElement?.();
+  } else {
+    model.setValue?.(text);
+  }
 }
 
 export interface RetainedEditorModelNamespace {
@@ -310,7 +362,7 @@ export class EditorModelRegistry {
     }
     const model =
       namespaceModel ?? input.namespace.createModel(input.text, input.language, input.uri);
-    if (model.getValue() !== input.text) model.setValue?.(input.text);
+    if (model.getValue() !== input.text) writeRetainedEditorModelValue(model, input.text);
     const entry = this.createEntry(identity, input, model);
     this.entries.set(identity, entry);
     return entry;
@@ -364,7 +416,11 @@ export class EditorModelRegistry {
       !preserveDirtyBuffer &&
       entry.model.getValue() !== input.text
     ) {
-      entry.model.setValue?.(input.text);
+      // Re-attach with newer host content (e.g. the editor remounting after an accepted agent
+      // review, #3070): the retained model's undo history is the whole point of retention, so
+      // the catch-up write must stay undoable — `setValue` here silently discarded the stack
+      // and a keyboard undo after the accept did nothing.
+      writeRetainedEditorModelValue(entry.model, input.text);
     }
   }
 
