@@ -8,10 +8,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { WINDOWS_SHORTCUT_MAX_BYTES } from "@oscharko-dev/keiko-security";
+import {
+  WINDOWS_SHORTCUT_MAX_BYTES,
+  windowsShortcutFallbackContent,
+} from "@oscharko-dev/keiko-security";
 
 import { windowsLauncher } from "./launcher-platforms.js";
 import { layoutFor } from "./portable-shared.js";
@@ -20,6 +23,8 @@ import {
   nativeRegistrationKinds,
   parseWindowsStartMenuRegistration,
   portableManagedRootMode,
+  portableRegistrationHealth,
+  removePortableRegistrationArtifacts,
   repairUserLocalRegistration,
   windowsLegacyStartMenuRegistrationPath,
   windowsStartMenuRegistrationPath,
@@ -118,6 +123,104 @@ describe("portable native registration policy", () => {
       expect(repaired).toBeGreaterThan(0);
       expect(existsSync(windowsStartMenuRegistrationPath(env, home))).toBe(true);
       expect(existsSync(legacyPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("counts action-required registrations and reports a refused legacy removal", () => {
+    const root = mkdtempSync(join(homedir(), ".keiko-action-required-"));
+    try {
+      const home = join(root, "home");
+      const env = { APPDATA: join(home, "AppData", "Roaming") };
+      const installRoot = join(home, "AppData", "Local", "Programs", "Keiko");
+      const layout = layoutFor("windows-x64", installRoot);
+      const lnkPath = windowsStartMenuRegistrationPath(env, home);
+      const legacyPath = windowsLegacyStartMenuRegistrationPath(env, home);
+      mkdirSync(dirname(lnkPath), { recursive: true });
+      const health = (): ReturnType<typeof portableRegistrationHealth> =>
+        portableRegistrationHealth(layout, "windows-x64", installRoot, env, home);
+
+      // Symlink, foreign content, oversize, hardlink: every unmanaged shape must surface as
+      // action-required — never as repairable-missing, never silently ok.
+      const target = join(root, "target.txt");
+      writeFileSync(target, "outside");
+      symlinkSync(target, lnkPath);
+      expect(health().actionRequired).toBeGreaterThan(0);
+      rmSync(lnkPath);
+
+      writeFileSync(
+        lnkPath,
+        windowsShortcutFallbackContent({
+          targetPath: join(root, "SomewhereElse", "Other.exe"),
+          workingDirectory: join(root, "SomewhereElse"),
+          iconPath: join(root, "SomewhereElse", "Other.exe"),
+        }),
+      );
+      expect(health().actionRequired).toBeGreaterThan(0);
+      rmSync(lnkPath);
+
+      writeFileSync(lnkPath, Buffer.alloc(WINDOWS_SHORTCUT_MAX_BYTES + 1, 0x20));
+      expect(health().actionRequired).toBeGreaterThan(0);
+      rmSync(lnkPath);
+
+      linkSync(target, lnkPath);
+      expect(health().actionRequired).toBeGreaterThan(0);
+      rmSync(lnkPath);
+
+      // A user-edited legacy launcher is refused by the content-verified removal, surfaces
+      // through the repairing CLI's io, and stays in place.
+      writeFileSync(lnkPath, "");
+      rmSync(lnkPath);
+      const errors: string[] = [];
+      const io = {
+        out: (): undefined => undefined,
+        err: (line: string): void => {
+          errors.push(line);
+        },
+      };
+      writeFileSync(legacyPath, "@echo edited by hand\r\n");
+      repairUserLocalRegistration(layout, "windows-x64", installRoot, env, home, io);
+      expect(existsSync(legacyPath)).toBe(true);
+      expect(errors.join("")).toContain("left in place");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps every artifact in place on a dry-run removal", () => {
+    const root = mkdtempSync(join(homedir(), ".keiko-dryrun-removal-"));
+    try {
+      const home = join(root, "home");
+      const env = { APPDATA: join(home, "AppData", "Roaming") };
+      const installRoot = join(home, "AppData", "Local", "Programs", "Keiko");
+      const layout = layoutFor("windows-x64", installRoot);
+      const legacyPath = windowsLegacyStartMenuRegistrationPath(env, home);
+      mkdirSync(dirname(legacyPath), { recursive: true });
+      writeFileSync(
+        legacyPath,
+        windowsLauncher.generateContent({ exe: layout.primaryLauncherPath, port: undefined }),
+      );
+      const io = { out: (): undefined => undefined, err: (): undefined => undefined };
+      installNativeRegistration(layout, "windows-x64", installRoot, env, home, io);
+      // installNativeRegistration retired the legacy launcher; restore it for the dry-run pass.
+      writeFileSync(
+        legacyPath,
+        windowsLauncher.generateContent({ exe: layout.primaryLauncherPath, port: undefined }),
+      );
+
+      const removed = removePortableRegistrationArtifacts(
+        layout,
+        "windows-x64",
+        installRoot,
+        env,
+        home,
+        true,
+        io,
+      );
+      expect(removed).toBeGreaterThan(0);
+      expect(existsSync(windowsStartMenuRegistrationPath(env, home))).toBe(true);
+      expect(existsSync(legacyPath)).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
