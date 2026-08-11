@@ -1235,6 +1235,66 @@
         "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.6",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.6",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "id": "2026-08-11-keiko-0.3.6-windows-installer-repair",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Keiko 0.3.6 delivers the Windows installation repair to end users. Installing on Windows now opens the app instead of flashing a console window and stopping; when a start genuinely cannot proceed, a native dialog explains it. The Start Menu entry becomes a verified shortcut with automatic cleanup of the legacy launcher file, and the archive pipeline behind the installer refuses hostile entries outright. The tags v0.3.4 and v0.3.5 were burned during this release chain (each froze a defective asset-build path discovered only by the release lane); 0.3.6 is the first version whose Windows asset build was proven green before tagging.",
+      "affectedStateStores": ["ui-store-schema"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "No schema change relative to 0.3.2. A store created by 0.3.x opens unchanged; a store from 0.2.x migrates forward exactly as 0.3.0 described.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "releaseNoteBullets": [
+        "Installing Keiko on Windows opens the app: the launcher recognizes an Explorer double-click, so no more console flash followed by nothing.",
+        "A start that truly cannot proceed explains itself in a native dialog - covering incomplete installs, damaged app bundles, and a runtime that fails to boot.",
+        "One verified Start Menu shortcut, everywhere: setup, repair, and the first launch after an in-app update all migrate away from the legacy Keiko.bat automatically.",
+        "The installer's archive layer refuses symlinks, NTFS alternate-stream names, encryption flags, and mistyped entries before extraction, and its cleanup paces retries correctly under silent installs.",
+        "These are evaluation-signed builds outside the one-click updater: grab 0.3.6 from the release page, then on Windows use SmartScreen's More info and Run anyway once, or on macOS right-click the app and choose Open once."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-11",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5257601218",
+        "rationale": "Completion of the Windows-repair release chain under the owner's standing direction from the 2026-08-11 working session. v0.3.5 froze the last two bare-cl spawners (the native test protocols, executed only by the release lane) inside the tag; the publisher binds assets to the exact tagged commit, so the tag is unpublishable. 0.3.6 carries the shared MSVC resolution in both protocols, and the evaluation lane ran fully green on the fix branch BEFORE this version was tagged."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
     }
   ]
 }
