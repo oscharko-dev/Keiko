@@ -352,7 +352,12 @@ function removeLegacyWindowsRegistration(
   const legacyPlan = legacyWindowsRegistrationPlan(layout, env, home);
   try {
     return removeVerifiedFileArtifact(legacyPlan, dryRun, io);
-  } catch {
+  } catch (error) {
+    io.err(
+      `keiko portable: legacy Start Menu launcher was left in place: ${
+        error instanceof Error ? error.message : "removal was refused"
+      }\n`,
+    );
     return false;
   }
 }
