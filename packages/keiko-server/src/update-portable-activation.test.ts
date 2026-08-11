@@ -21,7 +21,12 @@ import {
   capturePortableRegistration,
   readPortableActivationRecovery,
   readWindowsPortableShortcutTarget,
+  refreshPortableShortcut,
 } from "./update-portable-activation-files.js";
+import {
+  parseWindowsShortcutFallback,
+  windowsShortcutFallbackContent,
+} from "@oscharko-dev/keiko-security";
 
 const TARGET_VERSION = "0.2.12";
 const OLD_VERSION = "0.2.11";
@@ -306,6 +311,55 @@ describe("portable update activation", () => {
     expect(readWindowsPortableShortcutTarget(shortcutPath, activatorEnv)).toBe(
       join(managedRoot, "Keiko.exe"),
     );
+  });
+
+  it("rewrites an attributed shortcut with a stale working directory and refuses a foreign one", async () => {
+    const base = await mkdtemp(join(tmpdir(), "keiko-portable-shortcut-guard-"));
+    tempRoots.push(base);
+    const home = join(base, "home");
+    const installRoot = join(home, "AppData", "Local", "Programs", "Keiko");
+    const launcherPath = join(installRoot, "Keiko.exe");
+    const env = { APPDATA: join(home, "AppData", "Roaming") };
+    const shortcutPath = join(
+      env.APPDATA,
+      "Microsoft",
+      "Windows",
+      "Start Menu",
+      "Programs",
+      "Keiko.lnk",
+    );
+    const layout = {
+      installRoot,
+      appRoot: join(installRoot, "app"),
+      packageJsonPath: join(installRoot, "app", "package.json"),
+      setupManifestPath: join(installRoot, "app", "keiko-setup-manifest.json"),
+      launcherPath,
+    };
+    mkdirSync(dirname(shortcutPath), { recursive: true });
+
+    // Attributed (target = managed launcher) but stale working directory: the refresh must
+    // repair it, not refuse it — this is the exact artifact the rewrite exists to heal.
+    writeFileSync(
+      shortcutPath,
+      windowsShortcutFallbackContent({
+        targetPath: launcherPath,
+        workingDirectory: join(home, "old-install-root"),
+        iconPath: launcherPath,
+      }),
+      "utf8",
+    );
+    expect(refreshPortableShortcut({ target: "windows-x64", layout, env, home })).toBe(true);
+    expect(parseWindowsShortcutFallback(shortcutPath)?.workingDirectory).toBe(installRoot);
+
+    // Foreign target: cannot be attributed to this install, must be refused and left intact.
+    const foreign = windowsShortcutFallbackContent({
+      targetPath: join(home, "SomethingElse", "Other.exe"),
+      workingDirectory: join(home, "SomethingElse"),
+      iconPath: join(home, "SomethingElse", "Other.exe"),
+    });
+    writeFileSync(shortcutPath, foreign, "utf8");
+    expect(refreshPortableShortcut({ target: "windows-x64", layout, env, home })).toBe(false);
+    expect(readFileSync(shortcutPath, "utf8")).toBe(foreign);
   });
 
   it("fails closed and preserves the active install when the staged candidate is incomplete", async () => {

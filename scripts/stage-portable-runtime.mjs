@@ -1001,7 +1001,12 @@ function normalizeArchiveEntry(entry) {
     return "";
   }
   const parts = normalized.split("/");
-  if (parts.some((part) => part.length === 0 || part === "." || part === "..")) return "";
+  // A `:` anywhere in a component is an NTFS alternate-stream (or drive) designator on the
+  // Windows consumer of these archives — never a portable file name. Refuse, don't reinterpret.
+  if (
+    parts.some((part) => part.length === 0 || part === "." || part === ".." || part.includes(":"))
+  )
+    return "";
   return normalized;
 }
 
@@ -1070,6 +1075,7 @@ function createNodeZipAdapter() {
         rootName: entryName,
         followSymlinks: true,
         containmentRoot: treeRoot,
+        requireRegularEntries: true,
       });
     },
   };

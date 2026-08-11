@@ -207,6 +207,7 @@ describe("portable install decisions", () => {
         env: { APPDATA: appDataFile },
         home: root,
         now: new Date("2026-08-03T00:00:00.000Z"),
+        io: { out: () => undefined, err: () => undefined },
       });
     } catch (error) {
       thrown = error;
@@ -238,6 +239,7 @@ describe("portable install decisions", () => {
       env: {},
       home: root,
       now: new Date("2026-08-03T00:00:00.000Z"),
+      io: { out: () => undefined, err: () => undefined },
     } as const;
     let escaped: PortableManagedUpgradeFn | undefined;
 

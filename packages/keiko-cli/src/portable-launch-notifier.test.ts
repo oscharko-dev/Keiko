@@ -259,4 +259,29 @@ describe("runDetachedWindowsAlert", () => {
     }).not.toThrow();
     expect(reported).toEqual(["keiko portable launch: the failure alert could not be shown\n"]);
   });
+
+  it("forwards supplied TEMP and TMP into the detached child environment", () => {
+    const calls: unknown[][] = [];
+    runDetachedWindowsAlert(
+      "boom",
+      {
+        SystemRoot: String.raw`D:\Windows`,
+        TEMP: String.raw`D:\Scratch\Temp`,
+        TMP: String.raw`D:\Scratch\Tmp`,
+      },
+      (command, args, options) => {
+        calls.push([command, args, options]);
+        return { on: (): void => undefined, unref: (): void => undefined };
+      },
+      () => undefined,
+    );
+    // WPF initialization needs a writable temp location when the profile provides one; both
+    // variables must reach the child exactly as supplied, and nothing else may leak in.
+    expect((calls[0]?.[2] as { env: unknown }).env).toEqual({
+      SystemRoot: String.raw`D:\Windows`,
+      WINDIR: String.raw`D:\Windows`,
+      TEMP: String.raw`D:\Scratch\Temp`,
+      TMP: String.raw`D:\Scratch\Tmp`,
+    });
+  });
 });

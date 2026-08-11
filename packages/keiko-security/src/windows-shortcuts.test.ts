@@ -5,10 +5,14 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  WINDOWS_SHORTCUT_MAX_BYTES,
+  WINDOWS_SHORTCUT_TIMEOUT_MS,
   equivalentWindowsShortcutPath,
   parseWindowsShortcutFallback,
+  readWindowsShortcutDefinition,
   runWindowsShortcutCommand,
   windowsShortcutFallbackContent,
+  writeWindowsShortcutDefinition,
   type WindowsShortcutDefinition,
   type WindowsShortcutSpawnFn,
 } from "./windows-shortcuts.js";
@@ -61,6 +65,73 @@ describe("windows shortcut fallback codec", () => {
   it("refuses a missing fallback document", () => {
     expect(parseWindowsShortcutFallback(join(tempRoot(), "absent.lnk"))).toBeUndefined();
   });
+
+  it("bounds the fallback document size inside the parser itself", () => {
+    const oversized = join(tempRoot(), "oversized.lnk");
+    const padding = JSON.stringify({
+      schema: "keiko-windows-shortcut-v1",
+      ...DEFINITION,
+      pad: "x".repeat(WINDOWS_SHORTCUT_MAX_BYTES),
+    });
+    writeFileSync(oversized, `${padding}\n`, "utf8");
+    expect(parseWindowsShortcutFallback(oversized)).toBeUndefined();
+
+    const empty = join(tempRoot(), "empty.lnk");
+    writeFileSync(empty, "", "utf8");
+    expect(parseWindowsShortcutFallback(empty)).toBeUndefined();
+  });
+});
+
+// The two entry points portable-maintenance and update-portable-activation-files actually call.
+// Off Windows they must round-trip through the JSON stand-in with identical semantics.
+describe.skipIf(process.platform === "win32")("definition read/write entry points", () => {
+  it("round-trips a definition through write and read on a non-Windows host", () => {
+    const path = join(tempRoot(), "Keiko.lnk");
+    writeWindowsShortcutDefinition(path, DEFINITION, {}, "test prefix");
+    expect(readWindowsShortcutDefinition(path, {}, "test prefix")).toEqual(DEFINITION);
+  });
+
+  it("returns undefined for an unreadable definition instead of throwing", () => {
+    const path = join(tempRoot(), "broken.lnk");
+    writeFileSync(path, "{broken", "utf8");
+    expect(readWindowsShortcutDefinition(path, {}, "test prefix")).toBeUndefined();
+  });
+});
+
+// The win32 route of the same two entry points, exercised via the injected spawn seam with the
+// platform gate stubbed — the cscript binary itself never runs, so this stays hermetic anywhere.
+describe("definition read/write entry points on the win32 route", () => {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform");
+
+  afterEach(() => {
+    if (platform !== undefined) Object.defineProperty(process, "platform", platform);
+  });
+
+  function stubWin32(): void {
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+  }
+
+  it("reads three UTF-16LE lines through cscript and refuses a short read", () => {
+    stubWin32();
+    const lines = `${DEFINITION.targetPath}\r\n${DEFINITION.workingDirectory}\r\n${DEFINITION.iconPath}\r\n`;
+    const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() =>
+      spawnResult({ stdout: Buffer.from(lines, "utf16le") }),
+    );
+    expect(readWindowsShortcutDefinition("p", {}, "test prefix", spawnFn)).toEqual(DEFINITION);
+
+    const short = vi.fn<WindowsShortcutSpawnFn>(() =>
+      spawnResult({ stdout: Buffer.from("only-one-line", "utf16le") }),
+    );
+    expect(readWindowsShortcutDefinition("p", {}, "test prefix", short)).toBeUndefined();
+  });
+
+  it("creates through cscript instead of the JSON stand-in", () => {
+    stubWin32();
+    const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult());
+    writeWindowsShortcutDefinition("p", DEFINITION, {}, "test prefix", spawnFn);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(spawnFn.mock.calls[0]?.[1]).toContain("create");
+  });
 });
 
 describe("runWindowsShortcutCommand", () => {
@@ -88,6 +159,8 @@ describe("runWindowsShortcutCommand", () => {
       DEFINITION.iconPath,
     ]);
     expect(options?.shell).toBe(false);
+    // A wedged script host must be killed, never waited on forever.
+    expect(options?.timeout).toBe(WINDOWS_SHORTCUT_TIMEOUT_MS);
     // Minimal script-host environment only — never the caller's secret-bearing process env.
     expect(options?.env).toEqual({
       SystemRoot: String.raw`C:\Windows`,
@@ -122,12 +195,16 @@ describe("runWindowsShortcutCommand", () => {
     expect(() =>
       runWindowsShortcutCommand("create", "p", DEFINITION, {}, "test prefix", spawnFn),
     ).toThrow(`test prefix (cscript exit 0, stderr ${String(stderr.byteLength)} bytes)`);
-    // The profile-bearing stderr body never reaches the message.
+    // The profile-bearing stderr body never reaches the message. Captured unconditionally: if
+    // the command ever stops throwing here, the missing error itself fails the assertion.
+    let thrown: unknown;
     try {
       runWindowsShortcutCommand("create", "p", DEFINITION, {}, "test prefix", spawnFn);
     } catch (error) {
-      expect(String(error)).not.toContain("José");
+      thrown = error;
     }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(String(thrown)).not.toContain("José");
   });
 
   it("decodes UTF-16LE read output so non-ASCII profile paths survive the readback", () => {

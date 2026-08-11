@@ -109,6 +109,45 @@ describe("Windows portable ZIP adapter", () => {
     expect(existsSync(join(root, "out", "Keiko", "runtime", "link"))).toBe(false);
   });
 
+  // `name:stream` in a ZIP entry carries regular-file Unix type bits, but on NTFS it
+  // materializes an ALTERNATE DATA STREAM of `name` — payload bytes hidden from every plain
+  // directory listing. The retired 7z pipeline rejected these via its metadata checker; the
+  // Node adapter must refuse the name itself, on read, extract, and create alike.
+  it("fails closed on an NTFS alternate-stream entry name instead of materializing a stream", () => {
+    const root = tempRoot();
+    const archivePath = join(root, "with-ads.zip");
+    writeZipArchiveEntries(archivePath, [
+      { name: "Keiko/runtime/node.exe", data: Buffer.from("regular"), mode: 0o100644 },
+      { name: "Keiko/runtime/node.exe:payload", data: Buffer.from("hidden"), mode: 0o100644 },
+    ]);
+    const adapter = createPortableZipAdapter("win32", vi.fn());
+
+    expect(() => adapter.list(archivePath)).toThrow("alternate-stream separator");
+    expect(() => adapter.extract(archivePath, join(root, "out"))).toThrow(
+      "alternate-stream separator",
+    );
+  });
+
+  it("refuses to archive a source file whose name would become an alternate stream", () => {
+    const root = tempRoot();
+    const treeRoot = join(root, "Keiko");
+    mkdirSync(join(treeRoot, "runtime"), { recursive: true });
+    writeFileSync(join(treeRoot, "runtime", "node.exe"), "regular");
+    writeFileSync(join(treeRoot, "runtime", "evil:stream"), "hidden");
+    const adapter = createPortableZipAdapter("win32", vi.fn());
+
+    expect(() => adapter.create(root, "Keiko", join(root, "keiko.zip"))).toThrow(
+      "alternate-stream separator",
+    );
+  });
+
+  it("treats an alternate-stream name as escaping the expected root", () => {
+    const adapter = fakeAdapter(["Keiko/runtime/node.exe", "Keiko/runtime/node.exe:payload"]);
+    expect(() => safeZipExtractionEntries("runtime.zip", "Keiko", adapter)).toThrow(
+      "archive entry escapes Keiko",
+    );
+  });
+
   // A followed symlink whose target resolves OUTSIDE the staged tree must refuse archive
   // creation — otherwise a staged link could embed arbitrary workspace bytes into a release ZIP.
   it("refuses to archive a symlink that escapes the staged tree", () => {
@@ -117,7 +156,14 @@ describe("Windows portable ZIP adapter", () => {
     mkdirSync(join(treeRoot, "runtime"), { recursive: true });
     writeFileSync(join(treeRoot, "runtime", "node.exe"), "regular");
     writeFileSync(join(root, "outside-secret.txt"), "workspace bytes");
-    symlinkSync(join(root, "outside-secret.txt"), join(treeRoot, "runtime", "escape"));
+    try {
+      symlinkSync(join(root, "outside-secret.txt"), join(treeRoot, "runtime", "escape"));
+    } catch (error) {
+      // An unprivileged Windows host cannot create symlinks; the containment guard is
+      // exercised by the POSIX CI lanes, so skip rather than fail here.
+      if (error?.code === "EPERM") return;
+      throw error;
+    }
     const adapter = createPortableZipAdapter("win32", vi.fn());
 
     expect(() => adapter.create(root, "Keiko", join(root, "keiko.zip"))).toThrow(

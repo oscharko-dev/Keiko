@@ -596,20 +596,32 @@ function readShortcut(path: string, env: EnvSource): WindowsShortcutArtifact | u
   return readWindowsShortcutDefinition(path, env, SHORTCUT_FAILURE_PREFIX);
 }
 
-export function readWindowsPortableShortcutTarget(
-  path: string,
-  env: EnvSource = process.env,
-): string | undefined {
+function readGuardedShortcut(path: string, env: EnvSource): WindowsShortcutArtifact | undefined {
   if (!existsSync(path)) return undefined;
   const stat = lstatSync(path);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1) return undefined;
   if (stat.size <= 0 || stat.size > WINDOWS_SHORTCUT_MAX_BYTES) return undefined;
-  return readShortcut(path, env)?.targetPath;
+  return readShortcut(path, env);
 }
 
+export function readWindowsPortableShortcutTarget(
+  path: string,
+  env: EnvSource = process.env,
+): string | undefined {
+  return readGuardedShortcut(path, env)?.targetPath;
+}
+
+// Attribution check for the overwrite guard, deliberately target-only: a shortcut whose target
+// is this install's managed launcher is OURS, and the rewrite that follows refreshes every
+// managed field — a stale working directory is exactly what the rewrite repairs. Widening the
+// match to more fields would make the guard refuse the very artifacts the refresh exists to
+// heal; a target pointing anywhere else marks a foreign or user-edited file we never touch.
 function shortcutMatches(path: string, artifact: WindowsShortcutArtifact, env: EnvSource): boolean {
-  const shortcut = readWindowsPortableShortcutTarget(path, env);
-  return shortcut !== undefined && equivalentWindowsShortcutPath(shortcut, artifact.targetPath);
+  const shortcut = readGuardedShortcut(path, env);
+  return (
+    shortcut !== undefined &&
+    equivalentWindowsShortcutPath(shortcut.targetPath, artifact.targetPath)
+  );
 }
 
 function writeShortcut(path: string, artifact: WindowsShortcutArtifact, env: EnvSource): void {
@@ -638,6 +650,11 @@ export function refreshPortableShortcut(input: {
     const entry = lstatEntryOrUndefined(path);
     if (entry !== undefined) {
       if (entry.isSymbolicLink()) return false;
+      // Refuse-to-overwrite, not refresh-at-any-cost: an existing regular file whose target is
+      // not this install's launcher cannot be attributed to this product — it is foreign or
+      // user-edited, and activation must never destroy it (`shortcutRefreshed: false` reports
+      // the refusal). An attributed shortcut passes and is fully rewritten below, which is how
+      // a stale working directory or icon gets repaired.
       if (entry.isFile() && !shortcutMatches(path, artifact, input.env)) return false;
     }
     mkdirSync(dirname(path), { recursive: true, mode: 0o755 });
@@ -645,7 +662,11 @@ export function refreshPortableShortcut(input: {
     return true;
   } catch {
     // Boolean contract: a shortcut-host failure degrades to shortcutRefreshed=false — it must
-    // never abort an otherwise-completed activation.
+    // never abort an otherwise-completed activation. The redacted failure detail (exit status +
+    // stderr byte count) is intentionally not persisted here: this flow has no text sink, the
+    // API-visible signal is `shortcutRefreshed: false` in the activation summary, and the
+    // operator-diagnosable path for the same artifact is `keiko portable repair`, which checks
+    // and rewrites this registration with full CLI diagnostics.
     return false;
   }
 }

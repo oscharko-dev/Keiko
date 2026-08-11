@@ -287,6 +287,15 @@ export function writeZipArchiveFromDirectory(sourceRoot, archivePath, options) {
     preserveSymlinks: options.preserveSymlinks === true,
     ...(options.containmentRoot === undefined ? {} : { containmentRoot: options.containmentRoot }),
   });
+  if (options.requireRegularEntries === true) {
+    // Mirror of the read-side refusal: a `:` in an entry name would become an NTFS alternate
+    // data stream when the archive is later extracted on Windows.
+    for (const record of records) {
+      if (record.name.includes(":")) {
+        throw new Error(`ZIP entry name contains an NTFS alternate-stream separator: refused`);
+      }
+    }
+  }
   writeZipArchiveEntries(archivePath, records);
 }
 
@@ -397,6 +406,12 @@ function assertRegularZipEntry(entry, requireRegularEntries) {
   const type = entry.unixMode & UNIX_TYPE_MASK;
   if (type !== 0 && type !== UNIX_TYPE_REGULAR) {
     throw new Error(`ZIP entry ${entry.rawName} is an unsupported special entry type`);
+  }
+  // On NTFS, `name:stream` materializes an alternate data stream of `name` rather than a file —
+  // the Unix type bits still say "regular", so the name itself must be refused before a Windows
+  // extraction can hide payload bytes in a stream (the retired 7z checker rejected these too).
+  if (entry.rawName.includes(":")) {
+    throw new Error("ZIP entry name contains an NTFS alternate-stream separator");
   }
 }
 

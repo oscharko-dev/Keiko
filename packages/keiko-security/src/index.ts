@@ -65,6 +65,7 @@ export {
 export type { WindowsShortcutDefinition, WindowsShortcutSpawnFn } from "./windows-shortcuts.js";
 export {
   WINDOWS_SHORTCUT_MAX_BYTES,
+  WINDOWS_SHORTCUT_TIMEOUT_MS,
   equivalentWindowsShortcutPath,
   windowsSystemRoot,
   parseWindowsShortcutFallback,

@@ -11,7 +11,7 @@
 // document stands in for the binary `.lnk` so behaviour stays testable everywhere.
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 as win32Path } from "node:path";
 
@@ -22,6 +22,10 @@ export interface WindowsShortcutDefinition {
 }
 
 export const WINDOWS_SHORTCUT_MAX_BYTES = 128 * 1024;
+// A wedged script host (WSH is COM-backed and can hang on a broken shell registration) must not
+// block a setup or activation forever: spawnSync enforces this bound and surfaces the kill as a
+// spawn error, which the caller already fails closed on.
+export const WINDOWS_SHORTCUT_TIMEOUT_MS = 30_000;
 const WINDOWS_SHORTCUT_FALLBACK_SCHEMA = "keiko-windows-shortcut-v1";
 const DEFAULT_WINDOWS_ROOT = String.raw`C:\Windows`;
 
@@ -54,6 +58,7 @@ export type WindowsShortcutSpawnFn = (
     readonly env: NodeJS.ProcessEnv;
     readonly shell: false;
     readonly stdio: "pipe";
+    readonly timeout: number;
     readonly windowsHide: true;
   },
 ) => {
@@ -143,6 +148,7 @@ export function runWindowsShortcutCommand(
         env: windowsShortcutEnv(env),
         shell: false,
         stdio: "pipe",
+        timeout: WINDOWS_SHORTCUT_TIMEOUT_MS,
         windowsHide: true,
       },
     );
@@ -162,20 +168,27 @@ export function windowsShortcutFallbackContent(definition: WindowsShortcutDefini
   return `${JSON.stringify({ schema: WINDOWS_SHORTCUT_FALLBACK_SCHEMA, ...definition })}\n`;
 }
 
+function shortcutDefinitionFromRecord(raw: unknown): WindowsShortcutDefinition | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const record = raw as Record<string, unknown>;
+  if (record.schema !== WINDOWS_SHORTCUT_FALLBACK_SCHEMA) return undefined;
+  if (typeof record.targetPath !== "string") return undefined;
+  if (typeof record.workingDirectory !== "string") return undefined;
+  if (typeof record.iconPath !== "string") return undefined;
+  return {
+    targetPath: record.targetPath,
+    workingDirectory: record.workingDirectory,
+    iconPath: record.iconPath,
+  };
+}
+
 export function parseWindowsShortcutFallback(path: string): WindowsShortcutDefinition | undefined {
   try {
-    const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
-    const record = raw as Record<string, unknown>;
-    if (record.schema !== WINDOWS_SHORTCUT_FALLBACK_SCHEMA) return undefined;
-    if (typeof record.targetPath !== "string") return undefined;
-    if (typeof record.workingDirectory !== "string") return undefined;
-    if (typeof record.iconPath !== "string") return undefined;
-    return {
-      targetPath: record.targetPath,
-      workingDirectory: record.workingDirectory,
-      iconPath: record.iconPath,
-    };
+    // The size bound lives here, not only at the call sites: this is an exported entry point,
+    // and a reader that JSON-parses an unbounded file is a bug waiting for its first caller.
+    const size = statSync(path).size;
+    if (size <= 0 || size > WINDOWS_SHORTCUT_MAX_BYTES) return undefined;
+    return shortcutDefinitionFromRecord(JSON.parse(readFileSync(path, "utf8")) as unknown);
   } catch {
     return undefined;
   }
