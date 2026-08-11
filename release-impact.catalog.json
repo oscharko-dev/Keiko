@@ -1154,7 +1154,8 @@
         "Windows setup launches the UI: the portable launcher distinguishes a double-click from a terminal start, so installation no longer ends with a console flash and no window (#3072).",
         "Windows failures are visible: incomplete installs, a damaged app bundle, or a runtime that cannot start now surface a native error dialog instead of exiting silently.",
         "The Start Menu entry is a real shortcut; a legacy Keiko.bat from earlier releases is retired automatically during setup, repair, and the first start after an in-app update.",
-        "The Windows archive pipeline fails closed on symlinks, NTFS alternate-data-stream names, encryption-marked and mistyped entries, and installer cleanup retries correctly under silent installs."
+        "The Windows archive pipeline fails closed on symlinks, NTFS alternate-data-stream names, encryption-marked and mistyped entries, and installer cleanup retries correctly under silent installs.",
+        "These builds carry evaluation signing: Windows SmartScreen may warn on first run, and the governed in-app updater does not offer them as a one-click update \u2014 install 0.3.4 by downloading the setup from this release page."
       ],
       "review": {
         "status": "reviewed",
