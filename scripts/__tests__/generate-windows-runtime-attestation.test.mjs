@@ -1,4 +1,4 @@
-import { WindowsRuntimeAttestationError, Buffer } from "node:buffer";
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +6,7 @@ import { dirname, join, win32 } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  WindowsRuntimeAttestationError,
   buildWindowsRuntimeAttestationCarrier,
   generateWindowsRuntimeAttestation,
   windowsBuildToolchain,
