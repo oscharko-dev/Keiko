@@ -82,16 +82,6 @@ rules:
       # This anchor is a LINE NUMBER: adding a comment above the trigger silently invalidates it and
       # turns the required context red. That happened once already, on this very entry.
       - keiko-for-quality.yml:14
-  misfeature:
-    ignore:
-      # Windows MSVC toolchain setup must call vswhere.exe and vcvars64.bat, which are
-      # native CMD batch tooling; the step deliberately persists only the single-line
-      # variables the rc/cl compiler needs to GITHUB_ENV (see the inline comment at the
-      # step itself - dumping the full `set` output pollutes GITHUB_ENV with multi-line
-      # values). Rewriting to pwsh/bash risks breaking the Windows production-signing
-      # build and cannot be verified on this platform.
-      - portable-assets.yml:166
-      - portable-assets.yml:236
   adhoc-packages:
     ignore:
       # Publishing deliberately uses the separately reviewed npm version required by ADR-0130;

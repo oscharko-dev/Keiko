@@ -1,13 +1,32 @@
-import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { windowsLauncher } from "./launcher-platforms.js";
 import {
+  WINDOWS_SHORTCUT_MAX_BYTES,
+  windowsShortcutFallbackContent,
+} from "@oscharko-dev/keiko-security";
+
+import { windowsLauncher } from "./launcher-platforms.js";
+import { layoutFor } from "./portable-shared.js";
+import {
+  installNativeRegistration,
   nativeRegistrationKinds,
   parseWindowsStartMenuRegistration,
   portableManagedRootMode,
+  portableRegistrationHealth,
+  removePortableRegistrationArtifacts,
+  repairUserLocalRegistration,
+  windowsLegacyStartMenuRegistrationPath,
   windowsStartMenuRegistrationPath,
 } from "./portable-maintenance.js";
 
@@ -30,15 +49,190 @@ describe("portable native registration policy", () => {
   });
 
   it("derives deterministic registration locations and root modes", () => {
-    expect(
-      windowsStartMenuRegistrationPath(
-        { APPDATA: "C:\\Users\\keiko\\AppData\\Roaming" },
-        "C:\\Users\\keiko",
-      ),
-    ).toContain("Start Menu");
+    const appDataPath = windowsStartMenuRegistrationPath(
+      { APPDATA: "C:\\Users\\keiko\\AppData\\Roaming" },
+      "C:\\Users\\keiko",
+    );
+    expect(appDataPath).toContain("Start Menu");
+    // An absolute APPDATA is used as supplied — the profile fallback must not kick in here.
+    expect(appDataPath.startsWith("C:\\Users\\keiko\\AppData\\Roaming")).toBe(true);
     expect(
       portableManagedRootMode("macos-x64", "/Applications/Keiko.app", {}, "/Users/keiko"),
     ).toBe("default");
+  });
+
+  it("installs the shortcut registration and retires the legacy launcher during setup", () => {
+    const root = mkdtempSync(join(homedir(), ".keiko-install-registration-"));
+    try {
+      const home = join(root, "home");
+      const env = { APPDATA: join(home, "AppData", "Roaming") };
+      const installRoot = join(home, "AppData", "Local", "Programs", "Keiko");
+      const layout = layoutFor("windows-x64", installRoot);
+      const legacyPath = windowsLegacyStartMenuRegistrationPath(env, home);
+      mkdirSync(join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs"), {
+        recursive: true,
+      });
+      writeFileSync(
+        legacyPath,
+        windowsLauncher.generateContent({ exe: layout.primaryLauncherPath, port: undefined }),
+      );
+      const io = { out: (): undefined => undefined, err: (): undefined => undefined };
+
+      installNativeRegistration(layout, "windows-x64", installRoot, env, home, io);
+
+      // The `.lnk` is written and verified, and the contract-matching `.bat` is retired in the
+      // same pass — never two Start Menu entries after a setup.
+      expect(parseWindowsStartMenuRegistration(windowsStartMenuRegistrationPath(env, home))).toBe(
+        layout.primaryLauncherPath,
+      );
+      expect(existsSync(legacyPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("retires the contract-matching legacy launcher when repair verifies the shortcut", () => {
+    // Under the home directory like the sibling tests: the registration guards refuse symlinked
+    // ancestors, and the macOS tmpdir lives beneath the /var -> /private/var link.
+    const root = mkdtempSync(join(homedir(), ".keiko-repair-migration-"));
+    try {
+      const home = join(root, "home");
+      const env = { APPDATA: join(home, "AppData", "Roaming") };
+      const installRoot = join(home, "AppData", "Local", "Programs", "Keiko");
+      const layout = layoutFor("windows-x64", installRoot);
+      const legacyPath = windowsLegacyStartMenuRegistrationPath(env, home);
+      mkdirSync(join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs"), {
+        recursive: true,
+      });
+      writeFileSync(
+        legacyPath,
+        windowsLauncher.generateContent({ exe: layout.primaryLauncherPath, port: undefined }),
+      );
+      const io = { out: (): undefined => undefined, err: (): undefined => undefined };
+
+      // The `.lnk` is missing and the contract-matching `.bat` is present: repair must write
+      // the shortcut AND retire the legacy launcher, or the user keeps two Start Menu entries.
+      const repaired = repairUserLocalRegistration(
+        layout,
+        "windows-x64",
+        installRoot,
+        env,
+        home,
+        io,
+      );
+      expect(repaired).toBeGreaterThan(0);
+      expect(existsSync(windowsStartMenuRegistrationPath(env, home))).toBe(true);
+      expect(existsSync(legacyPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("counts action-required registrations and reports a refused legacy removal", () => {
+    const root = mkdtempSync(join(homedir(), ".keiko-action-required-"));
+    try {
+      const home = join(root, "home");
+      const env = { APPDATA: join(home, "AppData", "Roaming") };
+      const installRoot = join(home, "AppData", "Local", "Programs", "Keiko");
+      const layout = layoutFor("windows-x64", installRoot);
+      const lnkPath = windowsStartMenuRegistrationPath(env, home);
+      const legacyPath = windowsLegacyStartMenuRegistrationPath(env, home);
+      mkdirSync(dirname(lnkPath), { recursive: true });
+      const health = (): ReturnType<typeof portableRegistrationHealth> =>
+        portableRegistrationHealth(layout, "windows-x64", installRoot, env, home);
+
+      // Symlink, foreign content, oversize, hardlink: every unmanaged shape must surface as
+      // action-required — never as repairable-missing, never silently ok.
+      const target = join(root, "target.txt");
+      writeFileSync(target, "outside");
+      symlinkSync(target, lnkPath);
+      expect(health().actionRequired).toBeGreaterThan(0);
+      rmSync(lnkPath);
+
+      writeFileSync(
+        lnkPath,
+        windowsShortcutFallbackContent({
+          targetPath: join(root, "SomewhereElse", "Other.exe"),
+          workingDirectory: join(root, "SomewhereElse"),
+          iconPath: join(root, "SomewhereElse", "Other.exe"),
+        }),
+      );
+      expect(health().actionRequired).toBeGreaterThan(0);
+      rmSync(lnkPath);
+
+      writeFileSync(lnkPath, Buffer.alloc(WINDOWS_SHORTCUT_MAX_BYTES + 1, 0x20));
+      expect(health().actionRequired).toBeGreaterThan(0);
+      rmSync(lnkPath);
+
+      linkSync(target, lnkPath);
+      expect(health().actionRequired).toBeGreaterThan(0);
+      rmSync(lnkPath);
+
+      // A user-edited legacy launcher is refused by the content-verified removal, surfaces
+      // through the repairing CLI's io, and stays in place.
+      writeFileSync(lnkPath, "");
+      rmSync(lnkPath);
+      const errors: string[] = [];
+      const io = {
+        out: (): undefined => undefined,
+        err: (line: string): void => {
+          errors.push(line);
+        },
+      };
+      writeFileSync(legacyPath, "@echo edited by hand\r\n");
+      repairUserLocalRegistration(layout, "windows-x64", installRoot, env, home, io);
+      expect(existsSync(legacyPath)).toBe(true);
+      expect(errors.join("")).toContain("left in place");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps every artifact in place on a dry-run removal", () => {
+    const root = mkdtempSync(join(homedir(), ".keiko-dryrun-removal-"));
+    try {
+      const home = join(root, "home");
+      const env = { APPDATA: join(home, "AppData", "Roaming") };
+      const installRoot = join(home, "AppData", "Local", "Programs", "Keiko");
+      const layout = layoutFor("windows-x64", installRoot);
+      const legacyPath = windowsLegacyStartMenuRegistrationPath(env, home);
+      mkdirSync(dirname(legacyPath), { recursive: true });
+      writeFileSync(
+        legacyPath,
+        windowsLauncher.generateContent({ exe: layout.primaryLauncherPath, port: undefined }),
+      );
+      const io = { out: (): undefined => undefined, err: (): undefined => undefined };
+      installNativeRegistration(layout, "windows-x64", installRoot, env, home, io);
+      // installNativeRegistration retired the legacy launcher; restore it for the dry-run pass.
+      writeFileSync(
+        legacyPath,
+        windowsLauncher.generateContent({ exe: layout.primaryLauncherPath, port: undefined }),
+      );
+
+      const removed = removePortableRegistrationArtifacts(
+        layout,
+        "windows-x64",
+        installRoot,
+        env,
+        home,
+        true,
+        io,
+      );
+      expect(removed).toBeGreaterThan(0);
+      expect(existsSync(windowsStartMenuRegistrationPath(env, home))).toBe(true);
+      expect(existsSync(legacyPath)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the profile location when APPDATA is empty or relative", () => {
+    // An empty or relative APPDATA must never re-anchor the Start Menu path at the process
+    // working directory — the registration falls back to the canonical profile location.
+    for (const appData of ["", "relative\\appdata"]) {
+      const path = windowsStartMenuRegistrationPath({ APPDATA: appData }, "/home/keiko");
+      expect(path).toContain(join("/home/keiko", "AppData", "Roaming"));
+    }
   });
 
   it("reads only bounded regular unlinked Windows launcher registrations", () => {
@@ -71,6 +265,21 @@ describe("portable native registration policy", () => {
       const nestedLauncher = join(linkedParent, "Keiko.bat");
       writeFileSync(join(outside, "Keiko.bat"), canonical);
       expect(parseWindowsStartMenuRegistration(nestedLauncher)).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses shortcut registrations outside the size bounds", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-shortcut-bounds-"));
+    try {
+      const empty = join(root, "Keiko.lnk");
+      writeFileSync(empty, "");
+      expect(parseWindowsStartMenuRegistration(empty)).toBeUndefined();
+
+      const oversized = join(root, "Oversized.lnk");
+      writeFileSync(oversized, Buffer.alloc(WINDOWS_SHORTCUT_MAX_BYTES + 1, 0x20));
+      expect(parseWindowsStartMenuRegistration(oversized)).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

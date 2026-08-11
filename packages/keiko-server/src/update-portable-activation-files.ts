@@ -12,8 +12,15 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, win32 as win32Path } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import {
+  WINDOWS_SHORTCUT_MAX_BYTES,
+  equivalentWindowsShortcutPath,
+  readWindowsShortcutDefinition,
+  writeWindowsShortcutDefinition,
+  type WindowsShortcutDefinition,
+} from "@oscharko-dev/keiko-security";
 import type {
   UpdatePortableStagingSummary,
   UpdatePortableTarget,
@@ -581,6 +588,49 @@ export function refreshPortableRegistration(input: {
   }
 }
 
+const SHORTCUT_FAILURE_PREFIX = "portable activation shortcut command failed";
+
+type WindowsShortcutArtifact = WindowsShortcutDefinition;
+
+function readShortcut(path: string, env: EnvSource): WindowsShortcutArtifact | undefined {
+  return readWindowsShortcutDefinition(path, env, SHORTCUT_FAILURE_PREFIX);
+}
+
+function readGuardedShortcut(path: string, env: EnvSource): WindowsShortcutArtifact | undefined {
+  // One lstat, no exists-then-stat window: a file removed between the two calls must read as
+  // absent, not throw out of a read that callers treat as a plain lookup.
+  const stat = lstatEntryOrUndefined(path);
+  if (stat === undefined || !stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1) {
+    return undefined;
+  }
+  if (stat.size <= 0 || stat.size > WINDOWS_SHORTCUT_MAX_BYTES) return undefined;
+  return readShortcut(path, env);
+}
+
+export function readWindowsPortableShortcutTarget(
+  path: string,
+  env: EnvSource = process.env,
+): string | undefined {
+  return readGuardedShortcut(path, env)?.targetPath;
+}
+
+// Attribution check for the overwrite guard, deliberately target-only: a shortcut whose target
+// is this install's managed launcher is OURS, and the rewrite that follows refreshes every
+// managed field — a stale working directory is exactly what the rewrite repairs. Widening the
+// match to more fields would make the guard refuse the very artifacts the refresh exists to
+// heal; a target pointing anywhere else marks a foreign or user-edited file we never touch.
+function shortcutMatches(path: string, artifact: WindowsShortcutArtifact, env: EnvSource): boolean {
+  const shortcut = readGuardedShortcut(path, env);
+  return (
+    shortcut !== undefined &&
+    equivalentWindowsShortcutPath(shortcut.targetPath, artifact.targetPath)
+  );
+}
+
+function writeShortcut(path: string, artifact: WindowsShortcutArtifact, env: EnvSource): void {
+  writeWindowsShortcutDefinition(path, artifact, env, SHORTCUT_FAILURE_PREFIX);
+}
+
 export function refreshPortableShortcut(input: {
   readonly target: UpdatePortableTarget;
   readonly layout: PortableActivationLayout;
@@ -589,16 +639,53 @@ export function refreshPortableShortcut(input: {
 }): boolean {
   if (input.target !== "windows-x64") return true;
   if (!WINDOWS_SHORTCUT_SAFE_PATH.test(input.layout.launcherPath)) return false;
-  const root = input.env.APPDATA ?? join(input.home, "AppData", "Roaming");
-  const path = join(root, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.bat");
-  const content = `@start "" "${input.layout.launcherPath}" start --open\r\n`;
-  if (existsSync(path) && lstatSync(path).isSymbolicLink()) return false;
-  if (existsSync(path) && statSync(path).isFile() && readFileSync(path, "utf8") !== content) {
+  // Absolute-only, like every other environment-sourced root here: an empty or relative
+  // APPDATA would re-anchor the Start Menu path at the process working directory.
+  const configuredAppData = input.env.APPDATA;
+  const root =
+    configuredAppData !== undefined && win32Path.isAbsolute(configuredAppData)
+      ? configuredAppData
+      : join(input.home, "AppData", "Roaming");
+  const path = join(root, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk");
+  const artifact = {
+    targetPath: input.layout.launcherPath,
+    workingDirectory: input.layout.installRoot,
+    iconPath: input.layout.launcherPath,
+  };
+  try {
+    // lstat first: `existsSync` follows symlinks, so a DANGLING symlink would pass an
+    // exists-guarded check and the write would follow it to an attacker-chosen target. lstat
+    // sees the link itself regardless of its target.
+    const entry = lstatEntryOrUndefined(path);
+    if (entry !== undefined) {
+      if (entry.isSymbolicLink()) return false;
+      // Refuse-to-overwrite, not refresh-at-any-cost: an existing regular file whose target is
+      // not this install's launcher cannot be attributed to this product — it is foreign or
+      // user-edited, and activation must never destroy it (`shortcutRefreshed: false` reports
+      // the refusal). An attributed shortcut passes and is fully rewritten below, which is how
+      // a stale working directory or icon gets repaired.
+      if (entry.isFile() && !shortcutMatches(path, artifact, input.env)) return false;
+    }
+    mkdirSync(dirname(path), { recursive: true, mode: 0o755 });
+    writeShortcut(path, artifact, input.env);
+    return true;
+  } catch {
+    // Boolean contract: a shortcut-host failure degrades to shortcutRefreshed=false — it must
+    // never abort an otherwise-completed activation. The redacted failure detail (exit status +
+    // stderr byte count) is intentionally not persisted here: this flow has no text sink, the
+    // API-visible signal is `shortcutRefreshed: false` in the activation summary, and the
+    // operator-diagnosable path for the same artifact is `keiko portable repair`, which checks
+    // and rewrites this registration with full CLI diagnostics.
     return false;
   }
-  mkdirSync(dirname(path), { recursive: true, mode: 0o755 });
-  writeFileSync(path, content, { encoding: "utf8", mode: 0o644 });
-  return true;
+}
+
+function lstatEntryOrUndefined(path: string): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(path);
+  } catch {
+    return undefined;
+  }
 }
 
 export function cleanupPortableActivation(paths: PortableActivationPaths): void {

@@ -1,12 +1,15 @@
 import { spawn } from "node:child_process";
+import { join as joinWindowsPath } from "node:path/win32";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { windowsSystemRoot } from "@oscharko-dev/keiko-security";
 
 /**
- * A Finder double-click gives the portable launcher no terminal: every `io.err` line vanishes and
+ * A desktop double-click gives the portable launcher no terminal: every `io.err` line vanishes and
  * a failed first start looks like the app simply did nothing. This surfaced twice in the 0.3.0
- * beta — a Gatekeeper-blocked bundle and a refused runtime activation both died without a visible
- * word. When a setup or launch command fails under a double-click, this notifier shows the
- * recorded reason in a native alert instead.
+ * beta on macOS — a Gatekeeper-blocked bundle and a refused runtime activation both died without
+ * a visible word — and again on Windows when the console-backed Node child was hidden. When a
+ * setup or launch command fails under a double-click, this notifier shows the recorded reason in a
+ * native alert instead.
  *
  * The double-click is detected by `KEIKO_PORTABLE_UI_LAUNCH=1`, which only the native launcher
  * binary sets. A TTY heuristic is deliberately NOT used: it cannot tell a Finder launch from a
@@ -20,12 +23,14 @@ import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 const MAX_ALERT_MESSAGE_LENGTH = 400;
 const OSASCRIPT_EXECUTABLE = "/usr/bin/osascript";
+const WINDOWS_POWERSHELL_PARTS = ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"];
 
 export type PortableFailureNotifierFn = (message: string, env: EnvSource) => void;
 
 export interface PortableFailureNotifierDeps {
   readonly platform?: (() => NodeJS.Platform) | undefined;
   readonly runAlert?: ((script: string) => void) | undefined;
+  readonly runWindowsAlert?: ((message: string, env: EnvSource) => void) | undefined;
   /**
    * Receives one fixed, content-free line when the alert itself cannot be shown. The CLI wires
    * this to stderr: there is no operator diagnostic sink on this pre-server surface, and the
@@ -37,12 +42,16 @@ export interface PortableFailureNotifierDeps {
 
 const ALERT_FAILURE_LINE = "keiko portable launch: the failure alert could not be shown\n";
 
-/** Kept to displayable text: AppleScript-quoted, control-free, bounded. */
-function alertScript(message: string): string {
-  const displayable = Array.from(message)
+/** Kept to displayable text: platform-quoted, control-free, bounded. */
+function displayableAlertMessage(message: string): string {
+  return Array.from(message)
     .filter((character) => (character.codePointAt(0) ?? 0) >= 0x20)
     .join("")
     .slice(0, MAX_ALERT_MESSAGE_LENGTH);
+}
+
+function alertScript(message: string): string {
+  const displayable = displayableAlertMessage(message);
   const quoted = displayable.replaceAll("\\", String.raw`\\`).replaceAll('"', String.raw`\"`);
   return (
     `display alert "Keiko could not start" message "${quoted}` +
@@ -63,6 +72,7 @@ type DetachedAlertSpawn = (
     readonly env: NodeJS.ProcessEnv;
     readonly shell: false;
     readonly stdio: "ignore";
+    readonly windowsHide?: boolean;
   },
 ) => DetachedAlertChild;
 
@@ -87,8 +97,112 @@ export function runDetachedAlert(
   child.unref();
 }
 
+function windowsPowerShellExecutable(env: EnvSource): string {
+  return joinWindowsPath(windowsSystemRoot(env), ...WINDOWS_POWERSHELL_PARTS);
+}
+
+function powershellSingleQuoted(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function windowsAlertCommand(message: string): string {
+  const text = powershellSingleQuoted(displayableAlertMessage(message));
+  return [
+    "Add-Type -AssemblyName PresentationFramework",
+    `[System.Windows.MessageBox]::Show(${text}, 'Keiko could not start', 'OK', 'Error') | Out-Null`,
+  ].join("; ");
+}
+
+export function runDetachedWindowsAlert(
+  message: string,
+  env: EnvSource,
+  spawnFn: DetachedAlertSpawn = spawn,
+  reportAlertFailure: (line: string) => void = defaultAlertFailureReport,
+): void {
+  const systemRoot = windowsSystemRoot(env);
+  const child = spawnFn(
+    windowsPowerShellExecutable(env),
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-Sta",
+      "-WindowStyle",
+      "Hidden",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      windowsAlertCommand(message),
+    ],
+    {
+      detached: true,
+      // PowerShell and WPF need the core system variables; a fully empty environment can fail
+      // to initialize the runtime. Everything else stays withheld from the detached child.
+      env: {
+        SystemRoot: systemRoot,
+        WINDIR: systemRoot,
+        ...(env.TEMP === undefined ? {} : { TEMP: env.TEMP }),
+        ...(env.TMP === undefined ? {} : { TMP: env.TMP }),
+      },
+      shell: false,
+      stdio: "ignore",
+      windowsHide: true,
+    },
+  );
+  child.on("error", () => {
+    reportAlertFailure(ALERT_FAILURE_LINE);
+  });
+  child.unref();
+}
+
 function defaultAlertFailureReport(line: string): void {
   process.stderr.write(line);
+}
+
+function launchFailureMessage(message: string): string {
+  return message.trim() === "" ? "The portable launch failed without a reason." : message;
+}
+
+function notifyMacosLaunchFailure(
+  text: string,
+  deps: PortableFailureNotifierDeps,
+  reportAlertFailure: (line: string) => void,
+): void {
+  const runAlert =
+    deps.runAlert ??
+    ((script: string): void => {
+      runDetachedAlert(script, undefined, reportAlertFailure);
+    });
+  runAlert(alertScript(text));
+}
+
+function notifyWindowsLaunchFailure(
+  text: string,
+  env: EnvSource,
+  deps: PortableFailureNotifierDeps,
+  reportAlertFailure: (line: string) => void,
+): void {
+  const runWindowsAlert =
+    deps.runWindowsAlert ??
+    ((alertMessage: string, notifyEnv: EnvSource): void => {
+      runDetachedWindowsAlert(alertMessage, notifyEnv, undefined, reportAlertFailure);
+    });
+  runWindowsAlert(text, env);
+}
+
+function notifySupportedPlatformLaunchFailure(
+  hostPlatform: NodeJS.Platform,
+  text: string,
+  env: EnvSource,
+  deps: PortableFailureNotifierDeps,
+  reportAlertFailure: (line: string) => void,
+): void {
+  if (hostPlatform === "darwin") {
+    notifyMacosLaunchFailure(text, deps, reportAlertFailure);
+  }
+  if (hostPlatform === "win32") {
+    notifyWindowsLaunchFailure(text, env, deps, reportAlertFailure);
+  }
 }
 
 export function notifyPortableLaunchFailure(
@@ -98,16 +212,12 @@ export function notifyPortableLaunchFailure(
 ): void {
   if (env.KEIKO_PORTABLE_UI_LAUNCH !== "1") return;
   const platform = deps.platform ?? ((): NodeJS.Platform => process.platform);
-  if (platform() !== "darwin") return;
-  const text = message.trim() === "" ? "The portable launch failed without a reason." : message;
+  const hostPlatform = platform();
+  if (hostPlatform !== "darwin" && hostPlatform !== "win32") return;
+  const text = launchFailureMessage(message);
   const reportAlertFailure = deps.reportAlertFailure ?? defaultAlertFailureReport;
   try {
-    const runAlert =
-      deps.runAlert ??
-      ((script: string): void => {
-        runDetachedAlert(script, undefined, reportAlertFailure);
-      });
-    runAlert(alertScript(text));
+    notifySupportedPlatformLaunchFailure(hostPlatform, text, env, deps, reportAlertFailure);
   } catch {
     // Best-effort by contract — see runDetachedAlert; the fixed line below is the evidence.
     reportAlertFailure(ALERT_FAILURE_LINE);

@@ -32,6 +32,7 @@ import {
   installNativeRegistration,
   parseWindowsStartMenuRegistration,
   removePortableManagedInstall,
+  windowsLegacyStartMenuRegistrationPath,
   windowsStartMenuRegistrationPath,
 } from "./portable-maintenance.js";
 import { assertManagedRootAllowed } from "./portable-root-policy.js";
@@ -66,6 +67,7 @@ export interface PortableManagedUpgradeInput {
   readonly env: EnvSource;
   readonly home: string;
   readonly now: Date;
+  readonly io: CliIo;
 }
 
 type PortableManagedReplacementInput = Omit<PortableManagedUpgradeInput, "current">;
@@ -397,6 +399,7 @@ function promoteStagedUpgrade(
       layout,
       stagedSource.manifest,
       input.now,
+      input.io,
     );
     return layout;
   } catch (error) {
@@ -549,9 +552,17 @@ function finalizeManagedSetup(
   layout: PortableLayout,
   manifest: SetupManifest,
   now: Date,
+  io: CliIo,
 ): void {
   validatePortableRoot(options.target, layout.installRoot);
-  installNativeRegistration(layout, options.target, options.managedRoot, options.env, options.home);
+  installNativeRegistration(
+    layout,
+    options.target,
+    options.managedRoot,
+    options.env,
+    options.home,
+    io,
+  );
   writeManagedRegistration({
     stateDir: options.stateDir,
     layout,
@@ -690,11 +701,11 @@ export function recoverableFailedWindowsManagedRoot(
   env: EnvSource,
   home: string,
 ): string | undefined {
-  const registeredExe = parseWindowsStartMenuRegistration(
-    windowsStartMenuRegistrationPath(env, home),
-  );
-  if (registeredExe === undefined) return undefined;
-  return recoverableFailedManagedRoot("windows-x64", dirname(registeredExe), stateDir);
+  for (const registeredExe of windowsRegisteredLauncherTargets(env, home)) {
+    const recovered = recoverableFailedManagedRoot("windows-x64", dirname(registeredExe), stateDir);
+    if (recovered !== undefined) return recovered;
+  }
+  return undefined;
 }
 
 function canRecoverFailedManagedInstall(options: SetupPortableOptions): boolean {
@@ -982,6 +993,7 @@ function validateExistingManagedSetup(
   options: SetupPortableOptions,
   source: ValidatedPortableRoot,
   now: Date,
+  io: CliIo,
 ): PreparedPortableSetup | undefined {
   if (options.dryRun || sameRealPath(source.layout.installRoot, options.managedRoot)) {
     return undefined;
@@ -989,7 +1001,7 @@ function validateExistingManagedSetup(
   const existing = attestedManagedInstall(options.target, options.managedRoot, options.stateDir);
   if (existing === undefined) return undefined;
   try {
-    finalizeManagedSetup(options, existing.layout, existing.manifest, now);
+    finalizeManagedSetup(options, existing.layout, existing.manifest, now, io);
   } catch (error) {
     throw new PortableManagedRegistrationRepairError(error);
   }
@@ -1004,6 +1016,7 @@ function recoverBoundFailedSetup(
   options: SetupPortableOptions,
   source: ValidatedPortableRoot,
   now: Date,
+  io: CliIo,
 ): PreparedPortableSetup | undefined {
   if (
     options.dryRun ||
@@ -1012,13 +1025,14 @@ function recoverBoundFailedSetup(
   ) {
     return undefined;
   }
-  return recoverLockedFailedSetup(options, source, now);
+  return recoverLockedFailedSetup(options, source, now, io);
 }
 
 function recoverLockedFailedSetup(
   options: SetupPortableOptions,
   source: ValidatedPortableRoot,
   now: Date,
+  io: CliIo,
 ): PreparedPortableSetup {
   const current = requireAttestedFailedManagedInstall(options);
   if (compareStableVersions(source.manifest.packageVersion, current.manifest.packageVersion) < 0) {
@@ -1028,7 +1042,7 @@ function recoverLockedFailedSetup(
     requireAttestedFailedManagedInstall(options);
   };
   return {
-    layout: recoverFailedManagedInstall({ ...options, source, now }, verifyCurrent),
+    layout: recoverFailedManagedInstall({ ...options, source, now, io }, verifyCurrent),
     createdManagedInstall: false,
     message: "Keiko portable setup recovered at managed root.\n",
   };
@@ -1048,10 +1062,11 @@ function preparePortableSetup(
   options: SetupPortableOptions,
   source: ValidatedPortableRoot,
   now: Date,
+  io: CliIo,
 ): PreparedPortableSetup {
-  const existing = validateExistingManagedSetup(options, source, now);
+  const existing = validateExistingManagedSetup(options, source, now, io);
   if (existing !== undefined) return existing;
-  const recovered = recoverBoundFailedSetup(options, source, now);
+  const recovered = recoverBoundFailedSetup(options, source, now, io);
   if (recovered !== undefined) return recovered;
   const layout = promoteToManaged(
     options.target,
@@ -1063,7 +1078,7 @@ function preparePortableSetup(
   const createdManagedInstall =
     !options.dryRun && !sameRealPath(source.layout.installRoot, layout.installRoot);
   try {
-    if (!options.dryRun) finalizeManagedSetup(options, layout, source.manifest, now);
+    if (!options.dryRun) finalizeManagedSetup(options, layout, source.manifest, now, io);
   } catch (error) {
     if (createdManagedInstall) rollbackManagedSetup(layout);
     throw error;
@@ -1090,10 +1105,10 @@ export function setupPortable(
     assertManagedRootAllowed(options.managedRoot, options.stateDir, options.target);
     assertFailedSetupRecoveryBound(options);
     const prepared = options.dryRun
-      ? preparePortableSetup(options, source, now)
+      ? preparePortableSetup(options, source, now, io)
       : withPortableSetupLocks(options, () => {
           try {
-            return preparePortableSetup(options, source, now);
+            return preparePortableSetup(options, source, now, io);
           } catch (error) {
             const original =
               error instanceof PortableManagedRegistrationRepairError ? error.original : error;
@@ -1134,13 +1149,19 @@ function candidateManagedRoots(
   const hintedRoot = resolveManagedRootLocator(registration, home);
   if (hintedRoot !== undefined) roots.add(hintedRoot);
   if (target !== "windows-x64") return [...roots];
-  const registeredExe = parseWindowsStartMenuRegistration(
-    windowsStartMenuRegistrationPath(env, home),
-  );
-  if (registeredExe !== undefined) {
+  for (const registeredExe of windowsRegisteredLauncherTargets(env, home)) {
     roots.add(dirname(registeredExe));
   }
   return [...roots];
+}
+
+function windowsRegisteredLauncherTargets(env: EnvSource, home: string): readonly string[] {
+  return [
+    windowsStartMenuRegistrationPath(env, home),
+    windowsLegacyStartMenuRegistrationPath(env, home),
+  ]
+    .map((path) => parseWindowsStartMenuRegistration(path))
+    .filter((path): path is string => path !== undefined);
 }
 
 function resolveManagedRootLocator(

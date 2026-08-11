@@ -62,4 +62,17 @@ export {
   hasCriticalInjectionSignal,
 } from "./promptInjection.js";
 
+export type { WindowsShortcutDefinition, WindowsShortcutSpawnFn } from "./windows-shortcuts.js";
+export {
+  WINDOWS_SHORTCUT_MAX_BYTES,
+  WINDOWS_SHORTCUT_TIMEOUT_MS,
+  equivalentWindowsShortcutPath,
+  windowsSystemRoot,
+  parseWindowsShortcutFallback,
+  readWindowsShortcutDefinition,
+  runWindowsShortcutCommand,
+  windowsShortcutFallbackContent,
+  writeWindowsShortcutDefinition,
+} from "./windows-shortcuts.js";
+
 export * from "./errors/index.js";

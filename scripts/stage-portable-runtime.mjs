@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, posix, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
 import {
@@ -34,7 +34,11 @@ import {
   validatePortableStagingManifest,
   verifySha256File,
 } from "./portable-runtime.mjs";
-import { writeZipArchiveFromDirectory } from "./lib/zip-archive.mjs";
+import {
+  extractZipArchiveEntries,
+  readZipArchiveEntryNames,
+  writeZipArchiveFromDirectory,
+} from "./lib/zip-archive.mjs";
 import {
   usearchRuntimeApproval,
   usearchRuntimeTargetKey,
@@ -997,7 +1001,12 @@ function normalizeArchiveEntry(entry) {
     return "";
   }
   const parts = normalized.split("/");
-  if (parts.some((part) => part.length === 0 || part === "." || part === "..")) return "";
+  // A `:` anywhere in a component is an NTFS alternate-stream (or drive) designator on the
+  // Windows consumer of these archives — never a portable file name. Refuse, don't reinterpret.
+  if (
+    parts.some((part) => part.length === 0 || part === "." || part === ".." || part.includes(":"))
+  )
+    return "";
   return normalized;
 }
 
@@ -1037,23 +1046,36 @@ function assertTarSymlinkTargetSafe(entry, line, expectedRoot) {
 }
 
 export function createPortableZipAdapter(platform = process.platform, commandRunner = run) {
-  return platform === "win32"
-    ? createSevenZipAdapter(commandRunner)
-    : createInfoZipAdapter(commandRunner);
+  return platform === "win32" ? createNodeZipAdapter() : createInfoZipAdapter(commandRunner);
 }
 
-function createSevenZipAdapter(commandRunner) {
+function createNodeZipAdapter() {
+  // requireRegularEntries carries the fail-closed contract the retired 7z adapter proved with
+  // its own entry-type records: a Windows runtime archive may contain only regular files, so a
+  // symlink/device/FIFO entry refuses the archive instead of materializing as a plain file.
+  // containmentRoot keeps followed symlinks inside the staged tree — a link resolving outside
+  // it must never embed foreign workspace bytes into a release archive.
   return {
     list(archivePath) {
-      const result = commandRunner("7z", ["l", "-slt", "-ba", archivePath]);
-      return parseSevenZipEntries(result.stdout);
+      // Metadata-only: a listing must never inflate entry bodies, so a hostile declared
+      // expansion cannot cost memory before the containment check has even seen the names.
+      return readZipArchiveEntryNames(archivePath, { requireRegularEntries: true });
     },
     extract(archivePath, extractRoot) {
-      commandRunner("7z", ["x", "-y", `-o${extractRoot}`, archivePath]);
+      extractZipArchiveEntries(archivePath, extractRoot, { requireRegularEntries: true });
     },
     create(sourceRoot, entryName, archivePath) {
-      commandRunner("7z", ["a", "-tzip", "-mx=9", archivePath, entryName], {
-        cwd: sourceRoot,
+      const treeRoot = join(sourceRoot, entryName);
+      const resolvedTree = resolve(treeRoot);
+      const resolvedSource = resolve(sourceRoot);
+      if (resolvedTree !== resolvedSource && !resolvedTree.startsWith(resolvedSource + sep)) {
+        fail(`portable ZIP entry name escapes the staging root: ${entryName}`);
+      }
+      writeZipArchiveFromDirectory(treeRoot, archivePath, {
+        rootName: entryName,
+        followSymlinks: true,
+        containmentRoot: treeRoot,
+        requireRegularEntries: true,
       });
     },
   };
@@ -1085,62 +1107,6 @@ function assertInfoZipEntryTypesSafe(archivePath, commandRunner) {
     if (type === "d" || type === "-") continue;
     throw new Error("archive contains unsupported special-file entries");
   }
-}
-
-function parseSevenZipEntries(output) {
-  const records = sevenZipTechnicalRecords(output).filter((record) => "Folder" in record);
-  if (records.length === 0) throw new Error("7z did not report ZIP entries");
-  for (const record of records) assertSevenZipEntrySafe(record);
-  return records.map((record) => record.Path);
-}
-
-function sevenZipTechnicalRecords(output) {
-  return output
-    .split(/\r?\n\s*\r?\n/u)
-    .map(sevenZipTechnicalRecord)
-    .filter((record) => typeof record.Path === "string" && record.Path.length > 0);
-}
-
-function sevenZipTechnicalRecord(block) {
-  const record = {};
-  for (const line of block.split(/\r?\n/u)) {
-    const separator = line.indexOf(" = ");
-    if (separator <= 0) continue;
-    record[line.slice(0, separator)] = line.slice(separator + 3);
-  }
-  return record;
-}
-
-function assertSevenZipEntrySafe(record) {
-  const folder = record.Folder;
-  const unixType = sevenZipUnixEntryType(record.Attributes);
-  if (
-    (folder !== "+" && folder !== "-") ||
-    record.Encrypted === "+" ||
-    sevenZipTypeUnsupported(unixType) ||
-    sevenZipHasLinkMetadata(record) ||
-    sevenZipFolderTypeMismatch(folder, unixType)
-  ) {
-    throw new Error("archive contains unsupported special-file entries");
-  }
-}
-
-function sevenZipUnixEntryType(attributes) {
-  if (typeof attributes !== "string") return undefined;
-  return /(?:^|\s)([dlbcps-])[rwxStTs-]{9}(?:\s|$)/u.exec(attributes)?.[1];
-}
-
-function sevenZipTypeUnsupported(unixType) {
-  return unixType !== undefined && unixType !== "-" && unixType !== "d";
-}
-
-function sevenZipHasLinkMetadata(record) {
-  return "Symbolic Link" in record || "Hard Link" in record || "Alternate Stream" in record;
-}
-
-function sevenZipFolderTypeMismatch(folder, unixType) {
-  if (folder === "+") return unixType !== undefined && unixType !== "d";
-  return folder === "-" && unixType === "d";
 }
 
 function copySafeTreeContents(sourceRoot, destinationRoot) {
@@ -1871,25 +1837,119 @@ function compileMacLauncher(target, destination) {
   ]);
 }
 
+// Resolves the MSVC toolchain environment for the rc/cl launcher compile. The staging script
+// owns its toolchain instead of depending on a workflow step (or a developer) having persisted
+// vcvars into the process environment: a plain shell resolves Visual Studio through the fixed
+// vswhere installer path and imports the single-line vcvars64 variables; a Developer Command
+// Prompt (INCLUDE and LIB already present) is used as-is. Fails closed when no toolchain exists.
+function locateVisualStudioInstallation(baseEnv) {
+  const configuredProgramFiles = baseEnv["ProgramFiles(x86)"];
+  const programFiles =
+    configuredProgramFiles !== undefined && isAbsolute(configuredProgramFiles)
+      ? configuredProgramFiles
+      : String.raw`C:\Program Files (x86)`;
+  const vswhere = join(programFiles, "Microsoft Visual Studio", "Installer", "vswhere.exe");
+  if (!existsSync(vswhere)) {
+    fail("MSVC toolchain not found: install the Visual Studio C++ Build Tools (vswhere missing)");
+  }
+  const located = spawnSync(
+    vswhere,
+    [
+      "-latest",
+      "-products",
+      "*",
+      "-requires",
+      "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+      "-property",
+      "installationPath",
+      // Explicit UTF-8 output: without it vswhere emits the console code page, corrupting a
+      // non-ASCII installation path before it ever reaches vcvars.
+      "-utf8",
+    ],
+    { encoding: "utf8" },
+  );
+  const installationPath = located.stdout?.trim().split(/\r?\n/u)[0] ?? "";
+  if (located.status !== 0 || installationPath === "") {
+    fail("MSVC toolchain not found: Visual Studio C++ Build Tools are not installed");
+  }
+  return installationPath;
+}
+
+function importVcvarsEnvironment(baseEnv, installationPath) {
+  const vcvars = join(installationPath, "VC", "Auxiliary", "Build", "vcvars64.bat");
+  const systemRoot = baseEnv.SystemRoot ?? baseEnv.WINDIR ?? String.raw`C:\Windows`;
+  const dump = spawnSync(
+    join(systemRoot, "System32", "cmd.exe"),
+    // chcp 65001 before `set`: cmd's internal commands emit the OEM code page into a pipe,
+    // which corrupts non-ASCII PATH/INCLUDE/LIB values under the UTF-8 decode below.
+    ["/d", "/s", "/c", `""${vcvars}" >nul && chcp 65001 >nul && set"`],
+    { encoding: "utf8", windowsVerbatimArguments: true },
+  );
+  if (dump.status !== 0) fail("MSVC environment initialization failed (vcvars64)");
+  const resolved = { ...baseEnv };
+  for (const line of dump.stdout.split(/\r?\n/u)) {
+    const separator = line.indexOf("=");
+    if (separator > 0) resolved[line.slice(0, separator)] = line.slice(separator + 1);
+  }
+  // cmd emits `Path=`, the parent may carry `PATH=`: Windows treats env names case-insensitively
+  // but a JS object does not, and two same-named-differently-cased keys make the child PATH and
+  // the tool lookup ambiguous. Rebuild with every case variant merged onto the canonical PATH.
+  const canonical = {};
+  for (const [key, value] of Object.entries(resolved)) {
+    if (key.toUpperCase() === "PATH") canonical.PATH = value;
+    else canonical[key] = value;
+  }
+  return canonical;
+}
+
+export function resolveWindowsMsvcEnv(baseEnv = process.env) {
+  if (baseEnv.INCLUDE !== undefined && baseEnv.LIB !== undefined) return baseEnv;
+  const resolved = importVcvarsEnvironment(baseEnv, locateVisualStudioInstallation(baseEnv));
+  if (resolved.INCLUDE === undefined || resolved.LIB === undefined) {
+    fail("MSVC environment initialization did not define INCLUDE and LIB");
+  }
+  return resolved;
+}
+
+// Child-process PATH search does not reliably honour an options.env PATH, so the two MSVC tools
+// are located explicitly on the resolved toolchain PATH and spawned by absolute path.
+function windowsToolFromPath(envPath, tool) {
+  for (const dir of (envPath ?? "").split(";")) {
+    if (dir === "") continue;
+    const candidate = join(dir, tool);
+    if (existsSync(candidate)) return candidate;
+  }
+  return fail(`MSVC tool ${tool} was not found on the resolved toolchain PATH`);
+}
+
 function compileWindowsLauncher(target, destination) {
   requireWindowsLauncherIconSource();
+  const env = resolveWindowsMsvcEnv();
   const tempRoot = mkdtempSync(join(tmpdir(), "keiko-windows-launcher-resource-"));
   try {
     const resourcePath = join(tempRoot, "keiko-portable-launcher.res");
-    run("rc", ["/nologo", `/fo${resourcePath}`, windowsLauncherResourceSource()]);
-    run("cl", [
-      "/nologo",
-      "/O2",
-      "/DUNICODE",
-      "/D_UNICODE",
-      `/D${nativeLauncherTargetDefine(target)}`,
-      `/Fe:${destination}`,
-      nativeLauncherSource(),
-      resourcePath,
-      "/link",
-      "/SUBSYSTEM:WINDOWS",
-      "/ENTRY:wmainCRTStartup",
-    ]);
+    run(
+      windowsToolFromPath(env.PATH, "rc.exe"),
+      ["/nologo", `/fo${resourcePath}`, windowsLauncherResourceSource()],
+      { env },
+    );
+    run(
+      windowsToolFromPath(env.PATH, "cl.exe"),
+      [
+        "/nologo",
+        "/O2",
+        "/DUNICODE",
+        "/D_UNICODE",
+        `/D${nativeLauncherTargetDefine(target)}`,
+        `/Fe:${destination}`,
+        nativeLauncherSource(),
+        resourcePath,
+        "/link",
+        "/SUBSYSTEM:WINDOWS",
+        "/ENTRY:wmainCRTStartup",
+      ],
+      { env },
+    );
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }

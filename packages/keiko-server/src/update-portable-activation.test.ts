@@ -1,9 +1,12 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -18,7 +21,13 @@ import {
   activationIdFor,
   capturePortableRegistration,
   readPortableActivationRecovery,
+  readWindowsPortableShortcutTarget,
+  refreshPortableShortcut,
 } from "./update-portable-activation-files.js";
+import {
+  parseWindowsShortcutFallback,
+  windowsShortcutFallbackContent,
+} from "@oscharko-dev/keiko-security";
 
 const TARGET_VERSION = "0.2.12";
 const OLD_VERSION = "0.2.11";
@@ -42,7 +51,7 @@ function writeInstall(root: string, version: string): void {
   mkdirSync(join(root, "app"), { recursive: true });
   mkdirSync(join(root, ".portable"), { recursive: true });
   mkdirSync(join(root, "runtime", "node"), { recursive: true });
-  writeFileSync(join(root, "Keiko.exe"), `launcher-${version}`, "utf8");
+  copyFileSync(process.execPath, join(root, "Keiko.exe"));
   writeFileSync(join(root, "runtime", "node", "node.exe"), "node", "utf8");
   writeFileSync(
     join(root, "app", "package.json"),
@@ -93,6 +102,12 @@ async function makeInstall(): Promise<{
 
 function childProcess(): ChildProcess {
   return { unref: vi.fn() } as unknown as ChildProcess;
+}
+
+function filesUnder(root: string): readonly string[] {
+  return readdirSync(root, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name));
 }
 
 afterEach(async () => {
@@ -260,26 +275,29 @@ describe("portable update activation", () => {
     const packageRoot = join(managedRoot, "app");
     const stageRoot = join(dirname(managedRoot), ".keiko-portable-updates", "stage-1", "Keiko");
     const stateDir = join(home, ".keiko");
+    const activatorEnv = {
+      KEIKO_STATE_DIR: stateDir,
+      APPDATA: join(home, "AppData", "Roaming"),
+      LOCALAPPDATA: join(home, "AppData", "Local"),
+    };
     writeInstall(managedRoot, OLD_VERSION);
     writeInstall(stageRoot, TARGET_VERSION);
     const activator = createPortableUpdateActivator({
-      env: {
-        KEIKO_STATE_DIR: stateDir,
-        APPDATA: join(home, "AppData", "Roaming"),
-        LOCALAPPDATA: join(home, "AppData", "Local"),
-      },
+      env: activatorEnv,
       homedir: () => home,
       spawnFn: () => childProcess(),
       versionVerifier: () => Promise.resolve(true),
     });
 
-    await activator.activate({
+    const summary = await activator.activate({
       sessionId: "session-spaced-shortcut",
       targetVersion: TARGET_VERSION,
       stage: stageSummary(),
       runtimeFacts: { packageRoot, portableStateDir: stateDir },
     });
 
+    expect(summary.target).toBe(TARGET);
+    expect(summary.shortcutRefreshed).toBe(true);
     const shortcutPath = join(
       home,
       "AppData",
@@ -288,11 +306,103 @@ describe("portable update activation", () => {
       "Windows",
       "Start Menu",
       "Programs",
-      "Keiko.bat",
+      "Keiko.lnk",
     );
-    expect(readFileSync(shortcutPath, "utf8")).toBe(
-      `@start "" "${join(managedRoot, "Keiko.exe")}" start --open\r\n`,
+    expect(filesUnder(home).filter((path) => path.endsWith(".lnk"))).toContain(shortcutPath);
+    expect(readWindowsPortableShortcutTarget(shortcutPath, activatorEnv)).toBe(
+      join(managedRoot, "Keiko.exe"),
     );
+  });
+
+  it("rewrites an attributed shortcut with a stale working directory and refuses a foreign one", async () => {
+    const base = await mkdtemp(join(tmpdir(), "keiko-portable-shortcut-guard-"));
+    tempRoots.push(base);
+    const home = join(base, "home");
+    const installRoot = join(home, "AppData", "Local", "Programs", "Keiko");
+    const launcherPath = join(installRoot, "Keiko.exe");
+    const env = { APPDATA: join(home, "AppData", "Roaming") };
+    const shortcutPath = join(
+      env.APPDATA,
+      "Microsoft",
+      "Windows",
+      "Start Menu",
+      "Programs",
+      "Keiko.lnk",
+    );
+    const layout = {
+      installRoot,
+      appRoot: join(installRoot, "app"),
+      packageJsonPath: join(installRoot, "app", "package.json"),
+      setupManifestPath: join(installRoot, "app", "keiko-setup-manifest.json"),
+      launcherPath,
+    };
+    mkdirSync(dirname(shortcutPath), { recursive: true });
+
+    // Attributed (target = managed launcher) but stale working directory: the refresh must
+    // repair it, not refuse it — this is the exact artifact the rewrite exists to heal.
+    writeFileSync(
+      shortcutPath,
+      windowsShortcutFallbackContent({
+        targetPath: launcherPath,
+        workingDirectory: join(home, "old-install-root"),
+        iconPath: launcherPath,
+      }),
+      "utf8",
+    );
+    expect(refreshPortableShortcut({ target: "windows-x64", layout, env, home })).toBe(true);
+    expect(parseWindowsShortcutFallback(shortcutPath)?.workingDirectory).toBe(installRoot);
+
+    // Foreign target: cannot be attributed to this install, must be refused and left intact.
+    const foreign = windowsShortcutFallbackContent({
+      targetPath: join(home, "SomethingElse", "Other.exe"),
+      workingDirectory: join(home, "SomethingElse"),
+      iconPath: join(home, "SomethingElse", "Other.exe"),
+    });
+    writeFileSync(shortcutPath, foreign, "utf8");
+    expect(refreshPortableShortcut({ target: "windows-x64", layout, env, home })).toBe(false);
+    expect(readFileSync(shortcutPath, "utf8")).toBe(foreign);
+  });
+
+  it("falls back to the profile location when APPDATA is empty or relative", async () => {
+    const base = await mkdtemp(join(tmpdir(), "keiko-portable-appdata-guard-"));
+    tempRoots.push(base);
+    const home = join(base, "home");
+    const installRoot = join(home, "AppData", "Local", "Programs", "Keiko");
+    const launcherPath = join(installRoot, "Keiko.exe");
+    const layout = {
+      installRoot,
+      appRoot: join(installRoot, "app"),
+      packageJsonPath: join(installRoot, "app", "package.json"),
+      setupManifestPath: join(installRoot, "app", "keiko-setup-manifest.json"),
+      launcherPath,
+    };
+    const fallbackShortcut = join(
+      home,
+      "AppData",
+      "Roaming",
+      "Microsoft",
+      "Windows",
+      "Start Menu",
+      "Programs",
+      "Keiko.lnk",
+    );
+
+    // An empty or relative APPDATA must anchor at the profile fallback, never at the process
+    // working directory.
+    for (const appData of ["", "relative\\appdata"]) {
+      expect(
+        refreshPortableShortcut({
+          target: "windows-x64",
+          layout,
+          env: { APPDATA: appData },
+          home,
+        }),
+      ).toBe(true);
+      expect(parseWindowsShortcutFallback(fallbackShortcut)?.targetPath).toBe(launcherPath);
+      rmSync(fallbackShortcut);
+    }
+    expect(existsSync(join(process.cwd(), "Microsoft"))).toBe(false);
+    expect(existsSync(join(process.cwd(), "relative"))).toBe(false);
   });
 
   it("fails closed and preserves the active install when the staged candidate is incomplete", async () => {

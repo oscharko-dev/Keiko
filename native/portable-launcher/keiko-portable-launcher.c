@@ -6,8 +6,14 @@
 #define UNICODE
 #define _UNICODE
 #include <stdarg.h>
+#include <stdio.h>
 #include <wchar.h>
 #include <windows.h>
+
+#if defined(_MSC_VER)
+/* MessageBoxW lives in user32, which neither cl invocation links by default. */
+#pragma comment(lib, "user32.lib")
+#endif
 
 #define KEIKO_WIDEN2(value) L##value
 #define KEIKO_WIDEN(value) KEIKO_WIDEN2(value)
@@ -55,6 +61,47 @@ static int append_path(wchar_t *out, size_t cap, const wchar_t *base, const wcha
 static int quote_arg(wchar_t *out, size_t cap, const wchar_t *value) {
   int written = _snwprintf_s(out, cap, _TRUNCATE, L"\"%ls\"", value);
   return written > 0 && (size_t)written < cap;
+}
+
+static DWORD creation_flags_for_console_state(int has_console) {
+  return has_console ? 0 : CREATE_NO_WINDOW;
+}
+
+static int bootstrap_artifact_unusable(const wchar_t *path) {
+  DWORD attributes = GetFileAttributesW(path);
+  /* Missing, unreadable, or a directory wearing the artifact's name: none of these can
+   * possibly boot the runtime, and CreateProcess would fail after the console is hidden. */
+  return attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
+static void report_bootstrap_failure(int has_console, const wchar_t *console_line,
+                                     const wchar_t *dialog_text) {
+  if (has_console) {
+    fwprintf(stderr, L"%ls", console_line);
+  } else {
+    MessageBoxW(NULL, dialog_text, L"Keiko", MB_OK | MB_ICONERROR);
+  }
+}
+
+static int run_hidden_and_wait(const wchar_t *application, wchar_t *command,
+                               const wchar_t *workdir, DWORD *exit_code) {
+  STARTUPINFOW startup;
+  PROCESS_INFORMATION process;
+  ZeroMemory(&startup, sizeof(startup));
+  ZeroMemory(&process, sizeof(process));
+  startup.cb = sizeof(startup);
+  if (!CreateProcessW(
+        application, command, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, workdir, &startup,
+        &process
+      )) {
+    return 0;
+  }
+  WaitForSingleObject(process.hProcess, INFINITE);
+  *exit_code = 1;
+  GetExitCodeProcess(process.hProcess, exit_code);
+  CloseHandle(process.hThread);
+  CloseHandle(process.hProcess);
+  return 1;
 }
 
 enum { KEIKO_PATH_CAP = 32768, KEIKO_COMMAND_CAP = 98304 };
@@ -120,6 +167,75 @@ static int run_launcher(keiko_launcher_buffers *buffers) {
     return 1;
   }
 
+  /* Same double-click marker as the macOS launcher: the portable CLI surfaces launch failures
+   * visibly only when a human started the app through this binary, and the marker's contract must
+   * hold on every platform. A /SUBSYSTEM:WINDOWS binary never owns a console of its own, so
+   * GetConsoleWindow() alone cannot tell a cmd/PowerShell start from an Explorer double-click —
+   * both report NULL. Attaching to the parent's console distinguishes them: it succeeds for a
+   * shell start (keep console semantics, keep Node output visible) and fails for Explorer
+   * (set the UI-launch marker and suppress the child console window). */
+  int has_console = GetConsoleWindow() != NULL;
+  if (!has_console && AttachConsole(ATTACH_PARENT_PROCESS)) {
+    has_console = 1;
+  }
+
+  /* The CLI's own failure dialog cannot load when the Node runtime or the app bundle itself is
+   * gone, and with CREATE_NO_WINDOW the child's stderr would be invisible — the exact broken
+   * install would fail with no signal at all. Only this pre-flight class gets a native dialog
+   * here: any later failure is the CLI notifier's job, and a second generic dialog on a nonzero
+   * exit would double-report it. */
+  if (bootstrap_artifact_unusable(buffers->node) || bootstrap_artifact_unusable(buffers->cli)) {
+    report_bootstrap_failure(
+      has_console,
+      L"keiko portable launch: the installation is incomplete\n",
+      L"Keiko could not start: the installation is incomplete.\r\n"
+      L"Reinstall Keiko, or run Keiko.exe from a terminal for details."
+    );
+    return 1;
+  }
+
+  /* Explorer starts pre-parse the CLI bundle: `node --check` refuses a truncated or
+   * syntax-broken app/dist/cli/index.js WITHOUT executing it — the class where Node would die
+   * during module load, before the notifier exists, with CREATE_NO_WINDOW hiding the only
+   * output. Shell starts skip the extra spawn: their stderr is visible and the real start
+   * reports precisely. A runtime import of a missing module still belongs to the terminal
+   * diagnostic path — parsing cannot see it, and the notifier owns everything after boot. */
+  if (!has_console) {
+    int check_written = _snwprintf_s(
+      buffers->command,
+      KEIKO_COMMAND_CAP,
+      _TRUNCATE,
+      L"%ls --check %ls",
+      buffers->quoted_node,
+      buffers->quoted_cli
+    );
+    DWORD check_exit = 1;
+    if (check_written <= 0 || (size_t)check_written >= KEIKO_COMMAND_CAP ||
+        !run_hidden_and_wait(buffers->node, buffers->command, buffers->root, &check_exit) ||
+        check_exit != 0) {
+      report_bootstrap_failure(
+        has_console,
+        L"keiko portable launch: the application bundle is damaged\n",
+        L"Keiko could not start: the application bundle is damaged.\r\n"
+        L"Reinstall Keiko, or run Keiko.exe from a terminal for details."
+      );
+      return 1;
+    }
+  }
+
+  if (!has_console && !SetEnvironmentVariableW(L"KEIKO_PORTABLE_UI_LAUNCH", L"1")) {
+    /* Without the marker the CLI notifier stays silent, and with CREATE_NO_WINDOW the child's
+     * stderr is invisible — starting Node in that state would fail without any signal. */
+    report_bootstrap_failure(
+      has_console,
+      L"keiko portable launch: the launch environment could not be prepared\n",
+      L"Keiko could not prepare its launch environment.\r\n"
+      L"Reinstall Keiko, or run Keiko.exe from a terminal for details."
+    );
+    return 1;
+  }
+
+  /* Built AFTER the pre-parse: the check reuses the same command buffer. */
   int written = _snwprintf_s(
     buffers->command,
     KEIKO_COMMAND_CAP,
@@ -133,14 +249,7 @@ static int run_launcher(keiko_launcher_buffers *buffers) {
   if (written <= 0 || (size_t)written >= KEIKO_COMMAND_CAP) {
     return 1;
   }
-
-  /* Same double-click marker as the macOS launcher: the portable CLI surfaces launch failures
-   * visibly only when a human started the app through this binary, and the marker's contract must
-   * hold on every platform even though today's notifier renders only on macOS. A shell invocation
-   * owns a console window; an Explorer double-click of a windowed launcher does not. */
-  if (GetConsoleWindow() == NULL) {
-    SetEnvironmentVariableW(L"KEIKO_PORTABLE_UI_LAUNCH", L"1");
-  }
+  DWORD creation_flags = creation_flags_for_console_state(has_console);
   STARTUPINFOW startup;
   PROCESS_INFORMATION process;
   ZeroMemory(&startup, sizeof(startup));
@@ -152,12 +261,20 @@ static int run_launcher(keiko_launcher_buffers *buffers) {
         NULL,
         NULL,
         FALSE,
-        0,
+        creation_flags,
         NULL,
         buffers->root,
         &startup,
         &process
       )) {
+    /* The child never ran, so the CLI notifier cannot have reported anything — this is the one
+     * post-preflight failure the launcher itself must surface (corrupt PE, access denied). */
+    report_bootstrap_failure(
+      has_console,
+      L"keiko portable launch: the bundled runtime could not be started\n",
+      L"Keiko could not start its bundled runtime.\r\n"
+      L"Reinstall Keiko, or run Keiko.exe from a terminal for details."
+    );
     return 1;
   }
   WaitForSingleObject(process.hProcess, INFINITE);

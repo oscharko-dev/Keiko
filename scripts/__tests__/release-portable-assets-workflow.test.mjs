@@ -229,18 +229,15 @@ describe("portable secure-read qualification", () => {
     expect(secureReadNative.match(/pause_after_final_open\(\);/gu)).toHaveLength(2);
   });
 
-  it("configures MSVC through an analyzable PowerShell step", () => {
-    const windowsStage = workflowJob("  stage-windows-production:", "\n  stage-macos-production:");
-    const start = windowsStage.indexOf("      - name: Configure MSVC environment");
-    const end = windowsStage.indexOf("\n      - name:", start + 1);
-    const step = windowsStage.slice(start, end);
-
-    expect(step).toContain("shell: pwsh");
-    expect(step).not.toContain("shell: cmd");
-    expect(step).toContain('Join-Path $env:RUNNER_TEMP "keiko-vcvars-env.cmd"');
-    expect(step).toContain("$environment = & cmd.exe /d /c $vcvarsWrapper");
-    expect(step).toContain('foreach ($name in @("PATH", "INCLUDE", "LIB", "LIBPATH"))');
-    expect(step).toContain("$line | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append");
+  it("carries no workflow-level MSVC configuration step (the stage script owns its toolchain)", () => {
+    // The rc/cl toolchain is resolved inside stage-portable-runtime.mjs (resolveWindowsMsvcEnv:
+    // vswhere → vcvars64 → per-spawn env). A workflow step that persisted the full PATH through
+    // GITHUB_ENV was both a zizmor misfeature finding and an injection-shaped surface, and a
+    // developer machine would silently lack it — the script-owned resolution serves both.
+    expect(portableWorkflow).not.toContain("Configure MSVC environment");
+    expect(portableWorkflow).not.toContain("shell: cmd");
+    expect(portableWorkflow).not.toContain("echo PATH=%PATH%>> %GITHUB_ENV%");
+    expect(portableWorkflow).not.toContain("vcvars64.bat");
   });
 });
 
@@ -263,20 +260,16 @@ function workflowJob(start, end) {
   );
 }
 
-function preinstalledArchiveToolStep(job) {
-  const name = "Verify preinstalled 7z capability for staging";
+function stagePortableRuntimeStep(job) {
+  const name = "Stage portable runtime from approved inputs";
   const start = job.indexOf(`      - name: ${name}`);
+  if (start === -1) {
+    // Fail loudly: slicing from -1 would hand the assertions a one-character tail, letting the
+    // `not.toMatch` absence pins pass vacuously over a job that lost the step entirely.
+    throw new Error(`workflow job does not contain the step: ${name}`);
+  }
   const end = job.indexOf("\n      - name:", start + 1);
   return job.slice(start, end === -1 ? undefined : end);
-}
-
-function assertFailsClosedWhenArchiveToolIsMissing(step) {
-  expect(step).toContain(
-    'Get-Command -Name "7z" -CommandType Application -ErrorAction SilentlyContinue',
-  );
-  expect(step).toContain(
-    "Required preinstalled Windows staging tool '7z' is unavailable; refusing to install or download tooling.",
-  );
 }
 
 function simulateProviderRejection() {
@@ -525,29 +518,24 @@ describe("unsigned evaluation staging opt-in", () => {
 });
 
 describe("Windows portable production signing workflow", () => {
-  it("uses only preinstalled archive tools and fails closed in both Windows paths", () => {
+  it("stages Windows archives through the repository ZIP adapter without 7z", () => {
     const stagingJob = workflowJob("  stage:", "\n  stage-windows-production:");
     const productionJob = workflowJob("  stage-windows-production:", "\n  stage-macos-production:");
-    const stagingWindows = preinstalledArchiveToolStep(stagingJob);
-    const productionWindows = preinstalledArchiveToolStep(productionJob);
+    const stagingWindows = stagePortableRuntimeStep(stagingJob);
+    const productionWindows = stagePortableRuntimeStep(productionJob);
 
-    expect(portableWorkflow.match(/Verify preinstalled 7z capability for staging/gu)).toHaveLength(
-      2,
-    );
+    expect(portableWorkflow).not.toMatch(/Verify preinstalled 7z capability for staging/u);
+    expect(portableWorkflow).not.toMatch(/\b7z\b/iu);
     expect(portableWorkflow).not.toMatch(/\bchoco\s+install\b/iu);
     expect(portableWorkflow).not.toMatch(/\b(?:winget|msiexec)\b/iu);
 
     for (const step of [stagingWindows, productionWindows]) {
-      expect(step).toContain("@(& $command.Path i 2>&1)");
-      expect(step).toContain("Select-Object -First 6");
-      expect(step).toContain("$versionExitCode -ne 0");
-      expect(step).toContain("did not provide version evidence");
-      expect(step).toContain("Windows staging capability:");
-      assertFailsClosedWhenArchiveToolIsMissing(step);
+      expect(step).toContain("node scripts/run-portable-assets-stage.mjs --target ");
+      expect(step).not.toMatch(/\b7z\b/iu);
     }
 
-    expect(productionJob.indexOf("Verify preinstalled 7z capability for staging")).toBeLessThan(
-      productionJob.indexOf("Install dependencies"),
+    expect(productionJob.indexOf("Prepare approved sidecar payloads")).toBeLessThan(
+      productionJob.indexOf("Stage portable runtime from approved inputs"),
     );
   });
 

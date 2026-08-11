@@ -21,6 +21,7 @@ import {
   windowsSetupInstallerScript,
   windowsSetupSed,
 } from "../build-windows-portable-setup.mjs";
+import { writeZipArchiveFromDirectory } from "../lib/zip-archive.mjs";
 import { WINDOWS_PORTABLE_SETUP_ASSET_NAME } from "../portable-runtime.mjs";
 import { windowsLauncher } from "../../packages/keiko-cli/src/launcher-platforms.ts";
 
@@ -73,18 +74,22 @@ function fixtureCli() {
     'writeFileSync(process.env.KEIKO_IEXPRESS_LAUNCH_SENTINEL, `${portableRoot}\\n`, "utf8");',
     'writeFileSync(process.env.KEIKO_IEXPRESS_RUNTIME_SENTINEL, `${process.execPath}\\n`, "utf8");',
     'const nodePath = join(managedRoot, "runtime", "node", "node.exe");',
-    'const childScript = process.env.KEIKO_IEXPRESS_EXIT_IMMEDIATELY === "1" ? "process.exit(0)" : "const { writeFileSync } = require(\\"node:fs\\"); setTimeout(() => writeFileSync(process.env.KEIKO_IEXPRESS_HEALTHY, \\"healthy\\\\n\\"), 6000); setTimeout(() => process.exit(0), 14000)";',
+    'const childScript = process.env.KEIKO_IEXPRESS_EXIT_IMMEDIATELY === "1" ? "process.exit(0)" : "setTimeout(() => process.exit(0), 14000)";',
     'const child = spawn(nodePath, ["-e", childScript], { detached: true, stdio: "ignore" });',
     "child.unref();",
     'writeFileSync(process.env.KEIKO_IEXPRESS_PID, `${child.pid}\\n`, "utf8");',
-    "const deadline = Date.now() + 10000;",
+    "// Mirrors the real lifecycle CLI: launch exits 0 only after its own health window saw the",
+    "// spawned process stay alive; a child that dies early fails the launch (and the installer).",
+    "const deadline = Date.now() + 3000;",
     "const waitSignal = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));",
     "while (Date.now() < deadline) {",
-    "  if (existsSync(process.env.KEIKO_IEXPRESS_HEALTHY)) process.exit(0);",
     "  try { process.kill(child.pid, 0); } catch { process.exit(1); }",
     "  Atomics.wait(waitSignal, 0, 0, 100);",
     "}",
-    "process.exit(1);",
+    "// One final liveness probe AFTER the loop: a child that died inside the last wait window",
+    "// must not slip through as a healthy launch.",
+    "try { process.kill(child.pid, 0); } catch { process.exit(1); }",
+    "process.exit(0);",
   ].join("\n");
 }
 
@@ -104,22 +109,7 @@ function writePortableFixture(root, archivePath) {
   writeFileSync(join(portableRoot, "Keiko.exe"), portableExecutableFixture());
   copyFileSync(process.execPath, join(portableRoot, "runtime", "node", "node.exe"));
   writeFileSync(join(portableRoot, "app", "dist", "cli", "index.js"), fixtureCli(), "utf8");
-  run(
-    "powershell.exe",
-    [
-      "-NoLogo",
-      "-NoProfile",
-      "-Command",
-      "Compress-Archive -LiteralPath $env:KEIKO_FIXTURE_ROOT -DestinationPath $env:KEIKO_FIXTURE_ARCHIVE -Force",
-    ],
-    {
-      env: {
-        ...process.env,
-        KEIKO_FIXTURE_ARCHIVE: archivePath,
-        KEIKO_FIXTURE_ROOT: portableRoot,
-      },
-    },
-  );
+  writeZipArchiveFromDirectory(portableRoot, archivePath, { rootName: "Keiko" });
   assertNativeLauncherTransport(root);
 }
 
@@ -221,7 +211,6 @@ function cleanupSmoke(root, pidPath, failure) {
 }
 
 function setupEnvironment(
-  healthyPath,
   localAppData,
   pidPath,
   launchSentinelPath,
@@ -232,7 +221,6 @@ function setupEnvironment(
   return {
     env: {
       ...process.env,
-      KEIKO_IEXPRESS_HEALTHY: healthyPath,
       KEIKO_IEXPRESS_LAUNCH_SENTINEL: launchSentinelPath,
       KEIKO_IEXPRESS_PID: pidPath,
       KEIKO_IEXPRESS_RUNTIME_SENTINEL: runtimeSentinelPath,
@@ -260,15 +248,13 @@ function assertLaunchFailure(installerRoot, executeOptions) {
   assert.equal(processExists(pid), false, "failed setup process is still running");
 }
 
-function runHealthySetup(setupPath, executeOptions, healthyPath, pidPath) {
+function runHealthySetup(setupPath, executeOptions, pidPath) {
   run(setupPath, ["/Q"], { ...executeOptions, timeout: 90_000 });
-  assert.equal(existsSync(healthyPath), true, "setup process did not survive its health window");
   waitForFixtureProcessExit(pidPath);
 }
 
 function assertFreshSetup({
   executeOptions,
-  healthyPath,
   launchSentinelPath,
   managedRoot,
   pidPath,
@@ -276,7 +262,7 @@ function assertFreshSetup({
   setupPath,
   setupSentinelPath,
 }) {
-  runHealthySetup(setupPath, executeOptions, healthyPath, pidPath);
+  runHealthySetup(setupPath, executeOptions, pidPath);
   assert.equal(existsSync(managedRoot), true, "setup did not create the managed root");
   assert.equal(existsSync(setupSentinelPath), true, "generated installer did not invoke setup");
   assert.equal(existsSync(launchSentinelPath), true, "generated installer did not invoke launch");
@@ -291,7 +277,6 @@ function assertFreshSetup({
 
 function assertExistingSetupUnchanged({
   executeOptions,
-  healthyPath,
   launchSentinelPath,
   managedRoot,
   pidPath,
@@ -305,11 +290,10 @@ function assertExistingSetupUnchanged({
     "utf8",
   );
   const before = treeDigest(managedRoot);
-  rmSync(healthyPath, { force: true });
   rmSync(setupSentinelPath, { force: true });
   rmSync(launchSentinelPath, { force: true });
   rmSync(runtimeSentinelPath, { force: true });
-  runHealthySetup(setupPath, executeOptions, healthyPath, pidPath);
+  runHealthySetup(setupPath, executeOptions, pidPath);
   const extractedRoot = resolve(readFileSync(setupSentinelPath, "utf8").trim());
   assert.notEqual(
     extractedRoot,
@@ -351,7 +335,6 @@ function runWindowsIExpressCommandSmoke() {
   const setupPath = join(root, WINDOWS_PORTABLE_SETUP_ASSET_NAME);
   const archivePath = join(inputRoot, "keiko-windows-x64.zip");
   const sedPath = join(root, "setup.sed");
-  const healthyPath = join(root, "healthy.txt");
   const launchSentinelPath = join(root, "launch-root.txt");
   const setupSentinelPath = join(root, "setup-root.txt");
   const runtimeSentinelPath = join(root, "runtime-root.txt");
@@ -365,7 +348,6 @@ function runWindowsIExpressCommandSmoke() {
     run(iexpressPath(), ["/N", "/Q", sedPath], { timeout: 120_000 });
 
     const executeOptions = setupEnvironment(
-      healthyPath,
       localAppData,
       pidPath,
       launchSentinelPath,
@@ -375,7 +357,6 @@ function runWindowsIExpressCommandSmoke() {
     );
     const setupAssertion = {
       executeOptions,
-      healthyPath,
       launchSentinelPath,
       managedRoot,
       pidPath,
@@ -384,9 +365,7 @@ function runWindowsIExpressCommandSmoke() {
       setupSentinelPath,
     };
     assertCustomRootSetup(setupAssertion, localAppData);
-    rmSync(healthyPath, { force: true });
     assertLaunchFailure(inputRoot, executeOptions);
-    assert.equal(existsSync(healthyPath), false, "failed setup reported a healthy launch");
   } catch (error) {
     failure = error;
   } finally {

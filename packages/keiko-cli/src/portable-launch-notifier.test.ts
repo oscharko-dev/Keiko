@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { notifyPortableLaunchFailure, runDetachedAlert } from "./portable-launch-notifier.js";
+import {
+  notifyPortableLaunchFailure,
+  runDetachedAlert,
+  runDetachedWindowsAlert,
+} from "./portable-launch-notifier.js";
 
 const UI_LAUNCH = { KEIKO_PORTABLE_UI_LAUNCH: "1" };
 
@@ -70,6 +74,20 @@ describe("notifyPortableLaunchFailure", () => {
     expect(scripts[0]).toContain("The portable launch failed without a reason.");
   });
 
+  it("shows the recorded failure in a Windows alert for a double-click launch", () => {
+    const messages: string[] = [];
+    const env = { KEIKO_PORTABLE_UI_LAUNCH: "1", SystemRoot: String.raw`D:\Windows` };
+
+    notifyPortableLaunchFailure("keiko portable launch: failed\n", env, {
+      platform: () => "win32",
+      runWindowsAlert: (message) => {
+        messages.push(message);
+      },
+    });
+
+    expect(messages).toEqual(["keiko portable launch: failed\n"]);
+  });
+
   it.each([[{}], [{ KEIKO_PORTABLE_UI_LAUNCH: "true" }]])(
     "stays silent without the exact double-click marker",
     (env) => {
@@ -89,7 +107,7 @@ describe("notifyPortableLaunchFailure", () => {
     },
   );
 
-  it("stays silent on a non-darwin platform", () => {
+  it("stays silent on an unsupported platform", () => {
     let shown = false;
 
     notifyPortableLaunchFailure("reason", UI_LAUNCH, {
@@ -121,17 +139,20 @@ describe("notifyPortableLaunchFailure", () => {
   });
 
   it("reads the host platform when no platform seam is injected", () => {
-    // Deterministic per host: the alert seam fires exactly when the real platform is darwin. The
-    // runAlert seam keeps the test dialog-free either way.
+    // Deterministic per host: the alert seam fires exactly when the real platform supports a
+    // native dialog. Both alert seams keep the test dialog-free either way.
     let shown = false;
 
     notifyPortableLaunchFailure("reason", UI_LAUNCH, {
       runAlert: () => {
         shown = true;
       },
+      runWindowsAlert: () => {
+        shown = true;
+      },
     });
 
-    expect(shown).toBe(process.platform === "darwin");
+    expect(shown).toBe(process.platform === "darwin" || process.platform === "win32");
   });
 });
 
@@ -175,5 +196,92 @@ describe("runDetachedAlert", () => {
       errorHandler?.(new Error("spawn ENOENT"));
     }).not.toThrow();
     expect(reported).toEqual(["keiko portable launch: the failure alert could not be shown\n"]);
+  });
+});
+
+describe("runDetachedWindowsAlert", () => {
+  it("spawns the bounded detached PowerShell MessageBox contract and detaches from it", () => {
+    const calls: unknown[][] = [];
+    const reported: string[] = [];
+    let errorHandler: ((error: Error) => void) | undefined;
+    let unreferenced = false;
+
+    runDetachedWindowsAlert(
+      "can't start\r\nbecause",
+      { SystemRoot: String.raw`D:\Windows` },
+      (command, args, options) => {
+        calls.push([command, args, options]);
+        return {
+          on: (_event, listener): void => {
+            errorHandler = listener;
+          },
+          unref: (): void => {
+            unreferenced = true;
+          },
+        };
+      },
+      (line) => {
+        reported.push(line);
+      },
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[0]).toBe(
+      String.raw`D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+    );
+    expect(calls[0]?.[1]).toEqual([
+      "-NoLogo",
+      "-NoProfile",
+      "-Sta",
+      "-WindowStyle",
+      "Hidden",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      "Add-Type -AssemblyName PresentationFramework; " +
+        "[System.Windows.MessageBox]::Show('can''t startbecause', " +
+        "'Keiko could not start', 'OK', 'Error') | Out-Null",
+    ]);
+    // PowerShell/WPF need the core system variables to initialize; everything else stays
+    // withheld from the detached child (no TEMP/TMP here because the caller env carries none).
+    expect(calls[0]?.[2]).toEqual({
+      detached: true,
+      env: { SystemRoot: String.raw`D:\Windows`, WINDIR: String.raw`D:\Windows` },
+      shell: false,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    expect(unreferenced).toBe(true);
+    expect(errorHandler).toBeDefined();
+    expect(() => {
+      errorHandler?.(new Error("spawn ENOENT"));
+    }).not.toThrow();
+    expect(reported).toEqual(["keiko portable launch: the failure alert could not be shown\n"]);
+  });
+
+  it("forwards supplied TEMP and TMP into the detached child environment", () => {
+    const calls: unknown[][] = [];
+    runDetachedWindowsAlert(
+      "boom",
+      {
+        SystemRoot: String.raw`D:\Windows`,
+        TEMP: String.raw`D:\Scratch\Temp`,
+        TMP: String.raw`D:\Scratch\Tmp`,
+      },
+      (command, args, options) => {
+        calls.push([command, args, options]);
+        return { on: (): void => undefined, unref: (): void => undefined };
+      },
+      () => undefined,
+    );
+    // WPF initialization needs a writable temp location when the profile provides one; both
+    // variables must reach the child exactly as supplied, and nothing else may leak in.
+    expect((calls[0]?.[2] as { env: unknown }).env).toEqual({
+      SystemRoot: String.raw`D:\Windows`,
+      WINDIR: String.raw`D:\Windows`,
+      TEMP: String.raw`D:\Scratch\Temp`,
+      TMP: String.raw`D:\Scratch\Tmp`,
+    });
   });
 });

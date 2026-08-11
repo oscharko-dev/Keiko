@@ -532,6 +532,7 @@ function checkPortableRegistration(
   env: EnvSource,
   homedir: string,
   dryRun: boolean,
+  io: CliIo,
 ): CheckResult {
   const recordResult = readPortableRecordForRepair(stateDir, env, homedir);
   if (recordResult.kind === "error") {
@@ -562,6 +563,7 @@ function checkPortableRegistration(
     record.managedRoot,
     env,
     homedir,
+    io,
   );
   return fixed(
     "Portable registration",
@@ -822,7 +824,7 @@ export function runRepairCli(
           ...checkRuntimeStateArtifacts(stateDir, parsed.dryRun),
           checkLauncherRecords(stateDir, resolved.homedir(), io, parsed.dryRun),
           checkPortableManagedInstall(stateDir, env, resolved.homedir()),
-          checkPortableRegistration(stateDir, env, resolved.homedir(), parsed.dryRun),
+          checkPortableRegistration(stateDir, env, resolved.homedir(), parsed.dryRun, io),
         ]
       : [stateRootAction];
   const results: CheckResult[] = [

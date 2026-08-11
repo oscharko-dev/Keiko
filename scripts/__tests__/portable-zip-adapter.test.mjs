@@ -1,69 +1,77 @@
-import { describe, expect, it, vi } from "vitest";
+import { Buffer } from "node:buffer";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createPortableZipAdapter, safeZipExtractionEntries } from "../stage-portable-runtime.mjs";
+import { writeZipArchiveEntries } from "../lib/zip-archive.mjs";
 
-function sevenZipList(entries) {
-  return entries
-    .map((entry) =>
-      [
-        `Path = ${entry.path}`,
-        `Folder = ${entry.folder ? "+" : "-"}`,
-        `Attributes = ${entry.attributes ?? (entry.folder ? "D" : "A")}`,
-        ...(entry.symbolicLink === undefined ? [] : [`Symbolic Link = ${entry.symbolicLink}`]),
-      ].join("\n"),
-    )
-    .join("\n\n");
+const tempRoots = [];
+
+function tempRoot() {
+  const root = mkdtempSync(join(tmpdir(), "keiko-portable-zip-"));
+  tempRoots.push(root);
+  return root;
 }
 
+function fakeAdapter(entries) {
+  return {
+    list: () => entries,
+    extract: () => undefined,
+    create: () => undefined,
+  };
+}
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 describe("Windows portable ZIP adapter", () => {
-  it("uses preinstalled 7z for structured listing, extraction, and final ZIP creation", () => {
-    const run = vi.fn((command, args) => {
-      if (args[0] === "l") {
-        return {
-          stdout: sevenZipList([
-            { path: "Keiko", folder: true },
-            { path: "Keiko/runtime/node.exe", folder: false },
-          ]),
-        };
-      }
-      return { stdout: "" };
-    });
+  it("uses the Node ZIP reader and writer without a 7z process dependency", () => {
+    const root = tempRoot();
+    const source = join(root, "payload");
+    const archivePath = join(root, "out", "keiko.zip");
+    const extractRoot = join(root, "extract");
+    mkdirSync(join(source, "Keiko", "runtime"), { recursive: true });
+    writeFileSync(join(source, "Keiko", "runtime", "node.exe"), "fixture node\n");
+    const run = vi.fn();
     const adapter = createPortableZipAdapter("win32", run);
 
-    expect(safeZipExtractionEntries("runtime.zip", "Keiko", adapter)).toEqual([
-      "Keiko",
+    adapter.create(source, "Keiko", archivePath);
+    expect(safeZipExtractionEntries(archivePath, "Keiko", adapter)).toEqual([
       "Keiko/runtime/node.exe",
     ]);
-    adapter.extract("runtime.zip", "C:\\stage");
-    adapter.create("C:\\payload", "Keiko", "C:\\out\\keiko.zip");
+    adapter.extract(archivePath, extractRoot);
 
-    expect(run).toHaveBeenNthCalledWith(1, "7z", ["l", "-slt", "-ba", "runtime.zip"]);
-    expect(run).toHaveBeenNthCalledWith(2, "7z", ["x", "-y", "-oC:\\stage", "runtime.zip"]);
-    expect(run).toHaveBeenNthCalledWith(
-      3,
-      "7z",
-      ["a", "-tzip", "-mx=9", "C:\\out\\keiko.zip", "Keiko"],
-      { cwd: "C:\\payload" },
+    expect(run).not.toHaveBeenCalled();
+    expect(existsSync(join(extractRoot, "Keiko", "runtime", "node.exe"))).toBe(true);
+    expect(readFileSync(join(extractRoot, "Keiko", "runtime", "node.exe"), "utf8")).toBe(
+      "fixture node\n",
     );
   });
 
-  it("fails closed when 7z is missing or a command fails", () => {
-    for (const message of ["spawn 7z ENOENT", "7z exited 2"]) {
-      const adapter = createPortableZipAdapter("win32", () => {
-        throw new Error(message);
-      });
+  it("fails closed when the ZIP cannot be parsed", () => {
+    const root = tempRoot();
+    const archivePath = join(root, "broken.zip");
+    writeFileSync(archivePath, "not a zip");
+    const adapter = createPortableZipAdapter("win32", vi.fn());
 
-      expect(() => adapter.list("runtime.zip")).toThrow(message);
-    }
+    expect(() => adapter.list(archivePath)).toThrow("ZIP archive has no end-of-central-directory");
   });
 
   it("rejects traversal entries before extraction", () => {
-    const adapter = createPortableZipAdapter("win32", () => ({
-      stdout: sevenZipList([
-        { path: "Keiko", folder: true },
-        { path: "Keiko/../../escape.exe", folder: false },
-      ]),
-    }));
+    const adapter = fakeAdapter(["Keiko/runtime/node.exe", "Keiko/../../escape.exe"]);
 
     expect(() => safeZipExtractionEntries("runtime.zip", "Keiko", adapter)).toThrow(
       "archive entry escapes Keiko",
@@ -72,37 +80,211 @@ describe("Windows portable ZIP adapter", () => {
 
   // Regression coverage for the S8786 backtracking fix in `normalizeArchiveEntry`'s trailing-slash
   // strip: the previous `/\/+$/u` regex is unanchored at the front, so an entry name with a long
-  // run of `/` not at the very end (tar/zip entry names are attacker-controlled input here) forced
-  // an O(n) backtrack retry at every position in that run — O(n^2) overall.
+  // run of `/` not at the very end forced an O(n) backtrack retry at every position in that run.
   it("rejects an entry with a pathologically long slash run without catastrophic backtracking", () => {
     const adversarialPath = `Keiko/${"/".repeat(20000)}x`;
-    const adapter = createPortableZipAdapter("win32", () => ({
-      stdout: sevenZipList([
-        { path: "Keiko", folder: true },
-        { path: adversarialPath, folder: false },
-      ]),
-    }));
-
-    const start = Date.now();
+    const adapter = fakeAdapter(["Keiko/runtime/node.exe", adversarialPath]);
     expect(() => safeZipExtractionEntries("runtime.zip", "Keiko", adapter)).toThrow(
       "archive entry escapes Keiko",
     );
-    expect(Date.now() - start).toBeLessThan(300);
   });
 
-  it("rejects symbolic links and special entry types from structured 7z metadata", () => {
-    for (const entry of [
-      { path: "Keiko/link", folder: false, attributes: "A_ lrwxrwxrwx" },
-      { path: "Keiko/link", folder: false, symbolicLink: "../../outside" },
-      { path: "Keiko/device", folder: false, attributes: "A_ crw-rw-rw-" },
-    ]) {
-      const adapter = createPortableZipAdapter("win32", () => ({
-        stdout: sevenZipList([entry]),
-      }));
+  // Successor to the retired 7z adapter's entry-type pin: a Windows runtime archive may contain
+  // only regular files. A symlink entry (Unix S_IFLNK in the central-directory external
+  // attributes) must refuse the archive on BOTH list and extract — materializing a link's
+  // target text as a plain file would silently change its meaning.
+  it("fails closed on a ZIP symlink entry instead of materializing it as a file", () => {
+    const root = tempRoot();
+    const archivePath = join(root, "with-symlink.zip");
+    writeZipArchiveEntries(archivePath, [
+      { name: "Keiko/runtime/node.exe", data: Buffer.from("regular"), mode: 0o100644 },
+      { name: "Keiko/runtime/link", data: Buffer.from("../target"), mode: 0o120777 },
+    ]);
+    const adapter = createPortableZipAdapter("win32", vi.fn());
 
-      expect(() => adapter.list("runtime.zip")).toThrow(
-        "archive contains unsupported special-file entries",
+    expect(() => adapter.list(archivePath)).toThrow("unsupported special entry type");
+    expect(() => adapter.extract(archivePath, join(root, "out"))).toThrow(
+      "unsupported special entry type",
+    );
+    expect(existsSync(join(root, "out", "Keiko", "runtime", "link"))).toBe(false);
+  });
+
+  // General-purpose bit 0 declares the entry encrypted. The retired 7z checker refused these;
+  // the Node reader must fail closed on the marker itself, before touching any payload bytes.
+  it("fails closed on an entry marked encrypted in the general-purpose flags", () => {
+    const root = tempRoot();
+    const archivePath = join(root, "encrypted.zip");
+    writeZipArchiveEntries(archivePath, [
+      { name: "Keiko/runtime/node.exe", data: Buffer.from("regular"), mode: 0o100644 },
+    ]);
+    const bytes = readFileSync(archivePath);
+    const local = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    bytes.writeUInt16LE(bytes.readUInt16LE(local + 6) | 0x1, local + 6);
+    const central = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+    bytes.writeUInt16LE(bytes.readUInt16LE(central + 8) | 0x1, central + 8);
+    writeFileSync(archivePath, bytes);
+    const adapter = createPortableZipAdapter("win32", vi.fn());
+
+    expect(() => adapter.list(archivePath)).toThrow("marked encrypted");
+    expect(() => adapter.extract(archivePath, join(root, "out"))).toThrow("marked encrypted");
+  });
+
+  // A clear central flag with an encrypted LOCAL flag is a metadata lie: the listing is
+  // central-only by design (it never streams local headers), but the data path must refuse
+  // before materializing the payload the local header claims is encrypted.
+  it("fails closed on extraction when only the local header carries the encryption bit", () => {
+    const root = tempRoot();
+    const archivePath = join(root, "local-encrypted.zip");
+    writeZipArchiveEntries(archivePath, [
+      { name: "Keiko/runtime/node.exe", data: Buffer.from("regular"), mode: 0o100644 },
+    ]);
+    const bytes = readFileSync(archivePath);
+    const local = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    bytes.writeUInt16LE(bytes.readUInt16LE(local + 6) | 0x1, local + 6);
+    writeFileSync(archivePath, bytes);
+    const adapter = createPortableZipAdapter("win32", vi.fn());
+
+    expect(() => adapter.extract(archivePath, join(root, "out"))).toThrow("marked encrypted");
+    expect(existsSync(join(root, "out", "Keiko", "runtime", "node.exe"))).toBe(false);
+  });
+
+  // The same lie told only in the marker's LOCAL header must also refuse: a skipped marker
+  // never reaches the data readers, so the skip branch reads the two flag bytes itself.
+  it("fails closed on a directory marker whose local header alone carries the encryption bit", () => {
+    const root = tempRoot();
+    const archivePath = join(root, "local-encrypted-dir.zip");
+    writeZipArchiveEntries(
+      archivePath,
+      [
+        { name: "Keiko/runtime/node.exe", data: Buffer.from("regular"), mode: 0o100644 },
+        { name: "Keiko/dir/", data: Buffer.alloc(0), mode: 0o040755 },
+      ],
+      { allowUnsafeEntryNames: true },
+    );
+    const bytes = readFileSync(archivePath);
+    const firstLocal = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    const markerLocal = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04]), firstLocal + 4);
+    bytes.writeUInt16LE(bytes.readUInt16LE(markerLocal + 6) | 0x1, markerLocal + 6);
+    writeFileSync(archivePath, bytes);
+    const adapter = createPortableZipAdapter("win32", vi.fn());
+
+    expect(() => adapter.list(archivePath)).toThrow("marked encrypted");
+    expect(() => adapter.extract(archivePath, join(root, "out"))).toThrow("marked encrypted");
+  });
+
+  // An encryption-marked directory marker is a contradiction the skip branch must refuse,
+  // exactly like a symlink-typed one.
+  it("fails closed on a directory marker carrying the encryption bit", () => {
+    const root = tempRoot();
+    const archivePath = join(root, "encrypted-dir.zip");
+    writeZipArchiveEntries(
+      archivePath,
+      [
+        { name: "Keiko/runtime/node.exe", data: Buffer.from("regular"), mode: 0o100644 },
+        { name: "Keiko/dir/", data: Buffer.alloc(0), mode: 0o040755 },
+      ],
+      { allowUnsafeEntryNames: true },
+    );
+    const bytes = readFileSync(archivePath);
+    const central = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+    const second = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]), central + 4);
+    bytes.writeUInt16LE(bytes.readUInt16LE(second + 8) | 0x1, second + 8);
+    writeFileSync(archivePath, bytes);
+    const adapter = createPortableZipAdapter("win32", vi.fn());
+
+    expect(() => adapter.list(archivePath)).toThrow("marked encrypted");
+    expect(() => adapter.extract(archivePath, join(root, "out"))).toThrow("marked encrypted");
+  });
+
+  // A trailing-slash marker is skipped, not materialized — but a `dir/` entry whose Unix type
+  // bits say SYMLINK is a contradiction only a hostile archive produces. The skip branch must
+  // still validate the type instead of stepping over it (the retired 7z checker refused these).
+  it("fails closed on a directory marker carrying symlink type bits", () => {
+    const root = tempRoot();
+    const archivePath = join(root, "typed-dir.zip");
+    // The writer itself refuses trailing-slash names; the hostile fixture needs the explicit
+    // unsafe-name escape hatch to exist at all.
+    writeZipArchiveEntries(
+      archivePath,
+      [
+        { name: "Keiko/runtime/node.exe", data: Buffer.from("regular"), mode: 0o100644 },
+        { name: "Keiko/link/", data: Buffer.alloc(0), mode: 0o120777 },
+      ],
+      { allowUnsafeEntryNames: true },
+    );
+    const adapter = createPortableZipAdapter("win32", vi.fn());
+
+    expect(() => adapter.list(archivePath)).toThrow("unsupported special entry type");
+    expect(() => adapter.extract(archivePath, join(root, "out"))).toThrow(
+      "unsupported special entry type",
+    );
+  });
+
+  // `name:stream` in a ZIP entry carries regular-file Unix type bits, but on NTFS it
+  // materializes an ALTERNATE DATA STREAM of `name` — payload bytes hidden from every plain
+  // directory listing. The retired 7z pipeline rejected these via its metadata checker; the
+  // Node adapter must refuse the name itself, on read, extract, and create alike.
+  it("fails closed on an NTFS alternate-stream entry name instead of materializing a stream", () => {
+    const root = tempRoot();
+    const archivePath = join(root, "with-ads.zip");
+    writeZipArchiveEntries(archivePath, [
+      { name: "Keiko/runtime/node.exe", data: Buffer.from("regular"), mode: 0o100644 },
+      { name: "Keiko/runtime/node.exe:payload", data: Buffer.from("hidden"), mode: 0o100644 },
+    ]);
+    const adapter = createPortableZipAdapter("win32", vi.fn());
+
+    expect(() => adapter.list(archivePath)).toThrow("alternate-stream separator");
+    expect(() => adapter.extract(archivePath, join(root, "out"))).toThrow(
+      "alternate-stream separator",
+    );
+  });
+
+  // Skipped on Windows itself: there `writeFileSync("evil:stream")` would target an actual NTFS
+  // alternate data stream (ENOENT without a base file, invisible to readdirSync with one). The
+  // synthetic-ZIP tests above still cover list/extract rejection on every platform.
+  it.skipIf(process.platform === "win32")(
+    "refuses to archive a source file whose name would become an alternate stream",
+    () => {
+      const root = tempRoot();
+      const treeRoot = join(root, "Keiko");
+      mkdirSync(join(treeRoot, "runtime"), { recursive: true });
+      writeFileSync(join(treeRoot, "runtime", "node.exe"), "regular");
+      writeFileSync(join(treeRoot, "runtime", "evil:stream"), "hidden");
+      const adapter = createPortableZipAdapter("win32", vi.fn());
+
+      expect(() => adapter.create(root, "Keiko", join(root, "keiko.zip"))).toThrow(
+        "alternate-stream separator",
       );
+    },
+  );
+
+  it("treats an alternate-stream name as escaping the expected root", () => {
+    const adapter = fakeAdapter(["Keiko/runtime/node.exe", "Keiko/runtime/node.exe:payload"]);
+    expect(() => safeZipExtractionEntries("runtime.zip", "Keiko", adapter)).toThrow(
+      "archive entry escapes Keiko",
+    );
+  });
+
+  // A followed symlink whose target resolves OUTSIDE the staged tree must refuse archive
+  // creation — otherwise a staged link could embed arbitrary workspace bytes into a release ZIP.
+  it("refuses to archive a symlink that escapes the staged tree", () => {
+    const root = tempRoot();
+    const treeRoot = join(root, "Keiko");
+    mkdirSync(join(treeRoot, "runtime"), { recursive: true });
+    writeFileSync(join(treeRoot, "runtime", "node.exe"), "regular");
+    writeFileSync(join(root, "outside-secret.txt"), "workspace bytes");
+    try {
+      symlinkSync(join(root, "outside-secret.txt"), join(treeRoot, "runtime", "escape"));
+    } catch (error) {
+      // An unprivileged Windows host cannot create symlinks; the containment guard is
+      // exercised by the POSIX CI lanes, so skip rather than fail here.
+      if (error?.code === "EPERM") return;
+      throw error;
     }
+    const adapter = createPortableZipAdapter("win32", vi.fn());
+
+    expect(() => adapter.create(root, "Keiko", join(root, "keiko.zip"))).toThrow(
+      "escapes the archive root",
+    );
   });
 });

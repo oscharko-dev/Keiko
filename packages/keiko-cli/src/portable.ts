@@ -313,6 +313,7 @@ async function upgradeManagedWhileLocked(
       env,
       home: options.home,
       now: deps.now(),
+      io,
     });
     io.out("Keiko portable upgrade installed from downloaded package.\n");
     return await launchManaged(options.target, upgraded, io, env, options.stateDir, deps);
