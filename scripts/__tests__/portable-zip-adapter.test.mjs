@@ -152,18 +152,24 @@ describe("Windows portable ZIP adapter", () => {
     );
   });
 
-  it("refuses to archive a source file whose name would become an alternate stream", () => {
-    const root = tempRoot();
-    const treeRoot = join(root, "Keiko");
-    mkdirSync(join(treeRoot, "runtime"), { recursive: true });
-    writeFileSync(join(treeRoot, "runtime", "node.exe"), "regular");
-    writeFileSync(join(treeRoot, "runtime", "evil:stream"), "hidden");
-    const adapter = createPortableZipAdapter("win32", vi.fn());
+  // Skipped on Windows itself: there `writeFileSync("evil:stream")` would target an actual NTFS
+  // alternate data stream (ENOENT without a base file, invisible to readdirSync with one). The
+  // synthetic-ZIP tests above still cover list/extract rejection on every platform.
+  it.skipIf(process.platform === "win32")(
+    "refuses to archive a source file whose name would become an alternate stream",
+    () => {
+      const root = tempRoot();
+      const treeRoot = join(root, "Keiko");
+      mkdirSync(join(treeRoot, "runtime"), { recursive: true });
+      writeFileSync(join(treeRoot, "runtime", "node.exe"), "regular");
+      writeFileSync(join(treeRoot, "runtime", "evil:stream"), "hidden");
+      const adapter = createPortableZipAdapter("win32", vi.fn());
 
-    expect(() => adapter.create(root, "Keiko", join(root, "keiko.zip"))).toThrow(
-      "alternate-stream separator",
-    );
-  });
+      expect(() => adapter.create(root, "Keiko", join(root, "keiko.zip"))).toThrow(
+        "alternate-stream separator",
+      );
+    },
+  );
 
   it("treats an alternate-stream name as escaping the expected root", () => {
     const adapter = fakeAdapter(["Keiko/runtime/node.exe", "Keiko/runtime/node.exe:payload"]);

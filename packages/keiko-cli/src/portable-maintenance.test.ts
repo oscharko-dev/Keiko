@@ -32,12 +32,13 @@ describe("portable native registration policy", () => {
   });
 
   it("derives deterministic registration locations and root modes", () => {
-    expect(
-      windowsStartMenuRegistrationPath(
-        { APPDATA: "C:\\Users\\keiko\\AppData\\Roaming" },
-        "C:\\Users\\keiko",
-      ),
-    ).toContain("Start Menu");
+    const appDataPath = windowsStartMenuRegistrationPath(
+      { APPDATA: "C:\\Users\\keiko\\AppData\\Roaming" },
+      "C:\\Users\\keiko",
+    );
+    expect(appDataPath).toContain("Start Menu");
+    // An absolute APPDATA is used as supplied — the profile fallback must not kick in here.
+    expect(appDataPath.startsWith("C:\\Users\\keiko\\AppData\\Roaming")).toBe(true);
     expect(
       portableManagedRootMode("macos-x64", "/Applications/Keiko.app", {}, "/Users/keiko"),
     ).toBe("default");

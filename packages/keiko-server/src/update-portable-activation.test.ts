@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -360,6 +361,48 @@ describe("portable update activation", () => {
     writeFileSync(shortcutPath, foreign, "utf8");
     expect(refreshPortableShortcut({ target: "windows-x64", layout, env, home })).toBe(false);
     expect(readFileSync(shortcutPath, "utf8")).toBe(foreign);
+  });
+
+  it("falls back to the profile location when APPDATA is empty or relative", async () => {
+    const base = await mkdtemp(join(tmpdir(), "keiko-portable-appdata-guard-"));
+    tempRoots.push(base);
+    const home = join(base, "home");
+    const installRoot = join(home, "AppData", "Local", "Programs", "Keiko");
+    const launcherPath = join(installRoot, "Keiko.exe");
+    const layout = {
+      installRoot,
+      appRoot: join(installRoot, "app"),
+      packageJsonPath: join(installRoot, "app", "package.json"),
+      setupManifestPath: join(installRoot, "app", "keiko-setup-manifest.json"),
+      launcherPath,
+    };
+    const fallbackShortcut = join(
+      home,
+      "AppData",
+      "Roaming",
+      "Microsoft",
+      "Windows",
+      "Start Menu",
+      "Programs",
+      "Keiko.lnk",
+    );
+
+    // An empty or relative APPDATA must anchor at the profile fallback, never at the process
+    // working directory.
+    for (const appData of ["", "relative\\appdata"]) {
+      expect(
+        refreshPortableShortcut({
+          target: "windows-x64",
+          layout,
+          env: { APPDATA: appData },
+          home,
+        }),
+      ).toBe(true);
+      expect(parseWindowsShortcutFallback(fallbackShortcut)?.targetPath).toBe(launcherPath);
+      rmSync(fallbackShortcut);
+    }
+    expect(existsSync(join(process.cwd(), "Microsoft"))).toBe(false);
+    expect(existsSync(join(process.cwd(), "relative"))).toBe(false);
   });
 
   it("fails closed and preserves the active install when the staged candidate is incomplete", async () => {

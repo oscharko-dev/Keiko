@@ -9,7 +9,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, win32 as win32Path } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   WINDOWS_SHORTCUT_MAX_BYTES,
@@ -108,7 +108,7 @@ function appDataDir(env: EnvSource, home: string): string {
   // Absolute-only: an empty or relative APPDATA must not re-anchor registration paths at the
   // process working directory — fall back to the canonical profile location instead.
   const configured = env.APPDATA;
-  return configured !== undefined && isAbsolute(configured)
+  return configured !== undefined && win32Path.isAbsolute(configured)
     ? configured
     : join(home, "AppData", "Roaming");
 }

@@ -12,7 +12,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, win32 as win32Path } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   WINDOWS_SHORTCUT_MAX_BYTES,
@@ -643,7 +643,7 @@ export function refreshPortableShortcut(input: {
   // APPDATA would re-anchor the Start Menu path at the process working directory.
   const configuredAppData = input.env.APPDATA;
   const root =
-    configuredAppData !== undefined && isAbsolute(configuredAppData)
+    configuredAppData !== undefined && win32Path.isAbsolute(configuredAppData)
       ? configuredAppData
       : join(input.home, "AppData", "Roaming");
   const path = join(root, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk");
