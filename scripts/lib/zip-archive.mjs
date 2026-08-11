@@ -327,6 +327,7 @@ function readCentralEntry(bytes, offset) {
   }
   const nameLength = bytes.readUInt16LE(offset + 28);
   return {
+    flags: bytes.readUInt16LE(offset + 8),
     method: bytes.readUInt16LE(offset + 10),
     checksum: bytes.readUInt32LE(offset + 16),
     compressedSize: bytes.readUInt32LE(offset + 20),
@@ -419,12 +420,43 @@ function assertRegularZipEntry(entry, requireRegularEntries) {
   if (type !== 0 && type !== UNIX_TYPE_REGULAR) {
     throw new Error(`ZIP entry ${entry.rawName} is an unsupported special entry type`);
   }
+  // General-purpose bit 0 marks the entry as encrypted. The retired 7z pipeline refused these
+  // outright, and this reader must too: an "encrypted" marker over plainly deflated bytes is a
+  // metadata contradiction, and a genuinely encrypted payload could never verify anyway.
+  if ((entry.flags & 0x1) !== 0) {
+    throw new Error(`ZIP entry ${entry.rawName} is marked encrypted`);
+  }
   // On NTFS, `name:stream` materializes an alternate data stream of `name` rather than a file —
   // the Unix type bits still say "regular", so the name itself must be refused before a Windows
   // extraction can hide payload bytes in a stream (the retired 7z checker rejected these too).
   if (entry.rawName.includes(":")) {
     throw new Error("ZIP entry name contains an NTFS alternate-stream separator");
   }
+}
+
+/**
+ * Central-directory metadata walk WITHOUT inflating any entry body: same refusal set as the
+ * data-returning reader (special types, encrypted markers, alternate-stream names, typed
+ * directory markers), but a listing never pays an attacker-declared expansion size.
+ */
+export function readZipArchiveEntryNames(archivePath, options = {}) {
+  const bytes = readFileSync(archivePath);
+  const end = endOfCentralDirectoryOffset(bytes);
+  const count = bytes.readUInt16LE(end + 10);
+  const names = [];
+  let offset = bytes.readUInt32LE(end + 16);
+  assertZip32Directory(count, offset);
+  for (let index = 0; index < count; index += 1) {
+    const entry = readCentralEntry(bytes, offset);
+    if (entry.rawName.endsWith("/")) {
+      assertDirectoryMarkerEntry(entry, options.requireRegularEntries);
+    } else {
+      assertRegularZipEntry(entry, options.requireRegularEntries);
+      names.push(normalizedEntryName(entry.rawName));
+    }
+    offset = entry.next;
+  }
+  return names;
 }
 
 export function readZipArchiveEntries(archivePath, options = {}) {

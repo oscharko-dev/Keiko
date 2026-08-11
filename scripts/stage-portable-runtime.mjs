@@ -36,7 +36,7 @@ import {
 } from "./portable-runtime.mjs";
 import {
   extractZipArchiveEntries,
-  readZipArchiveEntries,
+  readZipArchiveEntryNames,
   writeZipArchiveFromDirectory,
 } from "./lib/zip-archive.mjs";
 import {
@@ -1057,9 +1057,9 @@ function createNodeZipAdapter() {
   // it must never embed foreign workspace bytes into a release archive.
   return {
     list(archivePath) {
-      return readZipArchiveEntries(archivePath, { requireRegularEntries: true }).map(
-        (entry) => entry.name,
-      );
+      // Metadata-only: a listing must never inflate entry bodies, so a hostile declared
+      // expansion cannot cost memory before the containment check has even seen the names.
+      return readZipArchiveEntryNames(archivePath, { requireRegularEntries: true });
     },
     extract(archivePath, extractRoot) {
       extractZipArchiveEntries(archivePath, extractRoot, { requireRegularEntries: true });

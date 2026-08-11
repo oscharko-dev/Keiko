@@ -109,6 +109,26 @@ describe("Windows portable ZIP adapter", () => {
     expect(existsSync(join(root, "out", "Keiko", "runtime", "link"))).toBe(false);
   });
 
+  // General-purpose bit 0 declares the entry encrypted. The retired 7z checker refused these;
+  // the Node reader must fail closed on the marker itself, before touching any payload bytes.
+  it("fails closed on an entry marked encrypted in the general-purpose flags", () => {
+    const root = tempRoot();
+    const archivePath = join(root, "encrypted.zip");
+    writeZipArchiveEntries(archivePath, [
+      { name: "Keiko/runtime/node.exe", data: Buffer.from("regular"), mode: 0o100644 },
+    ]);
+    const bytes = readFileSync(archivePath);
+    const local = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    bytes.writeUInt16LE(bytes.readUInt16LE(local + 6) | 0x1, local + 6);
+    const central = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+    bytes.writeUInt16LE(bytes.readUInt16LE(central + 8) | 0x1, central + 8);
+    writeFileSync(archivePath, bytes);
+    const adapter = createPortableZipAdapter("win32", vi.fn());
+
+    expect(() => adapter.list(archivePath)).toThrow("marked encrypted");
+    expect(() => adapter.extract(archivePath, join(root, "out"))).toThrow("marked encrypted");
+  });
+
   // A trailing-slash marker is skipped, not materialized — but a `dir/` entry whose Unix type
   // bits say SYMLINK is a contradiction only a hostile archive produces. The skip branch must
   // still validate the type instead of stepping over it (the retired 7z checker refused these).
