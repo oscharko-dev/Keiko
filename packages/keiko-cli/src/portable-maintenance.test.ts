@@ -16,6 +16,7 @@ import { WINDOWS_SHORTCUT_MAX_BYTES } from "@oscharko-dev/keiko-security";
 import { windowsLauncher } from "./launcher-platforms.js";
 import { layoutFor } from "./portable-shared.js";
 import {
+  installNativeRegistration,
   nativeRegistrationKinds,
   parseWindowsStartMenuRegistration,
   portableManagedRootMode,
@@ -53,6 +54,36 @@ describe("portable native registration policy", () => {
     expect(
       portableManagedRootMode("macos-x64", "/Applications/Keiko.app", {}, "/Users/keiko"),
     ).toBe("default");
+  });
+
+  it("installs the shortcut registration and retires the legacy launcher during setup", () => {
+    const root = mkdtempSync(join(homedir(), ".keiko-install-registration-"));
+    try {
+      const home = join(root, "home");
+      const env = { APPDATA: join(home, "AppData", "Roaming") };
+      const installRoot = join(home, "AppData", "Local", "Programs", "Keiko");
+      const layout = layoutFor("windows-x64", installRoot);
+      const legacyPath = windowsLegacyStartMenuRegistrationPath(env, home);
+      mkdirSync(join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs"), {
+        recursive: true,
+      });
+      writeFileSync(
+        legacyPath,
+        windowsLauncher.generateContent({ exe: layout.primaryLauncherPath, port: undefined }),
+      );
+      const io = { out: (): undefined => undefined, err: (): undefined => undefined };
+
+      installNativeRegistration(layout, "windows-x64", installRoot, env, home, io);
+
+      // The `.lnk` is written and verified, and the contract-matching `.bat` is retired in the
+      // same pass — never two Start Menu entries after a setup.
+      expect(parseWindowsStartMenuRegistration(windowsStartMenuRegistrationPath(env, home))).toBe(
+        layout.primaryLauncherPath,
+      );
+      expect(existsSync(legacyPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("retires the contract-matching legacy launcher when repair verifies the shortcut", () => {
