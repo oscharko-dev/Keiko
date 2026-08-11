@@ -43,6 +43,15 @@ describe("portable native registration policy", () => {
     ).toBe("default");
   });
 
+  it("falls back to the profile location when APPDATA is empty or relative", () => {
+    // An empty or relative APPDATA must never re-anchor the Start Menu path at the process
+    // working directory — the registration falls back to the canonical profile location.
+    for (const appData of ["", "relative\\appdata"]) {
+      const path = windowsStartMenuRegistrationPath({ APPDATA: appData }, "/home/keiko");
+      expect(path).toContain(join("/home/keiko", "AppData", "Roaming"));
+    }
+  });
+
   it("reads only bounded regular unlinked Windows launcher registrations", () => {
     const root = mkdtempSync(join(homedir(), ".keiko-registration-"));
     try {

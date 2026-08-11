@@ -639,7 +639,13 @@ export function refreshPortableShortcut(input: {
 }): boolean {
   if (input.target !== "windows-x64") return true;
   if (!WINDOWS_SHORTCUT_SAFE_PATH.test(input.layout.launcherPath)) return false;
-  const root = input.env.APPDATA ?? join(input.home, "AppData", "Roaming");
+  // Absolute-only, like every other environment-sourced root here: an empty or relative
+  // APPDATA would re-anchor the Start Menu path at the process working directory.
+  const configuredAppData = input.env.APPDATA;
+  const root =
+    configuredAppData !== undefined && isAbsolute(configuredAppData)
+      ? configuredAppData
+      : join(input.home, "AppData", "Roaming");
   const path = join(root, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk");
   const artifact = {
     targetPath: input.layout.launcherPath,

@@ -9,7 +9,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   WINDOWS_SHORTCUT_MAX_BYTES,
@@ -105,7 +105,12 @@ const MANAGED_INSTALL_RULES: Readonly<
 const WINDOWS_LAUNCHER_MAX_BYTES = 64 * 1024;
 
 function appDataDir(env: EnvSource, home: string): string {
-  return env.APPDATA ?? join(home, "AppData", "Roaming");
+  // Absolute-only: an empty or relative APPDATA must not re-anchor registration paths at the
+  // process working directory — fall back to the canonical profile location instead.
+  const configured = env.APPDATA;
+  return configured !== undefined && isAbsolute(configured)
+    ? configured
+    : join(home, "AppData", "Roaming");
 }
 
 export function windowsStartMenuRegistrationPath(env: EnvSource, home: string): string {
