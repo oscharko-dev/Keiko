@@ -53,7 +53,9 @@ function importVcvarsEnvironment(baseEnv, installationPath) {
     // chcp 65001 before `set`: cmd's internal commands emit the OEM code page into a pipe,
     // which corrupts non-ASCII PATH/INCLUDE/LIB values under the UTF-8 decode below.
     ["/d", "/s", "/c", `""${vcvars}" >nul && chcp 65001 >nul && set"`],
-    { encoding: "utf8", windowsVerbatimArguments: true },
+    // env: baseEnv, not the implicit process.env — the dump must extend exactly the
+    // environment the caller handed in, or the import silently mixes two trust inputs.
+    { encoding: "utf8", windowsVerbatimArguments: true, env: baseEnv },
   );
   if (dump.status !== 0) throw new Error("MSVC environment initialization failed (vcvars64)");
   const resolved = { ...baseEnv };
