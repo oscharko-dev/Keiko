@@ -53,6 +53,24 @@ describe("resolveWindowsMsvcEnv", () => {
     expect(spawnSyncMock).not.toHaveBeenCalled();
   });
 
+  it("imports vcvars when only one of INCLUDE and LIB is present", () => {
+    // A half-initialized environment is NOT a Developer Command Prompt: both partial shapes
+    // must take the full import path and come back complete.
+    for (const partial of [{ INCLUDE: String.raw`C:\inc` }, { LIB: String.raw`C:\lib` }]) {
+      spawnSyncMock.mockReset();
+      existsSyncMock.mockImplementation((path) => String(path).endsWith("vswhere.exe"));
+      spawnSyncMock
+        .mockReturnValueOnce({ status: 0, stdout: "C:\\VS\\2022\n" })
+        .mockReturnValueOnce(
+          vcvarsDump(["Path=C:\\VS\\bin", "INCLUDE=C:\\VS\\include", "LIB=C:\\VS\\lib"]),
+        );
+      const resolved = resolveWindowsMsvcEnv(partial);
+      expect(spawnSyncMock).toHaveBeenCalledTimes(2);
+      expect(resolved.INCLUDE).toBe("C:\\VS\\include");
+      expect(resolved.LIB).toBe("C:\\VS\\lib");
+    }
+  });
+
   it("imports the vcvars64 environment and merges every PATH case variant onto one key", () => {
     existsSyncMock.mockImplementation((path) => String(path).endsWith("vswhere.exe"));
     spawnSyncMock

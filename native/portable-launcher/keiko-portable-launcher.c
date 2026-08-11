@@ -187,8 +187,16 @@ static int run_launcher(keiko_launcher_buffers *buffers) {
     return 1;
   }
 
-  if (!has_console) {
-    SetEnvironmentVariableW(L"KEIKO_PORTABLE_UI_LAUNCH", L"1");
+  if (!has_console && !SetEnvironmentVariableW(L"KEIKO_PORTABLE_UI_LAUNCH", L"1")) {
+    /* Without the marker the CLI notifier stays silent, and with CREATE_NO_WINDOW the child's
+     * stderr is invisible — starting Node in that state would fail without any signal. */
+    report_bootstrap_failure(
+      has_console,
+      L"keiko portable launch: the launch environment could not be prepared\n",
+      L"Keiko could not prepare its launch environment.\r\n"
+      L"Reinstall Keiko, or run Keiko.exe from a terminal for details."
+    );
+    return 1;
   }
   DWORD creation_flags = creation_flags_for_console_state(has_console);
   STARTUPINFOW startup;
