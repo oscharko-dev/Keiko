@@ -3,7 +3,7 @@
   "version": "0.3.4",
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Internal workspace package: Keiko repository context and workspace access \u2014 detection, safe reads, path containment, deny/ignore rules, context packs, retrieval, and summaries. Not published independently.",
+  "description": "Internal workspace package: Keiko repository context and workspace access — detection, safe reads, path containment, deny/ignore rules, context packs, retrieval, and summaries. Not published independently.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

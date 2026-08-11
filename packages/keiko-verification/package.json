@@ -3,7 +3,7 @@
   "version": "0.3.4",
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Internal verification package: deterministic verification orchestrator \u2014 plan construction, resource-limit policy, best-effort memory monitoring, command classification, and audit/Markdown summaries (ADR-0007, ADR-0019). Not published independently.",
+  "description": "Internal verification package: deterministic verification orchestrator — plan construction, resource-limit policy, best-effort memory monitoring, command classification, and audit/Markdown summaries (ADR-0007, ADR-0019). Not published independently.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

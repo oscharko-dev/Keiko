@@ -800,7 +800,7 @@
       "remediation": "no-action-required",
       "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
-        "Every save is a restore point \u2014 browse, compare, and restore file history locally."
+        "Every save is a restore point — browse, compare, and restore file history locally."
       ],
       "internalOnly": false,
       "observableImpact": true,
@@ -1155,7 +1155,7 @@
         "Windows failures are visible: incomplete installs, a damaged app bundle, or a runtime that cannot start now surface a native error dialog instead of exiting silently.",
         "The Start Menu entry is a real shortcut; a legacy Keiko.bat from earlier releases is retired automatically during setup, repair, and the first start after an in-app update.",
         "The Windows archive pipeline fails closed on symlinks, NTFS alternate-data-stream names, encryption-marked and mistyped entries, and installer cleanup retries correctly under silent installs.",
-        "These builds carry evaluation signing: Windows SmartScreen may warn on first run, and the governed in-app updater does not offer them as a one-click update \u2014 install 0.3.4 by downloading the setup from this release page."
+        "These builds carry evaluation signing, and the governed in-app updater does not offer them as a one-click update — download 0.3.4 from this release page. On Windows, SmartScreen may warn on first run: choose “More info”, then “Run anyway”. On macOS, right-click the app and choose “Open” on first launch."
       ],
       "review": {
         "status": "reviewed",

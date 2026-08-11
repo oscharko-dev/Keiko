@@ -3,7 +3,7 @@
   "version": "0.3.4",
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Internal workspace package: Keiko model gateway \u2014 provider abstraction, OpenAI-compatible adapter, capability registry, routing, resilience, TLS handling. Not published independently.",
+  "description": "Internal workspace package: Keiko model gateway — provider abstraction, OpenAI-compatible adapter, capability registry, routing, resilience, TLS handling. Not published independently.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
