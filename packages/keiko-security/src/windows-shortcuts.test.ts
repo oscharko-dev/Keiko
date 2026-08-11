@@ -34,7 +34,7 @@ function tempRoot(): string {
 function spawnResult(
   overrides: Partial<ReturnType<WindowsShortcutSpawnFn>> = {},
 ): ReturnType<WindowsShortcutSpawnFn> {
-  return { status: 0, stdout: "", stderr: "", ...overrides };
+  return { status: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), ...overrides };
 }
 
 describe("windows shortcut fallback codec", () => {
@@ -65,7 +65,9 @@ describe("windows shortcut fallback codec", () => {
 
 describe("runWindowsShortcutCommand", () => {
   it("invokes cscript by absolute SystemRoot path with argv-carried fields", () => {
-    const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult({ stdout: "out\n" }));
+    const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() =>
+      spawnResult({ stdout: Buffer.from("out\n", "utf16le") }),
+    );
     const output = runWindowsShortcutCommand(
       "create",
       String.raw`C:\Menu\Keiko.lnk`,
@@ -77,8 +79,8 @@ describe("runWindowsShortcutCommand", () => {
     expect(output).toBe("out\n");
     const [command, args, options] = spawnFn.mock.calls[0] ?? [];
     expect(command).toBe(String.raw`C:\Windows\System32\cscript.exe`);
-    expect(args?.slice(0, 2)).toEqual(["//Nologo", "//E:JScript"]);
-    expect(args?.slice(3)).toEqual([
+    expect(args?.slice(0, 3)).toEqual(["//Nologo", "//U", "//E:JScript"]);
+    expect(args?.slice(4)).toEqual([
       "create",
       String.raw`C:\Menu\Keiko.lnk`,
       DEFINITION.targetPath,
@@ -86,7 +88,12 @@ describe("runWindowsShortcutCommand", () => {
       DEFINITION.iconPath,
     ]);
     expect(options?.shell).toBe(false);
-    expect(options?.env.SystemRoot).toBe(String.raw`C:\Windows`);
+    // Minimal script-host environment only — never the caller's secret-bearing process env.
+    expect(options?.env).toEqual({
+      SystemRoot: String.raw`C:\Windows`,
+      WINDIR: String.raw`C:\Windows`,
+      ComSpec: String.raw`C:\Windows\System32\cmd.exe`,
+    });
   });
 
   it("falls back to the default SystemRoot when the environment offers a relative one", () => {
@@ -109,13 +116,27 @@ describe("runWindowsShortcutCommand", () => {
     ).toThrow("test prefix");
   });
 
-  it("fails closed on ANY stderr output even with exit 0", () => {
-    const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() =>
-      spawnResult({ stderr: "WshShortcut refused" }),
-    );
+  it("fails closed on ANY stderr output even with exit 0, without echoing its content", () => {
+    const stderr = Buffer.from(String.raw`Error at C:\Users\José\shortcut.js`, "utf16le");
+    const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() => spawnResult({ stderr }));
     expect(() =>
       runWindowsShortcutCommand("create", "p", DEFINITION, {}, "test prefix", spawnFn),
-    ).toThrow("test prefix: WshShortcut refused");
+    ).toThrow(`test prefix (cscript exit 0, stderr ${String(stderr.byteLength)} bytes)`);
+    // The profile-bearing stderr body never reaches the message.
+    try {
+      runWindowsShortcutCommand("create", "p", DEFINITION, {}, "test prefix", spawnFn);
+    } catch (error) {
+      expect(String(error)).not.toContain("José");
+    }
+  });
+
+  it("decodes UTF-16LE read output so non-ASCII profile paths survive the readback", () => {
+    const lines = `${String.raw`C:\Users\José\Programs\Keiko\Keiko.exe`}\r\n`;
+    const spawnFn = vi.fn<WindowsShortcutSpawnFn>(() =>
+      spawnResult({ stdout: Buffer.from(lines, "utf16le") }),
+    );
+    const output = runWindowsShortcutCommand("read", "p", DEFINITION, {}, "test prefix", spawnFn);
+    expect(output).toContain("José");
   });
 
   it("propagates a spawn error", () => {

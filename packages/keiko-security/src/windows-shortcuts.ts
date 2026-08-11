@@ -51,7 +51,6 @@ export type WindowsShortcutSpawnFn = (
   command: string,
   args: readonly string[],
   options: {
-    readonly encoding: "utf8";
     readonly env: NodeJS.ProcessEnv;
     readonly shell: false;
     readonly stdio: "pipe";
@@ -60,11 +59,16 @@ export type WindowsShortcutSpawnFn = (
 ) => {
   readonly error?: Error | undefined;
   readonly status: number | null;
-  readonly stdout: string | null;
-  readonly stderr: string | null;
+  readonly stdout: Buffer | null;
+  readonly stderr: Buffer | null;
 };
 
-function windowsSystemRoot(env: ShortcutEnvSource): string {
+/**
+ * The trusted Windows system root: an absolute SystemRoot/WINDIR from the environment, or the
+ * platform default. The one shared trust decision every governed Windows child-process helper
+ * (cscript, powershell) resolves its executable against.
+ */
+export function windowsSystemRoot(env: ShortcutEnvSource): string {
   const root = env.SystemRoot ?? env.WINDIR ?? DEFAULT_WINDOWS_ROOT;
   return win32Path.isAbsolute(root) ? root : DEFAULT_WINDOWS_ROOT;
 }
@@ -73,14 +77,16 @@ function windowsCscriptExecutable(env: ShortcutEnvSource): string {
   return win32Path.join(windowsSystemRoot(env), "System32", "cscript.exe");
 }
 
+// The script host gets ONLY the variables it needs to run — never the caller's process
+// environment, which in the server holds provider API keys and other secrets.
 function windowsShortcutEnv(env: ShortcutEnvSource): NodeJS.ProcessEnv {
   const root = windowsSystemRoot(env);
   return {
-    ...process.env,
-    ...env,
     SystemRoot: root,
     WINDIR: root,
     ComSpec: win32Path.join(root, "System32", "cmd.exe"),
+    ...(env.TEMP === undefined ? {} : { TEMP: env.TEMP }),
+    ...(env.TMP === undefined ? {} : { TMP: env.TMP }),
   };
 }
 
@@ -90,9 +96,13 @@ function windowsShortcutArgs(
   path: string,
   definition: WindowsShortcutDefinition,
 ): readonly string[] {
-  if (mode === "read") return ["//Nologo", "//E:JScript", scriptPath, mode, path];
+  // `//U` makes cscript emit UTF-16LE on stdout/stderr; without it, redirected output uses the
+  // active ANSI/OEM code page and non-ASCII profile paths (e.g. `José`) come back corrupted,
+  // failing the post-create readback verification.
+  if (mode === "read") return ["//Nologo", "//U", "//E:JScript", scriptPath, mode, path];
   return [
     "//Nologo",
+    "//U",
     "//E:JScript",
     scriptPath,
     mode,
@@ -103,16 +113,16 @@ function windowsShortcutArgs(
   ];
 }
 
-function shortcutFailure(failurePrefix: string, stderr: string | null): string {
-  const detail = stderr?.trim();
-  return detail === undefined || detail.length === 0
-    ? failurePrefix
-    : `${failurePrefix}: ${detail}`;
+// Failure text stays content-free: WSH stderr names the script path and the shortcut path, and
+// both live under the user profile, so embedding it would carry the OS username into operator
+// diagnostics. Status and byte count are enough to diagnose the class of failure.
+function shortcutFailure(failurePrefix: string, status: number | null, stderr: Buffer): string {
+  return `${failurePrefix} (cscript exit ${String(status)}, stderr ${String(stderr.byteLength)} bytes)`;
 }
 
 /**
  * Run the fixed shortcut JScript through cscript. Fails closed on spawn errors, nonzero exits,
- * and ANY stderr output; returns raw stdout (three lines in read mode).
+ * and ANY stderr output; returns decoded stdout (three UTF-16LE lines in read mode).
  */
 export function runWindowsShortcutCommand(
   mode: "create" | "read",
@@ -130,7 +140,6 @@ export function runWindowsShortcutCommand(
       windowsCscriptExecutable(env),
       windowsShortcutArgs(mode, scriptPath, path, definition),
       {
-        encoding: "utf8",
         env: windowsShortcutEnv(env),
         shell: false,
         stdio: "pipe",
@@ -138,10 +147,11 @@ export function runWindowsShortcutCommand(
       },
     );
     if (result.error !== undefined) throw result.error;
-    if (result.status !== 0 || (result.stderr !== null && result.stderr.length > 0)) {
-      throw new Error(shortcutFailure(failurePrefix, result.stderr));
+    const stderr = result.stderr ?? Buffer.alloc(0);
+    if (result.status !== 0 || stderr.byteLength > 0) {
+      throw new Error(shortcutFailure(failurePrefix, result.status, stderr));
     }
-    return result.stdout ?? "";
+    return (result.stdout ?? Buffer.alloc(0)).toString("utf16le");
   } finally {
     rmSync(scriptRoot, { recursive: true, force: true });
   }

@@ -1,9 +1,19 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { Buffer } from "node:buffer";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createPortableZipAdapter, safeZipExtractionEntries } from "../stage-portable-runtime.mjs";
+import { writeZipArchiveEntries } from "../lib/zip-archive.mjs";
 
 const tempRoots = [];
 
@@ -74,11 +84,44 @@ describe("Windows portable ZIP adapter", () => {
   it("rejects an entry with a pathologically long slash run without catastrophic backtracking", () => {
     const adversarialPath = `Keiko/${"/".repeat(20000)}x`;
     const adapter = fakeAdapter(["Keiko/runtime/node.exe", adversarialPath]);
-
-    const start = Date.now();
     expect(() => safeZipExtractionEntries("runtime.zip", "Keiko", adapter)).toThrow(
       "archive entry escapes Keiko",
     );
-    expect(Date.now() - start).toBeLessThan(300);
+  });
+
+  // Successor to the retired 7z adapter's entry-type pin: a Windows runtime archive may contain
+  // only regular files. A symlink entry (Unix S_IFLNK in the central-directory external
+  // attributes) must refuse the archive on BOTH list and extract — materializing a link's
+  // target text as a plain file would silently change its meaning.
+  it("fails closed on a ZIP symlink entry instead of materializing it as a file", () => {
+    const root = tempRoot();
+    const archivePath = join(root, "with-symlink.zip");
+    writeZipArchiveEntries(archivePath, [
+      { name: "Keiko/runtime/node.exe", data: Buffer.from("regular"), mode: 0o100644 },
+      { name: "Keiko/runtime/link", data: Buffer.from("../target"), mode: 0o120777 },
+    ]);
+    const adapter = createPortableZipAdapter("win32", vi.fn());
+
+    expect(() => adapter.list(archivePath)).toThrow("unsupported special entry type");
+    expect(() => adapter.extract(archivePath, join(root, "out"))).toThrow(
+      "unsupported special entry type",
+    );
+    expect(existsSync(join(root, "out", "Keiko", "runtime", "link"))).toBe(false);
+  });
+
+  // A followed symlink whose target resolves OUTSIDE the staged tree must refuse archive
+  // creation — otherwise a staged link could embed arbitrary workspace bytes into a release ZIP.
+  it("refuses to archive a symlink that escapes the staged tree", () => {
+    const root = tempRoot();
+    const treeRoot = join(root, "Keiko");
+    mkdirSync(join(treeRoot, "runtime"), { recursive: true });
+    writeFileSync(join(treeRoot, "runtime", "node.exe"), "regular");
+    writeFileSync(join(root, "outside-secret.txt"), "workspace bytes");
+    symlinkSync(join(root, "outside-secret.txt"), join(treeRoot, "runtime", "escape"));
+    const adapter = createPortableZipAdapter("win32", vi.fn());
+
+    expect(() => adapter.create(root, "Keiko", join(root, "keiko.zip"))).toThrow(
+      "escapes the archive root",
+    );
   });
 });

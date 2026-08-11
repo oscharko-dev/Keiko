@@ -252,8 +252,21 @@ function ensureWindowsShortcutArtifactSafe(
   return "managed";
 }
 
+function ensureDirectoryArtifactSafe(path: string): "missing" | "managed" {
+  assertNoSymlinkAncestor(path);
+  if (!existsSync(path)) return "missing";
+  const stat = lstatSync(path);
+  if (stat.isSymbolicLink()) {
+    throw new Error(`portable registration refused symlink at ${path}`);
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`portable registration refused unknown artifact at ${path}`);
+  }
+  return "managed";
+}
+
 function ensureRegistrationArtifactSafe(plan: RegistrationPlan): "missing" | "managed" {
-  if (plan.artifact.type === "directory") return "managed";
+  if (plan.artifact.type === "directory") return ensureDirectoryArtifactSafe(plan.path);
   if (plan.artifact.type === "windows-shortcut") {
     return ensureWindowsShortcutArtifactSafe(plan.path, plan.artifact);
   }
@@ -353,7 +366,18 @@ export function installNativeRegistration(
 ): void {
   for (const plan of registrationPlans(layout, target, managedRoot, env, home)) {
     writeRegistrationArtifact(plan);
+    if (plan.artifact.type === "windows-shortcut") {
+      // Migration from the pre-.lnk release: once the shortcut registration is verified, a
+      // legacy `Keiko.bat` whose content exactly matches the managed launcher contract is
+      // retired so users do not keep two Start Menu entries. Foreign or edited files are left
+      // untouched (the removal path is content-verified and fails soft).
+      removeLegacyWindowsRegistration(layout, env, home, false, silentCliIo());
+    }
   }
+}
+
+function silentCliIo(): CliIo {
+  return { out: () => undefined, err: () => undefined };
 }
 
 function fileRegistrationStatus(plan: RegistrationPlan): "ok" | "missing" | "action-required" {

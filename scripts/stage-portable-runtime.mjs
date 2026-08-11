@@ -1045,17 +1045,26 @@ export function createPortableZipAdapter(platform = process.platform, commandRun
 }
 
 function createNodeZipAdapter() {
+  // requireRegularEntries carries the fail-closed contract the retired 7z adapter proved with
+  // its own entry-type records: a Windows runtime archive may contain only regular files, so a
+  // symlink/device/FIFO entry refuses the archive instead of materializing as a plain file.
+  // containmentRoot keeps followed symlinks inside the staged tree — a link resolving outside
+  // it must never embed foreign workspace bytes into a release archive.
   return {
     list(archivePath) {
-      return readZipArchiveEntries(archivePath).map((entry) => entry.name);
+      return readZipArchiveEntries(archivePath, { requireRegularEntries: true }).map(
+        (entry) => entry.name,
+      );
     },
     extract(archivePath, extractRoot) {
-      extractZipArchiveEntries(archivePath, extractRoot);
+      extractZipArchiveEntries(archivePath, extractRoot, { requireRegularEntries: true });
     },
     create(sourceRoot, entryName, archivePath) {
-      writeZipArchiveFromDirectory(join(sourceRoot, entryName), archivePath, {
+      const treeRoot = join(sourceRoot, entryName);
+      writeZipArchiveFromDirectory(treeRoot, archivePath, {
         rootName: entryName,
         followSymlinks: true,
+        containmentRoot: treeRoot,
       });
     },
   };

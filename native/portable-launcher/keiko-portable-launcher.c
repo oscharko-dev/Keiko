@@ -140,9 +140,15 @@ static int run_launcher(keiko_launcher_buffers *buffers) {
 
   /* Same double-click marker as the macOS launcher: the portable CLI surfaces launch failures
    * visibly only when a human started the app through this binary, and the marker's contract must
-   * hold on every platform. A shell invocation owns a console window; an Explorer double-click of
-   * a windowed launcher does not. */
+   * hold on every platform. A /SUBSYSTEM:WINDOWS binary never owns a console of its own, so
+   * GetConsoleWindow() alone cannot tell a cmd/PowerShell start from an Explorer double-click —
+   * both report NULL. Attaching to the parent's console distinguishes them: it succeeds for a
+   * shell start (keep console semantics, keep Node output visible) and fails for Explorer
+   * (set the UI-launch marker and suppress the child console window). */
   int has_console = GetConsoleWindow() != NULL;
+  if (!has_console && AttachConsole(ATTACH_PARENT_PROCESS)) {
+    has_console = 1;
+  }
   if (!has_console) {
     SetEnvironmentVariableW(L"KEIKO_PORTABLE_UI_LAUNCH", L"1");
   }

@@ -66,6 +66,7 @@ export type { WindowsShortcutDefinition, WindowsShortcutSpawnFn } from "./window
 export {
   WINDOWS_SHORTCUT_MAX_BYTES,
   equivalentWindowsShortcutPath,
+  windowsSystemRoot,
   parseWindowsShortcutFallback,
   readWindowsShortcutDefinition,
   runWindowsShortcutCommand,

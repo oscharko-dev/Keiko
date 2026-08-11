@@ -16,7 +16,7 @@ import {
   writeSync,
   statSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 
 const LOCAL_FILE_HEADER = 0x04034b50;
@@ -186,6 +186,15 @@ function symlinkDirectoryEntry(absolutePath, archiveName, options, stat) {
   if (options.followSymlinks !== true) {
     throw new Error(`ZIP source contains an unsupported entry: ${archiveName}`);
   }
+  // A followed symlink must resolve INSIDE the tree being archived: without this containment a
+  // staged link could embed arbitrary workspace or runner files into a release archive.
+  if (options.containmentRoot !== undefined) {
+    const resolvedTarget = realpathSync(absolutePath);
+    const resolvedRoot = realpathSync(options.containmentRoot);
+    if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(resolvedRoot + sep)) {
+      throw new Error(`ZIP source symlink escapes the archive root: ${archiveName}`);
+    }
+  }
   const targetStat = statSync(absolutePath);
   if (targetStat.isDirectory()) return { kind: "directory" };
   if (targetStat.isFile()) {
@@ -276,6 +285,7 @@ export function writeZipArchiveFromDirectory(sourceRoot, archivePath, options) {
   const records = collectDirectoryEntries(sourceRoot, rootName, {
     followSymlinks: options.followSymlinks === true,
     preserveSymlinks: options.preserveSymlinks === true,
+    ...(options.containmentRoot === undefined ? {} : { containmentRoot: options.containmentRoot }),
   });
   writeZipArchiveEntries(archivePath, records);
 }
@@ -313,6 +323,7 @@ function readCentralEntry(bytes, offset) {
     compressedSize: bytes.readUInt32LE(offset + 20),
     size: bytes.readUInt32LE(offset + 24),
     localOffset: bytes.readUInt32LE(offset + 42),
+    unixMode: bytes.readUInt32LE(offset + 38) >>> 16,
     rawName: bytes.subarray(offset + 46, offset + 46 + nameLength).toString("utf8"),
     next:
       offset + 46 + nameLength + bytes.readUInt16LE(offset + 30) + bytes.readUInt16LE(offset + 32),
@@ -375,7 +386,21 @@ function assertZip32Directory(count, directoryOffset) {
  * traversal-safety rule the writer enforces, so a hostile archive cannot name a path outside
  * its extraction root. Any structural disagreement throws: fail closed, never partial content.
  */
-export function readZipArchiveEntries(archivePath) {
+// Central-directory Unix type bits: only regular files (or DOS entries carrying no Unix mode)
+// are supported payloads. Symlinks, devices, FIFOs, and sockets fail closed when the caller
+// requires regular entries — a link materialized as a plain file would silently change meaning.
+const UNIX_TYPE_MASK = 0xf000;
+const UNIX_TYPE_REGULAR = 0x8000;
+
+function assertRegularZipEntry(entry, requireRegularEntries) {
+  if (requireRegularEntries !== true) return;
+  const type = entry.unixMode & UNIX_TYPE_MASK;
+  if (type !== 0 && type !== UNIX_TYPE_REGULAR) {
+    throw new Error(`ZIP entry ${entry.rawName} is an unsupported special entry type`);
+  }
+}
+
+export function readZipArchiveEntries(archivePath, options = {}) {
   const bytes = readFileSync(archivePath);
   const end = endOfCentralDirectoryOffset(bytes);
   const count = bytes.readUInt16LE(end + 10);
@@ -385,6 +410,7 @@ export function readZipArchiveEntries(archivePath) {
   for (let index = 0; index < count; index += 1) {
     const entry = readCentralEntry(bytes, offset);
     if (!entry.rawName.endsWith("/")) {
+      assertRegularZipEntry(entry, options.requireRegularEntries);
       records.push({
         name: normalizedEntryName(entry.rawName),
         data: centralEntryData(bytes, entry),
@@ -440,7 +466,7 @@ function extractEntryData(fd, entry, archiveSize) {
  * memory at once (Codex findings on #3055). Same contract as the reader otherwise:
  * traversal-safe names, proven sizes and checksums, fail closed.
  */
-export function extractZipArchiveEntries(archivePath, targetRoot) {
+export function extractZipArchiveEntries(archivePath, targetRoot, options = {}) {
   const fd = openSync(archivePath, "r");
   try {
     const size = fstatSync(fd).size;
@@ -457,6 +483,7 @@ export function extractZipArchiveEntries(archivePath, targetRoot) {
     for (let index = 0; index < count; index += 1) {
       const entry = readCentralEntry(directory, offset);
       if (!entry.rawName.endsWith("/")) {
+        assertRegularZipEntry(entry, options.requireRegularEntries);
         const path = join(targetRoot, normalizedEntryName(entry.rawName));
         mkdirSync(dirname(path), { recursive: true });
         writeFileSync(path, extractEntryData(fd, entry, size));

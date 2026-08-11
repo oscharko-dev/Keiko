@@ -631,13 +631,31 @@ export function refreshPortableShortcut(input: {
     workingDirectory: input.layout.installRoot,
     iconPath: input.layout.launcherPath,
   };
-  if (existsSync(path) && lstatSync(path).isSymbolicLink()) return false;
-  if (existsSync(path) && statSync(path).isFile() && !shortcutMatches(path, artifact, input.env)) {
+  try {
+    // lstat first: `existsSync` follows symlinks, so a DANGLING symlink would pass an
+    // exists-guarded check and the write would follow it to an attacker-chosen target. lstat
+    // sees the link itself regardless of its target.
+    const entry = lstatEntryOrUndefined(path);
+    if (entry !== undefined) {
+      if (entry.isSymbolicLink()) return false;
+      if (entry.isFile() && !shortcutMatches(path, artifact, input.env)) return false;
+    }
+    mkdirSync(dirname(path), { recursive: true, mode: 0o755 });
+    writeShortcut(path, artifact, input.env);
+    return true;
+  } catch {
+    // Boolean contract: a shortcut-host failure degrades to shortcutRefreshed=false — it must
+    // never abort an otherwise-completed activation.
     return false;
   }
-  mkdirSync(dirname(path), { recursive: true, mode: 0o755 });
-  writeShortcut(path, artifact, input.env);
-  return true;
+}
+
+function lstatEntryOrUndefined(path: string): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(path);
+  } catch {
+    return undefined;
+  }
 }
 
 export function cleanupPortableActivation(paths: PortableActivationPaths): void {

@@ -1,7 +1,9 @@
 import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+
+import { WINDOWS_SHORTCUT_MAX_BYTES } from "@oscharko-dev/keiko-security";
 
 import { windowsLauncher } from "./launcher-platforms.js";
 import {
@@ -71,6 +73,21 @@ describe("portable native registration policy", () => {
       const nestedLauncher = join(linkedParent, "Keiko.bat");
       writeFileSync(join(outside, "Keiko.bat"), canonical);
       expect(parseWindowsStartMenuRegistration(nestedLauncher)).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses shortcut registrations outside the size bounds", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-shortcut-bounds-"));
+    try {
+      const empty = join(root, "Keiko.lnk");
+      writeFileSync(empty, "");
+      expect(parseWindowsStartMenuRegistration(empty)).toBeUndefined();
+
+      const oversized = join(root, "Oversized.lnk");
+      writeFileSync(oversized, Buffer.alloc(WINDOWS_SHORTCUT_MAX_BYTES + 1, 0x20));
+      expect(parseWindowsStartMenuRegistration(oversized)).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
-import { isAbsolute as isAbsoluteWindowsPath, join as joinWindowsPath } from "node:path/win32";
+import { join as joinWindowsPath } from "node:path/win32";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { windowsSystemRoot } from "@oscharko-dev/keiko-security";
 
 /**
  * A desktop double-click gives the portable launcher no terminal: every `io.err` line vanishes and
@@ -22,7 +23,6 @@ import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 const MAX_ALERT_MESSAGE_LENGTH = 400;
 const OSASCRIPT_EXECUTABLE = "/usr/bin/osascript";
-const DEFAULT_WINDOWS_ROOT = String.raw`C:\Windows`;
 const WINDOWS_POWERSHELL_PARTS = ["System32", "WindowsPowerShell", "v1.0", "powershell.exe"];
 
 export type PortableFailureNotifierFn = (message: string, env: EnvSource) => void;
@@ -95,12 +95,6 @@ export function runDetachedAlert(
     reportAlertFailure(ALERT_FAILURE_LINE);
   });
   child.unref();
-}
-
-function windowsSystemRoot(env: EnvSource): string {
-  const value = env.SystemRoot ?? env.WINDIR;
-  if (value !== undefined && isAbsoluteWindowsPath(value)) return value;
-  return DEFAULT_WINDOWS_ROOT;
 }
 
 function windowsPowerShellExecutable(env: EnvSource): string {
