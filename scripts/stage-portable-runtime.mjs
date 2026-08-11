@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, posix, relative, resolve } from "node:path";
+import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
 import {
@@ -1061,6 +1061,11 @@ function createNodeZipAdapter() {
     },
     create(sourceRoot, entryName, archivePath) {
       const treeRoot = join(sourceRoot, entryName);
+      const resolvedTree = resolve(treeRoot);
+      const resolvedSource = resolve(sourceRoot);
+      if (resolvedTree !== resolvedSource && !resolvedTree.startsWith(resolvedSource + sep)) {
+        fail(`portable ZIP entry name escapes the staging root: ${entryName}`);
+      }
       writeZipArchiveFromDirectory(treeRoot, archivePath, {
         rootName: entryName,
         followSymlinks: true,
@@ -1870,6 +1875,15 @@ function importVcvarsEnvironment(baseEnv, installationPath) {
   for (const line of dump.stdout.split(/\r?\n/u)) {
     const separator = line.indexOf("=");
     if (separator > 0) resolved[line.slice(0, separator)] = line.slice(separator + 1);
+  }
+  // cmd emits `Path=`, the parent may carry `PATH=`: Windows treats env names case-insensitively
+  // but a JS object does not, and two same-named-differently-cased keys make the child PATH and
+  // the tool lookup ambiguous. Merge every case variant onto the one canonical PATH key.
+  for (const key of Object.keys(resolved)) {
+    if (key !== "PATH" && key.toUpperCase() === "PATH") {
+      resolved.PATH = resolved[key];
+      delete resolved[key];
+    }
   }
   return resolved;
 }
