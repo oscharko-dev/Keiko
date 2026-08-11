@@ -14,6 +14,8 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { resolveWindowsMsvcEnv, windowsToolFromPath } from "../../scripts/lib/windows-msvc.mjs";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 
@@ -196,9 +198,12 @@ async function compile(binary, paused = false) {
         binary,
         source,
       ];
-  const compiler = isWindows ? "cl" : "xcrun";
+  // Windows resolves the MSVC toolchain itself (shared lib, #3085): no workflow step persists
+  // vcvars into the environment, and a bare "cl" is not reliably searched on options.env.PATH.
+  const compileEnv = isWindows ? resolveWindowsMsvcEnv(process.env) : process.env;
+  const compiler = isWindows ? windowsToolFromPath(compileEnv.PATH, "cl.exe") : "xcrun";
   await new Promise((resolveCompile, reject) => {
-    const child = spawn(compiler, args, { env: process.env, stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(compiler, args, { env: compileEnv, stdio: ["ignore", "ignore", "pipe"] });
     const errors = [];
     child.stderr.on("data", (chunk) => errors.push(chunk));
     child.once("error", reject);

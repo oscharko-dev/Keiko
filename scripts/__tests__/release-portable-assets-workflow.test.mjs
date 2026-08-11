@@ -110,10 +110,12 @@ describe("portable secure-read qualification", () => {
       "test-protocol.mjs --binary .isolated-macos-artifact/${{ matrix.platform_target }}/payload/Keiko/Keiko.app/Contents/Resources/runtime/native/keiko-secure-workspace-read",
     );
     const windowsStage = workflowJob("  stage-windows-production:", "\n  stage-macos-production:");
-    expect(windowsStage.indexOf("Configure MSVC environment")).toBeLessThan(
-      windowsStage.indexOf("Run executable secure-read adversarial harness"),
-    );
-    expect(secureReadHarness).toContain('const compiler = isWindows ? "cl" : "xcrun"');
+    // The MSVC step is gone by design (#3084): the harness resolves its own toolchain via the
+    // shared lib and spawns the compiler by absolute path — never a bare name.
+    expect(windowsStage).not.toContain("Configure MSVC environment");
+    expect(secureReadHarness).toContain("resolveWindowsMsvcEnv(process.env)");
+    expect(secureReadHarness).toContain('windowsToolFromPath(compileEnv.PATH, "cl.exe")');
+    expect(secureReadHarness).not.toMatch(/isWindows \? "cl"/u);
     expect(secureReadHarness).toContain('argv[0] !== "--binary"');
     expect(secureReadHarness).toContain("spawn(binary, [], { stdio, env: {} })");
     expect(secureReadHarness).toContain('["EACCES", "EBUSY", "EPERM"]');
