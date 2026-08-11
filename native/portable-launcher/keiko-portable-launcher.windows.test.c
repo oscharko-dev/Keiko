@@ -30,5 +30,10 @@ int wmain(void) {
 
   assert(creation_flags_for_console_state(1) == 0);
   assert(creation_flags_for_console_state(0) == CREATE_NO_WINDOW);
+
+  /* The bootstrap pre-flight must read a present file as present and an impossible path as
+   * missing — this is what gates the incomplete-install dialog before any Node spawn. */
+  assert(bootstrap_artifact_missing(L"C:\\Windows\\System32\\kernel32.dll") == 0);
+  assert(bootstrap_artifact_missing(L"C:\\keiko-missing-bootstrap-probe\\nope.exe") == 1);
   return 0;
 }

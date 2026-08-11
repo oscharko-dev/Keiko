@@ -400,6 +400,18 @@ function assertZip32Directory(count, directoryOffset) {
 // requires regular entries — a link materialized as a plain file would silently change meaning.
 const UNIX_TYPE_MASK = 0xf000;
 const UNIX_TYPE_REGULAR = 0x8000;
+const UNIX_TYPE_DIRECTORY = 0x4000;
+
+// A directory marker (trailing `/`) is skipped rather than materialized — but its Unix type
+// bits must still agree. A crafted `dir/` entry carrying symlink or device bits is a
+// contradiction only a hostile archive produces; refuse it instead of skipping past it.
+function assertDirectoryMarkerEntry(entry, requireRegularEntries) {
+  if (requireRegularEntries !== true) return;
+  const type = entry.unixMode & UNIX_TYPE_MASK;
+  if (type !== 0 && type !== UNIX_TYPE_DIRECTORY) {
+    throw new Error(`ZIP entry ${entry.rawName} is an unsupported special entry type`);
+  }
+}
 
 function assertRegularZipEntry(entry, requireRegularEntries) {
   if (requireRegularEntries !== true) return;
@@ -424,7 +436,9 @@ export function readZipArchiveEntries(archivePath, options = {}) {
   assertZip32Directory(count, offset);
   for (let index = 0; index < count; index += 1) {
     const entry = readCentralEntry(bytes, offset);
-    if (!entry.rawName.endsWith("/")) {
+    if (entry.rawName.endsWith("/")) {
+      assertDirectoryMarkerEntry(entry, options.requireRegularEntries);
+    } else {
       assertRegularZipEntry(entry, options.requireRegularEntries);
       records.push({
         name: normalizedEntryName(entry.rawName),
@@ -497,7 +511,9 @@ export function extractZipArchiveEntries(archivePath, targetRoot, options = {}) 
     let offset = 0;
     for (let index = 0; index < count; index += 1) {
       const entry = readCentralEntry(directory, offset);
-      if (!entry.rawName.endsWith("/")) {
+      if (entry.rawName.endsWith("/")) {
+        assertDirectoryMarkerEntry(entry, options.requireRegularEntries);
+      } else {
         assertRegularZipEntry(entry, options.requireRegularEntries);
         const path = join(targetRoot, normalizedEntryName(entry.rawName));
         mkdirSync(dirname(path), { recursive: true });

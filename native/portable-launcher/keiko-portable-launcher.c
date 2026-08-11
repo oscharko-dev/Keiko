@@ -6,8 +6,14 @@
 #define UNICODE
 #define _UNICODE
 #include <stdarg.h>
+#include <stdio.h>
 #include <wchar.h>
 #include <windows.h>
+
+#if defined(_MSC_VER)
+/* MessageBoxW lives in user32, which neither cl invocation links by default. */
+#pragma comment(lib, "user32.lib")
+#endif
 
 #define KEIKO_WIDEN2(value) L##value
 #define KEIKO_WIDEN(value) KEIKO_WIDEN2(value)
@@ -59,6 +65,10 @@ static int quote_arg(wchar_t *out, size_t cap, const wchar_t *value) {
 
 static DWORD creation_flags_for_console_state(int has_console) {
   return has_console ? 0 : CREATE_NO_WINDOW;
+}
+
+static int bootstrap_artifact_missing(const wchar_t *path) {
+  return GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES;
 }
 
 enum { KEIKO_PATH_CAP = 32768, KEIKO_COMMAND_CAP = 98304 };
@@ -149,6 +159,27 @@ static int run_launcher(keiko_launcher_buffers *buffers) {
   if (!has_console && AttachConsole(ATTACH_PARENT_PROCESS)) {
     has_console = 1;
   }
+
+  /* The CLI's own failure dialog cannot load when the Node runtime or the app bundle itself is
+   * gone, and with CREATE_NO_WINDOW the child's stderr would be invisible — the exact broken
+   * install would fail with no signal at all. Only this pre-flight class gets a native dialog
+   * here: any later failure is the CLI notifier's job, and a second generic dialog on a nonzero
+   * exit would double-report it. */
+  if (bootstrap_artifact_missing(buffers->node) || bootstrap_artifact_missing(buffers->cli)) {
+    if (has_console) {
+      fwprintf(stderr, L"keiko portable launch: the installation is incomplete\n");
+    } else {
+      MessageBoxW(
+        NULL,
+        L"Keiko could not start: the installation is incomplete.\r\n"
+        L"Reinstall Keiko, or run Keiko.exe from a terminal for details.",
+        L"Keiko",
+        MB_OK | MB_ICONERROR
+      );
+    }
+    return 1;
+  }
+
   if (!has_console) {
     SetEnvironmentVariableW(L"KEIKO_PORTABLE_UI_LAUNCH", L"1");
   }

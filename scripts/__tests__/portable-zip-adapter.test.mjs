@@ -109,6 +109,30 @@ describe("Windows portable ZIP adapter", () => {
     expect(existsSync(join(root, "out", "Keiko", "runtime", "link"))).toBe(false);
   });
 
+  // A trailing-slash marker is skipped, not materialized — but a `dir/` entry whose Unix type
+  // bits say SYMLINK is a contradiction only a hostile archive produces. The skip branch must
+  // still validate the type instead of stepping over it (the retired 7z checker refused these).
+  it("fails closed on a directory marker carrying symlink type bits", () => {
+    const root = tempRoot();
+    const archivePath = join(root, "typed-dir.zip");
+    // The writer itself refuses trailing-slash names; the hostile fixture needs the explicit
+    // unsafe-name escape hatch to exist at all.
+    writeZipArchiveEntries(
+      archivePath,
+      [
+        { name: "Keiko/runtime/node.exe", data: Buffer.from("regular"), mode: 0o100644 },
+        { name: "Keiko/link/", data: Buffer.alloc(0), mode: 0o120777 },
+      ],
+      { allowUnsafeEntryNames: true },
+    );
+    const adapter = createPortableZipAdapter("win32", vi.fn());
+
+    expect(() => adapter.list(archivePath)).toThrow("unsupported special entry type");
+    expect(() => adapter.extract(archivePath, join(root, "out"))).toThrow(
+      "unsupported special entry type",
+    );
+  });
+
   // `name:stream` in a ZIP entry carries regular-file Unix type bits, but on NTFS it
   // materializes an ALTERNATE DATA STREAM of `name` — payload bytes hidden from every plain
   // directory listing. The retired 7z pipeline rejected these via its metadata checker; the
