@@ -319,6 +319,31 @@ Rules:
 - Packaged installs are release-qualified only for the fixed `windows-x64`, `macos-arm64`, and
   `macos-x64` ZIP targets; unsupported targets fail closed (ADR-0163).
 
+### Historical records, planning baselines, and delivery evidence
+
+These directories were previously reachable only through individual ADRs or not indexed at all
+(housekeeping 2026-08-10). The first two are frozen records — for them the ADRs and gates stay
+authoritative; the context-engineering decision log is a living coordinator record by its own
+contract; the remaining entries are living surfaces that simply lacked an index entry.
+
+- [historical/](historical/) - frozen Epic #270 Test-Intelligence → Quality-Intelligence
+  snapshots (baseline, parity matrix with post-closure delivery notes, compat contract,
+  inventory).
+- [planning/](planning/) - historical editor architecture and multi-language planning baselines
+  (superseded by the editor ADR cluster).
+- [context-engineering/decision-log.md](context-engineering/decision-log.md) - coordinator
+  decision log for the context-engineering milestone (ADR-0052..0057 context).
+- [acceptance/](acceptance/) - code-task acceptance contribution contract and the
+  `code-task-2387.json` acceptance descriptor (generator:
+  `scripts/generate-code-task-acceptance.mjs`; the downstream consumer is not yet scheduled).
+- [pilot/](pilot/) - pilot go/no-go evaluation and pilot runbook (content pinned by
+  `tests/pilot/`).
+- [relationship-engine/](relationship-engine/) - relationship storage/audit/UI specifications and
+  closure evidence (ADR-0031..0033).
+- [release/](release/) - live release engineering: readiness audits, portable launch and signing
+  operator contracts, dependency decision matrices, and release closeouts (wired into the
+  release workflows and required gates).
+
 ## Verification commands
 
 Use the narrowest relevant gate first, then broader gates when risk justifies it.

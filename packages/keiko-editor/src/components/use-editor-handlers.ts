@@ -82,6 +82,7 @@ import {
   attachRetainedEditorModel,
   EditorModelOwnershipError,
   updateRetainedEditorModelProtection,
+  writeRetainedEditorModelValue,
   type EditorModelProtection,
   type RetainedEditorModelAttachment,
   type RetainedEditorModel,
@@ -316,6 +317,17 @@ function emitHostEditFallback(
   );
 }
 
+// The controlled value sync may have already written this exact text (the host updates its
+// buffer state and the host-edit request in the same commit). Re-executing a whole-model
+// replacement with identical text would push a second, empty undo stop — a keyboard undo
+// would then appear to do nothing before restoring the pre-edit buffer (#1394 pin).
+function modelAlreadyHoldsHostEdit(
+  editor: NonNullable<EditorRefs["editorRef"]["current"]>,
+  text: string,
+): boolean {
+  return editor.getModel?.()?.getValue() === text;
+}
+
 function applyHostEditRequest(
   request: NonNullable<KeikoCodeEditorProps["hostEditRequest"]>,
   refs: EditorRefs,
@@ -328,6 +340,7 @@ function applyHostEditRequest(
     emitHostEditFallback(request, onContentChange);
     return;
   }
+  if (modelAlreadyHoldsHostEdit(editor, request.text)) return;
   programmaticChangeRef.current = { text: request.text, origin: request.origin };
   editor.pushUndoStop?.();
   const applied = editor.executeEdits("keiko.host-edit", [{ range, text: request.text }]);
@@ -384,13 +397,30 @@ function useHostEditRequest(
   ]);
 }
 
+// The text of the host-edit request that currently owns the model transition, or undefined when
+// no request owns it. A request owns the transition from the commit that posts it until the host
+// buffer has reconciled once (`expected === request.text`); a handled one-shot request may
+// legitimately stay in props afterwards, so ownership must expire with the transition rather
+// than persist for the request's lifetime (#3071 review).
+function owningHostEditText(
+  reconciledIdRef: RefObject<string | null>,
+  hostEdit: KeikoCodeEditorProps["hostEditRequest"],
+  expected: string,
+): string | undefined {
+  if (hostEdit === undefined) return undefined;
+  if (expected === hostEdit.text) reconciledIdRef.current = hostEdit.id;
+  return reconciledIdRef.current === hostEdit.id ? undefined : hostEdit.text;
+}
+
 function useControlledModelValueSync(
   props: KeikoCodeEditorProps,
   refs: EditorRefs,
   programmaticChangeRef: ProgrammaticEditorChangeRef,
 ): void {
+  const reconciledHostEditIdRef = useRef<string | null>(null);
   useEffect(() => {
     const expected = props.buffer.content.text;
+    const ownedText = owningHostEditText(reconciledHostEditIdRef, props.hostEditRequest, expected);
     const syncChange: ProgrammaticEditorChange =
       props.fileModel.lastChangeOrigin === null
         ? { text: expected, suppress: true }
@@ -401,8 +431,16 @@ function useControlledModelValueSync(
       const model = refs.editorRef.current?.getModel?.();
       if (model === undefined || model === null) return false;
       if (model.getValue() === expected || model.setValue === undefined) return true;
+      // A host-edit request that has just written the model owns this transition; the host's
+      // buffer state (`expected`) catches up on its own commit. Writing the stale `expected`
+      // back now would put a new → old → new pair on the undo stack, so the second keyboard
+      // undo would return to the host-edit text instead of moving further back (#3071 review).
+      if (ownedText !== undefined && model.getValue() === ownedText) return true;
       programmaticChangeRef.current = syncChange;
-      model.setValue(expected);
+      // Same-document programmatic updates (an agent-applied edit, a format result, a restore)
+      // must stay on the browser undo stack (#1394 pin); document switches never pass through
+      // here — they rebuild the model via the file identity key.
+      writeRetainedEditorModelValue(model, expected);
       queueMicrotask(() => {
         if (programmaticChangeRef.current === syncChange) programmaticChangeRef.current = null;
       });
@@ -422,6 +460,8 @@ function useControlledModelValueSync(
     props.buffer.content.text,
     props.fileModel.identity.uri,
     props.fileModel.lastChangeOrigin,
+    props.hostEditRequest?.id,
+    props.hostEditRequest?.text,
     refs,
   ]);
 }

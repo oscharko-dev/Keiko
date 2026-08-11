@@ -10,6 +10,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { readJsonFile } from "./lib/json.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const defaultRepoRoot = resolve(here, "..");
@@ -25,10 +26,6 @@ const GOVERNED_GIT_EXECUTABLE_PATHS = [
   String.raw`C:\Program Files\Git\cmd\git.exe`,
 ];
 
-function readJson(path) {
-  return JSON.parse(readFileSync(path, "utf8"));
-}
-
 function packageNameOf(specifier) {
   if (specifier.startsWith("@")) {
     const [scope, name] = specifier.split("/");
@@ -38,14 +35,14 @@ function packageNameOf(specifier) {
 }
 
 function readWorkspaceManifests(repoRoot) {
-  const rootPackage = readJson(join(repoRoot, "package.json"));
+  const rootPackage = readJsonFile(join(repoRoot, "package.json"));
   const manifests = [{ label: "<root>", pkg: rootPackage }];
   for (const entry of readdirSync(join(repoRoot, "packages"), { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     try {
       manifests.push({
         label: entry.name,
-        pkg: readJson(join(repoRoot, "packages", entry.name, "package.json")),
+        pkg: readJsonFile(join(repoRoot, "packages", entry.name, "package.json")),
       });
     } catch {
       // Package directories without manifests are outside this gate's dependency scope.

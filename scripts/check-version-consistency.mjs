@@ -19,6 +19,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readJsonFile } from "./lib/json.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const failures = [];
@@ -27,10 +28,6 @@ const APPROVED_ROOT_SRC_SHA256 = new Map([
   ["src/index.ts", "751c1c0fae45a8bf68ba099ecd0706a74d64661f8fc1b9bd7f05d4abd1beb20b"],
   ["src/cli/index.ts", "6e9df226e26117da62b3e3324216dacf4a56fd13e0a87ed52f8262a969c86402"],
 ]);
-
-function readJson(path) {
-  return JSON.parse(readFileSync(path, "utf8"));
-}
 
 function listFilesRecursively(rootDir, prefix = "") {
   const dirPath = join(rootDir, prefix);
@@ -93,7 +90,7 @@ function fail(message) {
   failures.push(message);
 }
 
-const rootManifest = readJson(join(repoRoot, "package.json"));
+const rootManifest = readJsonFile(join(repoRoot, "package.json"));
 const expected = rootManifest.version;
 if (typeof expected !== "string" || expected.length === 0) {
   console.error("version-consistency: root package.json has no version field.");
@@ -107,7 +104,7 @@ for (const name of readdirSync(packagesDir)) {
   const manifestPath = join(pkgDir, "package.json");
   let manifest;
   try {
-    manifest = readJson(manifestPath);
+    manifest = readJsonFile(manifestPath);
   } catch {
     continue;
   }
