@@ -408,7 +408,7 @@ const UNIX_TYPE_DIRECTORY = 0x4000;
 // bits must still agree, and it may not carry an encryption marker either. A crafted `dir/`
 // entry with symlink bits or encrypted flags is a contradiction only a hostile archive
 // produces; refuse it instead of skipping past it.
-function assertDirectoryMarkerEntry(entry, requireRegularEntries) {
+function assertDirectoryMarkerEntry(entry, requireRegularEntries, readLocalFlags) {
   if (requireRegularEntries !== true) return;
   const type = entry.unixMode & UNIX_TYPE_MASK;
   if (type !== 0 && type !== UNIX_TYPE_DIRECTORY) {
@@ -417,6 +417,20 @@ function assertDirectoryMarkerEntry(entry, requireRegularEntries) {
   if ((entry.flags & 0x1) !== 0) {
     throw new Error(`ZIP entry ${entry.rawName} is marked encrypted`);
   }
+  // A skipped marker never reaches the data readers, so its LOCAL flags are checked here — a
+  // clear central flag with an encrypted local flag is the same metadata lie either way. This
+  // is a two-byte read, so the listing stays free of entry-body inflation.
+  assertLocalHeaderNotEncrypted(readLocalFlags(), entry);
+}
+
+function localFlagsFromBytes(bytes, entry) {
+  if (
+    entry.localOffset + 30 > bytes.byteLength ||
+    bytes.readUInt32LE(entry.localOffset) !== LOCAL_FILE_HEADER
+  ) {
+    throw new Error(`ZIP entry ${entry.rawName} has a malformed local header`);
+  }
+  return bytes.readUInt16LE(entry.localOffset + 6);
 }
 
 // The local header carries its own general-purpose flags: a clear central flag with an
@@ -464,7 +478,9 @@ export function readZipArchiveEntryNames(archivePath, options = {}) {
   for (let index = 0; index < count; index += 1) {
     const entry = readCentralEntry(bytes, offset);
     if (entry.rawName.endsWith("/")) {
-      assertDirectoryMarkerEntry(entry, options.requireRegularEntries);
+      assertDirectoryMarkerEntry(entry, options.requireRegularEntries, () =>
+        localFlagsFromBytes(bytes, entry),
+      );
     } else {
       assertRegularZipEntry(entry, options.requireRegularEntries);
       names.push(normalizedEntryName(entry.rawName));
@@ -484,7 +500,9 @@ export function readZipArchiveEntries(archivePath, options = {}) {
   for (let index = 0; index < count; index += 1) {
     const entry = readCentralEntry(bytes, offset);
     if (entry.rawName.endsWith("/")) {
-      assertDirectoryMarkerEntry(entry, options.requireRegularEntries);
+      assertDirectoryMarkerEntry(entry, options.requireRegularEntries, () =>
+        localFlagsFromBytes(bytes, entry),
+      );
     } else {
       assertRegularZipEntry(entry, options.requireRegularEntries);
       records.push({
@@ -560,7 +578,12 @@ export function extractZipArchiveEntries(archivePath, targetRoot, options = {}) 
     for (let index = 0; index < count; index += 1) {
       const entry = readCentralEntry(directory, offset);
       if (entry.rawName.endsWith("/")) {
-        assertDirectoryMarkerEntry(entry, options.requireRegularEntries);
+        assertDirectoryMarkerEntry(entry, options.requireRegularEntries, () => {
+          if (entry.localOffset + 30 > size) {
+            throw new Error(`ZIP entry ${entry.rawName} has a malformed local header`);
+          }
+          return readAt(fd, entry.localOffset + 6, 2).readUInt16LE(0);
+        });
       } else {
         assertRegularZipEntry(entry, options.requireRegularEntries);
         const path = join(targetRoot, normalizedEntryName(entry.rawName));

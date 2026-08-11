@@ -148,6 +148,30 @@ describe("Windows portable ZIP adapter", () => {
     expect(existsSync(join(root, "out", "Keiko", "runtime", "node.exe"))).toBe(false);
   });
 
+  // The same lie told only in the marker's LOCAL header must also refuse: a skipped marker
+  // never reaches the data readers, so the skip branch reads the two flag bytes itself.
+  it("fails closed on a directory marker whose local header alone carries the encryption bit", () => {
+    const root = tempRoot();
+    const archivePath = join(root, "local-encrypted-dir.zip");
+    writeZipArchiveEntries(
+      archivePath,
+      [
+        { name: "Keiko/runtime/node.exe", data: Buffer.from("regular"), mode: 0o100644 },
+        { name: "Keiko/dir/", data: Buffer.alloc(0), mode: 0o040755 },
+      ],
+      { allowUnsafeEntryNames: true },
+    );
+    const bytes = readFileSync(archivePath);
+    const firstLocal = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    const markerLocal = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04]), firstLocal + 4);
+    bytes.writeUInt16LE(bytes.readUInt16LE(markerLocal + 6) | 0x1, markerLocal + 6);
+    writeFileSync(archivePath, bytes);
+    const adapter = createPortableZipAdapter("win32", vi.fn());
+
+    expect(() => adapter.list(archivePath)).toThrow("marked encrypted");
+    expect(() => adapter.extract(archivePath, join(root, "out"))).toThrow("marked encrypted");
+  });
+
   // An encryption-marked directory marker is a contradiction the skip branch must refuse,
   // exactly like a symlink-typed one.
   it("fails closed on a directory marker carrying the encryption bit", () => {
