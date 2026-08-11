@@ -306,7 +306,9 @@ function windowsSetupLaunchLines() {
     "for /l %%A in (1,1,10) do (",
     '  if exist "%STAGING_ROOT%" rmdir /s /q "%STAGING_ROOT%" >nul 2>nul',
     '  if not exist "%STAGING_ROOT%" goto cleanup_ok',
-    "  timeout /t 1 /nobreak >nul",
+    // ping, not timeout.exe: timeout demands console stdin and exits immediately under a
+    // redirected-stdin host (quiet IExpress), collapsing all ten retries into one instant.
+    "  ping -n 2 127.0.0.1 >nul",
     ")",
     ":cleanup_ok",
     'if exist "%STAGING_ROOT%" (',
@@ -316,7 +318,7 @@ function windowsSetupLaunchLines() {
     "echo       Keiko is running.",
     "echo.",
     "echo Keiko setup finished successfully.",
-    "timeout /t 2 /nobreak >nul",
+    "ping -n 3 127.0.0.1 >nul",
     "exit /b 0",
     "",
   ];

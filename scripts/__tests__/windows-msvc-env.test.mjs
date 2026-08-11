@@ -97,8 +97,12 @@ describe("resolveWindowsMsvcEnv", () => {
     expect(resolved.PATH).toBe("C:\\VS\\bin;C:\\Windows\\system32");
 
     expect(String(spawnSyncMock.mock.calls[0]?.[0])).toContain(VSWHERE_SUFFIX);
+    // Both discovery outputs must be forced to UTF-8, or a non-ASCII installation path is
+    // corrupted by the console code page before the toolchain lookup ever runs.
+    expect(spawnSyncMock.mock.calls[0]?.[1]).toContain("-utf8");
     expect(String(spawnSyncMock.mock.calls[1]?.[0])).toContain("cmd.exe");
     expect(String(spawnSyncMock.mock.calls[1]?.[1]?.[3])).toContain("vcvars64.bat");
+    expect(String(spawnSyncMock.mock.calls[1]?.[1]?.[3])).toContain("chcp 65001");
   });
 
   it("resolves vswhere under the canonical Program Files (x86) when the variable is relative", () => {

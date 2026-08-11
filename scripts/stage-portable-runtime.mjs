@@ -1862,6 +1862,9 @@ function locateVisualStudioInstallation(baseEnv) {
       "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
       "-property",
       "installationPath",
+      // Explicit UTF-8 output: without it vswhere emits the console code page, corrupting a
+      // non-ASCII installation path before it ever reaches vcvars.
+      "-utf8",
     ],
     { encoding: "utf8" },
   );
@@ -1877,7 +1880,9 @@ function importVcvarsEnvironment(baseEnv, installationPath) {
   const systemRoot = baseEnv.SystemRoot ?? baseEnv.WINDIR ?? String.raw`C:\Windows`;
   const dump = spawnSync(
     join(systemRoot, "System32", "cmd.exe"),
-    ["/d", "/s", "/c", `""${vcvars}" >nul && set"`],
+    // chcp 65001 before `set`: cmd's internal commands emit the OEM code page into a pipe,
+    // which corrupts non-ASCII PATH/INCLUDE/LIB values under the UTF-8 decode below.
+    ["/d", "/s", "/c", `""${vcvars}" >nul && chcp 65001 >nul && set"`],
     { encoding: "utf8", windowsVerbatimArguments: true },
   );
   if (dump.status !== 0) fail("MSVC environment initialization failed (vcvars64)");

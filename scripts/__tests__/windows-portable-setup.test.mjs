@@ -351,6 +351,10 @@ describe("windows portable setup companion", () => {
     expect(script).toContain("Keiko reported healthy; removing temporary application files");
     expect(script).not.toContain("KEIKO_IEXPRESS_HEALTHY");
     expect(script).not.toContain("timeout /t 5 /nobreak");
+    // timeout.exe demands console stdin and exits instantly under a redirected-stdin host
+    // (quiet IExpress) — the payload must pace retries with ping instead.
+    expect(script).not.toMatch(/\btimeout \/t\b/u);
+    expect(script).toContain("ping -n 2 127.0.0.1 >nul");
     expect(script).not.toContain("AddSeconds(30)");
     expect(script).not.toContain("Get-Process -Name Keiko,node");
     expect(script).not.toContain("Start-Sleep -Milliseconds 500");
