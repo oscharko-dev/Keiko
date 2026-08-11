@@ -1175,6 +1175,66 @@
         "signingScope": "evaluation",
         "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.5",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.5",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "id": "2026-08-11-keiko-0.3.5-windows-installer-repair",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Keiko 0.3.5 repairs the Windows portable installation end to end (issue #3072): setup no longer flashes a console window and stops - the launcher distinguishes a double-click from a terminal start, launches the UI, and reports real failures in a native dialog instead of exiting silently (incomplete install, damaged app bundle, runtime that cannot start). The Start Menu entry is a real shortcut; a legacy Keiko.bat from earlier releases is retired automatically during setup, repair, and the first start after an in-app update. The Windows archive pipeline now refuses symlinks, NTFS alternate-data-stream names, encryption-marked and mistyped entries outright, and installer cleanup retries correctly under silent installs.",
+      "affectedStateStores": ["ui-store-schema"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "No schema change relative to 0.3.2. A store created by 0.3.x opens unchanged; a store from 0.2.x migrates forward exactly as 0.3.0 described.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "releaseNoteBullets": [
+        "Double-clicking the Windows setup now brings up the Keiko UI - the launcher tells an Explorer start from a terminal one, ending the console-flash-then-nothing installs.",
+        "When a Windows start cannot proceed (missing pieces, a broken app bundle, a runtime that will not boot), a native dialog says so instead of a silent exit.",
+        "Setup, repair, and the first start after an in-app update all converge on one verified Start Menu shortcut and clear any leftover Keiko.bat from older releases.",
+        "Archive handling for Windows refuses symlinked, alternate-stream, encrypted, and mistyped entries up front, and cleanup keeps retrying properly under silent installs.",
+        "Downloads remain evaluation-signed and outside the governed one-click updater: fetch 0.3.5 from the release page, then use SmartScreen's More info / Run anyway on Windows or right-click Open on macOS for the first launch."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-11",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5256631037",
+        "rationale": "Completion of the 0.3.4 release event under the owner's standing direction from the working session: v0.3.4 froze a defective Windows native-builder toolchain path inside the tag (three builders spawned cl from an environment no workflow step provides since PR #3075), so its portable assets can never build from the tagged commit. 0.3.5 carries the script-owned MSVC resolution for all native builders plus the identical Windows installer repair; per the 0.3.3 precedent the version number advances until the release chain completes."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
     }
   ]
 }

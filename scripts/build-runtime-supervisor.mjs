@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { buildCompilerEnvironment } from "./build-secure-workspace-read.mjs";
+import { resolveWindowsMsvcEnv, windowsToolFromPath } from "./lib/windows-msvc.mjs";
 
 const WINDOWS_SOURCE = resolve("native/runtime-supervisor/windows/keiko_runtime_supervisor.c");
 const MACOS_SOURCE = resolve("native/runtime-supervisor/macos/keiko_runtime_supervisor.c");
@@ -147,23 +148,44 @@ async function buildMacosComponents(invocation, environment, spawnSyncImpl) {
   return 0;
 }
 
+// Absolute cl on Windows for the same reason as the sibling builders (#3084): a bare name is
+// not reliably searched on options.env.PATH.
+function windowsCompilerPath(target, compiler, compilerEnvironment, resolveCompilerImpl) {
+  if (target !== "windows-x64") return compiler;
+  return resolveCompilerImpl(compilerEnvironment.PATH, "cl.exe");
+}
+
 export async function runRuntimeSupervisorBuild({
   argv = process.argv,
   environment = process.env,
   spawnSyncImpl = spawnSync,
+  resolveMsvcEnvImpl = resolveWindowsMsvcEnv,
+  resolveCompilerImpl = windowsToolFromPath,
 } = {}) {
   const invocation = compilerInvocation(argv);
   if (invocation === undefined) return 2;
   const { args, compiler, output, target } = invocation;
+  const compilerEnvironment = buildCompilerEnvironment(target, environment, resolveMsvcEnvImpl);
+  const compilerPath = windowsCompilerPath(
+    target,
+    compiler,
+    compilerEnvironment,
+    resolveCompilerImpl,
+  );
   await mkdir(dirname(output), { recursive: true });
-  const result = spawnSyncImpl(compiler, args, {
-    stdio: "inherit",
-    env: buildCompilerEnvironment(target, environment),
-  });
-  if (result.status !== 0) return result.status ?? 1;
+  const status = compileSupervisorBinary(compilerPath, args, compilerEnvironment, spawnSyncImpl);
+  if (status !== 0) return status;
   return target === "windows-x64"
     ? 0
     : buildMacosComponents(invocation, environment, spawnSyncImpl);
+}
+
+function compileSupervisorBinary(compilerPath, args, compilerEnvironment, spawnSyncImpl) {
+  const result = spawnSyncImpl(compilerPath, args, {
+    stdio: "inherit",
+    env: compilerEnvironment,
+  });
+  return result.status ?? 1;
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
