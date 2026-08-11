@@ -1,6 +1,8 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+
+import { resolveWindowsMsvcEnv, windowsToolFromPath } from "./lib/windows-msvc.mjs";
 import { fileURLToPath } from "node:url";
 
 const source = resolve("native/secure-workspace-read/secure_workspace_read.c");
@@ -63,14 +65,28 @@ const COMPILER_ENV_KEYS = {
   windows: ["PATH", "INCLUDE", "LIB", "LIBPATH"],
 };
 
-export function buildCompilerEnvironment(target, environment) {
+// The workflow persists no MSVC environment (#3084): outside a Developer Command Prompt the
+// toolchain is imported here, script-owned, exactly like the launcher compile.
+function windowsEnvironmentSource(environment, resolveMsvcEnvImpl) {
+  if (environment.INCLUDE !== undefined && environment.LIB !== undefined) return environment;
+  return resolveMsvcEnvImpl(environment);
+}
+
+export function buildCompilerEnvironment(
+  target,
+  environment,
+  resolveMsvcEnvImpl = resolveWindowsMsvcEnv,
+) {
   let keys;
-  if (target === "windows-x64") keys = COMPILER_ENV_KEYS.windows;
-  else if (target === "macos-arm64" || target === "macos-x64") keys = COMPILER_ENV_KEYS.macos;
+  let source = environment;
+  if (target === "windows-x64") {
+    keys = COMPILER_ENV_KEYS.windows;
+    source = windowsEnvironmentSource(environment, resolveMsvcEnvImpl);
+  } else if (target === "macos-arm64" || target === "macos-x64") keys = COMPILER_ENV_KEYS.macos;
   else throw new Error(`unsupported compiler environment target: ${target}`);
   const filtered = {};
   for (const key of keys) {
-    const value = environment[key];
+    const value = source[key];
     if (value === undefined) continue;
     if (typeof value !== "string" || /[\0\r\n]/u.test(value))
       throw new Error(`invalid compiler environment variable: ${key}`);
@@ -96,13 +112,19 @@ export async function runSecureWorkspaceReadBuild({
   argv = process.argv,
   environment = process.env,
   spawnSyncImpl = spawnSync,
+  resolveMsvcEnvImpl = resolveWindowsMsvcEnv,
+  resolveCompilerImpl = windowsToolFromPath,
 } = {}) {
   const invocation = compilerInvocation(argv);
   if (invocation === undefined) return 2;
   const { args, compiler, output, target } = invocation;
-  const compilerEnvironment = buildCompilerEnvironment(target, environment);
+  const compilerEnvironment = buildCompilerEnvironment(target, environment, resolveMsvcEnvImpl);
+  // Child-process PATH search does not reliably honour options.env.PATH on Windows, so cl is
+  // located explicitly on the resolved toolchain PATH and spawned by absolute path.
+  const compilerPath =
+    target === "windows-x64" ? resolveCompilerImpl(compilerEnvironment.PATH, "cl.exe") : compiler;
   await mkdir(dirname(output), { recursive: true });
-  const result = spawnSyncImpl(compiler, args, {
+  const result = spawnSyncImpl(compilerPath, args, {
     stdio: "inherit",
     env: compilerEnvironment,
   });

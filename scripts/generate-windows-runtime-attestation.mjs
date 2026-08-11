@@ -16,6 +16,7 @@ import { dirname, join, resolve, win32 } from "node:path";
 import { tmpdir } from "node:os";
 
 import { buildCompilerEnvironment } from "./build-secure-workspace-read.mjs";
+import { resolveWindowsMsvcEnv } from "./lib/windows-msvc.mjs";
 import { RUNTIME_QUALIFICATION_SUITE } from "./runtime-activation-manifest.mjs";
 import { sha256File } from "./lib/digest.mjs";
 
@@ -190,9 +191,22 @@ function allowedWindowsBuildPath(path) {
 
 export function windowsBuildToolchain(
   environment,
-  { lstat = lstatSync, realpath = (path) => realpathSync.native(path) } = {},
+  {
+    lstat = lstatSync,
+    realpath = (path) => realpathSync.native(path),
+    resolveMsvcEnvImpl = resolveWindowsMsvcEnv,
+  } = {},
 ) {
-  const compilerEnvironment = buildCompilerEnvironment("windows-x64", environment);
+  let compilerEnvironment;
+  try {
+    compilerEnvironment = buildCompilerEnvironment("windows-x64", environment, resolveMsvcEnvImpl);
+  } catch (error) {
+    // Expected toolchain causes (vswhere missing, vcvars failure, incomplete import) must reach
+    // the workflow log verbatim — the CLI catch redacts every non-attestation error type.
+    throw new WindowsRuntimeAttestationError(
+      `windows-runtime-attestation: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const pathEntries = (compilerEnvironment.PATH ?? "")
     .split(win32.delimiter)
     .map((path) => path.trim().replace(/^"|"$/gu, ""))

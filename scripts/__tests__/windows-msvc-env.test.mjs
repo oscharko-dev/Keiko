@@ -20,6 +20,7 @@ const realFs = await vi.importActual("node:fs");
 existsSyncMock.mockImplementation((path) => realFs.existsSync(path));
 
 const { resolveWindowsMsvcEnv } = await import("../stage-portable-runtime.mjs");
+const { windowsToolFromPath } = await import("../lib/windows-msvc.mjs");
 
 const VSWHERE_SUFFIX = ["Microsoft Visual Studio", "Installer", "vswhere.exe"].join(
   process.platform === "win32" ? "\\" : "/",
@@ -103,6 +104,23 @@ describe("resolveWindowsMsvcEnv", () => {
     expect(String(spawnSyncMock.mock.calls[1]?.[0])).toContain("cmd.exe");
     expect(String(spawnSyncMock.mock.calls[1]?.[1]?.[3])).toContain("vcvars64.bat");
     expect(String(spawnSyncMock.mock.calls[1]?.[1]?.[3])).toContain("chcp 65001");
+    // The dump extends exactly the caller's environment, never the implicit process.env.
+    expect(spawnSyncMock.mock.calls[1]?.[2]?.env).toEqual({
+      SystemRoot: String.raw`C:\Windows`,
+      PATH: String.raw`C:\old`,
+      "ProgramFiles(x86)": String.raw`C:\Program Files (x86)`,
+    });
+  });
+
+  it("locates a tool by absolute path on the resolved PATH and throws when absent", () => {
+    existsSyncMock.mockImplementation((path) => String(path).endsWith("cl.exe"));
+    const sep = process.platform === "win32" ? "\\" : "/";
+    expect(windowsToolFromPath("C:\\VS\\bin;C:\\other", "cl.exe")).toBe(`C:\\VS\\bin${sep}cl.exe`);
+    existsSyncMock.mockImplementation(() => false);
+    expect(() => windowsToolFromPath("C:\\VS\\bin", "rc.exe")).toThrow(
+      "MSVC tool rc.exe was not found",
+    );
+    expect(() => windowsToolFromPath(undefined, "cl.exe")).toThrow("was not found");
   });
 
   it("resolves vswhere under the canonical Program Files (x86) when the variable is relative", () => {

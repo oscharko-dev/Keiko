@@ -55,10 +55,12 @@ describe("runtime supervisor build", () => {
         argv: ["node", "script", "windows-x64", output],
         environment,
         spawnSyncImpl: success,
+        resolveCompilerImpl: (envPath, tool) => "C:\\Program Files\\MSVC\\bin\\" + tool,
       }),
     ).resolves.toBe(0);
+    // Absolute path, never a bare name: options.env.PATH is not reliably searched on Windows.
     expect(success).toHaveBeenCalledWith(
-      "cl",
+      "C:\\Program Files\\MSVC\\bin\\cl.exe",
       expect.arrayContaining(["/std:c11", `/Fe:${output}`]),
       {
         env: {
@@ -76,6 +78,7 @@ describe("runtime supervisor build", () => {
         argv: ["node", "script", "windows-x64", output],
         environment,
         spawnSyncImpl: () => ({ status: null }),
+        resolveCompilerImpl: (envPath, tool) => "C:\\Program Files\\MSVC\\bin\\" + tool,
       }),
     ).resolves.toBe(1);
   });
