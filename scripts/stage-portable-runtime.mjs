@@ -1878,14 +1878,13 @@ function importVcvarsEnvironment(baseEnv, installationPath) {
   }
   // cmd emits `Path=`, the parent may carry `PATH=`: Windows treats env names case-insensitively
   // but a JS object does not, and two same-named-differently-cased keys make the child PATH and
-  // the tool lookup ambiguous. Merge every case variant onto the one canonical PATH key.
-  for (const key of Object.keys(resolved)) {
-    if (key !== "PATH" && key.toUpperCase() === "PATH") {
-      resolved.PATH = resolved[key];
-      delete resolved[key];
-    }
+  // the tool lookup ambiguous. Rebuild with every case variant merged onto the canonical PATH.
+  const canonical = {};
+  for (const [key, value] of Object.entries(resolved)) {
+    if (key.toUpperCase() === "PATH") canonical.PATH = value;
+    else canonical[key] = value;
   }
-  return resolved;
+  return canonical;
 }
 
 export function resolveWindowsMsvcEnv(baseEnv = process.env) {
