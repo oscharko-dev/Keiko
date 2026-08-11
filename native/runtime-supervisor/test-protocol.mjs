@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { resolveWindowsMsvcEnv, windowsToolFromPath } from "../../scripts/lib/windows-msvc.mjs";
+
 const source = fileURLToPath(new URL("./windows/keiko_runtime_supervisor.c", import.meta.url));
 const fixtureSource = fileURLToPath(new URL("./windows/qualification_fixture.c", import.meta.url));
 const DEADLINE_MS = 10_000;
@@ -49,7 +51,8 @@ function launchPacket(executable, cwd) {
 
 async function compile(sourcePath, output) {
   const objectPath = join(dirname(output), `${basename(output)}.obj`);
-  const result = await runProcess("cl", [
+  const compileEnv = resolveWindowsMsvcEnv(process.env);
+  const result = await runProcess(windowsToolFromPath(compileEnv.PATH, "cl.exe"), compileEnv, [
     "/nologo",
     "/std:c11",
     "/W4",
@@ -65,9 +68,9 @@ async function compile(sourcePath, output) {
   assert.equal(result.code, 0, `native compile failed: ${result.stderr.toString("utf8")}`);
 }
 
-function runProcess(command, args) {
+function runProcess(command, env, args) {
   return new Promise((resolveResult, reject) => {
-    const child = spawn(command, args, { env: process.env, stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(command, args, { env, stdio: ["ignore", "ignore", "pipe"] });
     const stderr = [];
     child.stderr.on("data", (chunk) => stderr.push(chunk));
     child.once("error", reject);
