@@ -800,7 +800,7 @@
       "remediation": "no-action-required",
       "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
-        "Every save is a restore point \u2014 browse, compare, and restore file history locally."
+        "Every save is a restore point — browse, compare, and restore file history locally."
       ],
       "internalOnly": false,
       "observableImpact": true,
@@ -1105,6 +1105,65 @@
         "humanApproved": true,
         "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5239029093",
         "rationale": "Completion of the 0.3.1/0.3.2 release event: the v0.3.2 tag freezes the publish verifier defect (empty-entry inflate crash) inside the very code every governed promotion path must run, so no checkout of that tag can ever verify its own downloads. The owner explicitly sanctioned advancing the version number until the release chain completes; 0.3.3 carries the one-line verifier repair and is otherwise byte-identical in product surface to 0.3.2."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.4",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.4",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "id": "2026-08-11-keiko-0.3.4-windows-installer-repair",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Keiko 0.3.4 repairs the Windows portable installation end to end (issue #3072): setup no longer flashes a console window and stops - the launcher distinguishes a double-click from a terminal start, launches the UI, and reports real failures in a native dialog instead of exiting silently (incomplete install, damaged app bundle, runtime that cannot start). The Start Menu entry is a real shortcut; a legacy Keiko.bat from earlier releases is retired automatically during setup, repair, and the first start after an in-app update. The Windows archive pipeline now refuses symlinks, NTFS alternate-data-stream names, encryption-marked and mistyped entries outright, and installer cleanup retries correctly under silent installs.",
+      "affectedStateStores": ["ui-store-schema"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "No schema change relative to 0.3.2. A store created by 0.3.x opens unchanged; a store from 0.2.x migrates forward exactly as 0.3.0 described.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "releaseNoteBullets": [
+        "Windows setup launches the UI: the portable launcher distinguishes a double-click from a terminal start, so installation no longer ends with a console flash and no window.",
+        "Windows failures are visible: incomplete installs, a damaged app bundle, or a runtime that cannot start now surface a native error dialog instead of exiting silently.",
+        "The Start Menu entry is a real shortcut; a legacy Keiko.bat from earlier releases is retired automatically during setup, repair, and the first start after an in-app update.",
+        "The Windows archive pipeline fails closed on symlinks, NTFS alternate-data-stream names, encryption-marked and mistyped entries, and installer cleanup retries correctly under silent installs.",
+        "These builds carry evaluation signing, and the governed in-app updater does not offer them as a one-click update — download 0.3.4 from this release page. On Windows, SmartScreen may warn on first run: choose “More info”, then “Run anyway”. On macOS, right-click the app and choose “Open” on first launch."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-11",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5255215533",
+        "rationale": "The owner directed the 0.3.4 release in the working session immediately after the Windows installer repair (PR #3075, issue #3072) merged to dev: the published 0.3.3 Windows portable assets still carry the broken installer, and neither downloads nor in-app updates can deliver the fix without a new release. 0.3.4 ships dev at the merge commit of that repair."
       },
       "userActionRequired": false,
       "remediation": "no-action-required",
