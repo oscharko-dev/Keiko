@@ -129,6 +129,49 @@ describe("Windows portable ZIP adapter", () => {
     expect(() => adapter.extract(archivePath, join(root, "out"))).toThrow("marked encrypted");
   });
 
+  // A clear central flag with an encrypted LOCAL flag is a metadata lie: the listing is
+  // central-only by design (it never streams local headers), but the data path must refuse
+  // before materializing the payload the local header claims is encrypted.
+  it("fails closed on extraction when only the local header carries the encryption bit", () => {
+    const root = tempRoot();
+    const archivePath = join(root, "local-encrypted.zip");
+    writeZipArchiveEntries(archivePath, [
+      { name: "Keiko/runtime/node.exe", data: Buffer.from("regular"), mode: 0o100644 },
+    ]);
+    const bytes = readFileSync(archivePath);
+    const local = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    bytes.writeUInt16LE(bytes.readUInt16LE(local + 6) | 0x1, local + 6);
+    writeFileSync(archivePath, bytes);
+    const adapter = createPortableZipAdapter("win32", vi.fn());
+
+    expect(() => adapter.extract(archivePath, join(root, "out"))).toThrow("marked encrypted");
+    expect(existsSync(join(root, "out", "Keiko", "runtime", "node.exe"))).toBe(false);
+  });
+
+  // An encryption-marked directory marker is a contradiction the skip branch must refuse,
+  // exactly like a symlink-typed one.
+  it("fails closed on a directory marker carrying the encryption bit", () => {
+    const root = tempRoot();
+    const archivePath = join(root, "encrypted-dir.zip");
+    writeZipArchiveEntries(
+      archivePath,
+      [
+        { name: "Keiko/runtime/node.exe", data: Buffer.from("regular"), mode: 0o100644 },
+        { name: "Keiko/dir/", data: Buffer.alloc(0), mode: 0o040755 },
+      ],
+      { allowUnsafeEntryNames: true },
+    );
+    const bytes = readFileSync(archivePath);
+    const central = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+    const second = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]), central + 4);
+    bytes.writeUInt16LE(bytes.readUInt16LE(second + 8) | 0x1, second + 8);
+    writeFileSync(archivePath, bytes);
+    const adapter = createPortableZipAdapter("win32", vi.fn());
+
+    expect(() => adapter.list(archivePath)).toThrow("marked encrypted");
+    expect(() => adapter.extract(archivePath, join(root, "out"))).toThrow("marked encrypted");
+  });
+
   // A trailing-slash marker is skipped, not materialized — but a `dir/` entry whose Unix type
   // bits say SYMLINK is a contradiction only a hostile archive produces. The skip branch must
   // still validate the type instead of stepping over it (the retired 7z checker refused these).

@@ -351,6 +351,7 @@ function centralEntryData(bytes, entry) {
   ) {
     throw new Error(`ZIP entry ${entry.rawName} has a malformed local header`);
   }
+  assertLocalHeaderNotEncrypted(bytes.readUInt16LE(entry.localOffset + 6), entry);
   const nameLength = bytes.readUInt16LE(entry.localOffset + 26);
   const extraLength = bytes.readUInt16LE(entry.localOffset + 28);
   const start = entry.localOffset + 30 + nameLength + extraLength;
@@ -404,13 +405,27 @@ const UNIX_TYPE_REGULAR = 0x8000;
 const UNIX_TYPE_DIRECTORY = 0x4000;
 
 // A directory marker (trailing `/`) is skipped rather than materialized — but its Unix type
-// bits must still agree. A crafted `dir/` entry carrying symlink or device bits is a
-// contradiction only a hostile archive produces; refuse it instead of skipping past it.
+// bits must still agree, and it may not carry an encryption marker either. A crafted `dir/`
+// entry with symlink bits or encrypted flags is a contradiction only a hostile archive
+// produces; refuse it instead of skipping past it.
 function assertDirectoryMarkerEntry(entry, requireRegularEntries) {
   if (requireRegularEntries !== true) return;
   const type = entry.unixMode & UNIX_TYPE_MASK;
   if (type !== 0 && type !== UNIX_TYPE_DIRECTORY) {
     throw new Error(`ZIP entry ${entry.rawName} is an unsupported special entry type`);
+  }
+  if ((entry.flags & 0x1) !== 0) {
+    throw new Error(`ZIP entry ${entry.rawName} is marked encrypted`);
+  }
+}
+
+// The local header carries its own general-purpose flags: a clear central flag with an
+// encrypted local flag is a metadata lie, and the payload behind it must never materialize.
+// Unconditional (not gated on requireRegularEntries): no producer this repository consumes
+// emits encrypted entries, so the marker is hostile on every read path.
+function assertLocalHeaderNotEncrypted(localFlags, entry) {
+  if ((localFlags & 0x1) !== 0) {
+    throw new Error(`ZIP entry ${entry.rawName} is marked encrypted`);
   }
 }
 
@@ -503,6 +518,7 @@ function extractEntryData(fd, entry, archiveSize) {
   if (header.readUInt32LE(0) !== LOCAL_FILE_HEADER) {
     throw new Error(`ZIP entry ${entry.rawName} has a malformed local header`);
   }
+  assertLocalHeaderNotEncrypted(header.readUInt16LE(6), entry);
   const nameLength = header.readUInt16LE(26);
   const extraLength = header.readUInt16LE(28);
   const dataStart = entry.localOffset + 30 + nameLength + extraLength;
