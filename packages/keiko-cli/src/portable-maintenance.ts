@@ -450,12 +450,19 @@ export function repairUserLocalRegistration(
   managedRoot: string,
   env: EnvSource,
   home: string,
+  io: CliIo,
 ): number {
   let repaired = 0;
   for (const plan of registrationPlans(layout, target, managedRoot, env, home)) {
     if (fileRegistrationStatus(plan) === "missing") {
       writeRegistrationArtifact(plan);
       repaired += 1;
+    }
+    // Same migration as setup: once the shortcut registration verifies, a legacy `Keiko.bat`
+    // whose content exactly matches the managed launcher contract is retired — a repair that
+    // recreates the `.lnk` must not leave the user with two Start Menu entries.
+    if (plan.artifact.type === "windows-shortcut" && fileRegistrationStatus(plan) === "ok") {
+      removeLegacyWindowsRegistration(layout, env, home, false, io);
     }
   }
   return repaired;

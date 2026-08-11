@@ -67,8 +67,20 @@ static DWORD creation_flags_for_console_state(int has_console) {
   return has_console ? 0 : CREATE_NO_WINDOW;
 }
 
-static int bootstrap_artifact_missing(const wchar_t *path) {
-  return GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES;
+static int bootstrap_artifact_unusable(const wchar_t *path) {
+  DWORD attributes = GetFileAttributesW(path);
+  /* Missing, unreadable, or a directory wearing the artifact's name: none of these can
+   * possibly boot the runtime, and CreateProcess would fail after the console is hidden. */
+  return attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
+static void report_bootstrap_failure(int has_console, const wchar_t *console_line,
+                                     const wchar_t *dialog_text) {
+  if (has_console) {
+    fwprintf(stderr, L"%ls", console_line);
+  } else {
+    MessageBoxW(NULL, dialog_text, L"Keiko", MB_OK | MB_ICONERROR);
+  }
 }
 
 enum { KEIKO_PATH_CAP = 32768, KEIKO_COMMAND_CAP = 98304 };
@@ -165,18 +177,13 @@ static int run_launcher(keiko_launcher_buffers *buffers) {
    * install would fail with no signal at all. Only this pre-flight class gets a native dialog
    * here: any later failure is the CLI notifier's job, and a second generic dialog on a nonzero
    * exit would double-report it. */
-  if (bootstrap_artifact_missing(buffers->node) || bootstrap_artifact_missing(buffers->cli)) {
-    if (has_console) {
-      fwprintf(stderr, L"keiko portable launch: the installation is incomplete\n");
-    } else {
-      MessageBoxW(
-        NULL,
-        L"Keiko could not start: the installation is incomplete.\r\n"
-        L"Reinstall Keiko, or run Keiko.exe from a terminal for details.",
-        L"Keiko",
-        MB_OK | MB_ICONERROR
-      );
-    }
+  if (bootstrap_artifact_unusable(buffers->node) || bootstrap_artifact_unusable(buffers->cli)) {
+    report_bootstrap_failure(
+      has_console,
+      L"keiko portable launch: the installation is incomplete\n",
+      L"Keiko could not start: the installation is incomplete.\r\n"
+      L"Reinstall Keiko, or run Keiko.exe from a terminal for details."
+    );
     return 1;
   }
 
@@ -201,6 +208,14 @@ static int run_launcher(keiko_launcher_buffers *buffers) {
         &startup,
         &process
       )) {
+    /* The child never ran, so the CLI notifier cannot have reported anything — this is the one
+     * post-preflight failure the launcher itself must surface (corrupt PE, access denied). */
+    report_bootstrap_failure(
+      has_console,
+      L"keiko portable launch: the bundled runtime could not be started\n",
+      L"Keiko could not start its bundled runtime.\r\n"
+      L"Reinstall Keiko, or run Keiko.exe from a terminal for details."
+    );
     return 1;
   }
   WaitForSingleObject(process.hProcess, INFINITE);

@@ -1,4 +1,12 @@
-import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,10 +14,13 @@ import { describe, expect, it } from "vitest";
 import { WINDOWS_SHORTCUT_MAX_BYTES } from "@oscharko-dev/keiko-security";
 
 import { windowsLauncher } from "./launcher-platforms.js";
+import { layoutFor } from "./portable-shared.js";
 import {
   nativeRegistrationKinds,
   parseWindowsStartMenuRegistration,
   portableManagedRootMode,
+  repairUserLocalRegistration,
+  windowsLegacyStartMenuRegistrationPath,
   windowsStartMenuRegistrationPath,
 } from "./portable-maintenance.js";
 
@@ -42,6 +53,43 @@ describe("portable native registration policy", () => {
     expect(
       portableManagedRootMode("macos-x64", "/Applications/Keiko.app", {}, "/Users/keiko"),
     ).toBe("default");
+  });
+
+  it("retires the contract-matching legacy launcher when repair verifies the shortcut", () => {
+    // Under the home directory like the sibling tests: the registration guards refuse symlinked
+    // ancestors, and the macOS tmpdir lives beneath the /var -> /private/var link.
+    const root = mkdtempSync(join(homedir(), ".keiko-repair-migration-"));
+    try {
+      const home = join(root, "home");
+      const env = { APPDATA: join(home, "AppData", "Roaming") };
+      const installRoot = join(home, "AppData", "Local", "Programs", "Keiko");
+      const layout = layoutFor("windows-x64", installRoot);
+      const legacyPath = windowsLegacyStartMenuRegistrationPath(env, home);
+      mkdirSync(join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs"), {
+        recursive: true,
+      });
+      writeFileSync(
+        legacyPath,
+        windowsLauncher.generateContent({ exe: layout.primaryLauncherPath, port: undefined }),
+      );
+      const io = { out: (): undefined => undefined, err: (): undefined => undefined };
+
+      // The `.lnk` is missing and the contract-matching `.bat` is present: repair must write
+      // the shortcut AND retire the legacy launcher, or the user keeps two Start Menu entries.
+      const repaired = repairUserLocalRegistration(
+        layout,
+        "windows-x64",
+        installRoot,
+        env,
+        home,
+        io,
+      );
+      expect(repaired).toBeGreaterThan(0);
+      expect(existsSync(windowsStartMenuRegistrationPath(env, home))).toBe(true);
+      expect(existsSync(legacyPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("falls back to the profile location when APPDATA is empty or relative", () => {
