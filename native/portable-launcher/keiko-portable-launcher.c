@@ -83,6 +83,27 @@ static void report_bootstrap_failure(int has_console, const wchar_t *console_lin
   }
 }
 
+static int run_hidden_and_wait(const wchar_t *application, wchar_t *command,
+                               const wchar_t *workdir, DWORD *exit_code) {
+  STARTUPINFOW startup;
+  PROCESS_INFORMATION process;
+  ZeroMemory(&startup, sizeof(startup));
+  ZeroMemory(&process, sizeof(process));
+  startup.cb = sizeof(startup);
+  if (!CreateProcessW(
+        application, command, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, workdir, &startup,
+        &process
+      )) {
+    return 0;
+  }
+  WaitForSingleObject(process.hProcess, INFINITE);
+  *exit_code = 1;
+  GetExitCodeProcess(process.hProcess, exit_code);
+  CloseHandle(process.hThread);
+  CloseHandle(process.hProcess);
+  return 1;
+}
+
 enum { KEIKO_PATH_CAP = 32768, KEIKO_COMMAND_CAP = 98304 };
 
 typedef struct {
@@ -146,20 +167,6 @@ static int run_launcher(keiko_launcher_buffers *buffers) {
     return 1;
   }
 
-  int written = _snwprintf_s(
-    buffers->command,
-    KEIKO_COMMAND_CAP,
-    _TRUNCATE,
-    L"%ls %ls portable launch --target %ls --portable-root %ls",
-    buffers->quoted_node,
-    buffers->quoted_cli,
-    KEIKO_WIDEN(KEIKO_PORTABLE_TARGET),
-    buffers->quoted_root
-  );
-  if (written <= 0 || (size_t)written >= KEIKO_COMMAND_CAP) {
-    return 1;
-  }
-
   /* Same double-click marker as the macOS launcher: the portable CLI surfaces launch failures
    * visibly only when a human started the app through this binary, and the marker's contract must
    * hold on every platform. A /SUBSYSTEM:WINDOWS binary never owns a console of its own, so
@@ -187,6 +194,35 @@ static int run_launcher(keiko_launcher_buffers *buffers) {
     return 1;
   }
 
+  /* Explorer starts pre-parse the CLI bundle: `node --check` refuses a truncated or
+   * syntax-broken app/dist/cli/index.js WITHOUT executing it — the class where Node would die
+   * during module load, before the notifier exists, with CREATE_NO_WINDOW hiding the only
+   * output. Shell starts skip the extra spawn: their stderr is visible and the real start
+   * reports precisely. A runtime import of a missing module still belongs to the terminal
+   * diagnostic path — parsing cannot see it, and the notifier owns everything after boot. */
+  if (!has_console) {
+    int check_written = _snwprintf_s(
+      buffers->command,
+      KEIKO_COMMAND_CAP,
+      _TRUNCATE,
+      L"%ls --check %ls",
+      buffers->quoted_node,
+      buffers->quoted_cli
+    );
+    DWORD check_exit = 1;
+    if (check_written <= 0 || (size_t)check_written >= KEIKO_COMMAND_CAP ||
+        !run_hidden_and_wait(buffers->node, buffers->command, buffers->root, &check_exit) ||
+        check_exit != 0) {
+      report_bootstrap_failure(
+        has_console,
+        L"keiko portable launch: the application bundle is damaged\n",
+        L"Keiko could not start: the application bundle is damaged.\r\n"
+        L"Reinstall Keiko, or run Keiko.exe from a terminal for details."
+      );
+      return 1;
+    }
+  }
+
   if (!has_console && !SetEnvironmentVariableW(L"KEIKO_PORTABLE_UI_LAUNCH", L"1")) {
     /* Without the marker the CLI notifier stays silent, and with CREATE_NO_WINDOW the child's
      * stderr is invisible — starting Node in that state would fail without any signal. */
@@ -196,6 +232,21 @@ static int run_launcher(keiko_launcher_buffers *buffers) {
       L"Keiko could not prepare its launch environment.\r\n"
       L"Reinstall Keiko, or run Keiko.exe from a terminal for details."
     );
+    return 1;
+  }
+
+  /* Built AFTER the pre-parse: the check reuses the same command buffer. */
+  int written = _snwprintf_s(
+    buffers->command,
+    KEIKO_COMMAND_CAP,
+    _TRUNCATE,
+    L"%ls %ls portable launch --target %ls --portable-root %ls",
+    buffers->quoted_node,
+    buffers->quoted_cli,
+    KEIKO_WIDEN(KEIKO_PORTABLE_TARGET),
+    buffers->quoted_root
+  );
+  if (written <= 0 || (size_t)written >= KEIKO_COMMAND_CAP) {
     return 1;
   }
   DWORD creation_flags = creation_flags_for_console_state(has_console);

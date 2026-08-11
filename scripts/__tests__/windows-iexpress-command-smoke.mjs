@@ -86,6 +86,9 @@ function fixtureCli() {
     "  try { process.kill(child.pid, 0); } catch { process.exit(1); }",
     "  Atomics.wait(waitSignal, 0, 0, 100);",
     "}",
+    "// One final liveness probe AFTER the loop: a child that died inside the last wait window",
+    "// must not slip through as a healthy launch.",
+    "try { process.kill(child.pid, 0); } catch { process.exit(1); }",
     "process.exit(0);",
   ].join("\n");
 }
