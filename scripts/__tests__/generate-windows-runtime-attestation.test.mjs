@@ -1,4 +1,4 @@
-import { Buffer } from "node:buffer";
+import { WindowsRuntimeAttestationError, Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -155,6 +155,20 @@ describe("Windows runtime attestation carrier", () => {
         { lstat, realpath: (path) => path, resolveMsvcEnvImpl: (environment) => environment },
       ),
     ).toThrow("approved MSVC compiler path is unavailable");
+    // A resolver failure surfaces as the attestation error type, so the CLI catch preserves
+    // the actionable toolchain cause instead of redacting it (#3085).
+    expect(() =>
+      windowsBuildToolchain(
+        { PATH: String.raw`C:\Users\attacker\bin` },
+        {
+          lstat,
+          realpath: (path) => path,
+          resolveMsvcEnvImpl: () => {
+            throw new Error("MSVC toolchain not found: vswhere missing");
+          },
+        },
+      ),
+    ).toThrow(WindowsRuntimeAttestationError);
   });
 
   it("rejects unsupported platforms, invalid receipts, stale activation binding, and failed builds", () => {

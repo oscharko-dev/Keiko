@@ -197,11 +197,16 @@ export function windowsBuildToolchain(
     resolveMsvcEnvImpl = resolveWindowsMsvcEnv,
   } = {},
 ) {
-  const compilerEnvironment = buildCompilerEnvironment(
-    "windows-x64",
-    environment,
-    resolveMsvcEnvImpl,
-  );
+  let compilerEnvironment;
+  try {
+    compilerEnvironment = buildCompilerEnvironment("windows-x64", environment, resolveMsvcEnvImpl);
+  } catch (error) {
+    // Expected toolchain causes (vswhere missing, vcvars failure, incomplete import) must reach
+    // the workflow log verbatim — the CLI catch redacts every non-attestation error type.
+    throw new WindowsRuntimeAttestationError(
+      `windows-runtime-attestation: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const pathEntries = (compilerEnvironment.PATH ?? "")
     .split(win32.delimiter)
     .map((path) => path.trim().replace(/^"|"$/gu, ""))
