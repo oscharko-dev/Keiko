@@ -295,7 +295,14 @@ function writeWindowsShortcutArtifact(
 }
 
 function writeRegistrationArtifact(plan: RegistrationPlan): void {
-  if (plan.artifact.type === "directory") return;
+  if (plan.artifact.type === "directory") {
+    // The directory registration artifact is the managed-root anchor itself: repairing a
+    // missing registration recreates the anchor directory (contents are the setup flow's job).
+    if (ensureRegistrationArtifactSafe(plan) === "missing") {
+      mkdirSync(plan.path, { recursive: true, mode: 0o755 });
+    }
+    return;
+  }
   const status = ensureRegistrationArtifactSafe(plan);
   if (status === "managed") return;
   if (plan.artifact.type === "windows-shortcut") {

@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
 import {
@@ -1837,7 +1837,11 @@ function compileMacLauncher(target, destination) {
 // vswhere installer path and imports the single-line vcvars64 variables; a Developer Command
 // Prompt (INCLUDE and LIB already present) is used as-is. Fails closed when no toolchain exists.
 function locateVisualStudioInstallation(baseEnv) {
-  const programFiles = baseEnv["ProgramFiles(x86)"] ?? String.raw`C:\Program Files (x86)`;
+  const configuredProgramFiles = baseEnv["ProgramFiles(x86)"];
+  const programFiles =
+    configuredProgramFiles !== undefined && isAbsolute(configuredProgramFiles)
+      ? configuredProgramFiles
+      : String.raw`C:\Program Files (x86)`;
   const vswhere = join(programFiles, "Microsoft Visual Studio", "Installer", "vswhere.exe");
   if (!existsSync(vswhere)) {
     fail("MSVC toolchain not found: install the Visual Studio C++ Build Tools (vswhere missing)");
