@@ -49,10 +49,12 @@ describe("zizmor workflow job", () => {
     expect(config).toMatch(/cache-poisoning:\n\s+ignore:\n(\s+#[^\n]+\n)+\s+- ci\.yml:\d+/u);
   });
 
-  it("documents the misfeature ignore with the Windows MSVC toolchain constraint", () => {
-    expect(config).toMatch(
-      /misfeature:\n\s+ignore:\n(\s+#[^\n]+\n)+\s+- portable-assets\.yml:\d+/u,
-    );
+  it("carries no misfeature ignore since the MSVC GITHUB_ENV steps were removed", () => {
+    // The only misfeature exception covered the workflow steps that persisted the MSVC
+    // environment via GITHUB_ENV. Those steps are gone (the staging script owns MSVC
+    // resolution, #3075), so the ignore block must stay gone with them — a new misfeature
+    // exception requires its own documented justification, not a revival of this one.
+    expect(config).not.toMatch(/misfeature:/u);
   });
 
   it("documents the adhoc-packages ignore with the npm Trusted Publishing bootstrap constraint", () => {

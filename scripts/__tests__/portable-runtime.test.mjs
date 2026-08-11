@@ -2501,7 +2501,9 @@ describe("portable runtime package scripts", () => {
     expect(source).toContain(
       "Keiko uses its runtime monitor to contain Coding Workbench processes",
     );
-    expect(source).toContain('run("rc"');
+    // The resource compiler is resolved to an absolute path from the imported vcvars PATH and
+    // spawned directly — never looked up implicitly by a bare `run("rc", ...)` (#3075).
+    expect(source).toContain('windowsToolFromPath(env.PATH, "rc.exe")');
     expect(source).toContain("windowsLauncherResourceSource()");
   });
 });
