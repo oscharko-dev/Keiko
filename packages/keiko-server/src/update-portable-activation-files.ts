@@ -597,9 +597,12 @@ function readShortcut(path: string, env: EnvSource): WindowsShortcutArtifact | u
 }
 
 function readGuardedShortcut(path: string, env: EnvSource): WindowsShortcutArtifact | undefined {
-  if (!existsSync(path)) return undefined;
-  const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1) return undefined;
+  // One lstat, no exists-then-stat window: a file removed between the two calls must read as
+  // absent, not throw out of a read that callers treat as a plain lookup.
+  const stat = lstatEntryOrUndefined(path);
+  if (stat === undefined || !stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1) {
+    return undefined;
+  }
   if (stat.size <= 0 || stat.size > WINDOWS_SHORTCUT_MAX_BYTES) return undefined;
   return readShortcut(path, env);
 }

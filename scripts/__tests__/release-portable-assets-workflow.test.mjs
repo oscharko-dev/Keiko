@@ -263,6 +263,11 @@ function workflowJob(start, end) {
 function stagePortableRuntimeStep(job) {
   const name = "Stage portable runtime from approved inputs";
   const start = job.indexOf(`      - name: ${name}`);
+  if (start === -1) {
+    // Fail loudly: slicing from -1 would hand the assertions a one-character tail, letting the
+    // `not.toMatch` absence pins pass vacuously over a job that lost the step entirely.
+    throw new Error(`workflow job does not contain the step: ${name}`);
+  }
   const end = job.indexOf("\n      - name:", start + 1);
   return job.slice(start, end === -1 ? undefined : end);
 }
