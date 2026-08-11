@@ -3,18 +3,20 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
   rmdirSync,
-  rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve, win32 as win32Path } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import {
+  WINDOWS_SHORTCUT_MAX_BYTES,
+  equivalentWindowsShortcutPath,
+  readWindowsShortcutDefinition,
+  writeWindowsShortcutDefinition,
+} from "@oscharko-dev/keiko-security";
 import { parseWindowsLauncherContent, windowsLauncher } from "./launcher-platforms.js";
 import type { CliIo } from "./runner.js";
 import { defaultManagedRoot, type PortableLayout, type PortableTarget } from "./portable-shared.js";
@@ -98,29 +100,6 @@ const MANAGED_INSTALL_RULES: Readonly<
   },
 };
 const WINDOWS_LAUNCHER_MAX_BYTES = 64 * 1024;
-const WINDOWS_SHORTCUT_MAX_BYTES = 128 * 1024;
-const DEFAULT_WINDOWS_ROOT = String.raw`C:\Windows`;
-const WINDOWS_SHORTCUT_FALLBACK_SCHEMA = "keiko-windows-shortcut-v1";
-
-const WINDOWS_SHORTCUT_SCRIPT = [
-  'var shell = WScript.CreateObject("WScript.Shell");',
-  "var mode = WScript.Arguments.Item(0);",
-  "var path = WScript.Arguments.Item(1);",
-  "var shortcut = shell.CreateShortcut(path);",
-  'if (mode === "create") {',
-  "  shortcut.TargetPath = WScript.Arguments.Item(2);",
-  '  shortcut.Arguments = "";',
-  "  shortcut.WorkingDirectory = WScript.Arguments.Item(3);",
-  "  shortcut.IconLocation = WScript.Arguments.Item(4);",
-  '  shortcut.Description = "Keiko";',
-  "  shortcut.Save();",
-  "} else {",
-  "  WScript.StdOut.WriteLine(shortcut.TargetPath);",
-  "  WScript.StdOut.WriteLine(shortcut.WorkingDirectory);",
-  "  WScript.StdOut.WriteLine(shortcut.IconLocation);",
-  "}",
-  "",
-].join("\r\n");
 
 function appDataDir(env: EnvSource, home: string): string {
   return env.APPDATA ?? join(home, "AppData", "Roaming");
@@ -299,11 +278,7 @@ function writeWindowsShortcutArtifact(
   artifact: WindowsShortcutRegistrationArtifact,
 ): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o755 });
-  if (process.platform !== "win32") {
-    writeFileSync(path, windowsShortcutFallbackContent(artifact), "utf8");
-    return;
-  }
-  runWindowsShortcutCommand("create", path, artifact);
+  writeWindowsShortcutDefinition(path, artifact, process.env, SHORTCUT_FAILURE_PREFIX);
 }
 
 function writeRegistrationArtifact(plan: RegistrationPlan): void {
@@ -318,119 +293,11 @@ function writeRegistrationArtifact(plan: RegistrationPlan): void {
   ensureRegistrationArtifactSafe(plan);
 }
 
-function windowsSystemRoot(env: EnvSource): string {
-  const root = env.SystemRoot ?? env.WINDIR ?? DEFAULT_WINDOWS_ROOT;
-  return win32Path.isAbsolute(root) ? root : DEFAULT_WINDOWS_ROOT;
-}
-
-function windowsCscriptExecutable(env: EnvSource): string {
-  return win32Path.join(windowsSystemRoot(env), "System32", "cscript.exe");
-}
-
-function windowsShortcutEnv(env: EnvSource): NodeJS.ProcessEnv {
-  const root = windowsSystemRoot(env);
-  return {
-    ...process.env,
-    ...env,
-    SystemRoot: root,
-    WINDIR: root,
-    ComSpec: win32Path.join(root, "System32", "cmd.exe"),
-  };
-}
-
-function runWindowsShortcutCommand(
-  mode: "create" | "read",
-  path: string,
-  artifact: WindowsShortcutRegistrationArtifact,
-): string {
-  const scriptRoot = mkdtempSync(join(tmpdir(), "keiko-shortcut-"));
-  const scriptPath = join(scriptRoot, "shortcut.js");
-  try {
-    writeFileSync(scriptPath, WINDOWS_SHORTCUT_SCRIPT, "utf8");
-    const args =
-      mode === "create"
-        ? [
-            "//Nologo",
-            "//E:JScript",
-            scriptPath,
-            mode,
-            path,
-            artifact.targetPath,
-            artifact.workingDirectory,
-            artifact.iconPath,
-          ]
-        : ["//Nologo", "//E:JScript", scriptPath, mode, path];
-    const result = spawnSync(windowsCscriptExecutable(process.env), args, {
-      encoding: "utf8",
-      env: windowsShortcutEnv(process.env),
-      shell: false,
-      stdio: "pipe",
-      windowsHide: true,
-    });
-    if (result.error !== undefined) throw result.error;
-    if (result.status !== 0 || result.stderr.length > 0) {
-      throw new Error(windowsShortcutFailure(result.stderr));
-    }
-    return result.stdout;
-  } finally {
-    rmSync(scriptRoot, { recursive: true, force: true });
-  }
-}
-
-function windowsShortcutFailure(stderr: string | null): string {
-  const detail = stderr?.trim();
-  return detail === undefined || detail.length === 0
-    ? "portable registration shortcut command failed"
-    : `portable registration shortcut command failed: ${detail}`;
-}
-
-function windowsShortcutFallbackContent(artifact: WindowsShortcutRegistrationArtifact): string {
-  return `${JSON.stringify({ schema: WINDOWS_SHORTCUT_FALLBACK_SCHEMA, ...artifact })}\n`;
-}
-
-function parseWindowsShortcutFallback(
-  path: string,
-): WindowsShortcutRegistrationArtifact | undefined {
-  try {
-    const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
-    const record = raw as Record<string, unknown>;
-    if (record.schema !== WINDOWS_SHORTCUT_FALLBACK_SCHEMA) return undefined;
-    if (typeof record.targetPath !== "string") return undefined;
-    if (typeof record.workingDirectory !== "string") return undefined;
-    if (typeof record.iconPath !== "string") return undefined;
-    return {
-      type: "windows-shortcut",
-      targetPath: record.targetPath,
-      workingDirectory: record.workingDirectory,
-      iconPath: record.iconPath,
-    };
-  } catch {
-    return undefined;
-  }
-}
+const SHORTCUT_FAILURE_PREFIX = "portable registration shortcut command failed";
 
 function readWindowsShortcut(path: string): WindowsShortcutRegistrationArtifact | undefined {
-  if (process.platform !== "win32") return parseWindowsShortcutFallback(path);
-  try {
-    const output = runWindowsShortcutCommand("read", path, {
-      type: "windows-shortcut",
-      targetPath: "",
-      workingDirectory: "",
-      iconPath: "",
-    });
-    const [targetPath, workingDirectory, iconPath] = output.split(/\r?\n/u);
-    if (targetPath === undefined || workingDirectory === undefined || iconPath === undefined) {
-      return undefined;
-    }
-    return { type: "windows-shortcut", targetPath, workingDirectory, iconPath };
-  } catch {
-    return undefined;
-  }
-}
-
-function equivalentWindowsPath(left: string, right: string): boolean {
-  return win32Path.normalize(left).toLowerCase() === win32Path.normalize(right).toLowerCase();
+  const definition = readWindowsShortcutDefinition(path, process.env, SHORTCUT_FAILURE_PREFIX);
+  return definition === undefined ? undefined : { type: "windows-shortcut", ...definition };
 }
 
 function windowsShortcutMatches(
@@ -438,8 +305,8 @@ function windowsShortcutMatches(
   expected: WindowsShortcutRegistrationArtifact,
 ): boolean {
   return (
-    equivalentWindowsPath(actual.targetPath, expected.targetPath) &&
-    equivalentWindowsPath(actual.workingDirectory, expected.workingDirectory)
+    equivalentWindowsShortcutPath(actual.targetPath, expected.targetPath) &&
+    equivalentWindowsShortcutPath(actual.workingDirectory, expected.workingDirectory)
   );
 }
 

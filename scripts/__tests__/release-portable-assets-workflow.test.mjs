@@ -229,20 +229,15 @@ describe("portable secure-read qualification", () => {
     expect(secureReadNative.match(/pause_after_final_open\(\);/gu)).toHaveLength(2);
   });
 
-  it("configures MSVC through a cmd step without a PowerShell dependency", () => {
-    const windowsStage = workflowJob("  stage-windows-production:", "\n  stage-macos-production:");
-    const start = windowsStage.indexOf("      - name: Configure MSVC environment");
-    const end = windowsStage.indexOf("\n      - name:", start + 1);
-    const step = windowsStage.slice(start, end);
-
-    expect(step).toContain("shell: cmd");
-    expect(step).not.toContain("shell: pwsh");
-    expect(step).toContain(
-      '"%ProgramFiles(x86)%\\Microsoft Visual Studio\\Installer\\vswhere.exe"',
-    );
-    expect(step).toContain("VC\\Auxiliary\\Build\\vcvars64.bat");
-    expect(step).toContain('if "%INCLUDE%"=="" exit /b 1');
-    expect(step).toContain("echo PATH=%PATH%>> %GITHUB_ENV%");
+  it("carries no workflow-level MSVC configuration step (the stage script owns its toolchain)", () => {
+    // The rc/cl toolchain is resolved inside stage-portable-runtime.mjs (resolveWindowsMsvcEnv:
+    // vswhere → vcvars64 → per-spawn env). A workflow step that persisted the full PATH through
+    // GITHUB_ENV was both a zizmor misfeature finding and an injection-shaped surface, and a
+    // developer machine would silently lack it — the script-owned resolution serves both.
+    expect(portableWorkflow).not.toContain("Configure MSVC environment");
+    expect(portableWorkflow).not.toContain("shell: cmd");
+    expect(portableWorkflow).not.toContain("echo PATH=%PATH%>> %GITHUB_ENV%");
+    expect(portableWorkflow).not.toContain("vcvars64.bat");
   });
 });
 

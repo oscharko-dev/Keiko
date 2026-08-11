@@ -243,9 +243,11 @@ describe("runDetachedWindowsAlert", () => {
         "[System.Windows.MessageBox]::Show('can''t startbecause', " +
         "'Keiko could not start', 'OK', 'Error') | Out-Null",
     ]);
+    // PowerShell/WPF need the core system variables to initialize; everything else stays
+    // withheld from the detached child (no TEMP/TMP here because the caller env carries none).
     expect(calls[0]?.[2]).toEqual({
       detached: true,
-      env: {},
+      env: { SystemRoot: String.raw`D:\Windows`, WINDIR: String.raw`D:\Windows` },
       shell: false,
       stdio: "ignore",
       windowsHide: true,

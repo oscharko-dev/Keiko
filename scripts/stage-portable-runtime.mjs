@@ -1817,25 +1817,102 @@ function compileMacLauncher(target, destination) {
   ]);
 }
 
+// Resolves the MSVC toolchain environment for the rc/cl launcher compile. The staging script
+// owns its toolchain instead of depending on a workflow step (or a developer) having persisted
+// vcvars into the process environment: a plain shell resolves Visual Studio through the fixed
+// vswhere installer path and imports the single-line vcvars64 variables; a Developer Command
+// Prompt (INCLUDE and LIB already present) is used as-is. Fails closed when no toolchain exists.
+function locateVisualStudioInstallation(baseEnv) {
+  const programFiles = baseEnv["ProgramFiles(x86)"] ?? String.raw`C:\Program Files (x86)`;
+  const vswhere = join(programFiles, "Microsoft Visual Studio", "Installer", "vswhere.exe");
+  if (!existsSync(vswhere)) {
+    fail("MSVC toolchain not found: install the Visual Studio C++ Build Tools (vswhere missing)");
+  }
+  const located = spawnSync(
+    vswhere,
+    [
+      "-latest",
+      "-products",
+      "*",
+      "-requires",
+      "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+      "-property",
+      "installationPath",
+    ],
+    { encoding: "utf8" },
+  );
+  const installationPath = located.stdout?.trim().split(/\r?\n/u)[0] ?? "";
+  if (located.status !== 0 || installationPath === "") {
+    fail("MSVC toolchain not found: Visual Studio C++ Build Tools are not installed");
+  }
+  return installationPath;
+}
+
+function importVcvarsEnvironment(baseEnv, installationPath) {
+  const vcvars = join(installationPath, "VC", "Auxiliary", "Build", "vcvars64.bat");
+  const systemRoot = baseEnv.SystemRoot ?? baseEnv.WINDIR ?? String.raw`C:\Windows`;
+  const dump = spawnSync(
+    join(systemRoot, "System32", "cmd.exe"),
+    ["/d", "/s", "/c", `""${vcvars}" >nul && set"`],
+    { encoding: "utf8", windowsVerbatimArguments: true },
+  );
+  if (dump.status !== 0) fail("MSVC environment initialization failed (vcvars64)");
+  const resolved = { ...baseEnv };
+  for (const line of dump.stdout.split(/\r?\n/u)) {
+    const separator = line.indexOf("=");
+    if (separator > 0) resolved[line.slice(0, separator)] = line.slice(separator + 1);
+  }
+  return resolved;
+}
+
+export function resolveWindowsMsvcEnv(baseEnv = process.env) {
+  if (baseEnv.INCLUDE !== undefined && baseEnv.LIB !== undefined) return baseEnv;
+  const resolved = importVcvarsEnvironment(baseEnv, locateVisualStudioInstallation(baseEnv));
+  if (resolved.INCLUDE === undefined || resolved.LIB === undefined) {
+    fail("MSVC environment initialization did not define INCLUDE and LIB");
+  }
+  return resolved;
+}
+
+// Child-process PATH search does not reliably honour an options.env PATH, so the two MSVC tools
+// are located explicitly on the resolved toolchain PATH and spawned by absolute path.
+function windowsToolFromPath(envPath, tool) {
+  for (const dir of (envPath ?? "").split(";")) {
+    if (dir === "") continue;
+    const candidate = join(dir, tool);
+    if (existsSync(candidate)) return candidate;
+  }
+  return fail(`MSVC tool ${tool} was not found on the resolved toolchain PATH`);
+}
+
 function compileWindowsLauncher(target, destination) {
   requireWindowsLauncherIconSource();
+  const env = resolveWindowsMsvcEnv();
   const tempRoot = mkdtempSync(join(tmpdir(), "keiko-windows-launcher-resource-"));
   try {
     const resourcePath = join(tempRoot, "keiko-portable-launcher.res");
-    run("rc", ["/nologo", `/fo${resourcePath}`, windowsLauncherResourceSource()]);
-    run("cl", [
-      "/nologo",
-      "/O2",
-      "/DUNICODE",
-      "/D_UNICODE",
-      `/D${nativeLauncherTargetDefine(target)}`,
-      `/Fe:${destination}`,
-      nativeLauncherSource(),
-      resourcePath,
-      "/link",
-      "/SUBSYSTEM:WINDOWS",
-      "/ENTRY:wmainCRTStartup",
-    ]);
+    run(
+      windowsToolFromPath(env.PATH, "rc.exe"),
+      ["/nologo", `/fo${resourcePath}`, windowsLauncherResourceSource()],
+      { env },
+    );
+    run(
+      windowsToolFromPath(env.PATH, "cl.exe"),
+      [
+        "/nologo",
+        "/O2",
+        "/DUNICODE",
+        "/D_UNICODE",
+        `/D${nativeLauncherTargetDefine(target)}`,
+        `/Fe:${destination}`,
+        nativeLauncherSource(),
+        resourcePath,
+        "/link",
+        "/SUBSYSTEM:WINDOWS",
+        "/ENTRY:wmainCRTStartup",
+      ],
+      { env },
+    );
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }

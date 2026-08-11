@@ -298,19 +298,11 @@ function windowsSetupInstallLines() {
 
 function windowsSetupLaunchLines() {
   return [
-    "echo [6/6] Confirming Keiko remains running...",
-    "echo       Waiting up to 60 seconds for installer smoke evidence...",
-    'set "KEIKO_LAUNCH_ROOT=%INSTALL_ROOT%"',
-    "if not defined KEIKO_IEXPRESS_HEALTHY goto health_delay",
-    "for /l %%A in (1,1,60) do (",
-    '  if exist "%KEIKO_IEXPRESS_HEALTHY%" goto health_ok',
-    "  timeout /t 1 /nobreak >nul",
-    ")",
-    "echo Keiko did not stay running after setup.",
-    "goto failure",
-    ":health_delay",
-    "timeout /t 5 /nobreak >nul",
-    ":health_ok",
+    // No separate liveness poll: `portable launch` above exits 0 only after the lifecycle CLI's
+    // waitForHealth saw /api/health answer with the exact installed version while the spawned
+    // process stayed alive. That exit code IS the "Keiko is running" proof; a marker file or a
+    // process poll here would re-attest weaker evidence the CLI already established.
+    "echo [6/6] Keiko reported healthy; removing temporary application files...",
     "for /l %%A in (1,1,10) do (",
     '  if exist "%STAGING_ROOT%" rmdir /s /q "%STAGING_ROOT%" >nul 2>nul',
     '  if not exist "%STAGING_ROOT%" goto cleanup_ok',

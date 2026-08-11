@@ -142,19 +142,6 @@ jobs:
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
-      - name: Configure MSVC environment for the native launcher
-        if: runner.os == 'Windows'
-        shell: cmd
-        run: |
-          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
-          rem Persist only the single-line MSVC toolchain variables the rc/cl compile needs. Dumping
-          rem the full `set` output pollutes GITHUB_ENV with multi-line/malformed values.
-          if "%INCLUDE%"=="" exit /b 1
-          if "%LIB%"=="" exit /b 1
-          echo PATH=%PATH%>> %GITHUB_ENV%
-          echo INCLUDE=%INCLUDE%>> %GITHUB_ENV%
-          echo LIB=%LIB%>> %GITHUB_ENV%
-          echo LIBPATH=%LIBPATH%>> %GITHUB_ENV%
       - name: Install dependencies
         run: npm ci --ignore-scripts
       - name: Run executable secure-read adversarial harness
@@ -214,16 +201,6 @@ jobs:
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
-      - name: Configure MSVC environment for the native launcher
-        shell: cmd
-        run: |
-          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
-          if "%INCLUDE%"=="" exit /b 1
-          if "%LIB%"=="" exit /b 1
-          echo PATH=%PATH%>> %GITHUB_ENV%
-          echo INCLUDE=%INCLUDE%>> %GITHUB_ENV%
-          echo LIB=%LIB%>> %GITHUB_ENV%
-          echo LIBPATH=%LIBPATH%>> %GITHUB_ENV%
       - name: Install dependencies
         run: npm ci --ignore-scripts
       - name: Run executable secure-read adversarial harness

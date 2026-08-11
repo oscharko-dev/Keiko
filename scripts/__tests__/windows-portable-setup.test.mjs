@@ -345,19 +345,21 @@ describe("windows portable setup companion", () => {
     expect(script).not.toContain('move "%INSTALL_ROOT%"');
     expect(script).not.toContain('rmdir /s /q "%INSTALL_ROOT%"');
     expect(script).not.toContain("Start-Process");
-    expect(script).toContain("Waiting up to 60 seconds for installer smoke evidence");
-    expect(script).toContain('if exist "%KEIKO_IEXPRESS_HEALTHY%" goto health_ok');
-    expect(script).toContain("timeout /t 5 /nobreak >nul");
+    // The managed `portable launch` exit code IS the health proof (the lifecycle CLI's
+    // waitForHealth gates it on /api/health answering with the installed version), so the
+    // payload carries NO secondary liveness poll: no marker file, no process query, no sleep.
+    expect(script).toContain("Keiko reported healthy; removing temporary application files");
+    expect(script).not.toContain("KEIKO_IEXPRESS_HEALTHY");
+    expect(script).not.toContain("timeout /t 5 /nobreak");
     expect(script).not.toContain("AddSeconds(30)");
     expect(script).not.toContain("Get-Process -Name Keiko,node");
     expect(script).not.toContain("Start-Sleep -Milliseconds 500");
     expect(script).not.toContain("Get-CimInstance Win32_Process");
-    expect(script).toContain("Keiko did not stay running after setup.");
     expect(script).toContain("for /l %%A in (1,1,10) do (");
     expect(script).toContain('rmdir /s /q "%STAGING_ROOT%"');
     expect(script).toContain('if exist "%STAGING_ROOT%" (');
     expect(script).toContain("Keiko setup could not remove its temporary application files.");
-    expect(script.indexOf(":health_ok")).toBeLessThan(script.indexOf(":cleanup_ok"));
+    expect(script.indexOf(managedLaunchCommand)).toBeLessThan(script.indexOf(":cleanup_ok"));
     expect(script).toContain('if "%KEIKO_INTERACTIVE%"=="1" pause');
     expect(script).not.toContain("\r\npause\r\n");
     expect(script).toContain("Keiko setup finished successfully.");

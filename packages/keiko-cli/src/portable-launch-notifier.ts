@@ -125,6 +125,7 @@ export function runDetachedWindowsAlert(
   spawnFn: DetachedAlertSpawn = spawn,
   reportAlertFailure: (line: string) => void = defaultAlertFailureReport,
 ): void {
+  const systemRoot = windowsSystemRoot(env);
   const child = spawnFn(
     windowsPowerShellExecutable(env),
     [
@@ -141,7 +142,14 @@ export function runDetachedWindowsAlert(
     ],
     {
       detached: true,
-      env: {},
+      // PowerShell and WPF need the core system variables; a fully empty environment can fail
+      // to initialize the runtime. Everything else stays withheld from the detached child.
+      env: {
+        SystemRoot: systemRoot,
+        WINDIR: systemRoot,
+        ...(env.TEMP === undefined ? {} : { TEMP: env.TEMP }),
+        ...(env.TMP === undefined ? {} : { TMP: env.TMP }),
+      },
       shell: false,
       stdio: "ignore",
       windowsHide: true,

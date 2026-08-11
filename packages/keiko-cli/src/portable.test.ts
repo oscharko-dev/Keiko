@@ -1197,6 +1197,24 @@ describe("runPortableCli", () => {
       }),
     );
 
+    // With the setup-created `.lnk` still intact, recovery resolves through the ATTESTED managed
+    // root (the registration identity chain validates it) — never through the foreign `.bat`.
+    const viaShortcut = capture();
+    expect(
+      await runPortableCli(
+        ["resolve-root", "--target", "windows-x64", "--state-dir", stateDir],
+        viaShortcut.io,
+        env,
+        { homedir: () => home },
+      ),
+    ).toBe(0);
+    expect(viaShortcut.out().trim()).toBe(managedRoot);
+
+    // The original #1394-era invariant, unchanged in strength: once only the redirected legacy
+    // launcher remains, the foreign target must NOT resolve — fail closed.
+    rmSync(join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk"), {
+      force: true,
+    });
     const resolved = capture();
     expect(
       await runPortableCli(
