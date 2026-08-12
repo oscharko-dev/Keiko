@@ -260,7 +260,7 @@ export type WindowRender<T extends WindowType = WindowType> = (
   ctx: WindowRenderContext,
 ) => ReactNode;
 
-export type WindowStatus = "placeholder";
+type WindowStatus = "placeholder";
 
 export interface WindowTypeDef {
   readonly titleKey: MessageKey;

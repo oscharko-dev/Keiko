@@ -29,7 +29,7 @@
 // 24kHz assumption elsewhere (see `primeFrames = 2400 // ~100ms at 24kHz` below) rather than
 // reading it, so the ceiling follows the same convention instead of adding a second, inconsistent
 // way to learn the rate.
-const MAX_CAPACITY_SAMPLES = 720_000; // 30s * 24_000 Hz
+const MAX_CAPACITY_SAMPLES = 720000; // 30s * 24000 Hz — no numeric separators for ES2019 compat
 
 class KeikoPlaybackProcessor extends AudioWorkletProcessor {
   constructor() {

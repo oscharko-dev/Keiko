@@ -246,13 +246,14 @@ describe("KEIKO-0308 — stream inactivity guard", () => {
     const interval = STREAM_INACTIVITY_TIMEOUT_MS - 5_000;
     const heartbeatCount = 5;
     let calls = 0;
+    const doneResult = { done: true, value: undefined } as unknown as ReadableStreamReadResult<Uint8Array>;
     const read = vi.fn(
       () =>
         new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => {
           setTimeout(() => {
             calls += 1;
             if (calls > heartbeatCount) {
-              resolve({ done: true });
+              resolve(doneResult);
               return;
             }
             resolve({ done: false, value: encoder.encode(": heartbeat\n\n") });
