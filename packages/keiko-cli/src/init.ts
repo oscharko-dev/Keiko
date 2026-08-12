@@ -150,7 +150,7 @@ function detectSpaceUnit(depths: readonly number[]): number {
   // PR-review follow-up: a single-space indent is non-standard for package.json and comes
   // out of GCD-of-mixed-depths (e.g. depths [2,3] → gcd 1). No convention writes a 1-space
   // JSON file, so treat that outcome the same as "no consistent style" and default to 2.
-  return width < 2 ? 2 : width;
+  return Math.max(width, 2);
 }
 
 function detectIndent(raw: string): string | number {
