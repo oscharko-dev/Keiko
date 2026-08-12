@@ -240,6 +240,10 @@ describe("runGenTestsCli (AC #1)", () => {
     expect(code).toBe(0);
     expect(seenModelId).toBe("example-chat-model-fast");
     expect(c.out() + c.err()).not.toContain(FIXTURE_API_KEY);
+    // KEIKO-0130 (PR-review follow-up): the vault-master-key travels through the CLI env
+    // (KEIKO_PROVIDER_CREDENTIALS_KEY). It must NEVER surface in either stream — a leak
+    // would be more serious than the plaintext-apiKey leak this test already guards.
+    expect(c.out() + c.err()).not.toContain(PROVIDER_CREDENTIALS_KEY);
   });
 
   it("does not default to a configured chat model without structured output", async () => {
