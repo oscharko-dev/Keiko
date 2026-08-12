@@ -172,7 +172,10 @@ refresh failure fails closed before either path. The review job repeats the head
 first secret-bearing step, so a later supersession fails there without invoking the model or
 handling store secrets. This debounce avoids buying the startup of a large review during an ordinary
 synchronize burst. It supplements rather than replaces the per-pull-request concurrency
-cancellation, which still stops a paid review already in progress.
+cancellation, which still stops a paid review already in progress. The debounce checkout and its
+two head refreshes are depth-one operations; only the subsequent review workspace fetches full
+history. Its ten-minute job bound leaves explicit headroom around the fixed wait for a slow hosted
+checkout without turning runner delay into a false admission failure.
 
 Fork-originated heads receive no model review. Model budget and the credential-bearing
 execution path are not exposed to arbitrary external heads, and a per-review budget bounds one review,

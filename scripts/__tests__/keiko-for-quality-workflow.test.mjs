@@ -147,9 +147,12 @@ describe("Keiko for Quality production workflow", () => {
     expect(reviewPosition).toBeGreaterThan(secretPosition);
 
     const debounce = jobSource("debounce");
+    expect(debounce).toContain("timeout-minutes: 10");
     expect(stepSource("Check out protected base for debounce")).toContain(
       "ref: ${{ github.workflow_sha }}",
     );
+    expect(stepSource("Check out protected base for debounce")).toContain("fetch-depth: 1");
+    expect(runScript("Debounce superseded pull-request heads")).toContain("--depth=1");
     expect(debounce).toContain("sleep 120");
     expect(debounce).toContain('origin "pull/${PR_NUMBER}/head"');
     expect(debounce).not.toContain("secrets.");
@@ -174,6 +177,7 @@ describe("Keiko for Quality production workflow", () => {
   it("prevents the secret-bearing review job from starting for a superseded head", () => {
     const reviewJob = jobSource("review");
     expect(stepSource("Check out protected base")).toContain("ref: ${{ github.workflow_sha }}");
+    expect(stepSource("Check out protected base")).toContain("fetch-depth: 0");
     expect(workflow).not.toContain("ref: ${{ github.event.pull_request.base.sha }}");
     expect(workflow.match(/uses: actions\/checkout@/gu)).toHaveLength(2);
     expect(workflow.match(/ref: \$\{\{ github\.workflow_sha \}\}/gu)).toHaveLength(2);

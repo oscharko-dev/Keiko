@@ -51,7 +51,9 @@ jobs:
   debounce:
     name: debounce current head
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # The fixed wait is two minutes. Keep enough headroom for a slow GitHub checkout while the
+    # shallow fetches below avoid downloading the repository's complete history and every ref.
+    timeout-minutes: 10
     if: >-
       github.event.pull_request.state == 'open' &&
       github.event.pull_request.draft == false &&
@@ -71,7 +73,7 @@ jobs:
           # payload base.sha is a PR comparison snapshot and can lag dev; using it made the
           # action-pin cross-check read an old workflow and disabled the review store.
           ref: ${{ github.workflow_sha }}
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
 
       # Expressions stay in env, never in the shell program. A failed fetch is a failed gate, not a
@@ -82,7 +84,7 @@ jobs:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          git fetch --quiet --no-tags --no-recurse-submodules origin "pull/${PR_NUMBER}/head"
+          git fetch --quiet --depth=1 --no-tags --no-recurse-submodules origin "pull/${PR_NUMBER}/head"
           INITIAL_HEAD="$(git rev-parse FETCH_HEAD)"
           if [ "${INITIAL_HEAD}" != "${EXPECTED_HEAD}" ]; then
             echo "::notice::pull-request head was superseded before debounce — skipping review"
@@ -90,7 +92,7 @@ jobs:
             exit 0
           fi
           sleep 120
-          git fetch --quiet --no-tags --no-recurse-submodules origin "pull/${PR_NUMBER}/head"
+          git fetch --quiet --depth=1 --no-tags --no-recurse-submodules origin "pull/${PR_NUMBER}/head"
           CURRENT_HEAD="$(git rev-parse FETCH_HEAD)"
           if [ "${CURRENT_HEAD}" = "${EXPECTED_HEAD}" ]; then
             echo "current=true" >> "${GITHUB_OUTPUT}"
