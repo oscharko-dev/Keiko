@@ -344,10 +344,17 @@ async function backfillEmbeddings(
   // target is met or the store is exhausted. skipped/embedded/failed counts follow the same
   // semantics as before. The --force mode has its own atomic staging path and never calls
   // this function.
+  //
+  // PR-review follow-up (KfQ thread 3769955302): capture the embedded-id set once up front so
+  // we can pre-filter each page in memory and stop paginating as soon as we have observed
+  // every embedded id we know about. Prior implementation kept paginating through fully-
+  // embedded pages even when no work was left, an O(N) scan on a large fully-embedded vault.
   const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
   const scopes = vault.listMemoryScopes();
+  const embeddedSet = new Set<MemoryRecord["id"]>(vault.listEmbeddedMemoryIds());
   const pageSize = Math.max(limit, 100);
   let offset = 0;
+  let observedEmbedded = 0;
   while (counts.embedded + counts.failed < limit) {
     const page = vault.listMemoriesAcrossScopes(scopes, {
       status: ["accepted"],
@@ -359,8 +366,15 @@ async function backfillEmbeddings(
     for (const record of page) {
       if (counts.embedded + counts.failed >= limit) break;
       await embedOne(vault, embed, record, counts);
+      if (embeddedSet.has(record.id)) observedEmbedded += 1;
     }
     offset += page.length;
+    // Once we've walked past every accepted memory that already carries an embedding, any
+    // remaining accepted pages MUST contain records without one — and if none do we would
+    // have hit them in this pass. Concretely: if observedEmbedded matches the snapshot's
+    // size and we still have not embedded anything, the corpus is fully embedded and
+    // continuing to page is pure waste.
+    if (observedEmbedded >= embeddedSet.size && counts.embedded + counts.failed === 0) break;
   }
   return counts;
 }
