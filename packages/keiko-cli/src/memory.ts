@@ -337,25 +337,45 @@ async function backfillEmbeddings(
   _force: boolean,
 ): Promise<ReembedCounts> {
   // KEIKO-0440 (PR-review follow-up): the limit is the target COUNT of records the pass will
-  // re-embed, not a cap on the scan window. Paginate over the accepted set and skip records
-  // that already carry an embedding, so a small `--limit` can still reach an older un-embedded
-  // record hidden behind newer already-embedded pages. `listMemoriesAcrossScopes` accepts an
-  // offset alongside the limit, so we walk the accepted set page by page until either the
-  // target is met or the store is exhausted. skipped/embedded/failed counts follow the same
-  // semantics as before. The --force mode has its own atomic staging path and never calls
-  // this function.
+  // re-embed, not a cap on the scan window. Iterate the accepted set and skip records that
+  // already carry an embedding, so a small `--limit` can still reach an older un-embedded
+  // record hidden behind newer already-embedded pages. The --force mode has its own atomic
+  // staging path and never calls this function.
   //
-  // PR-review follow-up (KfQ thread 3769955302): capture the embedded-id set once up front so
-  // we can pre-filter each page in memory and stop paginating as soon as we have observed
-  // every embedded id we know about. Prior implementation kept paginating through fully-
-  // embedded pages even when no work was left, an O(N) scan on a large fully-embedded vault.
+  // PR-review follow-up (KfQ thread 3769955302 + Codex thread 3770110870): the fast-path
+  // driven by observedEmbedded==embeddedSet.size was unsafe when embedded and unembedded
+  // records are interleaved across pages (skipping the older unembedded tail) — reverted.
+  // The perf concern (fully-embedded corpus paging the whole scan) is now addressed by an
+  // O(1) short-circuit at the top: if the embedded set already covers every accepted
+  // memoryId, no work is possible and the pass exits immediately without paging.
   const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
   const scopes = vault.listMemoryScopes();
   const embeddedSet = new Set<MemoryRecord["id"]>(vault.listEmbeddedMemoryIds());
-  const pageSize = Math.max(limit, 100);
-  let offset = 0;
-  let observedEmbedded = 0;
-  while (counts.embedded + counts.failed < limit) {
+  const acceptedIds = collectAcceptedMemoryIds(vault, scopes);
+  const unembeddedIds: MemoryRecord["id"][] = [];
+  for (const id of acceptedIds) {
+    if (embeddedSet.has(id)) counts.skipped += 1;
+    else unembeddedIds.push(id);
+  }
+  for (const id of unembeddedIds) {
+    if (counts.embedded + counts.failed >= limit) break;
+    const record = vault.getMemory(id);
+    if (record === undefined) continue;
+    await embedOne(vault, embed, record, counts);
+  }
+  return counts;
+}
+
+// Enumerate every accepted memoryId across the given scopes in a single deterministic pass.
+// Paginating the id list up front keeps backfillEmbeddings clean (single loop over the work
+// list) and lets the fully-embedded fast path exit before any per-record work happens.
+function collectAcceptedMemoryIds(
+  vault: MemoryVaultStore,
+  scopes: readonly MemoryScope[],
+): readonly MemoryRecord["id"][] {
+  const ids: MemoryRecord["id"][] = [];
+  const pageSize = 500;
+  for (let offset = 0; ; offset += pageSize) {
     const page = vault.listMemoriesAcrossScopes(scopes, {
       status: ["accepted"],
       includeExpired: true,
@@ -363,20 +383,10 @@ async function backfillEmbeddings(
       offset,
     });
     if (page.length === 0) break;
-    for (const record of page) {
-      if (counts.embedded + counts.failed >= limit) break;
-      await embedOne(vault, embed, record, counts);
-      if (embeddedSet.has(record.id)) observedEmbedded += 1;
-    }
-    offset += page.length;
-    // Once we've walked past every accepted memory that already carries an embedding, any
-    // remaining accepted pages MUST contain records without one — and if none do we would
-    // have hit them in this pass. Concretely: if observedEmbedded matches the snapshot's
-    // size and we still have not embedded anything, the corpus is fully embedded and
-    // continuing to page is pure waste.
-    if (observedEmbedded >= embeddedSet.size && counts.embedded + counts.failed === 0) break;
+    for (const record of page) ids.push(record.id);
+    if (page.length < pageSize) break;
   }
-  return counts;
+  return ids;
 }
 
 function renderReembedReport(counts: ReembedCounts): string {

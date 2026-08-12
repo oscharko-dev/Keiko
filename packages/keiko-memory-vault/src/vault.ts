@@ -173,12 +173,16 @@ interface EmbeddingRowSnapshot {
   readonly created_at: number;
 }
 
-// PR-review follow-up (Codex thread 3769711634 + 3769903807): concurrent-INSERT and
-// concurrent-UPDATE detection for --force. The CLI staged vectors OUTSIDE this transaction
-// (network embed calls are slow), so between snapshot and swap another writer may have
-// inserted a new embedding row (id not in stagedIds) or upserted a fresh vector for one of
-// our staged rows (created_at differs from the snapshot). Either case is a signal that a
-// silent overwrite would happen — refuse and let the operator retry.
+// PR-review follow-up (Codex threads 3769711634 + 3769903807 + 3770110875): concurrent
+// INSERT, UPDATE, and DELETE detection for --force. The CLI staged vectors OUTSIDE this
+// transaction (network embed calls are slow), so between snapshot and swap another writer
+// may have inserted a new embedding row (id not in stagedIds), upserted a fresh vector
+// for one of our staged rows (created_at differs from the snapshot), or deleted a row
+// that WAS in the snapshot. All three would silently corrupt the swap:
+//   - INSERT: our vault-wide delete drops the new row.
+//   - UPDATE: our staged vector overwrites the newer vector with a stale one.
+//   - DELETE: our staged vector recreates the row the deleter meant to remove.
+// Refuse and let the operator retry.
 function assertReembedSetUnchanged(
   existing: readonly EmbeddingRowSnapshot[],
   stagedIds: ReadonlySet<MemoryId>,
@@ -192,6 +196,15 @@ function assertReembedSetUnchanged(
     );
   }
   if (expectedSnapshot === undefined) return;
+  const currentIds = new Set<MemoryId>(existing.map((row) => row.memory_id as MemoryId));
+  for (const [expectedId] of expectedSnapshot) {
+    if (!currentIds.has(expectedId)) {
+      throw new MemoryStorageError(
+        "precondition-failed",
+        "Embedding row deleted during --force staging; rerun.",
+      );
+    }
+  }
   for (const row of existing) {
     const expected = expectedSnapshot.get(row.memory_id as MemoryId);
     if (expected === undefined || expected !== row.created_at) {

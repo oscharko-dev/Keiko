@@ -234,7 +234,7 @@ function walkJsonLines(ctx: ScanContext): void {
     if (ctx.stopped) return;
     // Clear the per-record nesting bail from any earlier line so a deeply-nested record does
     // not silently discard every valid record that follows (PR-review follow-up on KEIKO-0484).
-    ctx.nestingStopped = false;
+    resetLineNestingBail(ctx);
     const raw = lines[i];
     if (raw === undefined || raw.trim().length === 0) continue;
     const parsed = parseJsonValue(raw);
@@ -249,8 +249,30 @@ function walkJsonLines(ctx: ScanContext): void {
       );
       continue;
     }
+    // PR-review follow-up (Codex thread 3770110882): snapshot the per-record units and
+    // normalized-text position BEFORE walking so a nesting-overflow bail rolls back any
+    // partial output for THIS line. Without the rollback a hostile JSONL row of the shape
+    // `{"visible":"x","deep":<deeply nested>}` would still index the shallow scalar field
+    // even though the record trips NESTING_LIMIT_REACHED — leaving policy-invalid content
+    // in the parse alongside valid records from other lines.
+    const unitsMark = ctx.units.length;
+    const normalizedPartsMark = ctx.normalizedParts.length;
+    const normalizedLengthMark = ctx.normalizedLength;
     walk(ctx, parsed.value, joinPointer("", String(i)), 0);
+    if (ctx.nestingStopped) {
+      ctx.units.length = unitsMark;
+      ctx.normalizedParts.length = normalizedPartsMark;
+      ctx.normalizedLength = normalizedLengthMark;
+    }
   }
+}
+
+// Extracted so TS's control-flow analysis does not narrow ctx.nestingStopped to the literal
+// `false` after the reset assignment — the check after walk() would otherwise be flagged as
+// unreachable. walk() mutates the flag through pushNestingLimit, and TS cannot see through
+// the function boundary.
+function resetLineNestingBail(ctx: ScanContext): void {
+  ctx.nestingStopped = false;
 }
 
 export const jsonParser: ParserAdapter = Object.freeze({
