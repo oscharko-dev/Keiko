@@ -550,7 +550,8 @@ jobs:
           # 5.5-6M tokens per full review once billing settled (~44k input tokens per file for a
           # change of that weight, not the 25k first written here), so a heavy change meets the
           # ceiling around 135 files and only lighter mixes reach further.
-          # Whether that cost recurs is decided by whether the run completed, not by the ceiling.
+          # Whether that cost recurs is decided by the safely memoizable coverage that earns a
+          # store, not by the settlement label alone or by the ceiling.
           # See docs/qa/review-cost-model.md for the numbers and
           # docs/troubleshooting/model-review-spend.md for the failure modes.
           token_budget: "6000000"

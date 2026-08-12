@@ -26,8 +26,9 @@ log shows, near the start of the review step:
 {"code":"cache.hits","counts":{"hits":0,"misses":<all reviewable paths>}}
 ```
 
-Nothing fails. The run settles complete, findings publish normally, and the only visible signal is
-the model bill. This is why the failure can persist for weeks unnoticed.
+Nothing necessarily fails. The run may settle complete, or it may settle incomplete while safely
+covered paths still earn a store; findings can publish normally, and the only visible signal is the
+model bill. This is why the failure can persist for weeks unnoticed.
 
 **Root Cause**
 
@@ -57,8 +58,9 @@ A cold start is **expected and correct** in each of these cases, none of which i
   Zero entries on the first run after a rotation is the boundary working, not a defect;
 - the store is disabled for the run, which the log states explicitly.
 
-Suspect a real failure only when a prior run under the same identity completed inside the
-retention window and this run still loads nothing.
+Suspect a real failure when a prior run under the same identity reported `store_written=true` but
+produced no signed artifact, or when any eligible signed artifact inside the retention window exists
+and the current run still loads nothing. Settlement status alone does not decide either case.
 
 **Diagnostic Steps**
 
@@ -90,8 +92,11 @@ gh run view <earlier-run-id> --log | grep -oE '"code":"(settlement|inventory)\.[
 # settlement code, so a settlement-only search returns nothing and the table below is never
 # reached for the one reason whose remedy is a profile change rather than size or the engine.
 
-# 3. Check that the signing job ran and that a signed artifact exists for that run.
-gh run view <earlier-run-id> --json jobs --jq '.jobs[] | "\(.name): \(.conclusion)"'
+# 3. Check whether the action earned a store, whether hand-off/signing ran, and whether the signed
+# artifact exists. A successful hand-off proves store_written=true and store-enabled=true; a
+# skipped hand-off requires the two-cause diagnosis below.
+gh run view <earlier-run-id> --json jobs \
+  --jq '.jobs[] | {job: .name, conclusion, handoff: [.steps[]? | select(.name == "Hand off unsigned store") | .conclusion]}'
 gh api repos/<owner>/<repo>/actions/runs/<earlier-run-id>/artifacts \
   --jq '.artifacts[] | "\(.name) \(.size_in_bytes)"'
 ```
@@ -138,8 +143,9 @@ warnings and its `store-enabled` output before concluding anything from the revi
    Reducing the change size for any of the others wastes another full-price run without making the
    store persist.
 
-2. If the earlier run settled complete and produced no artifact, read the hand-off and signing
-   steps' logs — every archive-gate refusal writes a `::warning::` naming what it rejected.
+2. If the earlier run reported `store_written=true` and produced no signed artifact, read the
+   hand-off and signing steps' logs regardless of whether settlement was complete or incomplete —
+   every archive-gate refusal writes a `::warning::` naming what it rejected.
 3. If an artifact exists but the next run discarded it, the verify step logs
    `restored review store failed context-bound HMAC verification` (a genuine mismatch, so the store
    is correctly refused) or `restored artifact carries no readable signature`. Do not weaken the
