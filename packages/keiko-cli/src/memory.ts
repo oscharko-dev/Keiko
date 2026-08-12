@@ -299,14 +299,12 @@ async function embedOne(
   embed: MemoryEmbedder,
   record: MemoryRecord,
   counts: ReembedCounts,
-  force: boolean,
 ): Promise<void> {
   // Default mode: skip records that already carry an embedding — that is the "backfill
-  // missing embeddings" contract from USAGE. --force overrides this to overwrite stale
-  // vectors (e.g., after an embedding-model swap or a content-hash mismatch surfaced by
-  // health-scan). PR-review follow-up on KEIKO-0440: the skip-only mode must not be the
-  // only mode; operators must still be able to refresh stale embeddings.
-  if (!force && vault.getEmbedding(record.id) !== undefined) {
+  // missing embeddings" contract from USAGE. The --force path uses its own
+  // forceReembedAtomically() flow and does not call this helper (KEIKO-0440 PR-review
+  // follow-up: --force must stage the new vector space and swap atomically).
+  if (vault.getEmbedding(record.id) !== undefined) {
     counts.skipped += 1;
     return;
   }
@@ -336,7 +334,7 @@ async function backfillEmbeddings(
   vault: MemoryVaultStore,
   embed: MemoryEmbedder,
   limit: number,
-  force: boolean,
+  _force: boolean,
 ): Promise<ReembedCounts> {
   // KEIKO-0440 (PR-review follow-up): the limit is the target COUNT of records the pass will
   // re-embed, not a cap on the scan window. Paginate over the accepted set and skip records
@@ -344,14 +342,11 @@ async function backfillEmbeddings(
   // record hidden behind newer already-embedded pages. `listMemoriesAcrossScopes` accepts an
   // offset alongside the limit, so we walk the accepted set page by page until either the
   // target is met or the store is exhausted. skipped/embedded/failed counts follow the same
-  // semantics as before. When `--force` is set, no records are skipped by presence-of-embedding,
-  // so the loop naturally treats every accepted memory as re-embed work.
+  // semantics as before. The --force mode has its own atomic staging path and never calls
+  // this function.
   const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
   const scopes = vault.listMemoryScopes();
-  // Cap pageSize to a real integer so `--force` (which sets limit to Infinity) still passes a
-  // valid `limit` to listMemoriesAcrossScopes. 500 is large enough to keep provider round-trips
-  // amortized without letting one page hold the whole vault in memory.
-  const pageSize = Number.isFinite(limit) ? Math.max(limit, 100) : 500;
+  const pageSize = Math.max(limit, 100);
   let offset = 0;
   while (counts.embedded + counts.failed < limit) {
     const page = vault.listMemoriesAcrossScopes(scopes, {
@@ -363,7 +358,7 @@ async function backfillEmbeddings(
     if (page.length === 0) break;
     for (const record of page) {
       if (counts.embedded + counts.failed >= limit) break;
-      await embedOne(vault, embed, record, counts, force);
+      await embedOne(vault, embed, record, counts);
     }
     offset += page.length;
   }
@@ -397,22 +392,76 @@ async function reembed(
   const vault = resolveVault(args, env, deps);
   try {
     const force = args.includes("--force");
-    // KEIKO-0440 (PR-review follow-up on the follow-up): the embedding row store rejects any
-    // new (provider, modelId, dimensions, metric) tuple while any existing row from a prior
-    // tuple survives, so a per-record upsert cannot survive an embedding-model swap. When
-    // `--force` is set the pass MUST rebuild the full accepted set atomically — the bounded
-    // `--limit` cap that governs the missing-only mode would otherwise leave some previously
-    // embedded records without a vector after the vault-wide clear. Ignore `--limit` for
-    // `--force` and iterate until the accepted set is exhausted; the loop still terminates
-    // on `page.length === 0`.
-    const limit = force ? Number.POSITIVE_INFINITY : parseLimit(args);
-    if (force) vault.clearAllEmbeddings();
-    const counts = await backfillEmbeddings(vault, embed, limit, force);
+    if (force) {
+      const counts = await forceReembedAtomically(vault, embed);
+      io.out(renderReembedReport(counts));
+      // Any provider or upsert failure during --force means the swap was NOT performed —
+      // the prior vector space is intact and the operator sees a non-zero exit so they can
+      // retry rather than silently continuing on a partially rebuilt corpus.
+      return counts.failed > 0 ? 1 : 0;
+    }
+    const counts = await backfillEmbeddings(vault, embed, parseLimit(args), false);
     io.out(renderReembedReport(counts));
     return 0;
   } finally {
     if (deps.vault === undefined) vault.close();
   }
+}
+
+interface StagedVector {
+  readonly memoryId: MemoryRecord["id"];
+  readonly input: NonNullable<Awaited<ReturnType<MemoryEmbedder>>>;
+}
+
+// PR-review follow-up (KEIKO-0440, 3769276197): `--force` must be atomic — either every
+// accepted memory ends up with a fresh vector, OR the prior vector space is preserved and
+// the operator sees the failure. Stage every new vector in memory FIRST; only after every
+// provider call succeeds does the vault-wide clear + reinsert happen. A transient provider
+// failure now discards the staging (a cheap in-memory array) instead of the persisted
+// vectors.
+async function forceReembedAtomically(
+  vault: MemoryVaultStore,
+  embed: MemoryEmbedder,
+): Promise<ReembedCounts> {
+  const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
+  const scopes = vault.listMemoryScopes();
+  const staged: StagedVector[] = [];
+  const pageSize = 500;
+  for (let offset = 0; ; offset += pageSize) {
+    const page = vault.listMemoriesAcrossScopes(scopes, {
+      status: ["accepted"],
+      includeExpired: true,
+      limit: pageSize,
+      offset,
+    });
+    if (page.length === 0) break;
+    for (const record of page) {
+      let input;
+      try {
+        input = await embed(record.body);
+      } catch {
+        counts.failed += 1;
+        return counts;
+      }
+      if (input === null) {
+        counts.failed += 1;
+        return counts;
+      }
+      staged.push({ memoryId: record.id, input });
+    }
+    if (page.length < pageSize) break;
+  }
+  // All new vectors computed successfully — swap now.
+  vault.clearAllEmbeddings();
+  for (const entry of staged) {
+    try {
+      vault.upsertEmbedding(entry.memoryId, entry.input);
+      counts.embedded += 1;
+    } catch {
+      counts.failed += 1;
+    }
+  }
+  return counts;
 }
 
 // async wrapper so a sync-or-async failure surfaces as exit 1 (the sync subcommands rely on
