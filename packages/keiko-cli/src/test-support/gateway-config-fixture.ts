@@ -31,7 +31,7 @@ export const PROVIDER_CREDENTIALS_KEY = Buffer.alloc(
 export const REAL_TMPDIR = realpathSync(tmpdir());
 
 /** A single provider capability. `structuredOutput` mirrors the "-unstructured" naming test files rely on. */
-export function defaultCapability(modelId: string): Record<string, unknown> {
+function defaultCapability(modelId: string): Record<string, unknown> {
   return {
     id: modelId,
     kind: "chat",
