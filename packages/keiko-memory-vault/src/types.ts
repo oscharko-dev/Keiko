@@ -198,6 +198,11 @@ export interface MemoryVaultStore {
   readonly deleteEdge: (edgeId: MemoryEdgeId) => void;
   readonly upsertEmbedding: (memoryId: MemoryId, embedding: MemoryEmbeddingInput) => void;
   readonly deleteEmbedding: (memoryId: MemoryId) => void;
+  // KEIKO-0440 (PR-review follow-up): reserved for `keiko memory reembed --force` — the vault
+  // needs to drop the entire embedding space in one transaction before a re-embed pass that
+  // switches provider/model/dimensions/metric, because upsertEmbeddingRow rejects a new tuple
+  // while any old-tuple row remains. Not intended for any other caller.
+  readonly clearAllEmbeddings: () => void;
   readonly getEmbedding: (memoryId: MemoryId) => MemoryEmbeddingRow | undefined;
   readonly getEmbeddings: (
     memoryIds: readonly MemoryId[],

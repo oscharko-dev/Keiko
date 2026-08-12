@@ -394,6 +394,13 @@ async function reembed(
   const vault = resolveVault(args, env, deps);
   try {
     const force = args.includes("--force");
+    // KEIKO-0440 (PR-review follow-up): the embedding row store rejects any new
+    // (provider, modelId, dimensions, metric) tuple while any existing row from a prior
+    // tuple survives, so a per-record upsert cannot survive an embedding-model swap. When
+    // `--force` is set, clear the entire embedding space in one transaction BEFORE the
+    // re-embed loop so the new tuple takes over cleanly. This is safe under --force
+    // because that mode's contract is "re-embed everything".
+    if (force) vault.clearAllEmbeddings();
     const counts = await backfillEmbeddings(vault, embed, parseLimit(args), force);
     io.out(renderReembedReport(counts));
     return 0;

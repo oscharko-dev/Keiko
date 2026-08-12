@@ -159,6 +159,31 @@ function withSidecarHardening<T>(opts: ResolvedOptions, write: () => T): T {
   }
 }
 
+// Atomic vault-wide clear for `keiko memory reembed --force` — the ONLY caller. Needed because
+// the embedding-row schema check rejects a new (provider, modelId, dimensions, metric) tuple
+// while any pre-existing row from the OLD tuple survives, so a per-record upsert cannot
+// survive an embedding-model swap. Clearing the space in one transaction before the re-embed
+// loop lets the new tuple take over cleanly. Extracted to keep buildEmbeddingOps under the
+// max-lines-per-function bar.
+function clearAllEmbeddingRows(db: DatabaseSync, opts: ResolvedOptions): void {
+  const ids = db.prepare("SELECT memory_id FROM embeddings").all() as {
+    readonly memory_id: string;
+  }[];
+  db.exec("BEGIN");
+  try {
+    for (const row of ids) {
+      deleteEmbeddingRow(db, row.memory_id as MemoryId);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  for (const row of ids) {
+    opts.emit({ kind: "embedding:deleted", memoryId: row.memory_id as MemoryId });
+  }
+}
+
 const SUPPRESSION_HMAC_KEY_NAME = "body-suppression-hmac-v1";
 const SUPPRESSION_HMAC_KEY_BYTES = 32;
 
@@ -611,6 +636,7 @@ type EdgeAndEmbeddingOps = Pick<
   | "deleteEdge"
   | "upsertEmbedding"
   | "deleteEmbedding"
+  | "clearAllEmbeddings"
   | "getEmbedding"
   | "getEmbeddings"
 >;
@@ -622,7 +648,7 @@ type EdgeOps = Pick<
 
 type EmbeddingOps = Pick<
   MemoryVaultStore,
-  "upsertEmbedding" | "deleteEmbedding" | "getEmbedding" | "getEmbeddings"
+  "upsertEmbedding" | "deleteEmbedding" | "clearAllEmbeddings" | "getEmbedding" | "getEmbeddings"
 >;
 
 type TombstoneAndAccessOps = Pick<
@@ -732,6 +758,11 @@ function buildEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EmbeddingOp
         if (deleteEmbeddingRow(db, memoryId)) {
           opts.emit({ kind: "embedding:deleted", memoryId });
         }
+      });
+    },
+    clearAllEmbeddings: (): void => {
+      withSidecarHardening(opts, () => {
+        clearAllEmbeddingRows(db, opts);
       });
     },
     getEmbedding: (memoryId: MemoryId): MemoryEmbeddingRow | undefined =>

@@ -357,7 +357,11 @@ export async function runInvestigateCli(
 // ProviderCredentialVaultError, …), so a bare "has a non-empty string code" predicate
 // misclassified every typed non-fs error as a file-read failure and told the operator to check
 // evidence paths that were perfectly fine. Narrow to the fs errno codes we actually see through
-// the workspace file reader (KEIKO-0464).
+// the workspace file reader (KEIKO-0464). Extended (PR-review follow-up) to cover I/O and
+// descriptor-exhaustion errors that also surface as legitimate read failures under load: EIO
+// (hardware/driver), ENFILE (system-wide fd cap), ETIMEDOUT (network filesystem), and EBUSY
+// (path temporarily in use). Domain-error codes stay excluded — they never begin with 'E'
+// followed by a POSIX errno name.
 const FS_READ_ERROR_CODES: ReadonlySet<string> = new Set([
   "ENOENT",
   "EACCES",
@@ -366,6 +370,10 @@ const FS_READ_ERROR_CODES: ReadonlySet<string> = new Set([
   "ELOOP",
   "ENAMETOOLONG",
   "EMFILE",
+  "ENFILE",
+  "EIO",
+  "ETIMEDOUT",
+  "EBUSY",
 ]);
 
 function isFileReadError(error: Error): boolean {

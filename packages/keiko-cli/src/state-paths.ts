@@ -691,7 +691,20 @@ function walkOwnedDir(
   scope: ScanScope,
   acc: ScanAccumulator,
 ): void {
-  for (const name of readdirSync(absDir)) {
+  // PR-review follow-up on KEIKO-0301: an owned subtree that vanishes between the parent's
+  // successful lstatSync and this readdirSync (a concurrent uninstall/rm) yields ENOENT for
+  // the whole subtree — a race, not an error state. Skip it so the surrounding repair /
+  // uninstall walk stays operable; anything else (EACCES, EIO) still propagates.
+  let entries: readonly string[];
+  try {
+    entries = readdirSync(absDir);
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  for (const name of entries) {
     classifyEntry(absDir, relDir, name, scope, acc);
   }
 }
