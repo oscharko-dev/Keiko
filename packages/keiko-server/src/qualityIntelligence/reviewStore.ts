@@ -1147,7 +1147,17 @@ export const migrateReviewStateForRegeneration = (
   const allApproved =
     input.allCandidateIds.length > 0 &&
     input.allCandidateIds.every((candidateId) => candidateStates[candidateId] === "approved");
-  if (allApproved) {
+  // PR-review follow-up on KEIKO-0344: a negative TERMINAL run-level decision on the previous
+  // artifact (rejected / withdrawn / changes-requested) never silently promotes to "approved"
+  // just because the migrated per-candidate states line up. Zero-drift regenerations must
+  // require an explicit governed transition on the new run; otherwise the run-level review
+  // stays "open" and the reviewer takes an action explicitly. Only when the previous run was
+  // itself approved (or open) do we preserve the derived "approved" outcome.
+  const previousBlocks =
+    QualityIntelligence.isTerminalReviewState(oldArtifact.runState) &&
+    oldArtifact.runState !== "approved";
+  const carryApproval = allApproved && !previousBlocks;
+  if (carryApproval) {
     migratedAudit.push(
       runApprovalPreservedAudit({
         now: input.now,
@@ -1159,7 +1169,7 @@ export const migrateReviewStateForRegeneration = (
   const next: QiReviewStateArtifact = {
     qiReviewSchemaVersion: QI_REVIEW_SCHEMA_VERSION,
     runId: input.newRunId,
-    runState: allApproved ? "approved" : "open",
+    runState: carryApproval ? "approved" : "open",
     candidateStates,
     auditLog: chainAuditLog(migratedAudit),
     lastUpdatedAt: input.now,

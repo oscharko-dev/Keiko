@@ -105,38 +105,56 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // comment-style non-representative or an odd continuation), scan every property-open line
 // and pick the STYLE that appears MOST OFTEN. If tabs vs spaces are mixed, fall back to
 // 2 spaces so a mis-detected width does not cause a whole-file reformat.
-function tallyIndentStyles(raw: string): Record<string, number> {
-  const styles: Record<string, number> = {};
+// PR-review follow-up on KEIKO-0503: don't count absolute indent DEPTH — a conventional
+// 2-space file with many nested scripts entries would report "4" (or "6", "8") as the
+// dominant depth and JSON.stringify would rewrite the whole file with a 4-space unit.
+// Split into two decisions:
+//   1. tabs vs spaces: majority of indented lines wins, threshold 2/3.
+//   2. width unit: greatest common divisor of all observed space depths, clamped to the
+//      shallowest observed depth (so `[2, 4, 6]` → 2, `[4, 8]` → 4, `[3]` → 3).
+// This mirrors the algorithm used by editorconfig-style detectors and is robust against
+// deep nesting overwhelming the top level.
+function detectIndentSignals(raw: string): {
+  readonly tab: number;
+  readonly spaceDepths: number[];
+} {
+  let tab = 0;
+  const spaceDepths: number[] = [];
   for (const match of raw.matchAll(/\r?\n([ \t]+)"/gu)) {
     const first = match[1];
     if (first === undefined || first.length === 0) continue;
-    const style = first.startsWith("\t") ? "\t" : String(first.length);
-    styles[style] = (styles[style] ?? 0) + 1;
+    if (first.startsWith("\t")) {
+      tab += 1;
+    } else {
+      spaceDepths.push(first.length);
+    }
   }
-  return styles;
+  return { tab, spaceDepths };
 }
 
-function dominantIndentStyle(entries: readonly [string, number][]): {
-  style: string;
-  count: number;
-} {
-  return entries.reduce((best, [style, count]) => (count > best.count ? { style, count } : best), {
-    style: "",
-    count: 0,
-  });
+function gcd(a: number, b: number): number {
+  while (b !== 0) {
+    [a, b] = [b, a % b];
+  }
+  return Math.max(a, 0);
+}
+
+function detectSpaceUnit(depths: readonly number[]): number {
+  if (depths.length === 0) return 2;
+  const unit = depths.reduce((acc, depth) => gcd(acc, depth), depths[0] ?? 0);
+  if (unit <= 0) return 2;
+  const minDepth = Math.min(...depths);
+  return Math.min(unit, minDepth);
 }
 
 function detectIndent(raw: string): string | number {
-  const entries = Object.entries(tallyIndentStyles(raw));
-  if (entries.length === 0) return 2;
-  const { style, count } = dominantIndentStyle(entries);
-  // Reject a plurality below two thirds — that means the file is genuinely inconsistent and
-  // any pick would reformat surrounding lines; default preserves the historic behaviour.
-  const total = entries.reduce((sum, [, tally]) => sum + tally, 0);
-  if (count * 3 < total * 2) return 2;
-  if (style === "\t") return "\t";
-  const width = Number(style);
-  return Number.isFinite(width) && width > 0 ? width : 2;
+  const { tab, spaceDepths } = detectIndentSignals(raw);
+  const total = tab + spaceDepths.length;
+  if (total === 0) return 2;
+  // Tabs vs spaces: whichever side holds a two-thirds plurality wins; otherwise default 2.
+  if (tab * 3 >= total * 2) return "\t";
+  if (spaceDepths.length * 3 < total * 2) return 2;
+  return detectSpaceUnit(spaceDepths);
 }
 
 function stringifyPackageJson(data: unknown, indent: string | number): string {
@@ -187,16 +205,15 @@ function writePackageJsonAtomically(packagePath: string, content: string): void 
   const tmpFile = join(tmpDir, "package.json");
   try {
     writeFileSync(tmpFile, content, "utf8");
-    renameSync(tmpFile, packagePath);
+    // PR-review follow-up: apply the preserved mode to the TEMP file BEFORE the rename so
+    // the replacement is published at its correct permissions atomically. Applying chmod
+    // AFTER the rename briefly widened access under the default umask. On POSIX, chmodSync
+    // failures are surfaced (a preservation failure now aborts the rewrite rather than
+    // silently widening the file's permissions).
     if (originalMode !== undefined && process.platform !== "win32") {
-      try {
-        chmodSync(packagePath, originalMode);
-      } catch {
-        // Best-effort: preserving the mode failed (read-only fs, ownership race). Do not
-        // roll back the rewrite over that — the atomic write itself already succeeded and
-        // the file is intact; the mode simply reverts to the current default.
-      }
+      chmodSync(tmpFile, originalMode);
     }
+    renameSync(tmpFile, packagePath);
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

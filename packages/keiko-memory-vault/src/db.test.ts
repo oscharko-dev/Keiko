@@ -218,6 +218,12 @@ describe("ordinary WAL concurrency (two live connections)", () => {
     parentPort.postMessage({ event: "opened" });
     parentPort.once("message", (msg) => {
       if (msg && msg.event === "attempt-write") {
+        // "attempt-started" is posted from a setImmediate callback so the sync .run() call
+        // happens on the SAME tick — the message flushes to the channel first, then the
+        // insert blocks. Main can therefore observe two distinct signals: the worker has
+        // started (attempt-started arrived) AND is still blocked (its done/error message
+        // has not arrived yet). No time-based coordination is needed.
+        parentPort.postMessage({ event: "attempt-started" });
         try {
           b.prepare("INSERT INTO memory_vault_secrets (name, value) VALUES (?, ?)").run(
             workerData.rowName,
@@ -257,25 +263,35 @@ describe("ordinary WAL concurrency (two live connections)", () => {
           });
         });
 
+        // Observable coordination replaces the sleep the reviewer flagged (PR-review follow-up
+        // on KEIKO-0212): wait for the worker's `attempt-started` message — posted immediately
+        // before its synchronous `.run()` — then verify the worker is STILL blocked (its
+        // done/error message has not yet arrived). Together those two conditions prove the
+        // worker is sitting inside SQLite's lock-wait BEFORE we release the lock; without them
+        // a sabotaged busy_timeout=0 would race past this check with `event: "error"`.
+        let terminal: { event: string; message?: string } | undefined;
         const donePromise = new Promise<{ event: string; message?: string }>((resolve) => {
           worker.on("message", (msg: { event: string; message?: string }) => {
-            if (msg.event === "done" || msg.event === "error") resolve(msg);
+            if (msg.event === "done" || msg.event === "error") {
+              terminal = msg;
+              resolve(msg);
+            }
           });
         });
 
-        // Tell the worker to attempt its INSERT. node:sqlite is synchronous, so once the worker
-        // processes this message its thread is fully blocked inside SQLite's lock wait until we
-        // COMMIT below (busy_timeout=5000 keeps it there rather than throwing). A short
-        // coordination wait lets the worker's message handler run, call INSERT, and be sitting
-        // inside SQLite's lock-wait BEFORE we release the lock — this is what proves the semantics
-        // are wait-then-succeed rather than "both handles happen to serialize because we commit
-        // before the worker even attempts INSERT". The wait is NOT a wall-clock threshold assertion
-        // (no `expect(elapsed).toBeLessThan(...)`); it exists to widen the window in which the
-        // worker's INSERT is actually blocked. If busy_timeout were 0 (KEIKO-0212 sabotage
-        // scenario), the worker's INSERT would surface SQLITE_BUSY during this window instead of
-        // waiting.
         worker.postMessage({ event: "attempt-write" });
-        await new Promise((resolve) => setTimeout(resolve, 250));
+        await new Promise<void>((resolve, reject) => {
+          const settle = setTimeout(() => {
+            reject(new Error("worker did not report attempt-started"));
+          }, 5_000);
+          worker.on("message", (msg: { event: string }) => {
+            if (msg.event === "attempt-started") {
+              clearTimeout(settle);
+              resolve();
+            }
+          });
+        });
+        expect(terminal, "worker unexpectedly settled before main COMMIT").toBeUndefined();
 
         a.exec("COMMIT");
 

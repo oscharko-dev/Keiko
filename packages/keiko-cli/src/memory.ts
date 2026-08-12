@@ -36,8 +36,9 @@ const USAGE = `Usage:
   keiko memory stats [--memory-dir PATH]      Print memory counts by status and scope.
   keiko memory diagnostics [--memory-dir PATH] [--evidence-dir PATH] [--last N]
                                               Print redacted local diagnostics JSON.
-  keiko memory reembed [--memory-dir PATH] [--limit N] [--config PATH]
-                                              Backfill embeddings for accepted memories lacking one.
+  keiko memory reembed [--memory-dir PATH] [--limit N] [--config PATH] [--force]
+                                              Backfill embeddings for accepted memories lacking one;
+                                              use --force to re-embed every accepted memory instead.
 
 Opens the local memory vault (default $KEIKO_MEMORY_DIR or the platform state dir; override with
 --memory-dir). \`maintain\` archives faded memories, expires un-reviewed faint proposals, forgets
@@ -298,8 +299,14 @@ async function embedOne(
   embed: MemoryEmbedder,
   record: MemoryRecord,
   counts: ReembedCounts,
+  force: boolean,
 ): Promise<void> {
-  if (vault.getEmbedding(record.id) !== undefined) {
+  // Default mode: skip records that already carry an embedding — that is the "backfill
+  // missing embeddings" contract from USAGE. --force overrides this to overwrite stale
+  // vectors (e.g., after an embedding-model swap or a content-hash mismatch surfaced by
+  // health-scan). PR-review follow-up on KEIKO-0440: the skip-only mode must not be the
+  // only mode; operators must still be able to refresh stale embeddings.
+  if (!force && vault.getEmbedding(record.id) !== undefined) {
     counts.skipped += 1;
     return;
   }
@@ -320,6 +327,7 @@ async function backfillEmbeddings(
   vault: MemoryVaultStore,
   embed: MemoryEmbedder,
   limit: number,
+  force: boolean,
 ): Promise<ReembedCounts> {
   // KEIKO-0440 (PR-review follow-up): the limit is the target COUNT of records the pass will
   // re-embed, not a cap on the scan window. Paginate over the accepted set and skip records
@@ -327,7 +335,8 @@ async function backfillEmbeddings(
   // record hidden behind newer already-embedded pages. `listMemoriesAcrossScopes` accepts an
   // offset alongside the limit, so we walk the accepted set page by page until either the
   // target is met or the store is exhausted. skipped/embedded/failed counts follow the same
-  // semantics as before.
+  // semantics as before. When `--force` is set, no records are skipped by presence-of-embedding,
+  // so the loop naturally treats every accepted memory as re-embed work.
   const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
   const scopes = vault.listMemoryScopes();
   const pageSize = Math.max(limit, 100);
@@ -342,7 +351,7 @@ async function backfillEmbeddings(
     if (page.length === 0) break;
     for (const record of page) {
       if (counts.embedded + counts.failed >= limit) break;
-      await embedOne(vault, embed, record, counts);
+      await embedOne(vault, embed, record, counts, force);
     }
     offset += page.length;
   }
@@ -375,7 +384,8 @@ async function reembed(
   }
   const vault = resolveVault(args, env, deps);
   try {
-    const counts = await backfillEmbeddings(vault, embed, parseLimit(args));
+    const force = args.includes("--force");
+    const counts = await backfillEmbeddings(vault, embed, parseLimit(args), force);
     io.out(renderReembedReport(counts));
     return 0;
   } finally {

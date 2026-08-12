@@ -13,6 +13,7 @@
 import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createDefaultChatCapability } from "@oscharko-dev/keiko-model-gateway";
 import { openProviderCredentialVault } from "@oscharko-dev/keiko-server/credential-vault";
 
 // The vault key is intentionally reused across every test suite that consumes this fixture. The
@@ -30,19 +31,19 @@ export const PROVIDER_CREDENTIALS_KEY = Buffer.alloc(
 /** A tmpdir with symlinks resolved once — vault path guards refuse any ancestor symlink. */
 export const REAL_TMPDIR = realpathSync(tmpdir());
 
-/** A single provider capability. `structuredOutput` mirrors the "-unstructured" naming test files rely on. */
+/**
+ * A single provider capability. Built via the production `createDefaultChatCapability` factory,
+ * then overridden with the scenario-specific fields the test files rely on (`structuredOutput`
+ * derived from the "-unstructured" naming convention, cost/latency class from the "-fast"
+ * suffix, and Test-flavoured metadata). PR-review follow-up on KEIKO-0130: importing the
+ * factory means a change to the capability contract or its defaults propagates automatically
+ * instead of leaving this fixture behind — the exact fixture-drift class §7 forbids.
+ */
 function defaultCapability(modelId: string): Record<string, unknown> {
+  const base = createDefaultChatCapability(modelId);
   return {
-    id: modelId,
-    kind: "chat",
-    // KEIKO-0520: kind:"chat" now requires contextWindow > 0 in gateway config validation.
-    // 4096 mirrors `createDefaultChatCapability`'s sensible default and is a plausible
-    // window for the reference gateway targets test files exercise.
-    contextWindow: 4096,
-    maxOutputTokens: 0,
-    toolCalling: true,
+    ...base,
     structuredOutput: !modelId.includes("unstructured"),
-    streaming: true,
     costClass: modelId.endsWith("-fast") ? "low" : "high",
     latencyClass: modelId.endsWith("-fast") ? "fast" : "standard",
     throughputHint: "test fixture",
