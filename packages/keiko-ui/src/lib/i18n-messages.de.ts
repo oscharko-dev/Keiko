@@ -339,6 +339,7 @@ export const DE_MESSAGES = {
   "window.type.notifications.title": "Benachrichtigungen",
   "window.type.notifications.desc": "Hinweise und Updates prüfen",
   "notifications.empty": "Noch keine Benachrichtigungen.",
+  "notifications.previewNotice": "Vorschau — noch keine Benachrichtigungsquelle verdrahtet",
   "automations.status.preview": "Vorschau",
   "plugins.mcp.previewHeader": "Vorschau — kein Server verbunden",
   "plugins.mcp.rowStatusPreview": "Vorschau",

@@ -328,6 +328,7 @@ export const EN_MESSAGES = {
   "window.type.notifications.title": "Notifications",
   "window.type.notifications.desc": "Review alerts & updates",
   "notifications.empty": "No notifications yet.",
+  "notifications.previewNotice": "Preview — no notification source is wired yet",
   "automations.status.preview": "Preview",
   "plugins.mcp.previewHeader": "Preview — no server wired",
   "plugins.mcp.rowStatusPreview": "Preview",
