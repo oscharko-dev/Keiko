@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import type {
   EditorM7CommandDefinition,
@@ -344,16 +344,7 @@ function ShortcutActions({
   readonly onRemove: () => void;
 }): ReactNode {
   if (recording) {
-    return (
-      <div className={styles.control}>
-        <button type="button" className={styles.button} onKeyDown={onCapture}>
-          {t("settings.keyboard.pressShortcut")}
-        </button>
-        <button type="button" className={styles.button} onClick={onCancel}>
-          {t("settings.keyboard.cancel")}
-        </button>
-      </div>
-    );
+    return <RecordingControls t={t} onCancel={onCancel} onCapture={onCapture} />;
   }
   return (
     <div className={styles.control}>
@@ -375,6 +366,40 @@ function ShortcutActions({
         onClick={onRemove}
       >
         {t("settings.keyboard.remove")}
+      </button>
+    </div>
+  );
+}
+
+// Own component so its mount effect fires once when recording starts and never again on
+// unrelated re-renders of the row (KEIKO-0472). Safari does not focus a <button> on click, so
+// relying on ambient click-to-focus loses the keystroke on that platform.
+function RecordingControls({
+  t,
+  onCancel,
+  onCapture,
+}: {
+  readonly t: I18nTranslate;
+  readonly onCancel: () => void;
+  readonly onCapture: (event: KeyboardEvent<HTMLButtonElement>) => void;
+}): ReactNode {
+  const pressButtonRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    const handle = requestAnimationFrame(() => pressButtonRef.current?.focus());
+    return () => cancelAnimationFrame(handle);
+  }, []);
+  return (
+    <div className={styles.control}>
+      <button
+        ref={pressButtonRef}
+        type="button"
+        className={styles.button}
+        onKeyDown={onCapture}
+      >
+        {t("settings.keyboard.pressShortcut")}
+      </button>
+      <button type="button" className={styles.button} onClick={onCancel}>
+        {t("settings.keyboard.cancel")}
       </button>
     </div>
   );
@@ -435,6 +460,12 @@ function handleCapture(args: {
 }): void {
   args.event.preventDefault();
   args.event.stopPropagation();
+  // Escape must cancel recording; capturing it as an 'Esc' override would trap the panel-wide
+  // Escape-to-close affordance behind whatever the last user pressed while a row was live (#2894).
+  if (args.event.key === "Escape") {
+    args.setRecordingId(null);
+    return;
+  }
   const binding = bindingFromKeyboardEvent(args.event.nativeEvent);
   if (binding === null) {
     args.setIssue("INVALID_INPUT");

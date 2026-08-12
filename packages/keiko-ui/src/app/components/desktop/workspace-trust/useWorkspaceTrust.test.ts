@@ -1,11 +1,14 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  WORKSPACE_MANIFEST_SCHEMA_VERSION,
   WORKSPACE_TRUST_SCHEMA_VERSION,
+  type WorkspaceManifest,
   type WorkspaceTrustStatus,
 } from "@oscharko-dev/keiko-contracts";
 import { ApiError } from "@/lib/api";
 import { WORKSPACE_TRUST_CHANGED_EVENT } from "@/lib/workspace-trust-api";
+import { WORKSPACE_MANIFEST_CHANGED_EVENT } from "@/lib/workspace-manifest-api";
 import { useWorkspaceTrust } from "./useWorkspaceTrust";
 
 const fetchStatus = vi.hoisted(() => vi.fn());
@@ -30,6 +33,39 @@ function status(
     reason: trust === "trusted" ? "human-grant" : "human-revocation",
     revision: 1,
   };
+}
+
+function identityDigestFor(path: string): string {
+  const hex = [...path]
+    .map((char) => char.codePointAt(0)?.toString(16).padStart(2, "0") ?? "00")
+    .join("");
+  return hex.padEnd(64, "0").slice(0, 64);
+}
+
+function rootRefFor(path: string): string {
+  const hex = [...path]
+    .map((char) => char.codePointAt(0)?.toString(16).padStart(2, "0") ?? "00")
+    .join("");
+  return `root-${hex.padEnd(40, "0").slice(0, 40)}`;
+}
+
+function manifestFor(roots: readonly string[]): WorkspaceManifest {
+  return {
+    kind: "workspace-manifest",
+    schemaVersion: WORKSPACE_MANIFEST_SCHEMA_VERSION,
+    workspaceId: "workspace-a",
+    manifestRef: "manifest-workspace-a",
+    revision: 1,
+    manifestDigest: "d".repeat(64),
+    focusedRootRef: rootRefFor(roots[0] ?? "none"),
+    roots: roots.map((canonicalRoot) => ({
+      rootRef: rootRefFor(canonicalRoot),
+      canonicalRoot,
+      displayName: canonicalRoot,
+      identityDigest: identityDigestFor(canonicalRoot),
+      sourceDigest: { outcome: "absent" },
+    })),
+  } as unknown as WorkspaceManifest;
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -115,6 +151,36 @@ describe("useWorkspaceTrust", () => {
     await act(async () => {
       window.dispatchEvent(
         new CustomEvent(WORKSPACE_TRUST_CHANGED_EVENT, { detail: { projectId: "/repo-a" } }),
+      );
+    });
+    await waitFor(() => expect(fetchStatus).toHaveBeenCalledTimes(2));
+  });
+
+  // KEIKO-0352: server can recompute trust as a side-effect of an unrelated manifest mutation, so
+  // the trust panel must re-fetch on WORKSPACE_MANIFEST_CHANGED_EVENT (filtered to this projectId)
+  // instead of waiting for the next WORKSPACE_TRUST_CHANGED_EVENT.
+  it("refreshes on a manifest-changed event that includes the tracked project root", async () => {
+    fetchStatus.mockResolvedValue(status("/repo-a"));
+    const view = renderHook(() => useWorkspaceTrust("/repo-a"));
+    await waitFor(() => expect(view.result.current.status).toBeDefined());
+    expect(fetchStatus).toHaveBeenCalledTimes(1);
+
+    // Foreign manifest (does not include /repo-a) must NOT trigger a refresh.
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent(WORKSPACE_MANIFEST_CHANGED_EVENT, {
+          detail: { manifest: manifestFor(["/repo-b"]) },
+        }),
+      );
+    });
+    expect(fetchStatus).toHaveBeenCalledTimes(1);
+
+    // Manifest that includes /repo-a triggers a re-fetch.
+    await act(async () => {
+      window.dispatchEvent(
+        new CustomEvent(WORKSPACE_MANIFEST_CHANGED_EVENT, {
+          detail: { manifest: manifestFor(["/repo-a", "/repo-b"]) },
+        }),
       );
     });
     await waitFor(() => expect(fetchStatus).toHaveBeenCalledTimes(2));

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -175,6 +176,43 @@ describe("KeyboardShortcutsPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Record" }));
 
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  // KEIKO-0345: Escape while recording must cancel, not be captured as an 'Esc' override.
+  it("cancels recording when Escape is pressed and does not persist an 'Esc' override", async () => {
+    const currentView = view();
+    renderPanel(currentView);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
+      target: { value: "Quick Access: files" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Record" }));
+    fireEvent.keyDown(screen.getByRole("button", { name: "Press shortcut" }), {
+      key: "Escape",
+      code: "Escape",
+    });
+
+    expect(currentView.setValue).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Record" })).toBeInTheDocument();
+    });
+  });
+
+  // KEIKO-0472: The capture button must receive focus explicitly, not via ambient click-to-focus
+  // (Safari does not focus a <button> on click). Blur first, then use fireEvent.click which does
+  // not perform the browser's own focus-follows-click side effect, mirroring Safari's behavior.
+  it("explicitly focuses the 'Press shortcut' button when entering recording mode", async () => {
+    renderPanel(view());
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Search keyboard shortcuts" }), {
+      target: { value: "Quick Access: files" },
+    });
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    fireEvent.click(screen.getByRole("button", { name: "Record" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Press shortcut" })).toHaveFocus();
+    });
   });
 
   it("restores focus to the record button after cancelling", async () => {

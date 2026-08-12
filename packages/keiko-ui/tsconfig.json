@@ -10,6 +10,7 @@
     "exactOptionalPropertyTypes": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
     "forceConsistentCasingInFileNames": true,
     "esModuleInterop": true,
     "allowJs": false,

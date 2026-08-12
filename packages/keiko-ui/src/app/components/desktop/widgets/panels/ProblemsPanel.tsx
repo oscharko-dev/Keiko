@@ -166,8 +166,13 @@ function ProblemRow(props: {
       }
       aria-label={
         canJump
-          ? t("problems.jumpTo", { file: problem.file, line: problem.line ?? 1 })
-          : `${problem.message} (${t("problems.noLocation")})`
+          ? t("problems.jumpToWithDetails", {
+              severity: t(SEVERITY_LABEL[problem.severity]),
+              message: problem.message,
+              file: problem.file,
+              line: problem.line ?? 1,
+            })
+          : `${t(SEVERITY_LABEL[problem.severity])}: ${problem.message} (${t("problems.noLocation")})`
       }
       style={{ ...ROW_BASE, cursor: canJump ? "pointer" : "default" }}
     >
