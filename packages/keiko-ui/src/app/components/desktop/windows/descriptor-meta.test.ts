@@ -63,7 +63,7 @@ describe("descriptor meta table — production assertion (epic #518 #528 / ADR-0
     expect(WIN_META.notifications.authority).toBe("read-only");
     expect(WIN_META.notifications.trustBoundary).toEqual(["ui"]);
     expect(WIN_META.notifications.lifecycle).toEqual(["live"]);
-    expect(WIN_META.notifications.persistence).toBe("transient");
+    expect(WIN_META.notifications.persistence).toBe("durable.ui");
   });
 
   it("pdf preview restores only a durable UI shell and crosses only the network boundary for session fetch", () => {
@@ -82,7 +82,7 @@ describe("descriptor meta table — production assertion (epic #518 #528 / ADR-0
     expect(WIN_META.mobile.lifecycle).toEqual(["live"]);
     expect(WIN_META.mobile.trustBoundary).toEqual(["ui"]);
     expect(WIN_META.mobile.authority).toBe("read-only");
-    expect(WIN_META.mobile.persistence).toBe("transient");
+    expect(WIN_META.mobile.persistence).toBe("durable.ui");
   });
 
   // KEIKO-0175 — PluginsPanel.tsx renders hardcoded MCP/connector fixture rows; its MCP toggle
@@ -96,7 +96,7 @@ describe("descriptor meta table — production assertion (epic #518 #528 / ADR-0
     expect(WIN_META.plugins.lifecycle).toEqual(["live"]);
     expect(WIN_META.plugins.trustBoundary).toEqual(["ui"]);
     expect(WIN_META.plugins.authority).toBe("read-only");
-    expect(WIN_META.plugins.persistence).toBe("transient");
+    expect(WIN_META.plugins.persistence).toBe("durable.ui");
   });
 
   // KEIKO-0158 — AutomationsPanel.tsx's per-row Toggle (role="switch", persisting to

@@ -198,7 +198,10 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     lifecycle: ["live"],
     trustBoundary: ["ui"],
     authority: "read-only",
-    persistence: "transient",
+    // Codex on PR #3089: the window itself is a normal tool window whose position/size the
+    // user arranges and must survive a reload; only its internal domain state is a placeholder.
+    // `transient` here would have sanitizeWindow drop the whole window from the restored layout.
+    persistence: "durable.ui",
   },
   // KEIKO-0158 — AutomationsPanel.tsx's per-row Toggle (role="switch", persisting to
   // localStorage key "keiko.automations.v1") was replaced with plain non-interactive
@@ -221,7 +224,9 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     lifecycle: ["live"],
     trustBoundary: ["ui"],
     authority: "read-only",
-    persistence: "transient",
+    // Codex on PR #3089: same as plugins/notifications above — the window is placement-persistent
+    // (durable.ui) even though the panel has no per-instance domain state to save.
+    persistence: "durable.ui",
   },
   inspector: {
     lifecycle: ["empty", "focused"],
@@ -239,7 +244,9 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     lifecycle: ["live"],
     trustBoundary: ["ui"],
     authority: "read-only",
-    persistence: "transient",
+    // Codex on PR #3089: keep the window placement-persistent so a reload preserves the user's
+    // arrangement; the panel body is a placeholder empty state but the WINDOW is normal.
+    persistence: "durable.ui",
   },
   resources: {
     lifecycle: ["live"],

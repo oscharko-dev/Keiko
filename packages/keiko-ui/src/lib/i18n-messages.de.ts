@@ -331,6 +331,7 @@ export const DE_MESSAGES = {
   "window.type.automations.desc": "Workflow-Automatisierungen",
   "window.type.mobile.title": "Keiko Mobile",
   "window.type.mobile.desc": "Mobiler Begleiter",
+  "mobile.previewNotice": "Vorschau — Kopplung noch nicht verdrahtet",
   "window.type.inspector.title": "Inspektor",
   "window.type.inspector.desc": "Arbeitsbereich inspizieren",
   "window.type.activity.title": "Aktivität",

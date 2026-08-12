@@ -320,6 +320,7 @@ export const EN_MESSAGES = {
   "window.type.automations.desc": "Workflow automations",
   "window.type.mobile.title": "Keiko Mobile",
   "window.type.mobile.desc": "Mobile companion",
+  "mobile.previewNotice": "Preview — no pairing is wired yet",
   "window.type.inspector.title": "Inspector",
   "window.type.inspector.desc": "Inspect the workspace",
   "window.type.activity.title": "Activity",
