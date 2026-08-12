@@ -1176,11 +1176,11 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     await user.click(await screen.findByRole("button", { name: "Branch: main" }));
     await user.click(screen.getByRole("menuitemradio", { name: /feat\/x/ }));
 
-    const dialog = screen.getByRole("dialog", { name: "Confirm branch switch" });
+    const dialog = screen.getByRole("alertdialog", { name: "Confirm branch switch" });
     expect(client.branchSwitch).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(client.branchSwitch).not.toHaveBeenCalled();
-    expect(screen.queryByRole("dialog", { name: "Confirm branch switch" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog", { name: "Confirm branch switch" })).not.toBeInTheDocument();
   });
 
   it("reconciles editor buffers exactly once after a successful branch switch", async () => {
@@ -1532,7 +1532,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
       />,
     );
     await user.click(await screen.findByRole("button", { name: "Run sync: Pull" }));
-    const dialog = screen.getByRole("dialog", { name: "Confirm pull" });
+    const dialog = screen.getByRole("alertdialog", { name: "Confirm pull" });
     expect(client.syncPreview).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: "Pull changes" }));
 

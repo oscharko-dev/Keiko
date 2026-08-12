@@ -135,6 +135,34 @@ function jumpRequest(root: string, problem: EditorProblem): OpenEditorFileReques
   return { root, path: problem.file, lineStart: problem.line ?? 1, lineEnd: problem.line ?? 1 };
 }
 
+// KEIKO-0268: aria-label composed from severity + message + location + jump affordance so both
+// canJump and non-canJump rows always surface severity and message in the accessible name.
+function problemRowAccessibleName(
+  problem: EditorProblem,
+  canJump: boolean,
+  t: ProblemsTranslate,
+): string {
+  const severity = t(SEVERITY_LABEL[problem.severity]);
+  if (canJump) {
+    return t("problems.jumpToWithDetails", {
+      severity,
+      message: problem.message,
+      file: problem.file,
+      line: problem.line ?? 1,
+    });
+  }
+  return `${severity}: ${problem.message} (${t("problems.noLocation")})`;
+}
+
+function activateOnEnterOrSpace(onActivate: () => void) {
+  return (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onActivate();
+    }
+  };
+}
+
 function ProblemRow(props: {
   readonly problem: EditorProblem;
   readonly focused: boolean;
@@ -154,26 +182,8 @@ function ProblemRow(props: {
       tabIndex={focused ? 0 : -1}
       onFocus={props.onFocus}
       onClick={canJump ? props.onActivate : undefined}
-      onKeyDown={
-        canJump
-          ? (event): void => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                props.onActivate();
-              }
-            }
-          : undefined
-      }
-      aria-label={
-        canJump
-          ? t("problems.jumpToWithDetails", {
-              severity: t(SEVERITY_LABEL[problem.severity]),
-              message: problem.message,
-              file: problem.file,
-              line: problem.line ?? 1,
-            })
-          : `${t(SEVERITY_LABEL[problem.severity])}: ${problem.message} (${t("problems.noLocation")})`
-      }
+      onKeyDown={canJump ? activateOnEnterOrSpace(props.onActivate) : undefined}
+      aria-label={problemRowAccessibleName(problem, canJump, t)}
       style={{ ...ROW_BASE, cursor: canJump ? "pointer" : "default" }}
     >
       <span style={{ color: SEVERITY_COLOR[problem.severity], fontWeight: 600, minWidth: "64px" }}>
@@ -242,6 +252,47 @@ function SourceFilterSelect(props: {
   );
 }
 
+function ProblemsListbox(props: {
+  readonly problems: readonly EditorProblem[];
+  readonly activeFocusId: string | null;
+  readonly openEditorFile: ((request: OpenEditorFileRequest) => OpenEditorFileResult) | undefined;
+  readonly t: ProblemsTranslate;
+  readonly rowRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
+  readonly setFocusId: (id: string) => void;
+  readonly onListKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
+  readonly onActivate: (problem: EditorProblem) => void;
+}): ReactNode {
+  const { problems, activeFocusId, openEditorFile, t, rowRefs, setFocusId, onListKeyDown } = props;
+  return (
+    <div
+      role="listbox"
+      aria-label={t("problems.title")}
+      aria-live="polite"
+      aria-relevant="additions"
+      data-testid="problems-list"
+      tabIndex={-1}
+      style={LIST_STYLE}
+      onKeyDown={onListKeyDown}
+    >
+      {problems.map((problem) => (
+        <ProblemRow
+          key={problem.id}
+          problem={problem}
+          focused={problem.id === activeFocusId}
+          canJump={openEditorFile !== undefined && problem.line !== undefined}
+          t={t}
+          rowRef={(node) => {
+            if (node === null) rowRefs.current.delete(problem.id);
+            else rowRefs.current.set(problem.id, node);
+          }}
+          onFocus={() => setFocusId(problem.id)}
+          onActivate={() => props.onActivate(problem)}
+        />
+      ))}
+    </div>
+  );
+}
+
 export function ProblemsPanel({ root, openEditorFile }: ProblemsPanelProps): ReactNode {
   const t = useProblemsTranslate();
   // Issue #2092 (epic-level fix-up) — problems are scoped per project root: a multi-window desktop
@@ -269,7 +320,6 @@ export function ProblemsPanel({ root, openEditorFile }: ProblemsPanelProps): Rea
     focusId !== null && visibleIds.includes(focusId) ? focusId : (visibleIds[0] ?? null);
 
   // Roving tabindex is only half of the APG pattern: keyboard movement must also move DOM focus.
-  // Keep refs keyed by stable problem id and focus after React commits the new active option.
   useEffect(() => {
     if (focusId !== null) rowRefs.current.get(focusId)?.focus();
   }, [focusId]);
@@ -279,7 +329,6 @@ export function ProblemsPanel({ root, openEditorFile }: ProblemsPanelProps): Rea
     openEditorFile(jumpRequest(root, problem));
   };
 
-  // The listbox container owns roving-tabindex movement; each option owns Enter/Space activation.
   const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     const next = nextFocusId(event.key, visibleIds, activeFocusId);
     if (next !== activeFocusId) {
@@ -288,58 +337,31 @@ export function ProblemsPanel({ root, openEditorFile }: ProblemsPanelProps): Rea
     }
   };
 
-  const emptyStateContent =
-    verificationSourceHealth === "healthy" ? (
-      <p data-testid="problems-empty">{t("problems.empty")}</p>
-    ) : null;
-
-  // #2723 (S3358): the allProblems/snapshot ternary chain nested a second ternary inside the
-  // first branch; extracted to a named render function that early-returns each state instead.
   const renderProblemsBody = (): ReactNode => {
-    if (allProblems.length === 0) return emptyStateContent;
+    if (allProblems.length === 0) {
+      return verificationSourceHealth === "healthy" ? (
+        <p data-testid="problems-empty">{t("problems.empty")}</p>
+      ) : null;
+    }
     if (snapshot.problems.length === 0) {
       return <p data-testid="problems-no-match">{t("problems.noMatch")}</p>;
     }
     return (
-      <div
-        role="listbox"
-        aria-label={t("problems.title")}
-        aria-live="polite"
-        aria-relevant="additions"
-        data-testid="problems-list"
-        tabIndex={-1}
-        style={LIST_STYLE}
-        onKeyDown={onListKeyDown}
-      >
-        {snapshot.problems.map((problem) => (
-          <ProblemRow
-            key={problem.id}
-            problem={problem}
-            focused={problem.id === activeFocusId}
-            canJump={openEditorFile !== undefined && problem.line !== undefined}
-            t={t}
-            rowRef={(node) => {
-              if (node === null) rowRefs.current.delete(problem.id);
-              else rowRefs.current.set(problem.id, node);
-            }}
-            onFocus={() => {
-              setFocusId(problem.id);
-            }}
-            onActivate={() => {
-              activate(problem);
-            }}
-          />
-        ))}
-      </div>
+      <ProblemsListbox
+        problems={snapshot.problems}
+        activeFocusId={activeFocusId}
+        openEditorFile={openEditorFile}
+        t={t}
+        rowRefs={rowRefs}
+        setFocusId={setFocusId}
+        onListKeyDown={onListKeyDown}
+        onActivate={activate}
+      />
     );
   };
 
   return (
     <section aria-label={t("problems.panelLabel")} style={PANEL_STYLE}>
-      {/* #2721 — the filter row groups two real form controls, so it is a <fieldset> (the element
-          that owns role="group") named by aria-label rather than a <legend>. The filter row sets
-          neither padding nor border, so NATIVE_FIELDSET_RESET_STYLE drops all four user-agent
-          defaults a <fieldset> arrives with. */}
       <fieldset
         aria-label={t("problems.filterGroup")}
         style={{ ...NATIVE_FIELDSET_RESET_STYLE, ...FILTER_ROW_STYLE }}

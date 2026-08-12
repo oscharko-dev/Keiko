@@ -385,8 +385,8 @@ function RecordingControls({
 }): ReactNode {
   const pressButtonRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
-    const handle = requestAnimationFrame(() => pressButtonRef.current?.focus());
-    return () => cancelAnimationFrame(handle);
+    const handle = requestAnimationFrame((): void => pressButtonRef.current?.focus());
+    return (): void => cancelAnimationFrame(handle);
   }, []);
   return (
     <div className={styles.control}>

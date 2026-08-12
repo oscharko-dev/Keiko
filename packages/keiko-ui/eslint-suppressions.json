@@ -1501,7 +1501,7 @@
   },
   "src/app/components/desktop/widgets/panels/KeyboardShortcutsPanel.tsx": {
     "max-lines-per-function": {
-      "count": 3
+      "count": 2
     }
   },
   "src/app/components/desktop/widgets/panels/ManagedLanguageSettings.test.tsx": {
@@ -1518,11 +1518,6 @@
     },
     "max-lines-per-function": {
       "count": 5
-    }
-  },
-  "src/app/components/desktop/widgets/panels/PluginsPanel.tsx": {
-    "max-lines-per-function": {
-      "count": 1
     }
   },
   "src/app/components/desktop/widgets/panels/ProblemsPanel.tsx": {

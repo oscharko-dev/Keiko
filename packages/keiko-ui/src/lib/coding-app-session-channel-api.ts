@@ -14,6 +14,16 @@ const CHANNEL_PATH = "/api/coding-workbench/app-session/channel";
 const CHANNEL_STREAM_PATH = `${CHANNEL_PATH}/stream`;
 const MAX_STREAM_BUFFER_CHARS = CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES * 2;
 
+// KEIKO-0308 — the server heartbeats this stream every 15s even when it has nothing to deliver
+// (packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts, `setInterval(..., 15_000)`
+// writing ": heartbeat\n\n"), specifically so a live client can tell "quiet" apart from "dead". That
+// guarantee only protects the client if something on this side actually notices silence — a stalled
+// or half-broken TCP connection leaves `reader.read()` pending forever otherwise. 45s is three missed
+// heartbeats: generous enough to absorb one dropped write, tight enough that the UI does not hang
+// indefinitely. Exported so the regression test can advance fake timers by this exact value instead
+// of restating it (AGENTS.md: a fixture derives from the production entry point, never restates it).
+export const STREAM_INACTIVITY_TIMEOUT_MS = 45_000;
+
 function channelValidator(path: string, value: unknown): CodingAppSessionChannelSnapshot {
   const result: CodingWorkbenchValidationResult<CodingAppSessionChannelSnapshot> =
     validateCodingAppSessionChannelSnapshot(value);
@@ -70,6 +80,40 @@ function streamError(status: number): ApiError {
   );
 }
 
+// KEIKO-0308 — distinct from `streamError`: the connection DID establish, so this is not "the
+// stream is unavailable" (which other callers may reasonably retry immediately) but "the stream
+// went quiet past the point the server's own heartbeat guarantee allows for". Kept as its own typed
+// ApiError code, behind the same typed error surface every other failure in this module uses.
+function streamStalledError(): ApiError {
+  return new ApiError(
+    "CODING_APP_SESSION_STREAM_STALLED",
+    "The authenticated activity stream stopped receiving data.",
+    504,
+  );
+}
+
+/**
+ * Races one `reader.read()` call against the inactivity timer. Resolves/rejects exactly like
+ * `reader.read()` when bytes (or EOF) arrive first — the timer is cleared in `finally` so a healthy
+ * read never leaves a stray timeout armed. On timeout, the reader is presumed dead: it is cancelled
+ * and the call rejects with a typed stall error instead of leaving the caller waiting forever.
+ * `consumeStream` calls this once per loop iteration, so a fresh timer guards every read — including
+ * the first — and is effectively cleared-and-recreated ("reset") on every chunk that arrives, since
+ * arrival is what makes the read that started the race resolve.
+ */
+function readWithInactivityGuard(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stall = new Promise<never>((_resolve, reject): void => {
+    timer = setTimeout((): void => {
+      reader.cancel().catch(() => undefined);
+      reject(streamStalledError());
+    }, STREAM_INACTIVITY_TIMEOUT_MS);
+  });
+  return Promise.race([reader.read(), stall]).finally(() => clearTimeout(timer));
+}
+
 async function consumeStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   input: CodingAppSessionStreamInput,
@@ -78,7 +122,7 @@ async function consumeStream(
   let buffer = "";
   try {
     while (!input.signal.aborted) {
-      const result = await reader.read();
+      const result = await readWithInactivityGuard(reader);
       buffer += decoder.decode(result.value, { stream: !result.done });
       buffer = deliverFrames(buffer, input.onSnapshot);
       if (buffer.length > MAX_STREAM_BUFFER_CHARS) throw streamError(502);

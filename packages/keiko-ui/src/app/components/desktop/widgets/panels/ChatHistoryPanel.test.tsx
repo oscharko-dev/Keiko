@@ -131,9 +131,9 @@ describe("ChatHistoryPanel", () => {
     const row = screen.getByText("Sprint triage").closest(".chat-history-row");
     expect(row).not.toBeNull();
     const scoped = row as HTMLElement;
-    await user.click(within(scoped).getByRole("button", { name: "Delete" }));
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Delete" }));
+    await user.click(within(scoped).getByRole("button", { name: /^Delete\b/ }));
+    expect(screen.getByRole("button", { name: /^Cancel\b/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^Delete\b/ }));
 
     await waitFor(() => expect(updateChat).toHaveBeenCalledWith("chat-1", { status: "closed" }));
     expect(replaceChat).toHaveBeenCalledWith({ ...chat, status: "closed" });
@@ -241,8 +241,8 @@ describe("ChatHistoryPanel", () => {
 
     const row = screen.getByText("Sprint triage").closest(".chat-history-row");
     expect(row).not.toBeNull();
-    await user.click(within(row as HTMLElement).getByRole("button", { name: "Delete" }));
-    await user.click(screen.getByRole("button", { name: "Delete" }));
+    await user.click(within(row as HTMLElement).getByRole("button", { name: /^Delete\b/ }));
+    await user.click(screen.getByRole("button", { name: /^Delete\b/ }));
 
     await waitFor(() => expect(updateChat).toHaveBeenCalledWith("chat-1", { status: "closed" }));
     expect(screen.getByRole("tab", { name: /active/i })).toHaveAttribute("aria-selected", "true");
@@ -267,9 +267,9 @@ describe("ChatHistoryPanel", () => {
     const user = userEvent.setup();
     renderPanel(makeSession({ chats: [makeChat({ status: "closed" })] }));
     await user.click(screen.getByRole("tab", { name: /deleted/i }));
-    await user.click(screen.getByRole("button", { name: "Delete permanently" }));
+    await user.click(screen.getByRole("button", { name: /^Delete .* permanently$/i }));
     expect(screen.getByText(/cannot be undone/i)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: /^Cancel\b/ }));
 
     expect(deleteChat).not.toHaveBeenCalled();
   });
@@ -280,8 +280,8 @@ describe("ChatHistoryPanel", () => {
     const user = userEvent.setup();
     renderPanel(makeSession({ chats: [chat], activeProject: makeProject("/repo") }));
     await user.click(screen.getByRole("tab", { name: /deleted/i }));
-    await user.click(screen.getByRole("button", { name: "Delete permanently" }));
-    await user.click(screen.getByRole("button", { name: "Confirm permanent delete" }));
+    await user.click(screen.getByRole("button", { name: /^Delete .* permanently$/i }));
+    await user.click(screen.getByRole("button", { name: /^Confirm permanent delete of/ }));
 
     await waitFor(() => expect(deleteChat).toHaveBeenCalledWith("chat-1", "/repo"));
     expect(notifyChatDeleted).toHaveBeenCalledWith("chat-1");
@@ -293,12 +293,12 @@ describe("ChatHistoryPanel", () => {
     const user = userEvent.setup();
     renderPanel(makeSession({ chats: [chat], activeProject: makeProject("/repo") }));
     await user.click(screen.getByRole("tab", { name: /deleted/i }));
-    await user.click(screen.getByRole("button", { name: "Delete permanently" }));
-    await user.click(screen.getByRole("button", { name: "Confirm permanent delete" }));
+    await user.click(screen.getByRole("button", { name: /^Delete .* permanently$/i }));
+    await user.click(screen.getByRole("button", { name: /^Confirm permanent delete of/ }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("disk busy");
     expect(notifyChatDeleted).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Confirm permanent delete" }));
+    await user.click(screen.getByRole("button", { name: /^Confirm permanent delete of/ }));
     await waitFor(() => expect(deleteChat).toHaveBeenCalledTimes(2));
     expect(notifyChatDeleted).toHaveBeenCalledWith("chat-1");
   });
@@ -324,11 +324,11 @@ describe("ChatHistoryPanel", () => {
     const user = userEvent.setup();
     renderPanel(makeSession({ chats: [chat], replaceChat }));
 
-    await user.click(screen.getByRole("button", { name: "Rename" }));
+    await user.click(screen.getByRole("button", { name: /^Rename\b/ }));
     const input = screen.getByDisplayValue("Old title");
     await user.clear(input);
     await user.type(input, "New title");
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: /^Save\b/ }));
 
     await waitFor(() => expect(updateChat).toHaveBeenCalledWith("chat-1", { title: "New title" }));
     expect(replaceChat).toHaveBeenCalledWith({ ...chat, title: "New title" });
@@ -370,10 +370,10 @@ describe("ChatHistoryPanel", () => {
     const user = userEvent.setup();
     renderPanel();
 
-    await user.click(screen.getByRole("button", { name: "Rename" }));
+    await user.click(screen.getByRole("button", { name: /^Rename\b/ }));
     const renameInput = screen.getByDisplayValue("Sprint triage");
     await user.clear(renameInput);
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: /^Save\b/ }));
 
     // Field must still be present and marked invalid — not silently dismissed.
     expect(renameInput).toBeInTheDocument();
@@ -385,10 +385,10 @@ describe("ChatHistoryPanel", () => {
     const user = userEvent.setup();
     renderPanel();
 
-    await user.click(screen.getByRole("button", { name: "Rename" }));
+    await user.click(screen.getByRole("button", { name: /^Rename\b/ }));
     const renameInput = screen.getByDisplayValue("Sprint triage");
     await user.clear(renameInput);
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: /^Save\b/ }));
 
     const describedById = renameInput.getAttribute("aria-describedby");
     expect(describedById).toBeTruthy();
@@ -401,10 +401,10 @@ describe("ChatHistoryPanel", () => {
     const user = userEvent.setup();
     renderPanel();
 
-    await user.click(screen.getByRole("button", { name: "Rename" }));
+    await user.click(screen.getByRole("button", { name: /^Rename\b/ }));
     const renameInput = screen.getByDisplayValue("Sprint triage");
     await user.clear(renameInput);
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    await user.click(screen.getByRole("button", { name: /^Save\b/ }));
 
     // Error is shown; now type to clear it.
     await user.type(renameInput, "x");
@@ -453,20 +453,20 @@ describe("ChatHistoryPanel", () => {
     const scoped = row as HTMLElement;
 
     // Activate Delete via keyboard (focus + Enter).
-    const deleteButton = within(scoped).getByRole("button", { name: "Delete" });
+    const deleteButton = within(scoped).getByRole("button", { name: /^Delete\b/ });
     deleteButton.focus();
     await user.keyboard("{Enter}");
 
     // Confirmation mode: focus lands on the destructive confirm Delete button.
-    const confirmDelete = within(scoped).getByRole("button", { name: "Delete" });
+    const confirmDelete = within(scoped).getByRole("button", { name: /^Delete\b/ });
     expect(confirmDelete).toHaveFocus();
-    expect(within(scoped).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(within(scoped).getByRole("button", { name: /^Cancel\b/ })).toBeInTheDocument();
 
     // Escape cancels the confirmation and restores the default row actions.
     await user.keyboard("{Escape}");
-    expect(within(scoped).queryByRole("button", { name: "Cancel" })).toBeNull();
-    expect(within(scoped).getByRole("button", { name: "Rename" })).toBeInTheDocument();
-    expect(within(scoped).getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    expect(within(scoped).queryByRole("button", { name: /^Cancel\b/ })).toBeNull();
+    expect(within(scoped).getByRole("button", { name: /^Rename\b/ })).toBeInTheDocument();
+    expect(within(scoped).getByRole("button", { name: /^Delete\b/ })).toBeInTheDocument();
     expect(updateChat).not.toHaveBeenCalled();
   });
 
@@ -476,11 +476,11 @@ describe("ChatHistoryPanel", () => {
     const user = userEvent.setup();
     renderPanel();
 
-    await user.click(screen.getByRole("button", { name: "Rename" }));
+    await user.click(screen.getByRole("button", { name: /^Rename\b/ }));
     const renameInput = screen.getByDisplayValue("Sprint triage");
     await user.clear(renameInput);
     await user.type(renameInput, "Changed title");
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: /^Cancel\b/ }));
 
     expect(screen.queryByDisplayValue("Changed title")).toBeNull();
     expect(screen.getByText("Sprint triage")).toBeInTheDocument();
@@ -496,11 +496,11 @@ describe("ChatHistoryPanel", () => {
     expect(row).not.toBeNull();
     const scoped = row as HTMLElement;
 
-    await user.click(within(scoped).getByRole("button", { name: "Delete" }));
-    await user.click(within(scoped).getByRole("button", { name: "Cancel" }));
+    await user.click(within(scoped).getByRole("button", { name: /^Delete\b/ }));
+    await user.click(within(scoped).getByRole("button", { name: /^Cancel\b/ }));
 
-    expect(within(scoped).queryByRole("button", { name: "Cancel" })).toBeNull();
-    expect(within(scoped).getByRole("button", { name: "Rename" })).toBeInTheDocument();
+    expect(within(scoped).queryByRole("button", { name: /^Cancel\b/ })).toBeNull();
+    expect(within(scoped).getByRole("button", { name: /^Rename\b/ })).toBeInTheDocument();
     expect(updateChat).not.toHaveBeenCalled();
   });
 
@@ -515,13 +515,13 @@ describe("ChatHistoryPanel", () => {
     expect(row).not.toBeNull();
     const scoped = row as HTMLElement;
 
-    await user.click(within(scoped).getByRole("button", { name: "Delete" }));
-    const confirmDelete = within(scoped).getByRole("button", { name: "Delete" });
+    await user.click(within(scoped).getByRole("button", { name: /^Delete\b/ }));
+    const confirmDelete = within(scoped).getByRole("button", { name: /^Delete\b/ });
     confirmDelete.focus();
     await user.keyboard("{Escape}");
 
-    expect(within(scoped).queryByRole("button", { name: "Cancel" })).toBeNull();
-    expect(within(scoped).getByRole("button", { name: "Rename" })).toBeInTheDocument();
+    expect(within(scoped).queryByRole("button", { name: /^Cancel\b/ })).toBeNull();
+    expect(within(scoped).getByRole("button", { name: /^Rename\b/ })).toBeInTheDocument();
     expect(updateChat).not.toHaveBeenCalled();
   });
 
@@ -535,25 +535,44 @@ describe("ChatHistoryPanel", () => {
     expect(row).not.toBeNull();
     const scoped = row as HTMLElement;
 
-    await user.click(within(scoped).getByRole("button", { name: "Delete" }));
-    const cancelButton = within(scoped).getByRole("button", { name: "Cancel" });
+    await user.click(within(scoped).getByRole("button", { name: /^Delete\b/ }));
+    const cancelButton = within(scoped).getByRole("button", { name: /^Cancel\b/ });
     cancelButton.focus();
     await user.keyboard("{Escape}");
 
-    expect(within(scoped).queryByRole("button", { name: "Cancel" })).toBeNull();
-    expect(within(scoped).getByRole("button", { name: "Rename" })).toBeInTheDocument();
+    expect(within(scoped).queryByRole("button", { name: /^Cancel\b/ })).toBeNull();
+    expect(within(scoped).getByRole("button", { name: /^Rename\b/ })).toBeInTheDocument();
     expect(updateChat).not.toHaveBeenCalled();
   });
 
   // #2723 (S3358): the "deleted" row-actions branch has its own Rename button (distinct
   // JSX from the default branch's Rename button already exercised above).
+  // KEIKO-0452: with more than one row visible, every action button's accessible name must be
+  // unique (include the chat title). Otherwise a screen-reader user cannot tell one Delete
+  // button from another — worst-case, the irreversible purge Delete.
+  it("gives every row-scoped action button a chat-scoped, unique accessible name", () => {
+    const chatA = makeChat({ id: "a", title: "Sprint triage" });
+    const chatB = makeChat({ id: "b", title: "Bug hunt" });
+    renderPanel(makeSession({ chats: [chatA, chatB] }));
+    const renameButtons = screen.getAllByRole("button", { name: /^Rename\b/ });
+    const deleteButtons = screen.getAllByRole("button", { name: /^Delete\b/ });
+    const renameNames = renameButtons.map((btn) => btn.getAttribute("aria-label"));
+    const deleteNames = deleteButtons.map((btn) => btn.getAttribute("aria-label"));
+    expect(new Set(renameNames).size).toBe(renameNames.length);
+    expect(new Set(deleteNames).size).toBe(deleteNames.length);
+    expect(renameNames).toEqual(expect.arrayContaining(["Rename Sprint triage", "Rename Bug hunt"]));
+    expect(deleteNames).toEqual(expect.arrayContaining(["Delete Sprint triage", "Delete Bug hunt"]));
+    expect(screen.getByRole("article", { name: "Sprint triage" })).toBeInTheDocument();
+    expect(screen.getByRole("article", { name: "Bug hunt" })).toBeInTheDocument();
+  });
+
   it("renames a deleted chat from its history row", async () => {
     const chat = makeChat({ status: "closed" });
     const user = userEvent.setup();
     renderPanel(makeSession({ chats: [chat] }));
 
     await user.click(screen.getByRole("tab", { name: /deleted/i }));
-    await user.click(screen.getByRole("button", { name: "Rename" }));
+    await user.click(screen.getByRole("button", { name: /^Rename\b/ }));
 
     expect(screen.getByDisplayValue("Sprint triage")).toBeInTheDocument();
   });

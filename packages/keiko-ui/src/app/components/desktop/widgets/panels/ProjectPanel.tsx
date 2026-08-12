@@ -122,6 +122,31 @@ interface ProjectHeadButtonProps {
   readonly onToggleExpanded: () => void;
 }
 
+function ProjectCaretButton({
+  project,
+  expanded,
+  onToggleExpanded,
+}: {
+  readonly project: ProjectWithAvailability;
+  readonly expanded: boolean;
+  readonly onToggleExpanded: () => void;
+}): ReactNode {
+  return (
+    <button
+      className="proj-caret-btn"
+      type="button"
+      tabIndex={-1}
+      aria-hidden="true"
+      aria-label={`${expanded ? "Collapse" : "Expand"} ${project.name}`}
+      onClick={onToggleExpanded}
+    >
+      <span className="proj-caret" data-open={expanded} aria-hidden="true">
+        <ChevronRIcon size={13} />
+      </span>
+    </button>
+  );
+}
+
 // KEIKO-0262: the head-button click activates (opens the project), the sibling caret button
 // toggles expansion only. ArrowRight/ArrowLeft on the treeitem dispatches to the caret, so
 // keyboard-only expansion never fires openProject (which discards the composer draft).
@@ -136,25 +161,17 @@ function ProjectHeadButton({
 }: ProjectHeadButtonProps): ReactNode {
   const clearRovingTabindex = (): void => {
     if (treeRef.current === null) return;
-    const items = getTreeItems(treeRef.current);
-    items.forEach((item) => {
+    getTreeItems(treeRef.current).forEach((item) => {
       item.tabIndex = -1;
     });
   };
   return (
     <div className="proj-head-row">
-      <button
-        className="proj-caret-btn"
-        type="button"
-        tabIndex={-1}
-        aria-hidden="true"
-        aria-label={`${expanded ? "Collapse" : "Expand"} ${project.name}`}
-        onClick={onToggleExpanded}
-      >
-        <span className="proj-caret" data-open={expanded} aria-hidden="true">
-          <ChevronRIcon size={13} />
-        </span>
-      </button>
+      <ProjectCaretButton
+        project={project}
+        expanded={expanded}
+        onToggleExpanded={onToggleExpanded}
+      />
       <button
         className="proj-head"
         type="button"

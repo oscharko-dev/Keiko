@@ -62,6 +62,33 @@ describe("descriptor meta table — production assertion (epic #518 #528 / ADR-0
     expect(WIN_META.pdfCitationPreview.authority).toBe("user-confirm");
   });
 
+  // KEIKO-0175 — MobilePanel.tsx (packages/keiko-ui/.../widgets/panels/MobilePanel.tsx) is a
+  // ~21-line static component: no pairing state, no network call, no persisted config. The
+  // descriptor previously claimed lifecycle [paired, unpaired, error], a network trust boundary,
+  // and durable.config persistence — none of which the component's source backs.
+  it("mobile descriptor matches MobilePanel's static shape — no network boundary, no durable persistence", () => {
+    expect(WIN_META.mobile.trustBoundary).not.toContain("network");
+    expect(WIN_META.mobile.persistence).not.toBe("durable.config");
+    expect(WIN_META.mobile.lifecycle).toEqual(["live"]);
+    expect(WIN_META.mobile.trustBoundary).toEqual(["ui"]);
+    expect(WIN_META.mobile.authority).toBe("read-only");
+    expect(WIN_META.mobile.persistence).toBe("transient");
+  });
+
+  // KEIKO-0175 — PluginsPanel.tsx renders hardcoded MCP/connector fixture rows; its MCP toggle
+  // flips only ephemeral in-memory React state (no localStorage call, unlike AutomationsPanel's
+  // verified `localStorage.setItem(STORE_KEY, ...)`), and no install/uninstall flow exists. The
+  // descriptor previously claimed an "installed" lifecycle state and durable.config persistence —
+  // neither of which any call site in PluginsPanel backs.
+  it("plugins descriptor matches PluginsPanel's placeholder shape — no network boundary, no durable persistence", () => {
+    expect(WIN_META.plugins.trustBoundary).not.toContain("network");
+    expect(WIN_META.plugins.persistence).not.toBe("durable.config");
+    expect(WIN_META.plugins.lifecycle).toEqual(["live"]);
+    expect(WIN_META.plugins.trustBoundary).toEqual(["ui"]);
+    expect(WIN_META.plugins.authority).toBe("read-only");
+    expect(WIN_META.plugins.persistence).toBe("transient");
+  });
+
   it("Coding Workbench config exposes supervised and autonomous preview states", () => {
     const stateField = WIN_TYPES.coding.config?.find((field) => field.key === "state");
 

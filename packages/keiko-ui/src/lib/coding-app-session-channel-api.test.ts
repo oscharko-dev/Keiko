@@ -4,6 +4,7 @@ import type { CodingAppSessionChannelSnapshot } from "@oscharko-dev/keiko-contra
 import {
   getCodingAppSessionChannelSnapshot,
   streamCodingAppSessionChannelSnapshots,
+  STREAM_INACTIVITY_TIMEOUT_MS,
 } from "./coding-app-session-channel-api";
 
 const AT = "2026-07-19T12:00:00.000Z";
@@ -179,5 +180,100 @@ describe("coding app-session channel API", () => {
       code: "CODING_APP_SESSION_STREAM_UNAVAILABLE",
       status: 502,
     });
+  });
+});
+
+// KEIKO-0308 — a stalled or half-broken TCP connection can leave `reader.read()` pending forever;
+// the server-emitted heartbeat (every 15s, see codingAppSessionRoutes.ts) only protects the client
+// if something here actually notices silence. These tests pin: (a) no bytes at all — heartbeat or
+// snapshot — for longer than STREAM_INACTIVITY_TIMEOUT_MS aborts the reader and rejects with a typed
+// error, and (b) heartbeat-only chunks reset the clock, so a quiet-but-alive stream is never
+// mistaken for a dead one.
+describe("KEIKO-0308 — stream inactivity guard", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  // Hand-rolled fake reader (mirrors quality-intelligence-api.test.ts's makeStreamResponse): a real
+  // ReadableStream cannot have its chunk timing driven deterministically by fake timers, and the
+  // "never resolves" case cannot be expressed as a real stream at all.
+  function fakeReaderResponse(read: ReturnType<typeof vi.fn>): {
+    response: Response;
+    cancel: ReturnType<typeof vi.fn>;
+  } {
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const reader = {
+      read,
+      cancel,
+      releaseLock: vi.fn(),
+    } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+    const response = {
+      ok: true,
+      status: 200,
+      body: { getReader: () => reader } as unknown as ReadableStream<Uint8Array>,
+    } as unknown as Response;
+    return { response, cancel };
+  }
+
+  it("aborts a stalled stream and rejects with a typed error after the inactivity threshold", async () => {
+    vi.useFakeTimers();
+    // Never resolves — the exact "stalled or half-broken TCP connection" symptom from KEIKO-0308.
+    const read = vi.fn(() => new Promise<ReadableStreamReadResult<Uint8Array>>(() => {}));
+    const { response, cancel } = fakeReaderResponse(read);
+
+    const promise = streamCodingAppSessionChannelSnapshots({
+      signal: new AbortController().signal,
+      onSnapshot: vi.fn(),
+      fetchImpl: vi.fn().mockResolvedValue(response),
+    });
+    // Attach the rejection expectation BEFORE advancing time so it is a real handler, not a race
+    // against an unhandled-rejection warning.
+    const assertion = expect(promise).rejects.toMatchObject({
+      code: "CODING_APP_SESSION_STREAM_STALLED",
+      status: 504,
+    });
+
+    await vi.advanceTimersByTimeAsync(STREAM_INACTIVITY_TIMEOUT_MS + 1);
+    await assertion;
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("resets the inactivity timer on every heartbeat-only chunk instead of aborting", async () => {
+    vi.useFakeTimers();
+    const encoder = new TextEncoder();
+    // Each chunk arrives just under the threshold; only a broken (non-resetting) guard would abort.
+    const interval = STREAM_INACTIVITY_TIMEOUT_MS - 5_000;
+    const heartbeatCount = 5;
+    let calls = 0;
+    const read = vi.fn(
+      () =>
+        new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => {
+          setTimeout(() => {
+            calls += 1;
+            if (calls > heartbeatCount) {
+              resolve({ done: true });
+              return;
+            }
+            resolve({ done: false, value: encoder.encode(": heartbeat\n\n") });
+          }, interval);
+        }),
+    );
+    const { response } = fakeReaderResponse(read);
+    const onSnapshot = vi.fn();
+
+    const promise = streamCodingAppSessionChannelSnapshots({
+      signal: new AbortController().signal,
+      onSnapshot,
+      fetchImpl: vi.fn().mockResolvedValue(response),
+    });
+
+    // Cumulatively far past the threshold (5 * 40s = 200s vs. a 45s threshold) — only correct
+    // per-chunk resets, not a fixed one-shot timer, could let this reach a clean finish.
+    await vi.advanceTimersByTimeAsync(interval * (heartbeatCount + 1));
+
+    await expect(promise).resolves.toBeUndefined();
+    expect(onSnapshot).not.toHaveBeenCalled();
+    expect(read).toHaveBeenCalledTimes(heartbeatCount + 1);
   });
 });

@@ -189,11 +189,16 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "read-only",
     persistence: "transient",
   },
+  // KEIKO-0175 — PluginsPanel renders hardcoded MCP/connector fixture rows; the MCP toggle
+  // flips only ephemeral in-memory React state (no localStorage / server call, unlike
+  // AutomationsPanel's real `localStorage.setItem`), and no install/uninstall flow exists. This
+  // matches the fully static "placeholder" shape (WindowsRegistry status: "placeholder"), the
+  // same one used by the resources window.
   plugins: {
-    lifecycle: ["idle", "installed", "disabled", "enabled"],
+    lifecycle: ["live"],
     trustBoundary: ["ui"],
-    authority: "user",
-    persistence: "durable.config",
+    authority: "read-only",
+    persistence: "transient",
   },
   automations: {
     lifecycle: ["idle", "enabled", "disabled"],
@@ -201,11 +206,15 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user",
     persistence: "durable.config",
   },
+  // KEIKO-0175 — MobilePanel is a ~21-line static component: no pairing state, no network call,
+  // no persisted config (see packages/keiko-ui/src/app/components/desktop/widgets/panels/
+  // MobilePanel.tsx). This matches the fully static "placeholder" shape (WindowsRegistry status:
+  // "placeholder"), the same one used by the resources window.
   mobile: {
-    lifecycle: ["paired", "unpaired", "error"],
-    trustBoundary: ["ui", "network"],
-    authority: "user-confirm",
-    persistence: "durable.config",
+    lifecycle: ["live"],
+    trustBoundary: ["ui"],
+    authority: "read-only",
+    persistence: "transient",
   },
   inspector: {
     lifecycle: ["empty", "focused"],

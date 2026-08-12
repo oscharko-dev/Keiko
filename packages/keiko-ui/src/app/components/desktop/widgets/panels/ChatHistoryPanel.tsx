@@ -252,12 +252,18 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
   // into one small renderer per branch so each stays well under the 50-line limit. Each
   // renderer closes over the row action handlers above (a closure over per-row state
   // passed as params, not the whole component) so every call site stays flat.
+  // KEIKO-0452: every row-scoped action button carries an accessible name that includes the
+  // chat title, so no two rows' Rename/Delete/Save/Cancel/Restore/purge buttons share an
+  // accessible name (which would leave a screen-reader user unable to distinguish which
+  // Delete they're about to trigger — worst-case, the irreversible purge Delete). aria-label
+  // wins over visible text; visible copy stays terse.
   const renderEditingRowActions = (chat: Chat, busy: boolean): ReactNode => (
     <>
       <button
         type="button"
         className="lk-btn lk-btn-primary"
         disabled={busy}
+        aria-label={`Save ${chat.title}`}
         onClick={() => void commitRename(chat)}
       >
         Save
@@ -266,6 +272,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
         type="button"
         className="lk-btn lk-btn-ghost"
         disabled={busy}
+        aria-label={`Cancel ${chat.title}`}
         onClick={() => {
           setEditingId(null);
           setRenameError(null);
@@ -294,6 +301,11 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
         type="button"
         className="lk-btn lk-btn-danger"
         disabled={busy}
+        aria-label={
+          deleted
+            ? `Confirm permanent delete of ${chat.title}`
+            : `Delete ${chat.title}`
+        }
         onClick={() => void (deleted ? purgeChat(chat) : moveToTrash(chat))}
         onKeyDown={(event) => {
           if (event.key === "Escape") setDeleteConfirmId(null);
@@ -305,6 +317,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
         type="button"
         className="lk-btn lk-btn-ghost"
         disabled={busy}
+        aria-label={`Cancel ${chat.title}`}
         onClick={() => setDeleteConfirmId(null)}
         onKeyDown={(event) => {
           if (event.key === "Escape") setDeleteConfirmId(null);
@@ -321,18 +334,25 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
         type="button"
         className="lk-btn lk-btn-primary"
         disabled={busy}
+        aria-label={`Restore ${chat.title}`}
         onClick={() => void restoreChat(chat)}
       >
         <RestoreIcon size={14} />
         Restore
       </button>
-      <button type="button" className="lk-btn lk-btn-ghost" onClick={() => startRename(chat)}>
+      <button
+        type="button"
+        className="lk-btn lk-btn-ghost"
+        aria-label={`Rename ${chat.title}`}
+        onClick={() => startRename(chat)}
+      >
         Rename
       </button>
       <button
         type="button"
         className="lk-btn lk-btn-danger"
         disabled={busy}
+        aria-label={`Delete ${chat.title} permanently`}
         onClick={() => {
           setDeleteConfirmId(chat.id);
           setEditingId(null);
@@ -345,12 +365,18 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
 
   const renderDefaultRowActions = (chat: Chat): ReactNode => (
     <>
-      <button type="button" className="lk-btn lk-btn-ghost" onClick={() => startRename(chat)}>
+      <button
+        type="button"
+        className="lk-btn lk-btn-ghost"
+        aria-label={`Rename ${chat.title}`}
+        onClick={() => startRename(chat)}
+      >
         Rename
       </button>
       <button
         type="button"
         className="lk-btn lk-btn-ghost"
+        aria-label={`Delete ${chat.title}`}
         onClick={() => {
           setDeleteConfirmId(chat.id);
           setEditingId(null);
@@ -471,6 +497,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
                 className="chat-history-row"
                 data-chat-id={chat.id}
                 data-state={deleted ? "deleted" : "active"}
+                aria-label={chat.title}
               >
                 <div className="chat-history-row-main">
                   {editing ? (
