@@ -395,6 +395,8 @@ export const EN_MESSAGES = {
   "workspace.connect.connected": "Connected",
   "workspace.connect.connectedWith": "Connected: {label}",
   "palette.description": "Pick a card to add to your workspace",
+  "palette.placeholder": "Preview",
+  "palette.placeholderLabel": "Preview surface — not a working feature yet",
   "newWindow.title": "New {label} window",
   "newWindow.open": "Open {label}",
   "newWindow.empty": "Add a new {label} window to your workspace.",

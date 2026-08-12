@@ -406,6 +406,8 @@ export const DE_MESSAGES = {
   "workspace.connect.connected": "Verbunden",
   "workspace.connect.connectedWith": "Verbunden: {label}",
   "palette.description": "Wähle eine Karte für deinen Arbeitsbereich",
+  "palette.placeholder": "Vorschau",
+  "palette.placeholderLabel": "Vorschauoberfläche — noch nicht funktionsfähig",
   "newWindow.title": "Neues {label}-Fenster",
   "newWindow.open": "{label} öffnen",
   "newWindow.empty": "Füge deinem Arbeitsbereich ein neues {label}-Fenster hinzu.",

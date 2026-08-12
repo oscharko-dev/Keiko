@@ -22,7 +22,10 @@ export function WorktreeMutationConfirmDialog({
   onConfirm,
 }: WorktreeMutationConfirmDialogProps): ReactNode {
   const t = useOptionalWidgetTranslate();
-  const dialogRef = useRef<HTMLDialogElement>(null);
+  // KEIKO-0228: drop the native <dialog open> shell — it advertised aria-modal="true" without any
+  // of the modality machinery showModal() promises (jsdom does not implement showModal at all).
+  // Use the div+role="alertdialog"+useDialogTabTrap pattern the three sibling dialogs already ship.
+  const dialogRef = useRef<HTMLDivElement>(null);
   useDialogTabTrap(dialogRef);
   useModalInteractionLock({ initialFocusRef: dialogRef });
   const branchSwitch = request.kind === "branch-switch";
@@ -41,22 +44,15 @@ export function WorktreeMutationConfirmDialog({
   }, [onCancel]);
 
   const dialog = (
-    <dialog
-      open
+    <div
       ref={dialogRef}
+      role="alertdialog"
       aria-modal="true"
       aria-label={label}
       tabIndex={-1}
       style={{
         position: "fixed",
         inset: 0,
-        width: "auto",
-        height: "auto",
-        maxWidth: "none",
-        maxHeight: "none",
-        margin: 0,
-        padding: 0,
-        border: 0,
         zIndex: 100,
         display: "grid",
         placeItems: "center",
@@ -95,7 +91,7 @@ export function WorktreeMutationConfirmDialog({
           </button>
         </div>
       </section>
-    </dialog>
+    </div>
   );
   return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
 }

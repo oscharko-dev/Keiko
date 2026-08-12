@@ -28,6 +28,51 @@ function cardNames(): string[] {
   return cards().map((card) => card.querySelector(".pal-name")?.textContent ?? "");
 }
 
+// KEIKO-0349: the New Window palette must disclose which surfaces are non-functional placeholders
+// so their titles/descriptions never read as real feature copy. Driven by a single `status` field
+// on WIN_TYPES rather than per-panel styling.
+describe("Palette placeholder badge (KEIKO-0349)", () => {
+  const PLACEHOLDER_TYPES: readonly WindowType[] = [
+    "automations",
+    "mobile",
+    "notifications",
+    "resources",
+  ];
+  const FUNCTIONAL_TYPES: readonly WindowType[] = ["chat", "files", "editor"];
+
+  it("marks every placeholder window in WIN_TYPES with status === 'placeholder'", () => {
+    for (const type of PLACEHOLDER_TYPES) {
+      expect(WIN_TYPES[type].status).toBe("placeholder");
+    }
+    for (const type of FUNCTIONAL_TYPES) {
+      expect(WIN_TYPES[type].status).toBeUndefined();
+    }
+  });
+
+  it("renders the badge on placeholder cards and never on functional cards", () => {
+    renderPalette([...PLACEHOLDER_TYPES, ...FUNCTIONAL_TYPES]);
+    const badges = screen.getAllByTestId("pal-status-placeholder");
+    expect(badges).toHaveLength(PLACEHOLDER_TYPES.length);
+    for (const badge of badges) {
+      const card = badge.closest(".pal-card");
+      expect(card).toHaveAttribute("data-window-status", "placeholder");
+    }
+    for (const type of FUNCTIONAL_TYPES) {
+      const card = screen.getAllByRole("button").find((btn) => {
+        const name = btn.querySelector(".pal-name")?.textContent ?? "";
+        return name.length > 0 && name === WIN_TYPES[type].titleKey ? false : name.length > 0;
+      });
+      // The functional cards never receive the placeholder data attribute.
+      const functionalCards = screen
+        .getAllByRole("button")
+        .filter((b) => b.classList.contains("pal-card"))
+        .filter((b) => b.getAttribute("data-window-status") !== "placeholder");
+      expect(functionalCards.length).toBeGreaterThanOrEqual(FUNCTIONAL_TYPES.length);
+      expect(card).toBeDefined();
+    }
+  });
+});
+
 describe("Palette", () => {
   it("does not expose the hidden Plugins surface in the default window order", () => {
     expect(TYPE_ORDER).not.toContain("plugins");

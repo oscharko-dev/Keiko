@@ -247,6 +247,38 @@ describe("ProjectPanel", () => {
     expect(projectItem).toHaveAttribute("aria-expanded", "true");
   });
 
+  // KEIKO-0262: ArrowRight (expand) and ArrowLeft (collapse) must never activate the project —
+  // otherwise the user's composer draft is silently discarded on any keyboard tree navigation.
+  it("ArrowRight/ArrowLeft toggle expansion without calling openProject", async () => {
+    const user = userEvent.setup();
+    const openProject = vi.fn();
+    const otherProject: ProjectWithAvailability = {
+      path: "/workspace/other",
+      name: "OtherProject",
+      favorite: false,
+      createdAt: 3,
+      lastOpenedAt: 4,
+      available: true,
+    };
+    render(
+      <ChatSessionProvider
+        value={{ ...session(), openProject, projects: [session().projects[0]!, otherProject] }}
+      >
+        <ProjectPanel />
+      </ChatSessionProvider>,
+    );
+    const other = screen.getByRole("treeitem", { name: /OtherProject/ });
+    other.focus();
+    expect(other).toHaveAttribute("aria-expanded", "false");
+
+    await user.keyboard("{ArrowRight}");
+    expect(other).toHaveAttribute("aria-expanded", "true");
+    await user.keyboard("{ArrowLeft}");
+    expect(other).toHaveAttribute("aria-expanded", "false");
+
+    expect(openProject).not.toHaveBeenCalled();
+  });
+
   // handleTreeKey guards: non-registered keys don't crash, non-treeitem targets are ignored.
   it("ignores non-tree navigation keys (PA-03)", async () => {
     const user = userEvent.setup();
