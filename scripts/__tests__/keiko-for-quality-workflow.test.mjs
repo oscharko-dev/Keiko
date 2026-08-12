@@ -34,13 +34,17 @@ function jobSource(name) {
 
 function runScript(name) {
   const step = stepSource(name);
-  const marker = "        run: |\n";
-  const start = step.indexOf(marker);
-  expect(start, `${name} run block`).toBeGreaterThanOrEqual(0);
-  return step
-    .slice(start + marker.length)
-    .split("\n")
-    .map((line) => line.replace(/^ {10}/u, ""))
+  const marker = /^( +)run: \|\n/mu.exec(step);
+  expect(marker, `${name} run block`).not.toBeNull();
+  const scriptIndent = (marker?.[1].length ?? 0) + 2;
+  const scriptStart = (marker?.index ?? 0) + (marker?.[0].length ?? 0);
+  const lines = step.slice(scriptStart).split("\n");
+  const end = lines.findIndex(
+    (line) => line.length > 0 && (line.match(/^ */u)?.[0].length ?? 0) < scriptIndent,
+  );
+  return lines
+    .slice(0, end === -1 ? undefined : end)
+    .map((line) => line.slice(Math.min(scriptIndent, line.length)))
     .join("\n");
 }
 
@@ -84,16 +88,19 @@ ${script}
       PR_NUMBER: "3092",
     },
   });
-  const output = result.status === 0 ? readFileSync(outputPath, "utf8") : "";
-  rmSync(directory, { force: true, recursive: true });
-  return { output, status: result.status, stderr: result.stderr };
+  try {
+    const output = result.status === 0 ? readFileSync(outputPath, "utf8") : "";
+    return { output, status: result.status, stderr: result.stderr };
+  } finally {
+    rmSync(directory, { force: true, recursive: true });
+  }
 }
 
-function runReviewHeadGate(currentHead) {
+function runReviewHeadGate(currentHead, { failFetch = false } = {}) {
   const script = runScript("Fetch candidate head as Git objects");
   const harness = `
 git() {
-  if [ "$1" = "fetch" ]; then return 0; fi
+  if [ "$1" = "fetch" ]; then [ "\${FAIL_FETCH}" != "true" ]; return; fi
   if [ "$1" = "rev-parse" ]; then printf '%s\\n' "\${CURRENT_HEAD}"; return 0; fi
   return 1
 }
@@ -105,6 +112,7 @@ ${script}
       ...process.env,
       CURRENT_HEAD: currentHead,
       EXPECTED_HEAD: "a".repeat(40),
+      FAIL_FETCH: String(failFetch),
       PR_NUMBER: "3092",
     },
   });
@@ -175,5 +183,9 @@ describe("Keiko for Quality production workflow", () => {
     );
     expect(runReviewHeadGate("a".repeat(40)).status).toBe(0);
     expect(runReviewHeadGate("b".repeat(40)).status).not.toBe(0);
+    expect(runReviewHeadGate("").status).not.toBe(0);
+    expect(runReviewHeadGate("not-a-sha").status).not.toBe(0);
+    expect(runReviewHeadGate('$(printf "hostile")').status).not.toBe(0);
+    expect(runReviewHeadGate("a".repeat(40), { failFetch: true }).status).not.toBe(0);
   });
 });
