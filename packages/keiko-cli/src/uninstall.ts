@@ -100,6 +100,8 @@ export interface UninstallCliDeps {
   readonly homedir?: () => string;
   readonly isProcessAlive?: (pid: number) => boolean;
   readonly killProcess?: (pid: number, signal?: NodeJS.Signals | 0) => void;
+  // #KEIKO-0422: injected so tests can drive the post-SIGTERM wait deterministically.
+  readonly sleep?: (ms: number) => Promise<void>;
 }
 
 interface RawUninstallArgs {
@@ -193,6 +195,11 @@ interface ResolvedDeps {
   readonly homedir: () => string;
   readonly isProcessAlive: (pid: number) => boolean;
   readonly killProcess: (pid: number, signal?: NodeJS.Signals | 0) => void;
+  readonly sleep: (ms: number) => Promise<void>;
+}
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolveWait) => setTimeout(resolveWait, ms));
 }
 
 function resolveDeps(deps: UninstallCliDeps): ResolvedDeps {
@@ -201,17 +208,41 @@ function resolveDeps(deps: UninstallCliDeps): ResolvedDeps {
     homedir: deps.homedir ?? defaultHomedir,
     isProcessAlive: deps.isProcessAlive ?? defaultIsProcessAlive,
     killProcess: deps.killProcess ?? process.kill.bind(process),
+    sleep: deps.sleep ?? defaultSleep,
   };
+}
+
+const SERVER_STOP_POLL_INTERVAL_MS = 100;
+const SERVER_STOP_BUDGET_MS = 10_000;
+
+// #KEIKO-0422: poll `deps.isProcessAlive` on a bounded schedule (100ms interval, 10s
+// budget) so state removal never races with a still-shutting-down UI. Returns whether
+// the process is confirmed dead. `deps.sleep` yields to the event loop so tests can
+// control timing without a busy-wait.
+async function waitForProcessExit(
+  pid: number,
+  deps: Pick<ResolvedDeps, "isProcessAlive" | "sleep">,
+): Promise<boolean> {
+  const deadline = Date.now() + SERVER_STOP_BUDGET_MS;
+  while (deps.isProcessAlive(pid)) {
+    if (Date.now() >= deadline) return false;
+    await deps.sleep(SERVER_STOP_POLL_INTERVAL_MS);
+  }
+  return true;
 }
 
 // Returns "ok" to proceed, or "refused" when state removal is requested while the UI is
 // running and `--force` was not given (removing live state would orphan the process).
-function ensureServerStoppable(
+// #KEIKO-0422: after SIGTERM, wait (bounded) for the process to exit before returning
+// "ok" — a signalled UI still checkpointing SQLite WAL / rewriting ui.log/ui.pid while
+// the uninstaller unlinks would leave a half-removed install and trigger ENOTEMPTY at
+// rmdirSync.
+async function ensureServerStoppable(
   opts: UninstallOptions,
   io: CliIo,
   deps: ResolvedDeps,
   stateDir: string,
-): "ok" | "refused" {
+): Promise<"ok" | "refused"> {
   if (!opts.scopes.state) return "ok";
   const probe = classifyPid(join(stateDir, "ui.pid"), deps.isProcessAlive);
   if (probe.state !== "running" || probe.pid === undefined) return "ok";
@@ -230,6 +261,13 @@ function ensureServerStoppable(
     deps.killProcess(probe.pid, "SIGTERM");
   } catch {
     // Process already exited between the probe and the signal — nothing to stop.
+  }
+  const exited = await waitForProcessExit(probe.pid, deps);
+  if (!exited) {
+    io.err(
+      `keiko uninstall: Keiko UI (pid ${String(probe.pid)}) did not stop within the wait budget; state was not removed.\n`,
+    );
+    return "refused";
   }
   return "ok";
 }
@@ -474,12 +512,12 @@ function printPackageGuidance(io: CliIo, deps: ResolvedDeps): void {
   io.out("  yarn remove @oscharko-dev/keiko  •  pnpm remove @oscharko-dev/keiko  (yarn / pnpm)\n");
 }
 
-export function runUninstallCli(
+export async function runUninstallCli(
   args: readonly string[],
   io: CliIo,
   env: EnvSource,
   deps: UninstallCliDeps = {},
-): number {
+): Promise<number> {
   const resolved = resolveDeps(deps);
   const opts = parseUninstallArgs(args, resolved.cwd);
   if (opts === "help") {
@@ -494,7 +532,10 @@ export function runUninstallCli(
   const stateRoot = inspectStateRoot(stateDir);
   if (refuseUnsafeStateRoot(opts, io, stateRoot)) return 1;
   try {
-    if (ensureServerStoppable(opts, io, resolved, stateDir) === "refused") return 1;
+    // #KEIKO-0422: ensureServerStoppable is now async — it waits (bounded) for the
+    // signalled UI to exit before returning "ok", so state removal never races with a
+    // still-shutting-down process.
+    if ((await ensureServerStoppable(opts, io, resolved, stateDir)) === "refused") return 1;
     const launcherRefused = removeLaunchersStep(opts, io, resolved, stateDir);
     removeScriptsStep(opts, io);
     removePortableManagedStep(opts, io, env, stateDir, resolved.homedir());

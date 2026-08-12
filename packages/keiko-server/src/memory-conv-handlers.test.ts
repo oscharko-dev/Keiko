@@ -9,7 +9,7 @@
 // with the MemoriaViva routes (#211) and is already covered by routes.test.ts.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -95,7 +95,7 @@ afterEach(() => {
 });
 
 function makeVault(): MemoryVaultStore {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-conv-mem-"));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-conv-mem-"));
   tmpDirs.push(dir);
   const vault = createMemoryVault({ memoryDir: dir, redactString: (s) => s });
   activeVaults.push(vault);
@@ -113,7 +113,7 @@ function registerChat(
   deps: UiHandlerDeps,
   label = "memory-conversation",
 ): { projectPath: string; chatId: string } {
-  const projectPath = mkdtempSync(join(tmpdir(), `keiko-conv-chat-${label}-`));
+  const projectPath = mkdtempSync(join(realpathSync(tmpdir()), `keiko-conv-chat-${label}-`));
   tmpDirs.push(projectPath);
   mkdirSync(projectPath, { recursive: true });
   deps.store.createProject(projectPath, label);

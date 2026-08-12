@@ -1,4 +1,5 @@
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -451,7 +452,7 @@ async function waitForPhase(phase: UpdateSession["phase"]): Promise<UpdateSessio
 }
 
 beforeEach(async () => {
-  staticRoot = await mkdtemp(join(tmpdir(), "keiko-update-integration-"));
+  staticRoot = await mkdtemp(join(realpathSync(tmpdir()), "keiko-update-integration-"));
 });
 
 afterEach(async () => {

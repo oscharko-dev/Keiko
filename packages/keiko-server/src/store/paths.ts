@@ -21,12 +21,18 @@ function isInsideRuntimeStateRoot(path: string, workspaceRoot: string): boolean 
   return resolved === runtimeRoot || resolved.startsWith(`${runtimeRoot}${sep}`);
 }
 
+// Walk every ancestor from dirname(path) up to the filesystem root and return true as soon as ANY
+// existing ancestor is a symlink. Do NOT short-circuit at the first existing directory: a real
+// subdirectory pre-created inside a symlinked target would otherwise defeat the guard, because the
+// walk would see the real subdirectory (not a symlink) at the first-existing position and never
+// inspect the shallower symlinked ancestor. Audit KEIKO-0478; parity fix with
+// packages/keiko-memory-vault/src/paths.ts.
 function hasSymlinkAncestor(path: string): boolean {
   let current = dirname(path);
   const root = parse(current).root;
   while (current !== root) {
-    if (existsSync(current)) {
-      return lstatSync(current).isSymbolicLink();
+    if (existsSync(current) && lstatSync(current).isSymbolicLink()) {
+      return true;
     }
     current = dirname(current);
   }

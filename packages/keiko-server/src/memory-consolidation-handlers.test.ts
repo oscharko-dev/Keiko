@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { Socket, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -89,7 +89,7 @@ afterEach(() => {
 });
 
 function makeVault(): MemoryVaultStore {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-consolidation-mem-"));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-consolidation-mem-"));
   tmpDirs.push(dir);
   const vault = createMemoryVault({ memoryDir: dir, redactString: (s) => s });
   activeVaults.push(vault);
@@ -424,7 +424,7 @@ describe("memory consolidation job handlers", () => {
       throw new Error(rawFailure);
     });
 
-    const staticRoot = mkdtempSync(join(tmpdir(), "keiko-consolidation-static-"));
+    const staticRoot = mkdtempSync(join(realpathSync(tmpdir()), "keiko-consolidation-static-"));
     tmpDirs.push(staticRoot);
     const serverDeps = {
       staticRoot,

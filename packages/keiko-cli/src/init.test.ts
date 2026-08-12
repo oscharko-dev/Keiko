@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -123,5 +123,74 @@ describe("runInitCli", () => {
 
     expect(code).toBe(1);
     expect(c.err()).toContain("package.json not found");
+  });
+
+  it("preserves 4-space indentation instead of reformatting the whole file to 2 spaces", () => {
+    // #KEIKO-0503 must-fail-before-fix: stringifyPackageJson used to hardcode
+    // `JSON.stringify(data, null, 2)`, so a package.json indented with 4 spaces was
+    // re-emitted with 2 spaces regardless of the source. After the fix, the file's
+    // existing indentation is detected from the raw source and reused for the write,
+    // producing a minimal diff that adds the two scripts and leaves everything else
+    // (including the indent width of untouched lines) byte-identical.
+    const root = mkdtempSync(join(tmpdir(), "keiko-init-4space-"));
+    tempRoots.push(root);
+    const packagePath = join(root, "package.json");
+    const fourSpaceContent = `{
+    "name": "target-project",
+    "version": "1.0.0",
+    "scripts": {
+        "test": "vitest run"
+    }
+}
+`;
+    writeFileSync(packagePath, fourSpaceContent, "utf8");
+    const c = makeIo();
+
+    const code = runInitCli([], c.io, {}, { cwd: root });
+
+    expect(code).toBe(0);
+    const written = readFileSync(packagePath, "utf8");
+    // Existing 4-space-indented fields keep their indentation width.
+    expect(written).toMatch(/^ {4}"name":/mu);
+    expect(written).toMatch(/^ {4}"version":/mu);
+    // Nested script entries keep the 8-space indent that follows from the outer 4-space width.
+    expect(written).toMatch(/^ {8}"test":/mu);
+    expect(written).toMatch(/^ {8}"keiko:start":/mu);
+    // The file must never regress to the pre-fix 2-space output.
+    expect(written).not.toMatch(/^ {2}"name":/mu);
+  });
+
+  it("preserves tab indentation instead of reformatting to 2 spaces", () => {
+    // #KEIKO-0503: same guarantee for a tab-indented file — the whole file must not
+    // switch to space indentation just because `keiko init` added two scripts.
+    const root = mkdtempSync(join(tmpdir(), "keiko-init-tab-"));
+    tempRoots.push(root);
+    const packagePath = join(root, "package.json");
+    const tabContent = '{\n\t"name": "target-project",\n\t"version": "1.0.0"\n}\n';
+    writeFileSync(packagePath, tabContent, "utf8");
+    const c = makeIo();
+
+    const code = runInitCli([], c.io, {}, { cwd: root });
+
+    expect(code).toBe(0);
+    const written = readFileSync(packagePath, "utf8");
+    expect(written).toMatch(/^\t"name":/mu);
+    expect(written).toMatch(/^\t"scripts":/mu);
+    expect(written).not.toMatch(/^ {2}"name":/mu);
+  });
+
+  it("writes package.json atomically and leaves no .keiko-init-* temp dir behind", () => {
+    // #KEIKO-0503 must-fail-before-fix: writeFileSync was a truncate-then-write; a
+    // crash between truncate and write could leave the project's package.json
+    // truncated. After the fix, the write goes through mkdtemp -> write -> rename
+    // and cleans up the temp dir even on the success path.
+    const root = makeTempPackage({ name: "target-project", version: "1.0.0" });
+    const c = makeIo();
+
+    const code = runInitCli([], c.io, {}, { cwd: root });
+
+    expect(code).toBe(0);
+    const leftovers = readdirSync(root).filter((name) => name.startsWith(".keiko-init-"));
+    expect(leftovers).toEqual([]);
   });
 });

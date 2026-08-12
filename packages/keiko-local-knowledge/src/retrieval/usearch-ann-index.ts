@@ -314,14 +314,31 @@ function approvedRuntimeFor(targetKey: string): Readonly<UsearchRuntimeApproval>
   return approval;
 }
 
-function targetRuntime(
-  binaryPath: string | undefined,
-):
+type TargetRuntimeResult =
   | { readonly path: string; readonly sha256: string; readonly expectedVersion: string }
   | "unavailable"
-  | "invalid" {
-  const targetKey = usearchRuntimeTargetKey(process.platform, process.arch);
-  if (targetKey === undefined) return "unavailable";
+  | "invalid";
+
+interface CachedTargetRuntime {
+  readonly result: TargetRuntimeResult;
+  readonly mtimeMs: number;
+  readonly size: number;
+}
+
+// KEIKO-0409: memoize targetRuntime per resolved (path, mtimeMs, size) so a warm search
+// call does not re-read + SHA-256 the multi-MB native addon on the Node.js event loop for
+// every request. The runtime-availability check STAYS BEFORE the in-memory index cache
+// (a swapped-out binary must never be masked by a stale cache hit), and the SHA-256 still
+// runs whenever a fresh binary lands or the file changes on disk.
+const TARGET_RUNTIME_CACHE = new Map<string, CachedTargetRuntime>();
+
+// Test-only: clear the memoization so a fresh test can observe the cold-path hashing without
+// depending on previous tests' cache state. Production code never calls this.
+export function __resetTargetRuntimeCacheForTests(): void {
+  TARGET_RUNTIME_CACHE.clear();
+}
+
+function resolvedRuntimePath(binaryPath: string | undefined, targetKey: string): string {
   const approval = approvedRuntimeFor(targetKey);
   const portablePath =
     process.platform === "darwin"
@@ -330,11 +347,16 @@ function targetRuntime(
   const defaultPath = existsSync(portablePath)
     ? portablePath
     : resolve(process.cwd(), ".usearch", approval.version, targetKey, "usearch.node");
-  const path = binaryPath ?? process.env.KEIKO_USEARCH_BINARY_PATH ?? defaultPath;
-  if (!existsSync(path)) return "unavailable";
+  return binaryPath ?? process.env.KEIKO_USEARCH_BINARY_PATH ?? defaultPath;
+}
+
+function verifyRuntimeAt(path: string): TargetRuntimeResult {
   try {
     const stat = statSync(path);
     if (!stat.isFile()) return "invalid";
+    const targetKey = usearchRuntimeTargetKey(process.platform, process.arch);
+    if (targetKey === undefined) return "unavailable";
+    const approval = approvedRuntimeFor(targetKey);
     const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
     return digest === approval.binarySha256
       ? { path, sha256: digest, expectedVersion: approval.version }
@@ -342,6 +364,26 @@ function targetRuntime(
   } catch {
     return "invalid";
   }
+}
+
+function targetRuntime(binaryPath: string | undefined): TargetRuntimeResult {
+  const targetKey = usearchRuntimeTargetKey(process.platform, process.arch);
+  if (targetKey === undefined) return "unavailable";
+  const path = resolvedRuntimePath(binaryPath, targetKey);
+  if (!existsSync(path)) return "unavailable";
+  let stat;
+  try {
+    stat = statSync(path);
+  } catch {
+    return "invalid";
+  }
+  const cached = TARGET_RUNTIME_CACHE.get(path);
+  if (cached?.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    return cached.result;
+  }
+  const result = verifyRuntimeAt(path);
+  TARGET_RUNTIME_CACHE.set(path, { result, mtimeMs: stat.mtimeMs, size: stat.size });
+  return result;
 }
 
 function isUsearchWorkerMessage(value: unknown): value is UsearchWorkerMessage {
@@ -626,19 +668,23 @@ async function resolvedIndex(
   request: UsearchAnnSearchRequest,
 ): Promise<SearchIndex | UsearchAnnSearchResult> {
   const threshold = request.exactScanThreshold ?? DEFAULT_EXACT_SCAN_THRESHOLD;
-  if (request.partition.rowCount > threshold) {
-    const runtime = targetRuntime(request.binaryPath);
-    if (runtime === "unavailable") return { ok: false, reason: "runtime-unavailable" };
-    if (runtime === "invalid") return { ok: false, reason: "runtime-integrity-failed" };
-  }
   const maxBytes = Math.min(
     request.maxIndexBytes ?? DEFAULT_MAX_INDEX_BYTES,
     DEFAULT_MAX_INDEX_BYTES,
   );
+  if (request.partition.rowCount > threshold) {
+    // KEIKO-0409: the runtime-availability check runs first so a swapped-out or missing
+    // native addon can never be masked by a stale in-memory index cache. The SHA-256
+    // cost that motivated the finding is neutralised by memoization inside targetRuntime()
+    // (keyed on the resolved (path, mtimeMs, size)), so a warm hit no longer re-reads the
+    // multi-MB addon on the Node.js event loop.
+    const runtime = targetRuntime(request.binaryPath);
+    if (runtime === "unavailable") return { ok: false, reason: "runtime-unavailable" };
+    if (runtime === "invalid") return { ok: false, reason: "runtime-integrity-failed" };
+  }
   const cached = cachedIndex(request, maxBytes);
-  return (
-    cached ?? (await enqueueIndexBuild(request, request.partition.rowCount <= threshold, maxBytes))
-  );
+  if (cached !== undefined) return cached;
+  return await enqueueIndexBuild(request, request.partition.rowCount <= threshold, maxBytes);
 }
 
 function allIndexes(rowCount: number): readonly number[] {

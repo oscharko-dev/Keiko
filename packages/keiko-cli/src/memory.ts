@@ -305,6 +305,13 @@ async function backfillEmbeddings(
   });
   const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
   for (const record of accepted) {
+    // KEIKO-0440: honour the "for accepted memories lacking one" contract in USAGE and the
+    // command header — a record that already carries an embedding is skipped, not re-embedded,
+    // so the pass is O(missing) provider calls instead of O(all accepted) on every invocation.
+    if (vault.getEmbedding(record.id) !== undefined) {
+      counts.skipped += 1;
+      continue;
+    }
     const input = await embed(record.body);
     if (input === null) {
       counts.failed += 1;

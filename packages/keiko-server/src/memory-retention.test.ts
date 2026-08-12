@@ -3,7 +3,7 @@
 // per-reason histogram. Pinned-immunity has a dedicated test.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
@@ -33,7 +33,7 @@ const SCOPE: MemoryScope = { kind: "user", userId: USER_ID };
 let tmpDir = "";
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "keiko-mem-retention-"));
+  tmpDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-mem-retention-"));
 });
 
 afterEach(() => {

@@ -287,6 +287,66 @@ describe("Quality Intelligence model policy defaults", () => {
       },
     });
   });
+
+  // GEN-GATE-DISCOVERY-001: contextWindow===0 is a runtime-discovered placeholder, not a real
+  // "smallest" capacity. It must compare EQUAL to any other value on this tie-break term so an
+  // unenriched capability is not silently deprioritised below any nonzero declared window.
+  // parseGatewayConfig fails-closed on chat capabilities with contextWindow<=0 (audit KEIKO-0520),
+  // so these cases construct a GatewayConfig directly with an unenriched capability injected via
+  // the config.capabilities lookup path — the same surface a discovery/runtime injection would
+  // reach in production. The sort semantics under test live in modelSelection.ts, not in parse.
+  function configWithCapabilities(
+    modelIds: readonly string[],
+    capabilities: readonly ModelCapability[],
+  ): ReturnType<typeof parseGatewayConfig> {
+    return {
+      providers: modelIds.map((id) => ({
+        modelId: id,
+        baseUrl: "https://fake.example.com/v1",
+        apiKey: "fake-key",
+      })),
+      circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000, halfOpenProbes: 1 },
+      capabilities,
+    } as unknown as ReturnType<typeof parseGatewayConfig>;
+  }
+
+  it("treats contextWindow:0 as equal to any other value on the generation tie-break", () => {
+    const deps = depsWith(
+      configWithCapabilities(
+        ["a-unenriched", "b-large"],
+        [
+          capability("a-unenriched", { contextWindow: 0 }),
+          capability("b-large", { contextWindow: 128_000 }),
+        ],
+      ),
+    );
+
+    expect(recommendQiModelPolicy(deps).testDesignModelId).toBe("a-unenriched");
+  });
+
+  it("treats contextWindow:0 as equal to any other value on the judge tie-break", () => {
+    const deps = depsWith(
+      configWithCapabilities(
+        ["gen-cheap", "judge-unenriched", "judge-large"],
+        [
+          // Force judge selection to differ from generation by making generation the cheapest/
+          // fastest option and letting compareJudgeDefault break the tie on the contextWindow term.
+          capability("gen-cheap", {
+            contextWindow: 200_000,
+            costClass: "low",
+            latencyClass: "fast",
+          }),
+          capability("judge-unenriched", { contextWindow: 0 }),
+          capability("judge-large", { contextWindow: 128_000 }),
+        ],
+      ),
+    );
+
+    // Generation picks the cheapest/fastest ("gen-cheap"); judge avoids the generation model
+    // and falls back to compareJudgeDefault. With contextWindow:0 treated as equal, the tie
+    // breaks on index — "judge-unenriched" appears earlier in the list.
+    expect(recommendQiModelPolicy(deps).judgeModelId).toBe("judge-unenriched");
+  });
 });
 
 // Issue #810: multimodal selection routes a vision stage to a configured image-input model BY

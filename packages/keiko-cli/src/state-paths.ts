@@ -15,6 +15,8 @@ import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
+import { assertRealpathContained } from "./launcher-paths.js";
+import { LauncherError } from "./launcher-platforms.js";
 
 export const DEFAULT_STATE_DIR_NAME = ".keiko";
 export const DEFAULT_UI_STATE_SUBDIR = "ui";
@@ -58,6 +60,54 @@ export function resolveStateDir(cwd: string, env: EnvSource, stateDirArg?: strin
       ? stateDirArg
       : (env.KEIKO_STATE_DIR ?? DEFAULT_STATE_DIR_NAME);
   return isAbsolute(value) ? value : resolve(cwd, value);
+}
+
+// Home-contained variant of `resolveStateDir` (#KEIKO-0330). When the state dir comes
+// from an explicit `--state-dir` argument or `KEIKO_STATE_DIR`, its resolved realpath
+// MUST live under the user's homedir; the default `<cwd>/.keiko` fallback is trusted
+// (the user owns their own cwd). Refusing violates a fail-closed contract with the
+// operator: without this guard, an attacker who can plant the env var (wrapper script
+// in PATH, dev-container `.env`, exported in a parent shell) can steer the pid file
+// (fed to `process.kill`) and the append-mode log file to any user-writable path.
+// Callers that need the raw (unchecked) resolution stay on `resolveStateDir`; every
+// path that ends up mkdir-ing / writing / spawning the state dir must go through this
+// helper. Shared by `keiko launcher` (launcher.ts) and `keiko start|stop|status|restart`
+// (lifecycle.ts) — see ADR-0024 §9 / #125 audit findings F4.
+export function resolveContainedStateDir(
+  cwd: string,
+  env: EnvSource,
+  home: string,
+  stateDirArg?: string,
+): string {
+  const explicit = explicitStateDirSource(env, stateDirArg);
+  if (explicit === undefined) return resolve(cwd, DEFAULT_STATE_DIR_NAME);
+  const resolved = isAbsolute(explicit.value) ? explicit.value : resolve(cwd, explicit.value);
+  try {
+    assertRealpathContained(home, resolved);
+  } catch (e) {
+    if (e instanceof LauncherError && e.code === "PATH_ESCAPE") {
+      throw new LauncherError(
+        "STATE_DIR_ESCAPE",
+        `keiko: ${explicit.source} ${explicit.value} resolves outside the user's home directory (${home}); refusing to proceed.`,
+      );
+    }
+    throw e;
+  }
+  return resolved;
+}
+
+function explicitStateDirSource(
+  env: EnvSource,
+  stateDirArg?: string,
+): { readonly source: string; readonly value: string } | undefined {
+  if (stateDirArg !== undefined && stateDirArg.length > 0) {
+    return { source: "--state-dir", value: stateDirArg };
+  }
+  const fromEnv = env.KEIKO_STATE_DIR ?? process.env.KEIKO_STATE_DIR;
+  if (typeof fromEnv === "string" && fromEnv.length > 0) {
+    return { source: "KEIKO_STATE_DIR", value: fromEnv };
+  }
+  return undefined;
 }
 
 // Reads a pid file written by `lifecycle.ts`. Returns the integer pid, or undefined
@@ -560,6 +610,38 @@ function ownedChildSubtree(
   return scope.childSubtree(name, absPath);
 }
 
+// #KEIKO-0301: a file that vanishes between readdirSync and lstatSync (a concurrent
+// remove during the scan) is a race, not an error state — return undefined so the
+// enclosing repair / uninstall walk skips it. Every other lstat failure propagates.
+function lstatOrRaceSkip(absPath: string): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(absPath);
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function classifyFileEntry(
+  relPath: string,
+  absPath: string,
+  name: string,
+  scope: ScanScope,
+  nlink: number,
+  acc: ScanAccumulator,
+): void {
+  const category = ownedFileCategory(scope, name);
+  if (category === undefined) {
+    acc.retained.push({ relPath, absPath, reason: "unknown", owned: false });
+  } else if (nlink > 1) {
+    acc.retained.push({ relPath, absPath, reason: "hardlink", owned: true });
+  } else {
+    acc.files.push({ relPath, absPath, category });
+  }
+}
+
 function classifyEntry(
   absDir: string,
   relDir: string,
@@ -569,7 +651,8 @@ function classifyEntry(
 ): void {
   const absPath = join(absDir, name);
   const relPath = childRelPath(relDir, name);
-  const stat = lstatSync(absPath);
+  const stat = lstatOrRaceSkip(absPath);
+  if (stat === undefined) return;
   if (stat.isSymbolicLink()) {
     // Never follow a symlink in any position: chmod-through and delete-through a symlink can
     // escape `.keiko`. Flag it when it occupies a slot the manifest would otherwise own.
@@ -590,14 +673,7 @@ function classifyEntry(
     return;
   }
   if (stat.isFile()) {
-    const category = ownedFileCategory(scope, name);
-    if (category === undefined) {
-      acc.retained.push({ relPath, absPath, reason: "unknown", owned: false });
-    } else if (stat.nlink > 1) {
-      acc.retained.push({ relPath, absPath, reason: "hardlink", owned: true });
-    } else {
-      acc.files.push({ relPath, absPath, category });
-    }
+    classifyFileEntry(relPath, absPath, name, scope, Number(stat.nlink), acc);
     return;
   }
   // Sockets, FIFOs, devices: not a Keiko artifact — retain untouched.

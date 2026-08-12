@@ -284,7 +284,16 @@ export const jsonParser: ParserAdapter = Object.freeze({
     } else if (parsed?.ok === true) {
       walk(ctx, parsed.value, "", 0);
     }
-    if (ctx.diagnostics.some((diagnostic) => diagnostic.code === "NESTING_LIMIT_REACHED")) {
+    // KEIKO-0484: a whole-document nesting violation still invalidates a single-JSON-document
+    // parse (that is intentional — the top-level value is one thing, and it is malformed). For
+    // JSONL/NDJSON the file's own header contract (lines 208-210) commits to per-record
+    // independence: one bad line MUST NOT discard the whole file's good records. Preserve
+    // ctx.units/normalizedText on the jsonLines path alongside the error diagnostic, matching
+    // how PARSER_TIMEOUT/UNIT_LIMIT_REACHED/PARSER_CANCELLED already fall through.
+    if (
+      !jsonLines &&
+      ctx.diagnostics.some((diagnostic) => diagnostic.code === "NESTING_LIMIT_REACHED")
+    ) {
       return emptyResult(jsonParser.capability, input.documentId, options, ctx.diagnostics);
     }
     return {

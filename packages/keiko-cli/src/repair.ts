@@ -56,6 +56,7 @@ import {
   inspectStateRoot,
   resolveStateDir,
   scanRuntimeState,
+  type RetainedNode,
   type RuntimeStateCategory,
   type RuntimeStateNode,
   type StateRootInspection,
@@ -216,21 +217,34 @@ interface LoosePermFinding {
 }
 
 // Records every node not already at `targetMode`, applying the fix unless this is a dry-run.
+// #KEIKO-0301: guard each node's statSync/chmodSync so one unreadable / vanished artifact
+// is recorded as an "unreadable" finding rather than aborting the whole repair run. The
+// happy path (a stable, readable state tree) is unchanged; only the newly-guarded error
+// paths differ.
 function tightenNodes(
   nodes: readonly RuntimeStateNode[],
   targetMode: number,
   dryRun: boolean,
   findings: LoosePermFinding[],
+  unreadable: LoosePermFinding[],
 ): void {
   for (const node of nodes) {
-    const mode = statSync(node.absPath).mode & 0o777;
-    if (mode === targetMode) continue;
-    findings.push({
-      category: node.category,
-      relPath: node.relPath,
-      observed: `0o${mode.toString(8)}`,
-    });
-    if (!dryRun) chmodSync(node.absPath, targetMode);
+    try {
+      const mode = statSync(node.absPath).mode & 0o777;
+      if (mode === targetMode) continue;
+      findings.push({
+        category: node.category,
+        relPath: node.relPath,
+        observed: `0o${mode.toString(8)}`,
+      });
+      if (!dryRun) chmodSync(node.absPath, targetMode);
+    } catch {
+      unreadable.push({
+        category: node.category,
+        relPath: node.relPath,
+        observed: "unreadable",
+      });
+    }
   }
 }
 
@@ -244,6 +258,33 @@ function summarizeLooseCategory(
   const detail = `${String(matches.length)} ${RUNTIME_STATE_LABEL[category]} artifact(s) group/world-readable (e.g. ${example?.relPath ?? "?"} ${example?.observed ?? "?"})`;
   const name = "Runtime state artifacts";
   return dryRun ? fixable(name, detail) : fixed(name, detail);
+}
+
+function collectRuntimeStateFindings(
+  unreadable: readonly LoosePermFinding[],
+  refusedOwned: readonly RetainedNode[],
+  results: CheckResult[],
+): void {
+  // #KEIKO-0301: report each unreadable Keiko-owned artifact as an action item so a
+  // filesystem hiccup during the state walk is visible rather than crashing the CLI.
+  // Path is relative — no raw absolute path, uid, or stack trace escapes.
+  for (const entry of unreadable) {
+    results.push(
+      action(
+        "Runtime state artifacts",
+        `${RUNTIME_STATE_LABEL[entry.category]} artifact could not be inspected (unreadable): ${entry.relPath}`,
+      ),
+    );
+  }
+  for (const entry of refusedOwned) {
+    const kind = entry.reason === "symlink" ? "symlink" : "hardlink";
+    results.push(
+      action(
+        "Runtime state artifacts",
+        `${kind} occupies a Keiko-owned path and was left untouched: ${entry.relPath}`,
+      ),
+    );
+  }
 }
 
 function checkRuntimeStateArtifacts(stateDir: string, dryRun: boolean): CheckResult[] {
@@ -266,22 +307,15 @@ function checkRuntimeStateArtifacts(stateDir: string, dryRun: boolean): CheckRes
   }
 
   const findings: LoosePermFinding[] = [];
-  tightenNodes(scan.directories, RUNTIME_STATE_DIR_MODE, dryRun, findings);
-  tightenNodes(scan.files, RUNTIME_STATE_FILE_MODE, dryRun, findings);
+  const unreadable: LoosePermFinding[] = [];
+  tightenNodes(scan.directories, RUNTIME_STATE_DIR_MODE, dryRun, findings, unreadable);
+  tightenNodes(scan.files, RUNTIME_STATE_FILE_MODE, dryRun, findings, unreadable);
 
   const results: CheckResult[] = [];
   for (const category of new Set(findings.map((f) => f.category))) {
     results.push(summarizeLooseCategory(category, findings, dryRun));
   }
-  for (const entry of refusedOwned) {
-    const kind = entry.reason === "symlink" ? "symlink" : "hardlink";
-    results.push(
-      action(
-        "Runtime state artifacts",
-        `${kind} occupies a Keiko-owned path and was left untouched: ${entry.relPath}`,
-      ),
-    );
-  }
+  collectRuntimeStateFindings(unreadable, refusedOwned, results);
   if (results.length === 0) {
     results.push(
       ok(
@@ -792,22 +826,16 @@ function exitCodeFor(results: readonly CheckResult[], dryRun: boolean): number {
   return hasAction ? 1 : 0;
 }
 
-export function runRepairCli(
+// Runs every repair check and gathers their CheckResults. Extracted so `runRepairCli`
+// can wrap the whole pipeline in a single try/catch (#KEIKO-0301) without exceeding
+// the 50-line max-lines-per-function bar.
+function collectRepairResults(
   args: readonly string[],
   io: CliIo,
   env: EnvSource,
-  deps: RepairCliDeps = {},
-): number {
-  const parsed = parseRepairArgs(args);
-  if (parsed === "help") {
-    io.out(USAGE);
-    return 0;
-  }
-  if (parsed === null) {
-    io.err(USAGE);
-    return 2;
-  }
-  const resolved = resolveDeps(deps);
+  parsed: RepairOptions,
+  resolved: ResolvedRepairDeps,
+): readonly CheckResult[] {
   const stateDir = resolveStateDir(resolved.cwd, env, parsed.stateDirArg);
   const defaultConfigCandidates = defaultLocalGatewayConfigCandidates(
     env,
@@ -827,13 +855,48 @@ export function runRepairCli(
           checkPortableRegistration(stateDir, env, resolved.homedir(), parsed.dryRun, io),
         ]
       : [stateRootAction];
-  const results: CheckResult[] = [
+  return [
     ...stateResults,
     checkInstallLayout(resolved.cwd, env),
     checkLaunchPath(resolved.cwd, resolved.argv),
     checkGatewayConfig(args, env),
     ...checkCredentialStorage(args, env, defaultConfigCandidates),
   ];
+}
+
+export function runRepairCli(
+  args: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+  deps: RepairCliDeps = {},
+): number {
+  const parsed = parseRepairArgs(args);
+  if (parsed === "help") {
+    io.out(USAGE);
+    return 0;
+  }
+  if (parsed === null) {
+    io.err(USAGE);
+    return 2;
+  }
+  const resolved = resolveDeps(deps);
+  // #KEIKO-0301: mirror uninstall.ts's runUninstallCli try/catch — a filesystem
+  // hiccup (missing / unreadable / vanished artifact) during any check must not
+  // crash the command it exists to rescue. On an unexpected error, print an
+  // `[action]` line naming the class of failure (content-free) and return 1 so
+  // scripts can detect "manual step required".
+  let results: readonly CheckResult[];
+  try {
+    results = collectRepairResults(args, io, env, parsed, resolved);
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "UnknownError";
+    io.out("Keiko repair\n");
+    io.out(
+      `  [action] Runtime state artifacts: repair aborted after an unexpected error (${name})\n`,
+    );
+    io.out("\nKeiko repair: review the items marked `action` above.\n");
+    return 1;
+  }
   reportResults(io, results);
   const code = exitCodeFor(results, parsed.dryRun);
   io.out(summaryMessage(results, code));

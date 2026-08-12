@@ -1,6 +1,11 @@
+import { realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+// The memory-vault path guard refuses any ancestor symlink, so macOS `os.tmpdir()`
+// (which sits under `/var/folders/...` → `/private/var/...`) must be resolved once
+// before every mkdtemp call whose result flows into a KEIKO_*_DIR.
+const REAL_TMPDIR = realpathSync(tmpdir());
 import { EventEmitter } from "node:events";
 import type { Server } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -133,7 +138,7 @@ describe("runUiCli", () => {
   let staticRoot: string;
 
   beforeEach(async () => {
-    staticRoot = await mkdtemp(join(tmpdir(), "keiko-ui-cli-"));
+    staticRoot = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-"));
     await writeFile(join(staticRoot, "index.html"), "<html></html>", "utf8");
   });
 
@@ -197,7 +202,7 @@ describe("runUiCli", () => {
 
   it("prefers the built workspace checkout over a stale inherited global static root", async () => {
     const { io, out } = captureIo();
-    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-checkout-"));
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-checkout-"));
     const localStaticRoot = join(cwd, "dist", "ui", "static");
     const localCliRoot = join(cwd, "dist", "cli");
     const captured: { staticRoot?: string; handlerDeps?: UiHandlerDeps } = {};
@@ -234,7 +239,7 @@ describe("runUiCli", () => {
 
   it("re-execs through the built workspace checkout instead of a stale parent bin", async () => {
     const { io } = captureIo();
-    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-reexec-"));
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-reexec-"));
     const localStaticRoot = join(cwd, "dist", "ui", "static");
     const localCliEntry = join(cwd, "dist", "cli", "index.js");
     const spawned: { command: string; args: readonly string[] }[] = [];
@@ -294,9 +299,48 @@ describe("runUiCli", () => {
     }
   });
 
+  // Regression pin (KEIKO-0439): runUiCli built a live CspSource + file watcher, then handed the
+  // server a value that was evaluated ONCE at startup. The watcher mutated `current`, nobody ever
+  // read it again, and the server kept serving the stale Content-Security-Policy header after any
+  // rebuild — the browser blocked the new inline scripts and the UI went blank until restart.
+  // The server side already accepts a cspProvider callback; the CLI must forward the accessor,
+  // not the snapshot.
+  it("forwards a live cspProvider to createUiServer", async () => {
+    const { io } = captureIo();
+    interface CapturedCspDeps {
+      csp?: string;
+      cspProvider?: (() => string | Promise<string>) | undefined;
+    }
+    const captured: CapturedCspDeps = {};
+    let handlerDeps: UiHandlerDeps | undefined;
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd: staticRoot,
+      createServer: ({ csp, cspProvider, handlerDeps: createdHandlerDeps }) => {
+        captured.csp = csp;
+        captured.cspProvider = cspProvider;
+        handlerDeps = createdHandlerDeps;
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli(["--port", "4399"], io, {}, deps);
+      expect(code).toBe(0);
+      // The compatibility snapshot is still passed too — server.ts keeps `csp` as a fallback.
+      expect(captured.csp).toContain("script-src");
+      // The load-bearing check: the provider callback was passed through.
+      expect(typeof captured.cspProvider).toBe("function");
+      const live = captured.cspProvider === undefined ? undefined : await captured.cspProvider();
+      expect(live).toContain("script-src");
+    } finally {
+      closeHandlerDeps(handlerDeps);
+    }
+  });
+
   it("defaults UI and memory state to the workspace-local .keiko runtime root", async () => {
     const { io } = captureIo();
-    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-state-"));
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-state-"));
     const captured: UiHandlerDeps[] = [];
     const deps: UiCliDeps = {
       staticRoot,
@@ -324,7 +368,7 @@ describe("runUiCli", () => {
 
   it("registers the launch cwd as a project before the server starts", async () => {
     const { io } = captureIo();
-    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-launch-project-"));
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-launch-project-"));
     await writeFile(join(cwd, "package.json"), '{"name":"sandbox"}\n', "utf8");
     const captured: UiHandlerDeps[] = [];
     const deps: UiCliDeps = {
@@ -349,7 +393,7 @@ describe("runUiCli", () => {
 
   it("preserves explicit state overrides while defaulting missing runtime paths", async () => {
     const { io } = captureIo();
-    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-state-override-"));
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-state-override-"));
     const stateDir = join(cwd, "state");
     const uiDbPath = join(cwd, ".keiko", "ui", "custom-ui.db");
     const captured: UiHandlerDeps[] = [];
@@ -378,7 +422,7 @@ describe("runUiCli", () => {
 
   it("does not load trusted KEIKO_* runtime values from a repo-local .env", async () => {
     const { io } = captureIo();
-    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-dotenv-"));
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-dotenv-"));
     const configPath = join(cwd, "gateway.json");
     await writeFile(
       configPath,
@@ -431,26 +475,45 @@ describe("runUiCli", () => {
 });
 
 describe("createLiveCspSource", () => {
+  // Regression pin (KEIKO-0439): the original assertions were identical before and after the
+  // watcher was supposed to fire — both reads landed in the runtime-hash fallback branch of
+  // loadCspMaterial because the stored hash list never matched the runtime hashes, so the test
+  // could not detect a broken reload. Rewrite BOTH the static export's inline script AND the
+  // csp-hashes.json to a mutually-matching new hash, wait past the 500ms watch interval, and
+  // assert the header actually changed from the old hash to the new one.
   it("reloads the CSP when csp-hashes.json changes after startup", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "keiko-ui-csp-live-"));
+    const dir = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-csp-live-"));
     const staticRoot = join(dir, "static");
     const hashesFile = join(dir, "csp-hashes.json");
+    const indexHtml = join(staticRoot, "index.html");
     const { io } = captureIo();
     try {
       await mkdir(staticRoot, { recursive: true });
-      const html = "<html><body><script>window.__TEST__='new';</script></body></html>";
-      await writeFile(join(staticRoot, "index.html"), html, "utf8");
-      const [expectedHash] = extractInlineScriptHashes([html]);
-      await writeFile(hashesFile, JSON.stringify(["'sha256-old'"]), "utf8");
+      const initialHtml = "<html><body><script>window.__TEST__='before';</script></body></html>";
+      await writeFile(indexHtml, initialHtml, "utf8");
+      const [initialHash] = extractInlineScriptHashes([initialHtml]);
+      expect(initialHash).toBeDefined();
+      if (initialHash === undefined) throw new Error("expected initial inline script hash");
+      // Match runtime + stored so loadCspMaterial's stored-hash branch (not the fallback) runs.
+      await writeFile(hashesFile, JSON.stringify([initialHash]), "utf8");
       const runtime = await createLiveCspSource(staticRoot, hashesFile, io);
-      expect(expectedHash).toBeDefined();
-      if (expectedHash === undefined) throw new Error("expected inline script hash");
-      expect(runtime.csp()).toContain(expectedHash);
-      expect(runtime.csp()).not.toContain("'sha256-old'");
-      await writeFile(hashesFile, JSON.stringify(["'sha256-new'"]), "utf8");
+      expect(runtime.csp()).toContain(initialHash);
+
+      // Rewrite BOTH the exported HTML and the stored hash list so they still match, but to a
+      // different inline script → different hash. The watcher on csp-hashes.json fires reload(),
+      // which re-reads static/index.html and recomputes the runtime hashes.
+      const nextHtml = "<html><body><script>window.__TEST__='after';</script></body></html>";
+      await writeFile(indexHtml, nextHtml, "utf8");
+      const [nextHash] = extractInlineScriptHashes([nextHtml]);
+      expect(nextHash).toBeDefined();
+      if (nextHash === undefined) throw new Error("expected next inline script hash");
+      expect(nextHash).not.toBe(initialHash);
+      await writeFile(hashesFile, JSON.stringify([nextHash]), "utf8");
       await sleep(700);
-      expect(runtime.csp()).toContain(expectedHash);
-      expect(runtime.csp()).not.toContain("'sha256-new'");
+
+      // The header must have actually changed — before/after assertions differ.
+      expect(runtime.csp()).toContain(nextHash);
+      expect(runtime.csp()).not.toContain(initialHash);
       runtime.dispose();
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -523,32 +586,53 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
     expect(child.listenerCount("exit")).toBeGreaterThanOrEqual(0);
   });
 
+  // Regression pin (KEIKO-0443): the three "does not re-exec" tests below previously used the
+  // invalid `["--host", "0.0.0.0"]` args, so parseUiArgsOrExit returned 2 *before* the sqlite
+  // guard ran and neither `sqliteProbe`, the NODE_OPTIONS branch of `alreadyFlagged`, nor the
+  // execArgv branch was ever exercised. They now pass valid args and stub `createServer` via the
+  // same pattern as "does not re-exec when an injected createServer is supplied", so the guard
+  // actually runs. `spawned === 0` is the load-bearing assertion.
   it("does not re-exec when sqlite is already importable", async () => {
-    const { io, err } = captureIo();
+    const { io } = captureIo();
     let spawned = 0;
-    const code = await runUiCli(
-      ["--host", "0.0.0.0"], // invalid → returns 2 after the (no-op) guard
-      io,
-      {},
-      {
-        currentExecArgv: () => [],
-        sqliteProbe: () => true,
-        spawnFn: () => {
-          spawned += 1;
-          return fakeChild(0) as unknown as import("node:child_process").ChildProcess;
+    const record: { port?: number } = {};
+    const dir = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-noexec-probe-"));
+    let handlerDeps: UiHandlerDeps | undefined;
+    await writeFile(join(dir, "index.html"), "<html></html>", "utf8");
+    try {
+      const code = await runUiCli(
+        ["--port", "4399"],
+        io,
+        {},
+        {
+          staticRoot: dir,
+          hashesFile: join(dir, "csp-hashes.json"),
+          cwd: dir,
+          createServer: ({ handlerDeps: createdHandlerDeps }) => {
+            handlerDeps = createdHandlerDeps;
+            return fakeServer(record);
+          },
+          currentExecArgv: () => [],
+          sqliteProbe: () => true,
+          spawnFn: () => {
+            spawned += 1;
+            return fakeChild(0) as unknown as import("node:child_process").ChildProcess;
+          },
         },
-      },
-    );
-    expect(code).toBe(2);
-    expect(err.join("")).toContain("Usage:");
-    expect(spawned).toBe(0);
+      );
+      expect(code).toBe(0);
+      expect(spawned).toBe(0);
+    } finally {
+      closeHandlerDeps(handlerDeps);
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("does not re-exec when an injected createServer is supplied (test path)", async () => {
     const { io } = captureIo();
     let spawned = 0;
     const record: { port?: number } = {};
-    const dir = await mkdtemp(join(tmpdir(), "keiko-ui-cli-noexec-"));
+    const dir = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-noexec-"));
     let handlerDeps: UiHandlerDeps | undefined;
     await writeFile(join(dir, "index.html"), "<html></html>", "utf8");
     try {
@@ -583,22 +667,78 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
   it("does not re-exec when --experimental-sqlite is already on NODE_OPTIONS", async () => {
     const { io } = captureIo();
     let spawned = 0;
-    const code = await runUiCli(
-      ["--host", "0.0.0.0"],
-      io,
-      { NODE_OPTIONS: "--experimental-sqlite" },
-      {
-        currentExecArgv: () => [],
-        sqliteProbe: () => false,
-        spawnFn: () => {
-          spawned += 1;
-          return fakeChild(0) as unknown as import("node:child_process").ChildProcess;
+    const record: { port?: number } = {};
+    const dir = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-noexec-nodeopt-"));
+    let handlerDeps: UiHandlerDeps | undefined;
+    await writeFile(join(dir, "index.html"), "<html></html>", "utf8");
+    try {
+      const code = await runUiCli(
+        ["--port", "4399"],
+        io,
+        { NODE_OPTIONS: "--experimental-sqlite" },
+        {
+          staticRoot: dir,
+          hashesFile: join(dir, "csp-hashes.json"),
+          cwd: dir,
+          createServer: ({ handlerDeps: createdHandlerDeps }) => {
+            handlerDeps = createdHandlerDeps;
+            return fakeServer(record);
+          },
+          currentExecArgv: () => [],
+          sqliteProbe: () => false,
+          spawnFn: () => {
+            spawned += 1;
+            return fakeChild(0) as unknown as import("node:child_process").ChildProcess;
+          },
         },
-      },
-    );
-    // alreadyFlagged short-circuits the guard → falls through to flag parsing → 2.
-    expect(code).toBe(2);
-    expect(spawned).toBe(0);
+      );
+      // alreadyFlagged short-circuits via the NODE_OPTIONS branch; server startup then proceeds.
+      expect(code).toBe(0);
+      expect(spawned).toBe(0);
+    } finally {
+      closeHandlerDeps(handlerDeps);
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Regression pin (KEIKO-0443): the execArgv branch of `alreadyFlagged` had zero coverage — every
+  // pre-existing test set currentExecArgv to `() => []`. A regression that dropped the execArgv
+  // check would go unnoticed by this suite even though it is the branch that stops the re-exec
+  // guard from looping when the CLI is already inside the child.
+  it("does not re-exec when --experimental-sqlite is already on currentExecArgv", async () => {
+    const { io } = captureIo();
+    let spawned = 0;
+    const record: { port?: number } = {};
+    const dir = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-noexec-execargv-"));
+    let handlerDeps: UiHandlerDeps | undefined;
+    await writeFile(join(dir, "index.html"), "<html></html>", "utf8");
+    try {
+      const code = await runUiCli(
+        ["--port", "4399"],
+        io,
+        {},
+        {
+          staticRoot: dir,
+          hashesFile: join(dir, "csp-hashes.json"),
+          cwd: dir,
+          createServer: ({ handlerDeps: createdHandlerDeps }) => {
+            handlerDeps = createdHandlerDeps;
+            return fakeServer(record);
+          },
+          currentExecArgv: () => ["--experimental-sqlite"],
+          sqliteProbe: () => false,
+          spawnFn: () => {
+            spawned += 1;
+            return fakeChild(0) as unknown as import("node:child_process").ChildProcess;
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(spawned).toBe(0);
+    } finally {
+      closeHandlerDeps(handlerDeps);
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

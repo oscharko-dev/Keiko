@@ -4,8 +4,11 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -83,8 +86,16 @@ export function portableInstallRootIdentitySha256(path: string): string {
   return sha256Text(realpathSync(path));
 }
 
+// #KEIKO-0333: fail closed to `undefined` on a truncated / non-JSON registration file
+// so a crash mid-write leaves callers with "no registration recorded" instead of a
+// thrown SyntaxError. Matches launcher-state.ts loadState's behavior for the sibling
+// state file: an unreadable state artifact is a signal, not a crash.
 function readJson(path: string): unknown {
-  return JSON.parse(readFileSync(path, "utf8")) as unknown;
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as unknown;
+  } catch {
+    return undefined;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -127,15 +138,26 @@ export function hasPortableInstallRegistration(stateDir: string): boolean {
   return true;
 }
 
+// #KEIKO-0333: write through mkdtemp -> write -> rename so a crash mid-write can never
+// leave a truncated registration on disk. Reuses launcher-state.ts saveState's atomic
+// idiom so the two state files that live side by side in the same `.keiko` directory
+// have consistent durability semantics.
 function writeRegistration(stateDir: string, registration: PortableInstallRegistration): void {
   assertStateDirSafe(stateDir);
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const path = join(stateDir, REGISTRATION_FILE);
   assertRegistrationFileSafe(path);
-  writeFileSync(path, `${JSON.stringify(registration, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
+  const tmpDir = mkdtempSync(join(stateDir, ".portable-registration-"));
+  const tmpFile = join(tmpDir, "registration.json");
+  try {
+    writeFileSync(tmpFile, `${JSON.stringify(registration, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    renameSync(tmpFile, path);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
   try {
     chmodSync(path, 0o600);
   } catch {
@@ -265,7 +287,12 @@ export function readPortableInstallRegistration(
 ): PortableInstallRegistration | undefined {
   if (!hasPortableInstallRegistration(stateDir)) return undefined;
   const path = join(stateDir, REGISTRATION_FILE);
+  // #KEIKO-0333: readJson returns undefined for a truncated / non-JSON file so
+  // downstream callers observe "no registration recorded" instead of a thrown
+  // SyntaxError. That matches launcher-state.ts's fail-closed-to-empty semantics
+  // for the sibling state file.
   const raw = readJson(path);
+  if (raw === undefined) return undefined;
   if (isManagedRegistrationRecord(raw)) return managedRegistrationFromRecord(raw);
   if (isFailedRegistrationRecord(raw)) return failedRegistrationFromRecord(raw);
   return undefined;

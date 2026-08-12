@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { CliIo } from "./runner.js";
 
@@ -12,6 +12,9 @@ const USAGE = `Usage:
 Adds local package.json scripts for running Keiko:
   keiko:start  -> node ./node_modules/@oscharko-dev/keiko/dist/cli/index.js start
   keiko:stop   -> node ./node_modules/@oscharko-dev/keiko/dist/cli/index.js stop
+
+Rewrites package.json atomically (temp file + rename) and preserves the file's
+existing indentation style (2 spaces, 4 spaces, or tabs).
 
 Run this from the project where @oscharko-dev/keiko is installed.
 `;
@@ -29,6 +32,7 @@ export interface InitCliDeps {
 interface LoadedPackageJson {
   readonly ok: true;
   readonly packageJson: Record<string, unknown>;
+  readonly indent: string | number;
 }
 
 interface InitializedPackageJson {
@@ -84,17 +88,41 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function stringifyPackageJson(data: unknown): string {
-  return `${JSON.stringify(data, null, 2)}\n`;
+// #KEIKO-0503: detect the file's existing indentation instead of unconditionally
+// re-emitting with 2 spaces. A project that uses tabs or 4-space indentation
+// should not see a whole-file reformat diff when `keiko init` adds two scripts.
+// The heuristic matches the first indented line of the raw source: a single leading
+// tab means tabs; a run of spaces means that many spaces. When unsure, fall back to
+// the original 2-space default so behavior is preserved for the common case.
+function detectIndent(raw: string): string | number {
+  const match = /\{\r?\n([ \t]+)"/u.exec(raw);
+  if (match === null) return 2;
+  const first = match[1];
+  if (first === undefined || first.length === 0) return 2;
+  if (first.startsWith("\t")) return "\t";
+  return first.length;
+}
+
+function stringifyPackageJson(data: unknown, indent: string | number): string {
+  return `${JSON.stringify(data, null, indent)}\n`;
 }
 
 function loadPackageJson(packagePath: string): LoadedPackageJson | InitError {
   if (!existsSync(packagePath)) {
     return { ok: false, message: `keiko init: package.json not found at ${packagePath}.\n` };
   }
+  let raw: string;
+  try {
+    raw = readFileSync(packagePath, "utf8");
+  } catch {
+    return {
+      ok: false,
+      message: `keiko init: package.json at ${packagePath} is not readable.\n`,
+    };
+  }
   let packageJson: unknown;
   try {
-    packageJson = JSON.parse(readFileSync(packagePath, "utf8"));
+    packageJson = JSON.parse(raw);
   } catch {
     return {
       ok: false,
@@ -104,7 +132,22 @@ function loadPackageJson(packagePath: string): LoadedPackageJson | InitError {
   if (!isRecord(packageJson)) {
     return { ok: false, message: "keiko init: package.json must contain a JSON object.\n" };
   }
-  return { ok: true, packageJson };
+  return { ok: true, packageJson, indent: detectIndent(raw) };
+}
+
+// #KEIKO-0503: temp-file-then-renameSync in the same directory as parsed.packagePath
+// so a crash between truncate and write can never leave a truncated package.json —
+// the file that makes the project installable. Mirrors launcher-state.ts saveState.
+function writePackageJsonAtomically(packagePath: string, content: string): void {
+  const dir = dirname(packagePath);
+  const tmpDir = mkdtempSync(join(dir, ".keiko-init-"));
+  const tmpFile = join(tmpDir, "package.json");
+  try {
+    writeFileSync(tmpFile, content, "utf8");
+    renameSync(tmpFile, packagePath);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
 }
 
 function initializedPackageJson(
@@ -158,12 +201,13 @@ export function runInitCli(
     return 1;
   }
 
+  const rendered = stringifyPackageJson(initialized.value, loaded.indent);
   if (parsed.dryRun) {
-    io.out(stringifyPackageJson(initialized.value));
+    io.out(rendered);
     return 0;
   }
 
-  writeFileSync(parsed.packagePath, stringifyPackageJson(initialized.value), "utf8");
+  writePackageJsonAtomically(parsed.packagePath, rendered);
   io.out(
     "Keiko scripts added to package.json:\n" + "  npm run keiko:start\n" + "  npm run keiko:stop\n",
   );

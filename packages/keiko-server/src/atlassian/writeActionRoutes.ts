@@ -48,7 +48,9 @@ import {
   type AtlassianHttpBodyPort,
   type AtlassianWriteActionFailure,
   type JiraLiveSearchOutcome,
+  CONFLUENCE_TITLE_MAX_CHARS,
   JIRA_ISSUE_LABELS_MAX_ENTRIES,
+  JIRA_SUMMARY_MAX_CHARS,
   MARKDOWN_LITE_MAX_INPUT_CHARS,
 } from "@oscharko-dev/keiko-connectors";
 import {
@@ -95,9 +97,11 @@ import {
 } from "./syncService.js";
 
 // Composable body text is bounded at 100k characters; the JSON envelope around it stays well
-// under this request cap even at full UTF-8 width.
+// under this request cap even at full UTF-8 width. Single-line text bounds for summary and title
+// are imported from @oscharko-dev/keiko-connectors so a future change to either exported bound
+// stays authoritative through the BFF too — matching the pattern for JIRA_ISSUE_LABELS_MAX_ENTRIES
+// and MARKDOWN_LITE_MAX_INPUT_CHARS already established in this file (KEIKO-0488).
 const MAX_ACTION_BODY_BYTES = 512_000;
-const SINGLE_LINE_TEXT_MAX_CHARS = 255;
 const FIELD_TEXT_MAX_CHARS = 100;
 const NUMERIC_ID_PATTERN = /^\d{1,32}$/u;
 // eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
@@ -182,9 +186,20 @@ function requireSingleLine(value: unknown, field: string, maxChars: number): str
 
 // Composable body text: validated with the SAME parser the composers run at execution time, so
 // a request that passes here can never park an uncomposable payload in a pending approval.
-function requireComposable(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw invalid(`${field} must be non-empty text`);
+// KEIKO-0319: descriptionText/bodyText call sites pass allowEmpty:true so an explicit "clear this
+// field" edit passes through to update-issue-fields/update-page; commentText call sites keep the
+// default (non-empty required) because an empty comment is not a meaningful governed action.
+function requireComposable(
+  value: unknown,
+  field: string,
+  options: { readonly allowEmpty?: boolean } = {},
+): string {
+  if (typeof value !== "string") {
+    throw invalid(`${field} must be text`);
+  }
+  if (value.length === 0) {
+    if (options.allowEmpty !== true) throw invalid(`${field} must be non-empty text`);
+    return value;
   }
   if (value.length > MARKDOWN_LITE_MAX_INPUT_CHARS || !composePlainTextToAdf(value).ok) {
     throw invalid(
@@ -194,8 +209,12 @@ function requireComposable(value: unknown, field: string): string {
   return value;
 }
 
-function optionalComposable(value: unknown, field: string): string | undefined {
-  return value === undefined ? undefined : requireComposable(value, field);
+function optionalComposable(
+  value: unknown,
+  field: string,
+  options: { readonly allowEmpty?: boolean } = {},
+): string | undefined {
+  return value === undefined ? undefined : requireComposable(value, field, options);
 }
 
 function requireNumericId(value: unknown, field: string): string {
@@ -218,7 +237,9 @@ function validateCreateIssue(body: Record<string, unknown>): AtlassianWriteActio
   if ((body.issueTypeId === undefined) === (body.issueTypeName === undefined)) {
     throw invalid("exactly one of issueTypeId or issueTypeName is required");
   }
-  const descriptionText = optionalComposable(body.descriptionText, "descriptionText");
+  const descriptionText = optionalComposable(body.descriptionText, "descriptionText", {
+    allowEmpty: true,
+  });
   return {
     type: "create-issue",
     projectKey: body.projectKey,
@@ -231,15 +252,17 @@ function validateCreateIssue(body: Record<string, unknown>): AtlassianWriteActio
           ),
         }
       : { issueTypeId: requireNumericId(body.issueTypeId, "issueTypeId") }),
-    summary: requireSingleLine(body.summary, "summary", SINGLE_LINE_TEXT_MAX_CHARS),
+    summary: requireSingleLine(body.summary, "summary", JIRA_SUMMARY_MAX_CHARS),
     ...(descriptionText === undefined ? {} : { descriptionText }),
   };
 }
 
+// KEIKO-0319: labels: [] is an explicit "clear all labels" through update-issue-fields, matching
+// the executor's own (already permissive) lower bound in updatedFieldsOf. The upper bound and the
+// per-token identifier check stay unchanged.
 function isValidLabelList(value: unknown): value is readonly string[] {
   return (
     Array.isArray(value) &&
-    value.length > 0 &&
     value.length <= JIRA_ISSUE_LABELS_MAX_ENTRIES &&
     value.every((label) => isSafeAtlassianIdentifier(label))
   );
@@ -261,8 +284,10 @@ function optionalSingleLine(value: unknown, field: string, maxChars: number): st
 
 function validateUpdateIssueFields(body: Record<string, unknown>): AtlassianWriteActionInput {
   const issueKey = requireIdentifier(body.issueKey, "issueKey");
-  const summary = optionalSingleLine(body.summary, "summary", SINGLE_LINE_TEXT_MAX_CHARS);
-  const descriptionText = optionalComposable(body.descriptionText, "descriptionText");
+  const summary = optionalSingleLine(body.summary, "summary", JIRA_SUMMARY_MAX_CHARS);
+  const descriptionText = optionalComposable(body.descriptionText, "descriptionText", {
+    allowEmpty: true,
+  });
   const labels = validatedLabels(body.labels);
   const priorityName = optionalSingleLine(body.priorityName, "priorityName", FIELD_TEXT_MAX_CHARS);
   if (
@@ -309,8 +334,8 @@ function validateConfluenceActions(
       ...(body.parentId === undefined
         ? {}
         : { parentId: requireNumericId(body.parentId, "parentId") }),
-      title: requireSingleLine(body.title, "title", SINGLE_LINE_TEXT_MAX_CHARS),
-      bodyText: requireComposable(body.bodyText, "bodyText"),
+      title: requireSingleLine(body.title, "title", CONFLUENCE_TITLE_MAX_CHARS),
+      bodyText: requireComposable(body.bodyText, "bodyText", { allowEmpty: true }),
     };
   }
   if (type === "update-page") {
@@ -325,8 +350,8 @@ function validateConfluenceActions(
     return {
       type,
       pageId: requireNumericId(body.pageId, "pageId"),
-      title: requireSingleLine(body.title, "title", SINGLE_LINE_TEXT_MAX_CHARS),
-      bodyText: requireComposable(body.bodyText, "bodyText"),
+      title: requireSingleLine(body.title, "title", CONFLUENCE_TITLE_MAX_CHARS),
+      bodyText: requireComposable(body.bodyText, "bodyText", { allowEmpty: true }),
       currentVersion,
     };
   }

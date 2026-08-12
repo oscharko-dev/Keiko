@@ -12,7 +12,8 @@ import { spawn, type ChildProcess, type SpawnOptions, type StdioOptions } from "
 import { randomBytes, randomUUID } from "node:crypto";
 import { createServer as createNetServer } from "node:net";
 import { get as httpGet } from "node:http";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { homedir as defaultHomedir } from "node:os";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 // From the contracts leaf, NOT keiko-server or the keiko-sdk fat barrel: pulling the server
@@ -26,9 +27,11 @@ import {
   KEIKO_PRODUCT_VERSION as SDK_VERSION,
   encodeCodingAppSessionPairingFragment,
 } from "@oscharko-dev/keiko-contracts";
-import { resolvePreferredInstallLayout } from "./install-layout.js";
+import { absoluteExistingPath, resolvePreferredInstallLayout } from "./install-layout.js";
+import { LauncherError } from "./launcher-platforms.js";
 import { resolveLoopbackEndpoint } from "./loopback-endpoint.js";
 import type { CliIo } from "./runner.js";
+import { resolveContainedStateDir } from "./state-paths.js";
 
 type LifecycleCommand = "start" | "stop" | "status" | "restart";
 type SpawnFn = (command: string, args: readonly string[], opts: SpawnOptions) => ChildProcess;
@@ -88,6 +91,7 @@ interface RawLifecycleOptions {
 
 export interface LifecycleCliDeps {
   readonly cwd?: string | undefined;
+  readonly homedir?: (() => string) | undefined;
   readonly spawnFn?: SpawnFn | undefined;
   readonly fetchImpl?: FetchFn | undefined;
   readonly sleep?: SleepFn | undefined;
@@ -145,10 +149,6 @@ function optionOrEnv(
   return value ?? envValue ?? fallback;
 }
 
-function resolveStateDir(cwd: string, value: string): string {
-  return isAbsolute(value) ? value : resolve(cwd, value);
-}
-
 function isLifecycleFlag(arg: string): arg is LifecycleFlag {
   return Object.hasOwn(LIFECYCLE_FLAG_SETTERS, arg);
 }
@@ -178,6 +178,7 @@ function buildLifecycleOptions(
   raw: RawLifecycleOptions,
   cwd: string,
   env: EnvSource,
+  home: string,
 ): LifecycleOptions | null {
   const endpoint = resolveLoopbackEndpoint({ host: raw.hostRaw, port: raw.portRaw }, env);
   const startTimeoutMs = parsePositiveSeconds(
@@ -189,10 +190,13 @@ function buildLifecycleOptions(
   if (endpoint === null || startTimeoutMs === null || stopTimeoutMs === null) {
     return null;
   }
+  // #KEIKO-0330: route KEIKO_STATE_DIR / --state-dir through the same home-containment
+  // guard `keiko launcher` enforces. An env-planted or CLI-injected value that resolves
+  // outside the user's home throws `STATE_DIR_ESCAPE`, caught in `runLifecycleCli`.
   return {
     port: endpoint.port,
     host: endpoint.host,
-    stateDir: resolveStateDir(cwd, optionOrEnv(raw.stateDirRaw, env.KEIKO_STATE_DIR, ".keiko")),
+    stateDir: resolveContainedStateDir(cwd, env, home, raw.stateDirRaw),
     startTimeoutMs,
     stopTimeoutMs,
     openBrowser: raw.openBrowser === true,
@@ -203,10 +207,11 @@ function parseLifecycleArgs(
   args: readonly string[],
   cwd: string,
   env: EnvSource,
+  home: string,
 ): LifecycleOptions | "help" | null {
   const raw = collectLifecycleOptions(args);
   if (raw === "help" || raw === null) return raw;
-  return buildLifecycleOptions(raw, cwd, env);
+  return buildLifecycleOptions(raw, cwd, env, home);
 }
 
 function pidFile(options: LifecycleOptions): string {
@@ -399,16 +404,19 @@ function childEnv(env: EnvSource): NodeJS.ProcessEnv {
   return next;
 }
 
-function cliEntryPath(cwd: string): string {
+function cliEntryPath(cwd: string, env: EnvSource): string {
   const preferredLayout = resolvePreferredInstallLayout(cwd);
   if (preferredLayout !== undefined) return preferredLayout.binPath;
   // The root bin entry (`dist/cli/index.js`) surfaces `KEIKO_CLI_BIN_PATH` so
   // re-exec'd children spawned by `keiko start` invoke the published bin rather
-  // than the cli package barrel (which is not executable). The
-  // import.meta.url fallback preserves direct package-local invocation for callers
-  // that invoke runLifecycleCli without going through the published bin entry.
-  const fromEnv = process.env.KEIKO_CLI_BIN_PATH;
-  if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
+  // than the cli package barrel (which is not executable). Route through
+  // `absoluteExistingPath` — the same validation `install-layout.ts` applies to
+  // this variable — so a relative or non-existent value is refused instead of
+  // spawned (#KEIKO-0285). Read via the injected EnvSource first, matching the
+  // rest of this file's `optionOrEnv` pattern; `process.env` is only the
+  // documented last resort for callers who did not thread the env through.
+  const fromEnv = absoluteExistingPath(env.KEIKO_CLI_BIN_PATH ?? process.env.KEIKO_CLI_BIN_PATH);
+  if (fromEnv !== undefined) return fromEnv;
   return join(dirname(fileURLToPath(import.meta.url)), "index.js");
 }
 
@@ -524,7 +532,7 @@ function spawnUiProcess(
     return {
       child: deps.spawnFn(
         process.execPath,
-        [cliEntryPath(cwd), "ui", "--port", String(options.port), "--host", options.host],
+        [cliEntryPath(cwd, env), "ui", "--port", String(options.port), "--host", options.host],
         {
           argv0: KEIKO_PROCESS_TITLE,
           cwd,
@@ -586,6 +594,47 @@ async function keepAlreadyRunningUi(
   }
 }
 
+async function handleStaleRunning(
+  options: LifecycleOptions,
+  io: CliIo,
+  deps: LifecycleRuntimeDeps,
+  running: number,
+): Promise<number | "start"> {
+  const health = await deps.healthProbe(healthUrl(options));
+  if (health.version === SDK_VERSION) {
+    await keepAlreadyRunningUi(options, io, deps, running);
+    return 0;
+  }
+  io.out(
+    `Keiko UI process is stale (${staleProcessReason(health)}); restarting pid ${String(running)}.\n`,
+  );
+  const stopped = await cmdStop(options, io, deps);
+  if (stopped !== 0) return stopped;
+  return "start";
+}
+
+async function reportUnhealthyStart(
+  options: LifecycleOptions,
+  io: CliIo,
+  deps: LifecycleRuntimeDeps,
+  pid: number,
+  logPath: string,
+): Promise<number> {
+  // #KEIKO-0437: escalate SIGTERM -> SIGKILL and only remove the pid file once the
+  // process is confirmed gone. If it survives SIGKILL, KEEP the pid file so `keiko
+  // stop` can still find and finish the orphan (never orphan the port silently).
+  const outcome = await terminateAndConfirm(pid, options, deps);
+  if (outcome.confirmed) {
+    rmSync(pidFile(options), { force: true });
+    io.err(`keiko start: UI did not become healthy. Logs: ${logPath}\n`);
+  } else {
+    io.err(
+      `keiko start: UI did not become healthy and did not exit under SIGKILL (pid ${String(pid)} kept in ${pidFile(options)}). Logs: ${logPath}\n`,
+    );
+  }
+  return 1;
+}
+
 async function cmdStart(
   options: LifecycleOptions,
   io: CliIo,
@@ -595,16 +644,8 @@ async function cmdStart(
 ): Promise<number> {
   const running = runningPid(options, deps.isProcessAlive);
   if (running !== undefined) {
-    const health = await deps.healthProbe(healthUrl(options));
-    if (health.version === SDK_VERSION) {
-      await keepAlreadyRunningUi(options, io, deps, running);
-      return 0;
-    }
-    io.out(
-      `Keiko UI process is stale (${staleProcessReason(health)}); restarting pid ${String(running)}.\n`,
-    );
-    const stopped = await cmdStop(options, io, deps);
-    if (stopped !== 0) return stopped;
+    const nextAction = await handleStaleRunning(options, io, deps, running);
+    if (nextAction !== "start") return nextAction;
   }
 
   if (!(await ensureStartPortAvailable(options, io, deps))) return 1;
@@ -640,10 +681,39 @@ async function cmdStart(
     return reportHealthyStart(options, io, child.pid, logPath, deps.openExternal, pairingSecret);
   }
 
-  deps.killProcess(child.pid, "SIGTERM");
-  rmSync(pidFile(options), { force: true });
-  io.err(`keiko start: UI did not become healthy. Logs: ${logPath}\n`);
-  return 1;
+  return reportUnhealthyStart(options, io, deps, child.pid, logPath);
+}
+
+interface TerminateAndConfirmResult {
+  readonly confirmed: boolean;
+  readonly escalated: boolean;
+}
+
+// Shared teardown used by both cmdStop and the cmdStart unhealthy branch (#KEIKO-0437).
+// Sends SIGTERM, polls isProcessAlive up to options.stopTimeoutMs, escalates to SIGKILL
+// if still alive, then re-polls a short bounded window. The pid-file lifecycle is
+// intentionally NOT touched here — the caller decides based on `confirmed`: remove the
+// pid file only when the process is confirmed gone, keep it otherwise so `keiko stop`
+// can still find and finish the orphan. `escalated` tells the caller whether the
+// graceful window expired so cmdStop can emit its "sending SIGKILL" line at the same
+// moment the SIGKILL is actually sent.
+async function terminateAndConfirm(
+  pid: number,
+  options: LifecycleOptions,
+  deps: Pick<LifecycleRuntimeDeps, "sleep" | "isProcessAlive" | "killProcess">,
+  onEscalate?: () => void,
+): Promise<TerminateAndConfirmResult> {
+  deps.killProcess(pid, "SIGTERM");
+  const deadline = Date.now() + options.stopTimeoutMs;
+  while (Date.now() <= deadline) {
+    if (!deps.isProcessAlive(pid)) return { confirmed: true, escalated: false };
+    await deps.sleep(500);
+  }
+  onEscalate?.();
+  deps.killProcess(pid, "SIGKILL");
+  // Sleep at most 500 ms but respect whatever budget remains in stopTimeoutMs.
+  await deps.sleep(Math.max(0, Math.min(500, deadline - Date.now())));
+  return { confirmed: !deps.isProcessAlive(pid), escalated: true };
 }
 
 async function cmdStop(
@@ -657,27 +727,15 @@ async function cmdStop(
     return 0;
   }
   io.out(`Stopping Keiko UI (pid ${String(pid)}) ...\n`);
-  deps.killProcess(pid, "SIGTERM");
-  const deadline = Date.now() + options.stopTimeoutMs;
-  while (Date.now() <= deadline) {
-    if (!deps.isProcessAlive(pid)) {
-      rmSync(pidFile(options), { force: true });
-      io.out("Keiko UI stopped.\n");
-      return 0;
-    }
-    await deps.sleep(500);
-  }
-
-  io.err("keiko stop: UI did not exit gracefully; sending SIGKILL.\n");
-  deps.killProcess(pid, "SIGKILL");
-  // Sleep at most 500 ms but respect whatever budget remains in stopTimeoutMs.
-  await deps.sleep(Math.max(0, Math.min(500, deadline - Date.now())));
-  if (deps.isProcessAlive(pid)) {
+  const outcome = await terminateAndConfirm(pid, options, deps, () => {
+    io.err("keiko stop: UI did not exit gracefully; sending SIGKILL.\n");
+  });
+  if (!outcome.confirmed) {
     io.err(`keiko stop: failed to stop pid ${String(pid)}.\n`);
     return 1;
   }
   rmSync(pidFile(options), { force: true });
-  io.out("Keiko UI stopped (forced).\n");
+  io.out(outcome.escalated ? "Keiko UI stopped (forced).\n" : "Keiko UI stopped.\n");
   return 0;
 }
 
@@ -725,6 +783,33 @@ function runtimeDeps(deps: LifecycleCliDeps): LifecycleRuntimeDeps {
   };
 }
 
+// Wraps parseLifecycleArgs with the LauncherError conversion required by #KEIKO-0330:
+// a STATE_DIR_ESCAPE surfaced inside `resolveContainedStateDir` becomes a clean stderr
+// line plus non-zero exit ("refuse" sentinel), never an uncaught throw from the CLI.
+type ParseOutcome =
+  | { readonly kind: "options"; readonly value: LifecycleOptions }
+  | { readonly kind: "help" }
+  | { readonly kind: "usage" }
+  | { readonly kind: "refuse"; readonly message: string };
+
+function parseWithStateDirGuard(
+  args: readonly string[],
+  cwd: string,
+  env: EnvSource,
+  home: string,
+): ParseOutcome {
+  let parsed: LifecycleOptions | "help" | null;
+  try {
+    parsed = parseLifecycleArgs(args, cwd, env, home);
+  } catch (e) {
+    if (e instanceof LauncherError) return { kind: "refuse", message: `${e.message}\n` };
+    throw e;
+  }
+  if (parsed === "help") return { kind: "help" };
+  if (parsed === null) return { kind: "usage" };
+  return { kind: "options", value: parsed };
+}
+
 export async function runLifecycleCli(
   command: LifecycleCommand,
   args: readonly string[],
@@ -733,16 +818,22 @@ export async function runLifecycleCli(
   deps: LifecycleCliDeps = {},
 ): Promise<number> {
   const cwd = deps.cwd ?? process.cwd();
-  const options = parseLifecycleArgs(args, cwd, env);
-  if (options === "help") {
+  const home = (deps.homedir ?? defaultHomedir)();
+  const outcome = parseWithStateDirGuard(args, cwd, env, home);
+  if (outcome.kind === "help") {
     io.out(USAGE);
     return 0;
   }
-  if (options === null) {
+  if (outcome.kind === "usage") {
     io.err(USAGE);
     return 2;
   }
+  if (outcome.kind === "refuse") {
+    io.err(outcome.message);
+    return 1;
+  }
 
+  const options = outcome.value;
   const fullDeps = runtimeDeps(deps);
 
   const handlers: Readonly<Record<LifecycleCommand, () => Promise<number>>> = {

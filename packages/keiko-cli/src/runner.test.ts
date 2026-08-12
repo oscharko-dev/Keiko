@@ -171,4 +171,21 @@ describe("runCli", () => {
     expect(c.err().length).toBeGreaterThan(0);
     expect(c.out()).toBe("");
   });
+
+  // Regression pin (KEIKO-0434): the command dispatch table indexed a prototype-bearing object
+  // with unvalidated argv, so `keiko toString`, `constructor`, `hasOwnProperty`, `valueOf`, and
+  // `__proto__` each resolved to an inherited function whose return value became the process exit
+  // code — `process.exit("[object Object]")` then threw ERR_INVALID_ARG_TYPE and the CLI crashed
+  // instead of reporting `unknown command`. The table must expose no prototype-chain lookup surface.
+  it.each(["toString", "valueOf", "constructor", "hasOwnProperty", "__proto__"])(
+    "rejects Object.prototype keys as unknown commands (%s)",
+    (name) => {
+      const c = makeIo();
+      const result = runCli([name], c.io);
+      expect(result).toBe(2);
+      expect(c.err()).toContain(`unknown command: ${name}`);
+      expect(c.err()).toContain("keiko --help");
+      expect(c.out()).toBe("");
+    },
+  );
 });

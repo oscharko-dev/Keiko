@@ -85,10 +85,17 @@ const REMEMBER_PATTERNS: readonly RegExp[] = [
 // Each branch carries its own copy of the trailing "this project/workspace:" scope hint (rather
 // than factoring it into a second matching stage) so a single execFirst pass still yields the
 // complete prefix length bodyAfterPrefix needs — matching the original REMEMBER_ABOUT_RE shape.
+// The (project|workspace) alternation is now a CAPTURING group (audit KEIKO-0336): tryExtractRemember
+// reads the captured noun and threads it into scopeOrReject as an explicit scopeKind, so
+// "remember about this workspace: X" produces workspace-scoped output even when projectId is set
+// (pickImplicitScopeKind's project-first precedence would otherwise silently override the user's
+// stated intent). When the "about this project|workspace" fragment is absent (i.e. the plain
+// "remember about X" form) the capture is undefined and scope inference falls back to context
+// precedence exactly as before.
 const REMEMBER_ABOUT_PATTERNS: readonly RegExp[] = [
-  /^\s*remember\s+about\s+(?:this\s+(?:project|workspace)[:,\s]+)?/iu,
-  /^\s*merk(?:e)?\s+dir\s+(?:zu|über|ueber)\s+(?:this\s+(?:project|workspace)[:,\s]+)?/iu,
-  /^\s*speicher(?:e)?\s+(?:zu|über|ueber)\s+(?:this\s+(?:project|workspace)[:,\s]+)?/iu,
+  /^\s*remember\s+about\s+(?:this\s+(project|workspace)[:,\s]+)?/iu,
+  /^\s*merk(?:e)?\s+dir\s+(?:zu|über|ueber)\s+(?:this\s+(project|workspace)[:,\s]+)?/iu,
+  /^\s*speicher(?:e)?\s+(?:zu|über|ueber)\s+(?:this\s+(project|workspace)[:,\s]+)?/iu,
 ];
 const FORGET_PATTERNS: readonly RegExp[] = [
   /^\s*forget(?:\s+about)?\s+/iu,
@@ -206,10 +213,29 @@ function resolveTarget(
   return head === null ? { kind: "none" } : { kind: "unique", memoryId: head };
 }
 
+// Reads the capturing group added to REMEMBER_ABOUT_PATTERNS. Returns undefined when the "about
+// this <noun>:" fragment was absent (plain "remember about X"), so the caller preserves whatever
+// policy.scopeKind (if any) was already provided by the surrounding capture pipeline. Audit
+// KEIKO-0336.
+function explicitScopeKindFromAboutMatch(
+  aboutPrefixMatch: RegExpExecArray | null,
+): "project" | "workspace" | undefined {
+  const captured = aboutPrefixMatch?.[1];
+  if (captured === undefined) {
+    return undefined;
+  }
+  const normalized = captured.toLowerCase();
+  if (normalized === "project" || normalized === "workspace") {
+    return normalized;
+  }
+  return undefined;
+}
+
 // ─── tryExtractRemember ──────────────────────────────────────────────────────
-// "remember about this project: X" → project scope hint. "remember that X" / "remember X" →
-// implicit scope from context. Emits a preference-type proposal — explicit user instructions
-// are the canonical preference source per #205 source-kind taxonomy.
+// "remember about this project: X" → project scope hint. "remember about this workspace: X" →
+// workspace scope hint. "remember that X" / "remember X" → implicit scope from context. Emits a
+// preference-type proposal — explicit user instructions are the canonical preference source per
+// #205 source-kind taxonomy.
 export function tryExtractRemember(
   text: string,
   context: CaptureContext,
@@ -233,7 +259,15 @@ export function tryExtractRemember(
   if (rejection !== null) {
     return rejection;
   }
-  const scopeResolution = scopeOrReject(context, policy);
+  // The REMEMBER_ABOUT_PATTERNS capture the noun ("project" or "workspace") when the user wrote
+  // "about this <noun>:". Thread it through scopeOrReject as an explicit scopeKind so the user's
+  // stated intent wins over context precedence (audit KEIKO-0336). When the noun is absent
+  // (plain "remember X" / "remember about X"), leave policy.scopeKind alone so implicit
+  // context-based inference behaves exactly as before.
+  const explicitScopeKind = explicitScopeKindFromAboutMatch(aboutPrefixMatch);
+  const effectivePolicy =
+    explicitScopeKind === undefined ? policy : { ...policy, scopeKind: explicitScopeKind };
+  const scopeResolution = scopeOrReject(context, effectivePolicy);
   if (!scopeResolution.ok) {
     return scopeResolution.outcome;
   }

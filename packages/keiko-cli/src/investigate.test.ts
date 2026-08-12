@@ -1,13 +1,19 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { openProviderCredentialVault } from "@oscharko-dev/keiko-server/credential-vault";
 import { runInvestigateCli } from "./investigate.js";
 import { runCli } from "./runner.js";
 import type { CliIo } from "./runner.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import {
+  FIXTURE_API_KEY,
+  PROVIDER_CREDENTIALS_KEY,
+  REAL_TMPDIR,
+  serializeGatewayConfig,
+  writeReferenceOnlyGatewayConfig as writeReferenceOnlyGatewayConfigFixture,
+} from "./test-support/gateway-config-fixture.js";
 
 interface Captured {
   readonly io: CliIo;
@@ -47,32 +53,7 @@ function modelReturning(content: string): ModelPort {
 }
 
 function gatewayConfig(modelIds: readonly string[]): string {
-  const capability = (modelId: string): Record<string, unknown> => ({
-    id: modelId,
-    kind: "chat",
-    contextWindow: 0,
-    maxOutputTokens: 0,
-    toolCalling: true,
-    structuredOutput: !modelId.includes("unstructured"),
-    streaming: true,
-    costClass: modelId.endsWith("-fast") ? "low" : "high",
-    latencyClass: modelId.endsWith("-fast") ? "fast" : "standard",
-    throughputHint: "test fixture",
-    preferredUseCases: ["Test"],
-    knownLimitations: [],
-  });
-  return JSON.stringify({
-    providers: modelIds.map((modelId) => ({
-      modelId,
-      baseUrl: "https://provider.example/v1",
-      apiKey: "test-config-secret-value-1234567890",
-      timeoutMs: 30_000,
-      maxRetries: 0,
-      retryBaseDelayMs: 500,
-      capability: capability(modelId),
-    })),
-    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-  });
+  return serializeGatewayConfig({ modelIds });
 }
 
 const FIX = [
@@ -90,8 +71,6 @@ const FIX = [
 ].join("\n");
 
 let dir: string;
-const REAL_TMPDIR = realpathSync(tmpdir());
-const PROVIDER_CREDENTIALS_KEY = Buffer.alloc(32, 0x35).toString("base64");
 
 beforeEach(() => {
   dir = mkdtempSync(join(REAL_TMPDIR, "keiko-investigate-cli-"));
@@ -107,25 +86,6 @@ beforeEach(() => {
     "utf8",
   );
 });
-
-function writeReferenceOnlyGatewayConfig(modelId: string): string {
-  const configPath = join(dir, "gateway-reference-only.json");
-  const parsed = JSON.parse(gatewayConfig([modelId])) as {
-    providers: Record<string, unknown>[];
-  };
-  const provider = parsed.providers[0];
-  if (provider === undefined) {
-    throw new Error("test fixture must include one provider");
-  }
-  delete provider.apiKey;
-  provider.apiKeySecretRef = `cred:${modelId}`;
-  writeFileSync(configPath, JSON.stringify(parsed), "utf8");
-  openProviderCredentialVault({
-    configPath,
-    env: { KEIKO_PROVIDER_CREDENTIALS_KEY: PROVIDER_CREDENTIALS_KEY },
-  }).set(`cred:${modelId}`, "test-config-secret-value-1234567890");
-  return configPath;
-}
 
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
@@ -283,6 +243,32 @@ describe("runInvestigateCli (AC #1 CLI)", () => {
     expect(cap.err()).toContain("could not read");
   });
 
+  // Regression pin (KEIKO-0464): isFileReadError must not match any error that merely carries a
+  // non-empty string `code`. A GatewayError-shaped error (typed non-fs error taxonomy) reaching
+  // handleCliError must NOT be reported as "could not read an evidence file"; the message would
+  // point the operator at the wrong subsystem and discard the real code.
+  it("does not misclassify a typed non-fs error as a file-read error", async () => {
+    const cap = makeIo();
+    const reader = (): string => {
+      throw Object.assign(new Error("gateway boom"), { code: "GATEWAY_TRANSPORT" });
+    };
+    let caught: unknown;
+    try {
+      await runInvestigateCli(
+        ["--output-file", "/anywhere.txt", "--dir-root", dir],
+        cap.io,
+        {},
+        { model: modelReturning(FIX), readFile: reader },
+      );
+    } catch (error) {
+      caught = error;
+    }
+    // Post-fix: handleCliError rethrows because isFileReadError rejects a non-fs code.
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe("gateway boom");
+    expect(cap.err()).not.toContain("could not read an evidence file");
+  });
+
   it("selects the cheapest configured capable model when --model is omitted", async () => {
     const configPath = join(dir, "gateway.json");
     writeFileSync(
@@ -309,7 +295,10 @@ describe("runInvestigateCli (AC #1 CLI)", () => {
   });
 
   it("loads a reference-only config when selecting the injected model", async () => {
-    const configPath = writeReferenceOnlyGatewayConfig("example-chat-model-fast");
+    const configPath = writeReferenceOnlyGatewayConfigFixture(dir, {
+      modelIds: ["example-chat-model-fast"],
+      filename: "gateway-reference-only.json",
+    });
     let seenModelId: string | undefined;
     const model: ModelPort = {
       call: (request): Promise<NormalizedResponse> => {
@@ -326,7 +315,7 @@ describe("runInvestigateCli (AC #1 CLI)", () => {
     );
     expect(code).toBe(0);
     expect(seenModelId).toBe("example-chat-model-fast");
-    expect(cap.out() + cap.err()).not.toContain("test-config-secret-value-1234567890");
+    expect(cap.out() + cap.err()).not.toContain(FIXTURE_API_KEY);
   });
 
   it("does not default to a configured chat model without structured output", async () => {

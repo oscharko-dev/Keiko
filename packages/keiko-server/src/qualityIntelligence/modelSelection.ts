@@ -128,11 +128,19 @@ function compareNumberDesc(a: number | undefined, b: number | undefined): number
   return (b ?? 0) - (a ?? 0);
 }
 
+// contextWindow===0 is a runtime-discovered/unenriched placeholder (GEN-GATE-DISCOVERY-001),
+// not a real "smallest" capacity — do not let it lose the tie-break to any nonzero declared
+// value. Once both sides are nonzero the descending ordering is meaningful again.
+function compareContextWindowDesc(a: number | undefined = 0, b: number | undefined = 0): number {
+  if (a === 0 || b === 0) return 0;
+  return b - a;
+}
+
 function compareGenerationDefault(a: IndexedCapability, b: IndexedCapability): number {
   return (
     compareBooleanDesc(a.capability.structuredOutput, b.capability.structuredOutput) ||
     compareBooleanDesc(a.capability.supportsResponseFormat, b.capability.supportsResponseFormat) ||
-    compareNumberDesc(a.capability.contextWindow, b.capability.contextWindow) ||
+    compareContextWindowDesc(a.capability.contextWindow, b.capability.contextWindow) ||
     compareNumberDesc(a.capability.maxOutputTokens, b.capability.maxOutputTokens) ||
     LATENCY_RANK[a.capability.latencyClass] - LATENCY_RANK[b.capability.latencyClass] ||
     COST_RANK[a.capability.costClass] - COST_RANK[b.capability.costClass] ||
@@ -143,7 +151,7 @@ function compareGenerationDefault(a: IndexedCapability, b: IndexedCapability): n
 function compareJudgeDefault(a: IndexedCapability, b: IndexedCapability): number {
   return (
     compareBooleanDesc(a.capability.supportsResponseFormat, b.capability.supportsResponseFormat) ||
-    compareNumberDesc(a.capability.contextWindow, b.capability.contextWindow) ||
+    compareContextWindowDesc(a.capability.contextWindow, b.capability.contextWindow) ||
     compareNumberDesc(a.capability.maxOutputTokens, b.capability.maxOutputTokens) ||
     LATENCY_RANK[a.capability.latencyClass] - LATENCY_RANK[b.capability.latencyClass] ||
     COST_RANK[a.capability.costClass] - COST_RANK[b.capability.costClass] ||

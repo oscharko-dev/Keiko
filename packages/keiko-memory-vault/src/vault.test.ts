@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -38,7 +46,9 @@ afterEach(() => {
 });
 
 function freshDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-mem-vault-"));
+  // Realpath the tmpdir to avoid tripping the (correct) walk-every-ancestor symlink guard on
+  // macOS, where /var (and /tmp) are legitimate system-level symlinks. On Linux this is a no-op.
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-mem-vault-"));
   cleanups.push(dir);
   return dir;
 }
@@ -314,6 +324,86 @@ describe("onMemoryEvent fires post-commit and never on rollback", () => {
     expect(v.getMemory("m1" as MemoryId)).toBeDefined();
     expect(v.listTombstonesByScope({ kind: "user", userId: "u-1" as UserId })).toEqual([]);
     expect(events).toEqual([]);
+    v.close();
+  });
+
+  // Regression pin (audit KEIKO-0221): the FK ON DELETE CASCADE guarantee on memory_edges,
+  // memory_embeddings, and memory_access is already pinned at the SQL-module level in
+  // embeddings.test.ts:208 and edges.test.ts:138 by directly issuing DELETE FROM memories WHERE ...
+  // Those tests bypass the public vault.deleteMemory() API, so a future orchestration-layer change
+  // could silently reintroduce orphaned rows without any existing test failing. This test drives
+  // the whole insert-plus-links-plus-delete-plus-re-query cycle through the public MemoryVaultStore
+  // API for both tombstone modes.
+  it("public-API deleteMemory (tombstone:true) leaves no orphaned edge/embedding/access row", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    v.insertMemory(makeMemory({ id: "m1" as MemoryId }));
+    v.insertMemory(makeMemory({ id: "m2" as MemoryId }));
+    v.insertEdge({
+      id: "e1" as MemoryEdgeId,
+      schemaVersion: "1",
+      fromMemoryId: "m1" as MemoryId,
+      toMemoryId: "m2" as MemoryId,
+      kind: "related",
+      createdAt: 1_700_000_000_500,
+    });
+    v.upsertEmbedding("m1" as MemoryId, {
+      provider: "p",
+      modelId: "m",
+      metric: "cosine",
+      vector: new Float32Array([1, 0]),
+    });
+    v.recordAccess(["m1" as MemoryId], 1_700_000_000_800);
+    expect(v.getEmbedding("m1" as MemoryId)).toBeDefined();
+    expect(v.listOutgoingEdges("m1" as MemoryId)).toHaveLength(1);
+    expect(v.listIncomingEdges("m2" as MemoryId)).toHaveLength(1);
+    expect(v.getAccessStats(["m1" as MemoryId]).get("m1" as MemoryId)).toBeDefined();
+
+    v.deleteMemory("m1" as MemoryId, {
+      tombstone: true,
+      forgetterSurface: "test",
+      reason: "test",
+      nowMs: 1_700_000_001_000,
+    });
+
+    expect(v.getEmbedding("m1" as MemoryId)).toBeUndefined();
+    expect(v.listOutgoingEdges("m1" as MemoryId)).toEqual([]);
+    expect(v.listIncomingEdges("m2" as MemoryId)).toEqual([]);
+    expect(v.getAccessStats(["m1" as MemoryId]).get("m1" as MemoryId)).toBeUndefined();
+    v.close();
+  });
+
+  it("public-API deleteMemory (tombstone:false) leaves no orphaned edge/embedding/access row", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    v.insertMemory(makeMemory({ id: "m1" as MemoryId }));
+    v.insertMemory(makeMemory({ id: "m2" as MemoryId }));
+    v.insertEdge({
+      id: "e1" as MemoryEdgeId,
+      schemaVersion: "1",
+      fromMemoryId: "m1" as MemoryId,
+      toMemoryId: "m2" as MemoryId,
+      kind: "related",
+      createdAt: 1_700_000_000_500,
+    });
+    v.upsertEmbedding("m1" as MemoryId, {
+      provider: "p",
+      modelId: "m",
+      metric: "cosine",
+      vector: new Float32Array([1, 0]),
+    });
+    v.recordAccess(["m1" as MemoryId], 1_700_000_000_800);
+
+    v.deleteMemory("m1" as MemoryId, {
+      tombstone: false,
+      forgetterSurface: "test",
+      nowMs: 1_700_000_001_000,
+    });
+
+    expect(v.getEmbedding("m1" as MemoryId)).toBeUndefined();
+    expect(v.listOutgoingEdges("m1" as MemoryId)).toEqual([]);
+    expect(v.listIncomingEdges("m2" as MemoryId)).toEqual([]);
+    expect(v.getAccessStats(["m1" as MemoryId]).get("m1" as MemoryId)).toBeUndefined();
     v.close();
   });
 });
@@ -942,6 +1032,36 @@ describe("update + delete error paths", () => {
     expect(v.getMemory("m2" as MemoryId)).toBeDefined();
     expect(v.listTombstonesByScope({ kind: "user", userId: "u-1" as UserId })).toEqual([]);
     expect(events).toEqual([]);
+    v.close();
+  });
+
+  // Regression pin (audit KEIKO-0442): a batch containing a duplicate id must succeed and delete
+  // each distinct id exactly once, not roll back the entire batch with a not-found error triggered
+  // by the second occurrence's already-deleted row.
+  it("dedupes duplicate ids within a single deleteMemories batch (last-wins)", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    v.insertMemory(makeMemory({ id: "m1" as MemoryId }));
+    v.insertMemory(makeMemory({ id: "m2" as MemoryId }));
+
+    const results = v.deleteMemories([
+      {
+        id: "m1" as MemoryId,
+        options: { tombstone: false, forgetterSurface: "test", nowMs: 1_700_000_001_000 },
+      },
+      {
+        id: "m2" as MemoryId,
+        options: { tombstone: false, forgetterSurface: "test", nowMs: 1_700_000_001_000 },
+      },
+      {
+        id: "m1" as MemoryId,
+        options: { tombstone: false, forgetterSurface: "test", nowMs: 1_700_000_002_000 },
+      },
+    ]);
+
+    expect(results.map((r) => r.memoryId)).toEqual(["m1", "m2"]);
+    expect(v.getMemory("m1" as MemoryId)).toBeUndefined();
+    expect(v.getMemory("m2" as MemoryId)).toBeUndefined();
     v.close();
   });
 

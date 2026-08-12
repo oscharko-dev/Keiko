@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -32,6 +32,9 @@ function capture(): { io: CliIo; out: () => string; err: () => string } {
 
 const tmpDirs: string[] = [];
 const vaults: MemoryVaultStore[] = [];
+// Resolve tmpdir's symlink once: the memory-vault path guard refuses any ancestor symlink, and
+// on macOS `os.tmpdir()` sits under `/var/folders/...` which is a symlink to `/private/var/...`.
+const REAL_TMPDIR = realpathSync(tmpdir());
 
 afterEach(() => {
   for (const vault of vaults.splice(0)) {
@@ -45,7 +48,7 @@ afterEach(() => {
 });
 
 function makeVault(): MemoryVaultStore {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-cli-mem-"));
+  const dir = mkdtempSync(join(REAL_TMPDIR, "keiko-cli-mem-"));
   tmpDirs.push(dir);
   const vault = createMemoryVault({ memoryDir: dir, redactString: (s) => s });
   vaults.push(vault);
@@ -337,7 +340,11 @@ describe("runMemoryCli reembed", () => {
     expect(vault.getEmbedding(mid("b"))).toBeDefined();
   });
 
-  it("refreshes memories that already have an embedding so stale vectors are repairable", async () => {
+  // Regression pin (KEIKO-0440): backfillEmbeddings must skip records that already carry an
+  // embedding instead of re-embedding every accepted record. Without the skip, each `keiko memory
+  // reembed` run cost O(all accepted memories) provider calls regardless of what was actually
+  // missing, and the `skipped` counter was structurally unreachable from 0.
+  it("skips already-embedded memories and only embeds those lacking one", async () => {
     const vault = makeVault();
     insert(vault, { id: "a", status: "accepted" });
     insert(vault, { id: "b", status: "accepted" });
@@ -347,14 +354,23 @@ describe("runMemoryCli reembed", () => {
       metric: "cosine",
       vector: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]),
     });
+    let spyCalls = 0;
+    const inner = fakeEmbedder();
+    const spy: typeof inner = (text) => {
+      spyCalls += 1;
+      return inner(text);
+    };
     const cap = capture();
-    const code = await runMemoryCli(["reembed"], cap.io, {}, { vault, embedText: fakeEmbedder() });
+    const code = await runMemoryCli(["reembed"], cap.io, {}, { vault, embedText: spy });
     expect(code).toBe(0);
-    expect(cap.out()).toContain("embedded: 2");
-    expect(cap.out()).toContain("skipped:  0");
-    expect(Array.from(vault.getEmbedding(mid("a"))?.vector ?? [])).toEqual(
-      Array.from(Float32Array.from({ length: 8 }, (_, i) => (i + 1) / 8)),
-    );
+    expect(cap.out()).toContain("embedded: 1");
+    expect(cap.out()).toContain("skipped:  1");
+    // Only the unembedded record hit the embedder — the pre-embedded one was skipped.
+    expect(spyCalls).toBe(1);
+    // `a`'s original embedding stayed intact (the fixture vector, not the fakeEmbedder pattern).
+    expect(Array.from(vault.getEmbedding(mid("a"))?.vector ?? [])).toEqual([
+      1, 0, 0, 0, 0, 0, 0, 0,
+    ]);
   });
 
   it("does not embed non-accepted memories", async () => {

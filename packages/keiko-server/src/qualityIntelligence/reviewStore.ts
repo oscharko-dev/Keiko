@@ -985,6 +985,12 @@ export interface MigrateReviewStateForRegenerationInput {
   readonly evidenceDir: string;
   readonly preservedCandidateIds: readonly string[];
   readonly staleCandidateIds: readonly string[];
+  // The full merged, post-dedup candidate id set for the new run (preserved + regenerated). Used
+  // to derive the new run's aggregate runState: "approved" iff every id in this set maps to an
+  // approved candidate state in the migrated review artifact, else "open". A freshly regenerated
+  // candidate has no prior state and therefore keeps runState at "open" — matching
+  // assertRunApprovalCandidates's existing per-candidate-approved check (KEIKO-0344).
+  readonly allCandidateIds: readonly string[];
   readonly now: string;
   readonly redact: ReviewRedactor;
 }
@@ -1022,6 +1028,25 @@ const regenerationAudit = (args: {
   sourceCandidateId: args.candidateId,
   fromState: args.fromState,
   toState: args.toState,
+});
+
+// Run-scope audit entry documenting an auto-derived aggregate runState during regeneration
+// (KEIKO-0344). Emitted only when every migrated candidate is individually approved and no
+// regenerated candidate exists without a prior approval — the same per-candidate-approved check
+// assertRunApprovalCandidates already enforces for explicit run-level approvals — so the trail
+// records WHERE the "approved" runState came from instead of appearing without provenance.
+const runApprovalPreservedAudit = (args: {
+  readonly now: string;
+  readonly oldRunId: string;
+  readonly redact: ReviewRedactor;
+}): QiReviewAuditEntry => ({
+  at: args.now,
+  action: "regenerate-preserved",
+  scope: "run",
+  ...auditActorFields(regenerationActor, undefined, args.redact),
+  sourceRunId: args.oldRunId,
+  fromState: "open",
+  toState: "approved",
 });
 
 function migratedCandidateAudit(
@@ -1100,6 +1125,12 @@ function appendReopenedCandidateReviews(
  * new run's companion artifact. Stale candidates deliberately do not carry approvals forward; when
  * a stale candidate had prior review state/audit, the new run records an explicit reopened audit
  * event so the loss of approval is visible instead of silently disappearing with the old run id.
+ *
+ * The new run's aggregate `runState` is DERIVED from the migrated candidate states against
+ * `input.allCandidateIds` (the merged, post-dedup candidate id set for the new run): "approved"
+ * iff every id in that set maps to an approved candidate state in the migrated artifact, else
+ * "open". A freshly regenerated candidate has no prior state and therefore counts as not-approved,
+ * matching assertRunApprovalCandidates's per-candidate-approved check (KEIKO-0344).
  */
 export const migrateReviewStateForRegeneration = (
   input: MigrateReviewStateForRegenerationInput,
@@ -1113,10 +1144,22 @@ export const migrateReviewStateForRegeneration = (
   appendPreservedCandidateReviews(oldArtifact, preserved, input, candidateStates, migratedAudit);
   appendReopenedCandidateReviews(oldArtifact, stale, input, migratedAudit);
   if (Object.keys(candidateStates).length === 0 && migratedAudit.length === 0) return undefined;
+  const allApproved =
+    input.allCandidateIds.length > 0 &&
+    input.allCandidateIds.every((candidateId) => candidateStates[candidateId] === "approved");
+  if (allApproved) {
+    migratedAudit.push(
+      runApprovalPreservedAudit({
+        now: input.now,
+        oldRunId: input.oldRunId,
+        redact: input.redact,
+      }),
+    );
+  }
   const next: QiReviewStateArtifact = {
     qiReviewSchemaVersion: QI_REVIEW_SCHEMA_VERSION,
     runId: input.newRunId,
-    runState: "open",
+    runState: allApproved ? "approved" : "open",
     candidateStates,
     auditLog: chainAuditLog(migratedAudit),
     lastUpdatedAt: input.now,

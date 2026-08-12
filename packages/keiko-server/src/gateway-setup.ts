@@ -500,7 +500,7 @@ function createDefaultSetupCapability(
     embeddingModelIds?.includes(modelId) === true
       ? createDefaultEmbeddingCapability(modelId)
       : createDefaultChatCapability(modelId);
-  const existing = existingCapabilityForSetup(options.current, modelId, baseUrl, {
+  const rawExisting = existingCapabilityForSetup(options.current, modelId, baseUrl, {
     submitted: options,
     // The protocol of record is the DURABLE one, which is what the rebuild persists. Comparing
     // against the env-RESOLVED view made a plain rotation look like a protocol change whenever
@@ -508,6 +508,13 @@ function createDefaultSetupCapability(
     // for nothing (review finding on #3046).
     durable: storedProviderForModel(options.stored, modelId),
   });
+  // When the resolved kind CHANGES (e.g. a stored embedding is being switched back to chat by an
+  // explicit deployment list — review finding on #3037), observations made under the old kind are
+  // stale by construction and carrying them over would produce a hybrid capability whose numeric
+  // fields (contextWindow, maxOutputTokens) belong to the wrong kind — a chat capability with an
+  // embedding's contextWindow: 0 fails config-parse under KEIKO-0520. Treat existing as absent
+  // when its kind no longer matches so the flow restarts from baseCapability's defaults.
+  const existing = rawExisting?.kind === baseCapability.kind ? rawExisting : undefined;
   const discovered = options.modelMetadata?.[modelId];
   const capability: ModelCapability = {
     ...baseCapability,

@@ -803,6 +803,20 @@ function assertWorkflowEligibleForKind(
   }
 }
 
+// Mirrors assertWorkflowEligibleForKind: a chat capability without a positive contextWindow is a
+// degraded sentinel that only surfaces later through disconnected downstream symptoms
+// (GEN-GATE-CONTEXT-001/004). Fail closed at parse time, at the cheapest point to catch it. Voice
+// capabilities deliberately declare contextWindow: 0 (createDefaultVoiceCapabilityForSetup in
+// gateway-setup.ts), and embedding/ocr-vision have their own zero-conventions; both remain
+// unrestricted here. Audit KEIKO-0520.
+function assertContextWindowForKind(kind: ModelKind, contextWindow: number, path: string): void {
+  if (kind === "chat" && contextWindow <= 0) {
+    throw new ConfigInvalidError(
+      `${path}.contextWindow must be greater than 0 when ${path}.kind is "chat"`,
+    );
+  }
+}
+
 // ─── Voice capability parsing (Issue #493, ADR-0100 D5/D7) ─────────────────────
 // Shared by both the lenient inline parser and the strict top-level parser so the voice invariants
 // are enforced identically. Voice fields are preserved only when declared, so a non-voice capability
@@ -1016,10 +1030,12 @@ function buildProviderCapabilityBody(
 ): ModelCapability {
   const flags = providerCapabilityFlags(raw, path);
   const tokenAccounting = parseTokenAccounting(raw.tokenAccounting, `${path}.tokenAccounting`);
+  const contextWindow = optionalNonNegativeInt(raw.contextWindow, `${path}.contextWindow`, 0);
+  assertContextWindowForKind(kind, contextWindow, path);
   return {
     id,
     kind,
-    contextWindow: optionalNonNegativeInt(raw.contextWindow, `${path}.contextWindow`, 0),
+    contextWindow,
     maxOutputTokens: optionalNonNegativeInt(raw.maxOutputTokens, `${path}.maxOutputTokens`, 0),
     ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
     ...flags,
@@ -1200,10 +1216,12 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
   ]);
   const workflowEligible = requireBoolean(value.workflowEligible, `${path}.workflowEligible`);
   assertWorkflowEligibleForKind(kind, workflowEligible, path);
+  const contextWindow = requireNonNegativeIntStrict(value.contextWindow, `${path}.contextWindow`);
+  assertContextWindowForKind(kind, contextWindow, path);
   return {
     id,
     kind,
-    contextWindow: requireNonNegativeIntStrict(value.contextWindow, `${path}.contextWindow`),
+    contextWindow,
     maxOutputTokens: requireNonNegativeIntStrict(value.maxOutputTokens, `${path}.maxOutputTokens`),
     toolCalling: requireBoolean(value.toolCalling, `${path}.toolCalling`),
     structuredOutput: requireBoolean(value.structuredOutput, `${path}.structuredOutput`),
@@ -1265,16 +1283,18 @@ function resolveProviderConnection(
   return { baseUrl, apiKey };
 }
 
-function parseProviderConfig(
+interface ProviderProtocolConfig {
+  readonly endpointStyle?: ReturnType<typeof resolveProviderEndpointStyle>;
+  readonly apiVersion?: ReturnType<typeof resolveProviderApiVersion>;
+  readonly realtimeAuthMode?: ReturnType<typeof resolveRealtimeAuthMode>;
+}
+
+function resolveProviderProtocol(
   raw: Record<string, unknown>,
   path: string,
   modelId: string,
   env: EnvSource,
-  egress: OutboundHttpEgressConfig | undefined,
-  options: ParseGatewayConfigOptions,
-): ModelProviderConfig {
-  const { baseUrl, apiKey } = resolveProviderConnection(raw, path, modelId, env, egress, options);
-  const voiceProfiles = parseVoiceProfiles(raw.voiceProfiles, `${path}.voiceProfiles`);
+): ProviderProtocolConfig {
   const endpointStyle = resolveProviderEndpointStyle(
     raw.endpointStyle,
     `${path}.endpointStyle`,
@@ -1288,6 +1308,29 @@ function parseProviderConfig(
     `${path}.realtimeAuthMode`,
     modelId,
     env,
+  );
+  return { endpointStyle, apiVersion, realtimeAuthMode };
+}
+
+function parseProviderConfig(
+  raw: Record<string, unknown>,
+  path: string,
+  modelId: string,
+  env: EnvSource,
+  egress: OutboundHttpEgressConfig | undefined,
+  options: ParseGatewayConfigOptions,
+): ModelProviderConfig {
+  const { baseUrl, apiKey } = resolveProviderConnection(raw, path, modelId, env, egress, options);
+  const voiceProfiles = parseVoiceProfiles(raw.voiceProfiles, `${path}.voiceProfiles`);
+  const { endpointStyle, apiVersion, realtimeAuthMode } = resolveProviderProtocol(
+    raw,
+    path,
+    modelId,
+    env,
+  );
+  const circuitBreaker = parseOptionalProviderCircuitBreaker(
+    raw.circuitBreaker,
+    `${path}.circuitBreaker`,
   );
   return {
     modelId,
@@ -1310,6 +1353,7 @@ function parseProviderConfig(
       `${path}.retryBaseDelayMs`,
     ),
     ...(voiceProfiles === undefined ? {} : { voiceProfiles }),
+    ...(circuitBreaker === undefined ? {} : { circuitBreaker }),
   };
 }
 
@@ -1460,22 +1504,32 @@ function parseFigmaConnectorConfig(raw: unknown): FigmaConnectorConfig | undefin
   return accessToken === undefined ? {} : { accessToken };
 }
 
-function parseCircuitBreaker(raw: unknown): CircuitBreakerConfig {
+function parseCircuitBreaker(raw: unknown, path = "circuitBreaker"): CircuitBreakerConfig {
   const source = isRecord(raw) ? raw : {};
   return {
     failureThreshold: requirePositiveInt(
       source.failureThreshold ?? DEFAULT_FAILURE_THRESHOLD,
-      "circuitBreaker.failureThreshold",
+      `${path}.failureThreshold`,
     ),
-    cooldownMs: requirePositiveInt(
-      source.cooldownMs ?? DEFAULT_COOLDOWN_MS,
-      "circuitBreaker.cooldownMs",
-    ),
+    cooldownMs: requirePositiveInt(source.cooldownMs ?? DEFAULT_COOLDOWN_MS, `${path}.cooldownMs`),
     halfOpenProbes: requirePositiveInt(
       source.halfOpenProbes ?? DEFAULT_HALF_OPEN_PROBES,
-      "circuitBreaker.halfOpenProbes",
+      `${path}.halfOpenProbes`,
     ),
   };
+}
+
+// Per-provider circuitBreaker override (audit KEIKO-0167). Parsed present-only: absent when the
+// operator did not declare a provider-level block, so a mixed deployment can leave most providers
+// on the shared top-level policy and single out only the ones that need a different threshold
+// (e.g. a flakier LiteLLM proxy vs. a strict-latency direct Azure). Validation is delegated to
+// the same parseCircuitBreaker used for the top-level field so the two paths stay consistent.
+function parseOptionalProviderCircuitBreaker(
+  raw: unknown,
+  path: string,
+): CircuitBreakerConfig | undefined {
+  if (raw === undefined) return undefined;
+  return parseCircuitBreaker(raw, path);
 }
 
 function providersWithEgress(

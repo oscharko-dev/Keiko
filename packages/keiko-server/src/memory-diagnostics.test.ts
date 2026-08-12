@@ -4,7 +4,7 @@
 // the same persistence path production uses.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -54,7 +54,7 @@ const FIXED_NOW = 1_750_000_000_000;
 let tmpDir = "";
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), "keiko-mem-diag-"));
+  tmpDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-mem-diag-"));
 });
 
 afterEach(() => {
@@ -222,7 +222,7 @@ describe("exportMemoryDiagnostics — storage path redaction", () => {
 
   it("reports redacted memory vault quarantine files", () => {
     const vault = makeVault();
-    const tmp = mkdtempSync(join(tmpdir(), "keiko-memory-diag-secret-"));
+    const tmp = mkdtempSync(join(realpathSync(tmpdir()), "keiko-memory-diag-secret-"));
     const secret = "secret-memory-dir-segment";
     const memoryDir = join(tmp, secret);
     const redact = (input: string): string => input.replace(secret, "[redacted]");

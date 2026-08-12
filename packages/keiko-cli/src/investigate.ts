@@ -352,8 +352,23 @@ export async function runInvestigateCli(
   }
 }
 
-// A Node fs read error carries a string `code` (e.g. ENOENT); narrow without `any`.
+// A Node fs read error carries a string `code` from a fixed errno set. `code` alone is the
+// discriminant of the repository's own typed error taxonomy too (GatewayError,
+// ProviderCredentialVaultError, …), so a bare "has a non-empty string code" predicate
+// misclassified every typed non-fs error as a file-read failure and told the operator to check
+// evidence paths that were perfectly fine. Narrow to the fs errno codes we actually see through
+// the workspace file reader (KEIKO-0464).
+const FS_READ_ERROR_CODES: ReadonlySet<string> = new Set([
+  "ENOENT",
+  "EACCES",
+  "EISDIR",
+  "ENOTDIR",
+  "ELOOP",
+  "ENAMETOOLONG",
+  "EMFILE",
+]);
+
 function isFileReadError(error: Error): boolean {
   const code = (error as { code?: unknown }).code;
-  return typeof code === "string" && code.length > 0;
+  return typeof code === "string" && FS_READ_ERROR_CODES.has(code);
 }

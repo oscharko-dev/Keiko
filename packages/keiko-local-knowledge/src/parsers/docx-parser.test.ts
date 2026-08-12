@@ -328,6 +328,34 @@ describe("docxParser", () => {
     );
   });
 
+  it("aborts a many-entry docx zip walk with PARSER_TIMEOUT instead of walking every entry (KEIKO-0428)", async () => {
+    // KEIKO-0428: readDocxXmlPartsFromZip used to drive yauzl's central-directory 'entry' loop
+    // to completion with no per-entry deadline or entry-count bound; only `input.bytes.byteLength
+    // > maxBytes` guarded the outer scan, and a ZIP whose central directory is huge easily fits
+    // that budget (~46 bytes per entry + filename). Feed the parser a ZIP with many non-matching
+    // entries followed by a valid document.xml, cap maxEntries indirectly by exceeding the fixed
+    // MAX_DOCX_ZIP_ENTRIES ceiling, and assert the parse aborts with the shared PARSER_TIMEOUT
+    // diagnostic code instead of a MALFORMED_INPUT or a hung run.
+    const filler = Array.from({ length: 5_000 }, (_, index) => ({
+      name: `assets/filler-${String(index).padStart(6, "0")}.xml`,
+      content: "<x/>",
+    }));
+    const document = {
+      name: "word/document.xml",
+      content: "<w:document><w:body><w:p><w:r><w:t>Body</w:t></w:r></w:p></w:body></w:document>",
+    };
+    const bytes = zipDocxEntries([...filler, document]);
+    const result = await docxParser.parseAsync(
+      selectionFromBytes(bytes, {
+        extension: "docx",
+        mediaType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    expect(result.diagnostics.some((entry) => entry.code === "PARSER_TIMEOUT")).toBe(true);
+    expect(result.units.filter((unit) => unit.kind === "section")).toEqual([]);
+  });
+
   it("stops section emission at maxUnitsPerDocument", async () => {
     const xml = `<w:document>${Array.from({ length: 5 }, (_, index) =>
       headingParagraphXml(`Section ${String(index + 1)}`),

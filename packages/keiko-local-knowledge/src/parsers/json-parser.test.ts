@@ -205,6 +205,26 @@ describe("jsonParser — JSON Lines / NDJSON (GRD-011)", () => {
     expect(text).toContain("/1: b=2");
   });
 
+  it("preserves already-collected units when a later JSONL line exceeds maxNestingDepth (KEIKO-0484)", () => {
+    // KEIKO-0484: the file's own header contract (JSONL is per-record independent) is honoured
+    // for MALFORMED_INPUT via walkJsonLines' `continue`, but a NESTING_LIMIT_REACHED on a single
+    // line used to trip parse()'s unconditional discard of ctx.units — surfacing an EMPTY parse
+    // result for a JSONL file where any one line went too deep. The fix scopes that discard to
+    // the single-JSON-document case; for JSONL the units already accumulated by earlier valid
+    // lines survive alongside the NESTING_LIMIT_REACHED diagnostic.
+    const deep = nestedJson(50);
+    const text = `{"a":1}\n${deep}\n{"c":3}\n`;
+    const result = jsonParser.parse(
+      selectionFromText(text, { extension: "jsonl" }),
+      buildParserOptions({ now: () => 0, maxNestingDepth: 3 }),
+    );
+    const collectedPointers = pointersOf(result.units);
+    expect(collectedPointers).toContain("/0");
+    expect(
+      result.diagnostics.some((d) => d.code === "NESTING_LIMIT_REACHED" && d.severity === "error"),
+    ).toBe(true);
+  });
+
   it("skips a malformed line as a non-fatal warning while keeping good records (.ndjson)", () => {
     const result = jsonParser.parse(
       selectionFromText('{"a":1}\n{bad}\n{"c":3}\n', { extension: "ndjson" }),

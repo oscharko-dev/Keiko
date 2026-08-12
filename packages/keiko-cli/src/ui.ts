@@ -73,6 +73,11 @@ export interface UiCliDeps {
   readonly createServer?: (deps: {
     staticRoot: string;
     csp: string;
+    // KEIKO-0439: the live CSP source the CLI builds via `createLiveCspSource`. Forwarding the
+    // ACCESSOR (not `.csp()` evaluated once at startup) lets the server survive a rebuild/restart
+    // race — server.ts uses `(await deps.cspProvider?.()) ?? deps.csp` to pick the freshest header,
+    // so `csp` stays as the compatibility snapshot and `cspProvider` supplies the live reads.
+    cspProvider?: (() => string | Promise<string>) | undefined;
     port: number;
     handlerDeps: UiHandlerDeps;
   }) => Server | Promise<Server>;
@@ -527,6 +532,7 @@ async function maybeWaitForShutdown(server: Server, deps: UiCliDeps): Promise<vo
 async function startUiServer(
   staticRoot: string,
   csp: string,
+  cspProvider: (() => string | Promise<string>) | undefined,
   parsed: UiCliArgs,
   handlerDeps: UiHandlerDeps,
   io: CliIo,
@@ -534,7 +540,13 @@ async function startUiServer(
 ): Promise<void> {
   // Injected-server tests must not force-load the real server module graph.
   const factory = deps.createServer ?? (await loadServerModule()).createUiServer;
-  const server = await factory({ staticRoot, csp, port: parsed.port, handlerDeps });
+  const server = await factory({
+    staticRoot,
+    csp,
+    ...(cspProvider === undefined ? {} : { cspProvider }),
+    port: parsed.port,
+    handlerDeps,
+  });
   applyServerTimeouts(server);
   await listen(server, parsed.port);
   io.out(`Keiko UI listening on http://${UI_HOST}:${String(parsed.port)}\n`);
@@ -592,10 +604,15 @@ export async function createLiveCspSource(
 // gate: tests keep the deps alive so they can assert against the store after
 // runUiCli returns). Closing explicitly checkpoints the WAL instead of relying
 // on process exit to drop the WAL/-shm files in an arbitrary state.
+interface CspSnapshot {
+  readonly csp: string;
+  readonly cspProvider: (() => string | Promise<string>) | undefined;
+}
+
 async function launchUiFromDeps(
   parsed: UiCliArgs,
   staticRoot: string,
-  csp: string,
+  csp: CspSnapshot,
   cwd: string,
   effectiveEnv: EnvSource,
   io: CliIo,
@@ -611,7 +628,7 @@ async function launchUiFromDeps(
   try {
     const launchProjectResult = await registerLaunchProjectOrReport(cwd, handlerDeps, io);
     if (launchProjectResult !== null) return launchProjectResult;
-    await startUiServer(staticRoot, csp, parsed, handlerDeps, io, deps);
+    await startUiServer(staticRoot, csp.csp, csp.cspProvider, parsed, handlerDeps, io, deps);
     return 0;
   } finally {
     if (deps.createServer === undefined) await handlerDeps.dispose?.();
@@ -642,10 +659,13 @@ export async function runUiCli(
   // The finally now covers the deps-build error paths too: previously an early
   // return there leaked the csp-hashes file watcher for the process lifetime.
   try {
+    // Pass BOTH the startup snapshot (compat + fallback) and the live accessor. The server picks
+    // the fresher of the two via `(await cspProvider?.()) ?? csp` — KEIKO-0439 traced Issue-#1214's
+    // "UI blank until restart after a rebuild" back to the CLI passing only the snapshot.
     return await launchUiFromDeps(
       parsed,
       staticRoot,
-      cspRuntime.csp(),
+      { csp: cspRuntime.csp(), cspProvider: cspRuntime.csp },
       cwd,
       effectiveEnv,
       io,

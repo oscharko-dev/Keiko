@@ -732,6 +732,19 @@ export const ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS: readonly AtlassianCo
     "authority-budget-exceeded",
   ] as const satisfies readonly AtlassianConnectorAuthorityFailureReason[]);
 
+// The bounded server-side pending-approval registry (default cap: 64 in flight) rejects a
+// creation when the cap is exhausted. That is a per-instance capacity limit — distinct from any
+// per-envelope authority budget — so it gets its own closed reason literal instead of being
+// merged into `AtlassianConnectorAuthorityFailureReason`. Every rejected attempt still emits one
+// content-free activity record with this reason, preserving the module's "exactly one record per
+// attempt" invariant.
+export type AtlassianConnectorRegistryFailureReason = "approvals-registry-exhausted";
+
+export const ATLASSIAN_CONNECTOR_REGISTRY_FAILURE_REASONS: readonly AtlassianConnectorRegistryFailureReason[] =
+  Object.freeze([
+    "approvals-registry-exhausted",
+  ] as const satisfies readonly AtlassianConnectorRegistryFailureReason[]);
+
 // ─── Human-initiation rationale (Issue #2244, ADR-0129/ADR-0128 D5) ───────────
 // A direct human-triggered BFF operation (v1 sync is explicitly user-triggered, ADR-0128 D5) is
 // human-approved by construction under the ADR-0129 human-control invariant: the per-action
@@ -769,6 +782,7 @@ export type AtlassianConnectorActivityReasonCode =
   | AtlassianSyncFailureReason
   | AtlassianConnectorWriteFailureReason
   | AtlassianConnectorAuthorityFailureReason
+  | AtlassianConnectorRegistryFailureReason
   | AtlassianConnectorHumanInitiationReason;
 
 export interface AtlassianConnectorActivityRecord {
@@ -1144,4 +1158,10 @@ export function isAtlassianConnectorAuthorityFailureReason(
   value: unknown,
 ): value is AtlassianConnectorAuthorityFailureReason {
   return isOneOf(value, ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS);
+}
+
+export function isAtlassianConnectorRegistryFailureReason(
+  value: unknown,
+): value is AtlassianConnectorRegistryFailureReason {
+  return isOneOf(value, ATLASSIAN_CONNECTOR_REGISTRY_FAILURE_REASONS);
 }

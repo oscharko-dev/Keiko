@@ -1403,4 +1403,41 @@ describe("runRepairCli — runtime state artifacts", () => {
     expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(0);
     expect(c.out()).toContain("owner-only permissions");
   });
+
+  it("reports an unreadable runtime-state artifact instead of throwing", (ctx) => {
+    // #KEIKO-0301 must-fail-before-fix: the repair pipeline had no error containment,
+    // so an EACCES / ENOENT from any filesystem call (statSync inside tightenNodes,
+    // readdirSync inside walkOwnedDir, lstatSync inside classifyEntry) crashed the
+    // command it exists to rescue. After the fix, runRepairCli wraps the pipeline in
+    // a try/catch mirroring uninstall.ts, and reports the failure class as an
+    // `[action]` line without throwing.
+    //
+    // Model the failure by chmodding a Keiko-owned subdirectory (memory/) to 0o000.
+    // checkStateDirPerms tightens the top-level state dir first, then scanRuntimeState
+    // walks into memory/ where readdirSync throws EACCES. Skip when running as root
+    // because chmod does not restrict root.
+    if (process.platform === "win32") ctx.skip();
+    if (typeof process.getuid === "function" && process.getuid() === 0) ctx.skip();
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const stateDir = join(root, ".keiko");
+    mkdirSync(join(stateDir, "memory"), { recursive: true });
+    chmodSync(stateDir, 0o700);
+    // Seed a Keiko-owned file inside memory/ so scanRuntimeState treats the subtree
+    // as owned, then chmod the parent to 0o000 to force readdirSync to throw EACCES.
+    writeFileSync(join(stateDir, "memory", "keiko-memory.db"), "x", "utf8");
+    chmodSync(join(stateDir, "memory"), 0o000);
+    try {
+      const c = makeIo();
+      // Must NOT throw (pre-fix would have thrown EACCES out of walkOwnedDir):
+      expect(() => runRepairCli([], c.io, {}, healthyDeps(root))).not.toThrow();
+      const c2 = makeIo();
+      const code = runRepairCli([], c2.io, {}, healthyDeps(root));
+      // Repair reports an [action] line naming the affected check and exits 1.
+      expect(code).toBe(1);
+      expect(c2.out()).toContain("[action] Runtime state artifacts");
+    } finally {
+      chmodSync(join(stateDir, "memory"), 0o700);
+    }
+  });
 });

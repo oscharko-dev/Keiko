@@ -70,6 +70,18 @@ export interface ProgressiveExtractionOptions {
   readonly resumeWindowIndex?: number;
   readonly resumeObjectCursor?: number;
   readonly resumeExtractedTextBytes?: number;
+  // KEIKO-0172: whether any prior window persisted non-empty text. Determines whether the
+  // resumed WindowTextBuilder should treat the next non-empty page as the FIRST page (no
+  // leading PAGE_SEPARATOR) or as a mid-document page (leading PAGE_SEPARATOR before its
+  // text). The previous implementation reconstructed this flag from `resumeFromPage > 0`, a
+  // proxy that silently breaks for an all-textless pre-resume prefix (scanned front-matter,
+  // cover pages) — the resumed run then produces a spurious "\n\n" before the first real
+  // page that a continuous run of the same document would not have inserted. Callers that
+  // omit this field fall back to the historical `resumeFromPage > 0` proxy for backward
+  // compatibility with existing on-disk checkpoints. Callers that can derive it (e.g.
+  // extract-progressive.ts, from the already-persisted `extracted_text_bytes` cursor) should
+  // pass it explicitly so resume is byte-identical to a continuous single-pass run.
+  readonly resumeAnyPageEmitted?: boolean;
 }
 
 // ─── Extractor ────────────────────────────────────────────────────────────────

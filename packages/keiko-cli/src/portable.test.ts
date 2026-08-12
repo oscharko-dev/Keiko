@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -2884,5 +2885,61 @@ describe("runPortableCli", () => {
     expect(existsSync(join(outsidePrograms, "Keiko.lnk"))).toBe(false);
     expect(existsSync(managedRoot)).toBe(false);
     expect(c.err()).toContain("portable registration refused symlinked ancestor");
+  });
+
+  it("reads a truncated portable registration state as no registration recorded (fail-closed-to-undefined)", () => {
+    // #KEIKO-0333 must-fail-before-fix: readPortableInstallRegistration used to
+    // JSON.parse without try/catch, so a truncated / non-JSON registration file
+    // threw a SyntaxError out of every downstream caller. After the fix, the reader
+    // fails closed to `undefined` — matching launcher-state.ts's fail-closed-to-empty
+    // semantics for the sibling state file — so the CLI observes "no registration
+    // recorded" and stays operable.
+    const stateDir = join(tempRoot(), "state");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(stateDir, "portable-install-state.json"), "not json{", "utf8");
+    expect(() => readPortableInstallRegistration(stateDir)).not.toThrow();
+    expect(readPortableInstallRegistration(stateDir)).toBeUndefined();
+  });
+
+  it("writes portable registration atomically and leaves no temp dir behind after a failed write", async () => {
+    // #KEIKO-0333 must-fail-before-fix: writeRegistration used a single
+    // writeFileSync (truncate-then-write); a crash mid-write could leave a
+    // truncated registration on disk. After the fix, the write goes through
+    // mkdtemp -> write -> rename, mirroring launcher-state.ts saveState. Verify by
+    // running a successful setup and asserting only the target file survives — no
+    // `.portable-registration-*` temp directory remains.
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const env = windowsPortableEnv(home);
+    const managedRoot = join(env.LOCALAPPDATA, "Programs", "Keiko");
+    const stateDir = join(root, "state");
+    writeWindowsFixture(source);
+    const c = capture();
+    const code = await runPortableCli(
+      [
+        "setup",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        source,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      c.io,
+      env,
+      { homedir: () => home, now: () => NOW },
+    );
+    expect(code).toBe(0);
+    // Registration file exists and parses cleanly.
+    const parsed = readPortableInstallRegistration(stateDir);
+    expect(parsed?.status).toBe("managed");
+    // No `.portable-registration-*` temp dirs survived the atomic write.
+    const leftovers = readdirSync(stateDir).filter((name) =>
+      name.startsWith(".portable-registration-"),
+    );
+    expect(leftovers).toEqual([]);
   });
 });

@@ -5,12 +5,14 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import { chmodIfPresent, openMemoryDatabase, quarantineCorruptDb } from "./db.js";
 import { MEMORY_VAULT_SCHEMA_VERSION } from "./schema.js";
 import { TEST_CIPHER } from "./_support.js";
@@ -24,7 +26,9 @@ afterEach(() => {
 });
 
 function freshDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-mem-db-"));
+  // Realpath the tmpdir to avoid tripping the walk-every-ancestor symlink guard on macOS,
+  // where /var (and /tmp) are legitimate system-level symlinks. On Linux this is a no-op.
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-mem-db-"));
   cleanups.push(dir);
   return dir;
 }
@@ -186,5 +190,150 @@ describe("DatabaseSync sanity", () => {
     const db = new DatabaseSync(":memory:");
     expect(db.prepare("SELECT 1 AS one").get()).toEqual({ one: 1 });
     db.close();
+  });
+});
+
+// Regression pin (audit KEIKO-0212): the CLI's `keiko memory maintain|stats|diagnostics|reembed`
+// commands open a second live DatabaseSync handle against the same on-disk file the running BFF
+// already holds open — a documented, intentionally-supported concurrent-process pattern. The only
+// pre-existing two-handle test (openMemoryDatabase corruption path > does not quarantine
+// SQLITE_BUSY lock contention) deliberately forces PRAGMA locking_mode = EXCLUSIVE and asserts the
+// SECOND open throws immediately, proving the open path does not wait-and-succeed under an
+// EXCLUSIVE lock. This block covers the opposite — the ordinary (non-EXCLUSIVE) WAL case — where a
+// second-handle write must WAIT on the RESERVED lock (busy_timeout=5000 by db.ts) and then succeed
+// once the first handle commits, instead of surfacing SQLITE_BUSY. node:sqlite is synchronous, so
+// this test uses a worker thread to hold the second handle and issue the contending write in
+// parallel with the main thread's transaction; the coordination sequence is via structured
+// messages so no wall-clock threshold is asserted (fail-mode is "worker throws" or "worker never
+// completes", not "worker took longer than N ms").
+describe("ordinary WAL concurrency (two live connections)", () => {
+  const workerScript = `
+    const { workerData, parentPort } = require('node:worker_threads');
+    const { DatabaseSync } = require('node:sqlite');
+    const b = new DatabaseSync(workerData.dbPath);
+    // Same busy_timeout the production preparedDatabase() applies to the CLI's handle. Making it
+    // the SAME as the main-thread handle ensures the wait/throw decision comes from SQLite's
+    // ordinary WAL contention semantics, not from a tighter test-only timeout.
+    b.exec("PRAGMA busy_timeout = 5000");
+    parentPort.postMessage({ event: "opened" });
+    parentPort.once("message", (msg) => {
+      if (msg && msg.event === "attempt-write") {
+        try {
+          b.prepare("INSERT INTO memory_vault_secrets (name, value) VALUES (?, ?)").run(
+            workerData.rowName,
+            "kv1.worker",
+          );
+          parentPort.postMessage({ event: "done" });
+        } catch (err) {
+          parentPort.postMessage({ event: "error", message: err && err.message });
+        } finally {
+          b.close();
+        }
+      }
+    });
+  `;
+
+  it("a concurrent writer waits then succeeds, instead of surfacing SQLITE_BUSY", async () => {
+    const dir = freshDir();
+    const dbPath = join(dir, "keiko-memory.db");
+    const a = openMemoryDatabase(dbPath, TEST_CIPHER);
+    try {
+      a.exec("BEGIN IMMEDIATE");
+      a.prepare("INSERT INTO memory_vault_secrets (name, value) VALUES (?, ?)").run(
+        "m1-sentinel",
+        "kv1.main",
+      );
+
+      const worker = new Worker(workerScript, {
+        eval: true,
+        workerData: { dbPath, rowName: "m2-sentinel" },
+      });
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          worker.once("message", (msg: { event: string }) => {
+            if (msg.event === "opened") resolve();
+            else reject(new Error(`unexpected first message: ${msg.event}`));
+          });
+        });
+
+        const donePromise = new Promise<{ event: string; message?: string }>((resolve) => {
+          worker.on("message", (msg: { event: string; message?: string }) => {
+            if (msg.event === "done" || msg.event === "error") resolve(msg);
+          });
+        });
+
+        // Tell the worker to attempt its INSERT. node:sqlite is synchronous, so once the worker
+        // processes this message its thread is fully blocked inside SQLite's lock wait until we
+        // COMMIT below (busy_timeout=5000 keeps it there rather than throwing). A short
+        // coordination wait lets the worker's message handler run, call INSERT, and be sitting
+        // inside SQLite's lock-wait BEFORE we release the lock — this is what proves the semantics
+        // are wait-then-succeed rather than "both handles happen to serialize because we commit
+        // before the worker even attempts INSERT". The wait is NOT a wall-clock threshold assertion
+        // (no `expect(elapsed).toBeLessThan(...)`); it exists to widen the window in which the
+        // worker's INSERT is actually blocked. If busy_timeout were 0 (KEIKO-0212 sabotage
+        // scenario), the worker's INSERT would surface SQLITE_BUSY during this window instead of
+        // waiting.
+        worker.postMessage({ event: "attempt-write" });
+        await new Promise((resolve) => setTimeout(resolve, 250));
+
+        a.exec("COMMIT");
+
+        const result = await donePromise;
+        expect(result.event).toBe("done");
+
+        const rows = a
+          .prepare(
+            "SELECT name FROM memory_vault_secrets WHERE name LIKE 'm%-sentinel' ORDER BY name",
+          )
+          .all() as unknown as readonly { name: string }[];
+        expect(rows.map((r) => r.name)).toEqual(["m1-sentinel", "m2-sentinel"]);
+      } finally {
+        await worker.terminate();
+      }
+    } finally {
+      a.close();
+    }
+  });
+
+  it("a concurrent reader on a third handle sees a consistent (non-torn) row set", () => {
+    // WAL isolation guarantees a reader sees either the pre-transaction or post-commit snapshot,
+    // never a partially-visible intermediate. Prove this by starting a BEGIN IMMEDIATE writer,
+    // opening a fresh reader handle, and asserting the reader sees the pre-write row set exactly.
+    // After commit, a fresh read observes the post-write set. Both reads happen through a live
+    // third handle that never enters the write transaction itself.
+    const dir = freshDir();
+    const dbPath = join(dir, "keiko-memory.db");
+    const a = openMemoryDatabase(dbPath, TEST_CIPHER);
+    const reader = new DatabaseSync(dbPath);
+    try {
+      a.prepare("INSERT INTO memory_vault_secrets (name, value) VALUES (?, ?)").run(
+        "pre-existing",
+        "kv1.pre",
+      );
+
+      a.exec("BEGIN IMMEDIATE");
+      a.prepare("INSERT INTO memory_vault_secrets (name, value) VALUES (?, ?)").run(
+        "mid-transaction",
+        "kv1.mid",
+      );
+
+      // Reader sees the pre-transaction snapshot — the mid-transaction row is not yet visible.
+      const preRows = reader
+        .prepare("SELECT name FROM memory_vault_secrets WHERE name IN (?, ?) ORDER BY name")
+        .all("pre-existing", "mid-transaction") as unknown as readonly { name: string }[];
+      expect(preRows.map((r) => r.name)).toEqual(["pre-existing"]);
+
+      a.exec("COMMIT");
+
+      // Post-commit, a fresh read observes the full committed state.
+      const postRows = reader
+        .prepare("SELECT name FROM memory_vault_secrets WHERE name IN (?, ?) ORDER BY name")
+        .all("pre-existing", "mid-transaction") as unknown as readonly { name: string }[];
+      expect(postRows.map((r) => r.name)).toEqual(["mid-transaction", "pre-existing"]);
+    } finally {
+      reader.close();
+      a.close();
+    }
   });
 });

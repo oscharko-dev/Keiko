@@ -1564,12 +1564,21 @@ function persistRegenerationResult(args: {
     regeneratedManifest: args.regenerated.manifest,
     completedAt: args.regenerated.completedAt,
   });
+  // The MERGED, post-dedup candidate id set the new run actually persisted (KEIKO-0344): the
+  // review runState is derived from these ids, so the review store must see exactly what the
+  // candidate artifact does.
+  const mergedCandidateIds = buildMergedCandidates(
+    args.newRunId,
+    args.narrowed.preservedCandidates,
+    args.regenerated.candidates,
+  ).map((candidate) => String(candidate.id));
   migrateReviewStateForRegeneration({
     oldRunId: args.drift.manifest.runId,
     newRunId: args.newRunId,
     evidenceDir: args.evidenceDir,
     preservedCandidateIds: args.narrowed.preservedCandidates.map((candidate) => candidate.id),
     staleCandidateIds: [...args.narrowed.staleIds],
+    allCandidateIds: mergedCandidateIds,
     now: args.regenerated.completedAt,
     redact: args.deps.redactor,
   });

@@ -367,12 +367,19 @@ function runDelete(
   return ready.result;
 }
 
+// Dedupe the batch by memory id BEFORE preparing/applying any delete. A repeated id in one batch
+// call otherwise causes the second occurrence's applyPreparedDelete to observe changes===0 (the
+// row was already removed by the first pass within the same transaction) and throw not-found,
+// which rolls back every other valid deletion. Semantics are last-wins: when the same id appears
+// more than once, the LAST occurrence's options survive (matching how a Map collapses duplicate
+// keys). Audit KEIKO-0442.
 function runBatchDeleteMemories(
   db: DatabaseSync,
   deletes: readonly MemoryBatchDelete[],
   opts: ResolvedOptions,
 ): readonly MemoryDeleteResult[] {
-  const ready = deletes.map((entry) => prepareDelete(db, entry.id, entry.options, opts));
+  const deduped = [...new Map(deletes.map((entry) => [entry.id, entry])).values()];
+  const ready = deduped.map((entry) => prepareDelete(db, entry.id, entry.options, opts));
   db.exec("BEGIN");
   try {
     for (const prepared of ready) {

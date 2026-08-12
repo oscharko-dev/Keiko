@@ -7,7 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -31,7 +31,7 @@ let vault: MemoryVaultStore;
 let evidenceStore: EvidenceStore;
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), "keiko-voice-recap-"));
+  tmp = mkdtempSync(join(realpathSync(tmpdir()), "keiko-voice-recap-"));
   projectPath = join(tmp, "repo");
   mkdirSync(projectPath);
   const memoryDir = join(tmp, "vault");
