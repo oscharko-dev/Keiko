@@ -15,7 +15,7 @@
 // NOT modified (its SHA is pinned by tests). Decorative glyphs are `aria-hidden`; the accessible name
 // always comes from the control's label.
 
-import { useEffect, useRef, type ReactNode, type Ref } from "react";
+import { useEffect, useId, useRef, type ReactNode, type Ref } from "react";
 import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
 import { useTranslate } from "@/lib/i18n";
 import KeikoSelect from "./KeikoSelect";
@@ -129,6 +129,10 @@ export function VoiceDialogInterruptButton({
   onInterrupt,
 }: VoiceDialogInterruptButtonProps): ReactNode {
   const t = useTranslate();
+  // KfQ 3765608983: two instances of this button can co-exist (e.g. the sibling
+  // VoiceDialogControls cluster and ChatWindow's composer overlay if both mount). Use a
+  // useId()-generated per-instance id so duplicate ids never appear in the DOM.
+  const hintId = useId();
   return (
     <button
       type="button"
@@ -137,7 +141,7 @@ export function VoiceDialogInterruptButton({
       // GEN-UI-A11Y-013: aria-disabled + guarded onClick keep the control focusable and its
       // availability condition audible; the native `disabled` would blur and hide it.
       aria-disabled={!canInterrupt}
-      aria-describedby={SESSION_INTERRUPT_HINT_ID}
+      aria-describedby={hintId}
       onClick={() => {
         if (!canInterrupt) return;
         onInterrupt();
@@ -147,7 +151,7 @@ export function VoiceDialogInterruptButton({
       {/* No inline space here: aria-label already names the button, so this sr-only hint is
           read separately via aria-describedby, not concatenated with the visible label text —
           no space is ever implied (S6772). */}
-      <span id={SESSION_INTERRUPT_HINT_ID} className="sr-only">
+      <span id={hintId} className="sr-only">
         {t("voiceDialog.interrupt.unavailableHint")}
       </span>
     </button>
