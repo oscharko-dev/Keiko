@@ -3924,6 +3924,85 @@ describe("useChatSession canonical Voice FIFO", () => {
     expect(sendDesktopChat).not.toHaveBeenCalled();
     expect(askGrounded).not.toHaveBeenCalled();
   });
+
+  // KEIKO-0485 — ADR-0154 D1 characterization pin. The canonical Voice FIFO captures the memory
+  // request at enqueue time and delivers it verbatim; a memory-settings change made after the turn
+  // was queued does NOT retroactively rewrite the queued turn's memory (or its target modelId).
+  // This test exists so a future change cannot silently start re-deriving settings at drain time —
+  // that would directly contradict ADR-0154 D1's accepted "immutable target captured during
+  // handoff" text and needs an ADR amendment, not a quiet behavior change.
+  it("pins the memory request captured at enqueue time even if settings change before drain", async () => {
+    const rendered = await setupVoiceQueueSession();
+    const settings = renderHook(() => useConversationMemorySettings());
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+
+    // Initial settings at ENQUEUE time for the target turn.
+    act(() => {
+      settings.result.current.setMemoryEnabled(true);
+      settings.result.current.setMemoryBudgetTokens(1234);
+      settings.result.current.setMemoryMode("supervised-coding");
+    });
+
+    // Codex on PR #3089 (3764952038): to actually catch a regression that moves memory capture
+    // from enqueue time to drain time, the target turn has to sit in the FIFO — behind an earlier
+    // turn — while settings change. A deferred sendDesktopChat delays only the RESPONSE, not
+    // queue advancement, so the target's request object was constructed pre-mutation regardless
+    // of when the derivation actually runs. Block the FIFO with a prior turn instead.
+    const blockerGate = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    vi.mocked(sendDesktopChat)
+      .mockImplementationOnce(async () => blockerGate.promise as never)
+      .mockImplementationOnce(async () =>
+        completedTurn("pinned memory turn", "memory-pin-assistant"),
+      );
+
+    let blocker: Promise<SendMessageOutcome> | undefined;
+    let target: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      blocker = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("blocker turn", "voice-memory-blocker"),
+      );
+      target = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("pinned memory turn", "voice-memory-pin"),
+      );
+    });
+    // The FIFO drains one at a time; the target must still be queued behind the blocker.
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledTimes(1));
+
+    // Mutate every memory input WHILE the target sits in the FIFO. A re-derivation at drain
+    // time would land these values on the pending turn — the pin exists to prove that never
+    // happens.
+    act(() => {
+      settings.result.current.setMemoryEnabled(false);
+      settings.result.current.setMemoryBudgetTokens(9999);
+      settings.result.current.setMemoryMode("autonomous-delivery");
+    });
+
+    // Release the blocker so the target advances through the FIFO — the derivation, if any,
+    // would run now, under the mutated settings.
+    blockerGate.resolve(completedTurn("blocker turn", "blocker-assistant"));
+    await act(async () => {
+      await blocker;
+      await target;
+    });
+
+    // KfQ 3765528715: pin that both the blocker AND the target actually reached the wire — if the
+    // target never drained, `targetRequest?.memory` would be `undefined` and every `not.toMatchObject`
+    // assertion would trivially pass, hiding a regression that stopped draining the queue.
+    expect(sendDesktopChat).toHaveBeenCalledTimes(2);
+    // The target turn is the SECOND sendDesktopChat call.
+    const targetRequest = vi.mocked(sendDesktopChat).mock.calls[1]?.[0];
+    // ADR-0154 D1: memory captured at enqueue time survives every intervening settings change,
+    // even when drain happens after the change.
+    expect(targetRequest?.memory).toMatchObject({
+      enabled: true,
+      budgetTokens: 1234,
+      mode: "supervised-coding",
+      surface: "voice",
+    });
+    expect(targetRequest?.memory).not.toMatchObject({ enabled: false });
+    expect(targetRequest?.memory).not.toMatchObject({ budgetTokens: 9999 });
+    expect(targetRequest?.memory).not.toMatchObject({ mode: "autonomous-delivery" });
+  });
 });
 
 describe("useChatSession memory autonomy hydration", () => {

@@ -44,6 +44,11 @@ const I18N_USAGE_PATTERNS = [
   /\bCodingWorkbenchTranslate\b/,
   /\btranslateOptionalWidget\s*\(/,
   /\blocalizedWindow[A-Za-z]*\s*\(/,
+  // Feature-scoped catalog hooks for the Problems panel (Issue #2213) and other panels that
+  // ship their own EN/DE catalog under `packages/keiko-ui/src/app/components/desktop/widgets/panels/*-i18n.ts`.
+  // These follow the same shape as `useTranslate` / `useCodingWorkbenchTranslate` above:
+  // a hook that returns `(key, values?) => string`, backed by a matching-key EN and DE map.
+  /\buseProblemsTranslate\s*\(/,
 ];
 // Each quoted alternative used to open with an unbounded [^"]* that overlaps the required
 // [A-Za-z] pivot and the unbounded [^"]* that follows it, so a quote-less run of letters made

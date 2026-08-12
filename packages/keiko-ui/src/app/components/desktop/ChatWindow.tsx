@@ -118,7 +118,7 @@ import {
   type VoiceAuraState,
   type VoiceAuraStateSnapshot,
 } from "./hooks/voice-dialog-state";
-import { VoiceDialogModeSwitch } from "./VoiceDialogMode";
+import { VoiceDialogInterruptButton, VoiceDialogModeSwitch } from "./VoiceDialogMode";
 import styles from "./ChatWindow.module.css";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
 import { fetchFilesSearch, updateChat } from "@/lib/api";
@@ -1964,6 +1964,12 @@ interface VoiceDialogComposerControlsProps {
   readonly voiceDialogActive: boolean;
   readonly onToggleVoiceDialog: () => void;
   readonly voiceDialogButtonRef: Ref<HTMLButtonElement>;
+  // Issue #2894 (KEIKO-0217) — the barge-in affordance. `onInterrupt` is defined only once a
+  // dialogue session is actually connected (mirrors VoiceDialogControls's own presence gate:
+  // the button mounts when the caller has something to interrupt); `canInterrupt` then governs
+  // whether the mounted button is actionable, exactly as VoiceDialogInterruptButton expects.
+  readonly canInterrupt: boolean;
+  readonly onInterrupt: (() => void) | undefined;
   readonly compact?: boolean | undefined;
 }
 
@@ -2110,6 +2116,8 @@ function VoiceDialogComposerControls({
   voiceDialogActive,
   onToggleVoiceDialog,
   voiceDialogButtonRef,
+  canInterrupt,
+  onInterrupt,
   compact = false,
 }: VoiceDialogComposerControlsProps): ReactNode {
   return (
@@ -2127,6 +2135,9 @@ function VoiceDialogComposerControls({
           buttonRef={playbackButtonRef}
           compact={compact}
         />
+        {onInterrupt !== undefined ? (
+          <VoiceDialogInterruptButton canInterrupt={canInterrupt} onInterrupt={onInterrupt} />
+        ) : null}
       </div>
     </div>
   );
@@ -2657,6 +2668,19 @@ function VoiceDialogAttachments({
   );
 }
 
+// KEIKO-0217: the Interrupt control mounts once a dialogue session is actually connected (there
+// is nothing to barge in on before that); `canInterrupt` then governs whether the mounted button
+// is actionable. Gating presence on `phase === "connected"` (rather than on `voiceDialogActive`
+// alone) keeps it out of the DOM through requesting/negotiating/error, the same way
+// VoiceRealtimeStatusFromController is gated on the error phase specifically. Extracted so
+// ComposerVoiceOverlay's cyclomatic complexity stays under the eslint bar.
+function isVoiceInterruptReachable(
+  voiceDialogActive: boolean,
+  controller: RealtimeVoiceController,
+): boolean {
+  return voiceDialogActive && controller.phase === "connected";
+}
+
 function ComposerVoiceOverlay({
   voiceAuraActive,
   announcedVoiceHeadline,
@@ -2692,6 +2716,7 @@ function ComposerVoiceOverlay({
   readonly pendingAttachments: readonly PendingAttachment[];
   readonly onRemoveAttachment: (id: string) => void;
 }): ReactNode {
+  const interruptReachable = isVoiceInterruptReachable(voiceDialogActive, realtimeVoiceController);
   return (
     <>
       {voiceAuraActive ? (
@@ -2730,6 +2755,8 @@ function ComposerVoiceOverlay({
               playbackButtonRef={playbackButtonRef}
               voiceDialogActive={voiceDialogActive}
               onToggleVoiceDialog={onToggleVoiceDialog}
+              canInterrupt={realtimeVoiceController.canInterrupt}
+              onInterrupt={interruptReachable ? realtimeVoiceController.interrupt : undefined}
               voiceDialogButtonRef={voiceDialogButtonRef}
               compact={compact}
             />
@@ -2973,11 +3000,18 @@ function ComposerCoreImpl({
     (): boolean => canonicalVoiceCaptureMustPause?.() !== true,
     [canonicalVoiceCaptureMustPause],
   );
+  // Issue #2894 (KEIKO-0364) — ADR-0154 D1/D5: grounded retrieval runs in the canonical chat
+  // pipeline AFTER the spoken final is handed off, never inside Realtime itself, so this reads
+  // the canonical send state useChatSession already owns instead of standing up a second store.
+  // While voice dialogue is active the typed composer layer is inert (#2843), so a grounded send
+  // in flight can only be the pending canonical voice turn.
+  const canonicalVoiceRetrieving = voiceDialogActive && sending && hasGroundingScope(activeChat);
   const realtimeVoice = useRealtimeVoice({
     chatContext: composerRealtimeVoiceChatContext(activeChat),
     canStartCapture: canStartCanonicalVoiceCapture,
     onCanonicalUserTurn: commitCanonicalVoiceTurn,
     onUserSpeechStart: interruptCanonicalVoiceTurn,
+    retrieving: canonicalVoiceRetrieving,
   });
   const voiceDialogAvailable = voiceDialog.available && activeChat !== undefined;
   const playbackTurnState = playbackPhaseToTurnState(playback.snapshot.phase);

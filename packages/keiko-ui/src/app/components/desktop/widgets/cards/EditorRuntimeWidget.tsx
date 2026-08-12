@@ -2526,7 +2526,7 @@ function EditorRuntimeWidget({
     }
     if (maxBytes !== null && contentSizeBytes > maxBytes) return;
     if (activeContentHash === null) return;
-    const timer = window.setTimeout(() => {
+    const flushHotExitSnapshot = (): void => {
       const snapshot: EditorHotExitSnapshotV1 = {
         schemaVersion: EDITOR_HOT_EXIT_SCHEMA_VERSION,
         workspaceRoot: root,
@@ -2541,9 +2541,22 @@ function EditorRuntimeWidget({
       };
       lastHotExitSnapshotKeyRef.current = snapshotKey;
       dropHotExitPersistenceFailure(writeEditorHotExitSnapshot(snapshot));
-    }, HOT_EXIT_WRITE_DEBOUNCE_MS);
-    return () => {
+    };
+    const timer = window.setTimeout(flushHotExitSnapshot, HOT_EXIT_WRITE_DEBOUNCE_MS);
+    // KEIKO-0337: a graceful tab close/refresh fires `pagehide`, not the debounce timer above, so
+    // the last <400ms of edits would otherwise never reach the hot-exit store. Clear the pending
+    // timer and flush synchronously — fire-and-forget, since `writeEditorHotExitSnapshot` is
+    // IndexedDB + async-hash based and pagehide handlers cannot await. `pagehide`, not
+    // `beforeunload`, is the correct modern event: it never blocks navigation or triggers a
+    // confirm-close prompt.
+    const handlePageHide = (): void => {
       window.clearTimeout(timer);
+      flushHotExitSnapshot();
+    };
+    window.addEventListener("pagehide", handlePageHide);
+    return (): void => {
+      window.clearTimeout(timer);
+      window.removeEventListener("pagehide", handlePageHide);
     };
   }, [
     activeContentHash,

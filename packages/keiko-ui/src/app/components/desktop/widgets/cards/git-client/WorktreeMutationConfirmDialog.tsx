@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { useDialogTabTrap } from "../../../hooks/useDialogTabTrap";
@@ -22,9 +22,13 @@ export function WorktreeMutationConfirmDialog({
   onConfirm,
 }: WorktreeMutationConfirmDialogProps): ReactNode {
   const t = useOptionalWidgetTranslate();
-  const dialogRef = useRef<HTMLDialogElement>(null);
+  // KEIKO-0228: drop the native <dialog open> shell — it advertised aria-modal="true" without any
+  // of the modality machinery showModal() promises (jsdom does not implement showModal at all).
+  // Use the div+role="alertdialog"+useDialogTabTrap pattern the three sibling dialogs already ship.
+  const dialogRef = useRef<HTMLDivElement>(null);
   useDialogTabTrap(dialogRef);
   useModalInteractionLock({ initialFocusRef: dialogRef });
+  const descriptionId = useId();
   const branchSwitch = request.kind === "branch-switch";
   const label = branchSwitch
     ? t("gitClientWindow.confirm.branchSwitch.title")
@@ -41,22 +45,16 @@ export function WorktreeMutationConfirmDialog({
   }, [onCancel]);
 
   const dialog = (
-    <dialog
-      open
+    <div
       ref={dialogRef}
+      role="alertdialog"
       aria-modal="true"
       aria-label={label}
+      aria-describedby={descriptionId}
       tabIndex={-1}
       style={{
         position: "fixed",
         inset: 0,
-        width: "auto",
-        height: "auto",
-        maxWidth: "none",
-        maxHeight: "none",
-        margin: 0,
-        padding: 0,
-        border: 0,
         zIndex: 100,
         display: "grid",
         placeItems: "center",
@@ -79,7 +77,7 @@ export function WorktreeMutationConfirmDialog({
         <h2 style={{ margin: 0, font: "var(--weight-semibold) var(--text-body) var(--font-ui)" }}>
           {label}
         </h2>
-        <p style={{ margin: 0, color: "var(--fg-muted)" }}>
+        <p id={descriptionId} style={{ margin: 0, color: "var(--fg-muted)" }}>
           {branchSwitch
             ? t("gitClientWindow.confirm.branchSwitch.body", { branch: request.branchName })
             : t("gitClientWindow.confirm.pull.body")}
@@ -95,7 +93,7 @@ export function WorktreeMutationConfirmDialog({
           </button>
         </div>
       </section>
-    </dialog>
+    </div>
   );
   return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
 }

@@ -247,6 +247,38 @@ describe("ProjectPanel", () => {
     expect(projectItem).toHaveAttribute("aria-expanded", "true");
   });
 
+  // KEIKO-0262: ArrowRight (expand) and ArrowLeft (collapse) must never activate the project —
+  // otherwise the user's composer draft is silently discarded on any keyboard tree navigation.
+  it("ArrowRight/ArrowLeft toggle expansion without calling openProject", async () => {
+    const user = userEvent.setup();
+    const openProject = vi.fn();
+    const otherProject: ProjectWithAvailability = {
+      path: "/workspace/other",
+      name: "OtherProject",
+      favorite: false,
+      createdAt: 3,
+      lastOpenedAt: 4,
+      available: true,
+    };
+    render(
+      <ChatSessionProvider
+        value={{ ...session(), openProject, projects: [session().projects[0]!, otherProject] }}
+      >
+        <ProjectPanel />
+      </ChatSessionProvider>,
+    );
+    const other = screen.getByRole("treeitem", { name: /OtherProject/ });
+    other.focus();
+    expect(other).toHaveAttribute("aria-expanded", "false");
+
+    await user.keyboard("{ArrowRight}");
+    expect(other).toHaveAttribute("aria-expanded", "true");
+    await user.keyboard("{ArrowLeft}");
+    expect(other).toHaveAttribute("aria-expanded", "false");
+
+    expect(openProject).not.toHaveBeenCalled();
+  });
+
   // handleTreeKey guards: non-registered keys don't crash, non-treeitem targets are ignored.
   it("ignores non-tree navigation keys (PA-03)", async () => {
     const user = userEvent.setup();
@@ -295,6 +327,22 @@ describe("ProjectPanel", () => {
     );
     const group = screen.getByRole("group", { name: "Keiko" });
     expect(within(group).getByText("No chats")).toBeInTheDocument();
+  });
+
+  // WCAG 2.5.8 Target Size (Minimum): the caret button's pointer target must be at least
+  // 24×24 CSS pixels (Codex on PR #3089: 3766009390).
+  it("gives the caret a >=24x24 CSS-px pointer target (WCAG 2.5.8)", () => {
+    render(
+      <ChatSessionProvider value={session()}>
+        <ProjectPanel />
+      </ChatSessionProvider>,
+    );
+    const caret = document.querySelector<HTMLButtonElement>("button.proj-caret-btn");
+    expect(caret).not.toBeNull();
+    // jsdom returns the inline style values as strings; the visible chevron stays smaller
+    // but the button's own hit area is what the pointer sees.
+    expect(caret?.style.width).toBe("24px");
+    expect(caret?.style.height).toBe("24px");
   });
 
   // #2723: the chat row's onClick — confirms the click wiring the extracted render

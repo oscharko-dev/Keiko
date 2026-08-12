@@ -82,8 +82,11 @@ payload values.
 
 The desktop Digital Twin panel does not store separate MemoriaViva entries in
 browser `localStorage`. MemoriaViva's user-facing memory surface is the
-governed `/memoriaviva` route backed by the local vault and `/api/memory/*`
-routes.
+in-desktop `memoria` window (opened from the launcher or via the `memoria`
+`WindowType`, owned by #1295), backed by the local vault and `/api/memory/*`
+routes. The former `/memoriaviva` route stubs were removed in #2894
+(KEIKO-0129); bookmarked deep links fall through the server's `serveStatic`
+fallback onto the desktop shell.
 
 ## What is sent to the model gateway
 

@@ -346,9 +346,6 @@
       "Keiko Mobile",
       "Scan to continue this workspace on your phone."
     ],
-    "packages/keiko-ui/src/app/components/desktop/widgets/panels/NotificationsPanel.tsx": [
-      "Notifications"
-    ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/PluginsPanel.tsx": [
       "Browser automation",
       "Connectors",
@@ -454,13 +451,7 @@
     ],
     "packages/keiko-ui/src/app/local-knowledge/capsule/page.tsx": ["Knowledge Pod Detail — Keiko"],
     "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": ["MemoriaViva"],
-    "packages/keiko-ui/src/app/memoriaviva/consolidation/page.tsx": ["Keiko"],
     "packages/keiko-ui/src/app/memoriaviva/detail/MemoryDetailClient.tsx": ["No memory selected"],
-    "packages/keiko-ui/src/app/memoriaviva/detail/page.tsx": ["Keiko"],
-    "packages/keiko-ui/src/app/memoriaviva/health-scan/page.tsx": ["Keiko"],
-    "packages/keiko-ui/src/app/memoriaviva/journal/page.tsx": ["Keiko"],
-    "packages/keiko-ui/src/app/memoriaviva/page.tsx": ["Keiko"],
-    "packages/keiko-ui/src/app/memoriaviva/review-queue/page.tsx": ["Keiko"],
     "packages/keiko-ui/src/lib/local-knowledge-api.ts": [
       "Embedding mismatch",
       "Embedding opaque",

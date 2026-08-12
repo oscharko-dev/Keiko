@@ -1952,3 +1952,34 @@ describe("useRealtimeVoice errors", () => {
     await waitFor(() => expect(control.result.current.error?.reason).toBe("negotiation-failed"));
   });
 });
+
+// Issue #2894 (KEIKO-0364) — `retrieving` was previously hardcoded `false` in the return statement,
+// so the composer's grounded-retrieval aura ("Checking connected sources…") could never activate for
+// a spoken turn no matter what the canonical chat pipeline was doing. Per ADR-0154 D1/D5, retrieval
+// runs in the canonical chat pipeline AFTER the final transcript is handed off, never inside Realtime
+// itself — so the hook must not compute this from any provider event. It only mirrors the caller's
+// own live signal (derived from useChatSession's `sending` + the active chat's grounding scope) onto
+// the returned controller. These tests exercise exactly that passthrough, independent of the
+// transport/negotiation lifecycle covered elsewhere in this file.
+describe("useRealtimeVoice retrieving passthrough (Issue #2894, KEIKO-0364)", () => {
+  it("defaults retrieving to false when the caller supplies no live signal", () => {
+    const { result } = renderHook(() => useRealtimeVoice({}));
+    expect(result.current.retrieving).toBe(false);
+  });
+
+  it("mirrors the caller's live retrieving signal onto the controller as it changes", () => {
+    const { result, rerender } = renderHook(
+      ({ retrieving }: { readonly retrieving: boolean }) => useRealtimeVoice({ retrieving }),
+      { initialProps: { retrieving: false } },
+    );
+    expect(result.current.retrieving).toBe(false);
+
+    // A grounded retrieval starts for the pending canonical voice turn.
+    rerender({ retrieving: true });
+    expect(result.current.retrieving).toBe(true);
+
+    // The canonical send settles (completed, failed, or cancelled) and the signal clears.
+    rerender({ retrieving: false });
+    expect(result.current.retrieving).toBe(false);
+  });
+});

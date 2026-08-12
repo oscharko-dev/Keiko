@@ -49,17 +49,69 @@ describe("descriptor meta table — production assertion (epic #518 #528 / ADR-0
     expect(WIN_META.terminal.authority).toBe("user-confirm");
   });
 
-  it("inspector / notifications descriptors are ui-only with the ui trust boundary alone", () => {
+  it("inspector descriptor is ui-only with the ui trust boundary alone", () => {
     expect(WIN_META.inspector.authority).toBe("ui-only");
     expect(WIN_META.inspector.trustBoundary).toEqual(["ui"]);
-    expect(WIN_META.notifications.authority).toBe("ui-only");
+  });
+
+  // KEIKO-0158 follow-up (Codex PR #3089): NotificationsPanel is now an honest placeholder
+  // (no notification source is wired), so the descriptor must NOT advertise a functional
+  // unread→read→dismissed lifecycle or ui-only authority (which reads as "the panel writes
+  // user-owned state"). It carries the same read-only / live / transient shape the resources,
+  // mobile, and plugins placeholders already report.
+  it("notifications descriptor matches the read-only placeholder shape", () => {
+    expect(WIN_META.notifications.authority).toBe("read-only");
     expect(WIN_META.notifications.trustBoundary).toEqual(["ui"]);
+    expect(WIN_META.notifications.lifecycle).toEqual(["live"]);
+    expect(WIN_META.notifications.persistence).toBe("durable.ui");
   });
 
   it("pdf preview restores only a durable UI shell and crosses only the network boundary for session fetch", () => {
     expect(WIN_META.pdfCitationPreview.persistence).toBe("durable.ui");
     expect(WIN_META.pdfCitationPreview.trustBoundary).toEqual(["ui", "network"]);
     expect(WIN_META.pdfCitationPreview.authority).toBe("user-confirm");
+  });
+
+  // KEIKO-0175 — MobilePanel.tsx (packages/keiko-ui/.../widgets/panels/MobilePanel.tsx) is a
+  // ~21-line static component: no pairing state, no network call, no persisted config. The
+  // descriptor previously claimed lifecycle [paired, unpaired, error], a network trust boundary,
+  // and durable.config persistence — none of which the component's source backs.
+  it("mobile descriptor matches MobilePanel's static shape — no network boundary, no durable persistence", () => {
+    expect(WIN_META.mobile.trustBoundary).not.toContain("network");
+    expect(WIN_META.mobile.persistence).not.toBe("durable.config");
+    expect(WIN_META.mobile.lifecycle).toEqual(["live"]);
+    expect(WIN_META.mobile.trustBoundary).toEqual(["ui"]);
+    expect(WIN_META.mobile.authority).toBe("read-only");
+    expect(WIN_META.mobile.persistence).toBe("durable.ui");
+  });
+
+  // KEIKO-0175 — PluginsPanel.tsx renders hardcoded MCP/connector fixture rows; its MCP toggle
+  // flips only ephemeral in-memory React state (no localStorage call, unlike AutomationsPanel's
+  // verified `localStorage.setItem(STORE_KEY, ...)`), and no install/uninstall flow exists. The
+  // descriptor previously claimed an "installed" lifecycle state and durable.config persistence —
+  // neither of which any call site in PluginsPanel backs.
+  it("plugins descriptor matches PluginsPanel's placeholder shape — no network boundary, no durable persistence", () => {
+    expect(WIN_META.plugins.trustBoundary).not.toContain("network");
+    expect(WIN_META.plugins.persistence).not.toBe("durable.config");
+    expect(WIN_META.plugins.lifecycle).toEqual(["live"]);
+    expect(WIN_META.plugins.trustBoundary).toEqual(["ui"]);
+    expect(WIN_META.plugins.authority).toBe("read-only");
+    expect(WIN_META.plugins.persistence).toBe("durable.ui");
+  });
+
+  // KEIKO-0158 — AutomationsPanel.tsx's per-row Toggle (role="switch", persisting to
+  // localStorage) was replaced with plain non-interactive status-text rows; no scheduler is
+  // wired behind any row and the component owns no self-managed durable config anymore. The
+  // descriptor previously claimed "user" authority and "durable.config" (self-managed)
+  // persistence — neither of which the component's source backs anymore. The window still
+  // remembers its own position across a reload like any other tool window (durable.ui).
+  it("automations descriptor matches AutomationsPanel's placeholder shape — no self-managed durable config, no user-originated effect", () => {
+    expect(WIN_META.automations.persistence).not.toBe("durable.config");
+    expect(WIN_META.automations.authority).not.toBe("user");
+    expect(WIN_META.automations.lifecycle).toEqual(["live"]);
+    expect(WIN_META.automations.trustBoundary).toEqual(["ui"]);
+    expect(WIN_META.automations.authority).toBe("read-only");
+    expect(WIN_META.automations.persistence).toBe("durable.ui");
   });
 
   it("Coding Workbench config exposes supervised and autonomous preview states", () => {

@@ -612,8 +612,13 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       await user.click(await screen.findByRole("button", { name: "Branch: main" }));
       await user.click(screen.getByRole("menuitemradio", { name: /feat\/a11y/ }));
 
-      const dialog = screen.getByRole("dialog", { name: "Confirm branch switch" });
+      const dialog = screen.getByRole("alertdialog", { name: "Confirm branch switch" });
       expect(dialog).toHaveAttribute("aria-modal", "true");
+      // KEIKO-0228: the dialog must use the div+role="alertdialog" pattern the three siblings ship,
+      // NOT a native <dialog> that advertises aria-modal="true" without any of the modality
+      // machinery showModal() promises (jsdom does not implement showModal at all).
+      expect(dialog.tagName).not.toBe("DIALOG");
+      expect(dialog).toHaveAttribute("role", "alertdialog");
       expect(document.documentElement.dataset.keikoModalOpen).toBe("true");
       await waitFor(() => expect(dialog).toHaveFocus());
       within(dialog).getByRole("button", { name: "Switch branch" }).focus();
@@ -634,7 +639,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       await user.click(await screen.findByRole("button", { name: "Branch: main" }));
       await user.click(screen.getByRole("menuitemradio", { name: /feat\/a11y/ }));
 
-      const dialog = screen.getByRole("dialog", { name: "Branchwechsel bestätigen" });
+      const dialog = screen.getByRole("alertdialog", { name: "Branchwechsel bestätigen" });
       expect(within(dialog).getByRole("button", { name: "Branch wechseln" })).toBeEnabled();
       expect(within(dialog).getByRole("button", { name: "Abbrechen" })).toBeEnabled();
       expect(await axe(dialog)).toHaveNoViolations();
