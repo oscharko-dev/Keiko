@@ -15,7 +15,18 @@
 // `action` item remains (so scripts can detect "manual step required"). `--dry-run`
 // reports without changing anything and exits 1 if any issue (fixable or action) exists.
 
-import { chmodSync, existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fchmodSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import {
@@ -229,9 +240,23 @@ function tightenNodes(
   unreadable: LoosePermFinding[],
 ): void {
   for (const node of nodes) {
+    // PR-review follow-up (Codex thread 3770211419): use lstatSync so a TOCTOU race where
+    // another process replaces the scanned regular file/directory with a symlink between
+    // scanRuntimeState and this call does not silently follow the swap. scanRuntimeState
+    // classifies symlinks as retained and never tightens them, so a symlink observed here
+    // is by definition unexpected and belongs in `unreadable`, not chmodded.
     let observed: string;
     try {
-      const mode = statSync(node.absPath).mode & 0o777;
+      const stat = lstatSync(node.absPath);
+      if (stat.isSymbolicLink()) {
+        unreadable.push({
+          category: node.category,
+          relPath: node.relPath,
+          observed: "unreadable",
+        });
+        continue;
+      }
+      const mode = stat.mode & 0o777;
       if (mode === targetMode) continue;
       observed = `0o${mode.toString(8)}`;
     } catch {
@@ -250,15 +275,39 @@ function tightenNodes(
       findings.push({ category: node.category, relPath: node.relPath, observed });
       continue;
     }
-    try {
-      chmodSync(node.absPath, targetMode);
+    // PR-review follow-up (Codex thread 3770211419): apply the mode through a fresh
+    // O_NOFOLLOW-guarded descriptor so a symlink that lands between the lstat above and this
+    // block cannot redirect the chmod to a target outside the state directory. openSync with
+    // O_NOFOLLOW errors with ELOOP when the final path element is a symlink; fchmodSync then
+    // targets the exact inode we opened. Directories need O_DIRECTORY | O_RDONLY.
+    if (tightenNodeMode(node, targetMode)) {
       findings.push({ category: node.category, relPath: node.relPath, observed });
-    } catch {
+    } else {
       unreadable.push({
         category: node.category,
         relPath: node.relPath,
         observed: "unreadable",
       });
+    }
+  }
+}
+
+function tightenNodeMode(node: RuntimeStateNode, targetMode: number): boolean {
+  let fd: number | undefined;
+  try {
+    fd = openSync(node.absPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    fchmodSync(fd, targetMode);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Best-effort close; a descriptor left dangling here does not weaken the mode we
+        // already applied atomically via fchmodSync.
+      }
     }
   }
 }

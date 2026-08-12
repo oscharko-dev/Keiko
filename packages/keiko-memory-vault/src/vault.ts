@@ -216,6 +216,30 @@ function assertReembedSetUnchanged(
   }
 }
 
+// PR-review follow-up (Codex thread 3770211415): a memory whose body was edited during the
+// CLI's network-backed staging phase would otherwise get committed with a vector generated
+// from the OLD body — the embedding-row snapshot never sees the mutation because a new
+// memory has no prior embedding row and the BFF's best-effort refresh may fail silently.
+// Read each expected memory's current updated_at inside the transaction and refuse the
+// swap on any drift. Missing rows are also drift (concurrent delete). Absent expectation
+// map skips the check for backward callers.
+function assertMemoryVersionsUnchanged(
+  db: DatabaseSync,
+  expectedMemoryVersions: ReadonlyMap<MemoryId, number> | undefined,
+): void {
+  if (!expectedMemoryVersions?.size) return;
+  const stmt = db.prepare("SELECT updated_at FROM memories WHERE id = ?");
+  for (const [memoryId, expectedUpdatedAt] of expectedMemoryVersions) {
+    const row = stmt.get(memoryId) as { readonly updated_at: number } | undefined;
+    if (row?.updated_at !== expectedUpdatedAt) {
+      throw new MemoryStorageError(
+        "precondition-failed",
+        "Memory revision changed during --force staging; rerun.",
+      );
+    }
+  }
+}
+
 function snapshotEmbeddedMemoryIdsFromDb(db: DatabaseSync): ReadonlyMap<MemoryId, number> {
   const rows = db
     .prepare("SELECT memory_id, created_at FROM memory_embeddings")
@@ -230,6 +254,7 @@ function replaceAllEmbeddingRowsAtomically(
   opts: ResolvedOptions,
   pairs: readonly { readonly memoryId: MemoryId; readonly input: MemoryEmbeddingInput }[],
   expectedSnapshot: ReadonlyMap<MemoryId, number> | undefined,
+  expectedMemoryVersions: ReadonlyMap<MemoryId, number> | undefined,
 ): void {
   // PR-review follow-up (Codex thread 3769903813): the bulk path used to skip
   // gateEmbeddingInput, so a provider returning a vector above MAX_EMBEDDING_DIMENSIONS
@@ -245,6 +270,7 @@ function replaceAllEmbeddingRowsAtomically(
       .prepare("SELECT memory_id, created_at FROM memory_embeddings")
       .all() as unknown as EmbeddingRowSnapshot[];
     assertReembedSetUnchanged(existing, stagedIds, expectedSnapshot);
+    assertMemoryVersionsUnchanged(db, expectedMemoryVersions);
     for (const row of existing) {
       deleteEmbeddingRow(db, row.memory_id as MemoryId);
     }
@@ -829,36 +855,24 @@ function buildEdgeOps(db: DatabaseSync, opts: ResolvedOptions): EdgeOps {
 function buildEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EmbeddingOps {
   return {
     upsertEmbedding: (memoryId: MemoryId, embedding: MemoryEmbeddingInput): void => {
-      withSidecarHardening(opts, () => {
-        gateEmbeddingInput(embedding);
-        if (getMemoryRow(db, memoryId, opts.cipher) === undefined) {
-          throw new MemoryStorageError("not-found", "Memory not found.");
-        }
-        upsertEmbeddingRow(db, memoryId, embedding, opts.now(), opts.cipher);
-        opts.emit({
-          kind: "embedding:upserted",
-          memoryId,
-          provider: embedding.provider,
-          modelId: embedding.modelId,
-        });
-      });
+      upsertSingleEmbedding(db, opts, memoryId, embedding);
     },
     deleteEmbedding: (memoryId: MemoryId): void => {
-      withSidecarHardening(opts, () => {
-        if (getMemoryRow(db, memoryId, opts.cipher) === undefined) {
-          throw new MemoryStorageError("not-found", "Memory not found.");
-        }
-        if (deleteEmbeddingRow(db, memoryId)) {
-          opts.emit({ kind: "embedding:deleted", memoryId });
-        }
-      });
+      deleteSingleEmbedding(db, opts, memoryId);
     },
     replaceAllEmbeddings: (
       pairs: readonly { readonly memoryId: MemoryId; readonly input: MemoryEmbeddingInput }[],
       expectedSnapshot?: ReadonlyMap<MemoryId, number>,
+      expectedMemoryVersions?: ReadonlyMap<MemoryId, number>,
     ): void => {
       withSidecarHardening(opts, () => {
-        replaceAllEmbeddingRowsAtomically(db, opts, pairs, expectedSnapshot);
+        replaceAllEmbeddingRowsAtomically(
+          db,
+          opts,
+          pairs,
+          expectedSnapshot,
+          expectedMemoryVersions,
+        );
       });
     },
     listEmbeddedMemoryIds: (): readonly MemoryId[] => {
@@ -874,6 +888,38 @@ function buildEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EmbeddingOp
     getEmbeddings: (memoryIds: readonly MemoryId[]): ReadonlyMap<MemoryId, MemoryEmbeddingRow> =>
       getEmbeddingRows(db, memoryIds, opts.cipher),
   };
+}
+
+function upsertSingleEmbedding(
+  db: DatabaseSync,
+  opts: ResolvedOptions,
+  memoryId: MemoryId,
+  embedding: MemoryEmbeddingInput,
+): void {
+  withSidecarHardening(opts, () => {
+    gateEmbeddingInput(embedding);
+    if (getMemoryRow(db, memoryId, opts.cipher) === undefined) {
+      throw new MemoryStorageError("not-found", "Memory not found.");
+    }
+    upsertEmbeddingRow(db, memoryId, embedding, opts.now(), opts.cipher);
+    opts.emit({
+      kind: "embedding:upserted",
+      memoryId,
+      provider: embedding.provider,
+      modelId: embedding.modelId,
+    });
+  });
+}
+
+function deleteSingleEmbedding(db: DatabaseSync, opts: ResolvedOptions, memoryId: MemoryId): void {
+  withSidecarHardening(opts, () => {
+    if (getMemoryRow(db, memoryId, opts.cipher) === undefined) {
+      throw new MemoryStorageError("not-found", "Memory not found.");
+    }
+    if (deleteEmbeddingRow(db, memoryId)) {
+      opts.emit({ kind: "embedding:deleted", memoryId });
+    }
+  });
 }
 
 function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EdgeAndEmbeddingOps {

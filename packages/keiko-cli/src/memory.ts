@@ -462,6 +462,11 @@ async function forceReembedAtomically(
   // UPDATE to any already-embedded row (not just a concurrent INSERT). vault.replaceAll
   // Embeddings rejects when any existing row's created_at differs from this snapshot.
   const snapshot = vault.snapshotEmbeddedMemoryIds();
+  // PR-review follow-up (Codex thread 3770211415): capture memories.updated_at for each
+  // staged pair too. The embedding-row snapshot cannot catch a body edit on a memory that
+  // had no prior embedding — the concurrent write leaves the (empty) row set unchanged.
+  // Comparing the memory revision inside the swap detects that case; a mismatch aborts.
+  const memoryVersions = new Map<MemoryRecord["id"], number>();
   const staged: StagedVector[] = [];
   for (const memoryId of targetIds) {
     const record = vault.getMemory(memoryId);
@@ -471,12 +476,13 @@ async function forceReembedAtomically(
       // replace will remove any lingering embedding row for it under the same lock.
       continue;
     }
+    memoryVersions.set(record.id, record.updatedAt);
     const staged1 = await embedOneForForce(embed, record, counts);
     if (staged1 === null) return counts;
     staged.push(staged1);
   }
   try {
-    vault.replaceAllEmbeddings(staged, snapshot);
+    vault.replaceAllEmbeddings(staged, snapshot, memoryVersions);
     counts.embedded = staged.length;
   } catch {
     counts.failed = staged.length;

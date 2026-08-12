@@ -303,14 +303,26 @@ function isStagingDirOlderThan(path: string, staleBefore: number): boolean {
 }
 
 function resolveCanonicalPackagePath(packagePath: string): string {
-  if (!existsSync(packagePath)) return packagePath;
   // PR-review follow-up (Codex thread 3769557875): propagate lstat/realpath failures instead
   // of falling back to the symlink path. A transient EACCES/EIO/EBUSY on a symlink here used
   // to skip canonicalization silently, and if access recovered before renameSync the rewrite
   // replaced the symlink entry — severing the link and leaving the canonical target stale —
   // while `keiko init` reported success. Surfacing the error keeps the invariant that a
   // reported-success rewrite always updated the target the symlink pointed at.
-  return lstatSync(packagePath).isSymbolicLink() ? realpathSync(packagePath) : packagePath;
+  //
+  // PR-review follow-up (Codex thread 3770211407): call lstatSync directly. Gating it behind
+  // existsSync used to collapse EIO/EACCES to "return original path", which reintroduced the
+  // same silent-canonicalisation bug the earlier fix removed. Only ENOENT (the file does not
+  // exist yet — first run of `keiko init`) means "no canonical target to resolve"; any other
+  // errno propagates.
+  let stat;
+  try {
+    stat = lstatSync(packagePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return packagePath;
+    throw error;
+  }
+  return stat.isSymbolicLink() ? realpathSync(packagePath) : packagePath;
 }
 
 function capturePackageMode(packagePath: string): number | undefined {
