@@ -67,7 +67,10 @@ jobs:
       - name: Check out protected base for debounce
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          # Bind the workspace to the commit whose workflow GitHub is executing. A long-lived PR's
+          # payload base.sha is a PR comparison snapshot and can lag dev; using it made the
+          # action-pin cross-check read an old workflow and disabled the review store.
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -163,7 +166,10 @@ jobs:
       - name: Check out protected base
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          # Use the exact protected commit that supplied this workflow, not the pull request
+          # payload's historical base SHA. Candidate diff boundaries remain the immutable event
+          # base/head SHAs passed to the reviewer.
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
 
