@@ -31,9 +31,11 @@ describe("AutomationsPanel", () => {
     expect(screen.queryAllByRole("switch")).toHaveLength(0);
     expect(screen.queryAllByRole("button")).toHaveLength(0);
 
-    // Status is carried by visible copy instead of aria-checked.
-    expect(screen.getAllByText("On")).toHaveLength(2);
-    expect(screen.getAllByText("Off")).toHaveLength(1);
+    // Status is carried by visible "Preview" copy on every row — never "On/Off", which would
+    // read as a live scheduler state (Codex review, PR #3089).
+    expect(screen.getAllByText("Preview")).toHaveLength(3);
+    expect(screen.queryByText("On")).toBeNull();
+    expect(screen.queryByText("Off")).toBeNull();
   });
 
   it("does not write to window.localStorage when a row is clicked", async () => {
@@ -63,9 +65,10 @@ describe("AutomationsPanel", () => {
 
     render(<AutomationsPanel />);
 
-    // The rows still reflect the fixed, honest defaults — not whatever a previous session
-    // (or a hand-crafted storage entry) left behind.
-    expect(screen.getAllByText("On")).toHaveLength(2);
-    expect(screen.getAllByText("Off")).toHaveLength(1);
+    // The rows still reflect the fixed, honest placeholder state — not whatever a previous
+    // session (or a hand-crafted storage entry) left behind.
+    expect(screen.getAllByText("Preview")).toHaveLength(3);
+    expect(screen.queryByText("On")).toBeNull();
+    expect(screen.queryByText("Off")).toBeNull();
   });
 });

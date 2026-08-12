@@ -236,9 +236,9 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     persistence: "transient",
   },
   notifications: {
-    lifecycle: ["unread", "read", "dismissed"],
+    lifecycle: ["live"],
     trustBoundary: ["ui"],
-    authority: "ui-only",
+    authority: "read-only",
     persistence: "transient",
   },
   resources: {

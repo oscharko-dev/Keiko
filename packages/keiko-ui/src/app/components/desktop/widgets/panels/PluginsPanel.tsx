@@ -1,8 +1,14 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { useTranslate } from "@/lib/i18n";
 import { Icons } from "../../Icons";
 import type { IconName } from "../../Icons";
+import styles from "./PluginsPanel.module.css";
+
+// KEIKO-0160: brands whose SVG ships white-on-transparent (invisible on light theme) need a
+// theme-aware invert applied only in the light theme so they stay visible on both backgrounds.
+const BRAND_INVERT_ON_LIGHT: ReadonlySet<string> = new Set(["notion", "openai"]);
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CheckIcon = Icons.check;
@@ -49,9 +55,10 @@ interface PlugIconProps {
 
 function PlugIcon({ img, icon, glyph }: PlugIconProps): ReactNode {
   if (img !== undefined) {
+    const cls = BRAND_INVERT_ON_LIGHT.has(img) ? `pl-img ${styles.brandOnLight}` : "pl-img";
     return (
       // eslint-disable-next-line @next/next/no-img-element -- design CSS sizes raw SVG via .pl-img; next/image breaks sizing
-      <img className="pl-img" src={`/assets/icons/${img}.svg`} width="20" height="20" alt="" />
+      <img className={cls} src={`/assets/icons/${img}.svg`} width="20" height="20" alt="" />
     );
   }
   if (icon !== undefined) {
@@ -66,22 +73,20 @@ function PlugIcon({ img, icon, glyph }: PlugIconProps): ReactNode {
 }
 
 export function PluginsPanel(): ReactNode {
-  const activeCount = MCP_SERVERS.filter((m) => m.on).length;
-
+  const t = useTranslate();
   return (
     <div className="plg">
       <div className="plg-sec">
         <span className="plg-sec-t">MCP Servers</span>
-        <span className="plg-sec-c mono">
-          {activeCount}/{MCP_SERVERS.length} active
-        </span>
+        <span className="plg-sec-c mono">{t("plugins.mcp.previewHeader")}</span>
       </div>
       {MCP_SERVERS.map((m) => (
         // GEN-UI-INTERACTION-003 (KEIKO-0158): MCP servers are placeholders — no process
-        // actually runs behind any row. Render as non-interactive rows so they are NOT tab
-        // stops and do not advertise switch semantics — the "Running/Stopped" copy carries
-        // the status. Mirrors the Connectors section below (GEN-UI-INTERACTION-001).
-        <div className="plg-row" key={m.name} data-on={m.on}>
+        // actually runs behind any row. Render as non-interactive rows and label each with
+        // "Preview" so sighted users see the row is not live; previously the fake
+        // Running/Stopped copy misled readers into believing a process existed (Codex
+        // review on PR #3089).
+        <div className="plg-row" key={m.name} data-state="preview">
           <span className="plg-ico">
             <PlugIcon img={m.img} icon={m.icon} />
           </span>
@@ -89,8 +94,8 @@ export function PluginsPanel(): ReactNode {
             <span className="plg-name">{m.name}</span>
             <span className="plg-desc">{m.desc}</span>
           </span>
-          <span className={`plg-dot${m.on ? " on" : ""}`} aria-hidden="true" />
-          <span className="plg-desc mono">{m.on ? "Running" : "Stopped"}</span>
+          <span className="plg-dot" aria-hidden="true" />
+          <span className="plg-desc mono">{t("plugins.mcp.rowStatusPreview")}</span>
         </div>
       ))}
       <div className="plg-sec plg-sec2">

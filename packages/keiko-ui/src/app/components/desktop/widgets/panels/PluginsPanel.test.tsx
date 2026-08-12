@@ -7,10 +7,12 @@ import { describe, expect, it } from "vitest";
 import { PluginsPanel } from "./PluginsPanel";
 
 describe("PluginsPanel", () => {
-  it("renders MCP server rows as honest, non-interactive status text", () => {
+  it("renders MCP server rows as honest, non-interactive placeholders", () => {
     render(<PluginsPanel />);
 
-    expect(screen.getByText("5/7 active")).toBeInTheDocument();
+    // The section header no longer counts fake "active" servers; it announces the placeholder
+    // state explicitly (Codex review, PR #3089).
+    expect(screen.getByText("Preview — no server wired")).toBeInTheDocument();
     expect(screen.getByText("Context7")).toBeInTheDocument();
     expect(screen.getByText("Up-to-date library docs")).toBeInTheDocument();
     expect(screen.getByText("Playwright")).toBeInTheDocument();
@@ -20,9 +22,11 @@ describe("PluginsPanel", () => {
     expect(screen.queryAllByRole("switch")).toHaveLength(0);
     expect(screen.queryAllByRole("button")).toHaveLength(0);
 
-    // Status is carried by visible copy instead of aria-checked / title.
-    expect(screen.getAllByText("Running")).toHaveLength(5);
-    expect(screen.getAllByText("Stopped")).toHaveLength(2);
+    // Every row surfaces "Preview" as its status; the old Running/Stopped copy would have
+    // read as a live process state.
+    expect(screen.getAllByText("Preview")).toHaveLength(7);
+    expect(screen.queryByText("Running")).toBeNull();
+    expect(screen.queryByText("Stopped")).toBeNull();
   });
 
   // GEN-UI-INTERACTION-001 / test-plan #38: connectors are unwired placeholders, so

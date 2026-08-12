@@ -1,0 +1,16 @@
+/* KEIKO-0160 — Notion/OpenAI SVGs ship white (`fill="#ffffff"`), which is what the connectors row
+   needs on dark themes (where the row background is near-black). In the light theme the same
+   white-fill mark is invisible against the near-white row background. `<img>` cannot inherit
+   currentColor from its host page, so a theme-aware asset swap or a filter is the only path.
+   Invert the mark only for the light theme; the dark theme keeps its native rendering. */
+.brandOnLight {
+  /* No effect on dark; overridden below when the light theme wins. */
+}
+:root[data-theme="light"] .brandOnLight {
+  filter: invert(1) hue-rotate(180deg);
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .brandOnLight {
+    filter: invert(1) hue-rotate(180deg);
+  }
+}

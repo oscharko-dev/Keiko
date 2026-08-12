@@ -33,6 +33,7 @@ function cardNames(): string[] {
 // on WIN_TYPES rather than per-panel styling.
 describe("Palette placeholder badge (KEIKO-0349)", () => {
   const PLACEHOLDER_TYPES: readonly WindowType[] = [
+    "plugins",
     "automations",
     "mobile",
     "notifications",

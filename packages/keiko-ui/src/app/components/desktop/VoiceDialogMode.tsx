@@ -17,6 +17,7 @@
 
 import { useEffect, useRef, type ReactNode, type Ref } from "react";
 import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
+import { useTranslate } from "@/lib/i18n";
 import KeikoSelect from "./KeikoSelect";
 import { VoicePlaybackMuteButton } from "./VoicePlayback";
 import {
@@ -127,11 +128,12 @@ export function VoiceDialogInterruptButton({
   canInterrupt,
   onInterrupt,
 }: VoiceDialogInterruptButtonProps): ReactNode {
+  const t = useTranslate();
   return (
     <button
       type="button"
       className="cmp-voice-btn"
-      aria-label="Interrupt the assistant"
+      aria-label={t("voiceDialog.interrupt.ariaLabel")}
       // GEN-UI-A11Y-013: aria-disabled + guarded onClick keep the control focusable and its
       // availability condition audible; the native `disabled` would blur and hide it.
       aria-disabled={!canInterrupt}
@@ -141,12 +143,12 @@ export function VoiceDialogInterruptButton({
         onInterrupt();
       }}
     >
-      Interrupt
-      {/* No inline space here: aria-label already names the button ("Interrupt the
-          assistant"), so this sr-only hint is read separately via aria-describedby, not
-          concatenated with the visible label text — no space is ever implied (S6772). */}
+      {t("voiceDialog.interrupt.action")}
+      {/* No inline space here: aria-label already names the button, so this sr-only hint is
+          read separately via aria-describedby, not concatenated with the visible label text —
+          no space is ever implied (S6772). */}
       <span id={SESSION_INTERRUPT_HINT_ID} className="sr-only">
-        {INTERRUPT_UNAVAILABLE_HINT}
+        {t("voiceDialog.interrupt.unavailableHint")}
       </span>
     </button>
   );

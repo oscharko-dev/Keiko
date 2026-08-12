@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { Chat, ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "../../Icons";
 import { useChatSessionActions, useChatSessionCatalog } from "../../context/ChatSessionContext";
@@ -9,6 +9,29 @@ import { useChatSessionActions, useChatSessionCatalog } from "../../context/Chat
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const ChevronRIcon = Icons.chevronR;
 const FolderIcon = Icons.folder;
+
+// KEIKO-0262 layout: styled inline to avoid touching globals.css (SHA-pinned visual-proof gate,
+// #1300). Preserves the previous single-row project-header appearance now that the caret is a
+// physically separate button.
+const PROJ_HEAD_ROW_STYLE: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  width: "100%",
+  gap: "2px",
+};
+const PROJ_CARET_BTN_STYLE: CSSProperties = {
+  display: "grid",
+  placeItems: "center",
+  flexShrink: 0,
+  width: "18px",
+  height: "18px",
+  padding: 0,
+  margin: 0,
+  border: 0,
+  background: "transparent",
+  color: "inherit",
+  cursor: "pointer",
+};
 
 interface ProjectRowProps {
   readonly project: ProjectWithAvailability;
@@ -138,6 +161,7 @@ function ProjectCaretButton({
       tabIndex={-1}
       aria-hidden="true"
       aria-label={`${expanded ? "Collapse" : "Expand"} ${project.name}`}
+      style={PROJ_CARET_BTN_STYLE}
       onClick={onToggleExpanded}
     >
       <span className="proj-caret" data-open={expanded} aria-hidden="true">
@@ -166,7 +190,7 @@ function ProjectHeadButton({
     });
   };
   return (
-    <div className="proj-head-row">
+    <div className="proj-head-row" style={PROJ_HEAD_ROW_STYLE}>
       <ProjectCaretButton
         project={project}
         expanded={expanded}

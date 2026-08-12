@@ -49,11 +49,21 @@ describe("descriptor meta table — production assertion (epic #518 #528 / ADR-0
     expect(WIN_META.terminal.authority).toBe("user-confirm");
   });
 
-  it("inspector / notifications descriptors are ui-only with the ui trust boundary alone", () => {
+  it("inspector descriptor is ui-only with the ui trust boundary alone", () => {
     expect(WIN_META.inspector.authority).toBe("ui-only");
     expect(WIN_META.inspector.trustBoundary).toEqual(["ui"]);
-    expect(WIN_META.notifications.authority).toBe("ui-only");
+  });
+
+  // KEIKO-0158 follow-up (Codex PR #3089): NotificationsPanel is now an honest placeholder
+  // (no notification source is wired), so the descriptor must NOT advertise a functional
+  // unread→read→dismissed lifecycle or ui-only authority (which reads as "the panel writes
+  // user-owned state"). It carries the same read-only / live / transient shape the resources,
+  // mobile, and plugins placeholders already report.
+  it("notifications descriptor matches the read-only placeholder shape", () => {
+    expect(WIN_META.notifications.authority).toBe("read-only");
     expect(WIN_META.notifications.trustBoundary).toEqual(["ui"]);
+    expect(WIN_META.notifications.lifecycle).toEqual(["live"]);
+    expect(WIN_META.notifications.persistence).toBe("transient");
   });
 
   it("pdf preview restores only a durable UI shell and crosses only the network boundary for session fetch", () => {
