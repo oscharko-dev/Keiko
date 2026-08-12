@@ -155,7 +155,7 @@ jobs:
           # duplication safe.
           # Quoted: a hypothetical all-digit sha would otherwise parse as a YAML number and reach
           # the shell in a normalized form, defeating the length check below.
-          ACTION_PIN: "2049125bbe0c516da9357150bac347c316630645" # v0.23.0 — keep in sync with Review's uses:
+          ACTION_PIN: "32726aa1ad73cea63da2cf2081be97b50c6e9ff4" # unreleased P0 candidate — keep in sync with Review's uses:
         run: |
           # The pin no longer partitions the store, and that is a deliberate reversal. It used to,
           # because a wrapper release can change review or sanitization SEMANTICS without changing
@@ -427,7 +427,9 @@ jobs:
 
       - name: Review
         id: review
-        uses: oscharko-dev/Keiko-for-Quality@2049125bbe0c516da9357150bac347c316630645 # v0.23.0
+        # The exact P0 candidate intentionally has no release tag until #3089 proves completion.
+        # zizmor: ignore[ref-version-mismatch]
+        uses: oscharko-dev/Keiko-for-Quality@32726aa1ad73cea63da2cf2081be97b50c6e9ff4 # unreleased P0 candidate
         env:
           # Passed by variable NAME to the action, never as an input value: an input appears in the
           # step context that every other action in the job can read.
