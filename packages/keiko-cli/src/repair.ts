@@ -301,9 +301,7 @@ function tightenNodes(
 // can be re-directed by a symlink or hardlink swap between our lstat and the chmod call.
 function tightenNodeMode(node: RuntimeStateNode, targetMode: number): boolean {
   for (const flags of tightenOpenFlagCandidates()) {
-    const outcome = tightenViaOpenFlag(node, targetMode, flags);
-    if (outcome === true) return true;
-    if (outcome === false) continue;
+    if (tightenViaOpenFlag(node, targetMode, flags)) return true;
   }
   return false;
 }
@@ -321,14 +319,14 @@ function tightenViaOpenFlag(
   node: RuntimeStateNode,
   targetMode: number,
   flags: number,
-): boolean | null {
+): boolean {
   let fd: number | undefined;
   try {
     fd = openSync(node.absPath, flags);
     fchmodSync(fd, targetMode);
     return true;
   } catch {
-    return null;
+    return false;
   } finally {
     if (fd !== undefined) {
       try {
