@@ -149,9 +149,14 @@ export function migrateGatewayConfigToReferenceOnly(
     if (typeof modelId !== "string") {
       throw new TypeError("test fixture provider must have a string modelId");
     }
-    if (typeof provider.apiKeySecretRef === "string" && provider.apiKeySecretRef.length > 0) {
-      // Caller already established a ref for this provider — do not overwrite; skip the
-      // migration for this entry and leave its ref binding untouched.
+    const existingRef = provider.apiKeySecretRef;
+    if (typeof existingRef === "string" && existingRef.length > 0) {
+      // PR-review follow-up (Codex thread 3771128758): a pre-existing ref must still be
+      // seeded into the fresh vault we open below AND any residual plaintext apiKey must
+      // be removed, otherwise the promised reference-only fixture is unresolvable at
+      // config load and any lingering apiKey defeats the reference-only shape.
+      delete provider.apiKey;
+      refsToSeed.push({ ref: existingRef, key: apiKey });
       continue;
     }
     delete provider.apiKey;

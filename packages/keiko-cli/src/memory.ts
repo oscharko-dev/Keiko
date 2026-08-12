@@ -463,7 +463,8 @@ async function forceReembedAtomically(
   // from the snapshot — the swap would then have no drift signal and would recreate the
   // deleted vector from the staged pair. Snapshot-first closes that ordering gap.
   const snapshot = vault.snapshotEmbeddedMemoryIds();
-  const targetIds = collectForceReembedTargetIds(vault, snapshot);
+  const acceptedIds = new Set(vault.listMemoryIdsByStatus("accepted"));
+  const targetIds = collectForceReembedTargetIds(acceptedIds, snapshot);
   // PR-review follow-up (Codex thread 3770211415): capture memories.updated_at for each
   // staged pair too. The embedding-row snapshot cannot catch a body edit on a memory that
   // had no prior embedding — the concurrent write leaves the (empty) row set unchanged.
@@ -484,7 +485,7 @@ async function forceReembedAtomically(
     staged.push(staged1);
   }
   try {
-    vault.replaceAllEmbeddings(staged, snapshot, memoryVersions);
+    vault.replaceAllEmbeddings(staged, snapshot, memoryVersions, acceptedIds);
     counts.embedded = staged.length;
   } catch {
     // PR-review follow-up (Codex thread 3770517480): a storage failure on an empty stage
@@ -497,18 +498,15 @@ async function forceReembedAtomically(
 }
 
 function collectForceReembedTargetIds(
-  vault: MemoryVaultStore,
+  acceptedIds: ReadonlySet<MemoryRecord["id"]>,
   snapshot: ReadonlyMap<MemoryRecord["id"], number>,
 ): readonly MemoryRecord["id"][] {
-  // PR-review follow-up (Codex thread 3771011289): use vault.listMemoryIdsByStatus which
-  // returns every accepted memoryId in ONE SQL query. Prior implementation paginated with
-  // OFFSET; a concurrent DELETE that removed a row from an earlier page shifted the
-  // remaining rows and skipped an unembedded accepted record across the page boundary.
+  // Union of the accepted-id set captured up front (see forceReembedAtomically) with the
+  // embedded ids captured in the same window. Both come from single-query snapshots so a
+  // concurrent DELETE cannot re-add a deleted id, and a concurrent CREATE is caught by
+  // vault.replaceAllEmbeddings' expectedAcceptedIds precondition.
   const targetIds = new Set<MemoryRecord["id"]>();
-  for (const memoryId of vault.listMemoryIdsByStatus("accepted")) targetIds.add(memoryId);
-  // Embedded targets come from the snapshot (not a fresh listEmbeddedMemoryIds()) so a
-  // concurrent DELETE between snapshot and target enumeration cannot re-add a deleted id
-  // that the snapshot omits.
+  for (const memoryId of acceptedIds) targetIds.add(memoryId);
   for (const memoryId of snapshot.keys()) targetIds.add(memoryId);
   return Array.from(targetIds);
 }

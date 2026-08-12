@@ -241,6 +241,29 @@ function assertMemoryVersionsUnchanged(
   }
 }
 
+// PR-review follow-up (Codex thread 3771128741): a memory that becomes accepted between
+// the CLI's target-id snapshot and this swap would otherwise remain unembedded despite
+// --force reporting success. Read the current accepted-id set inside the transaction and
+// refuse the swap if any id is missing from the expectation. Absent expectation set skips
+// the check for backward callers.
+function assertAcceptedSetUnchanged(
+  db: DatabaseSync,
+  expectedAcceptedIds: ReadonlySet<MemoryId> | undefined,
+): void {
+  if (expectedAcceptedIds === undefined) return;
+  const rows = db.prepare("SELECT id FROM memories WHERE status = 'accepted'").all() as {
+    readonly id: string;
+  }[];
+  for (const row of rows) {
+    if (!expectedAcceptedIds.has(row.id as MemoryId)) {
+      throw new MemoryStorageError(
+        "precondition-failed",
+        "Accepted memory set changed during --force staging; rerun.",
+      );
+    }
+  }
+}
+
 function snapshotEmbeddedMemoryIdsFromDb(db: DatabaseSync): ReadonlyMap<MemoryId, number> {
   const rows = db
     .prepare("SELECT memory_id, created_at FROM memory_embeddings")
@@ -256,6 +279,7 @@ function replaceAllEmbeddingRowsAtomically(
   pairs: readonly { readonly memoryId: MemoryId; readonly input: MemoryEmbeddingInput }[],
   expectedSnapshot: ReadonlyMap<MemoryId, number> | undefined,
   expectedMemoryVersions: ReadonlyMap<MemoryId, number> | undefined,
+  expectedAcceptedIds: ReadonlySet<MemoryId> | undefined,
 ): void {
   // PR-review follow-up (Codex thread 3769903813): the bulk path used to skip
   // gateEmbeddingInput, so a provider returning a vector above MAX_EMBEDDING_DIMENSIONS
@@ -272,6 +296,7 @@ function replaceAllEmbeddingRowsAtomically(
       .all() as unknown as EmbeddingRowSnapshot[];
     assertReembedSetUnchanged(existing, stagedIds, expectedSnapshot);
     assertMemoryVersionsUnchanged(db, expectedMemoryVersions);
+    assertAcceptedSetUnchanged(db, expectedAcceptedIds);
     for (const row of existing) {
       deleteEmbeddingRow(db, row.memory_id as MemoryId);
     }
@@ -873,6 +898,7 @@ function buildEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EmbeddingOp
       pairs: readonly { readonly memoryId: MemoryId; readonly input: MemoryEmbeddingInput }[],
       expectedSnapshot?: ReadonlyMap<MemoryId, number>,
       expectedMemoryVersions?: ReadonlyMap<MemoryId, number>,
+      expectedAcceptedIds?: ReadonlySet<MemoryId>,
     ): void => {
       withSidecarHardening(opts, () => {
         replaceAllEmbeddingRowsAtomically(
@@ -881,6 +907,7 @@ function buildEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EmbeddingOp
           pairs,
           expectedSnapshot,
           expectedMemoryVersions,
+          expectedAcceptedIds,
         );
       });
     },

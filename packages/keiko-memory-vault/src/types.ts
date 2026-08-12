@@ -216,10 +216,18 @@ export interface MemoryVaultStore {
   // Inside the swap the vault reads the current memories.updated_at for each pair and
   // aborts if it differs — a concurrent body edit that happened while we were awaiting the
   // embed provider would otherwise commit a vector against the OLD body onto the new memory.
+  //
+  // PR-review follow-up (Codex thread 3771128741): the optional `expectedAcceptedIds` set
+  // catches a concurrent CREATE / status → accepted that lands between the CLI's target
+  // enumeration and this swap. When provided, the vault reads the current accepted-id set
+  // inside the transaction and aborts if any id is missing from expectedAcceptedIds —
+  // otherwise the newly-accepted memory would remain unembedded despite --force reporting
+  // success.
   readonly replaceAllEmbeddings: (
     pairs: readonly { readonly memoryId: MemoryId; readonly input: MemoryEmbeddingInput }[],
     expectedSnapshot?: ReadonlyMap<MemoryId, number>,
     expectedMemoryVersions?: ReadonlyMap<MemoryId, number>,
+    expectedAcceptedIds?: ReadonlySet<MemoryId>,
   ) => void;
   // KEIKO-0440 (PR-review follow-up, Codex thread 3769557887): expose the set of memoryIds
   // that currently carry an embedding row. `keiko memory reembed --force` uses this to stage

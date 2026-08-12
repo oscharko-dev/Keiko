@@ -223,9 +223,12 @@ async function waitForProcessExit(
   pid: number,
   deps: Pick<ResolvedDeps, "isProcessAlive" | "sleep">,
 ): Promise<boolean> {
-  const deadline = Date.now() + SERVER_STOP_BUDGET_MS;
+  // PR-review follow-up (Codex thread 3771128746): monotonic performance.now() so a
+  // wall-clock adjustment during shutdown does not extend the wait (backward jump) or
+  // refuse state removal immediately (forward jump). Mirrors lifecycle.terminateAndConfirm.
+  const start = performance.now();
   while (deps.isProcessAlive(pid)) {
-    if (Date.now() >= deadline) return false;
+    if (performance.now() - start >= SERVER_STOP_BUDGET_MS) return false;
     await deps.sleep(SERVER_STOP_POLL_INTERVAL_MS);
   }
   return true;

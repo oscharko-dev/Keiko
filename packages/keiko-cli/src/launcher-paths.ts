@@ -15,7 +15,7 @@
 // / `assertTargetNotSymlink` in `launcher.ts` are leaf-only defense-in-depth (see header
 // comments there).
 
-import { existsSync, realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { LauncherError } from "./launcher-platforms.js";
 
@@ -37,7 +37,13 @@ function resolveWithExistingAncestor(p: string): string {
   const tail: string[] = [];
   let current = absolute;
   for (let i = 0; i < 64; i += 1) {
-    if (existsSync(current)) {
+    // PR-review follow-up (Codex thread 3771128753): use lstatSync directly so an
+    // EACCES/EIO on the current segment propagates instead of being collapsed to
+    // "absent" by existsSync — the latter would treat an inaccessible symlinked
+    // ancestor as a still-textual tail and reconstruct the path without resolving
+    // through the symlink, defeating the containment check.
+    const existsHere = segmentExists(current);
+    if (existsHere) {
       if (tail.length === 0) return realpathOrResolve(current);
       tail.reverse();
       return join(realpathOrResolve(current), ...tail);
@@ -48,6 +54,16 @@ function resolveWithExistingAncestor(p: string): string {
     current = parent;
   }
   return absolute;
+}
+
+function segmentExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 // Asserts that `target` is contained within `approvedDir` AFTER both have been resolved

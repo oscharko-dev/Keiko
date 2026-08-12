@@ -247,7 +247,17 @@ function writePackageJsonAtomically(packagePath: string, content: string): void 
     }
     renameSync(tmpFile, canonicalPath);
   } finally {
-    rmSync(tmpDir, { recursive: true, force: true });
+    // PR-review follow-up (Codex thread 3771128762): rmSync failure MUST NOT masquerade as a
+    // failed atomic rewrite. If renameSync succeeded, the new package.json is already
+    // published; a cleanup failure on the marker-only tmpDir (EACCES / EBUSY / EIO) is a
+    // separate concern the sweep on the next run will clean up. Swallow rmSync errors so
+    // the primary outcome (success or the rename error itself) reaches the caller.
+    try {
+      rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort staging cleanup; sweepStaleInitStagingDirs will remove it on the next
+      // init run once the ownership marker + age cutoff match.
+    }
   }
 }
 
