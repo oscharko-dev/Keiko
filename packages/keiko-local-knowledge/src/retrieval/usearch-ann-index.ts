@@ -368,6 +368,24 @@ function verifyRuntimeAt(path: string): TargetRuntimeResult {
   }
 }
 
+function cacheEntryStillMatches(
+  cached: CachedTargetRuntime,
+  stat: {
+    readonly mtimeMs: number;
+    readonly ctimeMs: number;
+    readonly ino: number;
+    readonly size: number;
+  },
+): boolean {
+  if (process.platform === "win32") return false;
+  return (
+    cached.mtimeMs === stat.mtimeMs &&
+    cached.ctimeMs === stat.ctimeMs &&
+    cached.ino === stat.ino &&
+    cached.size === stat.size
+  );
+}
+
 function targetRuntime(binaryPath: string | undefined): TargetRuntimeResult {
   const targetKey = usearchRuntimeTargetKey(process.platform, process.arch);
   if (targetKey === undefined) return "unavailable";
@@ -380,12 +398,13 @@ function targetRuntime(binaryPath: string | undefined): TargetRuntimeResult {
     return "invalid";
   }
   const cached = TARGET_RUNTIME_CACHE.get(path);
-  if (
-    cached?.mtimeMs === stat.mtimeMs &&
-    cached.ctimeMs === stat.ctimeMs &&
-    cached.ino === stat.ino &&
-    cached.size === stat.size
-  ) {
+  // PR-review follow-up (Codex thread 3770517487): on Windows, ctime is birthtime-like and
+  // does not update on file mutation. An attacker with write access can restore mtime via
+  // utimes AND replace the file in place (same size, same file id), so mtime+size+ino+ctime
+  // all match a cached successful verification even though the bytes changed. Skip the cache
+  // on win32 and re-run SHA-256 verification every time — the extra hash is cheap next to
+  // the ANN load, and the platform lacks an unforgeable change signal.
+  if (cached !== undefined && cacheEntryStillMatches(cached, stat)) {
     return cached.result;
   }
   const result = verifyRuntimeAt(path);

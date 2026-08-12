@@ -831,7 +831,11 @@ const LEGACY_CHAT_CONTEXT_WINDOW_DEFAULT = 4096;
 function migrateChatCapabilityContextWindow(raw: unknown): unknown {
   if (!isRecord(raw)) return raw;
   if (raw.kind !== "chat") return raw;
-  if (typeof raw.contextWindow === "number" && raw.contextWindow > 0) return raw;
+  // PR-review follow-up (Codex thread 3770517473): only the exact legacy value 0 (produced
+  // by the pre-KEIKO-0520 factory) is migrated. Malformed shapes — missing field, null, a
+  // string, negative number — belong at the strict parser so the operator sees a real
+  // rejection instead of an invented 4096-token capacity.
+  if (raw.contextWindow !== 0) return raw;
   return { ...raw, contextWindow: LEGACY_CHAT_CONTEXT_WINDOW_DEFAULT };
 }
 

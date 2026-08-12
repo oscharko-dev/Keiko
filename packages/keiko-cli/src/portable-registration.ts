@@ -156,6 +156,16 @@ function writeRegistration(stateDir: string, registration: PortableInstallRegist
   const path = join(stateDir, REGISTRATION_FILE);
   assertRegistrationFileSafe(path);
   const tmpDir = mkdtempSync(join(stateDir, ".portable-registration-"));
+  // PR-review follow-up (KfQ thread 3770583048): mkdtempSync creates 0700 by default on
+  // POSIX (glibc mkdtemp) but the guarantee is implementation-defined. Belt-and-suspenders:
+  // explicitly chmod the staging directory to 0700 so a hostile umask (or a non-POSIX FS
+  // that widened the default) cannot leave the temp readable to other users during the
+  // brief writeFileSync → renameSync window.
+  try {
+    chmodSync(tmpDir, 0o700);
+  } catch {
+    // Best-effort on non-POSIX filesystems where chmod has no effect.
+  }
   const tmpFile = join(tmpDir, "registration.json");
   try {
     writeFileSync(tmpFile, `${JSON.stringify(registration, null, 2)}\n`, {

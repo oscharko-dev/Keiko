@@ -485,7 +485,11 @@ async function forceReembedAtomically(
     vault.replaceAllEmbeddings(staged, snapshot, memoryVersions);
     counts.embedded = staged.length;
   } catch {
-    counts.failed = staged.length;
+    // PR-review follow-up (Codex thread 3770517480): a storage failure on an empty stage
+    // (SQLite refuses BEGIN IMMEDIATE, sidecar hardening throws, etc.) must not report
+    // success — max(1, staged.length) so counts.failed is at least 1 and the CLI exits
+    // non-zero even when the target set was empty.
+    counts.failed = Math.max(1, staged.length);
   }
   return counts;
 }
