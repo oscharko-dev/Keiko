@@ -3936,49 +3936,68 @@ describe("useChatSession canonical Voice FIFO", () => {
     const settings = renderHook(() => useConversationMemorySettings());
     await waitFor(() => expect(rendered.result.current.loading).toBe(false));
 
-    // Initial settings at ENQUEUE time.
+    // Initial settings at ENQUEUE time for the target turn.
     act(() => {
       settings.result.current.setMemoryEnabled(true);
       settings.result.current.setMemoryBudgetTokens(1234);
       settings.result.current.setMemoryMode("supervised-coding");
     });
 
-    // Gate sendDesktopChat so the queued turn cannot drain before we mutate settings.
-    const gate = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
-    vi.mocked(sendDesktopChat).mockImplementationOnce(async () => gate.promise as never);
+    // Codex on PR #3089 (3764952038): to actually catch a regression that moves memory capture
+    // from enqueue time to drain time, the target turn has to sit in the FIFO — behind an earlier
+    // turn — while settings change. A deferred sendDesktopChat delays only the RESPONSE, not
+    // queue advancement, so the target's request object was constructed pre-mutation regardless
+    // of when the derivation actually runs. Block the FIFO with a prior turn instead.
+    const blockerGate = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    vi.mocked(sendDesktopChat)
+      .mockImplementationOnce(async () => blockerGate.promise as never)
+      .mockImplementationOnce(async () =>
+        completedTurn("pinned memory turn", "memory-pin-assistant"),
+      );
 
-    let delivery: Promise<SendMessageOutcome> | undefined;
+    let blocker: Promise<SendMessageOutcome> | undefined;
+    let target: Promise<SendMessageOutcome> | undefined;
     act(() => {
-      delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+      blocker = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("blocker turn", "voice-memory-blocker"),
+      );
+      target = rendered.result.current.enqueueCanonicalVoiceTurn?.(
         canonicalVoiceTurn("pinned memory turn", "voice-memory-pin"),
       );
     });
+    // The FIFO drains one at a time; the target must still be queued behind the blocker.
     await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledTimes(1));
 
-    // Change every memory input AFTER the turn was pushed onto the FIFO. A re-derivation at drain
-    // time would land these values on the pending turn — the pin exists to prove that never happens.
+    // Mutate every memory input WHILE the target sits in the FIFO. A re-derivation at drain
+    // time would land these values on the pending turn — the pin exists to prove that never
+    // happens.
     act(() => {
       settings.result.current.setMemoryEnabled(false);
       settings.result.current.setMemoryBudgetTokens(9999);
       settings.result.current.setMemoryMode("autonomous-delivery");
     });
 
-    gate.resolve(completedTurn("pinned memory turn", "memory-pin-assistant"));
+    // Release the blocker so the target advances through the FIFO — the derivation, if any,
+    // would run now, under the mutated settings.
+    blockerGate.resolve(completedTurn("blocker turn", "blocker-assistant"));
     await act(async () => {
-      await delivery;
+      await blocker;
+      await target;
     });
 
-    const firstRequest = vi.mocked(sendDesktopChat).mock.calls[0]?.[0];
-    // ADR-0154 D1: memory captured at enqueue time survives every intervening settings change.
-    expect(firstRequest?.memory).toMatchObject({
+    // The target turn is the SECOND sendDesktopChat call.
+    const targetRequest = vi.mocked(sendDesktopChat).mock.calls[1]?.[0];
+    // ADR-0154 D1: memory captured at enqueue time survives every intervening settings change,
+    // even when drain happens after the change.
+    expect(targetRequest?.memory).toMatchObject({
       enabled: true,
       budgetTokens: 1234,
       mode: "supervised-coding",
       surface: "voice",
     });
-    expect(firstRequest?.memory).not.toMatchObject({ enabled: false });
-    expect(firstRequest?.memory).not.toMatchObject({ budgetTokens: 9999 });
-    expect(firstRequest?.memory).not.toMatchObject({ mode: "autonomous-delivery" });
+    expect(targetRequest?.memory).not.toMatchObject({ enabled: false });
+    expect(targetRequest?.memory).not.toMatchObject({ budgetTokens: 9999 });
+    expect(targetRequest?.memory).not.toMatchObject({ mode: "autonomous-delivery" });
   });
 });
 

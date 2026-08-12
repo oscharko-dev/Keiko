@@ -162,6 +162,11 @@ function ProjectCaretButton({
       aria-hidden="true"
       aria-label={`${expanded ? "Collapse" : "Expand"} ${project.name}`}
       style={PROJ_CARET_BTN_STYLE}
+      // Codex on PR #3089: Chromium focuses <button> on click even at tabIndex={-1}, and the
+      // caret is aria-hidden and not a role="treeitem", so `handleTreeKey` cannot find a
+      // treeitem from the event target and Arrow/Home/End stops working until focus moves. Prevent
+      // the caret from taking focus on click so the sibling treeitem remains the focused element.
+      onMouseDown={(event) => event.preventDefault()}
       onClick={onToggleExpanded}
     >
       <span className="proj-caret" data-open={expanded} aria-hidden="true">
