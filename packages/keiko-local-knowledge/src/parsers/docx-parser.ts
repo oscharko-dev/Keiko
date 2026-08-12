@@ -48,6 +48,11 @@ const MAX_DOCX_ZIP_ENTRIES = 4_096;
 // into a PARSER_TIMEOUT diagnostic instead of the generic MALFORMED_INPUT surface. Attached as
 // a symbol-keyed property so subclassing yauzl's Error surface is unnecessary.
 const DOCX_SCAN_BUDGET_EXCEEDED = Symbol("keiko:docx:scanBudgetExceeded");
+// PR-review follow-up on KEIKO-0428: distinguish caller-cancellation from entry/deadline
+// exhaustion at the marker level so the asyncParse catch can map the two to different
+// diagnostic codes (PARSER_CANCELLED vs PARSER_TIMEOUT). Downstream discovery routes those
+// two codes to different failure classifications.
+const DOCX_SCAN_CANCELLED = Symbol("keiko:docx:scanCancelled");
 const HEADING_STYLE_PATTERN = /<w:pStyle\b[^>]*w:val="Heading([1-6])"/i;
 const PARAGRAPH_PATTERN = /<w:p\b[\s\S]*?<\/w:p>/gi;
 const TEXT_RUN_PATTERN = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>/gi;
@@ -162,11 +167,28 @@ function docxScanBudgetError(message: string): Error {
   return error;
 }
 
+function docxScanCancelledError(message: string): Error {
+  const error = new Error(message);
+  Object.defineProperty(error, DOCX_SCAN_CANCELLED, {
+    value: true,
+    enumerable: false,
+  });
+  return error;
+}
+
 function isDocxScanBudgetError(error: unknown): boolean {
   return (
     typeof error === "object" &&
     error !== null &&
     (error as Record<PropertyKey, unknown>)[DOCX_SCAN_BUDGET_EXCEEDED] === true
+  );
+}
+
+function isDocxScanCancelledError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as Record<PropertyKey, unknown>)[DOCX_SCAN_CANCELLED] === true
   );
 }
 
@@ -258,7 +280,10 @@ function isDocxXmlEntry(name: string): boolean {
 
 function scanBudgetStop(limits: DocxZipLimits, entriesSeen: number): Error | undefined {
   if (limits.signal?.aborted === true) {
-    return docxScanBudgetError(`docx zip scan cancelled after ${String(entriesSeen)} entries`);
+    // PR-review follow-up: caller cancellation is distinct from entry/deadline exhaustion,
+    // so map to a separate marker that asyncParse translates to PARSER_CANCELLED rather
+    // than PARSER_TIMEOUT. Downstream discovery routes the two to different failure classes.
+    return docxScanCancelledError(`docx zip scan cancelled after ${String(entriesSeen)} entries`);
   }
   if (entriesSeen > limits.maxEntries) {
     return docxScanBudgetError(
@@ -1073,6 +1098,11 @@ function docxAsyncParseError(
   options: ParserOptions,
   error: unknown,
 ): ParserResult {
+  if (isDocxScanCancelledError(error)) {
+    return emptyResult(capability, input.documentId, options, [
+      diagnostic("PARSER_CANCELLED", "caller aborted parser", input.documentId, "info"),
+    ]);
+  }
   if (isDocxScanBudgetError(error)) {
     return emptyResult(capability, input.documentId, options, [
       diagnostic(

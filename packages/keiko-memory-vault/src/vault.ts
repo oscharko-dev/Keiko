@@ -159,28 +159,44 @@ function withSidecarHardening<T>(opts: ResolvedOptions, write: () => T): T {
   }
 }
 
-// Atomic vault-wide clear for `keiko memory reembed --force` — the ONLY caller. Needed because
-// the embedding-row schema check rejects a new (provider, modelId, dimensions, metric) tuple
-// while any pre-existing row from the OLD tuple survives, so a per-record upsert cannot
-// survive an embedding-model swap. Clearing the space in one transaction before the re-embed
-// loop lets the new tuple take over cleanly. Extracted to keep buildEmbeddingOps under the
-// max-lines-per-function bar.
-function clearAllEmbeddingRows(db: DatabaseSync, opts: ResolvedOptions): void {
-  const ids = db.prepare("SELECT memory_id FROM embeddings").all() as {
+// Atomic vault-wide REPLACE for `keiko memory reembed --force` — the ONLY caller. One
+// transaction: enumerate → delete every existing embedding row → reinsert the staged set.
+// Any failure inside the swap rolls the whole transaction back so the prior vector space is
+// preserved. The embedding-row schema check rejects a new (provider, modelId, dimensions,
+// metric) tuple while any pre-existing row from the OLD tuple survives, so the delete phase
+// must complete before the first insert; performing both under one BEGIN/COMMIT guarantees
+// that.
+function replaceAllEmbeddingRowsAtomically(
+  db: DatabaseSync,
+  opts: ResolvedOptions,
+  pairs: readonly { readonly memoryId: MemoryId; readonly input: MemoryEmbeddingInput }[],
+): void {
+  const existing = db.prepare("SELECT memory_id FROM memory_embeddings").all() as {
     readonly memory_id: string;
   }[];
   db.exec("BEGIN");
   try {
-    for (const row of ids) {
+    for (const row of existing) {
       deleteEmbeddingRow(db, row.memory_id as MemoryId);
+    }
+    for (const pair of pairs) {
+      upsertEmbeddingRow(db, pair.memoryId, pair.input, opts.now(), opts.cipher);
     }
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
   }
-  for (const row of ids) {
+  for (const row of existing) {
     opts.emit({ kind: "embedding:deleted", memoryId: row.memory_id as MemoryId });
+  }
+  for (const pair of pairs) {
+    opts.emit({
+      kind: "embedding:upserted",
+      memoryId: pair.memoryId,
+      provider: pair.input.provider,
+      modelId: pair.input.modelId,
+    });
   }
 }
 
@@ -636,7 +652,7 @@ type EdgeAndEmbeddingOps = Pick<
   | "deleteEdge"
   | "upsertEmbedding"
   | "deleteEmbedding"
-  | "clearAllEmbeddings"
+  | "replaceAllEmbeddings"
   | "getEmbedding"
   | "getEmbeddings"
 >;
@@ -648,7 +664,7 @@ type EdgeOps = Pick<
 
 type EmbeddingOps = Pick<
   MemoryVaultStore,
-  "upsertEmbedding" | "deleteEmbedding" | "clearAllEmbeddings" | "getEmbedding" | "getEmbeddings"
+  "upsertEmbedding" | "deleteEmbedding" | "replaceAllEmbeddings" | "getEmbedding" | "getEmbeddings"
 >;
 
 type TombstoneAndAccessOps = Pick<
@@ -760,9 +776,11 @@ function buildEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EmbeddingOp
         }
       });
     },
-    clearAllEmbeddings: (): void => {
+    replaceAllEmbeddings: (
+      pairs: readonly { readonly memoryId: MemoryId; readonly input: MemoryEmbeddingInput }[],
+    ): void => {
       withSidecarHardening(opts, () => {
-        clearAllEmbeddingRows(db, opts);
+        replaceAllEmbeddingRowsAtomically(db, opts, pairs);
       });
     },
     getEmbedding: (memoryId: MemoryId): MemoryEmbeddingRow | undefined =>

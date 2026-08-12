@@ -413,12 +413,14 @@ interface StagedVector {
   readonly input: NonNullable<Awaited<ReturnType<MemoryEmbedder>>>;
 }
 
-// PR-review follow-up (KEIKO-0440, 3769276197): `--force` must be atomic — either every
-// accepted memory ends up with a fresh vector, OR the prior vector space is preserved and
-// the operator sees the failure. Stage every new vector in memory FIRST; only after every
-// provider call succeeds does the vault-wide clear + reinsert happen. A transient provider
-// failure now discards the staging (a cheap in-memory array) instead of the persisted
-// vectors.
+// PR-review follow-up (KEIKO-0440, threads 3769276197 + 3769424330): `--force` must be
+// atomic — either every accepted memory ends up with a fresh vector, OR the prior vector
+// space is preserved and the operator sees the failure. Two phases:
+//   1. Stage every new vector in memory (a provider throw / null-return aborts here, so
+//      the persisted vectors stay intact and reembed returns exit 1).
+//   2. Hand the staged pairs to `vault.replaceAllEmbeddings`, which performs the delete +
+//      reinsert in ONE SQLite transaction; any error inside that transaction rolls the
+//      whole swap back to the prior state.
 async function forceReembedAtomically(
   vault: MemoryVaultStore,
   embed: MemoryEmbedder,
@@ -451,15 +453,11 @@ async function forceReembedAtomically(
     }
     if (page.length < pageSize) break;
   }
-  // All new vectors computed successfully — swap now.
-  vault.clearAllEmbeddings();
-  for (const entry of staged) {
-    try {
-      vault.upsertEmbedding(entry.memoryId, entry.input);
-      counts.embedded += 1;
-    } catch {
-      counts.failed += 1;
-    }
+  try {
+    vault.replaceAllEmbeddings(staged);
+    counts.embedded = staged.length;
+  } catch {
+    counts.failed = staged.length;
   }
   return counts;
 }
