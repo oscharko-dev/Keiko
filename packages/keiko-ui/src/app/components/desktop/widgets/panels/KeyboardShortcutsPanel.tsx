@@ -390,12 +390,7 @@ function RecordingControls({
   }, []);
   return (
     <div className={styles.control}>
-      <button
-        ref={pressButtonRef}
-        type="button"
-        className={styles.button}
-        onKeyDown={onCapture}
-      >
+      <button ref={pressButtonRef} type="button" className={styles.button} onKeyDown={onCapture}>
         {t("settings.keyboard.pressShortcut")}
       </button>
       <button type="button" className={styles.button} onClick={onCancel}>

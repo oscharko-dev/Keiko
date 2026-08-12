@@ -69,12 +69,7 @@ describe("ConnectorCard DeleteConfirm (KEIKO-0508)", () => {
   it("moves focus into the delete confirmation, uses the translated copy as its accessible name, and cancels on Escape", async () => {
     const user = userEvent.setup();
     const connector = validConnector();
-    render(
-      <AtlassianConnectorsPanel
-        client={clientListing(connector)}
-        pollIntervalMs={100000}
-      />,
-    );
+    render(<AtlassianConnectorsPanel client={clientListing(connector)} pollIntervalMs={100000} />);
     await screen.findByTestId("acx-connector");
     (document.activeElement as HTMLElement | null)?.blur?.();
 

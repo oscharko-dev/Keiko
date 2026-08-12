@@ -193,7 +193,9 @@ describe("ProblemsPanel", () => {
   // KEIKO-0268: the row's aria-label previously replaced the diagnostic with a location string,
   // hiding severity + message from assistive tech. Composed accessible name must surface both.
   it("exposes severity and message in the accessible name of a jumpable row", () => {
-    setPaneDiagnostics("/ws", "window-a", "src/a.ts", [diagnostic("error", 11, "Cannot find name X")]);
+    setPaneDiagnostics("/ws", "window-a", "src/a.ts", [
+      diagnostic("error", 11, "Cannot find name X"),
+    ]);
     render(<ProblemsPanel root="/ws" openEditorFile={vi.fn()} />);
     const row = screen.getByRole("option", { name: /Errors: Cannot find name X/ });
     expect(row).toBeInTheDocument();

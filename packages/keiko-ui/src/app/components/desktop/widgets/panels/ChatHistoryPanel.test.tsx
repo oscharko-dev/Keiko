@@ -560,8 +560,12 @@ describe("ChatHistoryPanel", () => {
     const deleteNames = deleteButtons.map((btn) => btn.getAttribute("aria-label"));
     expect(new Set(renameNames).size).toBe(renameNames.length);
     expect(new Set(deleteNames).size).toBe(deleteNames.length);
-    expect(renameNames).toEqual(expect.arrayContaining(["Rename Sprint triage", "Rename Bug hunt"]));
-    expect(deleteNames).toEqual(expect.arrayContaining(["Delete Sprint triage", "Delete Bug hunt"]));
+    expect(renameNames).toEqual(
+      expect.arrayContaining(["Rename Sprint triage", "Rename Bug hunt"]),
+    );
+    expect(deleteNames).toEqual(
+      expect.arrayContaining(["Delete Sprint triage", "Delete Bug hunt"]),
+    );
     expect(screen.getByRole("article", { name: "Sprint triage" })).toBeInTheDocument();
     expect(screen.getByRole("article", { name: "Bug hunt" })).toBeInTheDocument();
   });

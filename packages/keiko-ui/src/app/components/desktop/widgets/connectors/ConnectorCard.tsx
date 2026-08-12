@@ -155,13 +155,7 @@ function DeleteConfirm({
         <button type="button" className="lk-btn lk-btn-danger" disabled={busy} onClick={onConfirm}>
           {t("atlassianConnectors.delete.confirmButton")}
         </button>
-        <button
-          ref={cancelRef}
-          type="button"
-          className="lk-btn"
-          disabled={busy}
-          onClick={onCancel}
-        >
+        <button ref={cancelRef} type="button" className="lk-btn" disabled={busy} onClick={onCancel}>
           {t("atlassianConnectors.delete.cancel")}
         </button>
       </div>

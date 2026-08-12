@@ -1180,7 +1180,9 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     expect(client.branchSwitch).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(client.branchSwitch).not.toHaveBeenCalled();
-    expect(screen.queryByRole("alertdialog", { name: "Confirm branch switch" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("alertdialog", { name: "Confirm branch switch" }),
+    ).not.toBeInTheDocument();
   });
 
   it("reconciles editor buffers exactly once after a successful branch switch", async () => {

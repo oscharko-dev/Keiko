@@ -301,11 +301,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
         type="button"
         className="lk-btn lk-btn-danger"
         disabled={busy}
-        aria-label={
-          deleted
-            ? `Confirm permanent delete of ${chat.title}`
-            : `Delete ${chat.title}`
-        }
+        aria-label={deleted ? `Confirm permanent delete of ${chat.title}` : `Delete ${chat.title}`}
         onClick={() => void (deleted ? purgeChat(chat) : moveToTrash(chat))}
         onKeyDown={(event) => {
           if (event.key === "Escape") setDeleteConfirmId(null);
