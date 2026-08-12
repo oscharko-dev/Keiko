@@ -136,7 +136,10 @@ function DeleteConfirm({
     cancelRef.current?.focus();
   }, []);
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key === "Escape") {
+    // Codex on PR #3089: an in-flight delete disables the visible Cancel button but Escape used
+    // to still call onCancel, hiding the confirmation while the request was still running and
+    // re-exposing CardActions' undisabled Manage/Delete controls. Ignore Escape while busy.
+    if (event.key === "Escape" && !busy) {
       event.stopPropagation();
       onCancel();
     }
