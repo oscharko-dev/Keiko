@@ -525,7 +525,7 @@ function topLevelFileCategory(name: string): RuntimeStateCategory | undefined {
   return undefined;
 }
 
-function topLevelChildSubtree(name: string): OwnedSubtree | undefined {
+function topLevelChildSubtree(name: string, absPath: string): OwnedSubtree | undefined {
   if (name === DEFAULT_UI_STATE_SUBDIR) return uiDataSubtree;
   if (name === CREDENTIALS_SUBDIR) return credentialsSubtree;
   if (name === MEMORY_SUBDIR) return memorySubtree;
@@ -533,8 +533,10 @@ function topLevelChildSubtree(name: string): OwnedSubtree | undefined {
   if (name === EVIDENCE_SUBDIR) return evidenceSubtree;
   if (name === EDITOR_HOT_EXIT_SUBDIR) return editorHotExitSubtree;
   if (name === UPDATE_SUBDIR) return updateSubtree;
-  if (isMkdtempOwned(name, LAUNCHER_STATE_TMP_PREFIX)) return launcherTmpSubtree;
-  if (isMkdtempOwned(name, PORTABLE_REGISTRATION_TMP_PREFIX)) return launcherTmpSubtree;
+  if (isMkdtempOwnedDir(absPath, name, LAUNCHER_STATE_TMP_PREFIX)) return launcherTmpSubtree;
+  if (isMkdtempOwnedDir(absPath, name, PORTABLE_REGISTRATION_TMP_PREFIX)) {
+    return launcherTmpSubtree;
+  }
   return undefined;
 }
 
@@ -544,8 +546,23 @@ function topLevelChildSubtree(name: string): OwnedSubtree | undefined {
 // erased by `keiko uninstall --state`. The prefix-only startsWith() version was flagged in a
 // PR review on top of KEIKO-0333: `whole: true` on launcherTmpSubtree means every regular
 // file beneath the matched entry gets removed, so a false positive here is data loss.
+//
+// PR-review follow-up (Codex thread 3770922333): the six-alphanum suffix reduces accidental
+// matches but a customer directory that happens to fit that shape (e.g. an operator ran
+// `mkdir .portable-registration-abcdef` by mistake) is still swept. Require and validate
+// the writer's ownership marker file inside the directory — .keiko-owned — before classifying
+// the entry as launcher-owned. saveState (launcher-state.ts) and writeRegistration
+// (portable-registration.ts) drop the marker as the first act after mkdtempSync, so a real
+// Keiko staging dir always has it AND a user-created dir with the same shape does not.
 const MKDTEMP_SUFFIX_PATTERN = /^[A-Za-z0-9]{6}$/u;
-function isMkdtempOwned(name: string, prefix: string): boolean {
+export const STAGING_OWNERSHIP_MARKER = ".keiko-owned";
+
+function isMkdtempOwnedDir(absPath: string, name: string, prefix: string): boolean {
+  if (!isMkdtempSuffix(name, prefix)) return false;
+  return existsSync(join(absPath, STAGING_OWNERSHIP_MARKER));
+}
+
+function isMkdtempSuffix(name: string, prefix: string): boolean {
   if (!name.startsWith(prefix)) return false;
   const suffix = name.slice(prefix.length);
   return MKDTEMP_SUFFIX_PATTERN.test(suffix);
@@ -623,7 +640,7 @@ function ownedChildSubtree(
   name: string,
   absPath: string,
 ): OwnedSubtree | undefined {
-  if (scope === "root") return topLevelChildSubtree(name);
+  if (scope === "root") return topLevelChildSubtree(name, absPath);
   if (scope.whole) return scope; // a whole subtree owns all of its descendant directories
   return scope.childSubtree(name, absPath);
 }

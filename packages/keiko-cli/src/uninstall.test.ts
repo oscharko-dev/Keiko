@@ -390,15 +390,37 @@ describe("runUninstallCli — apply", () => {
     expect(c.out()).toContain("non-Keiko entr");
   });
 
-  it("sweeps leftover launcher temp dirs", async () => {
+  it("sweeps leftover launcher temp dirs that carry the ownership marker", async () => {
     const root = makeRoot();
     const stateDir = seedState(root);
-    mkdirSync(join(stateDir, ".launcher-state-abc123"), { recursive: true });
+    const staleTmp = join(stateDir, ".launcher-state-abc123");
+    mkdirSync(staleTmp, { recursive: true });
+    // The classifier requires the ownership marker before treating a shape-matching directory
+    // as launcher-owned (Codex thread 3770922333). Without it a customer-created directory
+    // with the same prefix + 6-alphanum suffix would be swept — regression pin above.
+    writeFileSync(join(staleTmp, ".keiko-owned"), "", "utf8");
     const c = makeIo();
     await expect(
       runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
     ).resolves.toBe(0);
     expect(existsSync(stateDir)).toBe(false);
+  });
+
+  it("leaves a customer directory whose name matches the launcher tmp shape untouched", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root);
+    // Same prefix + 6-alphanum suffix a customer might create by hand; NO ownership marker
+    // inside. The classifier must NOT treat this as launcher-owned or `keiko uninstall --state`
+    // recursively deletes user data.
+    const customerDir = join(stateDir, ".launcher-state-cust01");
+    mkdirSync(customerDir, { recursive: true });
+    writeFileSync(join(customerDir, "user-notes.txt"), "keep me\n", "utf8");
+    const c = makeIo();
+    await expect(
+      runUninstallCli(["--state"], c.io, {}, { cwd: root, homedir: () => root }),
+    ).resolves.toBe(0);
+    expect(existsSync(customerDir)).toBe(true);
+    expect(existsSync(join(customerDir, "user-notes.txt"))).toBe(true);
   });
 });
 

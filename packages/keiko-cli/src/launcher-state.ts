@@ -35,6 +35,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { LauncherError, launcherFor, type Platform } from "./launcher-platforms.js";
 import { isRealpathContained } from "./launcher-paths.js";
+import { STAGING_OWNERSHIP_MARKER } from "./state-paths.js";
 
 export const LAUNCHER_STATE_VERSION = 1 as const;
 const STATE_FILE_NAME = "launcher-state.json";
@@ -248,6 +249,18 @@ export function saveState(stateDir: string, state: LauncherState): void {
     // ENOENT — fine; we're about to create it.
   }
   const tmpDir = mkdtempSync(join(stateDir, ".launcher-state-"));
+  // PR-review follow-up (Codex thread 3770922333): drop the ownership marker file first so
+  // state-paths.ts's isMkdtempOwnedDir classifier can distinguish this Keiko staging
+  // directory from any customer-created directory that happens to match the same prefix +
+  // 6-alphanum shape. Without the marker, `keiko uninstall --state` walks past a look-alike
+  // directory rather than recursively deleting a user-owned tree.
+  try {
+    writeFileSync(join(tmpDir, STAGING_OWNERSHIP_MARKER), "", "utf8");
+  } catch {
+    // Marker write failure is not fatal: the atomic write still proceeds; the sweep just
+    // will not classify this dir as owned if the operator later runs uninstall while the
+    // dir survives a crash — safer than pretending success.
+  }
   const tmpFile = join(tmpDir, "state.json");
   try {
     writeFileSync(tmpFile, JSON.stringify(state, null, 2) + "\n", {
