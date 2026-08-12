@@ -111,14 +111,15 @@ something: only a run executing a protected ref's own workflow file can hold the
 that, the action still re-derives every entry's digests on load — integrity on top of
 authenticity, not instead of it.
 
-Store identity carries a fourth dimension beside pull request, profile hash, and model identity:
-the reviewer's pinned commit, because a wrapper release can change review or sanitization
-semantics without changing the store's format. GitHub forbids an expression in `uses:`, so the
-pin is necessarily a literal and the workflow declares it once as the source of truth; a
-best-effort parse of the pinned step cross-checks that declaration. Neither may fail the job.
-A disagreement, or a pin the parse cannot confirm, disables the STORE for that run — a
-full-price review with the reviewer intact — because an outage of the reviewer costs more than
-a lost cache, and replaying under an unconfirmed identity costs more than not replaying at all.
+Store identity carries pull request, profile hash, and model identity. The reviewer's pinned commit
+deliberately does not partition the whole store: from v0.16.0 the action stamps each entry with its
+publication-contract identity and discards only entries whose semantics are incompatible with the
+running release. That preserves compatible work across releases without replaying findings under a
+changed publication contract. GitHub forbids an expression in `uses:`, so the pin is necessarily a
+literal and the workflow also declares it for a best-effort synchronization check. A disagreement,
+or a pin the parse cannot confirm, disables the store for that run — a full-price review with the
+reviewer intact — because an outage of the reviewer costs more than a lost cache, and replaying under
+an unconfirmed executable identity costs more than not replaying at all.
 
 The artifact is also an untrusted byte stream until proven otherwise, so both extraction sites —
 the consumer's restore step and the detached signer's fetch — gate the archive itself, not only
@@ -158,6 +159,15 @@ describing the capability as absent would misstate the trust model.
 It checks out the protected base and fetches the candidate head as Git objects only. The candidate
 tree is never checked out, symlink-followed, or submodule-initialized, and no candidate script, hook,
 action, package manager, or repository command is executed.
+
+Before the job that declares the secret-bearing environment can start, a separate job waits 120
+seconds, refreshes GitHub's server-owned pull-request head ref, and compares it with the event's
+immutable head SHA. A run superseded before or during that wait never enters the review job; a
+refresh failure fails closed before either path. The review job repeats the head check before its
+first secret-bearing step, so a later supersession fails there without invoking the model or
+handling store secrets. This debounce avoids buying the startup of a large review during an ordinary
+synchronize burst. It supplements rather than replaces the per-pull-request concurrency
+cancellation, which still stops a paid review already in progress.
 
 Fork-originated heads receive no model review. Model budget and the credential-bearing
 execution path are not exposed to arbitrary external heads, and a per-review budget bounds one review,

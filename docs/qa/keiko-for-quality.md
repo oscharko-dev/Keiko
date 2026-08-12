@@ -44,6 +44,12 @@ The pin in [`keiko-for-quality.yml`](../../.github/workflows/keiko-for-quality.y
 authoritative one; this table is history, and a disagreement between them means the table is
 stale.
 
+The production workflow admits a current head through a 120-second debounce free of model, store,
+and environment secrets before the job that declares the `keiko-for-quality` environment can start.
+It checks the server-owned pull ref both before and after the wait, and the review job rechecks once
+more before its first secret-bearing step. A superseded head therefore produces no model review;
+concurrency remains the containment for a run that already passed admission and began spending.
+
 **The delivery freeze in step 4 was not applied, and coverage for that window was therefore not
 established.** Recorded as a shortfall rather than as an exception, because the reasoning that
 justified skipping it was wrong.

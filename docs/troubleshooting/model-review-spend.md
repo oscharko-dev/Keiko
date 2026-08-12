@@ -26,8 +26,9 @@ log shows, near the start of the review step:
 {"code":"cache.hits","counts":{"hits":0,"misses":<all reviewable paths>}}
 ```
 
-Nothing fails. The run settles complete, findings publish normally, and the only visible signal is
-the model bill. This is why the failure can persist for weeks unnoticed.
+Nothing necessarily fails. The run may settle complete, or it may settle incomplete while safely
+covered paths still earn a store; findings can publish normally, and the only visible signal is the
+model bill. This is why the failure can persist for weeks unnoticed.
 
 **Root Cause**
 
@@ -39,24 +40,27 @@ empty store, and an empty store means every reviewable file is dispatched to the
 
 A cold start is **expected and correct** in each of these cases, none of which is a defect:
 
-- the store identity changed — the profile (`.github/keiko-for-quality.json`), the model id, the
-  model protocol, or the reviewer pin, all four of which are hashed into the artifact name and
-  bound into the signature context. Under `pull_request_target` the run derives these from the
-  **protected base**, not from the candidate: a pull request that edits the profile or the pin
-  does not shift its own identity, so the partition changes only once that change reaches `dev`;
+- the store identity changed — the profile (`.github/keiko-for-quality.json`), the model id, or the
+  model protocol, all three of which are hashed into the artifact name and bound into the signature
+  context. The reviewer pin is cross-checked but deliberately not a partition: the action validates
+  each entry's publication semantics. Under `pull_request_target` the run derives the profile from
+  the **protected base**, not from the candidate, so a pull request that edits it does not shift its
+  own identity; the partition changes only once that profile change reaches `dev`. A pin edit also
+  takes effect only after merge, but compatible entries remain in the same partition;
 - the seven-day artifact retention expired;
-- an incomplete run uploaded no replacement **and** no older complete artifact remains retained
-  under the same identity. The locator takes the newest eligible same-named artifact, not the
-  immediately preceding run's, so an earlier complete store inside the retention window is still
-  found;
+- a run produced `store_written=false` **and** no older artifact remains retained under the same
+  identity. An incomplete run can still persist safely memoizable covered paths; the action output,
+  not the settlement label alone, decides. The locator takes the newest eligible same-named
+  artifact, not the immediately preceding run's;
 - `KEIKO_QUALITY_STORE_HMAC` was rotated. The signing key is deliberately **not** part of the
-  store identity — that is profile, model, protocol, and pin — so a retained artifact stays
+  store identity — that is profile, model, and protocol — so a retained artifact stays
   eligible by name, and the verify step then recomputes its MAC with the new key and discards it.
   Zero entries on the first run after a rotation is the boundary working, not a defect;
 - the store is disabled for the run, which the log states explicitly.
 
-Suspect a real failure only when a prior run under the same identity completed inside the
-retention window and this run still loads nothing.
+Suspect a real failure when a prior run under the same identity reported `store_written=true` but
+produced no signed artifact, or when any eligible signed artifact inside the retention window exists
+and the current run still loads nothing. Settlement status alone does not decide either case.
 
 **Diagnostic Steps**
 
@@ -88,8 +92,11 @@ gh run view <earlier-run-id> --log | grep -oE '"code":"(settlement|inventory)\.[
 # settlement code, so a settlement-only search returns nothing and the table below is never
 # reached for the one reason whose remedy is a profile change rather than size or the engine.
 
-# 3. Check that the signing job ran and that a signed artifact exists for that run.
-gh run view <earlier-run-id> --json jobs --jq '.jobs[] | "\(.name): \(.conclusion)"'
+# 3. Check whether the action earned a store, whether hand-off/signing ran, and whether the signed
+# artifact exists. A successful hand-off proves store_written=true and store-enabled=true; a
+# skipped hand-off requires the two-cause diagnosis below.
+gh run view <earlier-run-id> --json jobs \
+  --jq '.jobs[] | {job: .name, conclusion, handoff: [.steps[]? | select(.name == "Hand off unsigned store") | .conclusion]}'
 gh api repos/<owner>/<repo>/actions/runs/<earlier-run-id>/artifacts \
   --jq '.artifacts[] | "\(.name) \(.size_in_bytes)"'
 ```
@@ -107,19 +114,19 @@ broke from the job's conclusion:
 gh run view <run-id> --log | grep -E "::warning::|::notice::"
 ```
 
-No signing job at all has two causes, not one. The job is skipped when the review did not settle
-complete **and** when the store was disabled for the run — `Derive store identity` turns
+No signing job at all has two causes, not one. The job is skipped when the action reports
+`store_written=false` **and** when the store was disabled for the run — `Derive store identity` turns
 persistence off when the declared pin is unreadable or disagrees with the pinned `uses:` line, and
 that decision gates the signer independently of the outcome. Read the store-identity step's
 warnings and its `store-enabled` output before concluding anything from the review outcome.
 
 **Resolution**
 
-1. If the earlier run settled **incomplete**, it uploaded nothing — the hand-off and the signing
-   job both gate on `outcome == 'complete'`. That explains the cold start **only when no older
-   complete artifact under the same identity is still retained**; the locator scans all eligible
-   artifacts, so if one exists this is still a real lookup or verification failure and the
-   investigation continues at step 3.
+1. If the earlier run reported `store_written=false`, it uploaded nothing. That explains the cold
+   start **only when no older artifact under the same identity is still retained**; the locator
+   scans all eligible artifacts, so if one exists this is still a real lookup or verification
+   failure and the investigation continues at step 3. Do not infer this output from `incomplete`:
+   safely covered paths can be retained from an incomplete review.
 
    Then read the settlement reason, because the remedy differs and only one of them is "make the
    change smaller":
@@ -136,8 +143,9 @@ warnings and its `store-enabled` output before concluding anything from the revi
    Reducing the change size for any of the others wastes another full-price run without making the
    store persist.
 
-2. If the earlier run settled complete and produced no artifact, read the hand-off and signing
-   steps' logs — every archive-gate refusal writes a `::warning::` naming what it rejected.
+2. If the earlier run reported `store_written=true` and produced no signed artifact, read the
+   hand-off and signing steps' logs regardless of whether settlement was complete or incomplete —
+   every archive-gate refusal writes a `::warning::` naming what it rejected.
 3. If an artifact exists but the next run discarded it, the verify step logs
    `restored review store failed context-bound HMAC verification` (a genuine mismatch, so the store
    is correctly refused) or `restored artifact carries no readable signature`. Do not weaken the
@@ -160,8 +168,10 @@ reached and other services on the same subscription must keep working.
 
 **Root Cause**
 
-Each eligible pull request event starts a reviewer run, and each run dispatches every reviewable
-file that the store cannot answer. Nothing throttles the number of runs per pull request.
+Each eligible pull request event creates a workflow run. A secretless 120-second debounce prevents
+superseded push bursts from entering the paid review job, and concurrency cancels an older run that
+is already active. Neither mechanism caps a sustained sequence of current-head events; every head
+that remains current after the debounce dispatches each reviewable file the store cannot answer.
 
 **Diagnostic Steps**
 
