@@ -25,6 +25,10 @@ const realtimeVoiceMock = vi.hoisted(() => ({
   error: undefined as
     { readonly reason: "connection-failed"; readonly message: string } | undefined,
   partialUserTranscript: undefined as string | undefined,
+  // Issue #2894 (KEIKO-0217) — configurable so the Interrupt-reachability suite can prove the
+  // composer's control tracks the real field; every pre-existing test leaves this at its default
+  // `false`, so their "Interrupt the assistant" -> null assertions are unaffected.
+  canInterrupt: false,
 }));
 
 vi.mock("./hooks/useRealtimeVoice", () => ({
@@ -46,7 +50,7 @@ vi.mock("./hooks/useRealtimeVoice", () => ({
     },
     listening: false,
     speaking: false,
-    canInterrupt: false,
+    canInterrupt: realtimeVoiceMock.canInterrupt,
     muted: false,
     partialUserTranscript: realtimeVoiceMock.partialUserTranscript,
     error: realtimeVoiceMock.error,
@@ -244,6 +248,7 @@ beforeEach(() => {
   realtimeVoiceMock.phase = "idle";
   realtimeVoiceMock.error = undefined;
   realtimeVoiceMock.partialUserTranscript = undefined;
+  realtimeVoiceMock.canInterrupt = false;
   vi.mocked(useRealtimeVoice).mockClear();
 });
 
@@ -1641,6 +1646,143 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
       "true",
     );
     expect(getComposerBox()).toHaveAttribute("data-voice-aura", "on");
+  });
+});
+
+// ─── Issue #2894 (KEIKO-0217) — the built Interrupt control becomes reachable ────────────────────────
+//
+// VoiceDialogControls / VoiceDialogTurnControls (VoiceDialogMode.tsx) already built and tested the
+// Interrupt (barge-in) affordance, but nothing in ChatWindow's composer ever mounted it: grepping this
+// file for `realtimeVoice\.` found `.canInterrupt` / `.interrupt` were never read. These tests drive
+// the ChatWindow-rendered voice-dialogue layer directly (the same layer the tests above assert is
+// "clean" while idle) and prove the control now mounts once a session is connected, wired to the real
+// controller fields — without disturbing any assertion above, all of which run with the mock's
+// `canInterrupt` at its default `false` and `phase` never advanced to "connected".
+describe("ChatWindow voice dialogue Interrupt control (Issue #2894, KEIKO-0217)", () => {
+  it("stays absent while dialogue is active but not yet connected", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME_WITH_PERSONAS });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    renderWindow(makeSession());
+
+    const dialogSwitch = await screen.findByRole("switch", { name: "Voice dialogue mode" });
+    await userEvent.click(dialogSwitch);
+    // Entering swaps composer layers, each with its own switch instance (normal vs. voice) — the
+    // one that is now accessible is a different DOM node, so this re-queries instead of reusing
+    // the stale `dialogSwitch` reference (mirrors `enterDialogue()` above).
+    await waitFor(() => {
+      expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+    });
+
+    // realtimeVoiceMock.phase stays "idle" — never simulated as connected in this test.
+    expect(screen.queryByRole("button", { name: "Interrupt the assistant" })).toBeNull();
+  });
+
+  it("mounts once connected, aria-disabled while canInterrupt is false, and ignores a click", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME_WITH_PERSONAS });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    realtimeVoiceMock.phase = "connected";
+    renderWindow(makeSession());
+
+    const dialogSwitch = await screen.findByRole("switch", { name: "Voice dialogue mode" });
+    await userEvent.click(dialogSwitch);
+
+    const interrupt = await screen.findByRole("button", { name: "Interrupt the assistant" });
+    expect(interrupt).not.toBeDisabled();
+    expect(interrupt).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(interrupt);
+    expect(realtimeVoiceMock.interrupt).not.toHaveBeenCalled();
+  });
+
+  it("is enabled and calls realtimeVoice.interrupt() once canInterrupt is true", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME_WITH_PERSONAS });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    realtimeVoiceMock.phase = "connected";
+    realtimeVoiceMock.canInterrupt = true;
+    renderWindow(makeSession());
+
+    const dialogSwitch = await screen.findByRole("switch", { name: "Voice dialogue mode" });
+    await userEvent.click(dialogSwitch);
+
+    const interrupt = await screen.findByRole("button", { name: "Interrupt the assistant" });
+    expect(interrupt).toHaveAttribute("aria-disabled", "false");
+    await userEvent.click(interrupt);
+    expect(realtimeVoiceMock.interrupt).toHaveBeenCalledOnce();
+  });
+
+  it("leaves the button absent once dialogue mode is left, even while still connected", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME_WITH_PERSONAS });
+    stubRealtimeBrowser(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
+    realtimeVoiceMock.phase = "connected";
+    realtimeVoiceMock.canInterrupt = true;
+    renderWindow(makeSession());
+
+    const dialogSwitch = await screen.findByRole("switch", { name: "Voice dialogue mode" });
+    await userEvent.click(dialogSwitch);
+    expect(
+      await screen.findByRole("button", { name: "Interrupt the assistant" }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("switch", { name: "Voice dialogue mode" }));
+    expect(screen.queryByRole("button", { name: "Interrupt the assistant" })).toBeNull();
+  });
+});
+
+// ─── Issue #2894 (KEIKO-0364) — the composer threads the canonical retrieval signal in ──────────────
+//
+// `useRealtimeVoice` is mocked here, so this suite cannot observe the aura headline end-to-end (that
+// is covered by voice-dialog-state.test.ts and useRealtimeVoice.test.ts's own passthrough tests). It
+// proves the other half: ComposerCoreImpl actually computes and forwards a `retrieving` option derived
+// from the canonical send state useChatSession already exposes (`sending` + the active chat's
+// grounding scope) — not a fabricated new store — by inspecting the arguments ChatWindow passed to the
+// mocked hook, the same technique the tool-calling-activation tests above already use.
+describe("ChatWindow voice dialogue retrieving signal (Issue #2894, KEIKO-0364)", () => {
+  function lastRealtimeVoiceCallOptions(): Parameters<typeof useRealtimeVoice>[0] {
+    const calls = vi.mocked(useRealtimeVoice).mock.calls;
+    const last = calls.at(-1);
+    if (last === undefined) throw new Error("useRealtimeVoice was never called");
+    return last[0];
+  }
+
+  it("passes retrieving=true while a grounded send is in flight during active dialogue", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME_WITH_PERSONAS });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    renderWindow(makeSession({ activeChat: makeGroundedKnowledgeChat(), sending: true }));
+
+    const dialogSwitch = await screen.findByRole("switch", { name: "Voice dialogue mode" });
+    await userEvent.click(dialogSwitch);
+
+    await waitFor(() => expect(lastRealtimeVoiceCallOptions().retrieving).toBe(true));
+  });
+
+  it("passes retrieving=false for an ungrounded chat even while a send is in flight", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME_WITH_PERSONAS });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    renderWindow(makeSession({ sending: true }));
+
+    const dialogSwitch = await screen.findByRole("switch", { name: "Voice dialogue mode" });
+    await userEvent.click(dialogSwitch);
+    // Re-query rather than reuse `dialogSwitch`: entering swaps in the voice layer's own switch
+    // instance, a different DOM node from the one just clicked (mirrors `enterDialogue()` above).
+    await waitFor(() => {
+      expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+    });
+
+    expect(lastRealtimeVoiceCallOptions().retrieving).toBe(false);
+  });
+
+  it("passes retrieving=false for a grounded chat while dialogue mode is not active", async () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME_WITH_PERSONAS });
+    stubRealtimeBrowser(async () => ({}) as MediaStream);
+    renderWindow(makeSession({ activeChat: makeGroundedKnowledgeChat(), sending: true }));
+
+    await screen.findByRole("switch", { name: "Voice dialogue mode" });
+    expect(lastRealtimeVoiceCallOptions().retrieving).toBe(false);
   });
 });
 

@@ -2668,6 +2668,19 @@ function VoiceDialogAttachments({
   );
 }
 
+// KEIKO-0217: the Interrupt control mounts once a dialogue session is actually connected (there
+// is nothing to barge in on before that); `canInterrupt` then governs whether the mounted button
+// is actionable. Gating presence on `phase === "connected"` (rather than on `voiceDialogActive`
+// alone) keeps it out of the DOM through requesting/negotiating/error, the same way
+// VoiceRealtimeStatusFromController is gated on the error phase specifically. Extracted so
+// ComposerVoiceOverlay's cyclomatic complexity stays under the eslint bar.
+function isVoiceInterruptReachable(
+  voiceDialogActive: boolean,
+  controller: RealtimeVoiceController,
+): boolean {
+  return voiceDialogActive && controller.phase === "connected";
+}
+
 function ComposerVoiceOverlay({
   voiceAuraActive,
   announcedVoiceHeadline,
@@ -2703,12 +2716,7 @@ function ComposerVoiceOverlay({
   readonly pendingAttachments: readonly PendingAttachment[];
   readonly onRemoveAttachment: (id: string) => void;
 }): ReactNode {
-  // Issue #2894 (KEIKO-0217) — the Interrupt control mounts once a dialogue session is actually
-  // connected (there is nothing to barge in on before that); `canInterrupt` then governs whether
-  // the mounted button is actionable. Gating presence on `phase === "connected"` (rather than on
-  // `voiceDialogActive` alone) keeps it out of the DOM through requesting/negotiating/error, the
-  // same way VoiceRealtimeStatusFromController above is gated on the error phase specifically.
-  const interruptReachable = voiceDialogActive && realtimeVoiceController.phase === "connected";
+  const interruptReachable = isVoiceInterruptReachable(voiceDialogActive, realtimeVoiceController);
   return (
     <>
       {voiceAuraActive ? (

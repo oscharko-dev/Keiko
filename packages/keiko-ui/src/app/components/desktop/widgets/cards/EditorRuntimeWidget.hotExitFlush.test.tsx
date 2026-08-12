@@ -141,7 +141,7 @@ function fileResponse(over?: Partial<FilesContentResponse>): FilesContentRespons
   };
 }
 
-let setTimeoutSpy: ReturnType<typeof vi.spyOn> | null = null;
+let setTimeoutSpy: MockInstance<typeof window.setTimeout> | null = null;
 
 beforeEach(() => {
   vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValue(LANGUAGE_CAPABILITIES);
@@ -190,7 +190,9 @@ describe("EditorRuntimeWidget hot-exit pagehide flush (KEIKO-0337)", () => {
     // The hot-exit debounce only arms once the separately debounced, async-hashed content digest
     // resolves — wait for the real `window.setTimeout(_, 400)` call instead of guessing a sleep.
     await waitFor(() => {
-      const armed = setTimeoutSpy?.mock.calls.some(([, delay]) => delay === HOT_EXIT_WRITE_DEBOUNCE_MS);
+      const armed = setTimeoutSpy?.mock.calls.some(
+        ([, delay]) => delay === HOT_EXIT_WRITE_DEBOUNCE_MS,
+      );
       expect(armed).toBe(true);
     });
     expect(writeEditorHotExitSnapshot).not.toHaveBeenCalled();
