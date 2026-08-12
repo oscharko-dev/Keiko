@@ -165,9 +165,17 @@ function ProjectCaretButton({
       // Codex on PR #3089: Chromium focuses <button> on click even at tabIndex={-1}, and the
       // caret is aria-hidden and not a role="treeitem", so `handleTreeKey` cannot find a
       // treeitem from the event target and Arrow/Home/End stops working until focus moves. Prevent
-      // the caret from taking focus on click so the sibling treeitem remains the focused element.
+      // the caret from taking focus on click.
       onMouseDown={(event) => event.preventDefault()}
-      onClick={onToggleExpanded}
+      // Codex 3765267604: when focus is on a chat child (aria-level 2) of THIS expanded project
+      // and the user collapses via caret click, `onToggleExpanded` unmounts the child and focus
+      // falls out of the tree entirely, breaking subsequent Arrow/Home/End navigation. Move focus
+      // to the sibling head treeitem before collapsing so a focused element always survives.
+      onClick={(event) => {
+        const row = event.currentTarget.closest<HTMLDivElement>(".proj-head-row");
+        row?.querySelector<HTMLButtonElement>("button.proj-head")?.focus();
+        onToggleExpanded();
+      }}
     >
       <span className="proj-caret" data-open={expanded} aria-hidden="true">
         <ChevronRIcon size={13} />
