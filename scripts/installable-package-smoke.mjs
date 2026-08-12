@@ -694,5 +694,5 @@ async function main() {
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  void main();
+  await main();
 }

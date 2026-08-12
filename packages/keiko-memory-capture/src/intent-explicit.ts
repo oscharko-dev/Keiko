@@ -213,13 +213,18 @@ function resolveTarget(
   return head === null ? { kind: "none" } : { kind: "unique", memoryId: head };
 }
 
+// Explicit scope hint captured from "about this <project|workspace>:" text. Alias exists so
+// the surrounding helpers and the extractor's own signature share one type name instead of
+// re-stating the string union in every position.
+type ExplicitScopeKind = "project" | "workspace";
+
 // Fail-closed conflict check: when the caller has already supplied an authority-constraint
 // scopeKind AND the "about this <noun>:" fragment names a DIFFERENT scope, reject the capture.
 // This closes the trust-boundary hole where user-controlled text could widen a project-scoped
 // policy to workspace scope by writing "about this workspace" (PR-review follow-up on KEIKO-0336).
 function rejectOnScopeConflict(
   policy: CapturePolicyOptions,
-  explicitScopeKind: "project" | "workspace" | undefined,
+  explicitScopeKind: ExplicitScopeKind | undefined,
   _context: CaptureContext,
 ): CaptureOutcome | null {
   if (policy.scopeKind === undefined || explicitScopeKind === undefined) return null;
@@ -229,7 +234,7 @@ function rejectOnScopeConflict(
 
 function mergePolicyScopeKind(
   policy: CapturePolicyOptions,
-  explicitScopeKind: "project" | "workspace" | undefined,
+  explicitScopeKind: ExplicitScopeKind | undefined,
 ): CapturePolicyOptions {
   if (explicitScopeKind === undefined) return policy;
   if (policy.scopeKind !== undefined) return policy;
@@ -242,7 +247,7 @@ function mergePolicyScopeKind(
 // KEIKO-0336.
 function explicitScopeKindFromAboutMatch(
   aboutPrefixMatch: RegExpExecArray | null,
-): "project" | "workspace" | undefined {
+): ExplicitScopeKind | undefined {
   const captured = aboutPrefixMatch?.[1];
   if (captured === undefined) {
     return undefined;

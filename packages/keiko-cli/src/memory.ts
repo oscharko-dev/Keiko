@@ -293,18 +293,41 @@ interface ReembedCounts {
   failed: number;
 }
 
+async function embedOne(
+  vault: MemoryVaultStore,
+  embed: MemoryEmbedder,
+  record: MemoryRecord,
+  counts: ReembedCounts,
+): Promise<void> {
+  if (vault.getEmbedding(record.id) !== undefined) {
+    counts.skipped += 1;
+    return;
+  }
+  const input = await embed(record.body);
+  if (input === null) {
+    counts.failed += 1;
+    return;
+  }
+  try {
+    vault.upsertEmbedding(record.id, input);
+    counts.embedded += 1;
+  } catch {
+    counts.failed += 1;
+  }
+}
+
 async function backfillEmbeddings(
   vault: MemoryVaultStore,
   embed: MemoryEmbedder,
   limit: number,
 ): Promise<ReembedCounts> {
   // KEIKO-0440 (PR-review follow-up): the limit is the target COUNT of records the pass will
-  // re-embed, not a cap on the scan window. Paginating over the accepted set and filtering
-  // out records that already carry an embedding ensures a small `--limit` can still reach an
-  // older un-embedded record hidden behind newer already-embedded pages. A simple caller loop
-  // is enough because `listMemoriesAcrossScopes` accepts an offset alongside the limit, so
-  // we walk the accepted set page by page until either the target is met or the store is
-  // exhausted. skipped/embedded/failed counts follow the same semantics as before.
+  // re-embed, not a cap on the scan window. Paginate over the accepted set and skip records
+  // that already carry an embedding, so a small `--limit` can still reach an older un-embedded
+  // record hidden behind newer already-embedded pages. `listMemoriesAcrossScopes` accepts an
+  // offset alongside the limit, so we walk the accepted set page by page until either the
+  // target is met or the store is exhausted. skipped/embedded/failed counts follow the same
+  // semantics as before.
   const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
   const scopes = vault.listMemoryScopes();
   const pageSize = Math.max(limit, 100);
@@ -319,21 +342,7 @@ async function backfillEmbeddings(
     if (page.length === 0) break;
     for (const record of page) {
       if (counts.embedded + counts.failed >= limit) break;
-      if (vault.getEmbedding(record.id) !== undefined) {
-        counts.skipped += 1;
-        continue;
-      }
-      const input = await embed(record.body);
-      if (input === null) {
-        counts.failed += 1;
-        continue;
-      }
-      try {
-        vault.upsertEmbedding(record.id, input);
-        counts.embedded += 1;
-      } catch {
-        counts.failed += 1;
-      }
+      await embedOne(vault, embed, record, counts);
     }
     offset += page.length;
   }
