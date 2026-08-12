@@ -8,6 +8,8 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import { ApiError } from "./api";
+import { clientErrorSummary } from "./client-error-summary";
+import { reportClientDiagnostic } from "./client-diagnostics";
 import { bffFetchJson, newClientCorrelationId, CORRELATION_HEADER } from "./http";
 
 const CHANNEL_PATH = "/api/coding-workbench/app-session/channel";
@@ -114,7 +116,14 @@ function readWithInactivityGuard(
       // Reject FIRST so the outer Promise.race locks the stall verdict before `cancel()` can
       // fulfil the pending `reader.read()` with `{ done: true }` on the microtask queue.
       reject(stallError);
-      reader.cancel(stallError).catch(() => undefined);
+      // CodeRabbit 3765131337: route cancellation failures to the redacted client-diagnostic
+      // sink instead of silently swallowing them (AGENTS.md §7 "no silent failures"). The typed
+      // stall rejection stays authoritative — a cancel that fails just leaves the reader for GC.
+      reader.cancel(stallError).catch((error: unknown) => {
+        reportClientDiagnostic(
+          `[keiko] coding app-session stream cancel-on-stall failed: ${clientErrorSummary(error)}`,
+        );
+      });
     }, STREAM_INACTIVITY_TIMEOUT_MS);
   });
   return Promise.race([reader.read(), stall]).finally(() => clearTimeout(timer));
