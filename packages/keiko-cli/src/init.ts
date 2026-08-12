@@ -4,6 +4,7 @@ import {
   lstatSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -206,6 +207,8 @@ function loadPackageJson(packagePath: string): LoadedPackageJson | InitError {
 // widen to the current umask default. Node's fs API cannot preserve owner/group or ACLs
 // without root, and Windows lacks POSIX mode entirely; on POSIX we at minimum re-apply the
 // captured mode, which covers the observable regression the reviewer flagged.
+const INIT_STAGING_PREFIX = ".keiko-init-";
+
 function writePackageJsonAtomically(packagePath: string, content: string): void {
   // PR-review follow-up: if the caller passed a symlink to package.json, replace the REAL
   // target atomically instead of the symlink entry itself. `renameSync` operates on
@@ -214,8 +217,13 @@ function writePackageJsonAtomically(packagePath: string, content: string): void 
   // success. `realpathSync` on a non-symlink returns the same path unchanged.
   const canonicalPath = resolveCanonicalPackagePath(packagePath);
   const dir = dirname(canonicalPath);
+  // PR-review follow-up: sweep any leftover .keiko-init-* staging dirs before creating a new
+  // one so an earlier interrupted `keiko init` (SIGKILL between mkdtempSync and rmSync) does
+  // not leave the user's repo permanently dirty across retries. Match the exact mkdtemp
+  // suffix shape so a customer-created directory with the same prefix is left untouched.
+  sweepStaleInitStagingDirs(dir);
   const originalMode = capturePackageMode(canonicalPath);
-  const tmpDir = mkdtempSync(join(dir, ".keiko-init-"));
+  const tmpDir = mkdtempSync(join(dir, INIT_STAGING_PREFIX));
   const tmpFile = join(tmpDir, "package.json");
   try {
     writeFileSync(tmpFile, content, "utf8");
@@ -230,6 +238,29 @@ function writePackageJsonAtomically(packagePath: string, content: string): void 
     renameSync(tmpFile, canonicalPath);
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+function sweepStaleInitStagingDirs(dir: string): void {
+  if (!existsSync(dir)) return;
+  let entries: readonly string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    if (!name.startsWith(INIT_STAGING_PREFIX)) continue;
+    // Match Node's mkdtemp suffix shape (6 alphanumerics) so a customer-created directory
+    // that happens to share the prefix is left alone.
+    const suffix = name.slice(INIT_STAGING_PREFIX.length);
+    if (!/^[A-Za-z0-9]{6}$/u.test(suffix)) continue;
+    try {
+      rmSync(join(dir, name), { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup; a stale dir that we cannot remove (locked, mount-boundary)
+      // does not block the current rewrite because mkdtempSync will pick its own name.
+    }
   }
 }
 

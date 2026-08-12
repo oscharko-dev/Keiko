@@ -533,9 +533,22 @@ function topLevelChildSubtree(name: string): OwnedSubtree | undefined {
   if (name === EVIDENCE_SUBDIR) return evidenceSubtree;
   if (name === EDITOR_HOT_EXIT_SUBDIR) return editorHotExitSubtree;
   if (name === UPDATE_SUBDIR) return updateSubtree;
-  if (name.startsWith(LAUNCHER_STATE_TMP_PREFIX)) return launcherTmpSubtree;
-  if (name.startsWith(PORTABLE_REGISTRATION_TMP_PREFIX)) return launcherTmpSubtree;
+  if (isMkdtempOwned(name, LAUNCHER_STATE_TMP_PREFIX)) return launcherTmpSubtree;
+  if (isMkdtempOwned(name, PORTABLE_REGISTRATION_TMP_PREFIX)) return launcherTmpSubtree;
   return undefined;
+}
+
+// Node's `mkdtempSync(prefix)` appends exactly six alphanumeric characters to the prefix
+// (see fs.mkdtemp implementation). Match that shape strictly so a customer-created directory
+// like `.portable-registration-backup` is NOT classified as launcher-owned and therefore
+// erased by `keiko uninstall --state`. The prefix-only startsWith() version was flagged in a
+// PR review on top of KEIKO-0333: `whole: true` on launcherTmpSubtree means every regular
+// file beneath the matched entry gets removed, so a false positive here is data loss.
+const MKDTEMP_SUFFIX_PATTERN = /^[A-Za-z0-9]{6}$/u;
+function isMkdtempOwned(name: string, prefix: string): boolean {
+  if (!name.startsWith(prefix)) return false;
+  const suffix = name.slice(prefix.length);
+  return MKDTEMP_SUFFIX_PATTERN.test(suffix);
 }
 
 // A Keiko-owned file or directory the manifest recognizes under the state directory.

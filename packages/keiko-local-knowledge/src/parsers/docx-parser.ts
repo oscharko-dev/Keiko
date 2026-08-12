@@ -146,6 +146,11 @@ interface DocxZipLimits {
   readonly startedAt: number;
   readonly timeoutMs: number;
   readonly maxEntries: number;
+  // PR-review follow-up: the caller's cancellation signal, threaded into the loop so an
+  // abort surfaces AS SOON AS the current entry finishes rather than at the end of the
+  // central-directory walk. Undefined when no signal is present (production tests, cheap
+  // callers) and left unchecked.
+  readonly signal?: AbortSignal | undefined;
 }
 
 function docxScanBudgetError(message: string): Error {
@@ -252,6 +257,9 @@ function isDocxXmlEntry(name: string): boolean {
 }
 
 function scanBudgetStop(limits: DocxZipLimits, entriesSeen: number): Error | undefined {
+  if (limits.signal?.aborted === true) {
+    return docxScanBudgetError(`docx zip scan cancelled after ${String(entriesSeen)} entries`);
+  }
   if (entriesSeen > limits.maxEntries) {
     return docxScanBudgetError(
       `docx zip scan exceeded ${String(limits.maxEntries)} central-directory entries`,
@@ -363,6 +371,7 @@ async function readDocxXmlParts(
       startedAt,
       timeoutMs: options.timeoutMs,
       maxEntries: MAX_DOCX_ZIP_ENTRIES,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
   } finally {
     closeZipQuietly(zip);
