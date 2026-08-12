@@ -456,12 +456,14 @@ async function forceReembedAtomically(
   embed: MemoryEmbedder,
 ): Promise<ReembedCounts> {
   const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
-  const targetIds = collectForceReembedTargetIds(vault);
-  // PR-review follow-up (Codex thread 3769903807): capture the (memoryId, createdAt) map
-  // BEFORE the network-backed staging phase so the atomic swap can detect a concurrent
-  // UPDATE to any already-embedded row (not just a concurrent INSERT). vault.replaceAll
-  // Embeddings rejects when any existing row's created_at differs from this snapshot.
+  // PR-review follow-up (Codex thread 3769903807 + 3770792792): capture the
+  // (memoryId, createdAt) snapshot FIRST, then derive embedded targets from the snapshot
+  // itself. If we enumerated targets before snapshotting, a concurrent DELETE that removes
+  // an embedding between the two calls would leave the deleted id in targets but absent
+  // from the snapshot — the swap would then have no drift signal and would recreate the
+  // deleted vector from the staged pair. Snapshot-first closes that ordering gap.
   const snapshot = vault.snapshotEmbeddedMemoryIds();
+  const targetIds = collectForceReembedTargetIds(vault, snapshot);
   // PR-review follow-up (Codex thread 3770211415): capture memories.updated_at for each
   // staged pair too. The embedding-row snapshot cannot catch a body edit on a memory that
   // had no prior embedding — the concurrent write leaves the (empty) row set unchanged.
@@ -494,7 +496,10 @@ async function forceReembedAtomically(
   return counts;
 }
 
-function collectForceReembedTargetIds(vault: MemoryVaultStore): readonly MemoryRecord["id"][] {
+function collectForceReembedTargetIds(
+  vault: MemoryVaultStore,
+  snapshot: ReadonlyMap<MemoryRecord["id"], number>,
+): readonly MemoryRecord["id"][] {
   const scopes = vault.listMemoryScopes();
   const targetIds = new Set<MemoryRecord["id"]>();
   const pageSize = 500;
@@ -509,7 +514,10 @@ function collectForceReembedTargetIds(vault: MemoryVaultStore): readonly MemoryR
     for (const record of page) targetIds.add(record.id);
     if (page.length < pageSize) break;
   }
-  for (const memoryId of vault.listEmbeddedMemoryIds()) targetIds.add(memoryId);
+  // Embedded targets come from the snapshot (not a fresh listEmbeddedMemoryIds()) so a
+  // concurrent DELETE between snapshot and target enumeration cannot re-add a deleted id
+  // that the snapshot omits.
+  for (const memoryId of snapshot.keys()) targetIds.add(memoryId);
   return Array.from(targetIds);
 }
 
