@@ -246,10 +246,13 @@ describe("KEIKO-0308 — stream inactivity guard", () => {
     const interval = STREAM_INACTIVITY_TIMEOUT_MS - 5_000;
     const heartbeatCount = 5;
     let calls = 0;
-    const doneResult = { done: true } satisfies Omit<
-      ReadableStreamReadDoneResult<Uint8Array>,
-      "value"
-    >;
+    // ReadableStreamReadDoneResult<T> types `value` as `T | undefined` with
+    // `exactOptionalPropertyTypes` refusing an explicit `value: undefined`. Use a runtime
+    // freeze around the declared shape so both tsc and typecheck:native accept the discriminant.
+    const doneResult: ReadableStreamReadResult<Uint8Array> = Object.freeze({
+      done: true as const,
+      value: undefined as unknown as Uint8Array,
+    });
     const read = vi.fn(
       () =>
         new Promise<ReadableStreamReadResult<Uint8Array>>((resolve) => {
