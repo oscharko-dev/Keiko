@@ -123,11 +123,15 @@ export function writeGatewayConfig(
 }
 
 /**
- * Migrates the FIRST provider in an already-written gateway.json from a plaintext apiKey to an
+ * Migrates EVERY provider in an already-written gateway.json from a plaintext apiKey to an
  * apiKeySecretRef, and seeds the on-disk provider credential vault at that path so the CLI's
- * config loader resolves the ref back to the given (or FIXTURE_API_KEY) secret. Exists so callers
+ * config loader resolves each ref back to the given (or FIXTURE_API_KEY) secret. Exists so callers
  * that maintain their own writeGatewayConfig shape (e.g. evaluate.test.ts's top-level capabilities
  * variant) do not have to repeat the delete/setRef/openVault/set dance six times.
+ *
+ * PR-review follow-up (KfQ threads 3771064025 + 3771064056): migrates every provider, not just
+ * the head, and refuses to overwrite a pre-existing apiKeySecretRef so a caller that already
+ * hand-migrated one entry does not lose their ref binding.
  */
 export function migrateGatewayConfigToReferenceOnly(
   configPath: string,
@@ -136,30 +140,39 @@ export function migrateGatewayConfigToReferenceOnly(
   const parsed = JSON.parse(readFileSync(configPath, "utf8")) as {
     providers: Record<string, unknown>[];
   };
-  const provider = parsed.providers[0];
-  if (provider === undefined) {
+  if (parsed.providers.length === 0) {
     throw new Error("test fixture must include at least one provider");
   }
-  const modelId = provider.modelId;
-  if (typeof modelId !== "string") {
-    throw new TypeError("test fixture provider must have a string modelId");
+  const refsToSeed: { readonly ref: string; readonly key: string }[] = [];
+  for (const provider of parsed.providers) {
+    const modelId = provider.modelId;
+    if (typeof modelId !== "string") {
+      throw new TypeError("test fixture provider must have a string modelId");
+    }
+    if (typeof provider.apiKeySecretRef === "string" && provider.apiKeySecretRef.length > 0) {
+      // Caller already established a ref for this provider — do not overwrite; skip the
+      // migration for this entry and leave its ref binding untouched.
+      continue;
+    }
+    delete provider.apiKey;
+    const ref = `cred:${modelId}`;
+    provider.apiKeySecretRef = ref;
+    refsToSeed.push({ ref, key: apiKey });
   }
-  delete provider.apiKey;
-  provider.apiKeySecretRef = `cred:${modelId}`;
   writeFileSync(configPath, JSON.stringify(parsed), "utf8");
-  openProviderCredentialVault({
+  const vault = openProviderCredentialVault({
     configPath,
     env: { KEIKO_PROVIDER_CREDENTIALS_KEY: PROVIDER_CREDENTIALS_KEY },
-  }).set(`cred:${modelId}`, apiKey);
+  });
+  for (const seed of refsToSeed) vault.set(seed.ref, seed.key);
   return configPath;
 }
 
 /**
  * Writes an apiKeySecretRef gateway.json inside `dir` AND seeds the on-disk provider credential
- * vault at that path so the CLI's config loader resolves the ref back to `FIXTURE_API_KEY`. Only
- * the first provider is migrated to the reference-only shape; consumers whose scenarios need every
- * provider migrated can post-process the returned file (existing tests only ever migrated the
- * head).
+ * vault at that path so the CLI's config loader resolves every provider's ref back to
+ * `FIXTURE_API_KEY`. All providers are migrated to the reference-only shape; a caller that
+ * pre-populated an apiKeySecretRef on one of the entries keeps that ref.
  */
 export function writeReferenceOnlyGatewayConfig(
   dir: string,
