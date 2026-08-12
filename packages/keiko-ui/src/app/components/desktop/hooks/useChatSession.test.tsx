@@ -3985,6 +3985,10 @@ describe("useChatSession canonical Voice FIFO", () => {
       await target;
     });
 
+    // KfQ 3765528715: pin that both the blocker AND the target actually reached the wire — if the
+    // target never drained, `targetRequest?.memory` would be `undefined` and every `not.toMatchObject`
+    // assertion would trivially pass, hiding a regression that stopped draining the queue.
+    expect(sendDesktopChat).toHaveBeenCalledTimes(2);
     // The target turn is the SECOND sendDesktopChat call.
     const targetRequest = vi.mocked(sendDesktopChat).mock.calls[1]?.[0];
     // ADR-0154 D1: memory captured at enqueue time survives every intervening settings change,

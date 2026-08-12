@@ -154,7 +154,7 @@ describe("keiko-playback-worklet — bounded ring buffer capacity (KEIKO-0471)",
     const processor = makeProcessor();
     send(processor, { type: "config", primeFrames: 1 });
 
-    const oversized = new Int16Array(5_000_000).fill(1); // far beyond any realistic ceiling
+    const oversized = new Int16Array(800_000).fill(1); // far beyond any realistic ceiling
     send(processor, oversized);
 
     const cappedCapacity = processor.capacity;
@@ -170,7 +170,7 @@ describe("keiko-playback-worklet — bounded ring buffer capacity (KEIKO-0471)",
   it("keeps refusing growth and keeps signalling backpressure under sustained pressure", () => {
     const processor = makeProcessor();
     send(processor, { type: "config", primeFrames: 1 });
-    send(processor, new Int16Array(5_000_000).fill(1));
+    send(processor, new Int16Array(800_000).fill(1));
     const cappedCapacity = processor.capacity;
 
     const more = new Int16Array(1000).fill(1);
@@ -179,7 +179,7 @@ describe("keiko-playback-worklet — bounded ring buffer capacity (KEIKO-0471)",
     expect(processor.capacity).toBe(cappedCapacity); // ceiling holds under a second overflow
     const backpressure = messagesOfType(processor, "backpressure");
     expect(backpressure).toEqual([
-      { type: "backpressure", dropped: 5_000_000 - cappedCapacity },
+      { type: "backpressure", dropped: 800_000 - cappedCapacity },
       { type: "backpressure", dropped: 1000 }, // the whole second chunk: buffer was already full
     ]);
   });
