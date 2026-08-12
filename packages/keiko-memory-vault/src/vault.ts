@@ -160,22 +160,37 @@ function withSidecarHardening<T>(opts: ResolvedOptions, write: () => T): T {
 }
 
 // Atomic vault-wide REPLACE for `keiko memory reembed --force` — the ONLY caller. One
-// transaction: enumerate → delete every existing embedding row → reinsert the staged set.
-// Any failure inside the swap rolls the whole transaction back so the prior vector space is
-// preserved. The embedding-row schema check rejects a new (provider, modelId, dimensions,
-// metric) tuple while any pre-existing row from the OLD tuple survives, so the delete phase
-// must complete before the first insert; performing both under one BEGIN/COMMIT guarantees
-// that.
+// transaction: enumerate → concurrent-write check → delete every existing embedding row →
+// reinsert the staged set. Any failure inside the swap rolls the whole transaction back
+// so the prior vector space is preserved. The embedding-row schema check rejects a new
+// (provider, modelId, dimensions, metric) tuple while any pre-existing row from the OLD
+// tuple survives, so the delete phase must complete before the first insert; performing
+// both under one BEGIN IMMEDIATE/COMMIT guarantees that AND takes the RESERVED lock up
+// front so no other writer can slip an embedding row in between the enumeration and the
+// delete phase.
 function replaceAllEmbeddingRowsAtomically(
   db: DatabaseSync,
   opts: ResolvedOptions,
   pairs: readonly { readonly memoryId: MemoryId; readonly input: MemoryEmbeddingInput }[],
 ): void {
-  const existing = db.prepare("SELECT memory_id FROM memory_embeddings").all() as {
-    readonly memory_id: string;
-  }[];
-  db.exec("BEGIN");
+  const stagedIds = new Set<MemoryId>(pairs.map((pair) => pair.memoryId));
+  db.exec("BEGIN IMMEDIATE");
+  let existing: readonly { readonly memory_id: string }[] = [];
   try {
+    existing = db.prepare("SELECT memory_id FROM memory_embeddings").all() as {
+      readonly memory_id: string;
+    }[];
+    // PR-review follow-up (Codex thread 3769711634): concurrent-write detection. The CLI
+    // enumerated embedded ids and staged vectors OUTSIDE this transaction (network embed
+    // calls can be slow). If another writer inserted an embedding row for an id we did not
+    // stage, the vault-wide delete would drop it silently. Refuse; the operator retries.
+    const extras = existing.filter((row) => !stagedIds.has(row.memory_id as MemoryId));
+    if (extras.length > 0) {
+      throw new MemoryStorageError(
+        "precondition-failed",
+        "Embedding vector space changed during --force staging; rerun.",
+      );
+    }
     for (const row of existing) {
       deleteEmbeddingRow(db, row.memory_id as MemoryId);
     }

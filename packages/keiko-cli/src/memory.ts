@@ -413,30 +413,33 @@ interface StagedVector {
   readonly input: NonNullable<Awaited<ReturnType<MemoryEmbedder>>>;
 }
 
-// PR-review follow-up (KEIKO-0440, threads 3769276197 + 3769424330 + 3769557887): `--force`
-// must be atomic — either every currently-embedded memory ends up with a fresh vector, OR the
-// prior vector space is preserved and the operator sees the failure. Two phases:
-//   1. Enumerate every memoryId that currently carries an embedding row (accepted OR retained
-//      after archive/supersede — updateMemory does not delete embeddings on status transitions,
-//      so a vault-wide replace would silently drop them if we staged only the accepted set) and
-//      stage a new vector for each. A provider throw / null-return aborts here, so the
-//      persisted vectors stay intact and reembed returns exit 1.
-//   2. Hand the staged pairs to `vault.replaceAllEmbeddings`, which performs the delete +
-//      reinsert in ONE SQLite transaction; any error inside that transaction rolls the
-//      whole swap back to the prior state.
+// PR-review follow-up (KEIKO-0440, threads 3769276197 + 3769424330 + 3769557887 +
+// 3769711626 + 3769711634): `--force` must be atomic — either every accepted memory ends
+// up with a fresh vector AND every previously-embedded memory keeps one, OR the prior
+// vector space is preserved and the operator sees the failure. Three phases:
+//   1. Snapshot the target set as the UNION of (every accepted memoryId) and (every
+//      currently-embedded memoryId). Accepted is the documented force contract; the
+//      embedded set adds archived/superseded memories whose embeddings updateMemory
+//      intentionally does not delete on status transitions.
+//   2. Stage a new vector for each target id. A provider throw / null-return aborts here,
+//      so the persisted vectors stay intact and reembed returns exit 1.
+//   3. Hand the staged pairs to `vault.replaceAllEmbeddings`, which takes a RESERVED lock,
+//      re-checks the embedding set for concurrent writes we did not stage, then performs
+//      the delete + reinsert in ONE SQLite transaction; any error inside that transaction
+//      rolls the whole swap back so the prior vector space is preserved.
 async function forceReembedAtomically(
   vault: MemoryVaultStore,
   embed: MemoryEmbedder,
 ): Promise<ReembedCounts> {
   const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
-  const embeddedIds = vault.listEmbeddedMemoryIds();
+  const targetIds = collectForceReembedTargetIds(vault);
   const staged: StagedVector[] = [];
-  for (const memoryId of embeddedIds) {
+  for (const memoryId of targetIds) {
     const record = vault.getMemory(memoryId);
     if (record === undefined) {
-      // ON DELETE CASCADE keeps embeddings and memories consistent, so this only surfaces if
-      // a concurrent deletion races between the id enumeration and the record lookup. Drop
-      // the stray id from the staged set — the vault-wide replace will remove its row.
+      // Under FK ON DELETE CASCADE this only surfaces if a concurrent deletion races
+      // between the snapshot and the record lookup. Drop the stray id — the vault-wide
+      // replace will remove any lingering embedding row for it under the same lock.
       continue;
     }
     const staged1 = await embedOneForForce(embed, record, counts);
@@ -450,6 +453,25 @@ async function forceReembedAtomically(
     counts.failed = staged.length;
   }
   return counts;
+}
+
+function collectForceReembedTargetIds(vault: MemoryVaultStore): readonly MemoryRecord["id"][] {
+  const scopes = vault.listMemoryScopes();
+  const targetIds = new Set<MemoryRecord["id"]>();
+  const pageSize = 500;
+  for (let offset = 0; ; offset += pageSize) {
+    const page = vault.listMemoriesAcrossScopes(scopes, {
+      status: ["accepted"],
+      includeExpired: true,
+      limit: pageSize,
+      offset,
+    });
+    if (page.length === 0) break;
+    for (const record of page) targetIds.add(record.id);
+    if (page.length < pageSize) break;
+  }
+  for (const memoryId of vault.listEmbeddedMemoryIds()) targetIds.add(memoryId);
+  return Array.from(targetIds);
 }
 
 async function embedOneForForce(

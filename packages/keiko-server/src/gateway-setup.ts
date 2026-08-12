@@ -668,6 +668,10 @@ interface VoiceProviderRawOptions {
   readonly capabilities: SetupVoiceCapabilities;
   readonly rawCapability?: ModelCapability | undefined;
   readonly voiceProfiles?: readonly VoicePersonaVoice[] | undefined;
+  // KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): pass a per-provider
+  // circuitBreaker override through voice reserialization so applyVoiceProviders /
+  // validateVoiceProviderConnection can round-trip it without dropping.
+  readonly circuitBreaker?: ModelProviderConfig["circuitBreaker"];
 }
 
 function voiceProviderEndpointRaw(options: VoiceProviderRawOptions): Record<string, unknown> {
@@ -705,6 +709,9 @@ function voiceProviderRaw(
     ...voiceProviderEndpointRaw(options),
     capability: configuredOrDefaultVoiceCapability(modelId, options),
     ...(options.voiceProfiles === undefined ? {} : { voiceProfiles: options.voiceProfiles }),
+    // KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): re-serialize the
+    // per-provider circuit-breaker override so a voice/setup save preserves it.
+    ...(options.circuitBreaker === undefined ? {} : { circuitBreaker: options.circuitBreaker }),
     timeoutMs: options.timeoutMs ?? 30_000,
     maxRetries: options.maxRetries ?? 1,
     retryBaseDelayMs: options.retryBaseDelayMs ?? 500,
@@ -1031,6 +1038,9 @@ function setupVoiceProviderFromCurrent(
       capabilities: voiceCapabilities(capability),
       rawCapability: capability,
       ...(provider.voiceProfiles === undefined ? {} : { voiceProfiles: provider.voiceProfiles }),
+      // KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): carry the persisted
+      // per-provider circuit-breaker override through the setup round-trip.
+      ...(provider.circuitBreaker === undefined ? {} : { circuitBreaker: provider.circuitBreaker }),
     },
   ];
 }
@@ -1092,6 +1102,9 @@ function applyVoiceProviders(
           ...(provider.voiceProfiles === undefined
             ? {}
             : { voiceProfiles: provider.voiceProfiles }),
+          ...(provider.circuitBreaker === undefined
+            ? {}
+            : { circuitBreaker: provider.circuitBreaker }),
         }),
       ),
     ],
@@ -1821,6 +1834,11 @@ interface SetupVoiceProvider {
   readonly capabilities: SetupVoiceCapabilities;
   readonly rawCapability?: ModelCapability | undefined;
   readonly voiceProfiles?: readonly VoicePersonaVoice[] | undefined;
+  // KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): carry a per-provider
+  // circuitBreaker override through the setup round-trip. Without this field
+  // setupVoiceProviderFromCurrent / applyVoiceProviders / voiceProviderRaw silently drop
+  // the persisted override on any unrelated voice/setup save.
+  readonly circuitBreaker?: ModelProviderConfig["circuitBreaker"];
 }
 
 function normalizeSetupApiKeyHeaderName(value: unknown): SetupParseResult<string> {
@@ -2391,6 +2409,9 @@ function validateVoiceProviderConnection(
             ...(provider.voiceProfiles === undefined
               ? {}
               : { voiceProfiles: provider.voiceProfiles }),
+            ...(provider.circuitBreaker === undefined
+              ? {}
+              : { circuitBreaker: provider.circuitBreaker }),
           }),
         ],
         circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
@@ -3493,7 +3514,18 @@ function setupVoiceProviderDefaults(
     retryBaseDelayMs: existing?.retryBaseDelayMs ?? 500,
     ...inheritedEndpoint,
     providerLocality,
+    ...inheritedCircuitBreakerFragment(existing),
   };
+}
+
+// KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): inherit the per-provider
+// circuit-breaker override from the stored voice provider so a regenerated
+// SetupVoiceProvider on unrelated setup input keeps it. Extracted so the caller stays
+// under the repo-wide cyclomatic-complexity ceiling.
+function inheritedCircuitBreakerFragment(
+  existing: ModelProviderConfig | undefined,
+): Pick<SetupVoiceProvider, "circuitBreaker"> | Record<string, never> {
+  return existing?.circuitBreaker === undefined ? {} : { circuitBreaker: existing.circuitBreaker };
 }
 
 function validatedVoiceProviders(

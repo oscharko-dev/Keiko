@@ -459,6 +459,79 @@ describe("runMemoryCli reembed", () => {
     expect(vault.getEmbedding(a.id)).toBeDefined();
     expect(vault.getEmbedding(b.id)).toBeDefined();
   });
+
+  // Regression pin (KEIKO-0440, Codex thread 3769711626): `--force` must also cover accepted
+  // memories that do not yet carry an embedding. Enumerating only listEmbeddedMemoryIds()
+  // would omit them and exit successfully while they stayed semantically unavailable; staging
+  // the union of accepted-ids and existing-embedded-ids fixes it.
+  it("embeds accepted memories without an existing embedding through --force", async () => {
+    const vault = makeVault();
+    const a = insert(vault, { id: "a", status: "accepted" });
+    const b = insert(vault, { id: "b", status: "accepted" });
+    // Only a has an existing embedding; b is a new accepted memory that has never been embedded.
+    vault.upsertEmbedding(a.id, {
+      provider: "openai",
+      modelId: "text-embedding-3-large",
+      metric: "cosine",
+      vector: Float32Array.from({ length: 8 }, (_, i) => (i + 1) / 8),
+    });
+    const cap = capture();
+    const code = await runMemoryCli(
+      ["reembed", "--force"],
+      cap.io,
+      {},
+      { vault, embedText: fakeEmbedder() },
+    );
+    expect(code).toBe(0);
+    expect(cap.out()).toContain("embedded: 2");
+    expect(vault.getEmbedding(a.id)).toBeDefined();
+    expect(vault.getEmbedding(b.id)).toBeDefined();
+  });
+
+  // Regression pin (KEIKO-0440, Codex thread 3769711634): if another writer inserts an
+  // embedding row between the CLI's snapshot enumeration and the vault-wide swap, the
+  // atomic replace refuses (reporting failed=N) rather than silently deleting that row.
+  // The concurrent write is simulated by upserting a new embedding on a NEW memory record
+  // directly before replaceAllEmbeddings runs — the vault's staged-set check inside the
+  // BEGIN IMMEDIATE transaction sees the extra id and rolls the whole swap back.
+  it("refuses --force when a concurrent write lands after staging", async () => {
+    const vault = makeVault();
+    const a = insert(vault, { id: "a", status: "accepted" });
+    vault.upsertEmbedding(a.id, {
+      provider: "openai",
+      modelId: "text-embedding-3-large",
+      metric: "cosine",
+      vector: Float32Array.from({ length: 8 }, (_, i) => (i + 1) / 8),
+    });
+    const wrappedVault: MemoryVaultStore = {
+      ...vault,
+      replaceAllEmbeddings: (pairs): void => {
+        // Simulate a concurrent writer landing an embedding for a NEW accepted memory that
+        // was created after --force enumerated its target ids.
+        const late = insert(vault, { id: "late", status: "accepted" });
+        vault.upsertEmbedding(late.id, {
+          provider: "openai",
+          modelId: "text-embedding-3-large",
+          metric: "cosine",
+          vector: Float32Array.from({ length: 8 }, (_, i) => (i + 1) / 8),
+        });
+        vault.replaceAllEmbeddings(pairs);
+      },
+    };
+    const cap = capture();
+    const code = await runMemoryCli(
+      ["reembed", "--force"],
+      cap.io,
+      {},
+      { vault: wrappedVault, embedText: fakeEmbedder() },
+    );
+    expect(code).toBe(1);
+    expect(cap.out()).toContain("failed:");
+    // The late-arriving embedding survived — --force did not silently delete it.
+    expect(vault.getEmbedding(mid("late"))).toBeDefined();
+    // a's embedding is likewise untouched (transaction rolled back before delete).
+    expect(vault.getEmbedding(a.id)).toBeDefined();
+  });
 });
 
 describe("runMemoryCli error handling", () => {
