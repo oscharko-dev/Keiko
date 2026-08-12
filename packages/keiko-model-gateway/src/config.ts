@@ -805,16 +805,29 @@ function assertWorkflowEligibleForKind(
 
 // Mirrors assertWorkflowEligibleForKind: a chat capability without a positive contextWindow is a
 // degraded sentinel that only surfaces later through disconnected downstream symptoms
-// (GEN-GATE-CONTEXT-001/004). Fail closed at parse time, at the cheapest point to catch it. Voice
-// capabilities deliberately declare contextWindow: 0 (createDefaultVoiceCapabilityForSetup in
-// gateway-setup.ts), and embedding/ocr-vision have their own zero-conventions; both remain
-// unrestricted here. Audit KEIKO-0520.
+// (GEN-GATE-CONTEXT-001/004). Voice capabilities deliberately declare contextWindow: 0
+// (createDefaultVoiceCapabilityForSetup in gateway-setup.ts), and embedding/ocr-vision have
+// their own zero-conventions; both remain unrestricted here. Audit KEIKO-0520.
 function assertContextWindowForKind(kind: ModelKind, contextWindow: number, path: string): void {
   if (kind === "chat" && contextWindow <= 0) {
     throw new ConfigInvalidError(
       `${path}.contextWindow must be greater than 0 when ${path}.kind is "chat"`,
     );
   }
+}
+
+// PR-review follow-up on KEIKO-0520: gateway configs persisted by pre-KEIKO-0520 releases can
+// carry `kind: "chat"` capabilities with `contextWindow: 0` because the OLD
+// `createDefaultChatCapability` returned that value and gateway setup persisted it. Rejecting
+// them outright at load time would prevent the gateway from starting after an upgrade — a
+// hard regression on installs that upgrade Keiko without re-running the setup wizard. Normalise
+// the persisted sentinel to the same 4096-token default the new factory hands out, then let
+// the strict guard above validate the outcome. This is idempotent: a config already carrying a
+// real positive window is untouched, and a fresh run of gateway-setup will overwrite the
+// migrated default with the discovered value.
+const LEGACY_CHAT_CONTEXT_WINDOW_DEFAULT = 4096;
+function normalizeLegacyChatContextWindow(kind: ModelKind, contextWindow: number): number {
+  return kind === "chat" && contextWindow <= 0 ? LEGACY_CHAT_CONTEXT_WINDOW_DEFAULT : contextWindow;
 }
 
 // ─── Voice capability parsing (Issue #493, ADR-0100 D5/D7) ─────────────────────
@@ -1030,7 +1043,8 @@ function buildProviderCapabilityBody(
 ): ModelCapability {
   const flags = providerCapabilityFlags(raw, path);
   const tokenAccounting = parseTokenAccounting(raw.tokenAccounting, `${path}.tokenAccounting`);
-  const contextWindow = optionalNonNegativeInt(raw.contextWindow, `${path}.contextWindow`, 0);
+  const rawContextWindow = optionalNonNegativeInt(raw.contextWindow, `${path}.contextWindow`, 0);
+  const contextWindow = normalizeLegacyChatContextWindow(kind, rawContextWindow);
   assertContextWindowForKind(kind, contextWindow, path);
   return {
     id,
@@ -1202,11 +1216,10 @@ function assertKnownCapabilityKeys(value: Record<string, unknown>, path: string)
   }
 }
 
-export function parseModelCapability(value: unknown, path: string): ModelCapability {
-  if (!isRecord(value)) {
-    throw new ConfigInvalidError(`${path} must be an object`);
-  }
-  assertKnownCapabilityKeys(value, path);
+function parseCapabilityCore(
+  value: Record<string, unknown>,
+  path: string,
+): { id: string; kind: ModelKind; workflowEligible: boolean; contextWindow: number } {
   const id = requireNonEmptyString(value.id, `${path}.id`);
   const kind = requireEnum<ModelKind>(value.kind, `${path}.kind`, [
     "chat",
@@ -1216,8 +1229,21 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
   ]);
   const workflowEligible = requireBoolean(value.workflowEligible, `${path}.workflowEligible`);
   assertWorkflowEligibleForKind(kind, workflowEligible, path);
-  const contextWindow = requireNonNegativeIntStrict(value.contextWindow, `${path}.contextWindow`);
+  const rawContextWindow = requireNonNegativeIntStrict(
+    value.contextWindow,
+    `${path}.contextWindow`,
+  );
+  const contextWindow = normalizeLegacyChatContextWindow(kind, rawContextWindow);
   assertContextWindowForKind(kind, contextWindow, path);
+  return { id, kind, workflowEligible, contextWindow };
+}
+
+export function parseModelCapability(value: unknown, path: string): ModelCapability {
+  if (!isRecord(value)) {
+    throw new ConfigInvalidError(`${path} must be an object`);
+  }
+  assertKnownCapabilityKeys(value, path);
+  const { id, kind, workflowEligible, contextWindow } = parseCapabilityCore(value, path);
   return {
     id,
     kind,

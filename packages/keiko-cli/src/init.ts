@@ -239,12 +239,12 @@ function resolveCanonicalPackagePath(packagePath: string): string {
 }
 
 function capturePackageMode(packagePath: string): number | undefined {
+  // PR-review follow-up: only the "file does not exist yet" case returns undefined (the caller
+  // has no mode to preserve). A statSync failure on an existing file (I/O, EACCES) propagates
+  // so writePackageJsonAtomically does not silently skip the chmod and widen the file to the
+  // umask default while reporting success.
   if (!existsSync(packagePath)) return undefined;
-  try {
-    return statSync(packagePath).mode & 0o777;
-  } catch {
-    return undefined;
-  }
+  return statSync(packagePath).mode & 0o777;
 }
 
 function initializedPackageJson(

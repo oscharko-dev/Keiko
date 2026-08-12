@@ -910,10 +910,13 @@ describe("parseGatewayConfig", () => {
   });
 
   // Regression pin (audit KEIKO-0520): the inline provider capability path used to default a
-  // missing contextWindow to 0 silently (optionalNonNegativeInt). A chat capability without a real
-  // contextWindow is a degraded sentinel — reject at parse time. Voice capabilities intentionally
-  // set contextWindow:0 (gateway-setup.ts createDefaultVoiceCapabilityForSetup) and remain accepted.
-  it("rejects an inline provider capability with kind: 'chat' and missing contextWindow", () => {
+  // missing contextWindow to 0 silently (optionalNonNegativeInt). A chat capability without a
+  // real contextWindow is a degraded sentinel. PR-review follow-up: rather than reject and
+  // break upgrades from persisted pre-fix configs (which carry contextWindow:0 for chat
+  // because the old createDefaultChatCapability produced that value), the loader now
+  // NORMALIZES a legacy sentinel to 4096 (the new default) and lets the strict guard validate
+  // the outcome. Voice capabilities intentionally set contextWindow:0 and remain accepted.
+  it("migrates an inline provider capability with kind: 'chat' and missing contextWindow to the default", () => {
     const raw = rawWithProvider((p) => ({
       ...p,
       modelId: "example-missing-context-chat",
@@ -921,17 +924,13 @@ describe("parseGatewayConfig", () => {
         kind: "chat",
       },
     }));
-    try {
-      parseGatewayConfig(raw);
-      expect.unreachable("should have thrown");
-    } catch (error) {
-      expect(error).toBeInstanceOf(ConfigInvalidError);
-      const message = (error as ConfigInvalidError).message;
-      expect(message).toContain("contextWindow");
-    }
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "example-missing-context-chat");
+    expect(cap?.kind).toBe("chat");
+    expect(cap?.contextWindow).toBe(4096);
   });
 
-  it("rejects an inline provider capability with kind: 'chat' and contextWindow: 0", () => {
+  it("migrates an inline provider capability with kind: 'chat' and contextWindow: 0 to the default", () => {
     const raw = rawWithProvider((p) => ({
       ...p,
       modelId: "example-zero-context-chat",
@@ -940,14 +939,10 @@ describe("parseGatewayConfig", () => {
         contextWindow: 0,
       },
     }));
-    try {
-      parseGatewayConfig(raw);
-      expect.unreachable("should have thrown");
-    } catch (error) {
-      expect(error).toBeInstanceOf(ConfigInvalidError);
-      const message = (error as ConfigInvalidError).message;
-      expect(message).toContain("contextWindow");
-    }
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "example-zero-context-chat");
+    expect(cap?.kind).toBe("chat");
+    expect(cap?.contextWindow).toBe(4096);
   });
 
   it("accepts an inline provider capability with kind: 'voice' and contextWindow: 0", () => {
@@ -1512,18 +1507,16 @@ describe("parseModelCapability", () => {
 
   // Regression pin (audit KEIKO-0520): a kind:'chat' capability with contextWindow:0 is a
   // misconfiguration — the whole chat runtime treats contextWindow<=0 as a degraded sentinel that
-  // surfaces later through disconnected symptoms (GEN-GATE-CONTEXT-001/004). Reject at parse time
-  // like the mirrored workflowEligible/kind invariant. Voice capabilities deliberately set
-  // contextWindow:0 (gateway-setup.ts:377) and must remain unrestricted.
-  it("rejects a chat capability whose contextWindow is 0 (misconfiguration)", () => {
+  // surfaces later through disconnected symptoms (GEN-GATE-CONTEXT-001/004). PR-review
+  // follow-up: rather than reject and break upgrades from configs persisted by pre-fix
+  // releases (which carry contextWindow:0 for chat), the loader now normalises the legacy
+  // sentinel to 4096 and lets the strict guard validate the outcome. Voice capabilities
+  // deliberately set contextWindow:0 (gateway-setup.ts:377) and must remain unrestricted.
+  it("migrates a persisted chat capability whose contextWindow is 0 to the default", () => {
     const raw = { ...validCapability(), contextWindow: 0 };
-    try {
-      parseModelCapability(raw, "capabilities[0]");
-      expect.unreachable("should have thrown");
-    } catch (error) {
-      expect(error).toBeInstanceOf(ConfigInvalidError);
-      expect((error as Error).message).toContain("contextWindow");
-    }
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed.kind).toBe("chat");
+    expect(parsed.contextWindow).toBe(4096);
   });
 
   it("accepts a voice capability whose contextWindow is 0", () => {
