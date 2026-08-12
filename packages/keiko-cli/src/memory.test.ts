@@ -505,6 +505,11 @@ describe("runMemoryCli reembed", () => {
     });
     const originalCreatedAt = vault.getEmbedding(a.id)?.createdAt;
     expect(originalCreatedAt).toBeDefined();
+    // Wait a beat so Date.now() advances before the second upsert stamps its created_at —
+    // otherwise a fast system stamps both upserts with the same ms and the snapshot check
+    // sees no drift. The real BFF/CLI race is separated by network latency, so this delay
+    // is only a test-time deterministic substitute for that.
+    await new Promise((resolve) => setTimeout(resolve, 5));
     const wrappedVault: MemoryVaultStore = {
       ...vault,
       replaceAllEmbeddings: (pairs, expectedSnapshot): void => {
@@ -533,6 +538,40 @@ describe("runMemoryCli reembed", () => {
     const finalVector = Array.from(vault.getEmbedding(a.id)?.vector ?? []);
     expect(finalVector[0]).toBeCloseTo(1.0);
     expect(finalVector[7]).toBeCloseTo(0.125);
+  });
+
+  // Regression pin (KfQ thread 3769955302, Codex thread 3770110870): a vault where every
+  // accepted memory is already embedded should return immediately with skipped=N and NOT
+  // touch the embedder. The prior fast-path (break on observedEmbedded==embeddedSet.size)
+  // was incorrect when embedded and unembedded pages interleaved; the fix enumerates ids
+  // once and subtracts in memory. This pin exercises the "nothing to do" path.
+  it("returns immediately without embedding when every accepted memory already has one", async () => {
+    const vault = makeVault();
+    const a = insert(vault, { id: "a", status: "accepted" });
+    const b = insert(vault, { id: "b", status: "accepted" });
+    vault.upsertEmbedding(a.id, {
+      provider: "openai",
+      modelId: "text-embedding-3-large",
+      metric: "cosine",
+      vector: Float32Array.from({ length: 8 }, (_, i) => (i + 1) / 8),
+    });
+    vault.upsertEmbedding(b.id, {
+      provider: "openai",
+      modelId: "text-embedding-3-large",
+      metric: "cosine",
+      vector: Float32Array.from({ length: 8 }, (_, i) => (i + 1) / 8),
+    });
+    let embedCalls = 0;
+    const spy: ReturnType<typeof fakeEmbedder> = (text) => {
+      embedCalls += 1;
+      return fakeEmbedder()(text);
+    };
+    const cap = capture();
+    const code = await runMemoryCli(["reembed"], cap.io, {}, { vault, embedText: spy });
+    expect(code).toBe(0);
+    expect(embedCalls).toBe(0);
+    expect(cap.out()).toContain("embedded: 0");
+    expect(cap.out()).toContain("skipped:  2");
   });
 
   // Regression pin (KEIKO-0440, Codex thread 3769711634): if another writer inserts an
