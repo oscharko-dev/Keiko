@@ -257,7 +257,7 @@ function ProblemsListbox(props: {
   readonly activeFocusId: string | null;
   readonly openEditorFile: ((request: OpenEditorFileRequest) => OpenEditorFileResult) | undefined;
   readonly t: ProblemsTranslate;
-  readonly rowRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
+  readonly rowRefs: React.RefObject<Map<string, HTMLDivElement>>;
   readonly setFocusId: (id: string) => void;
   readonly onListKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
   readonly onActivate: (problem: EditorProblem) => void;
