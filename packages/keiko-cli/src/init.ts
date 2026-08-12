@@ -1,8 +1,10 @@
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -201,8 +203,14 @@ function loadPackageJson(packagePath: string): LoadedPackageJson | InitError {
 // without root, and Windows lacks POSIX mode entirely; on POSIX we at minimum re-apply the
 // captured mode, which covers the observable regression the reviewer flagged.
 function writePackageJsonAtomically(packagePath: string, content: string): void {
-  const dir = dirname(packagePath);
-  const originalMode = capturePackageMode(packagePath);
+  // PR-review follow-up: if the caller passed a symlink to package.json, replace the REAL
+  // target atomically instead of the symlink entry itself. `renameSync` operates on
+  // directory entries, so writing "next to the symlink" and renaming it in place would
+  // sever the link and leave the canonical target unchanged, while still reporting
+  // success. `realpathSync` on a non-symlink returns the same path unchanged.
+  const canonicalPath = resolveCanonicalPackagePath(packagePath);
+  const dir = dirname(canonicalPath);
+  const originalMode = capturePackageMode(canonicalPath);
   const tmpDir = mkdtempSync(join(dir, ".keiko-init-"));
   const tmpFile = join(tmpDir, "package.json");
   try {
@@ -215,9 +223,18 @@ function writePackageJsonAtomically(packagePath: string, content: string): void 
     if (originalMode !== undefined && process.platform !== "win32") {
       chmodSync(tmpFile, originalMode);
     }
-    renameSync(tmpFile, packagePath);
+    renameSync(tmpFile, canonicalPath);
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+function resolveCanonicalPackagePath(packagePath: string): string {
+  if (!existsSync(packagePath)) return packagePath;
+  try {
+    return lstatSync(packagePath).isSymbolicLink() ? realpathSync(packagePath) : packagePath;
+  } catch {
+    return packagePath;
   }
 }
 

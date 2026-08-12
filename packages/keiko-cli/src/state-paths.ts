@@ -50,6 +50,10 @@ export const KEIKO_STATE_FILES = [
 // `launcher-state.ts` writes ephemeral mkdtemp dirs with this prefix during atomic
 // state saves; a crash can leave one behind, so uninstall/repair sweep them by prefix.
 const LAUNCHER_STATE_TMP_PREFIX = ".launcher-state-";
+// KEIKO-0333 (PR-review follow-up): portable-registration.ts writes atomic-save temp dirs
+// with this prefix. Register them under the same "launcher" subtree so a crash leaves a
+// classifiable stub that repair/uninstall can sweep instead of retaining as customer data.
+const PORTABLE_REGISTRATION_TMP_PREFIX = ".portable-registration-";
 
 // Resolves the state directory the same way `keiko start` does. An explicit
 // `--state-dir` argument wins, then `KEIKO_STATE_DIR`, then `<cwd>/.keiko`. Relative
@@ -530,6 +534,7 @@ function topLevelChildSubtree(name: string): OwnedSubtree | undefined {
   if (name === EDITOR_HOT_EXIT_SUBDIR) return editorHotExitSubtree;
   if (name === UPDATE_SUBDIR) return updateSubtree;
   if (name.startsWith(LAUNCHER_STATE_TMP_PREFIX)) return launcherTmpSubtree;
+  if (name.startsWith(PORTABLE_REGISTRATION_TMP_PREFIX)) return launcherTmpSubtree;
   return undefined;
 }
 

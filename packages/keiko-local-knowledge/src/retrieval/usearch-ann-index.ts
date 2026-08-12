@@ -322,6 +322,8 @@ type TargetRuntimeResult =
 interface CachedTargetRuntime {
   readonly result: TargetRuntimeResult;
   readonly mtimeMs: number;
+  readonly ctimeMs: number;
+  readonly ino: number;
   readonly size: number;
 }
 
@@ -378,16 +380,34 @@ function targetRuntime(binaryPath: string | undefined): TargetRuntimeResult {
     return "invalid";
   }
   const cached = TARGET_RUNTIME_CACHE.get(path);
-  if (cached?.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+  if (
+    cached?.mtimeMs === stat.mtimeMs &&
+    cached.ctimeMs === stat.ctimeMs &&
+    cached.ino === stat.ino &&
+    cached.size === stat.size
+  ) {
     return cached.result;
   }
   const result = verifyRuntimeAt(path);
   // PR-review follow-up: only memoize SUCCESSFUL verifications. A transient failure
   // (EMFILE, EIO, temporarily-tightened permissions) that later heals must NOT be cached
-  // against the same (path, mtimeMs, size) tuple — otherwise a recovered runtime is
-  // permanently invisible to every subsequent ANN request until process restart.
+  // against the same tuple — otherwise a recovered runtime is permanently invisible to every
+  // subsequent ANN request until process restart.
+  //
+  // Second PR-review follow-up: include ctimeMs and inode in the cache key. mtime alone can
+  // be restored by an attacker with write permission via `utimes`, allowing an in-place
+  // same-size mutation to bypass the SHA-256 verification. ctime is updated on any inode
+  // change and cannot be set from user space, and inode change (`mv` + fresh write) is
+  // detected too. On Windows ctime is birthtime-like; the fallback is the mtime+size pair
+  // that would otherwise apply, so behaviour is not worse than before.
   if (typeof result !== "string") {
-    TARGET_RUNTIME_CACHE.set(path, { result, mtimeMs: stat.mtimeMs, size: stat.size });
+    TARGET_RUNTIME_CACHE.set(path, {
+      result,
+      mtimeMs: stat.mtimeMs,
+      ctimeMs: stat.ctimeMs,
+      ino: stat.ino,
+      size: stat.size,
+    });
   }
   return result;
 }
