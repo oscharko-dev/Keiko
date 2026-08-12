@@ -19,12 +19,14 @@ const PROJ_HEAD_ROW_STYLE: CSSProperties = {
   width: "100%",
   gap: "2px",
 };
+// WCAG 2.5.8 Target Size (Minimum): the caret's pointer target is 24×24 CSS pixels; the
+// visible chevron stays at 13px and is centered by placeItems (Codex on PR #3089: 3766009390).
 const PROJ_CARET_BTN_STYLE: CSSProperties = {
   display: "grid",
   placeItems: "center",
   flexShrink: 0,
-  width: "18px",
-  height: "18px",
+  width: "24px",
+  height: "24px",
   padding: 0,
   margin: 0,
   border: 0,

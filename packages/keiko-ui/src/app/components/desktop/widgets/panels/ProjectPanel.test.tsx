@@ -329,6 +329,22 @@ describe("ProjectPanel", () => {
     expect(within(group).getByText("No chats")).toBeInTheDocument();
   });
 
+  // WCAG 2.5.8 Target Size (Minimum): the caret button's pointer target must be at least
+  // 24×24 CSS pixels (Codex on PR #3089: 3766009390).
+  it("gives the caret a >=24x24 CSS-px pointer target (WCAG 2.5.8)", () => {
+    render(
+      <ChatSessionProvider value={session()}>
+        <ProjectPanel />
+      </ChatSessionProvider>,
+    );
+    const caret = document.querySelector<HTMLButtonElement>("button.proj-caret-btn");
+    expect(caret).not.toBeNull();
+    // jsdom returns the inline style values as strings; the visible chevron stays smaller
+    // but the button's own hit area is what the pointer sees.
+    expect(caret?.style.width).toBe("24px");
+    expect(caret?.style.height).toBe("24px");
+  });
+
   // #2723: the chat row's onClick — confirms the click wiring the extracted render
   // function still attaches to each rendered chat button.
   it("opens a chat when its treeitem is clicked", async () => {
