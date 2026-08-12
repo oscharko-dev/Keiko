@@ -18,6 +18,7 @@ import type {
   MemoryId,
   MemoryRecord,
   MemoryScope,
+  MemoryStatus,
 } from "@oscharko-dev/keiko-contracts/memory";
 import { chmodIfPresent, openMemoryDatabase } from "./db.js";
 import { resolveMemoryDir, resolveMemoryDbPath } from "./paths.js";
@@ -424,6 +425,7 @@ type MemoryMutators = Pick<
   | "listMemoriesAcrossScopes"
   | "listMemoriesByScope"
   | "listMemoryMetadataByScope"
+  | "listMemoryIdsByStatus"
 >;
 
 // Internal-only: carries the forgotten memory's embedding (fetched BEFORE the row is deleted,
@@ -646,6 +648,7 @@ type MemoryReadOps = Pick<
   | "listMemoriesAcrossScopes"
   | "listMemoriesByScope"
   | "listMemoryMetadataByScope"
+  | "listMemoryIdsByStatus"
 >;
 
 function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWriteOps {
@@ -727,6 +730,12 @@ function buildMemoryReadOps(db: DatabaseSync, opts: ResolvedOptions): MemoryRead
       const effective = options ?? {};
       const nowMs = effective.nowMs ?? opts.now();
       return listMemoryMetadataByScopeRows(db, scope, effective, nowMs);
+    },
+    listMemoryIdsByStatus: (status: MemoryStatus): readonly MemoryId[] => {
+      const rows = db.prepare("SELECT id FROM memories WHERE status = ?").all(status) as {
+        readonly id: string;
+      }[];
+      return rows.map((row) => row.id as MemoryId);
     },
   };
 }

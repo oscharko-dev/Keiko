@@ -227,6 +227,11 @@ export interface MemoryVaultStore {
   // accepted-then-archived (embedding retained by design) is preserved rather than silently
   // dropped. The list is order-agnostic and driven by embedding presence, not status.
   readonly listEmbeddedMemoryIds: () => readonly MemoryId[];
+  // PR-review follow-up (Codex thread 3771011289): enumerate all memoryIds of a given status
+  // in ONE query. `keiko memory reembed --force` needs a stable accepted-id set independent
+  // of offset-paged listMemoriesAcrossScopes, whose OFFSET semantics skip rows if another
+  // writer deletes an earlier page while the pagination is running.
+  readonly listMemoryIdsByStatus: (status: MemoryStatus) => readonly MemoryId[];
   // PR-review follow-up (Codex thread 3769903807): snapshot the (memoryId, createdAt) pairs
   // of every embedding row at a moment in time. The force reembed pipeline captures this
   // BEFORE its network-backed staging phase and hands it back to replaceAllEmbeddings so a

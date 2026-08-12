@@ -124,7 +124,7 @@ async function expectNativeHealthStartFailure(
     const c = makeIo();
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
     let now = 0;
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => {
       now += 600;
       return now;
     });
@@ -997,7 +997,7 @@ describe("runLifecycleCli", () => {
       Promise.resolve(Response.json({ status: "ok", version: "0.0.0-wrong" }, { status: 200 })),
     );
     const killProcess = vi.fn();
-    const nowSpy = vi.spyOn(Date, "now");
+    const nowSpy = vi.spyOn(performance, "now");
     let now = 0;
     nowSpy.mockImplementation(() => {
       now += 600;
@@ -1165,7 +1165,9 @@ describe("runLifecycleCli", () => {
     writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
     const c = makeIo();
     const killProcess = vi.fn();
-    const nowSpy = vi.spyOn(Date, "now");
+    // terminateAndConfirm uses performance.now for a monotonic deadline (Codex thread
+    // 3771011316); mock it so the graceful loop expires after one iteration.
+    const nowSpy = vi.spyOn(performance, "now");
     nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
 
     try {
@@ -1199,7 +1201,9 @@ describe("runLifecycleCli", () => {
     writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
     const c = makeIo();
     const killProcess = vi.fn();
-    const nowSpy = vi.spyOn(Date, "now");
+    // terminateAndConfirm uses performance.now for a monotonic deadline (Codex thread
+    // 3771011316); mock it so the graceful loop expires after one iteration.
+    const nowSpy = vi.spyOn(performance, "now");
     nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
 
     try {
@@ -1240,7 +1244,7 @@ describe("runLifecycleCli", () => {
     // isProcessAlive stays true forever: SIGTERM never terminates the child; SIGKILL
     // also fails to kill (simulates a stuck kernel or another user's process the
     // uninstaller cannot signal).
-    const nowSpy = vi.spyOn(Date, "now");
+    const nowSpy = vi.spyOn(performance, "now");
     let now = 0;
     nowSpy.mockImplementation(() => {
       now += 600;

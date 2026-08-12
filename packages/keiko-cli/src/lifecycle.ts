@@ -553,8 +553,10 @@ async function waitForHealth(
   pid: number,
   deps: Pick<LifecycleRuntimeDeps, "healthProbe" | "sleep" | "isProcessAlive">,
 ): Promise<boolean> {
-  const deadline = Date.now() + options.startTimeoutMs;
-  while (Date.now() <= deadline) {
+  // Monotonic clock so a wall-clock adjustment during startup does not skip the health
+  // window (forward jump) or hold it open indefinitely (backward jump).
+  const start = performance.now();
+  while (performance.now() - start <= options.startTimeoutMs) {
     if (!deps.isProcessAlive(pid)) return false;
     const health = await deps.healthProbe(healthUrl(options));
     if (health.version === SDK_VERSION && deps.isProcessAlive(pid)) {
@@ -704,8 +706,13 @@ async function terminateAndConfirm(
   onEscalate?: () => void,
 ): Promise<TerminateAndConfirmResult> {
   deps.killProcess(pid, "SIGTERM");
-  const deadline = Date.now() + options.stopTimeoutMs;
-  while (Date.now() <= deadline) {
+  // PR-review follow-up (Codex thread 3771011316): measure elapsed shutdown time with the
+  // monotonic performance.now() clock instead of Date.now(). A wall-clock adjustment
+  // during shutdown (manual change, NTP correction) would otherwise extend the wait on a
+  // backward jump and send SIGKILL prematurely on a forward jump — both independent of
+  // the child process actually terminating.
+  const gracefulStart = performance.now();
+  while (performance.now() - gracefulStart <= options.stopTimeoutMs) {
     if (!deps.isProcessAlive(pid)) return { confirmed: true, escalated: false };
     await deps.sleep(500);
   }
@@ -716,8 +723,8 @@ async function terminateAndConfirm(
   // are asynchronous, and process.kill(pid, 0) can still succeed briefly; a zero-budget
   // remainder made the caller falsely conclude SIGKILL failed and retain ui.pid even when
   // the process exited moments later.
-  const killDeadline = Date.now() + 2_000;
-  while (Date.now() <= killDeadline) {
+  const killStart = performance.now();
+  while (performance.now() - killStart <= 2_000) {
     if (!deps.isProcessAlive(pid)) return { confirmed: true, escalated: true };
     await deps.sleep(100);
   }

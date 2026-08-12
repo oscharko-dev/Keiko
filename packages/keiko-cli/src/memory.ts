@@ -500,20 +500,12 @@ function collectForceReembedTargetIds(
   vault: MemoryVaultStore,
   snapshot: ReadonlyMap<MemoryRecord["id"], number>,
 ): readonly MemoryRecord["id"][] {
-  const scopes = vault.listMemoryScopes();
+  // PR-review follow-up (Codex thread 3771011289): use vault.listMemoryIdsByStatus which
+  // returns every accepted memoryId in ONE SQL query. Prior implementation paginated with
+  // OFFSET; a concurrent DELETE that removed a row from an earlier page shifted the
+  // remaining rows and skipped an unembedded accepted record across the page boundary.
   const targetIds = new Set<MemoryRecord["id"]>();
-  const pageSize = 500;
-  for (let offset = 0; ; offset += pageSize) {
-    const page = vault.listMemoriesAcrossScopes(scopes, {
-      status: ["accepted"],
-      includeExpired: true,
-      limit: pageSize,
-      offset,
-    });
-    if (page.length === 0) break;
-    for (const record of page) targetIds.add(record.id);
-    if (page.length < pageSize) break;
-  }
+  for (const memoryId of vault.listMemoryIdsByStatus("accepted")) targetIds.add(memoryId);
   // Embedded targets come from the snapshot (not a fresh listEmbeddedMemoryIds()) so a
   // concurrent DELETE between snapshot and target enumeration cannot re-add a deleted id
   // that the snapshot omits.

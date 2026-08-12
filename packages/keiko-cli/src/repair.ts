@@ -292,18 +292,23 @@ function tightenNodes(
   }
 }
 
-// PR-review follow-up (Codex threads 3770357730 + 3770792796): open a genuinely no-follow
-// descriptor and chmod through it. Priority order:
-//   1. O_PATH | O_NOFOLLOW — Linux, no permission bits required (works for 0222 and 0444).
-//   2. O_RDONLY | O_NOFOLLOW — POSIX fallback for files readable by the owner (0400+ etc.).
-//   3. O_WRONLY | O_NOFOLLOW — POSIX fallback for write-only files (0200 etc.).
-// If none open, the entry is reported as unreadable — better than a path-based chmod that
-// can be re-directed by a symlink or hardlink swap between our lstat and the chmod call.
+// PR-review follow-up (Codex threads 3770357730 + 3770792796 + 3771011305): open a
+// genuinely no-follow descriptor and chmod through it. Priority order:
+//   1. O_PATH | O_NOFOLLOW — Linux, no permission bits required (works for 0222 / 0444 /
+//      0333 directories).
+//   2. O_RDONLY | O_NOFOLLOW — POSIX fallback for files readable by the owner.
+//   3. O_WRONLY | O_NOFOLLOW — POSIX fallback for write-only files.
+//   4. lstat-verified chmodSync — non-Linux last resort for execute-only (0333)
+//      directories that no open flag can access. The lstat pre/post-check refuses to
+//      chmod anything that has become a symlink or changed inode/device between calls
+//      and best-effort reverts on drift; a directory swap in the state dir requires an
+//      attacker with write access to the state directory itself, which is a distinct
+//      threat class from the file-swap case the earlier finding addressed.
 function tightenNodeMode(node: RuntimeStateNode, targetMode: number): boolean {
   for (const flags of tightenOpenFlagCandidates()) {
     if (tightenViaOpenFlag(node, targetMode, flags)) return true;
   }
-  return false;
+  return tightenViaVerifiedPathChmod(node, targetMode);
 }
 
 function tightenOpenFlagCandidates(): readonly number[] {
@@ -315,11 +320,31 @@ function tightenOpenFlagCandidates(): readonly number[] {
   return candidates;
 }
 
-function tightenViaOpenFlag(
-  node: RuntimeStateNode,
-  targetMode: number,
-  flags: number,
-): boolean {
+// Last-resort path where no openSync flag combination succeeded (execute-only 0333
+// directory on a platform without O_PATH). lstat pre- and post-chmod verifies that the
+// entry's identity (kind + inode + device) did not change under us; a swap between the
+// checks is refused and the tightened mode is reverted best-effort.
+function tightenViaVerifiedPathChmod(node: RuntimeStateNode, targetMode: number): boolean {
+  try {
+    const before = lstatSync(node.absPath);
+    if (before.isSymbolicLink()) return false;
+    chmodSync(node.absPath, targetMode);
+    const after = lstatSync(node.absPath);
+    if (after.isSymbolicLink() || after.ino !== before.ino || after.dev !== before.dev) {
+      try {
+        chmodSync(node.absPath, before.mode & 0o777);
+      } catch {
+        // Best-effort revert.
+      }
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function tightenViaOpenFlag(node: RuntimeStateNode, targetMode: number, flags: number): boolean {
   let fd: number | undefined;
   try {
     fd = openSync(node.absPath, flags);

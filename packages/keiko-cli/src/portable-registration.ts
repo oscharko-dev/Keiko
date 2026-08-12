@@ -328,6 +328,25 @@ export function readPortableInstallRegistration(
   return undefined;
 }
 
+// PR-review follow-up (Codex thread 3771011311): destructive callers such as
+// `keiko uninstall --state` must refuse when the registration file EXISTS but cannot be
+// parsed into a recognised registration record — otherwise the uninstall skips
+// removePortableManagedStep AND then deletes the registration itself as an ordinary state
+// artifact, erasing the attestation needed to locate and remove the managed installation
+// safely. Callers that only need "what's registered" continue to use
+// readPortableInstallRegistration (which fails closed to undefined for backward
+// compatibility). Returns true only when the file exists but yields neither a managed nor
+// a failed registration through the strict record parsers.
+export function isPortableInstallRegistrationCorrupt(stateDir: string): boolean {
+  if (!hasPortableInstallRegistration(stateDir)) return false;
+  const path = join(stateDir, REGISTRATION_FILE);
+  const raw = readJson(path);
+  if (raw === undefined) return true;
+  if (isManagedRegistrationRecord(raw)) return false;
+  if (isFailedRegistrationRecord(raw)) return false;
+  return true;
+}
+
 export function readManagedRegistration(stateDir: string): ManagedSetupRegistration | undefined {
   const registration = readPortableInstallRegistration(stateDir);
   return registration?.status === "managed" ? registration : undefined;
