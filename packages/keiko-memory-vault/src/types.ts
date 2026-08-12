@@ -204,8 +204,15 @@ export interface MemoryVaultStore {
   // prior vector space is preserved. Needed because upsertEmbeddingRow rejects a new
   // (provider, modelId, dimensions, metric) tuple while any old-tuple row remains — the
   // delete phase must complete before the first insert. Not intended for any other caller.
+  //
+  // PR-review follow-up (Codex thread 3769903807): the optional `expectedSnapshot` map lets
+  // the caller detect concurrent UPDATES to already-staged rows (not just concurrent INSERTs
+  // of new rows). When provided, each row in memory_embeddings must appear in the map with a
+  // matching `createdAt`; a mismatch means another writer replaced that memory's vector
+  // during our staging window, so the swap aborts before the delete.
   readonly replaceAllEmbeddings: (
     pairs: readonly { readonly memoryId: MemoryId; readonly input: MemoryEmbeddingInput }[],
+    expectedSnapshot?: ReadonlyMap<MemoryId, number>,
   ) => void;
   // KEIKO-0440 (PR-review follow-up, Codex thread 3769557887): expose the set of memoryIds
   // that currently carry an embedding row. `keiko memory reembed --force` uses this to stage
@@ -213,6 +220,12 @@ export interface MemoryVaultStore {
   // accepted-then-archived (embedding retained by design) is preserved rather than silently
   // dropped. The list is order-agnostic and driven by embedding presence, not status.
   readonly listEmbeddedMemoryIds: () => readonly MemoryId[];
+  // PR-review follow-up (Codex thread 3769903807): snapshot the (memoryId, createdAt) pairs
+  // of every embedding row at a moment in time. The force reembed pipeline captures this
+  // BEFORE its network-backed staging phase and hands it back to replaceAllEmbeddings so a
+  // concurrent update to an already-staged row is detected (createdAt mismatch), not just
+  // a concurrent insert.
+  readonly snapshotEmbeddedMemoryIds: () => ReadonlyMap<MemoryId, number>;
   readonly getEmbedding: (memoryId: MemoryId) => MemoryEmbeddingRow | undefined;
   readonly getEmbeddings: (
     memoryIds: readonly MemoryId[],

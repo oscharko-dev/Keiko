@@ -433,6 +433,11 @@ async function forceReembedAtomically(
 ): Promise<ReembedCounts> {
   const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
   const targetIds = collectForceReembedTargetIds(vault);
+  // PR-review follow-up (Codex thread 3769903807): capture the (memoryId, createdAt) map
+  // BEFORE the network-backed staging phase so the atomic swap can detect a concurrent
+  // UPDATE to any already-embedded row (not just a concurrent INSERT). vault.replaceAll
+  // Embeddings rejects when any existing row's created_at differs from this snapshot.
+  const snapshot = vault.snapshotEmbeddedMemoryIds();
   const staged: StagedVector[] = [];
   for (const memoryId of targetIds) {
     const record = vault.getMemory(memoryId);
@@ -447,7 +452,7 @@ async function forceReembedAtomically(
     staged.push(staged1);
   }
   try {
-    vault.replaceAllEmbeddings(staged);
+    vault.replaceAllEmbeddings(staged, snapshot);
     counts.embedded = staged.length;
   } catch {
     counts.failed = staged.length;

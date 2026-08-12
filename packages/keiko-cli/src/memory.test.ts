@@ -488,6 +488,53 @@ describe("runMemoryCli reembed", () => {
     expect(vault.getEmbedding(b.id)).toBeDefined();
   });
 
+  // Regression pin (KEIKO-0440, Codex thread 3769903807): if another writer UPDATES an
+  // already-embedded row between the snapshot and the swap (upsertEmbedding overwrites its
+  // created_at with the fresh timestamp), the swap rejects with precondition-failed instead
+  // of overwriting the newer row with our stale staged vector. Simulated by upserting a
+  // fresh vector on `a` inside the wrapped replaceAllEmbeddings — the vault's snapshot
+  // check catches the created_at drift.
+  it("refuses --force when a concurrent update lands on an already-staged memory", async () => {
+    const vault = makeVault();
+    const a = insert(vault, { id: "a", status: "accepted" });
+    vault.upsertEmbedding(a.id, {
+      provider: "openai",
+      modelId: "text-embedding-3-large",
+      metric: "cosine",
+      vector: Float32Array.from({ length: 8 }, (_, i) => (i + 1) / 8),
+    });
+    const originalCreatedAt = vault.getEmbedding(a.id)?.createdAt;
+    expect(originalCreatedAt).toBeDefined();
+    const wrappedVault: MemoryVaultStore = {
+      ...vault,
+      replaceAllEmbeddings: (pairs, expectedSnapshot): void => {
+        // Simulate a concurrent writer replacing a's vector with a fresh one; the upsert
+        // stamps a new created_at that will not match the snapshot the CLI captured.
+        vault.upsertEmbedding(a.id, {
+          provider: "openai",
+          modelId: "text-embedding-3-large",
+          metric: "cosine",
+          vector: Float32Array.from({ length: 8 }, (_, i) => (8 - i) / 8),
+        });
+        vault.replaceAllEmbeddings(pairs, expectedSnapshot);
+      },
+    };
+    const cap = capture();
+    const code = await runMemoryCli(
+      ["reembed", "--force"],
+      cap.io,
+      {},
+      { vault: wrappedVault, embedText: fakeEmbedder() },
+    );
+    expect(code).toBe(1);
+    expect(cap.out()).toContain("failed:");
+    // The concurrent write's vector survives — --force did not overwrite it with a stale
+    // staged vector (fakeEmbedder pattern would be (i+1)/8 = [0.125, ...], not (8-i)/8).
+    const finalVector = Array.from(vault.getEmbedding(a.id)?.vector ?? []);
+    expect(finalVector[0]).toBeCloseTo(1.0);
+    expect(finalVector[7]).toBeCloseTo(0.125);
+  });
+
   // Regression pin (KEIKO-0440, Codex thread 3769711634): if another writer inserts an
   // embedding row between the CLI's snapshot enumeration and the vault-wide swap, the
   // atomic replace refuses (reporting failed=N) rather than silently deleting that row.

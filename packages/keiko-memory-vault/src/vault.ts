@@ -168,29 +168,70 @@ function withSidecarHardening<T>(opts: ResolvedOptions, write: () => T): T {
 // both under one BEGIN IMMEDIATE/COMMIT guarantees that AND takes the RESERVED lock up
 // front so no other writer can slip an embedding row in between the enumeration and the
 // delete phase.
+interface EmbeddingRowSnapshot {
+  readonly memory_id: string;
+  readonly created_at: number;
+}
+
+// PR-review follow-up (Codex thread 3769711634 + 3769903807): concurrent-INSERT and
+// concurrent-UPDATE detection for --force. The CLI staged vectors OUTSIDE this transaction
+// (network embed calls are slow), so between snapshot and swap another writer may have
+// inserted a new embedding row (id not in stagedIds) or upserted a fresh vector for one of
+// our staged rows (created_at differs from the snapshot). Either case is a signal that a
+// silent overwrite would happen — refuse and let the operator retry.
+function assertReembedSetUnchanged(
+  existing: readonly EmbeddingRowSnapshot[],
+  stagedIds: ReadonlySet<MemoryId>,
+  expectedSnapshot: ReadonlyMap<MemoryId, number> | undefined,
+): void {
+  const extras = existing.filter((row) => !stagedIds.has(row.memory_id as MemoryId));
+  if (extras.length > 0) {
+    throw new MemoryStorageError(
+      "precondition-failed",
+      "Embedding vector space changed during --force staging; rerun.",
+    );
+  }
+  if (expectedSnapshot === undefined) return;
+  for (const row of existing) {
+    const expected = expectedSnapshot.get(row.memory_id as MemoryId);
+    if (expected === undefined || expected !== row.created_at) {
+      throw new MemoryStorageError(
+        "precondition-failed",
+        "Embedding row changed during --force staging; rerun.",
+      );
+    }
+  }
+}
+
+function snapshotEmbeddedMemoryIdsFromDb(db: DatabaseSync): ReadonlyMap<MemoryId, number> {
+  const rows = db
+    .prepare("SELECT memory_id, created_at FROM memory_embeddings")
+    .all() as unknown as EmbeddingRowSnapshot[];
+  const snapshot = new Map<MemoryId, number>();
+  for (const row of rows) snapshot.set(row.memory_id as MemoryId, row.created_at);
+  return snapshot;
+}
+
 function replaceAllEmbeddingRowsAtomically(
   db: DatabaseSync,
   opts: ResolvedOptions,
   pairs: readonly { readonly memoryId: MemoryId; readonly input: MemoryEmbeddingInput }[],
+  expectedSnapshot: ReadonlyMap<MemoryId, number> | undefined,
 ): void {
+  // PR-review follow-up (Codex thread 3769903813): the bulk path used to skip
+  // gateEmbeddingInput, so a provider returning a vector above MAX_EMBEDDING_DIMENSIONS
+  // (or with a non-finite element, empty vector, unknown metric, etc.) could be persisted
+  // via upsertEmbeddingRow. Validate every pair up front so the vault-wide swap enforces
+  // the same input bounds the single-row upsert does.
+  for (const pair of pairs) gateEmbeddingInput(pair.input);
   const stagedIds = new Set<MemoryId>(pairs.map((pair) => pair.memoryId));
   db.exec("BEGIN IMMEDIATE");
-  let existing: readonly { readonly memory_id: string }[] = [];
+  let existing: readonly EmbeddingRowSnapshot[] = [];
   try {
-    existing = db.prepare("SELECT memory_id FROM memory_embeddings").all() as {
-      readonly memory_id: string;
-    }[];
-    // PR-review follow-up (Codex thread 3769711634): concurrent-write detection. The CLI
-    // enumerated embedded ids and staged vectors OUTSIDE this transaction (network embed
-    // calls can be slow). If another writer inserted an embedding row for an id we did not
-    // stage, the vault-wide delete would drop it silently. Refuse; the operator retries.
-    const extras = existing.filter((row) => !stagedIds.has(row.memory_id as MemoryId));
-    if (extras.length > 0) {
-      throw new MemoryStorageError(
-        "precondition-failed",
-        "Embedding vector space changed during --force staging; rerun.",
-      );
-    }
+    existing = db
+      .prepare("SELECT memory_id, created_at FROM memory_embeddings")
+      .all() as unknown as EmbeddingRowSnapshot[];
+    assertReembedSetUnchanged(existing, stagedIds, expectedSnapshot);
     for (const row of existing) {
       deleteEmbeddingRow(db, row.memory_id as MemoryId);
     }
@@ -669,6 +710,7 @@ type EdgeAndEmbeddingOps = Pick<
   | "deleteEmbedding"
   | "replaceAllEmbeddings"
   | "listEmbeddedMemoryIds"
+  | "snapshotEmbeddedMemoryIds"
   | "getEmbedding"
   | "getEmbeddings"
 >;
@@ -684,6 +726,7 @@ type EmbeddingOps = Pick<
   | "deleteEmbedding"
   | "replaceAllEmbeddings"
   | "listEmbeddedMemoryIds"
+  | "snapshotEmbeddedMemoryIds"
   | "getEmbedding"
   | "getEmbeddings"
 >;
@@ -799,9 +842,10 @@ function buildEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EmbeddingOp
     },
     replaceAllEmbeddings: (
       pairs: readonly { readonly memoryId: MemoryId; readonly input: MemoryEmbeddingInput }[],
+      expectedSnapshot?: ReadonlyMap<MemoryId, number>,
     ): void => {
       withSidecarHardening(opts, () => {
-        replaceAllEmbeddingRowsAtomically(db, opts, pairs);
+        replaceAllEmbeddingRowsAtomically(db, opts, pairs, expectedSnapshot);
       });
     },
     listEmbeddedMemoryIds: (): readonly MemoryId[] => {
@@ -810,6 +854,8 @@ function buildEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EmbeddingOp
       }[];
       return rows.map((row) => row.memory_id as MemoryId);
     },
+    snapshotEmbeddedMemoryIds: (): ReadonlyMap<MemoryId, number> =>
+      snapshotEmbeddedMemoryIdsFromDb(db),
     getEmbedding: (memoryId: MemoryId): MemoryEmbeddingRow | undefined =>
       getEmbeddingRow(db, memoryId, opts.cipher),
     getEmbeddings: (memoryIds: readonly MemoryId[]): ReadonlyMap<MemoryId, MemoryEmbeddingRow> =>

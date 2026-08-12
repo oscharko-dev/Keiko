@@ -318,8 +318,18 @@ function capturePackageMode(packagePath: string): number | undefined {
   // has no mode to preserve). A statSync failure on an existing file (I/O, EACCES) propagates
   // so writePackageJsonAtomically does not silently skip the chmod and widen the file to the
   // umask default while reporting success.
-  if (!existsSync(packagePath)) return undefined;
-  return statSync(packagePath).mode & 0o777;
+  //
+  // PR-review follow-up (Codex thread 3769903830): use statSync directly and inspect the errno
+  // instead of going through existsSync. existsSync collapses EIO/EACCES to `false`, which
+  // returned undefined here and made the atomic writer skip the pre-rename chmod — if access
+  // recovered for the following write, a 0600 manifest was published at the umask default
+  // while the command reported success. Only ENOENT (genuinely absent) yields undefined.
+  try {
+    return statSync(packagePath).mode & 0o777;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
 }
 
 function initializedPackageJson(
