@@ -310,7 +310,16 @@ async function embedOne(
     counts.skipped += 1;
     return;
   }
-  const input = await embed(record.body);
+  // PR-review follow-up: a thrown embed() (network error, provider auth failure, timeout)
+  // must count as failed for THIS record and let the loop keep going — otherwise a single
+  // provider error aborts the whole reembed pass with an unreported partial state.
+  let input;
+  try {
+    input = await embed(record.body);
+  } catch {
+    counts.failed += 1;
+    return;
+  }
   if (input === null) {
     counts.failed += 1;
     return;

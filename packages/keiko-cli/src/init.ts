@@ -151,9 +151,11 @@ function detectIndent(raw: string): string | number {
   const { tab, spaceDepths } = detectIndentSignals(raw);
   const total = tab + spaceDepths.length;
   if (total === 0) return 2;
-  // Tabs vs spaces: whichever side holds a two-thirds plurality wins; otherwise default 2.
-  if (tab * 3 >= total * 2) return "\t";
-  if (spaceDepths.length * 3 < total * 2) return 2;
+  // Tabs vs spaces: whichever side holds a STRICT two-thirds plurality wins (`>` not `>=`)
+  // so a marginal split like 4:6 defaults to 2 spaces instead of forcing a whole-file
+  // reformat on a hair-line majority.
+  if (tab * 3 > total * 2) return "\t";
+  if (spaceDepths.length * 3 <= total * 2) return 2;
   return detectSpaceUnit(spaceDepths);
 }
 
