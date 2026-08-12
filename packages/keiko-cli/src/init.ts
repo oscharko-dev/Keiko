@@ -208,6 +208,11 @@ function loadPackageJson(packagePath: string): LoadedPackageJson | InitError {
 // without root, and Windows lacks POSIX mode entirely; on POSIX we at minimum re-apply the
 // captured mode, which covers the observable regression the reviewer flagged.
 const INIT_STAGING_PREFIX = ".keiko-init-";
+// PR-review follow-up (KfQ thread 3769767223): a marker file dropped by our writer inside
+// each mkdtemp'd staging directory. sweepStaleInitStagingDirs requires the marker's presence
+// AND age before removing an entry, so a user directory that happens to match the
+// .keiko-init-XXXXXX prefix+suffix shape stays untouched even if it's older than the cutoff.
+const INIT_STAGING_MARKER = ".keiko-init-owned";
 
 function writePackageJsonAtomically(packagePath: string, content: string): void {
   // PR-review follow-up: if the caller passed a symlink to package.json, replace the REAL
@@ -226,6 +231,11 @@ function writePackageJsonAtomically(packagePath: string, content: string): void 
   const tmpDir = mkdtempSync(join(dir, INIT_STAGING_PREFIX));
   const tmpFile = join(tmpDir, "package.json");
   try {
+    // KfQ thread 3769767223: touch the ownership marker BEFORE writing the payload so the
+    // sweep can positively identify this directory as one of our staging dirs even if we die
+    // before renameSync. writeFileSync throwing here surfaces the same way as any other
+    // atomic-write failure — the finally block still removes the dir.
+    writeFileSync(join(tmpDir, INIT_STAGING_MARKER), "", "utf8");
     writeFileSync(tmpFile, content, "utf8");
     // PR-review follow-up: apply the preserved mode to the TEMP file BEFORE the rename so
     // the replacement is published at its correct permissions atomically. Applying chmod
@@ -267,7 +277,12 @@ function sweepStaleInitStagingDirs(dir: string): void {
     // between its mkdtempSync and renameSync, so the first invocation would fail during
     // write even though neither hit a real manifest conflict.
     const staging = join(dir, name);
+    // KfQ thread 3769767223: BOTH age AND our ownership marker must be present before we
+    // remove the entry. The prefix+suffix shape is only a first filter; if a customer creates
+    // .keiko-init-XXXXXX by hand and leaves it older than the cutoff the sweep still leaves
+    // it alone because the ownership marker is missing.
     if (!isStagingDirOlderThan(staging, staleBefore)) continue;
+    if (!existsSync(join(staging, INIT_STAGING_MARKER))) continue;
     try {
       rmSync(staging, { recursive: true, force: true });
     } catch {

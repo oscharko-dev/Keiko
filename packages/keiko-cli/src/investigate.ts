@@ -365,6 +365,12 @@ export async function runInvestigateCli(
 const FS_READ_ERROR_CODES: ReadonlySet<string> = new Set([
   "ENOENT",
   "EACCES",
+  // PR-review follow-up (KfQ thread 3769766886): EPERM (POSIX "operation not permitted",
+  // e.g. capability-scoped denial distinct from EACCES) and EROFS ("read-only filesystem",
+  // e.g. a volume that flipped to RO mid-read on external media) both surface as legitimate
+  // read failures the CLI should convert to a user-visible message instead of rethrowing.
+  "EPERM",
+  "EROFS",
   "EISDIR",
   "ENOTDIR",
   "ELOOP",
