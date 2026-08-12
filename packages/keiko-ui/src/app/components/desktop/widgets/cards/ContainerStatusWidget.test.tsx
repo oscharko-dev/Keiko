@@ -283,7 +283,7 @@ describe("ContainerStatusWidget", () => {
     vi.mocked(fetchContainerCapability).mockResolvedValue(AVAILABLE);
     vi.mocked(fetchContainerCatalog).mockResolvedValue(CATALOG);
     vi.mocked(createContainerRun).mockImplementation(() => new Promise<never>(() => undefined));
-    render(<ContainerStatusWidget projectPath="/proj" />);
+    const { unmount } = render(<ContainerStatusWidget projectPath="/proj" />);
     const runButton = await screen.findByRole("button", { name: /run diagnostic/i });
     await waitFor(() => expect(runButton).toHaveAttribute("aria-disabled", "false"));
     await userEvent.click(runButton);
@@ -313,6 +313,9 @@ describe("ContainerStatusWidget", () => {
     await waitFor(() => expect(within(log).getAllByRole("listitem")).toHaveLength(1));
     expect(within(log).getByText(/own-reason/)).toBeInTheDocument();
     expect(within(log).queryByText(/foreign-reason/)).toBeNull();
+    // Close the widget's shared SSE subscription so it never leaks into the next test.
+    unmount();
+    expect(FakeEventSource.last?.closed).toBe(true);
   });
 
   it("renders the policy-blocked engine state with its danger tone", async () => {

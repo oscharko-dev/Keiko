@@ -58,19 +58,13 @@ describe("Palette placeholder badge (KEIKO-0349)", () => {
       const card = badge.closest(".pal-card");
       expect(card).toHaveAttribute("data-window-status", "placeholder");
     }
-    for (const type of FUNCTIONAL_TYPES) {
-      const card = screen.getAllByRole("button").find((btn) => {
-        const name = btn.querySelector(".pal-name")?.textContent ?? "";
-        return name.length > 0 && name === WIN_TYPES[type].titleKey ? false : name.length > 0;
-      });
-      // The functional cards never receive the placeholder data attribute.
-      const functionalCards = screen
-        .getAllByRole("button")
-        .filter((b) => b.classList.contains("pal-card"))
-        .filter((b) => b.getAttribute("data-window-status") !== "placeholder");
-      expect(functionalCards.length).toBeGreaterThanOrEqual(FUNCTIONAL_TYPES.length);
-      expect(card).toBeDefined();
-    }
+    // Functional cards never receive the placeholder data attribute; at least
+    // one distinct card per functional type is present in the palette.
+    const functionalCards = screen
+      .getAllByRole("button")
+      .filter((b) => b.classList.contains("pal-card"))
+      .filter((b) => b.getAttribute("data-window-status") !== "placeholder");
+    expect(functionalCards.length).toBeGreaterThanOrEqual(FUNCTIONAL_TYPES.length);
   });
 });
 
