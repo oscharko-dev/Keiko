@@ -422,6 +422,43 @@ describe("runMemoryCli reembed", () => {
     expect(cap.out()).toContain("failed:   1");
     expect(vault.getEmbedding(mid("a"))).toBeUndefined();
   });
+
+  // Regression pin (KEIKO-0440, Codex thread 3769557887): `--force` staged only accepted
+  // memories but the vault-wide replace deleted every embedding row, so an archived memory
+  // that retained its embedding was silently dropped and the report counted only the accepted
+  // rebuild. After the fix, `--force` stages every currently-embedded memory (accepted OR
+  // archived), so the archived vector survives the swap.
+  it("preserves embeddings for archived memories through --force", async () => {
+    const vault = makeVault();
+    const a = insert(vault, { id: "a", status: "accepted" });
+    const b = insert(vault, { id: "b", status: "accepted" });
+    vault.upsertEmbedding(a.id, {
+      provider: "openai",
+      modelId: "text-embedding-3-large",
+      metric: "cosine",
+      vector: Float32Array.from({ length: 8 }, (_, i) => (i + 1) / 8),
+    });
+    vault.upsertEmbedding(b.id, {
+      provider: "openai",
+      modelId: "text-embedding-3-large",
+      metric: "cosine",
+      vector: Float32Array.from({ length: 8 }, (_, i) => (i + 1) / 8),
+    });
+    // Archive b — updateMemory intentionally does not delete embeddings on a status transition,
+    // so b's vector is still in the vault and must survive `--force`.
+    vault.updateMemory(b.id, { status: "archived" }, Date.now() + 1);
+    const cap = capture();
+    const code = await runMemoryCli(
+      ["reembed", "--force"],
+      cap.io,
+      {},
+      { vault, embedText: fakeEmbedder() },
+    );
+    expect(code).toBe(0);
+    expect(cap.out()).toContain("embedded: 2");
+    expect(vault.getEmbedding(a.id)).toBeDefined();
+    expect(vault.getEmbedding(b.id)).toBeDefined();
+  });
 });
 
 describe("runMemoryCli error handling", () => {

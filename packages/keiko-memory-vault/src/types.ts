@@ -207,6 +207,12 @@ export interface MemoryVaultStore {
   readonly replaceAllEmbeddings: (
     pairs: readonly { readonly memoryId: MemoryId; readonly input: MemoryEmbeddingInput }[],
   ) => void;
+  // KEIKO-0440 (PR-review follow-up, Codex thread 3769557887): expose the set of memoryIds
+  // that currently carry an embedding row. `keiko memory reembed --force` uses this to stage
+  // a new vector for every memory the vault-wide replace would delete, so a memory that was
+  // accepted-then-archived (embedding retained by design) is preserved rather than silently
+  // dropped. The list is order-agnostic and driven by embedding presence, not status.
+  readonly listEmbeddedMemoryIds: () => readonly MemoryId[];
   readonly getEmbedding: (memoryId: MemoryId) => MemoryEmbeddingRow | undefined;
   readonly getEmbeddings: (
     memoryIds: readonly MemoryId[],

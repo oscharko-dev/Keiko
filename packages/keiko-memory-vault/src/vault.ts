@@ -653,6 +653,7 @@ type EdgeAndEmbeddingOps = Pick<
   | "upsertEmbedding"
   | "deleteEmbedding"
   | "replaceAllEmbeddings"
+  | "listEmbeddedMemoryIds"
   | "getEmbedding"
   | "getEmbeddings"
 >;
@@ -664,7 +665,12 @@ type EdgeOps = Pick<
 
 type EmbeddingOps = Pick<
   MemoryVaultStore,
-  "upsertEmbedding" | "deleteEmbedding" | "replaceAllEmbeddings" | "getEmbedding" | "getEmbeddings"
+  | "upsertEmbedding"
+  | "deleteEmbedding"
+  | "replaceAllEmbeddings"
+  | "listEmbeddedMemoryIds"
+  | "getEmbedding"
+  | "getEmbeddings"
 >;
 
 type TombstoneAndAccessOps = Pick<
@@ -782,6 +788,12 @@ function buildEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EmbeddingOp
       withSidecarHardening(opts, () => {
         replaceAllEmbeddingRowsAtomically(db, opts, pairs);
       });
+    },
+    listEmbeddedMemoryIds: (): readonly MemoryId[] => {
+      const rows = db.prepare("SELECT memory_id FROM memory_embeddings").all() as {
+        readonly memory_id: string;
+      }[];
+      return rows.map((row) => row.memory_id as MemoryId);
     },
     getEmbedding: (memoryId: MemoryId): MemoryEmbeddingRow | undefined =>
       getEmbeddingRow(db, memoryId, opts.cipher),

@@ -241,6 +241,11 @@ function writePackageJsonAtomically(packagePath: string, content: string): void 
   }
 }
 
+// Any staging dir whose mtime is older than this counts as truly abandoned. A concurrent
+// `keiko init` completes in well under a second even on slow disks, so a 60-second cutoff is
+// generous while still surfacing dirs left behind by a SIGKILL between mkdtempSync and rmSync.
+const INIT_STAGING_STALE_AFTER_MS = 60_000;
+
 function sweepStaleInitStagingDirs(dir: string): void {
   if (!existsSync(dir)) return;
   let entries: readonly string[];
@@ -249,14 +254,22 @@ function sweepStaleInitStagingDirs(dir: string): void {
   } catch {
     return;
   }
+  const staleBefore = Date.now() - INIT_STAGING_STALE_AFTER_MS;
   for (const name of entries) {
     if (!name.startsWith(INIT_STAGING_PREFIX)) continue;
     // Match Node's mkdtemp suffix shape (6 alphanumerics) so a customer-created directory
     // that happens to share the prefix is left alone.
     const suffix = name.slice(INIT_STAGING_PREFIX.length);
     if (!/^[A-Za-z0-9]{6}$/u.test(suffix)) continue;
+    // PR-review follow-up (Codex thread 3769557880): only sweep dirs that are demonstrably
+    // stale. Two concurrent `keiko init` processes race on the same package.json — without
+    // this age check the second process would rmSync the first's live .keiko-init-XXXXXX dir
+    // between its mkdtempSync and renameSync, so the first invocation would fail during
+    // write even though neither hit a real manifest conflict.
+    const staging = join(dir, name);
+    if (!isStagingDirOlderThan(staging, staleBefore)) continue;
     try {
-      rmSync(join(dir, name), { recursive: true, force: true });
+      rmSync(staging, { recursive: true, force: true });
     } catch {
       // Best-effort cleanup; a stale dir that we cannot remove (locked, mount-boundary)
       // does not block the current rewrite because mkdtempSync will pick its own name.
@@ -264,13 +277,25 @@ function sweepStaleInitStagingDirs(dir: string): void {
   }
 }
 
+function isStagingDirOlderThan(path: string, staleBefore: number): boolean {
+  try {
+    return statSync(path).mtimeMs < staleBefore;
+  } catch {
+    // A vanished entry (already reclaimed) is treated as not-old-enough: leave the sweep for a
+    // future run rather than racing against another process that already cleaned it up.
+    return false;
+  }
+}
+
 function resolveCanonicalPackagePath(packagePath: string): string {
   if (!existsSync(packagePath)) return packagePath;
-  try {
-    return lstatSync(packagePath).isSymbolicLink() ? realpathSync(packagePath) : packagePath;
-  } catch {
-    return packagePath;
-  }
+  // PR-review follow-up (Codex thread 3769557875): propagate lstat/realpath failures instead
+  // of falling back to the symlink path. A transient EACCES/EIO/EBUSY on a symlink here used
+  // to skip canonicalization silently, and if access recovered before renameSync the rewrite
+  // replaced the symlink entry — severing the link and leaving the canonical target stale —
+  // while `keiko init` reported success. Surfacing the error keeps the invariant that a
+  // reported-success rewrite always updated the target the symlink pointed at.
+  return lstatSync(packagePath).isSymbolicLink() ? realpathSync(packagePath) : packagePath;
 }
 
 function capturePackageMode(packagePath: string): number | undefined {
