@@ -189,22 +189,29 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "read-only",
     persistence: "transient",
   },
-  // KEIKO-0175 — PluginsPanel renders hardcoded MCP/connector fixture rows; the MCP toggle
-  // flips only ephemeral in-memory React state (no localStorage / server call, unlike
-  // AutomationsPanel's real `localStorage.setItem`), and no install/uninstall flow exists. This
-  // matches the fully static "placeholder" shape (WindowsRegistry status: "placeholder"), the
-  // same one used by the resources window.
+  // KEIKO-0175 / KEIKO-0158 — PluginsPanel renders hardcoded MCP/connector fixture rows; the
+  // MCP dot flips no state at all (plain status text, no toggle, no localStorage / server
+  // call — see GEN-UI-INTERACTION-003), and no install/uninstall flow exists. This matches
+  // the fully static "placeholder" shape (WindowsRegistry status: "placeholder"), the same
+  // one used by the resources window.
   plugins: {
     lifecycle: ["live"],
     trustBoundary: ["ui"],
     authority: "read-only",
     persistence: "transient",
   },
+  // KEIKO-0158 — AutomationsPanel.tsx's per-row Toggle (role="switch", persisting to
+  // localStorage key "keiko.automations.v1") was replaced with plain non-interactive
+  // status-text rows (GEN-UI-INTERACTION-002), mirroring PluginsPanel's Connectors section.
+  // The component now owns no self-managed durable config and never mutates on user action,
+  // so "user" authority / "durable.config" (self-managed) persistence no longer hold. The
+  // window still remembers its own position across a reload like any other tool window
+  // (durable.ui) — only the fake per-row setting was removed, not ordinary window placement.
   automations: {
-    lifecycle: ["idle", "enabled", "disabled"],
+    lifecycle: ["live"],
     trustBoundary: ["ui"],
-    authority: "user",
-    persistence: "durable.config",
+    authority: "read-only",
+    persistence: "durable.ui",
   },
   // KEIKO-0175 — MobilePanel is a ~21-line static component: no pairing state, no network call,
   // no persisted config (see packages/keiko-ui/src/app/components/desktop/widgets/panels/

@@ -281,17 +281,19 @@ describe("CommandsWidget", () => {
     await screen.findByRole("combobox", { name: /task/i });
     await userEvent.click(screen.getByRole("button", { name: /run task/i }));
     await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
+    // requestId echoes this file's stubbed crypto.randomUUID() ("req-own" — see beforeEach) so
+    // these are recognized as this widget's own events under the KEIKO-0204 ownership filter.
     FakeEventSource.last?.dispatch(
       "command:run-failed",
       JSON.stringify({
         kind: "run-failed",
         runId: "r1",
-        payload: { failureReason: "spawn-error", durationMs: 3 },
+        payload: { failureReason: "spawn-error", durationMs: 3, requestId: "req-own" },
       }),
     );
     FakeEventSource.last?.dispatch(
       "command:run-cancelled",
-      JSON.stringify({ kind: "run-cancelled", runId: "r2", payload: {} }),
+      JSON.stringify({ kind: "run-cancelled", runId: "r2", payload: { requestId: "req-own" } }),
     );
     await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(2));
     expect(screen.getByText(/cancelled/)).toBeInTheDocument();
@@ -315,22 +317,54 @@ describe("CommandsWidget", () => {
     expect(FakeEventSource.last).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: /run task/i }));
     await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
+    // requestId echoes this file's stubbed crypto.randomUUID() ("req-own" — see beforeEach) so
+    // these are recognized as this widget's own events under the KEIKO-0204 ownership filter.
     FakeEventSource.last?.dispatch(
       "command:run-started",
-      JSON.stringify({ kind: "run-started", runId: "r8", payload: { requestId: "x" } }),
+      JSON.stringify({ kind: "run-started", runId: "r8", payload: { requestId: "req-own" } }),
     );
     FakeEventSource.last?.dispatch(
       "command:run-completed",
       JSON.stringify({
         kind: "run-completed",
         runId: "r8",
-        payload: { failureReason: "none", durationMs: 7, requestId: "x" },
+        payload: { failureReason: "none", durationMs: 7, requestId: "req-own" },
       }),
     );
     await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(2));
     const items = screen.getAllByRole("listitem");
     expect(items[0]).toHaveTextContent(/completed/);
     expect(items[1]).toHaveTextContent(/started/);
+  });
+
+  it("KEIKO-0204 — excludes a foreign run's events from the recent events log", async () => {
+    vi.mocked(createCommandRun).mockImplementation(() => new Promise<never>(() => undefined));
+    render(<CommandsWidget projectPath="/proj" />);
+    await screen.findByRole("combobox", { name: /task/i });
+    await userEvent.click(screen.getByRole("button", { name: /run task/i }));
+    await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
+    // A concurrent run from another window on the shared SSE channel (ADR-0018 D7) — its
+    // requestId does not match this widget's own pendingRequestIdRef ("req-own").
+    FakeEventSource.last?.dispatch(
+      "command:run-completed",
+      JSON.stringify({
+        kind: "run-completed",
+        runId: "run-foreign",
+        payload: { failureReason: "foreign-reason", durationMs: 3, requestId: "req-foreign" },
+      }),
+    );
+    // This widget's own run, echoing the requestId captured at submit time.
+    FakeEventSource.last?.dispatch(
+      "command:run-completed",
+      JSON.stringify({
+        kind: "run-completed",
+        runId: "run-own",
+        payload: { failureReason: "own-reason", durationMs: 5, requestId: "req-own" },
+      }),
+    );
+    await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(1));
+    expect(screen.getByText(/own-reason/)).toBeInTheDocument();
+    expect(screen.queryByText(/foreign-reason/)).toBeNull();
   });
 
   it("shares one command EventSource across concurrent running cards", async () => {

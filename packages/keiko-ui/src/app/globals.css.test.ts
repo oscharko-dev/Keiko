@@ -427,13 +427,12 @@ describe("BUNDLE-09 — lazy widget CSS split", () => {
     expectLazyCssModuleImport(timelinePanelComponent, "TimelinePanel.module.css");
   });
 
-  it("keeps Notification panel row styles out of render-blocking globals.css", () => {
-    expect(css).not.toContain("\n.nt-row {");
-    expect(css).not.toContain("\n.nt-text {");
-    expect(css).not.toContain("\n.nt-time {");
-    expect(notificationsPanelModuleCss).toContain(":global(.nt-row)");
-    expect(notificationsPanelModuleCss).toContain(":global(.nt-text)");
-    expect(notificationsPanelModuleCss).toContain(":global(.nt-time)");
+  // KEIKO-0158 — NotificationsPanel no longer renders a fake, never-changing notification
+  // list (.nt-row / .nt-text / .nt-time are gone, dead code removed with them); it shows an
+  // honest empty state instead (.nt-empty), mirroring TimelinePanel's own .tl-empty treatment.
+  it("keeps Notification panel styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain("\n.nt-empty {");
+    expect(notificationsPanelModuleCss).toContain(":global(.nt-empty)");
     expectLazyCssModuleImport(notificationsPanelComponent, "NotificationsPanel.module.css");
   });
 

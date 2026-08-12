@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import type { ReactNode } from "react";
 import { Icons } from "../../Icons";
 import type { IconName } from "../../Icons";
@@ -67,8 +66,7 @@ function PlugIcon({ img, icon, glyph }: PlugIconProps): ReactNode {
 }
 
 export function PluginsPanel(): ReactNode {
-  const [mcpState, setMcpState] = useState<boolean[]>(MCP_SERVERS.map((m) => m.on));
-  const activeCount = mcpState.filter(Boolean).length;
+  const activeCount = MCP_SERVERS.filter((m) => m.on).length;
 
   return (
     <div className="plg">
@@ -78,37 +76,23 @@ export function PluginsPanel(): ReactNode {
           {activeCount}/{MCP_SERVERS.length} active
         </span>
       </div>
-      {MCP_SERVERS.map((m, i) => {
-        const on = mcpState[i] ?? false;
-        return (
-          <div className="plg-row" key={m.name}>
-            <span className="plg-ico">
-              <PlugIcon img={m.img} icon={m.icon} />
-            </span>
-            <span className="plg-text">
-              <span className="plg-name">{m.name}</span>
-              <span className="plg-desc">{m.desc}</span>
-            </span>
-            <button
-              type="button"
-              className={`plg-dot${on ? " on" : ""}`}
-              // GEN-UI-A11Y-009: this dot switches the MCP server on/off — expose
-              // the on/off switch semantics + state, not just a bare button.
-              role="switch"
-              aria-checked={on}
-              title={on ? "Running" : "Stopped"}
-              aria-label={`${m.name}: ${on ? "running" : "stopped"}`}
-              onClick={() => {
-                setMcpState((prev) => {
-                  const next = [...prev];
-                  next[i] = !(next[i] ?? false);
-                  return next;
-                });
-              }}
-            />
-          </div>
-        );
-      })}
+      {MCP_SERVERS.map((m) => (
+        // GEN-UI-INTERACTION-003 (KEIKO-0158): MCP servers are placeholders — no process
+        // actually runs behind any row. Render as non-interactive rows so they are NOT tab
+        // stops and do not advertise switch semantics — the "Running/Stopped" copy carries
+        // the status. Mirrors the Connectors section below (GEN-UI-INTERACTION-001).
+        <div className="plg-row" key={m.name} data-on={m.on}>
+          <span className="plg-ico">
+            <PlugIcon img={m.img} icon={m.icon} />
+          </span>
+          <span className="plg-text">
+            <span className="plg-name">{m.name}</span>
+            <span className="plg-desc">{m.desc}</span>
+          </span>
+          <span className={`plg-dot${m.on ? " on" : ""}`} aria-hidden="true" />
+          <span className="plg-desc mono">{m.on ? "Running" : "Stopped"}</span>
+        </div>
+      ))}
       <div className="plg-sec plg-sec2">
         <span className="plg-sec-t">Connectors</span>
       </div>

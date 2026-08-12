@@ -3924,6 +3924,62 @@ describe("useChatSession canonical Voice FIFO", () => {
     expect(sendDesktopChat).not.toHaveBeenCalled();
     expect(askGrounded).not.toHaveBeenCalled();
   });
+
+  // KEIKO-0485 — ADR-0154 D1 characterization pin. The canonical Voice FIFO captures the memory
+  // request at enqueue time and delivers it verbatim; a memory-settings change made after the turn
+  // was queued does NOT retroactively rewrite the queued turn's memory (or its target modelId).
+  // This test exists so a future change cannot silently start re-deriving settings at drain time —
+  // that would directly contradict ADR-0154 D1's accepted "immutable target captured during
+  // handoff" text and needs an ADR amendment, not a quiet behavior change.
+  it("pins the memory request captured at enqueue time even if settings change before drain", async () => {
+    const rendered = await setupVoiceQueueSession();
+    const settings = renderHook(() => useConversationMemorySettings());
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+
+    // Initial settings at ENQUEUE time.
+    act(() => {
+      settings.result.current.setMemoryEnabled(true);
+      settings.result.current.setMemoryBudgetTokens(1234);
+      settings.result.current.setMemoryMode("supervised-coding");
+    });
+
+    // Gate sendDesktopChat so the queued turn cannot drain before we mutate settings.
+    const gate = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    vi.mocked(sendDesktopChat).mockImplementationOnce(async () => gate.promise as never);
+
+    let delivery: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      delivery = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("pinned memory turn", "voice-memory-pin"),
+      );
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledTimes(1));
+
+    // Change every memory input AFTER the turn was pushed onto the FIFO. A re-derivation at drain
+    // time would land these values on the pending turn — the pin exists to prove that never happens.
+    act(() => {
+      settings.result.current.setMemoryEnabled(false);
+      settings.result.current.setMemoryBudgetTokens(9999);
+      settings.result.current.setMemoryMode("autonomous-delivery");
+    });
+
+    gate.resolve(completedTurn("pinned memory turn", "memory-pin-assistant"));
+    await act(async () => {
+      await delivery;
+    });
+
+    const firstRequest = vi.mocked(sendDesktopChat).mock.calls[0]?.[0];
+    // ADR-0154 D1: memory captured at enqueue time survives every intervening settings change.
+    expect(firstRequest?.memory).toMatchObject({
+      enabled: true,
+      budgetTokens: 1234,
+      mode: "supervised-coding",
+      surface: "voice",
+    });
+    expect(firstRequest?.memory).not.toMatchObject({ enabled: false });
+    expect(firstRequest?.memory).not.toMatchObject({ budgetTokens: 9999 });
+    expect(firstRequest?.memory).not.toMatchObject({ mode: "autonomous-delivery" });
+  });
 });
 
 describe("useChatSession memory autonomy hydration", () => {

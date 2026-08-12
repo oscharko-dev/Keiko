@@ -89,6 +89,21 @@ describe("descriptor meta table — production assertion (epic #518 #528 / ADR-0
     expect(WIN_META.plugins.persistence).toBe("transient");
   });
 
+  // KEIKO-0158 — AutomationsPanel.tsx's per-row Toggle (role="switch", persisting to
+  // localStorage) was replaced with plain non-interactive status-text rows; no scheduler is
+  // wired behind any row and the component owns no self-managed durable config anymore. The
+  // descriptor previously claimed "user" authority and "durable.config" (self-managed)
+  // persistence — neither of which the component's source backs anymore. The window still
+  // remembers its own position across a reload like any other tool window (durable.ui).
+  it("automations descriptor matches AutomationsPanel's placeholder shape — no self-managed durable config, no user-originated effect", () => {
+    expect(WIN_META.automations.persistence).not.toBe("durable.config");
+    expect(WIN_META.automations.authority).not.toBe("user");
+    expect(WIN_META.automations.lifecycle).toEqual(["live"]);
+    expect(WIN_META.automations.trustBoundary).toEqual(["ui"]);
+    expect(WIN_META.automations.authority).toBe("read-only");
+    expect(WIN_META.automations.persistence).toBe("durable.ui");
+  });
+
   it("Coding Workbench config exposes supervised and autonomous preview states", () => {
     const stateField = WIN_TYPES.coding.config?.find((field) => field.key === "state");
 

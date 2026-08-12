@@ -1,54 +1,28 @@
+// KEIKO-0158 — MCP Servers is an honest placeholder: no process runs behind any row, so the
+// availability dot must not impersonate a live switch. Connectors already sets the pattern
+// this section now follows (see the "does not expose ... interactive" test below).
+
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { PluginsPanel } from "./PluginsPanel";
 
 describe("PluginsPanel", () => {
-  it("renders MCP server and connector states and toggles MCP availability", async () => {
-    const user = userEvent.setup();
+  it("renders MCP server rows as honest, non-interactive status text", () => {
     render(<PluginsPanel />);
 
     expect(screen.getByText("5/7 active")).toBeInTheDocument();
-    // GEN-UI-A11Y-009: the availability dot is an on/off switch, so it is exposed
-    // as role="switch" (no longer a bare button).
-    expect(screen.getByRole("switch", { name: "Playwright: stopped" })).toHaveAttribute(
-      "title",
-      "Stopped",
-    );
-    expect(screen.getByText("PostgreSQL")).toBeInTheDocument();
-    expect(screen.getAllByText("Connected")).toHaveLength(3);
-    expect(screen.getAllByText("Not connected")).toHaveLength(3);
+    expect(screen.getByText("Context7")).toBeInTheDocument();
+    expect(screen.getByText("Up-to-date library docs")).toBeInTheDocument();
+    expect(screen.getByText("Playwright")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("switch", { name: "Playwright: stopped" }));
+    // GEN-UI-INTERACTION-003 (KEIKO-0158): nothing here controls a real running process, so
+    // the availability dot may no longer expose switch or button semantics.
+    expect(screen.queryAllByRole("switch")).toHaveLength(0);
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
 
-    expect(screen.getByText("6/7 active")).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Playwright: running" })).toHaveAttribute(
-      "title",
-      "Running",
-    );
-
-    await user.click(screen.getByRole("switch", { name: "Context7: running" }));
-    expect(screen.getByText("5/7 active")).toBeInTheDocument();
-  });
-
-  // GEN-UI-A11Y-009 / test-plan #39: the MCP availability dot advertises switch
-  // semantics and its aria-checked mirrors the on/off state, flipping on toggle.
-  it("exposes each MCP availability control as a switch with aria-checked reflecting state", async () => {
-    const user = userEvent.setup();
-    render(<PluginsPanel />);
-
-    const playwright = screen.getByRole("switch", { name: "Playwright: stopped" });
-    expect(playwright).toHaveAttribute("aria-checked", "false");
-
-    const context7 = screen.getByRole("switch", { name: "Context7: running" });
-    expect(context7).toHaveAttribute("aria-checked", "true");
-
-    await user.click(playwright);
-    expect(screen.getByRole("switch", { name: "Playwright: running" })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
-    expect(screen.getByText("6/7 active")).toBeInTheDocument();
+    // Status is carried by visible copy instead of aria-checked / title.
+    expect(screen.getAllByText("Running")).toHaveLength(5);
+    expect(screen.getAllByText("Stopped")).toHaveLength(2);
   });
 
   // GEN-UI-INTERACTION-001 / test-plan #38: connectors are unwired placeholders, so
@@ -61,5 +35,14 @@ describe("PluginsPanel", () => {
     // The connectors carry only status copy, not a role/name that advertises action.
     expect(screen.getByText("PostgreSQL")).toBeInTheDocument();
     expect(screen.getByText("Sentry")).toBeInTheDocument();
+    expect(screen.getAllByText("Connected")).toHaveLength(3);
+    expect(screen.getAllByText("Not connected")).toHaveLength(3);
+  });
+
+  it("exposes no interactive controls anywhere in the panel", () => {
+    render(<PluginsPanel />);
+
+    expect(screen.queryAllByRole("switch")).toHaveLength(0);
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
   });
 });

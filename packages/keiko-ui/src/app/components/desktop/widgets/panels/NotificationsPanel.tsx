@@ -3,39 +3,14 @@
 import type { ReactNode } from "react";
 import styles from "./NotificationsPanel.module.css";
 
-interface NotificationItem {
-  t: string;
-  time: string;
-  c: string;
-}
-
-const ITEMS: NotificationItem[] = [
-  { t: "Agent finished build-board", time: "2m", c: "var(--accent)" },
-  { t: "diff-review ready to merge", time: "9m", c: "var(--info)" },
-  { t: "lint-pass queued", time: "14m", c: "var(--fg-faint)" },
-];
-
 export function NotificationsPanel(): ReactNode {
+  // GEN-UI-INTERACTION-004 (KEIKO-0158): no notification source is wired behind this panel.
+  // Previously this rendered three hardcoded, never-changing entries inside an aria-live
+  // log — content that looked live but could never change. Show an explicit empty state
+  // instead so the placeholder is honest about having nothing to report.
   return (
-    // GEN-UI-A11Y-014 — annotate as a polite log so future dynamic notifications are announced
-    // to assistive tech (mirrors TerminalWidget's role=log usage). Data is static today.
-    <ul
-      className={`tw-list ${styles.lazyWidgetScope}`}
-      role="log"
-      aria-live="polite"
-      aria-relevant="additions text"
-      aria-atomic="false"
-      aria-label="Notifications"
-    >
-      {ITEMS.map((n) => (
-        <li className="nt-row" key={n.t}>
-          <span className="dot" style={{ background: n.c, marginTop: 6 }} aria-hidden="true" />
-          <span className="nt-text">
-            <span className="nt-title">{n.t}</span>
-            <span className="nt-time mono">{n.time} ago</span>
-          </span>
-        </li>
-      ))}
-    </ul>
+    <div className={`tw-list ${styles.lazyWidgetScope}`}>
+      <p className="nt-empty">No notifications yet.</p>
+    </div>
   );
 }
