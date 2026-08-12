@@ -227,6 +227,13 @@ export interface UseRealtimeVoiceOptions {
   // Raised once at the beginning of each user utterance so the canonical chat generation and local
   // speech playback can be interrupted before the final transcript arrives (barge-in).
   readonly onUserSpeechStart?: (() => void) | undefined;
+  // Live signal for whether a grounded retrieval is currently in flight for the pending canonical
+  // voice turn (ADR-0154 D1/D5 — retrieval runs in the canonical chat pipeline AFTER the final
+  // transcript is handed off, never inside Realtime itself, so Realtime holds no retrieval state
+  // of its own). The caller derives this from the canonical send state it already owns (e.g.
+  // useChatSession's `sending` plus the active chat's grounding scope) and passes the current
+  // value on every render; the hook only mirrors it onto the returned controller's `retrieving`.
+  readonly retrieving?: boolean | undefined;
 }
 
 type CanonicalVoiceTurnHandoffResult = boolean | "accepted-stop" | void;
@@ -1460,7 +1467,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     canInterrupt: false,
     muted,
     partialUserTranscript,
-    retrieving: false,
+    retrieving: options.retrieving ?? false,
     start,
     stop,
     retry,

@@ -112,6 +112,46 @@ const INTERRUPT_UNAVAILABLE_HINT = "Available only while the assistant is speaki
 const SESSION_INTERRUPT_HINT_ID = "cmp-voice-dialog-interrupt-hint";
 const TURN_INTERRUPT_HINT_ID = "cmp-voice-turn-interrupt-hint";
 
+export interface VoiceDialogInterruptButtonProps {
+  readonly canInterrupt: boolean;
+  readonly onInterrupt: () => void;
+}
+
+// Issue #2894 (KEIKO-0217) — the session-cluster Interrupt affordance, extracted so
+// VoiceDialogControls (below) and ChatWindow's composer render the exact same aria-disabled +
+// aria-describedby markup from one implementation instead of a second hand-rolled copy. Presence
+// is the caller's decision (VoiceDialogControls shows it whenever `onInterrupt` is passed;
+// ChatWindow mounts it once a dialogue session is connected); this component only owns whether
+// the mounted button is actionable.
+export function VoiceDialogInterruptButton({
+  canInterrupt,
+  onInterrupt,
+}: VoiceDialogInterruptButtonProps): ReactNode {
+  return (
+    <button
+      type="button"
+      className="cmp-voice-btn"
+      aria-label="Interrupt the assistant"
+      // GEN-UI-A11Y-013: aria-disabled + guarded onClick keep the control focusable and its
+      // availability condition audible; the native `disabled` would blur and hide it.
+      aria-disabled={!canInterrupt}
+      aria-describedby={SESSION_INTERRUPT_HINT_ID}
+      onClick={() => {
+        if (!canInterrupt) return;
+        onInterrupt();
+      }}
+    >
+      Interrupt
+      {/* No inline space here: aria-label already names the button ("Interrupt the
+          assistant"), so this sr-only hint is read separately via aria-describedby, not
+          concatenated with the visible label text — no space is ever implied (S6772). */}
+      <span id={SESSION_INTERRUPT_HINT_ID} className="sr-only">
+        {INTERRUPT_UNAVAILABLE_HINT}
+      </span>
+    </button>
+  );
+}
+
 export function VoiceProfileSelect({
   personas,
   selected,
@@ -235,27 +275,7 @@ export function VoiceDialogControls({
         compact={compact}
       />
       {onInterrupt !== undefined ? (
-        <button
-          type="button"
-          className="cmp-voice-btn"
-          aria-label="Interrupt the assistant"
-          // GEN-UI-A11Y-013: aria-disabled + guarded onClick keep the control focusable and its
-          // availability condition audible; the native `disabled` would blur and hide it.
-          aria-disabled={!canInterrupt}
-          aria-describedby={SESSION_INTERRUPT_HINT_ID}
-          onClick={() => {
-            if (!canInterrupt) return;
-            onInterrupt();
-          }}
-        >
-          Interrupt
-          {/* No inline space here: aria-label already names the button ("Interrupt the
-              assistant"), so this sr-only hint is read separately via aria-describedby, not
-              concatenated with the visible label text — no space is ever implied (S6772). */}
-          <span id={SESSION_INTERRUPT_HINT_ID} className="sr-only">
-            {INTERRUPT_UNAVAILABLE_HINT}
-          </span>
-        </button>
+        <VoiceDialogInterruptButton canInterrupt={canInterrupt} onInterrupt={onInterrupt} />
       ) : null}
       <button
         type="button"
