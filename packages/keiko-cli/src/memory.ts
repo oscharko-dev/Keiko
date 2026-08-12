@@ -348,7 +348,10 @@ async function backfillEmbeddings(
   // so the loop naturally treats every accepted memory as re-embed work.
   const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
   const scopes = vault.listMemoryScopes();
-  const pageSize = Math.max(limit, 100);
+  // Cap pageSize to a real integer so `--force` (which sets limit to Infinity) still passes a
+  // valid `limit` to listMemoriesAcrossScopes. 500 is large enough to keep provider round-trips
+  // amortized without letting one page hold the whole vault in memory.
+  const pageSize = Number.isFinite(limit) ? Math.max(limit, 100) : 500;
   let offset = 0;
   while (counts.embedded + counts.failed < limit) {
     const page = vault.listMemoriesAcrossScopes(scopes, {
@@ -394,14 +397,17 @@ async function reembed(
   const vault = resolveVault(args, env, deps);
   try {
     const force = args.includes("--force");
-    // KEIKO-0440 (PR-review follow-up): the embedding row store rejects any new
-    // (provider, modelId, dimensions, metric) tuple while any existing row from a prior
+    // KEIKO-0440 (PR-review follow-up on the follow-up): the embedding row store rejects any
+    // new (provider, modelId, dimensions, metric) tuple while any existing row from a prior
     // tuple survives, so a per-record upsert cannot survive an embedding-model swap. When
-    // `--force` is set, clear the entire embedding space in one transaction BEFORE the
-    // re-embed loop so the new tuple takes over cleanly. This is safe under --force
-    // because that mode's contract is "re-embed everything".
+    // `--force` is set the pass MUST rebuild the full accepted set atomically — the bounded
+    // `--limit` cap that governs the missing-only mode would otherwise leave some previously
+    // embedded records without a vector after the vault-wide clear. Ignore `--limit` for
+    // `--force` and iterate until the accepted set is exhausted; the loop still terminates
+    // on `page.length === 0`.
+    const limit = force ? Number.POSITIVE_INFINITY : parseLimit(args);
     if (force) vault.clearAllEmbeddings();
-    const counts = await backfillEmbeddings(vault, embed, parseLimit(args), force);
+    const counts = await backfillEmbeddings(vault, embed, limit, force);
     io.out(renderReembedReport(counts));
     return 0;
   } finally {
