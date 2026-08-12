@@ -44,6 +44,7 @@ import {
   removePortableManagedInstall,
   removePortableRegistrationArtifacts,
 } from "./portable-maintenance.js";
+import { isPortableInstallRegistrationCorrupt } from "./portable-registration.js";
 import {
   classifyPid,
   defaultIsProcessAlive,
@@ -515,6 +516,20 @@ function printPackageGuidance(io: CliIo, deps: ResolvedDeps): void {
   io.out("  yarn remove @oscharko-dev/keiko  •  pnpm remove @oscharko-dev/keiko  (yarn / pnpm)\n");
 }
 
+// PR-review follow-up (Codex thread 3771181236): refuse to proceed with destructive
+// uninstall when the portable registration file exists but is corrupt. Without this check
+// removeStateStep would delete the registration as an ordinary launcher artifact, erasing
+// the attestation needed to locate and remove the portable-managed installation. Extracted
+// so the runUninstallCli caller stays under the repo-wide cyclomatic-complexity ceiling.
+function refuseCorruptPortableRegistration(io: CliIo, stateDir: string): boolean {
+  if (!isPortableInstallRegistrationCorrupt(stateDir)) return false;
+  io.err(
+    "keiko uninstall: refusing to proceed — portable install registration is corrupt. " +
+      "Repair or remove the file at .keiko/portable-install-state.json before retrying.\n",
+  );
+  return true;
+}
+
 export async function runUninstallCli(
   args: readonly string[],
   io: CliIo,
@@ -534,6 +549,7 @@ export async function runUninstallCli(
   const stateDir = resolveStateDir(resolved.cwd, env, opts.stateDirArg);
   const stateRoot = inspectStateRoot(stateDir);
   if (refuseUnsafeStateRoot(opts, io, stateRoot)) return 1;
+  if (refuseCorruptPortableRegistration(io, stateDir)) return 1;
   try {
     // #KEIKO-0422: ensureServerStoppable is now async — it waits (bounded) for the
     // signalled UI to exit before returning "ok", so state removal never races with a
