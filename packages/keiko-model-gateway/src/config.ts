@@ -816,18 +816,42 @@ function assertContextWindowForKind(kind: ModelKind, contextWindow: number, path
   }
 }
 
-// PR-review follow-up on KEIKO-0520: gateway configs persisted by pre-KEIKO-0520 releases can
-// carry `kind: "chat"` capabilities with `contextWindow: 0` because the OLD
-// `createDefaultChatCapability` returned that value and gateway setup persisted it. Rejecting
-// them outright at load time would prevent the gateway from starting after an upgrade — a
-// hard regression on installs that upgrade Keiko without re-running the setup wizard. Normalise
-// the persisted sentinel to the same 4096-token default the new factory hands out, then let
-// the strict guard above validate the outcome. This is idempotent: a config already carrying a
-// real positive window is untouched, and a fresh run of gateway-setup will overwrite the
-// migrated default with the discovered value.
+// PR-review follow-up on KEIKO-0520 + Codex thread 3770357725: gateway configs persisted by
+// pre-KEIKO-0520 releases can carry `kind: "chat"` capabilities with `contextWindow: 0` because
+// the OLD `createDefaultChatCapability` returned that value and gateway setup persisted it.
+// Rejecting them outright at file load would prevent the gateway from starting after an upgrade.
+// Migration therefore runs at the FILE-LOAD boundary (loadConfigFromFile) and rewrites the raw
+// JSON before it reaches the strict parser — direct callers of parseGatewayConfig (setup wizard
+// saves, live validation) still get the strict rejection so a wizard bug that emits 0 cannot be
+// silently hidden. This is idempotent: a config already carrying a real positive window is
+// untouched, and a fresh run of gateway-setup overwrites the migrated default with the
+// discovered value.
 const LEGACY_CHAT_CONTEXT_WINDOW_DEFAULT = 4096;
-function normalizeLegacyChatContextWindow(kind: ModelKind, contextWindow: number): number {
-  return kind === "chat" && contextWindow <= 0 ? LEGACY_CHAT_CONTEXT_WINDOW_DEFAULT : contextWindow;
+
+function migrateChatCapabilityContextWindow(raw: unknown): unknown {
+  if (!isRecord(raw)) return raw;
+  if (raw.kind !== "chat") return raw;
+  if (typeof raw.contextWindow === "number" && raw.contextWindow > 0) return raw;
+  return { ...raw, contextWindow: LEGACY_CHAT_CONTEXT_WINDOW_DEFAULT };
+}
+
+export function migrateLegacyChatContextWindows(raw: unknown): unknown {
+  if (!isRecord(raw)) return raw;
+  const migrated: Record<string, unknown> = { ...raw };
+  if (Array.isArray(migrated.capabilities)) {
+    migrated.capabilities = (migrated.capabilities as unknown[]).map(
+      migrateChatCapabilityContextWindow,
+    );
+  }
+  if (Array.isArray(migrated.providers)) {
+    migrated.providers = (migrated.providers as unknown[]).map(migrateProviderCapability);
+  }
+  return migrated;
+}
+
+function migrateProviderCapability(provider: unknown): unknown {
+  if (!isRecord(provider) || !isRecord(provider.capability)) return provider;
+  return { ...provider, capability: migrateChatCapabilityContextWindow(provider.capability) };
 }
 
 // ─── Voice capability parsing (Issue #493, ADR-0100 D5/D7) ─────────────────────
@@ -1043,8 +1067,7 @@ function buildProviderCapabilityBody(
 ): ModelCapability {
   const flags = providerCapabilityFlags(raw, path);
   const tokenAccounting = parseTokenAccounting(raw.tokenAccounting, `${path}.tokenAccounting`);
-  const rawContextWindow = optionalNonNegativeInt(raw.contextWindow, `${path}.contextWindow`, 0);
-  const contextWindow = normalizeLegacyChatContextWindow(kind, rawContextWindow);
+  const contextWindow = optionalNonNegativeInt(raw.contextWindow, `${path}.contextWindow`, 0);
   assertContextWindowForKind(kind, contextWindow, path);
   return {
     id,
@@ -1229,11 +1252,7 @@ function parseCapabilityCore(
   ]);
   const workflowEligible = requireBoolean(value.workflowEligible, `${path}.workflowEligible`);
   assertWorkflowEligibleForKind(kind, workflowEligible, path);
-  const rawContextWindow = requireNonNegativeIntStrict(
-    value.contextWindow,
-    `${path}.contextWindow`,
-  );
-  const contextWindow = normalizeLegacyChatContextWindow(kind, rawContextWindow);
+  const contextWindow = requireNonNegativeIntStrict(value.contextWindow, `${path}.contextWindow`);
   assertContextWindowForKind(kind, contextWindow, path);
   return { id, kind, workflowEligible, contextWindow };
 }
@@ -1730,7 +1749,14 @@ export function loadConfigFromFile(
   env: EnvSource = {},
   options: ParseGatewayConfigOptions = {},
 ): GatewayConfig {
-  return parseGatewayConfig(readGatewayConfigFile(path), env, options);
+  // PR-review follow-up (Codex thread 3770357725): migration for pre-KEIKO-0520 persisted
+  // configs runs HERE at the file-load boundary — not inside parseGatewayConfig — so a
+  // fresh setup wizard save with contextWindow:0 still gets the strict rejection.
+  return parseGatewayConfig(
+    migrateLegacyChatContextWindows(readGatewayConfigFile(path)),
+    env,
+    options,
+  );
 }
 
 export function loadEgressConfigFromFile(

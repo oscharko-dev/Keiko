@@ -6,6 +6,7 @@ import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway"
 import {
   loadConfigFromFile,
   loadEgressConfigFromFile,
+  migrateLegacyChatContextWindows,
   parseCapabilityList,
   parseEnvEgressConfigFaultTolerant,
   parseGatewayConfig,
@@ -911,12 +912,12 @@ describe("parseGatewayConfig", () => {
 
   // Regression pin (audit KEIKO-0520): the inline provider capability path used to default a
   // missing contextWindow to 0 silently (optionalNonNegativeInt). A chat capability without a
-  // real contextWindow is a degraded sentinel. PR-review follow-up: rather than reject and
-  // break upgrades from persisted pre-fix configs (which carry contextWindow:0 for chat
-  // because the old createDefaultChatCapability produced that value), the loader now
-  // NORMALIZES a legacy sentinel to 4096 (the new default) and lets the strict guard validate
-  // the outcome. Voice capabilities intentionally set contextWindow:0 and remain accepted.
-  it("migrates an inline provider capability with kind: 'chat' and missing contextWindow to the default", () => {
+  // real contextWindow is a degraded sentinel. PR-review follow-up (Codex thread 3770357725):
+  // the strict parser now REJECTS these misconfigurations so a fresh setup save (which should
+  // never emit 0) cannot silently produce a chat capability with invented 4096. Legacy
+  // migration for pre-KEIKO-0520 files runs separately in loadConfigFromFile via
+  // migrateLegacyChatContextWindows — the migration+parse pin below confirms that path.
+  it("rejects an inline provider capability with kind: 'chat' and missing contextWindow", () => {
     const raw = rawWithProvider((p) => ({
       ...p,
       modelId: "example-missing-context-chat",
@@ -924,13 +925,10 @@ describe("parseGatewayConfig", () => {
         kind: "chat",
       },
     }));
-    const config = parseGatewayConfig(raw);
-    const cap = config.capabilities?.find((c) => c.id === "example-missing-context-chat");
-    expect(cap?.kind).toBe("chat");
-    expect(cap?.contextWindow).toBe(4096);
+    expect(() => parseGatewayConfig(raw)).toThrow(/contextWindow/);
   });
 
-  it("migrates an inline provider capability with kind: 'chat' and contextWindow: 0 to the default", () => {
+  it("rejects an inline provider capability with kind: 'chat' and contextWindow: 0", () => {
     const raw = rawWithProvider((p) => ({
       ...p,
       modelId: "example-zero-context-chat",
@@ -939,8 +937,20 @@ describe("parseGatewayConfig", () => {
         contextWindow: 0,
       },
     }));
-    const config = parseGatewayConfig(raw);
-    const cap = config.capabilities?.find((c) => c.id === "example-zero-context-chat");
+    expect(() => parseGatewayConfig(raw)).toThrow(/contextWindow/);
+  });
+
+  it("migrates a legacy persisted inline chat contextWindow:0 when routed through the file-load walker", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "example-legacy-file-load-chat",
+      capability: {
+        kind: "chat",
+        contextWindow: 0,
+      },
+    }));
+    const config = parseGatewayConfig(migrateLegacyChatContextWindows(raw));
+    const cap = config.capabilities?.find((c) => c.id === "example-legacy-file-load-chat");
     expect(cap?.kind).toBe("chat");
     expect(cap?.contextWindow).toBe(4096);
   });
@@ -1508,15 +1518,21 @@ describe("parseModelCapability", () => {
   // Regression pin (audit KEIKO-0520): a kind:'chat' capability with contextWindow:0 is a
   // misconfiguration — the whole chat runtime treats contextWindow<=0 as a degraded sentinel that
   // surfaces later through disconnected symptoms (GEN-GATE-CONTEXT-001/004). PR-review
-  // follow-up: rather than reject and break upgrades from configs persisted by pre-fix
-  // releases (which carry contextWindow:0 for chat), the loader now normalises the legacy
-  // sentinel to 4096 and lets the strict guard validate the outcome. Voice capabilities
-  // deliberately set contextWindow:0 (gateway-setup.ts:377) and must remain unrestricted.
-  it("migrates a persisted chat capability whose contextWindow is 0 to the default", () => {
+  // follow-up (Codex thread 3770357725): the strict parser MUST reject a fresh chat capability
+  // with contextWindow:0. Legacy migration for pre-KEIKO-0520 persisted files runs separately
+  // in loadConfigFromFile via migrateLegacyChatContextWindows so upgrades still work; see the
+  // migration pin below for that path. Voice capabilities deliberately set contextWindow:0
+  // (gateway-setup.ts:377) and remain unrestricted.
+  it("rejects a chat capability whose contextWindow is 0", () => {
     const raw = { ...validCapability(), contextWindow: 0 };
-    const parsed = parseModelCapability(raw, "capabilities[0]");
-    expect(parsed.kind).toBe("chat");
-    expect(parsed.contextWindow).toBe(4096);
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(/contextWindow/);
+  });
+
+  it("migrates a legacy persisted chat capability with contextWindow:0 via the file-load walker", () => {
+    const migrated = migrateLegacyChatContextWindows({
+      providers: [{ capability: { ...validCapability(), contextWindow: 0 } }],
+    }) as { providers: readonly { capability: Record<string, unknown> }[] };
+    expect(migrated.providers[0]?.capability.contextWindow).toBe(4096);
   });
 
   it("accepts a voice capability whose contextWindow is 0", () => {

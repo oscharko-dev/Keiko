@@ -318,6 +318,12 @@ export interface QiExportLocalResult {
   readonly byteLen: number;
   readonly body: string;
   readonly encoding?: "base64";
+  // PR-review follow-up (Codex thread 3770357735): counts requested candidates that failed
+  // the deliverable-quality gate and were dropped from the artifact. Present when
+  // approvedOnly is false (so partial contents are possible) and > 0 when the artifact is
+  // less than the full requested set. ExportBar surfaces a warning before triggering the
+  // download so the operator does not accept a partial artifact as complete.
+  readonly omittedByQualityGate?: number;
 }
 
 export interface QiExportDryRunResult {
@@ -326,6 +332,7 @@ export interface QiExportDryRunResult {
   readonly candidateCount: number;
   readonly byteLen: number;
   readonly preview: string;
+  readonly omittedByQualityGate?: number;
 }
 
 export type QiExportResult = QiExportLocalResult | QiExportDryRunResult;

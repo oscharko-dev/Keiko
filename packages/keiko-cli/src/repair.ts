@@ -292,10 +292,30 @@ function tightenNodes(
   }
 }
 
+// PR-review follow-up (Codex thread 3770357730): the previous implementation opened with
+// O_RDONLY | O_NOFOLLOW and failed with EACCES on files whose loose mode denied the owner
+// read access (e.g. 0222) — the exact case `keiko repair` is meant to tighten. Prefer
+// O_PATH | O_NOFOLLOW where available (Linux — no permission bits required to open, and
+// fchmodSync targets the exact inode). Fall back to lstat-verified path chmod on platforms
+// without O_PATH, verifying identity (inode + device + non-symlink) before AND after the
+// chmod so a swap between the checks is refused and the tightened mode is reverted.
 function tightenNodeMode(node: RuntimeStateNode, targetMode: number): boolean {
+  const oPathFlags = oPathFlagsIfSupported();
+  if (oPathFlags !== undefined) return tightenViaOpenFlag(node, targetMode, oPathFlags);
+  return tightenViaVerifiedPathChmod(node, targetMode);
+}
+
+function oPathFlagsIfSupported(): number | undefined {
+  // O_PATH is a Linux extension exposed by Node when the kernel supports it. On macOS/BSD it
+  // is absent from fs.constants; skip the branch there.
+  const constants = fsConstants as { readonly O_PATH?: number };
+  return constants.O_PATH === undefined ? undefined : constants.O_PATH | fsConstants.O_NOFOLLOW;
+}
+
+function tightenViaOpenFlag(node: RuntimeStateNode, targetMode: number, flags: number): boolean {
   let fd: number | undefined;
   try {
-    fd = openSync(node.absPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    fd = openSync(node.absPath, flags);
     fchmodSync(fd, targetMode);
     return true;
   } catch {
@@ -309,6 +329,27 @@ function tightenNodeMode(node: RuntimeStateNode, targetMode: number): boolean {
         // already applied atomically via fchmodSync.
       }
     }
+  }
+}
+
+function tightenViaVerifiedPathChmod(node: RuntimeStateNode, targetMode: number): boolean {
+  try {
+    const before = lstatSync(node.absPath);
+    if (before.isSymbolicLink()) return false;
+    chmodSync(node.absPath, targetMode);
+    const after = lstatSync(node.absPath);
+    if (after.isSymbolicLink() || after.ino !== before.ino || after.dev !== before.dev) {
+      // Revert best-effort so the swapped target does not carry the tightened mode.
+      try {
+        chmodSync(node.absPath, before.mode & 0o777);
+      } catch {
+        // Best-effort revert.
+      }
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
 
