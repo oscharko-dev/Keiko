@@ -280,4 +280,40 @@ describe("KEIKO-0308 — stream inactivity guard", () => {
     expect(onSnapshot).not.toHaveBeenCalled();
     expect(read).toHaveBeenCalledTimes(heartbeatCount + 1);
   });
+
+  // Codex PR #3089 (comment 3764844733): a native ReadableStream's `cancel()` resolves the
+  // pending `read()` with `{ done: true }` — if that microtask wins the race, the stall becomes
+  // a silent clean EOF and CODING_APP_SESSION_STREAM_STALLED never surfaces. This pin uses a
+  // faithful producer (a real ReadableStream that never enqueues past the initial handshake
+  // but whose reader.cancel() DOES resolve the pending read) to ensure the typed rejection wins
+  // even against the microtask-level ordering the earlier fake-cancel test could not exercise.
+  it("wins the stall verdict even when reader.cancel() would fulfil the pending read with EOF", async () => {
+    vi.useFakeTimers();
+    // Producer that opens the stream, sends nothing, and lets `cancel()` fulfil the pending read.
+    // This mirrors the DOM-standard behavior of a real ReadableStream: pull is never called after
+    // start returns, and cancel({ reason }) causes the reader.read() promise to resolve — not
+    // reject — with { value: undefined, done: true }. The KEIKO-0308 guard has to reject FIRST.
+    const stream = new ReadableStream<Uint8Array>({
+      start(): void {
+        // Deliberately empty — the read stays pending until cancel arrives.
+      },
+    });
+    const response = new Response(stream, {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    });
+
+    const promise = streamCodingAppSessionChannelSnapshots({
+      signal: new AbortController().signal,
+      onSnapshot: vi.fn(),
+      fetchImpl: vi.fn().mockResolvedValue(response),
+    });
+    const assertion = expect(promise).rejects.toMatchObject({
+      code: "CODING_APP_SESSION_STREAM_STALLED",
+      status: 504,
+    });
+
+    await vi.advanceTimersByTimeAsync(STREAM_INACTIVITY_TIMEOUT_MS + 1);
+    await assertion;
+  });
 });

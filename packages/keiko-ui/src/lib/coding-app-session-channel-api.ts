@@ -96,7 +96,10 @@ function streamStalledError(): ApiError {
  * Races one `reader.read()` call against the inactivity timer. Resolves/rejects exactly like
  * `reader.read()` when bytes (or EOF) arrive first — the timer is cleared in `finally` so a healthy
  * read never leaves a stray timeout armed. On timeout, the reader is presumed dead: it is cancelled
- * and the call rejects with a typed stall error instead of leaving the caller waiting forever.
+ * AFTER the typed stall rejection is committed, and the fire-and-forget cancel resolves the pending
+ * read into `{ done: true }` for a separate GC path, not for this call's outcome. Codex on PR #3089
+ * caught the reverse ordering where `cancel()` fulfilled the pending read with a clean EOF before
+ * the rejection settled, so a stall silently reported disconnect instead of the typed stall error.
  * `consumeStream` calls this once per loop iteration, so a fresh timer guards every read — including
  * the first — and is effectively cleared-and-recreated ("reset") on every chunk that arrives, since
  * arrival is what makes the read that started the race resolve.
@@ -105,10 +108,13 @@ function readWithInactivityGuard(
   reader: ReadableStreamDefaultReader<Uint8Array>,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const stallError = streamStalledError();
   const stall = new Promise<never>((_resolve, reject): void => {
     timer = setTimeout((): void => {
-      reader.cancel().catch(() => undefined);
-      reject(streamStalledError());
+      // Reject FIRST so the outer Promise.race locks the stall verdict before `cancel()` can
+      // fulfil the pending `reader.read()` with `{ done: true }` on the microtask queue.
+      reject(stallError);
+      reader.cancel(stallError).catch(() => undefined);
     }, STREAM_INACTIVITY_TIMEOUT_MS);
   });
   return Promise.race([reader.read(), stall]).finally(() => clearTimeout(timer));
