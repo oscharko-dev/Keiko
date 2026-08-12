@@ -90,11 +90,19 @@ export function portableInstallRootIdentitySha256(path: string): string {
 // so a crash mid-write leaves callers with "no registration recorded" instead of a
 // thrown SyntaxError. Matches launcher-state.ts loadState's behavior for the sibling
 // state file: an unreadable state artifact is a signal, not a crash.
+//
+// PR-review follow-up: narrow the swallowed failure to JSON.parse's SyntaxError only.
+// A filesystem error (EACCES, EMFILE, EIO) is NOT a "no registration" signal — the
+// registration may still exist and be authoritative. Callers must see those failures
+// so they do not skip managed-update / cleanup behaviour or overwrite retained
+// installation attestation while the actual storage failure stays hidden.
 function readJson(path: string): unknown {
+  const raw = readFileSync(path, "utf8");
   try {
-    return JSON.parse(readFileSync(path, "utf8")) as unknown;
-  } catch {
-    return undefined;
+    return JSON.parse(raw) as unknown;
+  } catch (error) {
+    if (error instanceof SyntaxError) return undefined;
+    throw error;
   }
 }
 

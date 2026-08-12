@@ -56,7 +56,13 @@ interface ScanContext {
   readonly diagnostics: ParserDiagnostic[];
   readonly normalizedParts: string[];
   normalizedLength: number;
+  // Whole-file stop signal: PARSER_TIMEOUT / UNIT_LIMIT_REACHED / PARSER_CANCELLED. Once set
+  // the file-level walk aborts and stays aborted.
   stopped: boolean;
+  // Per-record stop signal set by pushNestingLimit only. `walk()` still short-circuits on it,
+  // but walkJsonLines clears it between records so a deeply-nested line does not silently
+  // discard every valid line that follows (PR-review follow-up on KEIKO-0484).
+  nestingStopped: boolean;
 }
 
 function stringifyValue(value: unknown): string {
@@ -122,7 +128,9 @@ function pushNestingLimit(ctx: ScanContext, pointer: string): void {
       "error",
     ),
   );
-  ctx.stopped = true;
+  // Per-record signal: walk()/descendArray()/descendObject() short-circuit on it, but
+  // walkJsonLines resets it between records so later valid JSONL lines still parse.
+  ctx.nestingStopped = true;
 }
 
 function descendArray(
@@ -140,7 +148,7 @@ function descendArray(
     return;
   }
   for (let i = 0; i < value.length; i += 1) {
-    if (ctx.stopped) return;
+    if (ctx.stopped || ctx.nestingStopped) return;
     walk(ctx, value[i], joinPointer(pointer, String(i)), depth + 1);
   }
 }
@@ -165,10 +173,10 @@ function descendObject(
   const fields = objectScalarFields(value);
   if (fields.length > 0) {
     pushRecord(ctx, pointer, fields.join(" | "));
-    if (ctx.stopped) return;
+    if (ctx.stopped || ctx.nestingStopped) return;
   }
   for (const key of Object.keys(value)) {
-    if (ctx.stopped) return;
+    if (ctx.stopped || ctx.nestingStopped) return;
     const child = value[key];
     if (isScalarOrEmpty(child)) continue;
     walk(ctx, child, joinPointer(pointer, encodePointerSegment(key)), depth + 1);
@@ -176,7 +184,7 @@ function descendObject(
 }
 
 function walk(ctx: ScanContext, value: unknown, pointer: string, depth: number): void {
-  if (ctx.stopped) return;
+  if (ctx.stopped || ctx.nestingStopped) return;
   if (isScalarOrEmpty(value)) {
     pushRecord(ctx, pointer, scalarProjection(value));
     return;
@@ -224,6 +232,9 @@ function walkJsonLines(ctx: ScanContext): void {
   const lines = ctx.text.split("\n");
   for (let i = 0; i < lines.length; i += 1) {
     if (ctx.stopped) return;
+    // Clear the per-record nesting bail from any earlier line so a deeply-nested record does
+    // not silently discard every valid record that follows (PR-review follow-up on KEIKO-0484).
+    ctx.nestingStopped = false;
     const raw = lines[i];
     if (raw === undefined || raw.trim().length === 0) continue;
     const parsed = parseJsonValue(raw);
@@ -278,6 +289,7 @@ export const jsonParser: ParserAdapter = Object.freeze({
       normalizedParts: [],
       normalizedLength: 0,
       stopped: false,
+      nestingStopped: false,
     };
     if (jsonLines) {
       walkJsonLines(ctx);

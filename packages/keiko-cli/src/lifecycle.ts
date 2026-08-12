@@ -711,8 +711,16 @@ async function terminateAndConfirm(
   }
   onEscalate?.();
   deps.killProcess(pid, "SIGKILL");
-  // Sleep at most 500 ms but respect whatever budget remains in stopTimeoutMs.
-  await deps.sleep(Math.max(0, Math.min(500, deadline - Date.now())));
+  // PR-review follow-up on KEIKO-0437: give SIGKILL its OWN bounded polling window instead of
+  // whatever budget the graceful sleep left behind. Process termination + reap after SIGKILL
+  // are asynchronous, and process.kill(pid, 0) can still succeed briefly; a zero-budget
+  // remainder made the caller falsely conclude SIGKILL failed and retain ui.pid even when
+  // the process exited moments later.
+  const killDeadline = Date.now() + 2_000;
+  while (Date.now() <= killDeadline) {
+    if (!deps.isProcessAlive(pid)) return { confirmed: true, escalated: true };
+    await deps.sleep(100);
+  }
   return { confirmed: !deps.isProcessAlive(pid), escalated: true };
 }
 

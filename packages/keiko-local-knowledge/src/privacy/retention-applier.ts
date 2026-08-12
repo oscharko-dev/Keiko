@@ -164,9 +164,13 @@ function deleteExpiredCapsuleData(
       // trigger enforces the same invariant today, but the fix makes retention-applier.ts
       // consistent with every other vectors DELETE call site (deleteVectorsForDocument,
       // deleteVectorsForCapsule) so a future schema change that drops the trigger cannot
-      // silently leave this one path staled behind. The call lands BEFORE COMMIT so a crash
-      // mid-retention cannot leave the two out of sync.
-      invalidateVectorIndexStateForCapsule(db, capsuleId);
+      // silently leave this one path staled behind.
+      //
+      // Only fire the invalidation when the DELETE actually removed rows (PR-review follow-up):
+      // an unconditional invalidation would repeatedly dirty an unchanged corpus's warm USearch
+      // cache and pay a full rebuild for every no-op retention sweep. Call lands BEFORE COMMIT
+      // so a crash mid-retention cannot leave the two out of sync.
+      if (deletedVectorCount > 0) invalidateVectorIndexStateForCapsule(db, capsuleId);
     }
     if (retain.retainExtractedTextDays !== undefined) {
       const textCutoff = cutoffFor(now, retain.retainExtractedTextDays);

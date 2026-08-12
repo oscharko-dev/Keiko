@@ -1522,13 +1522,26 @@ function parseCircuitBreaker(raw: unknown, path = "circuitBreaker"): CircuitBrea
 // Per-provider circuitBreaker override (audit KEIKO-0167). Parsed present-only: absent when the
 // operator did not declare a provider-level block, so a mixed deployment can leave most providers
 // on the shared top-level policy and single out only the ones that need a different threshold
-// (e.g. a flakier LiteLLM proxy vs. a strict-latency direct Azure). Validation is delegated to
-// the same parseCircuitBreaker used for the top-level field so the two paths stay consistent.
+// (e.g. a flakier LiteLLM proxy vs. a strict-latency direct Azure).
+//
+// PR-review follow-up: an explicit provider-level override must be a real object with only the
+// three supported keys. `parseCircuitBreaker` would otherwise coerce a non-record (e.g. the
+// string "off") to `{}` and quietly install the built-in defaults as a per-provider override —
+// silently replacing a deliberately-tuned top-level policy on `Gateway.breakerFor`. Reject
+// malformed shapes explicitly here so validation errors surface at config-parse time.
+const CIRCUIT_BREAKER_KEYS = new Set(["failureThreshold", "cooldownMs", "halfOpenProbes"]);
 function parseOptionalProviderCircuitBreaker(
   raw: unknown,
   path: string,
 ): CircuitBreakerConfig | undefined {
   if (raw === undefined) return undefined;
+  if (!isRecord(raw)) {
+    throw new ConfigInvalidError(`${path} must be an object when provided`);
+  }
+  const unknownKey = Object.keys(raw).find((key) => !CIRCUIT_BREAKER_KEYS.has(key));
+  if (unknownKey !== undefined) {
+    throw new ConfigInvalidError(`${path} has unsupported key ${unknownKey}`);
+  }
   return parseCircuitBreaker(raw, path);
 }
 

@@ -213,6 +213,29 @@ function resolveTarget(
   return head === null ? { kind: "none" } : { kind: "unique", memoryId: head };
 }
 
+// Fail-closed conflict check: when the caller has already supplied an authority-constraint
+// scopeKind AND the "about this <noun>:" fragment names a DIFFERENT scope, reject the capture.
+// This closes the trust-boundary hole where user-controlled text could widen a project-scoped
+// policy to workspace scope by writing "about this workspace" (PR-review follow-up on KEIKO-0336).
+function rejectOnScopeConflict(
+  policy: CapturePolicyOptions,
+  explicitScopeKind: "project" | "workspace" | undefined,
+  _context: CaptureContext,
+): CaptureOutcome | null {
+  if (policy.scopeKind === undefined || explicitScopeKind === undefined) return null;
+  if (policy.scopeKind === explicitScopeKind) return null;
+  return { kind: "rejected", reason: "scope-not-resolvable" };
+}
+
+function mergePolicyScopeKind(
+  policy: CapturePolicyOptions,
+  explicitScopeKind: "project" | "workspace" | undefined,
+): CapturePolicyOptions {
+  if (explicitScopeKind === undefined) return policy;
+  if (policy.scopeKind !== undefined) return policy;
+  return { ...policy, scopeKind: explicitScopeKind };
+}
+
 // Reads the capturing group added to REMEMBER_ABOUT_PATTERNS. Returns undefined when the "about
 // this <noun>:" fragment was absent (plain "remember about X"), so the caller preserves whatever
 // policy.scopeKind (if any) was already provided by the surrounding capture pipeline. Audit
@@ -260,13 +283,16 @@ export function tryExtractRemember(
     return rejection;
   }
   // The REMEMBER_ABOUT_PATTERNS capture the noun ("project" or "workspace") when the user wrote
-  // "about this <noun>:". Thread it through scopeOrReject as an explicit scopeKind so the user's
-  // stated intent wins over context precedence (audit KEIKO-0336). When the noun is absent
-  // (plain "remember X" / "remember about X"), leave policy.scopeKind alone so implicit
-  // context-based inference behaves exactly as before.
+  // "about this <noun>:". Thread it through scopeOrReject as an explicit scopeKind only when
+  // the CALLER has not already set one (audit KEIKO-0336). PR-review follow-up: never let
+  // user-controlled text override an authority-constraint scopeKind supplied by the pipeline
+  // — that would let "remember about this workspace" widen a project-scoped policy from an
+  // agent turn. On conflict (policy asks for one scope, text names the other) fail closed by
+  // rejecting the capture, mirroring how scope-missing already rejects.
   const explicitScopeKind = explicitScopeKindFromAboutMatch(aboutPrefixMatch);
-  const effectivePolicy =
-    explicitScopeKind === undefined ? policy : { ...policy, scopeKind: explicitScopeKind };
+  const conflictOutcome = rejectOnScopeConflict(policy, explicitScopeKind, context);
+  if (conflictOutcome !== null) return conflictOutcome;
+  const effectivePolicy = mergePolicyScopeKind(policy, explicitScopeKind);
   const scopeResolution = scopeOrReject(context, effectivePolicy);
   if (!scopeResolution.ok) {
     return scopeResolution.outcome;

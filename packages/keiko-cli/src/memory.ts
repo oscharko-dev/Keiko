@@ -298,31 +298,44 @@ async function backfillEmbeddings(
   embed: MemoryEmbedder,
   limit: number,
 ): Promise<ReembedCounts> {
-  const accepted = vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), {
-    status: ["accepted"],
-    includeExpired: true,
-    limit,
-  });
+  // KEIKO-0440 (PR-review follow-up): the limit is the target COUNT of records the pass will
+  // re-embed, not a cap on the scan window. Paginating over the accepted set and filtering
+  // out records that already carry an embedding ensures a small `--limit` can still reach an
+  // older un-embedded record hidden behind newer already-embedded pages. A simple caller loop
+  // is enough because `listMemoriesAcrossScopes` accepts an offset alongside the limit, so
+  // we walk the accepted set page by page until either the target is met or the store is
+  // exhausted. skipped/embedded/failed counts follow the same semantics as before.
   const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
-  for (const record of accepted) {
-    // KEIKO-0440: honour the "for accepted memories lacking one" contract in USAGE and the
-    // command header — a record that already carries an embedding is skipped, not re-embedded,
-    // so the pass is O(missing) provider calls instead of O(all accepted) on every invocation.
-    if (vault.getEmbedding(record.id) !== undefined) {
-      counts.skipped += 1;
-      continue;
+  const scopes = vault.listMemoryScopes();
+  const pageSize = Math.max(limit, 100);
+  let offset = 0;
+  while (counts.embedded + counts.failed < limit) {
+    const page = vault.listMemoriesAcrossScopes(scopes, {
+      status: ["accepted"],
+      includeExpired: true,
+      limit: pageSize,
+      offset,
+    });
+    if (page.length === 0) break;
+    for (const record of page) {
+      if (counts.embedded + counts.failed >= limit) break;
+      if (vault.getEmbedding(record.id) !== undefined) {
+        counts.skipped += 1;
+        continue;
+      }
+      const input = await embed(record.body);
+      if (input === null) {
+        counts.failed += 1;
+        continue;
+      }
+      try {
+        vault.upsertEmbedding(record.id, input);
+        counts.embedded += 1;
+      } catch {
+        counts.failed += 1;
+      }
     }
-    const input = await embed(record.body);
-    if (input === null) {
-      counts.failed += 1;
-      continue;
-    }
-    try {
-      vault.upsertEmbedding(record.id, input);
-      counts.embedded += 1;
-    } catch {
-      counts.failed += 1;
-    }
+    offset += page.length;
   }
   return counts;
 }

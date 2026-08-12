@@ -382,7 +382,13 @@ function targetRuntime(binaryPath: string | undefined): TargetRuntimeResult {
     return cached.result;
   }
   const result = verifyRuntimeAt(path);
-  TARGET_RUNTIME_CACHE.set(path, { result, mtimeMs: stat.mtimeMs, size: stat.size });
+  // PR-review follow-up: only memoize SUCCESSFUL verifications. A transient failure
+  // (EMFILE, EIO, temporarily-tightened permissions) that later heals must NOT be cached
+  // against the same (path, mtimeMs, size) tuple — otherwise a recovered runtime is
+  // permanently invisible to every subsequent ANN request until process restart.
+  if (typeof result !== "string") {
+    TARGET_RUNTIME_CACHE.set(path, { result, mtimeMs: stat.mtimeMs, size: stat.size });
+  }
   return result;
 }
 

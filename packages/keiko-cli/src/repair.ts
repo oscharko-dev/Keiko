@@ -229,15 +229,30 @@ function tightenNodes(
   unreadable: LoosePermFinding[],
 ): void {
   for (const node of nodes) {
+    let observed: string;
     try {
       const mode = statSync(node.absPath).mode & 0o777;
       if (mode === targetMode) continue;
-      findings.push({
+      observed = `0o${mode.toString(8)}`;
+    } catch {
+      unreadable.push({
         category: node.category,
         relPath: node.relPath,
-        observed: `0o${mode.toString(8)}`,
+        observed: "unreadable",
       });
-      if (!dryRun) chmodSync(node.absPath, targetMode);
+      continue;
+    }
+    // PR-review follow-up on KEIKO-0301: only record the node as "fixed" after chmod actually
+    // applied — a chmod failure (read-only filesystem, ownership race) leaves the node loose
+    // and must show up as an unreadable/action finding, not double-reported as fixed AND
+    // unreadable. The dry-run path skips chmod so it always records under findings.
+    if (dryRun) {
+      findings.push({ category: node.category, relPath: node.relPath, observed });
+      continue;
+    }
+    try {
+      chmodSync(node.absPath, targetMode);
+      findings.push({ category: node.category, relPath: node.relPath, observed });
     } catch {
       unreadable.push({
         category: node.category,

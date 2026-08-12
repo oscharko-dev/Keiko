@@ -128,11 +128,16 @@ function compareNumberDesc(a: number | undefined, b: number | undefined): number
   return (b ?? 0) - (a ?? 0);
 }
 
-// contextWindow===0 is a runtime-discovered/unenriched placeholder (GEN-GATE-DISCOVERY-001),
-// not a real "smallest" capacity — do not let it lose the tie-break to any nonzero declared
-// value. Once both sides are nonzero the descending ordering is meaningful again.
+// contextWindow===0 is a runtime-discovered/unenriched placeholder (GEN-GATE-DISCOVERY-001).
+// Total order (transitive) that (a) prefers any known capacity over the placeholder and
+// (b) orders known capacities largest-first, while treating two placeholders as equal.
+// Returning 0 for "0 vs X" and X vs Y descending is NOT a total order — the comparator
+// would report cycles (4K < 128K, 0 == 128K, 0 == 4K) and Node's stable sort could leave
+// the placeholder ahead of the largest window (PR-review follow-up on KEIKO-0501).
 function compareContextWindowDesc(a: number | undefined = 0, b: number | undefined = 0): number {
-  if (a === 0 || b === 0) return 0;
+  const aKnown = a > 0;
+  const bKnown = b > 0;
+  if (aKnown !== bKnown) return aKnown ? -1 : 1;
   return b - a;
 }
 

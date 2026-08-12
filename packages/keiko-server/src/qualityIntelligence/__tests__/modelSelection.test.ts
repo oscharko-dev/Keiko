@@ -310,7 +310,13 @@ describe("Quality Intelligence model policy defaults", () => {
     } as unknown as ReturnType<typeof parseGatewayConfig>;
   }
 
-  it("treats contextWindow:0 as equal to any other value on the generation tie-break", () => {
+  // KEIKO-0501 (PR-review follow-up): the original fix treated 0 as equal to every value on
+  // this term, which produced a non-transitive comparator (0 == 4K, 0 == 128K, 4K < 128K).
+  // The corrected total ordering PARTITIONS placeholders (contextWindow===0) behind every
+  // known-capacity capability — a runtime-discovered/unenriched model still loses to a
+  // model that DECLARES a real window, but the two are ordered consistently rather than
+  // cyclically. The tests now assert the transitive form.
+  it("prefers a known contextWindow over a placeholder on the generation tie-break", () => {
     const deps = depsWith(
       configWithCapabilities(
         ["a-unenriched", "b-large"],
@@ -321,10 +327,10 @@ describe("Quality Intelligence model policy defaults", () => {
       ),
     );
 
-    expect(recommendQiModelPolicy(deps).testDesignModelId).toBe("a-unenriched");
+    expect(recommendQiModelPolicy(deps).testDesignModelId).toBe("b-large");
   });
 
-  it("treats contextWindow:0 as equal to any other value on the judge tie-break", () => {
+  it("prefers a known contextWindow over a placeholder on the judge tie-break", () => {
     const deps = depsWith(
       configWithCapabilities(
         ["gen-cheap", "judge-unenriched", "judge-large"],
@@ -343,9 +349,21 @@ describe("Quality Intelligence model policy defaults", () => {
     );
 
     // Generation picks the cheapest/fastest ("gen-cheap"); judge avoids the generation model
-    // and falls back to compareJudgeDefault. With contextWindow:0 treated as equal, the tie
-    // breaks on index — "judge-unenriched" appears earlier in the list.
-    expect(recommendQiModelPolicy(deps).judgeModelId).toBe("judge-unenriched");
+    // and falls back to compareJudgeDefault, where the known 128K window beats the placeholder.
+    expect(recommendQiModelPolicy(deps).judgeModelId).toBe("judge-large");
+  });
+
+  it("orders two placeholders by their original list index (stable within the partition)", () => {
+    const deps = depsWith(
+      configWithCapabilities(
+        ["a-unenriched", "b-unenriched"],
+        [
+          capability("a-unenriched", { contextWindow: 0 }),
+          capability("b-unenriched", { contextWindow: 0 }),
+        ],
+      ),
+    );
+    expect(recommendQiModelPolicy(deps).testDesignModelId).toBe("a-unenriched");
   });
 });
 

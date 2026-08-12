@@ -1,4 +1,13 @@
-import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { CliIo } from "./runner.js";
@@ -91,16 +100,43 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // #KEIKO-0503: detect the file's existing indentation instead of unconditionally
 // re-emitting with 2 spaces. A project that uses tabs or 4-space indentation
 // should not see a whole-file reformat diff when `keiko init` adds two scripts.
-// The heuristic matches the first indented line of the raw source: a single leading
-// tab means tabs; a run of spaces means that many spaces. When unsure, fall back to
-// the original 2-space default so behavior is preserved for the common case.
+//
+// PR-review follow-up: instead of picking the very first indented line (which may be a
+// comment-style non-representative or an odd continuation), scan every property-open line
+// and pick the STYLE that appears MOST OFTEN. If tabs vs spaces are mixed, fall back to
+// 2 spaces so a mis-detected width does not cause a whole-file reformat.
+function tallyIndentStyles(raw: string): Record<string, number> {
+  const styles: Record<string, number> = {};
+  for (const match of raw.matchAll(/\r?\n([ \t]+)"/gu)) {
+    const first = match[1];
+    if (first === undefined || first.length === 0) continue;
+    const style = first.startsWith("\t") ? "\t" : String(first.length);
+    styles[style] = (styles[style] ?? 0) + 1;
+  }
+  return styles;
+}
+
+function dominantIndentStyle(entries: readonly [string, number][]): {
+  style: string;
+  count: number;
+} {
+  return entries.reduce((best, [style, count]) => (count > best.count ? { style, count } : best), {
+    style: "",
+    count: 0,
+  });
+}
+
 function detectIndent(raw: string): string | number {
-  const match = /\{\r?\n([ \t]+)"/u.exec(raw);
-  if (match === null) return 2;
-  const first = match[1];
-  if (first === undefined || first.length === 0) return 2;
-  if (first.startsWith("\t")) return "\t";
-  return first.length;
+  const entries = Object.entries(tallyIndentStyles(raw));
+  if (entries.length === 0) return 2;
+  const { style, count } = dominantIndentStyle(entries);
+  // Reject a plurality below two thirds — that means the file is genuinely inconsistent and
+  // any pick would reformat surrounding lines; default preserves the historic behaviour.
+  const total = entries.reduce((sum, [, tally]) => sum + tally, 0);
+  if (count * 3 < total * 2) return 2;
+  if (style === "\t") return "\t";
+  const width = Number(style);
+  return Number.isFinite(width) && width > 0 ? width : 2;
 }
 
 function stringifyPackageJson(data: unknown, indent: string | number): string {
@@ -138,15 +174,40 @@ function loadPackageJson(packagePath: string): LoadedPackageJson | InitError {
 // #KEIKO-0503: temp-file-then-renameSync in the same directory as parsed.packagePath
 // so a crash between truncate and write can never leave a truncated package.json —
 // the file that makes the project installable. Mirrors launcher-state.ts saveState.
+//
+// PR-review follow-up: preserve the existing file's permission bits across the rename so a
+// project that had, e.g., a 0o600 or otherwise tightened package.json does not silently
+// widen to the current umask default. Node's fs API cannot preserve owner/group or ACLs
+// without root, and Windows lacks POSIX mode entirely; on POSIX we at minimum re-apply the
+// captured mode, which covers the observable regression the reviewer flagged.
 function writePackageJsonAtomically(packagePath: string, content: string): void {
   const dir = dirname(packagePath);
+  const originalMode = capturePackageMode(packagePath);
   const tmpDir = mkdtempSync(join(dir, ".keiko-init-"));
   const tmpFile = join(tmpDir, "package.json");
   try {
     writeFileSync(tmpFile, content, "utf8");
     renameSync(tmpFile, packagePath);
+    if (originalMode !== undefined && process.platform !== "win32") {
+      try {
+        chmodSync(packagePath, originalMode);
+      } catch {
+        // Best-effort: preserving the mode failed (read-only fs, ownership race). Do not
+        // roll back the rewrite over that — the atomic write itself already succeeded and
+        // the file is intact; the mode simply reverts to the current default.
+      }
+    }
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+function capturePackageMode(packagePath: string): number | undefined {
+  if (!existsSync(packagePath)) return undefined;
+  try {
+    return statSync(packagePath).mode & 0o777;
+  } catch {
+    return undefined;
   }
 }
 
