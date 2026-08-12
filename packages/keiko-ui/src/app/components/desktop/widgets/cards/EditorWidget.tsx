@@ -82,6 +82,7 @@ import {
 import trustStyles from "../../workspace-trust/WorkspaceTrust.module.css";
 import {
   bindingFromKeyboardEvent,
+  dispatchableWorkspaceShortcutsForContext,
   resolveEffectiveKeyboardShortcuts,
   type EffectiveKeyboardShortcutRegistry,
 } from "../../keyboardShortcutsRegistry";
@@ -222,19 +223,26 @@ function sameEditorExternalLayoutInputs(
   );
 }
 
-function editorShortcutCommandId(
+// Looked up through the same collision-safe projection `shellShortcutState.ts`'s `labelledBindings`
+// uses for this context, never the raw per-command list: a persisted `keybindingOverrides` entry
+// that bypasses `updateKeyboardShortcutOverride`'s write-time validation (e.g. a settings import)
+// can carry two editor-context commands to the identical raw binding string, and a naive
+// `registry.commands.find(...)` would dispatch whichever happens to sit first in registry order
+// instead of the command the two-phase claim algorithm (`claimChords`) actually reserved the chord
+// for.
+export function editorShortcutCommandId(
   registry: EffectiveKeyboardShortcutRegistry,
   event: globalThis.KeyboardEvent,
 ): string | null {
   const binding = bindingFromKeyboardEvent(event);
   if (binding === null) return null;
-  const match = registry.commands.find(
-    (entry) =>
-      entry.binding === binding &&
-      entry.command.dispatchOwner === "keiko" &&
-      entry.command.contexts.includes("editor"),
+  const commandIdByBinding = new Map(
+    dispatchableWorkspaceShortcutsForContext(registry, "editor").map((entry) => [
+      entry.binding,
+      entry.commandId,
+    ]),
   );
-  return match?.command.id ?? null;
+  return commandIdByBinding.get(binding) ?? null;
 }
 
 function dispatchEditorShortcut(

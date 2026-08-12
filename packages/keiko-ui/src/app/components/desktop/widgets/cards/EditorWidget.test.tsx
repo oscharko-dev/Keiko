@@ -51,6 +51,7 @@ import {
   EDITOR_M7_SETTING_REGISTRY,
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
   resolveEditorM11Settings,
+  type EditorM7CommandDefinition,
   type EditorM7SettingId,
   type EditorM7SettingValue,
   type EditorM11SettingsSnapshot,
@@ -61,6 +62,11 @@ import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
+import { editorShortcutCommandId } from "./EditorWidget";
+import {
+  dispatchableWorkspaceShortcutsForContext,
+  type EffectiveKeyboardShortcutRegistry,
+} from "../../keyboardShortcutsRegistry";
 import { requestEditorBufferReconciliation } from "./editor-buffer-reconciliation-events";
 import { _resetEditorAgentBridgeStateForTests } from "./editorAgentBridge";
 import { getEditorProblems, resetEditorProblemsStoreForTests } from "./editorProblemsStore";
@@ -5610,5 +5616,81 @@ describe("EditorWidget — stale-load discard on rapid file switch (GEN-TEST-MIS
     // The always-present status-bar live region carries no error text; the stale landing was a
     // silent no-op rather than a surfaced load failure.
     expect(screen.getByTestId("editor-status-bar-alert")).toHaveTextContent("");
+  });
+});
+
+describe("EditorWidget — editor-context shortcut dispatch collision safety (KEIKO-0199)", () => {
+  function fakeEditorCommand(id: string, defaultBinding: string): EditorM7CommandDefinition {
+    return {
+      id,
+      labelKey: `test.${id}`,
+      descriptionKey: `test.${id}.description`,
+      scope: "editor",
+      contexts: ["editor"],
+      defaultBindings: [defaultBinding],
+      rebindable: true,
+      dispatchOwner: "keiko",
+    };
+  }
+
+  // OWNER's binding is its own, untouched default. HIJACKER's binding is a persisted override that
+  // targets OWNER's chord instead of its own — reachable only by bypassing
+  // `updateKeyboardShortcutOverride`'s write-time collision check (a hand-edited or imported
+  // `keybindingOverrides` entry never runs it), exactly as a settings-import path could produce.
+  // HIJACKER is listed FIRST so a raw `Array.find` over `registry.commands` reaches it before OWNER.
+  const OWNER = fakeEditorCommand("test.editorShortcutOwner", "CtrlOrMeta+Alt+A");
+  const HIJACKER = fakeEditorCommand("test.editorShortcutHijacker", "CtrlOrMeta+Alt+B");
+
+  function collidingRegistry(): EffectiveKeyboardShortcutRegistry {
+    return {
+      commands: [
+        {
+          command: HIJACKER,
+          binding: "CtrlOrMeta+Alt+A",
+          defaultBinding: "CtrlOrMeta+Alt+B",
+          source: "user",
+          modified: true,
+          conflictCommandIds: [],
+        },
+        {
+          command: OWNER,
+          binding: "CtrlOrMeta+Alt+A",
+          defaultBinding: "CtrlOrMeta+Alt+A",
+          source: "default",
+          modified: false,
+          conflictCommandIds: [],
+        },
+      ],
+      activeBindings: [
+        { commandId: HIJACKER.id, binding: "CtrlOrMeta+Alt+A" },
+        { commandId: OWNER.id, binding: "CtrlOrMeta+Alt+A" },
+      ],
+      status: { kind: "ready" },
+    };
+  }
+
+  function chordEvent(key: string): KeyboardEvent {
+    return new KeyboardEvent("keydown", { key, ctrlKey: true, altKey: true });
+  }
+
+  it("dispatches the contested chord to the collision-resolved owner, not the first raw binding match (#2894)", () => {
+    const registry = collidingRegistry();
+
+    // The reference projection: the two-phase claim algorithm reserves every command's own default
+    // chord before any override is considered, so OWNER keeps "CtrlOrMeta+Alt+A" and HIJACKER's
+    // override onto it is refused. Derived from the production projection rather than restated, so
+    // this assertion cannot silently drift from the algorithm it is pinned to.
+    const expectedCommandId =
+      dispatchableWorkspaceShortcutsForContext(registry, "editor").find(
+        (entry) => entry.binding === "CtrlOrMeta+Alt+A",
+      )?.commandId ?? null;
+    expect(expectedCommandId).toBe(OWNER.id);
+
+    expect(editorShortcutCommandId(registry, chordEvent("a"))).toBe(expectedCommandId);
+  });
+
+  it("falls the refused override back to the hijacker's own untouched default (#2894)", () => {
+    const registry = collidingRegistry();
+    expect(editorShortcutCommandId(registry, chordEvent("b"))).toBe(HIJACKER.id);
   });
 });
