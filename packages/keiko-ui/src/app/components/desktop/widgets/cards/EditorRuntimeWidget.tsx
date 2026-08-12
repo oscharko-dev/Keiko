@@ -2554,7 +2554,7 @@ function EditorRuntimeWidget({
       flushHotExitSnapshot();
     };
     window.addEventListener("pagehide", handlePageHide);
-    return () => {
+    return (): void => {
       window.clearTimeout(timer);
       window.removeEventListener("pagehide", handlePageHide);
     };

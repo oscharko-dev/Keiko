@@ -33,8 +33,6 @@ import {
   fetchFilesContent,
   fetchGitStatus,
   postEditorAgentSessionSnapshot,
-  requestEditorFormatting,
-  saveFilesContent,
 } from "../../../../../lib/api";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import { writeEditorHotExitSnapshot } from "./editorHotExitStore";

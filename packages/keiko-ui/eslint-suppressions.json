@@ -878,7 +878,7 @@
   },
   "src/app/components/desktop/widgets/cards/EditorRuntimeWidget.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 23
+      "count": 22
     },
     "complexity": {
       "count": 25
