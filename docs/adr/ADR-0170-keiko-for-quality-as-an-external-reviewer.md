@@ -156,9 +156,14 @@ guarantee bound to an immutable commit SHA, not a permission boundary, and the p
 pins it with a test. Approval is not required for `dev`, so the coupling costs nothing here — but
 describing the capability as absent would misstate the trust model.
 
-It checks out the protected base and fetches the candidate head as Git objects only. The candidate
-tree is never checked out, symlink-followed, or submodule-initialized, and no candidate script, hook,
-action, package manager, or repository command is executed.
+It checks out the exact protected commit identified by `github.workflow_sha` — the commit whose
+workflow definition GitHub is executing — and fetches the candidate head as Git objects only. It
+does not use the pull-request payload's `base.sha` for that workspace: on a long-lived pull request
+that field can still name an older base commit, which made the store-pin cross-check read a stale
+workflow and disabled cache reuse even while GitHub executed the current release. The immutable
+event base and head SHAs still define the review diff. The candidate tree is never checked out,
+symlink-followed, or submodule-initialized, and no candidate script, hook, action, package manager,
+or repository command is executed.
 
 Before the job that declares the secret-bearing environment can start, a separate job waits 120
 seconds, refreshes GitHub's server-owned pull-request head ref, and compares it with the event's
@@ -167,7 +172,10 @@ refresh failure fails closed before either path. The review job repeats the head
 first secret-bearing step, so a later supersession fails there without invoking the model or
 handling store secrets. This debounce avoids buying the startup of a large review during an ordinary
 synchronize burst. It supplements rather than replaces the per-pull-request concurrency
-cancellation, which still stops a paid review already in progress.
+cancellation, which still stops a paid review already in progress. The debounce checkout and its
+two head refreshes are depth-one operations; only the subsequent review workspace fetches full
+history. Its ten-minute job bound leaves explicit headroom around the fixed wait for a slow hosted
+checkout without turning runner delay into a false admission failure.
 
 Fork-originated heads receive no model review. Model budget and the credential-bearing
 execution path are not exposed to arbitrary external heads, and a per-review budget bounds one review,
