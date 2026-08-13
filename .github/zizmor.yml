@@ -58,8 +58,9 @@ rules:
       # protected-base code, and `pull_request_target` is the only trigger GitHub offers for that.
       # zizmor's warning is about the classic misuse - a workflow that checks out the candidate head
       # and runs it with the elevated token. This workflow does the opposite, by construction:
-      # it checks out `github.event.pull_request.base.sha` explicitly and fetches the head only as
-      # Git objects (`git fetch pull/N/head`), so no candidate file is ever written to the working
+      # it checks out `github.workflow_sha` — the exact protected commit whose workflow GitHub is
+      # executing — and fetches the head only as Git objects (`git fetch pull/N/head`), so no
+      # candidate file is ever written to the working
       # tree, no candidate script/hook/action/package manager runs, and `--no-recurse-submodules`
       # keeps submodules uninitialised. Its only write grant is `pull-requests: write`;
       # `actions: write` exists nowhere in the workflow — the review store persists as a run

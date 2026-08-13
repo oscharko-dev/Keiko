@@ -44,6 +44,18 @@ The pin in [`keiko-for-quality.yml`](../../.github/workflows/keiko-for-quality.y
 authoritative one; this table is history, and a disagreement between them means the table is
 stale.
 
+The production workflow admits a current head through a 120-second debounce free of model, store,
+and environment secrets before the job that declares the `keiko-for-quality` environment can start.
+It checks the server-owned pull ref both before and after the wait, and the review job rechecks once
+more before its first secret-bearing step. A superseded head therefore produces no model review;
+concurrency remains the containment for a run that already passed admission and began spending.
+Both workspaces are checked out at `github.workflow_sha`, so the pin synchronization check reads the
+same protected workflow revision GitHub is executing even when a long-lived pull request's payload
+still carries an older base SHA. The event's immutable base/head pair continues to define the diff.
+The debounce path is deliberately shallow (depth one for the trusted checkout and both head
+refreshes); the review path alone fetches full history. Its ten-minute bound includes the fixed
+two-minute wait plus hosted-checkout headroom.
+
 **The delivery freeze in step 4 was not applied, and coverage for that window was therefore not
 established.** Recorded as a shortfall rather than as an exception, because the reasoning that
 justified skipping it was wrong.

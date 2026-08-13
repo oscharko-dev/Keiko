@@ -45,8 +45,65 @@ concurrency:
     ${{ github.event.action != 'edited' || github.event.changes.base != null }}
 
 jobs:
+  # Wait outside the secret-bearing environment. A push burst can supersede a large review before
+  # its first model result; this gate absorbs that common case without materializing any store or
+  # model secret. The review job repeats the trusted checkout/fetch after this job succeeds.
+  debounce:
+    name: debounce current head
+    runs-on: ubuntu-latest
+    # The fixed wait is two minutes. Keep enough headroom for a slow GitHub checkout while the
+    # shallow fetches below avoid downloading the repository's complete history and every ref.
+    timeout-minutes: 10
+    if: >-
+      github.event.pull_request.state == 'open' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == 'dev' &&
+      (github.event.action != 'edited' || github.event.changes.base != null) &&
+      vars.KEIKO_QUALITY_ENABLED == 'true'
+    permissions:
+      contents: read
+    outputs:
+      current: ${{ steps.current-head.outputs.current }}
+    steps:
+      - name: Check out protected base for debounce
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Bind the workspace to the commit whose workflow GitHub is executing. A long-lived PR's
+          # payload base.sha is a PR comparison snapshot and can lag dev; using it made the
+          # action-pin cross-check read an old workflow and disabled the review store.
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      # Expressions stay in env, never in the shell program. A failed fetch is a failed gate, not a
+      # quiet stale pass; no credential-bearing or paid job can start from that result.
+      - name: Debounce superseded pull-request heads
+        id: current-head
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch --quiet --depth=1 --no-tags --no-recurse-submodules origin "pull/${PR_NUMBER}/head"
+          INITIAL_HEAD="$(git rev-parse FETCH_HEAD)"
+          if [ "${INITIAL_HEAD}" != "${EXPECTED_HEAD}" ]; then
+            echo "::notice::pull-request head was superseded before debounce — skipping review"
+            echo "current=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          sleep 120
+          git fetch --quiet --depth=1 --no-tags --no-recurse-submodules origin "pull/${PR_NUMBER}/head"
+          CURRENT_HEAD="$(git rev-parse FETCH_HEAD)"
+          if [ "${CURRENT_HEAD}" = "${EXPECTED_HEAD}" ]; then
+            echo "current=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "::notice::pull-request head was superseded during debounce — skipping review"
+            echo "current=false" >> "${GITHUB_OUTPUT}"
+          fi
+
   review:
     name: review
+    needs: debounce
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # This condition is the security-relevant eligibility layer: a job that never starts never has
@@ -66,6 +123,7 @@ jobs:
     # `state == 'open'` is what makes the `closed` trigger a pure cancellation: the event fires, the
     # concurrency group evicts the running review, and this job then declines to start a new one.
     if: >-
+      needs.debounce.outputs.current == 'true' &&
       github.event.pull_request.state == 'open' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
@@ -110,7 +168,10 @@ jobs:
       - name: Check out protected base
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          # Use the exact protected commit that supplied this workflow, not the pull request
+          # payload's historical base SHA. Candidate diff boundaries remain the immutable event
+          # base/head SHAs passed to the reviewer.
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -118,12 +179,19 @@ jobs:
       # without ever being written to the working tree.
       - name: Fetch candidate head as Git objects
         env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         # --quiet: this step runs before the reviewer, and its output is ordinary Actions output
         # rather than redacted diagnostics. Keeping it minimal narrows what the job log carries.
-        run: git fetch --quiet --no-tags --no-recurse-submodules origin "pull/${PR_NUMBER}/head"
+        run: |
+          git fetch --quiet --no-tags --no-recurse-submodules origin "pull/${PR_NUMBER}/head"
+          CURRENT_HEAD="$(git rev-parse FETCH_HEAD)"
+          if [ "${CURRENT_HEAD}" != "${EXPECTED_HEAD}" ]; then
+            echo "::error::pull-request head changed after debounce — refusing credentialed review"
+            exit 1
+          fi
 
-      # Unconditional, and deliberately BEFORE anything that costs money: the sign and verify
+      # Deliberately BEFORE anything that costs money: the sign and verify
       # steps guard the key too, but verify only runs when a prior store was located — on a fresh
       # installation, after retention expiry, or after a configuration change, the first key check
       # would otherwise be the signing step, AFTER the reviewer has spent up to its token ceiling.
@@ -149,13 +217,13 @@ jobs:
           PROFILE_HASH: ${{ hashFiles('.github/keiko-for-quality.json') }}
           MODEL_ID: ${{ vars.KEIKO_QUALITY_MODEL_ID }}
           MODEL_PROTOCOL: ${{ vars.KEIKO_QUALITY_MODEL_PROTOCOL }}
-          # The declared pin — the single source of truth for store identity. It duplicates the
-          # Review step's `uses:` value because GitHub forbids an expression there, so a literal
-          # is unavoidable; ADVANCE BOTH TOGETHER. The consistency check below is what makes that
-          # duplication safe.
+          # The declared pin is the source of truth for the synchronization check below. It
+          # duplicates the Review step's `uses:` value because GitHub forbids an expression there,
+          # so a literal is unavoidable; ADVANCE BOTH TOGETHER. It deliberately does not partition
+          # the store; per-entry publication semantics enforce compatibility inside the action.
           # Quoted: a hypothetical all-digit sha would otherwise parse as a YAML number and reach
           # the shell in a normalized form, defeating the length check below.
-          ACTION_PIN: "b1703e862a43479822fb197d416af1162567b9f4" # unreleased P0 candidate — keep in sync with Review's uses:
+          ACTION_PIN: "f6aa08d66c13de0a49a91ea8810600100ca8770d" # v0.24.0 — keep in sync with Review's uses:
         run: |
           # The pin no longer partitions the store, and that is a deliberate reversal. It used to,
           # because a wrapper release can change review or sanitization SEMANTICS without changing
@@ -427,9 +495,7 @@ jobs:
 
       - name: Review
         id: review
-        # The exact P0 candidate intentionally has no release tag until #3089 proves completion.
-        # zizmor: ignore[ref-version-mismatch]
-        uses: oscharko-dev/Keiko-for-Quality@b1703e862a43479822fb197d416af1162567b9f4 # unreleased P0 candidate
+        uses: oscharko-dev/Keiko-for-Quality@f6aa08d66c13de0a49a91ea8810600100ca8770d # v0.24.0
         env:
           # Passed by variable NAME to the action, never as an input value: an input appears in the
           # step context that every other action in the job can read.
@@ -465,21 +531,18 @@ jobs:
           # headroom the reviewer cannot use. The formula keeps ordinary pull requests far below it
           # either way — the allotment first meets the cap at about 72 reviewable files.
           #
-          # One fact everything below leans on, stated once because it is easy to drop: an
-          # incomplete run uploads NO replacement store, but the locate step scans every
-          # same-named artifact and takes the newest eligible one. So a pull request that has
-          # completed at least once under its current identity keeps replaying that store until
-          # the seven-day retention expires. "Starts cold on every push" is true only of a pull
-          # request that has NEVER completed under its current identity — call that the cold set.
+          # One fact everything below leans on, stated once because it is easy to drop: a run with
+          # `store_written=false` uploads no replacement, but the locate step scans every same-named
+          # artifact and takes the newest eligible one. So a pull request that has produced a store
+          # under its current identity keeps replaying it until the seven-day retention expires.
+          # "Starts cold on every push" is true only while no retained store exists.
           #
           # Why a HIGH ceiling is the cheap setting, which is the opposite of the intuition. A run
-          # that exhausts its allotment settles INCOMPLETE, and the hand-off and the signing job
-          # below gated on `outcome == 'complete'` (until v0.11.0 — see below), persisting nothing. A pull request in
-          # the cold set therefore pays in full on every push. Lowering the ceiling moves MORE
-          # pull requests into the cold set; raising it moves them out by letting the first review
-          # finish. This argument does not depend on any upstream change: it is exactly why the 2M
-          # cap set under credit pressure on 2026-08-02 was a false economy on large changes, and
-          # it holds at the pin this workflow currently runs.
+          # that exhausts its allotment settles INCOMPLETE. Since v0.11.0, safely covered paths can
+          # still seed the store, but lowering the ceiling still buys less coverage and can stop a
+          # cold review before it earns any reusable result. Raising the ceiling lets more reviews
+          # finish and maximizes what can be retained. This is why the 2M cap set under credit
+          # pressure on 2026-08-02 was a false economy on large changes.
           #
           # Since v0.11.0 both halves of the upstream fix are LIVE here: the pin carries
           # Keiko-for-Quality#76 (a truncated run persists the verdicts for the files it DID
@@ -495,7 +558,8 @@ jobs:
           # 5.5-6M tokens per full review once billing settled (~44k input tokens per file for a
           # change of that weight, not the 25k first written here), so a heavy change meets the
           # ceiling around 135 files and only lighter mixes reach further.
-          # Whether that cost recurs is decided by whether the run completed, not by the ceiling.
+          # Whether that cost recurs is decided by the safely memoizable coverage that earns a
+          # store, not by the settlement label alone or by the ceiling.
           # See docs/qa/review-cost-model.md for the numbers and
           # docs/troubleshooting/model-review-spend.md for the failure modes.
           token_budget: "6000000"
@@ -506,15 +570,15 @@ jobs:
 
       # Persists the store for the next push — as an artifact, which needs no write scope at all
       # (`actions: write` is deliberately absent from this workflow; see the permissions note).
-      # Only a complete settlement produces an updated store upstream, and a Review step that
-      # threw leaves `outcome` unset, so the condition skips both cases. The name partitions by
+      # The action's `store_written` output is authoritative: a complete run and an incomplete run
+      # with safely memoizable covered paths can both produce an updated store; a thrown action or
+      # a run with no earned store leaves it false. The name partitions by
       # pull request, profile hash, and model id — the invalidation boundary the retired cache
       # key carried: after a profile or model change the locate step finds nothing and the next
-      # review runs full-price rather than replaying decisions produced under the old
-      # configuration. The action pin is a fourth partition dimension: hashed into the artifact
-      # name and bound into the MAC context, so advancing the reviewer release starts a fresh
-      # partition even when the store format stays compatible — and beneath that, schema and key
-      # derivation still reject foreign entries. Runs each own
+      # review runs full-price rather than replaying decisions produced under the old configuration.
+      # The action pin is cross-checked above but deliberately not a partition dimension; the action
+      # stamps publication semantics per entry and rejects only incompatible entries. Beneath that,
+      # schema and key derivation still reject foreign entries. Runs each own
       # their artifact; the locate step picks the newest eligible one. Seven days comfortably
       # outlives any push gap on an active pull request.
       # Hands the UNSIGNED store to the sign-store job. Signing must not happen here: the
