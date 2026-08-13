@@ -50,11 +50,11 @@ export function createAuthenticatedSessionStartConfirmationPlane(
       claim: CodingRuntimeStartConfirmationClaim,
     ): CodingRuntimeConsumedStartConfirmation | undefined => {
       const nowMs = now();
-      if (!claimIsFresh(claim, nowMs, freshnessMs)) return undefined;
-      // Prune expired entries BEFORE the has()/cap checks: a request-id that was consumed and
-      // has since fallen out of the freshness window would otherwise deny a legitimate later
-      // attestation reusing the same id.
+      // #3099 R3 KfQ Major: prune at the top so stale entries clear even when the current claim
+      // is itself stale — otherwise a burst of stale-only replays could hoard the ~4k slots and
+      // deny a subsequent legitimate fresh claim on availability grounds.
       prune(nowMs);
+      if (!claimIsFresh(claim, nowMs, freshnessMs)) return undefined;
       if (consumedRequestIds.has(claim.requestId)) return undefined;
       if (consumedRequestIds.size >= MAX_TRACKED_REQUEST_IDS) return undefined;
       consumedRequestIds.set(claim.requestId, claim.nowMs + freshnessMs);

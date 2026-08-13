@@ -116,11 +116,12 @@ export function createLauncherSessionPairingPort(
     attest: (attestation: SessionPairingAttestation): SessionPairingDecision => {
       if (!isWellFormedSessionPairingAttestation(attestation)) return SESSION_PAIRING_DENIED;
       const nowMs = now();
-      if (!isFresh(attestation.issuedAtMs, nowMs, freshnessMs)) return SESSION_PAIRING_DENIED;
-      // Prune expired entries BEFORE the has()/cap checks: a requestId that was consumed and
-      // has since fallen outside the freshness window would otherwise deny a legitimate later
-      // attestation reusing the same id (KfQ Major).
+      // #3099 R3 KfQ Major: prune at the top of every attest so stale entries clear even when
+      // subsequent traffic is a stream of stale-only replays that never reaches the admit path
+      // — otherwise a burst of stale attestations could hoard the ~4k slots and lock a future
+      // fresh attestation out on availability grounds.
       prune(nowMs);
+      if (!isFresh(attestation.issuedAtMs, nowMs, freshnessMs)) return SESSION_PAIRING_DENIED;
       if (consumedRequestIds.has(attestation.requestId)) return SESSION_PAIRING_DENIED;
       if (consumedRequestIds.size >= MAX_TRACKED_REQUEST_IDS) return SESSION_PAIRING_DENIED;
       if (!claimMatches(secret, attestation)) return SESSION_PAIRING_DENIED;
