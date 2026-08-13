@@ -315,7 +315,7 @@ function normalizeRegistry(options) {
 
 function commandResult(cmd, args, options = {}) {
   return spawnSync(cmd, args, {
-    cwd: repoRoot,
+    cwd: options.cwd ?? repoRoot,
     encoding: "utf8",
     stdio: options.stdio ?? "pipe",
     env: options.env ?? process.env,

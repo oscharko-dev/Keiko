@@ -105,9 +105,34 @@ function terminateProcessTree(child) {
   }
 }
 
+function settleTimedOutProcess(child, stdout, stderr, settle) {
+  let terminationError;
+  try {
+    terminateProcessTree(child);
+  } catch (error) {
+    terminationError = error instanceof Error ? error.message : String(error);
+  }
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+  child.unref();
+  settle({
+    timedOut: true,
+    status: null,
+    signal: process.platform === "win32" ? "TASKKILL" : "SIGKILL",
+    stdout: stdout.join(""),
+    stderr:
+      terminationError === undefined
+        ? stderr.join("")
+        : `${stderr.join("")}\nprocess-tree termination failed: ${terminationError}`,
+  });
+}
+
 export function runAsync(cmd, args, options = {}) {
   const needsShell = process.platform === "win32" && (cmd === "npm" || cmd === "corepack");
   const { timeout, ...spawnOptions } = options;
+  if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) {
+    throw new TypeError("runAsync requires a positive finite timeout in milliseconds");
+  }
   return new Promise((resolvePromise) => {
     let settled = false;
     const stdout = [];
@@ -128,17 +153,7 @@ export function runAsync(cmd, args, options = {}) {
       resolvePromise(result);
     };
     const timer = globalThis.setTimeout(() => {
-      terminateProcessTree(child);
-      child.stdout?.destroy();
-      child.stderr?.destroy();
-      child.unref();
-      settle({
-        timedOut: true,
-        status: null,
-        signal: process.platform === "win32" ? "TASKKILL" : "SIGKILL",
-        stdout: stdout.join(""),
-        stderr: stderr.join(""),
-      });
+      settleTimedOutProcess(child, stdout, stderr, settle);
     }, timeout);
     child.once("error", (error) => {
       settle({ error, status: null, signal: null, stdout: "", stderr: "" });
@@ -369,10 +384,19 @@ async function startLocalRegistry(artifact) {
   }
   const registryUrl = `http://127.0.0.1:${String(address.port)}`;
   handler = localRegistryHandler(artifact, tarballBytes, registryUrl, requests);
-  const health = await globalThis.fetch(
-    `${registryUrl}/${encodeURIComponent(rootPackageJson.name)}`,
-  );
-  if (!health.ok) throw new Error("local package registry failed its packument health check");
+  try {
+    const health = await globalThis.fetch(
+      `${registryUrl}/${encodeURIComponent(rootPackageJson.name)}`,
+    );
+    if (!health.ok) {
+      throw new Error(
+        `local package registry failed its packument health check (HTTP ${String(health.status)})`,
+      );
+    }
+  } catch (error) {
+    await new Promise((resolvePromise) => server.close(resolvePromise));
+    throw error;
+  }
   return {
     registryUrl,
     requests,

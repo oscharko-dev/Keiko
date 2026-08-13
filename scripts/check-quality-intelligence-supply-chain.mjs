@@ -471,6 +471,28 @@ function externalRuntimeNamesFromManifest(manifest, runtimeWorkspaceNames) {
   return entries;
 }
 
+function validatedRuntimeWorkspaceNames(bundled, packagesDir) {
+  const names = new Set();
+  for (const fullName of bundled) {
+    if (typeof fullName !== "string" || !/^@oscharko-dev\/keiko-[a-z0-9-]+$/u.test(fullName)) {
+      throw new Error(
+        `bundleDependencies entry is not a reviewed runtime workspace: ${String(fullName)}`,
+      );
+    }
+    const shortName = fullName.slice("@oscharko-dev/".length);
+    const manifestPath = join(packagesDir, shortName, "package.json");
+    if (!safeStat(manifestPath)?.isFile()) {
+      throw new Error(`bundled runtime workspace manifest is missing: ${fullName}`);
+    }
+    const manifest = readJsonFile(manifestPath);
+    if (manifest.name !== fullName) {
+      throw new Error(`bundled runtime workspace manifest name does not match: ${fullName}`);
+    }
+    names.add(fullName);
+  }
+  return names;
+}
+
 // The published runtime surface = the root manifest's runtime/optional deps plus the runtime/optional
 // deps of every workspace in the reviewed runtime inventory. Those manifests are packed into staged
 // vendor archives. Returns name -> { label, section } of the first manifest that declared it.
@@ -483,7 +505,7 @@ function collectPublishedRuntimeDependencies(rootManifestPath, packagesDir) {
   const bundled = Array.isArray(rootManifest.bundleDependencies)
     ? rootManifest.bundleDependencies
     : [];
-  const runtimeWorkspaceNames = new Set(bundled);
+  const runtimeWorkspaceNames = validatedRuntimeWorkspaceNames(bundled, packagesDir);
   for (const { name, section } of externalRuntimeNamesFromManifest(
     rootManifest,
     runtimeWorkspaceNames,
@@ -493,7 +515,6 @@ function collectPublishedRuntimeDependencies(rootManifestPath, packagesDir) {
   for (const fullName of bundled) {
     const shortName = fullName.replace(/^@oscharko-dev\//, "");
     const manifestPath = join(packagesDir, shortName, "package.json");
-    if (!safeStat(manifestPath)?.isFile()) continue;
     for (const { name, section } of externalRuntimeNamesFromManifest(
       readJsonFile(manifestPath),
       runtimeWorkspaceNames,

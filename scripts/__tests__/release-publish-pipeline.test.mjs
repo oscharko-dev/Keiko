@@ -534,12 +534,14 @@ function stubPrologue(logFile, stateFile) {
     'import { Buffer } from "node:buffer";',
     'import { createHash } from "node:crypto";',
     'import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";',
+    'import { join } from "node:path";',
     `import { writeZipArchiveEntries } from ${JSON.stringify(ZIP_ARCHIVE_LIB_URL)};`,
     `const LOG = ${JSON.stringify(logFile)};`,
     `const STATE = ${JSON.stringify(stateFile)};`,
     `const VERSION = ${JSON.stringify(RELEASE_VERSION)};`,
     "const argv = process.argv.slice(2);",
     "function log(bin) { appendFileSync(LOG, bin + ' ' + JSON.stringify(argv) + '\\n'); }",
+    "function logCwd(bin) { appendFileSync(LOG, bin + '-cwd ' + JSON.stringify(process.cwd()) + '\\n'); }",
     "function state() { return JSON.parse(readFileSync(STATE, 'utf8')); }",
     "function setState(patch) { writeFileSync(STATE, JSON.stringify({ ...state(), ...patch })); }",
     "",
@@ -1058,6 +1060,18 @@ function runPublish({
 
 // A stub `npm` that shares the config/gate scaffolding and lets each scenario plug in the
 // `view` behaviour that is actually under test.
+function npmPackStubLines() {
+  return [
+    'if (sub === "pack") {',
+    '  const destination = argv[argv.indexOf("--pack-destination") + 1];',
+    '  const manifest = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));',
+    '  const archiveName = `${manifest.name.replace(/^@/u, "").replace("/", "-")}-${manifest.version}.tgz`;',
+    '  writeFileSync(join(destination, archiveName), "deterministic stub archive\\n");',
+    "  process.exit(0);",
+    "}",
+  ];
+}
+
 function npmStub(viewBody, { failOnPublish = false } = {}) {
   return [
     'log("npm");',
@@ -1067,10 +1081,12 @@ function npmStub(viewBody, { failOnPublish = false } = {}) {
     // All `npm run <gate>` invocations (version-consistency, publish-manifests,
     // release-impact, prepack, smoke) succeed so control reaches the publish loop.
     'if (sub === "run") { process.exit(0); }',
+    ...npmPackStubLines(),
     'if (sub === "view") {',
     viewBody,
     "}",
     'if (sub === "publish") {',
+    '  logCwd("npm");',
     failOnPublish
       ? '  process.stderr.write("stub npm: publish must not run when the version already exists\\n"); process.exit(97);'
       : "  setState({ published: true }); process.exit(0);",
@@ -1684,6 +1700,11 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(publishLine).toBe(
         'npm ["publish",".","--access","public","--tag","latest","--registry","https://registry.npmjs.org/","--ignore-scripts"]',
       );
+      const publishCwdLine = lastRun.calls.find((line) => line.startsWith("npm-cwd "));
+      expect(publishCwdLine).toBeDefined();
+      const publishCwd = JSON.parse(publishCwdLine?.slice("npm-cwd ".length) ?? '""');
+      expect(publishCwd).not.toBe(REPO_ROOT);
+      expect(publishCwd).toMatch(/keiko-publish-stage-[^/\\\\]+$/u);
       // A token publish carries no provenance attestation: npm can attest only where an OIDC
       // provider exists, and the unconditional flag killed every local operator publish (0.3.1).
 
@@ -2026,6 +2047,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         "const sub = argv[0];",
         'if (sub === "config" && argv[1] === "get" && argv[2] === "strict-ssl") { process.stdout.write("true\\n"); process.exit(0); }',
         'if (sub === "run") { process.exit(0); }',
+        ...npmPackStubLines(),
         'if (sub === "view") {',
         "  const s = state();",
         '  if (argv.includes("version")) {',
@@ -2071,6 +2093,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         "const sub = argv[0];",
         'if (sub === "config" && argv[1] === "get" && argv[2] === "strict-ssl") { process.stdout.write("true\\n"); process.exit(0); }',
         'if (sub === "run") { process.exit(0); }',
+        ...npmPackStubLines(),
         'if (sub === "view") {',
         "  const s = state();",
         '  if (argv.includes("version")) {',

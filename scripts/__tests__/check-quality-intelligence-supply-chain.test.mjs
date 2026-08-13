@@ -623,6 +623,36 @@ describe("collectPublishedRuntimeDependencies", () => {
     expect(map.has("@oscharko-dev/unbundled-runtime")).toBe(true);
   });
 
+  it("rejects a non-workspace bundleDependencies entry before granting an exemption", () => {
+    writeJson(root, "package.json", {
+      name: "synthetic-root",
+      version: "0.0.0",
+      dependencies: { "unapproved-runtime": "1.0.0" },
+      bundleDependencies: ["unapproved-runtime"],
+    });
+
+    expect(() =>
+      collectPublishedRuntimeDependencies(join(root, "package.json"), join(root, "packages")),
+    ).toThrow(/not a reviewed runtime workspace/u);
+  });
+
+  it("rejects a bundled workspace whose manifest name does not match", () => {
+    writeJson(root, "package.json", {
+      name: "synthetic-root",
+      version: "0.0.0",
+      dependencies: { "@oscharko-dev/keiko-contracts": "workspace:*" },
+      bundleDependencies: ["@oscharko-dev/keiko-contracts"],
+    });
+    writeJson(root, "packages/keiko-contracts/package.json", {
+      name: "@oscharko-dev/keiko-wrong-name",
+      version: "0.0.0",
+    });
+
+    expect(() =>
+      collectPublishedRuntimeDependencies(join(root, "package.json"), join(root, "packages")),
+    ).toThrow(/manifest name does not match/u);
+  });
+
   it("collects @types packages when they are placed in the runtime graph", () => {
     writeJson(root, "package.json", {
       name: "synthetic-root",

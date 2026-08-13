@@ -103,6 +103,15 @@ describe("registry install smoke security posture", () => {
 });
 
 describe("installable package smoke optional-dependency coverage", () => {
+  it.each([undefined, 0, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects an invalid asynchronous command timeout: %s",
+    (timeout) => {
+      expect(() => runAsync(process.execPath, ["--version"], { timeout })).toThrow(
+        /requires a positive finite timeout/u,
+      );
+    },
+  );
+
   it("settles a timed-out process-tree run and terminates its ready descendant", async () => {
     const fixtureRoot = mkdtempSync(join(tmpdir(), "keiko-install-timeout-"));
     const fixture = join(fixtureRoot, "hang.mjs");

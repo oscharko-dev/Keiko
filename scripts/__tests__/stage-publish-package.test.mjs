@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -172,6 +181,70 @@ describe("staged publish package", () => {
     expect(() => createStagedPublishPackage({ repoRoot: root })).toThrow(
       /keiko-server has no built dist directory/u,
     );
+  });
+
+  it.each([undefined, []])("rejects a runtime workspace without bounded files: %j", (files) => {
+    const root = fixture();
+    const manifestPath = join(root, "packages", "keiko-contracts", "package.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    if (files === undefined) delete manifest.files;
+    else manifest.files = files;
+    writeJson(manifestPath, manifest);
+
+    expect(() => createStagedPublishPackage({ repoRoot: root })).toThrow(
+      /must declare a bounded publish surface/u,
+    );
+  });
+
+  it.each([
+    ["/etc/passwd", /declares an invalid publish path/u],
+    ["../../secrets", /unsafe or unsupported publish path/u],
+    ["dist/*.js", /unsafe or unsupported publish path/u],
+  ])("rejects the hostile publish path %s", (hostile, expected) => {
+    const root = fixture();
+    const manifestPath = join(root, "packages", "keiko-contracts", "package.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.files = ["dist", hostile];
+    writeJson(manifestPath, manifest);
+
+    expect(() => createStagedPublishPackage({ repoRoot: root })).toThrow(expected);
+  });
+
+  it("rejects an export target that is absent from the workspace", () => {
+    const root = fixture();
+    const manifestPath = join(root, "packages", "keiko-server", "package.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.exports["./missing"] = "./assets/absent.json";
+    writeJson(manifestPath, manifest);
+
+    expect(() => createStagedPublishPackage({ repoRoot: root })).toThrow(
+      /publish path is missing or unsafe/u,
+    );
+  });
+
+  it("rejects symlinks in a workspace publish surface", () => {
+    const root = fixture();
+    symlinkSync("index.js", join(root, "packages", "keiko-contracts", "dist", "linked.js"));
+
+    expect(() => createStagedPublishPackage({ repoRoot: root })).toThrow(
+      /publish path contains a symlink/u,
+    );
+  });
+
+  it("creates byte-reproducible vendored workspace archives", () => {
+    const root = fixture();
+    const first = createStagedPublishPackage({ repoRoot: root });
+    roots.push(first.packageDir);
+    const second = createStagedPublishPackage({ repoRoot: root });
+    roots.push(second.packageDir);
+    const hashes = (staged) =>
+      staged.vendorPackages.map(({ archivePath }) =>
+        createHash("sha256")
+          .update(readFileSync(join(staged.packageDir, archivePath)))
+          .digest("hex"),
+      );
+
+    expect(hashes(first)).toEqual(hashes(second));
   });
 
   it("rejects a build-time-only workspace in the runtime inventory", () => {

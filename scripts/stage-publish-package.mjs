@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -13,7 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { resolveHostExecutable, shellCommandForTrustedExecutable } from "./lib/host-executable.mjs";
 import { explicitPrivateWorkspaceExclusions, scope } from "./release-workspace-policy.mjs";
 
 const defaultRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -159,6 +160,20 @@ function normalizedPublishPath(value, packageName) {
   return normalized;
 }
 
+function assertRegularPublishTree(path, packageName, relativePath) {
+  const stats = lstatSync(path);
+  if (stats.isSymbolicLink()) {
+    throw new Error(`${packageName} publish path contains a symlink: ${relativePath}`);
+  }
+  if (stats.isFile()) return;
+  if (!stats.isDirectory()) {
+    throw new Error(`${packageName} publish path has an unsupported file type: ${relativePath}`);
+  }
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    assertRegularPublishTree(join(path, entry.name), packageName, join(relativePath, entry.name));
+  }
+}
+
 function copyWorkspaceSurface(sourceRoot, destinationRoot, manifest) {
   for (const value of declaredPublishPaths(manifest)) {
     const relativePath = normalizedPublishPath(value, manifest.name);
@@ -166,13 +181,14 @@ function copyWorkspaceSurface(sourceRoot, destinationRoot, manifest) {
     if (!source.startsWith(`${sourceRoot}${sep}`) || !existsSync(source)) {
       throw new Error(`${manifest.name} publish path is missing or unsafe: ${relativePath}`);
     }
+    assertRegularPublishTree(source, manifest.name, relativePath);
     const destination = join(destinationRoot, relativePath);
     mkdirSync(dirname(destination), { recursive: true });
     cpSync(source, destination, { recursive: true });
   }
 }
 
-function assertWorkspacePack(result, record) {
+function assertWorkspacePack(result, record, archivePath) {
   if (result.error !== undefined) {
     throw new Error(`${record.manifest.name} archive packer could not spawn`);
   }
@@ -180,6 +196,9 @@ function assertWorkspacePack(result, record) {
     throw new Error(
       `${record.manifest.name} archive packer failed with status ${String(result.status)}`,
     );
+  }
+  if (!existsSync(archivePath)) {
+    throw new Error(`${record.manifest.name} archive packer produced no archive`);
   }
 }
 
@@ -219,11 +238,19 @@ function packWorkspace(stageRoot, record, runtimeNames) {
   writeJson(join(packageRoot, "package.json"), manifest);
   const archiveName = vendorArchiveName(record);
   const archivePath = join(vendorRoot, archiveName);
-  const result = spawnSync(resolveHostExecutable("tar"), ["-czf", archivePath, "package"], {
-    cwd: workspaceStage,
-    encoding: "utf8",
-  });
-  assertWorkspacePack(result, record);
+  const npmExecutable = resolveHostExecutable("npm");
+  const result = spawnSync(
+    shellCommandForTrustedExecutable(npmExecutable),
+    ["pack", "--silent", "--ignore-scripts", "--pack-destination", vendorRoot],
+    {
+      cwd: packageRoot,
+      encoding: "utf8",
+      // SECURITY-SHELL-OK: Windows requires a shell for the trusted npm.cmd executable. All
+      // arguments are static or mkdtemp-generated paths and the command is shell-quoted.
+      shell: process.platform === "win32",
+    },
+  );
+  assertWorkspacePack(result, record, archivePath);
   const files = packedFiles(packageRoot);
   const bundledRoot = join(stageRoot, "node_modules", ...record.manifest.name.split("/"));
   mkdirSync(dirname(bundledRoot), { recursive: true });
