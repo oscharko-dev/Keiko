@@ -823,7 +823,9 @@ function localRegistryHandler(artifact, tarballBytes, registryUrl, requests, ven
       stream.pipe(response);
       return;
     }
-    if (requested.toLowerCase() === rootPackageJson.name) {
+    // Both sides are normalized. npm forbids uppercase in new package names, so this is symmetry
+    // rather than a live defect — but a one-sided comparison is the kind that rots quietly.
+    if (requested.toLowerCase() === rootPackageJson.name.toLowerCase()) {
       response.writeHead(200, { "content-type": "application/vnd.npm.install-v1+json" });
       response.end(JSON.stringify(packument));
       return;
