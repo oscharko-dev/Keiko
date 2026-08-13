@@ -539,8 +539,14 @@ function refuseStateRemovalOnCorruptRegistration(
 // cyclomatic-complexity ceiling: unsafe state-root (symlink / non-directory) and corrupt
 // portable registration (only when state removal is selected) are both fail-closed guards.
 function refuseEarly(opts: UninstallOptions, io: CliIo, stateDir: string): boolean {
-  const stateRoot = inspectStateRoot(stateDir);
-  if (refuseUnsafeStateRoot(opts, io, stateRoot)) return true;
+  // PR-review follow-up (Codex thread 3771542616): only inspect the state directory when
+  // a scope that actually touches it is selected. --scripts alone must not lstat an
+  // unrelated state dir; an EACCES/EIO on that path would otherwise abort the scripts
+  // uninstall for no reason.
+  if (opts.scopes.state || opts.scopes.launchers) {
+    const stateRoot = inspectStateRoot(stateDir);
+    if (refuseUnsafeStateRoot(opts, io, stateRoot)) return true;
+  }
   if (refuseStateRemovalOnCorruptRegistration(opts, io, stateDir)) return true;
   return false;
 }

@@ -3049,7 +3049,21 @@ function voiceProviderConnection(
       template?.providerLocality,
       defaults.providerLocality,
     ),
+    // PR-review follow-up (Codex thread 3771542619): carry the per-provider circuitBreaker
+    // through the rebuild too. Without this the fresh SetupVoiceProviderDefaults loses the
+    // override, providerForVoiceRoles spreads a reduced object, and applyVoiceProviders
+    // serializes no override — silently switching the provider back to the top-level
+    // breaker policy on any unrelated voice/setup save.
+    ...voiceConnectionCircuitBreakerFragment(template, defaults),
   };
+}
+
+function voiceConnectionCircuitBreakerFragment(
+  template: SetupVoiceProvider | undefined,
+  defaults: SetupVoiceProviderDefaults,
+): Pick<SetupVoiceProvider, "circuitBreaker"> | Record<string, never> {
+  const inherited = template?.circuitBreaker ?? defaults.circuitBreaker;
+  return inherited === undefined ? {} : { circuitBreaker: inherited };
 }
 
 function voiceConnectionEndpointOptions(

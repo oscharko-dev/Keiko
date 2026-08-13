@@ -141,6 +141,12 @@ export function upsertEmbeddingRow(
   // The vector is memory CONTENT (ADR-0035), so the packed LE bytes are sealed before they touch
   // the BLOB column. vector_dimensions / vector_metric stay cleartext for retrieval-side dispatch.
   const bytes = cipher.sealBytes(encodeVectorLE(embedding.vector));
+  // PR-review follow-up (Codex thread 3771542611): guarantee a strictly-monotonic
+  // created_at per row. Date.now() has 1ms resolution and two rapid upserts on the same
+  // memoryId can collide, which would let the --force snapshot precondition accept a
+  // concurrent update the operator did not stage. Force created_at > previous by 1ms
+  // when the caller-supplied nowMs is not strictly greater than the existing row's value.
+  const nowMsMonotonic = ensureMonotonicCreatedAt(db, memoryId, nowMs);
   cachedPrepare(db, UPSERT_SQL).run(
     memoryId,
     embedding.provider,
@@ -149,8 +155,16 @@ export function upsertEmbeddingRow(
     embedding.vector.length,
     embedding.metric,
     bytes,
-    nowMs,
+    nowMsMonotonic,
   );
+}
+
+function ensureMonotonicCreatedAt(db: DatabaseSync, memoryId: MemoryId, nowMs: number): number {
+  const row = cachedPrepare(db, "SELECT created_at FROM memory_embeddings WHERE memory_id = ?").get(
+    memoryId,
+  ) as { readonly created_at: number } | undefined;
+  if (row === undefined) return nowMs;
+  return nowMs > row.created_at ? nowMs : row.created_at + 1;
 }
 
 function narrowMetric(raw: string): MemoryEmbeddingMetric {
