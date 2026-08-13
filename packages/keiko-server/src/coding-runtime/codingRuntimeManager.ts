@@ -1320,7 +1320,20 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       this.emit(runtimeExitEvent(active, this.nextSequence(active), code));
       return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
     }
-    this.captureResult(active, exitResultStatus(code), boundedExitCode(code));
+    // #3099 R8 P2: when a client stop(runId, "failed") races a crash-triggered teardown, it
+    // folds onto this promise via active.stopPromise (KEIKO-0402), after having merged the
+    // requested "failed" into active.stopResultStatus. An explicit client "failed" must remain
+    // authoritative over the exit-derived status — otherwise a lifecycle failure racing a clean
+    // exit would record the terminal result as "succeeded". A "signalled" exit (code=null)
+    // stays "signalled" unless the client requested something more severe.
+    const exitStatus = exitResultStatus(code);
+    const status =
+      exitStatus === "signalled"
+        ? active.stopResultStatus === "failed"
+          ? "failed"
+          : "signalled"
+        : mostSevereTerminalStatus(exitStatus, active.stopResultStatus);
+    this.captureResult(active, status, boundedExitCode(code));
     active.status = "stopped";
     this.active = undefined;
     this.emit(runtimeExitEvent(active, this.nextSequence(active), code));

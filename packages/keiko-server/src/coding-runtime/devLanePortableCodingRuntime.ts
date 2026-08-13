@@ -433,8 +433,11 @@ export function computePortableSidecarPayloadTreeDigest(
  */
 function hashDirectoryTree(root: string): string {
   const entries: { readonly relativePath: string; readonly sha256: string }[] = [];
-  // NOTE: order-of-iteration doesn't matter here — the canonical helper re-sorts.
-  for (const file of listFiles(root, (left, right) => left.localeCompare(right))) {
+  // #3099 R8 KfQ perf: `computePortableSidecarPayloadTreeDigest` re-sorts internally, so
+  // passing a no-op comparator to `listFiles` avoids the redundant O(n log n) sort on the
+  // discovery walk. Array.sort in modern V8 is stable, so `() => 0` preserves insertion order
+  // (irrelevant here — the helper sorts by relativePath itself).
+  for (const file of listFiles(root, () => 0)) {
     entries.push({
       relativePath: relative(root, file).split(sep).join("/"),
       sha256: sha256File(file),
