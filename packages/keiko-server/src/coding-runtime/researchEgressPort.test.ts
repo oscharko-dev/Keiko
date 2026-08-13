@@ -107,6 +107,7 @@ function harness(config: HarnessConfig): Harness {
       return config.charge ?? "ok";
     },
     invalidateRun: () => undefined,
+    saturateBytes: () => undefined,
   };
   const deps: ResearchEgressPortDeps = {
     registry,

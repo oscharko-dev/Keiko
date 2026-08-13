@@ -81,6 +81,15 @@ export interface ResearchGrantRegistry {
     nowMs: number,
   ) => ResearchChargeResult;
   readonly invalidateRun: (runId: string) => void;
+  /**
+   * Saturates a specific grant's cumulative byte budget so `reserveFetch`'s byte gate fails
+   * closed on the next call. #3099 R7 P1: used by the research egress port on an over-cap or
+   * mid-stream read failure — the fetch DID happen against the endpoint, we just cannot
+   * measure the exact bytes read. Charging maxReadBytes (2 MB) against the 10 MB grant is
+   * insufficient because the charge succeeds and lets 4 more oversized responses through
+   * before the fetch-count cap. Saturating gives one strike, one exhaustion.
+   */
+  readonly saturateBytes: (runId: string, grantId: string) => void;
 }
 
 // Internal mutable form: only the two usage counters mutate (`usedFetches` via `reserveFetch`,
@@ -263,6 +272,12 @@ class InMemoryResearchGrantRegistry implements ResearchGrantRegistry {
 
   public invalidateRun(runId: string): void {
     this.grantsByRun.delete(runId);
+  }
+
+  public saturateBytes(runId: string, grantId: string): void {
+    const grant = this.findGrant(runId, grantId);
+    if (grant === undefined) return;
+    grant.usedBytes = grant.maxTotalBytes;
   }
 }
 
