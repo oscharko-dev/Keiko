@@ -471,6 +471,69 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   }, 60_000);
 
+  // A package first seen as optional may later be genuinely REQUIRED by another parent. Serving
+  // the inert stub for that required edge would let the smoke pass without the real dependency.
+  it("withdraws an optional stub when another package requires the same dependency", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-stub-withdraw-test-"));
+    try {
+      // The two edges must come from DIFFERENT parents: within one manifest they are merged
+      // before the walk, so only a cross-parent fixture reaches the branch under test.
+      const write = (name, manifest) => {
+        const dir = join(root, "node_modules", name);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ name, ...manifest }), "utf8");
+      };
+      write("parent-optional", {
+        version: "1.0.0",
+        optionalDependencies: { "keiko-smoke-absent-both": "^7.8.9" },
+      });
+      write("parent-required", {
+        version: "1.0.0",
+        dependencies: { "keiko-smoke-absent-both": "^7.8.9" },
+      });
+
+      const closure = resolveVendorClosure(join(root, "node_modules"), {
+        dependencies: { "parent-optional": "^1.0.0", "parent-required": "^1.0.0" },
+        bundleDependencies: [],
+      });
+      // The optional edge is visited first and stubs the package; the required edge must withdraw
+      // that stub, or a genuinely required dependency would be served as an inert stub.
+      expect(closure.stubs).toEqual([]);
+      expect(closure.missing).toEqual(["keiko-smoke-absent-both"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ranks a prerelease below its own release when naming dist-tags.latest", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-prerelease-test-"));
+    const artifact = localRegistryArtifact(root);
+    const versions = new Map();
+    for (const version of ["1.0.0", "1.0.0-beta.2", "1.0.0-beta.10"]) {
+      const tarballPath = join(root, `demo-${version}.tgz`);
+      writeFileSync(tarballPath, `demo ${version}\n`, "utf8");
+      versions.set(version, {
+        name: "demo",
+        version,
+        tarballPath,
+        integrity: `sha512-${version}`,
+        manifest: { name: "demo", version },
+      });
+    }
+    const registry = await startLocalRegistry(artifact, new Map([["demo", versions]]));
+    try {
+      const packument = await (await globalThis.fetch(`${registry.registryUrl}/demo`)).json();
+      // Lexical ordering would name 1.0.0-beta.2 latest; SemVer precedence names the release.
+      expect(packument["dist-tags"].latest).toBe("1.0.0");
+      const ordered = Object.keys(packument.versions);
+      // beta.2 precedes beta.10 numerically, not lexically.
+      expect(ordered.indexOf("1.0.0-beta.2")).toBeLessThan(ordered.indexOf("1.0.0-beta.10"));
+    } finally {
+      await registry.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("names a concrete stub version from a caret, tilde, or exact range", () => {
     expect(minimumSatisfyingVersion("^1.0.2")).toBe("1.0.2");
     expect(minimumSatisfyingVersion("~3.4.5")).toBe("3.4.5");

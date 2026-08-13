@@ -536,7 +536,16 @@ export function resolveVendorClosure(modulesRoot, manifest = rootPackageJson) {
   const stubs = new Map();
   const visit = (name, requirement) => {
     const stubKey = `${name}@${minimumSatisfyingVersion(requirement?.range) ?? ""}`;
-    if (resolved.has(name) || stubs.has(stubKey) || missing.includes(name)) return;
+    if (resolved.has(name) || missing.includes(name)) return;
+    if (stubs.has(stubKey)) {
+      // A package first seen through an optional edge may later be REQUIRED by another parent.
+      // Returning early there would serve an inert stub for a genuinely required dependency and
+      // let the smoke pass without it, so the required edge wins and the stub is withdrawn.
+      if (requirement?.optional !== false) return;
+      stubs.delete(stubKey);
+      missing.push(name);
+      return;
+    }
     const copies = findInstalledCopies(name, modulesRoot);
     if (copies.length === 0) {
       recordAbsent(name, requirement);
@@ -625,7 +634,13 @@ function packStubPackage(entry, destination) {
     `${JSON.stringify(stubManifest(entry.name, entry.version), null, 2)}\n`,
     "utf8",
   );
-  return packVendoredPackage({ name: entry.name, directory: stubDir }, destination);
+  try {
+    return packVendoredPackage({ name: entry.name, directory: stubDir }, destination);
+  } finally {
+    // The tarball is already written to `destination`; the scaffolding directory is not needed
+    // beyond this point, so it goes immediately rather than lingering until the caller cleans up.
+    rmSync(stubDir, { recursive: true, force: true });
+  }
 }
 
 export function seedVendoredRegistry(
@@ -688,14 +703,48 @@ function tarballFileName(name, version) {
   return `${name.split("/").at(-1)}-${version}.tgz`;
 }
 
-function compareVersions(left, right) {
-  const segments = (value) => value.split(/[.+-]/u).map((part) => Number.parseInt(part, 10));
-  const [leftParts, rightParts] = [segments(left), segments(right)];
-  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
-    const difference = (leftParts[index] ?? -1) - (rightParts[index] ?? -1);
-    if (Number.isFinite(difference) && difference !== 0) return difference;
+function releaseSegments(version) {
+  const [core = ""] = version.split("+");
+  const [release = "", ...prerelease] = core.split("-");
+  return {
+    numbers: release.split(".").map((part) => Number.parseInt(part, 10) || 0),
+    prerelease: prerelease.join("-"),
+  };
+}
+
+function compareIdentifier(left, right) {
+  const [numericLeft, numericRight] = [/^\d+$/u.test(left), /^\d+$/u.test(right)];
+  if (numericLeft && numericRight) {
+    return Number.parseInt(left, 10) - Number.parseInt(right, 10);
   }
+  // SemVer §11: numeric identifiers always rank below alphanumeric ones.
+  if (numericLeft !== numericRight) return numericLeft ? -1 : 1;
   return compareStrings(left, right);
+}
+
+function comparePrereleaseIdentifiers(left, right) {
+  // SemVer §11: a version WITH a prerelease ranks below the same version without one.
+  if (left === right) return 0;
+  if (left === "") return 1;
+  if (right === "") return -1;
+  const leftParts = left.split(".");
+  const rightParts = right.split(".");
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const [a, b] = [leftParts[index], rightParts[index]];
+    if (a === undefined || b === undefined) return a === undefined ? -1 : 1;
+    const difference = compareIdentifier(a, b);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function compareVersions(left, right) {
+  const [a, b] = [releaseSegments(left), releaseSegments(right)];
+  for (let index = 0; index < Math.max(a.numbers.length, b.numbers.length); index += 1) {
+    const difference = (a.numbers[index] ?? 0) - (b.numbers[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return comparePrereleaseIdentifiers(a.prerelease, b.prerelease);
 }
 
 function vendoredPackument(name, versions, registryUrl) {
