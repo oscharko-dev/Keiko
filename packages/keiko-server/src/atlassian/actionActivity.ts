@@ -151,6 +151,31 @@ export interface CreatePendingApprovalResultInput {
 // Creates the bounded pending-approval entry (NO executor or fetcher invocation happens here —
 // the validated input parks server-side until approve/reject/expiry), records the one
 // pending-review activity record, and answers 202 with the content-free approval projection.
+// KEIKO-0339: emit exactly one activity record for the rejected attempt BEFORE the 429
+// response so the "one record per attempt" invariant survives registry-capacity denials.
+// The closed `approvals-registry-exhausted` reason distinguishes this from policy/authority
+// denials in the D6 audit vocabulary.
+function recordApprovalsExhausted(input: CreatePendingApprovalResultInput): RouteResult {
+  recordAtlassianActionActivity({
+    connectorId: input.connectorId,
+    actionType: input.actionType,
+    disposition: "denied",
+    outcome: "denied",
+    reasonCode: "approvals-registry-exhausted",
+    ...(input.targetRef === undefined ? {} : { targetRef: input.targetRef }),
+    correlationId: input.correlationId,
+    durationMs: 0,
+    ...(input.jqlDigest === undefined ? {} : { jqlDigest: input.jqlDigest }),
+  });
+  return {
+    status: 429,
+    body: errorBody(
+      "APPROVALS_EXHAUSTED",
+      "Too many pending connector action approvals; resolve or let them expire first.",
+    ),
+  };
+}
+
 export function createAtlassianPendingApprovalResult(
   input: CreatePendingApprovalResultInput,
 ): RouteResult {
@@ -169,13 +194,7 @@ export function createAtlassianPendingApprovalResult(
     payload: input.payload,
   });
   if (!created.ok) {
-    return {
-      status: 429,
-      body: errorBody(
-        "APPROVALS_EXHAUSTED",
-        "Too many pending connector action approvals; resolve or let them expire first.",
-      ),
-    };
+    return recordApprovalsExhausted(input);
   }
   recordAtlassianActionActivity({
     connectorId: input.connectorId,

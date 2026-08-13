@@ -457,6 +457,48 @@ describe("createBrowserAssistantSpeechStreamingSink", () => {
     }
   });
 
+  it("fails playback and cancels the producer when the worklet reports backpressure", async () => {
+    const { nodes } = stubDeferredAudioResume(Promise.resolve());
+    const cancelBody = vi.fn();
+    const pcm = leBytes([1, -1, 0x1234]);
+    vi.mocked(streamAssistantSpeech).mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller): void {
+            controller.enqueue(pcm);
+          },
+          cancel: cancelBody,
+        }),
+      ),
+    );
+    const handlers = { onStart: vi.fn(), onEnded: vi.fn(), onError: vi.fn() };
+    const sink = createBrowserAssistantSpeechStreamingSink();
+    const controller = new AbortController();
+
+    try {
+      await expect(
+        sink?.play({ text: "Stop a truncated stream" }, controller.signal, handlers),
+      ).resolves.toBe(true);
+      await vi.waitFor(() => expect(nodes[0]?.port.postMessage).toHaveBeenCalledTimes(2));
+
+      nodes[0]?.port.onmessage?.(
+        new MessageEvent("message", { data: { type: "backpressure", dropped: 12_000 } }),
+      );
+
+      await vi.waitFor(() => expect(cancelBody).toHaveBeenCalledOnce());
+      expect(handlers.onError).toHaveBeenCalledOnce();
+      expect(handlers.onEnded).not.toHaveBeenCalled();
+      expect(nodes[0]?.port.postMessage.mock.calls).toEqual([
+        [{ type: "config", primeFrames: 2_400 }],
+        [expect.any(Int16Array), [expect.any(ArrayBuffer)]],
+        [null],
+      ]);
+    } finally {
+      controller.abort();
+      sink?.stop();
+    }
+  });
+
   it.each(["stop", "dispose"] as const)(
     "cancels a late response while AudioContext resume is still pending on %s",
     async (teardown) => {

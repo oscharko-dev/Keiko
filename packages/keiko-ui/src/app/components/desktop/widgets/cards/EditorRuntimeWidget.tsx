@@ -2526,7 +2526,7 @@ function EditorRuntimeWidget({
     }
     if (maxBytes !== null && contentSizeBytes > maxBytes) return;
     if (activeContentHash === null) return;
-    const timer = window.setTimeout(() => {
+    const flushHotExitSnapshot = (): void => {
       const snapshot: EditorHotExitSnapshotV1 = {
         schemaVersion: EDITOR_HOT_EXIT_SCHEMA_VERSION,
         workspaceRoot: root,
@@ -2541,9 +2541,30 @@ function EditorRuntimeWidget({
       };
       lastHotExitSnapshotKeyRef.current = snapshotKey;
       dropHotExitPersistenceFailure(writeEditorHotExitSnapshot(snapshot));
-    }, HOT_EXIT_WRITE_DEBOUNCE_MS);
-    return () => {
+    };
+    let pending = true;
+    const flushPendingHotExitSnapshot = (): void => {
+      if (!pending) return;
+      pending = false;
       window.clearTimeout(timer);
+      flushHotExitSnapshot();
+    };
+    const timer = window.setTimeout(flushPendingHotExitSnapshot, HOT_EXIT_WRITE_DEBOUNCE_MS);
+    // KEIKO-0337: start the asynchronous IndexedDB/hash write when the document becomes hidden,
+    // before page teardown can freeze or abort it. `pagehide` remains a fallback for lifecycle
+    // paths that do not emit visibilitychange. The once-only wrapper also prevents the debounce,
+    // visibility, and teardown paths from racing duplicate writes.
+    const handleVisibilityChange = (): void => {
+      if (document.visibilityState === "hidden") flushPendingHotExitSnapshot();
+    };
+    const handlePageHide = flushPendingHotExitSnapshot;
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pagehide", handlePageHide);
+    return (): void => {
+      pending = false;
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pagehide", handlePageHide);
     };
   }, [
     activeContentHash,

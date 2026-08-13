@@ -50,10 +50,15 @@ interface SourceParams extends Readonly<Record<string, string | number | null>> 
   readonly updated_at: number;
 }
 
-const INSERT_SQL =
+// KEIKO-0246: exported (not re-exported through the package barrel — index.ts continues to
+// whitelist the addSourceToCapsule/listCapsuleSources/removeSourceFromCapsule/
+// updateSourceScopeInCapsule/AddCapsuleSourceInput surface only) so composition.ts's batch
+// runAddSourcesTransaction can reuse the same INSERT text and scope serialisation instead of
+// carrying byte-identical duplicates that a future schema change would silently desync.
+export const INSERT_SQL =
   "INSERT INTO capsule_sources (id, capsule_id, display_name, description, tags_json, scope_kind, scope_json, created_at, updated_at) VALUES (:id, :capsule_id, :display_name, :description, :tags_json, :scope_kind, :scope_json, :created_at, :updated_at)";
 
-const INSERT_KNOWLEDGE_SOURCE_SQL =
+export const INSERT_KNOWLEDGE_SOURCE_SQL =
   "INSERT INTO knowledge_sources (id, display_name, description, tags_json, scope_kind, scope_json, created_at, updated_at) VALUES (:id, :display_name, :description, :tags_json, :scope_kind, :scope_json, :created_at, :updated_at) ON CONFLICT(id) DO UPDATE SET display_name = excluded.display_name, description = excluded.description, tags_json = excluded.tags_json, scope_kind = excluded.scope_kind, scope_json = excluded.scope_json, updated_at = excluded.updated_at";
 
 const SELECT_BY_CAPSULE_SQL =
@@ -102,7 +107,10 @@ function rowToSource(row: CapsuleSourceRow): KnowledgeSource {
   return row.description === null ? base : { ...base, description: row.description };
 }
 
-function scopeToJson(scope: KnowledgeSourceScope): string {
+// KEIKO-0246: exported (see companion note on INSERT_SQL above) so composition.ts uses one
+// scope serialisation for capsule_sources.scope_json instead of maintaining a byte-identical
+// local copy.
+export function scopeToJson(scope: KnowledgeSourceScope): string {
   // We persist only the fields beyond `kind` (kind lives in its own column). Build a
   // plain object copy without `kind` rather than destructuring + discarding, which the
   // lint config flags as an unused binding.

@@ -227,6 +227,10 @@ export const PACKAGE_COVERAGE_EXCLUDE = [
   "**/__tests__/**",
   "**/_support.ts",
   "**/test-support.ts",
+  // KEIKO-0130: shared per-package test-fixture modules live under `src/test-support/` and are
+  // never bundled into the package's public surface. Excluded from the coverage inventory for
+  // the same reason `**/test-support.ts` is.
+  "**/test-support/**",
   "**/test-fixtures.ts",
   "**/testing.ts",
   "**/*.config.ts",

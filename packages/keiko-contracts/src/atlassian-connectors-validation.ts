@@ -19,6 +19,7 @@ import {
   ATLASSIAN_CONNECTOR_ACTION_DISPOSITIONS,
   ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS,
   ATLASSIAN_CONNECTOR_HUMAN_INITIATION_REASON,
+  ATLASSIAN_CONNECTOR_REGISTRY_FAILURE_REASONS,
   ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
   ATLASSIAN_JQL_MAX_CHARS,
@@ -597,10 +598,11 @@ function validateActivityReasonPairing(input: Record<string, unknown>, errors: s
   if (input.disposition === "denied") {
     if (
       !isOneOfStrings(input.reasonCode, CODING_WORKBENCH_POLICY_DENIAL_REASONS) &&
-      !isOneOfStrings(input.reasonCode, ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS)
+      !isOneOfStrings(input.reasonCode, ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS) &&
+      !isOneOfStrings(input.reasonCode, ATLASSIAN_CONNECTOR_REGISTRY_FAILURE_REASONS)
     ) {
       errors.push(
-        "activity.reasonCode must be a policy denial or authority failure reason for a denied attempt",
+        "activity.reasonCode must be a policy denial, authority failure, or registry failure reason for a denied attempt",
       );
     }
     if (input.outcome !== "denied") {

@@ -137,6 +137,8 @@ const QI_EN_MESSAGES = {
   "qi.export.preview": "Preview",
   "qi.export.download": "Download",
   "qi.export.downloaded": "Downloaded {filename}",
+  "qi.export.omittedByQualityGate":
+    "{count} candidate(s) were dropped by the deliverable-quality gate and are not in this artifact.",
   "qi.export.previewReady": "Export preview ready below.",
   "qi.export.previewSummary": "{count} test cases · {bytes} bytes",
   "qi.export.qualityCenterPreviewOnly":
@@ -373,6 +375,8 @@ const QI_DE_MESSAGES: QiMessageCatalog = {
   "qi.export.preview": "Vorschau",
   "qi.export.download": "Herunterladen",
   "qi.export.downloaded": "{filename} heruntergeladen",
+  "qi.export.omittedByQualityGate":
+    "{count} Kandidat(en) wurden vom Deliverable-Quality-Gate ausgeschlossen und sind nicht in diesem Artefakt enthalten.",
   "qi.export.previewReady": "Exportvorschau ist unten verfügbar.",
   "qi.export.previewSummary": "{count} Testfälle · {bytes} Bytes",
   "qi.export.qualityCenterPreviewOnly":

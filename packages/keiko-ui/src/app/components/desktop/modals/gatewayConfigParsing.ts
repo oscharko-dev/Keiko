@@ -58,6 +58,14 @@ const UNSUPPORTED_GENERIC_PROVIDER_SETTINGS = [
   "voiceProfiles",
 ] as const;
 
+// PR-review follow-up (Codex thread 3772192296): the per-provider `circuitBreaker` override
+// (config.ts:parseProviderConfig) has no field in the Test & Save form regardless of provider
+// kind, so parsing an upload that carries it and then submitting would silently swap the
+// override for the top-level breaker policy. Refuse the whole upload as unsupported on ANY
+// provider kind (generic or voice) until the form can represent it — matches the credential
+// reference refusal pattern above.
+const UNSUPPORTED_PROVIDER_SETTING_ALL_KINDS = "circuitBreaker";
+
 /**
  * KNOWN endpoint styles travel through the form into the setup request (#3042 follow-up: the
  * explicit openai-compatible of a LiteLLM file must survive a server-side
@@ -618,8 +626,10 @@ function carriesUnsupportedGenericSetting(
       ((genericIds.has(entry.modelId.trim()) &&
         (UNSUPPORTED_GENERIC_PROVIDER_SETTINGS.some((setting) => entry[setting] !== undefined) ||
           unknownGenericEndpointStyle(entry.endpointStyle))) ||
-        // A secret reference refuses on EVERY provider kind — no form field can carry it.
-        entry[UNSUPPORTED_CREDENTIAL_REFERENCE] !== undefined),
+        // A secret reference OR a per-provider circuit-breaker refuses on EVERY provider kind
+        // — the form has no field for either (Codex threads on #3037 + 3772192296).
+        entry[UNSUPPORTED_CREDENTIAL_REFERENCE] !== undefined ||
+        entry[UNSUPPORTED_PROVIDER_SETTING_ALL_KINDS] !== undefined),
   );
 }
 

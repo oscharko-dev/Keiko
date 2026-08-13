@@ -15,7 +15,19 @@
 // `action` item remains (so scripts can detect "manual step required"). `--dry-run`
 // reports without changing anything and exits 1 if any issue (fixable or action) exists.
 
-import { chmodSync, existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fchmodSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import {
@@ -56,6 +68,7 @@ import {
   inspectStateRoot,
   resolveStateDir,
   scanRuntimeState,
+  type RetainedNode,
   type RuntimeStateCategory,
   type RuntimeStateNode,
   type StateRootInspection,
@@ -216,21 +229,122 @@ interface LoosePermFinding {
 }
 
 // Records every node not already at `targetMode`, applying the fix unless this is a dry-run.
+// #KEIKO-0301: guard each node's statSync/chmodSync so one unreadable / vanished artifact
+// is recorded as an "unreadable" finding rather than aborting the whole repair run. The
+// happy path (a stable, readable state tree) is unchanged; only the newly-guarded error
+// paths differ.
 function tightenNodes(
   nodes: readonly RuntimeStateNode[],
   targetMode: number,
   dryRun: boolean,
   findings: LoosePermFinding[],
+  unreadable: LoosePermFinding[],
 ): void {
   for (const node of nodes) {
-    const mode = statSync(node.absPath).mode & 0o777;
-    if (mode === targetMode) continue;
-    findings.push({
-      category: node.category,
-      relPath: node.relPath,
-      observed: `0o${mode.toString(8)}`,
-    });
-    if (!dryRun) chmodSync(node.absPath, targetMode);
+    // PR-review follow-up (Codex thread 3770211419): use lstatSync so a TOCTOU race where
+    // another process replaces the scanned regular file/directory with a symlink between
+    // scanRuntimeState and this call does not silently follow the swap. scanRuntimeState
+    // classifies symlinks as retained and never tightens them, so a symlink observed here
+    // is by definition unexpected and belongs in `unreadable`, not chmodded.
+    let observed: string;
+    try {
+      const stat = lstatSync(node.absPath);
+      if (stat.isSymbolicLink()) {
+        unreadable.push({
+          category: node.category,
+          relPath: node.relPath,
+          observed: "unreadable",
+        });
+        continue;
+      }
+      const mode = stat.mode & 0o777;
+      if (mode === targetMode) continue;
+      observed = `0o${mode.toString(8)}`;
+    } catch {
+      unreadable.push({
+        category: node.category,
+        relPath: node.relPath,
+        observed: "unreadable",
+      });
+      continue;
+    }
+    // PR-review follow-up on KEIKO-0301: only record the node as "fixed" after chmod actually
+    // applied — a chmod failure (read-only filesystem, ownership race) leaves the node loose
+    // and must show up as an unreadable/action finding, not double-reported as fixed AND
+    // unreadable. The dry-run path skips chmod so it always records under findings.
+    if (dryRun) {
+      findings.push({ category: node.category, relPath: node.relPath, observed });
+      continue;
+    }
+    // PR-review follow-up (Codex thread 3770211419): apply the mode through a fresh
+    // O_NOFOLLOW-guarded descriptor so a symlink that lands between the lstat above and this
+    // block cannot redirect the chmod to a target outside the state directory. openSync with
+    // O_NOFOLLOW errors with ELOOP when the final path element is a symlink; fchmodSync then
+    // targets the exact inode we opened. Directories need O_DIRECTORY | O_RDONLY.
+    if (tightenNodeMode(node, targetMode)) {
+      findings.push({ category: node.category, relPath: node.relPath, observed });
+    } else {
+      unreadable.push({
+        category: node.category,
+        relPath: node.relPath,
+        observed: "unreadable",
+      });
+    }
+  }
+}
+
+// PR-review follow-up (Codex threads 3770357730 + 3770792796 + 3771011305 + 3771181239):
+// open a genuinely no-follow descriptor and chmod through it. Priority order:
+//   1. O_PATH | O_NOFOLLOW — Linux, no permission bits required (works for 0222 / 0444 /
+//      0333 directories).
+//   2. O_RDONLY | O_NOFOLLOW — POSIX fallback for files readable by the owner.
+//   3. O_WRONLY | O_NOFOLLOW — POSIX fallback for write-only files.
+// If no descriptor strategy works (e.g. an execute-only 0333 directory on a platform
+// without O_PATH), REFUSE to tighten via path-based chmod — a symlink/hardlink swap
+// between an lstat check and the chmod call could redirect the mode change outside the
+// state directory. The operator sees the entry as unreadable and can repair it manually.
+function tightenNodeMode(node: RuntimeStateNode, targetMode: number): boolean {
+  for (const flags of tightenOpenFlagCandidates()) {
+    if (tightenViaOpenFlag(node, targetMode, flags)) return true;
+  }
+  return false;
+}
+
+function tightenOpenFlagCandidates(): readonly number[] {
+  const candidates: number[] = [];
+  const constants = fsConstants as { readonly O_PATH?: number };
+  if (constants.O_PATH !== undefined) candidates.push(constants.O_PATH | fsConstants.O_NOFOLLOW);
+  candidates.push(fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  candidates.push(fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW);
+  return candidates;
+}
+
+function tightenViaOpenFlag(node: RuntimeStateNode, targetMode: number, flags: number): boolean {
+  let fd: number | undefined;
+  try {
+    fd = openSync(node.absPath, flags);
+    // PR-review follow-up (Codex thread 3771600808): fstat the opened descriptor and
+    // refuse if a REGULAR file has nlink > 1. Between the scanner's lstat and this open,
+    // another same-user process could have replaced the scanned Keiko-owned file with a
+    // hardlink to an unrelated inode; fchmodSync would otherwise change that inode's
+    // permissions. O_NOFOLLOW already blocks symlink swaps at the final component; the
+    // fstat here covers the hardlink case at the exact inode the fd points at. Directories
+    // inherently have nlink >= 2 ("." + parent), so the check only applies to regular files.
+    const stat = fstatSync(fd);
+    if (stat.isFile() && stat.nlink > 1) return false;
+    fchmodSync(fd, targetMode);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Best-effort close; a descriptor left dangling here does not weaken the mode we
+        // already applied atomically via fchmodSync.
+      }
+    }
   }
 }
 
@@ -244,6 +358,33 @@ function summarizeLooseCategory(
   const detail = `${String(matches.length)} ${RUNTIME_STATE_LABEL[category]} artifact(s) group/world-readable (e.g. ${example?.relPath ?? "?"} ${example?.observed ?? "?"})`;
   const name = "Runtime state artifacts";
   return dryRun ? fixable(name, detail) : fixed(name, detail);
+}
+
+function collectRuntimeStateFindings(
+  unreadable: readonly LoosePermFinding[],
+  refusedOwned: readonly RetainedNode[],
+  results: CheckResult[],
+): void {
+  // #KEIKO-0301: report each unreadable Keiko-owned artifact as an action item so a
+  // filesystem hiccup during the state walk is visible rather than crashing the CLI.
+  // Path is relative — no raw absolute path, uid, or stack trace escapes.
+  for (const entry of unreadable) {
+    results.push(
+      action(
+        "Runtime state artifacts",
+        `${RUNTIME_STATE_LABEL[entry.category]} artifact could not be inspected (unreadable): ${entry.relPath}`,
+      ),
+    );
+  }
+  for (const entry of refusedOwned) {
+    const kind = entry.reason === "symlink" ? "symlink" : "hardlink";
+    results.push(
+      action(
+        "Runtime state artifacts",
+        `${kind} occupies a Keiko-owned path and was left untouched: ${entry.relPath}`,
+      ),
+    );
+  }
 }
 
 function checkRuntimeStateArtifacts(stateDir: string, dryRun: boolean): CheckResult[] {
@@ -266,22 +407,15 @@ function checkRuntimeStateArtifacts(stateDir: string, dryRun: boolean): CheckRes
   }
 
   const findings: LoosePermFinding[] = [];
-  tightenNodes(scan.directories, RUNTIME_STATE_DIR_MODE, dryRun, findings);
-  tightenNodes(scan.files, RUNTIME_STATE_FILE_MODE, dryRun, findings);
+  const unreadable: LoosePermFinding[] = [];
+  tightenNodes(scan.directories, RUNTIME_STATE_DIR_MODE, dryRun, findings, unreadable);
+  tightenNodes(scan.files, RUNTIME_STATE_FILE_MODE, dryRun, findings, unreadable);
 
   const results: CheckResult[] = [];
   for (const category of new Set(findings.map((f) => f.category))) {
     results.push(summarizeLooseCategory(category, findings, dryRun));
   }
-  for (const entry of refusedOwned) {
-    const kind = entry.reason === "symlink" ? "symlink" : "hardlink";
-    results.push(
-      action(
-        "Runtime state artifacts",
-        `${kind} occupies a Keiko-owned path and was left untouched: ${entry.relPath}`,
-      ),
-    );
-  }
+  collectRuntimeStateFindings(unreadable, refusedOwned, results);
   if (results.length === 0) {
     results.push(
       ok(
@@ -792,22 +926,16 @@ function exitCodeFor(results: readonly CheckResult[], dryRun: boolean): number {
   return hasAction ? 1 : 0;
 }
 
-export function runRepairCli(
+// Runs every repair check and gathers their CheckResults. Extracted so `runRepairCli`
+// can wrap the whole pipeline in a single try/catch (#KEIKO-0301) without exceeding
+// the 50-line max-lines-per-function bar.
+function collectRepairResults(
   args: readonly string[],
   io: CliIo,
   env: EnvSource,
-  deps: RepairCliDeps = {},
-): number {
-  const parsed = parseRepairArgs(args);
-  if (parsed === "help") {
-    io.out(USAGE);
-    return 0;
-  }
-  if (parsed === null) {
-    io.err(USAGE);
-    return 2;
-  }
-  const resolved = resolveDeps(deps);
+  parsed: RepairOptions,
+  resolved: ResolvedRepairDeps,
+): readonly CheckResult[] {
   const stateDir = resolveStateDir(resolved.cwd, env, parsed.stateDirArg);
   const defaultConfigCandidates = defaultLocalGatewayConfigCandidates(
     env,
@@ -827,13 +955,48 @@ export function runRepairCli(
           checkPortableRegistration(stateDir, env, resolved.homedir(), parsed.dryRun, io),
         ]
       : [stateRootAction];
-  const results: CheckResult[] = [
+  return [
     ...stateResults,
     checkInstallLayout(resolved.cwd, env),
     checkLaunchPath(resolved.cwd, resolved.argv),
     checkGatewayConfig(args, env),
     ...checkCredentialStorage(args, env, defaultConfigCandidates),
   ];
+}
+
+export function runRepairCli(
+  args: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+  deps: RepairCliDeps = {},
+): number {
+  const parsed = parseRepairArgs(args);
+  if (parsed === "help") {
+    io.out(USAGE);
+    return 0;
+  }
+  if (parsed === null) {
+    io.err(USAGE);
+    return 2;
+  }
+  const resolved = resolveDeps(deps);
+  // #KEIKO-0301: mirror uninstall.ts's runUninstallCli try/catch — a filesystem
+  // hiccup (missing / unreadable / vanished artifact) during any check must not
+  // crash the command it exists to rescue. On an unexpected error, print an
+  // `[action]` line naming the class of failure (content-free) and return 1 so
+  // scripts can detect "manual step required".
+  let results: readonly CheckResult[];
+  try {
+    results = collectRepairResults(args, io, env, parsed, resolved);
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "UnknownError";
+    io.out("Keiko repair\n");
+    io.out(
+      `  [action] Runtime state artifacts: repair aborted after an unexpected error (${name})\n`,
+    );
+    io.out("\nKeiko repair: review the items marked `action` above.\n");
+    return 1;
+  }
   reportResults(io, results);
   const code = exitCodeFor(results, parsed.dryRun);
   io.out(summaryMessage(results, code));

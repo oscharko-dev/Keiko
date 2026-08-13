@@ -101,6 +101,13 @@ export interface ModelProviderConfig {
   // only on voice providers that advertise speech output or realtime voice. Credential-tier: dropped
   // by omission from `toSafeObject`'s allowlist and never serialised to the browser.
   readonly voiceProfiles?: readonly VoicePersonaVoice[] | undefined;
+  // Per-provider circuitBreaker override (audit KEIKO-0167). Optional and present-only: when
+  // undefined the gateway constructs the provider's CircuitBreaker with the top-level
+  // GatewayConfig.circuitBreaker policy, so every existing config keeps parsing and behaving
+  // unchanged. Operators can single out a flaky provider (e.g. a LiteLLM proxy) with a more
+  // forgiving threshold/cooldown, or tighten a latency-sensitive provider, without changing the
+  // shared default for the rest.
+  readonly circuitBreaker?: CircuitBreakerConfig | undefined;
 }
 
 export interface RerankerConfig {

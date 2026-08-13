@@ -244,7 +244,10 @@ async function* pdfExtractWindows(
   const startedAt = options.now();
   const state: PdfDriveState = {
     cursor: options.resumeCharacterStart ?? 0,
-    anyPageEmitted: resumeFromPage > 0,
+    // KEIKO-0172: seed from the caller-supplied prior-emitted flag when available; fall back
+    // to the `resumeFromPage > 0` proxy for pre-migration checkpoints that do not carry it.
+    // See ProgressiveExtractionOptions.resumeAnyPageEmitted for the full rationale.
+    anyPageEmitted: options.resumeAnyPageEmitted ?? resumeFromPage > 0,
     scannedObjects: options.resumeObjectCursor ?? 0,
     emittedUnits: 0,
     windowIndex: options.resumeWindowIndex ?? 0,

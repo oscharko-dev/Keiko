@@ -590,6 +590,15 @@ function extractionOptionsFor(
           resumeWindowIndex: state.windowIndex,
           resumeObjectCursor: state.objectCursor,
           resumeExtractedTextBytes: state.extractedTextBytes,
+          // KEIKO-0172: `extracted_text_bytes` is already persisted in
+          // extraction_checkpoints and is byte-identical in meaning to WindowTextBuilder's
+          // `hasEmittedAnyPage`: addPage only appends text (and only bumps
+          // extractedTextBytes) when pageText.length > 0, so >0 iff at least one prior page
+          // emitted real text. Deriving the flag from this existing column avoids a
+          // schema migration while restoring the correct anyPageEmitted seed for resume —
+          // an all-textless pre-resume prefix leaves the flag false, matching a continuous
+          // single-pass extraction of the same source.
+          resumeAnyPageEmitted: state.extractedTextBytes > 0,
         }
       : {}),
   };

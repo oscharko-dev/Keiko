@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -537,7 +537,9 @@ afterEach(() => {
 });
 
 function freshFactoryDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-tomb-ac4-"));
+  // Realpath the tmpdir to avoid tripping the walk-every-ancestor symlink guard on macOS,
+  // where /var (and /tmp) are legitimate system-level symlinks. On Linux this is a no-op.
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-tomb-ac4-"));
   factoryCleanups.push(dir);
   return dir;
 }

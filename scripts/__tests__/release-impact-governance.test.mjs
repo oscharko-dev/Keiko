@@ -45,6 +45,7 @@ function entry(overrides = {}) {
       "workspace-supply-chain",
       "package-surface",
       "qi-supply-chain",
+      "install-smoke",
     ],
     registry: "https://registry.npmjs.org/",
     releaseNoteBullets: ["Release-impact metadata now governs stable package publication."],

@@ -1,7 +1,7 @@
 // Desktop canvas chat routes: real UI chat persistence with an injected ModelPort, keeping provider
 // credentials behind the existing gateway seam and avoiding network calls in tests.
 
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
@@ -273,8 +273,8 @@ async function startServer(handlerDeps: UiHandlerDeps): Promise<void> {
 }
 
 beforeEach(async () => {
-  staticRoot = mkdtempSync(join(tmpdir(), "keiko-ui-desktop-static-"));
-  tmp = mkdtempSync(join(tmpdir(), "keiko-ui-desktop-"));
+  staticRoot = mkdtempSync(join(realpathSync(tmpdir()), "keiko-ui-desktop-static-"));
+  tmp = mkdtempSync(join(realpathSync(tmpdir()), "keiko-ui-desktop-"));
   projectDir = join(tmp, "repo");
   mkdirSync(projectDir);
   store = createInMemoryUiStore();

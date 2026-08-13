@@ -109,8 +109,8 @@ const nativeSonarExclusions = Object.freeze([
 const approvedScopeValueDigests = new Map([
   ["sonar.sources", "cdb4ee2aea69cc6a83331bbe96dc2caa9a299d21329efb0336fc02a82e1839a8"],
   ["sonar.tests", "cdb4ee2aea69cc6a83331bbe96dc2caa9a299d21329efb0336fc02a82e1839a8"],
-  ["sonar.exclusions", "ac872116ea08198beaea8352b61e3e3b558c6b30cf8be4525ba9c95458e443c0"],
-  ["sonar.test.inclusions", "3495afcea55c6742c14f79b59f2893c777c5d2326a4739574df3d8ad3f727e4d"],
+  ["sonar.exclusions", "e235a0d62060feb08934e07faebf1e1073b8870ba2d0bb69c191f54efa98d51d"],
+  ["sonar.test.inclusions", "0f68df73cf871d30aa6e012f1dc7876aab13ccdbb717c1f997ecc1f08dbdef6f"],
   ["sonar.test.exclusions", "5a01270e497c669e4f0abd5cef680f9eb0139bb8b82da51719b443b076fcd638"],
   [
     "sonar.typescript.tsconfigPaths",
@@ -133,6 +133,10 @@ const testScopeRules = Object.freeze([
   ["**/*.spec.*", (path) => /\.spec\.[^/]+$/u.test(path)],
   ["**/_support.*", (path) => /(?:^|\/)_support\.[^/]+$/u.test(path)],
   ["**/test-support.*", (path) => /(?:^|\/)test-support\.[^/]+$/u.test(path)],
+  // KEIKO-0130: shared per-package test-fixture modules live under `src/test-support/`, never
+  // in the packaged surface. Excluded from Sonar main-source scope for the same reason
+  // `**/test-support.*` is.
+  ["**/test-support/**", (path) => /(?:^|\/)test-support\//u.test(path)],
   ["**/test-fixtures.*", (path) => /(?:^|\/)test-fixtures\.[^/]+$/u.test(path)],
   ["**/testing.*", (path) => /(?:^|\/)testing\.[^/]+$/u.test(path)],
   [

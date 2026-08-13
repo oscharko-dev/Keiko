@@ -7,7 +7,7 @@
 // deps.codingRuntimeDeploymentCeiling (undefined fails closed to governed-assist).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
@@ -129,7 +129,7 @@ afterEach(() => {
 });
 
 function makeVault(): MemoryVaultStore {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-autonomy-"));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-autonomy-"));
   tmpDirs.push(dir);
   const vault = createMemoryVault({ memoryDir: dir, redactString: (s) => s });
   activeVaults.push(vault);
@@ -189,7 +189,7 @@ function makeDeps(options: DepsOptions): UiHandlerDeps {
 }
 
 function context(): ConversationMemoryRuntimeContext {
-  const path = mkdtempSync(join(tmpdir(), "keiko-autonomy-proj-"));
+  const path = mkdtempSync(join(realpathSync(tmpdir()), "keiko-autonomy-proj-"));
   tmpDirs.push(path);
   return {
     userId: "local-operator" as UserId,

@@ -191,7 +191,10 @@ export type CodingRuntimePauseResult =
   | {
       readonly ok: false;
       readonly failureCode:
-        "authority-expired" | "authority-resolution-failed" | "runtime-run-mismatch";
+        | "authority-expired"
+        | "authority-resolution-failed"
+        | "runtime-run-mismatch"
+        | "runtime-stopped";
       readonly retryable: false;
     };
 
@@ -404,6 +407,18 @@ function mostSevereTerminalStatus(
   return "succeeded";
 }
 
+// #3099 R8 P2 (+ R9 S3358 refactor): merges an exit-derived status with the client's requested
+// terminal status so an explicit client "failed" folded onto a crash teardown remains
+// authoritative. "signalled" (code=null) stays "signalled" unless the client requested "failed"
+// — cancelled is not more severe than a real signal exit.
+function mergedExitStatus(
+  exitStatus: CodingRuntimeRunResult["status"],
+  requested: CodingRuntimeTerminalStatus,
+): CodingRuntimeRunResult["status"] {
+  if (exitStatus !== "signalled") return mostSevereTerminalStatus(exitStatus, requested);
+  return requested === "failed" ? "failed" : "signalled";
+}
+
 export interface CodingRuntimeManager {
   start(
     request: CodingRuntimeLaunchRequest,
@@ -479,6 +494,22 @@ interface ActiveRuntime {
   stopPromise: Promise<CodingRuntimeStopResult> | undefined;
   stopResultStatus: CodingRuntimeTerminalStatus;
   stopRequested: boolean;
+  /**
+   * Set synchronously by the FIRST teardown initiator (stop/takeover/reconcile OR handleExit) so
+   * a concurrent second caller short-circuits instead of firing revokeAndTerminate / reapTree
+   * a second time on the same ActiveRuntime. `stopPromise` alone dedupes only stop-vs-stop; a
+   * crash-initiated teardown (handleExit → finalizeUnexpectedExit) previously did not set it,
+   * so a client stop() racing an in-flight crash reap could enter the supervisor concurrently.
+   * KEIKO-0402.
+   */
+  tearingDown: boolean;
+  /**
+   * Dedicated in-flight-reconcile promise. #3099 R4 P1: `tearingDown` alone cannot serialize
+   * reconcile-vs-reconcile in the recovery-required state (both callers must be admitted, but
+   * both must NOT enter `supervisor.reconcile` on the same tree). Both callers await this
+   * shared promise instead of racing.
+   */
+  reconcilePromise: Promise<CodingRuntimeStopResult> | undefined;
   paused: boolean;
   status: CodingRuntimeStatus;
   sequence: number;
@@ -701,7 +732,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       });
     }
     active.stopResultStatus = mostSevereTerminalStatus(active.stopResultStatus, resultStatus);
+    // KEIKO-0402 (and #3099 P1 follow-up): both stop() and handleExit() write `stopPromise`
+    // exactly once, so the second entry point AWAITS the real teardown result instead of
+    // synthesizing a success while the crash-triggered `finalizeUnexpectedExit` is still trying
+    // to reap the process tree. Without this, the orchestrator's caller received `ok:true` while
+    // the tree could still fail its reap, clearing the active slot and admitting a new runtime
+    // over a live one.
     if (active.stopPromise !== undefined) return active.stopPromise;
+    active.tearingDown = true;
     const stopping = this.stopActive(active);
     active.stopPromise = stopping;
     return stopping;
@@ -743,6 +781,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (active?.context.runId !== runId) {
       return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
     }
+    // Regression: KEIKO-0386. A resume racing an in-flight crash/handleExit teardown reported
+    // ok:true with paused:false while `active.status` was already "stopping" and `stopRequested`
+    // was true — issueApproval already guards against that same race at line ~808; resume/pause
+    // must apply the same guard so the operator never sees a "resumed" runtime that is halfway
+    // through disposal.
+    if (active.stopRequested || active.status !== "ready") {
+      return { ok: false, failureCode: "runtime-stopped", retryable: false };
+    }
     if (
       requestedMode !== undefined &&
       isCodingWorkbenchModeWidening(active.effectiveMode, requestedMode)
@@ -767,35 +813,65 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (active?.context.runId !== runId) {
       return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
     }
+    // KEIKO-0386: pause() must reject a mid-teardown runtime for the same reason resume() does —
+    // an ok:true pause on a stopping/stopped/recovery-required active reports state the manager
+    // will never honour.
+    if (active.stopRequested || active.status !== "ready") {
+      return { ok: false, failureCode: "runtime-stopped", retryable: false };
+    }
     active.paused = paused;
     return { ok: true, paused };
   }
 
-  public async reconcile(runId: string): Promise<CodingRuntimeStopResult> {
+  public reconcile(runId: string): Promise<CodingRuntimeStopResult> {
     const active = this.active;
-    if (active === undefined) return { ok: true, status: "stopped" };
+    if (active === undefined) return Promise.resolve({ ok: true, status: "stopped" });
     if (active.context.runId !== runId) {
-      return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
+      return Promise.resolve({ ok: false, failureCode: "runtime-run-mismatch", retryable: false });
     }
-    if (!active.shutdownBarrierComplete) {
-      await this.enterRecoveryRequired(active);
-      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+    // KEIKO-0402 + #3099 R4/R6 P1: reconcile is the sanctioned second-chance path (after a
+    // prior teardown returned reap-unproven). Precedence rules:
+    //   1. Another reconcile is already in flight → fold onto it (per-tree serialization).
+    //   2. A stop/handleExit teardown is in flight AND we are not yet recovery-required → await
+    //      its REAL result (not a synthesized ok:true). The teardown may still enter
+    //      recovery-required, and the operator MUST see that.
+    //   3. Otherwise, start a fresh reconcile against the tree.
+    if (active.reconcilePromise !== undefined) return active.reconcilePromise;
+    if (active.stopPromise !== undefined && active.status !== "recovery-required") {
+      return active.stopPromise;
     }
-    const result = await this.deps.supervisor.reconcile(active.tree);
-    if (result.status !== "reaped") {
-      await this.enterRecoveryRequired(active);
-      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+    active.tearingDown = true;
+    const reconciling = this.runReconcile(active);
+    active.reconcilePromise = reconciling;
+    return reconciling;
+  }
+
+  private async runReconcile(active: ActiveRuntime): Promise<CodingRuntimeStopResult> {
+    try {
+      if (!active.shutdownBarrierComplete) {
+        await this.enterRecoveryRequired(active);
+        return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+      }
+      const result = await this.deps.supervisor.reconcile(active.tree);
+      if (result.status !== "reaped") {
+        await this.enterRecoveryRequired(active);
+        return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+      }
+      if (!(await this.disposeAndReleaseAfterReap(active, result.receipt))) {
+        await this.enterRecoveryRequired(active);
+        return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+      }
+      active.status = "stopped";
+      this.active = undefined;
+      this.emit(
+        runtimeEvent(active, this.nextSequence(active), "runtime-stopped", { health: "stopped" }),
+      );
+      return { ok: true, status: "stopped" };
+    } finally {
+      // Once this teardown attempt has published its result, allow a subsequent operator-driven
+      // reconcile to try again if the runtime is back in recovery-required.
+      active.reconcilePromise = undefined;
     }
-    if (!(await this.disposeAndReleaseAfterReap(active, result.receipt))) {
-      await this.enterRecoveryRequired(active);
-      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
-    }
-    active.status = "stopped";
-    this.active = undefined;
-    this.emit(
-      runtimeEvent(active, this.nextSequence(active), "runtime-stopped", { health: "stopped" }),
-    );
-    return { ok: true, status: "stopped" };
   }
 
   public issueApproval(
@@ -1204,6 +1280,11 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
 
   private handleExit(active: ActiveRuntime, code: number | null): void {
     if (this.active !== active || active.stopRequested || active.status === "stopped") return;
+    // KEIKO-0402: mark the teardown BEFORE any await (finalizeUnexpectedExit) so a client stop()
+    // arriving in the same tick sees the flag and folds onto the same teardown result instead of
+    // re-entering revokeAndTerminate on this same ActiveRuntime.
+    if (active.tearingDown) return;
+    active.tearingDown = true;
     active.stopRequested = true;
     active.status = "stopping";
     active.startupOutput?.close();
@@ -1212,7 +1293,11 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     // an opaque `runtime-failed` and has nothing to diagnose it with. The code is a bounded number,
     // never content, and rides the redacted channel keyed by the run's correlation id.
     emitRuntimeExitDiagnostic(this.deps.diagnostics, active.context.runId, code, this.deps.now);
-    void this.finalizeUnexpectedExit(active, code);
+    // #3099 P1: publish the result-bearing crash teardown on `stopPromise` so a racing stop() /
+    // takeover() / reconcile() awaits the REAL reap outcome — not a synthesized `{ok:true}` that
+    // would let the orchestrator clear the active slot while the tree is still recovery-required
+    // or reap-unproven.
+    active.stopPromise = this.finalizeUnexpectedExit(active, code);
   }
 
   private captureResult(
@@ -1231,23 +1316,34 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     };
   }
 
-  private async finalizeUnexpectedExit(active: ActiveRuntime, code: number | null): Promise<void> {
+  private async finalizeUnexpectedExit(
+    active: ActiveRuntime,
+    code: number | null,
+  ): Promise<CodingRuntimeStopResult> {
     const receipt = await this.revokeAndTerminate(active);
-    if (this.active !== active) return;
+    if (this.active !== active) return { ok: true, status: "stopped" };
     if (receipt === undefined) {
       await this.enterRecoveryRequired(active);
       this.emit(runtimeExitEvent(active, this.nextSequence(active), code));
-      return;
+      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
     }
     if (!(await this.disposeAndReleaseAfterReap(active, receipt))) {
       await this.enterRecoveryRequired(active);
       this.emit(runtimeExitEvent(active, this.nextSequence(active), code));
-      return;
+      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
     }
-    this.captureResult(active, exitResultStatus(code), boundedExitCode(code));
+    // #3099 R8 P2: when a client stop(runId, "failed") races a crash-triggered teardown, it
+    // folds onto this promise via active.stopPromise (KEIKO-0402), after having merged the
+    // requested "failed" into active.stopResultStatus. An explicit client "failed" must remain
+    // authoritative over the exit-derived status — otherwise a lifecycle failure racing a clean
+    // exit would record the terminal result as "succeeded". A "signalled" exit (code=null)
+    // stays "signalled" unless the client requested something more severe.
+    const status = mergedExitStatus(exitResultStatus(code), active.stopResultStatus);
+    this.captureResult(active, status, boundedExitCode(code));
     active.status = "stopped";
     this.active = undefined;
     this.emit(runtimeExitEvent(active, this.nextSequence(active), code));
+    return { ok: true, status: "stopped" };
   }
 
   private async enterRecoveryRequired(active: ActiveRuntime): Promise<void> {
@@ -1955,6 +2051,8 @@ function createActiveRuntime(
     stopPromise: undefined,
     stopResultStatus: "succeeded",
     stopRequested: false,
+    tearingDown: false,
+    reconcilePromise: undefined,
     paused: false,
     status: "starting",
     sequence: 0,
@@ -1991,6 +2089,8 @@ function createInactiveRuntime(
     stopPromise: undefined,
     stopResultStatus: "succeeded",
     stopRequested: false,
+    tearingDown: false,
+    reconcilePromise: undefined,
     paused: false,
     status: "stopped",
     sequence: 0,

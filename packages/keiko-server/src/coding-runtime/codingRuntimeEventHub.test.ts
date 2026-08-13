@@ -257,4 +257,51 @@ describe("CodingRuntimeEventHub", () => {
     expect(closed).toBe(true);
     expect(hub.replay("run-a")).toEqual({ ok: true, events: [] });
   });
+
+  // Regression: KEIKO-0225. Previously the bare `catch { close(subscriber); return false; }`
+  // in write() swallowed both a throwing subscriber and a `false`-returning subscriber (SSE
+  // backpressure) with zero diagnostic — the operator saw a dropped stream with nothing to
+  // trace. With `diagnostics` wired, both paths emit one redacted, correlationId-bearing record.
+  it("records a redacted diagnostic when a subscriber's write throws", () => {
+    const records: unknown[] = [];
+    const hub = new CodingRuntimeEventHub({
+      diagnostics: { record: (record): void => void records.push(record) },
+    });
+    hub.subscribe("run-diag", undefined, {
+      write: (): boolean => {
+        throw new Error("STREAM_SECRET_UPSTREAM_FAILURE");
+      },
+      close: (): void => undefined,
+    });
+    hub.publish(status("run-diag", 1));
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "run-diag",
+        operation: "coding-runtime.sse-fanout",
+        source: "coding-runtime-event-hub.write",
+        errorClass: "Error",
+        message: "subscriber-write-threw",
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain("STREAM_SECRET");
+  });
+
+  it("records a redacted diagnostic when a subscriber returns false for backpressure", () => {
+    const records: unknown[] = [];
+    const hub = new CodingRuntimeEventHub({
+      diagnostics: { record: (record): void => void records.push(record) },
+    });
+    hub.subscribe("run-back", undefined, {
+      write: (): boolean => false,
+      close: (): void => undefined,
+    });
+    hub.publish(status("run-back", 1));
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "run-back",
+        source: "coding-runtime-event-hub.write",
+        message: "backpressure",
+      }),
+    ]);
+  });
 });

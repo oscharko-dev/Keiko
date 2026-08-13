@@ -89,6 +89,11 @@ interface RunExportContext {
   readonly t: I18nTranslate;
   readonly setPreview: (value: string) => void;
   readonly setDownloaded: (value: string) => void;
+  // PR-review follow-up (Codex thread 3770357735): the server carries
+  // omittedByQualityGate on every export response when the deliverable-quality gate drops
+  // requested candidates from the artifact. Surface a count next to the download so an
+  // all-candidate export cannot be silently treated as complete.
+  readonly setOmittedCount: (value: number) => void;
 }
 
 async function runQiExport(ctx: RunExportContext): Promise<void> {
@@ -101,6 +106,11 @@ async function runQiExport(ctx: RunExportContext): Promise<void> {
     const res = await ctx.traceabilityImpl(ctx.runId, traceFormat, {
       approvedOnly: ctx.approvedOnly,
     });
+    // PR-review follow-up (Codex thread 3772030500): the traceability route also runs the
+    // deliverability gate and can drop covering candidates from the matrix. Publish the
+    // omission count in the same React commit as the download so an all-candidate
+    // (approvedOnly=false) export cannot silently lose test links without a visible warning.
+    ctx.setOmittedCount(res.omittedByQualityGate ?? 0);
     triggerDownload(res.filename, res.contentType, res.body);
     ctx.setDownloaded(res.filename);
     return;
@@ -120,8 +130,13 @@ async function runQiExport(ctx: RunExportContext): Promise<void> {
         bytes: res.byteLen,
       })}\n\n${res.preview}`,
     );
+    ctx.setOmittedCount(res.omittedByQualityGate ?? 0);
     return;
   }
+  // PR-review follow-up (Codex thread 3771387243): publish the omission count BEFORE the
+  // download so the operator sees the alert in the same React commit the "downloaded"
+  // message appears in, not after the browser has already saved the partial artifact.
+  ctx.setOmittedCount(res.omittedByQualityGate ?? 0);
   // Binary formats (PDF / ZIP) arrive base64-encoded; forward the encoding so the Blob is built
   // from the DECODED bytes, not the base64 text. Omitting it corrupts the downloaded file.
   triggerDownload(res.filename, res.contentType, res.body, res.encoding);
@@ -233,11 +248,13 @@ function ExportResultRegions({
   downloaded,
   preview,
   error,
+  omittedCount,
   t,
 }: {
   readonly downloaded: string | null;
   readonly preview: string | null;
   readonly error: string | null;
+  readonly omittedCount: number;
   readonly t: I18nTranslate;
 }): ReactNode {
   return (
@@ -247,20 +264,22 @@ function ExportResultRegions({
           {t("qi.export.downloaded", { filename: downloaded })}
         </p>
       ) : null}
+      {omittedCount > 0 ? (
+        <p className="lk-alert" role="alert" data-testid="qi-export-omitted">
+          {t("qi.export.omittedByQualityGate", { count: omittedCount })}
+        </p>
+      ) : null}
       {preview !== null ? (
         // tabIndex makes the scrollable preview keyboard-reachable (max-height + overflow:auto cut
         // off longer previews with no way to scroll them by keyboard — uiux-fix F047 C269, WCAG
-        // 2.1.1 / axe scrollable-region-focusable); role+label name the region for AT.
+        // 2.1.1 / axe scrollable-region-focusable); the surrounding <section aria-label> names
+        // the region for assistive tech (Sonar S6819: prefer <section> over role="region").
         /* eslint-disable jsx-a11y/no-noninteractive-tabindex -- scrollable preview region must be keyboard-focusable (axe scrollable-region-focusable) */
-        <pre
-          className="qi-export-preview"
-          role="region"
-          aria-label={t("qi.export.previewAria")}
-          tabIndex={0}
-          data-testid="qi-export-preview"
-        >
-          {preview}
-        </pre>
+        <section aria-label={t("qi.export.previewAria")}>
+          <pre className="qi-export-preview" tabIndex={0} data-testid="qi-export-preview">
+            {preview}
+          </pre>
+        </section>
       ) : /* eslint-enable jsx-a11y/no-noninteractive-tabindex */
       null}
       {error !== null ? (
@@ -283,6 +302,10 @@ export function ExportBar({
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [downloaded, setDownloaded] = useState<string | null>(null);
+  // PR-review follow-up (Codex thread 3770357735): count of candidates the deliverable-quality
+  // gate dropped from the artifact — shown as an inline alert so an all-candidate export with a
+  // partial payload cannot be silently accepted as complete.
+  const [omittedCount, setOmittedCount] = useState(0);
   // Deliverable-safe default: local downloads start with the same reviewed scope that external TMS
   // adapters enforce server-side. Users can still opt into a local diagnostic all-candidate export.
   const [approvedOnly, setApprovedOnly] = useState(true);
@@ -300,6 +323,7 @@ export function ExportBar({
       t,
       setPreview,
       setDownloaded,
+      setOmittedCount,
     });
   }, [runId, adapter, isTms, approvedOnly, exportImpl, traceabilityImpl, t]);
 
@@ -308,6 +332,7 @@ export function ExportBar({
     setError(null);
     setPreview(null);
     setDownloaded(null);
+    setOmittedCount(0);
     try {
       await runExport();
     } catch (err) {
@@ -328,7 +353,18 @@ export function ExportBar({
           isTms={isTms}
           approvedOnly={approvedOnly}
           busy={busy}
-          onChange={setApprovedOnly}
+          onChange={(next) => {
+            setApprovedOnly(next);
+            // PR-review follow-up (Codex thread 3772192299): omittedCount belongs to the export
+            // whose scope produced it. If the operator toggles the scope after seeing the alert
+            // for an all-candidate export, the count no longer describes the currently-selected
+            // scope. Clear it (and the sibling result state) alongside the scope change to match
+            // the reset the adapter-change handler already performs.
+            setOmittedCount(0);
+            setDownloaded(null);
+            setPreview(null);
+            setError(null);
+          }}
           t={t}
         />
       </div>
@@ -360,6 +396,7 @@ export function ExportBar({
               setPreview(null);
               setError(null);
               setDownloaded(null);
+              setOmittedCount(0);
             }}
           />
         </div>
@@ -384,7 +421,13 @@ export function ExportBar({
         {exportStatusMessage(downloaded, preview, t)}
       </p>
       <ConnectorHint isTms={isTms} selectedId={selected?.id} t={t} />
-      <ExportResultRegions downloaded={downloaded} preview={preview} error={error} t={t} />
+      <ExportResultRegions
+        downloaded={downloaded}
+        preview={preview}
+        error={error}
+        omittedCount={omittedCount}
+        t={t}
+      />
     </div>
   );
 }

@@ -1,17 +1,38 @@
 import { cpSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
 
 import {
+  __resetTargetRuntimeCacheForTests,
   clearUsearchAnnCacheForTests,
   searchUsearchAnnIndex,
   type UsearchAnnPartition,
   type UsearchVectorEntry,
 } from "./usearch-ann-index.js";
 import { USEARCH_RUNTIME_MANIFEST, usearchRuntimeTargetKey } from "./usearch-runtime-manifest.js";
+
+// The fix under KEIKO-0409 removes the runtime-hash pre-check from the warm ANN-cache path.
+// The pre-check reads the whole native USearch addon (multi-MB) synchronously on the event loop,
+// so the regression test needs to observe readFileSync calls against the binary path. vi.mock on
+// node:fs delegates every unchanged export to the real implementation and only wraps readFileSync
+// to push the resolved path into a hoisted telemetry collector. Only the parent thread's
+// targetRuntime() path reads the binary — Worker threads run in their own context and are not
+// affected by this mock, so a bump here corresponds exactly to a parent-side hash operation.
+const readFileSyncTelemetry = vi.hoisted<{ paths: string[] }>(() => ({ paths: [] }));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs")>();
+  const wrapped: typeof original.readFileSync = ((
+    ...args: Parameters<typeof original.readFileSync>
+  ) => {
+    readFileSyncTelemetry.paths.push(String(args[0]));
+    return original.readFileSync(...args);
+  }) as typeof original.readFileSync;
+  return { ...original, readFileSync: wrapped };
+});
 
 const IDENTITY: EmbeddingModelIdentity = {
   provider: "test",
@@ -126,6 +147,7 @@ function exactTop(
 
 afterEach(() => {
   clearUsearchAnnCacheForTests();
+  readFileSyncTelemetry.paths.length = 0;
 });
 
 describe("USearch ANN index", () => {
@@ -350,6 +372,78 @@ describe("USearch ANN index", () => {
       }),
     ).toMatchObject({ ok: true, mode: "exact" });
   });
+
+  it("does not re-hash the native runtime binary on a warm ANN cache hit (KEIKO-0409)", async () => {
+    // Regression pin for KEIKO-0409: resolvedIndex still calls targetRuntime() first so a
+    // swapped-out or missing native addon can never be masked by a stale in-memory cache
+    // hit, but targetRuntime() now memoizes its result per (path, mtimeMs, size) — so a
+    // warm search does NOT re-read + SHA-256 the multi-MB native addon on the Node.js event
+    // loop. Fresh binaries or on-disk changes still trigger a full verification.
+    const corpus = clusteredCorpus(64, IDENTITY);
+    const queryVector = corpus.entries[0]?.vector;
+    if (queryVector === undefined) throw new Error("test corpus must contain a query vector");
+    const binary = runtimePath();
+    const request = {
+      partition: partition(corpus.entries, "warm-cache-runtime-hash"),
+      queryVector,
+      candidateLimit: 5,
+      exactScanThreshold: 0,
+      binaryPath: binary,
+    };
+    __resetTargetRuntimeCacheForTests();
+    readFileSyncTelemetry.paths.length = 0;
+    const first = await searchUsearchAnnIndex(request);
+    expect(first.ok).toBe(true);
+    const readsAfterCold = readFileSyncTelemetry.paths.filter((path) => path === binary).length;
+    expect(readsAfterCold).toBeGreaterThan(0);
+    const second = await searchUsearchAnnIndex(request);
+    expect(second.ok).toBe(true);
+    const readsAfterWarm = readFileSyncTelemetry.paths.filter((path) => path === binary).length;
+    expect(readsAfterWarm).toBe(readsAfterCold);
+  });
+
+  it("serializes concurrent callers through queryQueue without cross-contaminating results (KEIKO-0360)", async () => {
+    // KEIKO-0360: coverage pin for the ADR-0164 D2 single-Worker queryQueue serialization
+    // at annSearch()/annSearchExclusive(). Twelve concurrent Promise.all searches against
+    // one cached AnnIndex must each observe THEIR OWN nearest neighbour in the result set;
+    // any cross-talk through the shared control/query/result buffers would land another
+    // caller's top hit here.
+    const corpus = clusteredCorpus(20_001, IDENTITY);
+    const anchors = Array.from({ length: 12 }, (_, offset) => offset * 1_500);
+    const queries = anchors.map((row) => {
+      const entry = corpus.entries[row];
+      if (entry === undefined) throw new Error("test corpus missing anchor entry");
+      return { row, id: entry.id, vector: entry.vector };
+    });
+    const cachedPartition = partition(corpus.entries, "concurrent-queue-serialization");
+    // Warm the ANN cache once so the shared partition ships through the queryQueue,
+    // not through separate build phases racing to construct the index.
+    await searchUsearchAnnIndex({
+      partition: cachedPartition,
+      queryVector: queries[0]?.vector ?? new Float32Array(IDENTITY.vectorDimensions),
+      candidateLimit: 5,
+      binaryPath: runtimePath(),
+    });
+    const results = await Promise.all(
+      queries.map((query) =>
+        searchUsearchAnnIndex({
+          partition: cachedPartition,
+          queryVector: query.vector,
+          candidateLimit: 5,
+          binaryPath: runtimePath(),
+        }),
+      ),
+    );
+    for (let index = 0; index < results.length; index += 1) {
+      const result = results[index];
+      const query = queries[index];
+      if (result === undefined || query === undefined) throw new Error("missing result or query");
+      expect(result.ok).toBe(true);
+      if (!result.ok) continue;
+      expect(result.mode).toBe("ann");
+      expect(result.candidates.some((candidate) => candidate.id === query.id)).toBe(true);
+    }
+  }, 60_000);
 
   it("keeps the event loop responsive while the worker builds an ANN index", async () => {
     const corpus = clusteredCorpus(128, IDENTITY);

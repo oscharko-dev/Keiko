@@ -2,18 +2,10 @@
 // without spawning a child process: --help, offline run, --json, usage errors, --fixture selection,
 // --live fail-closed, and --output file write. No network or live model.
 
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { openProviderCredentialVault } from "@oscharko-dev/keiko-server/credential-vault";
 import { runEvaluateCli } from "./evaluate.js";
 import type { EvaluateDeps } from "./evaluate.js";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -25,6 +17,12 @@ import {
 } from "@oscharko-dev/keiko-evaluations";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import {
+  FIXTURE_API_KEY,
+  migrateGatewayConfigToReferenceOnly,
+  PROVIDER_CREDENTIALS_KEY,
+  REAL_TMPDIR,
+} from "./test-support/gateway-config-fixture.js";
 
 // ─── IO capture helpers ───────────────────────────────────────────────────────
 
@@ -49,8 +47,6 @@ function makeIo(): { io: Parameters<typeof runEvaluateCli>[1]; captured: () => C
 const FIXED_NOW = 1_700_000_000_000;
 const fixedNow = (): number => FIXED_NOW;
 const fixedId = (): string => "cli-test-id";
-const REAL_TMPDIR = realpathSync(tmpdir());
-const PROVIDER_CREDENTIALS_KEY = Buffer.alloc(32, 0x36).toString("base64");
 
 function offlineDeps(): EvaluateDeps {
   return {
@@ -79,6 +75,11 @@ function modelResponse(content: string): NormalizedResponse {
   };
 }
 
+// evaluate.test.ts keeps its own writeGatewayConfig because it needs the top-level `capabilities`
+// array shape (with workflowEligible/supportsImageInput/supportsDocumentInput) that other suites
+// do not exercise. The reference-only variant now delegates the "delete apiKey + insert
+// apiKeySecretRef + seed the vault" dance to the shared migrator so the shape stays here while
+// the credential-vault plumbing lives in one place (KEIKO-0130).
 function writeGatewayConfig(
   dir: string,
   options: {
@@ -86,15 +87,16 @@ function writeGatewayConfig(
     readonly capabilities?: readonly Record<string, unknown>[] | undefined;
   } = {},
 ): string {
+  const modelId = options.modelId ?? "configured-live-model";
   const path = join(dir, "gateway.json");
   writeFileSync(
     path,
     JSON.stringify({
       providers: [
         {
-          modelId: options.modelId ?? "configured-live-model",
+          modelId,
           baseUrl: "https://provider.example/v1",
-          apiKey: "example-test-token-1234567890",
+          apiKey: FIXTURE_API_KEY,
           timeoutMs: 30000,
           maxRetries: 3,
           retryBaseDelayMs: 500,
@@ -103,7 +105,7 @@ function writeGatewayConfig(
       circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
       capabilities: options.capabilities ?? [
         {
-          id: options.modelId ?? "configured-live-model",
+          id: modelId,
           kind: "chat",
           contextWindow: 64000,
           maxOutputTokens: 4096,
@@ -124,25 +126,6 @@ function writeGatewayConfig(
     "utf8",
   );
   return path;
-}
-
-function writeReferenceOnlyGatewayConfig(dir: string, modelId = "configured-live-model"): string {
-  const configPath = writeGatewayConfig(dir, { modelId });
-  const parsed = JSON.parse(readFileSync(configPath, "utf8")) as {
-    providers: Record<string, unknown>[];
-  };
-  const provider = parsed.providers[0];
-  if (provider === undefined) {
-    throw new Error("test fixture must include one provider");
-  }
-  delete provider.apiKey;
-  provider.apiKeySecretRef = `cred:${modelId}`;
-  writeFileSync(configPath, JSON.stringify(parsed), "utf8");
-  openProviderCredentialVault({
-    configPath,
-    env: { KEIKO_PROVIDER_CREDENTIALS_KEY: PROVIDER_CREDENTIALS_KEY },
-  }).set(`cred:${modelId}`, "example-test-token-1234567890");
-  return configPath;
 }
 
 // ─── --help ───────────────────────────────────────────────────────────────────
@@ -439,7 +422,10 @@ describe("--live fail-closed", () => {
     const seenModelIds: string[] = [];
     const { io, captured } = makeIo();
     try {
-      const configPath = writeReferenceOnlyGatewayConfig(dir);
+      // The plaintext-apiKey writeGatewayConfig above owns the top-level `capabilities` shape
+      // this suite depends on; migrateGatewayConfigToReferenceOnly then rewrites its first
+      // provider to apiKeySecretRef and seeds the vault so the CLI resolves the ref.
+      const configPath = migrateGatewayConfigToReferenceOnly(writeGatewayConfig(dir));
       const code = await runEvaluateCli(
         [
           "--fixture",
@@ -465,7 +451,7 @@ describe("--live fail-closed", () => {
       );
       expect(code).toBe(0);
       expect(seenModelIds).toEqual(["configured-live-model"]);
-      expect(captured().out + captured().err).not.toContain("example-test-token-1234567890");
+      expect(captured().out + captured().err).not.toContain(FIXTURE_API_KEY);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

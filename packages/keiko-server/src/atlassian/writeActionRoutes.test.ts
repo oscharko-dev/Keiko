@@ -6,8 +6,10 @@
 // never re-derived through the contract helper — so the routes are proven against the ADR, not
 // against themselves.
 
+import { readFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
@@ -33,7 +35,10 @@ import {
   editorAgentAuthorityRegistry,
   editorAgentWorkspaceRootDigest,
 } from "../editor/agentAuthorityRegistry.js";
-import { atlassianActionApprovalRegistry } from "./actionApprovals.js";
+import {
+  ATLASSIAN_ACTION_APPROVAL_MAX_PENDING,
+  atlassianActionApprovalRegistry,
+} from "./actionApprovals.js";
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
 import { atlassianSyncJobRegistry, connectorIdForAuthRef } from "./syncService.js";
 import {
@@ -644,6 +649,64 @@ describe("write-action route — audit completeness (AC4)", () => {
       expect(serialized).not.toContain(leaked);
     }
   });
+
+  // KEIKO-0339: a review-required creation that fails on registry capacity (429
+  // APPROVALS_EXHAUSTED) must still emit exactly one denied activity record with the
+  // closed `approvals-registry-exhausted` reason, so the "one record per attempt" invariant
+  // survives capacity denials.
+  it("records the rejected attempt when APPROVALS_EXHAUSTED capacity denies a review-required creation", async () => {
+    // Fill the registry to the 64-entry cap with distinct entries so the 65th create() lands
+    // on the capacity-exhausted branch. Using registry.create() directly (rather than driving
+    // 64 route calls) keeps the fixture bounded and does not depend on any per-approval
+    // deduplication logic that a route might introduce.
+    const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
+    for (let index = 0; index < ATLASSIAN_ACTION_APPROVAL_MAX_PENDING; index += 1) {
+      const filler = atlassianActionApprovalRegistry.create({
+        approval: {
+          schemaVersion: "1",
+          approvalId: `apr_filler-${String(index).padStart(4, "0")}`,
+          connectorId: connectorIdForAuthRef(JIRA_AUTH_REF),
+          provider: "jira",
+          actionType: "add-issue-comment",
+          actionClass: "connector-write",
+          requiredScope: "issue-tracker.write",
+          risk: "low",
+          reviewReason: "deterministic-risk-approval-required",
+          correlationId: `req_filler-${String(index).padStart(4, "0")}`,
+          requestedAt: 1,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+        },
+        authority: {
+          runId: authority.runId,
+          envelopeDigest: authority.envelopeDigest,
+          workspaceRoot: authority.workspaceRoot,
+        },
+        authRef: JIRA_AUTH_REF,
+        payload: {
+          kind: "write-action",
+          action: {
+            type: "add-issue-comment",
+            issueKey: `PROJ-${String(index + 100)}`,
+            commentText: "filler",
+          },
+        },
+      });
+      expect(filler.ok).toBe(true);
+    }
+    const guard = guardWith({ count: 0, requests: [] });
+    const { status, body } = await postAction("create-issue", authority, "governed-assist", guard);
+    expect(status).toBe(429);
+    expect((body.error as { code: string }).code).toBe("APPROVALS_EXHAUSTED");
+    const records = atlassianSyncJobRegistry.listActivity(connectorIdForAuthRef(JIRA_AUTH_REF));
+    const rejected = records.filter(
+      (record) => record.actionType === "create-issue" && record.disposition === "denied",
+    );
+    expect(rejected).toHaveLength(1);
+    const only = rejected[0];
+    expect(only?.outcome).toBe("denied");
+    expect(only?.reasonCode).toBe("approvals-registry-exhausted");
+    expect(validateAtlassianConnectorActivityRecord(only ?? {}).ok).toBe(true);
+  });
 });
 
 // ─── AC5: typed provider results through the route ─────────────────────────────
@@ -693,5 +756,109 @@ describe("write-action route — typed provider failures (AC5)", () => {
       deps(guard, "autonomous-delivery"),
     )) as { status: number };
     expect(unexpectedField.status).toBe(400);
+  });
+});
+
+// ─── KEIKO-0488: BFF must reuse the connector package's exported bounds ─────────
+describe("write-action route — reuses connector-package text bounds (KEIKO-0488)", () => {
+  it("declares no local SINGLE_LINE_TEXT_MAX_CHARS constant", () => {
+    const routesUrl = new URL("./writeActionRoutes.ts", import.meta.url);
+    const source = readFileSync(fileURLToPath(routesUrl), "utf8");
+    expect(source).not.toMatch(/SINGLE_LINE_TEXT_MAX_CHARS\s*=/u);
+  });
+});
+
+// ─── KEIKO-0319: allow explicit "clear this field" for labels and composable body
+describe("write-action route — clear-field validation (KEIKO-0319)", () => {
+  it("accepts labels: [] on update-issue-fields as an explicit clear-all", async () => {
+    const counter: FetchCounter = { count: 0, requests: [] };
+    const guard = guardWith(counter);
+    const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
+    const result = (await handleExecuteAtlassianConnectorAction(
+      ctx(
+        {
+          action: { type: "update-issue-fields", issueKey: "PROJ-9", labels: [] },
+          authority,
+        },
+        { authRef: JIRA_AUTH_REF },
+      ),
+      deps(guard, "autonomous-delivery"),
+    )) as { status: number; body: Record<string, unknown> };
+    expect(result.status).toBe(200);
+    expect(result.body.disposition).toBe("allowed");
+  });
+
+  it("accepts descriptionText: '' on update-issue-fields as an explicit clear", async () => {
+    const counter: FetchCounter = { count: 0, requests: [] };
+    const guard = guardWith(counter);
+    const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
+    const result = (await handleExecuteAtlassianConnectorAction(
+      ctx(
+        {
+          action: { type: "update-issue-fields", issueKey: "PROJ-9", descriptionText: "" },
+          authority,
+        },
+        { authRef: JIRA_AUTH_REF },
+      ),
+      deps(guard, "autonomous-delivery"),
+    )) as { status: number; body: Record<string, unknown> };
+    expect(result.status).toBe(200);
+    expect(result.body.disposition).toBe("allowed");
+  });
+
+  it("accepts bodyText: '' on update-page as an explicit clear", async () => {
+    const counter: FetchCounter = { count: 0, requests: [] };
+    const guard = guardWith(counter);
+    const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
+    const result = (await handleExecuteAtlassianConnectorAction(
+      ctx(
+        {
+          action: {
+            type: "update-page",
+            pageId: "123",
+            title: "Runbook",
+            bodyText: "",
+            currentVersion: 4,
+          },
+          authority,
+        },
+        { authRef: CONFLUENCE_AUTH_REF },
+      ),
+      deps(guard, "autonomous-delivery"),
+    )) as { status: number; body: Record<string, unknown> };
+    expect(result.status).toBe(200);
+    expect(result.body.disposition).toBe("allowed");
+  });
+
+  it("still rejects commentText: '' on add-issue-comment (empty comment is not meaningful)", async () => {
+    const guard = guardWith({ count: 0, requests: [] });
+    const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
+    const result = (await handleExecuteAtlassianConnectorAction(
+      ctx(
+        {
+          action: { type: "add-issue-comment", issueKey: "PROJ-9", commentText: "" },
+          authority,
+        },
+        { authRef: JIRA_AUTH_REF },
+      ),
+      deps(guard, "autonomous-delivery"),
+    )) as { status: number };
+    expect(result.status).toBe(400);
+  });
+
+  it("still rejects commentText: '' on add-page-comment (empty comment is not meaningful)", async () => {
+    const guard = guardWith({ count: 0, requests: [] });
+    const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
+    const result = (await handleExecuteAtlassianConnectorAction(
+      ctx(
+        {
+          action: { type: "add-page-comment", pageId: "123", commentText: "" },
+          authority,
+        },
+        { authRef: CONFLUENCE_AUTH_REF },
+      ),
+      deps(guard, "autonomous-delivery"),
+    )) as { status: number };
+    expect(result.status).toBe(400);
   });
 });

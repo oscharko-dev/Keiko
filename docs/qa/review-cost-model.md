@@ -88,11 +88,10 @@ still completes.
 The ceiling was 2M for one day, while the store was inert. It now sits at 6M, which is the largest
 value that has any effect at all: the action's allotment formula clamps at 6,000,000 before this
 input applies, so a bigger number would be inert. Raising it is the cheaper direction, not a
-relaxation: a run that exceeds the ceiling settles incomplete and an incomplete
-run hands off no store, so a pull request that has **never completed under its current identity**
-pays in full on every push. One that completed while it was smaller keeps replaying that older
-store until retention expires. A ceiling low enough to be hit is self-defeating for the first
-group, which is the group that costs money.
+relaxation. Since v0.11.0, an incomplete run can persist verdicts for the paths it safely covered;
+`store_written`, not the settlement label, controls the hand-off. A ceiling low enough to stop the
+review before it earns useful coverage is still self-defeating, while a retained older store can
+continue serving until retention expires.
 
 The spread on the first-review column is prompt caching: the lower bound assumes the provider
 caches most of the prompt across files, the upper bound assumes none of it.
@@ -126,11 +125,7 @@ with prompt caching: it removes the model call entirely, where caching only make
 review of it was paid for twice.
 
 **A ceiling that a large change can exhaust — still true here today.** A review that runs out of
-budget settles _incomplete_, and an incomplete run persists no store, so a large pull request never
-converges: every push starts empty and spends the ceiling again. A _lower_ ceiling makes this worse
-rather than better, by turning more pull requests into the non-converging case.
-
-Read this one in the past tense since the v0.11.0 repin: the pin carries Keiko-for-Quality#76 (a
+budget settles _incomplete_. Since the v0.11.0 repin, the pin carries Keiko-for-Quality#76 (a
 truncated run keeps the verdicts for files it actually reached) and the workflow's store hand-off
 and signing job gate on the action's `store_written` output (#78) instead of
 `outcome == 'complete'` — both halves of the adoption landed together, because either alone
@@ -139,6 +134,10 @@ shrinks to pull requests whose very first run fails before reaching any file. Th
 is unchanged: it takes the newest eligible same-named artifact, so an older complete store inside
 the seven-day retention still serves. Splitting an oversized change remains cheaper than arguing
 with the ceiling.
+
+Before any secret-bearing review job starts, a separate 120-second debounce rechecks the live pull
+request head. Superseded push bursts therefore consume runner time but no model budget. The existing
+concurrency cancellation remains responsible for stopping a review that has already begun spending.
 
 ## How to tell whether memoization is working
 

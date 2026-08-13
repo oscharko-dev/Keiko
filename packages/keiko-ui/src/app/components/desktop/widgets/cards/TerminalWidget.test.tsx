@@ -190,6 +190,8 @@ describe("TerminalWidget", () => {
     await waitFor(() => {
       expect(FakeEventSource.last).not.toBeNull();
     });
+    // requestId echoes this file's stubbed crypto.randomUUID() ("req-own" — see beforeEach) so
+    // these are recognized as this widget's own events under the KEIKO-0204 ownership filter.
     FakeEventSource.last?.dispatch(
       "terminal:execution-started",
       JSON.stringify({
@@ -200,7 +202,7 @@ describe("TerminalWidget", () => {
           command: "ls",
           argCount: 0,
           startedAt: 1700000000000,
-          requestId: "req-1",
+          requestId: "req-own",
         },
       }),
     );
@@ -209,7 +211,7 @@ describe("TerminalWidget", () => {
       JSON.stringify({
         kind: "execution-completed",
         executionId: "e8",
-        payload: { exitCode: 0, durationMs: 7, requestId: "req-1" },
+        payload: { exitCode: 0, durationMs: 7, requestId: "req-own" },
       }),
     );
     await waitFor(() => {
@@ -218,6 +220,54 @@ describe("TerminalWidget", () => {
     const items = screen.getAllByRole("listitem");
     expect(items[0]).toHaveTextContent(/completed/);
     expect(items[1]).toHaveTextContent(/started/);
+  });
+
+  it("KEIKO-0204 — excludes a foreign execution's events from the recent events log", async () => {
+    vi.mocked(createTerminalExecution).mockImplementation(
+      () => new Promise<never>(() => undefined),
+    );
+    render(<TerminalWidget projectPath="/proj" />);
+    await screen.findByRole("combobox", { name: /command/i });
+    await userEvent.click(screen.getByRole("button", { name: /run/i }));
+    await waitFor(() => {
+      expect(FakeEventSource.last).not.toBeNull();
+    });
+    // A concurrent execution from another window on the shared SSE channel (ADR-0018 D7) — its
+    // requestId does not match this widget's own pendingRequestIdRef ("req-own").
+    FakeEventSource.last?.dispatch(
+      "terminal:execution-started",
+      JSON.stringify({
+        kind: "execution-started",
+        executionId: "exec-foreign",
+        payload: {
+          projectId: "/other-project",
+          command: "foreign-cmd",
+          argCount: 0,
+          startedAt: Date.now(),
+          requestId: "req-foreign",
+        },
+      }),
+    );
+    // This widget's own execution, echoing the requestId captured at submit time.
+    FakeEventSource.last?.dispatch(
+      "terminal:execution-started",
+      JSON.stringify({
+        kind: "execution-started",
+        executionId: "exec-own",
+        payload: {
+          projectId: "/proj",
+          command: "own-cmd",
+          argCount: 0,
+          startedAt: Date.now(),
+          requestId: "req-own",
+        },
+      }),
+    );
+    await waitFor(() => {
+      expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    });
+    expect(screen.getByText("own-cmd")).toBeInTheDocument();
+    expect(screen.queryByText("foreign-cmd")).toBeNull();
   });
 
   it("closes the EventSource when unmounted", async () => {

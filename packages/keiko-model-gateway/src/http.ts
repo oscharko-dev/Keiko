@@ -1154,6 +1154,13 @@ export async function readJsonCapped(
   return JSON.parse(parts.join("")) as unknown;
 }
 
+export class ResponseBodySizeLimitError extends Error {
+  constructor() {
+    super("response body exceeded the size limit");
+    this.name = "ResponseBodySizeLimitError";
+  }
+}
+
 // Reads a binary response body into a single `ArrayBuffer`-backed `Uint8Array`, capping the
 // cumulative size exactly like `readJsonCapped`. Used by the text-to-speech adapter (Issue #1558) to
 // pull synthesized audio off the provider response without buffering an unbounded payload: a provider
@@ -1168,7 +1175,7 @@ export async function readBytesCapped(
   if (response.body === null) {
     const buffer = await response.arrayBuffer();
     if (buffer.byteLength > maxBytes) {
-      throw new Error("response body exceeded the size limit");
+      throw new ResponseBodySizeLimitError();
     }
     return new Uint8Array(buffer);
   }
@@ -1185,7 +1192,7 @@ export async function readBytesCapped(
     total += value.byteLength;
     if (total > maxBytes) {
       await reader.cancel();
-      throw new Error("response body exceeded the size limit");
+      throw new ResponseBodySizeLimitError();
     }
     chunks.push(value);
   }

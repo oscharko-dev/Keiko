@@ -114,6 +114,7 @@ export { PROVIDER_ENDPOINT_STYLES, REALTIME_AUTH_MODES } from "@oscharko-dev/kei
 export {
   apiKeyHeaderValue,
   DEFAULT_API_KEY_HEADER_NAME,
+  GATEWAY_CONFIG_SCHEMA_VERSION,
   loadConfigFromFile,
   loadEgressConfigFromFile,
   normalizeApiKeyHeaderName,

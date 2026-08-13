@@ -23,6 +23,7 @@ const CONFIGS = [
   { name: "script coverage gate", path: "vitest.coverage.scripts.config.ts" },
   { name: "keiko-ui coverage gate", path: "packages/keiko-ui/vitest.coverage.config.ts" },
   { name: "keiko-ui suite", path: "packages/keiko-ui/vitest.config.ts" },
+  { name: "keiko-local-knowledge suite", path: "packages/keiko-local-knowledge/vitest.config.ts" },
 ];
 
 function readPackageScripts() {
@@ -72,6 +73,8 @@ describe("vitest config timeout parity (GEN-TEST-FLAKE-001)", () => {
   // one package coverage configuration — which is what this now asserts.
   it("keeps every package coverage shard at the same bounded worker count", () => {
     const scripts = readPackageScripts();
+    expect(scripts["test:coverage:packages"]).toMatch(/^npm run build && /u);
+    expect(scripts["test:coverage:packages:shard"]).toMatch(/^npm run build && /u);
     expect(scripts["test:coverage:packages:shard"]).toContain(
       `--config ${JUDGING_COVERAGE_CONFIG}`,
     );

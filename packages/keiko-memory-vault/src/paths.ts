@@ -11,7 +11,7 @@
 // points back into a sensitive location.
 
 import { homedir } from "node:os";
-import { existsSync, lstatSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join, normalize, parse, resolve, sep } from "node:path";
 import { MemoryStorageError } from "./errors.js";
 
@@ -35,16 +35,34 @@ function isInsideRuntimeStateRoot(candidate: string): boolean {
   return r === runtimeRoot || r.startsWith(`${runtimeRoot}${sep}`);
 }
 
+// Walk every ancestor from dirname(path) up to the filesystem root and return true as soon as ANY
+// existing ancestor is a symlink. Do NOT short-circuit at the first existing directory: a real
+// subdirectory pre-created inside a symlinked target would otherwise defeat the guard, because the
+// walk would see the real subdirectory (not a symlink) at the first-existing position and never
+// inspect the shallower symlinked ancestor. Audit KEIKO-0478; the same fix must stay applied to
+// packages/keiko-server/src/store/paths.ts's byte-identical copy.
 function hasSymlinkAncestor(path: string): boolean {
   let current = dirname(path);
   const root = parse(current).root;
   while (current !== root) {
-    if (existsSync(current)) {
-      return lstatSync(current).isSymbolicLink();
-    }
+    // PR-review follow-up (Codex thread 3771256639): use lstatSync directly. existsSync
+    // returned false on transient EACCES/EIO, letting the walk pass an inaccessible
+    // symlinked ancestor we could not verify. Only ENOENT means the segment truly does
+    // not exist; every other errno propagates so the caller sees the storage failure.
+    const stat = lstatOrNull(current);
+    if (stat?.isSymbolicLink()) return true;
     current = dirname(current);
   }
   return false;
+}
+
+function lstatOrNull(path: string): Stats | null {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 function guard(path: string, label: string): string {

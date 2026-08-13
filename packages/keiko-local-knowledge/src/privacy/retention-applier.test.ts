@@ -9,6 +9,11 @@ import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-
 
 import { createCapsule } from "../capsule-lifecycle.js";
 import { addSourceToCapsule } from "../source-lifecycle.js";
+import {
+  readVectorIndexState,
+  writeVectorIndexState,
+  type VectorIndexStateKey,
+} from "../indexing/vector-index-state.js";
 import { freshStore, sampleCapsuleInput, sampleSourceInput } from "../_support.js";
 import type { KnowledgeStore } from "../store.js";
 
@@ -463,6 +468,59 @@ describe("applyRetentionToCapsule", () => {
         },
       ),
     ).toBe(1);
+  });
+
+  it("invalidates vector_index_state after deleting older vectors (KEIKO-0490)", () => {
+    // KEIKO-0490: retention-applier.ts was the second raw-SQL mutator of the vectors table
+    // outside vector-persist.ts and skipped the pairing invalidation contract that every
+    // other vectors DELETE honours. The vectors_index_state_ad AFTER-DELETE trigger in
+    // local-knowledge-schema.ts happens to make the DB-visible outcome identical today, so a
+    // naive after-DELETE state read would pass even against the pre-fix code. To pin the
+    // EXPLICIT call the fix adds — the defense-in-depth path if the trigger is ever dropped
+    // in a future schema change — drop the trigger inside the test setup, then verify the
+    // vector_index_state row still transitions to 'dirty' purely because of the retention
+    // code's own invalidation call.
+    const now = 30 * DAY_MS;
+    const capsuleId = "cap-invalidate" as KnowledgeCapsuleId;
+    createCapsule(env.store, sampleCapsuleInput({ id: capsuleId }));
+    const source = sampleSourceInput("src-1");
+    addSourceToCapsule(env.store, capsuleId, source);
+    seedDocWithVector(env.store, {
+      capsuleId,
+      sourceId: source.id,
+      documentId: "doc-old",
+      parsedUnitId: "pu-old",
+      chunkId: "ch-old",
+      vectorId: "vec-old",
+      lastExtractedAt: now - 14 * DAY_MS,
+      vectorCreatedAt: now - 14 * DAY_MS,
+    });
+
+    const indexKey: VectorIndexStateKey = {
+      capsuleId,
+      provider: "usearch",
+      indexName: "primary",
+      vectorDimensions: 1536,
+      vectorMetric: "cosine",
+      embeddingIdentityKey: "openai:text-embedding-3-small",
+    };
+    writeVectorIndexState(env.store._internal.db, {
+      ...indexKey,
+      vectorCount: 1,
+      vectorMaxCreatedAt: now - 14 * DAY_MS,
+      status: "ready",
+      updatedAt: now,
+    });
+    expect(readVectorIndexState(env.store._internal.db, indexKey)?.status).toBe("ready");
+
+    env.store._internal.db.exec("DROP TRIGGER IF EXISTS vectors_index_state_ad");
+
+    const result = applyRetentionToCapsule(env.store, capsuleId, { retainVectorsDays: 7 }, now);
+    expect(result.deletedVectorCount).toBe(1);
+
+    const post = readVectorIndexState(env.store._internal.db, indexKey);
+    expect(post?.status).not.toBe("ready");
+    expect(post?.status).toBe("dirty");
   });
 
   it("rejects negative or non-finite retention policy values before mutating data", () => {

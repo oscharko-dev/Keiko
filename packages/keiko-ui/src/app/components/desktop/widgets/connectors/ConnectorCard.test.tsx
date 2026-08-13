@@ -7,7 +7,8 @@
 // pre-fix component because mounting throws; after routing the value through the safe formatter
 // it renders a fallback instead.
 
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type {
   AtlassianConnectorMetadata,
@@ -47,6 +48,47 @@ function clientListing(connector: AtlassianConnectorMetadata): AtlassianConnecto
     })),
   };
 }
+
+function validConnector(): AtlassianConnectorMetadata {
+  return {
+    schemaVersion: "1",
+    authRef: "atlassian-cred:AAAAAAAAAAAAAAAAAAAAAA",
+    provider: "confluence",
+    displayName: "Docs",
+    baseUrl: "https://x.atlassian.net",
+    authScheme: "basic-api-token",
+    createdAt: Date.UTC(2026, 0, 1),
+  };
+}
+
+// KEIKO-0508: DeleteConfirm carried role="alertdialog" without any of the modality machinery the
+// role promises: focus stayed on <body>, Escape did nothing, aria-label was a hardcoded slug the
+// reader never sees. Mirror AgentGateCard's mount-focus + Escape handling and expose the confirm
+// copy as the accessible name via aria-labelledby.
+describe("ConnectorCard DeleteConfirm (KEIKO-0508)", () => {
+  it("moves focus into the delete confirmation, uses the translated copy as its accessible name, and cancels on Escape", async () => {
+    const user = userEvent.setup();
+    const connector = validConnector();
+    render(<AtlassianConnectorsPanel client={clientListing(connector)} pollIntervalMs={100000} />);
+    await screen.findByTestId("acx-connector");
+    (document.activeElement as HTMLElement | null)?.blur?.();
+
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+
+    const confirm = await screen.findByRole("alertdialog", {
+      name: "Delete this connector? Its stored credential is removed.",
+    });
+    expect(confirm).not.toHaveAttribute("aria-label", "delete-connector");
+    await waitFor(() => {
+      expect(within(confirm).getByRole("button", { name: "Keep connector" })).toHaveFocus();
+    });
+
+    fireEvent.keyDown(confirm, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+  });
+});
 
 describe("ConnectorCard hostile createdAt (F3)", () => {
   it.each([Number.NaN, "not-a-timestamp"])(

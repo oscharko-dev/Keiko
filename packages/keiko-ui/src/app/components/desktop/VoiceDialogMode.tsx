@@ -15,8 +15,9 @@
 // NOT modified (its SHA is pinned by tests). Decorative glyphs are `aria-hidden`; the accessible name
 // always comes from the control's label.
 
-import { useEffect, useRef, type ReactNode, type Ref } from "react";
+import { useEffect, useId, useRef, type ReactNode, type Ref } from "react";
 import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
+import { useTranslate } from "@/lib/i18n";
 import KeikoSelect from "./KeikoSelect";
 import { VoicePlaybackMuteButton } from "./VoicePlayback";
 import {
@@ -111,6 +112,51 @@ export const VOICE_PROFILE_LABEL_ID = "cmp-voice-dialog-profile-label";
 const INTERRUPT_UNAVAILABLE_HINT = "Available only while the assistant is speaking.";
 const SESSION_INTERRUPT_HINT_ID = "cmp-voice-dialog-interrupt-hint";
 const TURN_INTERRUPT_HINT_ID = "cmp-voice-turn-interrupt-hint";
+
+export interface VoiceDialogInterruptButtonProps {
+  readonly canInterrupt: boolean;
+  readonly onInterrupt: () => void;
+}
+
+// Issue #2894 (KEIKO-0217) — the session-cluster Interrupt affordance, extracted so
+// VoiceDialogControls (below) and ChatWindow's composer render the exact same aria-disabled +
+// aria-describedby markup from one implementation instead of a second hand-rolled copy. Presence
+// is the caller's decision (VoiceDialogControls shows it whenever `onInterrupt` is passed;
+// ChatWindow mounts it once a dialogue session is connected); this component only owns whether
+// the mounted button is actionable.
+export function VoiceDialogInterruptButton({
+  canInterrupt,
+  onInterrupt,
+}: VoiceDialogInterruptButtonProps): ReactNode {
+  const t = useTranslate();
+  // KfQ 3765608983: two instances of this button can co-exist (e.g. the sibling
+  // VoiceDialogControls cluster and ChatWindow's composer overlay if both mount). Use a
+  // useId()-generated per-instance id so duplicate ids never appear in the DOM.
+  const hintId = useId();
+  return (
+    <button
+      type="button"
+      className="cmp-voice-btn"
+      aria-label={t("voiceDialog.interrupt.ariaLabel")}
+      // GEN-UI-A11Y-013: aria-disabled + guarded onClick keep the control focusable and its
+      // availability condition audible; the native `disabled` would blur and hide it.
+      aria-disabled={!canInterrupt}
+      aria-describedby={hintId}
+      onClick={() => {
+        if (!canInterrupt) return;
+        onInterrupt();
+      }}
+    >
+      {t("voiceDialog.interrupt.action")}
+      {/* No inline space here: aria-label already names the button, so this sr-only hint is
+          read separately via aria-describedby, not concatenated with the visible label text —
+          no space is ever implied (S6772). */}
+      <span id={hintId} className="sr-only">
+        {t("voiceDialog.interrupt.unavailableHint")}
+      </span>
+    </button>
+  );
+}
 
 export function VoiceProfileSelect({
   personas,
@@ -235,27 +281,7 @@ export function VoiceDialogControls({
         compact={compact}
       />
       {onInterrupt !== undefined ? (
-        <button
-          type="button"
-          className="cmp-voice-btn"
-          aria-label="Interrupt the assistant"
-          // GEN-UI-A11Y-013: aria-disabled + guarded onClick keep the control focusable and its
-          // availability condition audible; the native `disabled` would blur and hide it.
-          aria-disabled={!canInterrupt}
-          aria-describedby={SESSION_INTERRUPT_HINT_ID}
-          onClick={() => {
-            if (!canInterrupt) return;
-            onInterrupt();
-          }}
-        >
-          Interrupt
-          {/* No inline space here: aria-label already names the button ("Interrupt the
-              assistant"), so this sr-only hint is read separately via aria-describedby, not
-              concatenated with the visible label text — no space is ever implied (S6772). */}
-          <span id={SESSION_INTERRUPT_HINT_ID} className="sr-only">
-            {INTERRUPT_UNAVAILABLE_HINT}
-          </span>
-        </button>
+        <VoiceDialogInterruptButton canInterrupt={canInterrupt} onInterrupt={onInterrupt} />
       ) : null}
       <button
         type="button"

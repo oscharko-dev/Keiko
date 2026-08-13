@@ -29,7 +29,7 @@ describe("installable-package-smoke script", () => {
     expect(source).toContain("export const WINDOWS_NPM_INSTALL_TIMEOUT_MS");
     expect(source).toContain("export function parseArgs");
     expect(source).toContain("export function parsePositiveTimeoutEnv");
-    expect(source).toContain("void main()");
+    expect(source).toContain("await main()");
     expect(source).toContain("pathToFileURL(process.argv[1]).href");
     expect(source).not.toMatch(/^export\s+default\b/m);
   });

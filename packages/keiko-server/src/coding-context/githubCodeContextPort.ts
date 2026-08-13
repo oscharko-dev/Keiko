@@ -31,7 +31,10 @@ const GH_API_MAX_STDOUT_BYTES = GOVERNED_GIT_REMOTE_SANDBOX_POLICY.maxOutputByte
 
 // Flags that turn `gh api` into a mutation or redirect it to another host. Presence
 // anywhere in the argument vector rejects the invocation (deny-by-default posture).
-const GH_API_DENY_FLAGS: readonly string[] = Object.freeze([
+// Exported so tests exercise the ACTUAL rules the port enforces at the spawn boundary rather
+// than a parallel copy — KEIKO-0223 removed a weaker duplicate that lived in the connector
+// module and drifted independently.
+export const GH_API_DENY_FLAGS: readonly string[] = Object.freeze([
   "--method",
   "-X",
   "--field",
@@ -43,7 +46,7 @@ const GH_API_DENY_FLAGS: readonly string[] = Object.freeze([
   "--verbose",
 ]);
 
-const GH_CODE_CONTEXT_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
+export const GH_CODE_CONTEXT_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
   {
     executable: "gh",
     allowedSubcommands: GITHUB_CODE_CONTEXT_ALLOWED_SUBCOMMANDS,

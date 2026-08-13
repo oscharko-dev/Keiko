@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  computePortableSidecarPayloadTreeDigest,
   discoverDevLaneOpenCode,
   devLaneEnvEnabled,
   KEIKO_CODING_RUNTIME_DEV_LANE_ENV,
@@ -213,5 +214,50 @@ describe("dev-lane OpenCode discovery", () => {
       "/* drifted source */\n",
     );
     expectRefusal(discover(drifted), "secure-read-helper-stale");
+  });
+});
+
+// PR #3099 follow-up (KfQ Major + Codex P2): the manager test fixture derives its expected
+// values from this very function, so a bug HERE would move both the production hash and the
+// fixture in lockstep and no downstream test would catch it. This standalone pin computes the
+// tree digest for a hand-hashed pair with a known relative path and asserts the exact 64-char
+// hex string — a formula change (order, separator, digest algorithm, sort collation) fails this
+// pin loudly.
+describe("computePortableSidecarPayloadTreeDigest (KEIKO-0180)", () => {
+  it("produces a stable hex digest for a known single-entry input", () => {
+    const contentSha = createHash("sha256").update("payload\n", "utf8").digest("hex");
+    const expected = createHash("sha256")
+      .update(`bin/opencode\0${contentSha}\0`, "utf8")
+      .digest("hex");
+    expect(
+      computePortableSidecarPayloadTreeDigest([
+        { relativePath: "bin/opencode", sha256: contentSha },
+      ]),
+    ).toBe(expected);
+  });
+
+  it("locale-sorts entries by relativePath before hashing (order-independent input, deterministic digest)", () => {
+    const bin = createHash("sha256").update("x", "utf8").digest("hex");
+    const lic = createHash("sha256").update("y", "utf8").digest("hex");
+    const forward = computePortableSidecarPayloadTreeDigest([
+      { relativePath: "LICENSE", sha256: lic },
+      { relativePath: "bin/opencode", sha256: bin },
+    ]);
+    const reversed = computePortableSidecarPayloadTreeDigest([
+      { relativePath: "bin/opencode", sha256: bin },
+      { relativePath: "LICENSE", sha256: lic },
+    ]);
+    expect(forward).toBe(reversed);
+    const sortedKeys = ["LICENSE", "bin/opencode"].sort((a, b) => a.localeCompare(b));
+    const shas: Record<string, string> = { LICENSE: lic, "bin/opencode": bin };
+    const hash = createHash("sha256");
+    for (const key of sortedKeys) hash.update(`${key}\0${shas[key] ?? ""}\0`, "utf8");
+    expect(forward).toBe(hash.digest("hex"));
+  });
+
+  it("empty entry set produces the sha256 of the empty string", () => {
+    expect(computePortableSidecarPayloadTreeDigest([])).toBe(
+      createHash("sha256").update("", "utf8").digest("hex"),
+    );
   });
 });

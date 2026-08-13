@@ -189,23 +189,44 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "read-only",
     persistence: "transient",
   },
+  // KEIKO-0175 / KEIKO-0158 — PluginsPanel renders hardcoded MCP/connector fixture rows; the
+  // MCP dot flips no state at all (plain status text, no toggle, no localStorage / server
+  // call — see GEN-UI-INTERACTION-003), and no install/uninstall flow exists. This matches
+  // the fully static "placeholder" shape (WindowsRegistry status: "placeholder"), the same
+  // one used by the resources window.
   plugins: {
-    lifecycle: ["idle", "installed", "disabled", "enabled"],
+    lifecycle: ["live"],
     trustBoundary: ["ui"],
-    authority: "user",
-    persistence: "durable.config",
+    authority: "read-only",
+    // Codex on PR #3089: the window itself is a normal tool window whose position/size the
+    // user arranges and must survive a reload; only its internal domain state is a placeholder.
+    // `transient` here would have sanitizeWindow drop the whole window from the restored layout.
+    persistence: "durable.ui",
   },
+  // KEIKO-0158 — AutomationsPanel.tsx's per-row Toggle (role="switch", persisting to
+  // localStorage key "keiko.automations.v1") was replaced with plain non-interactive
+  // status-text rows (GEN-UI-INTERACTION-002), mirroring PluginsPanel's Connectors section.
+  // The component now owns no self-managed durable config and never mutates on user action,
+  // so "user" authority / "durable.config" (self-managed) persistence no longer hold. The
+  // window still remembers its own position across a reload like any other tool window
+  // (durable.ui) — only the fake per-row setting was removed, not ordinary window placement.
   automations: {
-    lifecycle: ["idle", "enabled", "disabled"],
+    lifecycle: ["live"],
     trustBoundary: ["ui"],
-    authority: "user",
-    persistence: "durable.config",
+    authority: "read-only",
+    persistence: "durable.ui",
   },
+  // KEIKO-0175 — MobilePanel is a ~21-line static component: no pairing state, no network call,
+  // no persisted config (see packages/keiko-ui/src/app/components/desktop/widgets/panels/
+  // MobilePanel.tsx). This matches the fully static "placeholder" shape (WindowsRegistry status:
+  // "placeholder"), the same one used by the resources window.
   mobile: {
-    lifecycle: ["paired", "unpaired", "error"],
-    trustBoundary: ["ui", "network"],
-    authority: "user-confirm",
-    persistence: "durable.config",
+    lifecycle: ["live"],
+    trustBoundary: ["ui"],
+    authority: "read-only",
+    // Codex on PR #3089: same as plugins/notifications above — the window is placement-persistent
+    // (durable.ui) even though the panel has no per-instance domain state to save.
+    persistence: "durable.ui",
   },
   inspector: {
     lifecycle: ["empty", "focused"],
@@ -220,10 +241,12 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     persistence: "transient",
   },
   notifications: {
-    lifecycle: ["unread", "read", "dismissed"],
+    lifecycle: ["live"],
     trustBoundary: ["ui"],
-    authority: "ui-only",
-    persistence: "transient",
+    authority: "read-only",
+    // Codex on PR #3089: keep the window placement-persistent so a reload preserves the user's
+    // arrangement; the panel body is a placeholder empty state but the WINDOW is normal.
+    persistence: "durable.ui",
   },
   resources: {
     lifecycle: ["live"],

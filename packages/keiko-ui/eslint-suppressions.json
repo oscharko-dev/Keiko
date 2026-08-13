@@ -878,7 +878,7 @@
   },
   "src/app/components/desktop/widgets/cards/EditorRuntimeWidget.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 23
+      "count": 22
     },
     "complexity": {
       "count": 25
@@ -1049,9 +1049,6 @@
     }
   },
   "src/app/components/desktop/widgets/cards/TerminalWidget.tsx": {
-    "complexity": {
-      "count": 1
-    },
     "max-lines-per-function": {
       "count": 1
     }
@@ -1501,7 +1498,7 @@
   },
   "src/app/components/desktop/widgets/panels/KeyboardShortcutsPanel.tsx": {
     "max-lines-per-function": {
-      "count": 3
+      "count": 2
     }
   },
   "src/app/components/desktop/widgets/panels/ManagedLanguageSettings.test.tsx": {
@@ -1518,11 +1515,6 @@
     },
     "max-lines-per-function": {
       "count": 5
-    }
-  },
-  "src/app/components/desktop/widgets/panels/PluginsPanel.tsx": {
-    "max-lines-per-function": {
-      "count": 1
     }
   },
   "src/app/components/desktop/widgets/panels/ProblemsPanel.tsx": {

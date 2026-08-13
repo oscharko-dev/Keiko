@@ -95,11 +95,15 @@ const VIEWPORTS = [
   { id: "tablet", width: 900, height: 1024 },
   { id: "mobile", width: 420, height: 820 },
 ];
+// The `/memoriaviva` route stub was deleted in #2894 (KEIKO-0129); production `serveStatic`
+// falls back to the desktop shell for bookmarked deep links, but this evidence server serves
+// static files without that fallback and would 404. The in-desktop `memoria` window (owned by
+// #1295) is the surviving surface — reproduce it inside the shell via the `/` route rather
+// than a top-level URL.
 const ROUTES = [
   { id: "home", path: "/" },
   { id: "launch", path: "/launch" },
   { id: "local-knowledge", path: "/local-knowledge" },
-  { id: "memoriaviva", path: "/memoriaviva" },
 ];
 
 const browser = await chromium.launch();

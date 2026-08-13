@@ -260,6 +260,8 @@ export type WindowRender<T extends WindowType = WindowType> = (
   ctx: WindowRenderContext,
 ) => ReactNode;
 
+type WindowStatus = "placeholder";
+
 export interface WindowTypeDef {
   readonly titleKey: MessageKey;
   readonly icon: IconName;
@@ -273,6 +275,12 @@ export interface WindowTypeDef {
   readonly singleton?: boolean;
   readonly config?: readonly ConfigField[];
   readonly ctaKey?: MessageKey;
+  /**
+   * KEIKO-0349: non-functional placeholder surface. Shell chrome (New Window palette, dock,
+   * window title) may surface this to disclose to the user that the surface is a preview instead
+   * of a working feature. Absence means "functional".
+   */
+  readonly status?: WindowStatus;
   readonly render: WindowRender;
 }
 
@@ -294,6 +302,7 @@ interface PartialDef {
   readonly singleton?: boolean;
   readonly config?: readonly ConfigField[];
   readonly ctaKey?: MessageKey;
+  readonly status?: WindowStatus;
 }
 
 // Render is deferred at module load — the real render functions are injected
@@ -627,6 +636,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     h: 470,
     tool: true,
     singleton: true,
+    status: "placeholder",
   },
   automations: {
     titleKey: "window.type.automations.title",
@@ -636,6 +646,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     h: 300,
     tool: true,
     singleton: true,
+    status: "placeholder",
   },
   mobile: {
     // Audit C412 — title case like every other two-word title ("Figma Snapshot").
@@ -646,6 +657,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     h: 380,
     tool: true,
     singleton: true,
+    status: "placeholder",
   },
   inspector: {
     titleKey: "window.type.inspector.title",
@@ -675,6 +687,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     h: 360,
     tool: true,
     singleton: true,
+    status: "placeholder",
   },
   resources: {
     titleKey: "window.type.resources.title",
@@ -684,6 +697,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     h: 320,
     tool: true,
     singleton: true,
+    status: "placeholder",
   },
   // Epic #189 Slice 3 / Epic #1815 — compact Knowledge Pod picker window. The user selects
   // a ready capsule or capsule-set; the selection is stored in cfg for relationship binding.
@@ -924,7 +938,10 @@ function buildDef(type: WindowType, partial: PartialDef): WindowTypeDef {
     if (fn !== undefined) return fn(cfg, ctx);
     return null;
   };
-  const base: Omit<WindowTypeDef, "accent" | "tool" | "singleton" | "config" | "ctaKey"> = {
+  const base: Omit<
+    WindowTypeDef,
+    "accent" | "tool" | "singleton" | "config" | "ctaKey" | "status"
+  > = {
     titleKey: partial.titleKey,
     icon: partial.icon,
     descKey: partial.descKey,
@@ -940,12 +957,14 @@ function buildDef(type: WindowType, partial: PartialDef): WindowTypeDef {
     singleton?: boolean;
     config?: readonly ConfigField[];
     ctaKey?: MessageKey;
+    status?: WindowStatus;
   } = {};
   if (partial.accent === true) extra.accent = true;
   if (partial.tool === true) extra.tool = true;
   if (partial.singleton === true) extra.singleton = true;
   if (partial.config !== undefined) extra.config = partial.config;
   if (partial.ctaKey !== undefined) extra.ctaKey = partial.ctaKey;
+  if (partial.status !== undefined) extra.status = partial.status;
   return { ...base, ...extra };
 }
 

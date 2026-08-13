@@ -4,8 +4,11 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -18,6 +21,7 @@ import {
   type SetupManifest,
   type SetupStatus,
 } from "./portable-shared.js";
+import { STAGING_OWNERSHIP_MARKER } from "./state-paths.js";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 interface SetupRegistrationBase {
@@ -83,8 +87,24 @@ export function portableInstallRootIdentitySha256(path: string): string {
   return sha256Text(realpathSync(path));
 }
 
+// #KEIKO-0333: fail closed to `undefined` on a truncated / non-JSON registration file
+// so a crash mid-write leaves callers with "no registration recorded" instead of a
+// thrown SyntaxError. Matches launcher-state.ts loadState's behavior for the sibling
+// state file: an unreadable state artifact is a signal, not a crash.
+//
+// PR-review follow-up: narrow the swallowed failure to JSON.parse's SyntaxError only.
+// A filesystem error (EACCES, EMFILE, EIO) is NOT a "no registration" signal — the
+// registration may still exist and be authoritative. Callers must see those failures
+// so they do not skip managed-update / cleanup behaviour or overwrite retained
+// installation attestation while the actual storage failure stays hidden.
 function readJson(path: string): unknown {
-  return JSON.parse(readFileSync(path, "utf8")) as unknown;
+  const raw = readFileSync(path, "utf8");
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch (error) {
+    if (error instanceof SyntaxError) return undefined;
+    throw error;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -127,15 +147,57 @@ export function hasPortableInstallRegistration(stateDir: string): boolean {
   return true;
 }
 
+// #KEIKO-0333: write through mkdtemp -> write -> rename so a crash mid-write can never
+// leave a truncated registration on disk. Reuses launcher-state.ts saveState's atomic
+// idiom so the two state files that live side by side in the same `.keiko` directory
+// have consistent durability semantics.
 function writeRegistration(stateDir: string, registration: PortableInstallRegistration): void {
   assertStateDirSafe(stateDir);
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const path = join(stateDir, REGISTRATION_FILE);
   assertRegistrationFileSafe(path);
-  writeFileSync(path, `${JSON.stringify(registration, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
+  const tmpDir = mkdtempSync(join(stateDir, ".portable-registration-"));
+  // PR-review follow-up (KfQ thread 3770583048): mkdtempSync creates 0700 by default on
+  // POSIX (glibc mkdtemp) but the guarantee is implementation-defined. Belt-and-suspenders:
+  // explicitly chmod the staging directory to 0700 so a hostile umask (or a non-POSIX FS
+  // that widened the default) cannot leave the temp readable to other users during the
+  // brief writeFileSync → renameSync window.
+  try {
+    chmodSync(tmpDir, 0o700);
+  } catch {
+    // Best-effort on non-POSIX filesystems where chmod has no effect.
+  }
+  const tmpFile = join(tmpDir, "registration.json");
+  try {
+    // PR-review follow-up (Codex thread 3770922333): drop the ownership marker so
+    // state-paths.ts's isMkdtempOwnedDir classifier can distinguish this Keiko staging dir
+    // from a customer-created directory that happens to match the same prefix + 6-alphanum
+    // shape. Without the marker, `keiko uninstall --state` walks past a look-alike rather
+    // than recursively deleting user data.
+    //
+    // PR-review follow-up (Codex thread 3772030496): the marker write is now inside the
+    // shared try/finally so its failure propagates and the rmSync in finally reclaims the
+    // tmpDir immediately. Swallowing left a marker-less staging dir that a later
+    // `uninstall --state` sweep would skip, matching launcher-state.ts saveState's
+    // atomic-transaction contract. Mode 0o600 so the marker cannot leak the presence of
+    // Keiko staging directories to other local users.
+    writeFileSync(join(tmpDir, STAGING_OWNERSHIP_MARKER), "", { encoding: "utf8", mode: 0o600 });
+    writeFileSync(tmpFile, `${JSON.stringify(registration, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    renameSync(tmpFile, path);
+  } finally {
+    // PR-review follow-up (Codex thread 3771256638): rmSync failure MUST NOT masquerade as
+    // a failed atomic rewrite. If renameSync succeeded, the registration is already
+    // published; a cleanup failure on the marker-only tmpDir is a separate concern the
+    // state-paths.ts sweep can address on a later run. Mirrors init.ts.
+    try {
+      rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort staging cleanup.
+    }
+  }
   try {
     chmodSync(path, 0o600);
   } catch {
@@ -265,10 +327,40 @@ export function readPortableInstallRegistration(
 ): PortableInstallRegistration | undefined {
   if (!hasPortableInstallRegistration(stateDir)) return undefined;
   const path = join(stateDir, REGISTRATION_FILE);
+  // #KEIKO-0333: readJson returns undefined for a truncated / non-JSON file so
+  // downstream callers observe "no registration recorded" instead of a thrown
+  // SyntaxError. That matches launcher-state.ts's fail-closed-to-empty semantics
+  // for the sibling state file.
   const raw = readJson(path);
+  if (raw === undefined) return undefined;
   if (isManagedRegistrationRecord(raw)) return managedRegistrationFromRecord(raw);
   if (isFailedRegistrationRecord(raw)) return failedRegistrationFromRecord(raw);
   return undefined;
+}
+
+// PR-review follow-up (Codex threads 3771011311 + 3771684322 + 3771815001): destructive
+// callers such as `keiko uninstall --state` and `keiko portable setup` must refuse when the
+// registration file EXISTS but is not a recognized-schema record. Two failure modes:
+//
+//   1. Unparseable bytes (truncated / non-JSON): would be treated as absent and either
+//      deleted (uninstall) or overwritten with a new setup-failed record (setup).
+//   2. Parseable JSON that does not match any known schema (future Keiko schema, hand-edited
+//      record, corrupted fields): `readPortableInstallRegistration` returns undefined for
+//      the same reason — so `portable setup` would still overwrite via
+//      recordPreLockSetupFailure and `uninstall --state` would still delete the file as
+//      generic owned state, losing the locator and attestation the operator needs to recover
+//      the pre-existing installation.
+//
+// Both cases fail closed with the same operator remediation: repair or remove the file
+// before retrying. The adoption gate downstream ("existing same-path managed install root is
+// not attested") only fires when a managed root is discoverable, which schema-invalid
+// records may not carry — so this guard is the load-bearing check for that class.
+export function isPortableInstallRegistrationCorrupt(stateDir: string): boolean {
+  if (!hasPortableInstallRegistration(stateDir)) return false;
+  const path = join(stateDir, REGISTRATION_FILE);
+  const raw = readJson(path);
+  if (raw === undefined) return true;
+  return !isManagedRegistrationRecord(raw) && !isFailedRegistrationRecord(raw);
 }
 
 export function readManagedRegistration(stateDir: string): ManagedSetupRegistration | undefined {

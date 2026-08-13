@@ -2,7 +2,7 @@
 // vault and a fake ModelPort — no network, no real model.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
@@ -142,7 +142,7 @@ afterEach(() => {
 });
 
 function makeVault(): MemoryVaultStore {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-salience-"));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-salience-"));
   tmpDirs.push(dir);
   const vault = createMemoryVault({ memoryDir: dir, redactString: (s) => s });
   activeVaults.push(vault);
@@ -164,7 +164,7 @@ function makeDeps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
 }
 
 function context(): ConversationMemoryRuntimeContext {
-  const path = mkdtempSync(join(tmpdir(), "keiko-salience-proj-"));
+  const path = mkdtempSync(join(realpathSync(tmpdir()), "keiko-salience-proj-"));
   tmpDirs.push(path);
   return {
     userId: "local-operator" as UserId,

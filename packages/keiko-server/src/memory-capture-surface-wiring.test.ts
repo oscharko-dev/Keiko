@@ -11,7 +11,7 @@
 // settled spoken final is answered by this same canonical chat pipeline, so the origin cannot be
 // inferred server-side and must be declared on the request.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -98,7 +98,7 @@ function context(): ConversationMemoryRuntimeContext {
 function makeVault(
   evidenceStore: ReturnType<typeof createInMemoryEvidenceStore>,
 ): MemoryVaultStore {
-  const memoryDir = mkdtempSync(join(tmpdir(), "keiko-capture-surface-"));
+  const memoryDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-capture-surface-"));
   temporaryDirectories.push(memoryDir);
   const redactString = (value: string): string => value;
   const postCommitAudit = createMemoryAuditHandler({ evidenceStore, redactString });

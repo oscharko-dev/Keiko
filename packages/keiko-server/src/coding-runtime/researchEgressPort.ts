@@ -37,6 +37,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import {
   MAX_RESPONSE_BYTES,
+  ResponseBodySizeLimitError,
   gatewayFetch,
   readBytesCapped,
   type GatewayFetchOptions,
@@ -431,8 +432,13 @@ async function finalizeResearch(
   let bytes: Uint8Array;
   try {
     bytes = await readBytesCapped(response, ctx.config.maxReadBytes);
-  } catch {
-    // Over-cap or a mid-stream read error fails closed and drops the partial body.
+  } catch (error) {
+    // The typed capped-read failure also identifies an over-limit chunked response with no
+    // Content-Length. Transient stream errors fail this fetch closed without exhausting the grant;
+    // an observed size violation permits no additional outbound hop.
+    if (error instanceof ResponseBodySizeLimitError) {
+      ctx.deps.registry.saturateBytes(state.runId, state.grant.grantId);
+    }
     return FAILED;
   }
   const charge = ctx.deps.registry.chargeFetch(

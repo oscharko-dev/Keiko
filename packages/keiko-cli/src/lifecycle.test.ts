@@ -124,21 +124,30 @@ async function expectNativeHealthStartFailure(
     const c = makeIo();
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
     let now = 0;
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => {
       now += 600;
       return now;
     });
+    // #KEIKO-0437: cmdStart's unhealthy branch now runs the shared terminateAndConfirm
+    // loop. Model the child as "SIGTERM-responsive" so the terminate loop exits at its
+    // first liveness poll — realistic behavior for a child that received SIGTERM, and
+    // keeps these tests bounded to the wait-for-health path they exist to exercise.
+    let aliveCalls = 0;
     try {
       const code = await runLifecycleCli(
         "start",
-        ["--port", String(port), "--start-timeout", "1"],
+        ["--port", String(port), "--start-timeout", "1", "--stop-timeout", "1"],
         c.io,
         {},
         {
           cwd: root,
           spawnFn: () => child,
-          isProcessAlive: () => true,
+          isProcessAlive: () => {
+            aliveCalls += 1;
+            return aliveCalls === 1;
+          },
           isPortAvailable: () => Promise.resolve(true),
+          killProcess: vi.fn(),
           sleep: () => Promise.resolve(),
         },
       );
@@ -307,6 +316,9 @@ describe("runLifecycleCli", () => {
       {},
       {
         cwd: root,
+        // #KEIKO-0330: --state-dir is now home-contained; treat the test root as home so the
+        // ".keiko-test" fixture resolves inside the approved boundary.
+        homedir: () => root,
         spawnFn: (command, args, opts) => {
           spawned.push({ command, args, opts });
           return child;
@@ -343,11 +355,18 @@ describe("runLifecycleCli", () => {
 
   it("prefers the active published CLI entry when KEIKO_CLI_BIN_PATH is set", async () => {
     const root = makeRoot();
+    // #KEIKO-0285: the env override must be an ABSOLUTE, EXISTING file — the value is
+    // validated through `absoluteExistingPath` (the same guard install-layout.ts applies)
+    // instead of returned verbatim. Anchor the fixture to a real file inside the test root
+    // so the "env override is honored when valid" behavior is exercised without conflating
+    // it with the unvalidated pass-through that #KEIKO-0285 removed.
+    const binPath = join(root, "published-keiko-bin.js");
+    writeFileSync(binPath, "#!/usr/bin/env node\n", "utf8");
     const c = makeIo();
     const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
     const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
 
-    const code = await withEnvVar("KEIKO_CLI_BIN_PATH", "/tmp/fake-keiko-bin.js", async () =>
+    const code = await withEnvVar("KEIKO_CLI_BIN_PATH", binPath, async () =>
       runLifecycleCli(
         "start",
         [],
@@ -371,7 +390,153 @@ describe("runLifecycleCli", () => {
 
     expect(code).toBe(0);
     expect(spawned).toHaveLength(1);
-    expect(spawned[0]?.args[0]).toBe("/tmp/fake-keiko-bin.js");
+    expect(spawned[0]?.args[0]).toBe(binPath);
+  });
+
+  it("refuses a KEIKO_STATE_DIR that resolves outside the user's home with STATE_DIR_ESCAPE", async (ctx) => {
+    // #KEIKO-0330 must-fail-before-fix: buildLifecycleOptions/resolveStateDir accepted a
+    // planted KEIKO_STATE_DIR unconditionally and `keiko start` proceeded to mkdir it.
+    // After the fix, the same F4 assertRealpathContained(home, resolved) launcher enforces
+    // is applied here — a value resolving outside home refuses with STATE_DIR_ESCAPE and
+    // never creates the directory.
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    const home = join(root, "home");
+    mkdirSync(home, { recursive: true });
+    const escapeRoot = makeRoot();
+    const escapeDir = join(escapeRoot, "keiko-escape");
+    const c = makeIo();
+    const spawnFn = vi.fn();
+
+    const code = await runLifecycleCli(
+      "start",
+      [],
+      c.io,
+      { KEIKO_STATE_DIR: escapeDir },
+      {
+        cwd: root,
+        homedir: () => home,
+        spawnFn,
+        isProcessAlive: () => false,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("KEIKO_STATE_DIR");
+    expect(c.err()).toContain("outside the user's home directory");
+    expect(existsSync(escapeDir)).toBe(false);
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a --state-dir that resolves outside the user's home with STATE_DIR_ESCAPE", async (ctx) => {
+    // Same F4 guard applies to the explicit --state-dir flag: a CLI-injected value
+    // that escapes home is refused the same way as the env-planted variant.
+    if (process.platform === "win32") ctx.skip();
+    const root = makeRoot();
+    const home = join(root, "home");
+    mkdirSync(home, { recursive: true });
+    const escapeRoot = makeRoot();
+    const escapeDir = join(escapeRoot, "keiko-escape-arg");
+    const c = makeIo();
+    const spawnFn = vi.fn();
+
+    const code = await runLifecycleCli(
+      "start",
+      ["--state-dir", escapeDir],
+      c.io,
+      {},
+      {
+        cwd: root,
+        homedir: () => home,
+        spawnFn,
+        isProcessAlive: () => false,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("--state-dir");
+    expect(c.err()).toContain("outside the user's home directory");
+    expect(existsSync(escapeDir)).toBe(false);
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a KEIKO_CLI_BIN_PATH that is not absolute — falls back to the packaged entry", async () => {
+    // #KEIKO-0285 must-fail-before-fix: cliEntryPath used to return
+    // process.env.KEIKO_CLI_BIN_PATH verbatim, so a relative value was spawned as
+    // the child script. After the fix, `absoluteExistingPath` refuses non-absolute
+    // values and cliEntryPath falls through to the packaged import.meta.url entry.
+    // The injected EnvSource is the primary source, matching the rest of this file's
+    // `optionOrEnv` pattern.
+    const root = makeRoot();
+    const c = makeIo();
+    const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+
+    const code = await runLifecycleCli(
+      "start",
+      [],
+      c.io,
+      { KEIKO_CLI_BIN_PATH: "relative/bin.js" },
+      {
+        cwd: root,
+        spawnFn: (command, args, opts) => {
+          spawned.push({ command, args, opts });
+          return child;
+        },
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(spawned).toHaveLength(1);
+    // The relative value must never reach spawnFn as the child entry script.
+    expect(spawned[0]?.args[0]).not.toBe("relative/bin.js");
+    // The fallback entry lives under this package's dist and ends in `index.js`.
+    expect(spawned[0]?.args[0]).toMatch(/index\.js$/u);
+  });
+
+  it("refuses a KEIKO_CLI_BIN_PATH absolute path that does not exist — falls back to the packaged entry", async () => {
+    // #KEIKO-0285: `absoluteExistingPath` also requires `existsSync(value)`, so an
+    // attacker-planted absolute path (wrapper script in a dev-container .env, an exported
+    // env var in a parent shell) is refused before spawn instead of being executed by Node.
+    const root = makeRoot();
+    const c = makeIo();
+    const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+
+    const code = await runLifecycleCli(
+      "start",
+      [],
+      c.io,
+      { KEIKO_CLI_BIN_PATH: "/nonexistent/keiko-bin-planted.js" },
+      {
+        cwd: root,
+        spawnFn: (command, args, opts) => {
+          spawned.push({ command, args, opts });
+          return child;
+        },
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]?.args[0]).not.toBe("/nonexistent/keiko-bin-planted.js");
+    expect(spawned[0]?.args[0]).toMatch(/index\.js$/u);
   });
 
   it("prefers the built workspace checkout over a stale inherited global bin", async () => {
@@ -821,6 +986,10 @@ describe("runLifecycleCli", () => {
     // the sibling test (isProcessAlive:false short-circuits before the fetch).  After the
     // fix, waitForHealth delegates to probeHealth and checks health.version === SDK_VERSION,
     // so a wrong-version 200 keeps looping until the deadline and returns false.
+    // #KEIKO-0437 update: cmdStart's unhealthy branch now runs the shared
+    // terminateAndConfirm loop. Advance Date.now monotonically (so the terminate
+    // window also exits) and model the child as SIGTERM-responsive so the loop
+    // exits at its first liveness poll after SIGTERM.
     const root = makeRoot();
     const c = makeIo();
     const child = { pid: 24681, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
@@ -828,23 +997,28 @@ describe("runLifecycleCli", () => {
       Promise.resolve(Response.json({ status: "ok", version: "0.0.0-wrong" }, { status: 200 })),
     );
     const killProcess = vi.fn();
-    const nowSpy = vi.spyOn(Date, "now");
-    // Call 1 sets deadline (0 + startTimeoutMs); call 2 is the first while-check (0 ≤ deadline →
-    // enter the loop, run exactly one fetch); call 3+ exceeds the deadline so the loop exits after
-    // that single wrong-version probe and waitForHealth returns false.
-    nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(0).mockReturnValue(1_000_000);
+    const nowSpy = vi.spyOn(performance, "now");
+    let now = 0;
+    nowSpy.mockImplementation(() => {
+      now += 600;
+      return now;
+    });
+    let aliveCalls = 0;
 
     try {
       const code = await runLifecycleCli(
         "start",
-        ["--port", "4322", "--start-timeout", "1"],
+        ["--port", "4322", "--start-timeout", "1", "--stop-timeout", "1"],
         c.io,
         {},
         {
           cwd: root,
           spawnFn: () => child,
           fetchImpl,
-          isProcessAlive: () => true,
+          isProcessAlive: () => {
+            aliveCalls += 1;
+            return aliveCalls === 1;
+          },
           isPortAvailable: () => Promise.resolve(true),
           killProcess,
           sleep: () => Promise.resolve(),
@@ -991,7 +1165,9 @@ describe("runLifecycleCli", () => {
     writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
     const c = makeIo();
     const killProcess = vi.fn();
-    const nowSpy = vi.spyOn(Date, "now");
+    // terminateAndConfirm uses performance.now for a monotonic deadline (Codex thread
+    // 3771011316); mock it so the graceful loop expires after one iteration.
+    const nowSpy = vi.spyOn(performance, "now");
     nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
 
     try {
@@ -1025,7 +1201,9 @@ describe("runLifecycleCli", () => {
     writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
     const c = makeIo();
     const killProcess = vi.fn();
-    const nowSpy = vi.spyOn(Date, "now");
+    // terminateAndConfirm uses performance.now for a monotonic deadline (Codex thread
+    // 3771011316); mock it so the graceful loop expires after one iteration.
+    const nowSpy = vi.spyOn(performance, "now");
     nowSpy.mockReturnValueOnce(0).mockReturnValueOnce(1_001);
 
     try {
@@ -1047,6 +1225,58 @@ describe("runLifecycleCli", () => {
       expect(killProcess).toHaveBeenNthCalledWith(2, 12345, "SIGKILL");
       expect(c.err()).toContain("failed to stop pid 12345");
       expect(readFileSync(join(root, ".keiko", "ui.pid"), "utf8")).toBe("12345\n");
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("escalates to SIGKILL and keeps the pid file when the UI did not become healthy and SIGKILL fails", async () => {
+    // #KEIKO-0437 must-fail-before-fix: cmdStart used to send a single SIGTERM and
+    // unconditionally remove the pid file, orphaning the UI when it survived SIGTERM.
+    // After the fix, the unhealthy branch runs the shared terminateAndConfirm helper
+    // (SIGTERM -> poll -> SIGKILL -> re-poll) and only removes the pid file when the
+    // process is confirmed dead. When it survives SIGKILL too, the pid file MUST
+    // remain so `keiko stop` can still find and finish the orphan.
+    const root = makeRoot();
+    const c = makeIo();
+    const child = { pid: 45678, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const killProcess = vi.fn();
+    // isProcessAlive stays true forever: SIGTERM never terminates the child; SIGKILL
+    // also fails to kill (simulates a stuck kernel or another user's process the
+    // uninstaller cannot signal).
+    const nowSpy = vi.spyOn(performance, "now");
+    let now = 0;
+    nowSpy.mockImplementation(() => {
+      now += 600;
+      return now;
+    });
+
+    try {
+      const code = await runLifecycleCli(
+        "start",
+        ["--start-timeout", "1", "--stop-timeout", "1"],
+        c.io,
+        {},
+        {
+          cwd: root,
+          spawnFn: () => child,
+          fetchImpl: () =>
+            Promise.resolve(Response.json({ version: "0.0.0-wrong" }, { status: 200 })),
+          isProcessAlive: () => true,
+          isPortAvailable: () => Promise.resolve(true),
+          killProcess,
+          sleep: () => Promise.resolve(),
+        },
+      );
+
+      expect(code).toBe(1);
+      // SIGTERM AND SIGKILL were both attempted — no more single-SIGTERM-and-forget.
+      expect(killProcess).toHaveBeenNthCalledWith(1, 45678, "SIGTERM");
+      expect(killProcess).toHaveBeenNthCalledWith(2, 45678, "SIGKILL");
+      // Pid file survives so `keiko stop` can still find and finish the orphan.
+      expect(existsSync(join(root, ".keiko", "ui.pid"))).toBe(true);
+      expect(c.err()).toContain("did not become healthy");
+      expect(c.err()).toContain("did not exit under SIGKILL");
     } finally {
       nowSpy.mockRestore();
     }

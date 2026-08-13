@@ -56,7 +56,13 @@ interface ScanContext {
   readonly diagnostics: ParserDiagnostic[];
   readonly normalizedParts: string[];
   normalizedLength: number;
+  // Whole-file stop signal: PARSER_TIMEOUT / UNIT_LIMIT_REACHED / PARSER_CANCELLED. Once set
+  // the file-level walk aborts and stays aborted.
   stopped: boolean;
+  // Per-record stop signal set by pushNestingLimit only. `walk()` still short-circuits on it,
+  // but walkJsonLines clears it between records so a deeply-nested line does not silently
+  // discard every valid line that follows (PR-review follow-up on KEIKO-0484).
+  nestingStopped: boolean;
 }
 
 function stringifyValue(value: unknown): string {
@@ -122,7 +128,9 @@ function pushNestingLimit(ctx: ScanContext, pointer: string): void {
       "error",
     ),
   );
-  ctx.stopped = true;
+  // Per-record signal: walk()/descendArray()/descendObject() short-circuit on it, but
+  // walkJsonLines resets it between records so later valid JSONL lines still parse.
+  ctx.nestingStopped = true;
 }
 
 function descendArray(
@@ -140,7 +148,7 @@ function descendArray(
     return;
   }
   for (let i = 0; i < value.length; i += 1) {
-    if (ctx.stopped) return;
+    if (ctx.stopped || ctx.nestingStopped) return;
     walk(ctx, value[i], joinPointer(pointer, String(i)), depth + 1);
   }
 }
@@ -165,10 +173,10 @@ function descendObject(
   const fields = objectScalarFields(value);
   if (fields.length > 0) {
     pushRecord(ctx, pointer, fields.join(" | "));
-    if (ctx.stopped) return;
+    if (ctx.stopped || ctx.nestingStopped) return;
   }
   for (const key of Object.keys(value)) {
-    if (ctx.stopped) return;
+    if (ctx.stopped || ctx.nestingStopped) return;
     const child = value[key];
     if (isScalarOrEmpty(child)) continue;
     walk(ctx, child, joinPointer(pointer, encodePointerSegment(key)), depth + 1);
@@ -176,7 +184,7 @@ function descendObject(
 }
 
 function walk(ctx: ScanContext, value: unknown, pointer: string, depth: number): void {
-  if (ctx.stopped) return;
+  if (ctx.stopped || ctx.nestingStopped) return;
   if (isScalarOrEmpty(value)) {
     pushRecord(ctx, pointer, scalarProjection(value));
     return;
@@ -224,6 +232,9 @@ function walkJsonLines(ctx: ScanContext): void {
   const lines = ctx.text.split("\n");
   for (let i = 0; i < lines.length; i += 1) {
     if (ctx.stopped) return;
+    // Clear the per-record nesting bail from any earlier line so a deeply-nested record does
+    // not silently discard every valid record that follows (PR-review follow-up on KEIKO-0484).
+    resetLineNestingBail(ctx);
     const raw = lines[i];
     if (raw === undefined || raw.trim().length === 0) continue;
     const parsed = parseJsonValue(raw);
@@ -238,8 +249,48 @@ function walkJsonLines(ctx: ScanContext): void {
       );
       continue;
     }
+    // PR-review follow-up (Codex thread 3770110882): snapshot the per-record units and
+    // normalized-text position BEFORE walking so a nesting-overflow bail rolls back any
+    // partial output for THIS line. Without the rollback a hostile JSONL row of the shape
+    // `{"visible":"x","deep":<deeply nested>}` would still index the shallow scalar field
+    // even though the record trips NESTING_LIMIT_REACHED — leaving policy-invalid content
+    // in the parse alongside valid records from other lines.
+    const unitsMark = ctx.units.length;
+    const normalizedPartsMark = ctx.normalizedParts.length;
+    const normalizedLengthMark = ctx.normalizedLength;
+    const diagnosticsMark = ctx.diagnostics.length;
     walk(ctx, parsed.value, joinPointer("", String(i)), 0);
+    if (ctx.nestingStopped) {
+      ctx.units.length = unitsMark;
+      ctx.normalizedParts.length = normalizedPartsMark;
+      ctx.normalizedLength = normalizedLengthMark;
+      downgradeLineNestingDiagnostics(ctx, diagnosticsMark);
+    }
   }
+}
+
+// PR-review follow-up (Codex thread 3771815015): a per-record JSONL nesting overflow rolls
+// back that line's units, but the "NESTING_LIMIT_REACHED" diagnostic still ships at severity
+// "error". discovery/extract.ts:firstParserFailureDiagnostic treats any error-severity
+// diagnostic as fatal, so the document lands as `failed` and the orchestrator never chunks
+// the units from OTHER valid JSONL lines. Downgrade the line-scoped diagnostic to "warning"
+// to match how per-line MALFORMED_INPUT diagnostics are already emitted; the whole-document
+// JSON path keeps error severity because a single-JSON-document nesting violation IS fatal.
+function downgradeLineNestingDiagnostics(ctx: ScanContext, mark: number): void {
+  for (let j = mark; j < ctx.diagnostics.length; j += 1) {
+    const entry = ctx.diagnostics[j];
+    if (entry?.code === "NESTING_LIMIT_REACHED") {
+      ctx.diagnostics[j] = { ...entry, severity: "warning" };
+    }
+  }
+}
+
+// Extracted so TS's control-flow analysis does not narrow ctx.nestingStopped to the literal
+// `false` after the reset assignment — the check after walk() would otherwise be flagged as
+// unreachable. walk() mutates the flag through pushNestingLimit, and TS cannot see through
+// the function boundary.
+function resetLineNestingBail(ctx: ScanContext): void {
+  ctx.nestingStopped = false;
 }
 
 export const jsonParser: ParserAdapter = Object.freeze({
@@ -278,13 +329,23 @@ export const jsonParser: ParserAdapter = Object.freeze({
       normalizedParts: [],
       normalizedLength: 0,
       stopped: false,
+      nestingStopped: false,
     };
     if (jsonLines) {
       walkJsonLines(ctx);
     } else if (parsed?.ok === true) {
       walk(ctx, parsed.value, "", 0);
     }
-    if (ctx.diagnostics.some((diagnostic) => diagnostic.code === "NESTING_LIMIT_REACHED")) {
+    // KEIKO-0484: a whole-document nesting violation still invalidates a single-JSON-document
+    // parse (that is intentional — the top-level value is one thing, and it is malformed). For
+    // JSONL/NDJSON the file's own header contract (lines 208-210) commits to per-record
+    // independence: one bad line MUST NOT discard the whole file's good records. Preserve
+    // ctx.units/normalizedText on the jsonLines path alongside the error diagnostic, matching
+    // how PARSER_TIMEOUT/UNIT_LIMIT_REACHED/PARSER_CANCELLED already fall through.
+    if (
+      !jsonLines &&
+      ctx.diagnostics.some((diagnostic) => diagnostic.code === "NESTING_LIMIT_REACHED")
+    ) {
       return emptyResult(jsonParser.capability, input.documentId, options, ctx.diagnostics);
     }
     return {

@@ -178,6 +178,60 @@ describe("createProgressivePdfExtractor", () => {
     }
   });
 
+  it("produces identical text on resume after an all-textless prefix vs a continuous run (KEIKO-0172)", async () => {
+    // KEIKO-0172 regression pin. The bug: PdfDriveState seeded `anyPageEmitted` from the
+    // proxy `resumeFromPage > 0`, which is correct only when at least one pre-resume page
+    // had non-empty text. If the pre-resume prefix is entirely textless (scanned front-
+    // matter, cover pages), a resumed run inserts a spurious leading "\n\n" before the
+    // first real page's text that a continuous single-pass run would not emit. The fix
+    // seeds from `options.resumeAnyPageEmitted` (with the proxy as compatibility fallback);
+    // callers in extract-progressive.ts derive that flag from the already-persisted
+    // extracted_text_bytes cursor (0 iff no text was ever emitted).
+    const pages = ["", "", "charlie page", "delta page"] as const;
+    const buildExtractor = (): ReturnType<typeof createProgressivePdfExtractor> =>
+      createProgressivePdfExtractor({
+        loadDocument: () => Promise.resolve(fakePdf([...pages])),
+      });
+
+    const continuousSink = collectingSink();
+    await runProgressiveExtraction(buildExtractor(), SOURCE, options(2), continuousSink);
+    const continuousText = continuousSink.text();
+
+    const resumedSink = collectingSink();
+    // Simulate a checkpoint at end of page 2 with the true prior state: no text ever
+    // emitted (both leading pages were textless), so cursor is 0 and extractedTextBytes 0.
+    await runProgressiveExtraction(
+      buildExtractor(),
+      SOURCE,
+      options(2, {
+        resumeFromPage: 2,
+        resumeCharacterStart: 0,
+        resumeExtractedTextBytes: 0,
+        resumeAnyPageEmitted: false,
+      }),
+      resumedSink,
+    );
+    const resumedText = resumedSink.text();
+
+    expect(resumedText).toBe(continuousText);
+    expect(resumedText.startsWith("\n\n")).toBe(false);
+    // Verify a run without the flag (legacy proxy) would insert the spurious leading
+    // separator; this documents WHY the flag matters and pins the regression against the
+    // proxy path being silently reintroduced elsewhere.
+    const legacyProxySink = collectingSink();
+    await runProgressiveExtraction(
+      buildExtractor(),
+      SOURCE,
+      options(2, {
+        resumeFromPage: 2,
+        resumeCharacterStart: 0,
+        resumeExtractedTextBytes: 0,
+      }),
+      legacyProxySink,
+    );
+    expect(legacyProxySink.text().startsWith("\n\n")).toBe(true);
+  });
+
   it("opens range-only sources without requiring a full buffer", async () => {
     let sawRangeRead = false;
     const extractor = createProgressivePdfExtractor({

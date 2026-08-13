@@ -405,3 +405,44 @@ describe("Gateway.circuitStatus", () => {
     expect(gateway.circuitStatus("nope").state).toBe("closed");
   });
 });
+
+// Regression pin (audit KEIKO-0167): the per-provider circuitBreaker override, when present on a
+// ModelProviderConfig, is what breakerFor uses to construct that provider's CircuitBreaker — not
+// the top-level GatewayConfig.circuitBreaker. Providers WITHOUT an override continue to use the
+// shared top-level policy. This drives the observable behaviour by running the same "N failures
+// then open" scenario against two providers in one Gateway: one with failureThreshold=1 (opens
+// after the very first fault) and one with the top-level failureThreshold=3.
+describe("Gateway per-provider circuitBreaker override (KEIKO-0167)", () => {
+  const flakyProvider = provider({
+    modelId: "flaky-provider",
+    maxRetries: 0,
+    circuitBreaker: { failureThreshold: 1, cooldownMs: 1_000, halfOpenProbes: 1 },
+  });
+  const strictProvider = provider({
+    modelId: "strict-provider",
+    maxRetries: 0,
+    // No per-provider circuitBreaker => falls through to config.circuitBreaker (failureThreshold=3).
+  });
+
+  it("opens the flaky provider after ONE failure while the strict provider stays closed", async () => {
+    const gateway = new Gateway(config([flakyProvider, strictProvider]), {
+      adapter: fakeAdapter(() => Promise.reject(new TransportError("down"))),
+      clock: stubClock(),
+    });
+
+    await expect(gateway.chat({ ...REQUEST, modelId: "flaky-provider" })).rejects.toBeInstanceOf(
+      TransportError,
+    );
+    // Override says failureThreshold=1, so the flaky breaker is now OPEN after that single fault.
+    await expect(gateway.chat({ ...REQUEST, modelId: "flaky-provider" })).rejects.toBeInstanceOf(
+      CircuitOpenError,
+    );
+
+    // The sibling without an override still uses the top-level failureThreshold=3, so ONE fault
+    // leaves it closed.
+    await expect(gateway.chat({ ...REQUEST, modelId: "strict-provider" })).rejects.toBeInstanceOf(
+      TransportError,
+    );
+    expect(gateway.circuitStatus("strict-provider").state).toBe("closed");
+  });
+});

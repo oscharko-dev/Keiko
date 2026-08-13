@@ -73,6 +73,11 @@ interface AssistantSpeechContextLease {
   readonly generation: number;
 }
 
+interface AssistantSpeechPumpControl {
+  backpressured: boolean;
+  cancel: () => void;
+}
+
 function reportAudioContextResumeFailure(): void {
   window.reportError(new Error(AUDIO_CONTEXT_RESUME_ERROR));
 }
@@ -233,8 +238,14 @@ export function createBrowserAssistantSpeechStreamingSink():
     body: ReadableStream<Uint8Array>,
     signal: AbortSignal,
     handlers: AssistantSpeechStreamHandlers,
+    control: AssistantSpeechPumpControl,
   ): Promise<void> {
     const reader = body.getReader();
+    control.cancel = (): void => {
+      void reader.cancel().catch(() => {
+        // Playback has already failed closed; releasing the detached stream is best-effort.
+      });
+    };
     let leftover: Uint8Array | undefined;
     let posted = 0;
     try {
@@ -247,12 +258,19 @@ export function createBrowserAssistantSpeechStreamingSink():
           await reader.cancel();
           return;
         }
+        if (control.backpressured) {
+          await reader.cancel();
+          return;
+        }
         const { samples, leftover: rest } = pcmBytesToInt16(value, leftover);
         leftover = rest;
         if (samples.length > 0) {
           posted += samples.length;
           workletNode.port.postMessage(samples, [samples.buffer]);
         }
+      }
+      if (control.backpressured) {
+        return;
       }
       if (posted === 0) {
         // A 200 with no audio: degrade to the visible text rather than waiting on a stream that will
@@ -266,6 +284,31 @@ export function createBrowserAssistantSpeechStreamingSink():
         handlers.onError();
       }
     }
+  }
+
+  function attachWorkletMessageHandler(
+    workletNode: AudioWorkletNode,
+    control: AssistantSpeechPumpControl,
+    handlers: AssistantSpeechStreamHandlers,
+  ): void {
+    let started = false;
+    workletNode.port.onmessage = (event: MessageEvent): void => {
+      const data = event.data as { type?: string; frames?: number };
+      if (data.type === "position") {
+        positionFrames = data.frames ?? positionFrames;
+        if (!started) {
+          started = true;
+          handlers.onStart();
+        }
+      } else if (data.type === "ended") {
+        handlers.onEnded();
+      } else if (data.type === "backpressure" && !control.backpressured) {
+        control.backpressured = true;
+        control.cancel();
+        closeContext();
+        handlers.onError();
+      }
+    };
   }
 
   return {
@@ -288,25 +331,17 @@ export function createBrowserAssistantSpeechStreamingSink():
       }
       if (!leaseIsCurrent(lease, signal)) return true;
       positionFrames = 0;
-      let started = false;
       // AudioContext.resume() may stay pending until the browser's autoplay policy releases output.
       // Starting provider synthesis must not wait behind that browser-local gate: PCM can queue in the
       // worklet and begin as soon as the context runs.
       void resumeAudioContext(lease.context);
       const workletNode = lease.node;
-      workletNode.port.postMessage({ type: "config", primeFrames: PRIME_FRAMES });
-      workletNode.port.onmessage = (event: MessageEvent): void => {
-        const data = event.data as { type?: string; frames?: number };
-        if (data.type === "position") {
-          positionFrames = data.frames ?? positionFrames;
-          if (!started) {
-            started = true;
-            handlers.onStart();
-          }
-        } else if (data.type === "ended") {
-          handlers.onEnded();
-        }
+      const pumpControl: AssistantSpeechPumpControl = {
+        backpressured: false,
+        cancel: () => undefined,
       };
+      workletNode.port.postMessage({ type: "config", primeFrames: PRIME_FRAMES });
+      attachWorkletMessageHandler(workletNode, pumpControl, handlers);
 
       let response: Response;
       try {
@@ -326,7 +361,7 @@ export function createBrowserAssistantSpeechStreamingSink():
       if (response.body === null) {
         return false;
       }
-      void pump(workletNode, response.body, signal, handlers);
+      void pump(workletNode, response.body, signal, handlers, pumpControl);
       return true;
     },
 

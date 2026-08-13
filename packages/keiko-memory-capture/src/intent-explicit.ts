@@ -85,10 +85,17 @@ const REMEMBER_PATTERNS: readonly RegExp[] = [
 // Each branch carries its own copy of the trailing "this project/workspace:" scope hint (rather
 // than factoring it into a second matching stage) so a single execFirst pass still yields the
 // complete prefix length bodyAfterPrefix needs — matching the original REMEMBER_ABOUT_RE shape.
+// The (project|workspace) alternation is now a CAPTURING group (audit KEIKO-0336): tryExtractRemember
+// reads the captured noun and threads it into scopeOrReject as an explicit scopeKind, so
+// "remember about this workspace: X" produces workspace-scoped output even when projectId is set
+// (pickImplicitScopeKind's project-first precedence would otherwise silently override the user's
+// stated intent). When the "about this project|workspace" fragment is absent (i.e. the plain
+// "remember about X" form) the capture is undefined and scope inference falls back to context
+// precedence exactly as before.
 const REMEMBER_ABOUT_PATTERNS: readonly RegExp[] = [
-  /^\s*remember\s+about\s+(?:this\s+(?:project|workspace)[:,\s]+)?/iu,
-  /^\s*merk(?:e)?\s+dir\s+(?:zu|über|ueber)\s+(?:this\s+(?:project|workspace)[:,\s]+)?/iu,
-  /^\s*speicher(?:e)?\s+(?:zu|über|ueber)\s+(?:this\s+(?:project|workspace)[:,\s]+)?/iu,
+  /^\s*remember\s+about\s+(?:this\s+(project|workspace)[:,\s]+)?/iu,
+  /^\s*merk(?:e)?\s+dir\s+(?:zu|über|ueber)\s+(?:this\s+(project|workspace)[:,\s]+)?/iu,
+  /^\s*speicher(?:e)?\s+(?:zu|über|ueber)\s+(?:this\s+(project|workspace)[:,\s]+)?/iu,
 ];
 const FORGET_PATTERNS: readonly RegExp[] = [
   /^\s*forget(?:\s+about)?\s+/iu,
@@ -206,10 +213,57 @@ function resolveTarget(
   return head === null ? { kind: "none" } : { kind: "unique", memoryId: head };
 }
 
+// Explicit scope hint captured from "about this <project|workspace>:" text. Alias exists so
+// the surrounding helpers and the extractor's own signature share one type name instead of
+// re-stating the string union in every position.
+type ExplicitScopeKind = "project" | "workspace";
+
+// Fail-closed conflict check: when the caller has already supplied an authority-constraint
+// scopeKind AND the "about this <noun>:" fragment names a DIFFERENT scope, reject the capture.
+// This closes the trust-boundary hole where user-controlled text could widen a project-scoped
+// policy to workspace scope by writing "about this workspace" (PR-review follow-up on KEIKO-0336).
+function rejectOnScopeConflict(
+  policy: CapturePolicyOptions,
+  explicitScopeKind: ExplicitScopeKind | undefined,
+  _context: CaptureContext,
+): CaptureOutcome | null {
+  if (policy.scopeKind === undefined || explicitScopeKind === undefined) return null;
+  if (policy.scopeKind === explicitScopeKind) return null;
+  return { kind: "rejected", reason: "scope-not-resolvable" };
+}
+
+function mergePolicyScopeKind(
+  policy: CapturePolicyOptions,
+  explicitScopeKind: ExplicitScopeKind | undefined,
+): CapturePolicyOptions {
+  if (explicitScopeKind === undefined) return policy;
+  if (policy.scopeKind !== undefined) return policy;
+  return { ...policy, scopeKind: explicitScopeKind };
+}
+
+// Reads the capturing group added to REMEMBER_ABOUT_PATTERNS. Returns undefined when the "about
+// this <noun>:" fragment was absent (plain "remember about X"), so the caller preserves whatever
+// policy.scopeKind (if any) was already provided by the surrounding capture pipeline. Audit
+// KEIKO-0336.
+function explicitScopeKindFromAboutMatch(
+  aboutPrefixMatch: RegExpExecArray | null,
+): ExplicitScopeKind | undefined {
+  const captured = aboutPrefixMatch?.[1];
+  if (captured === undefined) {
+    return undefined;
+  }
+  const normalized = captured.toLowerCase();
+  if (normalized === "project" || normalized === "workspace") {
+    return normalized;
+  }
+  return undefined;
+}
+
 // ─── tryExtractRemember ──────────────────────────────────────────────────────
-// "remember about this project: X" → project scope hint. "remember that X" / "remember X" →
-// implicit scope from context. Emits a preference-type proposal — explicit user instructions
-// are the canonical preference source per #205 source-kind taxonomy.
+// "remember about this project: X" → project scope hint. "remember about this workspace: X" →
+// workspace scope hint. "remember that X" / "remember X" → implicit scope from context. Emits a
+// preference-type proposal — explicit user instructions are the canonical preference source per
+// #205 source-kind taxonomy.
 export function tryExtractRemember(
   text: string,
   context: CaptureContext,
@@ -233,7 +287,18 @@ export function tryExtractRemember(
   if (rejection !== null) {
     return rejection;
   }
-  const scopeResolution = scopeOrReject(context, policy);
+  // The REMEMBER_ABOUT_PATTERNS capture the noun ("project" or "workspace") when the user wrote
+  // "about this <noun>:". Thread it through scopeOrReject as an explicit scopeKind only when
+  // the CALLER has not already set one (audit KEIKO-0336). PR-review follow-up: never let
+  // user-controlled text override an authority-constraint scopeKind supplied by the pipeline
+  // — that would let "remember about this workspace" widen a project-scoped policy from an
+  // agent turn. On conflict (policy asks for one scope, text names the other) fail closed by
+  // rejecting the capture, mirroring how scope-missing already rejects.
+  const explicitScopeKind = explicitScopeKindFromAboutMatch(aboutPrefixMatch);
+  const conflictOutcome = rejectOnScopeConflict(policy, explicitScopeKind, context);
+  if (conflictOutcome !== null) return conflictOutcome;
+  const effectivePolicy = mergePolicyScopeKind(policy, explicitScopeKind);
+  const scopeResolution = scopeOrReject(context, effectivePolicy);
   if (!scopeResolution.ok) {
     return scopeResolution.outcome;
   }

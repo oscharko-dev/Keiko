@@ -404,12 +404,46 @@ function digestText(value: string): string {
 }
 
 /**
- * In-process payload digest. Mirrors `inspectStagedSidecarPayload`'s tree walk — including its
- * `localeCompare` ordering — because the launch-time re-check recomputes this digest in the same
- * server process and must agree byte-for-byte with the discovery-recorded summary.
+ * KEIKO-0180 (and #3099 P2 follow-up): SINGLE canonical formula shared by the production tree
+ * walker, the discovery pipeline, and tests. Given a set of `(relativePath, sha256)` pairs,
+ * produces the tree digest — locale-sorted (the payload lane matches `localeCompare`). The
+ * production directory walker `hashDirectoryTree` DELEGATES to this function so a formula
+ * change touches one place and every consumer (including the manager test fixture) moves with
+ * it. A test that hand-restated the concatenation could formerly drift silently; that path is
+ * now closed.
+ */
+export function computePortableSidecarPayloadTreeDigest(
+  entries: readonly { readonly relativePath: string; readonly sha256: string }[],
+): string {
+  const hash = createHash("sha256");
+  const sorted = [...entries].sort((left, right) =>
+    left.relativePath.localeCompare(right.relativePath),
+  );
+  for (const entry of sorted) {
+    hash.update(`${entry.relativePath}\0${entry.sha256}\0`);
+  }
+  return hash.digest("hex");
+}
+
+/**
+ * In-process payload digest. Delegates to the canonical
+ * `computePortableSidecarPayloadTreeDigest` above — one formula, one place. Mirrors
+ * `inspectStagedSidecarPayload`'s tree walk (locale-sorted) so the launch-time re-check agrees
+ * byte-for-byte with the discovery-recorded summary.
  */
 function hashDirectoryTree(root: string): string {
-  return hashTree(root, (left, right) => left.localeCompare(right));
+  const entries: { readonly relativePath: string; readonly sha256: string }[] = [];
+  // #3099 R8 KfQ perf: `computePortableSidecarPayloadTreeDigest` re-sorts internally, so
+  // passing a no-op comparator to `listFiles` avoids the redundant O(n log n) sort on the
+  // discovery walk. Array.sort in modern V8 is stable, so `() => 0` preserves insertion order
+  // (irrelevant here — the helper sorts by relativePath itself).
+  for (const file of listFiles(root, () => 0)) {
+    entries.push({
+      relativePath: relative(root, file).split(sep).join("/"),
+      sha256: sha256File(file),
+    });
+  }
+  return computePortableSidecarPayloadTreeDigest(entries);
 }
 
 /**

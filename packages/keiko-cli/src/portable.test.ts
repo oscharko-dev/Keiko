@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -1597,19 +1598,17 @@ describe("runPortableCli", () => {
   });
 
   it.each([
-    // Unparseable JSON fails closed before adoption is even considered (the read itself throws);
-    // a parseable record with an unknown schema reaches the adoption gate and must be treated as
-    // an existing registration, not a pristine first run — treating it as absent would let
-    // corrupting one file reopen adoption over a tampered root (#3026 review finding).
-    ["unparseable JSON", "{ corrupted\n", undefined],
-    [
-      "schema-invalid record",
-      '{"schemaVersion":999}\n',
-      "existing same-path managed install root is not attested",
-    ],
+    // Codex thread 3771815001: both an unparseable file AND a parseable-but-schema-unknown file
+    // must fail-closed BEFORE setup can rewrite the record with recordPreLockSetupFailure.
+    // Widening the pre-lock corrupt guard to cover the schema-invalid case preserves the
+    // locator + attestation an operator needs to recover the pre-existing managed installation.
+    // The registration bytes must survive the run unchanged and setup must never surface
+    // "ready at managed root".
+    ["unparseable JSON", "{ corrupted\n"],
+    ["schema-invalid record", '{"schemaVersion":999}\n'],
   ] as const)(
     "never adopts over a malformed existing registration (%s)",
-    async (_label, stateBytes, expectedMessage) => {
+    async (_label, stateBytes) => {
       const root = tempRoot();
       const home = join(root, "home");
       const managedRoot = join(home, "PortableApps", "Keiko");
@@ -1617,7 +1616,8 @@ describe("runPortableCli", () => {
       const c = capture();
       writeWindowsFixture(managedRoot);
       mkdirSync(stateDir, { recursive: true });
-      writeFileSync(join(stateDir, "portable-install-state.json"), stateBytes);
+      const registrationPath = join(stateDir, "portable-install-state.json");
+      writeFileSync(registrationPath, stateBytes);
 
       const code = await runPortableCli(
         [
@@ -1637,9 +1637,13 @@ describe("runPortableCli", () => {
       );
 
       expect(code).toBe(1);
-      if (expectedMessage !== undefined) expect(c.err()).toContain(expectedMessage);
+      expect(c.err()).toContain("portable install registration is corrupt");
       // Neither shape may ever have attested the root.
       expect(c.out()).not.toContain("ready at managed root");
+      // The original registration bytes must be preserved verbatim — the whole point of the
+      // pre-lock corrupt guard is to prevent recordPreLockSetupFailure from overwriting the
+      // locator and hashes needed for recovery.
+      expect(readFileSync(registrationPath, "utf8")).toBe(stateBytes);
     },
   );
 
@@ -2884,5 +2888,61 @@ describe("runPortableCli", () => {
     expect(existsSync(join(outsidePrograms, "Keiko.lnk"))).toBe(false);
     expect(existsSync(managedRoot)).toBe(false);
     expect(c.err()).toContain("portable registration refused symlinked ancestor");
+  });
+
+  it("reads a truncated portable registration state as no registration recorded (fail-closed-to-undefined)", () => {
+    // #KEIKO-0333 must-fail-before-fix: readPortableInstallRegistration used to
+    // JSON.parse without try/catch, so a truncated / non-JSON registration file
+    // threw a SyntaxError out of every downstream caller. After the fix, the reader
+    // fails closed to `undefined` — matching launcher-state.ts's fail-closed-to-empty
+    // semantics for the sibling state file — so the CLI observes "no registration
+    // recorded" and stays operable.
+    const stateDir = join(tempRoot(), "state");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(stateDir, "portable-install-state.json"), "not json{", "utf8");
+    expect(() => readPortableInstallRegistration(stateDir)).not.toThrow();
+    expect(readPortableInstallRegistration(stateDir)).toBeUndefined();
+  });
+
+  it("writes portable registration atomically and leaves no temp dir behind after a failed write", async () => {
+    // #KEIKO-0333 must-fail-before-fix: writeRegistration used a single
+    // writeFileSync (truncate-then-write); a crash mid-write could leave a
+    // truncated registration on disk. After the fix, the write goes through
+    // mkdtemp -> write -> rename, mirroring launcher-state.ts saveState. Verify by
+    // running a successful setup and asserting only the target file survives — no
+    // `.portable-registration-*` temp directory remains.
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const env = windowsPortableEnv(home);
+    const managedRoot = join(env.LOCALAPPDATA, "Programs", "Keiko");
+    const stateDir = join(root, "state");
+    writeWindowsFixture(source);
+    const c = capture();
+    const code = await runPortableCli(
+      [
+        "setup",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        source,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      c.io,
+      env,
+      { homedir: () => home, now: () => NOW },
+    );
+    expect(code).toBe(0);
+    // Registration file exists and parses cleanly.
+    const parsed = readPortableInstallRegistration(stateDir);
+    expect(parsed?.status).toBe("managed");
+    // No `.portable-registration-*` temp dirs survived the atomic write.
+    const leftovers = readdirSync(stateDir).filter((name) =>
+      name.startsWith(".portable-registration-"),
+    );
+    expect(leftovers).toEqual([]);
   });
 });

@@ -78,14 +78,9 @@ const SCANNED_DEPENDENCY_SECTIONS = [
 ];
 
 // Manifest sections that determine what ships in the published `@oscharko-dev/keiko` runtime graph.
-// `devDependencies`/`peerDependencies` are deliberately excluded — they do not ship in the tarball.
+// Workspace peers are included separately because staging promotes them to the root manifest.
 const PUBLISHED_RUNTIME_SECTIONS = ["dependencies", "optionalDependencies"];
-
-// Namespaces exempt from the published-runtime completeness check (check 7). Workspace packages are
-// governed by the bundle contract (`check-package-surface.mjs`); `@types/*` packages are
-// declaration-only (no runtime JS, install hook, or network reach) so they carry no supply-chain
-// execution risk even when declared under `dependencies`.
-const COMPLETENESS_EXEMPT_PREFIXES = ["@oscharko-dev/", "@types/"];
+const PROMOTED_WORKSPACE_RUNTIME_SECTIONS = [...PUBLISHED_RUNTIME_SECTIONS, "peerDependencies"];
 
 const SOURCE_SCAN_ROOTS = [
   { dir: "src", recurse: true },
@@ -464,47 +459,69 @@ function checkMatrixConsistency(matrixPath, rootManifestPath, packagesDir) {
 
 // --- Check 7: published-runtime completeness (fail-closed on unapproved dependencies) ---
 
-function isCompletenessExempt(name) {
-  for (const prefix of COMPLETENESS_EXEMPT_PREFIXES) {
-    if (name.startsWith(prefix)) return true;
-  }
-  return false;
-}
-
-function externalRuntimeNamesFromManifest(manifest) {
+function externalRuntimeNamesFromManifest(manifest, runtimeWorkspaceNames, sections) {
   const entries = [];
-  for (const section of PUBLISHED_RUNTIME_SECTIONS) {
+  for (const section of sections) {
     const value = manifest[section];
     if (value && typeof value === "object" && !Array.isArray(value)) {
       for (const name of Object.keys(value)) {
-        if (!isCompletenessExempt(name)) entries.push({ name, section });
+        if (!runtimeWorkspaceNames.has(name)) entries.push({ name, section });
       }
     }
   }
   return entries;
 }
 
+function validatedRuntimeWorkspaceNames(bundled, packagesDir) {
+  const names = new Set();
+  for (const fullName of bundled) {
+    if (typeof fullName !== "string" || !/^@oscharko-dev\/keiko-[a-z0-9-]+$/u.test(fullName)) {
+      throw new Error(
+        `bundleDependencies entry is not a reviewed runtime workspace: ${String(fullName)}`,
+      );
+    }
+    const shortName = fullName.slice("@oscharko-dev/".length);
+    const manifestPath = join(packagesDir, shortName, "package.json");
+    if (!safeStat(manifestPath)?.isFile()) {
+      throw new Error(`bundled runtime workspace manifest is missing: ${fullName}`);
+    }
+    const manifest = readJsonFile(manifestPath);
+    if (manifest.name !== fullName) {
+      throw new Error(`bundled runtime workspace manifest name does not match: ${fullName}`);
+    }
+    names.add(fullName);
+  }
+  return names;
+}
+
 // The published runtime surface = the root manifest's runtime/optional deps plus the runtime/optional
-// deps of every `bundleDependencies` workspace package — those are the only manifests whose declared
-// externals are packed into the published tarball. Returns name -> { label, section } of the first
-// manifest that declared it.
+// deps of every workspace in the reviewed runtime inventory. Those manifests are packed into staged
+// vendor archives. Returns name -> { label, section } of the first manifest that declared it.
 function collectPublishedRuntimeDependencies(rootManifestPath, packagesDir) {
   const rootManifest = readJsonFile(rootManifestPath);
   const collected = new Map();
   const add = (name, label, section) => {
     if (!collected.has(name)) collected.set(name, { label, section });
   };
-  for (const { name, section } of externalRuntimeNamesFromManifest(rootManifest)) {
-    add(name, "<root>", section);
-  }
   const bundled = Array.isArray(rootManifest.bundleDependencies)
     ? rootManifest.bundleDependencies
     : [];
+  const runtimeWorkspaceNames = validatedRuntimeWorkspaceNames(bundled, packagesDir);
+  for (const { name, section } of externalRuntimeNamesFromManifest(
+    rootManifest,
+    runtimeWorkspaceNames,
+    PUBLISHED_RUNTIME_SECTIONS,
+  )) {
+    add(name, "<root>", section);
+  }
   for (const fullName of bundled) {
     const shortName = fullName.replace(/^@oscharko-dev\//, "");
     const manifestPath = join(packagesDir, shortName, "package.json");
-    if (!safeStat(manifestPath)?.isFile()) continue;
-    for (const { name, section } of externalRuntimeNamesFromManifest(readJsonFile(manifestPath))) {
+    for (const { name, section } of externalRuntimeNamesFromManifest(
+      readJsonFile(manifestPath),
+      runtimeWorkspaceNames,
+      PROMOTED_WORKSPACE_RUNTIME_SECTIONS,
+    )) {
       add(name, shortName, section);
     }
   }

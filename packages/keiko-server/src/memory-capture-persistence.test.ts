@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MemoryId, MemoryRecord, MemoryUserId } from "@oscharko-dev/keiko-contracts";
@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 function vault(): MemoryVaultStore {
-  const memoryDir = mkdtempSync(join(tmpdir(), "keiko-capture-persistence-"));
+  const memoryDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-capture-persistence-"));
   roots.push(memoryDir);
   const store = createMemoryVault({ memoryDir, redactString: (value) => value });
   vaults.push(store);

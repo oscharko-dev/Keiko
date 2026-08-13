@@ -18,6 +18,7 @@ import { loadEvidence, loadServer } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 import {
   isPortableManagedInstallMode,
+  isTerminalUpdateSession,
   renderApplyTerminal,
   renderUpdateStatus,
 } from "./update-output.js";
@@ -299,15 +300,6 @@ function terminalSessionFor(
   return undefined;
 }
 
-function isTerminal(session: UpdateSession): boolean {
-  return (
-    session.phase === "restart-required" ||
-    session.phase === "succeeded" ||
-    session.phase === "failed" ||
-    session.phase === "cancelled"
-  );
-}
-
 async function waitForTerminalSession(
   manager: UpdateSessionManager,
   sessionId: string,
@@ -317,7 +309,7 @@ async function waitForTerminalSession(
 ): Promise<UpdateSession | undefined> {
   for (let elapsed = 0; elapsed <= maxWaitMs; elapsed += pollIntervalMs) {
     const session = terminalSessionFor(manager.getStatus(), sessionId);
-    if (session !== undefined && isTerminal(session)) return session;
+    if (session !== undefined && isTerminalUpdateSession(session)) return session;
     await sleep(pollIntervalMs);
   }
   return terminalSessionFor(manager.getStatus(), sessionId);
@@ -400,9 +392,32 @@ async function runApply(runtime: UpdateRuntime, io: CliIo, deps: UpdateCliDeps):
   return successfulApply(terminal) ? 0 : 1;
 }
 
-function safeErrorMessage(error: unknown, server: ServerModule | undefined): string {
+function errorDiscriminator(error: unknown): string {
+  const name = error instanceof Error ? error.name : "UnknownError";
+  const code =
+    error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
+      ? error.code
+      : undefined;
+  return code === undefined ? name : `${name} (${code})`;
+}
+
+// Body-free error discriminator. The UpdateSessionError branch keeps its already-vetted
+// error.message (that type is authored to be operator-safe). For every other error we emit
+// only the error's constructor name plus, when present, the errno `code` — no message, no
+// stack, no path — and route the fragment through the same secret redactor createRuntime uses
+// so a redactor rule authored for that runtime also masks anything that ever leaked into a
+// constructor/code string. When createRuntime itself threw, `server` is undefined and we fall
+// back to the unredacted discriminator (never to silence — see #KEIKO-0486 root cause).
+function safeErrorMessage(
+  error: unknown,
+  env: EnvSource,
+  server: ServerModule | undefined,
+): string {
   if (server !== undefined && error instanceof server.UpdateSessionError) return error.message;
-  return "Unexpected update command failure.";
+  const discriminator = errorDiscriminator(error);
+  const redacted =
+    server === undefined ? discriminator : stringRedactor(env, server)(discriminator);
+  return `Unexpected update command failure. ${redacted}`;
 }
 
 export async function runUpdateCli(
@@ -427,7 +442,7 @@ export async function runUpdateCli(
     if (subcommand === "check") return await runCheck(runtime, io);
     return await runApply(runtime, io, deps);
   } catch (error) {
-    io.err(`keiko update ${subcommand}: ${safeErrorMessage(error, runtime?.server)}\n`);
+    io.err(`keiko update ${subcommand}: ${safeErrorMessage(error, env, runtime?.server)}\n`);
     return 1;
   } finally {
     runtime?.close();

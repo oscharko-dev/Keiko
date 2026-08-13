@@ -1,5 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -108,7 +115,7 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
       }
 
       uiTsconfigBefore = readFileSync(UI_TSCONFIG, "utf8");
-      stateDir = mkdtempSync(join(tmpdir(), "keiko-dev-runner-"));
+      stateDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-dev-runner-"));
       const publicPort = await freePort();
       const bffPort = await freePort();
       const nextPort = await freePort();

@@ -12,7 +12,7 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { EventEmitter } from "node:events";
-import { promises as fs } from "node:fs";
+import { promises as fs, realpathSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1564,7 +1564,7 @@ describe("Issue #539 audit regressions", () => {
   // Architect GAP-1 / security C1: the BFF wiring must compose `relationship` into UiHandlerDeps
   // so production calls (`keiko ui`) reach the handlers instead of HTTP 500.
   it("BFF buildUiHandlerDeps wires the relationship deps with a scopeResolver", async () => {
-    const tmpDir = await fs.mkdtemp(join(tmpdir(), "keiko-issue539-"));
+    const tmpDir = await fs.mkdtemp(join(realpathSync(tmpdir()), "keiko-issue539-"));
     const dbPath = join(tmpDir, "ui.db");
     try {
       const env: Record<string, string> = { KEIKO_UI_DATA_DIR: tmpDir };
