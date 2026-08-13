@@ -134,6 +134,12 @@ function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingT
         "workspace-contained",
         "high",
       ) !== "allowed",
+    // KEIKO-0469: opt in to defense-in-depth binding enforcement so that a mutationGuard reaching
+    // read/discover/edit without a producer-binding is denied at the preflight boundary rather
+    // than silently no-op'ing the workspace/run identity check. The paired authority port
+    // (`createCodingToolAuthorityPort` with `requireProducerBinding: true`) already denies before
+    // such a guard can be constructed; this is the second lock.
+    enforceProducerBinding: true,
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     ...(input.mutationLeaseCoordinator
       ? { mutationLeaseCoordinator: input.mutationLeaseCoordinator }

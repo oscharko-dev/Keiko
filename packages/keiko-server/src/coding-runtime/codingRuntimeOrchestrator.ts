@@ -43,9 +43,19 @@ import type {
 import type { CodingRuntimeTaskOutcome } from "./productionCodingRuntimeHost.js";
 
 function runtimePauseFailureCode(
-  code: "authority-expired" | "authority-resolution-failed" | "runtime-run-mismatch",
+  code:
+    | "authority-expired"
+    | "authority-resolution-failed"
+    | "runtime-run-mismatch"
+    | "runtime-stopped",
 ): CodingWorkbenchRuntimeFailureCode {
-  return code === "runtime-run-mismatch" ? "authority-resolution-failed" : code;
+  if (code === "runtime-run-mismatch") return "authority-resolution-failed";
+  // KEIKO-0386: a pause/resume rejected because the runtime was mid-teardown surfaces on the
+  // orchestrator as `runtime-failed`, matching how issueApproval's runtime-stopped rejection is
+  // projected (see runtimeApprovalIssueFailureCode). Both refuse further operator input on an
+  // active that is disposing.
+  if (code === "runtime-stopped") return "runtime-failed";
+  return code;
 }
 
 type CodingRuntimeApprovalIssueFailureCode = Extract<
@@ -102,12 +112,6 @@ const TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
 export const MAX_APPROVAL_CHALLENGE_TTL_MS = 5 * 60 * 1_000;
 
 const DIGEST = (value: string): string => createHash("sha256").update(value).digest("hex");
-const terminal = new Set<CodingWorkbenchRuntimeStateName>([
-  "succeeded",
-  "failed",
-  "cancelled",
-  "taken-over",
-]);
 const GRANT_VISIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
   "starting",
   "ready",
@@ -415,11 +419,19 @@ export class CodingRuntimeOrchestrator {
     const grants = registry.activeGrants(runId, this.now().getTime());
     const newest = grants.at(-1);
     if (newest === undefined) return undefined;
-    const domains = [...new Set(grants.flatMap((grant) => grant.domains))].sort((left, right) =>
-      left.localeCompare(right),
-    );
-    const expiresAtMs = Math.max(...grants.map((grant) => grant.expiresAtMs));
-    return { grantId: newest.grantId, domains, expiresAt: new Date(expiresAtMs).toISOString() };
+    // The UI shows one row per authenticated research channel, so we project the newest live
+    // grant exclusively. Previously we unioned domains from every live grant while pairing the
+    // newest grant's id, which misrepresented an older grant's authority as belonging to the
+    // newest one. #3099 P2 follow-up: also drop the older grants' domains — grant id, domains,
+    // and expiry must all describe the SAME underlying grant record (a domain that belongs to
+    // a still-live older grant would otherwise be shown with the newest grant's expiry, then
+    // "unexpectedly reappear" with the older expiry once the newest grant is pruned).
+    const domains = [...new Set(newest.domains)].sort((left, right) => left.localeCompare(right));
+    return {
+      grantId: newest.grantId,
+      domains,
+      expiresAt: new Date(newest.expiresAtMs).toISOString(),
+    };
   }
 
   decideApproval(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
@@ -1010,7 +1022,11 @@ export class CodingRuntimeOrchestrator {
 
   private endSettledResult(runId: string): CodingRuntimeOrchestratorResult | undefined {
     const settled = this.deps.snapshots.get(runId);
-    if (this.activeRunId === undefined && settled !== undefined && terminal.has(settled.state)) {
+    if (
+      this.activeRunId === undefined &&
+      settled !== undefined &&
+      TERMINAL_STATES.has(settled.state)
+    ) {
       return { ok: true, snapshot: this.projection.publicSnapshot(settled) };
     }
     return undefined;
@@ -1080,7 +1096,7 @@ export class CodingRuntimeOrchestrator {
     published: boolean,
     state: CodingWorkbenchRuntimeStateName,
   ): boolean {
-    return !published && !terminal.has(state) && state !== "recovery-required";
+    return !published && !TERMINAL_STATES.has(state) && state !== "recovery-required";
   }
 
   private finalizeTransitionIfTerminal(
@@ -1090,7 +1106,7 @@ export class CodingRuntimeOrchestrator {
   ): void {
     if (state === "recovery-required") {
       this.deps.safeActivityProjection?.markUnavailable(next.runId);
-    } else if (!terminal.has(state)) {
+    } else if (!TERMINAL_STATES.has(state)) {
       return;
     } else {
       this.purgeExplicitlyEndedActivity(next.runId, state);
@@ -1124,8 +1140,9 @@ export class CodingRuntimeOrchestrator {
       bindingDigest: next.bindingDigest,
       provenanceDigest: next.provenanceDigest,
     });
-    if (terminal.has(state)) this.activeRunId = undefined;
-    if (terminal.has(state) || state === "recovery-required") this.activeEffectiveMode = undefined;
+    if (TERMINAL_STATES.has(state)) this.activeRunId = undefined;
+    if (TERMINAL_STATES.has(state) || state === "recovery-required")
+      this.activeEffectiveMode = undefined;
     this.approvals.delete(next.runId);
     this.operations.clear(next.runId);
     this.pruneSettled();

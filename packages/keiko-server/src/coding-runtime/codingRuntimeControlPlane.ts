@@ -1,6 +1,7 @@
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
+import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
@@ -66,6 +67,11 @@ export interface CodingRuntimeControlPlaneInput {
   readonly serverPrincipal: () => string | undefined;
   /** Qualified adapters are supplied by #2258; absence is a deliberate unavailable posture. */
   readonly runtimeHost?: CodingRuntimeHost | undefined;
+  /**
+   * When present, mid-stream SSE fan-out write failures are recorded via this sink — one
+   * redacted record per subscriber, correlationId=runId (KEIKO-0225).
+   */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 export interface CodingRuntimeControlPlane {
@@ -91,7 +97,9 @@ interface RuntimeEventReceiver {
 export function createCodingRuntimeControlPlane(
   input: CodingRuntimeControlPlaneInput,
 ): CodingRuntimeControlPlane {
-  const eventHub = new CodingRuntimeEventHub();
+  const eventHub = new CodingRuntimeEventHub(
+    input.diagnostics ? { diagnostics: input.diagnostics } : {},
+  );
   const receiver: RuntimeEventReceiver = {};
   const manager =
     input.runtimeHost?.createManager((event) => {

@@ -1,3 +1,7 @@
+import {
+  EDITOR_AGENT_CONFLICT_CODES,
+  EDITOR_AGENT_FAILURE_CODES,
+} from "@oscharko-dev/keiko-contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { createCodingToolFacade } from "./codingToolFacade.js";
@@ -498,6 +502,34 @@ describe("CodingToolFacade", () => {
       evidence: [{ kind: "governed-delegate", code: "failed" }],
     });
     expect(JSON.stringify(result)).not.toContain("SENTINEL_");
+  });
+
+  // Regression: KEIKO-0292. The facade's closed vocabulary must remain the union of the two
+  // contract-owned enums (EDITOR_AGENT_CONFLICT_CODES ∪ EDITOR_AGENT_FAILURE_CODES) plus this
+  // port's own transport markers. Iterating the exported enums proves that a future addition to
+  // either canonical list reaches this facade without a coordinated edit — the previous
+  // hand-restated 21-entry Set silently drifted on every new contract code.
+  it("forwards every canonical contract EditorAgent conflict and failure code", async () => {
+    const canonical = [...EDITOR_AGENT_CONFLICT_CODES, ...EDITOR_AGENT_FAILURE_CODES];
+    expect(canonical.length).toBeGreaterThanOrEqual(11 + 6);
+
+    for (const code of canonical) {
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() =>
+        Promise.resolve({ outcome: "failed", reasonCode: code }),
+      );
+      const subject = createCodingToolFacade(ports);
+
+      const result = await subject.execute({
+        body: requestBody({ action: "edit", changeset }),
+        capability,
+      });
+
+      expect(result).toEqual({
+        status: "failed",
+        evidence: [{ kind: "governed-delegate", code }],
+      });
+    }
   });
 
   it("never forwards a reasonCode for a non-edit action's failure", async () => {

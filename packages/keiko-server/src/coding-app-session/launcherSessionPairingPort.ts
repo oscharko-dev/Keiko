@@ -97,15 +97,35 @@ export function createLauncherSessionPairingPort(
   const now = deps.now ?? Date.now;
   const freshnessMs = deps.claimFreshnessMs ?? DEFAULT_CLAIM_FRESHNESS_MS;
   const secret = deps.secret;
-  const consumedRequestIds = new Set<string>();
+  // KEIKO-0460: the anti-replay set previously grew unbounded and — once past the cap —
+  // permanently rejected every future attestation. Since `isFresh` already denies any attestation
+  // whose issuedAtMs is more than `freshnessMs` from wall in either direction, an id can only be
+  // replayed inside that window. Pair each id with its own expiry (`issuedAtMs + freshnessMs`)
+  // and evict entries whose window has elapsed before the cap gate — no anti-replay strength is
+  // given up because a would-be replay outside the window was already denied by `isFresh`.
+  const consumedRequestIds = new Map<string, number>();
+  // Strict `<` matches `isFresh`'s inclusive `age <= freshnessMs` — at the exact boundary the
+  // original attestation is still admissible, so we must NOT evict its entry yet. #3099 P2
+  // follow-up to KEIKO-0460.
+  const prune = (nowMs: number): void => {
+    for (const [requestId, expiresAtMs] of consumedRequestIds) {
+      if (expiresAtMs < nowMs) consumedRequestIds.delete(requestId);
+    }
+  };
   return {
     attest: (attestation: SessionPairingAttestation): SessionPairingDecision => {
       if (!isWellFormedSessionPairingAttestation(attestation)) return SESSION_PAIRING_DENIED;
-      if (!isFresh(attestation.issuedAtMs, now(), freshnessMs)) return SESSION_PAIRING_DENIED;
+      const nowMs = now();
+      // #3099 R3 KfQ Major: prune at the top of every attest so stale entries clear even when
+      // subsequent traffic is a stream of stale-only replays that never reaches the admit path
+      // — otherwise a burst of stale attestations could hoard the ~4k slots and lock a future
+      // fresh attestation out on availability grounds.
+      prune(nowMs);
+      if (!isFresh(attestation.issuedAtMs, nowMs, freshnessMs)) return SESSION_PAIRING_DENIED;
       if (consumedRequestIds.has(attestation.requestId)) return SESSION_PAIRING_DENIED;
       if (consumedRequestIds.size >= MAX_TRACKED_REQUEST_IDS) return SESSION_PAIRING_DENIED;
       if (!claimMatches(secret, attestation)) return SESSION_PAIRING_DENIED;
-      consumedRequestIds.add(attestation.requestId);
+      consumedRequestIds.set(attestation.requestId, attestation.issuedAtMs + freshnessMs);
       return { outcome: "approved", principalLabel: APPROVED_PRINCIPAL_LABEL };
     },
   };

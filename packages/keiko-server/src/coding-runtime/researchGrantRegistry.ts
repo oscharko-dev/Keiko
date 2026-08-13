@@ -81,6 +81,15 @@ export interface ResearchGrantRegistry {
     nowMs: number,
   ) => ResearchChargeResult;
   readonly invalidateRun: (runId: string) => void;
+  /**
+   * Saturates a specific grant's cumulative byte budget so `reserveFetch`'s byte gate fails
+   * closed on the next call. #3099 R7 P1: used by the research egress port on an over-cap or
+   * mid-stream read failure — the fetch DID happen against the endpoint, we just cannot
+   * measure the exact bytes read. Charging maxReadBytes (2 MB) against the 10 MB grant is
+   * insufficient because the charge succeeds and lets 4 more oversized responses through
+   * before the fetch-count cap. Saturating gives one strike, one exhaustion.
+   */
+  readonly saturateBytes: (runId: string, grantId: string) => void;
 }
 
 // Internal mutable form: only the two usage counters mutate (`usedFetches` via `reserveFetch`,
@@ -219,18 +228,26 @@ class InMemoryResearchGrantRegistry implements ResearchGrantRegistry {
 
   // Reserves one fetch against the fetch-count budget BEFORE the caller makes any network call.
   // Expiry is checked before pruning would remove the grant so "expired" stays distinguishable
-  // from "unknown".
+  // from "unknown". Also refuses a reservation once the cumulative byte budget is already exhausted
+  // — chargeFetch runs after the response body has been read, so without this gate the next hop
+  // would be admitted and only stopped at charge time, permitting one extra outbound request per
+  // over-budget grant.
   public reserveFetch(runId: string, grantId: string, nowMs: number): ResearchChargeResult {
     const grant = this.findGrant(runId, grantId);
     if (grant === undefined) return "unknown";
     if (grant.expiresAtMs <= nowMs) return "expired";
     if (grant.usedFetches + 1 > grant.maxFetches) return "limit-reached";
+    if (grant.usedBytes >= grant.maxTotalBytes) return "limit-reached";
     grant.usedFetches += 1;
     return "ok";
   }
 
   // Reconciles actual bytes read against the cumulative byte budget AFTER a response body has been
   // read. Never touches `usedFetches` — that budget is reserved up front by `reserveFetch`.
+  // #3099 P1 follow-up: an over-limit charge now saturates `usedBytes` at `maxTotalBytes` so
+  // subsequent `reserveFetch` calls see the terminally-exhausted state and deny. Previously
+  // `usedBytes` was left below the ceiling on the rejected charge, so the byte gate in
+  // reserveFetch never fired and later hops slipped through until the fetch-count cap.
   public chargeFetch(
     runId: string,
     grantId: string,
@@ -241,7 +258,10 @@ class InMemoryResearchGrantRegistry implements ResearchGrantRegistry {
     if (grant === undefined) return "unknown";
     if (grant.expiresAtMs <= nowMs) return "expired";
     const charged = clampBytes(bytes);
-    if (grant.usedBytes + charged > grant.maxTotalBytes) return "limit-reached";
+    if (grant.usedBytes + charged > grant.maxTotalBytes) {
+      grant.usedBytes = grant.maxTotalBytes;
+      return "limit-reached";
+    }
     grant.usedBytes += charged;
     return "ok";
   }
@@ -252,6 +272,12 @@ class InMemoryResearchGrantRegistry implements ResearchGrantRegistry {
 
   public invalidateRun(runId: string): void {
     this.grantsByRun.delete(runId);
+  }
+
+  public saturateBytes(runId: string, grantId: string): void {
+    const grant = this.findGrant(runId, grantId);
+    if (grant === undefined) return;
+    grant.usedBytes = grant.maxTotalBytes;
   }
 }
 

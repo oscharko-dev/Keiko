@@ -155,8 +155,13 @@ function resolveAllowedScopes(
   paths: readonly string[],
 ): readonly string[] | undefined {
   if (paths.length === 0) return [root];
-  const scopes = paths.map((scope) => resolveScope(root, scope));
-  return scopes.every((scope): scope is string => scope !== undefined) ? scopes : undefined;
+  // KEIKO-0438: collapsing to `undefined` when ANY single scope fails to resolve turns one bad
+  // path (typo, not-yet-existing directory) into a wholesale denial of the operator-approved
+  // scope list. Keep the scopes that DID resolve; deny only when nothing survives.
+  const scopes = paths
+    .map((scope) => resolveScope(root, scope))
+    .filter((scope): scope is string => scope !== undefined);
+  return scopes.length > 0 ? scopes : undefined;
 }
 
 function resolveScope(root: string, scope: string): string | undefined {

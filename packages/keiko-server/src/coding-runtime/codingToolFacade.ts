@@ -2,6 +2,8 @@ import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 
 import {
+  EDITOR_AGENT_CONFLICT_CODES,
+  EDITOR_AGENT_FAILURE_CODES,
   validateAuxiliaryCapabilityOutcomeV1,
   type AuxiliaryCapabilityOutcomeV1,
 } from "@oscharko-dev/keiko-contracts";
@@ -20,34 +22,25 @@ import {
 
 const READ_DIGEST = /^[a-f0-9]{64}$/u;
 
-// The closed vocabulary an edit failure's `reasonCode` may carry (EditorAgentConflictCode +
-// EditorAgentFailureCode + this port's own transport/no-session/route markers). Content-free by
-// construction — never raw command output, unlike the delegate evidence every other governed
-// action strips — so forwarding one of these to the model, instead of the bare "failed" status,
-// is safe. An unrecognized value (a defensive floor, not an expected path) falls back to "failed"
-// rather than forwarding an unvetted string.
-const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set([
-  "DIRTY",
-  "VERSION_MISMATCH",
-  "CONTENT_HASH_MISMATCH",
-  "NO_ACTIVE_SESSION",
-  "NO_ACTIVE_BRIDGE",
-  "INVALID_EDITS",
-  "OUT_OF_SCOPE",
-  "DECOMPOSE_PER_ROOT",
-  "PRECONDITION_REQUIRED",
-  "POLICY_DENIED",
-  "APPROVAL_REQUIRED",
-  "TIMED_OUT",
-  "QUEUE_FULL",
-  "CANCELLED",
-  "PROVIDER_UNAVAILABLE",
-  "UNSUPPORTED_OPERATION",
-  "LIMIT_EXCEEDED",
+// The closed vocabulary an edit failure's `reasonCode` may carry: the two contract-owned closed
+// enums (EditorAgentConflictCode + EditorAgentFailureCode) plus this port's own transport /
+// no-session / route markers. Sourcing the two contract enums instead of hand-restating them keeps
+// this set in lockstep with `keiko-contracts` — every future addition to either canonical list
+// reaches the facade without a coordinated edit. Content-free by construction (never raw command
+// output, unlike the delegate evidence every other governed action strips), so forwarding one of
+// these to the model in place of the bare "failed" status is safe. An unrecognized value (a
+// defensive floor, not an expected path) falls back to "failed" rather than forwarding an unvetted
+// string.
+const EDIT_TRANSPORT_REASON_CODES = [
   "RESPONSE_TOO_LARGE",
   "TRANSPORT_FAILURE",
   "REDIRECT_BLOCKED",
   "EDIT_TRANSPORT_ERROR",
+] as const;
+const EDIT_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
+  ...EDITOR_AGENT_CONFLICT_CODES,
+  ...EDITOR_AGENT_FAILURE_CODES,
+  ...EDIT_TRANSPORT_REASON_CODES,
 ]);
 import type {
   CodingToolAdmission,
