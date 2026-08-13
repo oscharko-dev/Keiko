@@ -128,7 +128,7 @@ function subscribeToContent(
   if (session === undefined || contentSource?.subscribeContent === undefined) {
     return { snapshot, live: false, detach: (): void => undefined };
   }
-  return liveSubscription(
+  return liveSubscription({
     registry,
     contentSource,
     cookieToken,
@@ -136,8 +136,8 @@ function subscribeToContent(
     listener,
     admission,
     diagnostics,
-    session.sessionId,
-  );
+    correlationId: session.sessionId,
+  });
 }
 
 function recordSseFailure(
@@ -224,16 +224,30 @@ function makePublish(
   };
 }
 
+interface LiveSubscriptionInput {
+  readonly registry: SessionRegistry;
+  readonly contentSource: CodingAppSessionContentSource;
+  readonly cookieToken: string | undefined;
+  readonly snapshot: CodingAppSessionChannelSnapshot;
+  readonly listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean;
+  readonly admission: LiveSubscriptionAdmission;
+  readonly diagnostics: ServerDiagnosticSink | undefined;
+  readonly correlationId: string;
+}
+
 function liveSubscription(
-  registry: SessionRegistry,
-  contentSource: CodingAppSessionContentSource,
-  cookieToken: string | undefined,
-  snapshot: CodingAppSessionChannelSnapshot,
-  listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
-  admission: LiveSubscriptionAdmission,
-  diagnostics: ServerDiagnosticSink | undefined,
-  correlationId: string,
+  input: LiveSubscriptionInput,
 ): ReturnType<CodingAppSessionChannel["subscribe"]> {
+  const {
+    registry,
+    contentSource,
+    cookieToken,
+    snapshot,
+    listener,
+    admission,
+    diagnostics,
+    correlationId,
+  } = input;
   if (!admission.acquire()) return { snapshot, live: false, detach: (): void => undefined };
   const lifecycle: LiveLifecycle = { active: true, sourceDetach: (): void => undefined };
   const detach = makeDetach(lifecycle, admission);
