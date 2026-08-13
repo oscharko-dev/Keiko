@@ -353,7 +353,18 @@ export function ExportBar({
           isTms={isTms}
           approvedOnly={approvedOnly}
           busy={busy}
-          onChange={setApprovedOnly}
+          onChange={(next) => {
+            setApprovedOnly(next);
+            // PR-review follow-up (Codex thread 3772192299): omittedCount belongs to the export
+            // whose scope produced it. If the operator toggles the scope after seeing the alert
+            // for an all-candidate export, the count no longer describes the currently-selected
+            // scope. Clear it (and the sibling result state) alongside the scope change to match
+            // the reset the adapter-change handler already performs.
+            setOmittedCount(0);
+            setDownloaded(null);
+            setPreview(null);
+            setError(null);
+          }}
           t={t}
         />
       </div>
