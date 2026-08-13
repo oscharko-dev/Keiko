@@ -482,6 +482,32 @@ describe("runMemoryCli reembed", () => {
     expect(cap.out()).toContain("remaining: 2");
   });
 
+  // Coverage pin (Codex thread 3772192294): remaining is re-queried from
+  // countAcceptedMemoriesMissingEmbedding after the loop, so a target that was processed
+  // (embedded, skipped, or silently continued because it was deleted mid-pass) is not
+  // counted as remaining. In this shape all three accepted memories start unembedded and
+  // all three get embedded in one --limit=10 pass; remaining must be 0 even though no
+  // "target snapshot" is subtracted.
+  it("reports remaining as 0 when every unembedded target gets embedded in the pass", async () => {
+    const vault = makeVault();
+    insert(vault, { id: "a", status: "accepted" });
+    insert(vault, { id: "b", status: "accepted" });
+    insert(vault, { id: "c", status: "accepted" });
+    const cap = capture();
+    const code = await runMemoryCli(
+      ["reembed", "--limit", "10"],
+      cap.io,
+      {},
+      { vault, embedText: fakeEmbedder() },
+    );
+    expect(code).toBe(0);
+    expect(cap.out()).toContain("embedded: 3");
+    // Present-remaining-> absent-from-output rule: renderReembedReport omits the line when
+    // remaining === 0. Assert the ABSENCE so a formula regression that overcounts (e.g.
+    // "remaining: 3" from a stale target-snapshot subtraction) fails loudly.
+    expect(cap.out()).not.toMatch(/remaining: \d/);
+  });
+
   // Regression pin (KEIKO-0440, Codex thread 3769557887): `--force` staged only accepted
   // memories but the vault-wide replace deleted every embedding row, so an archived memory
   // that retained its embedding was silently dropped and the report counted only the accepted
