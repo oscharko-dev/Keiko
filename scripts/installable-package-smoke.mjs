@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import {
   createReadStream,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -23,7 +24,7 @@ import {
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import ts from "typescript";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
@@ -743,13 +744,24 @@ export function loadSeedIndex(destination) {
   for (const [name, versions] of Object.entries(raw)) {
     const restored = new Map();
     for (const [version, entry] of Object.entries(versions)) {
-      // A recorded entry whose archive has since vanished is dropped, so it is re-packed rather
-      // than served as a dangling path.
-      if (existsSync(entry.tarballPath)) restored.set(version, { ...entry, name, version });
+      // An indexed entry is only reused when its archive still exists, lives INSIDE this cache,
+      // and still hashes to the integrity that was recorded for it. Anything else is dropped and
+      // re-packed from the tree rather than served on trust.
+      if (isReusableSeedEntry(destination, entry))
+        restored.set(version, { ...entry, name, version });
     }
     if (restored.size > 0) seeded.set(name, restored);
   }
   return seeded;
+}
+
+function isReusableSeedEntry(destination, entry) {
+  if (typeof entry?.tarballPath !== "string" || !existsSync(entry.tarballPath)) return false;
+  // Containment: an index that points outside the cache could otherwise name any file on disk.
+  const resolvedRoot = realpathSync(destination);
+  const resolved = realpathSync(entry.tarballPath);
+  if (resolved !== resolvedRoot && !resolved.startsWith(`${resolvedRoot}${sep}`)) return false;
+  return entry.integrity === tarballIntegrity(resolved);
 }
 
 export function writeSeedIndex(destination, seeded) {
@@ -905,6 +917,28 @@ function manifestProtocolOffenders(name, entry) {
     );
 }
 
+/**
+ * The staged root's own non-bundled dependencies are checked too: a `git+https:` or tarball-URL
+ * descriptor there would be resolved by Yarn outside the loopback registry just as surely as one
+ * in a seeded manifest. The `file:vendor/...` entries are the intentional exception — that is how
+ * `stage-publish-package.mjs` points at the tarball-local private workspaces (ADR-0021 / #3101),
+ * and they never leave the installed package.
+ */
+export function assertStagedRootDescriptors(manifest) {
+  const offenders = ["dependencies", "optionalDependencies"]
+    .flatMap((group) => Object.entries(manifest?.[group] ?? {}))
+    .filter(([, range]) => typeof range === "string")
+    .filter(([, range]) => !/^file:vendor[/\\]/u.test(range))
+    .filter(([, range]) => isNonRegistryDescriptor(range))
+    .map(([dependency, range]) => `${dependency} (${descriptorClass(range)})`);
+  if (offenders.length > 0) {
+    fail(
+      `staged root declares non-registry dependency protocols outside its vendor archives: ` +
+        `${offenders.join(", ")}`,
+    );
+  }
+}
+
 export function assertRegistryOnlyDescriptors(seeded) {
   const offenders = [...seeded].flatMap(([name, versions]) =>
     [...versions.values()].flatMap((entry) => manifestProtocolOffenders(name, entry)),
@@ -1044,11 +1078,15 @@ export function yarnChildEnv(registryUrl, baseEnv = process.env) {
   // one, and an ambient `YARN_NODE_LINKER=pnp` or `YARN_RC_FILENAME` would change the install
   // shape just as surely as a registry override. The gate then re-asserts only what it needs, so
   // its outcome cannot depend on the machine it runs on (#3130).
+  // `COREPACK_*` is stripped for the same reason as `YARN_*`: `COREPACK_ENABLE_PROJECT_SPEC=0`
+  // makes Corepack ignore the project's `packageManager` field and run its system-wide Yarn, so
+  // the gate would exercise an unreviewed version despite the pin.
   const env = Object.fromEntries(
-    Object.entries(baseEnv).filter(([key]) => !key.startsWith("YARN_")),
+    Object.entries(baseEnv).filter(([key]) => !/^(?:YARN_|COREPACK_)/u.test(key)),
   );
   return {
     ...env,
+    COREPACK_ENABLE_PROJECT_SPEC: "1",
     YARN_ENABLE_GLOBAL_CACHE: "false",
     YARN_ENABLE_TELEMETRY: "false",
     YARN_NODE_LINKER: "node-modules",
@@ -1110,6 +1148,7 @@ function writeYarnConfiguration(tmp, registryUrl) {
 
 export async function installIntoWithYarn(tmp, artifact, vendored) {
   assertRegistryOnlyDescriptors(vendored ?? new Map());
+  assertStagedRootDescriptors(artifact.manifest);
   provisionPinnedYarn();
   const registry = await startLocalRegistry(artifact, vendored);
   writeFileSync(
@@ -1637,12 +1676,29 @@ async function assertPackagedLifecycleCommands(tmp) {
  * tree (#3130).
  */
 export function persistentVendorSeedDir(lockfilePath = join(repoRoot, "package-lock.json")) {
-  const key = existsSync(lockfilePath)
-    ? createHash("sha256").update(readFileSync(lockfilePath)).digest("hex").slice(0, 16)
-    : "no-lockfile";
+  // Keyed by the CHECKOUT as well as the lockfile: two checkouts sharing a lockfile must not share
+  // a cache, and a predictable path on a shared host is otherwise pre-creatable by another user.
+  const material = `${repoRoot}\u0000${existsSync(lockfilePath) ? readFileSync(lockfilePath) : "no-lockfile"}`;
+  const key = createHash("sha256").update(material).digest("hex").slice(0, 24);
   const dir = join(tmpdir(), `keiko-yarn-vendor-seed-${key}`);
-  mkdirSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  assertPrivateDirectory(dir);
   return dir;
+}
+
+/** A cache another account can write is a cache that can hand this gate unverified bytes. */
+function assertPrivateDirectory(dir) {
+  const stats = lstatSync(dir);
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    fail(`vendor seed cache ${dir} is not a real directory`);
+  }
+  if (process.getuid !== undefined && stats.uid !== process.getuid()) {
+    fail(`vendor seed cache ${dir} is not owned by this user`);
+  }
+  // Group/other write bits would let another account replace an archive between runs.
+  if (process.platform !== "win32" && (stats.mode & 0o022) !== 0) {
+    fail(`vendor seed cache ${dir} is group- or world-writable`);
+  }
 }
 
 export function seedThenPack(vendorTmp, deps) {

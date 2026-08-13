@@ -21,6 +21,7 @@ import {
   minimumSatisfyingVersion,
   resolveVendorClosure,
   assertRegistryOnlyDescriptors,
+  assertStagedRootDescriptors,
   persistentVendorSeedDir,
   seedThenPack,
   loadSeedIndex,
@@ -721,6 +722,69 @@ describe("installable package smoke optional-dependency coverage", () => {
       rmSync(seedDir, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it("validates the staged root's own descriptors, allowing only its vendor archives", () => {
+    // `file:vendor/...` is how stage-publish-package points at the tarball-local private
+    // workspaces; anything else external must be rejected before Yarn can resolve it.
+    expect(() =>
+      assertStagedRootDescriptors({
+        dependencies: {
+          "@oscharko-dev/keiko-cli": "file:vendor/keiko-cli-0.3.7.tgz",
+          typescript: "~6.0.3",
+        },
+      }),
+    ).not.toThrow();
+
+    rejectProcessExit();
+    expect(() =>
+      assertStagedRootDescriptors({
+        dependencies: { sneaky: "git+https://token@example.invalid/pkg.git" },
+      }),
+    ).toThrow(/process\.exit\(1\)/u);
+  });
+
+  it("drops an indexed seed entry whose bytes no longer match its integrity", () => {
+    const seedDir = mkdtempSync(join(tmpdir(), "keiko-seed-tamper-test-"));
+    try {
+      const tarballPath = join(seedDir, "demo-1.0.0.tgz");
+      writeFileSync(tarballPath, "original bytes\n", "utf8");
+      writeFileSync(
+        join(seedDir, "seed-index.json"),
+        JSON.stringify({
+          demo: {
+            "1.0.0": { tarballPath, integrity: "sha512-not-the-real-hash", manifest: {} },
+          },
+        }),
+        "utf8",
+      );
+      // A cache entry is only reused when its bytes still hash to what was recorded, so a swapped
+      // archive is re-packed from the tree instead of being served on trust.
+      expect(loadSeedIndex(seedDir).size).toBe(0);
+    } finally {
+      rmSync(seedDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an indexed seed entry pointing outside the cache directory", () => {
+    const seedDir = mkdtempSync(join(tmpdir(), "keiko-seed-escape-test-"));
+    const outside = mkdtempSync(join(tmpdir(), "keiko-seed-outside-"));
+    try {
+      const tarballPath = join(outside, "elsewhere.tgz");
+      writeFileSync(tarballPath, "outside bytes\n", "utf8");
+      writeFileSync(
+        join(seedDir, "seed-index.json"),
+        JSON.stringify({
+          demo: { "1.0.0": { tarballPath, integrity: "sha512-whatever", manifest: {} } },
+        }),
+        "utf8",
+      );
+      // An index naming a path outside the cache could otherwise serve any file on disk.
+      expect(loadSeedIndex(seedDir).size).toBe(0);
+    } finally {
+      rmSync(seedDir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
 
   it("keys the vendor seed directory to the lockfile so a second run reuses it", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-seed-key-test-"));
