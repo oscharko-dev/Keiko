@@ -12,12 +12,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createStagedPublishPackage, stagedVendorDirectory } from "../stage-publish-package.mjs";
+import {
+  assertWorkspacePack,
+  createStagedPublishPackage,
+  stagedVendorDirectory,
+} from "../stage-publish-package.mjs";
 
 const roots = [];
 
 function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function updateJson(path, update) {
+  const value = JSON.parse(readFileSync(path, "utf8"));
+  update(value);
+  writeJson(path, value);
 }
 
 function writeWorkspace(root, directory, manifest) {
@@ -75,6 +85,7 @@ function fixture() {
     },
     optionalDependencies: { "@oscharko-dev/keiko-contracts": "1.2.3", canvas: "1.0.0" },
     peerDependencies: { react: "^19.0.0" },
+    peerDependenciesMeta: { react: { optional: true } },
     scripts: { build: "tsc" },
   });
   mkdirSync(join(root, "packages", "keiko-server", "assets"), { recursive: true });
@@ -119,11 +130,10 @@ describe("staged publish package", () => {
     expect(manifest.dependencies).toMatchObject({
       "@oscharko-dev/keiko-contracts": "file:vendor/oscharko-dev-keiko-contracts-1.2.3.tgz",
       "@oscharko-dev/keiko-server": "file:vendor/oscharko-dev-keiko-server-1.2.3.tgz",
-      react: "19.2.7",
       "smol-toml": "1.0.0",
       ws: "1.0.0",
     });
-    expect(manifest.optionalDependencies).toEqual({ canvas: "1.0.0" });
+    expect(manifest.optionalDependencies).toEqual({ canvas: "1.0.0", react: "19.2.7" });
     expect(server.private).toBe(true);
     expect(server.scripts).toBeUndefined();
     expect(server.dependencies).toEqual({ "smol-toml": "1.0.0", ws: "1.0.0" });
@@ -134,6 +144,7 @@ describe("staged publish package", () => {
     });
     expect(server.peerDependenciesMeta).toEqual({
       "@oscharko-dev/keiko-contracts": { optional: true },
+      react: { optional: true },
     });
     expect(serverPackage?.files).toContain("dist/index.js");
     expect(serverPackage?.files).toContain("assets/schema.json");
@@ -160,6 +171,144 @@ describe("staged publish package", () => {
   it("rejects unsafe workspace package names", () => {
     expect(() => stagedVendorDirectory("foreign-package")).toThrow(/must use/u);
     expect(() => stagedVendorDirectory("@oscharko-dev/../escape")).toThrow(/unsafe/u);
+  });
+
+  it("rejects every invalid workspace archive packer outcome", () => {
+    const root = fixture();
+    const archivePath = join(root, "missing.tgz");
+    const record = { manifest: { name: "@oscharko-dev/keiko-contracts" } };
+
+    expect(() =>
+      assertWorkspacePack({ error: new Error("spawn failed"), status: null }, record, archivePath),
+    ).toThrow(/archive packer could not spawn/u);
+    expect(() => assertWorkspacePack({ status: 7 }, record, archivePath)).toThrow(
+      /archive packer failed with status 7/u,
+    );
+    expect(() => assertWorkspacePack({ status: 0 }, record, archivePath)).toThrow(
+      /archive packer produced no archive/u,
+    );
+    writeFileSync(archivePath, "archive\n", "utf8");
+    expect(() => assertWorkspacePack({ status: 0 }, record, archivePath)).not.toThrow();
+  });
+
+  it("requires an explicit runtime workspace inventory", () => {
+    const root = fixture();
+    updateJson(join(root, "package.json"), (manifest) => {
+      delete manifest.bundleDependencies;
+    });
+
+    expect(() => createStagedPublishPackage({ repoRoot: root })).toThrow(
+      /must declare the runtime workspace bundle list/u,
+    );
+  });
+
+  it("ignores non-package directories while discovering workspaces", () => {
+    const root = fixture();
+    mkdirSync(join(root, "packages", "notes"));
+
+    const staged = createStagedPublishPackage({ repoRoot: root });
+    roots.push(staged.packageDir);
+    expect(staged.vendorPackages).toHaveLength(2);
+  });
+
+  it("rejects missing root publish files and ignores a predeclared vendor directory", () => {
+    const root = fixture();
+    updateJson(join(root, "package.json"), (manifest) => {
+      manifest.files = ["vendor", "missing.txt"];
+    });
+
+    expect(() => createStagedPublishPackage({ repoRoot: root })).toThrow(
+      /root publish file is missing or unsafe/u,
+    );
+  });
+
+  it.each([
+    ["dependencies", null],
+    ["optionalDependencies", []],
+    ["peerDependencies", "react"],
+  ])("rejects a non-object %s manifest field", (field, value) => {
+    const root = fixture();
+    updateJson(join(root, "packages", "keiko-server", "package.json"), (manifest) => {
+      manifest[field] = value;
+    });
+
+    expect(() => createStagedPublishPackage({ repoRoot: root })).toThrow(
+      new RegExp(`keiko-server\\.${field} must be an object`, "u"),
+    );
+  });
+
+  it("rejects internal workspace dependencies outside the runtime inventory", () => {
+    const root = fixture();
+    updateJson(join(root, "packages", "keiko-server", "package.json"), (manifest) => {
+      manifest.dependencies["@oscharko-dev/keiko-ui"] = "1.2.3";
+    });
+
+    expect(() => createStagedPublishPackage({ repoRoot: root })).toThrow(
+      /keiko-ui is not a vendored runtime workspace/u,
+    );
+  });
+
+  it("collects string and object bin targets while ignoring non-path exports", () => {
+    const root = fixture();
+    const contractsRoot = join(root, "packages", "keiko-contracts");
+    const serverRoot = join(root, "packages", "keiko-server");
+    writeFileSync(join(contractsRoot, "cli.js"), "#!/usr/bin/env node\n", "utf8");
+    writeFileSync(join(serverRoot, "server.js"), "#!/usr/bin/env node\n", "utf8");
+    updateJson(join(contractsRoot, "package.json"), (manifest) => {
+      manifest.bin = "./cli.js";
+      manifest.exports = {
+        ".": { default: "./dist/index.js", browser: false },
+        external: "react",
+      };
+    });
+    updateJson(join(serverRoot, "package.json"), (manifest) => {
+      manifest.bin = { keikoServer: "./server.js" };
+    });
+
+    const staged = createStagedPublishPackage({ repoRoot: root });
+    roots.push(staged.packageDir);
+    const contracts = staged.vendorPackages.find(
+      (entry) => entry.name === "@oscharko-dev/keiko-contracts",
+    );
+    const server = staged.vendorPackages.find(
+      (entry) => entry.name === "@oscharko-dev/keiko-server",
+    );
+    expect(contracts?.files).toContain("cli.js");
+    expect(server?.files).toContain("server.js");
+  });
+
+  it("supports a root manifest without publish files", () => {
+    const root = fixture();
+    updateJson(join(root, "package.json"), (manifest) => {
+      delete manifest.files;
+    });
+
+    const staged = createStagedPublishPackage({ repoRoot: root });
+    roots.push(staged.packageDir);
+    const manifest = JSON.parse(readFileSync(join(staged.packageDir, "package.json"), "utf8"));
+    expect(manifest.files).toEqual(["vendor"]);
+  });
+
+  it("rejects unsafe workspace archive versions", () => {
+    const root = fixture();
+    updateJson(join(root, "packages", "keiko-contracts", "package.json"), (manifest) => {
+      manifest.version = "1.2.3/escape";
+    });
+
+    expect(() => createStagedPublishPackage({ repoRoot: root })).toThrow(
+      /has an unsafe archive version/u,
+    );
+  });
+
+  it("rejects a runtime inventory entry without a workspace package", () => {
+    const root = fixture();
+    updateJson(join(root, "package.json"), (manifest) => {
+      manifest.bundleDependencies.push("@oscharko-dev/keiko-missing");
+    });
+
+    expect(() => createStagedPublishPackage({ repoRoot: root })).toThrow(
+      /keiko-missing does not map to a workspace package/u,
+    );
   });
 
   it("rejects external dependency resolutions that cannot be flattened safely", () => {

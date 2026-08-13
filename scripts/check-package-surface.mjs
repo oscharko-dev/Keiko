@@ -488,7 +488,14 @@ function assertBuiltArtifactsFresh(vendorPackages) {
 }
 
 if (process.env.KEIKO_PACKAGE_SURFACE_COVERAGE_IMPORT_ONLY === "1") {
-  globalThis.__keikoPackageSurfaceCoverageSeam?.(assertTypeScriptRuntimeSurface);
+  globalThis.__keikoPackageSurfaceCoverageSeam?.({
+    assertLocalKnowledgeDistPath,
+    assertTypeScriptRuntimeSurface,
+    assertVendoredPayload,
+    assertVendoredWorkspaceExportArtifacts,
+    assertWorkflowHandoffSubpath,
+    collectBuildOutputs,
+  });
   throw new Error("package-surface import-only coverage seam must never pass a release gate");
 }
 

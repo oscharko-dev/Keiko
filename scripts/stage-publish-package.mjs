@@ -188,7 +188,7 @@ function copyWorkspaceSurface(sourceRoot, destinationRoot, manifest) {
   }
 }
 
-function assertWorkspacePack(result, record, archivePath) {
+export function assertWorkspacePack(result, record, archivePath) {
   if (result.error !== undefined) {
     throw new Error(`${record.manifest.name} archive packer could not spawn`);
   }

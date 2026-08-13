@@ -256,7 +256,7 @@ function collectConsumerVisibleTypeExports(specifier, fromDirectory) {
     .sort((left, right) => left.localeCompare(right));
 }
 
-function packRoot() {
+export function packRoot() {
   // BEHAVIOURAL BRANCH (env-gated, opt-in): default behaviour is unchanged — the gating Linux
   // `build-scan-sbom-smoke` job leaves the flag unset and packs with the full `prepack` chain
   // (clean + build + every release gate). ONLY the cross-platform runtime smoke (#284 AC4) opts in
@@ -364,7 +364,7 @@ function localRegistryHandler(artifact, tarballBytes, registryUrl, requests) {
   };
 }
 
-async function startLocalRegistry(artifact) {
+export async function startLocalRegistry(artifact) {
   const tarballBytes = readFileSync(artifact.tarballPath);
   const requests = [];
   let handler;
@@ -404,7 +404,7 @@ async function startLocalRegistry(artifact) {
   };
 }
 
-async function installIntoWithYarn(tmp, artifact) {
+export async function installIntoWithYarn(tmp, artifact) {
   const registry = await startLocalRegistry(artifact);
   writeFileSync(
     join(tmp, "package.json"),
@@ -466,7 +466,7 @@ function assertCliExecutable(tmp) {
   }
 }
 
-function assertVendoredPayload(tmp) {
+export function assertVendoredPayload(tmp) {
   const dependencyRoot = join(tmp, "node_modules");
   for (const name of runtimeWorkspaces) {
     const shortName = name.replace(/^@oscharko-dev\//, "");
@@ -493,7 +493,7 @@ function assertVendoredPayload(tmp) {
   }
 }
 
-function assertProductiveTypeScriptRuntime(tmp) {
+export function assertProductiveTypeScriptRuntime(tmp) {
   const manifest = join(tmp, "node_modules", "typescript", "package.json");
   if (!existsSync(manifest)) {
     fail(`productive TypeScript runtime dependency missing: ${manifest}`);
