@@ -179,8 +179,10 @@ Vendoring keeps internal packages private but still requires an auditable source
 graph. Four controls remain load-bearing:
 
 1. Every vendored package is `"private": true` and its source is reproducible from this repo's
-   commit. The registry is never consulted for internal names; ordinary third-party dependencies
-   continue to resolve from the configured registry under their reviewed manifests.
+   commit. The registry is never consulted for internal names. Ordinary third-party dependencies
+   resolve under their reviewed manifests at the versions `package-lock.json` pins; since the
+   #3130 amendment in D7, the installable-smoke gate serves those from its offline loopback
+   registry rather than the public one, so gate outcomes do not depend on upstream publish timing.
 2. Per-workspace CycloneDX SBOMs are emitted in CI by the new
    `scripts/check-workspace-supply-chain.mjs` script and uploaded as the
    `workspace-sboms-cyclonedx` CI artifact. This provides an auditable bill of materials for
@@ -198,12 +200,32 @@ graph. Four controls remain load-bearing:
 
 The script `scripts/installable-package-smoke.mjs` defines the AC2 gate: it stages and packs the
 publish artifact, installs the tarball into a clean npm project, and serves the exact same root
-bytes through a scoped loopback npm registry for a clean Yarn 4.9.1 install. The `@oscharko-dev`
-scope is isolated to loopback while ordinary third-party dependencies use Yarn's configured public
-registry, matching real consumer resolution. The gate asserts all vendored workspace `dist/` trees
-are installed and executes `keiko --version` and `keiko --help`. It also asserts the SDK root runtime
-and declaration exports resolve. The npm lane continues through the packaged UI and lifecycle
-integration proof.
+bytes through a loopback npm registry for a clean Yarn 4.9.1 install. The gate asserts all vendored
+workspace `dist/` trees are installed and executes `keiko --version` and `keiko --help`. It also
+asserts the SDK root runtime and declaration exports resolve. The npm lane continues through the
+packaged UI and lifecycle integration proof.
+
+**The Yarn lane resolves offline (amended 2026-08-13, issue #3130).** It originally isolated only
+the `@oscharko-dev` scope to loopback and let ordinary third-party dependencies use the public
+registry, on the reasoning that this matched real consumer resolution. That coupling made a
+required gate depend on third-party publish timing: on 2026-08-13 `@napi-rs/canvas` 1.0.6 was
+published 22 minutes before its own `linux-x64-musl` platform package, and every Keiko pull request
+failed on all three platforms inside that window with an error that reads like a Keiko packaging
+defect.
+
+`npmRegistryServer` is therefore set globally to the loopback registry, which serves the packed
+root plus the third-party closure seeded from this repository's installed tree — the versions
+`package-lock.json` already pins — and returns 404 for anything else. Optional dependency edges are
+preserved so the running platform's real native binding still installs and is still proven;
+foreign-platform prebuilds, which no host would link, resolve to inert stubs carrying an `os`/`cpu`
+pair that matches nothing. A dependency that is absent and *not* optional remains a hard failure,
+so the stub path cannot mask a genuine gap.
+
+The trade-off is deliberate and bounded: the lane no longer certifies that a consumer's foreign
+platform packages are published and resolvable — that is exactly the third-party coupling this
+amendment removes, and no Keiko artifact defect hides behind it. A new third-party dependency fails
+this gate until the closure is regenerated, which is intended: the failure is deterministic, local,
+and names the package instead of silently reaching the public registry.
 
 The `smoke:install` script is wired into the existing `build-scan-sbom-smoke` CI job
 (`.github/workflows/ci.yml:79`) after the `Build` step.

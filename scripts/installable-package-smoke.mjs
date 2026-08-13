@@ -9,6 +9,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  createReadStream,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -451,6 +452,27 @@ function readInstalledManifest(name, modulesRoot) {
  * a packument that happens to omit it.
  */
 export function findInstalledCopies(name, modulesRoot, packagesRoot = repoRoot) {
+  const copies = new Map();
+  const record = (root) => {
+    const manifest = readInstalledManifest(name, root);
+    if (manifest === undefined || copies.has(manifest.version)) return;
+    copies.set(manifest.version, {
+      name,
+      version: manifest.version,
+      directory: join(root, ...name.split("/")),
+      manifest,
+    });
+  };
+  for (const root of installedModuleRoots(modulesRoot, packagesRoot)) record(root);
+  return [...copies.values()];
+}
+
+/**
+ * npm hoists what it can, nests the rest under `packages/<workspace>/node_modules`, and nests a
+ * third conflicting version under `node_modules/<pkg>/node_modules`. All three are searched, so a
+ * version this repository genuinely pins can never be missing from the served packument.
+ */
+function installedModuleRoots(modulesRoot, packagesRoot) {
   const roots = [modulesRoot];
   const workspacesDir = join(packagesRoot, "packages");
   if (existsSync(workspacesDir)) {
@@ -458,18 +480,24 @@ export function findInstalledCopies(name, modulesRoot, packagesRoot = repoRoot) 
       roots.push(join(workspacesDir, workspace, "node_modules"));
     }
   }
-  const copies = new Map();
-  for (const root of roots) {
-    const manifest = readInstalledManifest(name, root);
-    if (manifest === undefined || copies.has(manifest.version)) continue;
-    copies.set(manifest.version, {
-      name,
-      version: manifest.version,
-      directory: join(root, ...name.split("/")),
-      manifest,
-    });
+  for (const nested of nestedModuleRoots(modulesRoot)) roots.push(nested);
+  return roots;
+}
+
+function nestedModuleRoots(modulesRoot) {
+  if (!existsSync(modulesRoot)) return [];
+  const roots = [];
+  for (const entry of readdirSync(modulesRoot)) {
+    if (entry.startsWith(".")) continue;
+    const owners = entry.startsWith("@")
+      ? readdirSync(join(modulesRoot, entry)).map((scoped) => join(modulesRoot, entry, scoped))
+      : [join(modulesRoot, entry)];
+    for (const owner of owners) {
+      const nested = join(owner, "node_modules");
+      if (existsSync(nested)) roots.push(nested);
+    }
   }
-  return [...copies.values()];
+  return roots;
 }
 
 /**
@@ -484,7 +512,8 @@ export function resolveVendorClosure(modulesRoot, manifest = rootPackageJson) {
   const missing = [];
   const stubs = new Map();
   const visit = (name, requirement) => {
-    if (resolved.has(name) || stubs.has(name) || missing.includes(name)) return;
+    const stubKey = `${name}@${minimumSatisfyingVersion(requirement?.range) ?? ""}`;
+    if (resolved.has(name) || stubs.has(stubKey) || missing.includes(name)) return;
     const copies = findInstalledCopies(name, modulesRoot);
     if (copies.length === 0) {
       recordAbsent(name, requirement);
@@ -500,7 +529,9 @@ export function resolveVendorClosure(modulesRoot, manifest = rootPackageJson) {
   const recordAbsent = (name, requirement) => {
     const version = minimumSatisfyingVersion(requirement?.range);
     if (requirement?.optional === true && version !== undefined) {
-      stubs.set(name, { name, version });
+      // Keyed by name AND version: canvas 1.0.0 and 1.0.2 each demand their own platform build,
+      // so a name-only key would serve one version's stub for the other's requirement.
+      stubs.set(`${name}@${version}`, { name, version });
       return;
     }
     missing.push(name);
@@ -526,14 +557,14 @@ export function resolveVendorClosure(modulesRoot, manifest = rootPackageJson) {
 function packVendoredPackage(entry, destination) {
   const result = run(
     "npm",
-    ["pack", entry.directory, "--pack-destination", destination, "--ignore-scripts"],
+    ["pack", entry.directory, "--pack-destination", destination, "--ignore-scripts", "--json"],
     { cwd: repoRoot, timeout: NPM_INSTALL_TIMEOUT_MS },
   );
   if (result.status !== 0) {
     fail(`npm pack of vendored dependency ${entry.name} exited ${String(result.status)}`);
   }
-  const produced = result.stdout.trim().split(/\r?\n/u).at(-1);
-  if (produced === undefined || produced.length === 0) {
+  const produced = JSON.parse(result.stdout).at(0)?.filename;
+  if (typeof produced !== "string" || produced.length === 0) {
     fail(`npm pack of vendored dependency ${entry.name} printed no tarball name`);
   }
   return join(destination, produced);
@@ -578,50 +609,72 @@ export function seedVendoredRegistry(destination, modulesRoot = join(repoRoot, "
   for (const entry of packages) {
     const tarballPath = packVendoredPackage(entry, destination);
     const versions = seeded.get(entry.name) ?? new Map();
-    versions.set(entry.version, { ...entry, tarballBytes: readFileSync(tarballPath) });
+    versions.set(entry.version, {
+      ...entry,
+      tarballPath,
+      integrity: tarballIntegrity(tarballPath),
+    });
     seeded.set(entry.name, versions);
   }
   for (const entry of stubs) {
-    if (seeded.has(entry.name)) continue;
+    const versions = seeded.get(entry.name) ?? new Map();
+    if (versions.has(entry.version)) continue;
     const tarballPath = packStubPackage(entry, destination);
-    seeded.set(
-      entry.name,
-      new Map([
-        [
-          entry.version,
-          {
-            ...entry,
-            tarballBytes: readFileSync(tarballPath),
-            manifest: { name: entry.name, version: entry.version },
-          },
-        ],
-      ]),
-    );
+    versions.set(entry.version, {
+      ...entry,
+      tarballPath,
+      integrity: tarballIntegrity(tarballPath),
+      manifest: { name: entry.name, version: entry.version },
+    });
+    seeded.set(entry.name, versions);
   }
   return seeded;
+}
+
+function tarballIntegrity(tarballPath) {
+  return `sha512-${createHash("sha512").update(readFileSync(tarballPath)).digest("base64")}`;
+}
+
+function rootTarballPath(name, version) {
+  return `${name}/-/${name.split("/").at(-1)}-${version}.tgz`;
+}
+
+function seededTarball(seeded, requested) {
+  for (const [name, versions] of seeded) {
+    if (!requested.startsWith(`${name}/-/`)) continue;
+    return [...versions.values()].find(
+      (entry) => requested === `${name}/-/${tarballFileName(name, entry.version)}`,
+    );
+  }
+  return undefined;
 }
 
 function tarballFileName(name, version) {
   return `${name.split("/").at(-1)}-${version}.tgz`;
 }
 
+function compareVersions(left, right) {
+  const segments = (value) => value.split(/[.+-]/u).map((part) => Number.parseInt(part, 10));
+  const [leftParts, rightParts] = [segments(left), segments(right)];
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const difference = (leftParts[index] ?? -1) - (rightParts[index] ?? -1);
+    if (Number.isFinite(difference) && difference !== 0) return difference;
+  }
+  return compareStrings(left, right);
+}
+
 function vendoredPackument(name, versions, registryUrl) {
   const sorted = [...versions.values()].sort((left, right) =>
-    compareStrings(left.version, right.version),
+    compareVersions(left.version, right.version),
   );
   const entries = {};
   for (const entry of sorted) {
-    // `optionalDependencies` are stripped so the Yarn arm resolves exactly what the npm arm
-    // installs with `--omit=optional`. Without this the consumer resolves every prebuilt platform
-    // package of a dependency like `@napi-rs/canvas` — eleven of them — and a single upstream
-    // publish gap in any one of them fails a required Keiko gate (#3130).
-    const manifest = Object.fromEntries(
-      Object.entries(entry.manifest).filter(([key]) => key !== "optionalDependencies"),
-    );
+    // Optional edges are preserved so the running platform's real native binding still installs
+    // and is still proven; the foreign-platform prebuilds resolve to inert stubs instead (#3130).
     entries[entry.version] = {
-      ...manifest,
+      ...entry.manifest,
       dist: {
-        integrity: `sha512-${createHash("sha512").update(entry.tarballBytes).digest("base64")}`,
+        integrity: entry.integrity,
         tarball: `${registryUrl}/${name}/-/${tarballFileName(name, entry.version)}`,
       },
     };
@@ -641,18 +694,21 @@ function localRegistryHandler(artifact, tarballBytes, registryUrl, requests, ven
     requests.push(pathname);
     const requested = decodeURIComponent(pathname.slice(1));
     if (pathname.endsWith(".tgz")) {
-      for (const [name, versions] of seeded) {
-        if (!requested.startsWith(`${name}/-/`)) continue;
-        const wanted = [...versions.values()].find(
-          (entry) => requested === `${name}/-/${tarballFileName(name, entry.version)}`,
-        );
-        if (wanted === undefined) break;
+      if (requested === rootTarballPath(rootPackageJson.name, rootVersion)) {
         response.writeHead(200, { "content-type": "application/octet-stream" });
-        response.end(wanted.tarballBytes);
+        response.end(tarballBytes);
+        return;
+      }
+      const served = seededTarball(seeded, requested);
+      if (served === undefined) {
+        // An unseeded or wrong-version tarball is never answered with the root artifact: serving
+        // real bytes under a foreign name would be a silent substitution, not a hermetic registry.
+        response.writeHead(404, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "not_found" }));
         return;
       }
       response.writeHead(200, { "content-type": "application/octet-stream" });
-      response.end(tarballBytes);
+      createReadStream(served.tarballPath).pipe(response);
       return;
     }
     if (requested.toLowerCase() === rootPackageJson.name) {
@@ -722,6 +778,7 @@ function writeYarnConfiguration(tmp, registryUrl) {
   const lines = [
     "nodeLinker: node-modules",
     "enableGlobalCache: false",
+    "enableTelemetry: false",
     "globalFolder: .yarn/global",
     "cacheFolder: .yarn/cache",
     `npmRegistryServer: ${registryUrl}`,

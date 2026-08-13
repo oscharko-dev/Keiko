@@ -272,6 +272,14 @@ describe("installable package smoke optional-dependency coverage", () => {
       // The scoped entry must point at the same loopback registry, so no resolution path is left
       // pointing at the public registry.
       expect(rc).toContain(`    npmRegistryServer: ${globalRegistry?.[1] ?? ""}`);
+      // No resolution path may reference a public registry, and the architecture narrowing the
+      // offline closure depends on must be present.
+      expect(rc).not.toMatch(/registry\.(?:npmjs|yarnpkg)\.(?:org|com)/u);
+      expect(rc).toContain("supportedArchitectures:");
+      expect(rc).toContain(`    - ${process.platform}`);
+      expect(rc).toContain(`    - ${process.arch}`);
+      // A hermetic gate makes no outbound telemetry call either.
+      expect(rc).toContain("enableTelemetry: false");
     } finally {
       process.env.PATH = previousPath;
       rmSync(root, { recursive: true, force: true });
@@ -307,10 +315,10 @@ describe("installable package smoke optional-dependency coverage", () => {
       expect(served.ok).toBe(true);
       const packument = await served.json();
       expect(packument.versions["3.4.0"].dist.tarball).toContain("/yauzl/-/yauzl-3.4.0.tgz");
-      // Optional entries are stripped so the Yarn arm resolves what the npm arm installs with
-      // `--omit=optional`; leaving them in is what let an upstream platform-package publish gap
-      // fail a required Keiko gate (#3130).
-      expect(packument.versions["3.4.0"].optionalDependencies).toBeUndefined();
+      // Optional edges are preserved, so the running platform's real native binding still
+      // installs and is still proven; the foreign-platform prebuilds resolve to inert stubs
+      // instead of reaching the public registry (#3130).
+      expect(packument.versions["3.4.0"].optionalDependencies).toEqual({ fsevents: "*" });
 
       // An unseeded package must not fall through to the public registry.
       const unseeded = await globalThis.fetch(`${registry.registryUrl}/@napi-rs%2Fcanvas`);
@@ -340,9 +348,93 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(minimumSatisfyingVersion("*")).toBeUndefined();
   });
 
+  // An unseeded .tgz used to fall through to the root artifact with HTTP 200, so a request for a
+  // package we never vendored was answered with real Keiko bytes under a foreign name. A hermetic
+  // registry must refuse, not substitute.
+  it("never answers an unseeded or wrong-version tarball with the root artifact", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-yarn-tarball-test-"));
+    const artifact = localRegistryArtifact(root);
+    const stubTarball = join(root, "yauzl.tgz");
+    writeFileSync(stubTarball, "yauzl fixture bytes\n", "utf8");
+    const seeded = new Map([
+      [
+        "yauzl",
+        new Map([
+          [
+            "3.4.0",
+            {
+              name: "yauzl",
+              version: "3.4.0",
+              tarballPath: stubTarball,
+              integrity: "sha512-fixture",
+              manifest: { name: "yauzl", version: "3.4.0" },
+            },
+          ],
+        ]),
+      ],
+    ]);
+    const registry = await startLocalRegistry(artifact, seeded);
+    try {
+      const seededTarball = await globalThis.fetch(
+        `${registry.registryUrl}/yauzl/-/yauzl-3.4.0.tgz`,
+      );
+      expect(await seededTarball.text()).toBe("yauzl fixture bytes\n");
+
+      // Wrong version of a seeded package.
+      const wrongVersion = await globalThis.fetch(
+        `${registry.registryUrl}/yauzl/-/yauzl-9.9.9.tgz`,
+      );
+      expect(wrongVersion.status).toBe(404);
+
+      // Never-seeded package.
+      const unseeded = await globalThis.fetch(
+        `${registry.registryUrl}/@napi-rs/canvas/-/canvas-1.0.2.tgz`,
+      );
+      expect(unseeded.status).toBe(404);
+
+      // The root package's own tarball is still served.
+      const rootShortName = ROOT_MANIFEST.name.split("/").at(-1);
+      const rootTarball = await globalThis.fetch(
+        `${registry.registryUrl}/${ROOT_MANIFEST.name}/-/${rootShortName}-${ROOT_MANIFEST.version}.tgz`,
+      );
+      expect(await rootTarball.text()).toBe("registry fixture bytes\n");
+    } finally {
+      await registry.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("orders dist-tags.latest numerically, not lexicographically", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-yarn-version-order-test-"));
+    const artifact = localRegistryArtifact(root);
+    const versions = new Map();
+    for (const version of ["1.0.9", "1.0.10"]) {
+      const tarballPath = join(root, `demo-${version}.tgz`);
+      writeFileSync(tarballPath, `demo ${version}\n`, "utf8");
+      versions.set(version, {
+        name: "demo",
+        version,
+        tarballPath,
+        integrity: `sha512-${version}`,
+        manifest: { name: "demo", version },
+      });
+    }
+    const registry = await startLocalRegistry(artifact, new Map([["demo", versions]]));
+    try {
+      const packument = await (await globalThis.fetch(`${registry.registryUrl}/demo`)).json();
+      // A string sort would name 1.0.9 latest because "9" > "1".
+      expect(packument["dist-tags"].latest).toBe("1.0.10");
+    } finally {
+      await registry.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("closes the third-party dependency closure over the repository's installed tree", () => {
+    const bundled = ROOT_MANIFEST.bundleDependencies ?? [];
+    expect(bundled.length).toBeGreaterThan(0);
     const names = vendoredDependencyNames(ROOT_MANIFEST);
-    expect(names).not.toContain(ROOT_MANIFEST.bundleDependencies[0]);
+    expect(names).not.toContain(bundled[0]);
     expect(names.length).toBeGreaterThan(0);
 
     const { packages, missing } = resolveVendorClosure(join(ROOT, "node_modules"), ROOT_MANIFEST);
@@ -350,7 +442,10 @@ describe("installable package smoke optional-dependency coverage", () => {
     const resolvedNames = packages.map((entry) => entry.name);
     for (const name of names) expect(resolvedNames).toContain(name);
     // Transitive runtime dependencies are included, so the registry can answer the whole graph.
-    expect(resolvedNames.length).toBeGreaterThanOrEqual(names.length);
+    // `pend` is reachable only through `yauzl`, so it proves the walk is genuinely transitive.
+    const transitive = resolvedNames.filter((name) => !names.includes(name));
+    expect(transitive.length).toBeGreaterThan(0);
+    expect(resolvedNames).toContain("pend");
     for (const entry of packages) expect(entry.version).toMatch(/^\d+\.\d+\.\d+/u);
   });
 
