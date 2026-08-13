@@ -325,7 +325,7 @@ The script:
 - requires a clean tracked working tree,
 - runs the `prepack` release gate,
 - stages and publishes or reuses the root package only; private runtime workspaces ship as
-  tarball-local `file:` dependencies under `vendor/` and are never resolved from the registry,
+  tarball-local `file:` archives under `vendor/` and are never resolved from the registry,
 - verifies the root npm package version and selected dist-tag,
 - runs mandatory npm and Yarn registry install smokes,
 - creates or updates the matching GitHub Release with generated release-impact notes,

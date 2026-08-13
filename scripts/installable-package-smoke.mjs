@@ -7,6 +7,7 @@
 // fire BEFORE publish so a broken bundle can never reach users.
 
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -18,10 +19,11 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
+import { createServer as createNetServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import ts from "typescript";
 import { createStagedPublishPackage } from "./stage-publish-package.mjs";
 
@@ -83,6 +85,31 @@ function run(cmd, args, options = {}) {
     fail(`${cmd} ${args.join(" ")} could not spawn: ${result.error.message}`);
   }
   return result;
+}
+
+function runAsync(cmd, args, options = {}) {
+  const needsShell = process.platform === "win32" && (cmd === "npm" || cmd === "corepack");
+  const { timeout, ...spawnOptions } = options;
+  return new Promise((resolvePromise) => {
+    const stdout = [];
+    const stderr = [];
+    const child = spawn(cmd, args, {
+      shell: needsShell,
+      stdio: ["ignore", "pipe", "pipe"],
+      ...spawnOptions,
+    });
+    child.stdout?.on("data", (chunk) => stdout.push(String(chunk)));
+    child.stderr?.on("data", (chunk) => stderr.push(String(chunk)));
+    const timer = globalThis.setTimeout(() => child.kill(), timeout);
+    child.once("error", (error) => {
+      globalThis.clearTimeout(timer);
+      resolvePromise({ error, status: null, signal: null, stdout: "", stderr: "" });
+    });
+    child.once("close", (status, signal) => {
+      globalThis.clearTimeout(timer);
+      resolvePromise({ status, signal, stdout: stdout.join(""), stderr: stderr.join("") });
+    });
+  });
 }
 
 function sleep(ms) {
@@ -195,11 +222,12 @@ function packRoot() {
     }
   }
   const staged = createStagedPublishPackage();
+  const manifest = JSON.parse(readFileSync(join(staged.packageDir, "package.json"), "utf8"));
   const artifactRoot = mkdtempSync(join(tmpdir(), "keiko-install-artifact-"));
   const result = run(
     "npm",
-    ["pack", staged.packageDir, "--silent", "--ignore-scripts", "--pack-destination", artifactRoot],
-    { cwd: repoRoot },
+    ["pack", "--silent", "--ignore-scripts", "--pack-destination", artifactRoot],
+    { cwd: staged.packageDir },
   );
   staged.cleanup();
   if (result.status !== 0) {
@@ -213,6 +241,7 @@ function packRoot() {
     fail(`expected tarball at ${tarballPath} after npm pack`);
   }
   return {
+    manifest,
     tarballPath,
     cleanup: () => rmSync(artifactRoot, { recursive: true, force: true }),
   };
@@ -246,7 +275,76 @@ function installInto(tmp, tarballPath, options) {
   }
 }
 
-function installIntoWithYarn(tmp, tarballPath) {
+function registryPackument(registryUrl, artifact, tarballBytes) {
+  const integrity = `sha512-${createHash("sha512").update(tarballBytes).digest("base64")}`;
+  return {
+    name: rootPackageJson.name,
+    "dist-tags": { latest: rootVersion },
+    versions: {
+      [rootVersion]: {
+        ...artifact.manifest,
+        dist: {
+          integrity,
+          tarball: `${registryUrl}/@oscharko-dev/keiko/-/keiko-${rootVersion}.tgz`,
+        },
+      },
+    },
+  };
+}
+
+function localRegistryHandler(artifact, tarballBytes, registryUrl, requests) {
+  const packument = registryPackument(registryUrl, artifact, tarballBytes);
+  return (request, response) => {
+    const pathname = new URL(request.url ?? "/", registryUrl).pathname;
+    requests.push(pathname);
+    if (pathname.endsWith(".tgz")) {
+      response.writeHead(200, { "content-type": "application/octet-stream" });
+      response.end(tarballBytes);
+      return;
+    }
+    if (decodeURIComponent(pathname.slice(1)).toLowerCase() === rootPackageJson.name) {
+      response.writeHead(200, { "content-type": "application/vnd.npm.install-v1+json" });
+      response.end(JSON.stringify(packument));
+      return;
+    }
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: "not_found" }));
+  };
+}
+
+async function startLocalRegistry(artifact) {
+  const tarballBytes = readFileSync(artifact.tarballPath);
+  const requests = [];
+  let handler;
+  const server = createHttpServer((request, response) => {
+    if (handler === undefined) {
+      response.writeHead(503);
+      response.end();
+      return;
+    }
+    handler(request, response);
+  });
+  await new Promise((resolvePromise) => server.listen(0, "127.0.0.1", resolvePromise));
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    server.close();
+    throw new Error("local package registry did not bind a TCP port");
+  }
+  const registryUrl = `http://127.0.0.1:${String(address.port)}`;
+  handler = localRegistryHandler(artifact, tarballBytes, registryUrl, requests);
+  const health = await globalThis.fetch(
+    `${registryUrl}/${encodeURIComponent(rootPackageJson.name)}`,
+  );
+  if (!health.ok) throw new Error("local package registry failed its packument health check");
+  return {
+    registryUrl,
+    requests,
+    close: () => new Promise((resolvePromise) => server.close(resolvePromise)),
+  };
+}
+
+async function installIntoWithYarn(tmp, artifact) {
+  const registry = await startLocalRegistry(artifact);
   writeFileSync(
     join(tmp, "package.json"),
     `${JSON.stringify(
@@ -254,25 +352,38 @@ function installIntoWithYarn(tmp, tarballPath) {
         private: true,
         type: "module",
         packageManager: "yarn@4.9.1",
-        dependencies: { [rootPackageJson.name]: `file:${tarballPath}` },
+        dependencies: { [rootPackageJson.name]: rootVersion },
       },
       null,
       2,
     )}\n`,
     "utf8",
   );
-  writeFileSync(join(tmp, "yarn.lock"), "", "utf8");
-  writeFileSync(join(tmp, ".yarnrc.yml"), "nodeLinker: node-modules\nenableGlobalCache: false\n");
-  const result = run("corepack", ["yarn", "install", "--no-immutable", "--mode=skip-build"], {
-    cwd: tmp,
-    timeout: NPM_INSTALL_TIMEOUT_MS,
-    env: { ...process.env, YARN_ENABLE_GLOBAL_CACHE: "false" },
-  });
-  if (result.status !== 0) {
-    fail(
-      `Yarn install of tarball exited ${String(result.status)} ` +
-        `(signal=${String(result.signal)}): ${result.stderr}`,
+  rmSync(join(tmp, "yarn.lock"), { force: true });
+  writeFileSync(
+    join(tmp, ".yarnrc.yml"),
+    `nodeLinker: node-modules\nenableGlobalCache: false\nglobalFolder: .yarn/global\ncacheFolder: .yarn/cache\nnpmScopes:\n  oscharko-dev:\n    npmRegistryServer: ${registry.registryUrl}\nunsafeHttpWhitelist:\n  - 127.0.0.1\n`,
+  );
+  try {
+    const result = await runAsync(
+      "corepack",
+      ["yarn", "install", "--no-immutable", "--mode=skip-build"],
+      {
+        cwd: tmp,
+        timeout: NPM_INSTALL_TIMEOUT_MS,
+        env: { ...process.env, YARN_ENABLE_GLOBAL_CACHE: "false" },
+      },
     );
+    if (result.error !== undefined || result.status !== 0) {
+      fail(
+        `Yarn registry install exited ${String(result.status)} ` +
+          `(signal=${String(result.signal)}; registry=${registry.registryUrl}; ` +
+          `requests=${registry.requests.join(",")}): ` +
+          `${(result.error?.message ?? result.stderr) || result.stdout}`,
+      );
+    }
+  } finally {
+    await registry.close();
   }
 }
 
@@ -297,9 +408,21 @@ function assertVendoredPayload(tmp) {
   const dependencyRoot = join(tmp, "node_modules");
   for (const name of runtimeWorkspaces) {
     const shortName = name.replace(/^@oscharko-dev\//, "");
-    const dist = join(dependencyRoot, "@oscharko-dev", shortName, "dist");
-    if (!existsSync(dist)) {
-      fail(`vendored runtime dependency missing: ${dist}`);
+    const candidates = [
+      join(dependencyRoot, "@oscharko-dev", shortName, "dist"),
+      join(
+        dependencyRoot,
+        "@oscharko-dev",
+        "keiko",
+        "node_modules",
+        "@oscharko-dev",
+        shortName,
+        "dist",
+      ),
+    ];
+    const dist = candidates.find((candidate) => existsSync(candidate));
+    if (dist === undefined) {
+      fail(`vendored runtime dependency missing: ${candidates.join(" or ")}`);
     }
     const entries = readdirSync(dist);
     if (entries.length === 0) {
@@ -364,7 +487,7 @@ function assertInstalledRootTypeSurface(tmp) {
 
 async function reserveUiPort() {
   return await new Promise((resolvePort, reject) => {
-    const server = createServer();
+    const server = createNetServer();
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
@@ -738,7 +861,7 @@ async function main() {
     assertInstalledRootTypeSurface(tmp);
     await assertPackagedUi(tmp);
     await assertPackagedLifecycleCommands(tmp);
-    installIntoWithYarn(yarnTmp, artifact.tarballPath);
+    await installIntoWithYarn(yarnTmp, artifact);
     assertCliExecutable(yarnTmp);
     assertVendoredPayload(yarnTmp);
     assertProductiveTypeScriptRuntime(yarnTmp);
@@ -746,7 +869,7 @@ async function main() {
     await assertInstalledRootRuntimeSurface(yarnTmp);
     assertInstalledRootTypeSurface(yarnTmp);
     console.log(
-      `installable-smoke ok: npm + Yarn tarball installs passed (${options.includeOptional ? "optional deps included" : "optional deps omitted"}), ${String(runtimeWorkspaces.length)} vendored packages present, root runtime/types + CLI + UI/lifecycle reachable.`,
+      `installable-smoke ok: npm tarball + Yarn registry installs passed (${options.includeOptional ? "optional deps included" : "optional deps omitted"}), ${String(runtimeWorkspaces.length)} vendored packages present, root runtime/types + CLI + UI/lifecycle reachable.`,
     );
   } finally {
     rmSync(tmp, { recursive: true, force: true });

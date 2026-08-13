@@ -64,25 +64,30 @@ self-contained without publishing private workspace packages to the registry?
 The source root `package.json` keeps the reviewed runtime-workspace inventory in
 `bundleDependencies`. Build-time-only workspaces such as `keiko-ui` and `keiko-editor` are excluded.
 `scripts/stage-publish-package.mjs` converts that inventory into a temporary publish directory after
-the release gates pass. It copies each runtime workspace's built `dist/` and a reduced private
-manifest under `vendor/<workspace-name>/`, copies the root product surface, and writes a staged root
-manifest such as:
+the release gates pass. It copies every declared publish path from each runtime workspace, writes a
+reduced private manifest, packs that surface into a versioned archive under `vendor/`, copies
+the root product surface, and writes a staged root manifest such as:
 
 ```json
 "files": ["dist", "vendor", "README.md", "LICENSE", "NOTICE", "TRADEMARKS.md"],
 "dependencies": {
-  "@oscharko-dev/keiko-contracts": "file:vendor/keiko-contracts",
-  "@oscharko-dev/keiko-server": "file:vendor/keiko-server",
-  "@oscharko-dev/keiko-cli": "file:vendor/keiko-cli"
+  "@oscharko-dev/keiko-contracts": "file:vendor/oscharko-dev-keiko-contracts-0.3.7.tgz",
+  "@oscharko-dev/keiko-server": "file:vendor/oscharko-dev-keiko-server-0.3.7.tgz",
+  "@oscharko-dev/keiko-cli": "file:vendor/oscharko-dev-keiko-cli-0.3.7.tgz"
 }
 ```
 
-The staged manifest contains no `bundleDependencies`. Every internal dependency is a standard
-`file:` dependency whose bytes are inside the same tarball. Internal edges in vendored manifests
+The staged manifest retains `bundleDependencies` and carries its reduced payload under
+`node_modules/` for npm, while every internal dependency also names a standard `file:` archive
+whose bytes are inside the same root tarball for Yarn. Both projections come from the same staged
+workspace surface. The dual representation is required because npm consumes its bundle payload
+when installing an outer tarball, while Yarn gives directory `file:` dependencies different
+resolution semantics when the parent is an npm registry locator. Internal edges in vendored manifests
 become exact-version peer dependencies so npm and Yarn resolve every private package to the sibling
 provided by the root. External dependencies remain declared by their owning vendored manifest and
-are also promoted at their reviewed lockfile version to the staged root manifest because npm does
-not recursively install dependencies of local directory dependencies. Missing or incompatible
+are also promoted at their reviewed lockfile version to the staged root manifest so the published
+root graph remains deterministic and auditable. External peers are promoted as required or optional
+according to their peer metadata. Missing or incompatible
 locked resolutions fail staging; missing runtime surfaces fail the npm/Yarn install smoke.
 
 Source workspace manifests remain `private: true`, source dependencies stay pinned for ordinary npm
@@ -157,9 +162,10 @@ managers. The accepted implementation avoids those rejected failure modes:
 - the source `package.json`, workspace manifests, and lockfile are never rewritten;
 - one temporary directory is assembled directly from the reviewed runtime inventory and built
   outputs, then deleted after pack/publish;
-- no per-workspace tarballs or ordering-dependent intermediate files exist;
-- staged manifests retain normal dependency metadata, so npm, Yarn, audit tools, and SBOM gates see
-  the runtime graph;
+- each workspace archive is produced from an isolated reduced manifest and declared publish surface;
+  temporary assembly directories are deleted before the root package is packed;
+- staged manifests retain normal dependency and bundle metadata, so npm, Yarn, audit tools, and
+  SBOM gates see the runtime graph;
 - package-surface, install, and release-publish paths all call the same staging producer.
 
 Direct publication from the source root is not the release path. `scripts/release-publish.mjs`
@@ -178,9 +184,10 @@ graph. Four controls remain load-bearing:
    `workspace-sboms-cyclonedx` CI artifact. This provides an auditable bill of materials for
    every vendored package's transitive dependency graph.
 3. The installable-smoke gate (`scripts/installable-package-smoke.mjs`, run as
-   `npm run smoke:install`) re-verifies after every push that the staged tarball installs cleanly
-   with both npm and pinned Yarn 4.9.1 and that `keiko --version`, `keiko --help`, the SDK root, and
-   external declarations remain reachable. AC2 cannot silently regress.
+   `npm run smoke:install`) re-verifies after every push that npm installs the staged tarball and
+   pinned Yarn 4.9.1 installs it through a loopback npm-registry locator. It then verifies that
+   `keiko --version`, `keiko --help`, the SDK root, and external declarations remain reachable.
+   AC2 cannot silently regress.
 4. A workspace-license allow-list encoded in `scripts/check-workspace-supply-chain.mjs` fails CI
    on any SPDX identifier not in the approved set, making unexpected license introduction visible
    in PR review.
@@ -188,10 +195,11 @@ graph. Four controls remain load-bearing:
 ### D7 — Installable-package smoke
 
 The script `scripts/installable-package-smoke.mjs` defines the AC2 gate: it stages and packs the
-publish artifact, installs the same tarball into separate clean npm and Yarn 4.9.1 projects, asserts
-all vendored workspace `dist/` trees are installed, and executes `keiko --version` and
-`keiko --help`. It also asserts the SDK root runtime and declaration exports resolve. The npm lane
-continues through the packaged UI and lifecycle integration proof.
+publish artifact, installs the tarball into a clean npm project, and serves the exact same bytes
+through a hermetic loopback npm registry for a clean Yarn 4.9.1 install. It asserts all vendored
+workspace `dist/` trees are installed and executes `keiko --version` and `keiko --help`. It also
+asserts the SDK root runtime and declaration exports resolve. The npm lane continues through the
+packaged UI and lifecycle integration proof.
 
 The `smoke:install` script is wired into the existing `build-scan-sbom-smoke` CI job
 (`.github/workflows/ci.yml:79`) after the `Build` step.

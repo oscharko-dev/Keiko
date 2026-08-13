@@ -17,7 +17,7 @@ import { findForbiddenPaths } from "./package-surface-rules.mjs";
 // against its built `dist/` directly here — the prepack chain has already run `npm run build`.
 import { runEditorBundleSizeCheck } from "./editor-bundle-size.mjs";
 import { packFiles } from "./package-surface-pack.mjs";
-import { createStagedPublishPackage, stagedVendorDirectory } from "./stage-publish-package.mjs";
+import { createStagedPublishPackage } from "./stage-publish-package.mjs";
 
 const EXPECTED_BUNDLE_EXCLUSIONS = new Map([
   [
@@ -88,10 +88,7 @@ function assertCspHashesMatchStaticHtml() {
   }
 }
 
-const WORKFLOW_HANDOFF_DIST_FILES = [
-  "vendor/keiko-contracts/dist/workflow-handoff.js",
-  "vendor/keiko-contracts/dist/workflow-handoff.d.ts",
-];
+const WORKFLOW_HANDOFF_DIST_FILES = ["dist/workflow-handoff.js", "dist/workflow-handoff.d.ts"];
 const ROOT_PACKAGE_SURFACE_CONTRACT_PATH = join("scripts", "root-package-surface.contract.json");
 
 function readRootPackageSurfaceContract() {
@@ -193,8 +190,14 @@ function assertServerRuntimeSurface(paths) {
   }
 }
 
-export function assertTypeScriptRuntimeSurface(paths) {
-  if (!paths.includes("vendor/keiko-server/package.json")) {
+function vendorPackage(vendorPackages, name) {
+  return vendorPackages.find((entry) => entry.name === name);
+}
+
+export function assertTypeScriptRuntimeSurface(vendorPackages) {
+  if (
+    !vendorPackage(vendorPackages, "@oscharko-dev/keiko-server")?.files.includes("package.json")
+  ) {
     fail(
       "the tarball does not include the vendored server manifest that declares the productive " +
         "TypeScript API runtime (the native compiler must remain development-only).",
@@ -272,17 +275,20 @@ async function assertRootPublicApiContract(paths) {
   assertRootContractMatches(currentContract, contract);
 }
 
-function assertVendoredPayload(paths) {
+function assertVendoredPayload(paths, vendorPackages) {
   const manifest = JSON.parse(readFileSync("package.json", "utf8"));
   const bundled = Array.isArray(manifest.bundleDependencies) ? manifest.bundleDependencies : [];
   if (bundled.length === 0) {
     fail("package.json declares no runtime workspace inventory — vendoring would be empty.");
   }
   for (const name of bundled) {
-    const distPrefix = `vendor/${stagedVendorDirectory(name)}/dist/`;
-    if (!paths.some((p) => p.startsWith(distPrefix))) {
+    const staged = vendorPackage(vendorPackages, name);
+    if (staged === undefined || !paths.includes(staged.archivePath)) {
+      fail(`runtime workspace ${name} has no file archive in the root package.`);
+    }
+    if (!staged.files.some((path) => path.startsWith("dist/"))) {
       fail(
-        `runtime workspace ${name} ships no files under ${distPrefix} ` +
+        `runtime workspace ${name} ships no files under dist/ in its archive ` +
           "— the vendored package is incomplete (run `npm run build:packages`).",
       );
     }
@@ -316,7 +322,7 @@ function collectExportTargets(exportsField) {
   return [...targets].sort((a, b) => a.localeCompare(b));
 }
 
-function assertVendoredWorkspaceExportArtifacts(paths) {
+function assertVendoredWorkspaceExportArtifacts(vendorPackages) {
   const manifest = JSON.parse(readFileSync("package.json", "utf8"));
   const bundled = Array.isArray(manifest.bundleDependencies) ? manifest.bundleDependencies : [];
   for (const name of bundled) {
@@ -328,10 +334,8 @@ function assertVendoredWorkspaceExportArtifacts(paths) {
     if (exportsField === undefined) {
       fail(`${name} declares no package.json exports; publish surface would be implicit.`);
     }
-    const prefix = `vendor/${stagedVendorDirectory(name)}/`;
-    const missing = collectExportTargets(exportsField)
-      .map((target) => `${prefix}${target}`)
-      .filter((target) => !paths.includes(target));
+    const files = vendorPackage(vendorPackages, name)?.files ?? [];
+    const missing = collectExportTargets(exportsField).filter((target) => !files.includes(target));
     if (missing.length > 0) {
       fail(
         `${name} export targets are missing from the packed artifact: ${missing.join(", ")} ` +
@@ -370,9 +374,10 @@ function assertRootWorkspaceContract() {
   }
 }
 
-function assertWorkflowHandoffSubpath(paths) {
+function assertWorkflowHandoffSubpath(vendorPackages) {
+  const files = vendorPackage(vendorPackages, "@oscharko-dev/keiko-contracts")?.files ?? [];
   for (const required of WORKFLOW_HANDOFF_DIST_FILES) {
-    if (!paths.includes(required)) {
+    if (!files.includes(required)) {
       fail(
         `workflow-handoff contract subpath is missing ${required} ` +
           "— the #186 governed handoff contract is not publishable.",
@@ -381,9 +386,10 @@ function assertWorkflowHandoffSubpath(paths) {
   }
 }
 
-function assertLocalKnowledgeDistPath(paths) {
-  const required = "vendor/keiko-local-knowledge/dist/index.js";
-  if (!paths.includes(required)) {
+function assertLocalKnowledgeDistPath(vendorPackages) {
+  const required = "dist/index.js";
+  const files = vendorPackage(vendorPackages, "@oscharko-dev/keiko-local-knowledge")?.files ?? [];
+  if (!files.includes(required)) {
     fail(
       `the tarball does not include ${required} ` +
         "— keiko-local-knowledge is missing from the vendored runtime (Epic #189 O7).",
@@ -429,7 +435,7 @@ function collectSourceInputs() {
   return inputs;
 }
 
-function collectBuildOutputs(paths) {
+function collectBuildOutputs(vendorPackages) {
   const outputs = [
     "dist/index.js",
     "dist/index.d.ts",
@@ -440,19 +446,17 @@ function collectBuildOutputs(paths) {
   const bundled = Array.isArray(manifest.bundleDependencies) ? manifest.bundleDependencies : [];
   for (const name of bundled) {
     const shortName = name.replace(/^@oscharko-dev\//, "");
-    for (const stagedPath of [
-      `vendor/${shortName}/dist/index.js`,
-      `vendor/${shortName}/dist/index.d.ts`,
-    ]) {
-      if (paths.includes(stagedPath)) {
-        outputs.push(stagedPath.replace(/^vendor\//u, "packages/"));
+    const files = vendorPackage(vendorPackages, name)?.files ?? [];
+    for (const stagedPath of ["dist/index.js", "dist/index.d.ts"]) {
+      if (files.includes(stagedPath)) {
+        outputs.push(join("packages", shortName, stagedPath));
       }
     }
   }
   return outputs;
 }
 
-function assertBuiltArtifactsFresh(paths) {
+function assertBuiltArtifactsFresh(vendorPackages) {
   const inputs = collectSourceInputs().filter((path) => {
     try {
       return statSync(path).isFile();
@@ -460,7 +464,7 @@ function assertBuiltArtifactsFresh(paths) {
       return false;
     }
   });
-  const outputs = collectBuildOutputs(paths);
+  const outputs = collectBuildOutputs(vendorPackages);
   for (const output of outputs) {
     try {
       if (!statSync(output).isFile()) {
@@ -490,6 +494,7 @@ if (process.env.KEIKO_PACKAGE_SURFACE_COVERAGE_IMPORT_ONLY === "1") {
 
 const stagedPackage = createStagedPublishPackage();
 let files;
+const vendorPackages = stagedPackage.vendorPackages;
 try {
   files = packFiles({ packageDir: stagedPackage.packageDir });
 } finally {
@@ -534,14 +539,14 @@ for (const hit of findForbiddenPaths(paths)) {
 
 assertCspHashesMatchStaticHtml();
 assertServerRuntimeSurface(paths);
-assertTypeScriptRuntimeSurface(paths);
+assertTypeScriptRuntimeSurface(vendorPackages);
 await assertRootPublicApiContract(paths);
 assertRootWorkspaceContract();
-assertVendoredPayload(paths);
-assertVendoredWorkspaceExportArtifacts(paths);
-assertWorkflowHandoffSubpath(paths);
-assertLocalKnowledgeDistPath(paths);
-assertBuiltArtifactsFresh(paths);
+assertVendoredPayload(paths, vendorPackages);
+assertVendoredWorkspaceExportArtifacts(vendorPackages);
+assertWorkflowHandoffSubpath(vendorPackages);
+assertLocalKnowledgeDistPath(vendorPackages);
+assertBuiltArtifactsFresh(vendorPackages);
 
 // Keiko Editor bundle-size budget (Issue #1207; ADR-0042 D3.6). Enforced here so it runs inside the
 // `ci` prepack chain (via `smoke:install`), as well as standalone via `npm run check:editor-bundle-size`.

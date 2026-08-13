@@ -54,6 +54,7 @@ const requiredStablePublishGates = [
   "workspace-supply-chain",
   "package-surface",
   "qi-supply-chain",
+  "install-smoke",
 ];
 const releaseOwners = new Set(["release-owner"]);
 

@@ -70,14 +70,10 @@ import {
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 beforeAll(() => {
-  if (existsSync(join(REPO_ROOT, "dist", "index.js"))) return;
-  const result = spawnSync(
-    process.execPath,
-    ["node_modules/@typescript/native/bin/tsc", "-p", "tsconfig.build.json"],
-    { cwd: REPO_ROOT, encoding: "utf8" },
-  );
-  if (result.status !== 0) {
-    throw new Error(`root build for release-publish tests failed: ${result.stderr}`);
+  if (!existsSync(join(REPO_ROOT, "dist", "index.js"))) {
+    throw new Error(
+      "release-publish tests require dist/index.js; run `npm run build` before this suite.",
+    );
   }
 });
 
@@ -1685,6 +1681,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
 
       // Publish carries the release-safety flags on the real command line.
       const publishLine = lastRun.calls.find((l) => l.startsWith('npm ["publish"'));
+      expect(publishLine).toContain('["publish","."');
       expect(publishLine).toContain('"--access","public"');
       expect(publishLine).toContain('"--tag","latest"');
       // A token publish carries no provenance attestation: npm can attest only where an OIDC

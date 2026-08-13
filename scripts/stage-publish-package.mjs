@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
@@ -9,9 +10,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { explicitPrivateWorkspaceExclusions, scope } from "./release-workspace-policy.mjs";
 
 const defaultRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -120,18 +122,119 @@ function stagedWorkspaceManifest(sourceManifest, runtimeNames) {
   return manifest;
 }
 
-function copyWorkspace(stageRoot, record, runtimeNames) {
-  const vendorRoot = join(stageRoot, "vendor", stagedVendorDirectory(record.manifest.name));
-  const dist = join(record.packageRoot, "dist");
-  if (!existsSync(dist)) {
+function addExportTargets(value, paths) {
+  if (typeof value === "string") {
+    if (value.startsWith("./")) paths.add(value.slice(2));
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  for (const entry of Object.values(value)) addExportTargets(entry, paths);
+}
+
+function declaredPublishPaths(manifest) {
+  if (!Array.isArray(manifest.files) || manifest.files.length === 0) {
+    throw new TypeError(`${manifest.name}.files must declare a bounded publish surface`);
+  }
+  const paths = new Set(manifest.files);
+  const bin = manifest.bin;
+  if (typeof bin === "string") paths.add(bin);
+  if (bin !== null && typeof bin === "object" && !Array.isArray(bin)) {
+    for (const target of Object.values(bin)) paths.add(target);
+  }
+  addExportTargets(manifest.exports, paths);
+  for (const field of ["main", "module", "types", "typings"]) {
+    if (typeof manifest[field] === "string") paths.add(manifest[field]);
+  }
+  return [...paths];
+}
+
+function normalizedPublishPath(value, packageName) {
+  if (typeof value !== "string" || value.length === 0 || isAbsolute(value)) {
+    throw new TypeError(`${packageName} declares an invalid publish path`);
+  }
+  const normalized = value.replace(/^\.\//u, "");
+  if (normalized.length === 0 || /(?:^|\/)\.\.(?:\/|$)|[*?[\]{}\\]/u.test(normalized)) {
+    throw new TypeError(`${packageName} declares an unsafe or unsupported publish path: ${value}`);
+  }
+  return normalized;
+}
+
+function copyWorkspaceSurface(sourceRoot, destinationRoot, manifest) {
+  for (const value of declaredPublishPaths(manifest)) {
+    const relativePath = normalizedPublishPath(value, manifest.name);
+    const source = resolve(sourceRoot, relativePath);
+    if (!source.startsWith(`${sourceRoot}${sep}`) || !existsSync(source)) {
+      throw new Error(`${manifest.name} publish path is missing or unsafe: ${relativePath}`);
+    }
+    const destination = join(destinationRoot, relativePath);
+    mkdirSync(dirname(destination), { recursive: true });
+    cpSync(source, destination, { recursive: true });
+  }
+}
+
+function assertWorkspacePack(result, record) {
+  if (result.error !== undefined) {
+    throw new Error(`${record.manifest.name} archive packer could not spawn`);
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `${record.manifest.name} archive packer failed with status ${String(result.status)}`,
+    );
+  }
+}
+
+function packedFiles(packageRoot) {
+  const files = [];
+  const visit = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) visit(path);
+      if (entry.isFile()) files.push(relative(packageRoot, path).split(sep).join("/"));
+    }
+  };
+  visit(packageRoot);
+  return files.sort((left, right) => left.localeCompare(right));
+}
+
+function vendorArchiveName(record) {
+  const version = record.manifest.version;
+  if (typeof version !== "string" || !/^[0-9A-Za-z.-]+$/u.test(version)) {
+    throw new TypeError(`${record.manifest.name} has an unsafe archive version`);
+  }
+  return `oscharko-dev-${stagedVendorDirectory(record.manifest.name)}-${version}.tgz`;
+}
+
+function packWorkspace(stageRoot, record, runtimeNames) {
+  const directory = stagedVendorDirectory(record.manifest.name);
+  const workspaceStage = join(stageRoot, ".vendor-stage", directory);
+  const packageRoot = join(workspaceStage, "package");
+  const vendorRoot = join(stageRoot, "vendor");
+  const manifest = stagedWorkspaceManifest(record.manifest, runtimeNames);
+  if (!existsSync(join(record.packageRoot, "dist"))) {
     throw new Error(`${record.manifest.name} has no built dist directory`);
   }
+  mkdirSync(packageRoot, { recursive: true });
   mkdirSync(vendorRoot, { recursive: true });
-  cpSync(dist, join(vendorRoot, "dist"), { recursive: true });
-  writeJson(
-    join(vendorRoot, "package.json"),
-    stagedWorkspaceManifest(record.manifest, runtimeNames),
-  );
+  copyWorkspaceSurface(record.packageRoot, packageRoot, manifest);
+  writeJson(join(packageRoot, "package.json"), manifest);
+  const archiveName = vendorArchiveName(record);
+  const archivePath = join(vendorRoot, archiveName);
+  const result = spawnSync(resolveHostExecutable("tar"), ["-czf", archivePath, "package"], {
+    cwd: workspaceStage,
+    encoding: "utf8",
+  });
+  assertWorkspacePack(result, record);
+  const files = packedFiles(packageRoot);
+  const bundledRoot = join(stageRoot, "node_modules", ...record.manifest.name.split("/"));
+  mkdirSync(dirname(bundledRoot), { recursive: true });
+  cpSync(packageRoot, bundledRoot, { recursive: true });
+  rmSync(workspaceStage, { recursive: true, force: true });
+  return {
+    name: record.manifest.name,
+    archivePath: `vendor/${archiveName}`,
+    files,
+    manifest,
+  };
 }
 
 function lockedDependencyVersion(lockfile, workspaceDirectory, dependencyName) {
@@ -180,6 +283,40 @@ function rootResolvedVersions(manifest, runtimeNames, lockfile) {
   return versions;
 }
 
+function promoteWorkspacePeers(
+  dependencies,
+  optionalDependencies,
+  workspace,
+  runtimeNames,
+  record,
+  lockfile,
+  promotedVersions,
+) {
+  const peerDependencies = objectField(workspace, "peerDependencies");
+  const peerMeta = objectField(workspace, "peerDependenciesMeta");
+  const requiredPeers = {};
+  const optionalPeers = {};
+  for (const [peerName, specifier] of Object.entries(peerDependencies)) {
+    if (runtimeNames.has(peerName)) continue;
+    const target = peerMeta[peerName]?.optional === true ? optionalPeers : requiredPeers;
+    target[peerName] = specifier;
+  }
+  for (const [target, peers] of [
+    [dependencies, requiredPeers],
+    [optionalDependencies, optionalPeers],
+  ]) {
+    addExternalDependencies(
+      target,
+      peers,
+      runtimeNames,
+      workspace.name,
+      record.directory,
+      lockfile,
+      promotedVersions,
+    );
+  }
+}
+
 function promoteWorkspaceDependencies(manifest, runtimeNames, records, lockfile) {
   const dependencies = objectField(manifest, "dependencies");
   const optionalDependencies = objectField(manifest, "optionalDependencies");
@@ -208,6 +345,15 @@ function promoteWorkspaceDependencies(manifest, runtimeNames, records, lockfile)
       lockfile,
       promotedVersions,
     );
+    promoteWorkspacePeers(
+      dependencies,
+      optionalDependencies,
+      workspace,
+      runtimeNames,
+      record,
+      lockfile,
+      promotedVersions,
+    );
   }
   for (const [name, specifier] of Object.entries(optionalDependencies)) {
     const requiredSpecifier = dependencies[name];
@@ -222,16 +368,20 @@ function promoteWorkspaceDependencies(manifest, runtimeNames, records, lockfile)
   setObjectField(manifest, "optionalDependencies", optionalDependencies);
 }
 
-function stagedRootManifest(sourceManifest, runtimeNames, records, lockfile) {
+function stagedRootManifest(sourceManifest, runtimeNames, records, lockfile, vendorPackages) {
   const manifest = structuredClone(sourceManifest);
   promoteWorkspaceDependencies(manifest, new Set(runtimeNames), records, lockfile);
   const dependencies = objectField(manifest, "dependencies");
+  const archives = new Map(
+    vendorPackages.map((vendorPackage) => [vendorPackage.name, vendorPackage.archivePath]),
+  );
   for (const name of runtimeNames) {
-    dependencies[name] = `file:vendor/${stagedVendorDirectory(name)}`;
+    const archivePath = archives.get(name);
+    if (archivePath === undefined) throw new Error(`${name} has no staged vendor archive`);
+    dependencies[name] = `file:${archivePath}`;
   }
   manifest.dependencies = dependencies;
   manifest.files = [...new Set([...(manifest.files ?? []), "vendor"])];
-  delete manifest.bundleDependencies;
   return manifest;
 }
 
@@ -256,12 +406,16 @@ export function createStagedPublishPackage({
   const records = workspaceRecords(resolvedRepoRoot);
   validateRuntimeRecords(runtimeNames, records);
   const stageRoot = mkdtempSync(join(temporaryRoot, "keiko-publish-stage-"));
+  const vendorPackages = [];
   try {
     copyRootSurface(resolvedRepoRoot, stageRoot, rootManifest);
-    for (const name of names) copyWorkspace(stageRoot, records.get(name), runtimeNames);
+    for (const name of names) {
+      vendorPackages.push(packWorkspace(stageRoot, records.get(name), runtimeNames));
+    }
+    rmSync(join(stageRoot, ".vendor-stage"), { recursive: true, force: true });
     writeJson(
       join(stageRoot, "package.json"),
-      stagedRootManifest(rootManifest, names, records, lockfile),
+      stagedRootManifest(rootManifest, names, records, lockfile, vendorPackages),
     );
   } catch (error) {
     rmSync(stageRoot, { recursive: true, force: true });
@@ -269,6 +423,7 @@ export function createStagedPublishPackage({
   }
   return {
     packageDir: stageRoot,
+    vendorPackages,
     cleanup: () => rmSync(stageRoot, { recursive: true, force: true }),
   };
 }

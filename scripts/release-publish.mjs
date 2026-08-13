@@ -1650,7 +1650,7 @@ function publishPackageDryRun(pkg, npmEnv, options) {
     "npm",
     [
       "publish",
-      pkg.packageDir,
+      ".",
       "--access",
       "public",
       "--tag",
@@ -1660,7 +1660,7 @@ function publishPackageDryRun(pkg, npmEnv, options) {
       "--ignore-scripts",
       "--dry-run",
     ],
-    { env: npmEnv, stdio: "inherit" },
+    { cwd: pkg.packageDir, env: npmEnv, stdio: "inherit" },
   );
 }
 
@@ -1670,7 +1670,7 @@ function publishPackageToRegistry(pkg, npmEnv, options) {
     "npm",
     [
       "publish",
-      pkg.packageDir,
+      ".",
       "--access",
       "public",
       "--tag",
@@ -1680,7 +1680,7 @@ function publishPackageToRegistry(pkg, npmEnv, options) {
       ...provenancePublishArgs(process.env),
       "--ignore-scripts",
     ],
-    { env: npmEnv, stdio: "inherit" },
+    { cwd: pkg.packageDir, env: npmEnv, stdio: "inherit" },
   );
 }
 

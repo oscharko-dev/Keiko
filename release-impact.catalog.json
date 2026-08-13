@@ -1320,7 +1320,7 @@
       "releaseNoteCategory": "fixes",
       "releaseNotePriority": "high",
       "userVisibleChange": "compatibility",
-      "userVisibleSummary": "Keiko 0.3.7 repairs installation with Yarn 4. The npm package now carries every private Keiko runtime workspace through tarball-local file dependencies instead of npm-only bundle metadata, so Yarn no longer queries the public registry for private packages such as @oscharko-dev/keiko-cli. The release gate now installs the exact staged artifact with both npm and Yarn 4.9.1 before publication.",
+      "userVisibleSummary": "Keiko 0.3.7 repairs installation with Yarn 4. The npm package now carries every private Keiko runtime workspace through tarball-local file archives instead of npm-only bundle metadata, so Yarn no longer queries the public registry for private packages such as @oscharko-dev/keiko-cli. The release gate now installs the exact staged artifact with npm and through a Yarn 4.9.1 npm-registry locator before publication.",
       "affectedStateStores": [],
       "stateImpact": [],
       "releaseNoteBullets": [
