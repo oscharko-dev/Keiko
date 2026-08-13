@@ -238,6 +238,22 @@ describe("ResearchGrantRegistry fetch reservation", () => {
     expect(store.reserveFetch(RUN, "grant-1", NOW)).toBe("limit-reached");
     expect(store.activeGrants(RUN, NOW)[0]?.usedFetches).toBe(1);
   });
+
+  // Regression: PR #3099 P1 follow-up. When an accepted charge leaves usedBytes below the
+  // ceiling but the next charge exceeds the remainder (60 + 50 with a 100-byte cap), the reject
+  // path must MARK the grant as terminally byte-exhausted — otherwise reserveFetch's byte gate
+  // (usedBytes >= maxTotalBytes) never fires and additional real outbound hops slip through
+  // until the fetch-count cap is reached.
+  it("terminally exhausts the byte budget on a rejected over-limit charge", () => {
+    const store = registry({ limits: { maxFetchesPerGrant: 10, maxTotalBytesPerGrant: 100 } });
+    store.register(RUN, makeScope(), undefined, APPROVAL, NOW);
+
+    expect(store.chargeFetch(RUN, "grant-1", 60, NOW)).toBe("ok");
+    expect(store.chargeFetch(RUN, "grant-1", 50, NOW)).toBe("limit-reached");
+    // Before the fix, usedBytes stayed at 60 and reserveFetch admitted more hops. After: 100.
+    expect(store.activeGrants(RUN, NOW)[0]?.usedBytes).toBe(100);
+    expect(store.reserveFetch(RUN, "grant-1", NOW)).toBe("limit-reached");
+  });
 });
 
 describe("ResearchGrantRegistry byte-budget reconciliation", () => {

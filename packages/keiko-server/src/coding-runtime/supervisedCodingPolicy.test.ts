@@ -170,26 +170,29 @@ describe("supervised coding policy", () => {
     expect(result).toMatchObject({ status: "allowed", reason: "scoped-file-edit" });
   });
 
-  // Regression: KEIKO-0438. When one declared scope cannot be resolved (typo, deleted directory,
-  // not-yet-existing branch) the resolver used to collapse the WHOLE allow-list to `undefined`,
-  // denying an edit that targeted a still-valid sibling scope. Keep the scopes that resolved.
+  // Regression: KEIKO-0438 (+ #3099 P2 follow-up). When one declared scope cannot be resolved,
+  // the resolver used to collapse the WHOLE allow-list to `undefined`, denying an edit that
+  // targeted a still-valid sibling scope. Keep the scopes that resolved. Uses `../outside`
+  // as the failing scope because containedRealPathInfo genuinely rejects an escaping path,
+  // whereas a not-yet-existing directory returns the LEXICAL contained path (so a typo like
+  // `packages/nonexistent-typo` doesn't actually exercise the .every()→.filter() change).
   it("keeps a resolvable scope after another declared scope fails to resolve", () => {
     const { root } = workspaceFixture();
 
     const result = decideSupervisedFileEdit({
       ...fileRequest(root, "src/hello.ts"),
-      allowedRelativePaths: ["src", "packages/nonexistent-typo"],
+      allowedRelativePaths: ["src", "../outside"],
     });
 
     expect(result).toMatchObject({ status: "allowed", reason: "scoped-file-edit" });
   });
 
   it("denies the edit only when EVERY declared scope fails to resolve", () => {
-    const { root } = workspaceFixture();
+    const { root, outside } = workspaceFixture();
 
     const result = decideSupervisedFileEdit({
       ...fileRequest(root, "src/hello.ts"),
-      allowedRelativePaths: ["../outside", "packages/nonexistent-typo"],
+      allowedRelativePaths: ["../outside", outside],
     });
 
     expect(result).toMatchObject({ status: "denied", reason: "out-of-scope-file-edit" });

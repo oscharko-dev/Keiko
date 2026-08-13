@@ -1051,6 +1051,23 @@ describe("OpenCode runtime adapter readiness", () => {
     }
   });
 
+  // Regression: PR #3099 P2 follow-up. `waitForTerminal` has an outer guard that returns before
+  // entering the poll loop when the caller signal is already aborted. The turn-settlement
+  // finally must sit OUTSIDE that guard so the already-aborted path also clears turnArmed —
+  // otherwise the next armTurn() short-circuits and no further turn can ever run.
+  it("KEIKO-0240 (early-abort): settles the turn when waitForTerminal receives an already-aborted signal", async () => {
+    const harness = readinessPorts();
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    expect(adapter.armTurn()).toBe(true);
+    const preAborted = new AbortController();
+    preAborted.abort();
+    await expect(adapter.waitForTerminal(preAborted.signal)).resolves.toBe(false);
+    // Before the fix: turnArmed remained true → next armTurn returned false.
+    expect(adapter.armTurn()).toBe(true);
+    await adapter.close();
+  });
+
   // Regression: KEIKO-0240. Before this fix, when waitForTerminal exited via caller abort or
   // its own 30-minute deadline WITHOUT the turn ever settling, `turnArmed` stayed true — every
   // subsequent armTurn() on the same adapter instance short-circuited to `false` and no further

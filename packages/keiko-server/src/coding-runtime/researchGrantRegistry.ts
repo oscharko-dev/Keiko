@@ -235,6 +235,10 @@ class InMemoryResearchGrantRegistry implements ResearchGrantRegistry {
 
   // Reconciles actual bytes read against the cumulative byte budget AFTER a response body has been
   // read. Never touches `usedFetches` — that budget is reserved up front by `reserveFetch`.
+  // #3099 P1 follow-up: an over-limit charge now saturates `usedBytes` at `maxTotalBytes` so
+  // subsequent `reserveFetch` calls see the terminally-exhausted state and deny. Previously
+  // `usedBytes` was left below the ceiling on the rejected charge, so the byte gate in
+  // reserveFetch never fired and later hops slipped through until the fetch-count cap.
   public chargeFetch(
     runId: string,
     grantId: string,
@@ -245,7 +249,10 @@ class InMemoryResearchGrantRegistry implements ResearchGrantRegistry {
     if (grant === undefined) return "unknown";
     if (grant.expiresAtMs <= nowMs) return "expired";
     const charged = clampBytes(bytes);
-    if (grant.usedBytes + charged > grant.maxTotalBytes) return "limit-reached";
+    if (grant.usedBytes + charged > grant.maxTotalBytes) {
+      grant.usedBytes = grant.maxTotalBytes;
+      return "limit-reached";
+    }
     grant.usedBytes += charged;
     return "ok";
   }

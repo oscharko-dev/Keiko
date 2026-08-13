@@ -419,13 +419,14 @@ export class CodingRuntimeOrchestrator {
     const grants = registry.activeGrants(runId, this.now().getTime());
     const newest = grants.at(-1);
     if (newest === undefined) return undefined;
-    const domains = [...new Set(grants.flatMap((grant) => grant.domains))].sort((left, right) =>
-      left.localeCompare(right),
-    );
-    // The UI shows one row per authenticated research channel, so we project the newest live grant.
-    // Pairing that grant's id with `Math.max(...allExpiries)` misrepresents a still-live older
-    // grant's later expiry as if it belonged to the newest grant (which may expire sooner). The
-    // grant id and the expiry must reference the same underlying grant record.
+    // The UI shows one row per authenticated research channel, so we project the newest live
+    // grant exclusively. Previously we unioned domains from every live grant while pairing the
+    // newest grant's id, which misrepresented an older grant's authority as belonging to the
+    // newest one. #3099 P2 follow-up: also drop the older grants' domains — grant id, domains,
+    // and expiry must all describe the SAME underlying grant record (a domain that belongs to
+    // a still-live older grant would otherwise be shown with the newest grant's expiry, then
+    // "unexpectedly reappear" with the older expiry once the newest grant is pruned).
+    const domains = [...new Set(newest.domains)].sort((left, right) => left.localeCompare(right));
     return {
       grantId: newest.grantId,
       domains,

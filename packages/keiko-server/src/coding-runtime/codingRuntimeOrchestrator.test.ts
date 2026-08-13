@@ -1333,13 +1333,16 @@ describe("CodingRuntimeOrchestrator research grants (#2387)", () => {
       FIXTURE_NOW_MS,
     );
 
-    // Regression: KEIKO-0269. The projected grant id and expiry must both come from the same
-    // underlying grant record. Previously the id was the newest grant's but the expiry was the
-    // MAX across every live grant, so a still-live older grant that outlived the newest one
-    // painted the newest one as though it would live longer than it actually will.
+    // Regression: KEIKO-0269 + #3099 P2 follow-up. The projected grant id, domains, and expiry
+    // must ALL come from the same underlying grant record. Previously the id was the newest
+    // grant's, the expiry was the MAX across all grants (KEIKO-0269), and the domain set was
+    // the UNION across all grants — a domain from a still-live older grant would appear paired
+    // with the newest grant's expiry and then "reappear" with a later expiry once the newest
+    // was pruned. The projection now shows exactly the newest grant's own id, domains, and
+    // expiry — a coherent one-record view.
     expect(f.orchestrator.researchGrant("run-1")).toEqual({
       grantId: "research-grant-2",
-      domains: ["api.example.net", "docs.example.org"],
+      domains: ["api.example.net"],
       expiresAt: "2026-01-01T00:04:00.000Z",
     });
   });

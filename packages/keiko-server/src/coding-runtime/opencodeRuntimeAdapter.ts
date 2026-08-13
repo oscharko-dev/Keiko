@@ -323,11 +323,11 @@ export function createOpenCodeRuntimeAdapter(
     turnNotifications.clear();
   }
 
-  /** Active/terminal, caller, deadline, stop, and polling gates fail independently. */
-  async function waitForTerminal(callerSignal: AbortSignal): Promise<boolean> {
-    const generation = turnGeneration;
-    if (turnSettled(generation) && !callerSignal.aborted) return turnSettledOutcome ?? false;
-    if (!turnArmed || ready === undefined || closed || callerSignal.aborted) return false;
+  async function awaitTerminalBounded(
+    generation: number,
+    callerSignal: AbortSignal,
+    sessionId: string,
+  ): Promise<boolean> {
     const deadline = new AbortController();
     const timer = setTimeout(() => {
       deadline.abort();
@@ -335,9 +335,32 @@ export function createOpenCodeRuntimeAdapter(
     timer.unref();
     const signal = AbortSignal.any([callerSignal, deadline.signal]);
     try {
-      return await awaitTurnTerminal(generation, signal, ready.sessionId);
+      return await awaitTurnTerminal(generation, signal, sessionId);
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  function waitForTerminalPreflightBlocked(callerSignal: AbortSignal): boolean {
+    return !turnArmed || ready === undefined || closed || callerSignal.aborted;
+  }
+
+  /** Active/terminal, caller, deadline, stop, and polling gates fail independently. */
+  async function waitForTerminal(callerSignal: AbortSignal): Promise<boolean> {
+    const generation = turnGeneration;
+    if (turnSettled(generation) && !callerSignal.aborted) return turnSettledOutcome ?? false;
+    // KEIKO-0240 + #3099 P2: settle the turn (as failed) on EVERY unsettled exit — including
+    // the outer early-return path when the caller signal is already aborted, when the adapter
+    // is closed, or when armTurn was never called. `awaitTurnTerminal`'s finally cannot cover
+    // those cases because they return before we enter the poll loop. This outer try/finally
+    // covers both.
+    try {
+      if (waitForTerminalPreflightBlocked(callerSignal) || ready === undefined) return false;
+      return await awaitTerminalBounded(generation, callerSignal, ready.sessionId);
+    } finally {
+      if (generation === turnGeneration && turnArmed && turnSettledGeneration !== generation) {
+        settleTurn(generation, false);
+      }
     }
   }
 
