@@ -38,8 +38,10 @@ The runtime set has since grown, but the invariant is unchanged: runtime workspa
 `"private": true`, while `keiko-ui` and `keiko-editor` are build-time-only.
 
 The source root `package.json` lists private runtime workspaces as pinned dependencies and keeps the
-runtime inventory in `bundleDependencies`. Those fields resolve through npm workspace symlinks
-during development. They are build inputs, not the manifest shipped to customers.
+runtime inventory in `bundleDependencies`. The pinned dependency values resolve through npm
+workspace symlinks during development and are build inputs: staging rewrites them to `file:` archive
+references. The reviewed `bundleDependencies` inventory itself remains in the staged customer
+manifest so npm and Yarn projections are derived from the same bounded runtime set.
 
 An empirical verification on 2026-06-03 confirmed the gap: running `npm pack` at the repo root
 produces `oscharko-dev-keiko-0.1.6.tgz`. Installing that tarball into a clean `tmpdir` fails with

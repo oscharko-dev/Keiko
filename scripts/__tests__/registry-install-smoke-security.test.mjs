@@ -47,6 +47,7 @@ function processExists(pid) {
     return true;
   } catch (error) {
     if (error?.code === "ESRCH") return false;
+    if (error?.code === "EPERM") return true;
     throw error;
   }
 }
@@ -300,6 +301,16 @@ describe("installable package smoke optional-dependency coverage", () => {
 
     expect(result.error?.code).toBe("ENOENT");
     expect(result.status).toBeNull();
+  });
+
+  it("treats an EPERM process probe as an existing process", () => {
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      const error = new Error("operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    });
+
+    expect(processExists(42)).toBe(true);
   });
 
   it("fails closed when the Yarn registry install command exits non-zero", async () => {
