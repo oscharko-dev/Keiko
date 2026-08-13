@@ -761,10 +761,17 @@ function stubbedHostBindings(seeded, entry, hostSuffixes) {
  * runs. The set is derived from the same libc detection `supportedArchitectures()` uses, so a glibc
  * host does not accept the musl build as its own.
  */
-export function hostBindingSuffixes() {
-  const base = `-${process.platform}-${process.arch}`;
-  if (process.platform === "linux") return [base, `${base}-${linuxLibc()}`];
-  if (process.platform === "win32") return [base, `${base}-msvc`];
+export function hostBindingSuffixes(platform = process.platform, arch = process.arch, libc) {
+  const base = `-${platform}-${arch}`;
+  if (platform === "linux") {
+    const resolvedLibc = libc ?? linuxLibc();
+    // `linuxLibc()` yields the value Yarn's `supportedArchitectures` expects — `glibc` — while the
+    // prebuilt packages are named with the toolchain, `-gnu`. Using the Yarn spelling here would
+    // generate `-linux-x64-glibc`, which matches no published binding, and the guard would be
+    // inert on the glibc lane exactly as the bare suffix was on every lane.
+    return [base, `${base}-${resolvedLibc === "musl" ? "musl" : "gnu"}`];
+  }
+  if (platform === "win32") return [base, `${base}-msvc`];
   return [base];
 }
 
@@ -1781,7 +1788,13 @@ function assertPrivateDirectory(dir) {
   if (process.getuid !== undefined && stats.uid !== process.getuid()) {
     fail(`vendor seed cache ${dir} is not owned by this user`);
   }
-  // Group/other write bits would let another account replace an archive between runs.
+  // Group/other write bits would let another account replace an archive between runs. POSIX mode
+  // bits carry no meaning on Windows — Node reports a synthetic mode there and exposes no ACL API —
+  // so the check is skipped rather than evaluated against a value that says nothing. That platform
+  // is not left unguarded: `os.tmpdir()` is per-user on Windows
+  // (`%LOCALAPPDATA%\Temp`), so the shared-directory exposure this check addresses does not arise
+  // by default, and the containment plus integrity checks in `isReusableSeedEntry` apply on every
+  // platform regardless.
   if (process.platform !== "win32" && (stats.mode & 0o022) !== 0) {
     fail(`vendor seed cache ${dir} is group- or world-writable`);
   }

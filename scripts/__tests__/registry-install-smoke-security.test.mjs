@@ -790,16 +790,26 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(() => assertHostBindingsAreReal(build(true))).toThrow(/process\.exit\(1\)/u);
   });
 
-  it("derives host binding suffixes that match the real prebuild names", () => {
-    const suffixes = hostBindingSuffixes();
-    // The bare form is always accepted; the ABI-qualified form is what Linux and Windows publish.
-    expect(suffixes).toContain(`-${process.platform}-${process.arch}`);
-    if (process.platform === "linux") {
-      expect(suffixes.some((s) => s.endsWith("-gnu") || s.endsWith("-musl"))).toBe(true);
-      // A glibc host must not accept the musl build as its own, and vice versa.
-      expect(new Set(suffixes).size).toBe(suffixes.length);
-    }
-    if (process.platform === "win32") expect(suffixes).toContain(`-win32-${process.arch}-msvc`);
+  // Checked for every CI platform, not just the running one: the previous revision asserted only
+  // the host's own branch, so the Linux naming defect below shipped green from macOS.
+  it.each([
+    ["linux", "x64", "glibc", "@napi-rs/canvas-linux-x64-gnu"],
+    ["linux", "x64", "musl", "@napi-rs/canvas-linux-x64-musl"],
+    ["linux", "arm64", "glibc", "@napi-rs/canvas-linux-arm64-gnu"],
+    ["win32", "x64", undefined, "@napi-rs/canvas-win32-x64-msvc"],
+    ["darwin", "arm64", undefined, "@napi-rs/canvas-darwin-arm64"],
+  ])("derives a suffix matching the real %s/%s prebuild", (platform, arch, libc, published) => {
+    const suffixes = hostBindingSuffixes(platform, arch, libc);
+    expect(suffixes.some((suffix) => published.endsWith(suffix))).toBe(true);
+  });
+
+  it("does not let a glibc host claim the musl build, or the reverse", () => {
+    // The toolchain name in the package (`-gnu`) differs from the value Yarn's
+    // supportedArchitectures wants (`glibc`); mapping one to the other is what this guards.
+    const glibc = hostBindingSuffixes("linux", "x64", "glibc");
+    const musl = hostBindingSuffixes("linux", "x64", "musl");
+    expect(glibc.some((s) => "@napi-rs/canvas-linux-x64-musl".endsWith(s))).toBe(false);
+    expect(musl.some((s) => "@napi-rs/canvas-linux-x64-gnu".endsWith(s))).toBe(false);
   });
 
   it("recovers from a malformed seed index instead of failing the gate", () => {
