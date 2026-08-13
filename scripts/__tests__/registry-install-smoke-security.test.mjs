@@ -18,6 +18,7 @@ import {
   assertVendoredPayload,
   installIntoWithYarn,
   packRoot,
+  minimumSatisfyingVersion,
   resolveVendorClosure,
   runAsync,
   startLocalRegistry,
@@ -317,6 +318,26 @@ describe("installable package smoke optional-dependency coverage", () => {
     } finally {
       await registry.close();
     }
+  });
+
+  // The first #3130 attempt passed on macOS and failed on Linux CI: npm drops an optional
+  // dependency entirely when its platform prebuild cannot be installed, so `@napi-rs/canvas` was
+  // present here and absent there, and Yarn — which resolves optional entries regardless — got a
+  // 404 from the offline registry. An absent optional package must resolve to an inert stub.
+  it("stubs an optional dependency the tree does not install, and still fails on a real absence", () => {
+    const stubbed = resolveVendorClosure(join(ROOT, "node_modules"), {
+      dependencies: { "keiko-smoke-absent-optional": "^2.3.4" },
+      bundleDependencies: [],
+    });
+    // A non-optional absence stays fatal — the stub path must never mask a genuine gap.
+    expect(stubbed.missing).toEqual(["keiko-smoke-absent-optional"]);
+  });
+
+  it("names a concrete stub version from a caret, tilde, or exact range", () => {
+    expect(minimumSatisfyingVersion("^1.0.2")).toBe("1.0.2");
+    expect(minimumSatisfyingVersion("~3.4.5")).toBe("3.4.5");
+    expect(minimumSatisfyingVersion("2.0.0")).toBe("2.0.0");
+    expect(minimumSatisfyingVersion("*")).toBeUndefined();
   });
 
   it("closes the third-party dependency closure over the repository's installed tree", () => {

@@ -353,7 +353,7 @@ function registryPackument(registryUrl, artifact, tarballBytes) {
 // The closure below is seeded from THIS repository's `node_modules`, i.e. exactly the versions the
 // committed `package-lock.json` already pins, so the smoke answers the Yarn-compatibility question
 // offline and deterministically.
-function workspaceThirdPartyNames(workspace, packagesRoot) {
+function workspaceThirdPartyRequirements(workspace, packagesRoot) {
   const manifestPath = join(
     packagesRoot,
     "packages",
@@ -362,25 +362,53 @@ function workspaceThirdPartyNames(workspace, packagesRoot) {
   );
   if (!existsSync(manifestPath)) return [];
   const workspaceManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  return ["dependencies", "optionalDependencies"]
-    .flatMap((group) => Object.keys(workspaceManifest[group] ?? {}))
-    .filter((name) => !name.startsWith("@oscharko-dev/"));
+  return ["dependencies", "optionalDependencies"].flatMap((group) =>
+    Object.entries(workspaceManifest[group] ?? {})
+      .filter(([name]) => !name.startsWith("@oscharko-dev/"))
+      .map(([name, range]) => ({ name, range, optional: group === "optionalDependencies" })),
+  );
 }
 
-export function vendoredDependencyNames(manifest = rootPackageJson, packagesRoot = repoRoot) {
+/** Lowest version a caret/tilde/exact range admits — enough to name a concrete stub version. */
+export function minimumSatisfyingVersion(range) {
+  // Anchored, with disjoint leading operators and digits, so there is nothing to backtrack over.
+  return /^[\s^~>=<v]*(\d+\.\d+\.\d+)/u.exec(range ?? "")?.[1];
+}
+
+export function vendoredDependencyRequirements(
+  manifest = rootPackageJson,
+  packagesRoot = repoRoot,
+) {
   const bundled = manifest.bundleDependencies ?? manifest.bundledDependencies ?? [];
   const bundledSet = new Set(bundled);
-  const names = new Set(
-    Object.keys(manifest.dependencies ?? {}).filter((name) => !bundledSet.has(name)),
-  );
+  const requirements = new Map();
+  const record = ({ name, range, optional }) => {
+    const existing = requirements.get(name);
+    if (existing === undefined) {
+      requirements.set(name, { name, range, optional });
+      return;
+    }
+    // A name required non-optionally anywhere must be genuinely present.
+    if (!optional)
+      requirements.set(name, { name, range: existing.range ?? range, optional: false });
+  };
+  for (const [name, range] of Object.entries(manifest.dependencies ?? {})) {
+    if (!bundledSet.has(name)) record({ name, range, optional: false });
+  }
   // A bundled workspace ships inside the tarball, but its own third-party dependencies do not:
   // the consumer's package manager still resolves those from a registry. `keiko-local-knowledge`
   // declaring `@napi-rs/canvas` is exactly how the 2026-08-13 upstream publish race reached a
   // required Keiko gate, so the closure has to include them.
   for (const workspace of bundled) {
-    for (const name of workspaceThirdPartyNames(workspace, packagesRoot)) names.add(name);
+    for (const requirement of workspaceThirdPartyRequirements(workspace, packagesRoot)) {
+      record(requirement);
+    }
   }
-  return [...names].sort(compareStrings);
+  return [...requirements.values()].sort((left, right) => compareStrings(left.name, right.name));
+}
+
+export function vendoredDependencyNames(manifest = rootPackageJson, packagesRoot = repoRoot) {
+  return vendoredDependencyRequirements(manifest, packagesRoot).map(({ name }) => name);
 }
 
 /**
@@ -454,31 +482,44 @@ export function findInstalledCopies(name, modulesRoot, packagesRoot = repoRoot) 
 export function resolveVendorClosure(modulesRoot, manifest = rootPackageJson) {
   const resolved = new Map();
   const missing = [];
-  const optional = new Set();
-  const visit = (name) => {
-    if (resolved.has(name) || missing.includes(name)) return;
+  const stubs = new Map();
+  const visit = (name, requirement) => {
+    if (resolved.has(name) || stubs.has(name) || missing.includes(name)) return;
     const copies = findInstalledCopies(name, modulesRoot);
     if (copies.length === 0) {
-      missing.push(name);
+      recordAbsent(name, requirement);
       return;
     }
     resolved.set(name, copies);
-    for (const copy of copies) {
-      for (const dependency of Object.keys(copy.manifest.dependencies ?? {})) visit(dependency);
-      // Optional entries are followed only when this repository actually installs them. The
-      // registry strips `optionalDependencies` from every manifest it serves (see
-      // `vendoredPackument`), so Yarn never asks for the foreign-platform prebuilds that made this
-      // gate depend on an upstream publish race in the first place.
-      for (const dependency of Object.keys(copy.manifest.optionalDependencies ?? {})) {
-        optional.add(dependency);
-        if (findInstalledCopies(dependency, modulesRoot).length > 0) visit(dependency);
-      }
+    for (const copy of copies) visitDependenciesOf(copy);
+  };
+  // npm drops an optional dependency entirely when its platform prebuild cannot be installed, so
+  // the tree genuinely may not contain it — that is how `@napi-rs/canvas` is present on macOS here
+  // and absent on Linux CI. Yarn still insists on RESOLVING it, so an absent optional package
+  // becomes an inert stub: resolvable, never linked. A non-optional absence stays fatal.
+  const recordAbsent = (name, requirement) => {
+    const version = minimumSatisfyingVersion(requirement?.range);
+    if (requirement?.optional === true && version !== undefined) {
+      stubs.set(name, { name, version });
+      return;
+    }
+    missing.push(name);
+  };
+  const visitDependenciesOf = (copy) => {
+    for (const [dependency, range] of Object.entries(copy.manifest.dependencies ?? {})) {
+      visit(dependency, { name: dependency, range, optional: false });
+    }
+    for (const [dependency, range] of Object.entries(copy.manifest.optionalDependencies ?? {})) {
+      visit(dependency, { name: dependency, range, optional: true });
     }
   };
-  for (const name of vendoredDependencyNames(manifest)) visit(name);
+  for (const requirement of vendoredDependencyRequirements(manifest)) {
+    visit(requirement.name, requirement);
+  }
   return {
     packages: [...resolved.values()].flat(),
-    missing: missing.filter((name) => !optional.has(name)),
+    stubs: [...stubs.values()],
+    missing,
   };
 }
 
@@ -498,8 +539,35 @@ function packVendoredPackage(entry, destination) {
   return join(destination, produced);
 }
 
+/**
+ * A stub carries the real name and a satisfying version so the resolution graph closes, and an
+ * `os`/`cpu` pair that matches no host so the package manager never links it. It exists only for
+ * optional dependencies this repository does not install; nothing real is ever replaced by one.
+ */
+function packStubPackage(entry, destination) {
+  const stubDir = mkdtempSync(join(destination, "stub-"));
+  mkdirSync(stubDir, { recursive: true });
+  writeFileSync(
+    join(stubDir, "package.json"),
+    `${JSON.stringify(
+      {
+        name: entry.name,
+        version: entry.version,
+        description:
+          "Inert offline stub served by the Keiko installable-package smoke (#3130). Never linked.",
+        os: ["keiko-smoke-never-matches"],
+        cpu: ["keiko-smoke-never-matches"],
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  return packVendoredPackage({ name: entry.name, directory: stubDir }, destination);
+}
+
 export function seedVendoredRegistry(destination, modulesRoot = join(repoRoot, "node_modules")) {
-  const { packages, missing } = resolveVendorClosure(modulesRoot);
+  const { packages, stubs, missing } = resolveVendorClosure(modulesRoot);
   if (missing.length > 0) {
     fail(
       `vendored dependency closure is not installed: ${missing.join(", ")} — ` +
@@ -512,6 +580,23 @@ export function seedVendoredRegistry(destination, modulesRoot = join(repoRoot, "
     const versions = seeded.get(entry.name) ?? new Map();
     versions.set(entry.version, { ...entry, tarballBytes: readFileSync(tarballPath) });
     seeded.set(entry.name, versions);
+  }
+  for (const entry of stubs) {
+    if (seeded.has(entry.name)) continue;
+    const tarballPath = packStubPackage(entry, destination);
+    seeded.set(
+      entry.name,
+      new Map([
+        [
+          entry.version,
+          {
+            ...entry,
+            tarballBytes: readFileSync(tarballPath),
+            manifest: { name: entry.name, version: entry.version },
+          },
+        ],
+      ]),
+    );
   }
   return seeded;
 }
