@@ -356,13 +356,25 @@ function registryPackument(registryUrl, artifact, tarballBytes) {
 // committed `package-lock.json` already pins, so the smoke answers the Yarn-compatibility question
 // offline and deterministically.
 function workspaceThirdPartyRequirements(workspace, packagesRoot) {
-  const manifestPath = join(
-    packagesRoot,
-    "packages",
-    workspace.replace(/^@oscharko-dev\//u, ""),
-    "package.json",
-  );
-  if (!existsSync(manifestPath)) return [];
+  // A bundled workspace outside the product scope would leave `@other/foo` in the path and miss
+  // its manifest, silently dropping that workspace's third-party dependencies from the closure —
+  // Yarn would then request a package this registry never seeded. Both that case and a genuinely
+  // absent manifest fail loudly instead, naming the workspace.
+  const scoped = /^@oscharko-dev\/(?<name>[^/]+)$/u.exec(workspace);
+  const directory = scoped?.groups?.name;
+  if (directory === undefined) {
+    fail(
+      `bundled workspace ${workspace} is outside the @oscharko-dev scope, so its third-party ` +
+        `dependencies cannot be located for the offline closure`,
+    );
+  }
+  const manifestPath = join(packagesRoot, "packages", directory ?? "", "package.json");
+  if (!existsSync(manifestPath)) {
+    fail(
+      `bundled workspace ${workspace} has no manifest at packages/${directory ?? ""}, so its ` +
+        `third-party dependencies cannot be added to the offline closure`,
+    );
+  }
   const workspaceManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   // Same npm precedence as any other manifest: an optional entry overrides a same-named required
   // one within this file. Flattening both groups separately would emit a required record for a
