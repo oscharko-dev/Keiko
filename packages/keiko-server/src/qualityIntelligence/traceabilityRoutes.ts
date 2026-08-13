@@ -271,7 +271,11 @@ function recordTraceabilityExportEvidence(
 }
 
 type ScopedRowsOutcome =
-  | { readonly ok: true; readonly rows: TraceabilityRows }
+  | {
+      readonly ok: true;
+      readonly rows: TraceabilityRows;
+      readonly omittedByQualityGate: number;
+    }
   | { readonly ok: false; readonly result: RouteResult };
 
 function loadDeliverableCandidateIds(
@@ -282,6 +286,24 @@ function loadDeliverableCandidateIds(
   return loadQualityIntelligenceCandidates(id, { evidenceDir })?.candidates.filter((candidate) =>
     isDeliverableQualityRow(candidate, review),
   );
+}
+
+// PR-review follow-up (Codex thread 3772030500): count the covering-candidate ids that the
+// deliverability gate drops from the matrix. The set is derived from the ORIGINAL rows the
+// user asked to export so the omission surfaces to the client even when the caller runs the
+// compliance-shaped path (approvedOnly=false) — matching the omittedByQualityGate signal the
+// generic candidate/TMS route already publishes.
+function countCoveringIdsOmittedByGate(
+  rows: TraceabilityRows,
+  permittedIds: ReadonlySet<string>,
+): number {
+  const allCoveringIds = new Set<string>();
+  for (const row of rows) {
+    for (const id of row.coveringCandidateIds) allCoveringIds.add(id);
+  }
+  let omitted = 0;
+  for (const id of allCoveringIds) if (!permittedIds.has(id)) omitted += 1;
+  return omitted;
 }
 
 function qualityScopedRows(
@@ -297,12 +319,11 @@ function qualityScopedRows(
         result: errorResult(500, "QI_LOAD_FAILED", "Failed to load the Quality Intelligence run."),
       };
     }
+    const permitted = new Set(candidates.map((candidate) => candidate.id));
     return {
       ok: true,
-      rows: QualityIntelligenceExport.scopeTraceabilityRowsToTests(
-        rows,
-        new Set(candidates.map((candidate) => candidate.id)),
-      ),
+      rows: QualityIntelligenceExport.scopeTraceabilityRowsToTests(rows, permitted),
+      omittedByQualityGate: countCoveringIdsOmittedByGate(rows, permitted),
     };
   } catch (error) {
     if (error instanceof QualityIntelligenceReviewIntegrityError) {
@@ -324,6 +345,8 @@ function qualityScopedRows(
 
 // Apply the same deliverability gate as the candidate/TMS route unconditionally, then optionally
 // narrow further to approved tests. Tampered review evidence fails closed with the sibling 409.
+// omittedByQualityGate reflects the deliverability filter's drops — the approvedOnly narrowing
+// after it is a user-chosen scope, not a quality omission, so it does not add to the count.
 function scopedRows(
   id: string,
   evidenceDir: string,
@@ -354,6 +377,7 @@ function scopedRows(
   return {
     ok: true,
     rows: QualityIntelligenceExport.scopeTraceabilityRowsToTests(qualityScoped.rows, approved),
+    omittedByQualityGate: qualityScoped.omittedByQualityGate,
   };
 }
 
@@ -423,6 +447,11 @@ export async function handleQiTraceabilityExport(
       contentType: meta.contentType,
       byteLen: Buffer.byteLength(body, "utf8"),
       body,
+      // PR-review follow-up (Codex thread 3772030500): expose the deliverability-gate omission
+      // count so the client's ExportBar can surface it next to the download in the same React
+      // commit — matches the omittedByQualityGate field the candidate/TMS export route already
+      // publishes.
+      omittedByQualityGate: scoped.omittedByQualityGate,
       ...resultWarnings(warnings),
     },
   };

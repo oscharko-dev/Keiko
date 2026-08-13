@@ -167,19 +167,21 @@ function writeRegistration(stateDir: string, registration: PortableInstallRegist
   } catch {
     // Best-effort on non-POSIX filesystems where chmod has no effect.
   }
-  // PR-review follow-up (Codex thread 3770922333): drop the ownership marker so
-  // state-paths.ts's isMkdtempOwnedDir classifier can distinguish this Keiko staging dir
-  // from a customer-created directory that happens to match the same prefix + 6-alphanum
-  // shape. Without the marker, `keiko uninstall --state` walks past a look-alike rather
-  // than recursively deleting user data.
-  try {
-    writeFileSync(join(tmpDir, STAGING_OWNERSHIP_MARKER), "", "utf8");
-  } catch {
-    // Marker write failure is not fatal — the sweep just will not classify this dir as
-    // owned if it survives a crash, which is safer than pretending success.
-  }
   const tmpFile = join(tmpDir, "registration.json");
   try {
+    // PR-review follow-up (Codex thread 3770922333): drop the ownership marker so
+    // state-paths.ts's isMkdtempOwnedDir classifier can distinguish this Keiko staging dir
+    // from a customer-created directory that happens to match the same prefix + 6-alphanum
+    // shape. Without the marker, `keiko uninstall --state` walks past a look-alike rather
+    // than recursively deleting user data.
+    //
+    // PR-review follow-up (Codex thread 3772030496): the marker write is now inside the
+    // shared try/finally so its failure propagates and the rmSync in finally reclaims the
+    // tmpDir immediately. Swallowing left a marker-less staging dir that a later
+    // `uninstall --state` sweep would skip, matching launcher-state.ts saveState's
+    // atomic-transaction contract. Mode 0o600 so the marker cannot leak the presence of
+    // Keiko staging directories to other local users.
+    writeFileSync(join(tmpDir, STAGING_OWNERSHIP_MARKER), "", { encoding: "utf8", mode: 0o600 });
     writeFileSync(tmpFile, `${JSON.stringify(registration, null, 2)}\n`, {
       encoding: "utf8",
       mode: 0o600,

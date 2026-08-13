@@ -367,6 +367,14 @@ export interface QiTraceabilityResult {
   readonly contentType: string;
   readonly byteLen: number;
   readonly body: string;
+  /**
+   * Count of covering-candidate ids the server's deliverability gate dropped from the exported
+   * matrix (Codex thread 3772030500). Present so the ExportBar can surface it next to the
+   * download in the same React commit — matching the omittedByQualityGate signal the generic
+   * candidate/TMS export route publishes. `undefined` on responses from older servers that
+   * predate the field.
+   */
+  readonly omittedByQualityGate?: number;
 }
 
 export interface QiTraceabilityOptions {

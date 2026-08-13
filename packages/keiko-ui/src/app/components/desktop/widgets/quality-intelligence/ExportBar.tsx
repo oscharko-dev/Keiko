@@ -106,6 +106,11 @@ async function runQiExport(ctx: RunExportContext): Promise<void> {
     const res = await ctx.traceabilityImpl(ctx.runId, traceFormat, {
       approvedOnly: ctx.approvedOnly,
     });
+    // PR-review follow-up (Codex thread 3772030500): the traceability route also runs the
+    // deliverability gate and can drop covering candidates from the matrix. Publish the
+    // omission count in the same React commit as the download so an all-candidate
+    // (approvedOnly=false) export cannot silently lose test links without a visible warning.
+    ctx.setOmittedCount(res.omittedByQualityGate ?? 0);
     triggerDownload(res.filename, res.contentType, res.body);
     ctx.setDownloaded(res.filename);
     return;

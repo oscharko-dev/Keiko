@@ -641,13 +641,41 @@ function assertGraphPrecondition(
   }
 }
 
+// PR-review follow-up (Codex thread 3772030490): single-row updateMemory used to run
+// read-then-write without a transaction, so two concurrent writers on the same row could
+// both read the same existing.updatedAt and compute the same +1 revision. That collision
+// let --force's assertMemoryVersionsUnchanged accept a stale vector against a body that had
+// been overwritten between snapshot and swap. Wrap in BEGIN IMMEDIATE so the write lock is
+// held BEFORE the read — matching runBatchUpdateMemories' envelope — and no other writer
+// can interleave. The mergePatch +1 monotonic bump stays load-bearing for same-millisecond
+// writes within one connection.
+function runSingleUpdateMemory(
+  db: DatabaseSync,
+  update: MemoryBatchUpdate,
+  opts: ResolvedOptions,
+): MemoryRecord {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const ready = updateMemoryInPlace(db, update, opts);
+    db.exec("COMMIT");
+    return ready;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function runBatchUpdateMemories(
   db: DatabaseSync,
   updates: readonly MemoryBatchUpdate[],
   opts: ResolvedOptions,
 ): readonly MemoryRecord[] {
   const ready: MemoryRecord[] = [];
-  db.exec("BEGIN");
+  // PR-review follow-up (Codex thread 3772030490): BEGIN (deferred) only takes the write lock
+  // on the first UPDATE, leaving room for another writer to interleave a read of the same
+  // updated_at before we do. BEGIN IMMEDIATE reserves the write lock up front so every
+  // read + monotonic-revision compute happens under exclusive write access.
+  db.exec("BEGIN IMMEDIATE");
   try {
     for (const update of updates) {
       ready.push(updateMemoryInPlace(db, update, opts));
@@ -717,7 +745,7 @@ function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWri
     },
     updateMemory: (id: MemoryId, patch: MemoryUpdatePatch, nowMs: number): MemoryRecord => {
       return withSidecarHardening(opts, () => {
-        const ready = updateMemoryInPlace(db, { id, patch, nowMs }, opts);
+        const ready = runSingleUpdateMemory(db, { id, patch, nowMs }, opts);
         opts.emit({ kind: "memory:updated", record: ready });
         return ready;
       });
