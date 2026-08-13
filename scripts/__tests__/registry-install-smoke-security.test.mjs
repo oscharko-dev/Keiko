@@ -19,6 +19,7 @@ import {
   packRoot,
   runAsync,
   startLocalRegistry,
+  terminateProcessTree,
 } from "../installable-package-smoke.mjs";
 import { provenancePublishArgs } from "../lib/npm-publish-preflight.mjs";
 
@@ -311,6 +312,33 @@ describe("installable package smoke optional-dependency coverage", () => {
     });
 
     expect(processExists(42)).toBe(true);
+  });
+
+  it("ignores an already-exited process while terminating a timed-out process tree", () => {
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+      const error = new Error("process not found");
+      error.code = "ESRCH";
+      throw error;
+    });
+    const childKill = vi.fn();
+
+    terminateProcessTree({ pid: 42, kill: childKill });
+
+    expect(kill).toHaveBeenCalledWith(-42, "SIGKILL");
+    expect(childKill).not.toHaveBeenCalled();
+  });
+
+  it("falls back to killing the child when process-group termination fails", () => {
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      const error = new Error("operation not permitted");
+      error.code = "EPERM";
+      throw error;
+    });
+    const childKill = vi.fn();
+
+    terminateProcessTree({ pid: 42, kill: childKill });
+
+    expect(childKill).toHaveBeenCalledWith("SIGKILL");
   });
 
   it("fails closed when the Yarn registry install command exits non-zero", async () => {

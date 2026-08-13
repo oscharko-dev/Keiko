@@ -84,7 +84,11 @@ function fixture() {
       ws: "1.0.0",
     },
     optionalDependencies: { "@oscharko-dev/keiko-contracts": "1.2.3", canvas: "1.0.0" },
-    peerDependencies: { react: "^19.0.0" },
+    peerDependencies: {
+      "@oscharko-dev/keiko-contracts": "1.2.3",
+      react: "^19.0.0",
+      "react-dom": "^19.0.0",
+    },
     peerDependenciesMeta: { react: { optional: true } },
     scripts: { build: "tsc" },
   });
@@ -98,6 +102,7 @@ function fixture() {
   const lockfilePath = join(root, "package-lock.json");
   const lockfile = JSON.parse(readFileSync(lockfilePath, "utf8"));
   lockfile.packages["node_modules/react"] = { version: "19.2.7" };
+  lockfile.packages["node_modules/react-dom"] = { version: "19.2.7" };
   writeJson(lockfilePath, lockfile);
   writeWorkspace(root, "keiko-ui", {
     name: "@oscharko-dev/keiko-ui",
@@ -132,6 +137,7 @@ describe("staged publish package", () => {
       "@oscharko-dev/keiko-server": "file:vendor/oscharko-dev-keiko-server-1.2.3.tgz",
       "smol-toml": "1.0.0",
       ws: "1.0.0",
+      "react-dom": "19.2.7",
     });
     expect(manifest.optionalDependencies).toEqual({ canvas: "1.0.0", react: "19.2.7" });
     expect(server.private).toBe(true);
@@ -141,6 +147,7 @@ describe("staged publish package", () => {
     expect(server.peerDependencies).toEqual({
       "@oscharko-dev/keiko-contracts": "1.2.3",
       react: "^19.0.0",
+      "react-dom": "^19.0.0",
     });
     expect(server.peerDependenciesMeta).toEqual({
       "@oscharko-dev/keiko-contracts": { optional: true },
@@ -320,6 +327,17 @@ describe("staged publish package", () => {
 
     expect(() => createStagedPublishPackage({ repoRoot: root })).toThrow(
       /resolves ws@2\.0\.0 from 1\.0\.0, which conflicts with the promoted 1\.0\.0/u,
+    );
+  });
+
+  it("rejects a required range that conflicts with the promoted optional version", () => {
+    const root = fixture();
+    updateJson(join(root, "package.json"), (manifest) => {
+      manifest.dependencies.canvas = "^1.0.0";
+    });
+
+    expect(() => createStagedPublishPackage({ repoRoot: root })).toThrow(
+      /required canvas@\^1\.0\.0 conflicts with promoted optional 1\.0\.0/u,
     );
   });
 

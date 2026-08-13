@@ -88,7 +88,7 @@ function run(cmd, args, options = {}) {
   return result;
 }
 
-function terminateProcessTree(child) {
+export function terminateProcessTree(child) {
   if (child.pid === undefined) return;
   if (process.platform === "win32") {
     spawnSync(resolveHostExecutable("taskkill"), ["/pid", String(child.pid), "/T", "/F"], {
