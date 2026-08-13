@@ -23,6 +23,7 @@ import {
   assertRegistryOnlyDescriptors,
   persistentVendorSeedDir,
   seedThenPack,
+  loadSeedIndex,
   seedVendoredRegistry,
   stubManifest,
   findInstalledCopies,
@@ -646,6 +647,46 @@ describe("installable package smoke optional-dependency coverage", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(destination, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  // CI runs this script twice as separate processes and the first run's prepack prunes the native
+  // optionals out of the shared checkout. A directory alone did not carry the seed across: the
+  // second process started from an empty map and re-derived stubs from the pruned tree.
+  it("reuses the pre-prune seed in a second process after the tree is pruned", () => {
+    const tree = mkdtempSync(join(tmpdir(), "keiko-two-process-tree-"));
+    const seedDir = mkdtempSync(join(tmpdir(), "keiko-two-process-seed-"));
+    const manifest = { dependencies: { "demo-native": "^1.0.0" }, bundleDependencies: [] };
+    try {
+      const packageDir = join(tree, "node_modules", "demo-native");
+      mkdirSync(packageDir, { recursive: true });
+      writeFileSync(
+        join(packageDir, "package.json"),
+        JSON.stringify({ name: "demo-native", version: "1.0.0" }),
+        "utf8",
+      );
+
+      const first = seedVendoredRegistry(seedDir, join(tree, "node_modules"), manifest);
+      const realTarball = first.get("demo-native")?.get("1.0.0")?.tarballPath;
+      expect(realTarball).toBeDefined();
+
+      // prepack prunes the package out of the shared tree.
+      rmSync(packageDir, { recursive: true, force: true });
+
+      // Second process: fresh map, pruned tree, same seed directory.
+      const second = seedVendoredRegistry(
+        seedDir,
+        join(tree, "node_modules"),
+        manifest,
+        loadSeedIndex(seedDir),
+      );
+      const entry = second.get("demo-native")?.get("1.0.0");
+      // The real archive, not a stub, and the very same file.
+      expect(entry?.manifest?.os).toBeUndefined();
+      expect(entry?.tarballPath).toBe(realTarball);
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+      rmSync(seedDir, { recursive: true, force: true });
     }
   }, 60_000);
 

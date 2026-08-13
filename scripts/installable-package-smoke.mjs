@@ -603,8 +603,11 @@ export function resolveVendorClosure(
   };
   const visit = (name, requirement) => {
     if (resolved.has(name) || missing.includes(name)) return;
-    const stubKey = `${name}@${minimumSatisfyingVersion(requirement?.range) ?? ""}`;
-    if (stubs.has(stubKey)) {
+    // No derivable version means no stub can exist for this descriptor, so the lookup is skipped
+    // rather than probing a `name@` key that is never written.
+    const stubVersion = minimumSatisfyingVersion(requirement?.range);
+    const stubKey = stubVersion === undefined ? undefined : `${name}@${stubVersion}`;
+    if (stubKey !== undefined && stubs.has(stubKey)) {
       resolveAgainstExistingStub(name, requirement, stubKey);
       return;
     }
@@ -632,9 +635,8 @@ export function resolveVendorClosure(
   };
   const visitDependenciesOf = (copy) => {
     // Same npm precedence as the root manifest: a name in both fields is optional here.
-    for (const requirement of manifestRequirements(copy.manifest)) {
+    for (const requirement of manifestRequirements(copy.manifest))
       visit(requirement.name, requirement);
-    }
   };
   for (const requirement of vendoredDependencyRequirements(manifest, packagesRoot)) {
     visit(requirement.name, requirement);
@@ -724,14 +726,59 @@ function seedEntry(seeded, entry, tarballPath) {
   seeded.set(entry.name, versions);
 }
 
+const SEED_INDEX_FILE = "seed-index.json";
+
+/**
+ * The seed has to survive across processes, not just across calls: CI runs this script twice and
+ * the first run's `prepack` prunes the native optionals out of `node_modules`. A directory alone
+ * is not enough — without an index the second process starts from an empty map, re-derives from
+ * the pruned tree, and overwrites the real archives with stubs. The index is what makes the
+ * pre-prune artifacts reusable (#3130).
+ */
+export function loadSeedIndex(destination) {
+  const indexPath = join(destination, SEED_INDEX_FILE);
+  if (!existsSync(indexPath)) return new Map();
+  const raw = JSON.parse(readFileSync(indexPath, "utf8"));
+  const seeded = new Map();
+  for (const [name, versions] of Object.entries(raw)) {
+    const restored = new Map();
+    for (const [version, entry] of Object.entries(versions)) {
+      // A recorded entry whose archive has since vanished is dropped, so it is re-packed rather
+      // than served as a dangling path.
+      if (existsSync(entry.tarballPath)) restored.set(version, { ...entry, name, version });
+    }
+    if (restored.size > 0) seeded.set(name, restored);
+  }
+  return seeded;
+}
+
+export function writeSeedIndex(destination, seeded) {
+  const serializable = {};
+  for (const [name, versions] of seeded) {
+    serializable[name] = Object.fromEntries(
+      [...versions].map(([version, entry]) => [
+        version,
+        { tarballPath: entry.tarballPath, integrity: entry.integrity, manifest: entry.manifest },
+      ]),
+    );
+  }
+  writeFileSync(join(destination, SEED_INDEX_FILE), `${JSON.stringify(serializable, null, 2)}\n`);
+}
+
 export function seedVendoredRegistry(
   destination,
   modulesRoot = join(repoRoot, "node_modules"),
   manifest = rootPackageJson,
-  seeded = new Map(),
+  seeded = loadSeedIndex(destination),
 ) {
   const { packages, stubs, missing } = resolveVendorClosure(modulesRoot, manifest);
-  if (missing.length > 0) {
+  // A name already restored from the index was captured from an intact tree by an earlier process;
+  // its absence now is `prepack`'s pruning, not a broken checkout. Likewise a stub must never
+  // replace a real archive we already hold.
+  const restored = (name) => seeded.has(name);
+  const genuinelyMissing = missing.filter((name) => !restored(name));
+  const neededStubs = stubs.filter((entry) => !restored(entry.name));
+  if (genuinelyMissing.length > 0) {
     fail(
       `vendored dependency closure is not installed: ${missing.join(", ")} — ` +
         `run \`npm install\` before the installable-package smoke`,
@@ -739,17 +786,19 @@ export function seedVendoredRegistry(
   }
   const pending = [
     ...packages.map((entry) => ({ entry, pack: packVendoredPackage })),
-    ...stubs.map((entry) => ({
+    ...neededStubs.map((entry) => ({
       entry: { ...entry, manifest: stubManifest(entry.name, entry.version) },
       pack: packStubPackage,
     })),
   ];
   for (const { entry, pack } of pending) {
-    // An entry seeded by an earlier pass wins: it was captured before `prepack` pruned the tree.
+    // An entry seeded by an earlier pass wins: it was captured before `prepack` pruned the tree,
+    // and that includes entries restored from a previous PROCESS through the index.
     if (seeded.get(entry.name)?.has(entry.version) !== true) {
       seedEntry(seeded, entry, pack(entry, destination));
     }
   }
+  writeSeedIndex(destination, seeded);
   return seeded;
 }
 
