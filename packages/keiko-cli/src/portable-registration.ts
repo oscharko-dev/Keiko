@@ -336,23 +336,20 @@ export function readPortableInstallRegistration(
   return undefined;
 }
 
-// PR-review follow-up (Codex thread 3771011311): destructive callers such as
-// `keiko uninstall --state` must refuse when the registration file EXISTS but cannot be
-// parsed into a recognised registration record — otherwise the uninstall skips
-// removePortableManagedStep AND then deletes the registration itself as an ordinary state
-// artifact, erasing the attestation needed to locate and remove the managed installation
-// safely. Callers that only need "what's registered" continue to use
-// readPortableInstallRegistration (which fails closed to undefined for backward
-// compatibility). Returns true only when the file exists but yields neither a managed nor
-// a failed registration through the strict record parsers.
+// PR-review follow-up (Codex threads 3771011311 + 3771684322): destructive callers such
+// as `keiko uninstall --state` and `keiko portable setup` must refuse when the registration
+// file EXISTS but its bytes cannot be JSON.parse'd — otherwise a corrupt/truncated file
+// would be treated as absent and either deleted (uninstall) or overwritten with a new
+// setup-failed record (setup), erasing the attestation needed to recover the installation.
+//
+// A PARSEABLE-but-schema-unknown record is NOT classified as corrupt: it may be a future
+// schema Keiko has not learned yet, and the adoption gate downstream refuses it as
+// "existing same-path managed install root is not attested" so it is not accidentally
+// treated as pristine either. Only unparseable bytes hit this guard.
 export function isPortableInstallRegistrationCorrupt(stateDir: string): boolean {
   if (!hasPortableInstallRegistration(stateDir)) return false;
   const path = join(stateDir, REGISTRATION_FILE);
-  const raw = readJson(path);
-  if (raw === undefined) return true;
-  if (isManagedRegistrationRecord(raw)) return false;
-  if (isFailedRegistrationRecord(raw)) return false;
-  return true;
+  return readJson(path) === undefined;
 }
 
 export function readManagedRegistration(stateDir: string): ManagedSetupRegistration | undefined {

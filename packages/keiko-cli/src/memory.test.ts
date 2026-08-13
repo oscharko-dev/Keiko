@@ -446,8 +446,8 @@ describe("runMemoryCli reembed", () => {
   it("reports a thrown reembed error as exit 1 with a redacted message", async () => {
     const vault: MemoryVaultStore = {
       ...makeVault(),
-      listMemoryIdsByStatus: (): never => {
-        throw new Error("vault listMemoryIdsByStatus crashed");
+      countMemoriesByStatus: (): never => {
+        throw new Error("vault countMemoriesByStatus crashed");
       },
     };
     const cap = capture();
@@ -459,7 +459,7 @@ describe("runMemoryCli reembed", () => {
     );
     expect(code).toBe(1);
     expect(cap.err()).toContain("keiko memory:");
-    expect(cap.err()).toContain("vault listMemoryIdsByStatus crashed");
+    expect(cap.err()).toContain("vault countMemoriesByStatus crashed");
   });
 
   // Coverage pin (Codex thread 3771469031): `--limit` smaller than the unembedded set

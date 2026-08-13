@@ -24,6 +24,7 @@ import {
   writeFailedRegistration,
   writeManagedRegistration,
   hasPortableInstallRegistration,
+  isPortableInstallRegistrationCorrupt,
   readPortableInstallRegistration,
   type PortableInstallRegistration,
 } from "./portable-registration.js";
@@ -1099,6 +1100,18 @@ export function setupPortable(
   let createdManagedInstall = false;
   let registrationBeforeSetup: PortableInstallRegistration | undefined;
   try {
+    // PR-review follow-up (Codex thread 3771684322): refuse to proceed when the
+    // registration file exists but is corrupt. Without this guard a subsequent setup
+    // failure would rewrite the file with a new setup-failed record, erasing the locator
+    // and hashes the operator needs to recover the pre-existing managed installation.
+    if (isPortableInstallRegistrationCorrupt(options.stateDir)) {
+      throw new PortableSetupFailureRecordedError(
+        new Error(
+          "portable install registration is corrupt; repair or remove " +
+            ".keiko/portable-install-state.json before retrying setup.",
+        ),
+      );
+    }
     registrationBeforeSetup = readPortableInstallRegistration(options.stateDir);
     assertSamePathSetupAttested(options);
     const source = validatePortableRoot(options.target, options.portableRoot);

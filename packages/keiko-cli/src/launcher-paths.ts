@@ -56,7 +56,15 @@ function resolveWithExistingAncestor(p: string): string {
     if (parent === current) return absolute;
     current = parent;
   }
-  return absolute;
+  // PR-review follow-up (Codex thread 3771684329): fail closed when we exhaust the 64-hop
+  // bound without finding an existing ancestor. Returning the unresolved textual path let
+  // a deep chain of non-existent segments below a symlinked ancestor pass containment,
+  // and lifecycle's later mkdir/open would then follow the symlink outside home.
+  throw new LauncherError(
+    "PATH_ESCAPE",
+    "keiko launcher: refusing to resolve a path deeper than 64 uncreated components; " +
+      "no ancestor resolved within the bound.",
+  );
 }
 
 function segmentExists(path: string): boolean {

@@ -452,6 +452,8 @@ type MemoryMutators = Pick<
   | "listMemoryMetadataByScope"
   | "listMemoryIdsByStatus"
   | "listAcceptedMemoryIdsMissingEmbedding"
+  | "countMemoriesByStatus"
+  | "countAcceptedMemoriesMissingEmbedding"
 >;
 
 // Internal-only: carries the forgotten memory's embedding (fetched BEFORE the row is deleted,
@@ -676,6 +678,8 @@ type MemoryReadOps = Pick<
   | "listMemoryMetadataByScope"
   | "listMemoryIdsByStatus"
   | "listAcceptedMemoryIdsMissingEmbedding"
+  | "countMemoriesByStatus"
+  | "countAcceptedMemoriesMissingEmbedding"
 >;
 
 function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWriteOps {
@@ -762,7 +766,29 @@ function buildMemoryReadOps(db: DatabaseSync, opts: ResolvedOptions): MemoryRead
       listMemoryIdsByStatusFromDb(db, status),
     listAcceptedMemoryIdsMissingEmbedding: (limit: number): readonly MemoryId[] =>
       listAcceptedMemoryIdsMissingEmbeddingFromDb(db, limit),
+    countMemoriesByStatus: (status: MemoryStatus): number =>
+      countMemoriesByStatusFromDb(db, status),
+    countAcceptedMemoriesMissingEmbedding: (): number =>
+      countAcceptedMemoriesMissingEmbeddingFromDb(db),
   };
+}
+
+function countMemoriesByStatusFromDb(db: DatabaseSync, status: MemoryStatus): number {
+  const row = db.prepare("SELECT COUNT(*) AS n FROM memories WHERE status = ?").get(status) as {
+    readonly n: number;
+  };
+  return row.n;
+}
+
+function countAcceptedMemoriesMissingEmbeddingFromDb(db: DatabaseSync): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM memories AS m
+       WHERE m.status = 'accepted'
+         AND NOT EXISTS (SELECT 1 FROM memory_embeddings e WHERE e.memory_id = m.id)`,
+    )
+    .get() as { readonly n: number };
+  return row.n;
 }
 
 function listMemoryIdsByStatusFromDb(db: DatabaseSync, status: MemoryStatus): readonly MemoryId[] {

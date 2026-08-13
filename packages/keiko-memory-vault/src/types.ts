@@ -245,6 +245,11 @@ export interface MemoryVaultStore {
   // (default path) uses this so a small --limit does not force the CLI to materialise the
   // full accepted set + full embedded set to compute the difference.
   readonly listAcceptedMemoryIdsMissingEmbedding: (limit: number) => readonly MemoryId[];
+  // PR-review follow-up (Codex thread 3771684315): O(1) counters for the CLI's report
+  // rows so `reembed --limit 1` no longer materialises O(total memories) worth of ids
+  // just to compute skipped and remaining.
+  readonly countMemoriesByStatus: (status: MemoryStatus) => number;
+  readonly countAcceptedMemoriesMissingEmbedding: () => number;
   // PR-review follow-up (Codex thread 3769903807): snapshot the (memoryId, createdAt) pairs
   // of every embedding row at a moment in time. The force reembed pipeline captures this
   // BEFORE its network-backed staging phase and hands it back to replaceAllEmbeddings so a

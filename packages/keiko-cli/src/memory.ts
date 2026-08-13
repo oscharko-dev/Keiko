@@ -355,17 +355,12 @@ async function backfillEmbeddings(
   // O(1) short-circuit at the top: if the embedded set already covers every accepted
   // memoryId, no work is possible and the pass exits immediately without paging.
   const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0, remaining: 0 };
-  // PR-review follow-up (Codex thread 3771333886 + 3771469031): resolve the exact work
-  // list AND capture the pre-run population sizes BEFORE any embed call runs. skipped =
-  // accepted-with-embedding at start of run; remaining = accepted-without-embedding that
-  // did not fit under --limit. A bounded partial pass no longer misreports untouched
-  // records as skipped.
-  const acceptedCountAtStart = vault.listMemoryIdsByStatus("accepted").length;
-  // acceptedCountAtStart + 1 is a safe upper bound for "give me every missing accepted";
-  // vault caps the SQL LIMIT at whatever positive integer we pass.
-  const totalMissingAtStart = vault.listAcceptedMemoryIdsMissingEmbedding(
-    Math.max(1, acceptedCountAtStart + 1),
-  ).length;
+  // PR-review follow-up (Codex threads 3771333886 + 3771469031 + 3771684315): use O(1)
+  // COUNT(*) aggregates from the vault instead of materialising every accepted id or
+  // every missing accepted id. Runtime and memory now stay bounded by --limit regardless
+  // of vault size.
+  const acceptedCountAtStart = vault.countMemoriesByStatus("accepted");
+  const totalMissingAtStart = vault.countAcceptedMemoriesMissingEmbedding();
   counts.skipped = Math.max(0, acceptedCountAtStart - totalMissingAtStart);
   const unembeddedIds = vault.listAcceptedMemoryIdsMissingEmbedding(limit);
   for (const id of unembeddedIds) {
