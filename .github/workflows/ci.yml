@@ -880,6 +880,8 @@ jobs:
           npm run prepare:bin
           npm run build:ui
           npm run check:editor-release-evidence
+      - name: Provision the pinned Yarn before the offline smoke (#3130)
+        run: npm run provision:yarn
       - name: Installable-package smoke (Issue #169 AC2)
         run: npm run smoke:install
       - name: Installable-package smoke with optional dependencies

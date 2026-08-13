@@ -24,6 +24,7 @@ import {
   assertRegistryOnlyDescriptors,
   assertHostBindingsAreReal,
   hostBindingSuffixes,
+  corepackCacheDir,
   privateYarnHome,
   assertStagedRootDescriptors,
   persistentVendorSeedDir,
@@ -464,6 +465,27 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
+  it("finds a copy nested arbitrarily deep, past any fixed limit", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-deep-nesting-test-"));
+    try {
+      // Ten levels: deeper than the fixed depth the previous revision imposed, which would have
+      // reported this package missing even though the installation contains it.
+      let dir = join(root, "node_modules");
+      for (let level = 0; level < 10; level += 1) dir = join(dir, `pkg${level}`, "node_modules");
+      const deep = join(dir, "demo");
+      mkdirSync(deep, { recursive: true });
+      writeFileSync(
+        join(deep, "package.json"),
+        JSON.stringify({ name: "demo", version: "7.7.7" }),
+        "utf8",
+      );
+      const copies = findInstalledCopies("demo", join(root, "node_modules"), root);
+      expect(copies.map((copy) => copy.version)).toEqual(["7.7.7"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("finds a copy nested below another nested dependency", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-nested-scan-test-"));
     try {
@@ -831,6 +853,20 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(() => assertHostBindingsAreReal(seeded)).toThrow(/process\.exit\(1\)/u);
   });
 
+  it("keeps the Corepack cache off the private home so it survives between runs", () => {
+    const home = privateYarnHome();
+    try {
+      const env = yarnChildEnv("http://127.0.0.1:12345", { PATH: "/usr/bin" }, home);
+      // If the cache followed HOME it would be empty every run, and the gate would download the
+      // package manager on each invocation instead of only when it is genuinely absent.
+      expect(env.COREPACK_HOME).toBe(corepackCacheDir());
+      expect(env.COREPACK_HOME.startsWith(home)).toBe(false);
+      expect(existsSync(env.COREPACK_HOME)).toBe(true);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("gives the Yarn child a private home so ambient rc files cannot apply", () => {
     const home = privateYarnHome();
     try {
@@ -964,6 +1000,21 @@ describe("installable package smoke optional-dependency coverage", () => {
     } finally {
       rmSync(seedDir, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("keys the vendor seed directory to the lockfile bytes, not its UTF-8 decoding", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-lockfile-bytes-test-"));
+    try {
+      const first = join(root, "a.json");
+      const second = join(root, "b.json");
+      // Byte sequences that do not survive a UTF-8 round trip: interpolating the Buffer into a
+      // template string would decode both to the same replacement characters and collide.
+      writeFileSync(first, Buffer.from([0x7b, 0xff, 0xfe, 0x7d]));
+      writeFileSync(second, Buffer.from([0x7b, 0xfe, 0xff, 0x7d]));
+      expect(persistentVendorSeedDir(first)).not.toBe(persistentVendorSeedDir(second));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -1147,6 +1198,11 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(minimumSatisfyingVersion("1.x")).toBe("1.0.0");
     expect(minimumSatisfyingVersion("1.2.x")).toBe("1.2.0");
     expect(minimumSatisfyingVersion("3")).toBe("3.0.0");
+    // Two-part partials are valid npm ranges and resolve to the lowest member.
+    expect(minimumSatisfyingVersion("1.2")).toBe("1.2.0");
+    expect(minimumSatisfyingVersion("~1.2")).toBe("1.2.0");
+    expect(minimumSatisfyingVersion("^1.2")).toBe("1.2.0");
+    expect(minimumSatisfyingVersion("^3")).toBe("3.0.0");
     // A grammar this helper does not model stays undefined, which recordAbsent treats as fatal —
     // serving a stub that does not satisfy the range would fail later and far less legibly.
     expect(minimumSatisfyingVersion("npm:other@^1.0.0")).toBeUndefined();

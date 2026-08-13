@@ -411,10 +411,12 @@ export function minimumSatisfyingVersion(range) {
 
 /** x-ranges (`1.x`, `1.2.x`, `1.*`) and a bare major, each resolving to the range's lowest member. */
 function partialRangeVersion(trimmed) {
-  const partial = /^[\s^~>=v]*(\d+)(?:\.(\d+))?\.[x*]/u.exec(trimmed);
+  // Every partial form npm accepts resolves to the lowest member of its range: an x-range
+  // (`1.x`, `1.2.*`), a two-part version (`1.2`, `~1.2`, `^1.2`) or a bare major (`3`, `^3`).
+  const partial = /^[\s^~>=v]*(\d+)(?:\.(\d+))?(?:\.[x*])?$/u.exec(trimmed);
   if (partial !== null) return `${partial[1]}.${partial[2] ?? "0"}.0`;
-  const majorOnly = /^[\s^~>=v]*(\d+)$/u.exec(trimmed);
-  return majorOnly === null ? undefined : `${majorOnly[1]}.0.0`;
+  const xRange = /^[\s^~>=v]*(\d+)(?:\.(\d+))?\.[x*]/u.exec(trimmed);
+  return xRange === null ? undefined : `${xRange[1]}.${xRange[2] ?? "0"}.0`;
 }
 
 /**
@@ -571,13 +573,16 @@ function installedModuleRoots(modulesRoot, packagesRoot) {
 }
 
 // npm resolves a conflict below an already nested dependency too
-// (`node_modules/a/node_modules/b/node_modules/c`), so a single level is not enough. The depth is
-// bounded because an npm tree is shallow in practice and an unbounded walk over a large
-// `node_modules` is slow enough to matter in a required gate.
-const NESTED_MODULE_SCAN_DEPTH = 6;
-
-function nestedModuleRoots(modulesRoot, depth = NESTED_MODULE_SCAN_DEPTH) {
-  if (depth <= 0 || !existsSync(modulesRoot)) return [];
+// (`node_modules/a/node_modules/b/node_modules/c`), and a chain of incompatible peer ranges can go
+// deeper still. The walk is therefore complete rather than capped at an arbitrary depth: a fixed
+// limit would silently omit a package the committed installation genuinely contains, and the gate
+// would report it missing or serve a stub in its place. Termination comes from a visited set over
+// resolved paths, which also breaks symlink cycles; the whole walk is memoized once per run.
+function nestedModuleRoots(modulesRoot, visited = new Set()) {
+  if (!existsSync(modulesRoot)) return [];
+  const resolvedRoot = realpathSync(modulesRoot);
+  if (visited.has(resolvedRoot)) return [];
+  visited.add(resolvedRoot);
   const roots = [];
   for (const entry of readdirSync(modulesRoot)) {
     if (entry.startsWith(".")) continue;
@@ -587,7 +592,7 @@ function nestedModuleRoots(modulesRoot, depth = NESTED_MODULE_SCAN_DEPTH) {
     for (const owner of owners) {
       const nested = join(owner, "node_modules");
       if (!existsSync(nested)) continue;
-      roots.push(nested, ...nestedModuleRoots(nested, depth - 1));
+      roots.push(nested, ...nestedModuleRoots(nested, visited));
     }
   }
   return roots;
@@ -1188,6 +1193,19 @@ export async function startLocalRegistry(artifact, vendored) {
  * child therefore gets a private, empty home; provisioning uses the same one so both agree on
  * Corepack's cache location (#3130).
  */
+/**
+ * Corepack caches package managers under `COREPACK_HOME`, which defaults to a path inside `HOME`.
+ * Since the child gets a private, empty home for rc isolation, leaving the cache to follow it would
+ * make every run download Yarn afresh — turning an occasional network dependency into a per-run
+ * one. The cache therefore lives at a stable path of its own, keyed by the pinned version so a
+ * bump does not reuse the previous tool (#3130).
+ */
+export function corepackCacheDir() {
+  const dir = join(tmpdir(), `keiko-corepack-${PINNED_YARN.replace(/[^a-zA-Z0-9.]+/gu, "-")}`);
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 export function privateYarnHome() {
   const home = mkdtempSync(join(tmpdir(), "keiko-yarn-home-"));
   return home;
@@ -1208,6 +1226,8 @@ export function yarnChildEnv(registryUrl, baseEnv = process.env, home = undefine
     ...env,
     // A private home keeps an ambient `~/.yarnrc.yml` out of this install entirely.
     ...(home === undefined ? {} : { HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: home }),
+    // Explicit, so the cache does not follow the private home and vanish between runs.
+    COREPACK_HOME: corepackCacheDir(),
     COREPACK_ENABLE_PROJECT_SPEC: "1",
     YARN_ENABLE_GLOBAL_CACHE: "false",
     YARN_ENABLE_TELEMETRY: "false",
@@ -1233,7 +1253,26 @@ const PINNED_YARN = "yarn@4.9.1";
  * mutate the environment it runs in; the throwaway project's own `packageManager` field is what
  * selects Yarn here.
  */
+/** Entry point for the setup step, so provisioning happens before the gate rather than inside it. */
+export function provisionPinnedYarnForSetup() {
+  if (isPinnedYarnCached()) {
+    console.log(`provision-pinned-yarn: ${PINNED_YARN} already cached; no request made.`);
+    return;
+  }
+  provisionPinnedYarn(undefined, undefined);
+  console.log(`provision-pinned-yarn: ${PINNED_YARN} cached in ${corepackCacheDir()}.`);
+}
+
+function isPinnedYarnCached() {
+  const cache = join(corepackCacheDir(), "v1", "yarn");
+  if (!existsSync(cache)) return false;
+  return readdirSync(cache).includes(PINNED_YARN.split("@").at(-1) ?? "");
+}
+
 function provisionPinnedYarn(registryUrl, home) {
+  // Already cached from an earlier run or a CI setup step: no network call at all. That keeps an
+  // outage at the package-manager host from failing a gate whose dependency install is offline.
+  if (isPinnedYarnCached()) return;
   // Provisioning must see the SAME sanitized environment as the install, or `COREPACK_HOME` is
   // honoured here and stripped there — Corepack would then cache the tool in one place and search
   // another with networking already disabled. Only the network flag differs.
@@ -1797,8 +1836,17 @@ async function assertPackagedLifecycleCommands(tmp) {
 export function persistentVendorSeedDir(lockfilePath = join(repoRoot, "package-lock.json")) {
   // Keyed by the CHECKOUT as well as the lockfile: two checkouts sharing a lockfile must not share
   // a cache, and a predictable path on a shared host is otherwise pre-creatable by another user.
-  const material = `${repoRoot}\u0000${existsSync(lockfilePath) ? readFileSync(lockfilePath) : "no-lockfile"}`;
-  const key = createHash("sha256").update(material).digest("hex").slice(0, 24);
+  // The lockfile is hashed as BYTES. Interpolating the Buffer into a template string would decode
+  // it as UTF-8 first, and any byte sequence that does not survive that round trip would map two
+  // distinct lockfiles onto one cache directory.
+  const digest = createHash("sha256").update(repoRoot).update("\u0000");
+  digest.update(existsSync(lockfilePath) ? readFileSync(lockfilePath) : "no-lockfile");
+  // The implementation is part of the key: switching revisions in one worktree without touching
+  // the lockfile would otherwise run new packing, manifest-projection or stub logic against
+  // tarballs produced by the old logic, and the gate could stay green over the very regression it
+  // is meant to catch.
+  digest.update("\u0000").update(readFileSync(fileURLToPath(import.meta.url)));
+  const key = digest.digest("hex").slice(0, 24);
   const dir = join(tmpdir(), `keiko-yarn-vendor-seed-${key}`);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   assertPrivateDirectory(dir);
