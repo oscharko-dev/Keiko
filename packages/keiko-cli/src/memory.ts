@@ -292,6 +292,12 @@ interface ReembedCounts {
   embedded: number;
   skipped: number;
   failed: number;
+  // PR-review follow-up (Codex thread 3771469031): unattempted count for the default
+  // backfill path — accepted memories that still lack an embedding but the current run
+  // did not reach because --limit was hit. Distinct from `skipped` (already-embedded)
+  // so operator reports and automation can tell a bounded partial pass apart from a
+  // nearly complete corpus.
+  remaining: number;
 }
 
 async function embedOne(
@@ -348,13 +354,19 @@ async function backfillEmbeddings(
   // The perf concern (fully-embedded corpus paging the whole scan) is now addressed by an
   // O(1) short-circuit at the top: if the embedded set already covers every accepted
   // memoryId, no work is possible and the pass exits immediately without paging.
-  const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
-  // PR-review follow-up (Codex thread 3771333886): resolve the exact work list with one
-  // vault-owned query that already applies LIMIT. `reembed --limit 1` on a 100k-memory
-  // vault now returns a 1-row result instead of loading two full sets to compute the
-  // difference in the CLI. `skipped` becomes "accepted-embedded count" (computed on
-  // demand by subtracting the work-list length from the total accepted count) so the
-  // report row stays comparable to the prior version.
+  const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0, remaining: 0 };
+  // PR-review follow-up (Codex thread 3771333886 + 3771469031): resolve the exact work
+  // list AND capture the pre-run population sizes BEFORE any embed call runs. skipped =
+  // accepted-with-embedding at start of run; remaining = accepted-without-embedding that
+  // did not fit under --limit. A bounded partial pass no longer misreports untouched
+  // records as skipped.
+  const acceptedCountAtStart = vault.listMemoryIdsByStatus("accepted").length;
+  // acceptedCountAtStart + 1 is a safe upper bound for "give me every missing accepted";
+  // vault caps the SQL LIMIT at whatever positive integer we pass.
+  const totalMissingAtStart = vault.listAcceptedMemoryIdsMissingEmbedding(
+    Math.max(1, acceptedCountAtStart + 1),
+  ).length;
+  counts.skipped = Math.max(0, acceptedCountAtStart - totalMissingAtStart);
   const unembeddedIds = vault.listAcceptedMemoryIdsMissingEmbedding(limit);
   for (const id of unembeddedIds) {
     if (counts.embedded + counts.failed >= limit) break;
@@ -362,19 +374,20 @@ async function backfillEmbeddings(
     if (record === undefined) continue;
     await embedOne(vault, embed, record, counts);
   }
-  const acceptedCount = vault.listMemoryIdsByStatus("accepted").length;
-  counts.skipped = Math.max(0, acceptedCount - counts.embedded - counts.failed);
+  counts.remaining = Math.max(0, totalMissingAtStart - counts.embedded - counts.failed);
   return counts;
 }
 
 function renderReembedReport(counts: ReembedCounts): string {
-  return [
+  const rows = [
     "Memory re-embedding complete.",
     `  embedded: ${String(counts.embedded)}`,
     `  skipped:  ${String(counts.skipped)}`,
     `  failed:   ${String(counts.failed)}`,
-    "",
-  ].join("\n");
+  ];
+  if (counts.remaining > 0) rows.push(`  remaining: ${String(counts.remaining)}`);
+  rows.push("");
+  return rows.join("\n");
 }
 
 async function reembed(
@@ -436,7 +449,7 @@ async function forceReembedAtomically(
   vault: MemoryVaultStore,
   embed: MemoryEmbedder,
 ): Promise<ReembedCounts> {
-  const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
+  const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0, remaining: 0 };
   // PR-review follow-up (Codex thread 3769903807 + 3770792792): capture the
   // (memoryId, createdAt) snapshot FIRST, then derive embedded targets from the snapshot
   // itself. If we enumerated targets before snapshotting, a concurrent DELETE that removes

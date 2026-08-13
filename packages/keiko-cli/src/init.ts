@@ -146,7 +146,10 @@ function detectSpaceUnit(depths: readonly number[]): number {
   if (depths.length === 0) return 2;
   const unit = depths.reduce((acc, depth) => gcd(acc, depth), depths[0] ?? 0);
   if (unit <= 0) return 2;
-  const minDepth = Math.min(...depths);
+  // PR-review follow-up (Codex thread 3771469014): reduce instead of Math.min(...depths).
+  // A large generated package.json can produce enough space-depth samples to exceed V8's
+  // function-argument limit and throw RangeError on the spread call.
+  const minDepth = depths.reduce((acc, depth) => (depth < acc ? depth : acc), depths[0] ?? 0);
   const width = Math.min(unit, minDepth);
   // PR-review follow-up: a single-space indent is non-standard for package.json and comes
   // out of GCD-of-mixed-depths (e.g. depths [2,3] → gcd 1). No convention writes a 1-space

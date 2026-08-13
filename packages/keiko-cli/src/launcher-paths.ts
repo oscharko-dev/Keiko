@@ -20,17 +20,14 @@ import { dirname, join, resolve, sep } from "node:path";
 import { LauncherError } from "./launcher-platforms.js";
 
 function realpathOrResolve(p: string): string {
-  // PR-review follow-up (Codex thread 3771387240): only ENOENT falls back to the textual
-  // resolve — every other errno (EACCES / EIO / ELOOP / EBUSY) propagates so a symlink
-  // whose target is temporarily inaccessible does not silently pass containment as its
-  // unresolved textual form. The caller already handles LauncherError by refusing the
-  // operation; a raw system error here is exactly that signal.
-  try {
-    return realpathSync(p);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return resolve(p);
-    throw error;
-  }
+  // PR-review follow-up (Codex thread 3771387240 + 3771468992): every errno from realpath
+  // propagates. The caller only calls realpathOrResolve on an ALREADY-EXISTING segment
+  // (segmentExists ran first in resolveWithExistingAncestor), so ENOENT here means
+  // realpathSync could not resolve the path — the segment exists (per lstat) but its
+  // symlink target is missing. That is a dangling symlink pointing outside the validated
+  // boundary; approving the unresolved textual path would let a later mkdir-then-open
+  // follow the symlink outside home. Fail loud instead.
+  return realpathSync(p);
 }
 
 // Walks up `p`'s ancestry until it finds an existing one; returns the realpath of that
