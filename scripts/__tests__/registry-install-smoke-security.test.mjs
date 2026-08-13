@@ -743,6 +743,46 @@ describe("installable package smoke optional-dependency coverage", () => {
     ).toThrow(/process\.exit\(1\)/u);
   });
 
+  it("lets a real package supersede a cached stub", () => {
+    const tree = mkdtempSync(join(tmpdir(), "keiko-stub-supersede-tree-"));
+    const seedDir = mkdtempSync(join(tmpdir(), "keiko-stub-supersede-seed-"));
+    const manifest = {
+      dependencies: {},
+      optionalDependencies: { "demo-native": "^1.0.0" },
+      bundleDependencies: [],
+    };
+    try {
+      mkdirSync(join(tree, "node_modules"), { recursive: true });
+      // First run: the package is not installed, so an inert stub is cached.
+      const first = seedVendoredRegistry(seedDir, join(tree, "node_modules"), manifest);
+      expect(first.get("demo-native")?.get("1.0.0")?.manifest?.os).toEqual([
+        "keiko-smoke-never-matches",
+      ]);
+
+      // The package becomes available without the lockfile changing.
+      const packageDir = join(tree, "node_modules", "demo-native");
+      mkdirSync(packageDir, { recursive: true });
+      writeFileSync(
+        join(packageDir, "package.json"),
+        JSON.stringify({ name: "demo-native", version: "1.0.0" }),
+        "utf8",
+      );
+
+      const second = seedVendoredRegistry(
+        seedDir,
+        join(tree, "node_modules"),
+        manifest,
+        loadSeedIndex(seedDir),
+      );
+      // The real archive must replace the placeholder, or the lane keeps skipping a binding that
+      // is now installed.
+      expect(second.get("demo-native")?.get("1.0.0")?.manifest?.os).toBeUndefined();
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+      rmSync(seedDir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("drops an indexed seed entry whose bytes no longer match its integrity", () => {
     const seedDir = mkdtempSync(join(tmpdir(), "keiko-seed-tamper-test-"));
     try {

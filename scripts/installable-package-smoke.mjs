@@ -729,6 +729,20 @@ function packStubPackage(entry, destination) {
   }
 }
 
+const isStubEntry = (entry) => entry?.manifest?.os?.[0] === STUB_INCOMPATIBLE_PLATFORM;
+
+/**
+ * An entry seeded by an earlier pass wins — it was captured before `prepack` pruned the tree,
+ * including entries restored from a previous PROCESS through the index. The one exception is a
+ * cached STUB: once the real package is installed again it must supersede the placeholder, or the
+ * lane would keep skipping a native binding that is now available.
+ */
+function shouldSeed(seeded, entry) {
+  const existing = seeded.get(entry.name)?.get(entry.version);
+  if (existing === undefined) return true;
+  return isStubEntry(existing) && !isStubEntry(entry);
+}
+
 function seedEntry(seeded, entry, tarballPath) {
   const versions = seeded.get(entry.name) ?? new Map();
   versions.set(entry.version, {
@@ -816,11 +830,7 @@ export function seedVendoredRegistry(
     })),
   ];
   for (const { entry, pack } of pending) {
-    // An entry seeded by an earlier pass wins: it was captured before `prepack` pruned the tree,
-    // and that includes entries restored from a previous PROCESS through the index.
-    if (seeded.get(entry.name)?.has(entry.version) !== true) {
-      seedEntry(seeded, entry, pack(entry, destination));
-    }
+    if (shouldSeed(seeded, entry)) seedEntry(seeded, entry, pack(entry, destination));
   }
   writeSeedIndex(destination, seeded);
   return seeded;
@@ -906,8 +916,14 @@ function descriptorClass(range) {
   return FORGE_SHORTHAND.test(range) ? "forge-shorthand" : "unknown";
 }
 
+const HAS_PROTOCOL = /^[a-z][a-z0-9+.-]*:/iu;
+
 function isNonRegistryDescriptor(range) {
-  return NON_REGISTRY_PROTOCOL.test(range) || FORGE_SHORTHAND.test(range);
+  if (NON_REGISTRY_PROTOCOL.test(range)) return true;
+  // A descriptor that carries ANY protocol is not a bare forge shorthand. `npm:@scope/pkg@1.0.0`
+  // is a registry alias whose target simply contains a slash, and rejecting it would fail a
+  // perfectly hermetic dependency before Yarn ever starts.
+  return !HAS_PROTOCOL.test(range) && FORGE_SHORTHAND.test(range);
 }
 
 /**
@@ -1123,9 +1139,14 @@ const PINNED_YARN = "yarn@4.9.1";
  * mutate the environment it runs in; the throwaway project's own `packageManager` field is what
  * selects Yarn here.
  */
-function provisionPinnedYarn() {
+function provisionPinnedYarn(registryUrl) {
+  // Provisioning must see the SAME sanitized environment as the install, or `COREPACK_HOME` is
+  // honoured here and stripped there — Corepack would then cache the tool in one place and search
+  // another with networking already disabled. Only the network flag differs.
+  const env = { ...yarnChildEnv(registryUrl), COREPACK_ENABLE_NETWORK: "1" };
   const result = run("corepack", ["install", "--global", "--cache-only", PINNED_YARN], {
     timeout: NPM_INSTALL_TIMEOUT_MS,
+    env,
   });
   if (result.status !== 0) {
     fail(
@@ -1161,8 +1182,8 @@ function writeYarnConfiguration(tmp, registryUrl) {
 export async function installIntoWithYarn(tmp, artifact, vendored) {
   assertRegistryOnlyDescriptors(vendored ?? new Map());
   assertStagedRootDescriptors(artifact.manifest);
-  provisionPinnedYarn();
   const registry = await startLocalRegistry(artifact, vendored);
+  provisionPinnedYarn(registry.registryUrl);
   writeFileSync(
     join(tmp, "package.json"),
     `${JSON.stringify(
