@@ -25,6 +25,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import ts from "typescript";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { createStagedPublishPackage } from "./stage-publish-package.mjs";
 
 export const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 600_000;
@@ -87,28 +88,63 @@ function run(cmd, args, options = {}) {
   return result;
 }
 
-function runAsync(cmd, args, options = {}) {
+function terminateProcessTree(child) {
+  if (child.pid === undefined) return;
+  if (process.platform === "win32") {
+    spawnSync(resolveHostExecutable("taskkill"), ["/pid", String(child.pid), "/T", "/F"], {
+      encoding: "utf8",
+      shell: false,
+      windowsHide: true,
+    });
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch (error) {
+    if (error?.code !== "ESRCH") child.kill("SIGKILL");
+  }
+}
+
+export function runAsync(cmd, args, options = {}) {
   const needsShell = process.platform === "win32" && (cmd === "npm" || cmd === "corepack");
   const { timeout, ...spawnOptions } = options;
   return new Promise((resolvePromise) => {
+    let settled = false;
     const stdout = [];
     const stderr = [];
     // SECURITY-SHELL-OK: corepack-only Windows .cmd compatibility; argv is fixed by this smoke.
     const child = spawn(cmd, args, {
+      ...spawnOptions,
+      detached: process.platform !== "win32",
       shell: needsShell,
       stdio: ["ignore", "pipe", "pipe"],
-      ...spawnOptions,
     });
     child.stdout?.on("data", (chunk) => stdout.push(String(chunk)));
     child.stderr?.on("data", (chunk) => stderr.push(String(chunk)));
-    const timer = globalThis.setTimeout(() => child.kill(), timeout);
-    child.once("error", (error) => {
+    const settle = (result) => {
+      if (settled) return;
+      settled = true;
       globalThis.clearTimeout(timer);
-      resolvePromise({ error, status: null, signal: null, stdout: "", stderr: "" });
+      resolvePromise(result);
+    };
+    const timer = globalThis.setTimeout(() => {
+      terminateProcessTree(child);
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      child.unref();
+      settle({
+        timedOut: true,
+        status: null,
+        signal: process.platform === "win32" ? "TASKKILL" : "SIGKILL",
+        stdout: stdout.join(""),
+        stderr: stderr.join(""),
+      });
+    }, timeout);
+    child.once("error", (error) => {
+      settle({ error, status: null, signal: null, stdout: "", stderr: "" });
     });
     child.once("close", (status, signal) => {
-      globalThis.clearTimeout(timer);
-      resolvePromise({ status, signal, stdout: stdout.join(""), stderr: stderr.join("") });
+      settle({ status, signal, stdout: stdout.join(""), stderr: stderr.join("") });
     });
   });
 }
@@ -375,9 +411,10 @@ async function installIntoWithYarn(tmp, artifact) {
         env: { ...process.env, YARN_ENABLE_GLOBAL_CACHE: "false" },
       },
     );
-    if (result.error !== undefined || result.status !== 0) {
+    if (result.timedOut === true || result.error !== undefined || result.status !== 0) {
+      const outcome = result.timedOut === true ? "timed out" : `exited ${String(result.status)}`;
       fail(
-        `Yarn registry install exited ${String(result.status)} ` +
+        `Yarn registry install ${outcome} ` +
           `(signal=${String(result.signal)}; registry=${registry.registryUrl}; ` +
           `requests=${registry.requests.join(",")}): ` +
           `${(result.error?.message ?? result.stderr) || result.stdout}`,

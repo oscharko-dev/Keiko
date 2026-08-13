@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { runAsync } from "../installable-package-smoke.mjs";
 import { provenancePublishArgs } from "../lib/npm-publish-preflight.mjs";
 
 const ROOT = join(import.meta.dirname, "..", "..");
@@ -12,6 +13,24 @@ const ROOT_MANIFEST = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"
 function writeExecutable(path, body) {
   writeFileSync(path, `#!/usr/bin/env node\n${body}\n`, "utf8");
   chmodSync(path, 0o755);
+}
+
+function processExists(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+async function waitForProcessExit(pid) {
+  const deadline = Date.now() + 2_000;
+  while (processExists(pid) && Date.now() < deadline) {
+    await new Promise((resolvePromise) => globalThis.setTimeout(resolvePromise, 25));
+  }
+  return !processExists(pid);
 }
 
 describe("registry install smoke security posture", () => {
@@ -84,6 +103,42 @@ describe("registry install smoke security posture", () => {
 });
 
 describe("installable package smoke optional-dependency coverage", () => {
+  it("settles a timed-out process-tree run without waiting for child close", async () => {
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "keiko-install-timeout-"));
+    const fixture = join(fixtureRoot, "hang.mjs");
+    const marker = join(fixtureRoot, "descendant-pid");
+    let descendantPid;
+    try {
+      writeFileSync(
+        fixture,
+        [
+          'import { spawn } from "node:child_process";',
+          'import { writeFileSync } from "node:fs";',
+          'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 60_000)"], { stdio: "ignore" });',
+          'writeFileSync(process.env.DESCENDANT_PID_MARKER, String(child.pid), "utf8");',
+          "setInterval(() => {}, 60_000);",
+        ].join("\n"),
+        "utf8",
+      );
+      const startedAt = Date.now();
+      const result = await runAsync(process.execPath, [fixture], {
+        env: { ...process.env, DESCENDANT_PID_MARKER: marker },
+        timeout: 300,
+      });
+      descendantPid = Number.parseInt(readFileSync(marker, "utf8"), 10);
+
+      expect(result.timedOut).toBe(true);
+      expect(result.status).toBeNull();
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+      expect(await waitForProcessExit(descendantPid)).toBe(true);
+    } finally {
+      if (descendantPid !== undefined && processExists(descendantPid)) {
+        process.kill(descendantPid, "SIGKILL");
+      }
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   it("keeps an explicit optional-dependency install mode", () => {
     const source = readFileSync(join(ROOT, "scripts", "installable-package-smoke.mjs"), "utf8");
     const manifest = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
