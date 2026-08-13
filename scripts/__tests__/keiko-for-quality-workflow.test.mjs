@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 const repositoryRoot = resolve(import.meta.dirname, "../..");
 const workflowPath = join(repositoryRoot, ".github/workflows/keiko-for-quality.yml");
 const workflow = readFileSync(workflowPath, "utf8");
-const releaseSha = "f6aa08d66c13de0a49a91ea8810600100ca8770d";
+const releaseSha = "f1117fb2b56a62bcbec22afbc149d5bd1474060c";
 
 function stepSource(name) {
   const marker = `      - name: ${name}\n`;
@@ -146,12 +146,12 @@ describe("Keiko for Quality production workflow", () => {
     );
   });
 
-  it("pins both action identities to the signed v0.24.0 release", () => {
+  it("pins both action identities to the signed v0.25.0 release", () => {
     expect(stepSource("Derive store identity")).toMatch(
-      new RegExp(`^ {10}ACTION_PIN: "${releaseSha}" # v0\\.24\\.0`, "mu"),
+      new RegExp(`^ {10}ACTION_PIN: "${releaseSha}" # v0\\.25\\.0`, "mu"),
     );
     expect(stepSource("Review")).toMatch(
-      new RegExp(`^ {8}uses: oscharko-dev/Keiko-for-Quality@${releaseSha} # v0\\.24\\.0$`, "mu"),
+      new RegExp(`^ {8}uses: oscharko-dev/Keiko-for-Quality@${releaseSha} # v0\\.25\\.0$`, "mu"),
     );
     expect(workflow.match(new RegExp(releaseSha, "gu"))).toHaveLength(2);
   });
