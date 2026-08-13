@@ -612,6 +612,30 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(logged).not.toContain("example.invalid");
 
     vi.restoreAllMocks();
+    // SSH forms are Yarn Git descriptors whose error output echoes the whole descriptor,
+    // credentials included — they must never reach Yarn.
+    vi.restoreAllMocks();
+    for (const descriptor of ["ssh://user:token@example.invalid/repo.git", "ssh+git://h/r.git"]) {
+      const viaSsh = new Map([
+        [
+          "demo",
+          new Map([
+            [
+              "1.0.0",
+              {
+                name: "demo",
+                version: "1.0.0",
+                manifest: { dependencies: { sneaky: descriptor } },
+              },
+            ],
+          ]),
+        ],
+      ]);
+      rejectProcessExit();
+      expect(() => assertRegistryOnlyDescriptors(viaSsh)).toThrow(/process\.exit\(1\)/u);
+      vi.restoreAllMocks();
+    }
+
     // A colon-less forge shorthand is fetched straight from GitHub and must be rejected too.
     const shorthand = new Map([
       [

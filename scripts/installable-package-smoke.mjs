@@ -948,8 +948,14 @@ function compareVersions(left, right) {
   return comparePrereleaseIdentifiers(a.prerelease, b.prerelease);
 }
 
-const NON_REGISTRY_PROTOCOL =
-  /^(?:git|git\+[a-z]+|https?|file|link|portal|workspace|github|bitbucket|gitlab):/iu;
+// An ALLOWLIST, not a denylist. A denylist of bad protocols is wrong by construction: it was
+// missing `ssh:` and `ssh+git:` — which Yarn's Git resolver accepts and whose error output echoes
+// the full descriptor, credentials included — and the next protocol would have slipped through the
+// same way. Only a registry descriptor is acceptable here: no protocol at all (a semver range, a
+// tag, `*`), or an explicit `npm:` alias. Everything else resolves outside the loopback registry
+// and is refused before Yarn starts (#3130).
+const REGISTRY_PROTOCOL = /^npm:/iu;
+const HAS_PROTOCOL = /^[a-z][a-z0-9+.-]*:/iu;
 // Yarn also accepts a colon-less forge shorthand (`owner/repo`, `owner/repo#semver:^1.0.0`), which
 // it fetches straight from GitHub. A leading `@` is excluded so a scoped package name is not
 // mistaken for one.
@@ -962,22 +968,11 @@ function descriptorClass(range) {
   return FORGE_SHORTHAND.test(range) ? "forge-shorthand" : "unknown";
 }
 
-const HAS_PROTOCOL = /^[a-z][a-z0-9+.-]*:/iu;
-
 function isNonRegistryDescriptor(range) {
-  if (NON_REGISTRY_PROTOCOL.test(range)) return true;
-  // A descriptor that carries ANY protocol is not a bare forge shorthand. `npm:@scope/pkg@1.0.0`
-  // is a registry alias whose target simply contains a slash, and rejecting it would fail a
-  // perfectly hermetic dependency before Yarn ever starts.
-  return !HAS_PROTOCOL.test(range) && FORGE_SHORTHAND.test(range);
+  if (HAS_PROTOCOL.test(range)) return !REGISTRY_PROTOCOL.test(range);
+  return FORGE_SHORTHAND.test(range);
 }
 
-/**
- * Yarn resolves a `git+https:`, tarball-URL, or `file:` descriptor directly instead of through
- * `npmRegistryServer`, so such an edge would reach an external host or an ambient path without
- * ever touching this registry's fail-closed 404s. The seed is rejected up front rather than
- * letting the install quietly leave the hermetic boundary (#3130).
- */
 function manifestProtocolOffenders(name, entry) {
   return ["dependencies", "optionalDependencies", "peerDependencies"]
     .flatMap((group) => Object.entries(entry.manifest?.[group] ?? {}))
