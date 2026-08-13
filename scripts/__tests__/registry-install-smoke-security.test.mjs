@@ -24,6 +24,7 @@ import {
   startLocalRegistry,
   terminateProcessTree,
   vendoredDependencyNames,
+  yarnChildEnv,
 } from "../installable-package-smoke.mjs";
 import { provenancePublishArgs } from "../lib/npm-publish-preflight.mjs";
 
@@ -333,12 +334,43 @@ describe("installable package smoke optional-dependency coverage", () => {
   // present here and absent there, and Yarn — which resolves optional entries regardless — got a
   // 404 from the offline registry. An absent optional package must resolve to an inert stub.
   it("stubs an optional dependency the tree does not install, and still fails on a real absence", () => {
-    const stubbed = resolveVendorClosure(join(ROOT, "node_modules"), {
+    // The incident itself: an OPTIONAL dependency the tree does not install must become a stub,
+    // resolvable and inert, so Yarn's resolution step closes instead of 404ing.
+    const optionalAbsent = resolveVendorClosure(join(ROOT, "node_modules"), {
+      dependencies: {},
+      optionalDependencies: { "keiko-smoke-absent-optional": "^2.3.4" },
+      bundleDependencies: [],
+    });
+    expect(optionalAbsent.missing).toEqual([]);
+    expect(optionalAbsent.stubs).toEqual([
+      { name: "keiko-smoke-absent-optional", version: "2.3.4" },
+    ]);
+
+    // A non-optional absence stays fatal — the stub path must never mask a genuine gap.
+    const requiredAbsent = resolveVendorClosure(join(ROOT, "node_modules"), {
       dependencies: { "keiko-smoke-absent-optional": "^2.3.4" },
       bundleDependencies: [],
     });
-    // A non-optional absence stays fatal — the stub path must never mask a genuine gap.
-    expect(stubbed.missing).toEqual(["keiko-smoke-absent-optional"]);
+    expect(requiredAbsent.missing).toEqual(["keiko-smoke-absent-optional"]);
+    expect(requiredAbsent.stubs).toEqual([]);
+  });
+
+  // Yarn reads YARN_* env vars above .yarnrc.yml, so an ambient override on a runner would send
+  // the install back to a live registry and straight past the fail-closed 404s.
+  it("neutralizes ambient Yarn registry environment overrides", () => {
+    const env = yarnChildEnv("http://127.0.0.1:12345", {
+      PATH: "/usr/bin",
+      YARN_NPM_REGISTRY_SERVER: "https://registry.example.invalid",
+      YARN_NPM_ALWAYS_AUTH: "true",
+      YARN_UNSAFE_HTTP_WHITELIST: "example.invalid",
+      YARN_ENABLE_NETWORK: "true",
+    });
+    expect(env.YARN_NPM_REGISTRY_SERVER).toBe("http://127.0.0.1:12345");
+    expect(env.YARN_UNSAFE_HTTP_WHITELIST).toBe("127.0.0.1");
+    expect(env.YARN_NPM_ALWAYS_AUTH).toBeUndefined();
+    expect(env.YARN_ENABLE_NETWORK).toBeUndefined();
+    expect(env.YARN_ENABLE_GLOBAL_CACHE).toBe("false");
+    expect(env.PATH).toBe("/usr/bin");
   });
 
   it("names a concrete stub version from a caret, tilde, or exact range", () => {

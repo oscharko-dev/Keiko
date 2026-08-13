@@ -376,6 +376,17 @@ export function minimumSatisfyingVersion(range) {
   return /^[\s^~>=<v]*(\d+\.\d+\.\d+)/u.exec(range ?? "")?.[1];
 }
 
+function manifestRequirements(manifest, bundledSet) {
+  return [
+    ["dependencies", false],
+    ["optionalDependencies", true],
+  ].flatMap(([group, optional]) =>
+    Object.entries(manifest[group] ?? {})
+      .filter(([name]) => !bundledSet.has(name))
+      .map(([name, range]) => ({ name, range, optional })),
+  );
+}
+
 export function vendoredDependencyRequirements(
   manifest = rootPackageJson,
   packagesRoot = repoRoot,
@@ -393,9 +404,9 @@ export function vendoredDependencyRequirements(
     if (!optional)
       requirements.set(name, { name, range: existing.range ?? range, optional: false });
   };
-  for (const [name, range] of Object.entries(manifest.dependencies ?? {})) {
-    if (!bundledSet.has(name)) record({ name, range, optional: false });
-  }
+  // The staged root carries optional entries too — `promoteWorkspacePeers` lifts a workspace's
+  // optional third-party peers into exactly that field — so both groups belong in the closure.
+  for (const requirement of manifestRequirements(manifest, bundledSet)) record(requirement);
   // A bundled workspace ships inside the tarball, but its own third-party dependencies do not:
   // the consumer's package manager still resolves those from a registry. `keiko-local-knowledge`
   // declaring `@napi-rs/canvas` is exactly how the 2026-08-13 upstream publish race reached a
@@ -508,6 +519,11 @@ function nestedModuleRoots(modulesRoot) {
  * told not to ask for it via `supportedArchitectures`.
  */
 export function resolveVendorClosure(modulesRoot, manifest = rootPackageJson) {
+  // `manifest` should be the STAGED manifest (`artifact.manifest`), not the repo root:
+  // `promoteWorkspacePeers` in stage-publish-package.mjs lifts a bundled workspace's third-party
+  // peer dependencies into the staged root, and a closure that re-derived only the workspace's
+  // own dependency fields would miss them — the consumer would then request a package this
+  // registry never seeded. Deriving from the producer's output keeps the two in step.
   const resolved = new Map();
   const missing = [];
   const stubs = new Map();
@@ -597,8 +613,12 @@ function packStubPackage(entry, destination) {
   return packVendoredPackage({ name: entry.name, directory: stubDir }, destination);
 }
 
-export function seedVendoredRegistry(destination, modulesRoot = join(repoRoot, "node_modules")) {
-  const { packages, stubs, missing } = resolveVendorClosure(modulesRoot);
+export function seedVendoredRegistry(
+  destination,
+  modulesRoot = join(repoRoot, "node_modules"),
+  manifest = rootPackageJson,
+) {
+  const { packages, stubs, missing } = resolveVendorClosure(modulesRoot, manifest);
   if (missing.length > 0) {
     fail(
       `vendored dependency closure is not installed: ${missing.join(", ")} — ` +
@@ -770,6 +790,26 @@ export async function startLocalRegistry(artifact, vendored) {
   };
 }
 
+/**
+ * Yarn reads `YARN_*` environment variables at a HIGHER precedence than `.yarnrc.yml`, so an
+ * ambient `YARN_NPM_REGISTRY_SERVER` on a runner or developer machine would silently send this
+ * install back to a live registry and past the fail-closed 404s. Registry-affecting variables are
+ * therefore dropped and the loopback server is re-asserted through the environment as well (#3130).
+ */
+export function yarnChildEnv(registryUrl, baseEnv = process.env) {
+  const env = Object.fromEntries(
+    Object.entries(baseEnv).filter(
+      ([key]) => !/^YARN_(?:NPM_|UNSAFE_HTTP|ENABLE_NETWORK)/u.test(key),
+    ),
+  );
+  return {
+    ...env,
+    YARN_ENABLE_GLOBAL_CACHE: "false",
+    YARN_NPM_REGISTRY_SERVER: registryUrl,
+    YARN_UNSAFE_HTTP_WHITELIST: "127.0.0.1",
+  };
+}
+
 function writeYarnConfiguration(tmp, registryUrl) {
   const architectureLines = Object.entries(supportedArchitectures()).flatMap(([key, values]) => [
     `  ${key}:`,
@@ -823,7 +863,7 @@ export async function installIntoWithYarn(tmp, artifact, vendored) {
       {
         cwd: tmp,
         timeout: NPM_INSTALL_TIMEOUT_MS,
-        env: { ...process.env, YARN_ENABLE_GLOBAL_CACHE: "false" },
+        env: yarnChildEnv(registry.registryUrl),
       },
     );
     if (result.timedOut === true || result.error !== undefined || result.status !== 0) {
@@ -1315,7 +1355,7 @@ async function main() {
     assertInstalledRootTypeSurface(tmp);
     await assertPackagedUi(tmp);
     await assertPackagedLifecycleCommands(tmp);
-    const vendored = seedVendoredRegistry(vendorTmp);
+    const vendored = seedVendoredRegistry(vendorTmp, undefined, artifact.manifest);
     await installIntoWithYarn(yarnTmp, artifact, vendored);
     assertCliExecutable(yarnTmp);
     assertVendoredPayload(yarnTmp);
