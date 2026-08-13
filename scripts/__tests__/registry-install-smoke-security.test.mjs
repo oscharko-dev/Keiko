@@ -616,6 +616,39 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(() => assertRegistryOnlyDescriptors(clean)).not.toThrow();
   });
 
+  // `@foo/bar-baz` and `@foo-bar/baz` both flatten to `foo-bar-baz-1.2.3.tgz`, so a name-derived
+  // directory that collapses separators would let the second pack overwrite the first after its
+  // integrity was recorded, handing Yarn bytes that fail the checksum it was given.
+  it("packs scope-ambiguous names without one archive overwriting the other", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-pack-collision-test-"));
+    const destination = mkdtempSync(join(tmpdir(), "keiko-pack-collision-out-"));
+    try {
+      const names = ["@foo/bar-baz", "@foo-bar/baz"];
+      for (const name of names) {
+        const dir = join(root, "node_modules", ...name.split("/"));
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify({ name, version: "1.2.3", description: name }),
+          "utf8",
+        );
+      }
+      const seeded = seedVendoredRegistry(destination, join(root, "node_modules"), {
+        dependencies: { "@foo/bar-baz": "^1.2.3", "@foo-bar/baz": "^1.2.3" },
+        bundleDependencies: [],
+      });
+
+      const packed = names.map((name) => seeded.get(name)?.get("1.2.3")?.tarballPath ?? "");
+      for (const tarballPath of packed) expect(existsSync(tarballPath)).toBe(true);
+      // Distinct paths, and each archive still carries its own bytes.
+      expect(packed[0]).not.toBe(packed[1]);
+      expect(readFileSync(packed[0] ?? "")).not.toEqual(readFileSync(packed[1] ?? ""));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(destination, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("keys the vendor seed directory to the lockfile so a second run reuses it", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-seed-key-test-"));
     try {

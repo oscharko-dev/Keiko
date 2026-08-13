@@ -593,16 +593,19 @@ export function resolveVendorClosure(
   const resolved = new Map();
   const missing = [];
   const stubs = new Map();
+  // A package first seen through an optional edge may later be REQUIRED by another parent. Keeping
+  // the stub there would serve an inert package for a genuinely required dependency and let the
+  // smoke pass without it, so the required edge withdraws the stub and the absence becomes fatal.
+  const resolveAgainstExistingStub = (name, requirement, stubKey) => {
+    if (requirement?.optional !== false) return;
+    stubs.delete(stubKey);
+    missing.push(name);
+  };
   const visit = (name, requirement) => {
-    const stubKey = `${name}@${minimumSatisfyingVersion(requirement?.range) ?? ""}`;
     if (resolved.has(name) || missing.includes(name)) return;
+    const stubKey = `${name}@${minimumSatisfyingVersion(requirement?.range) ?? ""}`;
     if (stubs.has(stubKey)) {
-      // A package first seen through an optional edge may later be REQUIRED by another parent.
-      // Returning early there would serve an inert stub for a genuinely required dependency and
-      // let the smoke pass without it, so the required edge wins and the stub is withdrawn.
-      if (requirement?.optional !== false) return;
-      stubs.delete(stubKey);
-      missing.push(name);
+      resolveAgainstExistingStub(name, requirement, stubKey);
       return;
     }
     const copies = findInstalledCopies(name, modulesRoot, packagesRoot);
@@ -648,7 +651,12 @@ function packVendoredPackage(entry, destination) {
   // boundary: `@foo/bar@1.2.3` and `foo-bar@1.2.3` both produce `foo-bar-1.2.3.tgz`. A per-package
   // directory keeps the second pack from overwriting the first after its integrity was recorded,
   // which would hand Yarn the wrong bytes.
-  const packDir = join(destination, `pack-${entry.name.replace(/[^a-zA-Z0-9]+/gu, "-")}`);
+  // Keyed by a digest of the exact name, not a character-class replacement: collapsing every
+  // separator to "-" maps `@foo/bar-baz` and `@foo-bar/baz` onto the same directory, and npm then
+  // names both archives `foo-bar-baz-1.2.3.tgz`, so the second overwrites the first after its
+  // integrity was recorded and Yarn receives bytes that fail the checksum it was handed.
+  const nameDigest = createHash("sha256").update(entry.name).digest("hex").slice(0, 16);
+  const packDir = join(destination, `pack-${nameDigest}`);
   mkdirSync(packDir, { recursive: true });
   const result = run(
     "npm",
