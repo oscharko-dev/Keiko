@@ -135,21 +135,18 @@ function detectIndentSignals(raw: string): {
   return { tab, spaceDepths };
 }
 
-function detectSpaceUnit(depths: readonly number[]): number {
-  if (depths.length === 0) return 2;
-  // PR-review follow-up (Codex thread 3771469014): reduce instead of Math.min(...depths).
-  // A large generated package.json can produce enough space-depth samples to exceed V8's
-  // function-argument limit and throw RangeError on the spread call.
-  const minDepth = depths.reduce((acc, depth) => (depth < acc ? depth : acc), depths[0] ?? 0);
-  // PR-review follow-up (KfQ thread 3771862601): use the shallowest observed indent depth
-  // rather than the GCD of all observed depths. The shallowest captured line is the closest
-  // proxy for the file's top-level indent step; the GCD of nested-only depths (e.g. depths
-  // [4,8,12] → GCD 4) can exceed the actual top-level width when the top-level key sits on
-  // the same line as `{` and never gets captured by the leading-whitespace regex, which
-  // would rewrite the whole file with a deeper indent and force a spurious full-file diff.
-  // A shallowest of 1 comes out of hand-authored JSON with a single leading space and is
-  // clamped up to 2 because no convention writes a 1-space JSON file.
-  return Math.max(minDepth, 2);
+// PR-review follow-up (Codex thread 3771930608): find the FIRST line indented directly under
+// the outermost `{`. That line's indent width IS the file's top-level indent step — it is a
+// direct observation, not derived from GCD or shallowest-of-nested-depths, both of which can
+// exceed the top-level step when the outer `{` shares a line with the only top-level key
+// (e.g. `{ "scripts": {\n    "test": "x"\n  } }` produces only depth 4 in the captured set,
+// even though the file uses a 2-space top-level convention). Falling back to `undefined`
+// lets the caller default to 2, matching the "no convention detected → conservative" rule.
+function detectTopLevelSpaceIndent(raw: string): number | undefined {
+  const m = /(?:^|\r?\n)\s*\{[ \t]*\r?\n( +)"/u.exec(raw);
+  if (m === null) return undefined;
+  const indent = m[1];
+  return indent !== undefined && indent.length >= 2 ? indent.length : undefined;
 }
 
 function detectIndent(raw: string): string | number {
@@ -161,7 +158,7 @@ function detectIndent(raw: string): string | number {
   // reformat on a hair-line majority.
   if (tab * 3 > total * 2) return "\t";
   if (spaceDepths.length * 3 <= total * 2) return 2;
-  return detectSpaceUnit(spaceDepths);
+  return detectTopLevelSpaceIndent(raw) ?? 2;
 }
 
 function stringifyPackageJson(data: unknown, indent: string | number): string {

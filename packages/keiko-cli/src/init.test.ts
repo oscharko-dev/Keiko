@@ -160,6 +160,32 @@ describe("runInitCli", () => {
     expect(written).not.toMatch(/^ {2}"name":/mu);
   });
 
+  it("keeps 2-space indent when the outer brace shares a line with the only top-level key (Codex 3771930608)", () => {
+    // Regression: when a compact JSON puts the sole top-level key on the SAME line as `{`,
+    // detectIndentSignals's `\n[ \t]+"` regex only captures nested lines (e.g. depth 4 for
+    // `"test"`). The pre-fix detector inferred the indent from those nested-only samples and
+    // rewrote the whole file at that deeper width (4 spaces here). The direct-top-level
+    // detector reads the FIRST indented line under the outermost `{` — which does not exist
+    // in this shape — and falls back to the conservative default of 2 spaces.
+    const root = mkdtempSync(join(tmpdir(), "keiko-init-compact-"));
+    tempRoots.push(root);
+    const packagePath = join(root, "package.json");
+    const compactContent =
+      '{ "name": "target-project", "version": "1.0.0", "scripts": {\n    "test": "x"\n  } }\n';
+    writeFileSync(packagePath, compactContent, "utf8");
+    const c = makeIo();
+
+    const code = runInitCli([], c.io, {}, { cwd: root });
+
+    expect(code).toBe(0);
+    const written = readFileSync(packagePath, "utf8");
+    // Nested-only depth 4 must NOT be picked up as the top-level step — a 4-space output
+    // would rewrite the whole file. Conservative default 2 is what the compact source
+    // implicitly reads as (its expanded form is 2-space).
+    expect(written).toMatch(/^ {2}"name":/mu);
+    expect(written).not.toMatch(/^ {4}"name":/mu);
+  });
+
   it("preserves tab indentation instead of reformatting to 2 spaces", () => {
     // #KEIKO-0503: same guarantee for a tab-indented file — the whole file must not
     // switch to space indentation just because `keiko init` added two scripts.
