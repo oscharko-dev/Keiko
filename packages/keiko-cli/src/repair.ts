@@ -21,6 +21,7 @@ import {
   constants as fsConstants,
   existsSync,
   fchmodSync,
+  fstatSync,
   lstatSync,
   openSync,
   readFileSync,
@@ -322,6 +323,15 @@ function tightenViaOpenFlag(node: RuntimeStateNode, targetMode: number, flags: n
   let fd: number | undefined;
   try {
     fd = openSync(node.absPath, flags);
+    // PR-review follow-up (Codex thread 3771600808): fstat the opened descriptor and
+    // refuse if a REGULAR file has nlink > 1. Between the scanner's lstat and this open,
+    // another same-user process could have replaced the scanned Keiko-owned file with a
+    // hardlink to an unrelated inode; fchmodSync would otherwise change that inode's
+    // permissions. O_NOFOLLOW already blocks symlink swaps at the final component; the
+    // fstat here covers the hardlink case at the exact inode the fd points at. Directories
+    // inherently have nlink >= 2 ("." + parent), so the check only applies to regular files.
+    const stat = fstatSync(fd);
+    if (stat.isFile() && stat.nlink > 1) return false;
     fchmodSync(fd, targetMode);
     return true;
   } catch {

@@ -568,8 +568,12 @@ export async function runUninstallCli(
     return 2;
   }
   const stateDir = resolveStateDir(resolved.cwd, env, opts.stateDirArg);
-  if (refuseEarly(opts, io, stateDir)) return 1;
   try {
+    // PR-review follow-up (Codex thread 3771600804): refuseEarly's guards can throw when
+    // an lstat / read on the state directory or portable-install-state.json fails with
+    // EACCES / EIO / etc. Keep them inside the same try so the documented filesystem-
+    // error handler prints the scoped diagnostic instead of the process-level fatal path.
+    if (refuseEarly(opts, io, stateDir)) return 1;
     // #KEIKO-0422: ensureServerStoppable is now async — it waits (bounded) for the
     // signalled UI to exit before returning "ok", so state removal never races with a
     // still-shutting-down process.
