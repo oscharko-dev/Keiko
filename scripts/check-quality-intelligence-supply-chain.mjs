@@ -78,8 +78,9 @@ const SCANNED_DEPENDENCY_SECTIONS = [
 ];
 
 // Manifest sections that determine what ships in the published `@oscharko-dev/keiko` runtime graph.
-// `devDependencies`/`peerDependencies` are deliberately excluded — they do not ship in the tarball.
+// Workspace peers are included separately because staging promotes them to the root manifest.
 const PUBLISHED_RUNTIME_SECTIONS = ["dependencies", "optionalDependencies"];
+const PROMOTED_WORKSPACE_RUNTIME_SECTIONS = [...PUBLISHED_RUNTIME_SECTIONS, "peerDependencies"];
 
 const SOURCE_SCAN_ROOTS = [
   { dir: "src", recurse: true },
@@ -458,9 +459,9 @@ function checkMatrixConsistency(matrixPath, rootManifestPath, packagesDir) {
 
 // --- Check 7: published-runtime completeness (fail-closed on unapproved dependencies) ---
 
-function externalRuntimeNamesFromManifest(manifest, runtimeWorkspaceNames) {
+function externalRuntimeNamesFromManifest(manifest, runtimeWorkspaceNames, sections) {
   const entries = [];
-  for (const section of PUBLISHED_RUNTIME_SECTIONS) {
+  for (const section of sections) {
     const value = manifest[section];
     if (value && typeof value === "object" && !Array.isArray(value)) {
       for (const name of Object.keys(value)) {
@@ -509,6 +510,7 @@ function collectPublishedRuntimeDependencies(rootManifestPath, packagesDir) {
   for (const { name, section } of externalRuntimeNamesFromManifest(
     rootManifest,
     runtimeWorkspaceNames,
+    PUBLISHED_RUNTIME_SECTIONS,
   )) {
     add(name, "<root>", section);
   }
@@ -518,6 +520,7 @@ function collectPublishedRuntimeDependencies(rootManifestPath, packagesDir) {
     for (const { name, section } of externalRuntimeNamesFromManifest(
       readJsonFile(manifestPath),
       runtimeWorkspaceNames,
+      PROMOTED_WORKSPACE_RUNTIME_SECTIONS,
     )) {
       add(name, shortName, section);
     }

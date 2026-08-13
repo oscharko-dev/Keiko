@@ -571,6 +571,38 @@ describe("collectPublishedRuntimeDependencies", () => {
     expect(map.get("yauzl")).toMatchObject({ label: "keiko-contracts", section: "dependencies" });
   });
 
+  it("collects external peers promoted from vendored workspaces", () => {
+    writeJson(root, "package.json", {
+      name: "synthetic-root",
+      version: "0.0.0",
+      dependencies: { "@oscharko-dev/keiko-contracts": "workspace:*" },
+      bundleDependencies: ["@oscharko-dev/keiko-contracts"],
+    });
+    writeJson(root, "packages/keiko-contracts/package.json", {
+      name: "@oscharko-dev/keiko-contracts",
+      version: "0.0.0",
+      peerDependencies: {
+        "@oscharko-dev/keiko-contracts": "0.0.0",
+        "required-peer": "^1.0.0",
+        "optional-peer": "^2.0.0",
+      },
+      peerDependenciesMeta: { "optional-peer": { optional: true } },
+    });
+    const map = collectPublishedRuntimeDependencies(
+      join(root, "package.json"),
+      join(root, "packages"),
+    );
+    expect(map.get("required-peer")).toMatchObject({
+      label: "keiko-contracts",
+      section: "peerDependencies",
+    });
+    expect(map.get("optional-peer")).toMatchObject({
+      label: "keiko-contracts",
+      section: "peerDependencies",
+    });
+    expect(map.has("@oscharko-dev/keiko-contracts")).toBe(false);
+  });
+
   it("does NOT collect deps from a workspace package that is NOT in bundleDependencies", () => {
     writeJson(root, "package.json", {
       name: "synthetic-root",
@@ -749,6 +781,37 @@ describe("checkUnapprovedRuntimeDependencies — completeness gate", () => {
     expect(hits.some((h) => h.name === "yauzl")).toBe(true);
     const yauzlHit = hits.find((h) => h.name === "yauzl");
     expect(yauzlHit).toMatchObject({ label: "keiko-contracts", section: "dependencies" });
+  });
+
+  it("FAILS when a vendored workspace declares an unlisted external peer", () => {
+    writeJson(root, "package.json", {
+      name: "synthetic-root",
+      version: "0.0.0",
+      dependencies: { "@oscharko-dev/keiko-contracts": "workspace:*" },
+      bundleDependencies: ["@oscharko-dev/keiko-contracts"],
+    });
+    writeJson(root, "packages/keiko-contracts/package.json", {
+      name: "@oscharko-dev/keiko-contracts",
+      version: "0.0.0",
+      peerDependencies: { "unapproved-peer": "^1.0.0" },
+    });
+    writeFile(
+      root,
+      MATRIX_PATH,
+      ["| package | ns | role | decision | license |", "| --- | --- | --- | --- | --- |"].join(
+        "\n",
+      ),
+    );
+    const hits = checkUnapprovedRuntimeDependencies(
+      join(root, MATRIX_PATH),
+      join(root, "package.json"),
+      join(root, "packages"),
+    );
+    expect(hits).toContainEqual({
+      name: "unapproved-peer",
+      label: "keiko-contracts",
+      section: "peerDependencies",
+    });
   });
 
   it("PASSES when all root and vendored-workspace runtime deps are approved", () => {

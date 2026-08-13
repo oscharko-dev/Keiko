@@ -287,13 +287,13 @@ product where:
 - **Why rejected**: The build chain is already correct (`tsc` + per-package `npm run build`).
   Introducing a bundler solves a non-problem and creates new surface in the trust path.
 
-### Alternative 4: In-place or per-workspace-tarball vendoring
+### Alternative 4: In-place vendoring or packing directly from source workspaces
 
 - **Pros**: Also avoids `bundleDependencies` semantics.
-- **Cons**: Mutates reviewed source manifests or creates ordering-dependent intermediate tarballs;
-  a failed lifecycle can leave the checkout in a publish-only state.
-- **Why rejected**: D5's isolated directory staging gets the portability benefit without source
-  mutation or intermediate package archives.
+- **Cons**: Mutates reviewed source manifests or packs unreduced source-workspace surfaces with
+  ordering-dependent state; a failed lifecycle can leave the checkout in a publish-only state.
+- **Why rejected**: D5 creates the required workspace archives from isolated, reduced staging
+  surfaces, preserving portability without mutating or packing from the source workspace tree.
 
 ### Alternative 5: Status quo — do nothing
 
