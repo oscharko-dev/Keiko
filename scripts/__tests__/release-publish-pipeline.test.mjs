@@ -1063,7 +1063,8 @@ function runPublish({
 function npmPackStubLines() {
   return [
     'if (sub === "pack") {',
-    '  const destination = argv[argv.indexOf("--pack-destination") + 1];',
+    '  const destinationIndex = argv.indexOf("--pack-destination");',
+    "  const destination = destinationIndex === -1 ? process.cwd() : argv[destinationIndex + 1];",
     '  const manifest = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));',
     '  const archiveName = `${manifest.name.replace(/^@/u, "").replace("/", "-")}-${manifest.version}.tgz`;',
     '  writeFileSync(join(destination, archiveName), "deterministic stub archive\\n");',

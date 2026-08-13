@@ -16,6 +16,7 @@ import {
   assertWorkspacePack,
   createStagedPublishPackage,
   stagedVendorDirectory,
+  workspacePackInvocation,
 } from "../stage-publish-package.mjs";
 
 const roots = [];
@@ -117,6 +118,29 @@ afterEach(() => {
 });
 
 describe("staged publish package", () => {
+  it("keeps dynamic Windows pack destinations out of shell-visible arguments", () => {
+    expect(workspacePackInvocation(String.raw`C:\Program Files\nodejs\npm.cmd`, "win32")).toEqual({
+      args: ["pack", "--silent", "--ignore-scripts"],
+      command: String.raw`"C:\Program Files\nodejs\npm.cmd"`,
+      shell: true,
+    });
+  });
+
+  it("stages workspace archives below a temporary root containing spaces", () => {
+    const root = fixture();
+    const temporaryRoot = mkdtempSync(join(tmpdir(), "keiko stage publish test "));
+    roots.push(temporaryRoot);
+    const staged = createStagedPublishPackage({ repoRoot: root, temporaryRoot });
+    roots.push(staged.packageDir);
+
+    expect(staged.vendorPackages).toHaveLength(2);
+    expect(
+      staged.vendorPackages.every(({ archivePath }) =>
+        existsSync(join(staged.packageDir, archivePath)),
+      ),
+    ).toBe(true);
+  });
+
   it("vendors private workspaces through archive dependencies and peer edges", () => {
     const root = fixture();
     const staged = createStagedPublishPackage({ repoRoot: root });

@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -223,6 +224,14 @@ function vendorArchiveName(record) {
   return `oscharko-dev-${stagedVendorDirectory(record.manifest.name)}-${version}.tgz`;
 }
 
+export function workspacePackInvocation(npmExecutable, platform = process.platform) {
+  return {
+    args: ["pack", "--silent", "--ignore-scripts"],
+    command: shellCommandForTrustedExecutable(npmExecutable, platform),
+    shell: platform === "win32",
+  };
+}
+
 function packWorkspace(stageRoot, record, runtimeNames) {
   const directory = stagedVendorDirectory(record.manifest.name);
   const workspaceStage = join(stageRoot, ".vendor-stage", directory);
@@ -238,19 +247,17 @@ function packWorkspace(stageRoot, record, runtimeNames) {
   writeJson(join(packageRoot, "package.json"), manifest);
   const archiveName = vendorArchiveName(record);
   const archivePath = join(vendorRoot, archiveName);
-  const npmExecutable = resolveHostExecutable("npm");
-  const result = spawnSync(
-    shellCommandForTrustedExecutable(npmExecutable),
-    ["pack", "--silent", "--ignore-scripts", "--pack-destination", vendorRoot],
-    {
-      cwd: packageRoot,
-      encoding: "utf8",
-      // SECURITY-SHELL-OK: Windows requires a shell for the trusted npm.cmd executable. All
-      // arguments are static or mkdtemp-generated paths and the command is shell-quoted.
-      shell: process.platform === "win32",
-    },
-  );
-  assertWorkspacePack(result, record, archivePath);
+  const stagedArchivePath = join(packageRoot, archiveName);
+  const invocation = workspacePackInvocation(resolveHostExecutable("npm"));
+  const result = spawnSync(invocation.command, invocation.args, {
+    cwd: packageRoot,
+    encoding: "utf8",
+    // SECURITY-SHELL-OK: Windows requires a shell for the trusted npm.cmd executable. Every
+    // shell-visible argument is static; the dynamic destination is handled with renameSync.
+    shell: invocation.shell,
+  });
+  assertWorkspacePack(result, record, stagedArchivePath);
+  renameSync(stagedArchivePath, archivePath);
   const files = packedFiles(packageRoot);
   const bundledRoot = join(stageRoot, "node_modules", ...record.manifest.name.split("/"));
   mkdirSync(dirname(bundledRoot), { recursive: true });
