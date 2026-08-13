@@ -228,6 +228,7 @@ export function workspacePackInvocation(npmExecutable, platform = process.platfo
   return {
     args: ["pack", "--silent", "--ignore-scripts"],
     command: shellCommandForTrustedExecutable(npmExecutable, platform),
+    // SECURITY-SHELL-OK: Windows requires a shell for the trusted npm.cmd executable; argv is static.
     shell: platform === "win32",
   };
 }
