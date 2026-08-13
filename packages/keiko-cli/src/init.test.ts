@@ -160,6 +160,37 @@ describe("runInitCli", () => {
     expect(written).not.toMatch(/^ {2}"name":/mu);
   });
 
+  it.each([
+    // Codex 3772132519: depth-aware scanner recognises depth-1 lines even when they are
+    // not immediately preceded by "\n" after the opening brace. Both shapes below were
+    // previously misdetected as 2-space and rewrote the whole file.
+    [
+      "blank line after {",
+      `{\n\n    "name": "target-project",\n    "version": "1.0.0",\n    "scripts": {\n        "test": "vitest run"\n    }\n}\n`,
+    ],
+    [
+      "inline first key",
+      `{ "name": "target-project",\n    "version": "1.0.0",\n    "scripts": {\n        "test": "vitest run"\n    }\n}\n`,
+    ],
+  ] as const)("preserves 4-space indent for compact layout (%s)", (_label, content) => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-init-4compact-"));
+    tempRoots.push(root);
+    const packagePath = join(root, "package.json");
+    writeFileSync(packagePath, content, "utf8");
+    const c = makeIo();
+
+    const code = runInitCli([], c.io, {}, { cwd: root });
+
+    expect(code).toBe(0);
+    const written = readFileSync(packagePath, "utf8");
+    expect(written).toMatch(/^ {4}"name":/mu);
+    expect(written).toMatch(/^ {4}"scripts":/mu);
+    // 8-space nested follows from the 4-space top-level step.
+    expect(written).toMatch(/^ {8}"test":/mu);
+    // Must never regress to the 2-space default just because the outer brace was compact.
+    expect(written).not.toMatch(/^ {2}"name":/mu);
+  });
+
   it("keeps 2-space indent when the outer brace shares a line with the only top-level key (Codex 3771930608)", () => {
     // Regression: when a compact JSON puts the sole top-level key on the SAME line as `{`,
     // detectIndentSignals's `\n[ \t]+"` regex only captures nested lines (e.g. depth 4 for

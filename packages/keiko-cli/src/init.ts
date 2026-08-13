@@ -135,18 +135,93 @@ function detectIndentSignals(raw: string): {
   return { tab, spaceDepths };
 }
 
-// PR-review follow-up (Codex thread 3771930608): find the FIRST line indented directly under
-// the outermost `{`. That line's indent width IS the file's top-level indent step — it is a
-// direct observation, not derived from GCD or shallowest-of-nested-depths, both of which can
-// exceed the top-level step when the outer `{` shares a line with the only top-level key
-// (e.g. `{ "scripts": {\n    "test": "x"\n  } }` produces only depth 4 in the captured set,
-// even though the file uses a 2-space top-level convention). Falling back to `undefined`
-// lets the caller default to 2, matching the "no convention detected → conservative" rule.
+// PR-review follow-ups (Codex threads 3771930608 + 3772132519): find the FIRST line indented
+// at outer nesting depth == 1 — that line's leading-space count IS the file's top-level indent
+// step, a direct observation independent of GCD or shallowest-of-nested-depths.
+//
+// The earlier regex form required the depth-1 property to sit on the very next line after the
+// opening brace, which missed two valid four-space layouts: an inline first key on the same
+// line as `{`, and a blank line between `{` and the first key. Both fall back to the 2-space
+// default and rewrite the entire manifest. A depth-aware scan (tracking `{`/`[`/`}`/`]` outside
+// string literals with backslash-escape awareness) recognises every depth-1 line regardless of
+// how the outer brace was authored. Absent-signal returns `undefined` so the caller defaults to
+// 2, matching the "no convention detected → conservative" rule.
+interface TopLevelIndentScan {
+  depth: number;
+  inString: boolean;
+  escape: boolean;
+  atLineStart: boolean;
+  leadingSpaces: number;
+}
+
+function stepInString(scan: TopLevelIndentScan, ch: string): void {
+  if (scan.escape) scan.escape = false;
+  else if (ch === "\\") scan.escape = true;
+  else if (ch === '"') scan.inString = false;
+  scan.atLineStart = false;
+}
+
+function stepAtLineStart(scan: TopLevelIndentScan, ch: string): number | undefined {
+  if (ch === " ") {
+    scan.leadingSpaces += 1;
+    return undefined;
+  }
+  if (ch === "\t") {
+    scan.atLineStart = false;
+    scan.leadingSpaces = 0;
+    return undefined;
+  }
+  if (ch === '"' && scan.depth === 1 && scan.leadingSpaces >= 2) {
+    return scan.leadingSpaces;
+  }
+  scan.atLineStart = false;
+  return undefined;
+}
+
+// Extracted to defeat TS's control-flow narrowing: after the outer `if (scan.atLineStart)`
+// guard, TS treats scan.atLineStart as `true` forever inside the block, and the follow-up
+// re-check is flagged as always-truthy by @typescript-eslint/no-unnecessary-condition even
+// though stepAtLineStart mutates the flag. Reading through this indirection breaks the
+// narrowing without changing behaviour.
+function readAtLineStart(scan: TopLevelIndentScan): boolean {
+  return scan.atLineStart;
+}
+
+function stepStructural(scan: TopLevelIndentScan, ch: string): void {
+  if (ch === '"') scan.inString = true;
+  else if (ch === "{" || ch === "[") scan.depth += 1;
+  else if (ch === "}" || ch === "]") scan.depth -= 1;
+}
+
 function detectTopLevelSpaceIndent(raw: string): number | undefined {
-  const m = /(?:^|\r?\n)\s*\{[ \t]*\r?\n( +)"/u.exec(raw);
-  if (m === null) return undefined;
-  const indent = m[1];
-  return indent !== undefined && indent.length >= 2 ? indent.length : undefined;
+  const scan: TopLevelIndentScan = {
+    depth: 0,
+    inString: false,
+    escape: false,
+    atLineStart: true,
+    leadingSpaces: 0,
+  };
+  for (const ch of raw) {
+    if (scan.inString) {
+      stepInString(scan, ch);
+      continue;
+    }
+    if (ch === "\n") {
+      scan.atLineStart = true;
+      scan.leadingSpaces = 0;
+      continue;
+    }
+    if (scan.atLineStart) {
+      const hit = stepAtLineStart(scan, ch);
+      if (hit !== undefined) return hit;
+      // stepAtLineStart may have consumed leading whitespace (still at line-start) or the
+      // opening quote of a depth-1 property (returned above). If it fell through without a
+      // hit and atLineStart is still true, this iteration was whitespace — skip structural.
+      if (readAtLineStart(scan)) continue;
+    }
+    stepStructural(scan, ch);
+  }
+  return undefined;
 }
 
 function detectIndent(raw: string): string | number {
