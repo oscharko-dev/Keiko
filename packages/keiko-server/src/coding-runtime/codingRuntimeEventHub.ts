@@ -8,7 +8,7 @@ import type {
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
 
-import type { ServerDiagnosticSink } from "../diagnostics-log.js";
+import { contentFreeErrorClass, type ServerDiagnosticSink } from "../diagnostics-log.js";
 
 /** Maximum replay retention. Kept small because this is an SSE recovery aid, not a history store. */
 export const CODING_RUNTIME_EVENT_HUB_MAX_EVENTS = 256;
@@ -421,8 +421,9 @@ function write(
     return accepted !== false;
   } catch (error) {
     // A throwing subscriber write means the wire is gone (client hung up, socket broken).
-    // Same treatment: record one line and close the subscriber.
-    recordSseFailure(diagnostics, runId, "subscriber-write-threw", errorClassName(error));
+    // Same treatment: record one line and close the subscriber. `contentFreeErrorClass` is the
+    // shared, prototype-safe classifier (protects against shadowed/throwing `constructor`).
+    recordSseFailure(diagnostics, runId, "subscriber-write-threw", contentFreeErrorClass(error));
     close(subscriber);
     return false;
   }
@@ -447,10 +448,6 @@ function recordSseFailure(
   } catch {
     // Diagnostic sink misbehaviour must not corrupt fan-out.
   }
-}
-
-function errorClassName(error: unknown): string {
-  return error instanceof Error ? error.constructor.name : "Error";
 }
 
 function close(subscriber: CodingRuntimeEventHubSubscriber): void {

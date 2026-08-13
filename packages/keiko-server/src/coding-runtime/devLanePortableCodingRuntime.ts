@@ -404,21 +404,13 @@ function digestText(value: string): string {
 }
 
 /**
- * In-process payload digest. Mirrors `inspectStagedSidecarPayload`'s tree walk — including its
- * `localeCompare` ordering — because the launch-time re-check recomputes this digest in the same
- * server process and must agree byte-for-byte with the discovery-recorded summary.
- */
-function hashDirectoryTree(root: string): string {
-  return hashTree(root, (left, right) => left.localeCompare(right));
-}
-
-/**
- * KEIKO-0180: exported canonical formula shared by the runtime, the discovery pipeline, and
- * tests. Given a set of `(relativePath, sha256)` pairs, produces the same tree digest the launch
- * paths recompute — locale-sorted (the payload lane matches `localeCompare`, same as
- * `hashDirectoryTree` above). Tests calling this instead of hand-rolling the formula cannot
- * drift when the formula moves. Only the pairs matter; a caller that walks a real directory
- * uses `hashDirectoryTree` and stays byte-identical.
+ * KEIKO-0180 (and #3099 P2 follow-up): SINGLE canonical formula shared by the production tree
+ * walker, the discovery pipeline, and tests. Given a set of `(relativePath, sha256)` pairs,
+ * produces the tree digest — locale-sorted (the payload lane matches `localeCompare`). The
+ * production directory walker `hashDirectoryTree` DELEGATES to this function so a formula
+ * change touches one place and every consumer (including the manager test fixture) moves with
+ * it. A test that hand-restated the concatenation could formerly drift silently; that path is
+ * now closed.
  */
 export function computePortableSidecarPayloadTreeDigest(
   entries: readonly { readonly relativePath: string; readonly sha256: string }[],
@@ -431,6 +423,24 @@ export function computePortableSidecarPayloadTreeDigest(
     hash.update(`${entry.relativePath}\0${entry.sha256}\0`);
   }
   return hash.digest("hex");
+}
+
+/**
+ * In-process payload digest. Delegates to the canonical
+ * `computePortableSidecarPayloadTreeDigest` above — one formula, one place. Mirrors
+ * `inspectStagedSidecarPayload`'s tree walk (locale-sorted) so the launch-time re-check agrees
+ * byte-for-byte with the discovery-recorded summary.
+ */
+function hashDirectoryTree(root: string): string {
+  const entries: { readonly relativePath: string; readonly sha256: string }[] = [];
+  // NOTE: order-of-iteration doesn't matter here — the canonical helper re-sorts.
+  for (const file of listFiles(root, (left, right) => left.localeCompare(right))) {
+    entries.push({
+      relativePath: relative(root, file).split(sep).join("/"),
+      sha256: sha256File(file),
+    });
+  }
+  return computePortableSidecarPayloadTreeDigest(entries);
 }
 
 /**

@@ -19,7 +19,7 @@ import {
   type SessionPairingPort,
 } from "./sessionPairingPort.js";
 import type { AppSession, SessionRegistry } from "./sessionRegistry.js";
-import type { ServerDiagnosticSink } from "../diagnostics-log.js";
+import { contentFreeErrorClass, type ServerDiagnosticSink } from "../diagnostics-log.js";
 
 export const CODING_APP_SESSION_MAX_LIVE_STREAMS = 32;
 
@@ -159,10 +159,6 @@ function recordSseFailure(
   }
 }
 
-function errorClassName(error: unknown): string {
-  return error instanceof Error ? error.constructor.name : "Error";
-}
-
 interface LiveSubscriptionAdmission {
   readonly acquire: () => boolean;
   readonly release: () => void;
@@ -215,7 +211,7 @@ function makePublish(
         detach();
       }
     } catch (error) {
-      recordSseFailure(diagnostics, "listener-threw", errorClassName(error));
+      recordSseFailure(diagnostics, "listener-threw", contentFreeErrorClass(error));
       detach();
     }
   };

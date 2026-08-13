@@ -37,9 +37,12 @@ export function createAuthenticatedSessionStartConfirmationPlane(
   // more, so pruning it does not weaken the anti-replay guarantee — it just prevents the cap
   // from turning into a permanent fail-closed once the process has seen its first ~4k requests.
   const consumedRequestIds = new Map<string, number>();
+  // Strict `<` matches claimIsFresh's inclusive `Math.abs(nowMs - claim.nowMs) <= freshnessMs`
+  // ceiling — at the exact boundary the original claim is still admissible, so we must NOT evict
+  // its entry yet. #3099 P2 follow-up to KEIKO-0396.
   const prune = (nowMs: number): void => {
     for (const [requestId, expiresAtMs] of consumedRequestIds) {
-      if (expiresAtMs <= nowMs) consumedRequestIds.delete(requestId);
+      if (expiresAtMs < nowMs) consumedRequestIds.delete(requestId);
     }
   };
   return {
@@ -48,8 +51,11 @@ export function createAuthenticatedSessionStartConfirmationPlane(
     ): CodingRuntimeConsumedStartConfirmation | undefined => {
       const nowMs = now();
       if (!claimIsFresh(claim, nowMs, freshnessMs)) return undefined;
+      // Prune expired entries BEFORE the has()/cap checks: a request-id that was consumed and
+      // has since fallen out of the freshness window would otherwise deny a legitimate later
+      // attestation reusing the same id.
+      prune(nowMs);
       if (consumedRequestIds.has(claim.requestId)) return undefined;
-      if (consumedRequestIds.size >= MAX_TRACKED_REQUEST_IDS) prune(nowMs);
       if (consumedRequestIds.size >= MAX_TRACKED_REQUEST_IDS) return undefined;
       consumedRequestIds.set(claim.requestId, claim.nowMs + freshnessMs);
       return { approvalDigest: approvalDigest(claim, instanceNonce) };

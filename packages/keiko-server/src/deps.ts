@@ -83,6 +83,7 @@ import {
 import { createRunRegistry } from "./runs.js";
 import type { ChatTurnSerializer } from "./chat-turn-serializer.js";
 import {
+  defaultServerDiagnosticSink,
   evidenceRetentionDiagnosticObserver,
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -3440,7 +3441,10 @@ function assembleUiHandlerRuntimeServices(
     // KEIKO-0225: forward the operator diagnostic sink so mid-stream SSE listener failures
     // (bare catch, backpressure `false`) surface as one redacted record per subscriber instead
     // of being silently swallowed.
-    ...(args.options.diagnostics ? { diagnostics: args.options.diagnostics } : {}),
+    // #3099 P2 (KEIKO-0225 follow-up): default to the stderr sink when no custom sink is
+    // wired, so the normal `keiko ui` / `dev-bff` composition actually records SSE fan-out
+    // failures instead of silently no-op'ing recordSseFailure().
+    diagnostics: args.options.diagnostics ?? defaultServerDiagnosticSink,
   });
   const workspaceLifecycle = activityAwareWorkspaceLifecycle(
     args.bundle.workspaceLifecycle,
@@ -3487,7 +3491,10 @@ function buildUiCodingRuntimeControlPlane(
     ...(codingRuntimeHost ? { runtimeHost: codingRuntimeHost } : {}),
     // KEIKO-0225: forward the operator diagnostic sink so mid-stream SSE fan-out write failures
     // surface as one redacted record per subscriber instead of being silently swallowed.
-    ...(args.options.diagnostics ? { diagnostics: args.options.diagnostics } : {}),
+    // #3099 P2 (KEIKO-0225 follow-up): default to the stderr sink when no custom sink is
+    // wired, so the normal `keiko ui` / `dev-bff` composition actually records SSE fan-out
+    // failures instead of silently no-op'ing recordSseFailure().
+    diagnostics: args.options.diagnostics ?? defaultServerDiagnosticSink,
   });
 }
 
@@ -3968,7 +3975,10 @@ function qualifiedRuntimeResolver(
     // coding-safe PROVIDER model id the sidecar gateway maps the runtime's "coding" alias onto.
     // Resolved per call because the gateway config can change while the server is up.
     childModelId: (): string | undefined => codingSafeChildModelId(args.runtimeConfig),
-    ...(args.options.diagnostics ? { diagnostics: args.options.diagnostics } : {}),
+    // #3099 P2 (KEIKO-0225 follow-up): default to the stderr sink when no custom sink is
+    // wired, so the normal `keiko ui` / `dev-bff` composition actually records SSE fan-out
+    // failures instead of silently no-op'ing recordSseFailure().
+    diagnostics: args.options.diagnostics ?? defaultServerDiagnosticSink,
     ...(confirmationConsumer ? { confirmationConsumer } : {}),
   });
 }

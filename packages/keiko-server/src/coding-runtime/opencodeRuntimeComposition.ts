@@ -414,19 +414,42 @@ function lifecycleAdapter(
 // KEIKO-0320: the prepare cleanup calls (bridge.close, rmSync) can each throw on their own — a
 // permission-denied unlink, a socket teardown failure. Without an inner guard, a throw here
 // escapes as an uncaught rejection and the outer manager relabels the resulting timeout as a
-// generic retryable failure, discarding the real cause. Guard each cleanup step and swallow its
-// own failure (the run root is already unreachable to the caller either way; the reason the
-// caller sees reflects the ORIGINAL prepare failure, not the disposal noise).
-async function disposeFailedPrepare(bridge: ToolBridgeController, runRoot: string): Promise<void> {
+// generic retryable failure, discarding the real cause. Guard each cleanup step and emit a
+// redacted operator diagnostic when the disposal itself fails (#3099 P2 follow-up: previously
+// the failure was silently swallowed, so a permission-error leak left the private run root on
+// disk with no diagnostic and no retry hook).
+function recordPrepareDisposalFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  operation: "prepare-bridge-close" | "prepare-run-root-remove",
+  error: unknown,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.opencode-composition",
+    source: `opencode-runtime-composition.${operation}`,
+    errorClass: contentFreeErrorClass(error),
+    message: operation,
+  });
+}
+
+async function disposeFailedPrepare(
+  bridge: ToolBridgeController,
+  runRoot: string,
+  runId: string,
+  diagnostics: ServerDiagnosticSink | undefined,
+): Promise<void> {
   try {
     await bridge.close();
-  } catch {
-    // Bridge close is best-effort during the failure path.
+  } catch (error) {
+    recordPrepareDisposalFailure(diagnostics, runId, "prepare-bridge-close", error);
   }
   try {
     rmSync(runRoot, { recursive: true, force: true });
-  } catch {
-    // A directory that cannot be removed here is disposed later by the manager's reap loop.
+  } catch (error) {
+    // The private run root may persist on disk; the operator record makes the leak diagnosable.
+    recordPrepareDisposalFailure(diagnostics, runId, "prepare-run-root-remove", error);
   }
 }
 
@@ -481,7 +504,7 @@ async function prepare(
   try {
     return await materializePrepare(input, bridge, runs, request, runRoot);
   } catch {
-    await disposeFailedPrepare(bridge, runRoot);
+    await disposeFailedPrepare(bridge, runRoot, request.runId, input.diagnostics);
     return { ok: false, reason: "config-materialization-failed" };
   }
 }

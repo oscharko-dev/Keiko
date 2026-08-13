@@ -713,16 +713,13 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       });
     }
     active.stopResultStatus = mostSevereTerminalStatus(active.stopResultStatus, resultStatus);
+    // KEIKO-0402 (and #3099 P1 follow-up): both stop() and handleExit() write `stopPromise`
+    // exactly once, so the second entry point AWAITS the real teardown result instead of
+    // synthesizing a success while the crash-triggered `finalizeUnexpectedExit` is still trying
+    // to reap the process tree. Without this, the orchestrator's caller received `ok:true` while
+    // the tree could still fail its reap, clearing the active slot and admitting a new runtime
+    // over a live one.
     if (active.stopPromise !== undefined) return active.stopPromise;
-    // KEIKO-0402: a crash-triggered teardown (handleExit → finalizeUnexpectedExit) may already be
-    // in flight without having set `stopPromise`. Fold onto the same teardown result via a shared
-    // stopPromise slot so the supervisor is not entered a second time. `tearingDown` is the
-    // synchronous flag both entry points check before touching revokeAndTerminate.
-    if (active.tearingDown) {
-      const raced: CodingRuntimeStopResult = { ok: true, status: "stopped" };
-      active.stopPromise = Promise.resolve(raced);
-      return active.stopPromise;
-    }
     active.tearingDown = true;
     const stopping = this.stopActive(active);
     active.stopPromise = stopping;
@@ -813,10 +810,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (active.context.runId !== runId) {
       return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
     }
-    // KEIKO-0402: another teardown initiator (stop/handleExit) already owns the reap; the second
-    // reconcile caller must not enter the supervisor while the first is still in flight, or the
-    // two reconcile paths race for the same tree.
-    if (active.tearingDown) return { ok: true, status: "stopped" };
+    // KEIKO-0402: reconcile is deliberately the "second chance" — the operator explicitly
+    // invokes it AFTER a prior teardown returned `runtime-reap-unproven`, so we cannot
+    // short-circuit on a stale `stopPromise`. But two concurrent reconcile calls must not both
+    // enter the supervisor; the `tearingDown` flag on this second-chance path guards against
+    // reconcile-vs-reconcile only.
+    if (active.tearingDown && active.status !== "recovery-required") {
+      return { ok: true, status: "stopped" };
+    }
     active.tearingDown = true;
     if (!active.shutdownBarrierComplete) {
       await this.enterRecoveryRequired(active);
@@ -1258,7 +1259,11 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     // an opaque `runtime-failed` and has nothing to diagnose it with. The code is a bounded number,
     // never content, and rides the redacted channel keyed by the run's correlation id.
     emitRuntimeExitDiagnostic(this.deps.diagnostics, active.context.runId, code, this.deps.now);
-    void this.finalizeUnexpectedExit(active, code);
+    // #3099 P1: publish the result-bearing crash teardown on `stopPromise` so a racing stop() /
+    // takeover() / reconcile() awaits the REAL reap outcome — not a synthesized `{ok:true}` that
+    // would let the orchestrator clear the active slot while the tree is still recovery-required
+    // or reap-unproven.
+    active.stopPromise = this.finalizeUnexpectedExit(active, code);
   }
 
   private captureResult(
@@ -1277,23 +1282,27 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     };
   }
 
-  private async finalizeUnexpectedExit(active: ActiveRuntime, code: number | null): Promise<void> {
+  private async finalizeUnexpectedExit(
+    active: ActiveRuntime,
+    code: number | null,
+  ): Promise<CodingRuntimeStopResult> {
     const receipt = await this.revokeAndTerminate(active);
-    if (this.active !== active) return;
+    if (this.active !== active) return { ok: true, status: "stopped" };
     if (receipt === undefined) {
       await this.enterRecoveryRequired(active);
       this.emit(runtimeExitEvent(active, this.nextSequence(active), code));
-      return;
+      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
     }
     if (!(await this.disposeAndReleaseAfterReap(active, receipt))) {
       await this.enterRecoveryRequired(active);
       this.emit(runtimeExitEvent(active, this.nextSequence(active), code));
-      return;
+      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
     }
     this.captureResult(active, exitResultStatus(code), boundedExitCode(code));
     active.status = "stopped";
     this.active = undefined;
     this.emit(runtimeExitEvent(active, this.nextSequence(active), code));
+    return { ok: true, status: "stopped" };
   }
 
   private async enterRecoveryRequired(active: ActiveRuntime): Promise<void> {
