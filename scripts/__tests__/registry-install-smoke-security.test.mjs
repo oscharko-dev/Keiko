@@ -27,6 +27,7 @@ import {
   startLocalRegistry,
   terminateProcessTree,
   vendoredDependencyNames,
+  vendoredDependencyRequirements,
   yarnChildEnv,
 } from "../installable-package-smoke.mjs";
 import { provenancePublishArgs } from "../lib/npm-publish-preflight.mjs";
@@ -381,6 +382,8 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(env.YARN_RC_FILENAME).toBeUndefined();
     expect(env.YARN_NODE_LINKER).toBe("node-modules");
     expect(env.YARN_ENABLE_TELEMETRY).toBe("false");
+    // Corepack must not fetch the package manager mid-install; the pinned tool is provisioned first.
+    expect(env.COREPACK_ENABLE_NETWORK).toBe("0");
   });
 
   // A stub's platform guards must reach the PACKUMENT, not just the tarball: Yarn decides
@@ -574,6 +577,33 @@ describe("installable package smoke optional-dependency coverage", () => {
       await registry.close();
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  // `prepack` runs `prune:package-native-optionals`, which deletes @napi-rs/canvas out of
+  // node_modules. Seeding after packRoot() would therefore stub the current host's native binding
+  // and let the Yarn arm pass without it, so main() must seed BEFORE packing.
+  it("seeds the vendored registry before packRoot prunes native optionals", () => {
+    const source = readFileSync(join(ROOT, "scripts", "installable-package-smoke.mjs"), "utf8");
+    const seedAt = source.indexOf("const vendored = seedVendoredRegistry(vendorTmp)");
+    const packAt = source.indexOf("const artifact = packRoot()");
+    expect(seedAt).toBeGreaterThan(-1);
+    expect(packAt).toBeGreaterThan(-1);
+    expect(seedAt).toBeLessThan(packAt);
+  });
+
+  it("keeps the required range when a package is also declared optional", () => {
+    const requirements = vendoredDependencyRequirements(
+      {
+        dependencies: { demo: "^2.0.0" },
+        optionalDependencies: { demo: "^1.0.0" },
+        bundleDependencies: [],
+      },
+      ROOT,
+    );
+    const demo = requirements.find((entry) => entry.name === "demo");
+    // The required range binds; inheriting the optional one could stub an incompatible version.
+    expect(demo?.optional).toBe(false);
+    expect(demo?.range).toBe("^2.0.0");
   });
 
   it("names a concrete stub version across the npm range forms it models", () => {

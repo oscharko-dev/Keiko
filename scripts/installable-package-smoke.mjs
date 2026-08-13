@@ -484,7 +484,9 @@ export function findInstalledCopies(name, modulesRoot, packagesRoot = repoRoot) 
     const manifest = readInstalledManifest(name, root);
     if (manifest === undefined || copies.has(manifest.version)) return;
     copies.set(manifest.version, {
-      name,
+      // An `npm:real@1.0.0` alias is installed under the alias directory, but Yarn requests the
+      // packument under the TARGET name from the manifest, so that is the key to serve it by.
+      name: typeof manifest.name === "string" && manifest.name.length > 0 ? manifest.name : name,
       version: manifest.version,
       directory: join(root, ...name.split("/")),
       manifest,
@@ -659,10 +661,21 @@ function packStubPackage(entry, destination) {
   }
 }
 
+function seedEntry(seeded, entry, tarballPath) {
+  const versions = seeded.get(entry.name) ?? new Map();
+  versions.set(entry.version, {
+    ...entry,
+    tarballPath,
+    integrity: tarballIntegrity(tarballPath),
+  });
+  seeded.set(entry.name, versions);
+}
+
 export function seedVendoredRegistry(
   destination,
   modulesRoot = join(repoRoot, "node_modules"),
   manifest = rootPackageJson,
+  seeded = new Map(),
 ) {
   const { packages, stubs, missing } = resolveVendorClosure(modulesRoot, manifest);
   if (missing.length > 0) {
@@ -671,28 +684,18 @@ export function seedVendoredRegistry(
         `run \`npm install\` before the installable-package smoke`,
     );
   }
-  const seeded = new Map();
-  for (const entry of packages) {
-    const tarballPath = packVendoredPackage(entry, destination);
-    const versions = seeded.get(entry.name) ?? new Map();
-    versions.set(entry.version, {
-      ...entry,
-      tarballPath,
-      integrity: tarballIntegrity(tarballPath),
-    });
-    seeded.set(entry.name, versions);
-  }
-  for (const entry of stubs) {
-    const versions = seeded.get(entry.name) ?? new Map();
-    if (versions.has(entry.version)) continue;
-    const tarballPath = packStubPackage(entry, destination);
-    versions.set(entry.version, {
-      ...entry,
-      tarballPath,
-      integrity: tarballIntegrity(tarballPath),
-      manifest: stubManifest(entry.name, entry.version),
-    });
-    seeded.set(entry.name, versions);
+  const pending = [
+    ...packages.map((entry) => ({ entry, pack: packVendoredPackage })),
+    ...stubs.map((entry) => ({
+      entry: { ...entry, manifest: stubManifest(entry.name, entry.version) },
+      pack: packStubPackage,
+    })),
+  ];
+  for (const { entry, pack } of pending) {
+    // An entry seeded by an earlier pass wins: it was captured before `prepack` pruned the tree.
+    if (seeded.get(entry.name)?.has(entry.version) !== true) {
+      seedEntry(seeded, entry, pack(entry, destination));
+    }
   }
   return seeded;
 }
@@ -895,7 +898,30 @@ export function yarnChildEnv(registryUrl, baseEnv = process.env) {
     YARN_NODE_LINKER: "node-modules",
     YARN_NPM_REGISTRY_SERVER: registryUrl,
     YARN_UNSAFE_HTTP_WHITELIST: "127.0.0.1",
+    // Corepack must not reach repo.yarnpkg.com during the install: the pinned tool is provisioned
+    // beforehand, so an outage there cannot fail a gate that claims to resolve offline (#3130).
+    COREPACK_ENABLE_NETWORK: "0",
   };
+}
+
+const PINNED_YARN = "yarn@4.9.1";
+
+/**
+ * Downloads the pinned Yarn into Corepack's cache if it is not there yet. This is the one network
+ * call the smoke may still make, and it is tool provisioning rather than dependency resolution:
+ * it happens before the install, its failure names Corepack explicitly, and the install itself
+ * then runs with `COREPACK_ENABLE_NETWORK=0`.
+ */
+function provisionPinnedYarn() {
+  const result = run("corepack", ["install", "--global", PINNED_YARN], {
+    timeout: NPM_INSTALL_TIMEOUT_MS,
+  });
+  if (result.status !== 0) {
+    fail(
+      `corepack could not provision ${PINNED_YARN} before the offline install: ` +
+        `${(result.stderr || result.stdout).trim()}`,
+    );
+  }
 }
 
 function writeYarnConfiguration(tmp, registryUrl) {
@@ -922,6 +948,7 @@ function writeYarnConfiguration(tmp, registryUrl) {
 }
 
 export async function installIntoWithYarn(tmp, artifact, vendored) {
+  provisionPinnedYarn();
   const registry = await startLocalRegistry(artifact, vendored);
   writeFileSync(
     join(tmp, "package.json"),
@@ -1429,10 +1456,15 @@ async function assertPackagedLifecycleCommands(tmp) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  const vendorTmp = mkdtempSync(join(tmpdir(), "keiko-yarn-vendor-seed-"));
+  // Seeded BEFORE packRoot(), because `prepack` runs `prune:package-native-optionals`, which
+  // deletes `@napi-rs/canvas` and its platform bindings out of `node_modules`. Seeding afterwards
+  // would find them gone, serve inert stubs in their place, and let the Yarn arm pass without the
+  // native binding it exists to prove (#3130).
+  const vendored = seedVendoredRegistry(vendorTmp);
   const artifact = packRoot();
   const tmp = mkdtempSync(join(tmpdir(), "keiko-install-smoke-"));
   const yarnTmp = mkdtempSync(join(tmpdir(), "keiko-yarn-install-smoke-"));
-  const vendorTmp = mkdtempSync(join(tmpdir(), "keiko-yarn-vendor-seed-"));
   try {
     installInto(tmp, artifact.tarballPath, options);
     assertCliExecutable(tmp);
@@ -1443,7 +1475,10 @@ async function main() {
     assertInstalledRootTypeSurface(tmp);
     await assertPackagedUi(tmp);
     await assertPackagedLifecycleCommands(tmp);
-    const vendored = seedVendoredRegistry(vendorTmp, undefined, artifact.manifest);
+    // Top up from the STAGED manifest: `promoteWorkspacePeers` can lift third-party peers into it
+    // that the repository manifest never named. Anything already captured above is kept as-is, so
+    // the pre-prune copies win.
+    seedVendoredRegistry(vendorTmp, undefined, artifact.manifest, vendored);
     await installIntoWithYarn(yarnTmp, artifact, vendored);
     assertCliExecutable(yarnTmp);
     assertVendoredPayload(yarnTmp);
