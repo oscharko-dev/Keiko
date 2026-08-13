@@ -23,6 +23,7 @@ import {
   resolveVendorClosure,
   assertRegistryOnlyDescriptors,
   assertHostBindingsAreReal,
+  hostBindingSuffixes,
   assertStagedRootDescriptors,
   persistentVendorSeedDir,
   seedThenPack,
@@ -731,7 +732,10 @@ describe("installable package smoke optional-dependency coverage", () => {
   // only ever legitimate for a FOREIGN platform, so a real parent whose host binding is stubbed
   // would let the Yarn arm pass without the binding while the ADR promises otherwise.
   it("refuses a stubbed binding for the running host", () => {
-    const hostBinding = `demo-native-${process.platform}-${process.arch}`;
+    // The real prebuilds carry an ABI suffix on Linux and Windows (`-linux-x64-gnu`,
+    // `-win32-x64-msvc`). An earlier revision of this test used a bare `-<platform>-<arch>` name,
+    // which exists on no CI lane and hid the fact that the guard matched nothing there.
+    const hostBinding = `demo-native${hostBindingSuffixes().at(-1)}`;
     const foreignBinding = "demo-native-aix-mips";
     const build = (bindingIsStub) =>
       new Map([
@@ -784,6 +788,18 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(() => assertHostBindingsAreReal(build(false))).not.toThrow();
     rejectProcessExit();
     expect(() => assertHostBindingsAreReal(build(true))).toThrow(/process\.exit\(1\)/u);
+  });
+
+  it("derives host binding suffixes that match the real prebuild names", () => {
+    const suffixes = hostBindingSuffixes();
+    // The bare form is always accepted; the ABI-qualified form is what Linux and Windows publish.
+    expect(suffixes).toContain(`-${process.platform}-${process.arch}`);
+    if (process.platform === "linux") {
+      expect(suffixes.some((s) => s.endsWith("-gnu") || s.endsWith("-musl"))).toBe(true);
+      // A glibc host must not accept the musl build as its own, and vice versa.
+      expect(new Set(suffixes).size).toBe(suffixes.length);
+    }
+    if (process.platform === "win32") expect(suffixes).toContain(`-win32-${process.arch}-msvc`);
   });
 
   it("recovers from a malformed seed index instead of failing the gate", () => {

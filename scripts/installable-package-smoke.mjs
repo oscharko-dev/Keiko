@@ -523,8 +523,14 @@ export function findInstalledCopies(name, modulesRoot, packagesRoot = repoRoot) 
   const copies = new Map();
   const record = (root) => {
     const manifest = readInstalledManifest(name, root);
-    if (manifest === undefined || copies.has(manifest.version)) return;
-    copies.set(manifest.version, {
+    if (manifest === undefined) return;
+    // Keyed by TARGET name and version: two parents may use one alias key for different targets at
+    // the same version (`codec: "npm:foo@1.0.0"` and `codec: "npm:bar@1.0.0"`), and npm installs
+    // both. A version-only key would discard whichever was scanned second, and Yarn would then ask
+    // for a packument this registry never seeded.
+    const copyKey = `${typeof manifest.name === "string" ? manifest.name : name}@${manifest.version}`;
+    if (copies.has(copyKey)) return;
+    copies.set(copyKey, {
       // An `npm:real@1.0.0` alias is installed under the alias directory, but Yarn requests the
       // packument under the TARGET name from the manifest, so that is the key to serve it by.
       name: typeof manifest.name === "string" && manifest.name.length > 0 ? manifest.name : name,
@@ -738,10 +744,10 @@ const isStubEntry = (entry) => entry?.manifest?.os?.[0] === STUB_INCOMPATIBLE_PL
  * binding while ADR-0021 D7 claims the running platform's binding is installed and proven — so the
  * gate says so instead of quietly shipping the weaker guarantee (#3130).
  */
-function stubbedHostBindings(seeded, entry, hostSuffix) {
+function stubbedHostBindings(seeded, entry, hostSuffixes) {
   if (isStubEntry(entry)) return [];
   return Object.keys(entry.manifest?.optionalDependencies ?? {})
-    .filter((optional) => optional.endsWith(hostSuffix))
+    .filter((optional) => hostSuffixes.some((suffix) => optional.endsWith(suffix)))
     .filter((optional) => {
       const candidates = [...(seeded.get(optional)?.values() ?? [])];
       return candidates.length > 0 && candidates.every(isStubEntry);
@@ -749,10 +755,23 @@ function stubbedHostBindings(seeded, entry, hostSuffix) {
     .map((optional) => `${entry.name}@${entry.version} -> ${optional}`);
 }
 
+/**
+ * Prebuilt binding names carry an ABI suffix on some platforms — `-linux-x64-gnu`, `-linux-x64-musl`,
+ * `-win32-x64-msvc` — so a bare `-<platform>-<arch>` suffix matches nothing on exactly the lanes CI
+ * runs. The set is derived from the same libc detection `supportedArchitectures()` uses, so a glibc
+ * host does not accept the musl build as its own.
+ */
+export function hostBindingSuffixes() {
+  const base = `-${process.platform}-${process.arch}`;
+  if (process.platform === "linux") return [base, `${base}-${linuxLibc()}`];
+  if (process.platform === "win32") return [base, `${base}-msvc`];
+  return [base];
+}
+
 export function assertHostBindingsAreReal(seeded) {
-  const hostSuffix = `-${process.platform}-${process.arch}`;
+  const hostSuffixes = hostBindingSuffixes();
   const offenders = [...seeded.values()].flatMap((versions) =>
-    [...versions.values()].flatMap((entry) => stubbedHostBindings(seeded, entry, hostSuffix)),
+    [...versions.values()].flatMap((entry) => stubbedHostBindings(seeded, entry, hostSuffixes)),
   );
   if (offenders.length > 0) {
     fail(
