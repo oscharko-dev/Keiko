@@ -241,11 +241,18 @@ function assertMemoryVersionsUnchanged(
   }
 }
 
-// PR-review follow-up (Codex thread 3771128741): a memory that becomes accepted between
-// the CLI's target-id snapshot and this swap would otherwise remain unembedded despite
-// --force reporting success. Read the current accepted-id set inside the transaction and
-// refuse the swap if any id is missing from the expectation. Absent expectation set skips
-// the check for backward callers.
+// PR-review follow-ups (Codex 3771128741 + 3771970107): the accepted-memory set must be
+// checked for equality against the expectation in BOTH directions — a newly-accepted memory
+// that is missing from the expectation, AND a previously-accepted memory that has since
+// been archived (or otherwise left the accepted set). One-way inclusion is not enough:
+// consider a memory M in the CLI's target snapshot that is archived after the target
+// snapshot but before its row is read, so the CLI captures its post-archive updated_at as
+// the expected memory-version. assertMemoryVersionsUnchanged would then observe the same
+// updated_at and pass, and a one-way accepted check would also pass (M is absent from BOTH
+// current rows and the expectation-covered slice of them). The swap would then attach a
+// new embedding to a memory that is no longer accepted. Enforcing set equality closes that
+// window: any status drift — addition or removal — aborts the force swap. Absent
+// expectation set skips the check for backward callers.
 function assertAcceptedSetUnchanged(
   db: DatabaseSync,
   expectedAcceptedIds: ReadonlySet<MemoryId> | undefined,
@@ -254,8 +261,17 @@ function assertAcceptedSetUnchanged(
   const rows = db.prepare("SELECT id FROM memories WHERE status = 'accepted'").all() as {
     readonly id: string;
   }[];
-  for (const row of rows) {
-    if (!expectedAcceptedIds.has(row.id as MemoryId)) {
+  const currentAcceptedIds = new Set<MemoryId>(rows.map((row) => row.id as MemoryId));
+  for (const currentId of currentAcceptedIds) {
+    if (!expectedAcceptedIds.has(currentId)) {
+      throw new MemoryStorageError(
+        "precondition-failed",
+        "Accepted memory set changed during --force staging; rerun.",
+      );
+    }
+  }
+  for (const expectedId of expectedAcceptedIds) {
+    if (!currentAcceptedIds.has(expectedId)) {
       throw new MemoryStorageError(
         "precondition-failed",
         "Accepted memory set changed during --force staging; rerun.",
