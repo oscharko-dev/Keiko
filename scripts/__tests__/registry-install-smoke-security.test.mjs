@@ -20,6 +20,8 @@ import {
   packRoot,
   minimumSatisfyingVersion,
   resolveVendorClosure,
+  assertRegistryOnlyDescriptors,
+  persistentVendorSeedDir,
   seedThenPack,
   seedVendoredRegistry,
   stubManifest,
@@ -574,6 +576,63 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
+  it("rejects a seeded dependency that would resolve outside the registry", () => {
+    const offending = new Map([
+      [
+        "demo",
+        new Map([
+          [
+            "1.0.0",
+            {
+              name: "demo",
+              version: "1.0.0",
+              manifest: {
+                name: "demo",
+                version: "1.0.0",
+                dependencies: { sneaky: "git+https://example.invalid/pkg.git" },
+              },
+            },
+          ],
+        ]),
+      ],
+    ]);
+    rejectProcessExit();
+    // Yarn resolves such a descriptor directly, never through npmRegistryServer, so the install
+    // would leave the hermetic boundary without ever hitting a fail-closed 404.
+    expect(() => assertRegistryOnlyDescriptors(offending)).toThrow(/process\.exit\(1\)/u);
+
+    vi.restoreAllMocks();
+    const clean = new Map([
+      [
+        "demo",
+        new Map([
+          [
+            "1.0.0",
+            { name: "demo", version: "1.0.0", manifest: { dependencies: { ok: "^1.0.0" } } },
+          ],
+        ]),
+      ],
+    ]);
+    expect(() => assertRegistryOnlyDescriptors(clean)).not.toThrow();
+  });
+
+  it("keys the vendor seed directory to the lockfile so a second run reuses it", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-seed-key-test-"));
+    try {
+      const lockA = join(root, "a.json");
+      const lockB = join(root, "b.json");
+      writeFileSync(lockA, '{"lockfileVersion":3}', "utf8");
+      writeFileSync(lockB, '{"lockfileVersion":4}', "utf8");
+      // CI runs this script twice against one checkout; the second run must find the first run's
+      // pre-prune artifacts rather than re-deriving them from a tree prepack has since pruned.
+      expect(persistentVendorSeedDir(lockA)).toBe(persistentVendorSeedDir(lockA));
+      expect(persistentVendorSeedDir(lockA)).not.toBe(persistentVendorSeedDir(lockB));
+      expect(existsSync(persistentVendorSeedDir(lockA))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("fails the request instead of crashing when a tarball cannot be read", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-stream-error-test-"));
     const artifact = localRegistryArtifact(root);
@@ -714,6 +773,13 @@ describe("installable package smoke optional-dependency coverage", () => {
     // serving a stub that does not satisfy the range would fail later and far less legibly.
     expect(minimumSatisfyingVersion("npm:other@^1.0.0")).toBeUndefined();
     expect(minimumSatisfyingVersion("github:owner/repo")).toBeUndefined();
+    // A strict comparator excludes its own boundary, so no stub version is derivable.
+    expect(minimumSatisfyingVersion(">1.2.3")).toBeUndefined();
+    expect(minimumSatisfyingVersion("<2.0.0")).toBeUndefined();
+    // `>=` does include the boundary.
+    expect(minimumSatisfyingVersion(">=1.2.3")).toBe("1.2.3");
+    // An exact prerelease is satisfied only by itself, so the suffix must survive.
+    expect(minimumSatisfyingVersion("1.2.3-beta.1")).toBe("1.2.3-beta.1");
   });
 
   // An unseeded .tgz used to fall through to the root artifact with HTTP 200, so a request for a

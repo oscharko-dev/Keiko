@@ -363,10 +363,11 @@ function workspaceThirdPartyRequirements(workspace, packagesRoot) {
   );
   if (!existsSync(manifestPath)) return [];
   const workspaceManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  return ["dependencies", "optionalDependencies"].flatMap((group) =>
-    Object.entries(workspaceManifest[group] ?? {})
-      .filter(([name]) => !name.startsWith("@oscharko-dev/"))
-      .map(([name, range]) => ({ name, range, optional: group === "optionalDependencies" })),
+  // Same npm precedence as any other manifest: an optional entry overrides a same-named required
+  // one within this file. Flattening both groups separately would emit a required record for a
+  // name npm treats as optional.
+  return manifestRequirements(workspaceManifest).filter(
+    ({ name }) => !name.startsWith("@oscharko-dev/"),
   );
 }
 
@@ -381,15 +382,25 @@ function workspaceThirdPartyRequirements(workspace, packagesRoot) {
 export function minimumSatisfyingVersion(range) {
   const trimmed = (range ?? "").trim();
   if (trimmed === "" || trimmed === "*" || trimmed === "x" || trimmed === "latest") return "0.0.0";
+  // A strict `>` or `<` excludes the boundary version, so the lowest member of the range is not
+  // derivable this way. Those return undefined and the absence becomes fatal, rather than serving
+  // a stub the descriptor itself rejects.
+  if (/^[<>]\s*[^=]/u.test(trimmed)) return undefined;
   // Anchored, with disjoint leading operators and digits, so there is nothing to backtrack over.
-  const exact = /^[\s^~>=v]*(\d+)\.(\d+)\.(\d+)/u.exec(trimmed);
-  if (exact !== null) return `${exact[1]}.${exact[2]}.${exact[3]}`;
+  // The prerelease suffix is preserved: an exact `1.2.3-beta.1` is satisfied only by itself, so
+  // dropping it would again produce a stub the range rejects.
+  const exact = /^[\s^~>=v]*(\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?)/u.exec(trimmed);
+  if (exact !== null) return exact[1];
   // x-ranges: 1.x, 1.2.x, 1.*
+  return partialRangeVersion(trimmed);
+}
+
+/** x-ranges (`1.x`, `1.2.x`, `1.*`) and a bare major, each resolving to the range's lowest member. */
+function partialRangeVersion(trimmed) {
   const partial = /^[\s^~>=v]*(\d+)(?:\.(\d+))?\.[x*]/u.exec(trimmed);
   if (partial !== null) return `${partial[1]}.${partial[2] ?? "0"}.0`;
   const majorOnly = /^[\s^~>=v]*(\d+)$/u.exec(trimmed);
-  if (majorOnly !== null) return `${majorOnly[1]}.0.0`;
-  return undefined;
+  return majorOnly === null ? undefined : `${majorOnly[1]}.0.0`;
 }
 
 /**
@@ -517,7 +528,14 @@ export function findInstalledCopies(name, modulesRoot, packagesRoot = repoRoot) 
  * third conflicting version under `node_modules/<pkg>/node_modules`. All three are searched, so a
  * version this repository genuinely pins can never be missing from the served packument.
  */
+const moduleRootCache = new Map();
+
 function installedModuleRoots(modulesRoot, packagesRoot) {
+  // The root set cannot change during a run, and this walk is otherwise repeated for every visited
+  // package name, multiplying syscalls in a required gate.
+  const cacheKey = `${modulesRoot}\u0000${packagesRoot}`;
+  const cached = moduleRootCache.get(cacheKey);
+  if (cached !== undefined) return cached;
   const roots = [modulesRoot];
   const workspacesDir = join(packagesRoot, "packages");
   if (existsSync(workspacesDir)) {
@@ -527,7 +545,9 @@ function installedModuleRoots(modulesRoot, packagesRoot) {
   }
   // Every root is scanned recursively, workspace roots included: npm nests a conflict under a
   // workspace exactly as it does under the hoisted tree.
-  return [...roots, ...roots.flatMap((root) => nestedModuleRoots(root))];
+  const all = [...roots, ...roots.flatMap((root) => nestedModuleRoots(root))];
+  moduleRootCache.set(cacheKey, all);
+  return all;
 }
 
 // npm resolves a conflict below an already nested dependency too
@@ -791,6 +811,34 @@ function compareVersions(left, right) {
   return comparePrereleaseIdentifiers(a.prerelease, b.prerelease);
 }
 
+const NON_REGISTRY_PROTOCOL =
+  /^(?:git|git\+[a-z]+|https?|file|link|portal|workspace|github|bitbucket|gitlab):/iu;
+
+/**
+ * Yarn resolves a `git+https:`, tarball-URL, or `file:` descriptor directly instead of through
+ * `npmRegistryServer`, so such an edge would reach an external host or an ambient path without
+ * ever touching this registry's fail-closed 404s. The seed is rejected up front rather than
+ * letting the install quietly leave the hermetic boundary (#3130).
+ */
+function manifestProtocolOffenders(name, entry) {
+  return ["dependencies", "optionalDependencies", "peerDependencies"]
+    .flatMap((group) => Object.entries(entry.manifest?.[group] ?? {}))
+    .filter(([, range]) => typeof range === "string" && NON_REGISTRY_PROTOCOL.test(range))
+    .map(([dependency, range]) => `${name}@${entry.version} -> ${dependency}@${range}`);
+}
+
+export function assertRegistryOnlyDescriptors(seeded) {
+  const offenders = [...seeded].flatMap(([name, versions]) =>
+    [...versions.values()].flatMap((entry) => manifestProtocolOffenders(name, entry)),
+  );
+  if (offenders.length > 0) {
+    fail(
+      `vendored closure declares non-registry dependency protocols, which would resolve outside ` +
+        `the offline registry: ${offenders.join(", ")}`,
+    );
+  }
+}
+
 function vendoredPackument(name, versions, registryUrl) {
   const sorted = [...versions.values()].sort((left, right) =>
     compareVersions(left.version, right.version),
@@ -846,9 +894,9 @@ function localRegistryHandler(artifact, tarballBytes, registryUrl, requests, ven
       stream.pipe(response);
       return;
     }
-    // Both sides are normalized. npm forbids uppercase in new package names, so this is symmetry
-    // rather than a live defect — but a one-sided comparison is the kind that rots quietly.
-    if (requested.toLowerCase() === rootPackageJson.name.toLowerCase()) {
+    // Exact match only. A registry should answer for the name it was asked for and nothing else;
+    // case-folding here would serve the root packument under a name npm would treat as different.
+    if (requested === rootPackageJson.name) {
       response.writeHead(200, { "content-type": "application/vnd.npm.install-v1+json" });
       response.end(JSON.stringify(packument));
       return;
@@ -983,6 +1031,7 @@ function writeYarnConfiguration(tmp, registryUrl) {
 }
 
 export async function installIntoWithYarn(tmp, artifact, vendored) {
+  assertRegistryOnlyDescriptors(vendored ?? new Map());
   provisionPinnedYarn();
   const registry = await startLocalRegistry(artifact, vendored);
   writeFileSync(
@@ -991,7 +1040,7 @@ export async function installIntoWithYarn(tmp, artifact, vendored) {
       {
         private: true,
         type: "module",
-        packageManager: "yarn@4.9.1",
+        packageManager: PINNED_YARN,
         dependencies: { [rootPackageJson.name]: rootVersion },
       },
       null,
@@ -1499,6 +1548,25 @@ async function assertPackagedLifecycleCommands(tmp) {
  * Dependency-injected so the ordering is observable in a test: a pin comparing source positions
  * would stay green if a refactor moved the effective call and left the statement text in place.
  */
+/**
+ * CI runs this script twice — `smoke:install` then `smoke:install:optional` — as separate
+ * processes against one checkout. The first run's `prepack` permanently prunes `@napi-rs/canvas`
+ * and its bindings out of `node_modules`, so a second run seeding from that tree would substitute
+ * inert stubs and let the optional lane pass without the native binding it exists to prove.
+ *
+ * The seed directory is therefore stable and keyed by the lockfile, so the second invocation
+ * reuses the pre-prune artifacts the first one packed instead of re-deriving them from a mutated
+ * tree (#3130).
+ */
+export function persistentVendorSeedDir(lockfilePath = join(repoRoot, "package-lock.json")) {
+  const key = existsSync(lockfilePath)
+    ? createHash("sha256").update(readFileSync(lockfilePath)).digest("hex").slice(0, 16)
+    : "no-lockfile";
+  const dir = join(tmpdir(), `keiko-yarn-vendor-seed-${key}`);
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 export function seedThenPack(vendorTmp, deps) {
   const seed = deps?.seedVendoredRegistry ?? seedVendoredRegistry;
   const pack = deps?.packRoot ?? packRoot;
@@ -1509,11 +1577,16 @@ export function seedThenPack(vendorTmp, deps) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const vendorTmp = mkdtempSync(join(tmpdir(), "keiko-yarn-vendor-seed-"));
-  const { vendored, artifact } = seedThenPack(vendorTmp);
+  // Stable and lockfile-keyed, so the second CI invocation reuses the pre-prune artifacts.
+  const vendorTmp = persistentVendorSeedDir();
   const tmp = mkdtempSync(join(tmpdir(), "keiko-install-smoke-"));
   const yarnTmp = mkdtempSync(join(tmpdir(), "keiko-yarn-install-smoke-"));
+  // The try starts before seeding and packing so a failure in either still cleans up.
+  let artifact;
   try {
+    const seeded = seedThenPack(vendorTmp);
+    const { vendored } = seeded;
+    artifact = seeded.artifact;
     installInto(tmp, artifact.tarballPath, options);
     assertCliExecutable(tmp);
     assertVendoredPayload(tmp);
@@ -1540,8 +1613,9 @@ async function main() {
   } finally {
     rmSync(tmp, { recursive: true, force: true });
     rmSync(yarnTmp, { recursive: true, force: true });
-    rmSync(vendorTmp, { recursive: true, force: true });
-    artifact.cleanup();
+    // vendorTmp is deliberately NOT removed: it is the lockfile-keyed cache the next invocation
+    // reuses, and it lives under the OS temp directory.
+    artifact?.cleanup();
   }
 }
 
