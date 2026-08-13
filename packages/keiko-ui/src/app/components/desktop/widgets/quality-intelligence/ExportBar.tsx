@@ -128,11 +128,14 @@ async function runQiExport(ctx: RunExportContext): Promise<void> {
     ctx.setOmittedCount(res.omittedByQualityGate ?? 0);
     return;
   }
+  // PR-review follow-up (Codex thread 3771387243): publish the omission count BEFORE the
+  // download so the operator sees the alert in the same React commit the "downloaded"
+  // message appears in, not after the browser has already saved the partial artifact.
+  ctx.setOmittedCount(res.omittedByQualityGate ?? 0);
   // Binary formats (PDF / ZIP) arrive base64-encoded; forward the encoding so the Blob is built
   // from the DECODED bytes, not the base64 text. Omitting it corrupts the downloaded file.
   triggerDownload(res.filename, res.contentType, res.body, res.encoding);
   ctx.setDownloaded(res.filename);
-  ctx.setOmittedCount(res.omittedByQualityGate ?? 0);
 }
 
 // Nested ternary (busy -> isTms -> label) extracted to a named predicate-style helper.

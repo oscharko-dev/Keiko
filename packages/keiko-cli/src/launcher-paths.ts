@@ -20,10 +20,16 @@ import { dirname, join, resolve, sep } from "node:path";
 import { LauncherError } from "./launcher-platforms.js";
 
 function realpathOrResolve(p: string): string {
+  // PR-review follow-up (Codex thread 3771387240): only ENOENT falls back to the textual
+  // resolve — every other errno (EACCES / EIO / ELOOP / EBUSY) propagates so a symlink
+  // whose target is temporarily inaccessible does not silently pass containment as its
+  // unresolved textual form. The caller already handles LauncherError by refusing the
+  // operation; a raw system error here is exactly that signal.
   try {
     return realpathSync(p);
-  } catch {
-    return resolve(p);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return resolve(p);
+    throw error;
   }
 }
 

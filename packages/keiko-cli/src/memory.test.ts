@@ -412,13 +412,13 @@ describe("runMemoryCli reembed", () => {
     expect(vault.getEmbedding(mid("a"))).toBeUndefined();
   });
 
-  it("counts an embed failure (null result) without throwing", async () => {
+  it("exits non-zero when an embed call fails during backfill (Codex thread 3771387251)", async () => {
     const vault = makeVault();
     insert(vault, { id: "a", status: "accepted" });
     const cap = capture();
     const failingEmbedder = (): Promise<null> => Promise.resolve(null);
     const code = await runMemoryCli(["reembed"], cap.io, {}, { vault, embedText: failingEmbedder });
-    expect(code).toBe(0);
+    expect(code).toBe(1);
     expect(cap.out()).toContain("failed:   1");
     expect(vault.getEmbedding(mid("a"))).toBeUndefined();
   });

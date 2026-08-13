@@ -404,7 +404,10 @@ async function reembed(
     }
     const counts = await backfillEmbeddings(vault, embed, parseLimit(args), false);
     io.out(renderReembedReport(counts));
-    return 0;
+    // PR-review follow-up (Codex thread 3771387251): non-force backfill also exits
+    // non-zero when any provider call failed. Prior version always returned 0, letting
+    // automation misread a run where every requested embedding failed as success.
+    return counts.failed > 0 ? 1 : 0;
   } finally {
     if (deps.vault === undefined) vault.close();
   }
