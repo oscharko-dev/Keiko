@@ -344,27 +344,252 @@ function registryPackument(registryUrl, artifact, tarballBytes) {
   };
 }
 
-function localRegistryHandler(artifact, tarballBytes, registryUrl, requests) {
+// The published root declares 23 bundled private workspaces plus a handful of genuine third-party
+// runtime dependencies. Everything the Yarn consumer resolves therefore has to come from somewhere,
+// and before #3130 only the `oscharko-dev` scope was pointed at this local registry — the rest was
+// resolved live from the public npm registry, on every run. That made a required gate depend on a
+// stranger's publish timing: on 2026-08-13 `@napi-rs/canvas` 1.0.6 was published 22 minutes before
+// its own `linux-x64-musl` platform package, and every Keiko pull request went red in that window.
+// The closure below is seeded from THIS repository's `node_modules`, i.e. exactly the versions the
+// committed `package-lock.json` already pins, so the smoke answers the Yarn-compatibility question
+// offline and deterministically.
+function workspaceThirdPartyNames(workspace, packagesRoot) {
+  const manifestPath = join(
+    packagesRoot,
+    "packages",
+    workspace.replace(/^@oscharko-dev\//u, ""),
+    "package.json",
+  );
+  if (!existsSync(manifestPath)) return [];
+  const workspaceManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  return ["dependencies", "optionalDependencies"]
+    .flatMap((group) => Object.keys(workspaceManifest[group] ?? {}))
+    .filter((name) => !name.startsWith("@oscharko-dev/"));
+}
+
+export function vendoredDependencyNames(manifest = rootPackageJson, packagesRoot = repoRoot) {
+  const bundled = manifest.bundleDependencies ?? manifest.bundledDependencies ?? [];
+  const bundledSet = new Set(bundled);
+  const names = new Set(
+    Object.keys(manifest.dependencies ?? {}).filter((name) => !bundledSet.has(name)),
+  );
+  // A bundled workspace ships inside the tarball, but its own third-party dependencies do not:
+  // the consumer's package manager still resolves those from a registry. `keiko-local-knowledge`
+  // declaring `@napi-rs/canvas` is exactly how the 2026-08-13 upstream publish race reached a
+  // required Keiko gate, so the closure has to include them.
+  for (const workspace of bundled) {
+    for (const name of workspaceThirdPartyNames(workspace, packagesRoot)) names.add(name);
+  }
+  return [...names].sort(compareStrings);
+}
+
+/**
+ * Yarn resolves every `optionalDependencies` entry unless the supported architectures are pinned,
+ * which for a package like `@napi-rs/canvas` means all eleven prebuilt platform packages. Only the
+ * running platform's variant is installed here, so narrowing this to the current host keeps the
+ * offline closure both small and complete. `glibcVersionRuntime` is absent on musl builds.
+ */
+function linuxLibc() {
+  if (process.platform !== "linux") return undefined;
+  const glibc = process.report?.getReport?.()?.header?.glibcVersionRuntime;
+  return glibc === undefined ? "musl" : "glibc";
+}
+
+export function supportedArchitectures() {
+  const libc = linuxLibc();
+  return {
+    os: [process.platform],
+    cpu: [process.arch],
+    ...(libc === undefined ? {} : { libc: [libc] }),
+  };
+}
+
+function compareStrings(left, right) {
+  if (left < right) return -1;
+  return left > right ? 1 : 0;
+}
+
+function readInstalledManifest(name, modulesRoot) {
+  const manifestPath = join(modulesRoot, ...name.split("/"), "package.json");
+  if (!existsSync(manifestPath)) return undefined;
+  return JSON.parse(readFileSync(manifestPath, "utf8"));
+}
+
+/**
+ * npm hoists what it can and nests the rest, so one dependency name can be installed at several
+ * versions across the workspace tree (`@napi-rs/canvas` is hoisted at 1.0.0 while
+ * `keiko-local-knowledge` carries 1.0.2 for its own `^1.0.2` range). The offline registry has to
+ * offer every installed copy, or Yarn resolves a range this repository genuinely satisfies against
+ * a packument that happens to omit it.
+ */
+export function findInstalledCopies(name, modulesRoot, packagesRoot = repoRoot) {
+  const roots = [modulesRoot];
+  const workspacesDir = join(packagesRoot, "packages");
+  if (existsSync(workspacesDir)) {
+    for (const workspace of readdirSync(workspacesDir)) {
+      roots.push(join(workspacesDir, workspace, "node_modules"));
+    }
+  }
+  const copies = new Map();
+  for (const root of roots) {
+    const manifest = readInstalledManifest(name, root);
+    if (manifest === undefined || copies.has(manifest.version)) continue;
+    copies.set(manifest.version, {
+      name,
+      version: manifest.version,
+      directory: join(root, ...name.split("/")),
+      manifest,
+    });
+  }
+  return [...copies.values()];
+}
+
+/**
+ * Walks the third-party dependency closure the Yarn consumer has to resolve — the root's own
+ * non-bundled dependencies plus those declared by the bundled workspaces — against this
+ * repository's installed tree, i.e. the versions `package-lock.json` already pins. A dependency
+ * that is only reachable as an optional entry and is not installed here is not an error: Yarn is
+ * told not to ask for it via `supportedArchitectures`.
+ */
+export function resolveVendorClosure(modulesRoot, manifest = rootPackageJson) {
+  const resolved = new Map();
+  const missing = [];
+  const optional = new Set();
+  const visit = (name) => {
+    if (resolved.has(name) || missing.includes(name)) return;
+    const copies = findInstalledCopies(name, modulesRoot);
+    if (copies.length === 0) {
+      missing.push(name);
+      return;
+    }
+    resolved.set(name, copies);
+    for (const copy of copies) {
+      for (const dependency of Object.keys(copy.manifest.dependencies ?? {})) visit(dependency);
+      // Optional entries are followed only when this repository actually installs them. The
+      // registry strips `optionalDependencies` from every manifest it serves (see
+      // `vendoredPackument`), so Yarn never asks for the foreign-platform prebuilds that made this
+      // gate depend on an upstream publish race in the first place.
+      for (const dependency of Object.keys(copy.manifest.optionalDependencies ?? {})) {
+        optional.add(dependency);
+        if (findInstalledCopies(dependency, modulesRoot).length > 0) visit(dependency);
+      }
+    }
+  };
+  for (const name of vendoredDependencyNames(manifest)) visit(name);
+  return {
+    packages: [...resolved.values()].flat(),
+    missing: missing.filter((name) => !optional.has(name)),
+  };
+}
+
+function packVendoredPackage(entry, destination) {
+  const result = run(
+    "npm",
+    ["pack", entry.directory, "--pack-destination", destination, "--ignore-scripts"],
+    { cwd: repoRoot, timeout: NPM_INSTALL_TIMEOUT_MS },
+  );
+  if (result.status !== 0) {
+    fail(`npm pack of vendored dependency ${entry.name} exited ${String(result.status)}`);
+  }
+  const produced = result.stdout.trim().split(/\r?\n/u).at(-1);
+  if (produced === undefined || produced.length === 0) {
+    fail(`npm pack of vendored dependency ${entry.name} printed no tarball name`);
+  }
+  return join(destination, produced);
+}
+
+export function seedVendoredRegistry(destination, modulesRoot = join(repoRoot, "node_modules")) {
+  const { packages, missing } = resolveVendorClosure(modulesRoot);
+  if (missing.length > 0) {
+    fail(
+      `vendored dependency closure is not installed: ${missing.join(", ")} — ` +
+        `run \`npm install\` before the installable-package smoke`,
+    );
+  }
+  const seeded = new Map();
+  for (const entry of packages) {
+    const tarballPath = packVendoredPackage(entry, destination);
+    const versions = seeded.get(entry.name) ?? new Map();
+    versions.set(entry.version, { ...entry, tarballBytes: readFileSync(tarballPath) });
+    seeded.set(entry.name, versions);
+  }
+  return seeded;
+}
+
+function tarballFileName(name, version) {
+  return `${name.split("/").at(-1)}-${version}.tgz`;
+}
+
+function vendoredPackument(name, versions, registryUrl) {
+  const sorted = [...versions.values()].sort((left, right) =>
+    compareStrings(left.version, right.version),
+  );
+  const entries = {};
+  for (const entry of sorted) {
+    // `optionalDependencies` are stripped so the Yarn arm resolves exactly what the npm arm
+    // installs with `--omit=optional`. Without this the consumer resolves every prebuilt platform
+    // package of a dependency like `@napi-rs/canvas` — eleven of them — and a single upstream
+    // publish gap in any one of them fails a required Keiko gate (#3130).
+    const manifest = Object.fromEntries(
+      Object.entries(entry.manifest).filter(([key]) => key !== "optionalDependencies"),
+    );
+    entries[entry.version] = {
+      ...manifest,
+      dist: {
+        integrity: `sha512-${createHash("sha512").update(entry.tarballBytes).digest("base64")}`,
+        tarball: `${registryUrl}/${name}/-/${tarballFileName(name, entry.version)}`,
+      },
+    };
+  }
+  return {
+    name,
+    "dist-tags": { latest: sorted.at(-1)?.version },
+    versions: entries,
+  };
+}
+
+function localRegistryHandler(artifact, tarballBytes, registryUrl, requests, vendored) {
   const packument = registryPackument(registryUrl, artifact, tarballBytes);
+  const seeded = vendored ?? new Map();
   return (request, response) => {
     const pathname = new URL(request.url ?? "/", registryUrl).pathname;
     requests.push(pathname);
+    const requested = decodeURIComponent(pathname.slice(1));
     if (pathname.endsWith(".tgz")) {
+      for (const [name, versions] of seeded) {
+        if (!requested.startsWith(`${name}/-/`)) continue;
+        const wanted = [...versions.values()].find(
+          (entry) => requested === `${name}/-/${tarballFileName(name, entry.version)}`,
+        );
+        if (wanted === undefined) break;
+        response.writeHead(200, { "content-type": "application/octet-stream" });
+        response.end(wanted.tarballBytes);
+        return;
+      }
       response.writeHead(200, { "content-type": "application/octet-stream" });
       response.end(tarballBytes);
       return;
     }
-    if (decodeURIComponent(pathname.slice(1)).toLowerCase() === rootPackageJson.name) {
+    if (requested.toLowerCase() === rootPackageJson.name) {
       response.writeHead(200, { "content-type": "application/vnd.npm.install-v1+json" });
       response.end(JSON.stringify(packument));
       return;
     }
+    const vendoredVersions = seeded.get(requested);
+    if (vendoredVersions !== undefined) {
+      response.writeHead(200, { "content-type": "application/vnd.npm.install-v1+json" });
+      response.end(JSON.stringify(vendoredPackument(requested, vendoredVersions, registryUrl)));
+      return;
+    }
+    // A 404 here is the hermeticity guarantee, not an oversight: the install may only see packages
+    // this repository already pins. An unexpected request fails the gate loudly instead of silently
+    // reaching the public registry (#3130).
     response.writeHead(404, { "content-type": "application/json" });
     response.end(JSON.stringify({ error: "not_found" }));
   };
 }
 
-export async function startLocalRegistry(artifact) {
+export async function startLocalRegistry(artifact, vendored) {
   const tarballBytes = readFileSync(artifact.tarballPath);
   const requests = [];
   let handler;
@@ -383,7 +608,7 @@ export async function startLocalRegistry(artifact) {
     throw new Error("local package registry did not bind a TCP port");
   }
   const registryUrl = `http://127.0.0.1:${String(address.port)}`;
-  handler = localRegistryHandler(artifact, tarballBytes, registryUrl, requests);
+  handler = localRegistryHandler(artifact, tarballBytes, registryUrl, requests, vendored);
   try {
     const health = await globalThis.fetch(
       `${registryUrl}/${encodeURIComponent(rootPackageJson.name)}`,
@@ -404,8 +629,30 @@ export async function startLocalRegistry(artifact) {
   };
 }
 
-export async function installIntoWithYarn(tmp, artifact) {
-  const registry = await startLocalRegistry(artifact);
+function writeYarnConfiguration(tmp, registryUrl) {
+  const architectureLines = Object.entries(supportedArchitectures()).flatMap(([key, values]) => [
+    `  ${key}:`,
+    ...values.map((value) => `    - ${value}`),
+  ]);
+  const lines = [
+    "nodeLinker: node-modules",
+    "enableGlobalCache: false",
+    "globalFolder: .yarn/global",
+    "cacheFolder: .yarn/cache",
+    `npmRegistryServer: ${registryUrl}`,
+    "npmScopes:",
+    "  oscharko-dev:",
+    `    npmRegistryServer: ${registryUrl}`,
+    "supportedArchitectures:",
+    ...architectureLines,
+    "unsafeHttpWhitelist:",
+    "  - 127.0.0.1",
+  ];
+  writeFileSync(join(tmp, ".yarnrc.yml"), `${lines.join("\n")}\n`);
+}
+
+export async function installIntoWithYarn(tmp, artifact, vendored) {
+  const registry = await startLocalRegistry(artifact, vendored);
   writeFileSync(
     join(tmp, "package.json"),
     `${JSON.stringify(
@@ -421,10 +668,12 @@ export async function installIntoWithYarn(tmp, artifact) {
     "utf8",
   );
   rmSync(join(tmp, "yarn.lock"), { force: true });
-  writeFileSync(
-    join(tmp, ".yarnrc.yml"),
-    `nodeLinker: node-modules\nenableGlobalCache: false\nglobalFolder: .yarn/global\ncacheFolder: .yarn/cache\nnpmScopes:\n  oscharko-dev:\n    npmRegistryServer: ${registry.registryUrl}\nunsafeHttpWhitelist:\n  - 127.0.0.1\n`,
-  );
+  // `npmRegistryServer` is set GLOBALLY, not only for the `oscharko-dev` scope (#3130): every
+  // package this install resolves must come from the local registry, which serves the packed root
+  // plus the repository-pinned third-party closure and 404s everything else. Scoping it made the
+  // gate depend on live npm for the transitive graph, so an unrelated upstream publish could — and
+  // did — turn every Keiko pull request red.
+  writeYarnConfiguration(tmp, registry.registryUrl);
   try {
     const result = await runAsync(
       "corepack",
@@ -913,6 +1162,7 @@ async function main() {
   const artifact = packRoot();
   const tmp = mkdtempSync(join(tmpdir(), "keiko-install-smoke-"));
   const yarnTmp = mkdtempSync(join(tmpdir(), "keiko-yarn-install-smoke-"));
+  const vendorTmp = mkdtempSync(join(tmpdir(), "keiko-yarn-vendor-seed-"));
   try {
     installInto(tmp, artifact.tarballPath, options);
     assertCliExecutable(tmp);
@@ -923,7 +1173,8 @@ async function main() {
     assertInstalledRootTypeSurface(tmp);
     await assertPackagedUi(tmp);
     await assertPackagedLifecycleCommands(tmp);
-    await installIntoWithYarn(yarnTmp, artifact);
+    const vendored = seedVendoredRegistry(vendorTmp);
+    await installIntoWithYarn(yarnTmp, artifact, vendored);
     assertCliExecutable(yarnTmp);
     assertVendoredPayload(yarnTmp);
     assertProductiveTypeScriptRuntime(yarnTmp);
@@ -936,6 +1187,7 @@ async function main() {
   } finally {
     rmSync(tmp, { recursive: true, force: true });
     rmSync(yarnTmp, { recursive: true, force: true });
+    rmSync(vendorTmp, { recursive: true, force: true });
     artifact.cleanup();
   }
 }

@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -17,9 +18,11 @@ import {
   assertVendoredPayload,
   installIntoWithYarn,
   packRoot,
+  resolveVendorClosure,
   runAsync,
   startLocalRegistry,
   terminateProcessTree,
+  vendoredDependencyNames,
 } from "../installable-package-smoke.mjs";
 import { provenancePublishArgs } from "../lib/npm-publish-preflight.mjs";
 
@@ -244,6 +247,90 @@ describe("installable package smoke optional-dependency coverage", () => {
       process.env.PATH = previousPath;
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  // #3130: before this pin the Yarn arm pointed only the `oscharko-dev` scope at the local
+  // registry and installed with a deleted lockfile, so the whole transitive graph resolved live
+  // from public npm. A 22-minute partial publish of `@napi-rs/canvas` 1.0.6 turned every Keiko
+  // pull request red on 2026-08-13. The install must now be answerable entirely offline.
+  it("routes every package through the local registry, not only the oscharko-dev scope", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-yarn-hermetic-test-"));
+    const binDir = join(root, "bin");
+    const projectDir = join(root, "project");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(projectDir, { recursive: true });
+    const artifact = localRegistryArtifact(root);
+    writeExecutable(join(binDir, "corepack"), "process.exit(0);");
+    const previousPath = process.env.PATH;
+    process.env.PATH = `${binDir}${delimiter}${previousPath}`;
+    try {
+      await installIntoWithYarn(projectDir, artifact, new Map());
+      const rc = readFileSync(join(projectDir, ".yarnrc.yml"), "utf8");
+      const globalRegistry = /^npmRegistryServer: (http:\/\/127\.0\.0\.1:\d+)$/mu.exec(rc);
+      expect(globalRegistry).not.toBeNull();
+      // The scoped entry must point at the same loopback registry, so no resolution path is left
+      // pointing at the public registry.
+      expect(rc).toContain(`    npmRegistryServer: ${globalRegistry?.[1] ?? ""}`);
+    } finally {
+      process.env.PATH = previousPath;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("serves the repository-pinned third-party closure and 404s anything unseeded", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-yarn-closure-test-"));
+    const artifact = localRegistryArtifact(root);
+    const seeded = new Map([
+      [
+        "yauzl",
+        new Map([
+          [
+            "3.4.0",
+            {
+              name: "yauzl",
+              version: "3.4.0",
+              tarballBytes: Buffer.from("yauzl fixture"),
+              manifest: {
+                name: "yauzl",
+                version: "3.4.0",
+                optionalDependencies: { fsevents: "*" },
+              },
+            },
+          ],
+        ]),
+      ],
+    ]);
+    const registry = await startLocalRegistry(artifact, seeded);
+    try {
+      const served = await globalThis.fetch(`${registry.registryUrl}/yauzl`);
+      expect(served.ok).toBe(true);
+      const packument = await served.json();
+      expect(packument.versions["3.4.0"].dist.tarball).toContain("/yauzl/-/yauzl-3.4.0.tgz");
+      // Optional entries are stripped so the Yarn arm resolves what the npm arm installs with
+      // `--omit=optional`; leaving them in is what let an upstream platform-package publish gap
+      // fail a required Keiko gate (#3130).
+      expect(packument.versions["3.4.0"].optionalDependencies).toBeUndefined();
+
+      // An unseeded package must not fall through to the public registry.
+      const unseeded = await globalThis.fetch(`${registry.registryUrl}/@napi-rs%2Fcanvas`);
+      expect(unseeded.status).toBe(404);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("closes the third-party dependency closure over the repository's installed tree", () => {
+    const names = vendoredDependencyNames(ROOT_MANIFEST);
+    expect(names).not.toContain(ROOT_MANIFEST.bundleDependencies[0]);
+    expect(names.length).toBeGreaterThan(0);
+
+    const { packages, missing } = resolveVendorClosure(join(ROOT, "node_modules"), ROOT_MANIFEST);
+    expect(missing).toEqual([]);
+    const resolvedNames = packages.map((entry) => entry.name);
+    for (const name of names) expect(resolvedNames).toContain(name);
+    // Transitive runtime dependencies are included, so the registry can answer the whole graph.
+    expect(resolvedNames.length).toBeGreaterThanOrEqual(names.length);
+    for (const entry of packages) expect(entry.version).toMatch(/^\d+\.\d+\.\d+/u);
   });
 
   it("validates nested vendored workspaces and the TypeScript runtime", () => {
