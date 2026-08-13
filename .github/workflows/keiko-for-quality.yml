@@ -229,7 +229,7 @@ jobs:
           # the store; per-entry publication semantics enforce compatibility inside the action.
           # Quoted: a hypothetical all-digit sha would otherwise parse as a YAML number and reach
           # the shell in a normalized form, defeating the length check below.
-          ACTION_PIN: "f6aa08d66c13de0a49a91ea8810600100ca8770d" # v0.24.0 — keep in sync with Review's uses:
+          ACTION_PIN: "f1117fb2b56a62bcbec22afbc149d5bd1474060c" # v0.25.0 — keep in sync with Review's uses:
         run: |
           # The pin no longer partitions the store, and that is a deliberate reversal. It used to,
           # because a wrapper release can change review or sanitization SEMANTICS without changing
@@ -501,7 +501,7 @@ jobs:
 
       - name: Review
         id: review
-        uses: oscharko-dev/Keiko-for-Quality@f6aa08d66c13de0a49a91ea8810600100ca8770d # v0.24.0
+        uses: oscharko-dev/Keiko-for-Quality@f1117fb2b56a62bcbec22afbc149d5bd1474060c # v0.25.0
         env:
           # Passed by variable NAME to the action, never as an input value: an input appears in the
           # step context that every other action in the job can read.
