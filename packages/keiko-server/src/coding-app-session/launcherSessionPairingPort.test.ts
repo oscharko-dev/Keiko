@@ -86,6 +86,40 @@ describe("createLauncherSessionPairingPort", () => {
       computeLauncherPairingClaim(SECRET, "req_x", 6),
     );
   });
+
+  // Regression: KEIKO-0460. The anti-replay set previously grew unbounded and, once past the cap,
+  // permanently denied every attestation for the rest of the process's life — including ones
+  // whose ids could no longer be replayed under `isFresh`. Prune expired ids before the cap gate.
+  it("prunes anti-replay ids whose freshness window has elapsed so the cap never becomes permanent", () => {
+    let currentNow = 1_000;
+    const port = createLauncherSessionPairingPort({
+      secret: SECRET,
+      now: () => currentNow,
+      claimFreshnessMs: 5_000,
+    });
+    for (let index = 0; index < 4_096; index += 1) {
+      const attestation = mintLauncherPairingAttestation({
+        secret: SECRET,
+        requestId: `req_${String(index)}`,
+        issuedAtMs: currentNow,
+      });
+      expect(port.attest(attestation).outcome).toBe("approved");
+    }
+    const overflow = mintLauncherPairingAttestation({
+      secret: SECRET,
+      requestId: "req_full",
+      issuedAtMs: currentNow,
+    });
+    expect(port.attest(overflow).outcome).toBe("denied");
+    // Advance past the freshness window on every tracked id and try again.
+    currentNow += 10_000;
+    const afterDrain = mintLauncherPairingAttestation({
+      secret: SECRET,
+      requestId: "req_after_drain",
+      issuedAtMs: currentNow,
+    });
+    expect(port.attest(afterDrain).outcome).toBe("approved");
+  });
 });
 
 describe("resolveLauncherSessionPairingPort", () => {

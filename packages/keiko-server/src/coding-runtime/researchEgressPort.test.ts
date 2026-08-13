@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   validateCodingWorkbenchRuntimeEvent,
+  type AuxiliaryResearchScopeV1,
   type CodingWorkbenchRuntimeEvent,
 } from "@oscharko-dev/keiko-contracts";
 import type {
@@ -20,10 +21,11 @@ import {
   type ResearchEgressPortConfig,
   type ResearchEgressPortDeps,
 } from "./researchEgressPort.js";
-import type {
-  ResearchChargeResult,
-  ResearchGrantRegistry,
-  ResolvedResearchGrant,
+import {
+  createResearchGrantRegistry,
+  type ResearchChargeResult,
+  type ResearchGrantRegistry,
+  type ResolvedResearchGrant,
 } from "./researchGrantRegistry.js";
 
 const IDENTITY = { actionId: "action-1", idempotencyKey: "key-1" } as const;
@@ -728,5 +730,57 @@ describe("researchEgressPort untrusted research content (#2637)", () => {
     expect(test.events[0]?.auxiliaryOutcome).toBe("denied");
     expect(test.events[0]?.contentTrust).toBeUndefined();
     expect(validateCodingWorkbenchRuntimeEvent(test.events[0]).ok).toBe(true);
+  });
+});
+
+// Regression: KEIKO-0284. The port's registry seam is exercised by the tests above through a
+// mocked registry, but no test wired the REAL InMemoryResearchGrantRegistry to a real port with
+// a deliberately deferred fetch that could be revoked mid-flight. That gap left the following
+// end-to-end race untested: (a) fetch is in flight, (b) the operator or orchestrator revokes the
+// grant (`invalidateRun`), (c) the port must fail closed at the post-fetch charge boundary
+// rather than surfacing the response body. This test pins the seam directly using the real
+// registry, so a refactor that stops re-checking the grant post-fetch would fail here.
+describe("researchEgressPort real-registry mid-flight revoke (KEIKO-0284)", () => {
+  it("fails closed when the run is invalidated on the real registry while a fetch is in flight", async () => {
+    const registry = createResearchGrantRegistry();
+    const scope: AuxiliaryResearchScopeV1 = {
+      grantId: "grant-integration-1" as AuxiliaryResearchScopeV1["grantId"],
+      domains: ["docs.example.com"],
+      expiresAt: new Date(2_100_000_000_000).toISOString(),
+      queryTextDigest: { outcome: "known", value: "a".repeat(64) },
+    };
+    registry.register("run-1", scope, undefined, "b".repeat(64), 1_000);
+
+    let releaseFetch: ((response: Response) => void) | undefined;
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const port = (await import("./researchEgressPort.js")).createResearchEgressPort({
+      registry,
+      resolveRunId: () => "run-1",
+      gatewayEgress: () => undefined,
+      emitEvent: (event) => events.push(event),
+      now: () => 2_000,
+      fetchImpl: (): Promise<Response> =>
+        new Promise((resolve) => {
+          releaseFetch = resolve;
+        }),
+    });
+
+    const inflight = port.execute(
+      egressRequest("https://docs.example.com/"),
+      undefined,
+      LIVE_GUARD,
+    );
+    // With the fetch parked, revoke the run on the SAME registry the port is querying.
+    registry.invalidateRun("run-1");
+    // Now let the fetch complete with a normal response — chargeFetch must see the missing grant
+    // and the port must fail closed instead of surfacing the response body.
+    releaseFetch?.(new Response("secret", { status: 200 }));
+    const result = (await inflight) as { status: string };
+    expect(result.status).toBe("failed");
+    // The single emitted event is the denial telemetry from the failed charge.
+    expect(events).toHaveLength(1);
+    expect(events[0]?.auxiliaryOutcome).toBe("denied");
+    // And no residual read/content escapes.
+    expect(JSON.stringify(result)).not.toContain("secret");
   });
 });

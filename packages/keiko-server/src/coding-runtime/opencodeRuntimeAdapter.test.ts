@@ -1050,4 +1050,36 @@ describe("OpenCode runtime adapter readiness", () => {
       vi.useRealTimers();
     }
   });
+
+  // Regression: KEIKO-0240. Before this fix, when waitForTerminal exited via caller abort or
+  // its own 30-minute deadline WITHOUT the turn ever settling, `turnArmed` stayed true — every
+  // subsequent armTurn() on the same adapter instance short-circuited to `false` and no further
+  // turns could run. Any unsettled exit must now settle the turn as failed so armTurn() can
+  // succeed again. Exercised here through the caller-signal abort seam because the mock
+  // control.status signature this suite uses does not accept a signal parameter (a fake-timer
+  // path against the internal 30-minute deadline needs a signal-aware status mock, which the
+  // test-local Ports type does not model).
+  it("KEIKO-0240: settles the turn on caller abort so a subsequent armTurn() can succeed", async () => {
+    const harness = readinessPorts();
+    let releaseStatus: (() => void) | undefined;
+    harness.ports.control.status = (): Promise<undefined> =>
+      new Promise<undefined>((resolve) => {
+        releaseStatus = (): void => {
+          resolve(undefined);
+        };
+      });
+    const adapter = (await adapterModule()).createOpenCodeRuntimeAdapter(harness.ports);
+    await expect(adapter.start()).resolves.toMatchObject({ ok: true });
+    expect(adapter.armTurn()).toBe(true);
+    const caller = new AbortController();
+    const waiting = adapter.waitForTerminal(caller.signal);
+    // Give the poll loop a microtask to reach the awaiting-status state, then abort the caller.
+    await Promise.resolve();
+    caller.abort();
+    releaseStatus?.();
+    await expect(waiting).resolves.toBe(false);
+    // Before the fix, this returned false because turnArmed was still true from the leaked turn.
+    expect(adapter.armTurn()).toBe(true);
+    await adapter.close();
+  });
 });

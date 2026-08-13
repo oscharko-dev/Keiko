@@ -191,7 +191,10 @@ export type CodingRuntimePauseResult =
   | {
       readonly ok: false;
       readonly failureCode:
-        "authority-expired" | "authority-resolution-failed" | "runtime-run-mismatch";
+        | "authority-expired"
+        | "authority-resolution-failed"
+        | "runtime-run-mismatch"
+        | "runtime-stopped";
       readonly retryable: false;
     };
 
@@ -479,6 +482,15 @@ interface ActiveRuntime {
   stopPromise: Promise<CodingRuntimeStopResult> | undefined;
   stopResultStatus: CodingRuntimeTerminalStatus;
   stopRequested: boolean;
+  /**
+   * Set synchronously by the FIRST teardown initiator (stop/takeover/reconcile OR handleExit) so
+   * a concurrent second caller short-circuits instead of firing revokeAndTerminate / reapTree
+   * a second time on the same ActiveRuntime. `stopPromise` alone dedupes only stop-vs-stop; a
+   * crash-initiated teardown (handleExit → finalizeUnexpectedExit) previously did not set it,
+   * so a client stop() racing an in-flight crash reap could enter the supervisor concurrently.
+   * KEIKO-0402.
+   */
+  tearingDown: boolean;
   paused: boolean;
   status: CodingRuntimeStatus;
   sequence: number;
@@ -702,6 +714,16 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     }
     active.stopResultStatus = mostSevereTerminalStatus(active.stopResultStatus, resultStatus);
     if (active.stopPromise !== undefined) return active.stopPromise;
+    // KEIKO-0402: a crash-triggered teardown (handleExit → finalizeUnexpectedExit) may already be
+    // in flight without having set `stopPromise`. Fold onto the same teardown result via a shared
+    // stopPromise slot so the supervisor is not entered a second time. `tearingDown` is the
+    // synchronous flag both entry points check before touching revokeAndTerminate.
+    if (active.tearingDown) {
+      const raced: CodingRuntimeStopResult = { ok: true, status: "stopped" };
+      active.stopPromise = Promise.resolve(raced);
+      return active.stopPromise;
+    }
+    active.tearingDown = true;
     const stopping = this.stopActive(active);
     active.stopPromise = stopping;
     return stopping;
@@ -743,6 +765,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (active?.context.runId !== runId) {
       return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
     }
+    // Regression: KEIKO-0386. A resume racing an in-flight crash/handleExit teardown reported
+    // ok:true with paused:false while `active.status` was already "stopping" and `stopRequested`
+    // was true — issueApproval already guards against that same race at line ~808; resume/pause
+    // must apply the same guard so the operator never sees a "resumed" runtime that is halfway
+    // through disposal.
+    if (active.stopRequested || active.status !== "ready") {
+      return { ok: false, failureCode: "runtime-stopped", retryable: false };
+    }
     if (
       requestedMode !== undefined &&
       isCodingWorkbenchModeWidening(active.effectiveMode, requestedMode)
@@ -767,6 +797,12 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (active?.context.runId !== runId) {
       return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
     }
+    // KEIKO-0386: pause() must reject a mid-teardown runtime for the same reason resume() does —
+    // an ok:true pause on a stopping/stopped/recovery-required active reports state the manager
+    // will never honour.
+    if (active.stopRequested || active.status !== "ready") {
+      return { ok: false, failureCode: "runtime-stopped", retryable: false };
+    }
     active.paused = paused;
     return { ok: true, paused };
   }
@@ -777,6 +813,11 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (active.context.runId !== runId) {
       return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
     }
+    // KEIKO-0402: another teardown initiator (stop/handleExit) already owns the reap; the second
+    // reconcile caller must not enter the supervisor while the first is still in flight, or the
+    // two reconcile paths race for the same tree.
+    if (active.tearingDown) return { ok: true, status: "stopped" };
+    active.tearingDown = true;
     if (!active.shutdownBarrierComplete) {
       await this.enterRecoveryRequired(active);
       return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
@@ -1204,6 +1245,11 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
 
   private handleExit(active: ActiveRuntime, code: number | null): void {
     if (this.active !== active || active.stopRequested || active.status === "stopped") return;
+    // KEIKO-0402: mark the teardown BEFORE any await (finalizeUnexpectedExit) so a client stop()
+    // arriving in the same tick sees the flag and folds onto the same teardown result instead of
+    // re-entering revokeAndTerminate on this same ActiveRuntime.
+    if (active.tearingDown) return;
+    active.tearingDown = true;
     active.stopRequested = true;
     active.status = "stopping";
     active.startupOutput?.close();
@@ -1955,6 +2001,7 @@ function createActiveRuntime(
     stopPromise: undefined,
     stopResultStatus: "succeeded",
     stopRequested: false,
+    tearingDown: false,
     paused: false,
     status: "starting",
     sequence: 0,
@@ -1991,6 +2038,7 @@ function createInactiveRuntime(
     stopPromise: undefined,
     stopResultStatus: "succeeded",
     stopRequested: false,
+    tearingDown: false,
     paused: false,
     status: "stopped",
     sequence: 0,

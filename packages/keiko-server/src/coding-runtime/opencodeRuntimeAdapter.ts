@@ -346,14 +346,25 @@ export function createOpenCodeRuntimeAdapter(
     signal: AbortSignal,
     sessionId: string,
   ): Promise<boolean> {
-    while (turnCurrent(generation, signal)) {
-      const settled = settleIfCompleted(generation, signal);
-      if (settled !== undefined) return settled;
-      const outcome = await pollTurnOnce(generation, signal, sessionId);
-      if (outcome !== undefined) return outcome;
-      await waitForTurnChange(signal, generation);
+    try {
+      while (turnCurrent(generation, signal)) {
+        const settled = settleIfCompleted(generation, signal);
+        if (settled !== undefined) return settled;
+        const outcome = await pollTurnOnce(generation, signal, sessionId);
+        if (outcome !== undefined) return outcome;
+        await waitForTurnChange(signal, generation);
+      }
+      return turnSettled(generation) ? (turnSettledOutcome ?? false) : false;
+    } finally {
+      // KEIKO-0240: every exit from this function that has not settled the current generation
+      // leaves `turnArmed = true`, which locks armTurn() closed forever on this adapter instance
+      // — every subsequent turn silently no-ops. Settle the turn as failed on any unsettled exit
+      // (deadline, caller abort, or a pollTurnOnce catch that returned false), so armTurn() can
+      // succeed again on the next turn.
+      if (generation === turnGeneration && turnArmed && turnSettledGeneration !== generation) {
+        settleTurn(generation, false);
+      }
     }
-    return turnSettled(generation) ? (turnSettledOutcome ?? false) : false;
   }
 
   /** Returns the settled wait outcome, or undefined when polling must continue. */

@@ -8,6 +8,8 @@ import type {
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
 
+import type { ServerDiagnosticSink } from "../diagnostics-log.js";
+
 /** Maximum replay retention. Kept small because this is an SSE recovery aid, not a history store. */
 export const CODING_RUNTIME_EVENT_HUB_MAX_EVENTS = 256;
 export const CODING_RUNTIME_EVENT_HUB_MAX_BYTES = 1024 * 1024;
@@ -84,6 +86,12 @@ export interface CodingRuntimeEventHubOptions {
   readonly maxBytes?: number | undefined;
   readonly maxSubscribers?: number | undefined;
   readonly now?: (() => Date) | undefined;
+  /**
+   * When present, mid-stream subscriber-write failures are recorded once per subscriber via this
+   * sink with a redacted, correlation-preserving summary. Without a sink the failure was still
+   * closed cleanly but left no operator trail (KEIKO-0225).
+   */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 interface RetainedEvent {
@@ -119,6 +127,7 @@ export class CodingRuntimeEventHub {
   private readonly maxBytes: number;
   private readonly maxSubscribers: number;
   private readonly now: () => Date;
+  private readonly diagnostics: ServerDiagnosticSink | undefined;
 
   constructor(options: CodingRuntimeEventHubOptions = {}) {
     this.maxEvents = positiveInteger(options.maxEvents, CODING_RUNTIME_EVENT_HUB_MAX_EVENTS);
@@ -128,6 +137,7 @@ export class CodingRuntimeEventHub {
       CODING_RUNTIME_EVENT_HUB_MAX_SUBSCRIBERS,
     );
     this.now = options.now ?? ((): Date => new Date());
+    this.diagnostics = options.diagnostics;
   }
 
   publish(input: CodingRuntimeEventHubInput): CodingRuntimeEventHubPublishResult {
@@ -194,7 +204,8 @@ export class CodingRuntimeEventHub {
     const run = this.runs.get(runId) ?? this.newRun(runId);
     if (run.subscribers.size >= this.maxSubscribers) return reset("subscriber-capacity");
     for (const event of replay.events) {
-      if (!write(subscriber, event)) return { ok: true, detach: () => undefined };
+      if (!write(subscriber, event, runId, this.diagnostics))
+        return { ok: true, detach: () => undefined };
     }
     if (run.terminal) {
       close(subscriber);
@@ -288,7 +299,8 @@ export class CodingRuntimeEventHub {
 
   private fanOut(run: RunBuffer, event: CodingWorkbenchRuntimeSseEvent): void {
     for (const subscriber of run.subscribers) {
-      if (!write(subscriber, event)) run.subscribers.delete(subscriber);
+      if (!write(subscriber, event, event.runId, this.diagnostics))
+        run.subscribers.delete(subscriber);
     }
   }
 
@@ -394,15 +406,51 @@ function positiveInteger(value: number | undefined, fallback: number): number {
 function write(
   subscriber: CodingRuntimeEventHubSubscriber,
   event: CodingWorkbenchRuntimeSseEvent,
+  runId: string,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): boolean {
   try {
     const accepted = subscriber.write(event);
-    if (accepted === false) close(subscriber);
+    if (accepted === false) {
+      // A subscriber that returns `false` from write() is signalling backpressure exhaustion.
+      // Emit a redacted operator record so the failure is diagnosable — previously it was
+      // silently swallowed and closed. KEIKO-0225.
+      recordSseFailure(diagnostics, runId, "backpressure", "Error");
+      close(subscriber);
+    }
     return accepted !== false;
-  } catch {
+  } catch (error) {
+    // A throwing subscriber write means the wire is gone (client hung up, socket broken).
+    // Same treatment: record one line and close the subscriber.
+    recordSseFailure(diagnostics, runId, "subscriber-write-threw", errorClassName(error));
     close(subscriber);
     return false;
   }
+}
+
+function recordSseFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  message: string,
+  errorClass: string,
+): void {
+  if (diagnostics === undefined) return;
+  try {
+    diagnostics.record({
+      correlationId: runId,
+      timestamp: new Date().toISOString(),
+      operation: "coding-runtime.sse-fanout",
+      source: "coding-runtime-event-hub.write",
+      errorClass,
+      message,
+    });
+  } catch {
+    // Diagnostic sink misbehaviour must not corrupt fan-out.
+  }
+}
+
+function errorClassName(error: unknown): string {
+  return error instanceof Error ? error.constructor.name : "Error";
 }
 
 function close(subscriber: CodingRuntimeEventHubSubscriber): void {

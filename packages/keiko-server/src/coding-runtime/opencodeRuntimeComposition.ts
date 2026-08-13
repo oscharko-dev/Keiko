@@ -411,6 +411,60 @@ function lifecycleAdapter(
   };
 }
 
+// KEIKO-0320: the prepare cleanup calls (bridge.close, rmSync) can each throw on their own — a
+// permission-denied unlink, a socket teardown failure. Without an inner guard, a throw here
+// escapes as an uncaught rejection and the outer manager relabels the resulting timeout as a
+// generic retryable failure, discarding the real cause. Guard each cleanup step and swallow its
+// own failure (the run root is already unreachable to the caller either way; the reason the
+// caller sees reflects the ORIGINAL prepare failure, not the disposal noise).
+async function disposeFailedPrepare(bridge: ToolBridgeController, runRoot: string): Promise<void> {
+  try {
+    await bridge.close();
+  } catch {
+    // Bridge close is best-effort during the failure path.
+  }
+  try {
+    rmSync(runRoot, { recursive: true, force: true });
+  } catch {
+    // A directory that cannot be removed here is disposed later by the manager's reap loop.
+  }
+}
+
+async function materializePrepare(
+  input: OpenCodeRuntimeCompositionInput,
+  bridge: ToolBridgeController,
+  runs: Map<string, PreparedRun>,
+  request: OpenCodeLifecyclePrepareRequest,
+  runRoot: string,
+): Promise<OpenCodeLifecyclePrepareResult> {
+  createPrivateState(runRoot);
+  await bridge.start();
+  const profile = buildOpenCodeLaunchProfile({
+    executable: request.executablePath,
+    stateRoot: runRoot,
+  });
+  if (!profile.ok) throw new Error("profile-invalid");
+  const bundle = createGeneratedOpenCodeBundle();
+  const config = JSON.stringify(bundle.config);
+  materialize(runRoot, config, bundle.toolSources);
+  const password = profile.env.OPENCODE_SERVER_PASSWORD;
+  if (password === undefined) throw new Error("password-missing");
+  const configDigest = createHash("sha256").update(config, "utf8").digest("hex");
+  runs.set(
+    request.runId,
+    preparedRun(request.runId, runRoot, password, configDigest, request.verification),
+  );
+  return {
+    ok: true,
+    env: {
+      ...profile.env,
+      KEIKO_MODEL_GATEWAY_CAPABILITY: input.capabilities.modelGatewayCapability,
+      KEIKO_TOOL_FACADE_URL: bridge.publicPort.url,
+      KEIKO_TOOL_FACADE_CAPABILITY: input.capabilities.toolFacadeCapability,
+    },
+  };
+}
+
 async function prepare(
   input: OpenCodeRuntimeCompositionInput,
   bridge: ToolBridgeController,
@@ -425,35 +479,9 @@ async function prepare(
   }
   const runRoot = join(input.stateBaseRoot, request.runId);
   try {
-    createPrivateState(runRoot);
-    await bridge.start();
-    const profile = buildOpenCodeLaunchProfile({
-      executable: request.executablePath,
-      stateRoot: runRoot,
-    });
-    if (!profile.ok) throw new Error("profile-invalid");
-    const bundle = createGeneratedOpenCodeBundle();
-    const config = JSON.stringify(bundle.config);
-    materialize(runRoot, config, bundle.toolSources);
-    const password = profile.env.OPENCODE_SERVER_PASSWORD;
-    if (password === undefined) throw new Error("password-missing");
-    const configDigest = createHash("sha256").update(config, "utf8").digest("hex");
-    runs.set(
-      request.runId,
-      preparedRun(request.runId, runRoot, password, configDigest, request.verification),
-    );
-    return {
-      ok: true,
-      env: {
-        ...profile.env,
-        KEIKO_MODEL_GATEWAY_CAPABILITY: input.capabilities.modelGatewayCapability,
-        KEIKO_TOOL_FACADE_URL: bridge.publicPort.url,
-        KEIKO_TOOL_FACADE_CAPABILITY: input.capabilities.toolFacadeCapability,
-      },
-    };
+    return await materializePrepare(input, bridge, runs, request, runRoot);
   } catch {
-    await bridge.close();
-    rmSync(runRoot, { recursive: true, force: true });
+    await disposeFailedPrepare(bridge, runRoot);
     return { ok: false, reason: "config-materialization-failed" };
   }
 }

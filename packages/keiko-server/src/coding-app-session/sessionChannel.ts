@@ -19,6 +19,7 @@ import {
   type SessionPairingPort,
 } from "./sessionPairingPort.js";
 import type { AppSession, SessionRegistry } from "./sessionRegistry.js";
+import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 
 export const CODING_APP_SESSION_MAX_LIVE_STREAMS = 32;
 
@@ -68,6 +69,13 @@ export interface CodingAppSessionChannelDeps {
   readonly pairingPort?: SessionPairingPort | undefined;
   /** Absent = channel serves content-free even to a paired session (this wave's production posture). */
   readonly contentSource?: CodingAppSessionContentSource | undefined;
+  /**
+   * When present, mid-stream listener failures (a `false` return or a throw from the SSE writer)
+   * are recorded as one redacted operator record per subscriber. Previously the failure was
+   * silently swallowed and the wire detached — the operator saw a dropped stream with nothing to
+   * diagnose. KEIKO-0225.
+   */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 function projectContent(
@@ -110,6 +118,7 @@ function subscribeToContent(
   cookieToken: string | undefined,
   listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
   admission: LiveSubscriptionAdmission,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): ReturnType<CodingAppSessionChannel["subscribe"]> {
   const session = registry.verify(cookieToken);
   const snapshot =
@@ -119,7 +128,39 @@ function subscribeToContent(
   if (session === undefined || contentSource?.subscribeContent === undefined) {
     return { snapshot, live: false, detach: (): void => undefined };
   }
-  return liveSubscription(registry, contentSource, cookieToken, snapshot, listener, admission);
+  return liveSubscription(
+    registry,
+    contentSource,
+    cookieToken,
+    snapshot,
+    listener,
+    admission,
+    diagnostics,
+  );
+}
+
+function recordSseFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  message: string,
+  errorClass: string,
+): void {
+  if (diagnostics === undefined) return;
+  try {
+    diagnostics.record({
+      correlationId: "coding-app-session",
+      timestamp: new Date().toISOString(),
+      operation: "coding-app-session.channel.subscribe",
+      source: "coding-app-session.session-channel.publish",
+      errorClass,
+      message,
+    });
+  } catch {
+    // Diagnostic sink misbehaviour must not corrupt fan-out.
+  }
+}
+
+function errorClassName(error: unknown): string {
+  return error instanceof Error ? error.constructor.name : "Error";
 }
 
 interface LiveSubscriptionAdmission {
@@ -137,6 +178,49 @@ function rejectedSourceSubscription(
   return { snapshot, live: false, detach: (): void => undefined };
 }
 
+interface LiveLifecycle {
+  active: boolean;
+  sourceDetach: () => void;
+  expiryTimer?: ReturnType<typeof setInterval>;
+}
+
+function makeDetach(lifecycle: LiveLifecycle, admission: LiveSubscriptionAdmission): () => void {
+  return (): void => {
+    if (!lifecycle.active) return;
+    lifecycle.active = false;
+    if (lifecycle.expiryTimer !== undefined) clearInterval(lifecycle.expiryTimer);
+    lifecycle.sourceDetach();
+    admission.release();
+  };
+}
+
+function makePublish(
+  lifecycle: LiveLifecycle,
+  validity: () => boolean,
+  listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
+  detach: () => void,
+  diagnostics: ServerDiagnosticSink | undefined,
+): (content: CodingAppSessionChannelContent | null) => void {
+  return (content: CodingAppSessionChannelContent | null): void => {
+    if (!lifecycle.active) return;
+    const valid = validity();
+    try {
+      const accepted = listener(
+        valid ? snapshotForContent(content) : contentFreeCodingAppSessionChannelSnapshot(),
+      );
+      if (!valid || !accepted) {
+        // KEIKO-0225: previously a listener returning `false` silently detached with nothing to
+        // diagnose. Report backpressure once so operators can see a stream that dropped.
+        if (valid && !accepted) recordSseFailure(diagnostics, "backpressure", "Error");
+        detach();
+      }
+    } catch (error) {
+      recordSseFailure(diagnostics, "listener-threw", errorClassName(error));
+      detach();
+    }
+  };
+}
+
 function liveSubscription(
   registry: SessionRegistry,
   contentSource: CodingAppSessionContentSource,
@@ -144,33 +228,13 @@ function liveSubscription(
   snapshot: CodingAppSessionChannelSnapshot,
   listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
   admission: LiveSubscriptionAdmission,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): ReturnType<CodingAppSessionChannel["subscribe"]> {
   if (!admission.acquire()) return { snapshot, live: false, detach: (): void => undefined };
-  const lifecycle: {
-    active: boolean;
-    sourceDetach: () => void;
-    expiryTimer?: ReturnType<typeof setInterval>;
-  } = { active: true, sourceDetach: (): void => undefined };
-  const detach = (): void => {
-    if (!lifecycle.active) return;
-    lifecycle.active = false;
-    if (lifecycle.expiryTimer !== undefined) clearInterval(lifecycle.expiryTimer);
-    lifecycle.sourceDetach();
-    admission.release();
-  };
+  const lifecycle: LiveLifecycle = { active: true, sourceDetach: (): void => undefined };
+  const detach = makeDetach(lifecycle, admission);
   const validity = (): boolean => registry.inspect(cookieToken) !== undefined;
-  const publish = (content: CodingAppSessionChannelContent | null): void => {
-    if (!lifecycle.active) return;
-    const valid = validity();
-    try {
-      const accepted = listener(
-        valid ? snapshotForContent(content) : contentFreeCodingAppSessionChannelSnapshot(),
-      );
-      if (!valid || !accepted) detach();
-    } catch {
-      detach();
-    }
-  };
+  const publish = makePublish(lifecycle, validity, listener, detach, diagnostics);
   const sourceSubscription = contentSource.subscribeContent?.(publish);
   if (!sourceSubscription?.admitted)
     return rejectedSourceSubscription(sourceSubscription, detach, snapshot);
@@ -186,12 +250,9 @@ function liveSubscription(
   return { snapshot, live: true, detach };
 }
 
-export function createCodingAppSessionChannel(
-  deps: CodingAppSessionChannelDeps,
-): CodingAppSessionChannel {
-  const { registry, pairingPort, contentSource } = deps;
+function makeLiveSubscriptionAdmission(): LiveSubscriptionAdmission {
   let liveSubscriptions = 0;
-  const admission: LiveSubscriptionAdmission = {
+  return {
     acquire: (): boolean => {
       if (liveSubscriptions >= CODING_APP_SESSION_MAX_LIVE_STREAMS) return false;
       liveSubscriptions += 1;
@@ -201,6 +262,13 @@ export function createCodingAppSessionChannel(
       liveSubscriptions = Math.max(0, liveSubscriptions - 1);
     },
   };
+}
+
+export function createCodingAppSessionChannel(
+  deps: CodingAppSessionChannelDeps,
+): CodingAppSessionChannel {
+  const { registry, pairingPort, contentSource, diagnostics } = deps;
+  const admission = makeLiveSubscriptionAdmission();
   return {
     pair: (attestation: unknown): CodingAppSessionPairResult => {
       if (pairingPort === undefined) return { paired: false };
@@ -231,6 +299,6 @@ export function createCodingAppSessionChannel(
     verifySession: (cookieToken: string | undefined): AppSession | undefined =>
       registry.verify(cookieToken),
     subscribe: (cookieToken, listener) =>
-      subscribeToContent(registry, contentSource, cookieToken, listener, admission),
+      subscribeToContent(registry, contentSource, cookieToken, listener, admission, diagnostics),
   };
 }

@@ -170,6 +170,31 @@ describe("supervised coding policy", () => {
     expect(result).toMatchObject({ status: "allowed", reason: "scoped-file-edit" });
   });
 
+  // Regression: KEIKO-0438. When one declared scope cannot be resolved (typo, deleted directory,
+  // not-yet-existing branch) the resolver used to collapse the WHOLE allow-list to `undefined`,
+  // denying an edit that targeted a still-valid sibling scope. Keep the scopes that resolved.
+  it("keeps a resolvable scope after another declared scope fails to resolve", () => {
+    const { root } = workspaceFixture();
+
+    const result = decideSupervisedFileEdit({
+      ...fileRequest(root, "src/hello.ts"),
+      allowedRelativePaths: ["src", "packages/nonexistent-typo"],
+    });
+
+    expect(result).toMatchObject({ status: "allowed", reason: "scoped-file-edit" });
+  });
+
+  it("denies the edit only when EVERY declared scope fails to resolve", () => {
+    const { root } = workspaceFixture();
+
+    const result = decideSupervisedFileEdit({
+      ...fileRequest(root, "src/hello.ts"),
+      allowedRelativePaths: ["../outside", "packages/nonexistent-typo"],
+    });
+
+    expect(result).toMatchObject({ status: "denied", reason: "out-of-scope-file-edit" });
+  });
+
   it("fails closed for file edits outside the worktree, scope, or through escaping symlinks", () => {
     const { root, outside } = workspaceFixture();
 

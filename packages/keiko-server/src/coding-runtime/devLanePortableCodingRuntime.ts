@@ -413,6 +413,27 @@ function hashDirectoryTree(root: string): string {
 }
 
 /**
+ * KEIKO-0180: exported canonical formula shared by the runtime, the discovery pipeline, and
+ * tests. Given a set of `(relativePath, sha256)` pairs, produces the same tree digest the launch
+ * paths recompute — locale-sorted (the payload lane matches `localeCompare`, same as
+ * `hashDirectoryTree` above). Tests calling this instead of hand-rolling the formula cannot
+ * drift when the formula moves. Only the pairs matter; a caller that walks a real directory
+ * uses `hashDirectoryTree` and stays byte-identical.
+ */
+export function computePortableSidecarPayloadTreeDigest(
+  entries: readonly { readonly relativePath: string; readonly sha256: string }[],
+): string {
+  const hash = createHash("sha256");
+  const sorted = [...entries].sort((left, right) =>
+    left.relativePath.localeCompare(right.relativePath),
+  );
+  for (const entry of sorted) {
+    hash.update(`${entry.relativePath}\0${entry.sha256}\0`);
+  }
+  return hash.digest("hex");
+}
+
+/**
  * Cross-process helper-source digest. The staging script records `sourceTreeSha256` in one
  * process and discovery re-derives it in another; a locale-dependent collation could diverge
  * between those processes and report a false stale helper, so this ordering is plain

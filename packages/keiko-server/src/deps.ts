@@ -3437,6 +3437,10 @@ function assembleUiHandlerRuntimeServices(
     contentSource:
       args.options.codingAppSessionContentSource ??
       safeActivityContentSource(codingRuntimeControlPlane?.safeActivityProjection),
+    // KEIKO-0225: forward the operator diagnostic sink so mid-stream SSE listener failures
+    // (bare catch, backpressure `false`) surface as one redacted record per subscriber instead
+    // of being silently swallowed.
+    ...(args.options.diagnostics ? { diagnostics: args.options.diagnostics } : {}),
   });
   const workspaceLifecycle = activityAwareWorkspaceLifecycle(
     args.bundle.workspaceLifecycle,
@@ -3481,6 +3485,9 @@ function buildUiCodingRuntimeControlPlane(
       args.options.codingRuntimeServerPrincipal ??
       ((): string | undefined => DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID),
     ...(codingRuntimeHost ? { runtimeHost: codingRuntimeHost } : {}),
+    // KEIKO-0225: forward the operator diagnostic sink so mid-stream SSE fan-out write failures
+    // surface as one redacted record per subscriber instead of being silently swallowed.
+    ...(args.options.diagnostics ? { diagnostics: args.options.diagnostics } : {}),
   });
 }
 

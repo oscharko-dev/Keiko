@@ -867,4 +867,125 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     expect(adapterSignal).toBeInstanceOf(AbortSignal);
     expect(adapterSignal?.aborted).toBe(true);
   });
+
+  // Regression: KEIKO-0469. When `enforceProducerBinding: true` is wired, a mutationGuard that
+  // omits `binding` altogether must be denied at the preflight boundary — previously mutationBinding
+  // returned `undefined` and readContextMatches/editorContextMatches short-circuited to `true`, so
+  // reads/discovers/edits proceeded as if no binding enforcement were required.
+  describe("binding-enforcement (KEIKO-0469)", () => {
+    it("denies a bindingless mutationGuard for read/discover/edit when enforceProducerBinding is on", async () => {
+      const readText = vi.fn(() =>
+        Promise.resolve({ ok: true as const, text: "const value = 1;\n" }),
+      );
+      const editorAction = vi.fn(() =>
+        Promise.resolve({
+          ok: true as const,
+          value: {
+            result: {
+              schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+              actionId: "edit-1",
+              sessionId: "session-2332",
+              status: "queued" as const,
+            },
+          },
+        }),
+      );
+      const root = mkdtempSync(join(tmpdir(), "keiko-coding-binding-"));
+      try {
+        writeFileSync(join(root, "package.json"), '{"name":"fixture","version":"1.0.0"}\n');
+        const ports = createCodingToolReadEditPorts({
+          secureWorkspaceTextRead: { readText },
+          editorAgentClient: { action: editorAction },
+          resolveEditorActionContext: () => ({
+            sessionId: "session-binding",
+            authorityRef: { runId: "run-binding", envelopeDigest: DIGEST },
+            origin: "agent",
+            workspaceRoot: root,
+            workspaceId: admittedBinding.workspaceId,
+            workspaceRootDigest: admittedBinding.workspaceRootDigest,
+            expiresAt: admittedBinding.expiresAt,
+          }),
+          resolveRepositoryReadContext: () => admittedBinding,
+          resolveWorkspaceRoot: () => root,
+          enforceProducerBinding: true,
+        });
+
+        const bindingless = { check: (): true => true };
+
+        await expect(
+          ports.repositoryRead.execute(
+            {
+              action: "read",
+              actionId: "read-1",
+              idempotencyKey: "read-key",
+              relativePath: "package.json",
+            },
+            undefined,
+            bindingless,
+          ),
+        ).resolves.toEqual({ status: "failed" });
+        expect(readText).not.toHaveBeenCalled();
+
+        await expect(
+          ports.repositoryDiscover.execute(
+            {
+              action: "discover",
+              actionId: "discover-1",
+              idempotencyKey: "discover-key",
+              query: "package",
+              maxResults: 10,
+            },
+            undefined,
+            bindingless,
+          ),
+        ).resolves.toEqual({ status: "failed" });
+
+        await expect(
+          ports.editorChangeset.execute(
+            {
+              action: "edit",
+              actionId: "edit-1",
+              idempotencyKey: "edit-key",
+              changeset: changeset(),
+            },
+            undefined,
+            bindingless,
+          ),
+        ).resolves.toEqual({ status: "failed" });
+        expect(editorAction).not.toHaveBeenCalled();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps the pre-existing bindingless behavior when enforceProducerBinding is unset", async () => {
+      // A test-focused wiring without `enforceProducerBinding: true` opts out of the new defense
+      // and preserves the prior semantics — this is the escape hatch that keeps the ~17 pre-existing
+      // tests in this file green without adding binding infrastructure to each of them.
+      const readText = vi.fn(() =>
+        Promise.resolve({ ok: true as const, text: "const value = 1;\n" }),
+      );
+      const ports = createCodingToolReadEditPorts({
+        secureWorkspaceTextRead: { readText },
+        editorAgentClient: { action: vi.fn() },
+        resolveEditorActionContext: () => ({
+          sessionId: "session-legacy",
+          authorityRef: { runId: "run-legacy", envelopeDigest: DIGEST },
+          origin: "agent",
+        }),
+      });
+      await expect(
+        ports.repositoryRead.execute(
+          {
+            action: "read",
+            actionId: "read-1",
+            idempotencyKey: "read-key",
+            relativePath: "src/a.ts",
+          },
+          undefined,
+          { check: (): true => true },
+        ),
+      ).resolves.toMatchObject({ status: "completed" });
+    });
+  });
 });

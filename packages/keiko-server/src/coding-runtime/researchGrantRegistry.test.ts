@@ -224,6 +224,20 @@ describe("ResearchGrantRegistry fetch reservation", () => {
     expect(store.reserveFetch(RUN, "absent-grant", NOW)).toBe("unknown");
     expect(store.reserveFetch("other-run", "grant-1", NOW)).toBe("unknown");
   });
+
+  // Regression: KEIKO-0379. `chargeFetch` runs AFTER a response body has been read, so a grant
+  // whose byte budget has already been exhausted must refuse further reservations at the boundary
+  // where outbound calls are gated. Without this, one extra hop per over-budget grant slips past
+  // reserveFetch and only fails at charge time — real bytes leave the process first.
+  it("refuses to reserve a fetch after the cumulative byte budget is exhausted", () => {
+    const store = registry({ limits: { maxFetchesPerGrant: 10, maxTotalBytesPerGrant: 100 } });
+    store.register(RUN, makeScope(), undefined, APPROVAL, NOW);
+
+    expect(store.reserveFetch(RUN, "grant-1", NOW)).toBe("ok");
+    expect(store.chargeFetch(RUN, "grant-1", 100, NOW)).toBe("ok");
+    expect(store.reserveFetch(RUN, "grant-1", NOW)).toBe("limit-reached");
+    expect(store.activeGrants(RUN, NOW)[0]?.usedFetches).toBe(1);
+  });
 });
 
 describe("ResearchGrantRegistry byte-budget reconciliation", () => {

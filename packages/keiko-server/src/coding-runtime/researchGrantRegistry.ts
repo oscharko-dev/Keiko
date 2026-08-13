@@ -219,12 +219,16 @@ class InMemoryResearchGrantRegistry implements ResearchGrantRegistry {
 
   // Reserves one fetch against the fetch-count budget BEFORE the caller makes any network call.
   // Expiry is checked before pruning would remove the grant so "expired" stays distinguishable
-  // from "unknown".
+  // from "unknown". Also refuses a reservation once the cumulative byte budget is already exhausted
+  // — chargeFetch runs after the response body has been read, so without this gate the next hop
+  // would be admitted and only stopped at charge time, permitting one extra outbound request per
+  // over-budget grant.
   public reserveFetch(runId: string, grantId: string, nowMs: number): ResearchChargeResult {
     const grant = this.findGrant(runId, grantId);
     if (grant === undefined) return "unknown";
     if (grant.expiresAtMs <= nowMs) return "expired";
     if (grant.usedFetches + 1 > grant.maxFetches) return "limit-reached";
+    if (grant.usedBytes >= grant.maxTotalBytes) return "limit-reached";
     grant.usedFetches += 1;
     return "ok";
   }

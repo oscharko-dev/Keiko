@@ -61,6 +61,15 @@ export interface CodingToolReadEditPortDeps {
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly mutationLeaseCoordinator?:
     Pick<CodingRuntimeEditorMutationLeaseCoordinator, "register" | "discard"> | undefined;
+  /**
+   * When true, a mutationGuard that carries no `binding` property at all fails closed at the
+   * preflight boundary — read/discover/edit return failed rather than proceeding as if no
+   * binding enforcement were required. Defaults to false so that pre-existing wirings and tests
+   * that supplied bindingless guards keep their prior semantics. The single production wiring
+   * (createRuntimeCodingToolFacade in productionManagedWorktreeTools.ts) opts in to lock the
+   * defense-in-depth behavior KEIKO-0469 called for; new/alternative wirings should follow.
+   */
+  readonly enforceProducerBinding?: boolean | undefined;
 }
 
 interface EditorActionContext {
@@ -299,6 +308,7 @@ function readPreflight(
   if (isAborted(signal) || isDenied(request.relativePath)) return false;
   const binding = mutationBinding(mutationGuard);
   if (binding === null) return false;
+  if (binding === undefined && deps.enforceProducerBinding === true) return false;
   if (!readContextMatches(deps, binding) || !checkGuard(mutationGuard)) return false;
   return isDenied(request.relativePath) ? false : binding;
 }
@@ -311,6 +321,7 @@ function discoveryPreflight(
   if (isAborted(signal)) return false;
   const binding = mutationBinding(mutationGuard);
   if (binding === null) return false;
+  if (binding === undefined && deps.enforceProducerBinding === true) return false;
   return readContextMatches(deps, binding) && checkGuard(mutationGuard) ? binding : false;
 }
 
@@ -447,6 +458,15 @@ function waitForEditorSession(delayMs: number, signal: AbortSignal): Promise<boo
   });
 }
 
+// The checkGuard(mutationGuard) call this delegates into (validatedChangeset) runs at PREPARE
+// time — before bindLiveEditorSession's up-to-~11.75s session-binding wait and before the actual
+// mutating editorAgentClient.action() call. It is NOT the final mutation-authority recheck. The
+// true final-boundary recheck happens in packages/keiko-server/src/editor/agentRoutes.ts's
+// applyChangeset(), which calls claimRuntimeMutation() → deps.runtimeMutationLease.claim() → the
+// same mutationGuard closure registered by registerMutationLease() below (via
+// codingRuntimeEditorMutationLeaseCoordinator), immediately before applyPatch(). A future reader
+// must not treat the single local checkGuard() here as the only guard: the coordinator is what
+// binds the mutation authority to the commit boundary.
 function prepareEdit(
   deps: CodingToolReadEditPortDeps,
   request: EditorChangesetRequest,
@@ -457,6 +477,7 @@ function prepareEdit(
   if (changeset === undefined) return undefined;
   const binding = mutationBinding(mutationGuard);
   if (binding === null) return undefined;
+  if (binding === undefined && deps.enforceProducerBinding === true) return undefined;
   const context = resolveEditorContext(deps);
   if (context === undefined || !editorContextMatches(context, binding)) return undefined;
   const action = changesetAction(request, changeset, context);
@@ -637,6 +658,10 @@ function isAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
 
+// Returns `null` when the guard carries a `binding` property whose shape is malformed, `undefined`
+// when the guard omits `binding` altogether, or the extracted binding when it is well-formed.
+// Callers that opted in to `enforceProducerBinding` (KEIKO-0469) treat both `null` and `undefined`
+// as fail-closed — otherwise `undefined` preserves the pre-existing "no binding, no check" path.
 function mutationBinding(
   mutationGuard: CodingToolMutationGuard,
 ): RuntimeProducerBinding | undefined | null {
