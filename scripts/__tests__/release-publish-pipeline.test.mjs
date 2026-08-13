@@ -42,6 +42,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -53,7 +54,7 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
   hashDirectoryTree,
@@ -67,6 +68,18 @@ import {
 } from "../lib/portable-evaluation-manifest.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+beforeAll(() => {
+  if (existsSync(join(REPO_ROOT, "dist", "index.js"))) return;
+  const result = spawnSync(
+    process.execPath,
+    ["node_modules/@typescript/native/bin/tsc", "-p", "tsconfig.build.json"],
+    { cwd: REPO_ROOT, encoding: "utf8" },
+  );
+  if (result.status !== 0) {
+    throw new Error(`root build for release-publish tests failed: ${result.stderr}`);
+  }
+});
 
 // The orchestrator reads the release version from the live root manifest at runtime,
 // so the stubs must answer with that same version rather than a hardcoded one. This

@@ -1,8 +1,8 @@
 // Installable-package smoke (Issue #169 D2, AC2). Packs the root, installs the tarball into a
-// fresh tmpdir, and asserts that (a) every bundleDependencies workspace ships under
-// node_modules/@oscharko-dev/keiko/node_modules/@oscharko-dev/keiko-<name>/dist/, (b) the CLI bin
-// is executable end-to-end (`--version`, `--help`), (c) the SDK root export resolves with the
-// bundle in place, and (d) the packaged UI static export resolves through `keiko ui`. This is the
+// fresh npm and Yarn projects, and asserts that (a) every private runtime workspace resolves from
+// the tarball-local vendor graph, (b) the CLI bin is executable end-to-end (`--version`, `--help`),
+// (c) the SDK root export resolves with the vendor graph in place, and (d) the packaged UI static
+// export resolves through `keiko ui`. This is the
 // runtime mirror of `scripts/check-package-surface.mjs`'s static tarball assertions, intended to
 // fire BEFORE publish so a broken bundle can never reach users.
 
@@ -23,6 +23,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
+import { createStagedPublishPackage } from "./stage-publish-package.mjs";
 
 export const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 600_000;
 export const WINDOWS_NPM_INSTALL_TIMEOUT_MS = 600_000;
@@ -40,7 +41,7 @@ const rootPackageSurfaceContract = JSON.parse(
   readFileSync(join(repoRoot, "scripts", "root-package-surface.contract.json"), "utf8"),
 );
 const rootVersion = rootPackageJson.version;
-const bundled = rootPackageJson.bundleDependencies ?? [];
+const runtimeWorkspaces = rootPackageJson.bundleDependencies ?? [];
 
 export function parseArgs(argv) {
   return {
@@ -76,7 +77,7 @@ function run(cmd, args, options = {}) {
   // spawned directly (no shell) so absolute bin paths never pass through shell word-splitting. The
   // npm arguments are tool-internal literals plus a tarball path under a controlled directory — no
   // untrusted shell input. POSIX is unaffected: the shell runs the same `npm …` invocation.
-  const needsShell = cmd === "npm";
+  const needsShell = process.platform === "win32" && (cmd === "npm" || cmd === "corepack");
   const result = spawnSync(cmd, args, { encoding: "utf8", shell: needsShell, ...options });
   if (result.error) {
     fail(`${cmd} ${args.join(" ")} could not spawn: ${result.error.message}`);
@@ -187,20 +188,34 @@ function packRoot() {
   // shell out to `npx`/`npm` in ways that are not Windows-portable, which is a separate concern from
   // verifying that the PACKED ARTIFACT runs cross-platform. On Linux the gate keeps the full
   // prepack pack (flag unset), so its coverage is unchanged.
-  const packArgs =
-    process.env.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS === "1"
-      ? ["pack", "--silent", "--ignore-scripts"]
-      : ["pack", "--silent"];
-  const result = run("npm", packArgs, { cwd: repoRoot });
+  if (process.env.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS !== "1") {
+    const gateResult = run("npm", ["run", "prepack"], { cwd: repoRoot });
+    if (gateResult.status !== 0) {
+      fail(`npm run prepack exited ${String(gateResult.status)}: ${gateResult.stderr}`);
+    }
+  }
+  const staged = createStagedPublishPackage();
+  const artifactRoot = mkdtempSync(join(tmpdir(), "keiko-install-artifact-"));
+  const result = run(
+    "npm",
+    ["pack", staged.packageDir, "--silent", "--ignore-scripts", "--pack-destination", artifactRoot],
+    { cwd: repoRoot },
+  );
+  staged.cleanup();
   if (result.status !== 0) {
+    rmSync(artifactRoot, { recursive: true, force: true });
     fail(`npm pack exited ${String(result.status)}: ${result.stderr}`);
   }
   const tarballName = `oscharko-dev-keiko-${rootVersion}.tgz`;
-  const tarballPath = join(repoRoot, tarballName);
+  const tarballPath = join(artifactRoot, tarballName);
   if (!existsSync(tarballPath)) {
+    rmSync(artifactRoot, { recursive: true, force: true });
     fail(`expected tarball at ${tarballPath} after npm pack`);
   }
-  return tarballPath;
+  return {
+    tarballPath,
+    cleanup: () => rmSync(artifactRoot, { recursive: true, force: true }),
+  };
 }
 
 function installInto(tmp, tarballPath, options) {
@@ -209,7 +224,7 @@ function installInto(tmp, tarballPath, options) {
     fail(`npm init -y exited ${String(initResult.status)}: ${initResult.stderr}`);
   }
   // `--ignore-scripts` matches the conservative posture the gate models for consumer installs:
-  // a future bundled package that acquires a `postinstall` hook would otherwise execute it on
+  // a future vendored package that acquires a `postinstall` hook would otherwise execute it on
   // every CI build and developer machine before review (issue #169 security-triage finding L1).
   const installResult = run(
     "npm",
@@ -231,6 +246,36 @@ function installInto(tmp, tarballPath, options) {
   }
 }
 
+function installIntoWithYarn(tmp, tarballPath) {
+  writeFileSync(
+    join(tmp, "package.json"),
+    `${JSON.stringify(
+      {
+        private: true,
+        type: "module",
+        packageManager: "yarn@4.9.1",
+        dependencies: { [rootPackageJson.name]: `file:${tarballPath}` },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  writeFileSync(join(tmp, "yarn.lock"), "", "utf8");
+  writeFileSync(join(tmp, ".yarnrc.yml"), "nodeLinker: node-modules\nenableGlobalCache: false\n");
+  const result = run("corepack", ["yarn", "install", "--no-immutable", "--mode=skip-build"], {
+    cwd: tmp,
+    timeout: NPM_INSTALL_TIMEOUT_MS,
+    env: { ...process.env, YARN_ENABLE_GLOBAL_CACHE: "false" },
+  });
+  if (result.status !== 0) {
+    fail(
+      `Yarn install of tarball exited ${String(result.status)} ` +
+        `(signal=${String(result.signal)}): ${result.stderr}`,
+    );
+  }
+}
+
 function assertCliExecutable(tmp) {
   const cliEntry = join(tmp, "node_modules", "@oscharko-dev", "keiko", "dist", "cli", "index.js");
   if (!existsSync(cliEntry)) {
@@ -248,18 +293,25 @@ function assertCliExecutable(tmp) {
   }
 }
 
-function assertBundledPayload(tmp) {
-  const bundleRoot = join(tmp, "node_modules", "@oscharko-dev", "keiko", "node_modules");
-  for (const name of bundled) {
+function assertVendoredPayload(tmp) {
+  const dependencyRoot = join(tmp, "node_modules");
+  for (const name of runtimeWorkspaces) {
     const shortName = name.replace(/^@oscharko-dev\//, "");
-    const dist = join(bundleRoot, "@oscharko-dev", shortName, "dist");
+    const dist = join(dependencyRoot, "@oscharko-dev", shortName, "dist");
     if (!existsSync(dist)) {
-      fail(`bundleDependencies payload missing: ${dist}`);
+      fail(`vendored runtime dependency missing: ${dist}`);
     }
     const entries = readdirSync(dist);
     if (entries.length === 0) {
-      fail(`bundleDependencies payload empty: ${dist}`);
+      fail(`vendored runtime dependency empty: ${dist}`);
     }
+  }
+}
+
+function assertProductiveTypeScriptRuntime(tmp) {
+  const manifest = join(tmp, "node_modules", "typescript", "package.json");
+  if (!existsSync(manifest)) {
+    fail(`productive TypeScript runtime dependency missing: ${manifest}`);
   }
 }
 
@@ -673,23 +725,33 @@ async function assertPackagedLifecycleCommands(tmp) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const tarballPath = packRoot();
+  const artifact = packRoot();
   const tmp = mkdtempSync(join(tmpdir(), "keiko-install-smoke-"));
+  const yarnTmp = mkdtempSync(join(tmpdir(), "keiko-yarn-install-smoke-"));
   try {
-    installInto(tmp, tarballPath, options);
+    installInto(tmp, artifact.tarballPath, options);
     assertCliExecutable(tmp);
-    assertBundledPayload(tmp);
+    assertVendoredPayload(tmp);
+    assertProductiveTypeScriptRuntime(tmp);
     assertCliVersionAndHelp(tmp);
     await assertInstalledRootRuntimeSurface(tmp);
     assertInstalledRootTypeSurface(tmp);
     await assertPackagedUi(tmp);
     await assertPackagedLifecycleCommands(tmp);
+    installIntoWithYarn(yarnTmp, artifact.tarballPath);
+    assertCliExecutable(yarnTmp);
+    assertVendoredPayload(yarnTmp);
+    assertProductiveTypeScriptRuntime(yarnTmp);
+    assertCliVersionAndHelp(yarnTmp);
+    await assertInstalledRootRuntimeSurface(yarnTmp);
+    assertInstalledRootTypeSurface(yarnTmp);
     console.log(
-      `installable-smoke ok: tarball installed (${options.includeOptional ? "optional deps included" : "optional deps omitted"}), ${String(bundled.length)} bundled packages present, root runtime/types + CLI + UI/lifecycle reachable.`,
+      `installable-smoke ok: npm + Yarn tarball installs passed (${options.includeOptional ? "optional deps included" : "optional deps omitted"}), ${String(runtimeWorkspaces.length)} vendored packages present, root runtime/types + CLI + UI/lifecycle reachable.`,
     );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
-    rmSync(tarballPath, { force: true });
+    rmSync(yarnTmp, { recursive: true, force: true });
+    artifact.cleanup();
   }
 }
 

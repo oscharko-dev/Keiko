@@ -19,7 +19,7 @@ below. Do not publish packages and then manually remember the rest of the cleanu
 `scripts/release-publish.mjs` is the source of truth for the final publish. A stable `latest`
 release is created or updated BEFORE npm publishes, so its downloads can be verified while the
 dist-tag is still private; every other dist-tag creates or updates its GitHub Release after the
-npm registry install smoke passes. Stable `latest` publishes are marked as GitHub's `Latest`
+mandatory npm and Yarn registry install smokes pass. Stable `latest` publishes are marked as GitHub's `Latest`
 release. If the GitHub Release is missing
 after `release:publish` exits successfully, treat that as a script defect, not a manual
 follow-up.
@@ -324,9 +324,10 @@ The script:
 - requires publish-time release-impact approval evidence to resolve through GitHub to an artifact authored by `KEIKO_RELEASE_OWNER_GITHUB_LOGINS` — either an approved PR review (`github-pr-review:`) or, for the solo-owner case where GitHub refuses self-approval, an owner-authored issue comment (`github-issue-comment:`) carrying the version-bound `Approved-for-publish:` phrase on a line of its own (see the release-impact runbook for both forms),
 - requires a clean tracked working tree,
 - runs the `prepack` release gate,
-- publishes or reuses the root package only; private runtime workspaces are bundled inside it,
+- stages and publishes or reuses the root package only; private runtime workspaces ship as
+  tarball-local `file:` dependencies under `vendor/` and are never resolved from the registry,
 - verifies the root npm package version and selected dist-tag,
-- runs the registry install smoke,
+- runs mandatory npm and Yarn registry install smokes,
 - creates or updates the matching GitHub Release with generated release-impact notes,
 - marks stable `--tag latest` publishes as GitHub `Latest`.
 

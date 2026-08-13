@@ -54,6 +54,7 @@ import {
 } from "./lib/portable-release-verification.mjs";
 import { sha256 } from "./lib/digest.mjs";
 import { readJsonFile } from "./lib/json.mjs";
+import { createStagedPublishPackage } from "./stage-publish-package.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const packageRegistryScope = scope.slice(0, -1);
@@ -1805,7 +1806,9 @@ const publishPlan = [...workspacePackages, rootPackage];
 console.log(
   `release-publish: ${rootPackage.spec} -> ${options.registry} with dist-tag ${options.tag}.`,
 );
-console.log("release-publish: root-only publish; private runtime workspaces are bundled.");
+console.log(
+  "release-publish: root-only publish; private runtime workspaces are staged as file dependencies.",
+);
 for (const pkg of publishPlan) {
   console.log(`release-publish: plan ${pkg.spec} from ${pkg.packageDir}`);
 }
@@ -1843,8 +1846,11 @@ if (!options.allowUntagged) {
 ensureTrackedTreeIsClean();
 
 const { cleanup, env: npmEnv, hasToken } = createNpmEnvironment(options.registry);
+let stagedPackage;
 try {
   runReleaseGates();
+  stagedPackage = createStagedPublishPackage();
+  rootPackage.packageDir = stagedPackage.packageDir;
   // A stable `latest` release must be proven complete BEFORE npm learns the dist-tag. When this
   // run has nothing to upload, that proof is taken from the release the governed evaluation lane
   // already published, and it is taken FIRST — creating the release up front would leave a public,
@@ -1883,5 +1889,6 @@ try {
   }
   console.log(`release-publish: PASS - ${rootPackage.spec} published as ${options.tag}.`);
 } finally {
+  stagedPackage?.cleanup();
   cleanup();
 }

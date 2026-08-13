@@ -1295,6 +1295,57 @@
         "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.7",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.7",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-13-keiko-0.3.7-yarn-install-repair",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "compatibility",
+      "userVisibleSummary": "Keiko 0.3.7 repairs installation with Yarn 4. The npm package now carries every private Keiko runtime workspace through tarball-local file dependencies instead of npm-only bundle metadata, so Yarn no longer queries the public registry for private packages such as @oscharko-dev/keiko-cli. The release gate now installs the exact staged artifact with both npm and Yarn 4.9.1 before publication.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Yarn 4 can install Keiko again: private runtime packages are resolved from the Keiko tarball instead of being requested from the public npm registry.",
+        "The release gate now installs and exercises the same staged package with npm and Yarn 4.9.1, including the CLI, SDK declarations, TypeScript runtime, and all private runtime workspaces."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-13",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3100#5277801301",
+        "rationale": "The release owner directed an immediate 0.3.7 deployment after a customer reproduced the Yarn 4.9.1 installation failure. Issue #3100 records the incident, its root cause, the corrected artifact design, and the version-bound publish authorization."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
     }
   ]
 }

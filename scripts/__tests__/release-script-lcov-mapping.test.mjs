@@ -37,7 +37,7 @@ describe("release script LCOV mapping seams", () => {
     globalThis.__keikoPackageSurfaceCoverageSeam = (assertTypeScriptRuntimeSurface) => {
       try {
         seamCalled = true;
-        assertTypeScriptRuntimeSurface(["node_modules/typescript/package.json"]);
+        assertTypeScriptRuntimeSurface(["vendor/keiko-server/package.json"]);
 
         expect(() => {
           assertTypeScriptRuntimeSurface([]);

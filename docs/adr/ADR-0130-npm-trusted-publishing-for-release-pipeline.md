@@ -177,8 +177,9 @@ that secret.
 
 ## Related
 
-- [ADR-0021](ADR-0021-publish-strategy-bundled-monorepo-product.md): publish strategy this
-  authentication change does not alter (still root-only, `bundleDependencies`).
+- [ADR-0021](ADR-0021-publish-strategy-bundled-monorepo-product.md): publish strategy remains
+  root-only; the root is assembled through isolated `file:` vendoring before this authentication
+  path publishes it.
 - `.github/workflows/release.yml`: the `publish` job implementing this decision.
 - `scripts/release-publish.mjs`: `createNpmEnvironment()`, `publishPackage()`,
   `ensurePackageDistTag()`.
