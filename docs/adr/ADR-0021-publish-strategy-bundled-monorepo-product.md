@@ -213,7 +213,9 @@ published 22 minutes before its own `linux-x64-musl` platform package, and every
 failed on all three platforms inside that window with an error that reads like a Keiko packaging
 defect.
 
-`npmRegistryServer` is therefore set globally to the loopback registry, which serves the packed
+`npmRegistryServer` is therefore set as the throwaway consumer project's default registry — in its
+own `.yarnrc.yml` under a temporary directory, not machine-wide — pointing at the loopback server,
+which serves the packed
 root plus the third-party closure seeded from this repository's installed tree — the versions
 `package-lock.json` already pins — and returns 404 for anything else. Optional dependency edges are
 preserved so the running platform's real native binding still installs and is still proven;
