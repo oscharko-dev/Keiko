@@ -407,6 +407,18 @@ function mostSevereTerminalStatus(
   return "succeeded";
 }
 
+// #3099 R8 P2 (+ R9 S3358 refactor): merges an exit-derived status with the client's requested
+// terminal status so an explicit client "failed" folded onto a crash teardown remains
+// authoritative. "signalled" (code=null) stays "signalled" unless the client requested "failed"
+// — cancelled is not more severe than a real signal exit.
+function mergedExitStatus(
+  exitStatus: CodingRuntimeRunResult["status"],
+  requested: CodingRuntimeTerminalStatus,
+): CodingRuntimeRunResult["status"] {
+  if (exitStatus !== "signalled") return mostSevereTerminalStatus(exitStatus, requested);
+  return requested === "failed" ? "failed" : "signalled";
+}
+
 export interface CodingRuntimeManager {
   start(
     request: CodingRuntimeLaunchRequest,
@@ -1326,13 +1338,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     // authoritative over the exit-derived status — otherwise a lifecycle failure racing a clean
     // exit would record the terminal result as "succeeded". A "signalled" exit (code=null)
     // stays "signalled" unless the client requested something more severe.
-    const exitStatus = exitResultStatus(code);
-    const status =
-      exitStatus === "signalled"
-        ? active.stopResultStatus === "failed"
-          ? "failed"
-          : "signalled"
-        : mostSevereTerminalStatus(exitStatus, active.stopResultStatus);
+    const status = mergedExitStatus(exitResultStatus(code), active.stopResultStatus);
     this.captureResult(active, status, boundedExitCode(code));
     active.status = "stopped";
     this.active = undefined;
