@@ -20,6 +20,7 @@ import {
   packRoot,
   minimumSatisfyingVersion,
   resolveVendorClosure,
+  seedThenPack,
   seedVendoredRegistry,
   stubManifest,
   findInstalledCopies,
@@ -612,12 +613,22 @@ describe("installable package smoke optional-dependency coverage", () => {
   // node_modules. Seeding after packRoot() would therefore stub the current host's native binding
   // and let the Yarn arm pass without it, so main() must seed BEFORE packing.
   it("seeds the vendored registry before packRoot prunes native optionals", () => {
-    const source = readFileSync(join(ROOT, "scripts", "installable-package-smoke.mjs"), "utf8");
-    const seedAt = source.indexOf("const vendored = seedVendoredRegistry(vendorTmp)");
-    const packAt = source.indexOf("const artifact = packRoot()");
-    expect(seedAt).toBeGreaterThan(-1);
-    expect(packAt).toBeGreaterThan(-1);
-    expect(seedAt).toBeLessThan(packAt);
+    // Observes the production calls rather than their source positions: a text-order pin would
+    // stay green if a refactor moved the effective call and left the statement text in place.
+    const calls = [];
+    const { vendored, artifact } = seedThenPack("/tmp/keiko-seed-order-fixture", {
+      seedVendoredRegistry: (destination) => {
+        calls.push("seed");
+        return new Map([["destination", destination]]);
+      },
+      packRoot: () => {
+        calls.push("pack");
+        return { manifest: { name: "fixture" }, tarballPath: "/tmp/fixture.tgz" };
+      },
+    });
+    expect(calls).toEqual(["seed", "pack"]);
+    expect(vendored.get("destination")).toBe("/tmp/keiko-seed-order-fixture");
+    expect(artifact.tarballPath).toBe("/tmp/fixture.tgz");
   });
 
   // npm's package-json contract: within ONE manifest, an optionalDependencies entry overrides a

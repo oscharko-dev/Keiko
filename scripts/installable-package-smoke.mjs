@@ -624,9 +624,15 @@ export function resolveVendorClosure(
 }
 
 function packVendoredPackage(entry, destination) {
+  // npm names its output `<flattened-name>-<version>.tgz`, which collides across the scope
+  // boundary: `@foo/bar@1.2.3` and `foo-bar@1.2.3` both produce `foo-bar-1.2.3.tgz`. A per-package
+  // directory keeps the second pack from overwriting the first after its integrity was recorded,
+  // which would hand Yarn the wrong bytes.
+  const packDir = join(destination, `pack-${entry.name.replace(/[^a-zA-Z0-9]+/gu, "-")}`);
+  mkdirSync(packDir, { recursive: true });
   const result = run(
     "npm",
-    ["pack", entry.directory, "--pack-destination", destination, "--ignore-scripts", "--json"],
+    ["pack", entry.directory, "--pack-destination", packDir, "--ignore-scripts", "--json"],
     { cwd: repoRoot, timeout: NPM_INSTALL_TIMEOUT_MS },
   );
   if (result.status !== 0) {
@@ -639,7 +645,7 @@ function packVendoredPackage(entry, destination) {
   if (typeof produced !== "string" || produced.length === 0) {
     fail(`npm pack of vendored dependency ${entry.name} printed no tarball name`);
   }
-  return join(destination, produced);
+  return join(packDir, produced);
 }
 
 /**
@@ -834,6 +840,9 @@ function localRegistryHandler(artifact, tarballBytes, registryUrl, requests, ven
       // An unhandled stream error would take the registry — and with it the gate — down with an
       // opaque crash; destroying the response instead surfaces as a failed fetch Yarn can report.
       stream.on("error", () => response.destroy());
+      // `pipe()` only unpipes and pauses the source when the destination goes away, leaving its
+      // descriptor open, so an aborted download would accumulate descriptors until EMFILE.
+      response.on("close", () => stream.destroy());
       stream.pipe(response);
       return;
     }
@@ -1480,15 +1489,28 @@ async function assertPackagedLifecycleCommands(tmp) {
   }
 }
 
+/**
+ * Seeds the offline registry and THEN packs the publish artifact, in that order, because
+ * `packRoot()` runs `prepack`, whose `prune:package-native-optionals` step deletes
+ * `@napi-rs/canvas` and its platform bindings out of `node_modules`. Seeding afterwards would find
+ * them gone, serve inert stubs in their place, and let the Yarn arm pass without the native
+ * binding it exists to prove (#3130).
+ *
+ * Dependency-injected so the ordering is observable in a test: a pin comparing source positions
+ * would stay green if a refactor moved the effective call and left the statement text in place.
+ */
+export function seedThenPack(vendorTmp, deps) {
+  const seed = deps?.seedVendoredRegistry ?? seedVendoredRegistry;
+  const pack = deps?.packRoot ?? packRoot;
+  const vendored = seed(vendorTmp);
+  const artifact = pack();
+  return { vendored, artifact };
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const vendorTmp = mkdtempSync(join(tmpdir(), "keiko-yarn-vendor-seed-"));
-  // Seeded BEFORE packRoot(), because `prepack` runs `prune:package-native-optionals`, which
-  // deletes `@napi-rs/canvas` and its platform bindings out of `node_modules`. Seeding afterwards
-  // would find them gone, serve inert stubs in their place, and let the Yarn arm pass without the
-  // native binding it exists to prove (#3130).
-  const vendored = seedVendoredRegistry(vendorTmp);
-  const artifact = packRoot();
+  const { vendored, artifact } = seedThenPack(vendorTmp);
   const tmp = mkdtempSync(join(tmpdir(), "keiko-install-smoke-"));
   const yarnTmp = mkdtempSync(join(tmpdir(), "keiko-yarn-install-smoke-"));
   try {
