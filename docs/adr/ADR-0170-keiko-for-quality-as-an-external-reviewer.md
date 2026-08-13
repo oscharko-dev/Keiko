@@ -171,11 +171,15 @@ immutable head SHA. A run superseded before or during that wait never enters the
 refresh failure fails closed before either path. The review job repeats the head check before its
 first secret-bearing step, so a later supersession fails there without invoking the model or
 handling store secrets. This debounce avoids buying the startup of a large review during an ordinary
-synchronize burst. It supplements rather than replaces the per-pull-request concurrency
-cancellation, which still stops a paid review already in progress. The debounce checkout and its
+synchronize burst. Once paid work has started, a later synchronize event does not cancel it:
+GitHub keeps the running member and coalesces the pending member to the newest head, preventing a
+push burst from repeatedly discarding admitted work. Closed, converted-to-draft, and base-retarget
+events still cancel immediately because continued credentials and spend are no longer authorized. The debounce checkout and its
 two head refreshes are depth-one operations; only the subsequent review workspace fetches full
 history. Its ten-minute job bound leaves explicit headroom around the fixed wait for a slow hosted
-checkout without turning runner delay into a false admission failure.
+checkout without turning runner delay into a false admission failure. The review action retains a
+30-minute deadline inside a 45-minute job envelope so checkpoint hand-off is not cut off by the
+runner timeout.
 
 Fork-originated heads receive no model review. Model budget and the credential-bearing
 execution path are not exposed to arbitrary external heads, and a per-review budget bounds one review,

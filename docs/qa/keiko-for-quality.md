@@ -47,14 +47,18 @@ stale.
 The production workflow admits a current head through a 120-second debounce free of model, store,
 and environment secrets before the job that declares the `keiko-for-quality` environment can start.
 It checks the server-owned pull ref both before and after the wait, and the review job rechecks once
-more before its first secret-bearing step. A superseded head therefore produces no model review;
-concurrency remains the containment for a run that already passed admission and began spending.
+more before its first secret-bearing step. A head superseded during admission therefore produces no
+model review.
+After admission, synchronize events deliberately do not cancel paid work: the running review
+finishes, and GitHub coalesces pending runs to the newest head. Closed,
+converted-to-draft, and base-retarget events still cancel immediately.
 Both workspaces are checked out at `github.workflow_sha`, so the pin synchronization check reads the
 same protected workflow revision GitHub is executing even when a long-lived pull request's payload
 still carries an older base SHA. The event's immutable base/head pair continues to define the diff.
 The debounce path is deliberately shallow (depth one for the trusted checkout and both head
 refreshes); the review path alone fetches full history. Its ten-minute bound includes the fixed
-two-minute wait plus hosted-checkout headroom.
+two-minute wait plus hosted-checkout headroom. The action's 30-minute deadline runs inside a
+45-minute review-job envelope so store hand-off is not lost at the runner boundary.
 
 **The delivery freeze in step 4 was not applied, and coverage for that window was therefore not
 established.** Recorded as a shortfall rather than as an exception, because the reasoning that
@@ -419,7 +423,7 @@ branch-protection change.
    secret instead would let the job start and then fail — noisy, and slower to take effect.
 2. **Cancel every in-progress `keiko-for-quality` run.** Step 1 does not stop a runner that already
    started: it has its inputs and credentials and will keep publishing findings until it finishes or
-   hits the 30-minute job timeout. Treating step 1 alone as "nothing new is published" is wrong, and
+   hits the 45-minute job timeout. Treating step 1 alone as "nothing new is published" is wrong, and
    during a precision failure that is exactly the window that matters.
 
    ```bash

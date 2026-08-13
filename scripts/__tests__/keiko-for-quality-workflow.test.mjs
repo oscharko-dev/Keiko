@@ -119,6 +119,33 @@ ${script}
 }
 
 describe("Keiko for Quality production workflow", () => {
+  it("preserves paid synchronize work but cancels unauthorized lifecycle transitions", () => {
+    const concurrency = workflow.slice(
+      workflow.indexOf("concurrency:\n"),
+      workflow.indexOf("\njobs:\n"),
+    );
+    expect(concurrency).toContain("github.event.action == 'closed'");
+    expect(concurrency).toContain("github.event.action == 'converted_to_draft'");
+    expect(concurrency).toContain(
+      "github.event.action == 'edited' && github.event.changes.base != null",
+    );
+    expect(concurrency).not.toContain("github.event.action != 'edited'");
+    expect(concurrency).not.toContain("github.event.action == 'synchronize'");
+
+    const reviewJob = jobSource("review");
+    expect(reviewJob).toContain("timeout-minutes: 45");
+    expect(stepSource("Review")).toContain('review_timeout_seconds: "1800"');
+    expect(workflow.indexOf('review_timeout_seconds: "1800"')).toBeLessThan(
+      workflow.indexOf("      - name: Hand off unsigned store"),
+    );
+    expect(stepSource("Hand off unsigned store")).toContain(
+      "if: always() && steps.review.outputs.store_written == 'true'",
+    );
+    expect(jobSource("sign-store")).toContain(
+      "if: always() && needs.review.outputs.store-written == 'true'",
+    );
+  });
+
   it("pins both action identities to the signed v0.24.0 release", () => {
     expect(stepSource("Derive store identity")).toMatch(
       new RegExp(`^ {10}ACTION_PIN: "${releaseSha}" # v0\\.24\\.0`, "mu"),
