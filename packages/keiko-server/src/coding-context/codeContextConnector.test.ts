@@ -12,9 +12,9 @@ import {
 } from "./codeContextConnector.js";
 import {
   createGitHubCodeContextConnector,
-  GITHUB_CODE_CONTEXT_COMMAND_RULES,
   gitHubCodeContextArgvIsGoverned,
 } from "./githubCodeContextConnector.js";
+import { GH_CODE_CONTEXT_COMMAND_RULES } from "./githubCodeContextPort.js";
 import {
   buildJiraCodeContextRequest,
   createJiraCodeContextConnector,
@@ -265,7 +265,7 @@ describe("CodeContextConnector", () => {
     ).toThrow("objectId must be a positive Jira issue number");
   });
 
-  it("keeps GitHub context reads on a dedicated read-only gh api command allowlist", () => {
+  it("keeps GitHub context reads on the port-canonical read-only gh api command allowlist (KEIKO-0223)", () => {
     const argv = buildGitHubCodeContextArgv({
       source: "github",
       objectKind: "issue",
@@ -273,27 +273,25 @@ describe("CodeContextConnector", () => {
       objectId: "1989",
     });
 
-    expect(isCommandAllowed(GITHUB_CODE_CONTEXT_COMMAND_RULES, "gh", argv)).toMatchObject({
+    expect(isCommandAllowed(GH_CODE_CONTEXT_COMMAND_RULES, "gh", argv)).toMatchObject({
       allowed: true,
     });
     expect(
-      isCommandAllowed(GITHUB_CODE_CONTEXT_COMMAND_RULES, "gh", ["api", "/repos/o/r/issues/1"]),
+      isCommandAllowed(GH_CODE_CONTEXT_COMMAND_RULES, "gh", ["api", "/repos/o/r/issues/1"]),
     ).toMatchObject({ allowed: true });
-    expect(
-      isCommandAllowed(GITHUB_CODE_CONTEXT_COMMAND_RULES, "gh", [
-        "api",
-        "/repos/o/r/issues/1",
-        "--paginate",
-      ]),
-    ).toMatchObject({ allowed: false });
-    expect(
-      isCommandAllowed(GITHUB_CODE_CONTEXT_COMMAND_RULES, "gh", [
-        "api",
-        "/repos/o/r/issues/1",
-        "-f",
-        "body=mutation",
-      ]),
-    ).toMatchObject({ allowed: false });
+    // Mutation-adjacent flags every canonical rule denies — the earlier connector-owned
+    // duplicate admitted `--method` / `-X` / `--hostname` via `valueFlags`; the canonical rule
+    // set (this one) denies them outright.
+    for (const denied of ["--method", "-X", "--hostname", "-f", "-F", "--input", "--verbose"]) {
+      expect(
+        isCommandAllowed(GH_CODE_CONTEXT_COMMAND_RULES, "gh", [
+          "api",
+          "/repos/o/r/issues/1",
+          denied,
+          "body=mutation",
+        ]),
+      ).toMatchObject({ allowed: false });
+    }
   });
 
   it("blocks connector reads when the deployment mode ceiling excludes the request mode", async () => {

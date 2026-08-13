@@ -42,6 +42,7 @@ import {
   type RuntimeTreeSignal,
 } from "./runtimeProcessSupervisor.js";
 import { createInMemorySupervisedCodingApprovalStore } from "./supervisedCodingApprovalStore.js";
+import { computePortableSidecarPayloadTreeDigest } from "./devLanePortableCodingRuntime.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
   codingToolApprovalBindingDigest,
@@ -634,10 +635,17 @@ function createPortableRuntimeFixture(): {
   const executableDigest = digest("#!/bin/sh\n");
   const licenseDigest = digest("approved license\n");
   const sbomDigest = digest('{"bomFormat":"CycloneDX"}\n');
-  const executableTreeSha256 = digest(`opencode-sidecar\0${executableDigest}\0`);
-  const payloadSha256 = digest(
-    `LICENSE\0${licenseDigest}\0opencode-sidecar\0${executableDigest}\0sbom.cdx.json\0${sbomDigest}\0`,
-  );
+  // KEIKO-0180: use the exported canonical tree-digest formula instead of hand-restating
+  // filename\0sha256\0 concatenation. If the production formula moves, this test moves with it
+  // instead of the fixture drifting silently.
+  const executableTreeSha256 = computePortableSidecarPayloadTreeDigest([
+    { relativePath: "opencode-sidecar", sha256: executableDigest },
+  ]);
+  const payloadSha256 = computePortableSidecarPayloadTreeDigest([
+    { relativePath: "LICENSE", sha256: licenseDigest },
+    { relativePath: "opencode-sidecar", sha256: executableDigest },
+    { relativePath: "sbom.cdx.json", sha256: sbomDigest },
+  ]);
   return {
     resourceRoot,
     executablePath,
@@ -4047,6 +4055,98 @@ describe("run-bound stop authority", () => {
     });
     expect(manager.health()).toMatchObject({ status: "ready" });
     await expect(manager.stop("run-1988")).resolves.toEqual({ ok: true, status: "stopped" });
+  });
+
+  // Regression: KEIKO-0386. resume()/pause() must reject when the active runtime is mid-teardown
+  // (stopRequested/status !== "ready"), the same guard issueApproval() already enforces. Without
+  // it, an operator racing a crash sees an ok:true pause/resume for a runtime the manager is in
+  // the middle of disposing.
+  it("KEIKO-0386: refuses pause/resume once the runtime is mid-teardown", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+    });
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    // Simulate a child exit / crash — this drives handleExit which sets stopRequested=true and
+    // status="stopping" synchronously.
+    harness.children[0]?.exit(1);
+    await Promise.resolve();
+    expect(manager.pause("run-1988")).toEqual({
+      ok: false,
+      failureCode: "runtime-stopped",
+      retryable: false,
+    });
+    expect(manager.resume("run-1988")).toEqual({
+      ok: false,
+      failureCode: "runtime-stopped",
+      retryable: false,
+    });
+  });
+
+  // Regression: PR #3099 R4 P1. Two overlapping reconcile() calls after a prior teardown
+  // returned reap-unproven both need to be admitted (the second one might arrive from a
+  // different operator), but they must fold onto a SHARED in-flight promise instead of both
+  // entering the supervisor and disposing / releasing the same tree. Before the reconcilePromise
+  // slot, both admissions raced.
+  it("R4-P1: concurrent reconcile calls fold onto a shared promise instead of racing the supervisor", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    // Mirror the SIGKILL-escalation setup that drives the first stop to reap-unproven.
+    const setTimer = vi.fn((callback: () => void): unknown => {
+      callback();
+      return undefined;
+    });
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn, { setTimer }),
+      processEnv: {},
+    });
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    await expect(manager.stop("run-1988")).resolves.toMatchObject({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+    });
+    // Now the process actually exits (operator killed it out-of-band).
+    harness.children[0]?.exit(0);
+    // Fire TWO reconcile calls in the same tick — they must return the same result and both
+    // observe the shared teardown outcome without re-entering the supervisor.
+    const first = manager.reconcile("run-1988");
+    const second = manager.reconcile("run-1988");
+    const [a, b] = await Promise.all([first, second]);
+    expect(a).toEqual({ ok: true, status: "stopped" });
+    expect(b).toEqual({ ok: true, status: "stopped" });
+    // A subsequent reconcile call after active is cleared still returns cleanly.
+    await expect(manager.reconcile("run-1988")).resolves.toEqual({ ok: true, status: "stopped" });
+  });
+
+  // Regression: KEIKO-0402. A client-initiated stop() racing an in-flight crash teardown must not
+  // enter the supervisor a second time. Before the tearingDown guard, the two paths raced through
+  // revokeAndTerminate concurrently.
+  it("KEIKO-0402: a stop racing a crash-triggered teardown does not re-enter the supervisor", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+    });
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    const child = harness.children[0];
+    // Fire the child-exit callback synchronously — handleExit → finalizeUnexpectedExit is now
+    // in flight (via a microtask), stopRequested=true and tearingDown=true are already set.
+    child?.exit(0);
+    // In the SAME tick, before any await, a client stop() races in. With the tearingDown guard
+    // it must fold onto a stopped result rather than enter revokeAndTerminate a second time.
+    const raced = manager.stop("run-1988");
+    await expect(raced).resolves.toEqual({ ok: true, status: "stopped" });
+    // Only ONE lifecycle child exists; the manager did not spawn or re-signal it.
+    expect(harness.children).toHaveLength(1);
   });
 });
 

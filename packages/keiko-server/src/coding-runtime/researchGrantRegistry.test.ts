@@ -224,6 +224,75 @@ describe("ResearchGrantRegistry fetch reservation", () => {
     expect(store.reserveFetch(RUN, "absent-grant", NOW)).toBe("unknown");
     expect(store.reserveFetch("other-run", "grant-1", NOW)).toBe("unknown");
   });
+
+  // Regression: KEIKO-0379. `chargeFetch` runs AFTER a response body has been read, so a grant
+  // whose byte budget has already been exhausted must refuse further reservations at the boundary
+  // where outbound calls are gated. Without this, one extra hop per over-budget grant slips past
+  // reserveFetch and only fails at charge time — real bytes leave the process first.
+  it("refuses to reserve a fetch after the cumulative byte budget is exhausted", () => {
+    const store = registry({ limits: { maxFetchesPerGrant: 10, maxTotalBytesPerGrant: 100 } });
+    store.register(RUN, makeScope(), undefined, APPROVAL, NOW);
+
+    expect(store.reserveFetch(RUN, "grant-1", NOW)).toBe("ok");
+    expect(store.chargeFetch(RUN, "grant-1", 100, NOW)).toBe("ok");
+    expect(store.reserveFetch(RUN, "grant-1", NOW)).toBe("limit-reached");
+    expect(store.activeGrants(RUN, NOW)[0]?.usedFetches).toBe(1);
+  });
+
+  // Regression: PR #3099 P1 follow-up. When an accepted charge leaves usedBytes below the
+  // ceiling but the next charge exceeds the remainder (60 + 50 with a 100-byte cap), the reject
+  // path must MARK the grant as terminally byte-exhausted — otherwise reserveFetch's byte gate
+  // (usedBytes >= maxTotalBytes) never fires and additional real outbound hops slip through
+  // until the fetch-count cap is reached.
+  it("terminally exhausts the byte budget on a rejected over-limit charge", () => {
+    const store = registry({ limits: { maxFetchesPerGrant: 10, maxTotalBytesPerGrant: 100 } });
+    store.register(RUN, makeScope(), undefined, APPROVAL, NOW);
+
+    expect(store.chargeFetch(RUN, "grant-1", 60, NOW)).toBe("ok");
+    expect(store.chargeFetch(RUN, "grant-1", 50, NOW)).toBe("limit-reached");
+    // Before the fix, usedBytes stayed at 60 and reserveFetch admitted more hops. After: 100.
+    expect(store.activeGrants(RUN, NOW)[0]?.usedBytes).toBe(100);
+    expect(store.reserveFetch(RUN, "grant-1", NOW)).toBe("limit-reached");
+  });
+
+  // Regression: PR #3099 R6 P1 (paired with the researchEgressPort finalizeResearch fix). A
+  // single over-cap response should immediately saturate the grant's byte budget when charged
+  // for maxTotalBytes — subsequent reserveFetch calls must fail closed. Verifies that a
+  // single charge >= maxTotalBytes exhausts the grant in one step.
+  it("saturates the byte budget on a single charge >= maxTotalBytes", () => {
+    const store = registry({ limits: { maxFetchesPerGrant: 16, maxTotalBytesPerGrant: 100 } });
+    store.register(RUN, makeScope(), undefined, APPROVAL, NOW);
+
+    // A single over-cap charge saturates the budget in one step.
+    expect(store.chargeFetch(RUN, "grant-1", 999, NOW)).toBe("limit-reached");
+    expect(store.activeGrants(RUN, NOW)[0]?.usedBytes).toBe(100);
+    expect(store.reserveFetch(RUN, "grant-1", NOW)).toBe("limit-reached");
+  });
+
+  // Regression: PR #3099 R7 P1 — saturateBytes is called by researchEgressPort's capped-read
+  // failure path to make ONE strike exhaust the grant, since we cannot measure the exact bytes
+  // read. Charging maxReadBytes (2 MB per response) against a 10 MB grant succeeds and admits
+  // several more oversized responses before the fetch-count cap; saturating in one step
+  // prevents that.
+  it("saturateBytes exhausts the grant's byte budget in one call", () => {
+    const store = registry({
+      limits: { maxFetchesPerGrant: 16, maxTotalBytesPerGrant: 10_000_000 },
+    });
+    store.register(RUN, makeScope(), undefined, APPROVAL, NOW);
+
+    expect(store.reserveFetch(RUN, "grant-1", NOW)).toBe("ok");
+    store.saturateBytes(RUN, "grant-1");
+    expect(store.activeGrants(RUN, NOW)[0]?.usedBytes).toBe(10_000_000);
+    expect(store.reserveFetch(RUN, "grant-1", NOW)).toBe("limit-reached");
+  });
+
+  it("saturateBytes on an unknown grant or run is a no-op", () => {
+    const store = registry();
+    store.register(RUN, makeScope(), undefined, APPROVAL, NOW);
+    store.saturateBytes(RUN, "not-a-grant");
+    store.saturateBytes("not-a-run", "grant-1");
+    expect(store.activeGrants(RUN, NOW)[0]?.usedBytes).toBe(0);
+  });
 });
 
 describe("ResearchGrantRegistry byte-budget reconciliation", () => {

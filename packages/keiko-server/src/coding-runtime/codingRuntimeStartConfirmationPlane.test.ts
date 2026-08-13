@@ -74,4 +74,25 @@ describe("authenticated session start-confirmation plane", () => {
     }
     expect(plane.consume(claimAt(1_000, "req-overflow"))).toBeUndefined();
   });
+
+  // Regression: KEIKO-0396. Once ~4k requests filled the anti-replay set, every subsequent claim
+  // was permanently denied — even after the freshness window on all the tracked entries had
+  // elapsed and none of them could ever be replayed. The set must prune expired ids so a
+  // long-lived process can keep starting runtimes.
+  it("prunes replay-tracked ids whose freshness window has elapsed so the cap does not become permanent", () => {
+    let currentNow = 1_000;
+    const plane = createAuthenticatedSessionStartConfirmationPlane({
+      now: () => currentNow,
+      claimFreshnessMs: 5_000,
+    });
+    for (let index = 0; index < 4_096; index += 1) {
+      expect(plane.consume(claimAt(currentNow, `req-${String(index)}`))).toBeDefined();
+    }
+    // At the cap; the next id is denied under this wall clock.
+    expect(plane.consume(claimAt(currentNow, "req-still-full"))).toBeUndefined();
+    // Advance past the freshness window — every tracked entry is now unreplayable and can be
+    // pruned. A brand-new fresh claim must succeed.
+    currentNow += 10_000;
+    expect(plane.consume(claimAt(currentNow, "req-after-drain"))).toBeDefined();
+  });
 });
