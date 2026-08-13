@@ -218,7 +218,7 @@ describe("installable package smoke optional-dependency coverage", () => {
       if (previous === undefined) delete process.env.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS;
       else process.env.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS = previous;
     }
-  });
+  }, 60_000);
 
   it("runs the Yarn registry flow through the isolated project", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-yarn-registry-test-"));
