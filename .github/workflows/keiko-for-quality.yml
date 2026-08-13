@@ -37,12 +37,15 @@ concurrency:
     keiko-for-quality-${{ github.event.pull_request.number }}-${{
       (github.event.action == 'edited' && github.event.changes.base == null) && 'meta' || 'review'
     }}
-  # Cancel a superseded review — but NOT for a metadata-only `edited` event. Concurrency is
-  # evaluated when the workflow is triggered, not when the job decides to run, so an unconditional
-  # `true` lets a title or description edit cancel an in-flight review and leave the current head
-  # unreviewed until the arming interlock expires.
+  # A newer `synchronize` run must NOT kill paid work already in flight. GitHub keeps the running
+  # member and coalesces the pending member to the newest head, so a push burst cannot repeatedly
+  # discard reviews that already passed admission. Security/lifecycle events still cancel
+  # immediately: a closed, draft, or retargeted pull request must not keep credentials or model
+  # spend alive.
   cancel-in-progress: >-
-    ${{ github.event.action != 'edited' || github.event.changes.base != null }}
+    ${{ github.event.action == 'closed' ||
+        github.event.action == 'converted_to_draft' ||
+        (github.event.action == 'edited' && github.event.changes.base != null) }}
 
 jobs:
   # Wait outside the secret-bearing environment. A push burst can supersede a large review before
@@ -105,7 +108,10 @@ jobs:
     name: review
     needs: debounce
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The action owns a 30-minute review deadline. Keep a separate 15-minute envelope for runner
+    # setup plus checkpoint hand-off; a job timeout must not kill the process after it has
+    # paid for completed chunks but before it can expose `store_written`.
+    timeout-minutes: 45
     # This condition is the security-relevant eligibility layer: a job that never starts never has
     # the environment's secrets materialized. Its evidence is the skipped job in the Actions run,
     # not a redacted diagnostic — no process runs to emit one. The action re-checks eligibility for
@@ -315,7 +321,7 @@ jobs:
           # continue-on-error on the download step, one layer earlier.
           # The size bound is part of the poisoning model: a candidate-base run can upload a
           # same-named artifact of arbitrary size, and a huge download would eat runner disk or
-          # the 30-minute job timeout — which continue-on-error cannot catch, reopening the
+          # the 45-minute job timeout — which continue-on-error cannot catch, reopening the
           # unreviewed-merge window through resource exhaustion instead of an exit code. A real
           # store is a few hundred kilobytes; 25 MiB is far above any legitimate size and far
           # below harm.
@@ -563,6 +569,9 @@ jobs:
           # See docs/qa/review-cost-model.md for the numbers and
           # docs/troubleshooting/model-review-spend.md for the failure modes.
           token_budget: "6000000"
+          # Strictly below the job timeout so the action always gets time to persist its final
+          # generation checkpoint and the workflow can hand it to the detached signer.
+          review_timeout_seconds: "1800"
           # Enables per-file memoization (v0.9.0). Relative to the workspace; the file lives in
           # the directory the locate/upload steps carry between runs. Without this input the
           # store layer is fully inert — that property is pinned by a test upstream.
@@ -571,8 +580,9 @@ jobs:
       # Persists the store for the next push — as an artifact, which needs no write scope at all
       # (`actions: write` is deliberately absent from this workflow; see the permissions note).
       # The action's `store_written` output is authoritative: a complete run and an incomplete run
-      # with safely memoizable covered paths can both produce an updated store; a thrown action or
-      # a run with no earned store leaves it false. The name partitions by
+      # with safely memoizable covered paths can both produce an updated store. A checkpoint-capable
+      # action also raises the output as soon as a generation chunk is durable, so a later failure
+      # can still hand it to the signer. A run with no earned store leaves it false. The name partitions by
       # pull request, profile hash, and model id — the invalidation boundary the retired cache
       # key carried: after a profile or model change the locate step finds nothing and the next
       # review runs full-price rather than replaying decisions produced under the old configuration.
@@ -587,7 +597,9 @@ jobs:
       # step of THIS job would expose it to that process. The unsigned artifact is worthless to
       # an attacker (they can fabricate unsigned stores anyway) and lives one day.
       - name: Hand off unsigned store
-        if: steps.review.outputs.store_written == 'true' && steps.store-identity.outputs.store-enabled == 'true'
+        # `always()` is load-bearing for checkpoint-capable releases: a later engine failure keeps
+        # the Review step red, but must not skip hand-off after `store_written=true` was emitted.
+        if: always() && steps.review.outputs.store_written == 'true' && steps.store-identity.outputs.store-enabled == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: keiko-review-store-unsigned-${{ github.run_id }}
@@ -612,7 +624,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: review
-    if: needs.review.outputs.store-written == 'true' && needs.review.outputs.store-enabled == 'true'
+    # A failed Review job may still have handed off valid raw checkpoints before failing. Sign only
+    # the explicit output, but evaluate it even when the dependency itself is red.
+    if: always() && needs.review.outputs.store-written == 'true' && needs.review.outputs.store-enabled == 'true'
     permissions:
       actions: read
     environment: keiko-for-quality
