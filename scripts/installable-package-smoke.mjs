@@ -370,10 +370,26 @@ function workspaceThirdPartyRequirements(workspace, packagesRoot) {
   );
 }
 
-/** Lowest version a caret/tilde/exact range admits — enough to name a concrete stub version. */
+/**
+ * A concrete version that satisfies `range`, used only to name an inert stub for an optional
+ * dependency this repository does not install. Handles the npm forms that actually occur —
+ * exact, `^`, `~`, `>=`, `v`-prefixed, x-ranges and `*` — and returns `undefined` for anything
+ * else, which `recordAbsent` treats as fatal. Guessing at a grammar this does not model would
+ * serve a stub that does not satisfy the requested range, and Yarn would fail with a confusing
+ * "no candidates" error instead of a diagnosable one.
+ */
 export function minimumSatisfyingVersion(range) {
+  const trimmed = (range ?? "").trim();
+  if (trimmed === "" || trimmed === "*" || trimmed === "x" || trimmed === "latest") return "0.0.0";
   // Anchored, with disjoint leading operators and digits, so there is nothing to backtrack over.
-  return /^[\s^~>=<v]*(\d+\.\d+\.\d+)/u.exec(range ?? "")?.[1];
+  const exact = /^[\s^~>=v]*(\d+)\.(\d+)\.(\d+)/u.exec(trimmed);
+  if (exact !== null) return `${exact[1]}.${exact[2]}.${exact[3]}`;
+  // x-ranges: 1.x, 1.2.x, 1.*
+  const partial = /^[\s^~>=v]*(\d+)(?:\.(\d+))?\.[x*]/u.exec(trimmed);
+  if (partial !== null) return `${partial[1]}.${partial[2] ?? "0"}.0`;
+  const majorOnly = /^[\s^~>=v]*(\d+)$/u.exec(trimmed);
+  if (majorOnly !== null) return `${majorOnly[1]}.0.0`;
+  return undefined;
 }
 
 function manifestRequirements(manifest, bundledSet) {
@@ -792,7 +808,11 @@ function localRegistryHandler(artifact, tarballBytes, registryUrl, requests, ven
         return;
       }
       response.writeHead(200, { "content-type": "application/octet-stream" });
-      createReadStream(served.tarballPath).pipe(response);
+      const stream = createReadStream(served.tarballPath);
+      // An unhandled stream error would take the registry — and with it the gate — down with an
+      // opaque crash; destroying the response instead surfaces as a failed fetch Yarn can report.
+      stream.on("error", () => response.destroy());
+      stream.pipe(response);
       return;
     }
     if (requested.toLowerCase() === rootPackageJson.name) {
@@ -861,14 +881,18 @@ export async function startLocalRegistry(artifact, vendored) {
  * therefore dropped and the loopback server is re-asserted through the environment as well (#3130).
  */
 export function yarnChildEnv(registryUrl, baseEnv = process.env) {
+  // Every `YARN_*` variable is dropped, not a curated subset: Yarn maps each of its settings to
+  // one, and an ambient `YARN_NODE_LINKER=pnp` or `YARN_RC_FILENAME` would change the install
+  // shape just as surely as a registry override. The gate then re-asserts only what it needs, so
+  // its outcome cannot depend on the machine it runs on (#3130).
   const env = Object.fromEntries(
-    Object.entries(baseEnv).filter(
-      ([key]) => !/^YARN_(?:NPM_|UNSAFE_HTTP|ENABLE_NETWORK)/u.test(key),
-    ),
+    Object.entries(baseEnv).filter(([key]) => !key.startsWith("YARN_")),
   );
   return {
     ...env,
     YARN_ENABLE_GLOBAL_CACHE: "false",
+    YARN_ENABLE_TELEMETRY: "false",
+    YARN_NODE_LINKER: "node-modules",
     YARN_NPM_REGISTRY_SERVER: registryUrl,
     YARN_UNSAFE_HTTP_WHITELIST: "127.0.0.1",
   };

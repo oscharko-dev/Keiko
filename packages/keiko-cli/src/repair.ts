@@ -314,8 +314,10 @@ function tightenOpenFlagCandidates(): readonly number[] {
   const candidates: number[] = [];
   const constants = fsConstants as { readonly O_PATH?: number };
   if (constants.O_PATH !== undefined) candidates.push(constants.O_PATH | fsConstants.O_NOFOLLOW);
-  candidates.push(fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-  candidates.push(fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW);
+  candidates.push(
+    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+    fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW,
+  );
   return candidates;
 }
 

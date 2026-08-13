@@ -367,6 +367,8 @@ describe("installable package smoke optional-dependency coverage", () => {
       YARN_NPM_ALWAYS_AUTH: "true",
       YARN_UNSAFE_HTTP_WHITELIST: "example.invalid",
       YARN_ENABLE_NETWORK: "true",
+      YARN_NODE_LINKER: "pnp",
+      YARN_RC_FILENAME: "/tmp/elsewhere.yml",
     });
     expect(env.YARN_NPM_REGISTRY_SERVER).toBe("http://127.0.0.1:12345");
     expect(env.YARN_UNSAFE_HTTP_WHITELIST).toBe("127.0.0.1");
@@ -374,6 +376,11 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(env.YARN_ENABLE_NETWORK).toBeUndefined();
     expect(env.YARN_ENABLE_GLOBAL_CACHE).toBe("false");
     expect(env.PATH).toBe("/usr/bin");
+    // Any YARN_* setting can change the install shape, not only the registry ones: a linker or
+    // rc-file override would leave no node_modules tree for the assertions to inspect.
+    expect(env.YARN_RC_FILENAME).toBeUndefined();
+    expect(env.YARN_NODE_LINKER).toBe("node-modules");
+    expect(env.YARN_ENABLE_TELEMETRY).toBe("false");
   });
 
   // A stub's platform guards must reach the PACKUMENT, not just the tarball: Yarn decides
@@ -534,11 +541,58 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
-  it("names a concrete stub version from a caret, tilde, or exact range", () => {
+  it("fails the request instead of crashing when a tarball cannot be read", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-stream-error-test-"));
+    const artifact = localRegistryArtifact(root);
+    const seeded = new Map([
+      [
+        "demo",
+        new Map([
+          [
+            "1.0.0",
+            {
+              name: "demo",
+              version: "1.0.0",
+              // Points at a path that does not exist, so the read stream errors mid-response.
+              tarballPath: join(root, "definitely-missing.tgz"),
+              integrity: "sha512-missing",
+              manifest: { name: "demo", version: "1.0.0" },
+            },
+          ],
+        ]),
+      ],
+    ]);
+    const registry = await startLocalRegistry(artifact, seeded);
+    try {
+      await expect(
+        globalThis.fetch(`${registry.registryUrl}/demo/-/demo-1.0.0.tgz`).then((r) => r.text()),
+      ).rejects.toThrow();
+      // The registry itself must survive: a later request still succeeds.
+      const stillAlive = await globalThis.fetch(`${registry.registryUrl}/demo`);
+      expect(stillAlive.ok).toBe(true);
+    } finally {
+      await registry.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("names a concrete stub version across the npm range forms it models", () => {
     expect(minimumSatisfyingVersion("^1.0.2")).toBe("1.0.2");
     expect(minimumSatisfyingVersion("~3.4.5")).toBe("3.4.5");
     expect(minimumSatisfyingVersion("2.0.0")).toBe("2.0.0");
-    expect(minimumSatisfyingVersion("*")).toBeUndefined();
+    expect(minimumSatisfyingVersion(">=1.2.3")).toBe("1.2.3");
+    expect(minimumSatisfyingVersion("v4.5.6")).toBe("4.5.6");
+    // A wildcard is satisfied by anything, so the lowest version is a valid stub.
+    expect(minimumSatisfyingVersion("*")).toBe("0.0.0");
+    expect(minimumSatisfyingVersion("")).toBe("0.0.0");
+    // x-ranges resolve to the lowest member of the range.
+    expect(minimumSatisfyingVersion("1.x")).toBe("1.0.0");
+    expect(minimumSatisfyingVersion("1.2.x")).toBe("1.2.0");
+    expect(minimumSatisfyingVersion("3")).toBe("3.0.0");
+    // A grammar this helper does not model stays undefined, which recordAbsent treats as fatal —
+    // serving a stub that does not satisfy the range would fail later and far less legibly.
+    expect(minimumSatisfyingVersion("npm:other@^1.0.0")).toBeUndefined();
+    expect(minimumSatisfyingVersion("github:owner/repo")).toBeUndefined();
   });
 
   // An unseeded .tgz used to fall through to the root artifact with HTTP 200, so a request for a
