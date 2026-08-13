@@ -1681,14 +1681,11 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
 
       // Publish carries the release-safety flags on the real command line.
       const publishLine = lastRun.calls.find((l) => l.startsWith('npm ["publish"'));
-      expect(publishLine).toContain('["publish","."');
-      expect(publishLine).toContain('"--access","public"');
-      expect(publishLine).toContain('"--tag","latest"');
+      expect(publishLine).toBe(
+        'npm ["publish",".","--access","public","--tag","latest","--registry","https://registry.npmjs.org/","--ignore-scripts"]',
+      );
       // A token publish carries no provenance attestation: npm can attest only where an OIDC
       // provider exists, and the unconditional flag killed every local operator publish (0.3.1).
-      expect(publishLine).not.toContain('"--provenance"');
-      expect(publishLine).toContain('"--ignore-scripts"');
-      expect(publishLine).not.toContain('"--dry-run"');
 
       // The post-publish verification pass re-reads BOTH the version and the dist-tag.
       const versionViews = lastRun.calls.filter(isVersionView).length;

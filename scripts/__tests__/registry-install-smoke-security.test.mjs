@@ -103,11 +103,12 @@ describe("registry install smoke security posture", () => {
 });
 
 describe("installable package smoke optional-dependency coverage", () => {
-  it("settles a timed-out process-tree run without waiting for child close", async () => {
+  it("settles a timed-out process-tree run and terminates its ready descendant", async () => {
     const fixtureRoot = mkdtempSync(join(tmpdir(), "keiko-install-timeout-"));
     const fixture = join(fixtureRoot, "hang.mjs");
     const marker = join(fixtureRoot, "descendant-pid");
     let descendantPid;
+    let readyRun;
     try {
       writeFileSync(
         fixture,
@@ -120,18 +121,25 @@ describe("installable package smoke optional-dependency coverage", () => {
         ].join("\n"),
         "utf8",
       );
-      const startedAt = Date.now();
-      const result = await runAsync(process.execPath, [fixture], {
+      readyRun = runAsync(process.execPath, [fixture], {
         env: { ...process.env, DESCENDANT_PID_MARKER: marker },
-        timeout: 300,
+        timeout: 5_000,
       });
+      const markerDeadline = Date.now() + 2_000;
+      while (!existsSync(marker) && Date.now() < markerDeadline) {
+        await new Promise((resolvePromise) => globalThis.setTimeout(resolvePromise, 25));
+      }
+      expect(existsSync(marker)).toBe(true);
       descendantPid = Number.parseInt(readFileSync(marker, "utf8"), 10);
+      const startedAt = Date.now();
+      const result = await readyRun;
 
       expect(result.timedOut).toBe(true);
       expect(result.status).toBeNull();
-      expect(Date.now() - startedAt).toBeLessThan(5_000);
+      expect(Date.now() - startedAt).toBeLessThan(6_000);
       expect(await waitForProcessExit(descendantPid)).toBe(true);
     } finally {
+      await readyRun;
       if (descendantPid !== undefined && processExists(descendantPid)) {
         process.kill(descendantPid, "SIGKILL");
       }
