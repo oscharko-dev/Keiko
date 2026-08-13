@@ -21,6 +21,7 @@ import {
   minimumSatisfyingVersion,
   resolveVendorClosure,
   assertRegistryOnlyDescriptors,
+  assertHostBindingsAreReal,
   assertStagedRootDescriptors,
   persistentVendorSeedDir,
   seedThenPack,
@@ -741,6 +742,76 @@ describe("installable package smoke optional-dependency coverage", () => {
         dependencies: { sneaky: "git+https://token@example.invalid/pkg.git" },
       }),
     ).toThrow(/process\.exit\(1\)/u);
+  });
+
+  // ADR-0021 D7 claims the running platform's native binding is installed and proven. A stub is
+  // only ever legitimate for a FOREIGN platform, so a real parent whose host binding is stubbed
+  // would let the Yarn arm pass without the binding while the ADR promises otherwise.
+  it("refuses a stubbed binding for the running host", () => {
+    const hostBinding = `demo-native-${process.platform}-${process.arch}`;
+    const foreignBinding = "demo-native-aix-mips";
+    const build = (bindingIsStub) =>
+      new Map([
+        [
+          "demo-native",
+          new Map([
+            [
+              "1.0.0",
+              {
+                name: "demo-native",
+                version: "1.0.0",
+                manifest: {
+                  optionalDependencies: { [hostBinding]: "1.0.0", [foreignBinding]: "1.0.0" },
+                },
+              },
+            ],
+          ]),
+        ],
+        [
+          hostBinding,
+          new Map([
+            [
+              "1.0.0",
+              bindingIsStub
+                ? {
+                    name: hostBinding,
+                    version: "1.0.0",
+                    manifest: stubManifest(hostBinding, "1.0.0"),
+                  }
+                : { name: hostBinding, version: "1.0.0", manifest: { name: hostBinding } },
+            ],
+          ]),
+        ],
+        // A foreign platform binding may legitimately be a stub.
+        [
+          foreignBinding,
+          new Map([
+            [
+              "1.0.0",
+              {
+                name: foreignBinding,
+                version: "1.0.0",
+                manifest: stubManifest(foreignBinding, "1.0.0"),
+              },
+            ],
+          ]),
+        ],
+      ]);
+
+    expect(() => assertHostBindingsAreReal(build(false))).not.toThrow();
+    rejectProcessExit();
+    expect(() => assertHostBindingsAreReal(build(true))).toThrow(/process\.exit\(1\)/u);
+  });
+
+  it("recovers from a malformed seed index instead of failing the gate", () => {
+    const seedDir = mkdtempSync(join(tmpdir(), "keiko-seed-malformed-test-"));
+    try {
+      writeFileSync(join(seedDir, "seed-index.json"), "{ this is not json", "utf8");
+      // An interrupted previous run must not turn into a red build no change can fix.
+      expect(loadSeedIndex(seedDir).size).toBe(0);
+    } finally {
+      rmSync(seedDir, { recursive: true, force: true });
+    }
   });
 
   it("lets a real package supersede a cached stub", () => {

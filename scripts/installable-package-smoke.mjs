@@ -17,6 +17,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -732,6 +733,36 @@ function packStubPackage(entry, destination) {
 const isStubEntry = (entry) => entry?.manifest?.os?.[0] === STUB_INCOMPATIBLE_PLATFORM;
 
 /**
+ * A stub is only ever legitimate for a FOREIGN platform prebuild. If a package is seeded for real
+ * but the optional binding matching this host is a stub, the install would run without the native
+ * binding while ADR-0021 D7 claims the running platform's binding is installed and proven — so the
+ * gate says so instead of quietly shipping the weaker guarantee (#3130).
+ */
+function stubbedHostBindings(seeded, entry, hostSuffix) {
+  if (isStubEntry(entry)) return [];
+  return Object.keys(entry.manifest?.optionalDependencies ?? {})
+    .filter((optional) => optional.endsWith(hostSuffix))
+    .filter((optional) => {
+      const candidates = [...(seeded.get(optional)?.values() ?? [])];
+      return candidates.length > 0 && candidates.every(isStubEntry);
+    })
+    .map((optional) => `${entry.name}@${entry.version} -> ${optional}`);
+}
+
+export function assertHostBindingsAreReal(seeded) {
+  const hostSuffix = `-${process.platform}-${process.arch}`;
+  const offenders = [...seeded.values()].flatMap((versions) =>
+    [...versions.values()].flatMap((entry) => stubbedHostBindings(seeded, entry, hostSuffix)),
+  );
+  if (offenders.length > 0) {
+    fail(
+      `this host's native bindings are not installed, so the Yarn arm would pass without them: ` +
+        `${offenders.join(", ")} — run \`npm install\` before the installable-package smoke`,
+    );
+  }
+}
+
+/**
  * An entry seeded by an earlier pass wins — it was captured before `prepack` pruned the tree,
  * including entries restored from a previous PROCESS through the index. The one exception is a
  * cached STUB: once the real package is installed again it must supersede the placeholder, or the
@@ -765,7 +796,15 @@ const SEED_INDEX_FILE = "seed-index.json";
 export function loadSeedIndex(destination) {
   const indexPath = join(destination, SEED_INDEX_FILE);
   if (!existsSync(indexPath)) return new Map();
-  const raw = JSON.parse(readFileSync(indexPath, "utf8"));
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(indexPath, "utf8"));
+  } catch {
+    // A malformed index is recoverable state, not a reason to fail a required gate: the closure is
+    // simply re-packed from the tree. Failing here would turn an interrupted previous run into a
+    // red build that no change to this checkout could fix.
+    return new Map();
+  }
   const seeded = new Map();
   for (const [name, versions] of Object.entries(raw)) {
     const restored = new Map();
@@ -791,6 +830,9 @@ function isReusableSeedEntry(destination, entry) {
 }
 
 export function writeSeedIndex(destination, seeded) {
+  // Published by rename so a concurrent reader never sees a half-written file: two smoke commands
+  // share this path within one checkout, and an interrupted write would otherwise leave malformed
+  // JSON that the next invocation cannot parse.
   const serializable = {};
   for (const [name, versions] of seeded) {
     serializable[name] = Object.fromEntries(
@@ -800,7 +842,10 @@ export function writeSeedIndex(destination, seeded) {
       ]),
     );
   }
-  writeFileSync(join(destination, SEED_INDEX_FILE), `${JSON.stringify(serializable, null, 2)}\n`);
+  const target = join(destination, SEED_INDEX_FILE);
+  const staging = `${target}.${String(process.pid)}.tmp`;
+  writeFileSync(staging, `${JSON.stringify(serializable, null, 2)}\n`);
+  renameSync(staging, target);
 }
 
 export function seedVendoredRegistry(
@@ -833,6 +878,7 @@ export function seedVendoredRegistry(
     if (shouldSeed(seeded, entry)) seedEntry(seeded, entry, pack(entry, destination));
   }
   writeSeedIndex(destination, seeded);
+  assertHostBindingsAreReal(seeded);
   return seeded;
 }
 
