@@ -423,6 +423,65 @@ describe("runMemoryCli reembed", () => {
     expect(vault.getEmbedding(mid("a"))).toBeUndefined();
   });
 
+  // Coverage pin: --force with a null-returning embedder increments counts.failed and
+  // exits non-zero through embedOneForForce's `input === null` branch.
+  it("exits non-zero when --force provider returns null (embedOneForForce null branch)", async () => {
+    const vault = makeVault();
+    insert(vault, { id: "a", status: "accepted" });
+    const cap = capture();
+    const nullEmbedder = (): Promise<null> => Promise.resolve(null);
+    const code = await runMemoryCli(
+      ["reembed", "--force"],
+      cap.io,
+      {},
+      { vault, embedText: nullEmbedder },
+    );
+    expect(code).toBe(1);
+    expect(cap.out()).toContain("failed:");
+    expect(vault.getEmbedding(mid("a"))).toBeUndefined();
+  });
+
+  // Coverage pin: runReembed's outer try/catch reports a thrown reembed() error as a
+  // clean non-zero exit with the redacted message, not an unhandled rejection.
+  it("reports a thrown reembed error as exit 1 with a redacted message", async () => {
+    const vault: MemoryVaultStore = {
+      ...makeVault(),
+      listMemoryIdsByStatus: (): never => {
+        throw new Error("vault listMemoryIdsByStatus crashed");
+      },
+    };
+    const cap = capture();
+    const code = await runMemoryCli(
+      ["reembed"],
+      cap.io,
+      {},
+      { vault, embedText: (): Promise<null> => Promise.resolve(null) },
+    );
+    expect(code).toBe(1);
+    expect(cap.err()).toContain("keiko memory:");
+    expect(cap.err()).toContain("vault listMemoryIdsByStatus crashed");
+  });
+
+  // Coverage pin (Codex thread 3771469031): `--limit` smaller than the unembedded set
+  // reports non-zero `remaining` alongside embedded / skipped / failed. Operators can now
+  // tell a bounded partial pass apart from a nearly-complete corpus.
+  it("reports remaining when --limit does not cover every unembedded accepted memory", async () => {
+    const vault = makeVault();
+    insert(vault, { id: "a", status: "accepted" });
+    insert(vault, { id: "b", status: "accepted" });
+    insert(vault, { id: "c", status: "accepted" });
+    const cap = capture();
+    const code = await runMemoryCli(
+      ["reembed", "--limit", "1"],
+      cap.io,
+      {},
+      { vault, embedText: fakeEmbedder() },
+    );
+    expect(code).toBe(0);
+    expect(cap.out()).toContain("embedded: 1");
+    expect(cap.out()).toContain("remaining: 2");
+  });
+
   // Regression pin (KEIKO-0440, Codex thread 3769557887): `--force` staged only accepted
   // memories but the vault-wide replace deleted every embedding row, so an archived memory
   // that retained its embedding was silently dropped and the report counted only the accepted
