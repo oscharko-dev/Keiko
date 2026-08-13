@@ -349,9 +349,12 @@ async function backfillEmbeddings(
   // O(1) short-circuit at the top: if the embedded set already covers every accepted
   // memoryId, no work is possible and the pass exits immediately without paging.
   const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
-  const scopes = vault.listMemoryScopes();
   const embeddedSet = new Set<MemoryRecord["id"]>(vault.listEmbeddedMemoryIds());
-  const acceptedIds = collectAcceptedMemoryIds(vault, scopes);
+  // PR-review follow-up (Codex thread 3771256634): use vault.listMemoryIdsByStatus so a
+  // concurrent DELETE from an earlier "page" cannot shift the remaining rows and skip an
+  // unembedded id. The default backfill path shares the same enumeration guarantee as the
+  // --force path.
+  const acceptedIds = vault.listMemoryIdsByStatus("accepted");
   const unembeddedIds: MemoryRecord["id"][] = [];
   for (const id of acceptedIds) {
     if (embeddedSet.has(id)) counts.skipped += 1;
@@ -364,29 +367,6 @@ async function backfillEmbeddings(
     await embedOne(vault, embed, record, counts);
   }
   return counts;
-}
-
-// Enumerate every accepted memoryId across the given scopes in a single deterministic pass.
-// Paginating the id list up front keeps backfillEmbeddings clean (single loop over the work
-// list) and lets the fully-embedded fast path exit before any per-record work happens.
-function collectAcceptedMemoryIds(
-  vault: MemoryVaultStore,
-  scopes: readonly MemoryScope[],
-): readonly MemoryRecord["id"][] {
-  const ids: MemoryRecord["id"][] = [];
-  const pageSize = 500;
-  for (let offset = 0; ; offset += pageSize) {
-    const page = vault.listMemoriesAcrossScopes(scopes, {
-      status: ["accepted"],
-      includeExpired: true,
-      limit: pageSize,
-      offset,
-    });
-    if (page.length === 0) break;
-    for (const record of page) ids.push(record.id);
-    if (page.length < pageSize) break;
-  }
-  return ids;
 }
 
 function renderReembedReport(counts: ReembedCounts): string {

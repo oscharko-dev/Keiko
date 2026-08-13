@@ -516,18 +516,33 @@ function printPackageGuidance(io: CliIo, deps: ResolvedDeps): void {
   io.out("  yarn remove @oscharko-dev/keiko  •  pnpm remove @oscharko-dev/keiko  (yarn / pnpm)\n");
 }
 
-// PR-review follow-up (Codex thread 3771181236): refuse to proceed with destructive
-// uninstall when the portable registration file exists but is corrupt. Without this check
-// removeStateStep would delete the registration as an ordinary launcher artifact, erasing
-// the attestation needed to locate and remove the portable-managed installation. Extracted
-// so the runUninstallCli caller stays under the repo-wide cyclomatic-complexity ceiling.
-function refuseCorruptPortableRegistration(io: CliIo, stateDir: string): boolean {
+// PR-review follow-up (Codex threads 3771181236 + 3771256642): refuse destructive uninstall
+// when the portable registration file exists but is corrupt AND state removal is actually
+// selected. A scripts-only or launchers-only uninstall must not read
+// portable-install-state.json since it would not touch it. Extracted so runUninstallCli
+// stays under the repo-wide cyclomatic-complexity ceiling.
+function refuseStateRemovalOnCorruptRegistration(
+  opts: UninstallOptions,
+  io: CliIo,
+  stateDir: string,
+): boolean {
+  if (!opts.scopes.state) return false;
   if (!isPortableInstallRegistrationCorrupt(stateDir)) return false;
   io.err(
     "keiko uninstall: refusing to proceed — portable install registration is corrupt. " +
       "Repair or remove the file at .keiko/portable-install-state.json before retrying.\n",
   );
   return true;
+}
+
+// Consolidates the pre-run refusal checks so runUninstallCli stays under the repo-wide
+// cyclomatic-complexity ceiling: unsafe state-root (symlink / non-directory) and corrupt
+// portable registration (only when state removal is selected) are both fail-closed guards.
+function refuseEarly(opts: UninstallOptions, io: CliIo, stateDir: string): boolean {
+  const stateRoot = inspectStateRoot(stateDir);
+  if (refuseUnsafeStateRoot(opts, io, stateRoot)) return true;
+  if (refuseStateRemovalOnCorruptRegistration(opts, io, stateDir)) return true;
+  return false;
 }
 
 export async function runUninstallCli(
@@ -547,9 +562,7 @@ export async function runUninstallCli(
     return 2;
   }
   const stateDir = resolveStateDir(resolved.cwd, env, opts.stateDirArg);
-  const stateRoot = inspectStateRoot(stateDir);
-  if (refuseUnsafeStateRoot(opts, io, stateRoot)) return 1;
-  if (refuseCorruptPortableRegistration(io, stateDir)) return 1;
+  if (refuseEarly(opts, io, stateDir)) return 1;
   try {
     // #KEIKO-0422: ensureServerStoppable is now async — it waits (bounded) for the
     // signalled UI to exit before returning "ok", so state removal never races with a

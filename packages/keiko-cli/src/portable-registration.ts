@@ -186,7 +186,15 @@ function writeRegistration(stateDir: string, registration: PortableInstallRegist
     });
     renameSync(tmpFile, path);
   } finally {
-    rmSync(tmpDir, { recursive: true, force: true });
+    // PR-review follow-up (Codex thread 3771256638): rmSync failure MUST NOT masquerade as
+    // a failed atomic rewrite. If renameSync succeeded, the registration is already
+    // published; a cleanup failure on the marker-only tmpDir is a separate concern the
+    // state-paths.ts sweep can address on a later run. Mirrors init.ts.
+    try {
+      rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort staging cleanup.
+    }
   }
   try {
     chmodSync(path, 0o600);

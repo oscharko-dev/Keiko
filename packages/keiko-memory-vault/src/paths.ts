@@ -11,7 +11,7 @@
 // points back into a sensitive location.
 
 import { homedir } from "node:os";
-import { existsSync, lstatSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join, normalize, parse, resolve, sep } from "node:path";
 import { MemoryStorageError } from "./errors.js";
 
@@ -45,12 +45,24 @@ function hasSymlinkAncestor(path: string): boolean {
   let current = dirname(path);
   const root = parse(current).root;
   while (current !== root) {
-    if (existsSync(current) && lstatSync(current).isSymbolicLink()) {
-      return true;
-    }
+    // PR-review follow-up (Codex thread 3771256639): use lstatSync directly. existsSync
+    // returned false on transient EACCES/EIO, letting the walk pass an inaccessible
+    // symlinked ancestor we could not verify. Only ENOENT means the segment truly does
+    // not exist; every other errno propagates so the caller sees the storage failure.
+    const stat = lstatOrNull(current);
+    if (stat?.isSymbolicLink()) return true;
     current = dirname(current);
   }
   return false;
+}
+
+function lstatOrNull(path: string): Stats | null {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 function guard(path: string, label: string): string {
