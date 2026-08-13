@@ -37,6 +37,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import {
   MAX_RESPONSE_BYTES,
+  ResponseBodySizeLimitError,
   gatewayFetch,
   readBytesCapped,
   type GatewayFetchOptions,
@@ -423,17 +424,6 @@ async function redirectTarget(
   return isAllowlistedResearchTarget(next, grant) ? next : undefined;
 }
 
-// #3099 R10: differentiate over-cap-for-sure (Content-Length header exceeds maxReadBytes) from
-// transient / unknown-length failures. Only the former justifies exhausting the grant's byte
-// budget on a single strike — a transient stream error should keep subsequent legitimate
-// fetches available.
-function isDefinitelyOverCap(response: Response, maxReadBytes: number): boolean {
-  const raw = response.headers.get("content-length");
-  if (raw === null) return false;
-  const declared = Number.parseInt(raw, 10);
-  return Number.isFinite(declared) && declared > maxReadBytes;
-}
-
 async function finalizeResearch(
   ctx: ResearchEgressContext,
   response: Response,
@@ -442,15 +432,11 @@ async function finalizeResearch(
   let bytes: Uint8Array;
   try {
     bytes = await readBytesCapped(response, ctx.config.maxReadBytes);
-  } catch {
-    // #3099 R7/R10: saturate the grant ONLY when we can prove the response was over-cap.
-    // readBytesCapped throws for two reasons: (a) content exceeded maxBytes, or (b) a
-    // transient network / stream error. A transient error should NOT deny subsequent
-    // legitimate fetches (R10 KfQ), so we require a Content-Length header exceeding maxReadBytes
-    // as the definitive signal. Absent a length or a length within cap, the failure is either
-    // transient or already under budget; both fall closed for THIS fetch but leave the grant
-    // alive.
-    if (isDefinitelyOverCap(response, ctx.config.maxReadBytes)) {
+  } catch (error) {
+    // The typed capped-read failure also identifies an over-limit chunked response with no
+    // Content-Length. Transient stream errors fail this fetch closed without exhausting the grant;
+    // an observed size violation permits no additional outbound hop.
+    if (error instanceof ResponseBodySizeLimitError) {
       ctx.deps.registry.saturateBytes(state.runId, state.grant.grantId);
     }
     return FAILED;

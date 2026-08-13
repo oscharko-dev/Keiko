@@ -2542,20 +2542,28 @@ function EditorRuntimeWidget({
       lastHotExitSnapshotKeyRef.current = snapshotKey;
       dropHotExitPersistenceFailure(writeEditorHotExitSnapshot(snapshot));
     };
-    const timer = window.setTimeout(flushHotExitSnapshot, HOT_EXIT_WRITE_DEBOUNCE_MS);
-    // KEIKO-0337: a graceful tab close/refresh fires `pagehide`, not the debounce timer above, so
-    // the last <400ms of edits would otherwise never reach the hot-exit store. Clear the pending
-    // timer and flush synchronously — fire-and-forget, since `writeEditorHotExitSnapshot` is
-    // IndexedDB + async-hash based and pagehide handlers cannot await. `pagehide`, not
-    // `beforeunload`, is the correct modern event: it never blocks navigation or triggers a
-    // confirm-close prompt.
-    const handlePageHide = (): void => {
+    let pending = true;
+    const flushPendingHotExitSnapshot = (): void => {
+      if (!pending) return;
+      pending = false;
       window.clearTimeout(timer);
       flushHotExitSnapshot();
     };
+    const timer = window.setTimeout(flushPendingHotExitSnapshot, HOT_EXIT_WRITE_DEBOUNCE_MS);
+    // KEIKO-0337: start the asynchronous IndexedDB/hash write when the document becomes hidden,
+    // before page teardown can freeze or abort it. `pagehide` remains a fallback for lifecycle
+    // paths that do not emit visibilitychange. The once-only wrapper also prevents the debounce,
+    // visibility, and teardown paths from racing duplicate writes.
+    const handleVisibilityChange = (): void => {
+      if (document.visibilityState === "hidden") flushPendingHotExitSnapshot();
+    };
+    const handlePageHide = flushPendingHotExitSnapshot;
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("pagehide", handlePageHide);
     return (): void => {
+      pending = false;
       window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("pagehide", handlePageHide);
     };
   }, [

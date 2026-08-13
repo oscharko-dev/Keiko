@@ -67,6 +67,7 @@ interface Harness {
   readonly reserves: { grantId: string }[];
   readonly calls: FetchCall[];
   readonly grantMissing: URL[];
+  readonly saturations: { grantId: string }[];
 }
 
 interface HarnessConfig {
@@ -89,6 +90,7 @@ function harness(config: HarnessConfig): Harness {
   const reserves: { grantId: string }[] = [];
   const calls: FetchCall[] = [];
   const grantMissing: URL[] = [];
+  const saturations: { grantId: string }[] = [];
   const queue = [...(config.responses ?? [])];
   const registry: ResearchGrantRegistry = {
     register: () => undefined,
@@ -107,7 +109,9 @@ function harness(config: HarnessConfig): Harness {
       return config.charge ?? "ok";
     },
     invalidateRun: () => undefined,
-    saturateBytes: () => undefined,
+    saturateBytes: (_runId, grantId) => {
+      saturations.push({ grantId });
+    },
   };
   const deps: ResearchEgressPortDeps = {
     registry,
@@ -131,6 +135,7 @@ function harness(config: HarnessConfig): Harness {
     reserves,
     calls,
     grantMissing,
+    saturations,
   };
 }
 
@@ -397,6 +402,30 @@ describe("researchEgressPort redirect handling", () => {
 });
 
 describe("researchEgressPort transport and budget failures", () => {
+  it("saturates the grant when an unknown-length response exceeds the read cap", async () => {
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller): void {
+          controller.enqueue(new TextEncoder().encode("abc"));
+          controller.enqueue(new TextEncoder().encode("def"));
+          controller.close();
+        },
+      }),
+    );
+    const test = harness({
+      grants: [makeGrant()],
+      responses: [response],
+      portConfig: { maxReadBytes: 4 },
+    });
+
+    await expect(
+      test.execute(egressRequest("https://docs.example.com/"), undefined, LIVE_GUARD),
+    ).resolves.toEqual({ status: "failed" });
+    expect(response.headers.has("content-length")).toBe(false);
+    expect(test.charges).toHaveLength(0);
+    expect(test.saturations).toEqual([{ grantId: "grant-1" }]);
+  });
+
   it("fails closed when the fetch transport throws and drops the body", async () => {
     const test = harness({
       grants: [makeGrant()],

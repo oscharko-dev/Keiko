@@ -171,6 +171,43 @@ afterEach(() => {
 });
 
 describe("EditorRuntimeWidget hot-exit pagehide flush (KEIKO-0337)", () => {
+  it("starts the pending write when the document becomes hidden before page teardown", async () => {
+    setTimeoutSpy = vi.spyOn(window, "setTimeout");
+    const visibilityState = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+
+    render(<EditorRuntimeWidget windowId="hot-exit-hidden" root="/repo" file="src/app.ts" />);
+    await screen.findByTestId("editor-surface");
+
+    act(() => {
+      surface.props?.onContentChange(
+        { text: EDITED_CONTENT, sizeBytes: EDITED_CONTENT.length },
+        "human",
+      );
+    });
+    await waitFor(() => {
+      const armed = setTimeoutSpy?.mock.calls.some(
+        ([, delay]) => delay === HOT_EXIT_WRITE_DEBOUNCE_MS,
+      );
+      expect(armed).toBe(true);
+    });
+    expect(writeEditorHotExitSnapshot).not.toHaveBeenCalled();
+
+    visibilityState.mockReturnValue("hidden");
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    expect(writeEditorHotExitSnapshot).toHaveBeenCalledOnce();
+    expect(writeEditorHotExitSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ content: EDITED_CONTENT }),
+    );
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    expect(writeEditorHotExitSnapshot).toHaveBeenCalledOnce();
+    visibilityState.mockRestore();
+  });
+
   it("flushes the pending hot-exit write on pagehide before the debounce timer fires", async () => {
     const realSetTimeout = globalThis.setTimeout;
     setTimeoutSpy = vi.spyOn(window, "setTimeout");
