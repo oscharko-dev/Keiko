@@ -76,31 +76,41 @@ type CommandHandler = (
   env: EnvSource,
 ) => number | Promise<number>;
 
-const COMMAND_HANDLERS: Readonly<Record<string, CommandHandler>> = {
-  models: runModelsCli,
-  run: runAgentCli,
-  context: (rest, io) => runContextCli(rest, io),
-  verify: (rest, io) => runVerifyCli(rest, io),
-  "gen-tests": runGenTestsCli,
-  investigate: runInvestigateCli,
-  evidence: (rest, io, env) => runEvidenceCli(rest, io, { env }),
-  evaluate: (rest, io, env) => runEvaluateCli(rest, io, env, {}),
-  "prompt-enhancer": (rest, io, env) => runPromptEnhancerCli(rest, io, env, {}),
-  memory: (rest, io, env) => runMemoryCli(rest, io, env),
-  "task-workspace": runTaskWorkspaceCli,
-  init: runInitCli,
-  doctor: runDoctorCli,
-  repair: runRepairCli,
-  uninstall: runUninstallCli,
-  update: runUpdateCli,
-  start: (rest, io, env) => runLifecycleCli("start", rest, io, env),
-  stop: (rest, io, env) => runLifecycleCli("stop", rest, io, env),
-  status: (rest, io, env) => runLifecycleCli("status", rest, io, env),
-  restart: (rest, io, env) => runLifecycleCli("restart", rest, io, env),
-  ui: runUiCli,
-  launcher: runLauncherCli,
-  portable: runPortableCli,
-};
+// A Map has no prototype-chain lookup surface — `.get("toString")` etc. return undefined instead
+// of resolving to inherited Object.prototype functions. An object literal indexed by raw argv let
+// `keiko toString` dispatch into `Object.prototype.toString`, whose "[object Object]" return
+// value became the exit code and crashed `process.exit` with ERR_INVALID_ARG_TYPE (KEIKO-0434).
+const COMMAND_HANDLERS: ReadonlyMap<string, CommandHandler> = new Map<string, CommandHandler>([
+  ["models", runModelsCli],
+  ["run", runAgentCli],
+  ["context", (rest, io): number | Promise<number> => runContextCli(rest, io)],
+  ["verify", (rest, io): number | Promise<number> => runVerifyCli(rest, io)],
+  ["gen-tests", runGenTestsCli],
+  ["investigate", runInvestigateCli],
+  ["evidence", (rest, io, env): number | Promise<number> => runEvidenceCli(rest, io, { env })],
+  ["evaluate", (rest, io, env): number | Promise<number> => runEvaluateCli(rest, io, env, {})],
+  [
+    "prompt-enhancer",
+    (rest, io, env): number | Promise<number> => runPromptEnhancerCli(rest, io, env, {}),
+  ],
+  ["memory", (rest, io, env): number | Promise<number> => runMemoryCli(rest, io, env)],
+  ["task-workspace", runTaskWorkspaceCli],
+  ["init", runInitCli],
+  ["doctor", runDoctorCli],
+  ["repair", runRepairCli],
+  ["uninstall", runUninstallCli],
+  ["update", runUpdateCli],
+  ["start", (rest, io, env): number | Promise<number> => runLifecycleCli("start", rest, io, env)],
+  ["stop", (rest, io, env): number | Promise<number> => runLifecycleCli("stop", rest, io, env)],
+  ["status", (rest, io, env): number | Promise<number> => runLifecycleCli("status", rest, io, env)],
+  [
+    "restart",
+    (rest, io, env): number | Promise<number> => runLifecycleCli("restart", rest, io, env),
+  ],
+  ["ui", runUiCli],
+  ["launcher", runLauncherCli],
+  ["portable", runPortableCli],
+]);
 
 // Dispatches named subcommands; returns undefined when the name is not recognised.
 function dispatchCommand(
@@ -109,7 +119,7 @@ function dispatchCommand(
   io: CliIo,
   env: EnvSource,
 ): number | Promise<number> | undefined {
-  return COMMAND_HANDLERS[name]?.(rest, io, env);
+  return COMMAND_HANDLERS.get(name)?.(rest, io, env);
 }
 
 function handleMetaCommand(first: string | undefined, io: CliIo): number | undefined {

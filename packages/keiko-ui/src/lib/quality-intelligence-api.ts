@@ -318,6 +318,12 @@ export interface QiExportLocalResult {
   readonly byteLen: number;
   readonly body: string;
   readonly encoding?: "base64";
+  // PR-review follow-up (Codex thread 3770357735): counts requested candidates that failed
+  // the deliverable-quality gate and were dropped from the artifact. Present when
+  // approvedOnly is false (so partial contents are possible) and > 0 when the artifact is
+  // less than the full requested set. ExportBar surfaces a warning before triggering the
+  // download so the operator does not accept a partial artifact as complete.
+  readonly omittedByQualityGate?: number;
 }
 
 export interface QiExportDryRunResult {
@@ -326,6 +332,7 @@ export interface QiExportDryRunResult {
   readonly candidateCount: number;
   readonly byteLen: number;
   readonly preview: string;
+  readonly omittedByQualityGate?: number;
 }
 
 export type QiExportResult = QiExportLocalResult | QiExportDryRunResult;
@@ -360,6 +367,14 @@ export interface QiTraceabilityResult {
   readonly contentType: string;
   readonly byteLen: number;
   readonly body: string;
+  /**
+   * Count of covering-candidate ids the server's deliverability gate dropped from the exported
+   * matrix (Codex thread 3772030500). Present so the ExportBar can surface it next to the
+   * download in the same React commit — matching the omittedByQualityGate signal the generic
+   * candidate/TMS export route publishes. `undefined` on responses from older servers that
+   * predate the field.
+   */
+  readonly omittedByQualityGate?: number;
 }
 
 export interface QiTraceabilityOptions {

@@ -37,6 +37,22 @@ const DOCUMENT_XML_ENTRY = "word/document.xml";
 const FOOTNOTES_XML_ENTRY = "word/footnotes.xml";
 const MAX_DOCUMENT_XML_INFLATED_BYTES = 16 * 1024 * 1024;
 const MAX_DOCUMENT_XML_INFLATE_RATIO = 100;
+// KEIKO-0428: cap the number of central-directory entries the zip scan is willing to walk before
+// aborting. A real .docx has on the order of a few dozen entries (`word/document.xml`,
+// `word/footnotes.xml`, styles, themes, media, `[Content_Types].xml`); the ceiling here is a
+// generous multiple that admits every realistic template while denying an adversarial ZIP with
+// hundreds of thousands of tiny non-matching entries (each entry costs ~46 bytes of central
+// directory + filename, so a maxBytes budget in the tens of MB comfortably admits that regime).
+const MAX_DOCX_ZIP_ENTRIES = 4_096;
+// KEIKO-0428: a distinguishable marker so asyncParse's catch translates the scan-budget stop
+// into a PARSER_TIMEOUT diagnostic instead of the generic MALFORMED_INPUT surface. Attached as
+// a symbol-keyed property so subclassing yauzl's Error surface is unnecessary.
+const DOCX_SCAN_BUDGET_EXCEEDED = Symbol("keiko:docx:scanBudgetExceeded");
+// PR-review follow-up on KEIKO-0428: distinguish caller-cancellation from entry/deadline
+// exhaustion at the marker level so the asyncParse catch can map the two to different
+// diagnostic codes (PARSER_CANCELLED vs PARSER_TIMEOUT). Downstream discovery routes those
+// two codes to different failure classifications.
+const DOCX_SCAN_CANCELLED = Symbol("keiko:docx:scanCancelled");
 const HEADING_STYLE_PATTERN = /<w:pStyle\b[^>]*w:val="Heading([1-6])"/i;
 const PARAGRAPH_PATTERN = /<w:p\b[\s\S]*?<\/w:p>/gi;
 const TEXT_RUN_PATTERN = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>/gi;
@@ -125,6 +141,55 @@ function openZip(bytes: Uint8Array): Promise<yauzl.ZipFile> {
 interface DocxZipLimits {
   readonly maxInflatedEntryBytes: number;
   readonly maxInflateRatio: number;
+  // KEIKO-0428: cooperative bounds on the CENTRAL-DIRECTORY WALK itself. The existing
+  // maxInflated*/maxInflateRatio bounds only guard the CONTENT of the two entries that are
+  // actually decompressed; a many-entry ZIP whose central directory is huge could walk past
+  // options.timeoutMs undetected because asyncParse's shouldStop() check fires ONCE, AFTER
+  // readDocxXmlParts has already resolved. These bounds land inside the loop so the scan can
+  // give up cooperatively when it hits either the caller's deadline or the entry-count ceiling.
+  readonly now: () => number;
+  readonly startedAt: number;
+  readonly timeoutMs: number;
+  readonly maxEntries: number;
+  // PR-review follow-up: the caller's cancellation signal, threaded into the loop so an
+  // abort surfaces AS SOON AS the current entry finishes rather than at the end of the
+  // central-directory walk. Undefined when no signal is present (production tests, cheap
+  // callers) and left unchecked.
+  readonly signal?: AbortSignal | undefined;
+}
+
+function docxScanBudgetError(message: string): Error {
+  const error = new Error(message);
+  Object.defineProperty(error, DOCX_SCAN_BUDGET_EXCEEDED, {
+    value: true,
+    enumerable: false,
+  });
+  return error;
+}
+
+function docxScanCancelledError(message: string): Error {
+  const error = new Error(message);
+  Object.defineProperty(error, DOCX_SCAN_CANCELLED, {
+    value: true,
+    enumerable: false,
+  });
+  return error;
+}
+
+function isDocxScanBudgetError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as Record<PropertyKey, unknown>)[DOCX_SCAN_BUDGET_EXCEEDED] === true
+  );
+}
+
+function isDocxScanCancelledError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as Record<PropertyKey, unknown>)[DOCX_SCAN_CANCELLED] === true
+  );
 }
 
 function maxInflatedEntryBytes(maxInputBytes: number): number {
@@ -213,12 +278,34 @@ function isDocxXmlEntry(name: string): boolean {
   return name === DOCUMENT_XML_ENTRY || name === FOOTNOTES_XML_ENTRY;
 }
 
+function scanBudgetStop(limits: DocxZipLimits, entriesSeen: number): Error | undefined {
+  if (limits.signal?.aborted === true) {
+    // PR-review follow-up: caller cancellation is distinct from entry/deadline exhaustion,
+    // so map to a separate marker that asyncParse translates to PARSER_CANCELLED rather
+    // than PARSER_TIMEOUT. Downstream discovery routes the two to different failure classes.
+    return docxScanCancelledError(`docx zip scan cancelled after ${String(entriesSeen)} entries`);
+  }
+  if (entriesSeen > limits.maxEntries) {
+    return docxScanBudgetError(
+      `docx zip scan exceeded ${String(limits.maxEntries)} central-directory entries`,
+    );
+  }
+  const elapsed = limits.now() - limits.startedAt;
+  if (elapsed > limits.timeoutMs) {
+    return docxScanBudgetError(
+      `docx zip scan exceeded ${String(limits.timeoutMs)}ms deadline after ${String(entriesSeen)} entries`,
+    );
+  }
+  return undefined;
+}
+
 // eslint-disable-next-line max-lines-per-function
 function readDocxXmlPartsFromZip(zip: ZipFileLike, limits: DocxZipLimits): Promise<DocxXmlParts> {
   // eslint-disable-next-line max-lines-per-function
   return new Promise((resolve, reject) => {
     const parts: { documentXml?: string; footnotesXml?: string } = {};
     let settled = false;
+    let entriesSeen = 0;
 
     const resolveOnce = (): void => {
       if (settled) {
@@ -258,6 +345,15 @@ function readDocxXmlPartsFromZip(zip: ZipFileLike, limits: DocxZipLimits): Promi
     };
 
     const handleEntry = async (entry: yauzl.Entry): Promise<void> => {
+      entriesSeen += 1;
+      // KEIKO-0428: cooperative bound on the central-directory walk itself. Fires whether the
+      // entry is the one we want (skipped or not) so an adversarial ZIP whose first 100k
+      // entries are non-matching still gets stopped inside the loop instead of after it.
+      const scanStop = scanBudgetStop(limits, entriesSeen);
+      if (scanStop !== undefined) {
+        rejectOnce(scanStop);
+        return;
+      }
       if (!isDocxXmlEntry(entry.fileName)) {
         zip.readEntry();
         return;
@@ -286,12 +382,21 @@ function readDocxXmlPartsFromZip(zip: ZipFileLike, limits: DocxZipLimits): Promi
   });
 }
 
-async function readDocxXmlParts(bytes: Uint8Array, maxInputBytes: number): Promise<DocxXmlParts> {
+async function readDocxXmlParts(
+  bytes: Uint8Array,
+  options: ParserOptions,
+  startedAt: number,
+): Promise<DocxXmlParts> {
   const zip = (await openZip(bytes)) as ZipFileLike;
   try {
     return await readDocxXmlPartsFromZip(zip, {
-      maxInflatedEntryBytes: maxInflatedEntryBytes(maxInputBytes),
+      maxInflatedEntryBytes: maxInflatedEntryBytes(options.maxBytes),
       maxInflateRatio: MAX_DOCUMENT_XML_INFLATE_RATIO,
+      now: options.now,
+      startedAt,
+      timeoutMs: options.timeoutMs,
+      maxEntries: MAX_DOCX_ZIP_ENTRIES,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
   } finally {
     closeZipQuietly(zip);
@@ -984,7 +1089,40 @@ function docxParseResult(
   };
 }
 
-// eslint-disable-next-line max-lines-per-function
+// KEIKO-0428: the catch surface distinguishes the scan-budget stop from every other reject
+// path so the diagnostic code matches the shared shouldStop deadline outcome. Kept as its own
+// helper so asyncParse's cyclomatic complexity stays within the repo bar.
+function docxAsyncParseError(
+  capability: ParserCapability,
+  input: ParserSelectionInput,
+  options: ParserOptions,
+  error: unknown,
+): ParserResult {
+  if (isDocxScanCancelledError(error)) {
+    return emptyResult(capability, input.documentId, options, [
+      diagnostic("PARSER_CANCELLED", "caller aborted parser", input.documentId, "info"),
+    ]);
+  }
+  if (isDocxScanBudgetError(error)) {
+    return emptyResult(capability, input.documentId, options, [
+      diagnostic(
+        "PARSER_TIMEOUT",
+        "docx zip scan exceeded budget before word/document.xml was reached",
+        input.documentId,
+        "info",
+      ),
+    ]);
+  }
+  return emptyResult(capability, input.documentId, options, [
+    diagnostic(
+      "MALFORMED_INPUT",
+      "docx parser rejected malformed or unsupported document",
+      input.documentId,
+      "error",
+    ),
+  ]);
+}
+
 async function asyncParse(
   capability: ParserCapability,
   input: ParserSelectionInput,
@@ -1001,7 +1139,7 @@ async function asyncParse(
 
   const startedAt = options.now();
   try {
-    const xmlParts = await readDocxXmlParts(input.bytes, options.maxBytes);
+    const xmlParts = await readDocxXmlParts(input.bytes, options, startedAt);
     const limit = shouldStop(startedAt, options, 0);
     if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
       return emptyResult(capability, input.documentId, options, [
@@ -1029,15 +1167,8 @@ async function asyncParse(
       parsed.diagnostics,
       startedAt,
     );
-  } catch {
-    return emptyResult(capability, input.documentId, options, [
-      diagnostic(
-        "MALFORMED_INPUT",
-        "docx parser rejected malformed or unsupported document",
-        input.documentId,
-        "error",
-      ),
-    ]);
+  } catch (error) {
+    return docxAsyncParseError(capability, input, options, error);
   }
 }
 

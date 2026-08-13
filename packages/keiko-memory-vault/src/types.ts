@@ -198,6 +198,64 @@ export interface MemoryVaultStore {
   readonly deleteEdge: (edgeId: MemoryEdgeId) => void;
   readonly upsertEmbedding: (memoryId: MemoryId, embedding: MemoryEmbeddingInput) => void;
   readonly deleteEmbedding: (memoryId: MemoryId) => void;
+  // KEIKO-0440 (PR-review follow-up): reserved for `keiko memory reembed --force`. Atomic
+  // vault-wide replace: delete every existing embedding row and insert the supplied set in
+  // ONE transaction. Any failure inside the swap rolls the whole transaction back so the
+  // prior vector space is preserved. Needed because upsertEmbeddingRow rejects a new
+  // (provider, modelId, dimensions, metric) tuple while any old-tuple row remains — the
+  // delete phase must complete before the first insert. Not intended for any other caller.
+  //
+  // PR-review follow-up (Codex thread 3769903807): the optional `expectedSnapshot` map lets
+  // the caller detect concurrent UPDATES to already-staged rows (not just concurrent INSERTs
+  // of new rows). When provided, each row in memory_embeddings must appear in the map with a
+  // matching `createdAt`; a mismatch means another writer replaced that memory's vector
+  // during our staging window, so the swap aborts before the delete.
+  //
+  // PR-review follow-up (Codex thread 3770211415): the optional `expectedMemoryVersions` map
+  // additionally binds each staged pair to the memories.updated_at we saw at stage time.
+  // Inside the swap the vault reads the current memories.updated_at for each pair and
+  // aborts if it differs — a concurrent body edit that happened while we were awaiting the
+  // embed provider would otherwise commit a vector against the OLD body onto the new memory.
+  //
+  // PR-review follow-up (Codex thread 3771128741): the optional `expectedAcceptedIds` set
+  // catches a concurrent CREATE / status → accepted that lands between the CLI's target
+  // enumeration and this swap. When provided, the vault reads the current accepted-id set
+  // inside the transaction and aborts if any id is missing from expectedAcceptedIds —
+  // otherwise the newly-accepted memory would remain unembedded despite --force reporting
+  // success.
+  readonly replaceAllEmbeddings: (
+    pairs: readonly { readonly memoryId: MemoryId; readonly input: MemoryEmbeddingInput }[],
+    expectedSnapshot?: ReadonlyMap<MemoryId, number>,
+    expectedMemoryVersions?: ReadonlyMap<MemoryId, number>,
+    expectedAcceptedIds?: ReadonlySet<MemoryId>,
+  ) => void;
+  // KEIKO-0440 (PR-review follow-up, Codex thread 3769557887): expose the set of memoryIds
+  // that currently carry an embedding row. `keiko memory reembed --force` uses this to stage
+  // a new vector for every memory the vault-wide replace would delete, so a memory that was
+  // accepted-then-archived (embedding retained by design) is preserved rather than silently
+  // dropped. The list is order-agnostic and driven by embedding presence, not status.
+  readonly listEmbeddedMemoryIds: () => readonly MemoryId[];
+  // PR-review follow-up (Codex thread 3771011289): enumerate all memoryIds of a given status
+  // in ONE query. `keiko memory reembed --force` needs a stable accepted-id set independent
+  // of offset-paged listMemoriesAcrossScopes, whose OFFSET semantics skip rows if another
+  // writer deletes an earlier page while the pagination is running.
+  readonly listMemoryIdsByStatus: (status: MemoryStatus) => readonly MemoryId[];
+  // PR-review follow-up (Codex thread 3771333886): return up to `limit` accepted memoryIds
+  // that do NOT currently carry an embedding, in one stable query. `keiko memory reembed`
+  // (default path) uses this so a small --limit does not force the CLI to materialise the
+  // full accepted set + full embedded set to compute the difference.
+  readonly listAcceptedMemoryIdsMissingEmbedding: (limit: number) => readonly MemoryId[];
+  // PR-review follow-up (Codex thread 3771684315): O(1) counters for the CLI's report
+  // rows so `reembed --limit 1` no longer materialises O(total memories) worth of ids
+  // just to compute skipped and remaining.
+  readonly countMemoriesByStatus: (status: MemoryStatus) => number;
+  readonly countAcceptedMemoriesMissingEmbedding: () => number;
+  // PR-review follow-up (Codex thread 3769903807): snapshot the (memoryId, createdAt) pairs
+  // of every embedding row at a moment in time. The force reembed pipeline captures this
+  // BEFORE its network-backed staging phase and hands it back to replaceAllEmbeddings so a
+  // concurrent update to an already-staged row is detected (createdAt mismatch), not just
+  // a concurrent insert.
+  readonly snapshotEmbeddedMemoryIds: () => ReadonlyMap<MemoryId, number>;
   readonly getEmbedding: (memoryId: MemoryId) => MemoryEmbeddingRow | undefined;
   readonly getEmbeddings: (
     memoryIds: readonly MemoryId[],

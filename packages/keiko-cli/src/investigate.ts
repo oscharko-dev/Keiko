@@ -352,8 +352,37 @@ export async function runInvestigateCli(
   }
 }
 
-// A Node fs read error carries a string `code` (e.g. ENOENT); narrow without `any`.
+// A Node fs read error carries a string `code` from a fixed errno set. `code` alone is the
+// discriminant of the repository's own typed error taxonomy too (GatewayError,
+// ProviderCredentialVaultError, …), so a bare "has a non-empty string code" predicate
+// misclassified every typed non-fs error as a file-read failure and told the operator to check
+// evidence paths that were perfectly fine. Narrow to the fs errno codes we actually see through
+// the workspace file reader (KEIKO-0464). Extended (PR-review follow-up) to cover I/O and
+// descriptor-exhaustion errors that also surface as legitimate read failures under load: EIO
+// (hardware/driver), ENFILE (system-wide fd cap), ETIMEDOUT (network filesystem), and EBUSY
+// (path temporarily in use). Domain-error codes stay excluded — they never begin with 'E'
+// followed by a POSIX errno name.
+const FS_READ_ERROR_CODES: ReadonlySet<string> = new Set([
+  "ENOENT",
+  "EACCES",
+  // PR-review follow-up (KfQ thread 3769766886): EPERM (POSIX "operation not permitted",
+  // e.g. capability-scoped denial distinct from EACCES) and EROFS ("read-only filesystem",
+  // e.g. a volume that flipped to RO mid-read on external media) both surface as legitimate
+  // read failures the CLI should convert to a user-visible message instead of rethrowing.
+  "EPERM",
+  "EROFS",
+  "EISDIR",
+  "ENOTDIR",
+  "ELOOP",
+  "ENAMETOOLONG",
+  "EMFILE",
+  "ENFILE",
+  "EIO",
+  "ETIMEDOUT",
+  "EBUSY",
+]);
+
 function isFileReadError(error: Error): boolean {
   const code = (error as { code?: unknown }).code;
-  return typeof code === "string" && code.length > 0;
+  return typeof code === "string" && FS_READ_ERROR_CODES.has(code);
 }

@@ -5,6 +5,7 @@ import type {
   MemoryProposalId,
   ProjectId,
   UserId,
+  WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
 
 import {
@@ -57,6 +58,31 @@ describe("tryExtractRemember", () => {
     expect(outcome?.kind).toBe("candidate");
     if (outcome?.kind !== "candidate") return;
     expect(outcome.proposal.body).toBe("use pnpm not npm");
+    expect(outcome.proposal.scope).toEqual({ kind: "project", projectId: "p-1" });
+  });
+
+  // Regression pin (audit KEIKO-0336): the "about this workspace|project" hint used a
+  // non-capturing group so tryExtractRemember never inspected which noun matched — scope was
+  // decided by implicit context precedence (project > workspace > ...) and a user asking for
+  // workspace scope inside a project silently got a project-scoped memory instead. Both nouns
+  // must now flow through scopeOrReject's scopeKind override so the stated intent wins.
+  it('extracts "remember about this workspace: X" with workspace scope even when projectId is set', () => {
+    const outcome = tryExtractRemember(
+      "remember about this workspace: use pnpm not npm",
+      ctx({ projectId: "p-1" as ProjectId, workspaceId: "w-1" as WorkspaceId }),
+    );
+    expect(outcome?.kind).toBe("candidate");
+    if (outcome?.kind !== "candidate") return;
+    expect(outcome.proposal.body).toBe("use pnpm not npm");
+    expect(outcome.proposal.scope).toEqual({ kind: "workspace", workspaceId: "w-1" });
+  });
+
+  it('"remember about this workspace: X" fails closed when workspaceId is absent from context', () => {
+    const outcome = tryExtractRemember(
+      "remember about this workspace: use pnpm not npm",
+      ctx({ projectId: "p-1" as ProjectId }),
+    );
+    expect(outcome).toEqual({ kind: "rejected", reason: "scope-not-resolvable" });
   });
 
   it("flips requiresApproval=true when body classifies as confidential", () => {

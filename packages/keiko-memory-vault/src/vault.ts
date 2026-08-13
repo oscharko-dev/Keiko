@@ -18,6 +18,7 @@ import type {
   MemoryId,
   MemoryRecord,
   MemoryScope,
+  MemoryStatus,
 } from "@oscharko-dev/keiko-contracts/memory";
 import { chmodIfPresent, openMemoryDatabase } from "./db.js";
 import { resolveMemoryDir, resolveMemoryDbPath } from "./paths.js";
@@ -159,6 +160,183 @@ function withSidecarHardening<T>(opts: ResolvedOptions, write: () => T): T {
   }
 }
 
+// Atomic vault-wide REPLACE for `keiko memory reembed --force` — the ONLY caller. One
+// transaction: enumerate → concurrent-write check → delete every existing embedding row →
+// reinsert the staged set. Any failure inside the swap rolls the whole transaction back
+// so the prior vector space is preserved. The embedding-row schema check rejects a new
+// (provider, modelId, dimensions, metric) tuple while any pre-existing row from the OLD
+// tuple survives, so the delete phase must complete before the first insert; performing
+// both under one BEGIN IMMEDIATE/COMMIT guarantees that AND takes the RESERVED lock up
+// front so no other writer can slip an embedding row in between the enumeration and the
+// delete phase.
+interface EmbeddingRowSnapshot {
+  readonly memory_id: string;
+  readonly created_at: number;
+}
+
+// PR-review follow-up (Codex threads 3769711634 + 3769903807 + 3770110875): concurrent
+// INSERT, UPDATE, and DELETE detection for --force. The CLI staged vectors OUTSIDE this
+// transaction (network embed calls are slow), so between snapshot and swap another writer
+// may have inserted a new embedding row (id not in stagedIds), upserted a fresh vector
+// for one of our staged rows (created_at differs from the snapshot), or deleted a row
+// that WAS in the snapshot. All three would silently corrupt the swap:
+//   - INSERT: our vault-wide delete drops the new row.
+//   - UPDATE: our staged vector overwrites the newer vector with a stale one.
+//   - DELETE: our staged vector recreates the row the deleter meant to remove.
+// Refuse and let the operator retry.
+function assertReembedSetUnchanged(
+  existing: readonly EmbeddingRowSnapshot[],
+  stagedIds: ReadonlySet<MemoryId>,
+  expectedSnapshot: ReadonlyMap<MemoryId, number> | undefined,
+): void {
+  const extras = existing.filter((row) => !stagedIds.has(row.memory_id as MemoryId));
+  if (extras.length > 0) {
+    throw new MemoryStorageError(
+      "precondition-failed",
+      "Embedding vector space changed during --force staging; rerun.",
+    );
+  }
+  if (expectedSnapshot === undefined) return;
+  const currentIds = new Set<MemoryId>(existing.map((row) => row.memory_id as MemoryId));
+  for (const [expectedId] of expectedSnapshot) {
+    if (!currentIds.has(expectedId)) {
+      throw new MemoryStorageError(
+        "precondition-failed",
+        "Embedding row deleted during --force staging; rerun.",
+      );
+    }
+  }
+  for (const row of existing) {
+    const expected = expectedSnapshot.get(row.memory_id as MemoryId);
+    if (expected === undefined || expected !== row.created_at) {
+      throw new MemoryStorageError(
+        "precondition-failed",
+        "Embedding row changed during --force staging; rerun.",
+      );
+    }
+  }
+}
+
+// PR-review follow-up (Codex thread 3770211415): a memory whose body was edited during the
+// CLI's network-backed staging phase would otherwise get committed with a vector generated
+// from the OLD body — the embedding-row snapshot never sees the mutation because a new
+// memory has no prior embedding row and the BFF's best-effort refresh may fail silently.
+// Read each expected memory's current updated_at inside the transaction and refuse the
+// swap on any drift. Missing rows are also drift (concurrent delete). Absent expectation
+// map skips the check for backward callers.
+function assertMemoryVersionsUnchanged(
+  db: DatabaseSync,
+  expectedMemoryVersions: ReadonlyMap<MemoryId, number> | undefined,
+): void {
+  if (!expectedMemoryVersions?.size) return;
+  const stmt = db.prepare("SELECT updated_at FROM memories WHERE id = ?");
+  for (const [memoryId, expectedUpdatedAt] of expectedMemoryVersions) {
+    const row = stmt.get(memoryId) as { readonly updated_at: number } | undefined;
+    if (row?.updated_at !== expectedUpdatedAt) {
+      throw new MemoryStorageError(
+        "precondition-failed",
+        "Memory revision changed during --force staging; rerun.",
+      );
+    }
+  }
+}
+
+// PR-review follow-ups (Codex 3771128741 + 3771970107): the accepted-memory set must be
+// checked for equality against the expectation in BOTH directions — a newly-accepted memory
+// that is missing from the expectation, AND a previously-accepted memory that has since
+// been archived (or otherwise left the accepted set). One-way inclusion is not enough:
+// consider a memory M in the CLI's target snapshot that is archived after the target
+// snapshot but before its row is read, so the CLI captures its post-archive updated_at as
+// the expected memory-version. assertMemoryVersionsUnchanged would then observe the same
+// updated_at and pass, and a one-way accepted check would also pass (M is absent from BOTH
+// current rows and the expectation-covered slice of them). The swap would then attach a
+// new embedding to a memory that is no longer accepted. Enforcing set equality closes that
+// window: any status drift — addition or removal — aborts the force swap. Absent
+// expectation set skips the check for backward callers.
+function assertAcceptedSetUnchanged(
+  db: DatabaseSync,
+  expectedAcceptedIds: ReadonlySet<MemoryId> | undefined,
+): void {
+  if (expectedAcceptedIds === undefined) return;
+  const rows = db.prepare("SELECT id FROM memories WHERE status = 'accepted'").all() as {
+    readonly id: string;
+  }[];
+  const currentAcceptedIds = new Set<MemoryId>(rows.map((row) => row.id as MemoryId));
+  for (const currentId of currentAcceptedIds) {
+    if (!expectedAcceptedIds.has(currentId)) {
+      throw new MemoryStorageError(
+        "precondition-failed",
+        "Accepted memory set changed during --force staging; rerun.",
+      );
+    }
+  }
+  for (const expectedId of expectedAcceptedIds) {
+    if (!currentAcceptedIds.has(expectedId)) {
+      throw new MemoryStorageError(
+        "precondition-failed",
+        "Accepted memory set changed during --force staging; rerun.",
+      );
+    }
+  }
+}
+
+function snapshotEmbeddedMemoryIdsFromDb(db: DatabaseSync): ReadonlyMap<MemoryId, number> {
+  const rows = db
+    .prepare("SELECT memory_id, created_at FROM memory_embeddings")
+    .all() as unknown as EmbeddingRowSnapshot[];
+  const snapshot = new Map<MemoryId, number>();
+  for (const row of rows) snapshot.set(row.memory_id as MemoryId, row.created_at);
+  return snapshot;
+}
+
+function replaceAllEmbeddingRowsAtomically(
+  db: DatabaseSync,
+  opts: ResolvedOptions,
+  pairs: readonly { readonly memoryId: MemoryId; readonly input: MemoryEmbeddingInput }[],
+  expectedSnapshot: ReadonlyMap<MemoryId, number> | undefined,
+  expectedMemoryVersions: ReadonlyMap<MemoryId, number> | undefined,
+  expectedAcceptedIds: ReadonlySet<MemoryId> | undefined,
+): void {
+  // PR-review follow-up (Codex thread 3769903813): the bulk path used to skip
+  // gateEmbeddingInput, so a provider returning a vector above MAX_EMBEDDING_DIMENSIONS
+  // (or with a non-finite element, empty vector, unknown metric, etc.) could be persisted
+  // via upsertEmbeddingRow. Validate every pair up front so the vault-wide swap enforces
+  // the same input bounds the single-row upsert does.
+  for (const pair of pairs) gateEmbeddingInput(pair.input);
+  const stagedIds = new Set<MemoryId>(pairs.map((pair) => pair.memoryId));
+  db.exec("BEGIN IMMEDIATE");
+  let existing: readonly EmbeddingRowSnapshot[] = [];
+  try {
+    existing = db
+      .prepare("SELECT memory_id, created_at FROM memory_embeddings")
+      .all() as unknown as EmbeddingRowSnapshot[];
+    assertReembedSetUnchanged(existing, stagedIds, expectedSnapshot);
+    assertMemoryVersionsUnchanged(db, expectedMemoryVersions);
+    assertAcceptedSetUnchanged(db, expectedAcceptedIds);
+    for (const row of existing) {
+      deleteEmbeddingRow(db, row.memory_id as MemoryId);
+    }
+    for (const pair of pairs) {
+      upsertEmbeddingRow(db, pair.memoryId, pair.input, opts.now(), opts.cipher);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  for (const row of existing) {
+    opts.emit({ kind: "embedding:deleted", memoryId: row.memory_id as MemoryId });
+  }
+  for (const pair of pairs) {
+    opts.emit({
+      kind: "embedding:upserted",
+      memoryId: pair.memoryId,
+      provider: pair.input.provider,
+      modelId: pair.input.modelId,
+    });
+  }
+}
+
 const SUPPRESSION_HMAC_KEY_NAME = "body-suppression-hmac-v1";
 const SUPPRESSION_HMAC_KEY_BYTES = 32;
 
@@ -214,6 +392,13 @@ function mergePatch(existing: MemoryRecord, patch: MemoryUpdatePatch, nowMs: num
   // updatedAt is owned by the vault, not the patch, so the caller cannot regress it. createdAt
   // and the scope coordinate are immutable on update (scope changes require supersession +
   // re-insert by design — moving a record across scopes is an audit event, not a field write).
+  //
+  // PR-review follow-up (Codex thread 3771815009): assign a strictly-monotonic revision by
+  // bumping updatedAt past the existing value when the clock cannot separate two writes
+  // (same-millisecond retry, backwards clock adjustment). Without this bump, --force's
+  // assertMemoryVersionsUnchanged precondition could accept a concurrent body/status
+  // mutation whose updatedAt collides with the observed value, letting a vector generated
+  // from the old body commit against the new record.
   const next: MemoryRecord = {
     ...existing,
     ...patch,
@@ -221,7 +406,7 @@ function mergePatch(existing: MemoryRecord, patch: MemoryUpdatePatch, nowMs: num
     schemaVersion: existing.schemaVersion,
     scope: existing.scope,
     createdAt: existing.createdAt,
-    updatedAt: nowMs,
+    updatedAt: Math.max(nowMs, existing.updatedAt + 1),
   };
   return next;
 }
@@ -288,6 +473,10 @@ type MemoryMutators = Pick<
   | "listMemoriesAcrossScopes"
   | "listMemoriesByScope"
   | "listMemoryMetadataByScope"
+  | "listMemoryIdsByStatus"
+  | "listAcceptedMemoryIdsMissingEmbedding"
+  | "countMemoriesByStatus"
+  | "countAcceptedMemoriesMissingEmbedding"
 >;
 
 // Internal-only: carries the forgotten memory's embedding (fetched BEFORE the row is deleted,
@@ -367,12 +556,19 @@ function runDelete(
   return ready.result;
 }
 
+// Dedupe the batch by memory id BEFORE preparing/applying any delete. A repeated id in one batch
+// call otherwise causes the second occurrence's applyPreparedDelete to observe changes===0 (the
+// row was already removed by the first pass within the same transaction) and throw not-found,
+// which rolls back every other valid deletion. Semantics are last-wins: when the same id appears
+// more than once, the LAST occurrence's options survive (matching how a Map collapses duplicate
+// keys). Audit KEIKO-0442.
 function runBatchDeleteMemories(
   db: DatabaseSync,
   deletes: readonly MemoryBatchDelete[],
   opts: ResolvedOptions,
 ): readonly MemoryDeleteResult[] {
-  const ready = deletes.map((entry) => prepareDelete(db, entry.id, entry.options, opts));
+  const deduped = [...new Map(deletes.map((entry) => [entry.id, entry])).values()];
+  const ready = deduped.map((entry) => prepareDelete(db, entry.id, entry.options, opts));
   db.exec("BEGIN");
   try {
     for (const prepared of ready) {
@@ -445,13 +641,41 @@ function assertGraphPrecondition(
   }
 }
 
+// PR-review follow-up (Codex thread 3772030490): single-row updateMemory used to run
+// read-then-write without a transaction, so two concurrent writers on the same row could
+// both read the same existing.updatedAt and compute the same +1 revision. That collision
+// let --force's assertMemoryVersionsUnchanged accept a stale vector against a body that had
+// been overwritten between snapshot and swap. Wrap in BEGIN IMMEDIATE so the write lock is
+// held BEFORE the read — matching runBatchUpdateMemories' envelope — and no other writer
+// can interleave. The mergePatch +1 monotonic bump stays load-bearing for same-millisecond
+// writes within one connection.
+function runSingleUpdateMemory(
+  db: DatabaseSync,
+  update: MemoryBatchUpdate,
+  opts: ResolvedOptions,
+): MemoryRecord {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const ready = updateMemoryInPlace(db, update, opts);
+    db.exec("COMMIT");
+    return ready;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function runBatchUpdateMemories(
   db: DatabaseSync,
   updates: readonly MemoryBatchUpdate[],
   opts: ResolvedOptions,
 ): readonly MemoryRecord[] {
   const ready: MemoryRecord[] = [];
-  db.exec("BEGIN");
+  // PR-review follow-up (Codex thread 3772030490): BEGIN (deferred) only takes the write lock
+  // on the first UPDATE, leaving room for another writer to interleave a read of the same
+  // updated_at before we do. BEGIN IMMEDIATE reserves the write lock up front so every
+  // read + monotonic-revision compute happens under exclusive write access.
+  db.exec("BEGIN IMMEDIATE");
   try {
     for (const update of updates) {
       ready.push(updateMemoryInPlace(db, update, opts));
@@ -503,6 +727,10 @@ type MemoryReadOps = Pick<
   | "listMemoriesAcrossScopes"
   | "listMemoriesByScope"
   | "listMemoryMetadataByScope"
+  | "listMemoryIdsByStatus"
+  | "listAcceptedMemoryIdsMissingEmbedding"
+  | "countMemoriesByStatus"
+  | "countAcceptedMemoriesMissingEmbedding"
 >;
 
 function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWriteOps {
@@ -517,7 +745,7 @@ function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWri
     },
     updateMemory: (id: MemoryId, patch: MemoryUpdatePatch, nowMs: number): MemoryRecord => {
       return withSidecarHardening(opts, () => {
-        const ready = updateMemoryInPlace(db, { id, patch, nowMs }, opts);
+        const ready = runSingleUpdateMemory(db, { id, patch, nowMs }, opts);
         opts.emit({ kind: "memory:updated", record: ready });
         return ready;
       });
@@ -585,7 +813,56 @@ function buildMemoryReadOps(db: DatabaseSync, opts: ResolvedOptions): MemoryRead
       const nowMs = effective.nowMs ?? opts.now();
       return listMemoryMetadataByScopeRows(db, scope, effective, nowMs);
     },
+    listMemoryIdsByStatus: (status: MemoryStatus): readonly MemoryId[] =>
+      listMemoryIdsByStatusFromDb(db, status),
+    listAcceptedMemoryIdsMissingEmbedding: (limit: number): readonly MemoryId[] =>
+      listAcceptedMemoryIdsMissingEmbeddingFromDb(db, limit),
+    countMemoriesByStatus: (status: MemoryStatus): number =>
+      countMemoriesByStatusFromDb(db, status),
+    countAcceptedMemoriesMissingEmbedding: (): number =>
+      countAcceptedMemoriesMissingEmbeddingFromDb(db),
   };
+}
+
+function countMemoriesByStatusFromDb(db: DatabaseSync, status: MemoryStatus): number {
+  const row = db.prepare("SELECT COUNT(*) AS n FROM memories WHERE status = ?").get(status) as {
+    readonly n: number;
+  };
+  return row.n;
+}
+
+function countAcceptedMemoriesMissingEmbeddingFromDb(db: DatabaseSync): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM memories AS m
+       WHERE m.status = 'accepted'
+         AND NOT EXISTS (SELECT 1 FROM memory_embeddings e WHERE e.memory_id = m.id)`,
+    )
+    .get() as { readonly n: number };
+  return row.n;
+}
+
+function listMemoryIdsByStatusFromDb(db: DatabaseSync, status: MemoryStatus): readonly MemoryId[] {
+  const rows = db.prepare("SELECT id FROM memories WHERE status = ?").all(status) as {
+    readonly id: string;
+  }[];
+  return rows.map((row) => row.id as MemoryId);
+}
+
+function listAcceptedMemoryIdsMissingEmbeddingFromDb(
+  db: DatabaseSync,
+  limit: number,
+): readonly MemoryId[] {
+  if (!Number.isSafeInteger(limit) || limit <= 0) return [];
+  const rows = db
+    .prepare(
+      `SELECT m.id FROM memories AS m
+       WHERE m.status = 'accepted'
+         AND NOT EXISTS (SELECT 1 FROM memory_embeddings e WHERE e.memory_id = m.id)
+       LIMIT ?`,
+    )
+    .all(limit) as { readonly id: string }[];
+  return rows.map((row) => row.id as MemoryId);
 }
 
 function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMutators {
@@ -604,6 +881,9 @@ type EdgeAndEmbeddingOps = Pick<
   | "deleteEdge"
   | "upsertEmbedding"
   | "deleteEmbedding"
+  | "replaceAllEmbeddings"
+  | "listEmbeddedMemoryIds"
+  | "snapshotEmbeddedMemoryIds"
   | "getEmbedding"
   | "getEmbeddings"
 >;
@@ -615,7 +895,13 @@ type EdgeOps = Pick<
 
 type EmbeddingOps = Pick<
   MemoryVaultStore,
-  "upsertEmbedding" | "deleteEmbedding" | "getEmbedding" | "getEmbeddings"
+  | "upsertEmbedding"
+  | "deleteEmbedding"
+  | "replaceAllEmbeddings"
+  | "listEmbeddedMemoryIds"
+  | "snapshotEmbeddedMemoryIds"
+  | "getEmbedding"
+  | "getEmbeddings"
 >;
 
 type TombstoneAndAccessOps = Pick<
@@ -703,35 +989,73 @@ function buildEdgeOps(db: DatabaseSync, opts: ResolvedOptions): EdgeOps {
 function buildEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EmbeddingOps {
   return {
     upsertEmbedding: (memoryId: MemoryId, embedding: MemoryEmbeddingInput): void => {
-      withSidecarHardening(opts, () => {
-        gateEmbeddingInput(embedding);
-        if (getMemoryRow(db, memoryId, opts.cipher) === undefined) {
-          throw new MemoryStorageError("not-found", "Memory not found.");
-        }
-        upsertEmbeddingRow(db, memoryId, embedding, opts.now(), opts.cipher);
-        opts.emit({
-          kind: "embedding:upserted",
-          memoryId,
-          provider: embedding.provider,
-          modelId: embedding.modelId,
-        });
-      });
+      upsertSingleEmbedding(db, opts, memoryId, embedding);
     },
     deleteEmbedding: (memoryId: MemoryId): void => {
+      deleteSingleEmbedding(db, opts, memoryId);
+    },
+    replaceAllEmbeddings: (
+      pairs: readonly { readonly memoryId: MemoryId; readonly input: MemoryEmbeddingInput }[],
+      expectedSnapshot?: ReadonlyMap<MemoryId, number>,
+      expectedMemoryVersions?: ReadonlyMap<MemoryId, number>,
+      expectedAcceptedIds?: ReadonlySet<MemoryId>,
+    ): void => {
       withSidecarHardening(opts, () => {
-        if (getMemoryRow(db, memoryId, opts.cipher) === undefined) {
-          throw new MemoryStorageError("not-found", "Memory not found.");
-        }
-        if (deleteEmbeddingRow(db, memoryId)) {
-          opts.emit({ kind: "embedding:deleted", memoryId });
-        }
+        replaceAllEmbeddingRowsAtomically(
+          db,
+          opts,
+          pairs,
+          expectedSnapshot,
+          expectedMemoryVersions,
+          expectedAcceptedIds,
+        );
       });
     },
+    listEmbeddedMemoryIds: (): readonly MemoryId[] => {
+      const rows = db.prepare("SELECT memory_id FROM memory_embeddings").all() as {
+        readonly memory_id: string;
+      }[];
+      return rows.map((row) => row.memory_id as MemoryId);
+    },
+    snapshotEmbeddedMemoryIds: (): ReadonlyMap<MemoryId, number> =>
+      snapshotEmbeddedMemoryIdsFromDb(db),
     getEmbedding: (memoryId: MemoryId): MemoryEmbeddingRow | undefined =>
       getEmbeddingRow(db, memoryId, opts.cipher),
     getEmbeddings: (memoryIds: readonly MemoryId[]): ReadonlyMap<MemoryId, MemoryEmbeddingRow> =>
       getEmbeddingRows(db, memoryIds, opts.cipher),
   };
+}
+
+function upsertSingleEmbedding(
+  db: DatabaseSync,
+  opts: ResolvedOptions,
+  memoryId: MemoryId,
+  embedding: MemoryEmbeddingInput,
+): void {
+  withSidecarHardening(opts, () => {
+    gateEmbeddingInput(embedding);
+    if (getMemoryRow(db, memoryId, opts.cipher) === undefined) {
+      throw new MemoryStorageError("not-found", "Memory not found.");
+    }
+    upsertEmbeddingRow(db, memoryId, embedding, opts.now(), opts.cipher);
+    opts.emit({
+      kind: "embedding:upserted",
+      memoryId,
+      provider: embedding.provider,
+      modelId: embedding.modelId,
+    });
+  });
+}
+
+function deleteSingleEmbedding(db: DatabaseSync, opts: ResolvedOptions, memoryId: MemoryId): void {
+  withSidecarHardening(opts, () => {
+    if (getMemoryRow(db, memoryId, opts.cipher) === undefined) {
+      throw new MemoryStorageError("not-found", "Memory not found.");
+    }
+    if (deleteEmbeddingRow(db, memoryId)) {
+      opts.emit({ kind: "embedding:deleted", memoryId });
+    }
+  });
 }
 
 function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EdgeAndEmbeddingOps {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  UPDATE_SESSION_PHASES,
   type UpdatePreflightReport,
   type UpdateRemediationStatusReport,
   type UpdateSession,
@@ -12,6 +13,7 @@ import type {
 } from "@oscharko-dev/keiko-server";
 import { runCli, type CliIo } from "./runner.js";
 import { runUpdateCli, type UpdateCliDeps, type UpdateCliPreflight } from "./update.js";
+import { isTerminalUpdateSession, renderApplyTerminal } from "./update-output.js";
 
 interface Captured {
   readonly io: CliIo;
@@ -499,5 +501,55 @@ describe("keiko update CLI", () => {
     expect(c.out()).toContain("Package-manager update failed.");
     expect(output(c)).not.toContain("SECRET_TOKEN");
     expect(output(c)).not.toContain("raw package-manager stderr");
+  });
+});
+
+describe("keiko update CLI — safe error discriminator", () => {
+  it("reports a redacted error discriminator on unexpected failures", async () => {
+    const c = makeIo();
+    const secretPath = "/Users/me/secret";
+    const preflight: UpdateCliPreflight = {
+      getStartupReport: (): Promise<UpdatePreflightReport> => Promise.resolve(baseReport()),
+      runManualCheck: (): Promise<UpdatePreflightReport> => {
+        // A synthetic EACCES surfaced during manual check — the body carries a workspace path
+        // that must NEVER appear in the operator-visible error line.
+        const err = Object.assign(new Error(`boom ${secretPath}`), { code: "EACCES" });
+        return Promise.reject(err);
+      },
+    };
+    const session = fakeSessionManager(baseStatus());
+    const code = await runUpdate(["apply"], c, {
+      preflight,
+      session: session.manager,
+      remediation: fakeRemediation(),
+      sleep: () => Promise.resolve(),
+      pollIntervalMs: 1,
+      maxWaitMs: 1,
+    });
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("Unexpected update command failure.");
+    expect(c.err()).toContain("EACCES");
+    expect(output(c)).not.toContain(secretPath);
+    expect(output(c)).not.toContain("boom ");
+  });
+});
+
+// Structural guard: waitForTerminalSession (via isTerminalUpdateSession) and renderApplyTerminal
+// must agree about which UpdateSessionPhase values are terminal. The two branches were duplicated
+// in update.ts and update-output.ts and would drift silently: the poller could accept a session
+// the renderer still treated as "timed out". Iterating UPDATE_SESSION_PHASES here catches the drift
+// against every declared phase, including any added later.
+describe("update terminal-phase agreement (structural)", () => {
+  it("has renderApplyTerminal treat exactly the isTerminalUpdateSession-terminal phases as terminal", () => {
+    for (const phase of UPDATE_SESSION_PHASES) {
+      const session = updateSession({ phase });
+      const terminalByPredicate = isTerminalUpdateSession(session);
+      const rendered = renderApplyTerminal(session);
+      const treatedAsTerminalByRenderer = !rendered.some((line) =>
+        line.includes("timed out before a terminal session state"),
+      );
+      expect(treatedAsTerminalByRenderer).toBe(terminalByPredicate);
+    }
   });
 });

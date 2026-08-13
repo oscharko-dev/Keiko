@@ -4,7 +4,7 @@
 // vector is unchanged, and a disabled/absent memory request writes nothing.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
@@ -91,7 +91,7 @@ afterEach(() => {
 });
 
 function makeVault(): MemoryVaultStore {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-parity-"));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-parity-"));
   tmpDirs.push(dir);
   const vault = createMemoryVault({ memoryDir: dir, redactString: (s) => s });
   activeVaults.push(vault);
@@ -114,7 +114,7 @@ function legacyDeps(vault: MemoryVaultStore): UiHandlerDeps {
 }
 
 function context(): ConversationMemoryRuntimeContext {
-  const path = mkdtempSync(join(tmpdir(), "keiko-parity-proj-"));
+  const path = mkdtempSync(join(realpathSync(tmpdir()), "keiko-parity-proj-"));
   tmpDirs.push(path);
   return {
     userId: "local-operator" as UserId,

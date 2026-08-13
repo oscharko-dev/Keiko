@@ -101,7 +101,7 @@ export function resolveKeikoBinary(
   return undefined;
 }
 
-function absoluteExistingPath(value: unknown): string | undefined {
+export function absoluteExistingPath(value: unknown): string | undefined {
   return typeof value === "string" && isAbsolute(value) && existsSync(value) ? value : undefined;
 }
 

@@ -500,7 +500,7 @@ function createDefaultSetupCapability(
     embeddingModelIds?.includes(modelId) === true
       ? createDefaultEmbeddingCapability(modelId)
       : createDefaultChatCapability(modelId);
-  const existing = existingCapabilityForSetup(options.current, modelId, baseUrl, {
+  const rawExisting = existingCapabilityForSetup(options.current, modelId, baseUrl, {
     submitted: options,
     // The protocol of record is the DURABLE one, which is what the rebuild persists. Comparing
     // against the env-RESOLVED view made a plain rotation look like a protocol change whenever
@@ -508,6 +508,13 @@ function createDefaultSetupCapability(
     // for nothing (review finding on #3046).
     durable: storedProviderForModel(options.stored, modelId),
   });
+  // When the resolved kind CHANGES (e.g. a stored embedding is being switched back to chat by an
+  // explicit deployment list — review finding on #3037), observations made under the old kind are
+  // stale by construction and carrying them over would produce a hybrid capability whose numeric
+  // fields (contextWindow, maxOutputTokens) belong to the wrong kind — a chat capability with an
+  // embedding's contextWindow: 0 fails config-parse under KEIKO-0520. Treat existing as absent
+  // when its kind no longer matches so the flow restarts from baseCapability's defaults.
+  const existing = rawExisting?.kind === baseCapability.kind ? rawExisting : undefined;
   const discovered = options.modelMetadata?.[modelId];
   const capability: ModelCapability = {
     ...baseCapability,
@@ -661,6 +668,10 @@ interface VoiceProviderRawOptions {
   readonly capabilities: SetupVoiceCapabilities;
   readonly rawCapability?: ModelCapability | undefined;
   readonly voiceProfiles?: readonly VoicePersonaVoice[] | undefined;
+  // KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): pass a per-provider
+  // circuitBreaker override through voice reserialization so applyVoiceProviders /
+  // validateVoiceProviderConnection can round-trip it without dropping.
+  readonly circuitBreaker?: ModelProviderConfig["circuitBreaker"];
 }
 
 function voiceProviderEndpointRaw(options: VoiceProviderRawOptions): Record<string, unknown> {
@@ -698,6 +709,9 @@ function voiceProviderRaw(
     ...voiceProviderEndpointRaw(options),
     capability: configuredOrDefaultVoiceCapability(modelId, options),
     ...(options.voiceProfiles === undefined ? {} : { voiceProfiles: options.voiceProfiles }),
+    // KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): re-serialize the
+    // per-provider circuit-breaker override so a voice/setup save preserves it.
+    ...(options.circuitBreaker === undefined ? {} : { circuitBreaker: options.circuitBreaker }),
     timeoutMs: options.timeoutMs ?? 30_000,
     maxRetries: options.maxRetries ?? 1,
     retryBaseDelayMs: options.retryBaseDelayMs ?? 500,
@@ -940,36 +954,50 @@ function stripDerivedVoicePersonas(capability: ModelCapability): ModelCapability
 // the preserve-existing save path round-trips a parsed config back to raw for persistence, and the
 // Issue #1557 voice-persona round-trip (voiceProfiles preserved, derived supportedVoicePersonas
 // stripped and re-derived on reload — ADR-0094 D2) is pinned directly against this function.
+function rawProviderFromCurrent(
+  provider: ModelProviderConfig,
+  capability: ModelCapability | undefined,
+  timeoutMs: number | undefined,
+): Record<string, unknown> {
+  return {
+    modelId: provider.modelId,
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey,
+    apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+    ...(provider.endpointStyle === undefined ? {} : { endpointStyle: provider.endpointStyle }),
+    ...(provider.apiVersion === undefined ? {} : { apiVersion: provider.apiVersion }),
+    ...(provider.outputTokenParameter === undefined
+      ? {}
+      : { outputTokenParameter: provider.outputTokenParameter }),
+    ...(provider.realtimeAuthMode === undefined
+      ? {}
+      : { realtimeAuthMode: provider.realtimeAuthMode }),
+    timeoutMs: timeoutMs ?? provider.timeoutMs,
+    maxRetries: provider.maxRetries,
+    retryBaseDelayMs: provider.retryBaseDelayMs,
+    // Persist the credential-tier persona → voice-id mapping so personas survive a save; the
+    // derived content-free `supportedVoicePersonas` is stripped and re-derived on reload.
+    ...(provider.voiceProfiles === undefined ? {} : { voiceProfiles: provider.voiceProfiles }),
+    // KEIKO-0167 (PR-review follow-up): persist the per-provider circuit-breaker override so
+    // a credential rotation or an otherwise unrelated setup save does not silently drop it.
+    ...(provider.circuitBreaker === undefined ? {} : { circuitBreaker: provider.circuitBreaker }),
+    ...(capability === undefined ? {} : { capability: stripDerivedVoicePersonas(capability) }),
+  };
+}
+
 export function rawConfigFromCurrent(
   config: GatewayConfig,
   figmaAccessToken: string | undefined,
   timeoutMs?: number,
 ): Record<string, unknown> {
   return {
-    providers: config.providers.map((provider) => {
-      const capability = config.capabilities?.find((item) => item.id === provider.modelId);
-      return {
-        modelId: provider.modelId,
-        baseUrl: provider.baseUrl,
-        apiKey: provider.apiKey,
-        apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
-        ...(provider.endpointStyle === undefined ? {} : { endpointStyle: provider.endpointStyle }),
-        ...(provider.apiVersion === undefined ? {} : { apiVersion: provider.apiVersion }),
-        ...(provider.outputTokenParameter === undefined
-          ? {}
-          : { outputTokenParameter: provider.outputTokenParameter }),
-        ...(provider.realtimeAuthMode === undefined
-          ? {}
-          : { realtimeAuthMode: provider.realtimeAuthMode }),
-        timeoutMs: timeoutMs ?? provider.timeoutMs,
-        maxRetries: provider.maxRetries,
-        retryBaseDelayMs: provider.retryBaseDelayMs,
-        // Persist the credential-tier persona → voice-id mapping so personas survive a save; the
-        // derived content-free `supportedVoicePersonas` is stripped and re-derived on reload.
-        ...(provider.voiceProfiles === undefined ? {} : { voiceProfiles: provider.voiceProfiles }),
-        ...(capability === undefined ? {} : { capability: stripDerivedVoicePersonas(capability) }),
-      };
-    }),
+    providers: config.providers.map((provider) =>
+      rawProviderFromCurrent(
+        provider,
+        config.capabilities?.find((item) => item.id === provider.modelId),
+        timeoutMs,
+      ),
+    ),
     circuitBreaker: config.circuitBreaker,
     ...(config.capabilities === undefined
       ? {}
@@ -1010,6 +1038,9 @@ function setupVoiceProviderFromCurrent(
       capabilities: voiceCapabilities(capability),
       rawCapability: capability,
       ...(provider.voiceProfiles === undefined ? {} : { voiceProfiles: provider.voiceProfiles }),
+      // KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): carry the persisted
+      // per-provider circuit-breaker override through the setup round-trip.
+      ...(provider.circuitBreaker === undefined ? {} : { circuitBreaker: provider.circuitBreaker }),
     },
   ];
 }
@@ -1071,6 +1102,9 @@ function applyVoiceProviders(
           ...(provider.voiceProfiles === undefined
             ? {}
             : { voiceProfiles: provider.voiceProfiles }),
+          ...(provider.circuitBreaker === undefined
+            ? {}
+            : { circuitBreaker: provider.circuitBreaker }),
         }),
       ),
     ],
@@ -1800,6 +1834,11 @@ interface SetupVoiceProvider {
   readonly capabilities: SetupVoiceCapabilities;
   readonly rawCapability?: ModelCapability | undefined;
   readonly voiceProfiles?: readonly VoicePersonaVoice[] | undefined;
+  // KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): carry a per-provider
+  // circuitBreaker override through the setup round-trip. Without this field
+  // setupVoiceProviderFromCurrent / applyVoiceProviders / voiceProviderRaw silently drop
+  // the persisted override on any unrelated voice/setup save.
+  readonly circuitBreaker?: ModelProviderConfig["circuitBreaker"];
 }
 
 function normalizeSetupApiKeyHeaderName(value: unknown): SetupParseResult<string> {
@@ -2370,6 +2409,9 @@ function validateVoiceProviderConnection(
             ...(provider.voiceProfiles === undefined
               ? {}
               : { voiceProfiles: provider.voiceProfiles }),
+            ...(provider.circuitBreaker === undefined
+              ? {}
+              : { circuitBreaker: provider.circuitBreaker }),
           }),
         ],
         circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
@@ -3007,7 +3049,21 @@ function voiceProviderConnection(
       template?.providerLocality,
       defaults.providerLocality,
     ),
+    // PR-review follow-up (Codex thread 3771542619): carry the per-provider circuitBreaker
+    // through the rebuild too. Without this the fresh SetupVoiceProviderDefaults loses the
+    // override, providerForVoiceRoles spreads a reduced object, and applyVoiceProviders
+    // serializes no override — silently switching the provider back to the top-level
+    // breaker policy on any unrelated voice/setup save.
+    ...voiceConnectionCircuitBreakerFragment(template, defaults),
   };
+}
+
+function voiceConnectionCircuitBreakerFragment(
+  template: SetupVoiceProvider | undefined,
+  defaults: SetupVoiceProviderDefaults,
+): Pick<SetupVoiceProvider, "circuitBreaker"> | Record<string, never> {
+  const inherited = template?.circuitBreaker ?? defaults.circuitBreaker;
+  return inherited === undefined ? {} : { circuitBreaker: inherited };
 }
 
 function voiceConnectionEndpointOptions(
@@ -3472,7 +3528,18 @@ function setupVoiceProviderDefaults(
     retryBaseDelayMs: existing?.retryBaseDelayMs ?? 500,
     ...inheritedEndpoint,
     providerLocality,
+    ...inheritedCircuitBreakerFragment(existing),
   };
+}
+
+// KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): inherit the per-provider
+// circuit-breaker override from the stored voice provider so a regenerated
+// SetupVoiceProvider on unrelated setup input keeps it. Extracted so the caller stays
+// under the repo-wide cyclomatic-complexity ceiling.
+function inheritedCircuitBreakerFragment(
+  existing: ModelProviderConfig | undefined,
+): Pick<SetupVoiceProvider, "circuitBreaker"> | Record<string, never> {
+  return existing?.circuitBreaker === undefined ? {} : { circuitBreaker: existing.circuitBreaker };
 }
 
 function validatedVoiceProviders(
@@ -4177,6 +4244,10 @@ function storedDedicatedProviderRaw(
     timeoutMs: provider.timeoutMs,
     maxRetries: provider.maxRetries,
     retryBaseDelayMs: provider.retryBaseDelayMs,
+    // KEIKO-0167 (PR-review follow-up): the per-provider circuit-breaker override must
+    // survive a dedicated-provider restore too, or an unrelated setup save (voice/ocr
+    // deployment change) silently drops it and the runtime falls back to top-level policy.
+    ...(provider.circuitBreaker === undefined ? {} : { circuitBreaker: provider.circuitBreaker }),
     capability,
   };
 }

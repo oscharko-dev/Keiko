@@ -33,17 +33,6 @@ interface VerifyArgs {
   readonly json: boolean;
 }
 
-// Returns the value of a `--flag value` pair, undefined if absent, or null if present without a
-// value (a usage error) — identical contract to runContextCli's flagValue.
-function flagValue(args: readonly string[], name: string): string | undefined | null {
-  const i = args.indexOf(name);
-  if (i === -1) {
-    return undefined;
-  }
-  const value = args[i + 1];
-  return value === undefined || value.startsWith("--") ? null : value;
-}
-
 function parseKinds(raw: string): readonly VerificationKind[] | null {
   const parts = raw.split(",").map((p) => p.trim());
   if (parts.some((p) => !VALID_KINDS.has(p))) {
@@ -52,19 +41,63 @@ function parseKinds(raw: string): readonly VerificationKind[] | null {
   return parts as readonly VerificationKind[];
 }
 
+interface RawVerifyOptions {
+  dir?: string | undefined;
+  only?: string | undefined;
+  changed?: string | undefined;
+  json: boolean;
+}
+
+// KEIKO-0492: left-to-right scan, mirroring parseUiArgs/parseUninstallArgs. Any token that is not
+// `--json`, `--dir <v>`, `--only <v>`, or `--changed <v>` is a usage error — this is what stops a
+// mistyped `--onlyy` from being silently ignored and escalating a targeted run into the full plan.
+// Empty and `--`-prefixed values are also rejected (an empty `--dir` used to fall through to
+// `detectWorkspace("")` because `??` does not replace `""`).
+function readValueFlag(
+  args: readonly string[],
+  index: number,
+  raw: RawVerifyOptions,
+  flag: "--dir" | "--only" | "--changed",
+): number | null {
+  const value = args[index + 1];
+  if (value === undefined || value.length === 0 || value.startsWith("--")) {
+    return null;
+  }
+  if (flag === "--dir") raw.dir = value;
+  else if (flag === "--only") raw.only = value;
+  else raw.changed = value;
+  return index + 2;
+}
+
+function collectVerifyOptions(args: readonly string[]): RawVerifyOptions | null {
+  const raw: RawVerifyOptions = { json: false };
+  let i = 0;
+  while (i < args.length) {
+    const arg = args[i];
+    if (arg === "--json") {
+      raw.json = true;
+      i += 1;
+      continue;
+    }
+    if (arg === "--dir" || arg === "--only" || arg === "--changed") {
+      const next = readValueFlag(args, i, raw, arg);
+      if (next === null) return null;
+      i = next;
+      continue;
+    }
+    return null;
+  }
+  return raw;
+}
+
 function parseArgs(args: readonly string[]): VerifyArgs | null {
-  const dirRaw = flagValue(args, "--dir");
-  const onlyRaw = flagValue(args, "--only");
-  const changedRaw = flagValue(args, "--changed");
-  if (dirRaw === null || onlyRaw === null || changedRaw === null) {
-    return null;
-  }
-  const only = onlyRaw === undefined ? undefined : parseKinds(onlyRaw);
-  if (only === null) {
-    return null;
-  }
-  const changed = changedRaw === undefined ? undefined : changedRaw.split(",").map((p) => p.trim());
-  return { dir: dirRaw ?? ".", only, changed, json: args.includes("--json") };
+  const raw = collectVerifyOptions(args);
+  if (raw === null) return null;
+  const only = raw.only === undefined ? undefined : parseKinds(raw.only);
+  if (only === null) return null;
+  const changed =
+    raw.changed === undefined ? undefined : raw.changed.split(",").map((p) => p.trim());
+  return { dir: raw.dir ?? ".", only, changed, json: raw.json };
 }
 
 async function runPlan(parsed: VerifyArgs): Promise<VerificationReport> {

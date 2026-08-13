@@ -628,7 +628,7 @@ describe("validateAtlassianConnectorActivityRecord (ADR-0128 D6 evidence)", () =
         ),
       ),
     ).toContain(
-      "activity.reasonCode must be a policy denial or authority failure reason for a denied attempt",
+      "activity.reasonCode must be a policy denial, authority failure, or registry failure reason for a denied attempt",
     );
     expect(
       errorsOf(
@@ -657,6 +657,18 @@ describe("validateAtlassianConnectorActivityRecord (ADR-0128 D6 evidence)", () =
         ),
       ),
     ).toContain("activity.reasonCode must be a review reason for a review-required attempt");
+    // KEIKO-0339: the closed `approvals-registry-exhausted` reason is a valid denied-attempt
+    // reasonCode so the "one record per attempt" invariant covers capacity denials without
+    // widening the vocabulary for allowed/review-required attempts.
+    expectOk(
+      validateAtlassianConnectorActivityRecord(
+        activity({
+          disposition: "denied",
+          outcome: "denied",
+          reasonCode: "approvals-registry-exhausted",
+        }),
+      ),
+    );
   });
 
   it("requires a closed failure reason when an allowed attempt fails", () => {

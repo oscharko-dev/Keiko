@@ -19,7 +19,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
@@ -647,10 +647,11 @@ async function assertPackagedLifecycleCommands(tmp) {
   const port = await reserveUiPort();
   // The runtime state / UI data dir MUST live outside the workspace (the lifecycle cwd = tmp): keiko
   // rejects a state dir inside the current workspace so the UI DB can never overlap a selected
-  // repository (packages/keiko-server/src/store/paths.ts). A dir under tmp failed on Linux/Windows;
-  // macOS masked it because /var realpath resolution made the containment check miss. A sibling temp
-  // dir is outside the workspace on every platform.
-  const stateDir = mkdtempSync(join(tmpdir(), "keiko-smoke-state-"));
+  // repository (packages/keiko-server/src/store/paths.ts). It must also live INSIDE the user's home
+  // directory: `keiko start` refuses a state dir outside home to close the launcher's F4 env-var
+  // planting attack (KEIKO-0330). A home-contained temp dir satisfies both: outside the workspace,
+  // inside home, cleaned up when the smoke completes.
+  const stateDir = mkdtempSync(join(homedir(), ".keiko-smoke-state-"));
   const lifecycleRun = lifecycleCommandRunner(tmp, bin, port, stateDir);
 
   let started = false;
@@ -693,5 +694,5 @@ async function main() {
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  void main();
+  await main();
 }

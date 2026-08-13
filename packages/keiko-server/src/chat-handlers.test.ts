@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -125,7 +125,7 @@ function configureBreakerGateway(deps: UiHandlerDeps): void {
 }
 
 async function createGatewayBreakerFixture(): Promise<GatewayBreakerFixture> {
-  const root = mkdtempSync(join(tmpdir(), "keiko-chat-breaker-"));
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "keiko-chat-breaker-"));
   const projectPath = join(root, "repo");
   let deps: UiHandlerDeps | undefined;
   try {

@@ -29,6 +29,7 @@ import {
 } from "./connector-source-metadata.js";
 import { buildKnowledgePodSummary } from "./knowledge-pods.js";
 import { getCapsule } from "./capsule-lifecycle.js";
+import { listCapsuleSources } from "./source-lifecycle.js";
 import { createDefaultParserRegistry } from "./parsers/index.js";
 import { runLocalKnowledgeRetrieval } from "./retrieval/index.js";
 import { scriptedAdapter } from "./testing.js";
@@ -132,6 +133,33 @@ describe("createConnectorPodShell", () => {
       connectorId: CONNECTOR_ID,
       scopeLabels: ["ENG"],
     });
+  });
+});
+
+describe("applyConnectorSyncRun — first-sync-empty (KEIKO-0197)", () => {
+  it("does not promote a bare pod to 'ready' when the very first sync fetches zero items", async () => {
+    // KEIKO-0197: a first-ever applied run with zero items used to force lifecycleState to
+    // 'ready' unconditionally even though ensureConnectorSourceAttached was skipped by
+    // indexAppliedItems' items.length === 0 early return — leaving the capsule in the
+    // self-contradictory state 'ready' with zero attached capsule_sources rows. The fix
+    // scopes the itemCount === 0 → 'ready' branch to runs where the source was already
+    // attached (a repeat/incremental sync reaffirming a prior ready state).
+    createShell();
+    const adapter = countingAdapter();
+    const result = await applyConnectorSyncRun(indexingDeps(adapter), {
+      runId: "run-first-empty",
+      items: [],
+      enumeratedItemKeys: [],
+      deniedItemKeys: [],
+      failedItemKeys: [],
+    });
+    expect(result.changeSummary.outcome).toBe("succeeded");
+    const capsule = getCapsule(store, CAPSULE_ID);
+    const attached = listCapsuleSources(store, CAPSULE_ID).some(
+      (source) => source.id === SOURCE_ID,
+    );
+    // Acceptance from the finding: either the capsule is NOT 'ready', OR a source is attached.
+    expect(capsule?.lifecycleState !== "ready" || attached).toBe(true);
   });
 });
 

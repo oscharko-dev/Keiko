@@ -6,6 +6,7 @@ import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway"
 import {
   loadConfigFromFile,
   loadEgressConfigFromFile,
+  migrateLegacyChatContextWindows,
   parseCapabilityList,
   parseEnvEgressConfigFaultTolerant,
   parseGatewayConfig,
@@ -909,6 +910,69 @@ describe("parseGatewayConfig", () => {
     }
   });
 
+  // Regression pin (audit KEIKO-0520): the inline provider capability path used to default a
+  // missing contextWindow to 0 silently (optionalNonNegativeInt). A chat capability without a
+  // real contextWindow is a degraded sentinel. PR-review follow-up (Codex thread 3770357725):
+  // the strict parser now REJECTS these misconfigurations so a fresh setup save (which should
+  // never emit 0) cannot silently produce a chat capability with invented 4096. Legacy
+  // migration for pre-KEIKO-0520 files runs separately in loadConfigFromFile via
+  // migrateLegacyChatContextWindows — the migration+parse pin below confirms that path.
+  it("rejects an inline provider capability with kind: 'chat' and missing contextWindow", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "example-missing-context-chat",
+      capability: {
+        kind: "chat",
+      },
+    }));
+    expect(() => parseGatewayConfig(raw)).toThrow(/contextWindow/);
+  });
+
+  it("rejects an inline provider capability with kind: 'chat' and contextWindow: 0", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "example-zero-context-chat",
+      capability: {
+        kind: "chat",
+        contextWindow: 0,
+      },
+    }));
+    expect(() => parseGatewayConfig(raw)).toThrow(/contextWindow/);
+  });
+
+  it("migrates a legacy persisted inline chat contextWindow:0 when routed through the file-load walker", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "example-legacy-file-load-chat",
+      capability: {
+        kind: "chat",
+        contextWindow: 0,
+      },
+    }));
+    const config = parseGatewayConfig(migrateLegacyChatContextWindows(raw));
+    const cap = config.capabilities?.find((c) => c.id === "example-legacy-file-load-chat");
+    expect(cap?.kind).toBe("chat");
+    expect(cap?.contextWindow).toBe(4096);
+  });
+
+  it("accepts an inline provider capability with kind: 'voice' and contextWindow: 0", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "example-voice-model",
+      capability: {
+        kind: "voice",
+        contextWindow: 0,
+        supportsSpeechInput: true,
+        supportsSpeechOutput: true,
+        voiceProviderLocality: "azure-foundry",
+      },
+    }));
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "example-voice-model");
+    expect(cap?.kind).toBe("voice");
+    expect(cap?.contextWindow).toBe(0);
+  });
+
   it("rejects an empty providers array", () => {
     expect(() => parseGatewayConfig({ providers: [], circuitBreaker: {} })).toThrow(
       ConfigInvalidError,
@@ -1060,6 +1124,54 @@ describe("parseGatewayConfig", () => {
         ],
       };
       expect(parseGatewayConfig(raw).providers[0]?.baseUrl).toBe("https://10.0.0.5/v1");
+    });
+  });
+
+  // Regression pin (audit KEIKO-0167): a provider may declare its own circuitBreaker override so
+  // a mixed deployment (LiteLLM proxy + direct Azure) can give the flakier provider a more
+  // forgiving threshold/cooldown while the stricter provider keeps the shared top-level default.
+  // Parsed present-only: an override on providers[0] leaves providers[1].circuitBreaker undefined,
+  // and the top-level GatewayConfig.circuitBreaker continues to apply to every provider without
+  // one. The parser reuses parseCircuitBreaker so per-provider validation stays consistent with
+  // the top-level surface.
+  describe("per-provider circuitBreaker override (KEIKO-0167)", () => {
+    it("round-trips a provider-level override alongside a sibling that omits it", () => {
+      const raw = {
+        providers: [
+          {
+            ...validProvider(),
+            modelId: "flaky-provider",
+            circuitBreaker: { failureThreshold: 1, cooldownMs: 1_000, halfOpenProbes: 1 },
+          },
+          {
+            ...validProvider(),
+            modelId: "strict-provider",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      };
+      const config = parseGatewayConfig(raw);
+      const overridden = config.providers.find((p) => p.modelId === "flaky-provider");
+      const sibling = config.providers.find((p) => p.modelId === "strict-provider");
+      expect(overridden?.circuitBreaker).toEqual({
+        failureThreshold: 1,
+        cooldownMs: 1_000,
+        halfOpenProbes: 1,
+      });
+      expect(sibling?.circuitBreaker).toBeUndefined();
+      expect(config.circuitBreaker).toEqual({
+        failureThreshold: 5,
+        cooldownMs: 30_000,
+        halfOpenProbes: 2,
+      });
+    });
+
+    it("rejects a non-positive per-provider cooldownMs using the shared validator", () => {
+      const raw = rawWithProvider((p) => ({
+        ...p,
+        circuitBreaker: { failureThreshold: 2, cooldownMs: 0, halfOpenProbes: 1 },
+      }));
+      expect(() => parseGatewayConfig(raw)).toThrow(/providers\[0\]\.circuitBreaker\.cooldownMs/u);
     });
   });
 });
@@ -1401,6 +1513,41 @@ describe("parseModelCapability", () => {
   it("rejects a non-integer contextWindow", () => {
     const raw = { ...validCapability(), contextWindow: -1 };
     expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(/contextWindow/);
+  });
+
+  // Regression pin (audit KEIKO-0520): a kind:'chat' capability with contextWindow:0 is a
+  // misconfiguration — the whole chat runtime treats contextWindow<=0 as a degraded sentinel that
+  // surfaces later through disconnected symptoms (GEN-GATE-CONTEXT-001/004). PR-review
+  // follow-up (Codex thread 3770357725): the strict parser MUST reject a fresh chat capability
+  // with contextWindow:0. Legacy migration for pre-KEIKO-0520 persisted files runs separately
+  // in loadConfigFromFile via migrateLegacyChatContextWindows so upgrades still work; see the
+  // migration pin below for that path. Voice capabilities deliberately set contextWindow:0
+  // (gateway-setup.ts:377) and remain unrestricted.
+  it("rejects a chat capability whose contextWindow is 0", () => {
+    const raw = { ...validCapability(), contextWindow: 0 };
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(/contextWindow/);
+  });
+
+  it("migrates a legacy persisted chat capability with contextWindow:0 via the file-load walker", () => {
+    const migrated = migrateLegacyChatContextWindows({
+      providers: [{ capability: { ...validCapability(), contextWindow: 0 } }],
+    }) as { providers: readonly { capability: Record<string, unknown> }[] };
+    expect(migrated.providers[0]?.capability.contextWindow).toBe(4096);
+  });
+
+  it("accepts a voice capability whose contextWindow is 0", () => {
+    const raw = {
+      ...validCapability(),
+      kind: "voice",
+      workflowEligible: false,
+      contextWindow: 0,
+      supportsSpeechInput: true,
+      supportsSpeechOutput: true,
+      voiceProviderLocality: "azure-foundry",
+    };
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed.kind).toBe("voice");
+    expect(parsed.contextWindow).toBe(0);
   });
 
   it("accepts an embedding capability whose workflowEligible is false", () => {
@@ -2120,6 +2267,7 @@ describe("parseGatewayConfig top-level capabilities array", () => {
       modelId: "example-private-chat",
       capability: {
         kind: "chat",
+        contextWindow: 8_192,
         toolCalling: false,
         structuredOutput: false,
         supportsImageInput: false,

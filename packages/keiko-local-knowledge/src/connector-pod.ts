@@ -555,6 +555,14 @@ export async function applyConnectorSyncRun(
   const prior = readConnectorItemFingerprints(deps.store, deps.capsuleId, deps.sourceId);
   const runId = input.runId ?? deps.idSource?.() ?? randomUUID();
   const carriedMode = (input.carriedItemKeys ?? []).length > 0;
+  // KEIKO-0197: capture whether the pod's source row was attached BEFORE this run. On a
+  // zero-items path indexAppliedItems returns early without calling
+  // ensureConnectorSourceAttached, so the empty-items branch of finalizeAppliedLifecycle
+  // must decide against the state that existed BEFORE the run — anything computed after
+  // indexing would see a source attached by this same run, defeating the check.
+  const sourceAlreadyAttached = listCapsuleSources(deps.store, deps.capsuleId).some(
+    (source) => source.id === deps.sourceId,
+  );
   const artifacts = await indexAppliedItems(deps, metadata, rootPath, input.items, carriedMode);
   const changes = buildAppliedChanges(prior, input, artifacts.indexing);
   const outcome = appliedOutcome(changes);
@@ -575,7 +583,7 @@ export async function applyConnectorSyncRun(
     appliedFailureReason(changes),
     applied ? input.providerWatermark : undefined,
   );
-  finalizeAppliedLifecycle(deps, outcome, input.items.length);
+  finalizeAppliedLifecycle(deps, outcome, input.items.length, sourceAlreadyAttached);
   return {
     changeSummary: summary,
     ...(artifacts.indexing === undefined ? {} : { indexing: artifacts.indexing }),
@@ -586,12 +594,20 @@ export async function applyConnectorSyncRun(
 // An applied run with zero fetched items never ran the indexing job (which is what normally
 // advances the capsule out of draft), so lifecycle is finalized explicitly; an indexing run
 // already set ready/error itself (orchestrator terminal transition).
+//
+// KEIKO-0197: gate the itemCount === 0 → 'ready' promotion on the source having been attached
+// BEFORE this run. Without that guard, a bare-shell pod whose upstream is genuinely empty on
+// its very first sync (empty Confluence space, unmatched Jira JQL) would be promoted to
+// 'ready' with zero attached capsule_sources rows — mirroring manual-pod.ts's
+// attachManualSource behaviour of leaving an empty crawl in 'draft'.
 function finalizeAppliedLifecycle(
   deps: ConnectorPodDeps,
   outcome: AtlassianSyncTerminalStatus,
   itemCount: number,
+  sourceAlreadyAttached: boolean,
 ): void {
   if (itemCount > 0) return;
+  if (!sourceAlreadyAttached) return;
   if (outcome === "succeeded" || outcome === "partial") {
     updateCapsuleState(deps.store, deps.capsuleId, "ready");
   }

@@ -40,7 +40,7 @@ import {
   writeSync,
 } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { CliIo } from "./runner.js";
 import {
@@ -62,6 +62,7 @@ import {
   type LauncherStateEntry,
 } from "./launcher-state.js";
 import { resolveKeikoBinary } from "./install-layout.js";
+import { resolveContainedStateDir } from "./state-paths.js";
 
 type LauncherSubcommand = "install" | "remove" | "status";
 
@@ -265,27 +266,11 @@ function writeAtomicExcl(target: string, content: string, mode: number): void {
 // user's homedir. Without this guard, an attacker who can plant the env var (wrapper
 // script in PATH, dev-container `.env`, exported in a parent shell) can combine with
 // F1 to steer the launcher state file to a world-writable location and from there to
-// arbitrary-file primitives. We re-use `assertRealpathContained` so symlinked-ancestor
-// edge cases compare consistently. The thrown error is re-classified as
-// `STATE_DIR_ESCAPE` so the user-facing message is unambiguous.
+// arbitrary-file primitives. Delegated to `resolveContainedStateDir` in
+// `state-paths.ts` so `keiko start|stop|status|restart` enforces the SAME rule with
+// the SAME `STATE_DIR_ESCAPE` classification (#KEIKO-0330).
 function defaultStateDir(cwd: string, env: EnvSource, home: string): string {
-  const fromEnv = env.KEIKO_STATE_DIR ?? process.env.KEIKO_STATE_DIR;
-  if (typeof fromEnv === "string" && fromEnv.length > 0) {
-    const resolved = isAbsolute(fromEnv) ? fromEnv : resolve(cwd, fromEnv);
-    try {
-      assertRealpathContained(home, resolved);
-    } catch (e) {
-      if (e instanceof LauncherError && e.code === "PATH_ESCAPE") {
-        throw new LauncherError(
-          "STATE_DIR_ESCAPE",
-          `keiko launcher: KEIKO_STATE_DIR ${fromEnv} resolves outside the user's home directory (${home}); refusing to proceed.`,
-        );
-      }
-      throw e;
-    }
-    return resolved;
-  }
-  return resolve(cwd, ".keiko");
+  return resolveContainedStateDir(cwd, env, home);
 }
 
 interface InstallPlan {

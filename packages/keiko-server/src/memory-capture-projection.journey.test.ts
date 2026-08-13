@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -121,7 +121,7 @@ function makeRouteContext(path: string, payload: unknown, id?: string): RouteCon
 function makeVault(
   evidenceStore: ReturnType<typeof createInMemoryEvidenceStore>,
 ): MemoryVaultStore {
-  const memoryDir = mkdtempSync(join(tmpdir(), "keiko-capture-projection-"));
+  const memoryDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-capture-projection-"));
   temporaryDirectories.push(memoryDir);
   const redactString = (value: string): string => value;
   const postCommitAudit = createMemoryAuditHandler({ evidenceStore, redactString });

@@ -13,7 +13,7 @@
 //  2. NEGATIVE/CONTROL: same paths with VALID input do NOT throw — proves the test would
 //     pass-then-fail-silently if the validator/orchestrator stopped throwing.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -48,7 +48,7 @@ afterEach(() => {
 });
 
 function freshDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-eval-err-"));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-eval-err-"));
   cleanups.push(dir);
   return dir;
 }

@@ -2,7 +2,7 @@
 // explicit option → KEIKO_UI_DATA_DIR/keiko-ui.db → homedir()/.keiko/keiko-ui.db.
 
 import { homedir } from "node:os";
-import { existsSync, lstatSync } from "node:fs";
+import { existsSync, lstatSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join, normalize, parse, resolve, sep } from "node:path";
 import { invalidRequest } from "./errors.js";
 
@@ -21,16 +21,33 @@ function isInsideRuntimeStateRoot(path: string, workspaceRoot: string): boolean 
   return resolved === runtimeRoot || resolved.startsWith(`${runtimeRoot}${sep}`);
 }
 
+// Walk every ancestor from dirname(path) up to the filesystem root and return true as soon as ANY
+// existing ancestor is a symlink. Do NOT short-circuit at the first existing directory: a real
+// subdirectory pre-created inside a symlinked target would otherwise defeat the guard, because the
+// walk would see the real subdirectory (not a symlink) at the first-existing position and never
+// inspect the shallower symlinked ancestor. Audit KEIKO-0478; parity fix with
+// packages/keiko-memory-vault/src/paths.ts.
 function hasSymlinkAncestor(path: string): boolean {
   let current = dirname(path);
   const root = parse(current).root;
   while (current !== root) {
-    if (existsSync(current)) {
-      return lstatSync(current).isSymbolicLink();
-    }
+    // PR-review follow-up (Codex thread 3771256639): lstat directly. Only ENOENT means the
+    // segment truly does not exist; EACCES/EIO propagate so a symlinked ancestor whose
+    // target is temporarily inaccessible cannot slip past by looking absent to existsSync.
+    const stat = lstatOrNull(current);
+    if (stat?.isSymbolicLink()) return true;
     current = dirname(current);
   }
   return false;
+}
+
+function lstatOrNull(path: string): Stats | null {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 function resolveConfiguredPath(path: string, label: string): string {

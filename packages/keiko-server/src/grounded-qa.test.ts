@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough, Readable } from "node:stream";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -486,7 +486,7 @@ function assertGroundedEvidenceManifest(
 
 beforeEach(() => {
   store = createInMemoryUiStore();
-  tmp = mkdtempSync(join(tmpdir(), "keiko-grounded-qa-"));
+  tmp = mkdtempSync(join(realpathSync(tmpdir()), "keiko-grounded-qa-"));
 });
 
 afterEach(() => {
@@ -1622,8 +1622,8 @@ describe("handleGroundedAsk", () => {
   //    that source and answer from the healthy ones, instead of aborting the whole N+1 run.
   it("fails soft when one connected folder root is inaccessible but a healthy root remains", async () => {
     const project = store.createProject(tmp, "demo");
-    const goodRoot = mkdtempSync(join(tmpdir(), "keiko-good-root-"));
-    const deadRoot = mkdtempSync(join(tmpdir(), "keiko-dead-root-"));
+    const goodRoot = mkdtempSync(join(realpathSync(tmpdir()), "keiko-good-root-"));
+    const deadRoot = mkdtempSync(join(realpathSync(tmpdir()), "keiko-dead-root-"));
     seedScopedRepo(goodRoot);
     const chat = store.createChat(project.path, "Resilient multi-source", CHAT_MODEL);
     store.updateChat(chat.id, {
@@ -1694,7 +1694,7 @@ describe("handleGroundedAsk", () => {
 
   it("hard-fails with the original safe error when the ONLY connected folder root is inaccessible", async () => {
     const project = store.createProject(tmp, "demo");
-    const deadRoot = mkdtempSync(join(tmpdir(), "keiko-dead-only-"));
+    const deadRoot = mkdtempSync(join(realpathSync(tmpdir()), "keiko-dead-only-"));
     const chat = store.createChat(project.path, "Inaccessible only", CHAT_MODEL);
     store.updateChat(chat.id, {
       connectedScopes: [

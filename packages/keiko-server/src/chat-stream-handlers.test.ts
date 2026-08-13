@@ -10,7 +10,7 @@
 // emits "aborted"; `res` captures writeHead/write/end. The fake ModelPort records the prompt it was
 // streamed and yields a `delta` then a `done` chunk.
 
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
@@ -466,7 +466,7 @@ function lastRecordedContent(recorded: { request: GatewayRequest | undefined }):
 }
 
 beforeEach(() => {
-  tmp = mkdtempSync(join(tmpdir(), "keiko-stream-"));
+  tmp = mkdtempSync(join(realpathSync(tmpdir()), "keiko-stream-"));
   projectDir = join(tmp, "repo");
   mkdirSync(projectDir);
   store = createInMemoryUiStore();

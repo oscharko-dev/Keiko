@@ -15,6 +15,8 @@ import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
+import { assertRealpathContained } from "./launcher-paths.js";
+import { LauncherError } from "./launcher-platforms.js";
 
 export const DEFAULT_STATE_DIR_NAME = ".keiko";
 export const DEFAULT_UI_STATE_SUBDIR = "ui";
@@ -48,6 +50,10 @@ export const KEIKO_STATE_FILES = [
 // `launcher-state.ts` writes ephemeral mkdtemp dirs with this prefix during atomic
 // state saves; a crash can leave one behind, so uninstall/repair sweep them by prefix.
 const LAUNCHER_STATE_TMP_PREFIX = ".launcher-state-";
+// KEIKO-0333 (PR-review follow-up): portable-registration.ts writes atomic-save temp dirs
+// with this prefix. Register them under the same "launcher" subtree so a crash leaves a
+// classifiable stub that repair/uninstall can sweep instead of retaining as customer data.
+const PORTABLE_REGISTRATION_TMP_PREFIX = ".portable-registration-";
 
 // Resolves the state directory the same way `keiko start` does. An explicit
 // `--state-dir` argument wins, then `KEIKO_STATE_DIR`, then `<cwd>/.keiko`. Relative
@@ -58,6 +64,54 @@ export function resolveStateDir(cwd: string, env: EnvSource, stateDirArg?: strin
       ? stateDirArg
       : (env.KEIKO_STATE_DIR ?? DEFAULT_STATE_DIR_NAME);
   return isAbsolute(value) ? value : resolve(cwd, value);
+}
+
+// Home-contained variant of `resolveStateDir` (#KEIKO-0330). When the state dir comes
+// from an explicit `--state-dir` argument or `KEIKO_STATE_DIR`, its resolved realpath
+// MUST live under the user's homedir; the default `<cwd>/.keiko` fallback is trusted
+// (the user owns their own cwd). Refusing violates a fail-closed contract with the
+// operator: without this guard, an attacker who can plant the env var (wrapper script
+// in PATH, dev-container `.env`, exported in a parent shell) can steer the pid file
+// (fed to `process.kill`) and the append-mode log file to any user-writable path.
+// Callers that need the raw (unchecked) resolution stay on `resolveStateDir`; every
+// path that ends up mkdir-ing / writing / spawning the state dir must go through this
+// helper. Shared by `keiko launcher` (launcher.ts) and `keiko start|stop|status|restart`
+// (lifecycle.ts) — see ADR-0024 §9 / #125 audit findings F4.
+export function resolveContainedStateDir(
+  cwd: string,
+  env: EnvSource,
+  home: string,
+  stateDirArg?: string,
+): string {
+  const explicit = explicitStateDirSource(env, stateDirArg);
+  if (explicit === undefined) return resolve(cwd, DEFAULT_STATE_DIR_NAME);
+  const resolved = isAbsolute(explicit.value) ? explicit.value : resolve(cwd, explicit.value);
+  try {
+    assertRealpathContained(home, resolved);
+  } catch (e) {
+    if (e instanceof LauncherError && e.code === "PATH_ESCAPE") {
+      throw new LauncherError(
+        "STATE_DIR_ESCAPE",
+        `keiko: ${explicit.source} ${explicit.value} resolves outside the user's home directory (${home}); refusing to proceed.`,
+      );
+    }
+    throw e;
+  }
+  return resolved;
+}
+
+function explicitStateDirSource(
+  env: EnvSource,
+  stateDirArg?: string,
+): { readonly source: string; readonly value: string } | undefined {
+  if (stateDirArg !== undefined && stateDirArg.length > 0) {
+    return { source: "--state-dir", value: stateDirArg };
+  }
+  const fromEnv = env.KEIKO_STATE_DIR ?? process.env.KEIKO_STATE_DIR;
+  if (typeof fromEnv === "string" && fromEnv.length > 0) {
+    return { source: "KEIKO_STATE_DIR", value: fromEnv };
+  }
+  return undefined;
 }
 
 // Reads a pid file written by `lifecycle.ts`. Returns the integer pid, or undefined
@@ -471,7 +525,7 @@ function topLevelFileCategory(name: string): RuntimeStateCategory | undefined {
   return undefined;
 }
 
-function topLevelChildSubtree(name: string): OwnedSubtree | undefined {
+function topLevelChildSubtree(name: string, absPath: string): OwnedSubtree | undefined {
   if (name === DEFAULT_UI_STATE_SUBDIR) return uiDataSubtree;
   if (name === CREDENTIALS_SUBDIR) return credentialsSubtree;
   if (name === MEMORY_SUBDIR) return memorySubtree;
@@ -479,8 +533,39 @@ function topLevelChildSubtree(name: string): OwnedSubtree | undefined {
   if (name === EVIDENCE_SUBDIR) return evidenceSubtree;
   if (name === EDITOR_HOT_EXIT_SUBDIR) return editorHotExitSubtree;
   if (name === UPDATE_SUBDIR) return updateSubtree;
-  if (name.startsWith(LAUNCHER_STATE_TMP_PREFIX)) return launcherTmpSubtree;
+  if (isMkdtempOwnedDir(absPath, name, LAUNCHER_STATE_TMP_PREFIX)) return launcherTmpSubtree;
+  if (isMkdtempOwnedDir(absPath, name, PORTABLE_REGISTRATION_TMP_PREFIX)) {
+    return launcherTmpSubtree;
+  }
   return undefined;
+}
+
+// Node's `mkdtempSync(prefix)` appends exactly six alphanumeric characters to the prefix
+// (see fs.mkdtemp implementation). Match that shape strictly so a customer-created directory
+// like `.portable-registration-backup` is NOT classified as launcher-owned and therefore
+// erased by `keiko uninstall --state`. The prefix-only startsWith() version was flagged in a
+// PR review on top of KEIKO-0333: `whole: true` on launcherTmpSubtree means every regular
+// file beneath the matched entry gets removed, so a false positive here is data loss.
+//
+// PR-review follow-up (Codex thread 3770922333): the six-alphanum suffix reduces accidental
+// matches but a customer directory that happens to fit that shape (e.g. an operator ran
+// `mkdir .portable-registration-abcdef` by mistake) is still swept. Require and validate
+// the writer's ownership marker file inside the directory — .keiko-owned — before classifying
+// the entry as launcher-owned. saveState (launcher-state.ts) and writeRegistration
+// (portable-registration.ts) drop the marker as the first act after mkdtempSync, so a real
+// Keiko staging dir always has it AND a user-created dir with the same shape does not.
+const MKDTEMP_SUFFIX_PATTERN = /^[A-Za-z0-9]{6}$/u;
+export const STAGING_OWNERSHIP_MARKER = ".keiko-owned";
+
+function isMkdtempOwnedDir(absPath: string, name: string, prefix: string): boolean {
+  if (!isMkdtempSuffix(name, prefix)) return false;
+  return existsSync(join(absPath, STAGING_OWNERSHIP_MARKER));
+}
+
+function isMkdtempSuffix(name: string, prefix: string): boolean {
+  if (!name.startsWith(prefix)) return false;
+  const suffix = name.slice(prefix.length);
+  return MKDTEMP_SUFFIX_PATTERN.test(suffix);
 }
 
 // A Keiko-owned file or directory the manifest recognizes under the state directory.
@@ -555,9 +640,41 @@ function ownedChildSubtree(
   name: string,
   absPath: string,
 ): OwnedSubtree | undefined {
-  if (scope === "root") return topLevelChildSubtree(name);
+  if (scope === "root") return topLevelChildSubtree(name, absPath);
   if (scope.whole) return scope; // a whole subtree owns all of its descendant directories
   return scope.childSubtree(name, absPath);
+}
+
+// #KEIKO-0301: a file that vanishes between readdirSync and lstatSync (a concurrent
+// remove during the scan) is a race, not an error state — return undefined so the
+// enclosing repair / uninstall walk skips it. Every other lstat failure propagates.
+function lstatOrRaceSkip(absPath: string): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(absPath);
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function classifyFileEntry(
+  relPath: string,
+  absPath: string,
+  name: string,
+  scope: ScanScope,
+  nlink: number,
+  acc: ScanAccumulator,
+): void {
+  const category = ownedFileCategory(scope, name);
+  if (category === undefined) {
+    acc.retained.push({ relPath, absPath, reason: "unknown", owned: false });
+  } else if (nlink > 1) {
+    acc.retained.push({ relPath, absPath, reason: "hardlink", owned: true });
+  } else {
+    acc.files.push({ relPath, absPath, category });
+  }
 }
 
 function classifyEntry(
@@ -569,7 +686,8 @@ function classifyEntry(
 ): void {
   const absPath = join(absDir, name);
   const relPath = childRelPath(relDir, name);
-  const stat = lstatSync(absPath);
+  const stat = lstatOrRaceSkip(absPath);
+  if (stat === undefined) return;
   if (stat.isSymbolicLink()) {
     // Never follow a symlink in any position: chmod-through and delete-through a symlink can
     // escape `.keiko`. Flag it when it occupies a slot the manifest would otherwise own.
@@ -590,14 +708,7 @@ function classifyEntry(
     return;
   }
   if (stat.isFile()) {
-    const category = ownedFileCategory(scope, name);
-    if (category === undefined) {
-      acc.retained.push({ relPath, absPath, reason: "unknown", owned: false });
-    } else if (stat.nlink > 1) {
-      acc.retained.push({ relPath, absPath, reason: "hardlink", owned: true });
-    } else {
-      acc.files.push({ relPath, absPath, category });
-    }
+    classifyFileEntry(relPath, absPath, name, scope, Number(stat.nlink), acc);
     return;
   }
   // Sockets, FIFOs, devices: not a Keiko artifact — retain untouched.
@@ -610,7 +721,20 @@ function walkOwnedDir(
   scope: ScanScope,
   acc: ScanAccumulator,
 ): void {
-  for (const name of readdirSync(absDir)) {
+  // PR-review follow-up on KEIKO-0301: an owned subtree that vanishes between the parent's
+  // successful lstatSync and this readdirSync (a concurrent uninstall/rm) yields ENOENT for
+  // the whole subtree — a race, not an error state. Skip it so the surrounding repair /
+  // uninstall walk stays operable; anything else (EACCES, EIO) still propagates.
+  let entries: readonly string[];
+  try {
+    entries = readdirSync(absDir);
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+  for (const name of entries) {
     classifyEntry(absDir, relDir, name, scope, acc);
   }
 }

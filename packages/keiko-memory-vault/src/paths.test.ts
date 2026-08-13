@@ -25,7 +25,9 @@ vi.mock("node:os", async (importOriginal) => {
 });
 
 function freshTmp(): string {
-  return mkdtempSync(join(tmpdir(), "keiko-mem-paths-"));
+  // Realpath the tmpdir to avoid tripping the (correct) walk-every-ancestor symlink guard on
+  // macOS, where /var (and /tmp) are legitimate system-level symlinks. On Linux this is a no-op.
+  return mkdtempSync(join(realpathSync(tmpdir()), "keiko-mem-paths-"));
 }
 
 function emptyEnv(): Readonly<Record<string, string | undefined>> {
@@ -261,6 +263,29 @@ describe("resolveMemoryDir", () => {
       expect.fail("should have thrown");
     } catch (err) {
       expect((err as MemoryStorageError).code).toBe("invalid-path");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  // Regression pin (audit KEIKO-0478): hasSymlinkAncestor used to `return` unconditionally at the
+  // FIRST existing ancestor and stopped walking. If a real subdirectory has been pre-created inside
+  // a symlinked target (link/child already exists as a plain directory via the symlink), the walk
+  // for path=link/child/grandchild found link/child first, saw it was not a symlink, and reported
+  // "no symlinked ancestor" — bypassing the guard, redirecting the vault to the symlink target.
+  it("rejects a path under a symlinked ancestor when a real subdirectory already exists", () => {
+    const base = freshTmp();
+    const real = join(base, "real");
+    const link = join(base, "link");
+    mkdirSync(real);
+    mkdirSync(join(real, "child"));
+    symlinkSync(real, link);
+    try {
+      resolveMemoryDir(join(link, "child", "grandchild"), emptyEnv());
+      expect.fail("should have thrown");
+    } catch (err) {
+      if (!(err instanceof MemoryStorageError)) throw err;
+      expect(err.code).toBe("invalid-path");
     } finally {
       rmSync(base, { recursive: true, force: true });
     }

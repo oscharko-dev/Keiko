@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -438,6 +439,41 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
     );
 
     expect(result.body).toMatchObject({ status: "delegated", operation: "push" });
+  });
+
+  // KEIKO-0322: the facade's autonomy admission (repository-delivery ≥ autonomous-delivery) and the
+  // merge route's own approval gate (KEIKO_DEFAULT_MERGE_POLICY_PACK ⇒ approval-required with no
+  // token) currently compose safely BY COINCIDENCE of two separate design decisions. Pin the
+  // intersection so a future edit to either side in isolation cannot silently reopen the
+  // autonomous-merge path ADR-0087/AGENTS.md forbid. The facade must admit at the
+  // autonomous-delivery ceiling, delegate through to the real merge route, and receive back the
+  // approval-required nested response — never a completed merge.
+  it("admitted merge execute at autonomous-delivery still resolves to approval-required (ADR-0087)", async () => {
+    // readWorktreeSnapshotFor spawns real git before the approval gate runs; init a minimal repo
+    // in the SAME tmp root beforeEach registered so the merge route reaches the approval gate
+    // rather than 409 on GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE.
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+    execFileSync("git", ["config", "user.email", "test@keiko.example"], { cwd: root });
+    execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: root });
+    execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: root });
+    execFileSync("git", ["commit", "--allow-empty", "-m", "base"], { cwd: root });
+
+    const result = await handleGitAgentOperation(
+      ctx(executeRequest("merge", "merge-facade-approval-required")),
+      deps(undefined, "autonomous-delivery"),
+    );
+
+    // The delegated response wrapper carries the nested route status and body.
+    expect(result.body).toMatchObject({
+      status: "delegated",
+      operation: "merge",
+      mode: "execute",
+      routeStatus: 200,
+      response: { status: "approval-required" },
+    });
+    // The merge must never have completed via the agent facade at this ceiling.
+    const response = (result.body as { response: Record<string, unknown> }).response;
+    expect(response.status).not.toBe("merged");
   });
 
   it.each(["read", "preview"] as const)(

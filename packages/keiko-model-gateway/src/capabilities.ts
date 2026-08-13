@@ -158,7 +158,14 @@ export function createDefaultChatCapability(modelId: string): ModelCapability {
   return {
     id: modelId,
     kind: "chat",
-    contextWindow: 0,
+    // Conservative non-zero default (audit KEIKO-0520): a chat capability with contextWindow<=0
+    // is a degraded sentinel that only surfaces later through disconnected downstream symptoms
+    // (GEN-GATE-CONTEXT-001/004). parseModelCapability and buildProviderCapabilityBody now reject
+    // chat capabilities with contextWindow<=0 at config-parse time, so this default must be a real
+    // positive number for the setup workflow's unenriched placeholder capabilities to parse. 4096
+    // is the smallest window any modern chat model advertises; discovery and enrichment will
+    // widen it to the true value before the model is actually used.
+    contextWindow: 4096,
     maxOutputTokens: 0,
     toolCalling: true,
     structuredOutput: false,

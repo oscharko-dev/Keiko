@@ -4,7 +4,7 @@
 // capture storage, the graceful no-model path, the swallow-on-failure contract, and the pure
 // cosine helper. The gateway is driven through an injected fake adapter (no network).
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -114,7 +114,7 @@ afterEach(() => {
 });
 
 function makeVault(): MemoryVaultStore {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-mem-embed-"));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-mem-embed-"));
   dirs.push(dir);
   const vault = createMemoryVault({ memoryDir: dir, redactString: (s) => s });
   vaults.push(vault);

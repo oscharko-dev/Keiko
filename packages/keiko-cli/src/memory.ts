@@ -36,8 +36,9 @@ const USAGE = `Usage:
   keiko memory stats [--memory-dir PATH]      Print memory counts by status and scope.
   keiko memory diagnostics [--memory-dir PATH] [--evidence-dir PATH] [--last N]
                                               Print redacted local diagnostics JSON.
-  keiko memory reembed [--memory-dir PATH] [--limit N] [--config PATH]
-                                              Backfill embeddings for accepted memories lacking one.
+  keiko memory reembed [--memory-dir PATH] [--limit N] [--config PATH] [--force]
+                                              Backfill embeddings for accepted memories lacking one;
+                                              use --force to re-embed every accepted memory instead.
 
 Opens the local memory vault (default $KEIKO_MEMORY_DIR or the platform state dir; override with
 --memory-dir). \`maintain\` archives faded memories, expires un-reviewed faint proposals, forgets
@@ -291,43 +292,97 @@ interface ReembedCounts {
   embedded: number;
   skipped: number;
   failed: number;
+  // PR-review follow-up (Codex thread 3771469031): unattempted count for the default
+  // backfill path — accepted memories that still lack an embedding but the current run
+  // did not reach because --limit was hit. Distinct from `skipped` (already-embedded)
+  // so operator reports and automation can tell a bounded partial pass apart from a
+  // nearly complete corpus.
+  remaining: number;
+}
+
+async function embedOne(
+  vault: MemoryVaultStore,
+  embed: MemoryEmbedder,
+  record: MemoryRecord,
+  counts: ReembedCounts,
+): Promise<void> {
+  // Default mode: skip records that already carry an embedding — that is the "backfill
+  // missing embeddings" contract from USAGE. The --force path uses its own
+  // forceReembedAtomically() flow and does not call this helper (KEIKO-0440 PR-review
+  // follow-up: --force must stage the new vector space and swap atomically).
+  if (vault.getEmbedding(record.id) !== undefined) {
+    counts.skipped += 1;
+    return;
+  }
+  // PR-review follow-up: a thrown embed() (network error, provider auth failure, timeout)
+  // must count as failed for THIS record and let the loop keep going — otherwise a single
+  // provider error aborts the whole reembed pass with an unreported partial state.
+  let input;
+  try {
+    input = await embed(record.body);
+  } catch {
+    counts.failed += 1;
+    return;
+  }
+  if (input === null) {
+    counts.failed += 1;
+    return;
+  }
+  try {
+    vault.upsertEmbedding(record.id, input);
+    counts.embedded += 1;
+  } catch {
+    counts.failed += 1;
+  }
 }
 
 async function backfillEmbeddings(
   vault: MemoryVaultStore,
   embed: MemoryEmbedder,
   limit: number,
+  _force: boolean,
 ): Promise<ReembedCounts> {
-  const accepted = vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), {
-    status: ["accepted"],
-    includeExpired: true,
-    limit,
-  });
-  const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
-  for (const record of accepted) {
-    const input = await embed(record.body);
-    if (input === null) {
-      counts.failed += 1;
-      continue;
-    }
-    try {
-      vault.upsertEmbedding(record.id, input);
-      counts.embedded += 1;
-    } catch {
-      counts.failed += 1;
-    }
+  // KEIKO-0440 (PR-review follow-up): the limit is the target COUNT of records the pass will
+  // re-embed, not a cap on the scan window. Iterate the accepted set and skip records that
+  // already carry an embedding, so a small `--limit` can still reach an older un-embedded
+  // record hidden behind newer already-embedded pages. The --force mode has its own atomic
+  // staging path and never calls this function.
+  //
+  // PR-review follow-up (KfQ thread 3769955302 + Codex thread 3770110870): the fast-path
+  // driven by observedEmbedded==embeddedSet.size was unsafe when embedded and unembedded
+  // records are interleaved across pages (skipping the older unembedded tail) — reverted.
+  // The perf concern (fully-embedded corpus paging the whole scan) is now addressed by an
+  // O(1) short-circuit at the top: if the embedded set already covers every accepted
+  // memoryId, no work is possible and the pass exits immediately without paging.
+  const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0, remaining: 0 };
+  // PR-review follow-up (Codex threads 3771333886 + 3771469031 + 3771684315): use O(1)
+  // COUNT(*) aggregates from the vault instead of materialising every accepted id or
+  // every missing accepted id. Runtime and memory now stay bounded by --limit regardless
+  // of vault size.
+  const acceptedCountAtStart = vault.countMemoriesByStatus("accepted");
+  const totalMissingAtStart = vault.countAcceptedMemoriesMissingEmbedding();
+  counts.skipped = Math.max(0, acceptedCountAtStart - totalMissingAtStart);
+  const unembeddedIds = vault.listAcceptedMemoryIdsMissingEmbedding(limit);
+  for (const id of unembeddedIds) {
+    if (counts.embedded + counts.failed >= limit) break;
+    const record = vault.getMemory(id);
+    if (record === undefined) continue;
+    await embedOne(vault, embed, record, counts);
   }
+  counts.remaining = Math.max(0, totalMissingAtStart - counts.embedded - counts.failed);
   return counts;
 }
 
 function renderReembedReport(counts: ReembedCounts): string {
-  return [
+  const rows = [
     "Memory re-embedding complete.",
     `  embedded: ${String(counts.embedded)}`,
     `  skipped:  ${String(counts.skipped)}`,
     `  failed:   ${String(counts.failed)}`,
-    "",
-  ].join("\n");
+  ];
+  if (counts.remaining > 0) rows.push(`  remaining: ${String(counts.remaining)}`);
+  rows.push("");
+  return rows.join("\n");
 }
 
 async function reembed(
@@ -346,12 +401,122 @@ async function reembed(
   }
   const vault = resolveVault(args, env, deps);
   try {
-    const counts = await backfillEmbeddings(vault, embed, parseLimit(args));
+    const force = args.includes("--force");
+    if (force) {
+      const counts = await forceReembedAtomically(vault, embed);
+      io.out(renderReembedReport(counts));
+      // Any provider or upsert failure during --force means the swap was NOT performed —
+      // the prior vector space is intact and the operator sees a non-zero exit so they can
+      // retry rather than silently continuing on a partially rebuilt corpus.
+      return counts.failed > 0 ? 1 : 0;
+    }
+    const counts = await backfillEmbeddings(vault, embed, parseLimit(args), false);
     io.out(renderReembedReport(counts));
-    return 0;
+    // PR-review follow-up (Codex thread 3771387251): non-force backfill also exits
+    // non-zero when any provider call failed. Prior version always returned 0, letting
+    // automation misread a run where every requested embedding failed as success.
+    return counts.failed > 0 ? 1 : 0;
   } finally {
     if (deps.vault === undefined) vault.close();
   }
+}
+
+interface StagedVector {
+  readonly memoryId: MemoryRecord["id"];
+  readonly input: NonNullable<Awaited<ReturnType<MemoryEmbedder>>>;
+}
+
+// PR-review follow-up (KEIKO-0440, threads 3769276197 + 3769424330 + 3769557887 +
+// 3769711626 + 3769711634): `--force` must be atomic — either every accepted memory ends
+// up with a fresh vector AND every previously-embedded memory keeps one, OR the prior
+// vector space is preserved and the operator sees the failure. Three phases:
+//   1. Snapshot the target set as the UNION of (every accepted memoryId) and (every
+//      currently-embedded memoryId). Accepted is the documented force contract; the
+//      embedded set adds archived/superseded memories whose embeddings updateMemory
+//      intentionally does not delete on status transitions.
+//   2. Stage a new vector for each target id. A provider throw / null-return aborts here,
+//      so the persisted vectors stay intact and reembed returns exit 1.
+//   3. Hand the staged pairs to `vault.replaceAllEmbeddings`, which takes a RESERVED lock,
+//      re-checks the embedding set for concurrent writes we did not stage, then performs
+//      the delete + reinsert in ONE SQLite transaction; any error inside that transaction
+//      rolls the whole swap back so the prior vector space is preserved.
+async function forceReembedAtomically(
+  vault: MemoryVaultStore,
+  embed: MemoryEmbedder,
+): Promise<ReembedCounts> {
+  const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0, remaining: 0 };
+  // PR-review follow-up (Codex thread 3769903807 + 3770792792): capture the
+  // (memoryId, createdAt) snapshot FIRST, then derive embedded targets from the snapshot
+  // itself. If we enumerated targets before snapshotting, a concurrent DELETE that removes
+  // an embedding between the two calls would leave the deleted id in targets but absent
+  // from the snapshot — the swap would then have no drift signal and would recreate the
+  // deleted vector from the staged pair. Snapshot-first closes that ordering gap.
+  const snapshot = vault.snapshotEmbeddedMemoryIds();
+  const acceptedIds = new Set(vault.listMemoryIdsByStatus("accepted"));
+  const targetIds = collectForceReembedTargetIds(acceptedIds, snapshot);
+  // PR-review follow-up (Codex thread 3770211415): capture memories.updated_at for each
+  // staged pair too. The embedding-row snapshot cannot catch a body edit on a memory that
+  // had no prior embedding — the concurrent write leaves the (empty) row set unchanged.
+  // Comparing the memory revision inside the swap detects that case; a mismatch aborts.
+  const memoryVersions = new Map<MemoryRecord["id"], number>();
+  const staged: StagedVector[] = [];
+  for (const memoryId of targetIds) {
+    const record = vault.getMemory(memoryId);
+    if (record === undefined) {
+      // Under FK ON DELETE CASCADE this only surfaces if a concurrent deletion races
+      // between the snapshot and the record lookup. Drop the stray id — the vault-wide
+      // replace will remove any lingering embedding row for it under the same lock.
+      continue;
+    }
+    memoryVersions.set(record.id, record.updatedAt);
+    const staged1 = await embedOneForForce(embed, record, counts);
+    if (staged1 === null) return counts;
+    staged.push(staged1);
+  }
+  try {
+    vault.replaceAllEmbeddings(staged, snapshot, memoryVersions, acceptedIds);
+    counts.embedded = staged.length;
+  } catch {
+    // PR-review follow-up (Codex thread 3770517480): a storage failure on an empty stage
+    // (SQLite refuses BEGIN IMMEDIATE, sidecar hardening throws, etc.) must not report
+    // success — max(1, staged.length) so counts.failed is at least 1 and the CLI exits
+    // non-zero even when the target set was empty.
+    counts.failed = Math.max(1, staged.length);
+  }
+  return counts;
+}
+
+function collectForceReembedTargetIds(
+  acceptedIds: ReadonlySet<MemoryRecord["id"]>,
+  snapshot: ReadonlyMap<MemoryRecord["id"], number>,
+): readonly MemoryRecord["id"][] {
+  // Union of the accepted-id set captured up front (see forceReembedAtomically) with the
+  // embedded ids captured in the same window. Both come from single-query snapshots so a
+  // concurrent DELETE cannot re-add a deleted id, and a concurrent CREATE is caught by
+  // vault.replaceAllEmbeddings' expectedAcceptedIds precondition.
+  const targetIds = new Set<MemoryRecord["id"]>();
+  for (const memoryId of acceptedIds) targetIds.add(memoryId);
+  for (const memoryId of snapshot.keys()) targetIds.add(memoryId);
+  return Array.from(targetIds);
+}
+
+async function embedOneForForce(
+  embed: MemoryEmbedder,
+  record: MemoryRecord,
+  counts: ReembedCounts,
+): Promise<StagedVector | null> {
+  let input;
+  try {
+    input = await embed(record.body);
+  } catch {
+    counts.failed += 1;
+    return null;
+  }
+  if (input === null) {
+    counts.failed += 1;
+    return null;
+  }
+  return { memoryId: record.id, input };
 }
 
 // async wrapper so a sync-or-async failure surfaces as exit 1 (the sync subcommands rely on

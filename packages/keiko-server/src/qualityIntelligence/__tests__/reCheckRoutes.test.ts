@@ -1682,6 +1682,124 @@ describe("handleQiRegenerateStale — preserved candidates are materialised in t
   });
 });
 
+// KEIKO-0344: when every migrated candidate is individually approved and no candidate was
+// regenerated (zero drift), the new run's aggregate review runState must be derived to "approved"
+// — not hardcoded to "open". Skipping this derivation forces a redundant run-level re-approval
+// with no code path that could distinguish it from a genuinely open run.
+describe("handleQiRegenerateStale — runState derivation on zero-drift regeneration (KEIKO-0344)", () => {
+  it("derives runState 'approved' when every merged candidate is individually approved", async () => {
+    const runId = "run-regen-runstate-approved";
+    const originalText = "Login must work reliably\nMFA must work reliably";
+    const seeded = ingestInlineSources({
+      request: { sources: [{ kind: "requirements", label: "Spec", text: originalText }] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    seedRunFromSources({
+      runId,
+      sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      candidates: [
+        qiCandidate(runId, "cand-approved-1", "Login test", [
+          String(seeded.ingestedAtoms[0]?.atom.id),
+        ]),
+        qiCandidate(runId, "cand-approved-2", "MFA test", [
+          String(seeded.ingestedAtoms[1]?.atom.id),
+        ]),
+      ],
+    });
+    for (const candidateId of ["cand-approved-1", "cand-approved-2"]) {
+      applyReviewDecision({
+        runId,
+        evidenceDir,
+        action: "approve",
+        scope: "candidate",
+        candidateId,
+        reviewerLabel: "Release reviewer",
+        actor: {
+          actorId: "release-reviewer",
+          displayLabel: "Release reviewer",
+          source: "test",
+          kind: "human",
+        },
+        now: "2026-06-09T10:03:00.000Z",
+        redact: (value: unknown): unknown => value,
+      });
+    }
+
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx(
+          "regenerate-stale",
+          runId,
+          // Same source text → zero drift → every candidate preserved, nothing regenerated.
+          makeReq({ sources: [{ kind: "requirements", label: "Spec", text: originalText }] }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { runId: string };
+    const review = loadRunReviewState(body.runId, evidenceDir);
+    expect(review?.runState).toBe("approved");
+  });
+
+  it("keeps runState 'open' when a merged candidate is not approved", async () => {
+    const runId = "run-regen-runstate-open";
+    const originalText = "Login must work reliably\nMFA must work reliably";
+    const seeded = ingestInlineSources({
+      request: { sources: [{ kind: "requirements", label: "Spec", text: originalText }] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    seedRunFromSources({
+      runId,
+      sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      candidates: [
+        qiCandidate(runId, "cand-approved", "Login test", [
+          String(seeded.ingestedAtoms[0]?.atom.id),
+        ]),
+        qiCandidate(runId, "cand-untouched", "MFA test", [
+          String(seeded.ingestedAtoms[1]?.atom.id),
+        ]),
+      ],
+    });
+    // Only ONE candidate is approved — the other never receives a decision.
+    applyReviewDecision({
+      runId,
+      evidenceDir,
+      action: "approve",
+      scope: "candidate",
+      candidateId: "cand-approved",
+      reviewerLabel: "Release reviewer",
+      actor: {
+        actorId: "release-reviewer",
+        displayLabel: "Release reviewer",
+        source: "test",
+        kind: "human",
+      },
+      now: "2026-06-09T10:03:00.000Z",
+      redact: (value: unknown): unknown => value,
+    });
+
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx(
+          "regenerate-stale",
+          runId,
+          makeReq({ sources: [{ kind: "requirements", label: "Spec", text: originalText }] }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { runId: string };
+    const review = loadRunReviewState(body.runId, evidenceDir);
+    expect(review?.runState).toBe("open");
+  });
+});
+
 describe("handleQiRegenerateStale — requirement replacements are positional (#743)", () => {
   it("regenerates only the edited requirement line and ignores unrelated newly-added lines", async () => {
     const runId = "run-regen-requirement-positional";

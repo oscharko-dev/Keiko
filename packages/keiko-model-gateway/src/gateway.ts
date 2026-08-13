@@ -218,7 +218,11 @@ export class Gateway {
     if (existing !== undefined) {
       return existing;
     }
-    const breaker = new CircuitBreaker(provider.modelId, this.config.circuitBreaker, this.clock);
+    // Prefer the provider-level override (audit KEIKO-0167). Falls through to the top-level
+    // GatewayConfig.circuitBreaker when the provider did not declare its own — every existing
+    // config keeps its exact behaviour.
+    const breakerConfig = provider.circuitBreaker ?? this.config.circuitBreaker;
+    const breaker = new CircuitBreaker(provider.modelId, breakerConfig, this.clock);
     this.breakers.set(provider.modelId, breaker);
     return breaker;
   }
