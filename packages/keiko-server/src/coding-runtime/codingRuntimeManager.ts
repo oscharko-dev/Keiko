@@ -491,6 +491,13 @@ interface ActiveRuntime {
    * KEIKO-0402.
    */
   tearingDown: boolean;
+  /**
+   * Dedicated in-flight-reconcile promise. #3099 R4 P1: `tearingDown` alone cannot serialize
+   * reconcile-vs-reconcile in the recovery-required state (both callers must be admitted, but
+   * both must NOT enter `supervisor.reconcile` on the same tree). Both callers await this
+   * shared promise instead of racing.
+   */
+  reconcilePromise: Promise<CodingRuntimeStopResult> | undefined;
   paused: boolean;
   status: CodingRuntimeStatus;
   sequence: number;
@@ -804,40 +811,53 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     return { ok: true, paused };
   }
 
-  public async reconcile(runId: string): Promise<CodingRuntimeStopResult> {
+  public reconcile(runId: string): Promise<CodingRuntimeStopResult> {
     const active = this.active;
-    if (active === undefined) return { ok: true, status: "stopped" };
+    if (active === undefined) return Promise.resolve({ ok: true, status: "stopped" });
     if (active.context.runId !== runId) {
-      return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
+      return Promise.resolve({ ok: false, failureCode: "runtime-run-mismatch", retryable: false });
     }
-    // KEIKO-0402: reconcile is deliberately the "second chance" — the operator explicitly
-    // invokes it AFTER a prior teardown returned `runtime-reap-unproven`, so we cannot
-    // short-circuit on a stale `stopPromise`. But two concurrent reconcile calls must not both
-    // enter the supervisor; the `tearingDown` flag on this second-chance path guards against
-    // reconcile-vs-reconcile only.
+    // KEIKO-0402 + #3099 R4 P1: reconcile is the sanctioned second-chance path (after a prior
+    // teardown returned reap-unproven), so it cannot short-circuit on a stale `stopPromise`.
+    // But two concurrent reconcile calls must NOT both enter `supervisor.reconcile` on the same
+    // tree. Dedupe via a dedicated `reconcilePromise` slot: the second caller folds onto the
+    // first caller's in-flight promise instead of racing it into the supervisor.
+    if (active.reconcilePromise !== undefined) return active.reconcilePromise;
     if (active.tearingDown && active.status !== "recovery-required") {
-      return { ok: true, status: "stopped" };
+      return Promise.resolve({ ok: true, status: "stopped" });
     }
     active.tearingDown = true;
-    if (!active.shutdownBarrierComplete) {
-      await this.enterRecoveryRequired(active);
-      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+    const reconciling = this.runReconcile(active);
+    active.reconcilePromise = reconciling;
+    return reconciling;
+  }
+
+  private async runReconcile(active: ActiveRuntime): Promise<CodingRuntimeStopResult> {
+    try {
+      if (!active.shutdownBarrierComplete) {
+        await this.enterRecoveryRequired(active);
+        return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+      }
+      const result = await this.deps.supervisor.reconcile(active.tree);
+      if (result.status !== "reaped") {
+        await this.enterRecoveryRequired(active);
+        return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+      }
+      if (!(await this.disposeAndReleaseAfterReap(active, result.receipt))) {
+        await this.enterRecoveryRequired(active);
+        return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+      }
+      active.status = "stopped";
+      this.active = undefined;
+      this.emit(
+        runtimeEvent(active, this.nextSequence(active), "runtime-stopped", { health: "stopped" }),
+      );
+      return { ok: true, status: "stopped" };
+    } finally {
+      // Once this teardown attempt has published its result, allow a subsequent operator-driven
+      // reconcile to try again if the runtime is back in recovery-required.
+      active.reconcilePromise = undefined;
     }
-    const result = await this.deps.supervisor.reconcile(active.tree);
-    if (result.status !== "reaped") {
-      await this.enterRecoveryRequired(active);
-      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
-    }
-    if (!(await this.disposeAndReleaseAfterReap(active, result.receipt))) {
-      await this.enterRecoveryRequired(active);
-      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
-    }
-    active.status = "stopped";
-    this.active = undefined;
-    this.emit(
-      runtimeEvent(active, this.nextSequence(active), "runtime-stopped", { health: "stopped" }),
-    );
-    return { ok: true, status: "stopped" };
   }
 
   public issueApproval(
@@ -2011,6 +2031,7 @@ function createActiveRuntime(
     stopResultStatus: "succeeded",
     stopRequested: false,
     tearingDown: false,
+    reconcilePromise: undefined,
     paused: false,
     status: "starting",
     sequence: 0,
@@ -2048,6 +2069,7 @@ function createInactiveRuntime(
     stopResultStatus: "succeeded",
     stopRequested: false,
     tearingDown: false,
+    reconcilePromise: undefined,
     paused: false,
     status: "stopped",
     sequence: 0,

@@ -4087,6 +4087,43 @@ describe("run-bound stop authority", () => {
     });
   });
 
+  // Regression: PR #3099 R4 P1. Two overlapping reconcile() calls after a prior teardown
+  // returned reap-unproven both need to be admitted (the second one might arrive from a
+  // different operator), but they must fold onto a SHARED in-flight promise instead of both
+  // entering the supervisor and disposing / releasing the same tree. Before the reconcilePromise
+  // slot, both admissions raced.
+  it("R4-P1: concurrent reconcile calls fold onto a shared promise instead of racing the supervisor", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    // Mirror the SIGKILL-escalation setup that drives the first stop to reap-unproven.
+    const setTimer = vi.fn((callback: () => void): unknown => {
+      callback();
+      return undefined;
+    });
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn, { setTimer }),
+      processEnv: {},
+    });
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    await expect(manager.stop("run-1988")).resolves.toMatchObject({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+    });
+    // Now the process actually exits (operator killed it out-of-band).
+    harness.children[0]?.exit(0);
+    // Fire TWO reconcile calls in the same tick — they must return the same result and both
+    // observe the shared teardown outcome without re-entering the supervisor.
+    const first = manager.reconcile("run-1988");
+    const second = manager.reconcile("run-1988");
+    const [a, b] = await Promise.all([first, second]);
+    expect(a).toEqual({ ok: true, status: "stopped" });
+    expect(b).toEqual({ ok: true, status: "stopped" });
+    // A subsequent reconcile call after active is cleared still returns cleanly.
+    await expect(manager.reconcile("run-1988")).resolves.toEqual({ ok: true, status: "stopped" });
+  });
+
   // Regression: KEIKO-0402. A client-initiated stop() racing an in-flight crash teardown must not
   // enter the supervisor a second time. Before the tearingDown guard, the two paths raced through
   // revokeAndTerminate concurrently.

@@ -40,13 +40,18 @@ describe("safeRealFile symlink and hard-link rejection", () => {
     }
   });
 
-  it("rejects a symlinked file even when the target is inside the workspace", () => {
+  // Symlink creation on Windows without SeCreateSymbolicLinkPrivilege throws EPERM, which
+  // would fail this pin for the wrong reason on hosted Windows CI (no Developer Mode). The
+  // symlink-rejection guard is Linux+macOS-relevant only; safeRealFile still exercises the
+  // other bad-shape branches on Windows via the neighbouring tests.
+  const itOnPosix = platform === "win32" ? it.skip : it;
+  itOnPosix("rejects a symlinked file even when the target is inside the workspace", () => {
     const root = workspace();
     try {
       const target = join(root, "governed.bin");
       const link = join(root, "aliased.bin");
       writeFileSync(target, "content", "utf8");
-      symlinkSync(target, link);
+      symlinkSync(target, link, "file");
       expect(() => safeRealFile(link)).toThrow(/native-runtime-request-invalid/u);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -95,13 +100,14 @@ describe("safeRealDirectory symlink rejection", () => {
     }
   });
 
-  it("rejects a symlinked directory", () => {
+  const itOnPosixDir = platform === "win32" ? it.skip : it;
+  itOnPosixDir("rejects a symlinked directory", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-paths-dir-")));
     try {
       const target = join(root, "governed");
       const link = join(root, "aliased");
       mkdirSync(target);
-      symlinkSync(target, link);
+      symlinkSync(target, link, "dir");
       expect(() => safeRealDirectory(link)).toThrow(/native-runtime-request-invalid/u);
     } finally {
       rmSync(root, { recursive: true, force: true });

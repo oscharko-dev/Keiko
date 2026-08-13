@@ -136,18 +136,23 @@ function subscribeToContent(
     listener,
     admission,
     diagnostics,
+    session.sessionId,
   );
 }
 
 function recordSseFailure(
   diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string,
   message: string,
   errorClass: string,
 ): void {
   if (diagnostics === undefined) return;
   try {
     diagnostics.record({
-      correlationId: "coding-app-session",
+      // #3099 R4 P2: correlate per session so an operator watching two concurrent stream
+      // failures can distinguish them. The sessionId is a code-generated bounded token from the
+      // registry, safe to surface (no user content).
+      correlationId,
       timestamp: new Date().toISOString(),
       operation: "coding-app-session.channel.subscribe",
       source: "coding-app-session.session-channel.publish",
@@ -196,6 +201,7 @@ function makePublish(
   listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
   detach: () => void,
   diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string,
 ): (content: CodingAppSessionChannelContent | null) => void {
   return (content: CodingAppSessionChannelContent | null): void => {
     if (!lifecycle.active) return;
@@ -207,11 +213,12 @@ function makePublish(
       if (!valid || !accepted) {
         // KEIKO-0225: previously a listener returning `false` silently detached with nothing to
         // diagnose. Report backpressure once so operators can see a stream that dropped.
-        if (valid && !accepted) recordSseFailure(diagnostics, "backpressure", "Error");
+        if (valid && !accepted)
+          recordSseFailure(diagnostics, correlationId, "backpressure", "Error");
         detach();
       }
     } catch (error) {
-      recordSseFailure(diagnostics, "listener-threw", contentFreeErrorClass(error));
+      recordSseFailure(diagnostics, correlationId, "listener-threw", contentFreeErrorClass(error));
       detach();
     }
   };
@@ -225,12 +232,13 @@ function liveSubscription(
   listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
   admission: LiveSubscriptionAdmission,
   diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string,
 ): ReturnType<CodingAppSessionChannel["subscribe"]> {
   if (!admission.acquire()) return { snapshot, live: false, detach: (): void => undefined };
   const lifecycle: LiveLifecycle = { active: true, sourceDetach: (): void => undefined };
   const detach = makeDetach(lifecycle, admission);
   const validity = (): boolean => registry.inspect(cookieToken) !== undefined;
-  const publish = makePublish(lifecycle, validity, listener, detach, diagnostics);
+  const publish = makePublish(lifecycle, validity, listener, detach, diagnostics, correlationId);
   const sourceSubscription = contentSource.subscribeContent?.(publish);
   if (!sourceSubscription?.admitted)
     return rejectedSourceSubscription(sourceSubscription, detach, snapshot);
