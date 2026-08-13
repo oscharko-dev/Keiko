@@ -11,7 +11,7 @@ const { version: packageVersion } = createRequire(import.meta.url)("../package.j
 };
 
 describe("KEIKO_MEMORY_RETRIEVAL_VERSION", () => {
-  it("is the pinned literal 0.3.1", () => {
+  it("matches the package manifest", () => {
     expect(KEIKO_MEMORY_RETRIEVAL_VERSION).toBe(packageVersion);
   });
 

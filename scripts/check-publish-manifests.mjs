@@ -260,7 +260,7 @@ function main() {
     (name) => typeof name === "string" && name.startsWith(scope),
   ).length;
   console.log(
-    `publish-manifests: PASS - ${runtimeWorkspaceCount} private runtime workspaces are bundled into the root package; no workspace is independently publishable.`,
+    `publish-manifests: PASS - ${runtimeWorkspaceCount} private runtime workspaces are configured for root-package vendoring; no workspace is independently publishable.`,
   );
 }
 

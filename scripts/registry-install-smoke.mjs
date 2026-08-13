@@ -10,8 +10,6 @@ const packageSpec =
   process.env.KEIKO_REGISTRY_INSTALL_PACKAGE ?? `${rootManifest.name}@${rootManifest.version}`;
 const registry = process.env.KEIKO_REGISTRY_URL ?? "https://registry.npmjs.org/";
 const timeoutMs = Number.parseInt(process.env.KEIKO_REGISTRY_INSTALL_TIMEOUT_MS ?? "300000", 10);
-const skipYarn = process.env.KEIKO_REGISTRY_INSTALL_SKIP_YARN === "1";
-const forceYarn = process.env.KEIKO_REGISTRY_INSTALL_FORCE_YARN === "1";
 
 function fail(message) {
   console.error(`registry-install-smoke failed: ${message}`);
@@ -38,35 +36,6 @@ function assertTlsVerificationEnabled() {
   );
 }
 
-function rootPackageSpec() {
-  return `${rootManifest.name}@${rootManifest.version}`;
-}
-
-function isInternalRuntimeDependency(name) {
-  return name.startsWith("@oscharko-dev/keiko-");
-}
-
-function hasRootOnlyBundledRuntimeWorkspaces() {
-  const dependencies =
-    rootManifest.dependencies && typeof rootManifest.dependencies === "object"
-      ? Object.keys(rootManifest.dependencies)
-      : [];
-  const bundled = Array.isArray(rootManifest.bundleDependencies)
-    ? new Set(rootManifest.bundleDependencies)
-    : new Set();
-  const internalDependencies = dependencies.filter(isInternalRuntimeDependency);
-  return internalDependencies.length > 0 && internalDependencies.every((name) => bundled.has(name));
-}
-
-function yarnSkipReason() {
-  if (skipYarn) return "KEIKO_REGISTRY_INSTALL_SKIP_YARN=1";
-  if (forceYarn) return undefined;
-  if (packageSpec === rootPackageSpec() && hasRootOnlyBundledRuntimeWorkspaces()) {
-    return "root-only package bundles private runtime workspaces";
-  }
-  return undefined;
-}
-
 function run(cmd, args, options = {}) {
   const result = spawnSync(cmd, args, {
     encoding: "utf8",
@@ -90,19 +59,24 @@ function installedPackageRoot(projectDir) {
   return join(projectDir, "node_modules", "@oscharko-dev", "keiko");
 }
 
-function assertBundledPayload(projectDir) {
-  const bundleRoot = join(installedPackageRoot(projectDir), "node_modules");
-  const bundled = Array.isArray(rootManifest.bundleDependencies)
+function assertVendoredPayload(projectDir) {
+  const roots = [
+    join(projectDir, "node_modules"),
+    join(installedPackageRoot(projectDir), "node_modules"),
+  ];
+  const runtimeWorkspaces = Array.isArray(rootManifest.bundleDependencies)
     ? rootManifest.bundleDependencies
     : [];
-  for (const name of bundled) {
+  for (const name of runtimeWorkspaces) {
     const shortName = name.replace(/^@oscharko-dev\//, "");
-    const dist = join(bundleRoot, "@oscharko-dev", shortName, "dist");
-    if (!existsSync(dist)) {
-      fail(`registry-installed package missing bundled dependency dist: ${dist}`);
+    const dist = roots
+      .map((root) => join(root, "@oscharko-dev", shortName, "dist"))
+      .find((candidate) => existsSync(candidate));
+    if (dist === undefined) {
+      fail(`registry-installed package missing runtime dependency dist: ${name}`);
     }
     if (readdirSync(dist).length === 0) {
-      fail(`registry-installed package has empty bundled dependency dist: ${dist}`);
+      fail(`registry-installed package has empty runtime dependency dist: ${name}`);
     }
   }
 }
@@ -125,7 +99,7 @@ async function assertInstalledRuntime(projectDir) {
     fail(`installed CLI version output did not include ${rootManifest.version}: ${result.stdout}`);
   }
   run(process.execPath, [bin, "--help"], { cwd: projectDir });
-  assertBundledPayload(projectDir);
+  assertVendoredPayload(projectDir);
   await assertRootImport(projectDir);
 }
 
@@ -156,11 +130,6 @@ async function npmSmoke() {
 }
 
 async function yarnSmoke() {
-  const skipReason = yarnSkipReason();
-  if (skipReason !== undefined) {
-    console.log(`registry-install-smoke: yarn check skipped (${skipReason}).`);
-    return;
-  }
   const projectDir = mkdtempSync(join(tmpdir(), "keiko-registry-yarn-"));
   try {
     writeFileSync(

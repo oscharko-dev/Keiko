@@ -73,6 +73,8 @@ describe("vitest config timeout parity (GEN-TEST-FLAKE-001)", () => {
   // one package coverage configuration — which is what this now asserts.
   it("keeps every package coverage shard at the same bounded worker count", () => {
     const scripts = readPackageScripts();
+    expect(scripts["test:coverage:packages"]).toMatch(/^npm run build && /u);
+    expect(scripts["test:coverage:packages:shard"]).toMatch(/^npm run build && /u);
     expect(scripts["test:coverage:packages:shard"]).toContain(
       `--config ${JUDGING_COVERAGE_CONFIG}`,
     );
