@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -579,8 +580,8 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
-  it("rejects a seeded dependency that would resolve outside the registry", () => {
-    const offending = new Map([
+  const seededWithDependency = (range) =>
+    new Map([
       [
         "demo",
         new Map([
@@ -589,95 +590,53 @@ describe("installable package smoke optional-dependency coverage", () => {
             {
               name: "demo",
               version: "1.0.0",
-              manifest: {
-                name: "demo",
-                version: "1.0.0",
-                dependencies: { sneaky: "git+https://token@example.invalid/pkg.git" },
-              },
+              manifest: { name: "demo", version: "1.0.0", dependencies: { sneaky: range } },
             },
           ],
         ]),
       ],
     ]);
+
+  // Yarn resolves each of these directly rather than through npmRegistryServer, so the install
+  // would leave the hermetic boundary without ever hitting a fail-closed 404.
+  it.each([
+    ["git+https", "git+https://token@example.invalid/pkg.git"],
+    ["ssh", "ssh://user:token@example.invalid/repo.git"],
+    ["ssh+git", "ssh+git://example.invalid/repo.git"],
+    ["forge shorthand", "owner/repo"],
+    ["portal", "portal:../elsewhere"],
+  ])("rejects a %s dependency before Yarn starts", (_label, range) => {
+    rejectProcessExit();
+    expect(() => assertRegistryOnlyDescriptors(seededWithDependency(range))).toThrow(
+      /process\.exit\(1\)/u,
+    );
+  });
+
+  it("names the descriptor's shape without leaking its value", () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.spyOn(process, "exit").mockImplementation((code) => {
       throw new Error(`process.exit(${String(code)})`);
     });
-    // Yarn resolves such a descriptor directly, never through npmRegistryServer, so the install
-    // would leave the hermetic boundary without ever hitting a fail-closed 404.
-    expect(() => assertRegistryOnlyDescriptors(offending)).toThrow(/process\.exit\(1\)/u);
-    // The descriptor VALUE must never reach the log — it can carry a token or private endpoint.
+    expect(() =>
+      assertRegistryOnlyDescriptors(
+        seededWithDependency("git+https://token@secret-host.invalid/pkg.git"),
+      ),
+    ).toThrow(/process\.exit\(1\)/u);
     const logged = errors.mock.calls.flat().join(" ");
     expect(logged).toContain("demo@1.0.0 -> sneaky (git+https:)");
-    expect(logged).not.toContain("example.invalid");
-
-    vi.restoreAllMocks();
-    // SSH forms are Yarn Git descriptors whose error output echoes the whole descriptor,
-    // credentials included — they must never reach Yarn.
-    vi.restoreAllMocks();
-    for (const descriptor of ["ssh://user:token@example.invalid/repo.git", "ssh+git://h/r.git"]) {
-      const viaSsh = new Map([
-        [
-          "demo",
-          new Map([
-            [
-              "1.0.0",
-              {
-                name: "demo",
-                version: "1.0.0",
-                manifest: { dependencies: { sneaky: descriptor } },
-              },
-            ],
-          ]),
-        ],
-      ]);
-      rejectProcessExit();
-      expect(() => assertRegistryOnlyDescriptors(viaSsh)).toThrow(/process\.exit\(1\)/u);
-      vi.restoreAllMocks();
-    }
-
-    // A colon-less forge shorthand is fetched straight from GitHub and must be rejected too.
-    const shorthand = new Map([
-      [
-        "demo",
-        new Map([
-          [
-            "1.0.0",
-            {
-              name: "demo",
-              version: "1.0.0",
-              manifest: { dependencies: { sneaky: "owner/repo" } },
-            },
-          ],
-        ]),
-      ],
-    ]);
-    rejectProcessExit();
-    expect(() => assertRegistryOnlyDescriptors(shorthand)).toThrow(/process\.exit\(1\)/u);
-
-    vi.restoreAllMocks();
-    const clean = new Map([
-      [
-        "demo",
-        new Map([
-          [
-            "1.0.0",
-            {
-              name: "demo",
-              version: "1.0.0",
-              // A scoped package name contains a slash but is a normal registry dependency.
-              manifest: { dependencies: { ok: "^1.0.0", "@scope/pkg": "~2.0.0" } },
-            },
-          ],
-        ]),
-      ],
-    ]);
-    expect(() => assertRegistryOnlyDescriptors(clean)).not.toThrow();
+    // The value may carry a credential or a private endpoint and must never reach the log.
+    expect(logged).not.toContain("secret-host.invalid");
   });
 
-  // `@foo/bar-baz` and `@foo-bar/baz` both flatten to `foo-bar-baz-1.2.3.tgz`, so a name-derived
-  // directory that collapses separators would let the second pack overwrite the first after its
-  // integrity was recorded, handing Yarn bytes that fail the checksum it was given.
+  it.each([
+    ["a semver range", "^1.0.0"],
+    ["an npm alias", "npm:other@^1.0.0"],
+    ["a scoped npm alias", "npm:@scope/pkg@1.0.0"],
+    ["a tag", "beta"],
+  ])("accepts %s", (_label, range) => {
+    expect(() => assertRegistryOnlyDescriptors(seededWithDependency(range))).not.toThrow();
+  });
+
   it("packs scope-ambiguous names without one archive overwriting the other", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-pack-collision-test-"));
     const destination = mkdtempSync(join(tmpdir(), "keiko-pack-collision-out-"));
@@ -833,6 +792,13 @@ describe("installable package smoke optional-dependency coverage", () => {
       writeFileSync(join(seedDir, "seed-index.json"), "{ this is not json", "utf8");
       // An interrupted previous run must not turn into a red build no change can fix.
       expect(loadSeedIndex(seedDir).size).toBe(0);
+
+      // A document that parses but is not an index object must recover the same way rather than
+      // throwing outside the guard.
+      for (const payload of ["null", "[]", '"a string"', "42"]) {
+        writeFileSync(join(seedDir, "seed-index.json"), payload, "utf8");
+        expect(loadSeedIndex(seedDir).size).toBe(0);
+      }
     } finally {
       rmSync(seedDir, { recursive: true, force: true });
     }
@@ -905,12 +871,14 @@ describe("installable package smoke optional-dependency coverage", () => {
     const outside = mkdtempSync(join(tmpdir(), "keiko-seed-outside-"));
     try {
       const tarballPath = join(outside, "elsewhere.tgz");
-      writeFileSync(tarballPath, "outside bytes\n", "utf8");
+      const bytes = "outside bytes\n";
+      writeFileSync(tarballPath, bytes, "utf8");
+      // The REAL integrity, so the integrity rule cannot reject this entry and containment is the
+      // only rule left that can — otherwise this would pass even with containment deleted.
+      const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
       writeFileSync(
         join(seedDir, "seed-index.json"),
-        JSON.stringify({
-          demo: { "1.0.0": { tarballPath, integrity: "sha512-whatever", manifest: {} } },
-        }),
+        JSON.stringify({ demo: { "1.0.0": { tarballPath, integrity, manifest: {} } } }),
         "utf8",
       );
       // An index naming a path outside the cache could otherwise serve any file on disk.

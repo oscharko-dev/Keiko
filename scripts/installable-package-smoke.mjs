@@ -805,6 +805,9 @@ export function loadSeedIndex(destination) {
     // red build that no change to this checkout could fix.
     return new Map();
   }
+  // A document that parses but is not an index object would throw on Object.entries outside the
+  // try, defeating the recovery this function documents.
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return new Map();
   const seeded = new Map();
   for (const [name, versions] of Object.entries(raw)) {
     const restored = new Map();
@@ -863,7 +866,7 @@ export function seedVendoredRegistry(
   const neededStubs = stubs.filter((entry) => !restored(entry.name));
   if (genuinelyMissing.length > 0) {
     fail(
-      `vendored dependency closure is not installed: ${missing.join(", ")} — ` +
+      `vendored dependency closure is not installed: ${genuinelyMissing.join(", ")} — ` +
         `run \`npm install\` before the installable-package smoke`,
     );
   }
@@ -1730,16 +1733,6 @@ async function assertPackagedLifecycleCommands(tmp) {
 }
 
 /**
- * Seeds the offline registry and THEN packs the publish artifact, in that order, because
- * `packRoot()` runs `prepack`, whose `prune:package-native-optionals` step deletes
- * `@napi-rs/canvas` and its platform bindings out of `node_modules`. Seeding afterwards would find
- * them gone, serve inert stubs in their place, and let the Yarn arm pass without the native
- * binding it exists to prove (#3130).
- *
- * Dependency-injected so the ordering is observable in a test: a pin comparing source positions
- * would stay green if a refactor moved the effective call and left the statement text in place.
- */
-/**
  * CI runs this script twice — `smoke:install` then `smoke:install:optional` — as separate
  * processes against one checkout. The first run's `prepack` permanently prunes `@napi-rs/canvas`
  * and its bindings out of `node_modules`, so a second run seeding from that tree would substitute
@@ -1775,6 +1768,16 @@ function assertPrivateDirectory(dir) {
   }
 }
 
+/**
+ * Seeds the offline registry and THEN packs the publish artifact, in that order, because
+ * `packRoot()` runs `prepack`, whose `prune:package-native-optionals` step deletes
+ * `@napi-rs/canvas` and its platform bindings out of `node_modules`. Seeding afterwards would find
+ * them gone, serve inert stubs in their place, and let the Yarn arm pass without the native
+ * binding it exists to prove (#3130).
+ *
+ * Dependency-injected so the ordering is observable in a test: a pin comparing source positions
+ * would stay green if a refactor moved the effective call and left the statement text in place.
+ */
 export function seedThenPack(vendorTmp, deps) {
   const seed = deps?.seedVendoredRegistry ?? seedVendoredRegistry;
   const pack = deps?.packRoot ?? packRoot;
@@ -1787,11 +1790,14 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   // Stable and lockfile-keyed, so the second CI invocation reuses the pre-prune artifacts.
   const vendorTmp = persistentVendorSeedDir();
-  const tmp = mkdtempSync(join(tmpdir(), "keiko-install-smoke-"));
-  const yarnTmp = mkdtempSync(join(tmpdir(), "keiko-yarn-install-smoke-"));
-  // The try starts before seeding and packing so a failure in either still cleans up.
+  // Both directories are created INSIDE the try, so a failure creating the second does not strand
+  // the first; the finally tolerates either being unassigned.
+  let tmp;
+  let yarnTmp;
   let artifact;
   try {
+    tmp = mkdtempSync(join(tmpdir(), "keiko-install-smoke-"));
+    yarnTmp = mkdtempSync(join(tmpdir(), "keiko-yarn-install-smoke-"));
     const seeded = seedThenPack(vendorTmp);
     const { vendored } = seeded;
     artifact = seeded.artifact;
@@ -1819,8 +1825,8 @@ async function main() {
       `installable-smoke ok: npm tarball + Yarn registry installs passed (${options.includeOptional ? "optional deps included" : "optional deps omitted"}), ${String(runtimeWorkspaces.length)} vendored packages present, root runtime/types + CLI + UI/lifecycle reachable.`,
     );
   } finally {
-    rmSync(tmp, { recursive: true, force: true });
-    rmSync(yarnTmp, { recursive: true, force: true });
+    if (tmp !== undefined) rmSync(tmp, { recursive: true, force: true });
+    if (yarnTmp !== undefined) rmSync(yarnTmp, { recursive: true, force: true });
     // vendorTmp is deliberately NOT removed: it is the lockfile-keyed cache the next invocation
     // reuses, and it lives under the OS temp directory.
     artifact?.cleanup();
