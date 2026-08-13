@@ -135,26 +135,21 @@ function detectIndentSignals(raw: string): {
   return { tab, spaceDepths };
 }
 
-function gcd(a: number, b: number): number {
-  while (b !== 0) {
-    [a, b] = [b, a % b];
-  }
-  return Math.max(a, 0);
-}
-
 function detectSpaceUnit(depths: readonly number[]): number {
   if (depths.length === 0) return 2;
-  const unit = depths.reduce((acc, depth) => gcd(acc, depth), depths[0] ?? 0);
-  if (unit <= 0) return 2;
   // PR-review follow-up (Codex thread 3771469014): reduce instead of Math.min(...depths).
   // A large generated package.json can produce enough space-depth samples to exceed V8's
   // function-argument limit and throw RangeError on the spread call.
   const minDepth = depths.reduce((acc, depth) => (depth < acc ? depth : acc), depths[0] ?? 0);
-  const width = Math.min(unit, minDepth);
-  // PR-review follow-up: a single-space indent is non-standard for package.json and comes
-  // out of GCD-of-mixed-depths (e.g. depths [2,3] → gcd 1). No convention writes a 1-space
-  // JSON file, so treat that outcome the same as "no consistent style" and default to 2.
-  return Math.max(width, 2);
+  // PR-review follow-up (KfQ thread 3771862601): use the shallowest observed indent depth
+  // rather than the GCD of all observed depths. The shallowest captured line is the closest
+  // proxy for the file's top-level indent step; the GCD of nested-only depths (e.g. depths
+  // [4,8,12] → GCD 4) can exceed the actual top-level width when the top-level key sits on
+  // the same line as `{` and never gets captured by the leading-whitespace regex, which
+  // would rewrite the whole file with a deeper indent and force a spurious full-file diff.
+  // A shallowest of 1 comes out of hand-authored JSON with a single leading space and is
+  // clamped up to 2 because no convention writes a 1-space JSON file.
+  return Math.max(minDepth, 2);
 }
 
 function detectIndent(raw: string): string | number {
