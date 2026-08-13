@@ -495,8 +495,14 @@ function installedModuleRoots(modulesRoot, packagesRoot) {
   return roots;
 }
 
-function nestedModuleRoots(modulesRoot) {
-  if (!existsSync(modulesRoot)) return [];
+// npm resolves a conflict below an already nested dependency too
+// (`node_modules/a/node_modules/b/node_modules/c`), so a single level is not enough. The depth is
+// bounded because an npm tree is shallow in practice and an unbounded walk over a large
+// `node_modules` is slow enough to matter in a required gate.
+const NESTED_MODULE_SCAN_DEPTH = 6;
+
+function nestedModuleRoots(modulesRoot, depth = NESTED_MODULE_SCAN_DEPTH) {
+  if (depth <= 0 || !existsSync(modulesRoot)) return [];
   const roots = [];
   for (const entry of readdirSync(modulesRoot)) {
     if (entry.startsWith(".")) continue;
@@ -505,7 +511,8 @@ function nestedModuleRoots(modulesRoot) {
       : [join(modulesRoot, entry)];
     for (const owner of owners) {
       const nested = join(owner, "node_modules");
-      if (existsSync(nested)) roots.push(nested);
+      if (!existsSync(nested)) continue;
+      roots.push(nested, ...nestedModuleRoots(nested, depth - 1));
     }
   }
   return roots;
@@ -577,7 +584,10 @@ function packVendoredPackage(entry, destination) {
     { cwd: repoRoot, timeout: NPM_INSTALL_TIMEOUT_MS },
   );
   if (result.status !== 0) {
-    fail(`npm pack of vendored dependency ${entry.name} exited ${String(result.status)}`);
+    fail(
+      `npm pack of vendored dependency ${entry.name} exited ${String(result.status)}: ` +
+        `${(result.stderr || result.stdout).trim()}`,
+    );
   }
   const produced = JSON.parse(result.stdout).at(0)?.filename;
   if (typeof produced !== "string" || produced.length === 0) {
@@ -591,23 +601,28 @@ function packVendoredPackage(entry, destination) {
  * `os`/`cpu` pair that matches no host so the package manager never links it. It exists only for
  * optional dependencies this repository does not install; nothing real is ever replaced by one.
  */
+// Yarn evaluates platform compatibility from packument metadata, not only from the tarball, so
+// these guards have to appear in BOTH. Without them in the packument, an absent optional package
+// would be linked as an empty stub and a native-binding regression could pass unnoticed (#3130).
+const STUB_INCOMPATIBLE_PLATFORM = "keiko-smoke-never-matches";
+
+export function stubManifest(name, version) {
+  return {
+    name,
+    version,
+    description:
+      "Inert offline stub served by the Keiko installable-package smoke (#3130). Never linked.",
+    os: [STUB_INCOMPATIBLE_PLATFORM],
+    cpu: [STUB_INCOMPATIBLE_PLATFORM],
+  };
+}
+
 function packStubPackage(entry, destination) {
   const stubDir = mkdtempSync(join(destination, "stub-"));
   mkdirSync(stubDir, { recursive: true });
   writeFileSync(
     join(stubDir, "package.json"),
-    `${JSON.stringify(
-      {
-        name: entry.name,
-        version: entry.version,
-        description:
-          "Inert offline stub served by the Keiko installable-package smoke (#3130). Never linked.",
-        os: ["keiko-smoke-never-matches"],
-        cpu: ["keiko-smoke-never-matches"],
-      },
-      null,
-      2,
-    )}\n`,
+    `${JSON.stringify(stubManifest(entry.name, entry.version), null, 2)}\n`,
     "utf8",
   );
   return packVendoredPackage({ name: entry.name, directory: stubDir }, destination);
@@ -644,7 +659,7 @@ export function seedVendoredRegistry(
       ...entry,
       tarballPath,
       integrity: tarballIntegrity(tarballPath),
-      manifest: { name: entry.name, version: entry.version },
+      manifest: stubManifest(entry.name, entry.version),
     });
     seeded.set(entry.name, versions);
   }

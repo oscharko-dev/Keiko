@@ -20,6 +20,9 @@ import {
   packRoot,
   minimumSatisfyingVersion,
   resolveVendorClosure,
+  seedVendoredRegistry,
+  stubManifest,
+  findInstalledCopies,
   runAsync,
   startLocalRegistry,
   terminateProcessTree,
@@ -372,6 +375,101 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(env.YARN_ENABLE_GLOBAL_CACHE).toBe("false");
     expect(env.PATH).toBe("/usr/bin");
   });
+
+  // A stub's platform guards must reach the PACKUMENT, not just the tarball: Yarn decides
+  // compatibility from packument metadata, so without them it would link the empty stub and a
+  // missing native binding could pass unnoticed.
+  it("keeps the stub platform guards in the served packument", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-stub-packument-test-"));
+    const artifact = localRegistryArtifact(root);
+    const tarballPath = join(root, "stub.tgz");
+    writeFileSync(tarballPath, "stub bytes\n", "utf8");
+    const seeded = new Map([
+      [
+        "@napi-rs/canvas-linux-x64-musl",
+        new Map([
+          [
+            "1.0.2",
+            {
+              name: "@napi-rs/canvas-linux-x64-musl",
+              version: "1.0.2",
+              tarballPath,
+              integrity: "sha512-stub",
+              manifest: stubManifest("@napi-rs/canvas-linux-x64-musl", "1.0.2"),
+            },
+          ],
+        ]),
+      ],
+    ]);
+    const registry = await startLocalRegistry(artifact, seeded);
+    try {
+      const packument = await (
+        await globalThis.fetch(`${registry.registryUrl}/@napi-rs%2Fcanvas-linux-x64-musl`)
+      ).json();
+      const served = packument.versions["1.0.2"];
+      expect(served.os).toEqual(["keiko-smoke-never-matches"]);
+      expect(served.cpu).toEqual(["keiko-smoke-never-matches"]);
+      // The guards must not match any real host, or the stub could be linked somewhere.
+      expect(served.os).not.toContain(process.platform);
+      expect(served.cpu).not.toContain(process.arch);
+    } finally {
+      await registry.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("finds a copy nested below another nested dependency", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-nested-scan-test-"));
+    try {
+      // node_modules/a/node_modules/b/node_modules/demo — deeper than one level.
+      const deep = join(root, "node_modules", "a", "node_modules", "b", "node_modules", "demo");
+      mkdirSync(deep, { recursive: true });
+      writeFileSync(
+        join(deep, "package.json"),
+        JSON.stringify({ name: "demo", version: "4.5.6" }),
+        "utf8",
+      );
+      const copies = findInstalledCopies("demo", join(root, "node_modules"), root);
+      expect(copies.map((copy) => copy.version)).toEqual(["4.5.6"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("packs installed dependencies and synthesizes stubs for absent optional ones", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-seed-test-"));
+    const destination = mkdtempSync(join(tmpdir(), "keiko-seed-out-"));
+    try {
+      const demoDir = join(root, "node_modules", "demo");
+      mkdirSync(demoDir, { recursive: true });
+      writeFileSync(
+        join(demoDir, "package.json"),
+        JSON.stringify({
+          name: "demo",
+          version: "1.2.3",
+          optionalDependencies: { "demo-absent-platform": "^4.5.6" },
+        }),
+        "utf8",
+      );
+
+      const seeded = seedVendoredRegistry(destination, join(root, "node_modules"), {
+        dependencies: { demo: "^1.2.3" },
+        bundleDependencies: [],
+      });
+
+      const packed = seeded.get("demo")?.get("1.2.3");
+      expect(packed?.integrity).toMatch(/^sha512-/u);
+      expect(existsSync(packed?.tarballPath ?? "")).toBe(true);
+
+      // The absent optional dependency is synthesized, with its platform guards intact.
+      const stub = seeded.get("demo-absent-platform")?.get("4.5.6");
+      expect(stub?.manifest.os).toEqual(["keiko-smoke-never-matches"]);
+      expect(existsSync(stub?.tarballPath ?? "")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(destination, { recursive: true, force: true });
+    }
+  }, 60_000);
 
   it("names a concrete stub version from a caret, tilde, or exact range", () => {
     expect(minimumSatisfyingVersion("^1.0.2")).toBe("1.0.2");
