@@ -24,6 +24,7 @@ import {
   assertRegistryOnlyDescriptors,
   assertHostBindingsAreReal,
   hostBindingSuffixes,
+  privateYarnHome,
   assertStagedRootDescriptors,
   persistentVendorSeedDir,
   seedThenPack,
@@ -801,6 +802,57 @@ describe("installable package smoke optional-dependency coverage", () => {
   ])("derives a suffix matching the real %s/%s prebuild", (platform, arch, libc, published) => {
     const suffixes = hostBindingSuffixes(platform, arch, libc);
     expect(suffixes.some((suffix) => published.endsWith(suffix))).toBe(true);
+  });
+
+  // The lockfile carries canvas 1.0.0 and 1.0.2, so checking "any version under this name is
+  // real" passes while the 1.0.2 parent still resolves its own exact binding to a stub.
+  it("checks the binding version each parent declares, not any version under the name", () => {
+    const binding = `demo-native${hostBindingSuffixes().at(-1)}`;
+    const parent = (version, bindingVersion) => [
+      version,
+      {
+        name: "demo-native",
+        version,
+        manifest: { optionalDependencies: { [binding]: bindingVersion } },
+      },
+    ];
+    const seeded = new Map([
+      ["demo-native", new Map([parent("1.0.0", "1.0.0"), parent("1.0.2", "1.0.2")])],
+      [
+        binding,
+        new Map([
+          // 1.0.0 is real, 1.0.2 is a stub — an aggregate check would see "not all stubs" and pass.
+          ["1.0.0", { name: binding, version: "1.0.0", manifest: { name: binding } }],
+          ["1.0.2", { name: binding, version: "1.0.2", manifest: stubManifest(binding, "1.0.2") }],
+        ]),
+      ],
+    ]);
+    rejectProcessExit();
+    expect(() => assertHostBindingsAreReal(seeded)).toThrow(/process\.exit\(1\)/u);
+  });
+
+  it("gives the Yarn child a private home so ambient rc files cannot apply", () => {
+    const home = privateYarnHome();
+    try {
+      expect(existsSync(home)).toBe(true);
+      const env = yarnChildEnv(
+        "http://127.0.0.1:12345",
+        { PATH: "/usr/bin", HOME: "/real/home" },
+        home,
+      );
+      // Yarn reads ~/.yarnrc.yml, so the home must be the private one, not the developer's.
+      expect(env.HOME).toBe(home);
+      expect(env.USERPROFILE).toBe(home);
+      expect(env.XDG_CONFIG_HOME).toBe(home);
+      // Without a private home the caller's environment is left untouched.
+      const inherited = yarnChildEnv("http://127.0.0.1:12345", {
+        PATH: "/usr/bin",
+        HOME: "/real/home",
+      });
+      expect(inherited.HOME).toBe("/real/home");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("does not let a glibc host claim the musl build, or the reverse", () => {

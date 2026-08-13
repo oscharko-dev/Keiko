@@ -746,13 +746,19 @@ const isStubEntry = (entry) => entry?.manifest?.os?.[0] === STUB_INCOMPATIBLE_PL
  */
 function stubbedHostBindings(seeded, entry, hostSuffixes) {
   if (isStubEntry(entry)) return [];
-  return Object.keys(entry.manifest?.optionalDependencies ?? {})
-    .filter((optional) => hostSuffixes.some((suffix) => optional.endsWith(suffix)))
-    .filter((optional) => {
-      const candidates = [...(seeded.get(optional)?.values() ?? [])];
-      return candidates.length > 0 && candidates.every(isStubEntry);
+  return Object.entries(entry.manifest?.optionalDependencies ?? {})
+    .filter(([optional]) => hostSuffixes.some((suffix) => optional.endsWith(suffix)))
+    .filter(([optional, range]) => {
+      // The version THIS parent declares, not any version under the name. The lockfile carries
+      // canvas 1.0.0 and 1.0.2, so an aggregate check passes as soon as one binding is real while
+      // the other parent still resolves its exact binding to a stub.
+      const required = minimumSatisfyingVersion(range);
+      const versions = seeded.get(optional);
+      if (versions === undefined || required === undefined) return false;
+      const candidate = versions.get(required);
+      return candidate !== undefined && isStubEntry(candidate);
     })
-    .map((optional) => `${entry.name}@${entry.version} -> ${optional}`);
+    .map(([optional, range]) => `${entry.name}@${entry.version} -> ${optional}@${range}`);
 }
 
 /**
@@ -1175,7 +1181,19 @@ export async function startLocalRegistry(artifact, vendored) {
  * install back to a live registry and past the fail-closed 404s. Registry-affecting variables are
  * therefore dropped and the loopback server is re-asserted through the environment as well (#3130).
  */
-export function yarnChildEnv(registryUrl, baseEnv = process.env) {
+/**
+ * Yarn reads `.yarnrc.yml` from the home directory and from every ancestor of the project, so
+ * sanitizing environment variables alone leaves an ambient rc able to switch on hardened mode,
+ * register plugins, or inject `packageExtensions` inside a gate that claims to be hermetic. The
+ * child therefore gets a private, empty home; provisioning uses the same one so both agree on
+ * Corepack's cache location (#3130).
+ */
+export function privateYarnHome() {
+  const home = mkdtempSync(join(tmpdir(), "keiko-yarn-home-"));
+  return home;
+}
+
+export function yarnChildEnv(registryUrl, baseEnv = process.env, home = undefined) {
   // Every `YARN_*` variable is dropped, not a curated subset: Yarn maps each of its settings to
   // one, and an ambient `YARN_NODE_LINKER=pnp` or `YARN_RC_FILENAME` would change the install
   // shape just as surely as a registry override. The gate then re-asserts only what it needs, so
@@ -1188,6 +1206,8 @@ export function yarnChildEnv(registryUrl, baseEnv = process.env) {
   );
   return {
     ...env,
+    // A private home keeps an ambient `~/.yarnrc.yml` out of this install entirely.
+    ...(home === undefined ? {} : { HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: home }),
     COREPACK_ENABLE_PROJECT_SPEC: "1",
     YARN_ENABLE_GLOBAL_CACHE: "false",
     YARN_ENABLE_TELEMETRY: "false",
@@ -1213,11 +1233,11 @@ const PINNED_YARN = "yarn@4.9.1";
  * mutate the environment it runs in; the throwaway project's own `packageManager` field is what
  * selects Yarn here.
  */
-function provisionPinnedYarn(registryUrl) {
+function provisionPinnedYarn(registryUrl, home) {
   // Provisioning must see the SAME sanitized environment as the install, or `COREPACK_HOME` is
   // honoured here and stripped there — Corepack would then cache the tool in one place and search
   // another with networking already disabled. Only the network flag differs.
-  const env = { ...yarnChildEnv(registryUrl), COREPACK_ENABLE_NETWORK: "1" };
+  const env = { ...yarnChildEnv(registryUrl, process.env, home), COREPACK_ENABLE_NETWORK: "1" };
   const result = run("corepack", ["install", "--global", "--cache-only", PINNED_YARN], {
     timeout: NPM_INSTALL_TIMEOUT_MS,
     env,
@@ -1257,7 +1277,8 @@ export async function installIntoWithYarn(tmp, artifact, vendored) {
   assertRegistryOnlyDescriptors(vendored ?? new Map());
   assertStagedRootDescriptors(artifact.manifest);
   const registry = await startLocalRegistry(artifact, vendored);
-  provisionPinnedYarn(registry.registryUrl);
+  const yarnHome = privateYarnHome();
+  provisionPinnedYarn(registry.registryUrl, yarnHome);
   writeFileSync(
     join(tmp, "package.json"),
     `${JSON.stringify(
@@ -1286,7 +1307,7 @@ export async function installIntoWithYarn(tmp, artifact, vendored) {
       {
         cwd: tmp,
         timeout: NPM_INSTALL_TIMEOUT_MS,
-        env: yarnChildEnv(registry.registryUrl),
+        env: yarnChildEnv(registry.registryUrl, process.env, yarnHome),
       },
     );
     if (result.timedOut === true || result.error !== undefined || result.status !== 0) {
@@ -1300,6 +1321,7 @@ export async function installIntoWithYarn(tmp, artifact, vendored) {
     }
   } finally {
     await registry.close();
+    rmSync(yarnHome, { recursive: true, force: true });
   }
 }
 
