@@ -761,7 +761,11 @@ function stubbedHostBindings(seeded, entry, hostSuffixes) {
  * runs. The set is derived from the same libc detection `supportedArchitectures()` uses, so a glibc
  * host does not accept the musl build as its own.
  */
-export function hostBindingSuffixes(platform = process.platform, arch = process.arch, libc) {
+export function hostBindingSuffixes(
+  platform = process.platform,
+  arch = process.arch,
+  libc = undefined,
+) {
   const base = `-${platform}-${arch}`;
   if (platform === "linux") {
     const resolvedLibc = libc ?? linuxLibc();
