@@ -197,11 +197,13 @@ graph. Four controls remain load-bearing:
 ### D7 — Installable-package smoke
 
 The script `scripts/installable-package-smoke.mjs` defines the AC2 gate: it stages and packs the
-publish artifact, installs the tarball into a clean npm project, and serves the exact same bytes
-through a hermetic loopback npm registry for a clean Yarn 4.9.1 install. It asserts all vendored
-workspace `dist/` trees are installed and executes `keiko --version` and `keiko --help`. It also
-asserts the SDK root runtime and declaration exports resolve. The npm lane continues through the
-packaged UI and lifecycle integration proof.
+publish artifact, installs the tarball into a clean npm project, and serves the exact same root
+bytes through a scoped loopback npm registry for a clean Yarn 4.9.1 install. The `@oscharko-dev`
+scope is isolated to loopback while ordinary third-party dependencies use Yarn's configured public
+registry, matching real consumer resolution. The gate asserts all vendored workspace `dist/` trees
+are installed and executes `keiko --version` and `keiko --help`. It also asserts the SDK root runtime
+and declaration exports resolve. The npm lane continues through the packaged UI and lifecycle
+integration proof.
 
 The `smoke:install` script is wired into the existing `build-scan-sbom-smoke` CI job
 (`.github/workflows/ci.yml:79`) after the `Build` step.
