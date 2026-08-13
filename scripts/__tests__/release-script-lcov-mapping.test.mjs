@@ -7,6 +7,7 @@ import {
   parseArgs,
   parsePositiveTimeoutEnv,
 } from "../installable-package-smoke.mjs";
+import { createStagedPublishPackage } from "../stage-publish-package.mjs";
 
 afterEach(() => {
   delete globalThis.__keikoPackageSurfaceCoverageSeam;
@@ -24,9 +25,9 @@ describe("release script LCOV mapping seams", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("version-consistency: PASS"));
   });
 
-  // The guarded module imports the built server surface, which can take longer than Vitest's
-  // default timeout to instrument on a cold V8 coverage run.
-  it("covers the package-surface TypeScript runtime tarball requirement without running npm pack", async () => {
+  // The guarded module imports and stages the built package surface, which can take longer than
+  // Vitest's default timeout to instrument on a cold V8 coverage run.
+  it("covers the package-surface runtime and vendored workspace requirements", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.spyOn(process, "exit").mockImplementation((code) => {
       throw new Error(`process.exit(${String(code)})`);
@@ -34,16 +35,35 @@ describe("release script LCOV mapping seams", () => {
     let seamError;
     let seamCalled = false;
     process.env.KEIKO_PACKAGE_SURFACE_COVERAGE_IMPORT_ONLY = "1";
-    globalThis.__keikoPackageSurfaceCoverageSeam = (assertTypeScriptRuntimeSurface) => {
+    globalThis.__keikoPackageSurfaceCoverageSeam = (surface) => {
+      const staged = createStagedPublishPackage();
       try {
         seamCalled = true;
-        assertTypeScriptRuntimeSurface(["node_modules/typescript/package.json"]);
-
+        surface.assertTypeScriptRuntimeSurface([
+          {
+            name: "@oscharko-dev/keiko-server",
+            files: ["package.json"],
+          },
+        ]);
         expect(() => {
-          assertTypeScriptRuntimeSurface([]);
+          surface.assertTypeScriptRuntimeSurface([]);
         }).toThrow("process.exit(1)");
+        const paths = staged.vendorPackages.map(({ archivePath }) => archivePath);
+        surface.assertVendoredPayload(paths, staged.vendorPackages);
+        surface.assertVendoredWorkspaceExportArtifacts(staged.vendorPackages);
+        surface.assertWorkflowHandoffSubpath(staged.vendorPackages);
+        surface.assertLocalKnowledgeDistPath(staged.vendorPackages);
+        expect(surface.collectBuildOutputs(staged.vendorPackages)).toContain(
+          "packages/keiko-server/dist/index.js",
+        );
+        expect(() => surface.assertVendoredPayload(paths, [])).toThrow("process.exit(1)");
+        expect(() => surface.assertVendoredWorkspaceExportArtifacts([])).toThrow("process.exit(1)");
+        expect(() => surface.assertWorkflowHandoffSubpath([])).toThrow("process.exit(1)");
+        expect(() => surface.assertLocalKnowledgeDistPath([])).toThrow("process.exit(1)");
       } catch (error_) {
         seamError = error_;
+      } finally {
+        staged.cleanup();
       }
     };
 

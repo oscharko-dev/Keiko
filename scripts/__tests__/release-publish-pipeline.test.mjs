@@ -42,6 +42,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -53,7 +54,7 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
   hashDirectoryTree,
@@ -67,6 +68,14 @@ import {
 } from "../lib/portable-evaluation-manifest.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+beforeAll(() => {
+  if (!existsSync(join(REPO_ROOT, "dist", "index.js"))) {
+    throw new Error(
+      "release-publish tests require dist/index.js; run `npm run build` before this suite.",
+    );
+  }
+});
 
 // The orchestrator reads the release version from the live root manifest at runtime,
 // so the stubs must answer with that same version rather than a hardcoded one. This
@@ -525,12 +534,14 @@ function stubPrologue(logFile, stateFile) {
     'import { Buffer } from "node:buffer";',
     'import { createHash } from "node:crypto";',
     'import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";',
+    'import { join } from "node:path";',
     `import { writeZipArchiveEntries } from ${JSON.stringify(ZIP_ARCHIVE_LIB_URL)};`,
     `const LOG = ${JSON.stringify(logFile)};`,
     `const STATE = ${JSON.stringify(stateFile)};`,
     `const VERSION = ${JSON.stringify(RELEASE_VERSION)};`,
     "const argv = process.argv.slice(2);",
     "function log(bin) { appendFileSync(LOG, bin + ' ' + JSON.stringify(argv) + '\\n'); }",
+    "function logCwd(bin) { appendFileSync(LOG, bin + '-cwd ' + JSON.stringify(process.cwd()) + '\\n'); }",
     "function state() { return JSON.parse(readFileSync(STATE, 'utf8')); }",
     "function setState(patch) { writeFileSync(STATE, JSON.stringify({ ...state(), ...patch })); }",
     "",
@@ -1049,6 +1060,19 @@ function runPublish({
 
 // A stub `npm` that shares the config/gate scaffolding and lets each scenario plug in the
 // `view` behaviour that is actually under test.
+function npmPackStubLines() {
+  return [
+    'if (sub === "pack") {',
+    '  const destinationIndex = argv.indexOf("--pack-destination");',
+    "  const destination = destinationIndex === -1 ? process.cwd() : argv[destinationIndex + 1];",
+    '  const manifest = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));',
+    '  const archiveName = `${manifest.name.replace(/^@/u, "").replace("/", "-")}-${manifest.version}.tgz`;',
+    '  writeFileSync(join(destination, archiveName), "deterministic stub archive\\n");',
+    "  process.exit(0);",
+    "}",
+  ];
+}
+
 function npmStub(viewBody, { failOnPublish = false } = {}) {
   return [
     'log("npm");',
@@ -1058,10 +1082,12 @@ function npmStub(viewBody, { failOnPublish = false } = {}) {
     // All `npm run <gate>` invocations (version-consistency, publish-manifests,
     // release-impact, prepack, smoke) succeed so control reaches the publish loop.
     'if (sub === "run") { process.exit(0); }',
+    ...npmPackStubLines(),
     'if (sub === "view") {',
     viewBody,
     "}",
     'if (sub === "publish") {',
+    '  logCwd("npm");',
     failOnPublish
       ? '  process.stderr.write("stub npm: publish must not run when the version already exists\\n"); process.exit(97);'
       : "  setState({ published: true }); process.exit(0);",
@@ -1672,13 +1698,16 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
 
       // Publish carries the release-safety flags on the real command line.
       const publishLine = lastRun.calls.find((l) => l.startsWith('npm ["publish"'));
-      expect(publishLine).toContain('"--access","public"');
-      expect(publishLine).toContain('"--tag","latest"');
+      expect(publishLine).toBe(
+        'npm ["publish",".","--access","public","--tag","latest","--registry","https://registry.npmjs.org/","--ignore-scripts"]',
+      );
+      const publishCwdLine = lastRun.calls.find((line) => line.startsWith("npm-cwd "));
+      expect(publishCwdLine).toBeDefined();
+      const publishCwd = JSON.parse(publishCwdLine?.slice("npm-cwd ".length) ?? '""');
+      expect(publishCwd).not.toBe(REPO_ROOT);
+      expect(publishCwd).toMatch(/keiko-publish-stage-[^/\\]+$/u);
       // A token publish carries no provenance attestation: npm can attest only where an OIDC
       // provider exists, and the unconditional flag killed every local operator publish (0.3.1).
-      expect(publishLine).not.toContain('"--provenance"');
-      expect(publishLine).toContain('"--ignore-scripts"');
-      expect(publishLine).not.toContain('"--dry-run"');
 
       // The post-publish verification pass re-reads BOTH the version and the dist-tag.
       const versionViews = lastRun.calls.filter(isVersionView).length;
@@ -2019,6 +2048,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         "const sub = argv[0];",
         'if (sub === "config" && argv[1] === "get" && argv[2] === "strict-ssl") { process.stdout.write("true\\n"); process.exit(0); }',
         'if (sub === "run") { process.exit(0); }',
+        ...npmPackStubLines(),
         'if (sub === "view") {',
         "  const s = state();",
         '  if (argv.includes("version")) {',
@@ -2064,6 +2094,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         "const sub = argv[0];",
         'if (sub === "config" && argv[1] === "get" && argv[2] === "strict-ssl") { process.stdout.write("true\\n"); process.exit(0); }',
         'if (sub === "run") { process.exit(0); }',
+        ...npmPackStubLines(),
         'if (sub === "view") {',
         "  const s = state();",
         '  if (argv.includes("version")) {',

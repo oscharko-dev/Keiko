@@ -34,7 +34,7 @@ function workspace(name, overrides = {}) {
 }
 
 describe("validatePublishManifests", () => {
-  it("accepts root-only publishing with private bundled runtime workspaces", () => {
+  it("accepts root-only publishing with private vendored runtime workspaces", () => {
     const failures = validatePublishManifests(rootManifest(), [
       workspace("@oscharko-dev/keiko-contracts"),
       workspace("@oscharko-dev/keiko-ui"),
