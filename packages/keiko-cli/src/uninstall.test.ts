@@ -648,7 +648,10 @@ describe("runUninstallCli — running server guard", () => {
     };
     const c = makeIo();
     let now = 0;
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+    // uninstall.waitForProcessExit uses performance.now for its 10-second budget
+    // (Codex thread 3771011316); mock it so the deadline exhausts deterministically
+    // instead of spinning against real elapsed time.
+    const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => {
       now += 500;
       return now;
     });

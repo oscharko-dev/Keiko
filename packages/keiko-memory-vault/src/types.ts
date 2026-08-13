@@ -240,6 +240,11 @@ export interface MemoryVaultStore {
   // of offset-paged listMemoriesAcrossScopes, whose OFFSET semantics skip rows if another
   // writer deletes an earlier page while the pagination is running.
   readonly listMemoryIdsByStatus: (status: MemoryStatus) => readonly MemoryId[];
+  // PR-review follow-up (Codex thread 3771333886): return up to `limit` accepted memoryIds
+  // that do NOT currently carry an embedding, in one stable query. `keiko memory reembed`
+  // (default path) uses this so a small --limit does not force the CLI to materialise the
+  // full accepted set + full embedded set to compute the difference.
+  readonly listAcceptedMemoryIdsMissingEmbedding: (limit: number) => readonly MemoryId[];
   // PR-review follow-up (Codex thread 3769903807): snapshot the (memoryId, createdAt) pairs
   // of every embedding row at a moment in time. The force reembed pipeline captures this
   // BEFORE its network-backed staging phase and hands it back to replaceAllEmbeddings so a

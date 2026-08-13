@@ -451,6 +451,7 @@ type MemoryMutators = Pick<
   | "listMemoriesByScope"
   | "listMemoryMetadataByScope"
   | "listMemoryIdsByStatus"
+  | "listAcceptedMemoryIdsMissingEmbedding"
 >;
 
 // Internal-only: carries the forgotten memory's embedding (fetched BEFORE the row is deleted,
@@ -674,6 +675,7 @@ type MemoryReadOps = Pick<
   | "listMemoriesByScope"
   | "listMemoryMetadataByScope"
   | "listMemoryIdsByStatus"
+  | "listAcceptedMemoryIdsMissingEmbedding"
 >;
 
 function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWriteOps {
@@ -756,13 +758,34 @@ function buildMemoryReadOps(db: DatabaseSync, opts: ResolvedOptions): MemoryRead
       const nowMs = effective.nowMs ?? opts.now();
       return listMemoryMetadataByScopeRows(db, scope, effective, nowMs);
     },
-    listMemoryIdsByStatus: (status: MemoryStatus): readonly MemoryId[] => {
-      const rows = db.prepare("SELECT id FROM memories WHERE status = ?").all(status) as {
-        readonly id: string;
-      }[];
-      return rows.map((row) => row.id as MemoryId);
-    },
+    listMemoryIdsByStatus: (status: MemoryStatus): readonly MemoryId[] =>
+      listMemoryIdsByStatusFromDb(db, status),
+    listAcceptedMemoryIdsMissingEmbedding: (limit: number): readonly MemoryId[] =>
+      listAcceptedMemoryIdsMissingEmbeddingFromDb(db, limit),
   };
+}
+
+function listMemoryIdsByStatusFromDb(db: DatabaseSync, status: MemoryStatus): readonly MemoryId[] {
+  const rows = db.prepare("SELECT id FROM memories WHERE status = ?").all(status) as {
+    readonly id: string;
+  }[];
+  return rows.map((row) => row.id as MemoryId);
+}
+
+function listAcceptedMemoryIdsMissingEmbeddingFromDb(
+  db: DatabaseSync,
+  limit: number,
+): readonly MemoryId[] {
+  if (!Number.isSafeInteger(limit) || limit <= 0) return [];
+  const rows = db
+    .prepare(
+      `SELECT m.id FROM memories AS m
+       WHERE m.status = 'accepted'
+         AND NOT EXISTS (SELECT 1 FROM memory_embeddings e WHERE e.memory_id = m.id)
+       LIMIT ?`,
+    )
+    .all(limit) as { readonly id: string }[];
+  return rows.map((row) => row.id as MemoryId);
 }
 
 function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMutators {

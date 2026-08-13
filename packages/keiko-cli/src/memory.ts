@@ -349,23 +349,21 @@ async function backfillEmbeddings(
   // O(1) short-circuit at the top: if the embedded set already covers every accepted
   // memoryId, no work is possible and the pass exits immediately without paging.
   const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
-  const embeddedSet = new Set<MemoryRecord["id"]>(vault.listEmbeddedMemoryIds());
-  // PR-review follow-up (Codex thread 3771256634): use vault.listMemoryIdsByStatus so a
-  // concurrent DELETE from an earlier "page" cannot shift the remaining rows and skip an
-  // unembedded id. The default backfill path shares the same enumeration guarantee as the
-  // --force path.
-  const acceptedIds = vault.listMemoryIdsByStatus("accepted");
-  const unembeddedIds: MemoryRecord["id"][] = [];
-  for (const id of acceptedIds) {
-    if (embeddedSet.has(id)) counts.skipped += 1;
-    else unembeddedIds.push(id);
-  }
+  // PR-review follow-up (Codex thread 3771333886): resolve the exact work list with one
+  // vault-owned query that already applies LIMIT. `reembed --limit 1` on a 100k-memory
+  // vault now returns a 1-row result instead of loading two full sets to compute the
+  // difference in the CLI. `skipped` becomes "accepted-embedded count" (computed on
+  // demand by subtracting the work-list length from the total accepted count) so the
+  // report row stays comparable to the prior version.
+  const unembeddedIds = vault.listAcceptedMemoryIdsMissingEmbedding(limit);
   for (const id of unembeddedIds) {
     if (counts.embedded + counts.failed >= limit) break;
     const record = vault.getMemory(id);
     if (record === undefined) continue;
     await embedOne(vault, embed, record, counts);
   }
+  const acceptedCount = vault.listMemoryIdsByStatus("accepted").length;
+  counts.skipped = Math.max(0, acceptedCount - counts.embedded - counts.failed);
   return counts;
 }
 
