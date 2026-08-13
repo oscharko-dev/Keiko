@@ -870,6 +870,21 @@ function compareVersions(left, right) {
 
 const NON_REGISTRY_PROTOCOL =
   /^(?:git|git\+[a-z]+|https?|file|link|portal|workspace|github|bitbucket|gitlab):/iu;
+// Yarn also accepts a colon-less forge shorthand (`owner/repo`, `owner/repo#semver:^1.0.0`), which
+// it fetches straight from GitHub. A leading `@` is excluded so a scoped package name is not
+// mistaken for one.
+const FORGE_SHORTHAND = /^[^@\s/][^\s/]*\/[^\s/]+$/u;
+
+/** A descriptor's shape, never its value: the value may carry a token or a private endpoint. */
+function descriptorClass(range) {
+  const protocol = /^([a-z][a-z0-9+.-]*):/iu.exec(range)?.[1];
+  if (protocol !== undefined) return `${protocol.toLowerCase()}:`;
+  return FORGE_SHORTHAND.test(range) ? "forge-shorthand" : "unknown";
+}
+
+function isNonRegistryDescriptor(range) {
+  return NON_REGISTRY_PROTOCOL.test(range) || FORGE_SHORTHAND.test(range);
+}
 
 /**
  * Yarn resolves a `git+https:`, tarball-URL, or `file:` descriptor directly instead of through
@@ -880,8 +895,14 @@ const NON_REGISTRY_PROTOCOL =
 function manifestProtocolOffenders(name, entry) {
   return ["dependencies", "optionalDependencies", "peerDependencies"]
     .flatMap((group) => Object.entries(entry.manifest?.[group] ?? {}))
-    .filter(([, range]) => typeof range === "string" && NON_REGISTRY_PROTOCOL.test(range))
-    .map(([dependency, range]) => `${name}@${entry.version} -> ${dependency}@${range}`);
+    .filter(([, range]) => typeof range === "string" && isNonRegistryDescriptor(range))
+    .map(
+      // The descriptor VALUE never reaches the log: `git+https://token@host/pkg.git` would carry a
+      // credential into a required gate's output. Only the owning package, the dependency name and
+      // the descriptor's shape are reported, per the repository's body-free evidence rule.
+      ([dependency, range]) =>
+        `${name}@${entry.version} -> ${dependency} (${descriptorClass(range)})`,
+    );
 }
 
 export function assertRegistryOnlyDescriptors(seeded) {

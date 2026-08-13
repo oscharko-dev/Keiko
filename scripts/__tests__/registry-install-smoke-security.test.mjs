@@ -590,17 +590,44 @@ describe("installable package smoke optional-dependency coverage", () => {
               manifest: {
                 name: "demo",
                 version: "1.0.0",
-                dependencies: { sneaky: "git+https://example.invalid/pkg.git" },
+                dependencies: { sneaky: "git+https://token@example.invalid/pkg.git" },
               },
             },
           ],
         ]),
       ],
     ]);
-    rejectProcessExit();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(process, "exit").mockImplementation((code) => {
+      throw new Error(`process.exit(${String(code)})`);
+    });
     // Yarn resolves such a descriptor directly, never through npmRegistryServer, so the install
     // would leave the hermetic boundary without ever hitting a fail-closed 404.
     expect(() => assertRegistryOnlyDescriptors(offending)).toThrow(/process\.exit\(1\)/u);
+    // The descriptor VALUE must never reach the log — it can carry a token or private endpoint.
+    const logged = errors.mock.calls.flat().join(" ");
+    expect(logged).toContain("demo@1.0.0 -> sneaky (git+https:)");
+    expect(logged).not.toContain("example.invalid");
+
+    vi.restoreAllMocks();
+    // A colon-less forge shorthand is fetched straight from GitHub and must be rejected too.
+    const shorthand = new Map([
+      [
+        "demo",
+        new Map([
+          [
+            "1.0.0",
+            {
+              name: "demo",
+              version: "1.0.0",
+              manifest: { dependencies: { sneaky: "owner/repo" } },
+            },
+          ],
+        ]),
+      ],
+    ]);
+    rejectProcessExit();
+    expect(() => assertRegistryOnlyDescriptors(shorthand)).toThrow(/process\.exit\(1\)/u);
 
     vi.restoreAllMocks();
     const clean = new Map([
@@ -609,7 +636,12 @@ describe("installable package smoke optional-dependency coverage", () => {
         new Map([
           [
             "1.0.0",
-            { name: "demo", version: "1.0.0", manifest: { dependencies: { ok: "^1.0.0" } } },
+            {
+              name: "demo",
+              version: "1.0.0",
+              // A scoped package name contains a slash but is a normal registry dependency.
+              manifest: { dependencies: { ok: "^1.0.0", "@scope/pkg": "~2.0.0" } },
+            },
           ],
         ]),
       ],
