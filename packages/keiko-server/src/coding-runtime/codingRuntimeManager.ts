@@ -817,14 +817,16 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (active.context.runId !== runId) {
       return Promise.resolve({ ok: false, failureCode: "runtime-run-mismatch", retryable: false });
     }
-    // KEIKO-0402 + #3099 R4 P1: reconcile is the sanctioned second-chance path (after a prior
-    // teardown returned reap-unproven), so it cannot short-circuit on a stale `stopPromise`.
-    // But two concurrent reconcile calls must NOT both enter `supervisor.reconcile` on the same
-    // tree. Dedupe via a dedicated `reconcilePromise` slot: the second caller folds onto the
-    // first caller's in-flight promise instead of racing it into the supervisor.
+    // KEIKO-0402 + #3099 R4/R6 P1: reconcile is the sanctioned second-chance path (after a
+    // prior teardown returned reap-unproven). Precedence rules:
+    //   1. Another reconcile is already in flight → fold onto it (per-tree serialization).
+    //   2. A stop/handleExit teardown is in flight AND we are not yet recovery-required → await
+    //      its REAL result (not a synthesized ok:true). The teardown may still enter
+    //      recovery-required, and the operator MUST see that.
+    //   3. Otherwise, start a fresh reconcile against the tree.
     if (active.reconcilePromise !== undefined) return active.reconcilePromise;
-    if (active.tearingDown && active.status !== "recovery-required") {
-      return Promise.resolve({ ok: true, status: "stopped" });
+    if (active.stopPromise !== undefined && active.status !== "recovery-required") {
+      return active.stopPromise;
     }
     active.tearingDown = true;
     const reconciling = this.runReconcile(active);

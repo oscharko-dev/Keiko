@@ -432,7 +432,18 @@ async function finalizeResearch(
   try {
     bytes = await readBytesCapped(response, ctx.config.maxReadBytes);
   } catch {
-    // Over-cap or a mid-stream read error fails closed and drops the partial body.
+    // #3099 R6 P1 (follow-up to KEIKO-0379): an over-cap or mid-stream read failure drops the
+    // partial body, but the fetch DID happen against the endpoint. If we return FAILED here
+    // without charging bytes, `usedBytes` stays low and the byte-budget gate in reserveFetch
+    // never fires — an endpoint that reliably exceeds the response cap could burn every fetch
+    // reservation for a grant while `usedBytes` reports near-zero. Charge the full response cap
+    // so chargeFetch's saturating over-limit path (R2 fix) marks the grant terminally exhausted.
+    ctx.deps.registry.chargeFetch(
+      state.runId,
+      state.grant.grantId,
+      ctx.config.maxReadBytes,
+      ctx.now(),
+    );
     return FAILED;
   }
   const charge = ctx.deps.registry.chargeFetch(

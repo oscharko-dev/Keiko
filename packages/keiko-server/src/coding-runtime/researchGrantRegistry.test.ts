@@ -254,6 +254,20 @@ describe("ResearchGrantRegistry fetch reservation", () => {
     expect(store.activeGrants(RUN, NOW)[0]?.usedBytes).toBe(100);
     expect(store.reserveFetch(RUN, "grant-1", NOW)).toBe("limit-reached");
   });
+
+  // Regression: PR #3099 R6 P1 (paired with the researchEgressPort finalizeResearch fix). A
+  // single over-cap response should immediately saturate the grant's byte budget when charged
+  // for maxTotalBytes — subsequent reserveFetch calls must fail closed. Verifies that a
+  // single charge >= maxTotalBytes exhausts the grant in one step.
+  it("saturates the byte budget on a single charge >= maxTotalBytes", () => {
+    const store = registry({ limits: { maxFetchesPerGrant: 16, maxTotalBytesPerGrant: 100 } });
+    store.register(RUN, makeScope(), undefined, APPROVAL, NOW);
+
+    // A single over-cap charge saturates the budget in one step.
+    expect(store.chargeFetch(RUN, "grant-1", 999, NOW)).toBe("limit-reached");
+    expect(store.activeGrants(RUN, NOW)[0]?.usedBytes).toBe(100);
+    expect(store.reserveFetch(RUN, "grant-1", NOW)).toBe("limit-reached");
+  });
 });
 
 describe("ResearchGrantRegistry byte-budget reconciliation", () => {
