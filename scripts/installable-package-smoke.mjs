@@ -93,6 +93,7 @@ function runAsync(cmd, args, options = {}) {
   return new Promise((resolvePromise) => {
     const stdout = [];
     const stderr = [];
+    // SECURITY-SHELL-OK: corepack-only Windows .cmd compatibility; argv is fixed by this smoke.
     const child = spawn(cmd, args, {
       shell: needsShell,
       stdio: ["ignore", "pipe", "pipe"],
