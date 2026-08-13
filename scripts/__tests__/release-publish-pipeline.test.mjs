@@ -1704,7 +1704,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(publishCwdLine).toBeDefined();
       const publishCwd = JSON.parse(publishCwdLine?.slice("npm-cwd ".length) ?? '""');
       expect(publishCwd).not.toBe(REPO_ROOT);
-      expect(publishCwd).toMatch(/keiko-publish-stage-[^/\\\\]+$/u);
+      expect(publishCwd).toMatch(/keiko-publish-stage-[^/\\]+$/u);
       // A token publish carries no provenance attestation: npm can attest only where an OIDC
       // provider exists, and the unconditional flag killed every local operator publish (0.3.1).
 
