@@ -258,11 +258,29 @@ function walkJsonLines(ctx: ScanContext): void {
     const unitsMark = ctx.units.length;
     const normalizedPartsMark = ctx.normalizedParts.length;
     const normalizedLengthMark = ctx.normalizedLength;
+    const diagnosticsMark = ctx.diagnostics.length;
     walk(ctx, parsed.value, joinPointer("", String(i)), 0);
     if (ctx.nestingStopped) {
       ctx.units.length = unitsMark;
       ctx.normalizedParts.length = normalizedPartsMark;
       ctx.normalizedLength = normalizedLengthMark;
+      downgradeLineNestingDiagnostics(ctx, diagnosticsMark);
+    }
+  }
+}
+
+// PR-review follow-up (Codex thread 3771815015): a per-record JSONL nesting overflow rolls
+// back that line's units, but the "NESTING_LIMIT_REACHED" diagnostic still ships at severity
+// "error". discovery/extract.ts:firstParserFailureDiagnostic treats any error-severity
+// diagnostic as fatal, so the document lands as `failed` and the orchestrator never chunks
+// the units from OTHER valid JSONL lines. Downgrade the line-scoped diagnostic to "warning"
+// to match how per-line MALFORMED_INPUT diagnostics are already emitted; the whole-document
+// JSON path keeps error severity because a single-JSON-document nesting violation IS fatal.
+function downgradeLineNestingDiagnostics(ctx: ScanContext, mark: number): void {
+  for (let j = mark; j < ctx.diagnostics.length; j += 1) {
+    const entry = ctx.diagnostics[j];
+    if (entry?.code === "NESTING_LIMIT_REACHED") {
+      ctx.diagnostics[j] = { ...entry, severity: "warning" };
     }
   }
 }

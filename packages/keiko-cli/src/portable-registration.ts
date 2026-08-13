@@ -336,20 +336,29 @@ export function readPortableInstallRegistration(
   return undefined;
 }
 
-// PR-review follow-up (Codex threads 3771011311 + 3771684322): destructive callers such
-// as `keiko uninstall --state` and `keiko portable setup` must refuse when the registration
-// file EXISTS but its bytes cannot be JSON.parse'd — otherwise a corrupt/truncated file
-// would be treated as absent and either deleted (uninstall) or overwritten with a new
-// setup-failed record (setup), erasing the attestation needed to recover the installation.
+// PR-review follow-up (Codex threads 3771011311 + 3771684322 + 3771815001): destructive
+// callers such as `keiko uninstall --state` and `keiko portable setup` must refuse when the
+// registration file EXISTS but is not a recognized-schema record. Two failure modes:
 //
-// A PARSEABLE-but-schema-unknown record is NOT classified as corrupt: it may be a future
-// schema Keiko has not learned yet, and the adoption gate downstream refuses it as
-// "existing same-path managed install root is not attested" so it is not accidentally
-// treated as pristine either. Only unparseable bytes hit this guard.
+//   1. Unparseable bytes (truncated / non-JSON): would be treated as absent and either
+//      deleted (uninstall) or overwritten with a new setup-failed record (setup).
+//   2. Parseable JSON that does not match any known schema (future Keiko schema, hand-edited
+//      record, corrupted fields): `readPortableInstallRegistration` returns undefined for
+//      the same reason — so `portable setup` would still overwrite via
+//      recordPreLockSetupFailure and `uninstall --state` would still delete the file as
+//      generic owned state, losing the locator and attestation the operator needs to recover
+//      the pre-existing installation.
+//
+// Both cases fail closed with the same operator remediation: repair or remove the file
+// before retrying. The adoption gate downstream ("existing same-path managed install root is
+// not attested") only fires when a managed root is discoverable, which schema-invalid
+// records may not carry — so this guard is the load-bearing check for that class.
 export function isPortableInstallRegistrationCorrupt(stateDir: string): boolean {
   if (!hasPortableInstallRegistration(stateDir)) return false;
   const path = join(stateDir, REGISTRATION_FILE);
-  return readJson(path) === undefined;
+  const raw = readJson(path);
+  if (raw === undefined) return true;
+  return !isManagedRegistrationRecord(raw) && !isFailedRegistrationRecord(raw);
 }
 
 export function readManagedRegistration(stateDir: string): ManagedSetupRegistration | undefined {

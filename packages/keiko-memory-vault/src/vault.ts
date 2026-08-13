@@ -376,6 +376,13 @@ function mergePatch(existing: MemoryRecord, patch: MemoryUpdatePatch, nowMs: num
   // updatedAt is owned by the vault, not the patch, so the caller cannot regress it. createdAt
   // and the scope coordinate are immutable on update (scope changes require supersession +
   // re-insert by design — moving a record across scopes is an audit event, not a field write).
+  //
+  // PR-review follow-up (Codex thread 3771815009): assign a strictly-monotonic revision by
+  // bumping updatedAt past the existing value when the clock cannot separate two writes
+  // (same-millisecond retry, backwards clock adjustment). Without this bump, --force's
+  // assertMemoryVersionsUnchanged precondition could accept a concurrent body/status
+  // mutation whose updatedAt collides with the observed value, letting a vector generated
+  // from the old body commit against the new record.
   const next: MemoryRecord = {
     ...existing,
     ...patch,
@@ -383,7 +390,7 @@ function mergePatch(existing: MemoryRecord, patch: MemoryUpdatePatch, nowMs: num
     schemaVersion: existing.schemaVersion,
     scope: existing.scope,
     createdAt: existing.createdAt,
-    updatedAt: nowMs,
+    updatedAt: Math.max(nowMs, existing.updatedAt + 1),
   };
   return next;
 }

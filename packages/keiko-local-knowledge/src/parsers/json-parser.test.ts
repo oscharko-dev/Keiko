@@ -212,6 +212,12 @@ describe("jsonParser — JSON Lines / NDJSON (GRD-011)", () => {
     // result for a JSONL file where any one line went too deep. The fix scopes that discard to
     // the single-JSON-document case; for JSONL the units already accumulated by earlier valid
     // lines survive alongside the NESTING_LIMIT_REACHED diagnostic.
+    //
+    // Codex thread 3771815015: a per-record nesting overflow must ship as `warning` (matching
+    // per-line MALFORMED_INPUT), NOT `error`. discovery/extract.ts:firstParserFailureDiagnostic
+    // treats any error-severity diagnostic as fatal, so surfacing this as `error` would land
+    // the whole document as `failed` and the orchestrator would never chunk the preserved
+    // units — the exact regression KEIKO-0484 exists to prevent.
     const deep = nestedJson(50);
     const text = `{"a":1}\n${deep}\n{"c":3}\n`;
     const result = jsonParser.parse(
@@ -221,8 +227,11 @@ describe("jsonParser — JSON Lines / NDJSON (GRD-011)", () => {
     const collectedPointers = pointersOf(result.units);
     expect(collectedPointers).toContain("/0");
     expect(
-      result.diagnostics.some((d) => d.code === "NESTING_LIMIT_REACHED" && d.severity === "error"),
+      result.diagnostics.some(
+        (d) => d.code === "NESTING_LIMIT_REACHED" && d.severity === "warning",
+      ),
     ).toBe(true);
+    expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
   });
 
   it("skips a malformed line as a non-fatal warning while keeping good records (.ndjson)", () => {

@@ -1598,19 +1598,17 @@ describe("runPortableCli", () => {
   });
 
   it.each([
-    // Unparseable JSON fails closed before adoption is even considered (the read itself throws);
-    // a parseable record with an unknown schema reaches the adoption gate and must be treated as
-    // an existing registration, not a pristine first run — treating it as absent would let
-    // corrupting one file reopen adoption over a tampered root (#3026 review finding).
-    ["unparseable JSON", "{ corrupted\n", undefined],
-    [
-      "schema-invalid record",
-      '{"schemaVersion":999}\n',
-      "existing same-path managed install root is not attested",
-    ],
+    // Codex thread 3771815001: both an unparseable file AND a parseable-but-schema-unknown file
+    // must fail-closed BEFORE setup can rewrite the record with recordPreLockSetupFailure.
+    // Widening the pre-lock corrupt guard to cover the schema-invalid case preserves the
+    // locator + attestation an operator needs to recover the pre-existing managed installation.
+    // The registration bytes must survive the run unchanged and setup must never surface
+    // "ready at managed root".
+    ["unparseable JSON", "{ corrupted\n"],
+    ["schema-invalid record", '{"schemaVersion":999}\n'],
   ] as const)(
     "never adopts over a malformed existing registration (%s)",
-    async (_label, stateBytes, expectedMessage) => {
+    async (_label, stateBytes) => {
       const root = tempRoot();
       const home = join(root, "home");
       const managedRoot = join(home, "PortableApps", "Keiko");
@@ -1618,7 +1616,8 @@ describe("runPortableCli", () => {
       const c = capture();
       writeWindowsFixture(managedRoot);
       mkdirSync(stateDir, { recursive: true });
-      writeFileSync(join(stateDir, "portable-install-state.json"), stateBytes);
+      const registrationPath = join(stateDir, "portable-install-state.json");
+      writeFileSync(registrationPath, stateBytes);
 
       const code = await runPortableCli(
         [
@@ -1638,9 +1637,13 @@ describe("runPortableCli", () => {
       );
 
       expect(code).toBe(1);
-      if (expectedMessage !== undefined) expect(c.err()).toContain(expectedMessage);
+      expect(c.err()).toContain("portable install registration is corrupt");
       // Neither shape may ever have attested the root.
       expect(c.out()).not.toContain("ready at managed root");
+      // The original registration bytes must be preserved verbatim — the whole point of the
+      // pre-lock corrupt guard is to prevent recordPreLockSetupFailure from overwriting the
+      // locator and hashes needed for recovery.
+      expect(readFileSync(registrationPath, "utf8")).toBe(stateBytes);
     },
   );
 
