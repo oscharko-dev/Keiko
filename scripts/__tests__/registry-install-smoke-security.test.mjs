@@ -637,6 +637,55 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(demo?.range).toBe("^1.0.0");
   });
 
+  // Two bundled workspaces may declare the same absent optional dependency under non-overlapping
+  // ranges. A name-keyed map would keep only the first, and Yarn — which still resolves the second
+  // descriptor from the tarball — would find no candidate for it.
+  it("keeps every distinct optional range for the same package", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-multi-range-test-"));
+    try {
+      for (const [workspace, range] of [
+        ["keiko-alpha", "^1.0.0"],
+        ["keiko-beta", "^2.0.0"],
+      ]) {
+        const dir = join(root, "packages", workspace);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify({
+            name: `@oscharko-dev/${workspace}`,
+            optionalDependencies: { "keiko-smoke-absent-multi": range },
+          }),
+          "utf8",
+        );
+      }
+      const requirements = vendoredDependencyRequirements(
+        {
+          dependencies: {},
+          bundleDependencies: ["@oscharko-dev/keiko-alpha", "@oscharko-dev/keiko-beta"],
+        },
+        root,
+      );
+      const ranges = requirements
+        .filter((entry) => entry.name === "keiko-smoke-absent-multi")
+        .map((entry) => entry.range)
+        .sort();
+      expect(ranges).toEqual(["^1.0.0", "^2.0.0"]);
+
+      // Each distinct range yields its own stub, so both descriptors can resolve.
+      const closure = resolveVendorClosure(
+        join(root, "node_modules"),
+        {
+          dependencies: {},
+          bundleDependencies: ["@oscharko-dev/keiko-alpha", "@oscharko-dev/keiko-beta"],
+        },
+        root,
+      );
+      expect(closure.stubs.map((stub) => stub.version).sort()).toEqual(["1.0.0", "2.0.0"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("names a concrete stub version across the npm range forms it models", () => {
     expect(minimumSatisfyingVersion("^1.0.2")).toBe("1.0.2");
     expect(minimumSatisfyingVersion("~3.4.5")).toBe("3.4.5");

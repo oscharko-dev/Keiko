@@ -416,15 +416,19 @@ export function vendoredDependencyRequirements(
   const bundled = manifest.bundleDependencies ?? manifest.bundledDependencies ?? [];
   const bundledSet = new Set(bundled);
   const requirements = new Map();
+  // Keyed by name, but every distinct OPTIONAL range is kept: two bundled workspaces may declare
+  // the same absent optional dependency under non-overlapping ranges, and Yarn has to resolve both
+  // descriptors. A required edge from any manifest supersedes them all, since that one must
+  // genuinely be present, and its own range is the binding one.
   const record = ({ name, range, optional }) => {
-    const existing = requirements.get(name);
-    if (existing === undefined) {
-      requirements.set(name, { name, range, optional });
-      return;
-    }
-    // A name required non-optionally anywhere must be genuinely present.
-    if (!optional)
-      requirements.set(name, { name, range: existing.range ?? range, optional: false });
+    const existing = requirements.get(name) ?? {
+      name,
+      required: undefined,
+      optionalRanges: new Set(),
+    };
+    if (optional) existing.optionalRanges.add(range);
+    else existing.required = range;
+    requirements.set(name, existing);
   };
   // The staged root carries optional entries too — `promoteWorkspacePeers` lifts a workspace's
   // optional third-party peers into exactly that field — so both groups belong in the closure.
@@ -438,7 +442,13 @@ export function vendoredDependencyRequirements(
       record(requirement);
     }
   }
-  return [...requirements.values()].sort((left, right) => compareStrings(left.name, right.name));
+  return [...requirements.values()]
+    .sort((left, right) => compareStrings(left.name, right.name))
+    .flatMap(({ name, required, optionalRanges }) =>
+      required === undefined
+        ? [...optionalRanges].map((range) => ({ name, range, optional: true }))
+        : [{ name, range: required, optional: false }],
+    );
 }
 
 export function vendoredDependencyNames(manifest = rootPackageJson, packagesRoot = repoRoot) {
@@ -550,7 +560,11 @@ function nestedModuleRoots(modulesRoot, depth = NESTED_MODULE_SCAN_DEPTH) {
  * that is only reachable as an optional entry and is not installed here is not an error: Yarn is
  * told not to ask for it via `supportedArchitectures`.
  */
-export function resolveVendorClosure(modulesRoot, manifest = rootPackageJson) {
+export function resolveVendorClosure(
+  modulesRoot,
+  manifest = rootPackageJson,
+  packagesRoot = repoRoot,
+) {
   // `manifest` should be the STAGED manifest (`artifact.manifest`), not the repo root:
   // `promoteWorkspacePeers` in stage-publish-package.mjs lifts a bundled workspace's third-party
   // peer dependencies into the staged root, and a closure that re-derived only the workspace's
@@ -571,7 +585,7 @@ export function resolveVendorClosure(modulesRoot, manifest = rootPackageJson) {
       missing.push(name);
       return;
     }
-    const copies = findInstalledCopies(name, modulesRoot);
+    const copies = findInstalledCopies(name, modulesRoot, packagesRoot);
     if (copies.length === 0) {
       recordAbsent(name, requirement);
       return;
@@ -599,7 +613,7 @@ export function resolveVendorClosure(modulesRoot, manifest = rootPackageJson) {
       visit(requirement.name, requirement);
     }
   };
-  for (const requirement of vendoredDependencyRequirements(manifest)) {
+  for (const requirement of vendoredDependencyRequirements(manifest, packagesRoot)) {
     visit(requirement.name, requirement);
   }
   return {
@@ -918,9 +932,14 @@ const PINNED_YARN = "yarn@4.9.1";
  * call the smoke may still make, and it is tool provisioning rather than dependency resolution:
  * it happens before the install, its failure names Corepack explicitly, and the install itself
  * then runs with `COREPACK_ENABLE_NETWORK=0`.
+ *
+ * `--cache-only` matters: a plain `--global` install would make this version Corepack's system-wide
+ * default and change unrelated invocations on a developer machine or shared runner. A gate must not
+ * mutate the environment it runs in; the throwaway project's own `packageManager` field is what
+ * selects Yarn here.
  */
 function provisionPinnedYarn() {
-  const result = run("corepack", ["install", "--global", PINNED_YARN], {
+  const result = run("corepack", ["install", "--global", "--cache-only", PINNED_YARN], {
     timeout: NPM_INSTALL_TIMEOUT_MS,
   });
   if (result.status !== 0) {
