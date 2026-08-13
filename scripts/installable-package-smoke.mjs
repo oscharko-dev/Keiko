@@ -392,15 +392,21 @@ export function minimumSatisfyingVersion(range) {
   return undefined;
 }
 
-function manifestRequirements(manifest, bundledSet) {
-  return [
-    ["dependencies", false],
-    ["optionalDependencies", true],
-  ].flatMap(([group, optional]) =>
-    Object.entries(manifest[group] ?? {})
-      .filter(([name]) => !bundledSet.has(name))
-      .map(([name, range]) => ({ name, range, optional })),
-  );
+/**
+ * npm's package-json documentation: "Entries in optionalDependencies will override entries of the
+ * same name in dependencies." That precedence is applied per manifest, so a name listed in both is
+ * treated as optional. Across DIFFERENT manifests a genuine required edge still wins — see
+ * `record()` — because another package really does need it.
+ */
+function manifestRequirements(manifest, bundledSet = new Set()) {
+  const merged = new Map();
+  for (const [name, range] of Object.entries(manifest.dependencies ?? {})) {
+    merged.set(name, { name, range, optional: false });
+  }
+  for (const [name, range] of Object.entries(manifest.optionalDependencies ?? {})) {
+    merged.set(name, { name, range, optional: true });
+  }
+  return [...merged.values()].filter((requirement) => !bundledSet.has(requirement.name));
 }
 
 export function vendoredDependencyRequirements(
@@ -509,8 +515,9 @@ function installedModuleRoots(modulesRoot, packagesRoot) {
       roots.push(join(workspacesDir, workspace, "node_modules"));
     }
   }
-  for (const nested of nestedModuleRoots(modulesRoot)) roots.push(nested);
-  return roots;
+  // Every root is scanned recursively, workspace roots included: npm nests a conflict under a
+  // workspace exactly as it does under the hoisted tree.
+  return [...roots, ...roots.flatMap((root) => nestedModuleRoots(root))];
 }
 
 // npm resolves a conflict below an already nested dependency too
@@ -587,11 +594,9 @@ export function resolveVendorClosure(modulesRoot, manifest = rootPackageJson) {
     missing.push(name);
   };
   const visitDependenciesOf = (copy) => {
-    for (const [dependency, range] of Object.entries(copy.manifest.dependencies ?? {})) {
-      visit(dependency, { name: dependency, range, optional: false });
-    }
-    for (const [dependency, range] of Object.entries(copy.manifest.optionalDependencies ?? {})) {
-      visit(dependency, { name: dependency, range, optional: true });
+    // Same npm precedence as the root manifest: a name in both fields is optional here.
+    for (const requirement of manifestRequirements(copy.manifest)) {
+      visit(requirement.name, requirement);
     }
   };
   for (const requirement of vendoredDependencyRequirements(manifest)) {

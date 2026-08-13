@@ -428,6 +428,33 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
+  it("finds a copy nested below a workspace's own node_modules", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-workspace-nested-test-"));
+    try {
+      // packages/<workspace>/node_modules/a/node_modules/demo — npm nests conflicts under a
+      // workspace exactly as it does under the hoisted tree.
+      const deep = join(
+        root,
+        "packages",
+        "keiko-demo",
+        "node_modules",
+        "a",
+        "node_modules",
+        "demo",
+      );
+      mkdirSync(deep, { recursive: true });
+      writeFileSync(
+        join(deep, "package.json"),
+        JSON.stringify({ name: "demo", version: "9.9.9" }),
+        "utf8",
+      );
+      const copies = findInstalledCopies("demo", join(root, "node_modules"), root);
+      expect(copies.map((copy) => copy.version)).toEqual(["9.9.9"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("finds a copy nested below another nested dependency", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-nested-scan-test-"));
     try {
@@ -507,7 +534,9 @@ describe("installable package smoke optional-dependency coverage", () => {
         bundleDependencies: [],
       });
       // The optional edge is visited first and stubs the package; the required edge must withdraw
-      // that stub, or a genuinely required dependency would be served as an inert stub.
+      // that stub, or a genuinely required dependency would be served as an inert stub. Across
+      // DIFFERENT manifests the required edge binds — unlike within one manifest, where npm gives
+      // optionalDependencies precedence.
       expect(closure.stubs).toEqual([]);
       expect(closure.missing).toEqual(["keiko-smoke-absent-both"]);
     } finally {
@@ -591,7 +620,10 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(seedAt).toBeLessThan(packAt);
   });
 
-  it("keeps the required range when a package is also declared optional", () => {
+  // npm's package-json contract: within ONE manifest, an optionalDependencies entry overrides a
+  // same-named dependencies entry. An earlier revision of this test asserted the opposite and was
+  // wrong about npm, not about the code.
+  it("lets optionalDependencies override dependencies inside one manifest", () => {
     const requirements = vendoredDependencyRequirements(
       {
         dependencies: { demo: "^2.0.0" },
@@ -601,9 +633,8 @@ describe("installable package smoke optional-dependency coverage", () => {
       ROOT,
     );
     const demo = requirements.find((entry) => entry.name === "demo");
-    // The required range binds; inheriting the optional one could stub an incompatible version.
-    expect(demo?.optional).toBe(false);
-    expect(demo?.range).toBe("^2.0.0");
+    expect(demo?.optional).toBe(true);
+    expect(demo?.range).toBe("^1.0.0");
   });
 
   it("names a concrete stub version across the npm range forms it models", () => {
