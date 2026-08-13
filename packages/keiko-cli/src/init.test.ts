@@ -205,6 +205,47 @@ describe("runInitCli", () => {
     expect(written).not.toMatch(/^ {2}"name":/mu);
   });
 
+  it.each([["--help"], ["-h"]])("prints usage and returns 0 for %s", (flag) => {
+    // Branch-coverage pin: exercises the parseInitArgs "help" return and the runInitCli
+    // early-return branch. Both branches are otherwise never hit by tests.
+    const root = makeTempPackage({ name: "target-project", version: "1.0.0" });
+    const c = makeIo();
+
+    const code = runInitCli([flag], c.io, {}, { cwd: root });
+
+    expect(code).toBe(0);
+    expect(c.out()).toContain("keiko init");
+    expect(c.err()).toBe("");
+    // Never touches package.json when help was requested.
+    expect(readPackage(root).scripts).toBeUndefined();
+  });
+
+  it("returns 2 and prints usage on an unknown flag", () => {
+    // Branch-coverage pin: exercises the parseInitArgs null return path and the runInitCli
+    // usage-to-stderr branch. Distinct exit code (2) from generic error (1).
+    const root = makeTempPackage({ name: "target-project", version: "1.0.0" });
+    const c = makeIo();
+
+    const code = runInitCli(["--nope"], c.io, {}, { cwd: root });
+
+    expect(code).toBe(2);
+    expect(c.err()).toContain("keiko init");
+    expect(readPackage(root).scripts).toBeUndefined();
+  });
+
+  it("emits the rendered manifest to stdout and does not write on --dry-run", () => {
+    // Branch-coverage pin: exercises the dryRun branch and confirms the write is skipped.
+    const root = makeTempPackage({ name: "target-project", version: "1.0.0" });
+    const before = readFileSync(join(root, "package.json"), "utf8");
+    const c = makeIo();
+
+    const code = runInitCli(["--dry-run"], c.io, {}, { cwd: root });
+
+    expect(code).toBe(0);
+    expect(c.out()).toContain("keiko:start");
+    expect(readFileSync(join(root, "package.json"), "utf8")).toBe(before);
+  });
+
   it("writes package.json atomically and leaves no .keiko-init-* temp dir behind", () => {
     // #KEIKO-0503 must-fail-before-fix: writeFileSync was a truncate-then-write; a
     // crash between truncate and write could leave the project's package.json
