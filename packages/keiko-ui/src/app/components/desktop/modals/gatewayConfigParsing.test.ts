@@ -643,6 +643,21 @@ describe("parseGatewayConfigUpload", () => {
     expect(parseGatewayConfigUpload(withRef)).toEqual({ outcome: "unsupportedSetting" });
   });
 
+  it("refuses a provider carrying a per-provider circuitBreaker the form cannot apply", () => {
+    // PR-review follow-up (Codex thread 3772192296): the per-provider circuitBreaker override
+    // (config.ts:parseProviderConfig) has no field in the Test & Save form regardless of
+    // provider kind. Silently dropping it would swap the override for the top-level breaker
+    // policy on submit — fail-closed instead, matching apiKeySecretRef.
+    const withBreaker = JSON.stringify({
+      providers: [
+        providerFixture({
+          circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        }),
+      ],
+    });
+    expect(parseGatewayConfigUpload(withBreaker)).toEqual({ outcome: "unsupportedSetting" });
+  });
+
   it("rejects a voice locality on a non-voice capability", () => {
     // The canonical parser rejects a chat/embedding capability carrying voiceProviderLocality
     // (assertNoVoiceFieldsForNonVoiceKind) — reporting upload success would hand the route a

@@ -1535,6 +1535,27 @@ describe("parseModelCapability", () => {
     expect(migrated.providers[0]?.capability.contextWindow).toBe(4096);
   });
 
+  // PR-review follow-up (Codex thread 3772192295): the migration walker MUST only touch
+  // pre-KEIKO-0520 legacy roots (missing schemaVersion OR schemaVersion == 1). A modern
+  // file that carries schemaVersion >= 2 with a hand-edited or corrupted contextWindow:0
+  // must reach the strict parser unchanged so the operator sees a real rejection instead
+  // of an invented 4096-token capacity.
+  it("does NOT migrate a modern root (schemaVersion >= 2) whose chat contextWindow is 0", () => {
+    const migrated = migrateLegacyChatContextWindows({
+      schemaVersion: 2,
+      providers: [{ capability: { ...validCapability(), contextWindow: 0 } }],
+    }) as { providers: readonly { capability: Record<string, unknown> }[] };
+    expect(migrated.providers[0]?.capability.contextWindow).toBe(0);
+  });
+
+  it("migrates a legacy root whose schemaVersion === 1", () => {
+    const migrated = migrateLegacyChatContextWindows({
+      schemaVersion: 1,
+      providers: [{ capability: { ...validCapability(), contextWindow: 0 } }],
+    }) as { providers: readonly { capability: Record<string, unknown> }[] };
+    expect(migrated.providers[0]?.capability.contextWindow).toBe(4096);
+  });
+
   it("accepts a voice capability whose contextWindow is 0", () => {
     const raw = {
       ...validCapability(),

@@ -369,7 +369,13 @@ async function backfillEmbeddings(
     if (record === undefined) continue;
     await embedOne(vault, embed, record, counts);
   }
-  counts.remaining = Math.max(0, totalMissingAtStart - counts.embedded - counts.failed);
+  // PR-review follow-up (Codex thread 3772192294): the `remaining` count is the number of
+  // accepted memories still missing an embedding after this pass — the operator's
+  // "unattempted work" signal. Deriving it as totalMissingAtStart - embedded - failed
+  // overcounts when a target IS processed but neither embedded nor failed (a concurrent
+  // fill increments `skipped` via embedOne, and a target deleted before getMemory is
+  // silently continued). Re-query the aggregate so it always reflects real DB state.
+  counts.remaining = vault.countAcceptedMemoriesMissingEmbedding();
   return counts;
 }
 

@@ -11,6 +11,7 @@ import {
   DEFAULT_API_KEY_HEADER_NAME,
   ERROR_CODES,
   Gateway,
+  GATEWAY_CONFIG_SCHEMA_VERSION,
   createDefaultChatCapability,
   createDefaultEmbeddingCapability,
   findConfiguredCapability,
@@ -1729,16 +1730,26 @@ async function defaultFigmaCredentialTester(
 // keiko.config.json (Issue #1320). `deps.evidenceDir` is the resolved evidence root used by the
 // encrypted Figma PAT vault; it is resolved defensively so persistence never depends on the optional
 // field being pre-populated.
+//
+// PR-review follow-up (Codex thread 3772192295): stamp `schemaVersion:
+// GATEWAY_CONFIG_SCHEMA_VERSION` on every write so the pre-KEIKO-0520 legacy-migration guard
+// (config.ts:migrateLegacyChatContextWindows) can distinguish a legacy pre-migration file
+// from a modern hand-edited/corrupted one. A modern file that carries schemaVersion >= 2
+// with contextWindow: 0 now fails strict parsing instead of being silently rewritten to a
+// 4096-token default.
 function persistGatewayConfig(
   raw: Record<string, unknown>,
   storagePath: string,
   deps: UiHandlerDeps,
 ): void {
-  persistSealedGatewayConfig(raw, {
-    env: deps.env,
-    storagePath,
-    evidenceDir: resolveEvidenceDir(deps.evidenceDir, deps.env),
-  });
+  persistSealedGatewayConfig(
+    { ...raw, schemaVersion: GATEWAY_CONFIG_SCHEMA_VERSION },
+    {
+      env: deps.env,
+      storagePath,
+      evidenceDir: resolveEvidenceDir(deps.evidenceDir, deps.env),
+    },
+  );
 }
 
 interface SetupRequest {

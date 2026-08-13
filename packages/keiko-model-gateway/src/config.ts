@@ -816,31 +816,44 @@ function assertContextWindowForKind(kind: ModelKind, contextWindow: number, path
   }
 }
 
-// PR-review follow-up on KEIKO-0520 + Codex thread 3770357725: gateway configs persisted by
-// pre-KEIKO-0520 releases can carry `kind: "chat"` capabilities with `contextWindow: 0` because
-// the OLD `createDefaultChatCapability` returned that value and gateway setup persisted it.
-// Rejecting them outright at file load would prevent the gateway from starting after an upgrade.
-// Migration therefore runs at the FILE-LOAD boundary (loadConfigFromFile) and rewrites the raw
-// JSON before it reaches the strict parser — direct callers of parseGatewayConfig (setup wizard
-// saves, live validation) still get the strict rejection so a wizard bug that emits 0 cannot be
-// silently hidden. This is idempotent: a config already carrying a real positive window is
-// untouched, and a fresh run of gateway-setup overwrites the migrated default with the
-// discovered value.
+// PR-review follow-ups on KEIKO-0520 + Codex threads 3770357725 + 3770517473 + 3772192295:
+// gateway configs persisted by pre-KEIKO-0520 releases can carry `kind: "chat"` capabilities
+// with `contextWindow: 0` because the OLD `createDefaultChatCapability` returned that value
+// and gateway setup persisted it. Rejecting them outright at file load would prevent the
+// gateway from starting after an upgrade. Migration therefore runs at the FILE-LOAD boundary
+// (loadConfigFromFile) and rewrites the raw JSON before it reaches the strict parser.
+//
+// The migration is gated on TWO conditions that together prove the record is legacy:
+//   1. `contextWindow` is the exact legacy value 0 (the pre-KEIKO-0520 factory's output).
+//   2. The config root is missing `schemaVersion`, OR carries `schemaVersion: 1` — the
+//      pre-KEIKO-0520 shape never wrote this field, and every modern setup / test emits
+//      `schemaVersion: 2` or higher (see `GATEWAY_CONFIG_SCHEMA_VERSION`). A modern file with
+//      `contextWindow: 0` is a real bug and MUST fail strict parsing so the operator sees
+//      the rejection instead of an invented 4096-token capacity.
+//
+// Direct callers of parseGatewayConfig (setup wizard saves, live validation) never invoke
+// this migration, so a wizard bug that emits 0 is still caught. The migration is idempotent
+// on legacy files: a fresh run of gateway-setup will overwrite the migrated default with the
+// discovered value and stamp `schemaVersion: 2`.
 const LEGACY_CHAT_CONTEXT_WINDOW_DEFAULT = 4096;
+export const GATEWAY_CONFIG_SCHEMA_VERSION = 2;
+
+function isLegacySchemaRoot(root: Record<string, unknown>): boolean {
+  const version = root.schemaVersion;
+  if (version === undefined) return true;
+  return version === 1;
+}
 
 function migrateChatCapabilityContextWindow(raw: unknown): unknown {
   if (!isRecord(raw)) return raw;
   if (raw.kind !== "chat") return raw;
-  // PR-review follow-up (Codex thread 3770517473): only the exact legacy value 0 (produced
-  // by the pre-KEIKO-0520 factory) is migrated. Malformed shapes — missing field, null, a
-  // string, negative number — belong at the strict parser so the operator sees a real
-  // rejection instead of an invented 4096-token capacity.
   if (raw.contextWindow !== 0) return raw;
   return { ...raw, contextWindow: LEGACY_CHAT_CONTEXT_WINDOW_DEFAULT };
 }
 
 export function migrateLegacyChatContextWindows(raw: unknown): unknown {
   if (!isRecord(raw)) return raw;
+  if (!isLegacySchemaRoot(raw)) return raw;
   const migrated: Record<string, unknown> = { ...raw };
   if (Array.isArray(migrated.capabilities)) {
     migrated.capabilities = (migrated.capabilities as unknown[]).map(
