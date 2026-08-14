@@ -37,9 +37,17 @@ interface MonacoMouseEventLike {
   };
 }
 
+// A Monaco text model exposes its own `deltaDecorations`, independent of whichever editor (if
+// any) currently has it attached -- see the KEIKO-0378 follow-up note on `clearTarget` below.
+export interface MonacoBlameModel {
+  deltaDecorations(oldDecorations: string[], next: readonly MonacoBlameDecoration[]): string[];
+  isDisposed?(): boolean;
+}
+
 export interface MonacoBlameEditor {
   deltaDecorations(oldDecorations: string[], next: readonly MonacoBlameDecoration[]): string[];
   getPosition?(): { readonly lineNumber: number; readonly column: number } | null;
+  getModel?(): MonacoBlameModel | null;
   onMouseDown(listener: (event: MonacoMouseEventLike) => void): MonacoDisposable;
   onDidChangeModel(listener: () => void): MonacoDisposable;
   addAction(descriptor: {
@@ -118,12 +126,37 @@ interface BlameState {
   lines: Map<number, GitEditorBlameLine>;
   lineIds: string[];
   truncationIds: string[];
+  // The model `lineIds`/`truncationIds` were applied to, captured at apply time (Codex P2 / KEIKO-0378
+  // follow-up). Null when the host doesn't expose `editor.getModel` -- clearing then always falls
+  // back to the editor, matching this bridge's original (pre-follow-up) behaviour.
+  model: MonacoBlameModel | null;
+}
+
+// Decoration ids are scoped to the Monaco model they were applied to, but `editor.deltaDecorations`
+// always delegates to the editor's CURRENT model. The KEIKO-0378 swap handler runs `clearBlame`
+// AFTER Monaco has already reattached the editor to the new model, so clearing through the editor
+// targets the new model (the recorded ids are unknown there: a no-op) while the superseded model --
+// retained live in Monaco's model registry -- keeps its decorations, which can resurface as stale
+// glyphs (and duplicate on re-enable) if the user returns to it. Target the recorded model's own
+// `deltaDecorations` directly whenever it still differs from the current one; fall back to the
+// editor when nothing swapped (same model) or the recorded model is gone/disposed, so this never
+// throws on a stale handle.
+function clearTarget(
+  state: BlameState,
+  args: RegisterEditorBlameArgs,
+): Pick<MonacoBlameEditor, "deltaDecorations"> {
+  const stale = state.model;
+  const current = args.editor.getModel?.() ?? null;
+  if (stale !== null && stale !== current && stale.isDisposed?.() !== true) return stale;
+  return args.editor;
 }
 
 function clearBlame(state: BlameState, args: RegisterEditorBlameArgs): void {
-  state.lineIds = args.editor.deltaDecorations(state.lineIds, []);
-  state.truncationIds = args.editor.deltaDecorations(state.truncationIds, []);
+  const target = clearTarget(state, args);
+  state.lineIds = target.deltaDecorations(state.lineIds, []);
+  state.truncationIds = target.deltaDecorations(state.truncationIds, []);
   state.lines = new Map();
+  state.model = null;
 }
 
 function applyBlame(
@@ -131,6 +164,7 @@ function applyBlame(
   args: RegisterEditorBlameArgs,
   response: GitEditorBlameResponse,
 ): void {
+  state.model = args.editor.getModel?.() ?? null;
   state.lines = new Map(response.lines.map((line) => [line.line, line]));
   state.lineIds = args.editor.deltaDecorations(
     state.lineIds,
@@ -181,16 +215,21 @@ function handleModelSwap(state: BlameState, args: RegisterEditorBlameArgs): void
   state.enabled = false;
 }
 
-export function registerEditorBlame(args: RegisterEditorBlameArgs): EditorBlameBridge {
-  if (args.degraded) return inertBridge();
-  const state: BlameState = {
+function createBlameState(): BlameState {
+  return {
     enabled: false,
     disposed: false,
     sequence: 0,
     lines: new Map(),
     lineIds: [],
     truncationIds: [],
+    model: null,
   };
+}
+
+export function registerEditorBlame(args: RegisterEditorBlameArgs): EditorBlameBridge {
+  if (args.degraded) return inertBridge();
+  const state: BlameState = createBlameState();
   const mouse = args.editor.onMouseDown((event) => {
     const line = event.target.position?.lineNumber;
     if (state.enabled && event.target.type === args.glyphMarginTargetType && line !== undefined) {

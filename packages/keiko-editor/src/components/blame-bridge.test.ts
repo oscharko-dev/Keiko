@@ -1,8 +1,38 @@
 import type { GitEditorBlameResponse } from "@oscharko-dev/keiko-contracts";
 import { describe, expect, it, vi } from "vitest";
 
-import { registerEditorBlame, type MonacoBlameEditor } from "./blame-bridge.js";
+import {
+  registerEditorBlame,
+  type MonacoBlameEditor,
+  type MonacoBlameModel,
+} from "./blame-bridge.js";
 import { BLAME_GLYPH_MARGIN_LANE } from "./glyph-margin-lanes.js";
+
+type BlameDecoration = Parameters<MonacoBlameEditor["deltaDecorations"]>[1][number];
+
+// A fixture Monaco model: decorations live on ITS OWN map, exactly like a real `ITextModel`, so a
+// clear issued against one model can never remove ids that live on another (Codex P2 / KEIKO-0378
+// follow-up regression coverage below needs to observe exactly that separation).
+function fixtureModel(
+  name: string,
+  calls: (readonly [string[], readonly BlameDecoration[]])[],
+): MonacoBlameModel & { readonly liveCount: () => number } {
+  const live = new Map<string, BlameDecoration>();
+  let nextId = 0;
+  return {
+    deltaDecorations: (oldIds, next): string[] => {
+      calls.push([oldIds, next]);
+      for (const id of oldIds) live.delete(id);
+      return next.map((decoration) => {
+        const id = `${name}-${String(nextId)}`;
+        nextId += 1;
+        live.set(id, decoration);
+        return id;
+      });
+    },
+    liveCount: () => live.size,
+  };
+}
 
 const RESPONSE: GitEditorBlameResponse = {
   schemaVersion: "1",
@@ -31,6 +61,7 @@ function fixture(): {
   click(line: number): void;
   rawClick(type: number, line?: number): void;
   swapModel(): void;
+  liveCount(model: "A" | "B"): number;
 } {
   const actions = new Map<string, () => void>();
   let mouseListener = (_event: {
@@ -41,14 +72,17 @@ function fixture(): {
   }): void => undefined;
   let modelListener = (): void => undefined;
   const calls: (readonly [string[], Parameters<MonacoBlameEditor["deltaDecorations"]>[1]])[] = [];
+  // Two independent model handles (per Monaco model, not one shared global decoration list) so the
+  // regression test can observe decorations stranded on the model swapped away from (Codex P2).
+  const modelA = fixtureModel("A", calls);
+  const modelB = fixtureModel("B", calls);
+  let current: typeof modelA = modelA;
   return {
     calls,
     editor: {
-      deltaDecorations: (oldIds, next): string[] => {
-        calls.push([oldIds, next]);
-        return next.map((_, index) => `d${String(index)}`);
-      },
+      deltaDecorations: (oldIds, next): string[] => current.deltaDecorations(oldIds, next),
       getPosition: () => ({ lineNumber: 2, column: 1 }),
+      getModel: () => current,
       onMouseDown: (listener): { dispose(): void } => {
         mouseListener = listener;
         return { dispose: (): void => undefined };
@@ -72,9 +106,14 @@ function fixture(): {
       const position = line === undefined ? undefined : { lineNumber: line };
       mouseListener({ target: { type, ...(position === undefined ? {} : { position }) } });
     },
+    // Monaco reattaches the editor to the new model BEFORE it fires the model-change listener --
+    // the swap itself happens first, matching the KEIKO-0378 bug premise that `clearBlame` runs
+    // only after `editor.getModel()`/`editor.deltaDecorations` already targets the new model.
     swapModel: (): void => {
+      current = modelB;
       modelListener();
     },
+    liveCount: (model): number => (model === "A" ? modelA : modelB).liveCount(),
   };
 }
 
@@ -246,6 +285,35 @@ describe("registerEditorBlame", () => {
     expect(view.calls.every((call) => call[1].length === 0)).toBe(true);
     view.click(2);
     expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("removes decorations from the superseded model, not the newly attached one (Codex P2, KEIKO-0378 follow-up)", async () => {
+    const view = fixture();
+    registerEditorBlame({
+      editor: view.editor,
+      resolve: () => Promise.resolve(RESPONSE),
+      degraded: false,
+      glyphMarginTargetType: 7,
+      dirty: () => false,
+      describe: () => "line",
+      formatAge: () => "age",
+      labels: { toggle: "Toggle", openCommit: "Open", dirtyNotice: "HEAD", truncated: "More" },
+      onCommit: vi.fn(),
+    });
+
+    // Model A: toggle blame on and let the decorations actually land on A.
+    view.run("keiko.editor.toggleBlame");
+    await flush();
+    expect(view.liveCount("A")).toBeGreaterThan(0);
+    expect(view.liveCount("B")).toBe(0);
+
+    // Swap to model B. `editor.deltaDecorations` now delegates to B (Monaco already reattached),
+    // so a clear that only goes through the editor would land on B and leave A's decorations
+    // stranded -- the exact KEIKO-0378 follow-up bug. A's set must end up empty and B must never
+    // pick up a stray decoration it was never given.
+    view.swapModel();
+    expect(view.liveCount("A")).toBe(0);
+    expect(view.liveCount("B")).toBe(0);
   });
 
   it("does zero work when degraded and discards a stale response after disable", async () => {
