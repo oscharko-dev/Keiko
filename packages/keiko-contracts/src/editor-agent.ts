@@ -925,12 +925,27 @@ function preparedTextBytes(files: readonly EditorAgentPreparedChangesetFile[]): 
   );
 }
 
+// Structural edit count over UNVALIDATED files: used only to reject an oversized payload before the
+// expensive per-file validation runs. A non-array textEdits contributes 0 and is caught downstream.
+function declaredEditCount(files: readonly unknown[]): number {
+  return files.reduce<number>(
+    (total, file) =>
+      total + (isRecord(file) && Array.isArray(file.textEdits) ? file.textEdits.length : 0),
+    0,
+  );
+}
+
 export function isEditorAgentPreparedChangeset(
   value: unknown,
 ): value is EditorAgentPreparedChangeset {
   if (!isRecord(value) || !Array.isArray(value.files)) return false;
   if (value.files.length === 0 || value.files.length > EDITOR_AGENT_CHANGESET_MAX_FILES)
     return false;
+  // Cheap aggregate bound FIRST. The per-file structural validation below runs an overlap sort and a
+  // UTF-8 encoding pass over every edit, so checking it before the edit-count cap meant a payload
+  // that the cap was going to reject anyway still paid for the full per-file work at a pre-authority
+  // trust boundary. The count is read structurally here because the files are not yet validated.
+  if (declaredEditCount(value.files) > EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS) return false;
   if (!value.files.every(isEditorAgentPreparedChangesetFile)) return false;
   const files = value.files as readonly EditorAgentPreparedChangesetFile[];
   const editCount = files.reduce((total, file) => total + file.textEdits.length, 0);
@@ -1517,10 +1532,24 @@ function isTextEdit(
   return isRecord(value) && isRange(value.range) && typeof value.newText === "string";
 }
 
+// The applyTextEdits / applyPatch primitives carry the SAME payload shapes a prepared changeset
+// caps, but were unbounded here: an action could hand over an unlimited edit array with unlimited
+// newText, and overlapping or inverted ranges that the changeset path rejects. Same payload, same
+// trust boundary, so the same bounds and the same overlap check apply.
 function isTextEditArray(
   value: unknown,
 ): value is readonly { readonly range: LanguageRange; readonly newText: string }[] {
-  return Array.isArray(value) && value.every(isTextEdit);
+  if (!Array.isArray(value) || value.length > EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS) {
+    return false;
+  }
+  if (!value.every(isTextEdit)) return false;
+  const edits = value as readonly { readonly range: LanguageRange; readonly newText: string }[];
+  const bytes = edits.reduce(
+    (total, edit) => total + EDITOR_AGENT_TEXT_ENCODER.encode(edit.newText).length,
+    0,
+  );
+  if (bytes > EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES) return false;
+  return validateAgentTextEdits(edits) === null;
 }
 
 export function isEditorAgentAction(value: unknown): value is EditorAgentAction {
@@ -1546,7 +1575,11 @@ export function isEditorAgentAction(value: unknown): value is EditorAgentAction 
     value.type === "applyTextEdits" || value.type === "applyPatch"
       ? isUndefinedOr(value.textEdits, isTextEditArray)
       : value.textEdits === undefined,
-    value.type === "applyPatch" ? isUndefinedOr(value.patch, isString) : value.patch === undefined,
+    value.type === "applyPatch"
+      ? isUndefinedOr(value.patch, (patch) =>
+          isBoundedUtf8String(patch, EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES),
+        )
+      : value.patch === undefined,
     value.type === "applyChangeset"
       ? isEditorAgentChangeset(value.changeset)
       : value.changeset === undefined,

@@ -551,13 +551,58 @@ function readStringArray(value: unknown): readonly string[] {
     : [];
 }
 
+// Compared against the canonical plan set-wise rather than by a capability heuristic: brainstorm's
+// facets went completely unvalidated because the only rule was "disagreement-capable modes mandate
+// all three", so a brainstorm plan could mandate anything at all — or nothing.
 function validateModePlanFacets(mode: DiscussionMode, value: unknown, reasons: string[]): void {
-  const disagreementCapable = mode !== "brainstorm";
+  const canonical = DISCUSSION_MODE_PLANS[mode].mandatedFacets;
   const mandated = readStringArray(value);
-  for (const facet of DISAGREEMENT_FACETS) {
-    if (disagreementCapable && !mandated.includes(facet)) {
+  for (const facet of canonical) {
+    if (!mandated.includes(facet)) {
       reasons.push(`mandatedFacets: ${mode} must mandate ${facet}`);
     }
+  }
+  for (const facet of mandated) {
+    if (!(canonical as readonly string[]).includes(facet)) {
+      reasons.push(`mandatedFacets: ${mode} must not mandate ${facet}`);
+    }
+  }
+}
+
+function sameStringSet(actual: unknown, canonical: readonly string[]): boolean {
+  const values = readStringArray(actual);
+  return (
+    values.length === canonical.length &&
+    canonical.every((entry) => values.includes(entry)) &&
+    values.every((entry) => canonical.includes(entry))
+  );
+}
+
+// Every field of the plan is compared against the canonical table, not just one. A plan claiming a
+// different citationDiscipline or contradictionPolicy than the mode it names describes a discussion
+// posture the product never sanctioned, and eight of the nine fields were free to diverge.
+function validateModePlanFields(
+  canonical: DiscussionModePlan,
+  value: Record<string, unknown>,
+  reasons: string[],
+): void {
+  for (const field of [
+    "challengesAssumptions",
+    "requiresExplicitAssumptions",
+    "requiresUncertaintyDisclosure",
+    "citationDiscipline",
+    "contradictionPolicy",
+    "producesDecisionRecommendation",
+  ] as const) {
+    if (value[field] !== canonical[field]) {
+      reasons.push(`${field}: disagrees with canonical plan`);
+    }
+  }
+  if (!sameStringSet(value.groundingDirectives, canonical.groundingDirectives)) {
+    reasons.push("groundingDirectives: disagrees with canonical plan");
+  }
+  if (!sameStringSet(value.directives, canonical.directives)) {
+    reasons.push("directives: disagrees with canonical plan");
   }
 }
 
@@ -588,8 +633,6 @@ export function validateDiscussionModePlan(value: unknown): DiscussionValidation
   const canonical = DISCUSSION_MODE_PLANS[mode];
   validateModePlanFacets(mode, value.mandatedFacets, reasons);
   validateModePlanDirectives(value.directives, reasons);
-  if (value.producesDecisionRecommendation !== canonical.producesDecisionRecommendation) {
-    reasons.push("producesDecisionRecommendation: disagrees with canonical plan");
-  }
+  validateModePlanFields(canonical, value, reasons);
   return buildDiscussionResult(reasons);
 }

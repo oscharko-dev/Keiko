@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   WORKSPACE_RESERVED_CHORDS,
+  isWorkspaceChordAcceptable,
   isWorkspaceDispatchableChord,
   isWorkspaceReservedChord,
   workspaceChordClaimKeys,
@@ -88,6 +89,29 @@ describe("workspace chord vocabulary — expressibility", () => {
       expect(isWorkspaceDispatchableChord(chord)).toBe(expected);
     },
   );
+});
+
+// KEIKO-0423: the two predicates are a must-call-BOTH pair — dispatchable alone still admits a
+// chord the host OS or browser has reserved — but nothing exported or tested the composition, so
+// every caller had to remember it.
+describe("workspace chord acceptability (combined predicate)", () => {
+  it("rejects a chord that is reserved even though it is dispatchable", () => {
+    for (const reserved of WORKSPACE_RESERVED_CHORDS) {
+      expect(isWorkspaceDispatchableChord(reserved)).toBe(true);
+      expect(isWorkspaceChordAcceptable(reserved)).toBe(false);
+    }
+  });
+
+  it("rejects a chord carrying both cmd and ctrl", () => {
+    expect(isWorkspaceChordAcceptable({ key: "j", mod: ["ctrl", "cmd"] })).toBe(false);
+  });
+
+  it("accepts a chord that is both dispatchable and unreserved", () => {
+    const chord: WorkspaceKeyChord = { key: "j", mod: ["alt", "shift"] };
+    expect(isWorkspaceDispatchableChord(chord)).toBe(true);
+    expect(isWorkspaceReservedChord(chord)).toBe(false);
+    expect(isWorkspaceChordAcceptable(chord)).toBe(true);
+  });
 });
 
 describe("workspace chord vocabulary — reservation", () => {

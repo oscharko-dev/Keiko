@@ -3339,6 +3339,7 @@ export {
   workspaceChordKeyForPlatform,
   workspaceChordsCollide,
   workspacePlatformModifiers,
+  isWorkspaceChordAcceptable,
   isWorkspaceDispatchableChord,
   isWorkspaceReservedChord,
   workspaceInverseAction,

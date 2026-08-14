@@ -2033,3 +2033,84 @@ describe("requestVerification action type (Issue #2210, ADR-0126 D5)", () => {
     expect(isEditorAgentAction(baseAction({ type: "applyPatch" }))).toBe(true);
   });
 });
+
+// KEIKO-0481 / KEIKO-0518 — the applyTextEdits/applyPatch primitives carry the same payload shapes a
+// prepared changeset caps, at the same trust boundary, but were unbounded and skipped the overlap
+// check; and the changeset validator ran its per-file sort + UTF-8 encoding pass BEFORE the cheap
+// aggregate edit-count bound that was going to reject the payload anyway.
+describe("editor agent action payload bounds", () => {
+  function editsAction(count: number, newText = "x"): unknown {
+    return baseAction({
+      type: "applyTextEdits",
+      textEdits: Array.from({ length: count }, (_unused, index) => ({
+        range: {
+          start: { line: index, character: 0 },
+          end: { line: index, character: 0 },
+        },
+        newText,
+      })),
+    } as Partial<EditorAgentAction>);
+  }
+
+  it("rejects an applyTextEdits action whose edit array exceeds the changeset cap", () => {
+    expect(isEditorAgentAction(editsAction(EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS))).toBe(true);
+    expect(isEditorAgentAction(editsAction(EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS + 1))).toBe(
+      false,
+    );
+  });
+
+  it("rejects an applyTextEdits action whose total newText exceeds the byte cap", () => {
+    expect(
+      isEditorAgentAction(editsAction(2, "x".repeat(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES))),
+    ).toBe(false);
+  });
+
+  it("rejects overlapping ranges on an action exactly as the changeset path does", () => {
+    expect(
+      isEditorAgentAction(
+        baseAction({
+          type: "applyTextEdits",
+          textEdits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } },
+              newText: "a",
+            },
+            {
+              range: { start: { line: 0, character: 2 }, end: { line: 0, character: 7 } },
+              newText: "b",
+            },
+          ],
+        } as Partial<EditorAgentAction>),
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects an applyPatch action whose patch string exceeds the byte cap", () => {
+    expect(
+      isEditorAgentAction(
+        baseAction({
+          type: "applyPatch",
+          patch: "x".repeat(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES + 1),
+        } as Partial<EditorAgentAction>),
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects an oversized prepared changeset without running the per-file work", () => {
+    const files = Array.from({ length: 2 }, (_unused, fileIndex) => ({
+      file: `src/f${String(fileIndex)}.ts`,
+      expectedContentHash: HASH,
+      textEdits: Array.from(
+        { length: EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS },
+        (_each, index) => ({
+          range: {
+            start: { line: index, character: 0 },
+            end: { line: index, character: 0 },
+          },
+          newText: "x",
+        }),
+      ),
+    }));
+    expect(isEditorAgentPreparedChangeset({ files })).toBe(false);
+  });
+});

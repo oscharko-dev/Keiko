@@ -28,6 +28,8 @@ import {
   type EditorAgentFailureCode,
   type EditorAgentRootAttribution,
   type EditorAgentRootBinding,
+  isEditorAgentConflictCode,
+  isEditorAgentFailureCode,
 } from "./editor-agent.js";
 import {
   codingWorkbenchPolicyEffectFor,
@@ -735,6 +737,31 @@ export function isEditorAgentActionEffectClass(
 // identifiers, the enum members, and the bounded summary. It does not attempt secret detection — the
 // content-free input type plus server-side redaction already guarantee that — it guards shape so a
 // consumer reading the audit feed off the wire cannot be handed a malformed record.
+function isEditorAgentActionStatus(value: unknown): value is EditorAgentActionStatus {
+  return value === "queued" || value === "succeeded" || value === "failed" || value === "conflict";
+}
+
+function hasValidAuditReasonCodes(value: Record<string, unknown>): boolean {
+  return (
+    (value.denyReason === undefined ||
+      EDITOR_AGENT_ACTION_DENY_REASONS.includes(value.denyReason as EditorAgentActionDenyReason)) &&
+    (value.reviewReason === undefined ||
+      EDITOR_AGENT_ACTION_REVIEW_REASONS.includes(
+        value.reviewReason as EditorAgentActionReviewReason,
+      )) &&
+    (value.conflictCode === undefined || isEditorAgentConflictCode(value.conflictCode)) &&
+    (value.failureCode === undefined || isEditorAgentFailureCode(value.failureCode))
+  );
+}
+
+// The documented pairing: a denyReason belongs only to a denied disposition, a reviewReason only to
+// review-required. A record carrying the wrong one describes a decision that was never made.
+function hasValidDispositionReasonPairing(value: Record<string, unknown>): boolean {
+  if (value.denyReason !== undefined && value.disposition !== "denied") return false;
+  if (value.reviewReason !== undefined && value.disposition !== "review-required") return false;
+  return true;
+}
+
 export function isEditorAgentActionAuditRecord(
   value: unknown,
 ): value is EditorAgentActionAuditRecord {
@@ -749,7 +776,13 @@ export function isEditorAgentActionAuditRecord(
     value.origin === undefined || isEditorAgentActionOrigin(value.origin),
     hasMatchingActionEffect(value.actionType, value.effectClass, value.mutating),
     isEditorAgentActionDisposition(value.disposition),
-    typeof value.outcome === "string" && value.outcome.length > 0,
+    // The typed vocabularies were declared on the record and then not enforced: `outcome` took any
+    // non-empty string, and denyReason / reviewReason / conflictCode / failureCode were unchecked
+    // entirely. An audit record is the artifact a reviewer reads to reconstruct what the agent was
+    // allowed to do, so an unrecognised value there is a hole in the record, not a cosmetic one.
+    isEditorAgentActionStatus(value.outcome),
+    hasValidAuditReasonCodes(value),
+    hasValidDispositionReasonPairing(value),
     hasValidAuditTargetMetadata(value),
     typeof value.summary === "string" &&
       value.summary.length <= EDITOR_AGENT_AUDIT_SUMMARY_MAX_CHARS,
