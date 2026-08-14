@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import "../../vitest.setup";
+
 import { describe, expect, it } from "vitest";
 
 import { installDebugMonacoStyles } from "./debug-monaco-styles.js";

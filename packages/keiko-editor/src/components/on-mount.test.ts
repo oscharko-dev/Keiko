@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import "../../vitest.setup";
+
 import { describe, expect, it, vi } from "vitest";
 import type { SourceBreakpoint } from "@oscharko-dev/keiko-contracts";
 
