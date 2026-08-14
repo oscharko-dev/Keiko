@@ -987,6 +987,7 @@ function liveDebugWorkspace(
 interface RenamedBreakpointRecords {
   readonly applied: readonly RenamedInstrumentationFileId[];
   readonly latest: Extract<BreakpointStoreMutationResult, { readonly ok: true }> | undefined;
+  readonly rejectedCount: number;
 }
 
 function renameBreakpointRecords(
@@ -996,14 +997,17 @@ function renameBreakpointRecords(
 ): RenamedBreakpointRecords {
   const applied: RenamedInstrumentationFileId[] = [];
   let latest: Extract<BreakpointStoreMutationResult, { readonly ok: true }> | undefined;
+  let rejectedCount = 0;
   for (const pair of renames) {
     const renamed = service.breakpoints.renameFile(realRoot, pair.previousFileId, pair.nextFileId);
     if (renamed.ok) {
       latest = renamed;
       applied.push(pair);
+    } else {
+      rejectedCount += 1;
     }
   }
-  return { applied, latest };
+  return { applied, latest, rejectedCount };
 }
 
 // A rename is a server-observed filesystem event, not a client-authored setBreakpoints edit, so
@@ -1054,6 +1058,30 @@ function emitRenameInstrumentationFailure(
       source: "dap.debug-routes.rename-instrumentation",
       error,
       redact: () => "Debug adapter re-arm after a rename failed.",
+    }),
+  );
+}
+
+// Codex review round 5 on PR #3141: a renameFile rejection (per-file cap at the destination, store
+// unavailable, invalid id) previously vanished — the pair was skipped with no diagnostic, and when
+// EVERY pair rejected the whole migration returned silently, contradicting this module's stated
+// best-effort-with-diagnostics contract. Counts only, never file ids: diagnostics stay body-free.
+function emitRenameReKeyRejected(
+  service: DapDebugRouteService,
+  realRoot: string,
+  rejectedCount: number,
+  totalCount: number,
+): void {
+  emitServerDiagnostic(
+    service.diagnosticSink,
+    serverDiagnosticFromError({
+      correlationId: breakpointStoreWorkspaceFingerprint(realRoot),
+      operation: "dap.debug-routes.rename-instrumentation.re-key-rejected",
+      source: "dap.debug-routes.rename-instrumentation",
+      error: new Error("RENAME_RE_KEY_REJECTED"),
+      redact: () =>
+        `Breakpoint re-key after a rename was rejected for ${String(rejectedCount)} of ` +
+        `${String(totalCount)} affected file id(s); their breakpoints remain under the old path.`,
     }),
   );
 }
@@ -1126,7 +1154,10 @@ async function runRenameInstrumentation(
   realRoot: string,
   renames: readonly RenamedInstrumentationFileId[],
 ): Promise<void> {
-  const { applied, latest } = renameBreakpointRecords(service, realRoot, renames);
+  const { applied, latest, rejectedCount } = renameBreakpointRecords(service, realRoot, renames);
+  // Rejections are reported even when nothing else proceeds: an all-rejected migration must leave a
+  // diagnostic behind, not return as if there had been nothing to migrate.
+  if (rejectedCount > 0) emitRenameReKeyRejected(service, realRoot, rejectedCount, renames.length);
   if (latest === undefined) return;
   // inspectDebugWorkspaceIdentity stays inside the guard: it can throw if the root becomes unreadable
   // between the store re-key and this lookup, and the method's contract is that it never rejects — a

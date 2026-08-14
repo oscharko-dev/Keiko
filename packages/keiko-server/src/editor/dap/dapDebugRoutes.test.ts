@@ -2325,4 +2325,48 @@ describe("renameInstrumentation orchestration (KEIKO-0179 follow-up, Codex P1 on
       ]);
     }
   });
+
+  // Codex review round 5 on PR #3141: a renameFile rejection used to vanish — the pair was skipped
+  // silently, and an all-rejected migration returned with no diagnostic and no event, leaving the
+  // old-path breakpoints orphaned with nothing to tell an operator why.
+  it("diagnoses a rejected re-key (destination over the per-file cap) instead of returning silently", async () => {
+    const service = buildRenameService();
+    const initial = service.breakpoints.snapshot(workspaceRoot);
+    if (!initial.ok) throw new Error("expected an available breakpoint snapshot");
+    const capFill = service.breakpoints.setBreakpointsForFile(
+      workspaceRoot,
+      initial.snapshot.revision,
+      initial.snapshot.etag,
+      "src/full.ts",
+      Array.from({ length: 64 }, (_, index) => ({ line: index + 1, enabled: true })),
+    );
+    expect(capFill.ok).toBe(true);
+    if (!capFill.ok) throw new Error("expected the cap fill to commit");
+    const armed = service.breakpoints.setBreakpointsForFile(
+      workspaceRoot,
+      capFill.snapshot.revision,
+      capFill.snapshot.etag,
+      "src/app.ts",
+      [{ line: 4, enabled: true }],
+    );
+    expect(armed.ok).toBe(true);
+    const publishSpy = vi.spyOn(service.events, "publish");
+
+    await service.renameInstrumentation(workspaceRoot, [
+      { previousFileId: "src/app.ts", nextFileId: "src/full.ts" },
+    ]);
+
+    const rejected = diagnosticRecords.filter((record) =>
+      record.operation.endsWith("re-key-rejected"),
+    );
+    expect(rejected).toHaveLength(1);
+    expect(publishSpy).not.toHaveBeenCalled();
+    const untouched = service.breakpoints.snapshot(workspaceRoot);
+    expect(untouched.ok).toBe(true);
+    if (untouched.ok) {
+      const perFile = untouched.snapshot.breakpoints.map((entry) => entry.fileId);
+      expect(perFile.filter((fileId) => fileId === "src/app.ts")).toHaveLength(1);
+      expect(perFile.filter((fileId) => fileId === "src/full.ts")).toHaveLength(64);
+    }
+  });
 });
