@@ -917,17 +917,37 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(() => assertHostBindingsAreReal(build(true))).toThrow(/process\.exit\(1\)/u);
   });
 
-  // Checked for every CI platform, not just the running one: the previous revision asserted only
-  // the host's own branch, so the Linux naming defect below shipped green from macOS.
-  it.each([
-    ["linux", "x64", "glibc", "@napi-rs/canvas-linux-x64-gnu"],
-    ["linux", "x64", "musl", "@napi-rs/canvas-linux-x64-musl"],
-    ["linux", "arm64", "glibc", "@napi-rs/canvas-linux-arm64-gnu"],
-    ["win32", "x64", undefined, "@napi-rs/canvas-win32-x64-msvc"],
-    ["darwin", "arm64", undefined, "@napi-rs/canvas-darwin-arm64"],
-  ])("derives a suffix matching the real %s/%s prebuild", (platform, arch, libc, published) => {
-    const suffixes = hostBindingSuffixes(platform, arch, libc);
-    expect(suffixes.some((suffix) => published.endsWith(suffix))).toBe(true);
+  // Derived from `package-lock.json`, not from a hand-written list. The previous revision listed
+  // the published names as literals and simply omitted 32-bit ARM, whose glibc builds are spelled
+  // `gnueabihf` rather than `gnu` — so the helper matched nothing on that lane and the test could
+  // not say so (Codex thread 3780358321). Reading the names the lockfile actually pins means a
+  // prebuild added upstream under a new ABI spelling fails here instead of silently disabling the
+  // guard for that host.
+  it("derives a suffix matching every prebuild the lockfile pins", () => {
+    const lockfile = JSON.parse(readFileSync(join(ROOT, "package-lock.json"), "utf8"));
+    const published = [
+      ...new Set(
+        Object.keys(lockfile.packages ?? {})
+          .map((path) => path.split("node_modules/").at(-1))
+          .filter((name) => name?.startsWith("@napi-rs/canvas-")),
+      ),
+    ];
+    expect(published.length).toBeGreaterThan(5);
+
+    // Only the platforms this helper claims to answer for; `android`/`riscv64` builds exist
+    // upstream but are not hosts Keiko runs its gates on.
+    const covered = published.filter((name) => /-(?:linux|win32|darwin)-/u.test(name));
+    expect(covered.length).toBeGreaterThan(4);
+
+    for (const name of covered) {
+      const [platform, arch, ...abi] = name.slice("@napi-rs/canvas-".length).split("-");
+      const libc = platform === "linux" ? (abi.includes("musl") ? "musl" : "glibc") : undefined;
+      const suffixes = hostBindingSuffixes(platform, arch, libc);
+      expect(
+        suffixes.some((suffix) => name.endsWith(suffix)),
+        `${platform}/${arch}/${libc ?? "-"} derives ${JSON.stringify(suffixes)}, none matching ${name}`,
+      ).toBe(true);
+    }
   });
 
   // The lockfile carries canvas 1.0.0 and 1.0.2, so checking "any version under this name is

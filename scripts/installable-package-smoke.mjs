@@ -772,6 +772,13 @@ function stubbedHostBindings(seeded, entry, hostSuffixes) {
  * runs. The set is derived from the same libc detection `supportedArchitectures()` uses, so a glibc
  * host does not accept the musl build as its own.
  */
+/** The toolchain spellings a Linux prebuild for this libc and architecture may carry. */
+function linuxBindingAbis(libc, arch) {
+  if (libc === "musl") return ["musl"];
+  if (arch === "arm") return ["gnueabihf", "gnu"];
+  return ["gnu"];
+}
+
 export function hostBindingSuffixes(
   platform = process.platform,
   arch = process.arch,
@@ -784,7 +791,15 @@ export function hostBindingSuffixes(
     // prebuilt packages are named with the toolchain, `-gnu`. Using the Yarn spelling here would
     // generate `-linux-x64-glibc`, which matches no published binding, and the guard would be
     // inert on the glibc lane exactly as the bare suffix was on every lane.
-    return [base, `${base}-${resolvedLibc === "musl" ? "musl" : "gnu"}`];
+    //
+    // 32-bit ARM is the one architecture where "the toolchain" is not `gnu`: its glibc builds are
+    // hard-float, spelled `gnueabihf`, and `package-lock.json` carries exactly that name
+    // (`@napi-rs/canvas-linux-arm-gnueabihf`). Emitting only `-linux-arm-gnu` there would match no
+    // published binding, so a stubbed host binding would pass unnoticed on that lane — the very
+    // gap this helper closes everywhere else (Codex thread 3780358321). Both spellings are
+    // returned rather than one, because the suffix set is matched with `endsWith` and a name that
+    // does not exist can never produce a false positive.
+    return [base, ...linuxBindingAbis(resolvedLibc, arch).map((abi) => `${base}-${abi}`)];
   }
   if (platform === "win32") return [base, `${base}-msvc`];
   return [base];
@@ -1119,7 +1134,13 @@ function localRegistryHandler(artifact, tarballBytes, registryUrl, requests, ven
     const pathname = new URL(request.url ?? "/", registryUrl).pathname;
     requests.push(pathname);
     const requested = decodeURIComponent(pathname.slice(1));
-    if (pathname.endsWith(".tgz")) {
+    // Classified by the registry's ARCHIVE ROUTE shape, `<name>/-/<file>.tgz`, not by the
+    // extension alone. `foo.tgz` and `@scope/foo.tgz` are valid npm package names, so a packument
+    // request for one ends in `.tgz` without being an archive request — the extension test alone
+    // would route it here and 404 a package the registry holds (Codex thread 3780358326). Both
+    // serving paths below already require the `/-/` segment, so narrowing the branch to it can
+    // serve nothing less than before.
+    if (requested.includes("/-/") && pathname.endsWith(".tgz")) {
       if (requested === rootTarballPath(rootPackageJson.name, rootVersion)) {
         response.writeHead(200, { "content-type": "application/octet-stream" });
         response.end(tarballBytes);
