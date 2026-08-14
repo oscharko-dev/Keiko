@@ -1031,9 +1031,22 @@ function manifestProtocolOffenders(name, entry) {
 }
 
 /**
+ * `stage-publish-package.mjs` writes exactly one vendor shape — its `archivePath` is built as
+ * `vendor/${archiveName}`, so the descriptor is always `file:vendor/<archive>.tgz`: one segment
+ * directly under the staged `vendor/` directory. Matching that shape rather than the `file:vendor/`
+ * PREFIX is the point. A prefix test also accepts `file:vendor/../../ambient-package`, which Yarn
+ * resolves straight from the filesystem and therefore outside the loopback registry — the exact
+ * hermeticity this check exists to enforce (KfQ thread 3780151719).
+ */
+export function isStagedVendorArchive(range) {
+  const archive = /^file:vendor[/\\]([^/\\]+)$/u.exec(range)?.[1];
+  return archive !== undefined && archive !== ".." && archive.endsWith(".tgz");
+}
+
+/**
  * The staged root's own non-bundled dependencies are checked too: a `git+https:` or tarball-URL
  * descriptor there would be resolved by Yarn outside the loopback registry just as surely as one
- * in a seeded manifest. The `file:vendor/...` entries are the intentional exception — that is how
+ * in a seeded manifest. The staged vendor archives are the intentional exception — that is how
  * `stage-publish-package.mjs` points at the tarball-local private workspaces (ADR-0021 / #3101),
  * and they never leave the installed package.
  */
@@ -1041,7 +1054,7 @@ export function assertStagedRootDescriptors(manifest) {
   const offenders = ["dependencies", "optionalDependencies"]
     .flatMap((group) => Object.entries(manifest?.[group] ?? {}))
     .filter(([, range]) => typeof range === "string")
-    .filter(([, range]) => !/^file:vendor[/\\]/u.test(range))
+    .filter(([, range]) => !isStagedVendorArchive(range))
     .filter(([, range]) => isNonRegistryDescriptor(range))
     .map(([dependency, range]) => `${dependency} (${descriptorClass(range)})`);
   if (offenders.length > 0) {
@@ -1306,11 +1319,42 @@ function provisionPinnedYarn(registryUrl, home) {
     env,
   });
   if (result.status !== 0) {
+    // The other children in this gate run against the local tree or the loopback registry, so
+    // their stderr is echoed verbatim, as every sibling smoke gate does — that is what makes them
+    // debuggable. Corepack is the one child that contacts a remote host, so it is the one whose
+    // output can carry an endpoint, a proxy URL, or the credentials embedded in one. It is
+    // therefore classified rather than quoted (KfQ thread 3780151718).
     fail(
-      `corepack could not provision ${PINNED_YARN} before the offline install: ` +
-        `${(result.stderr || result.stdout).trim()}`,
+      `corepack could not provision ${PINNED_YARN} before the offline install ` +
+        `(exit ${String(result.status)}, ${classifyProvisionFailure(result)}) — re-run ` +
+        `\`npm run provision:smoke\` on a host with network access to populate the cache`,
     );
   }
+}
+
+// Matched against the failed downloader's output to route the failure. Only the right-hand label
+// is ever emitted; the text that matched never is.
+const PROVISION_FAILURE_CLASSES = [
+  {
+    pattern: /ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENETUNREACH/u,
+    label: "the host was unreachable",
+  },
+  {
+    pattern: /EINTEGRITY|integrity|checksum|hash mismatch/iu,
+    label: "the archive failed its integrity check",
+  },
+  {
+    pattern: /\b40[13]\b|unauthorized|forbidden|authentication/iu,
+    label: "the request was rejected as unauthorized",
+  },
+  { pattern: /\b404\b|not found/iu, label: "the requested version was not found" },
+];
+
+export function classifyProvisionFailure(result) {
+  if (result.signal !== null && result.signal !== undefined) return "terminated after the timeout";
+  const combined = `${result.stderr ?? ""}\n${result.stdout ?? ""}`;
+  const matched = PROVISION_FAILURE_CLASSES.find((entry) => entry.pattern.test(combined));
+  return matched === undefined ? "the failure matched no known class" : matched.label;
 }
 
 function writeYarnConfiguration(tmp, registryUrl) {

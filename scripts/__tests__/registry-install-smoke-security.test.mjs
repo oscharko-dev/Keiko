@@ -28,6 +28,8 @@ import {
   corepackCacheDir,
   privateYarnHome,
   assertStagedRootDescriptors,
+  isStagedVendorArchive,
+  classifyProvisionFailure,
   persistentVendorSeedDir,
   seedThenPack,
   loadSeedIndex,
@@ -45,6 +47,23 @@ import { provenancePublishArgs } from "../lib/npm-publish-preflight.mjs";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const ROOT_MANIFEST = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+
+const SMOKE_INVOCATION = /npm run smoke:install(?::optional)?/u;
+
+/**
+ * `ci.yml` split into its top-level jobs, so a workflow assertion can be scoped to the job that
+ * owns the steps instead of scanning the whole document — the difference between proving a step
+ * runs in THIS job and proving it runs somewhere in the file.
+ */
+function ciJobs() {
+  const workflow = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
+  const body = workflow.slice(workflow.indexOf("\njobs:"));
+  const starts = [...body.matchAll(/^ {2}([A-Za-z0-9_-]+):$/gmu)];
+  return starts.map((start, index) => ({
+    name: start[1],
+    text: body.slice(start.index, starts[index + 1]?.index ?? body.length),
+  }));
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -752,6 +771,57 @@ describe("installable package smoke optional-dependency coverage", () => {
     ).toThrow(/process\.exit\(1\)/u);
   });
 
+  // A `file:` descriptor is resolved by Yarn straight from the filesystem, never through the
+  // loopback registry, so the vendor exemption is the one hole in the hermeticity this gate
+  // enforces. It has to match the shape `stage-publish-package.mjs` actually writes —
+  // `vendor/<archive>.tgz`, one segment — rather than the `file:vendor/` prefix, which a
+  // traversal descriptor also satisfies (KfQ thread 3780151719).
+  it("accepts only the exact staged vendor archive shape, not any file:vendor prefix", () => {
+    expect(isStagedVendorArchive("file:vendor/keiko-cli-0.3.7.tgz")).toBe(true);
+    expect(isStagedVendorArchive("file:vendor\\keiko-cli-0.3.7.tgz")).toBe(true);
+
+    for (const escape of [
+      "file:vendor/../../ambient-package",
+      "file:vendor/../../../etc/passwd.tgz",
+      "file:vendor/nested/dir/pkg.tgz",
+      "file:vendor/..",
+      "file:vendor/",
+      "file:vendorish/pkg.tgz",
+      "file:vendor/pkg",
+    ]) {
+      expect(isStagedVendorArchive(escape), `${escape} must not be exempt`).toBe(false);
+    }
+
+    rejectProcessExit();
+    expect(() =>
+      assertStagedRootDescriptors({
+        dependencies: { ambient: "file:vendor/../../ambient-package" },
+      }),
+    ).toThrow(/process\.exit\(1\)/u);
+  });
+
+  // Corepack is the only child in this gate that contacts a remote host, so it is the only one
+  // whose failure output can carry an endpoint or the credentials embedded in a proxy URL. The
+  // gate reports a classification and never the text it matched (KfQ thread 3780151718).
+  it("classifies a Corepack provisioning failure without echoing its output", () => {
+    const secret = "https://deploy:hunter2@proxy.internal:8080";
+    const cases = [
+      [{ stderr: `getaddrinfo ENOTFOUND ${secret}`, stdout: "", signal: null }, /unreachable/u],
+      [{ stderr: `EINTEGRITY ${secret}`, stdout: "", signal: null }, /integrity/u],
+      [{ stderr: `401 Unauthorized ${secret}`, stdout: "", signal: null }, /unauthorized/u],
+      [{ stderr: "", stdout: `404 Not Found ${secret}`, signal: null }, /not found/u],
+      [{ stderr: `weird ${secret}`, stdout: "", signal: null }, /no known class/u],
+      [{ stderr: `ENOTFOUND ${secret}`, stdout: "", signal: "SIGKILL" }, /terminated/u],
+    ];
+    for (const [result, expected] of cases) {
+      const classification = classifyProvisionFailure(result);
+      expect(classification).toMatch(expected);
+      expect(classification).not.toContain("hunter2");
+      expect(classification).not.toContain("proxy.internal");
+      expect(classification).not.toContain("https://");
+    }
+  });
+
   // ADR-0021 D7 claims the running platform's native binding is installed and proven. A stub is
   // only ever legitimate for a FOREIGN platform, so a real parent whose host binding is stubbed
   // would let the Yarn arm pass without the binding while the ADR promises otherwise.
@@ -1091,20 +1161,28 @@ describe("installable package smoke optional-dependency coverage", () => {
   // Every job that runs a smoke must prepare the offline fixture first, and in core-quality that
   // preparation has to precede `prune:package-native-optionals` — a seed taken after the prune
   // serves stubs where the host binding belongs.
-  it("prepares the offline smoke in every workflow job that runs one, before any prune", () => {
-    const workflow = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
-    const smokeSites = [...workflow.matchAll(/npm run smoke:install(?::optional)?/gu)];
-    expect(smokeSites.length).toBeGreaterThan(0);
-    // Each smoke invocation is preceded somewhere above by the preparation step.
-    for (const site of smokeSites) {
-      const before = workflow.slice(0, site.index ?? 0);
-      expect(before).toContain("npm run provision:smoke");
+  it("prepares the offline smoke inside every job that runs one, before that job's prune", () => {
+    // Scoped per JOB, not over the whole document. A document-wide "is there a `provision:smoke`
+    // somewhere above this smoke site" check stays green when the step is deleted from
+    // `build-scan-sbom-smoke` or the cross-platform job, because an earlier job's invocation
+    // still sits above it — the assertion would then no longer be able to fail for the regression
+    // it was written to catch (KfQ thread 3780151720).
+    const jobs = ciJobs();
+    const smokeJobs = jobs.filter((job) => SMOKE_INVOCATION.test(job.text));
+    expect(smokeJobs.length).toBeGreaterThan(0);
+    for (const job of smokeJobs) {
+      const prepare = job.text.indexOf("npm run provision:smoke");
+      expect(prepare, `${job.name} runs a smoke without preparing it`).toBeGreaterThan(-1);
+      expect(prepare, `${job.name} prepares after its own smoke`).toBeLessThan(
+        job.text.search(SMOKE_INVOCATION),
+      );
+      // Where the job also prunes, preparation precedes the prune, not merely the smoke: a seed
+      // taken after the prune serves stubs where the host binding belongs.
+      const prune = job.text.indexOf("npm run prune:package-native-optionals");
+      if (prune > -1) {
+        expect(prepare, `${job.name} prepares after its own prune`).toBeLessThan(prune);
+      }
     }
-    // In core-quality the preparation precedes the destructive prune, not merely the smoke.
-    const prune = workflow.indexOf("npm run prune:package-native-optionals");
-    const prepare = workflow.indexOf("npm run provision:smoke");
-    expect(prepare).toBeGreaterThan(-1);
-    expect(prepare).toBeLessThan(prune);
   });
 
   it("bounds every step that may reach the package-manager host", () => {

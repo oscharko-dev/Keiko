@@ -295,14 +295,18 @@ function tightenNodes(
 
 // PR-review follow-up (Codex threads 3770357730 + 3770792796 + 3771011305 + 3771181239):
 // open a genuinely no-follow descriptor and chmod through it. Priority order:
-//   1. O_PATH | O_NOFOLLOW — Linux, no permission bits required (works for 0222 / 0444 /
-//      0333 directories).
-//   2. O_RDONLY | O_NOFOLLOW — POSIX fallback for files readable by the owner.
-//   3. O_WRONLY | O_NOFOLLOW — POSIX fallback for write-only files.
-// If no descriptor strategy works (e.g. an execute-only 0333 directory on a platform
-// without O_PATH), REFUSE to tighten via path-based chmod — a symlink/hardlink swap
-// between an lstat check and the chmod call could redirect the mode change outside the
-// state directory. The operator sees the entry as unreadable and can repair it manually.
+//   1. O_RDONLY | O_NOFOLLOW — POSIX, for entries readable by the owner.
+//   2. O_WRONLY | O_NOFOLLOW — POSIX fallback for write-only files.
+// An O_PATH candidate stood first here until KfQ thread 3780142203. It never ran and could
+// not have worked: Node exposes no `fs.constants.O_PATH` on any platform (verified on
+// linux/node 24.18.0), so the guard was always false; and forcing the raw Linux value shows
+// `fchmod` on such a descriptor failing with EBADF for both a 0666 file and a 0333 directory,
+// leaving the mode untouched — open(2) excludes fchmod from what an O_PATH descriptor permits.
+// The "no permission bits required" coverage it advertised therefore never existed.
+// If no descriptor strategy works (an execute-only 0333 directory has no readable or writable
+// open mode), REFUSE to tighten via path-based chmod — a symlink/hardlink swap between an lstat
+// check and the chmod call could redirect the mode change outside the state directory. The
+// operator sees the entry as unreadable and can repair it manually.
 function tightenNodeMode(node: RuntimeStateNode, targetMode: number): boolean {
   for (const flags of tightenOpenFlagCandidates()) {
     if (tightenViaOpenFlag(node, targetMode, flags)) return true;
@@ -311,14 +315,10 @@ function tightenNodeMode(node: RuntimeStateNode, targetMode: number): boolean {
 }
 
 function tightenOpenFlagCandidates(): readonly number[] {
-  const candidates: number[] = [];
-  const constants = fsConstants as { readonly O_PATH?: number };
-  if (constants.O_PATH !== undefined) candidates.push(constants.O_PATH | fsConstants.O_NOFOLLOW);
-  candidates.push(
+  return [
     fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
     fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW,
-  );
-  return candidates;
+  ];
 }
 
 function tightenViaOpenFlag(node: RuntimeStateNode, targetMode: number, flags: number): boolean {
