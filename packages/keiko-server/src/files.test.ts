@@ -25,6 +25,7 @@ import {
   copyFilesEntry,
   deleteFilesEntry,
   handleFilesContent,
+  handleFilesRename,
   readFilesContent,
   readFilesPreview,
   readFilesTree,
@@ -35,6 +36,7 @@ import {
 import { normalizeRelativePath, resolveRoot } from "./files.js";
 import type { RouteContext, UiHandlerDeps } from "./index.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import { createBreakpointStore } from "./editor/dap/breakpointStore.js";
 import { createEditorLocalHistoryStore } from "./editor/localHistory/localHistoryStore.js";
 import type {
   EditorLocalHistoryCaptureInput,
@@ -1401,6 +1403,39 @@ describe("desktop files mutations (create / rename / delete)", () => {
     });
     await expect(stat(join(root, "src", "app.ts"))).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readFile(join(root, "src", "renamed.ts"), "utf8")).toBe("export const a = 1;\n");
+  });
+
+  it("re-keys breakpoints through the rename route when a DAP breakpoint store is wired (KEIKO-0179)", async () => {
+    const debugStateDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-mut-dap-")));
+    const breakpoints = createBreakpointStore({ stateDir: debugStateDir });
+    const initial = breakpoints.snapshot(root);
+    if (!initial.ok) throw new Error("expected an available breakpoint snapshot");
+    const armed = breakpoints.setBreakpointsForFile(
+      root,
+      initial.snapshot.revision,
+      initial.snapshot.etag,
+      "src/app.ts",
+      [{ line: 1, enabled: true }],
+    );
+    expect(armed.ok).toBe(true);
+
+    const result = await handleFilesRename(
+      patchContentContext({ root, path: "src/app.ts", newPath: "src/renamed.ts" }),
+      { store, redactor: buildRedactor({}), dapDebug: { breakpoints } } as unknown as UiHandlerDeps,
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: { path: "src/renamed.ts", previousPath: "src/app.ts" },
+    });
+    const migrated = breakpoints.snapshot(root);
+    expect(migrated.ok).toBe(true);
+    if (migrated.ok) {
+      expect(migrated.snapshot.breakpoints.map((entry) => entry.fileId)).toEqual([
+        "src/renamed.ts",
+      ]);
+    }
+    await rm(debugStateDir, { recursive: true, force: true });
   });
 
   it("renames a folder and carries its contents", async () => {

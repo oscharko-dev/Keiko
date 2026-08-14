@@ -18,6 +18,7 @@ import {
   type ServerDiagnosticSink,
 } from "../../diagnostics-log.js";
 import { assertNoSymlinkedPathSegments, savePrivateJson } from "../../private-json.js";
+import { inspectDebugWorkspaceIdentity } from "./debugLaunchContext.js";
 
 const MAX_RECORD_BYTES = 512 * 1024;
 const MAX_BREAKPOINTS_PER_FILE = DEFAULT_DEBUG_PAYLOAD_LIMITS.maxBreakpointsPerFile;
@@ -70,6 +71,13 @@ export interface RequestedExceptionBreakpointFilter {
 interface InstrumentationRecord {
   readonly schemaVersion: typeof DAP_DEBUG_CONTRACT_SCHEMA_VERSION;
   readonly workspaceFingerprint: string;
+  // KEIKO-0190: the live filesystem-object identity of realRoot at the time this record was last
+  // committed. loadRecord treats a mismatch against the CURRENT live identity as absent — the same
+  // object-identity reconciliation editorSettingsStore.ts's reconcileRootBinding already applies —
+  // so a directory replaced at the same path never inherits the prior occupant's breakpoints,
+  // watches, or revision. Empty string is reserved for the in-memory `emptyRecord` sentinel; every
+  // committed record carries a real digest, stamped centrally by commitRecord.
+  readonly rootObjectIdentityDigest: string;
   readonly revision: number;
   readonly breakpoints: readonly SourceBreakpoint[];
   readonly exceptionFilters: readonly ExceptionBreakpointFilter[];
@@ -135,6 +143,16 @@ export interface BreakpointStore {
     expectedRevision: number,
     expectedEtag: string,
   ) => BreakpointStoreMutationResult;
+  // KEIKO-0179: re-keys every breakpoint currently filed under `previousFileId` to `nextFileId`
+  // after a successful file/directory-entry rename, so debugging configuration survives the move
+  // instead of lingering orphaned against a now-nonexistent path. No expectedRevision/expectedEtag:
+  // this is a server-initiated migration driven by a filesystem event the caller already observed,
+  // not a client-authored edit racing another client's optimistic-concurrency token.
+  readonly renameFile: (
+    realRoot: string,
+    previousFileId: string,
+    nextFileId: string,
+  ) => BreakpointStoreMutationResult;
 }
 
 export interface BreakpointStoreOptions {
@@ -172,6 +190,7 @@ function emptyRecord(realRoot: string): InstrumentationRecord {
   return {
     schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
     workspaceFingerprint: breakpointStoreWorkspaceFingerprint(realRoot),
+    rootObjectIdentityDigest: "",
     revision: 0,
     breakpoints: [],
     exceptionFilters: NODE_EXCEPTION_FILTERS.map((filter) => ({ ...filter })),
@@ -393,6 +412,7 @@ function parseInstrumentationRecord(
   const allowed = [
     "schemaVersion",
     "workspaceFingerprint",
+    "rootObjectIdentityDigest",
     "revision",
     "breakpoints",
     "exceptionFilters",
@@ -403,6 +423,7 @@ function parseInstrumentationRecord(
   if (value.workspaceFingerprint !== fingerprint || !isNonnegativeRevision(value.revision)) {
     return undefined;
   }
+  if (typeof value.rootObjectIdentityDigest !== "string") return undefined;
   const breakpoints = parseBreakpoints(value.breakpoints);
   const exceptionFilters = parseExceptionFilters(value.exceptionFilters);
   const watches = parseWatches(value.watches);
@@ -412,6 +433,7 @@ function parseInstrumentationRecord(
   return {
     schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
     workspaceFingerprint: fingerprint,
+    rootObjectIdentityDigest: value.rootObjectIdentityDigest,
     revision: value.revision,
     breakpoints,
     exceptionFilters,
@@ -454,6 +476,20 @@ function safeRecordPath(path: string, stateDir: string, realRoot: string): boole
   }
 }
 
+// KEIKO-0190: whether `record`'s stamped identity still matches the live filesystem object at
+// `realRoot`. An unreadable/missing/non-directory root (or one this filesystem cannot durably
+// identify) never matches, so the record fails closed to absent rather than trusting a path alone.
+function identityMatchesLiveRoot(record: InstrumentationRecord, realRoot: string): boolean {
+  try {
+    return (
+      inspectDebugWorkspaceIdentity(realRoot).objectIdentityDigest ===
+      record.rootObjectIdentityDigest
+    );
+  } catch {
+    return false;
+  }
+}
+
 function loadRecord(realRoot: string, options: BreakpointStoreOptions): LoadResult {
   const empty = emptyRecord(realRoot);
   const path = breakpointStoreRecordPath(options.stateDir, realRoot);
@@ -467,9 +503,13 @@ function loadRecord(realRoot: string, options: BreakpointStoreOptions): LoadResu
       JSON.parse(raw.text) as unknown,
       empty.workspaceFingerprint,
     );
-    return parsed === undefined
-      ? { state: "unavailable", record: empty }
-      : { state: "ready", record: parsed };
+    if (parsed === undefined) return { state: "unavailable", record: empty };
+    // A workspace root replaced at the identical path (different inode/object identity) must never
+    // resurrect the prior occupant's breakpoints, watches, or revision counter — treat it as a
+    // fresh absent record (revision 0), never carrying the stale sequence forward.
+    return identityMatchesLiveRoot(parsed, realRoot)
+      ? { state: "ready", record: parsed }
+      : { state: "absent", record: empty };
   } catch {
     return { state: "unavailable", record: empty };
   }
@@ -479,6 +519,7 @@ function recordForWrite(record: InstrumentationRecord): Record<string, unknown> 
   return {
     schemaVersion: record.schemaVersion,
     workspaceFingerprint: record.workspaceFingerprint,
+    rootObjectIdentityDigest: record.rootObjectIdentityDigest,
     revision: record.revision,
     breakpoints: record.breakpoints.map(canonicalBreakpoint),
     exceptionFilters: record.exceptionFilters.map(canonicalExceptionFilter),
@@ -726,17 +767,32 @@ function serializedRecordFits(record: InstrumentationRecord): boolean {
 // mutation for this workspace would silently repeat the same rejection. Emit a redacted diagnostic
 // so the failure is diagnosable without ever surfacing raw content to the caller (mirrors the
 // managed-LSP evidence-projection precedent in managedLspControlFactory.ts).
+//
+// KEIKO-0190: stamps the live rootObjectIdentityDigest into every write, centralizing the identity
+// binding at the one layer every mutator already funnels through instead of six separate call
+// sites. Returns the actually-persisted record (not merely a boolean) so callers build their
+// success snapshot — and its etag — from what is really on disk, not a pre-stamp copy.
 function commitRecord(
   realRoot: string,
   record: InstrumentationRecord,
   options: BreakpointStoreOptions,
-): boolean {
+): InstrumentationRecord | undefined {
   const path = breakpointStoreRecordPath(options.stateDir, realRoot);
-  if (!safeRecordPath(path, options.stateDir, realRoot) || !serializedRecordFits(record))
-    return false;
+  if (!safeRecordPath(path, options.stateDir, realRoot)) return undefined;
+  let identity: ReturnType<typeof inspectDebugWorkspaceIdentity>;
   try {
-    (options.save ?? savePrivateJson)(path, recordForWrite(record));
-    return true;
+    identity = inspectDebugWorkspaceIdentity(realRoot);
+  } catch {
+    return undefined;
+  }
+  const stamped: InstrumentationRecord = {
+    ...record,
+    rootObjectIdentityDigest: identity.objectIdentityDigest,
+  };
+  if (!serializedRecordFits(stamped)) return undefined;
+  try {
+    (options.save ?? savePrivateJson)(path, recordForWrite(stamped));
+    return stamped;
   } catch (error) {
     emitServerDiagnostic(
       options.diagnosticSink,
@@ -748,7 +804,7 @@ function commitRecord(
         redact: () => "Persisting debug instrumentation state failed.",
       }),
     );
-    return false;
+    return undefined;
   }
 }
 
@@ -820,9 +876,41 @@ function commitBreakpointReplacement(
     breakpoints: [...retained, ...buildBreakpoints(fileId, requested, ids)],
   };
   if (!serializedRecordFits(next)) return rejected("cap_exceeded", record, 0, requested.length);
-  return commitRecord(realRoot, next, options)
-    ? success(next, requested.length)
+  const persisted = commitRecord(realRoot, next, options);
+  return persisted !== undefined
+    ? success(persisted, requested.length)
     : rejected("state_unavailable", record, 0, requested.length);
+}
+
+// KEIKO-0179: mirrors commitBreakpointReplacement's CAS shape (load -> mutate -> commitRecord) but
+// is driven by the server's own rename fan-out rather than a client-supplied breakpoint list. A
+// rename against no matching entries is a true no-op — it must not consume a revision for nothing.
+// Entries already filed under `nextFileId` are retained, never dropped, so a rename that lands on
+// an already-tracked destination path keeps both breakpoint sets rather than silently losing one.
+function renameFileEntries(
+  options: BreakpointStoreOptions,
+  realRoot: string,
+  previousFileId: string,
+  nextFileId: string,
+): BreakpointStoreMutationResult {
+  const load = loadRecord(realRoot, options);
+  if (load.state === "unavailable") return rejected("state_unavailable", load.record, 0, 0);
+  if (!validFileId(previousFileId) || !validFileId(nextFileId)) {
+    return rejected("invalid", load.record, 0, 0);
+  }
+  const matching = load.record.breakpoints.filter((entry) => entry.fileId === previousFileId);
+  if (matching.length === 0) return success(load.record, 0);
+  const retained = load.record.breakpoints.filter((entry) => entry.fileId !== previousFileId);
+  const rekeyed = matching.map((entry) => ({ ...entry, fileId: nextFileId }));
+  const next = {
+    ...load.record,
+    revision: load.record.revision + 1,
+    breakpoints: [...retained, ...rekeyed],
+  };
+  const persisted = commitRecord(realRoot, next, options);
+  return persisted !== undefined
+    ? success(persisted, rekeyed.length)
+    : rejected("state_unavailable", load.record, 0, 0);
 }
 
 function parseVerificationUpdates(
@@ -874,8 +962,9 @@ function setBreakpointVerifications(
     return success(load.record, current.length);
   }
   const next = { ...load.record, revision: load.record.revision + 1, breakpoints: nextBreakpoints };
-  return commitRecord(realRoot, next, options)
-    ? success(next, current.length)
+  const persisted = commitRecord(realRoot, next, options);
+  return persisted !== undefined
+    ? success(persisted, current.length)
     : rejected("state_unavailable", load.record, current.length, input.length);
 }
 
@@ -911,8 +1000,9 @@ function commitWatchReplacement(
   if (ids === undefined) return rejected("invalid", record, 0, requested.length);
   const next = { ...record, revision: record.revision + 1, watches: buildWatches(requested, ids) };
   if (!serializedRecordFits(next)) return rejected("cap_exceeded", record, 0, requested.length);
-  return commitRecord(realRoot, next, options)
-    ? success(next, requested.length)
+  const persisted = commitRecord(realRoot, next, options);
+  return persisted !== undefined
+    ? success(persisted, requested.length)
     : rejected("state_unavailable", record, 0, requested.length);
 }
 
@@ -945,8 +1035,9 @@ function setExceptionFilters(
     exceptionFilters: requested,
   };
   if (!serializedRecordFits(next)) return rejected("cap_exceeded", load.record, 0, input.length);
-  return commitRecord(realRoot, next, options)
-    ? success(next, requested.length)
+  const persisted = commitRecord(realRoot, next, options);
+  return persisted !== undefined
+    ? success(persisted, requested.length)
     : rejected("state_unavailable", load.record, 0, input.length);
 }
 
@@ -973,8 +1064,9 @@ function clearInstrumentation(
     exceptionFilters: NODE_EXCEPTION_FILTERS.map((filter) => ({ ...filter })),
     watches: [],
   };
-  return commitRecord(realRoot, next, options)
-    ? success(next, 0)
+  const persisted = commitRecord(realRoot, next, options);
+  return persisted !== undefined
+    ? success(persisted, 0)
     : rejected("state_unavailable", load.record, 0, 0);
 }
 
@@ -997,5 +1089,7 @@ export function createBreakpointStore(options: BreakpointStoreOptions): Breakpoi
     setBreakpointVerifications: (realRoot, revision, etag, fileId, updates) =>
       setBreakpointVerifications(options, realRoot, revision, etag, fileId, updates),
     clearAll: (realRoot, revision, etag) => clearInstrumentation(options, realRoot, revision, etag),
+    renameFile: (realRoot, previousFileId, nextFileId) =>
+      renameFileEntries(options, realRoot, previousFileId, nextFileId),
   };
 }

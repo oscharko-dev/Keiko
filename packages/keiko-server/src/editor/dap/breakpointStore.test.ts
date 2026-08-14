@@ -4,6 +4,7 @@ import {
   readFileSync,
   realpathSync,
   readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -20,6 +21,7 @@ import {
 
 import type { ServerDiagnosticRecord } from "../../diagnostics-log.js";
 import { savePrivateJson } from "../../private-json.js";
+import { inspectDebugWorkspaceIdentity } from "./debugLaunchContext.js";
 import {
   BREAKPOINT_STORE_LIMITS,
   breakpointStoreRecordPath,
@@ -98,6 +100,7 @@ function validRecord(root: string): Record<string, unknown> {
   return {
     schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
     workspaceFingerprint: breakpointStoreWorkspaceFingerprint(root),
+    rootObjectIdentityDigest: inspectDebugWorkspaceIdentity(root).objectIdentityDigest,
     revision: 0,
     breakpoints: [],
     exceptionFilters: DEFAULT_NODE_EXCEPTION_FILTERS,
@@ -118,6 +121,21 @@ function expectUnavailable(store: BreakpointStore, root: string): void {
     exceptionFilters: DEFAULT_NODE_EXCEPTION_FILTERS,
     watches: [],
   });
+}
+
+/**
+ * Replace the directory at `path` with a genuinely different filesystem object. The replacement is
+ * created BEFORE the original is removed, so its inode was allocated while the old one was still in
+ * use and can never be the recycled one — deleting and re-creating in place is not deterministic,
+ * since Linux commonly hands the freed inode straight back (mirrors editorSettingsStore.test.ts's
+ * identical helper, the reference implementation for this exact "root replaced at the same path"
+ * scenario).
+ */
+function replaceDirectory(path: string): void {
+  const staged = `${path}.replacement`;
+  mkdirSync(staged);
+  rmSync(path, { recursive: true, force: true });
+  renameSync(staged, path);
 }
 
 function parseJsonRecord(text: string): Record<string, unknown> {
@@ -711,6 +729,7 @@ describe("canonical breakpoint and watch persistence", () => {
     expect(Object.keys(raw)).toEqual([
       "schemaVersion",
       "workspaceFingerprint",
+      "rootObjectIdentityDigest",
       "revision",
       "breakpoints",
       "exceptionFilters",
@@ -728,5 +747,133 @@ describe("canonical breakpoint and watch persistence", () => {
     ]) {
       expect(keys).not.toContain(forbidden);
     }
+  });
+});
+
+describe("KEIKO-0190 — object-identity reconciliation on load", () => {
+  it("treats a workspace root replaced at the same path as absent, never carrying forward the prior occupant's breakpoints, watches, or revision", () => {
+    // The store was keyed by sha256(realRoot) alone, so breakpoints set for one directory were
+    // silently resumed by whatever directory later occupied that path. The record now binds the
+    // root's filesystem-object identity, mirroring editorSettingsStore's reconcileRootBinding.
+    const stateDir = temporaryDirectory("debug-state-root-replaced");
+    const parent = temporaryDirectory("debug-workspace-root-replaced");
+    const root = join(parent, "root");
+    mkdirSync(root);
+    const store = createBreakpointStore({ stateDir, idFactory: (): string => "replaced_id" });
+    const armed = setBreakpoints(store, root, "a.ts", [breakpoint(1)]);
+    expect(armed.ok).toBe(true);
+    setWatches(store, root, [watch(1)]);
+    expect(currentSnapshot(store, root).breakpoints).toHaveLength(1);
+
+    replaceDirectory(root);
+
+    const reloaded = store.snapshot(root);
+    expect(reloaded.ok).toBe(true);
+    expect(reloaded.snapshot).toMatchObject({ revision: 0, breakpoints: [], watches: [] });
+  });
+
+  it("stamps the live object identity into every committed record", () => {
+    const stateDir = temporaryDirectory("debug-state-root-stamp");
+    const root = temporaryDirectory("debug-workspace-root-stamp");
+    const store = createBreakpointStore({ stateDir, idFactory: (): string => "stamp_id" });
+
+    expect(setBreakpoints(store, root, "a.ts", [breakpoint(1)]).ok).toBe(true);
+
+    const persisted = parseJsonRecord(
+      readFileSync(breakpointStoreRecordPath(stateDir, root), "utf8"),
+    );
+    expect(persisted.rootObjectIdentityDigest).toBe(
+      inspectDebugWorkspaceIdentity(root).objectIdentityDigest,
+    );
+  });
+});
+
+describe("KEIKO-0179 — breakpoint re-key on file rename", () => {
+  it("re-keys breakpoints to the new fileId, bumping revision exactly once", () => {
+    const stateDir = temporaryDirectory("debug-state-rename");
+    const root = temporaryDirectory("debug-workspace-rename");
+    let id = 0;
+    const store = createBreakpointStore({ stateDir, idFactory: () => `rename_${String(id++)}` });
+    const accepted = setBreakpoints(store, root, "a.ts", [breakpoint(1), breakpoint(2)]);
+    expect(accepted.ok).toBe(true);
+    const before = currentSnapshot(store, root);
+
+    const renamed = store.renameFile(root, "a.ts", "b.ts");
+
+    expect(renamed).toMatchObject({
+      ok: true,
+      snapshot: {
+        revision: before.revision + 1,
+        breakpoints: [
+          { fileId: "b.ts", line: 1 },
+          { fileId: "b.ts", line: 2 },
+        ],
+      },
+    });
+    const afterFileIds = currentSnapshot(store, root).breakpoints.map((entry) => entry.fileId);
+    expect(afterFileIds).not.toContain("a.ts");
+  });
+
+  it("no-ops without bumping revision when no breakpoint is filed under the previous fileId", () => {
+    const stateDir = temporaryDirectory("debug-state-rename-noop");
+    const root = temporaryDirectory("debug-workspace-rename-noop");
+    const store = createBreakpointStore({ stateDir });
+    const before = currentSnapshot(store, root);
+
+    const result = store.renameFile(root, "a.ts", "b.ts");
+
+    expect(result).toMatchObject({ ok: true, snapshot: before });
+  });
+
+  it("keeps both breakpoint sets when the rename target already has breakpoints of its own", () => {
+    const stateDir = temporaryDirectory("debug-state-rename-collision");
+    const root = temporaryDirectory("debug-workspace-rename-collision");
+    let id = 0;
+    const store = createBreakpointStore({ stateDir, idFactory: () => `collide_${String(id++)}` });
+    setBreakpoints(store, root, "a.ts", [breakpoint(1)]);
+    setBreakpoints(store, root, "b.ts", [breakpoint(9)]);
+
+    const renamed = store.renameFile(root, "a.ts", "b.ts");
+
+    expect(renamed.ok).toBe(true);
+    const lines = currentSnapshot(store, root)
+      .breakpoints.filter((entry) => entry.fileId === "b.ts")
+      .map((entry) => entry.line)
+      .sort();
+    expect(lines).toEqual([1, 9]);
+  });
+
+  it("rejects an invalid destination fileId without mutating the record", () => {
+    const stateDir = temporaryDirectory("debug-state-rename-invalid");
+    const root = temporaryDirectory("debug-workspace-rename-invalid");
+    const store = createBreakpointStore({ stateDir, idFactory: (): string => "invalid_id" });
+    setBreakpoints(store, root, "a.ts", [breakpoint(1)]);
+    const before = currentSnapshot(store, root);
+
+    const rejected = store.renameFile(root, "a.ts", "/absolute/escape.ts");
+
+    expect(rejected).toMatchObject({ ok: false, reason: "invalid", snapshot: before });
+  });
+
+  it("does not resurrect stale breakpoints when renaming against an identity-mismatched (absent) record", () => {
+    // Co-tests KEIKO-0190 and KEIKO-0179: a rename that lands on a root whose persisted record was
+    // just invalidated by an object-identity mismatch must observe the fresh absent record, never
+    // the prior occupant's breakpoints — so nothing is re-keyed and no stale state is written back.
+    const stateDir = temporaryDirectory("debug-state-rename-after-mismatch");
+    const parent = temporaryDirectory("debug-workspace-rename-after-mismatch");
+    const root = join(parent, "root");
+    mkdirSync(root);
+    const store = createBreakpointStore({ stateDir, idFactory: (): string => "stale_id" });
+    setBreakpoints(store, root, "a.ts", [breakpoint(1)]);
+    expect(currentSnapshot(store, root).breakpoints).toHaveLength(1);
+
+    replaceDirectory(root);
+
+    const renamed = store.renameFile(root, "a.ts", "b.ts");
+
+    expect(renamed).toMatchObject({ ok: true, retainedCount: 0 });
+    const snapshot = currentSnapshot(store, root);
+    expect(snapshot.revision).toBe(0);
+    expect(snapshot.breakpoints).toEqual([]);
   });
 });

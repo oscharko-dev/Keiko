@@ -2573,6 +2573,46 @@ function parseOptionalBaseVersion(
   return { version: parsed.value };
 }
 
+// KEIKO-0179: maps one renamed breakpoint fileId (the exact source path, or a path inside a renamed
+// directory) to its post-rename fileId. `undefined` means this fileId is unaffected by the rename.
+function renamedBreakpointFileId(
+  fileId: string,
+  previousPath: string,
+  nextPath: string,
+): string | undefined {
+  if (fileId === previousPath) return nextPath;
+  if (fileId.startsWith(`${previousPath}/`))
+    return `${nextPath}${fileId.slice(previousPath.length)}`;
+  return undefined;
+}
+
+// KEIKO-0179: fans out a successful rename to the DAP breakpoint store so debugging configuration
+// follows the file instead of lingering, orphaned, against the now-nonexistent old path. A directory
+// rename affects every breakpoint filed under the old prefix, re-keyed one fileId at a time (never a
+// blind string-prefix rewrite) so each destination fileId is validated on its own. Deliberately
+// best-effort: the filesystem rename already succeeded, so a store-side rejection here (corrupt
+// store, malformed id) must not turn a completed rename into an error response.
+function reKeyRenamedBreakpoints(
+  deps: UiHandlerDeps,
+  realRoot: string,
+  previousPath: string,
+  nextPath: string,
+): void {
+  const store = deps.dapDebug?.breakpoints;
+  if (store === undefined) return;
+  const snapshot = store.snapshot(realRoot);
+  if (!snapshot.ok) return;
+  const affected = new Set(
+    snapshot.snapshot.breakpoints
+      .map((entry) => entry.fileId)
+      .filter((fileId) => renamedBreakpointFileId(fileId, previousPath, nextPath) !== undefined),
+  );
+  for (const fileId of affected) {
+    const nextFileId = renamedBreakpointFileId(fileId, previousPath, nextPath);
+    if (nextFileId !== undefined) store.renameFile(realRoot, fileId, nextFileId);
+  }
+}
+
 export async function handleFilesRename(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -2592,18 +2632,19 @@ export async function handleFilesRename(
     const resolvedRoot = await resolveRequestRoot(ctx, deps, rootInput);
     const baseVersion = parseOptionalBaseVersion(body);
     if (isRouteResult(baseVersion)) return baseVersion;
-    return {
-      status: 200,
-      body: await renameFilesEntry({
-        store: deps.store,
-        rootInput,
-        pathInput,
-        newPathInput,
-        baseVersion: baseVersion.version,
-        redactor: deps.redactor,
-        resolvedRoot,
-      }),
-    };
+    const result = await renameFilesEntry({
+      store: deps.store,
+      rootInput,
+      pathInput,
+      newPathInput,
+      baseVersion: baseVersion.version,
+      redactor: deps.redactor,
+      resolvedRoot,
+    });
+    if (result.previousPath !== undefined) {
+      reKeyRenamedBreakpoints(deps, resolvedRoot.realRoot, result.previousPath, result.path);
+    }
+    return { status: 200, body: result };
   });
 }
 
