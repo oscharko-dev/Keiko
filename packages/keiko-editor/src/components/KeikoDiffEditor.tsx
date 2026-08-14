@@ -461,6 +461,7 @@ function useDiffThemeReapply(
 function useDiffController(
   themeVariant: EditorThemeVariant,
   onThemeError: ((message: string) => void) | undefined,
+  diffViewRendered: boolean,
 ): DiffController {
   const controllerRef = useRef<DiffMountController | null>(null);
   const monacoRef = useRef<MountMonaco | null>(null);
@@ -493,6 +494,16 @@ function useDiffController(
     },
     [],
   );
+  // The inner <DiffEditor> unmounts (binary/unsupported file, load error, or no selection) while
+  // KeikoDiffEditor itself stays mounted. Without this, monacoRef/containerRef keep pointing at the
+  // now-disposed editor and detached container, so a later themeVariant change would reapply against
+  // stale handles and report a spurious theme error. Nulling both here makes useDiffThemeReapply's
+  // existing guard a no-op until onMount refreshes them for a newly live editor.
+  useEffect(() => {
+    if (diffViewRendered) return;
+    monacoRef.current = null;
+    containerRef.current = null;
+  }, [diffViewRendered]);
   useDiffThemeReapply(themeVariant, onThemeError, monacoRef, containerRef);
   const goToPrev = useCallback((): void => controllerRef.current?.goToPreviousDiff(), []);
   const goToNext = useCallback((): void => controllerRef.current?.goToNextDiff(), []);
@@ -539,7 +550,9 @@ export function KeikoDiffEditor(props: KeikoDiffEditorProps): ReactElement {
   const variant = themeVariant ?? "dark";
   const [selectedUri, setSelectedUri] = useState<string | null>(null);
   const { file: selected } = resolveSelectedFile(model, selectedUri);
-  const controller = useDiffController(variant, props.onRuntimeError);
+  // Mirrors DiffPane's render conditional below: the only branch that actually mounts <DiffEditor>.
+  const diffViewRendered = loadState.status === "ready" && selected?.diffable === true;
+  const controller = useDiffController(variant, props.onRuntimeError, diffViewRendered);
 
   const { onSelectFile } = props;
   const handleSelect = useCallback(

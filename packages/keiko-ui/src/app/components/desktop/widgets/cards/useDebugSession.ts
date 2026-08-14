@@ -1217,7 +1217,11 @@ export function useDebugSession(
         return await trackedRequest(url, buildInit(instrumentation));
       } catch (error: unknown) {
         if (!isRevisionConflict(error)) throw error;
-        const refreshedOk = await refreshInstrumentationAtLeast();
+        // The 409 proves the server is already past `instrumentation.revision`, so the retry must
+        // observe at least the next revision. Without this floor, refreshInstrumentationAtLeast's
+        // default minimumRevision of 0 lets it hand back an in-flight GET that started before this
+        // conflict and still carries the same stale revision, and the retry repeats the failure.
+        const refreshedOk = await refreshInstrumentationAtLeast(instrumentation.revision + 1);
         const refreshed = refreshedOk
           ? debugSessionSnapshot(stableWorkspaceId).instrumentation
           : null;

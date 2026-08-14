@@ -796,6 +796,21 @@ function commitRecord(
   } catch {
     return undefined;
   }
+  // Codex review of PR #3141: `record` may have been loaded and validated against a PRIOR live
+  // identity that has since drifted -- the root was replaced by another filesystem object between
+  // loadRecord's validation and this inspection. Rebinding unconditionally would re-stamp the NEW
+  // identity onto content only ever validated against the OLD one, resurrecting the prior
+  // occupant's breakpoints/watches/filters under the replacement workspace and defeating the very
+  // isolation KEIKO-0190 introduced. A non-empty digest that already matched at load time but no
+  // longer matches here is not a first bind (that is emptyRecord's "" sentinel, handled below by
+  // falling through to the stamp) -- it is a validated binding invalidated mid-mutation, so fail
+  // closed instead of rebinding.
+  if (
+    record.rootObjectIdentityDigest !== "" &&
+    record.rootObjectIdentityDigest !== identity.objectIdentityDigest
+  ) {
+    return undefined;
+  }
   const stamped: InstrumentationRecord = {
     ...record,
     rootObjectIdentityDigest: identity.objectIdentityDigest,

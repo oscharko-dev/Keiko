@@ -1,4 +1,4 @@
-import { relative } from "node:path";
+import { isAbsolute, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   DEFAULT_LSP_PROCESS_CONFIG,
@@ -239,6 +239,38 @@ export function listHostLspHealthSnapshotsForRoot(
   });
 }
 
+// Path-segment-safe "candidate is deletedPath itself, or nested under it" check. A raw string
+// prefix (`candidate.startsWith(deletedPath)`) would wrongly match "/root/pkg-sibling/x" against
+// deleted directory "/root/pkg"; `relative` compares whole path segments instead.
+function isUnderOrEqual(deletedPath: string, candidate: string): boolean {
+  const rel = relative(deletedPath, candidate);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+// A Deleted watched-file event (file OR directory) must stop the pool from treating the removed
+// path's overlay(s) as still open BEFORE the watched-file notification is published — otherwise
+// the next op for that URI reaches syncDocument with the entry still present and sends
+// textDocument/didChange instead of didOpen, so diagnostics/symbols keep serving the deleted (or,
+// for a rename, renamed-away) path's stale content until the pooled process is next idle-evicted.
+// Mirrors the didClose/removal seam closeOpenDocuments already uses on full eviction, scoped to
+// exactly the deleted URI plus, for a directory delete, every overlay nested under it.
+function closeDeletedOverlayDocuments(entry: PooledLspEntry, deletedAbsolutePath: string): void {
+  const childGeneration = entry.manager.getChildGeneration();
+  for (const [uri, document] of entry.openDocuments) {
+    let absolutePath: string;
+    try {
+      absolutePath = fileURLToPath(uri);
+    } catch {
+      continue;
+    }
+    if (!isUnderOrEqual(deletedAbsolutePath, absolutePath)) continue;
+    if (document.childGeneration === childGeneration) {
+      entry.manager.sendNotification("textDocument/didClose", { textDocument: { uri } });
+    }
+    entry.openDocuments.delete(uri);
+  }
+}
+
 // FileChangeType per the LSP spec: Created=1, Changed=2, Deleted=3. Defaults to Changed so the
 // existing content-save call site (files.ts writeFilesContentRoute) needs no change.
 export function notifyHostLspWorkspaceFileChanged(
@@ -250,9 +282,9 @@ export function notifyHostLspWorkspaceFileChanged(
   const prefix = `${workspaceRoot}\0`;
   const params = { changes: [{ uri: pathToFileURL(absolutePath).href, type: changeType }] };
   for (const [key, entry] of LSP_PROCESS_POOL) {
-    if (key.startsWith(prefix) && !entry.disposed) {
-      entry.manager.sendNotification("workspace/didChangeWatchedFiles", params);
-    }
+    if (!key.startsWith(prefix) || entry.disposed) continue;
+    if (changeType === 3) closeDeletedOverlayDocuments(entry, absolutePath);
+    entry.manager.sendNotification("workspace/didChangeWatchedFiles", params);
   }
 }
 

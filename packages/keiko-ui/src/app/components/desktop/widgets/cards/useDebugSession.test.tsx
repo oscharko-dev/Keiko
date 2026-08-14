@@ -943,10 +943,19 @@ describe("useDebugSession", () => {
 
   it("surfaces a real error when the retried save mutation conflicts again", async () => {
     let breakpointCalls = 0;
+    let instrumentationCalls = 0;
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = input instanceof Request ? input.url : input.toString();
       if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
-        return response(instrumentation());
+        instrumentationCalls += 1;
+        // A real 409 proves the server is already past the attempted revision, so a genuine
+        // refresh must reflect that — the retry below still conflicts, simulating another writer
+        // racing ahead again rather than a fixture that never advances past the stale revision.
+        return response(
+          instrumentationCalls === 1
+            ? instrumentation()
+            : { ...instrumentation(), revision: 5, etag: "fresh-etag" },
+        );
       }
       if (url === "/api/editor/debug/breakpoints") {
         breakpointCalls += 1;
@@ -973,6 +982,86 @@ describe("useDebugSession", () => {
     ).rejects.toThrow("Debug request was rejected.");
 
     expect(breakpointCalls).toBe(2);
+  });
+
+  it("retries a breakpoint save with a genuinely fresh revision, not a stale in-flight GET", async () => {
+    let instrumentationCalls = 0;
+    let breakpointCalls = 0;
+    const staleInstrumentation = deferredResponse();
+    const freshInstrumentation = deferredResponse();
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
+        instrumentationCalls += 1;
+        if (instrumentationCalls === 1) return response(instrumentation());
+        if (instrumentationCalls === 2) return staleInstrumentation.promise;
+        return freshInstrumentation.promise;
+      }
+      if (url === "/api/editor/debug/breakpoints") {
+        breakpointCalls += 1;
+        const body = parsedRequestBody(init);
+        if (typeof body.expectedRevision !== "number" || body.expectedRevision < 1) {
+          return conflictResponse();
+        }
+        return response(
+          mutationSnapshot({
+            revision: 6,
+            etag: "post-save-etag",
+            breakpoints: [
+              {
+                id: "line-4",
+                fileId: "src/program.ts",
+                line: 4,
+                enabled: true,
+                kind: "line",
+                verification: "pending",
+              },
+            ],
+          }),
+        );
+      }
+      return response({});
+    });
+    const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() => expect(result.current.snapshot.instrumentation).not.toBeNull());
+
+    // Simulate another consumer's refresh already in flight when the save below hits its 409:
+    // sharedInstrumentation dedupes concurrent GETs, so the retry must not be handed this same
+    // pre-conflict response.
+    const pendingRefresh = result.current.actions.refreshInstrumentation();
+    await waitFor(() => expect(instrumentationCalls).toBe(2));
+
+    const pendingSave = result.current.actions.saveBreakpoints("src/program.ts", [
+      {
+        id: "line-4",
+        fileId: "src/program.ts",
+        line: 4,
+        enabled: true,
+        kind: "line",
+        verification: "pending",
+      },
+    ]);
+    await waitFor(() => expect(breakpointCalls).toBe(1));
+
+    // The in-flight GET resolves with the same stale revision the conflicting mutation raced.
+    staleInstrumentation.resolve(instrumentation());
+    // A genuinely fresh GET carries the bumped revision the 409 proves must exist.
+    freshInstrumentation.resolve({ ...instrumentation(), revision: 5, etag: "fresh-etag" });
+
+    await act(async () => {
+      await Promise.all([pendingRefresh, pendingSave]);
+    });
+
+    expect(instrumentationCalls).toBe(3);
+    expect(breakpointCalls).toBe(2);
+    const breakpointRequests = vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) => url === "/api/editor/debug/breakpoints");
+    expect(breakpointRequests[1]?.[1]).toMatchObject({
+      headers: expect.objectContaining({ "if-match": "fresh-etag" }),
+    });
+    expect(parsedRequestBody(breakpointRequests[1]?.[1])).toMatchObject({ expectedRevision: 5 });
+    expect(result.current.snapshot.instrumentation?.revision).toBe(6);
   });
 
   it("starts only a structured file target and persists its bounded breakpoint projection", async () => {

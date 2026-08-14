@@ -838,6 +838,49 @@ describe("KEIKO-0190 — object-identity reconciliation on load", () => {
 
     expectUnavailable(store, root);
   });
+
+  it("rejects a commit whose live root identity drifted after loadRecord validated it, never re-stamping the new identity onto content read from the old occupant", () => {
+    // Codex P1: commitRecord used to stamp whatever identity was live AT COMMIT TIME unconditionally.
+    // If the root is replaced by another filesystem object between loadRecord's validation (which
+    // passed against identity A) and commitRecord's own inspectDebugWorkspaceIdentity call, the old
+    // occupant's record content got re-stamped with the NEW identity B and persisted as if it were
+    // B's own state -- defeating the KEIKO-0190 isolation under exactly this root-swap race. The
+    // idFactory hook runs after loadRecord has already validated against A but before commitRecord
+    // re-inspects, so it is the injection point that reproduces the race deterministically.
+    const stateDir = temporaryDirectory("debug-state-identity-drift");
+    const parent = temporaryDirectory("debug-workspace-identity-drift-parent");
+    const root = join(parent, "root");
+    mkdirSync(root);
+    const seedStore = createBreakpointStore({ stateDir, idFactory: (): string => "drift_seed_id" });
+    expect(setBreakpoints(seedStore, root, "a.ts", [breakpoint(1)]).ok).toBe(true);
+    const before = currentSnapshot(seedStore, root);
+    const digestBeforeSwap = inspectDebugWorkspaceIdentity(root).objectIdentityDigest;
+    const seededOnDisk = parseJsonRecord(
+      readFileSync(breakpointStoreRecordPath(stateDir, root), "utf8"),
+    );
+    expect(seededOnDisk.rootObjectIdentityDigest).toBe(digestBeforeSwap);
+
+    const driftingStore = createBreakpointStore({
+      stateDir,
+      idFactory: (): string => {
+        replaceDirectory(root);
+        return "drift_new_id";
+      },
+    });
+
+    const result = driftingStore.setBreakpointsForFile(root, before.revision, before.etag, "b.ts", [
+      breakpoint(9),
+    ]);
+
+    expect(result).toMatchObject({ ok: false, reason: "state_unavailable" });
+    const onDisk = parseJsonRecord(readFileSync(breakpointStoreRecordPath(stateDir, root), "utf8"));
+    expect(onDisk.rootObjectIdentityDigest).toBe(digestBeforeSwap);
+    expect(onDisk.rootObjectIdentityDigest).not.toBe(
+      inspectDebugWorkspaceIdentity(root).objectIdentityDigest,
+    );
+    const rawBreakpoints = onDisk.breakpoints as readonly Record<string, unknown>[];
+    expect(rawBreakpoints.map((entry) => entry.fileId)).toEqual(["a.ts"]);
+  });
 });
 
 describe("KEIKO-0179 — breakpoint re-key on file rename", () => {
