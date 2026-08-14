@@ -1235,17 +1235,33 @@ function useBoundChatWindowRuntime(
   session: ChatSessionApi,
 ): void {
   const { focusWindow, restoreWindow, updateCfg, windowId } = ctx;
-  const { chatId, newChatRequestId, selectionHandoffId } = configuration;
+  const { chatId, newChatRequestId, projectPath, selectionHandoffId } = configuration;
   usePublishChatWindowActivity(windowId, session.sending, session.latestGrounded);
   const runtimeTarget = useMemo<ChatWindowRuntimeTarget | undefined>(() => {
+    if (
+      selectionHandoffId !== undefined ||
+      newChatRequestId !== undefined ||
+      routing.lookupFailed ||
+      routing.targetMissing
+    ) {
+      return undefined;
+    }
     const activeTarget = routing.activeTarget;
-    return activeTarget !== undefined &&
-      activeTarget.id === chatId &&
-      selectionHandoffId === undefined &&
-      newChatRequestId === undefined
-      ? { conversationId: activeTarget.id, projectPath: activeTarget.projectPath }
-      : undefined;
-  }, [chatId, newChatRequestId, routing.activeTarget, selectionHandoffId]);
+    if (activeTarget !== undefined && activeTarget.id === chatId) {
+      return { conversationId: activeTarget.id, projectPath: activeTarget.projectPath };
+    }
+    return chatId === undefined || projectPath === undefined
+      ? undefined
+      : { conversationId: chatId, projectPath };
+  }, [
+    chatId,
+    newChatRequestId,
+    projectPath,
+    routing.activeTarget,
+    routing.lookupFailed,
+    routing.targetMissing,
+    selectionHandoffId,
+  ]);
   const acceptSelectionHandoff = useCallback(
     (selectionHandoffId: string): void => {
       updateCfg({ selectionHandoffId, newChatRequestId: undefined });

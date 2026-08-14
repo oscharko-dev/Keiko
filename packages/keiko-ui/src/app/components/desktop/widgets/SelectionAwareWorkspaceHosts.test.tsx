@@ -20,6 +20,7 @@ import {
   normalizedChatTitle,
 } from "./SelectionAwareWorkspaceHosts";
 import { subText } from "../windows/connectionUtils";
+import { chatWindowRuntimeTarget } from "../windows/chatWindowActivity";
 
 const addRoot = vi.hoisted(() => vi.fn());
 const disposeRoot = vi.hoisted(() => vi.fn());
@@ -1647,6 +1648,39 @@ describe("ChatWindowSessionHost target missing", () => {
 
     expect(await screen.findByTestId("chat-window")).toBeInTheDocument();
     expect(ctx.updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ chatId: chatB.id }));
+  });
+
+  it("reserves a persisted chat runtime while its owning project is restoring", async () => {
+    const projectA: ProjectWithAvailability = {
+      path: "/repo-a",
+      name: "Repo A",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    const projectB: ProjectWithAvailability = { ...projectA, path: "/repo-b", name: "Repo B" };
+    const chatB = { ...chatFixture("chat-b", "Chat B", 2), projectPath: projectB.path };
+    chatSessionState.activeProject = projectB;
+    chatSessionState.activeChat = chatB;
+    chatSessionState.projects = [projectA, projectB];
+    chatSessionState.chats = [chatB];
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ chatId: "chat-a", projectPath: projectA.path, title: "Chat A" }}
+          ctx={context({ windowId: "restoring-chat-window" })}
+        />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void =>
+      expect(chatWindowRuntimeTarget("restoring-chat-window")).toEqual({
+        conversationId: "chat-a",
+        projectPath: projectA.path,
+      }),
+    );
   });
 
   it("surfaces a configured project restoration failure without reporting deletion", async () => {

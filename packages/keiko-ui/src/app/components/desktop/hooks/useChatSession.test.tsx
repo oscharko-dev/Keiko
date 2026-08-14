@@ -4291,6 +4291,31 @@ describe("useChatSession memory autonomy hydration", () => {
     await waitFor(() => expect(settings.result.current.memoryMode).toBe("autonomous-delivery"));
   });
 
+  it("shares one in-flight policy hydration across concurrent session mounts", async () => {
+    mockMinimalBootstrap();
+    const hydration = deferred<{
+      requestedMode: "supervised-coding";
+      effectiveMode: "supervised-coding";
+      deploymentCeiling: "supervised-coding";
+      revision: number;
+    }>();
+    vi.mocked(loadMemoryAutonomyMode).mockReturnValue(hydration.promise);
+
+    renderHook(() => useChatSession({ autoCreate: false }));
+    renderHook(() => useChatSession({ autoCreate: false }));
+
+    expect(loadMemoryAutonomyMode).toHaveBeenCalledOnce();
+    await act(async () => {
+      hydration.resolve({
+        requestedMode: "supervised-coding",
+        effectiveMode: "supervised-coding",
+        deploymentCeiling: "supervised-coding",
+        revision: 1,
+      });
+      await hydration.promise;
+    });
+  });
+
   it("does not let a stale hydration response overwrite a newer selection", async () => {
     mockMinimalBootstrap();
     const hydration = deferred<{

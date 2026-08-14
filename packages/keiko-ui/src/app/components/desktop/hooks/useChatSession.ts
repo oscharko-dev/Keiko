@@ -2108,6 +2108,28 @@ export interface UseChatSessionOptions {
   readonly loadMemoryAutonomyModeImpl?: typeof loadMemoryAutonomyMode;
 }
 
+type MemoryAutonomyModeLoader = typeof loadMemoryAutonomyMode;
+const memoryAutonomyModeHydrations = new WeakMap<
+  MemoryAutonomyModeLoader,
+  ReturnType<MemoryAutonomyModeLoader>
+>();
+
+function sharedLoadMemoryAutonomyMode(
+  loader: MemoryAutonomyModeLoader,
+): ReturnType<MemoryAutonomyModeLoader> {
+  const active = memoryAutonomyModeHydrations.get(loader);
+  if (active !== undefined) return active;
+  const started = loader();
+  memoryAutonomyModeHydrations.set(loader, started);
+  const clear = (): void => {
+    if (memoryAutonomyModeHydrations.get(loader) === started) {
+      memoryAutonomyModeHydrations.delete(loader);
+    }
+  };
+  void started.then(clear, clear);
+  return started;
+}
+
 function activeConversationMemoryScope(state: SessionState): string | undefined {
   return state.activeChat?.id;
 }
@@ -2197,15 +2219,14 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     memoryMode,
     setMemoryMode,
   } = useConversationMemorySettings(renderedChatIdentity);
-  // Hydrate the server-persisted autonomy mode once per session mount so chat/voice requests use
-  // the user's actual selection even if no autonomy-settings surface is opened. The settings
-  // authority mode is process-wide, so redundant hydration across multiple mounted sessions is a
-  // harmless no-op (equal publications are skipped); a failure leaves the safe
-  // "governed-assist" default untouched.
+  // Hydrate the server-persisted autonomy mode so chat/voice requests use the user's actual
+  // selection even if no autonomy-settings surface is opened. The settings authority mode is
+  // process-wide, so simultaneously mounting many windows shares the same in-flight request; a
+  // failure leaves the safe "governed-assist" default untouched.
   useEffect(() => {
     let active = true;
     const revisionAtHydrationStart = currentConversationMemoryModeRevision();
-    void loadMemoryAutonomyModeImpl()
+    void sharedLoadMemoryAutonomyMode(loadMemoryAutonomyModeImpl)
       .then((policy) => {
         // A newer selection (this hydration in another mounted session, or a change made through
         // MemoriaVivaWindow) already landed while this request was in flight — applying the stale
