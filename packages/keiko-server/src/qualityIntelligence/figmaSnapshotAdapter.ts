@@ -204,6 +204,25 @@ function visionUserText(request: FigmaVisionScreenRequest, baselineText: string)
   );
 }
 
+const VISION_RESPONSE_FORMAT = {
+  type: "json_schema" as const,
+  name: "quality_intelligence_figma_vision_hints",
+  strict: true,
+  schema: {
+    type: "object",
+    required: ["hints"],
+    additionalProperties: false,
+    properties: {
+      hints: {
+        type: "array",
+        items: { type: "string" },
+        minItems: 1,
+        maxItems: MAX_VISION_HINTS,
+      },
+    },
+  },
+};
+
 function buildVisionRequest(
   request: FigmaVisionScreenRequest,
   modelId: string,
@@ -220,7 +239,7 @@ function buildVisionRequest(
         content:
           "You are an additive UI test-generation vision pass. Use the image only to recover " +
           "semantics missing from the structural baseline. Do not contradict, replace, or restate " +
-          "the baseline. Return concise JSON: an array of strings.",
+          'the baseline. Return at least one concise visual hint as JSON: { "hints": string[] }.',
       },
       {
         role: "user",
@@ -233,14 +252,7 @@ function buildVisionRequest(
     ],
     ...(structuredOutput
       ? {
-          responseFormat: {
-            type: "json_schema" as const,
-            schema: {
-              type: "array",
-              items: { type: "string" },
-              maxItems: MAX_VISION_HINTS,
-            },
-          },
+          responseFormat: VISION_RESPONSE_FORMAT,
         }
       : {}),
   };

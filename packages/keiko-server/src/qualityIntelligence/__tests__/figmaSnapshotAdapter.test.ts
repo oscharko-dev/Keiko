@@ -160,6 +160,32 @@ function recordVisionSnapshot(dir: string): {
   return { loaded, screen };
 }
 
+function expectStructuredVisionRequest(seenRequests: readonly GatewayRequest[]): void {
+  expect(seenRequests).toHaveLength(1);
+  const request = seenRequests[0];
+  if (request === undefined) throw new TypeError("expected one gateway request");
+  expect(request.modelId).toBe("vision-low");
+  const user = request.messages[1];
+  if (user === undefined) throw new TypeError("expected a vision user message");
+  expect(user.content).toContain("Screen id:");
+  const contentParts = user.contentParts ?? [];
+  const textPart = contentParts.find((part) => part.type === "text");
+  const imagePart = contentParts.find((part) => part.type === "image_url");
+  expect(textPart?.text).toContain("Screen id:");
+  expect(imagePart?.image_url.url).toMatch(/^data:image\/png;base64,/u);
+  expect(request.responseFormat).toMatchObject({
+    type: "json_schema",
+    name: "quality_intelligence_figma_vision_hints",
+    strict: true,
+    schema: {
+      type: "object",
+      required: ["hints"],
+      additionalProperties: false,
+      properties: { hints: { type: "array", minItems: 1 } },
+    },
+  });
+}
+
 // ─── Snapshot loader ──────────────────────────────────────────────────────────────
 
 describe("makeFigmaSnapshotLoader", () => {
@@ -352,12 +378,20 @@ describe("makeFigmaVisionHintProvider", () => {
         call: (request) => {
           seenRequests.push(request);
           return Promise.resolve(
-            normalizedResponse(JSON.stringify(["Primary CTA is visually disabled"]), "vision-low"),
+            normalizedResponse(
+              JSON.stringify({ hints: ["Primary CTA is visually disabled"] }),
+              "vision-low",
+            ),
           );
         },
       };
       const deps = depsWith({
-        config: configWith([capability("vision-low", { supportsImageInput: true })]),
+        config: configWith([
+          capability("vision-low", {
+            supportsImageInput: true,
+            supportsResponseFormat: true,
+          }),
+        ]),
         configPresent: true,
         evidenceDir: dir,
         modelPortFactory: () => port,
@@ -374,13 +408,7 @@ describe("makeFigmaVisionHintProvider", () => {
         }),
       ).resolves.toEqual(["Primary CTA is visually disabled"]);
 
-      const user = seenRequests[0]?.messages[1];
-      expect(seenRequests[0]?.modelId).toBe("vision-low");
-      expect(user?.content).toContain("Screen id:");
-      const textPart = user?.contentParts?.find((part) => part.type === "text");
-      const imagePart = user?.contentParts?.find((part) => part.type === "image_url");
-      expect(textPart?.text).toContain("Screen id:");
-      expect(imagePart?.image_url.url).toMatch(/^data:image\/png;base64,/u);
+      expectStructuredVisionRequest(seenRequests);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

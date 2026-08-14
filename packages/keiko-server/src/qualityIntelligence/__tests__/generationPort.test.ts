@@ -712,6 +712,20 @@ describe("createQiGenerationPort.generate — determinism-first parameters", () 
     }
     expect(responseFormat.name).toBe("quality_intelligence_test_design");
     expect(responseFormat.strict).toBe(true);
+    const responseSchema = responseFormat.schema as {
+      readonly properties?: {
+        readonly testCases?: {
+          readonly items?: {
+            readonly properties?: Readonly<Record<string, unknown>>;
+            readonly required?: readonly string[];
+          };
+        };
+      };
+    };
+    const candidateSchema = responseSchema.properties?.testCases?.items;
+    expect(new Set(candidateSchema?.required)).toEqual(
+      new Set(Object.keys(candidateSchema?.properties ?? {})),
+    );
     expect(calls[0]?.request.temperature).toBe(0);
     expect(calls[0]?.request.topP).toBe(1);
     expect(result.modelParameters?.temperature).toBe(0);
