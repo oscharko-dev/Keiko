@@ -9,6 +9,15 @@ export interface ChatWindowFlow {
   readonly intensity: ChatWindowFlowIntensity;
 }
 
+export interface ChatWindowRuntimeTarget {
+  readonly conversationId: string;
+  readonly projectPath: string;
+}
+
+interface ChatWindowRuntime extends ChatWindowRuntimeTarget {
+  readonly acceptSelectionHandoff: (selectionHandoffId: string) => void;
+}
+
 export type ChatWindowGroundingActivity =
   | {
       readonly groundingKind: "connected-context";
@@ -37,6 +46,7 @@ const FLOW_AFTERGLOW_MS = 2_500;
 
 let snapshot: ReadonlyMap<string, ChatWindowFlow> = new Map();
 const listeners = new Set<() => void>();
+const runtimes = new Map<string, ChatWindowRuntime>();
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
@@ -122,6 +132,47 @@ export function usePublishChatWindowActivity(
     },
     [windowId],
   );
+}
+
+export function registerChatWindowRuntime(
+  windowId: string,
+  runtime: ChatWindowRuntime,
+): () => void {
+  runtimes.set(windowId, runtime);
+  return (): void => {
+    if (runtimes.get(windowId) === runtime) runtimes.delete(windowId);
+  };
+}
+
+export function chatWindowRuntimeTarget(windowId: string): ChatWindowRuntimeTarget | undefined {
+  const runtime = runtimes.get(windowId);
+  return runtime === undefined
+    ? undefined
+    : { conversationId: runtime.conversationId, projectPath: runtime.projectPath };
+}
+
+export function routeSelectionHandoffToOpenChat(
+  projectPath: string,
+  selectionHandoffId: string,
+): string | null {
+  for (const [windowId, runtime] of runtimes) {
+    if (runtime.projectPath !== projectPath) continue;
+    runtimes.delete(windowId);
+    runtime.acceptSelectionHandoff(selectionHandoffId);
+    return windowId;
+  }
+  return null;
+}
+
+export function usePublishChatWindowRuntime(
+  windowId: string,
+  target: ChatWindowRuntimeTarget | undefined,
+  acceptSelectionHandoff: (selectionHandoffId: string) => void,
+): void {
+  useEffect((): (() => void) | undefined => {
+    if (target === undefined) return;
+    return registerChatWindowRuntime(windowId, { ...target, acceptSelectionHandoff });
+  }, [acceptSelectionHandoff, target, windowId]);
 }
 
 export function useChatWindowFlows(): ReadonlyMap<string, ChatWindowFlow> {

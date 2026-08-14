@@ -138,7 +138,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
     removePendingAttachment: vi.fn(),
     clearPendingAttachments: vi.fn(),
-    memoryEnabled: true,
+    memoryEnabled: false,
     setMemoryEnabled: vi.fn(),
     memoryBudgetTokens: 1200,
     setMemoryBudgetTokens: vi.fn(),
@@ -2233,11 +2233,11 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
 
     expect(container.querySelector(".chatw")).toHaveClass("chatw-minimal");
     const activation = screen.getByRole("button", {
-      name: "Disable MemoriaViva for this chat",
+      name: "Enable MemoriaViva for this chat",
     });
     expect(activation).toHaveClass("chat-memory-activation-toggle");
-    expect(activation).toHaveAttribute("data-enabled", "true");
-    expect(activation).toHaveAttribute("data-tip", "Disable MemoriaViva for this chat");
+    expect(activation).toHaveAttribute("data-enabled", "false");
+    expect(activation).toHaveAttribute("data-tip", "Enable MemoriaViva for this chat");
     expect(activation.querySelector("svg")).not.toBeNull();
     expect(screen.queryByText(/Approximate context:/)).toBeNull();
     expect(screen.queryByRole("button", { name: /clear history/i })).toBeNull();
@@ -2378,6 +2378,7 @@ describe("ChatWindow memory controls", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat(),
+        memoryEnabled: true,
         latestMemory: undefined,
       }),
     );

@@ -28,6 +28,7 @@ import {
   stripJsonCodeFence,
   type FigmaVisionScreenRequest,
 } from "../figmaSnapshotAdapter.js";
+import { requireRecord } from "./schemaTestAssertions.js";
 
 function emptyStore(): EvidenceStore {
   return { put: () => "", list: () => [], get: () => undefined, delete: () => undefined };
@@ -68,17 +69,6 @@ function configWith(
     },
     {},
   );
-}
-
-function isUnknownRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isUnknownRecord(value)) {
-    throw new TypeError(`${label} must be an object`);
-  }
-  return value;
 }
 
 function depsWith(over: Partial<UiHandlerDeps>): UiHandlerDeps {

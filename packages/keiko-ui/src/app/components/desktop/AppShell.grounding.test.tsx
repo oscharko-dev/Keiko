@@ -14,6 +14,7 @@ import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.type
 import { MAX_WORKSPACE_WINDOWS } from "./hooks/workspace-persistence";
 import type { AppWindow, Connection } from "./windows/types";
 import appShellStyles from "./AppShell.module.css";
+import { registerChatWindowRuntime } from "./windows/chatWindowActivity";
 
 interface WorkspaceHookOptions {
   readonly onWindowLimitReached?: (limit: number) => void;
@@ -812,6 +813,43 @@ describe("AppShell grounding connections", () => {
       expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
     );
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(grounded);
+  });
+
+  it("resolves a privacy-omitted chat through its transient window target", async (): Promise<void> => {
+    const privateChat = chat({ id: "chat-private", projectPath: "/private", updatedAt: 4 });
+    const grounded = chat({
+      id: privateChat.id,
+      projectPath: privateChat.projectPath,
+      connectedScopes: [fileScope("/repo")],
+      updatedAt: 5,
+    });
+    mocks.state.workspaceResult = workspaceResult([
+      win("chat", { chatId: privateChat.id, projectPathPrivacy: "omit" }, "private-window"),
+    ]);
+    mocks.fetchChats.mockResolvedValueOnce({ chats: [privateChat] });
+    mocks.updateChatConnectedScopes.mockResolvedValueOnce({ chat: grounded });
+    const unregister = registerChatWindowRuntime("private-window", {
+      conversationId: privateChat.id,
+      projectPath: privateChat.projectPath,
+      acceptSelectionHandoff: vi.fn(),
+    });
+
+    try {
+      await renderMounted();
+      const accepted = await mocks.state.workspaceOptions?.onScopeBind?.(
+        "private-window",
+        fileScope("/repo"),
+      );
+
+      expect(accepted).toBe(true);
+      expect(mocks.fetchChats).toHaveBeenCalledWith("/private");
+      expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
+        privateChat.id,
+        expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
+      );
+    } finally {
+      unregister();
+    }
   });
 
   it("surfaces a redacted diagnostic when a private chat lookup fails", async (): Promise<void> => {

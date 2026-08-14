@@ -22,6 +22,7 @@ import type {
   QualityIntelligenceGenerationPort,
   QualityIntelligenceGenerationPortArgs,
 } from "@oscharko-dev/keiko-workflows";
+import { requireRecord } from "./schemaTestAssertions.js";
 
 // ─── Fake infrastructure ─────────────────────────────────────────────────────
 
@@ -700,15 +701,6 @@ function configWithSeeding(modelId: string): ReturnType<typeof parseGatewayConfi
 interface CandidateSchemaContract {
   readonly properties: Readonly<Record<string, unknown>>;
   readonly required: readonly string[];
-}
-
-function isUnknownRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isUnknownRecord(value)) throw new TypeError(`${label} must be an object.`);
-  return value;
 }
 
 function isStringArray(value: unknown): value is readonly string[] {

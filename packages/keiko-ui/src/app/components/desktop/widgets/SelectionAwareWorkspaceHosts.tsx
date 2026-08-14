@@ -3,14 +3,19 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { disposeEditorModelRegistryRoot } from "@oscharko-dev/keiko-editor";
 import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 
-import { fetchChats, updateChat } from "@/lib/api";
+import { updateChat } from "@/lib/api";
 import { newClientCorrelationId } from "@/lib/http";
 import { useTranslate } from "@/lib/i18n";
 import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 
 import { ChatSessionProvider } from "../context/ChatSessionContext";
-import { usePublishChatWindowActivity } from "../windows/chatWindowActivity";
-import { useChatSession, type ChatSessionApi } from "../hooks/useChatSession";
+import {
+  routeSelectionHandoffToOpenChat,
+  usePublishChatWindowActivity,
+  usePublishChatWindowRuntime,
+  type ChatWindowRuntimeTarget,
+} from "../windows/chatWindowActivity";
+import { sharedFetchChats, useChatSession, type ChatSessionApi } from "../hooks/useChatSession";
 import { useWorkspaceManifest, type WorkspaceManifestView } from "../hooks/useWorkspaceManifest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
@@ -29,6 +34,7 @@ import {
   discardEditorSelectionHandoff,
   inspectEditorSelectionHandoff,
   registerEditorSelectionHandoff,
+  type EditorSelectionHandoff,
   type EditorSelectionHandoffMetadata,
 } from "./cards/editorSelectionHandoff";
 
@@ -697,7 +703,7 @@ async function findChatProjectPath(
   const projectChats = await Promise.all(
     projects.map(async (project): Promise<readonly Chat[] | undefined> => {
       try {
-        return (await fetchChats(project.path)).chats;
+        return (await sharedFetchChats(project.path)).chats;
       } catch {
         window.reportError(
           correlatedDiagnostic(CHAT_PROJECT_LOOKUP_DIAGNOSTIC, newClientCorrelationId()),
@@ -1222,13 +1228,41 @@ function BoundChatAlerts({
   );
 }
 
+function useBoundChatWindowRuntime(
+  configuration: BoundChatConfig,
+  ctx: WindowRenderContext,
+  routing: BoundChatRouting,
+  session: ChatSessionApi,
+): void {
+  const { focusWindow, restoreWindow, updateCfg, windowId } = ctx;
+  const { chatId, newChatRequestId, selectionHandoffId } = configuration;
+  usePublishChatWindowActivity(windowId, session.sending, session.latestGrounded);
+  const runtimeTarget = useMemo<ChatWindowRuntimeTarget | undefined>(() => {
+    const activeTarget = routing.activeTarget;
+    return activeTarget !== undefined &&
+      activeTarget.id === chatId &&
+      selectionHandoffId === undefined &&
+      newChatRequestId === undefined
+      ? { conversationId: activeTarget.id, projectPath: activeTarget.projectPath }
+      : undefined;
+  }, [chatId, newChatRequestId, routing.activeTarget, selectionHandoffId]);
+  const acceptSelectionHandoff = useCallback(
+    (selectionHandoffId: string): void => {
+      updateCfg({ selectionHandoffId, newChatRequestId: undefined });
+      restoreWindow?.(windowId);
+      focusWindow(windowId);
+    },
+    [focusWindow, restoreWindow, updateCfg, windowId],
+  );
+  usePublishChatWindowRuntime(windowId, runtimeTarget, acceptSelectionHandoff);
+}
+
 function BoundChatWindowSessionHost({
   cfg,
   ctx,
   session,
 }: BoundChatWindowSessionHostProps): ReactNode {
   const configuration = boundChatConfig(cfg);
-  usePublishChatWindowActivity(ctx.windowId, session.sending, session.latestGrounded);
   const routing = useBoundChatRouting({
     chatId: configuration.chatId,
     configuredProjectPath: configuration.projectPath,
@@ -1237,6 +1271,7 @@ function BoundChatWindowSessionHost({
     session,
     updateCfg: ctx.updateCfg,
   });
+  useBoundChatWindowRuntime(configuration, ctx, routing, session);
   const memory = useBoundMemorySession({
     activeTarget: routing.activeTarget,
     chatId: configuration.chatId,
@@ -1464,6 +1499,24 @@ function revealSessionProps(cfg: Record<string, unknown>): EditorRevealSessionPr
   };
 }
 
+function routeEditorSelectionToChat(
+  targetRoot: string | undefined,
+  handoff: EditorSelectionHandoff,
+  ctx: WindowRenderContext,
+): boolean {
+  if (targetRoot === undefined) return false;
+  const selectionHandoffId = registerEditorSelectionHandoff(targetRoot, handoff);
+  if (selectionHandoffId === null) return false;
+  if (routeSelectionHandoffToOpenChat(targetRoot, selectionHandoffId) !== null) return true;
+  const chatWindowId = ctx.openWindow("chat", {
+    projectPathPrivacy: "omit",
+    selectionHandoffId,
+  });
+  if (chatWindowId !== null) return true;
+  discardEditorSelectionHandoff(selectionHandoffId);
+  return false;
+}
+
 function editorSessionBaseProps(
   targetRoot: string | undefined,
   cfg: Record<string, unknown>,
@@ -1500,18 +1553,7 @@ function editorSessionBaseProps(
         });
       }
     },
-    onAskSelection: (handoff) => {
-      if (targetRoot === undefined) return false;
-      const selectionHandoffId = registerEditorSelectionHandoff(targetRoot, handoff);
-      if (selectionHandoffId === null) return false;
-      const chatWindowId = ctx.openWindow("chat", {
-        projectPathPrivacy: "omit",
-        selectionHandoffId,
-      });
-      if (chatWindowId !== null) return true;
-      discardEditorSelectionHandoff(selectionHandoffId);
-      return false;
-    },
+    onAskSelection: (handoff) => routeEditorSelectionToChat(targetRoot, handoff, ctx),
   };
 }
 

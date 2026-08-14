@@ -83,6 +83,7 @@ import {
 import "./widgets";
 import { localizedWindowTitle, WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow, Connection } from "./windows/types";
+import { chatWindowRuntimeTarget } from "./windows/chatWindowActivity";
 import { registerSw } from "./install/registerSw";
 import { workspaceRootTargets } from "./workspaceRootTargets";
 import { workspaceInteractionLocked } from "./interactionGuards";
@@ -450,6 +451,11 @@ interface ChatMutationAttempt {
 }
 
 type ChatLookupTarget = ChatBindingTarget | ChatUnbindTarget;
+
+function runtimeProjectPathForChat(chatWindowId: string, chatId: string): string | undefined {
+  const runtimeTarget = chatWindowRuntimeTarget(chatWindowId);
+  return runtimeTarget?.conversationId === chatId ? runtimeTarget.projectPath : undefined;
+}
 
 export const CHAT_MUTATION_TIMEOUT_MS = 15_000;
 
@@ -880,7 +886,9 @@ function AppShellInner(): ReactNode {
   const resolveChatForWindow = useCallback(
     async (chatWindowId: string, target?: ChatLookupTarget): Promise<Chat | undefined> => {
       const windowSnapshot = wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId);
-      const chatId = target?.conversationId ?? chatIdFromWindow(windowSnapshot);
+      const runtimeTarget = chatWindowRuntimeTarget(chatWindowId);
+      const chatId =
+        target?.conversationId ?? chatIdFromWindow(windowSnapshot) ?? runtimeTarget?.conversationId;
       if (chatId === undefined) return undefined;
       if (!chatLookupTargetIsCurrent(target)) return undefined;
       const sessionChat =
@@ -893,7 +901,10 @@ function AppShellInner(): ReactNode {
           ? confirmed
           : sessionChat;
       if (chat !== undefined) return chat.status === "closed" ? undefined : chat;
-      const projectPath = target?.projectPath ?? projectPathFromWindow(windowSnapshot);
+      const projectPath =
+        target?.projectPath ??
+        projectPathFromWindow(windowSnapshot) ??
+        runtimeProjectPathForChat(chatWindowId, chatId);
       if (projectPath === undefined) return undefined;
       try {
         const response = await fetchChats(projectPath);

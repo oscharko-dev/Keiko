@@ -5,9 +5,11 @@ import type { Chat } from "@/lib/types";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import type { AppWindow } from "../windows/types";
 import {
+  discardEditorSelectionHandoff,
   inspectEditorSelectionHandoff,
   type EditorSelectionHandoff,
 } from "./cards/editorSelectionHandoff";
+import { registerChatWindowRuntime } from "../windows/chatWindowActivity";
 
 type UpdateCfg = (patch: AppWindow["cfg"]) => void;
 
@@ -697,6 +699,29 @@ describe("workspace widget renderer registry", () => {
       expect(ctx.updateCfg).toHaveBeenCalledWith({ title: "Chat 1", titleIsDefault: false });
     });
     expect(screen.getByTestId("chat-window")).toHaveTextContent("true:/repo:/repo|/docs:false");
+  });
+
+  it("routes an editor selection into an existing project chat without opening a duplicate", async () => {
+    const ctx = makeCtx();
+    const acceptSelectionHandoff = vi.fn<(selectionHandoffId: string) => void>();
+    const unregister = registerChatWindowRuntime("existing-chat-window", {
+      conversationId: "chat-origin",
+      projectPath: "/workspace/origin",
+      acceptSelectionHandoff,
+    });
+
+    render(<>{WIN_TYPES.editor.render({ root: "/workspace/origin", file: "src/app.ts" }, ctx)}</>);
+    fireEvent.click(await screen.findByRole("button", { name: "Ask editor selection" }));
+
+    expect(ctx.openWindow).not.toHaveBeenCalled();
+    expect(acceptSelectionHandoff).toHaveBeenCalledOnce();
+    const handoffId = acceptSelectionHandoff.mock.calls[0]?.[0];
+    expect(typeof handoffId).toBe("string");
+    if (handoffId !== undefined) {
+      expect(inspectEditorSelectionHandoff(handoffId)?.workspaceRoot).toBe("/workspace/origin");
+      discardEditorSelectionHandoff(handoffId);
+    }
+    unregister();
   });
 
   it("routes a selection to its exact originating project before one-use send", async () => {

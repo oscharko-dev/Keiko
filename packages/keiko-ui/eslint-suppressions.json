@@ -704,7 +704,7 @@
   },
   "src/app/components/desktop/widgets/SelectionAwareWorkspaceHosts.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 6
+      "count": 5
     },
     "complexity": {
       "count": 2

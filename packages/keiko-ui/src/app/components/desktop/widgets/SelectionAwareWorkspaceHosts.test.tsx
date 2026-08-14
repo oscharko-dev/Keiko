@@ -1495,6 +1495,51 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(screen.queryByText("Chat not found")).not.toBeInTheDocument();
   });
 
+  it("shares concurrent legacy project scans across restored chat windows", async () => {
+    const projectA: ProjectWithAvailability = {
+      path: "/repo-a",
+      name: "Repo A",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    const projectB: ProjectWithAvailability = { ...projectA, path: "/repo-b", name: "Repo B" };
+    chatSessionState.activeProject = projectB;
+    chatSessionState.activeChat = undefined;
+    chatSessionState.projects = [projectA, projectB];
+    chatSessionState.chats = [];
+    const projectAChats = deferred<{ readonly chats: readonly Chat[] }>();
+    const projectBChats = deferred<{ readonly chats: readonly Chat[] }>();
+    fetchChatsMock.mockImplementation((path) =>
+      path === projectA.path ? projectAChats.promise : projectBChats.promise,
+    );
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ chatId: "legacy-chat-a" }}
+          ctx={context({ windowId: "chat-window-a" })}
+        />
+        <ChatWindowSessionHost
+          cfg={{ chatId: "legacy-chat-b" }}
+          ctx={context({ windowId: "chat-window-b" })}
+        />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void => expect(fetchChatsMock).toHaveBeenCalledTimes(2));
+    expect(fetchChatsMock).toHaveBeenCalledWith(projectA.path);
+    expect(fetchChatsMock).toHaveBeenCalledWith(projectB.path);
+    await act(async (): Promise<void> => {
+      projectAChats.resolve({ chats: [] });
+      projectBChats.resolve({ chats: [] });
+      await Promise.all([projectAChats.promise, projectBChats.promise]);
+    });
+    await waitFor((): void => expect(screen.getAllByText("Chat not found")).toHaveLength(2));
+    expect(fetchChatsMock).toHaveBeenCalledTimes(2);
+  });
+
   it("surfaces a legacy project lookup failure without caching it as deletion", async () => {
     const reportError = vi.fn();
     vi.stubGlobal("reportError", reportError);

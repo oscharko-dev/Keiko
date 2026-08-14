@@ -3060,8 +3060,9 @@ function ComposerCoreImpl({
       return;
     }
     primeAudioOutput();
-    if (!voiceDialog.enter()) return;
     setPendingVoiceAnswer(null);
+    voiceDialogSessionChatIdRef.current = undefined;
+    if (!voiceDialog.enter()) return;
     voiceDialogSessionChatIdRef.current = activeChat?.id;
     realtimeVoice.start();
   }, [activeChat?.id, primeAudioOutput, voiceDialog, voiceDialogAvailable, realtimeVoice]);

@@ -1513,7 +1513,9 @@ function cloneChatMessagesPayload(payload: { readonly messages: readonly ChatMes
   return { messages: Array.from(payload.messages) };
 }
 
-function sharedFetchChats(projectPath: string): Promise<{ readonly chats: readonly Chat[] }> {
+export function sharedFetchChats(
+  projectPath: string,
+): Promise<{ readonly chats: readonly Chat[] }> {
   const existing = sharedChatListInflight.get(projectPath);
   if (existing !== undefined) return existing.then(cloneChatListPayload);
   const pending = fetchChats(projectPath)
