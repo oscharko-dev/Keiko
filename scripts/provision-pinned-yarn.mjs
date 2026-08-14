@@ -9,4 +9,14 @@
 
 import { provisionPinnedYarnForSetup } from "./installable-package-smoke.mjs";
 
-provisionPinnedYarnForSetup();
+try {
+  provisionPinnedYarnForSetup();
+} catch (error) {
+  // A Corepack failure already exits through the smoke's own diagnostic. This catch is for
+  // everything else — an unwritable temp directory, a cache path that fails its ownership check —
+  // which would otherwise surface as a raw Node stack trace in a CI setup step and name neither
+  // the step nor the cause.
+  const reason = error instanceof Error ? error.message : String(error);
+  console.error(`provision-pinned-yarn: could not provision the pinned Yarn: ${reason}`);
+  process.exit(1);
+}
