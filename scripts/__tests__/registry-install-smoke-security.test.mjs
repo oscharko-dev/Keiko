@@ -25,6 +25,7 @@ import {
   assertRegistryOnlyDescriptors,
   assertHostBindingsAreReal,
   assertStubsAreForeignOnly,
+  writeSeedIndex,
   hostBindingSuffixes,
   corepackCacheDir,
   privateYarnHome,
@@ -842,6 +843,90 @@ describe("installable package smoke optional-dependency coverage", () => {
   // FIRST file's scopes — the `lockfilePath` argument ignored and the verdict decided by call
   // order, which is the one property `scripts/**` tooling must not have (CodeRabbit thread
   // 3780586007).
+  // The persist filter and the assertion must judge stubs by the SAME criterion. They did not: the
+  // filter matched host-binding name SUFFIXES, so a platform-agnostic parent carried no suffix, was
+  // published, and the assertion then rejected it — leaving an integrity-valid poisoned entry that
+  // every later invocation reloaded and rejected again (Codex thread 3780652032).
+  it("publishes no stub for a package the lockfile installs here, suffix or not", () => {
+    const seedDir = mkdtempSync(join(tmpdir(), "keiko-agnostic-stub-"));
+    const stubbed = (name) =>
+      new Map([
+        [
+          name,
+          new Map([["1.0.2", { manifest: stubManifest(name, "1.0.2"), name, version: "1.0.2" }]]),
+        ],
+      ]);
+    try {
+      // Read the written document directly. `loadSeedIndex` re-validates each entry against a real
+      // archive on disk, so a synthetic fixture would be dropped on READ and the assertion would
+      // pass without the filter doing anything — a test that cannot fail for its own regression.
+      const written = (seeded) => {
+        writeSeedIndex(seedDir, seeded);
+        return JSON.parse(readFileSync(join(seedDir, "seed-index.json"), "utf8"));
+      };
+
+      // Carries no platform in its name, and the lockfile scopes it to nothing — it installs here.
+      expect(written(stubbed("@napi-rs/canvas"))["@napi-rs/canvas"]).toBeUndefined();
+
+      // A binding for a platform this host is not: still shareable, still published.
+      const foreign = written(stubbed("@napi-rs/canvas-android-arm64"));
+      expect(foreign["@napi-rs/canvas-android-arm64"]?.["1.0.2"]).toBeDefined();
+
+      // And this host's own binding, which the lockfile pins to this platform.
+      const own = `@napi-rs/canvas${hostBindingSuffixes().at(-1)}`;
+      expect(written(stubbed(own))[own]).toBeUndefined();
+    } finally {
+      rmSync(seedDir, { recursive: true, force: true });
+    }
+  });
+
+  // npm evaluates both halves of a mixed `os`/`cpu` list. Treating a negation as the whole answer
+  // let `["darwin", "!win32"]` allow Linux, which classifies a legitimately foreign stub as
+  // host-installable and fails the hermetic smoke on a correct closure (Codex thread 3780652044).
+  it("honours the allowlist half of a mixed platform list", () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-mixed-platform-"));
+    const stubbed = new Map([
+      [
+        "demo-native",
+        new Map([
+          [
+            "1.0.2",
+            {
+              manifest: stubManifest("demo-native", "1.0.2"),
+              name: "demo-native",
+              version: "1.0.2",
+            },
+          ],
+        ]),
+      ],
+    ]);
+    const write = (file, scope) => {
+      const path = join(dir, file);
+      writeFileSync(
+        path,
+        JSON.stringify({
+          packages: { "node_modules/demo-native": { version: "1.0.2", ...scope } },
+        }),
+        "utf8",
+      );
+      return path;
+    };
+    try {
+      const other = process.platform === "darwin" ? "linux" : "darwin";
+      rejectProcessExit();
+      // Names THIS platform positively: it installs here, so a stub is wrong.
+      expect(() =>
+        assertStubsAreForeignOnly(stubbed, write("here.json", { os: [process.platform, "!aix"] })),
+      ).toThrow(/process\.exit\(1\)/u);
+      // Names only ANOTHER platform positively, with an unrelated negation: foreign, stub is right.
+      expect(() =>
+        assertStubsAreForeignOnly(stubbed, write("elsewhere.json", { os: [other, "!aix"] })),
+      ).not.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("reads the lockfile it is given, not the one it read first", () => {
     const dir = mkdtempSync(join(tmpdir(), "keiko-lockfile-scope-"));
     const write = (file, scope) => {

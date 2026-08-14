@@ -811,9 +811,14 @@ export function hostBindingSuffixes(
  */
 function platformListAllows(list, value) {
   if (!Array.isArray(list) || list.length === 0) return true;
-  const negated = list.filter((item) => typeof item === "string" && item.startsWith("!"));
-  if (negated.length > 0) return !negated.some((item) => item.slice(1) === value);
-  return list.includes(value);
+  const entries = list.filter((item) => typeof item === "string");
+  // npm evaluates BOTH halves of a mixed list: any matching negation rejects outright, and when
+  // positive entries exist one of them must also match. Treating the presence of a negation as the
+  // whole answer made `os: ["darwin", "!win32"]` allow Linux, which would classify a legitimately
+  // foreign stub as host-installable (Codex thread 3780652044).
+  if (entries.some((item) => item.startsWith("!") && item.slice(1) === value)) return false;
+  const positive = entries.filter((item) => !item.startsWith("!"));
+  return positive.length === 0 || positive.includes(value);
 }
 
 // Keyed by PATH, not a single bare cache. `assertStubsAreForeignOnly` takes `lockfilePath` as an
@@ -964,13 +969,24 @@ function isReusableSeedEntry(destination, entry) {
 }
 
 /**
- * A stub standing in for the binding this very host would link. Foreign-platform stubs are
- * legitimate and shareable; this one is the placeholder `assertHostBindingsAreReal` exists to
- * reject, so it must never outlive the process that made it.
+ * A stub for something this host would actually link. Judged by the same criterion
+ * `assertStubsAreForeignOnly` rejects on — what `package-lock.json` scopes to this host — because
+ * the two must not disagree. They did: this filter matched host-binding NAME SUFFIXES, so a
+ * platform-agnostic parent like `@napi-rs/canvas` carried no suffix, was published to the shared
+ * index, and the assertion below then rejected it — leaving an integrity-valid poisoned entry that
+ * every later invocation reloaded and rejected again (Codex thread 3780652032).
+ *
+ * The lockfile criterion subsumes the suffix one: a host binding is scoped to this host by its own
+ * `os`/`cpu`, so it is still caught, and a foreign binding is still shareable.
  */
-function isHostBindingStub(name, entry) {
+function isNonDurableStub(name, entry) {
   if (!isStubEntry(entry)) return false;
-  return hostBindingSuffixes().some((suffix) => name.endsWith(suffix));
+  // The UNION of both criteria, because neither covers the other. The lockfile answers for a pinned
+  // package including a platform-agnostic parent, but says nothing about a name it does not pin;
+  // the suffix answers for this host's own binding by name, whether pinned or not. Using only the
+  // lockfile let an unpinned host-binding stub through, which the suffix rule had been catching.
+  if (hostBindingSuffixes().some((suffix) => name.endsWith(suffix))) return true;
+  return installsOnThisHost(name, join(repoRoot, "package-lock.json"));
 }
 
 export function writeSeedIndex(destination, seeded) {
@@ -997,7 +1013,7 @@ export function writeSeedIndex(destination, seeded) {
   // or torn one is rejected and re-packed.
   const serializable = {};
   for (const [name, versions] of seeded) {
-    const durable = [...versions].filter(([, entry]) => !isHostBindingStub(name, entry));
+    const durable = [...versions].filter(([, entry]) => !isNonDurableStub(name, entry));
     if (durable.length === 0) continue;
     serializable[name] = Object.fromEntries(
       durable.map(([version, entry]) => [
