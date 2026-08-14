@@ -15,7 +15,6 @@ import {
   type GroundingPlan,
   type GroundingSourcePolicy,
   type GroundingStrategy,
-  type NoAnswerCondition,
   type PromptEnhancementRequest,
   type PromptTaskAnalysis,
   type RagEvaluationHint,
@@ -49,10 +48,8 @@ import {
 import {
   buildDirectives,
   buildSourcePriority,
-  MULTI_SOURCE_STRATEGIES,
   RAG_HINT_TEMPLATES,
   RETRIEVAL_MODES_BY_STRATEGY,
-  SCOPED_EVIDENCE_STRATEGIES,
   buildNoAnswerConditions,
   buildRecency,
 } from "./prompt-enhancer-grounding.js";

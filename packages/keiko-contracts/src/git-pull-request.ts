@@ -310,7 +310,7 @@ function primaryAreaOf(narrative: GitPullRequestChangeNarrative): string | undef
 
 function humaniseBranchSlug(headBranch: string): string {
   const segments = headBranch.split("/");
-  const tail = segments[segments.length - 1] ?? headBranch;
+  const tail = segments.at(-1) ?? headBranch;
   const tokens = tail.split("-").filter((t) => t.length > 0);
   // Drop a leading run of `issue` markers and pure-numeric issue numbers (e.g. "issue-477-…",
   // "1234-…"), keeping only the descriptive remainder of the slug.

@@ -88,7 +88,7 @@ function emptyExtensionTable(): Record<string, string> {
 // Final path segment (basename) from a POSIX or Windows path. Pure, allocation-light.
 function modeMapBasename(pathOrName: string): string {
   const segments = pathOrName.split(/[/\\]/u);
-  return segments[segments.length - 1] ?? pathOrName;
+  return segments.at(-1) ?? pathOrName;
 }
 
 // Lower-case extension (without the leading dot) of a file name, or "" when there is none. A leading

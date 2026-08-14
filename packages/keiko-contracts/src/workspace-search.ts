@@ -406,18 +406,12 @@ function validateReplaceEdit(value: unknown, reasons: string[]): void {
     return;
   }
   const range = value.range;
-  if (
-    !isPositiveInteger(range.startLine) ||
-    !isPositiveInteger(range.startColumn) ||
-    !isPositiveInteger(range.endLine) ||
-    !isPositiveInteger(range.endColumn)
-  ) {
-    reasons.push("edit range invalid");
-  } else if (isBackwardsRange(range.startLine, range.startColumn, range.endLine, range.endColumn)) {
-    // Each bound was previously checked in isolation, so a backwards range reached the patch
-    // applier, which would slice from a start position after its end. The sibling isValidLineRange
-    // in connected-context.ts already enforces this ordering rule for line ranges; an out-of-order
-    // range is malformed and is rejected, never silently swapped.
+  // The four bounds and their ORDERING are one rule with one reason string: each bound was
+  // previously checked in isolation, so a backwards range reached the patch applier, which would
+  // slice from a start position after its end. The sibling isValidLineRange in connected-context.ts
+  // already enforces this ordering for line ranges; an out-of-order range is malformed and is
+  // rejected, never silently swapped.
+  if (!isWellFormedEditRange(range)) {
     reasons.push("edit range invalid");
   }
   if (typeof value.originalText !== "string" || typeof value.newText !== "string") {
@@ -427,6 +421,18 @@ function validateReplaceEdit(value: unknown, reasons: string[]): void {
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1;
+}
+
+function isWellFormedEditRange(range: Record<string, unknown>): boolean {
+  if (
+    !isPositiveInteger(range.startLine) ||
+    !isPositiveInteger(range.startColumn) ||
+    !isPositiveInteger(range.endLine) ||
+    !isPositiveInteger(range.endColumn)
+  ) {
+    return false;
+  }
+  return !isBackwardsRange(range.startLine, range.startColumn, range.endLine, range.endColumn);
 }
 
 // A zero-width range (end === start) is a legal insertion point and stays accepted.
