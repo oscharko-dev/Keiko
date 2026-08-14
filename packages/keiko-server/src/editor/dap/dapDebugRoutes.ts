@@ -113,7 +113,11 @@ const EVALUATE_RESPONSE_KEYS = [
   "valueLocationReference",
 ] as const;
 
-export interface RenamedInstrumentationFileId {
+// Deliberately not exported: files.ts's rename fan-out passes the shape structurally so no
+// files.ts -> dapDebugRoutes.ts import edge exists (dapDebugRoutes.ts already imports from
+// files.ts), and knip rightly rejects an export nothing names. The exported service interface
+// below spells the shape inline for the same reason.
+interface RenamedInstrumentationFileId {
   readonly previousFileId: string;
   readonly nextFileId: string;
 }
@@ -133,7 +137,7 @@ export interface DapDebugRouteService {
   // because reconciliation did.
   readonly renameInstrumentation: (
     realRoot: string,
-    renames: readonly RenamedInstrumentationFileId[],
+    renames: readonly { readonly previousFileId: string; readonly nextFileId: string }[],
   ) => Promise<void>;
   readonly diagnosticSink?: ServerDiagnosticSink | undefined;
 }
