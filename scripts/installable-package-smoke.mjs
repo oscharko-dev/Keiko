@@ -7,7 +7,7 @@
 // fire BEFORE publish so a broken bundle can never reach users.
 
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   createReadStream,
   existsSync,
@@ -1283,6 +1283,24 @@ export function privateYarnHome() {
   return home;
 }
 
+/**
+ * A private, unpredictable rc filename for the throwaway project.
+ *
+ * Yarn merges `.yarnrc.yml` from EVERY ancestor of the project, not only from the project and the
+ * home directory — and the project lives directly under `os.tmpdir()`, which is world-writable on
+ * Linux. A planted `/tmp/.yarnrc.yml` therefore reaches this install and can add plugins,
+ * `packageExtensions` or network settings to the gate whose entire purpose is hermeticity. The
+ * private home closed the `~/.yarnrc.yml` half of the problem and left this half open; proved by
+ * planting a probe at the tmpdir root, which failed the install on an unrecognized setting
+ * (Codex thread 3780424132).
+ *
+ * Naming the file per run closes it: Yarn walks the ancestors looking for THIS name, and nothing
+ * up the tree carries it. The `YARN_*` settings the gate depends on are re-asserted through the
+ * environment as well, which outranks any rc file — this protects the settings it does NOT pin,
+ * `plugins` above all, since a plugin is executable code.
+ */
+export const YARN_RC_FILENAME = `.yarnrc-keiko-${randomBytes(9).toString("hex")}.yml`;
+
 export function yarnChildEnv(registryUrl, baseEnv = process.env, home = undefined) {
   // Every `YARN_*` variable is dropped, not a curated subset: Yarn maps each of its settings to
   // one, and an ambient `YARN_NODE_LINKER=pnp` or `YARN_RC_FILENAME` would change the install
@@ -1305,6 +1323,8 @@ export function yarnChildEnv(registryUrl, baseEnv = process.env, home = undefine
     YARN_ENABLE_TELEMETRY: "false",
     YARN_NODE_LINKER: "node-modules",
     YARN_NPM_REGISTRY_SERVER: registryUrl,
+    // Points Yarn at the private rc name above, so the ancestor walk finds only our own file.
+    YARN_RC_FILENAME,
     YARN_UNSAFE_HTTP_WHITELIST: "127.0.0.1",
     // Corepack must not reach repo.yarnpkg.com during the install: the pinned tool is provisioned
     // beforehand, so an outage there cannot fail a gate that claims to resolve offline (#3130).
@@ -1435,7 +1455,7 @@ function writeYarnConfiguration(tmp, registryUrl) {
     "unsafeHttpWhitelist:",
     "  - 127.0.0.1",
   ];
-  writeFileSync(join(tmp, ".yarnrc.yml"), `${lines.join("\n")}\n`);
+  writeFileSync(join(tmp, YARN_RC_FILENAME), `${lines.join("\n")}\n`);
 }
 
 export async function installIntoWithYarn(tmp, artifact, vendored) {

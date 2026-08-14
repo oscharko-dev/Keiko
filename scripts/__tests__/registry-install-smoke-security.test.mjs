@@ -28,6 +28,7 @@ import {
   corepackCacheDir,
   privateYarnHome,
   assertStagedRootDescriptors,
+  YARN_RC_FILENAME,
   isStagedVendorArchive,
   classifyProvisionFailure,
   persistentVendorSeedDir,
@@ -276,7 +277,7 @@ describe("installable package smoke optional-dependency coverage", () => {
       expect(readFileSync(join(projectDir, "package.json"), "utf8")).toContain(
         ROOT_MANIFEST.version,
       );
-      expect(readFileSync(join(projectDir, ".yarnrc.yml"), "utf8")).toContain(
+      expect(readFileSync(join(projectDir, YARN_RC_FILENAME), "utf8")).toContain(
         "enableGlobalCache: false",
       );
     } finally {
@@ -301,7 +302,7 @@ describe("installable package smoke optional-dependency coverage", () => {
     process.env.PATH = `${binDir}${delimiter}${previousPath}`;
     try {
       await installIntoWithYarn(projectDir, artifact, new Map());
-      const rc = readFileSync(join(projectDir, ".yarnrc.yml"), "utf8");
+      const rc = readFileSync(join(projectDir, YARN_RC_FILENAME), "utf8");
       const globalRegistry = /^npmRegistryServer: (http:\/\/127\.0\.0\.1:\d+)$/mu.exec(rc);
       expect(globalRegistry).not.toBeNull();
       // EVERY scoped entry must equal the global loopback registry, compared as a whole value
@@ -417,8 +418,13 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(env.YARN_ENABLE_GLOBAL_CACHE).toBe("false");
     expect(env.PATH).toBe("/usr/bin");
     // Any YARN_* setting can change the install shape, not only the registry ones: a linker or
-    // rc-file override would leave no node_modules tree for the assertions to inspect.
-    expect(env.YARN_RC_FILENAME).toBeUndefined();
+    // rc-file override would leave no node_modules tree for the assertions to inspect. The rc
+    // filename is now REPLACED rather than merely stripped — stripping it restored the default
+    // `.yarnrc.yml`, which Yarn also merges from every ancestor of a project living under a
+    // world-writable `os.tmpdir()`. Overriding it with the private per-run name is the stronger
+    // assertion: the ambient value cannot survive, and neither can an ancestor file.
+    expect(env.YARN_RC_FILENAME).toBe(YARN_RC_FILENAME);
+    expect(env.YARN_RC_FILENAME).toMatch(/^\.yarnrc-keiko-[0-9a-f]{18}\.yml$/u);
     expect(env.YARN_NODE_LINKER).toBe("node-modules");
     expect(env.YARN_ENABLE_TELEMETRY).toBe("false");
     // Corepack must not fetch the package manager mid-install; the pinned tool is provisioned first.
