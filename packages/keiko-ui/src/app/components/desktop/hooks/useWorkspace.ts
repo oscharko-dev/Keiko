@@ -1556,7 +1556,11 @@ export interface UseWorkspaceOptions {
       ) => boolean | Promise<boolean>)
     | undefined;
   readonly onScopeUnbind?:
-    | ((chatWindowId: string, scope: ChatConnectedScope, target?: ChatUnbindTarget) => void)
+    | ((
+        chatWindowId: string,
+        scope: ChatConnectedScope,
+        target?: ChatUnbindTarget,
+      ) => boolean | Promise<boolean>)
     | undefined;
   readonly onConnectorBind?:
     | ((
@@ -1566,7 +1570,11 @@ export interface UseWorkspaceOptions {
       ) => boolean | Promise<boolean>)
     | undefined;
   readonly onConnectorUnbind?:
-    | ((chatWindowId: string, scope: ChatLocalKnowledgeScope, target?: ChatUnbindTarget) => void)
+    | ((
+        chatWindowId: string,
+        scope: ChatLocalKnowledgeScope,
+        target?: ChatUnbindTarget,
+      ) => boolean | Promise<boolean>)
     | undefined;
 }
 
@@ -1633,22 +1641,30 @@ function unbindClosedWindowConnection(
 function useWorkspaceWindowState(): {
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly wins: AppWindow[] | null;
+  readonly winsReadyRef: RefObject<boolean>;
+  readonly winsRef: RefObject<AppWindow[]>;
 } {
   const [wins, setWins] = useState<AppWindow[] | null>(null);
+  const committedWinsRef = useRef<AppWindow[] | null>(null);
+  const winsRef = useRef<AppWindow[]>([]);
+  const winsReadyRef = useRef(false);
   const setBoundedWins = useCallback<Dispatch<SetStateAction<AppWindow[] | null>>>((update) => {
-    setWins((current) => {
-      const next = typeof update === "function" ? update(current) : update;
-      return next === null ? null : enforceWorkspaceWindowInvariants(next);
-    });
+    const current = committedWinsRef.current;
+    const next = typeof update === "function" ? update(current) : update;
+    const bounded = next === null ? null : enforceWorkspaceWindowInvariants(next);
+    committedWinsRef.current = bounded;
+    winsRef.current = bounded ?? [];
+    winsReadyRef.current = bounded !== null;
+    setWins(bounded);
   }, []);
-  return { setWins: setBoundedWins, wins };
+  return { setWins: setBoundedWins, wins, winsReadyRef, winsRef };
 }
 
 export function useWorkspace(
   wsRef: RefObject<HTMLElement | null>,
   opts: UseWorkspaceOptions = {},
 ): UseWorkspaceResult {
-  const { setWins, wins } = useWorkspaceWindowState();
+  const { setWins, wins, winsReadyRef, winsRef } = useWorkspaceWindowState();
   const [selection, setSelection] = useState<WorkspaceUiSelectionState>({
     focusedWindowId: null,
     selectedWindowIds: [],
@@ -1695,9 +1711,12 @@ export function useWorkspace(
     [],
   );
   const stableScopeUnbind = useCallback(
-    (chatWindowId: string, scope: ChatConnectedScope, target?: ChatUnbindTarget): void => {
-      onScopeUnbindRef.current?.(chatWindowId, scope, target);
-    },
+    (
+      chatWindowId: string,
+      scope: ChatConnectedScope,
+      target?: ChatUnbindTarget,
+    ): boolean | Promise<boolean> =>
+      onScopeUnbindRef.current?.(chatWindowId, scope, target) ?? true,
     [],
   );
   const stableConnectorBind = useCallback(
@@ -1710,9 +1729,12 @@ export function useWorkspace(
     [],
   );
   const stableConnectorUnbind = useCallback(
-    (chatWindowId: string, scope: ChatLocalKnowledgeScope, target?: ChatUnbindTarget): void => {
-      onConnectorUnbindRef.current?.(chatWindowId, scope, target);
-    },
+    (
+      chatWindowId: string,
+      scope: ChatLocalKnowledgeScope,
+      target?: ChatUnbindTarget,
+    ): boolean | Promise<boolean> =>
+      onConnectorUnbindRef.current?.(chatWindowId, scope, target) ?? true,
     [],
   );
   const stableWindowLimitReached = useCallback((limit: number): void => {
@@ -1731,10 +1753,6 @@ export function useWorkspace(
     suppressNextServerPersistRef.current = true;
   }, []);
 
-  const winsRef = useRef<AppWindow[]>([]);
-  winsRef.current = wins ?? [];
-  const winsReadyRef = useRef(false);
-  winsReadyRef.current = wins !== null;
   const selectionRef = useRef<WorkspaceUiSelectionState>(selection);
   selectionRef.current = selection;
   const workspaceClipboardRef = useRef<string | null>(null);

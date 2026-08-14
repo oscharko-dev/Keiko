@@ -1029,7 +1029,11 @@ interface ConnectArgs {
       ) => boolean | Promise<boolean>)
     | undefined;
   readonly onScopeUnbind?:
-    | ((chatWindowId: string, scope: ChatConnectedScope, target?: ChatUnbindTarget) => void)
+    | ((
+        chatWindowId: string,
+        scope: ChatConnectedScope,
+        target?: ChatUnbindTarget,
+      ) => boolean | Promise<boolean>)
     | undefined;
   // Epic #189 Slice 3 M3 — invoked when a Connector↔Chat relationship edge is created/removed,
   // with the selected ChatLocalKnowledgeScope from the connector window's cfg. The composition
@@ -1042,7 +1046,11 @@ interface ConnectArgs {
       ) => boolean | Promise<boolean>)
     | undefined;
   readonly onConnectorUnbind?:
-    | ((chatWindowId: string, scope: ChatLocalKnowledgeScope, target?: ChatUnbindTarget) => void)
+    | ((
+        chatWindowId: string,
+        scope: ChatLocalKnowledgeScope,
+        target?: ChatUnbindTarget,
+      ) => boolean | Promise<boolean>)
     | undefined;
 }
 
@@ -1122,6 +1130,29 @@ function resolveBindAcceptance(
       return onConnectorBind?.(chatWindowId, connectorScope, target) ?? true;
     }
     return true;
+  } catch {
+    return false;
+  }
+}
+
+async function connectionUnbindAccepted(
+  chatWindowId: string,
+  boundScope: ChatConnectedScope | null,
+  connectorScope: ChatLocalKnowledgeScope | null,
+  target: ChatUnbindTarget | undefined,
+  onScopeUnbind: ConnectArgs["onScopeUnbind"],
+  onConnectorUnbind: ConnectArgs["onConnectorUnbind"],
+): Promise<boolean> {
+  try {
+    const results: Promise<boolean>[] = [];
+    if (boundScope !== null && onScopeUnbind !== undefined) {
+      results.push(Promise.resolve(onScopeUnbind(chatWindowId, boundScope, target)));
+    }
+    if (connectorScope !== null && onConnectorUnbind !== undefined) {
+      results.push(Promise.resolve(onConnectorUnbind(chatWindowId, connectorScope, target)));
+    }
+    const resolved = await Promise.all(results);
+    return resolved.every(Boolean);
   } catch {
     return false;
   }
@@ -1345,6 +1376,10 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     connsByIdRef?.current.get(id) ?? connsRef.current.find((c) => c.id === id);
   const connectionsFor = (id: string): readonly Connection[] =>
     connsByEndpointRef?.current.get(id) ?? connsRef.current.filter((c) => c.a === id || c.b === id);
+  const pendingConnectionRemovals = new Set<string>();
+  const removeStoredConnection = (id: string): void => {
+    setConns((connections) => connections.filter((connection) => connection.id !== id));
+  };
   // The window on the other end of `c` from `id`, resolved through winById, or null when the
   // connection doesn't touch `id` or the other endpoint no longer exists.
   const connectedWindow = (c: Connection, id: string): AppWindow | null => {
@@ -1504,8 +1539,10 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     // and re-deriving from it would unbind the WRONG source. Falls back to cfg-derivation for
     // edges persisted before the snapshot fields existed.
     const conn = connById(id);
-    setConns((cs) => cs.filter((c) => c.id !== id));
-    if (conn === undefined || options?.unbind === false) return;
+    if (conn === undefined || options?.unbind === false) {
+      removeStoredConnection(id);
+      return;
+    }
     const a = winById(conn.a);
     const b = winById(conn.b);
     const bothLive = a !== undefined && b !== undefined;
@@ -1514,14 +1551,27 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const boundScope =
       boundScopeOf(conn) ??
       (conn.boundScopeElided === true || !bothLive ? null : filesChatBindScope(a, b, Date.now()));
-    if (boundScope !== null && chatWindowId !== null) {
-      onScopeUnbind?.(chatWindowId, boundScope, target);
-    }
     const connectorScope =
       boundConnectorScopeOf(conn) ?? (bothLive ? connectorChatBind(a, b) : null);
-    if (connectorScope !== null && chatWindowId !== null) {
-      onConnectorUnbind?.(chatWindowId, connectorScope, target);
+    const canUnbindScope = boundScope !== null && onScopeUnbind !== undefined;
+    const canUnbindConnector = connectorScope !== null && onConnectorUnbind !== undefined;
+    if (chatWindowId === null || (!canUnbindScope && !canUnbindConnector)) {
+      removeStoredConnection(id);
+      return;
     }
+    if (pendingConnectionRemovals.has(id)) return;
+    pendingConnectionRemovals.add(id);
+    void connectionUnbindAccepted(
+      chatWindowId,
+      boundScope,
+      connectorScope,
+      target,
+      onScopeUnbind,
+      onConnectorUnbind,
+    ).then((accepted): void => {
+      pendingConnectionRemovals.delete(id);
+      if (accepted) removeStoredConnection(id);
+    });
   };
 
   const connect: WorkspaceApi["connect"] = (a, b) => {

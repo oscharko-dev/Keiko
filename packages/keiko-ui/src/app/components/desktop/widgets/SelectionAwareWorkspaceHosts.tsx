@@ -455,7 +455,6 @@ function useSelectionHandoffControl(args: {
       }
       args.ctx.updateCfg({
         chatId: route.chat.id,
-        projectPathPrivacy: "omit",
         title: route.chat.title,
         selectionHandoffId: undefined,
         newChatRequestId: undefined,

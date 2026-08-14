@@ -471,19 +471,6 @@ class ChatLookupFailure extends Error {
   }
 }
 
-async function resolveChatForUnbind(
-  resolve: (chatWindowId: string, target?: ChatLookupTarget) => Promise<Chat | undefined>,
-  chatWindowId: string,
-  target?: ChatUnbindTarget,
-): Promise<Chat | undefined> {
-  try {
-    return await resolve(chatWindowId, target);
-  } catch {
-    reportGroundingMutationFailure("Chat lookup failed.");
-    return undefined;
-  }
-}
-
 function chatLookupTargetIsCurrent(target: ChatLookupTarget | undefined): boolean {
   return target === undefined || !("isCurrent" in target) || target.isCurrent();
 }
@@ -494,7 +481,10 @@ function chatLookupRequiresMountedWindow(target: ChatLookupTarget | undefined): 
 
 function groundingMutationFailureKey(
   error: unknown,
-  mutationFailedKey: "chat.grounding.connectSourceFailed" | "chat.grounding.connectKnowledgeFailed",
+  mutationFailedKey:
+    | "chat.grounding.connectSourceFailed"
+    | "chat.grounding.connectKnowledgeFailed"
+    | "scope.disconnectError",
 ): "chat.grounding.recoveryRequired" | "chat.grounding.timeoutBlocked" | typeof mutationFailedKey {
   if (error instanceof ChatLookupFailure) {
     reportGroundingMutationFailure("Chat lookup failed.");
@@ -1050,29 +1040,43 @@ function AppShellInner(): ReactNode {
     [replaceFilesScope],
   );
   const handleScopeUnbind = useCallback(
-    (chatWindowId: string, scope: ChatConnectedScope, target?: ChatUnbindTarget): void => {
-      const chatKey = groundingMutationKey(chatWindowId, target);
-      void serializeChatMutation(
-        groundingMutationQueueRef.current,
-        chatKey,
-        async (): Promise<void> => {
-          const chat = await resolveChatForUnbind(resolveChatForWindow, chatWindowId, target);
-          if (chat === undefined) return;
-          const next = removeConnectedScope(effectiveScopes(chat), scope);
-          try {
+    async (
+      chatWindowId: string,
+      scope: ChatConnectedScope,
+      target?: ChatUnbindTarget,
+    ): Promise<boolean> => {
+      try {
+        return await serializeChatMutation(
+          groundingMutationQueueRef.current,
+          groundingMutationKey(chatWindowId, target),
+          async (): Promise<boolean> => {
+            const chat = await resolveChatForWindow(chatWindowId, target);
+            if (chat === undefined) {
+              return rejectForConnectionFailure(t("scope.disconnectError"));
+            }
+            const next = removeConnectedScope(effectiveScopes(chat), scope);
             const res = await updateChatConnectedScopes(chat.id, next.length > 0 ? next : null);
             rememberGroundingChat(res.chat);
             session.replaceChat(res.chat);
-          } catch {
-            reportGroundingMutationFailure("Connected-scope unbind failed.");
-          }
-        },
-      ).catch((): void => {
-        reportGroundingMutationFailure("Connected-scope unbind timed out.");
-      });
+            setSourceConnectionNotice(null);
+            return true;
+          },
+        );
+      } catch (error: unknown) {
+        return rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "scope.disconnectError")),
+        );
+      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
-    [groundingMutationKey, rememberGroundingChat, resolveChatForWindow, session.replaceChat],
+    [
+      groundingMutationKey,
+      rememberGroundingChat,
+      rejectForConnectionFailure,
+      resolveChatForWindow,
+      session.replaceChat,
+      t,
+    ],
   );
   // Epic #189 Slice 3 M3 — a Connector↔Chat relationship edge binds/unbinds the connector scope
   // on the active chat's localKnowledgeScopes, so the gesture grounds the chat via vector search.
@@ -1155,34 +1159,48 @@ function AppShellInner(): ReactNode {
     [groundingMutationKey, handleConnectorBindNow, rejectForConnectionFailure, t],
   );
   const handleConnectorUnbind = useCallback(
-    (chatWindowId: string, scope: ChatLocalKnowledgeScope, target?: ChatUnbindTarget): void => {
-      const chatKey = groundingMutationKey(chatWindowId, target);
-      void serializeChatMutation(
-        groundingMutationQueueRef.current,
-        chatKey,
-        async (): Promise<void> => {
-          const chat = await resolveChatForUnbind(resolveChatForWindow, chatWindowId, target);
-          if (chat === undefined) return;
-          const key =
-            scope.kind === "capsule" ? `capsule:${scope.capsuleId}` : `set:${scope.capsuleSetId}`;
-          const next = removeConnectorScope(effectiveLocalKnowledgeScopes(chat), key);
-          try {
+    async (
+      chatWindowId: string,
+      scope: ChatLocalKnowledgeScope,
+      target?: ChatUnbindTarget,
+    ): Promise<boolean> => {
+      try {
+        return await serializeChatMutation(
+          groundingMutationQueueRef.current,
+          groundingMutationKey(chatWindowId, target),
+          async (): Promise<boolean> => {
+            const chat = await resolveChatForWindow(chatWindowId, target);
+            if (chat === undefined) {
+              return rejectForConnectionFailure(t("scope.disconnectError"));
+            }
+            const key =
+              scope.kind === "capsule" ? `capsule:${scope.capsuleId}` : `set:${scope.capsuleSetId}`;
+            const next = removeConnectorScope(effectiveLocalKnowledgeScopes(chat), key);
             const res = await updateChatLocalKnowledgeScopes(
               chat.id,
               next.length > 0 ? next : null,
             );
             rememberGroundingChat(res.chat);
             session.replaceChat(res.chat);
-          } catch {
-            reportGroundingMutationFailure("Local knowledge scope unbind failed.");
-          }
-        },
-      ).catch((): void => {
-        reportGroundingMutationFailure("Local knowledge scope unbind timed out.");
-      });
+            setSourceConnectionNotice(null);
+            return true;
+          },
+        );
+      } catch (error: unknown) {
+        return rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "scope.disconnectError")),
+        );
+      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
-    [groundingMutationKey, rememberGroundingChat, resolveChatForWindow, session.replaceChat],
+    [
+      groundingMutationKey,
+      rememberGroundingChat,
+      rejectForConnectionFailure,
+      resolveChatForWindow,
+      session.replaceChat,
+      t,
+    ],
   );
   const [cameraSmoothness, setCameraSmoothness] = useState<number>(readWorkspaceCameraSmoothness);
 

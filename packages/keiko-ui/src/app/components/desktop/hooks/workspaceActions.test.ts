@@ -54,6 +54,17 @@ function win(type: AppWindow["type"], cfg: AppWindow["cfg"] = {}, id = `${type}-
   return { id, type, x: 0, y: 0, w: 10, h: 10, z: 1, cfg, max: false };
 }
 
+function deferredValue<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle): void => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 function scope(root: string, connectedAtMs = 1): ChatConnectedScope {
   return { kind: "workspace-root", relativePaths: [], root, connectedAtMs };
 }
@@ -442,7 +453,7 @@ interface ConnectHarnessOverrides {
     chatWindowId: string,
     scope: ChatConnectedScope,
     target?: ChatUnbindTarget,
-  ) => void;
+  ) => boolean | Promise<boolean>;
   readonly onConnectorBind?: (
     chatWindowId: string,
     scope: ChatLocalKnowledgeScope,
@@ -452,7 +463,7 @@ interface ConnectHarnessOverrides {
     chatWindowId: string,
     scope: ChatLocalKnowledgeScope,
     target?: ChatUnbindTarget,
-  ) => void;
+  ) => boolean | Promise<boolean>;
 }
 
 function makeConnectHarness(
@@ -2723,6 +2734,64 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
 // Release 0.2.0 — unbind must remove the source the edge BOUND, not whatever the window's cfg
 // points at NOW (the user may have navigated the Files window / re-selected another capsule).
 describe("removeConn — unbinds the bind-time snapshot, not the current cfg", () => {
+  it("retains the edge when an asynchronous server unbind is rejected", async () => {
+    const files = win("files", { resolvedRoot: "/data/docs" }, "files-1");
+    const chat = win("chat", { chatId: "chat-private", projectPath: "/private" }, "chat-1");
+    const edge: Connection = {
+      id: "files-1~chat-1",
+      a: "files-1",
+      b: "chat-1",
+      boundRoot: "/data/docs",
+    };
+    const store = { conns: [edge] };
+    const unbind = deferredValue<boolean>();
+    const setConns: Dispatch<SetStateAction<Connection[]>> = (action): void => {
+      store.conns = typeof action === "function" ? action(store.conns) : action;
+    };
+    const harness = makeConnectHarness([files, chat], [edge], {
+      setConns,
+      onScopeUnbind: () => unbind.promise,
+    });
+
+    harness.removeConn(edge.id);
+    expect(store.conns).toEqual([edge]);
+    unbind.resolve(false);
+    await unbind.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(store.conns).toEqual([edge]);
+  });
+
+  it("removes the edge only after an asynchronous server unbind is accepted", async () => {
+    const files = win("files", { resolvedRoot: "/data/docs" }, "files-1");
+    const chat = win("chat", { chatId: "chat-private", projectPath: "/private" }, "chat-1");
+    const edge: Connection = {
+      id: "files-1~chat-1",
+      a: "files-1",
+      b: "chat-1",
+      boundRoot: "/data/docs",
+    };
+    const store = { conns: [edge] };
+    const unbind = deferredValue<boolean>();
+    const setConns: Dispatch<SetStateAction<Connection[]>> = (action): void => {
+      store.conns = typeof action === "function" ? action(store.conns) : action;
+    };
+    const harness = makeConnectHarness([files, chat], [edge], {
+      setConns,
+      onScopeUnbind: () => unbind.promise,
+    });
+
+    harness.removeConn(edge.id);
+    expect(store.conns).toEqual([edge]);
+    unbind.resolve(true);
+    await unbind.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(store.conns).toEqual([]);
+  });
+
   it("passes an immutable chat target to asynchronous unbind handlers", () => {
     const onScopeUnbind = vi.fn();
     const files = win("files", { resolvedRoot: "/data/docs" }, "files-1");
@@ -2761,11 +2830,13 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
     };
     const harness = makeConnectHarness([files, chat], [edge], {
       setConns,
-      onScopeUnbind: (_chatWindowId, scope): void => {
+      onScopeUnbind: (_chatWindowId, scope): boolean => {
         unboundScopes.push(scope);
+        return true;
       },
-      onConnectorUnbind: (_chatWindowId, scope): void => {
+      onConnectorUnbind: (_chatWindowId, scope): boolean => {
         unboundConnectors.push(scope);
+        return true;
       },
     });
 
@@ -2795,6 +2866,7 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
     const harness = makeConnectHarness([connector, chat], [edge], {
       onConnectorUnbind: (_chatWindowId, scope) => {
         unbound.push(scope);
+        return true;
       },
     });
     harness.removeConn("conn-1~chat-1");
@@ -2815,6 +2887,7 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
     const harness = makeConnectHarness([files, chat], [edge], {
       onScopeUnbind: (_chatWindowId, scope) => {
         unbound.push(scope);
+        return true;
       },
     });
     harness.removeConn("files-1~chat-1");
@@ -2840,6 +2913,7 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
     const harness = makeConnectHarness([files, chat], [edge], {
       onScopeUnbind: (_chatWindowId, scope) => {
         unbound.push(scope);
+        return true;
       },
     });
     harness.removeConn("files-1~chat-1");
@@ -2857,6 +2931,7 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
     const harness = makeConnectHarness([files, chat], [conn("files-1", "chat-1")], {
       onScopeUnbind: (_chatWindowId, scope) => {
         unbound.push(scope);
+        return true;
       },
     });
     harness.removeConn("files-1~chat-1");

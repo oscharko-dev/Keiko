@@ -7,6 +7,7 @@ import type { AppWindow } from "../windows/types";
 import {
   discardEditorSelectionHandoff,
   inspectEditorSelectionHandoff,
+  registerEditorSelectionHandoff,
   type EditorSelectionHandoff,
 } from "./cards/editorSelectionHandoff";
 import { registerChatWindowRuntime } from "../windows/chatWindowActivity";
@@ -724,6 +725,32 @@ describe("workspace widget renderer registry", () => {
     unregister();
   });
 
+  it("preserves ordinary project ownership when an existing chat consumes a selection", async () => {
+    const ctx = makeCtx();
+    const selectionHandoffId = registerEditorSelectionHandoff("/repo", {
+      file: "src/app.ts",
+      range: {
+        start: { line: 1, column: 2 },
+        end: { line: 2, column: 4 },
+      },
+      text: "const selected = true;\r\n",
+      truncated: false,
+    });
+    if (selectionHandoffId === null) throw new Error("selection handoff registration failed");
+
+    render(
+      <>{WIN_TYPES.chat.render({ chatId: "chat-1", title: "Chat 1", selectionHandoffId }, ctx)}</>,
+    );
+
+    await waitFor((): void => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: "chat-1",
+      title: "Chat 1",
+      selectionHandoffId: undefined,
+      newChatRequestId: undefined,
+    });
+  });
+
   it("routes a selection to its exact originating project before one-use send", async () => {
     const ctx = makeCtx();
     const originRoot = "/workspace/origin";
@@ -786,7 +813,6 @@ describe("workspace widget renderer registry", () => {
     expect(prompt).toContain('"const selected = true;\\r\\n"');
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       chatId: "chat-origin",
-      projectPathPrivacy: "omit",
       title: "Origin chat",
       selectionHandoffId: undefined,
       newChatRequestId: undefined,
@@ -843,7 +869,6 @@ describe("workspace widget renderer registry", () => {
     await waitFor((): void => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       chatId: createdChat.id,
-      projectPathPrivacy: "omit",
       title: createdChat.title,
       selectionHandoffId: undefined,
       newChatRequestId: undefined,
@@ -1050,7 +1075,6 @@ describe("workspace widget renderer registry", () => {
     expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce();
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       chatId: "chat-created",
-      projectPathPrivacy: "omit",
       title: "Created chat",
       selectionHandoffId: undefined,
       newChatRequestId: undefined,
@@ -1221,7 +1245,6 @@ describe("workspace widget renderer registry", () => {
     expect(chatSessionMock.replaceChat).toHaveBeenCalledWith(renamedChat);
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       chatId: "chat-created",
-      projectPathPrivacy: "omit",
       title: renamedChat.title,
       selectionHandoffId: undefined,
       newChatRequestId: undefined,
@@ -1258,7 +1281,6 @@ describe("workspace widget renderer registry", () => {
     await waitFor((): void => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       chatId: existingChat.id,
-      projectPathPrivacy: "omit",
       title: existingChat.title,
       selectionHandoffId: undefined,
       newChatRequestId: undefined,
