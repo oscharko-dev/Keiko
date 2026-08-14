@@ -1590,6 +1590,14 @@ export interface FilesContentResponse extends FilesPreviewBase {
         readonly reason:
           "workspace-unavailable" | "filesystem-identity-unsupported" | "history-unavailable";
         readonly correlationId: string;
+      }
+    // Issue #2898: a capture whose content looks like a secret is never vaulted at all — this is
+    // not a failure of the protection mechanism, so it gets its own status rather than routing
+    // through the generic "degraded" (unavailable-infrastructure) shape.
+    | {
+        readonly status: "suppressed";
+        readonly reason: "secret-detected";
+        readonly correlationId: string;
       };
 }
 

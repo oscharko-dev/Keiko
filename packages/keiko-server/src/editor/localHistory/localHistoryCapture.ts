@@ -101,6 +101,20 @@ function degradedProtection(
   };
 }
 
+// A secret-shaped capture is a deliberate protection decision, not unavailable infrastructure — it
+// gets its own status instead of being folded into "degraded" (#2898). Kept as a thin branch ahead
+// of degradedProtection rather than inside it, since the store-unavailable call site above can never
+// produce this error and should keep reading as the plain "degraded" case it always was.
+function protectionForCaptureFailure(
+  error: unknown,
+  correlationId: string,
+): EditorLocalHistoryCaptureProtection {
+  if (error instanceof EditorLocalHistoryError && error.code === "SECRET_CONTENT_SUPPRESSED") {
+    return { status: "suppressed", reason: "secret-detected", correlationId };
+  }
+  return degradedProtection(error, correlationId);
+}
+
 export function captureEditorLocalHistorySafely(input: {
   readonly deps: Pick<UiHandlerDeps, "store" | "editorLocalHistoryStore" | "diagnostics">;
   readonly realRoot: string;
@@ -142,6 +156,6 @@ export function captureEditorLocalHistorySafely(input: {
       error,
       input.nowMs,
     );
-    return degradedProtection(error, correlationId);
+    return protectionForCaptureFailure(error, correlationId);
   }
 }
