@@ -41,6 +41,7 @@ import type { FilesContentResponse as FilesContentWireResponse } from "@oscharko
 import { containsPath } from "@oscharko-dev/keiko-git";
 import { notifyHostLspWorkspaceFileChanged } from "./editor/lsp/hostLanguageOperation.js";
 import { captureEditorLocalHistorySafely } from "./editor/localHistory/localHistoryCapture.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
 import {
   STREAMING,
@@ -2601,13 +2602,10 @@ type DapDebugService = NonNullable<UiHandlerDeps["dapDebug"]>;
 // directory), never a blind string-prefix rewrite, so each destination fileId is validated on its
 // own by whatever consumes the list.
 function affectedRenamedFileIds(
-  store: DapDebugService["breakpoints"],
-  realRoot: string,
+  snapshot: Extract<ReturnType<DapDebugService["breakpoints"]["snapshot"]>, { readonly ok: true }>,
   previousPath: string,
   nextPath: string,
 ): readonly { readonly previousFileId: string; readonly nextFileId: string }[] {
-  const snapshot = store.snapshot(realRoot);
-  if (!snapshot.ok) return [];
   const seen = new Set<string>();
   const renames: { readonly previousFileId: string; readonly nextFileId: string }[] = [];
   for (const entry of snapshot.snapshot.breakpoints) {
@@ -2635,7 +2633,27 @@ async function reKeyRenamedBreakpoints(
 ): Promise<void> {
   const service = deps.dapDebug;
   if (service === undefined) return;
-  const renames = affectedRenamedFileIds(service.breakpoints, realRoot, previousPath, nextPath);
+  const snapshot = service.breakpoints.snapshot(realRoot);
+  if (!snapshot.ok) {
+    // Codex review round 6 on PR #3141: an unavailable snapshot (corrupt record, transient
+    // identity-inspection failure) used to skip the whole migration silently, bypassing the
+    // service-side rejection diagnostic entirely. The rename still must not fail — but the skipped
+    // migration has to be observable, mirroring the service's own redacted, body-free convention.
+    emitServerDiagnostic(
+      service.diagnosticSink,
+      serverDiagnosticFromError({
+        correlationId: `files-rename-${randomUUID()}`,
+        operation: "files.rename.breakpoint-migration-skipped",
+        source: "files.rename",
+        error: new Error("BREAKPOINT_SNAPSHOT_UNAVAILABLE"),
+        redact: () =>
+          "Breakpoint migration for a rename was skipped: the instrumentation snapshot is " +
+          "unavailable; breakpoints remain under the old path.",
+      }),
+    );
+    return;
+  }
+  const renames = affectedRenamedFileIds(snapshot, previousPath, nextPath);
   if (renames.length > 0) await service.renameInstrumentation(realRoot, renames);
 }
 

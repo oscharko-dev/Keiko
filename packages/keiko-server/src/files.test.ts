@@ -1457,6 +1457,43 @@ describe("desktop files mutations (create / rename / delete)", () => {
     await rm(debugStateDir, { recursive: true, force: true });
   });
 
+  // Codex review round 6 on PR #3141: an unavailable snapshot used to skip the migration silently,
+  // bypassing every downstream diagnostic. The rename must still succeed, but the skip must leave a
+  // redacted diagnostic behind.
+  it("diagnoses a skipped breakpoint migration when the snapshot is unavailable", async () => {
+    const renameInstrumentation = vi.fn().mockResolvedValue(undefined);
+    const diagnostics: { operation: string }[] = [];
+    const breakpoints = {
+      snapshot: (): { readonly ok: false; readonly reason: string } => ({
+        ok: false,
+        reason: "state_unavailable",
+      }),
+    };
+
+    const result = await handleFilesRename(
+      patchContentContext({ root, path: "src/app.ts", newPath: "src/renamed.ts" }),
+      {
+        store,
+        redactor: buildRedactor({}),
+        dapDebug: {
+          breakpoints,
+          renameInstrumentation,
+          diagnosticSink: {
+            record: (record: { operation: string }): void => {
+              diagnostics.push(record);
+            },
+          },
+        },
+      } as unknown as UiHandlerDeps,
+    );
+
+    expect(result).toMatchObject({ status: 200, body: { path: "src/renamed.ts" } });
+    expect(renameInstrumentation).not.toHaveBeenCalled();
+    expect(
+      diagnostics.filter((record) => record.operation.endsWith("breakpoint-migration-skipped")),
+    ).toHaveLength(1);
+  });
+
   it("delegates every fileId under a renamed directory in one call (KEIKO-0179)", async () => {
     await writeFile(join(root, "src", "lib.ts"), "export const b = 2;\n");
     const debugStateDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-mut-dap-dir-")));
