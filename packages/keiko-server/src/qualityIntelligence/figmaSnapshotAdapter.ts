@@ -113,7 +113,7 @@ export interface FigmaVisionHintProviderOptions {
 
 const MAX_VISION_IMAGE_BYTES = 4 * 1024 * 1024;
 const MAX_VISION_BASELINE_BYTES = 12_000;
-export const MAX_VISION_HINTS = 24;
+const MAX_VISION_HINTS = 24;
 const FIGMA_VISION_TIMEOUT_MS = 30_000;
 
 const encoder = new TextEncoder();

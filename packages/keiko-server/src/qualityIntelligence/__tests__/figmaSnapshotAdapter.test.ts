@@ -23,7 +23,6 @@ import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import {
-  MAX_VISION_HINTS,
   makeFigmaSnapshotLoader,
   makeFigmaVisionHintProvider,
   stripJsonCodeFence,
@@ -188,7 +187,7 @@ function expectStructuredVisionRequest(seenRequests: readonly GatewayRequest[]):
           type: "array",
           items: { type: "string" },
           minItems: 0,
-          maxItems: MAX_VISION_HINTS,
+          maxItems: 24,
         },
       },
     },

@@ -898,6 +898,50 @@ describe("ChatWindowSessionHost target missing", () => {
     expect((reported as Error).message).not.toContain("Sensitive title");
   });
 
+  it("creates an unbound chat in its configured project before routing settles", async () => {
+    const projectA: ProjectWithAvailability = {
+      path: "/repo-a",
+      name: "Repo A",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    const projectB: ProjectWithAvailability = { ...projectA, path: "/repo-b", name: "Repo B" };
+    const created = {
+      ...chatFixture("chat-created-in-b", "Project B chat", 2),
+      projectPath: projectB.path,
+    };
+    chatSessionState.activeProject = projectA;
+    chatSessionState.projects = [projectA, projectB];
+    chatSessionState.openNewChat.mockResolvedValueOnce(created);
+    const ctx = context();
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{
+            projectPath: projectB.path,
+            title: created.title,
+            newChatRequestId: "configured-project-request",
+          }}
+          ctx={ctx}
+        />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void =>
+      expect(chatSessionState.openNewChat).toHaveBeenCalledWith(projectB, created.title),
+    );
+    expect(chatSessionState.openNewChat).not.toHaveBeenCalledWith(projectA, created.title);
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: created.id,
+      projectPath: projectB.path,
+      title: created.title,
+      newChatRequestId: undefined,
+    });
+  });
+
   it("correlates a redacted title-update diagnostic", async (): Promise<void> => {
     const reportError = vi.fn();
     vi.stubGlobal("reportError", reportError);
@@ -1447,6 +1491,37 @@ describe("ChatWindowSessionHost target missing", () => {
     );
     expect(chatSessionState.openProject).toHaveBeenCalledWith(projectA);
     expect(screen.queryByText("Chat not found")).not.toBeInTheDocument();
+  });
+
+  it("surfaces a legacy project lookup failure without caching it as deletion", async () => {
+    const projectA: ProjectWithAvailability = {
+      path: "/repo-a",
+      name: "Repo A",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    const projectB: ProjectWithAvailability = { ...projectA, path: "/repo-b", name: "Repo B" };
+    const current = { ...chatFixture("chat-b", "Current chat", 2), projectPath: projectB.path };
+    chatSessionState.activeProject = projectB;
+    chatSessionState.activeChat = current;
+    chatSessionState.projects = [projectA, projectB];
+    chatSessionState.chats = [current];
+    fetchChatsMock.mockImplementation(async (path) => {
+      if (path === projectA.path) throw new TypeError("temporary lookup failure");
+      return { chats: [current] };
+    });
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "legacy-chat" }} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not open chat.");
+    expect(screen.queryByText("Chat not found")).not.toBeInTheDocument();
+    expect(chatSessionState.openProject).not.toHaveBeenCalled();
   });
 
   it("restores a persisted chat from its owning project without replacing its binding", async () => {

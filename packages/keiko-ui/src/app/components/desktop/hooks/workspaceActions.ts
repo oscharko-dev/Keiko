@@ -35,6 +35,7 @@ import {
   EDITOR_SIDEBAR_MIN_WIDTH,
   EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
 } from "../editorSidebarSizing";
+import { MAX_WORKSPACE_WINDOWS } from "./workspace-persistence";
 
 function addPosition(
   vp: ViewportWorld,
@@ -322,6 +323,51 @@ function makeMaximize(args: MutateArgs): WorkspaceApi["maximize"] {
     });
 }
 
+interface NewWindowAllocationArgs {
+  readonly cfg: AppWindow["cfg"] | undefined;
+  readonly defaultH: number;
+  readonly defaultMinH: number;
+  readonly defaultMinW: number;
+  readonly defaultW: number;
+  readonly list: readonly AppWindow[];
+  readonly type: WindowType;
+  readonly vp: ViewportWorld;
+  readonly zc: RefObject<number>;
+}
+
+function allocateNewWindow(args: NewWindowAllocationArgs): {
+  readonly id: string | null;
+  readonly windows: readonly AppWindow[];
+} {
+  // Keep live UI state inside the same trust boundary enforced by local persistence and the BFF.
+  // Existing singleton/per-identity windows are focused before this allocation is attempted.
+  if (args.list.length >= MAX_WORKSPACE_WINDOWS) return { id: null, windows: args.list };
+  const { x, y } = addPosition(args.vp, args.defaultW, args.defaultH, args.list.length, 40);
+  const typeDefinition = WIN_TYPES[args.type];
+  const id =
+    typeDefinition.singleton === true
+      ? args.type
+      : nextWindowId(args.type, args.list, args.zc.current + 1);
+  return {
+    id,
+    windows: [
+      ...args.list,
+      {
+        id,
+        type: args.type,
+        x,
+        y,
+        w: Math.max(args.defaultW, args.defaultMinW),
+        h: Math.max(args.defaultH, args.defaultMinH),
+        z: ++args.zc.current,
+        cfg: initialWindowCfg(args.type, args.cfg),
+        max: false,
+        zoom: 1,
+      },
+    ],
+  };
+}
+
 function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
   const { setWins, zc, worldVP } = args;
   return (type, cfg) => {
@@ -391,24 +437,19 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
           );
         }
       }
-      const { x, y } = addPosition(vp, defaultW, defaultH, list.length, 40);
-      const id = t.singleton === true ? type : nextWindowId(type, list, zc.current + 1);
-      createdId = id;
-      return [
-        ...list,
-        {
-          id,
-          type,
-          x,
-          y,
-          w: Math.max(defaultW, defaultMinW),
-          h: Math.max(defaultH, defaultMinH),
-          z: ++zc.current,
-          cfg: initialWindowCfg(type, cfg),
-          max: false,
-          zoom: 1,
-        },
-      ];
+      const allocation = allocateNewWindow({
+        cfg,
+        defaultH,
+        defaultMinH,
+        defaultMinW,
+        defaultW,
+        list,
+        type,
+        vp,
+        zc,
+      });
+      createdId = allocation.id;
+      return [...allocation.windows];
     });
     return createdId;
   };

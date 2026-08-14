@@ -48,6 +48,7 @@ import {
   EDITOR_SIDEBAR_MIN_WIDTH,
   EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
 } from "../editorSidebarSizing";
+import { MAX_WORKSPACE_WINDOWS } from "./workspace-persistence";
 
 function win(type: AppWindow["type"], cfg: AppWindow["cfg"] = {}, id = `${type}-1`): AppWindow {
   return { id, type, x: 0, y: 0, w: 10, h: 10, z: 1, cfg, max: false };
@@ -1709,6 +1710,27 @@ describe("makeMutations.add — per-conversation Chat windows", () => {
     expect(chatWindows).toHaveLength(2);
     expect(chatWindows.map((window) => window.cfg["chatId"])).toEqual(["A", "B"]);
     expect(chatWindows.map((window) => window.cfg["memoryEnabled"])).toEqual([false, false]);
+  });
+
+  it("enforces the global workspace bound while still focusing an existing chat", () => {
+    let wins: AppWindow[] | null = Array.from({ length: MAX_WORKSPACE_WINDOWS }, (_, index) => ({
+      ...win("chat", { chatId: `chat-${String(index)}` }, `chat-window-${String(index)}`),
+      minimized: index === 0,
+      z: index + 1,
+    }));
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const { add } = makeMutations({
+      setWins,
+      zc: { current: MAX_WORKSPACE_WINDOWS },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    expect(add("chat", { chatId: "overflow-chat" })).toBeNull();
+    expect(wins).toHaveLength(MAX_WORKSPACE_WINDOWS);
+    expect(add("chat", { chatId: "chat-0" })).toBe("chat-window-0");
+    expect(wins?.find((window) => window.id === "chat-window-0")?.minimized).toBe(false);
   });
 
   it("preserves an explicit memory preference while defaulting a new chat window off", () => {

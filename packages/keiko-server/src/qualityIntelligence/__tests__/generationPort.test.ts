@@ -722,6 +722,7 @@ function requiredCandidateSchema(schema: unknown): CandidateSchemaContract {
   const candidate = requireRecord(testCases.items, "Candidate schema");
   const candidateProperties = requireRecord(candidate.properties, "Candidate properties");
   const required = candidate.required;
+  if (!Array.isArray(required)) throw new TypeError("Candidate required fields must be an array.");
   if (!isStringArray(required)) throw new TypeError("Candidate required fields must be strings.");
   return { properties: candidateProperties, required };
 }

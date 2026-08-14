@@ -90,9 +90,11 @@ windows.
    GEN-PERF-SSE-001 batching). Memory inclusion and token budget are keyed by `chatId`; the
    MemoriaViva switch in each chat controls only that conversation. The product-wide memory
    autonomy mode remains global and monotonic, so a window cannot widen governance authority.
-8. **D8 — Resource governance.** Open windows are not capped by an arbitrary UI count. Active
-   concurrent streams remain governed by GEN-PERF-CHATSTREAM-001 (default 16, hard cap 64), with
-   the existing buffered-request degradation. Idle/open windows do not consume stream slots.
+8. **D8 — Resource governance.** Chats have no smaller, chat-specific UI quota: the existing global
+   workspace limit of 128 windows is enforced consistently by live allocation, local persistence,
+   and the BFF snapshot boundary. Active concurrent streams remain governed by
+   GEN-PERF-CHATSTREAM-001 (default 16, hard cap 64), with the existing buffered-request degradation.
+   Idle/open windows do not consume stream slots.
 
 ## Consequences
 

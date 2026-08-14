@@ -51,7 +51,7 @@ const MAX_EDITOR_LAYOUT_SPLIT_DEPTH = 32;
 // MAX_WORKSPACE_WINDOWS/MAX_WORKSPACE_CONNECTIONS) on the client parse path: the
 // localStorage route otherwise accepts unbounded arrays the server would reject,
 // leaving local state permanently divergent from the server snapshot.
-const MAX_PERSISTED_WINDOWS = 128;
+export const MAX_WORKSPACE_WINDOWS = 128;
 const MAX_PERSISTED_CONNECTIONS = 512;
 
 const CREDENTIAL_KEY_MARKERS = [
@@ -761,7 +761,7 @@ export function sanitizePersistedWindows(wins: readonly AppWindow[]): AppWindow[
     if (next !== null) out.push(migrateLegacyFigmaWindow(next));
     // Mirror the server's MAX_WORKSPACE_WINDOWS bound; anything beyond it could
     // never round-trip through the server snapshot anyway.
-    if (out.length >= MAX_PERSISTED_WINDOWS) break;
+    if (out.length >= MAX_WORKSPACE_WINDOWS) break;
   }
   return dedupeSingletonWindows(out);
 }
