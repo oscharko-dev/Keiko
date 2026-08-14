@@ -1077,7 +1077,8 @@ describe("installable package smoke optional-dependency coverage", () => {
     // Observes the production calls rather than their source positions: a text-order pin would
     // stay green if a refactor moved the effective call and left the statement text in place.
     const calls = [];
-    const { vendored, artifact } = seedThenPack("/tmp/keiko-seed-order-fixture", {
+    // A sentinel, not a path: both dependencies are stubbed, so nothing touches the filesystem.
+    const { vendored, artifact } = seedThenPack("<seed-destination-sentinel>", {
       seedVendoredRegistry: (destination) => {
         calls.push("seed");
         return new Map([["destination", destination]]);
@@ -1088,7 +1089,7 @@ describe("installable package smoke optional-dependency coverage", () => {
       },
     });
     expect(calls).toEqual(["seed", "pack"]);
-    expect(vendored.get("destination")).toBe("/tmp/keiko-seed-order-fixture");
+    expect(vendored.get("destination")).toBe("<seed-destination-sentinel>");
     expect(artifact.tarballPath).toBe("/tmp/fixture.tgz");
   });
 
