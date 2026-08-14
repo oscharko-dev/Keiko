@@ -168,6 +168,63 @@
   text-align: center;
 }
 
+.memoryControls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.memoryActivationButton {
+  align-items: center;
+  background: color-mix(in oklch, var(--surface-primary) 78%, transparent);
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  color: var(--text-secondary);
+  display: inline-flex;
+  flex: none;
+  height: 32px;
+  justify-content: center;
+  min-width: 32px;
+  opacity: 0.64;
+  padding: 0;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    color 0.15s ease,
+    opacity 0.15s ease;
+  width: 32px;
+}
+
+.memoryActivationButton[data-enabled="true"] {
+  background: color-mix(in oklch, var(--accent) 22%, var(--surface-primary));
+  border-color: color-mix(in oklch, var(--accent) 78%, var(--border-strong));
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--accent) 18%, transparent),
+    0 0 18px color-mix(in oklch, var(--accent) 38%, transparent);
+  color: var(--accent);
+  opacity: 1;
+}
+
+.memoryActivationButton:hover {
+  background: color-mix(in oklch, var(--surface-secondary) 68%, transparent);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+  opacity: 0.86;
+}
+
+.memoryActivationButton[data-enabled="true"]:hover {
+  background: color-mix(in oklch, var(--accent) 26%, var(--surface-primary));
+  border-color: color-mix(in oklch, var(--accent) 88%, var(--border-strong));
+  color: var(--accent);
+  opacity: 1;
+}
+
+.memoryActivationButton:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .responseVersionControl {
   align-items: center;
   display: flex;

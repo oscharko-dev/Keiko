@@ -215,14 +215,15 @@ function str(cfg: Record<string, unknown>, key: string): string | undefined {
 
 // Issue #446 (ADR-0090) — the single root-resolution choke point for bound surfaces. When a task
 // workspace is active, its managed-worktree root OVERRIDES the window's per-window cfg root and the
-// selected Workbench root, per-window cfg, and linked-window fallback, so a switch atomically
-// retargets every surface and none can keep executing against the previous workspace (AC1/AC2,
-// SC1/SC3). In unbound mode the Workbench-wide selected folder is the shared base context.
+// selected Workbench root and linked-window fallback, so a switch atomically retargets every
+// surface and none can keep executing against the previous workspace (AC1/AC2, SC1/SC3). In
+// unbound mode an explicit per-window root stays authoritative; the Workbench-wide selection is
+// only the default for windows without one.
 export function resolveBoundRoot(
   ctx: Pick<WindowRenderContext, "activeRoot" | "selectedRoot" | "linkedRoot">,
   cfgRoot: string | undefined,
 ): string | undefined {
-  return ctx.activeRoot ?? ctx.selectedRoot ?? cfgRoot ?? ctx.linkedRoot ?? undefined;
+  return ctx.activeRoot ?? cfgRoot ?? ctx.selectedRoot ?? ctx.linkedRoot ?? undefined;
 }
 
 // Issue #2619 — `surface` replaces the free-text label: it selects the window's entry in
@@ -321,7 +322,11 @@ registerWindowRender("chat", (cfg, ctx) => <ChatWindowSessionHost cfg={cfg} ctx=
 registerWindowRender("chatHistory", (_cfg, ctx) => (
   <ChatHistoryPanel
     openChatWindow={(chat: Chat) => {
-      ctx.openWindow("chat", { chatId: chat.id, title: chat.title });
+      ctx.openWindow("chat", {
+        chatId: chat.id,
+        projectPath: chat.projectPath,
+        title: chat.title,
+      });
     }}
   />
 ));

@@ -1658,8 +1658,8 @@ describe("makeMutations.add — scoped Figma-view card geometry (#GEN-DUP-NEAR-0
   });
 });
 
-describe("makeMutations.add — Chat singleton", () => {
-  it("reuses the existing chat window and switches its target conversation", () => {
+describe("makeMutations.add — per-conversation Chat windows", () => {
+  it("keeps the existing chat window when a different conversation opens", () => {
     let wins: AppWindow[] | null = [win("chat", { chatId: "chat-1", title: "Chat 1" }, "chat")];
     const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
       wins = typeof fn === "function" ? fn(wins) : fn;
@@ -1672,22 +1672,23 @@ describe("makeMutations.add — Chat singleton", () => {
 
     const id = add("chat", { chatId: "chat-2", title: "Chat 2" });
 
-    expect(id).toBe("chat");
-    expect(wins).toHaveLength(1);
-    expect(wins?.[0]).toMatchObject({
-      id: "chat",
-      type: "chat",
-      cfg: { chatId: "chat-2", title: "Chat 2" },
-      minimized: false,
-      z: 5,
+    expect(id).not.toBe("chat");
+    expect(wins?.filter((window) => window.type === "chat")).toHaveLength(2);
+    expect(wins?.find((window) => window.id === "chat")?.cfg).toEqual({
+      chatId: "chat-1",
+      title: "Chat 1",
+    });
+    expect(wins?.find((window) => window.id === id)?.cfg).toEqual({
+      chatId: "chat-2",
+      memoryEnabled: false,
+      title: "Chat 2",
     });
   });
 
-  // GEN-PERF-CHAT-001 — pin the load-bearing singleton invariant. The original Critical was N chat
-  // hosts (one per window) fighting over a single global session's active pointer, producing an
-  // openChat ping-pong storm. Step 03 made `chat` a singleton window; adding a second chat from an
-  // empty workspace must yield exactly ONE 'chat' window (focus + cfg-merge), never a second host.
-  it("add('chat', A) then add('chat', B) yields exactly ONE chat window (singleton pin)", () => {
+  // GEN-PERF-CHAT-001 — the old singleton prevented multiple hosts from fighting over one global
+  // active-chat pointer by deleting the first window. Hosts now own isolated sessions, so the pin
+  // moves to the actual invariant: different conversations get different windows and identities.
+  it("add('chat', A) then add('chat', B) preserves both chat windows", () => {
     let wins: AppWindow[] | null = [];
     const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
       wins = typeof fn === "function" ? fn(wins) : fn;
@@ -1701,14 +1702,55 @@ describe("makeMutations.add — Chat singleton", () => {
     const firstId = add("chat", { chatId: "A", title: "Chat A" });
     const secondId = add("chat", { chatId: "B", title: "Chat B" });
 
-    // Both adds resolve to the same singleton window id.
-    expect(firstId).toBe("chat");
-    expect(secondId).toBe("chat");
-    // Exactly one 'chat' window exists — no second host was spawned.
+    expect(firstId).not.toBeNull();
+    expect(secondId).not.toBeNull();
+    expect(secondId).not.toBe(firstId);
     const chatWindows = (wins ?? []).filter((w) => w.type === "chat");
-    expect(chatWindows).toHaveLength(1);
-    // The singleton now targets the most-recently-added conversation (cfg merged, not duplicated).
-    expect(chatWindows[0]?.cfg).toMatchObject({ chatId: "B", title: "Chat B" });
+    expect(chatWindows).toHaveLength(2);
+    expect(chatWindows.map((window) => window.cfg["chatId"])).toEqual(["A", "B"]);
+    expect(chatWindows.map((window) => window.cfg["memoryEnabled"])).toEqual([false, false]);
+  });
+
+  it("preserves an explicit memory preference while defaulting a new chat window off", () => {
+    let wins: AppWindow[] | null = [];
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const { add } = makeMutations({
+      setWins,
+      zc: { current: 1 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    add("chat", { chatId: "new-chat" });
+    add("chat", { chatId: "restored-chat", memoryEnabled: true });
+
+    const chatWindows = (wins ?? []).filter((window) => window.type === "chat");
+    expect(chatWindows[0]?.cfg["memoryEnabled"]).toBe(false);
+    expect(chatWindows[1]?.cfg["memoryEnabled"]).toBe(true);
+  });
+
+  it("focuses the existing window when the same conversation opens again", () => {
+    let wins: AppWindow[] | null = [
+      { ...win("chat", { chatId: "A", title: "Chat A" }, "chat-a"), minimized: true, z: 1 },
+    ];
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const { add } = makeMutations({
+      setWins,
+      zc: { current: 4 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    expect(add("chat", { chatId: "A", title: "Ignored duplicate" })).toBe("chat-a");
+    expect(wins).toHaveLength(1);
+    expect(wins?.[0]).toMatchObject({
+      id: "chat-a",
+      minimized: false,
+      z: 5,
+      cfg: { chatId: "A", title: "Chat A" },
+    });
   });
 });
 

@@ -316,7 +316,6 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     w: 480,
     h: 480,
     min: { w: 300, h: 260 },
-    singleton: true,
     config: [
       {
         key: "title",

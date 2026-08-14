@@ -810,6 +810,7 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
     expect(view.result.current.activeChat?.connectedScope).toBeUndefined();
     expect(view.result.current.activeChat?.connectedScopes).toHaveLength(1);
 
+    act(() => view.result.current.setMemoryEnabled(true));
     act(() => view.result.current.setDraft("ground plural scope"));
     await act(async () => {
       await view.result.current.sendMessage();

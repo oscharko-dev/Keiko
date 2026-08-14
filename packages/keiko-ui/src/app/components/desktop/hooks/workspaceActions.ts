@@ -48,6 +48,23 @@ function addPosition(
   return { x, y };
 }
 
+function nextWindowId(type: WindowType, wins: readonly AppWindow[], sequence: number): string {
+  const base =
+    type === "chat"
+      ? `${type}-${Date.now().toString(36)}-${sequence.toString(36)}`
+      : `${type}-${Date.now().toString(36)}`;
+  if (!wins.some((window) => window.id === base)) return base;
+  let suffix = 1;
+  while (wins.some((window) => window.id === `${base}-${suffix.toString(36)}`)) suffix += 1;
+  return `${base}-${suffix.toString(36)}`;
+}
+
+function initialWindowCfg(type: WindowType, cfg: AppWindow["cfg"] | undefined): AppWindow["cfg"] {
+  const initial = cfg ?? {};
+  if (type !== "chat" || typeof initial["memoryEnabled"] === "boolean") return initial;
+  return { ...initial, memoryEnabled: false };
+}
+
 interface MutateArgs {
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly zc: RefObject<number>;
@@ -375,7 +392,7 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
         }
       }
       const { x, y } = addPosition(vp, defaultW, defaultH, list.length, 40);
-      const id = t.singleton === true ? type : `${type}-${Date.now().toString(36)}`;
+      const id = t.singleton === true ? type : nextWindowId(type, list, zc.current + 1);
       createdId = id;
       return [
         ...list,
@@ -387,7 +404,7 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
           w: Math.max(defaultW, defaultMinW),
           h: Math.max(defaultH, defaultMinH),
           z: ++zc.current,
-          cfg: cfg ?? {},
+          cfg: initialWindowCfg(type, cfg),
           max: false,
           zoom: 1,
         },
@@ -569,7 +586,7 @@ export function replaceWorkspaceSelection(
   windowIds: readonly string[],
 ): WorkspaceUiSelectionState {
   return normalizeWorkspaceSelection(wins, {
-    focusedWindowId: windowIds[windowIds.length - 1] ?? null,
+    focusedWindowId: windowIds.at(-1) ?? null,
     selectedWindowIds: windowIds,
   });
 }

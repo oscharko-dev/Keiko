@@ -439,16 +439,24 @@ describe("workspace-persistence", () => {
     expect(persisted[0]?.cfg).toEqual({ snapshotRunId: "fs-current" });
   });
 
-  it("normalizes every persisted singleton window by registry ownership", () => {
+  it("normalizes persisted singleton windows while preserving distinct chats", () => {
     const persisted = sanitizePersistedWindows([
       win({ id: "quality-old", type: "quality", z: 2, cfg: { stale: "old" } }),
       win({ id: "quality-current", type: "quality", z: 6, cfg: { fresh: "current" } }),
-      win({ id: "chat-a", type: "chat", z: 1, cfg: { title: "A" } }),
-      win({ id: "chat-b", type: "chat", z: 3, cfg: { title: "B" } }),
+      win({
+        id: "chat-a",
+        type: "chat",
+        z: 1,
+        cfg: { chatId: "A", memoryEnabled: false, projectPath: "/repo-a", title: "A" },
+      }),
+      win({ id: "chat-b", type: "chat", z: 3, cfg: { chatId: "B", title: "B" } }),
     ]);
 
-    expect(persisted.map((entry) => entry.id)).toEqual(["quality-current", "chat-b"]);
-    expect(persisted.find((entry) => entry.type === "chat")?.cfg).toEqual({ title: "B" });
+    expect(persisted.map((entry) => entry.id)).toEqual(["quality-current", "chat-a", "chat-b"]);
+    expect(persisted.filter((entry) => entry.type === "chat").map((entry) => entry.cfg)).toEqual([
+      { chatId: "A", memoryEnabled: false, projectPath: "/repo-a", title: "A" },
+      { chatId: "B", title: "B" },
+    ]);
   });
 
   it("preserves standalone Figma JSON references without persisting raw JSON payloads", () => {

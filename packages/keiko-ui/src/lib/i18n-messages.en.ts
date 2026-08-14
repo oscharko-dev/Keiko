@@ -613,6 +613,8 @@ export const EN_MESSAGES = {
   "chat.grounding.connectKnowledgeFailed":
     "Keiko could not connect that knowledge source. Check that it is still available and try again.",
   "chat.memory.panel": "Conversation memory",
+  "chat.memory.enableForChat": "Enable MemoriaViva for this chat",
+  "chat.memory.disableForChat": "Disable MemoriaViva for this chat",
   "chat.memory.included": "{count} memories included",
   "chat.memory.noneIncluded": "No memories included",
   "chat.memory.disclosurePending": "MemoriaViva disclosure appears after the next response.",

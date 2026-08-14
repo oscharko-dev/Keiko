@@ -1636,8 +1636,8 @@ function sharedRunSummaryPatch(
   const existing = sharedRunSummarySyncs.get(key);
   if (existing !== undefined) return existing;
   // GEN-PERF-CHAT-011 — the poll is aborted when the owning hook unmounts (signal from the hook's
-  // AbortController). The shared cache is keyed per (chat, project, message, runId); chat is a
-  // singleton window (Step 03) so a single hook owns the poll for a given run.
+  // AbortController). The shared cache is keyed per (chat, project, message, runId), so reopening
+  // or observing the same run never creates a duplicate poll across isolated window sessions.
   const pending = pollRunSummaryPatch(chat, projectPath, message, signal).finally(() => {
     if (sharedRunSummarySyncs.get(key) === pending) {
       sharedRunSummarySyncs.delete(key);
@@ -1977,6 +1977,25 @@ export interface UseChatSessionOptions {
   readonly loadMemoryAutonomyModeImpl?: typeof loadMemoryAutonomyMode;
 }
 
+function activeConversationMemoryScope(state: SessionState): string | undefined {
+  return state.activeChat?.id;
+}
+
+function activeProjectIdentity(state: SessionState): string | undefined {
+  return state.activeProject?.path;
+}
+
+function synchronizeRenderedIdentity(
+  activeRef: { current: string | undefined },
+  renderedRef: { current: string | undefined },
+  next: string | undefined,
+): void {
+  const previous = renderedRef.current;
+  if (previous === next) return;
+  if (activeRef.current === previous || activeRef.current === next) activeRef.current = next;
+  renderedRef.current = next;
+}
+
 export function useChatSession(options: UseChatSessionOptions = {}): UseChatSessionResult {
   // 0.3.0 release audit — the pre-send attachment notices are user-facing text and were hardcoded
   // English. `documentContext` is not a component and cannot call a hook, so the session hook
@@ -2037,6 +2056,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // chat changes (see openChat) so a stale answer never overhangs into another conversation.
   const [latestGrounded, setLatestGrounded] = useState<GroundedAnswerWire | undefined>();
   const [latestMemory, setLatestMemory] = useState<ConversationMemoryResultWire | undefined>();
+  const renderedChatIdentity = activeConversationMemoryScope(state);
+  const renderedProjectIdentity = activeProjectIdentity(state);
   const {
     memoryEnabled,
     setMemoryEnabled,
@@ -2044,11 +2065,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     setMemoryBudgetTokens,
     memoryMode,
     setMemoryMode,
-  } = useConversationMemorySettings();
+  } = useConversationMemorySettings(renderedChatIdentity);
   // Hydrate the server-persisted autonomy mode once per session mount so chat/voice requests use
   // the user's actual selection even if no autonomy-settings surface is opened. The settings
-  // store is a module-level singleton, so redundant hydration across multiple mounted sessions is
-  // a harmless no-op (publish() skips an identical value); a failure leaves the safe
+  // authority mode is process-wide, so redundant hydration across multiple mounted sessions is a
+  // harmless no-op (equal publications are skipped); a failure leaves the safe
   // "governed-assist" default untouched.
   useEffect(() => {
     let active = true;
@@ -2074,14 +2095,22 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     };
   }, [loadMemoryAutonomyModeImpl, setMemoryMode]);
   const mountedRef = useRef(true);
-  const activeChatIdRef = useRef<string | undefined>(undefined);
+  const activeChatIdRef = useRef<string | undefined>(renderedChatIdentity);
+  const renderedActiveChatIdRef = useRef(renderedChatIdentity);
+  synchronizeRenderedIdentity(activeChatIdRef, renderedActiveChatIdRef, renderedChatIdentity);
   // GEN-DUP-SEMANTIC-016 — two named predicates for the two repeated stale-landing guards so the
   // intent reads at the call site. `activeChatIdRef.current` is read at CALL time (not captured),
   // preserving the existing ref-based guard behaviour exactly.
   const isStillActiveChat = (id: string): boolean => activeChatIdRef.current === id;
   const isSupersededOrAborted = (id: string, signal: AbortSignal): boolean =>
     signal.aborted || activeChatIdRef.current !== id;
-  const activeProjectPathRef = useRef<string | undefined>(undefined);
+  const activeProjectPathRef = useRef<string | undefined>(renderedProjectIdentity);
+  const renderedProjectPathRef = useRef(renderedProjectIdentity);
+  synchronizeRenderedIdentity(
+    activeProjectPathRef,
+    renderedProjectPathRef,
+    renderedProjectIdentity,
+  );
   const runSummarySyncingRef = useRef<Set<string>>(new Set());
   // GEN-PERF-CHAT-011 — a per-hook AbortController for the run-summary pollers, aborted on unmount
   // so the poll loop stops at its fetch/sleep edges instead of running out its remaining attempts.
@@ -2095,7 +2124,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const selectedModelPersistRef = useRef(0);
   // COMP-5 — synchronous read of the current model list inside setSelectedModel
   // (which is intentionally `useCallback(..., [])`) without recreating the callback.
-  const modelsRef = useRef<readonly ModelCapability[]>([]);
+  const modelsRef = useRef<readonly ModelCapability[]>(state.models);
+  modelsRef.current = state.models;
   // Issue #147 — pending-attachment state. Cleared after a successful send (AC #3).
   const [pendingAttachments, setPendingAttachments] = useState<readonly PendingAttachment[]>([]);
   // GEN-PERF-MEMORY-001 — live mirror of pendingAttachments so the unmount cleanup can revoke any
@@ -2185,14 +2215,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     });
   }, []);
 
-  // 0.3.0 release audit — the composer (draft text + staged attachment queue) is ONE app-wide
-  // slot because the chat window is a singleton (ADR-0114). Switching the active conversation
-  // reset the stream bubble, the grounded answer, the latest memory and the document note, but
-  // never the composer — so a document staged in chat A was extracted and sent into chat B, under
-  // whatever model and provider chat B had selected. Content a user staged for one conversation
-  // must never ride along into another: every path that changes the active conversation clears it
-  // fail-closed. Placed here, on the state that owns the composer, so a new switch path cannot
-  // forget to call it.
+  // 0.3.0 release audit — each mounted session owns one composer (draft text + staged attachment
+  // queue). Switching that session to another conversation must clear the composer fail-closed so
+  // content staged for chat A cannot ride into chat B. ADR-0114 now mounts one session per chat
+  // window, so this reset is local to that window and never touches a sibling composer.
   const resetComposerForConversationSwitch = useCallback((): void => {
     setDraft("");
     clearPendingAttachments();
@@ -2481,18 +2507,6 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     },
     [],
   );
-
-  useEffect(() => {
-    activeChatIdRef.current = state.activeChat?.id;
-  }, [state.activeChat?.id]);
-
-  useEffect(() => {
-    activeProjectPathRef.current = state.activeProject?.path;
-  }, [state.activeProject?.path]);
-
-  useEffect(() => {
-    modelsRef.current = state.models;
-  }, [state.models]);
 
   useEffect(() => {
     let cancelled = false;

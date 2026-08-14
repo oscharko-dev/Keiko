@@ -1,4 +1,5 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { Chat, ChatMessage, ModelCapability, ProjectWithAvailability } from "@/lib/types";
@@ -32,6 +33,7 @@ import {
   pickChatModelId,
   resolveSelectedModelId,
   type SendMessageOutcome,
+  type ChatSessionApi,
   useChatSession,
 } from "./useChatSession";
 import {
@@ -228,7 +230,42 @@ describe("useChatSession pure guards", () => {
   });
 });
 
+function ImmediateChatBinding({
+  session,
+  target,
+}: {
+  readonly session: ChatSessionApi;
+  readonly target: Chat;
+}): ReactNode {
+  const { activeChat, loading, openChat } = session;
+  useEffect((): void => {
+    if (!loading && activeChat?.id !== target.id) void openChat(target);
+  }, [activeChat?.id, loading, openChat, target]);
+  return <output data-testid="immediate-chat-binding">{activeChat?.id ?? "none"}</output>;
+}
+
+function ImmediateChatBindingHarness({ target }: { readonly target: Chat }): ReactNode {
+  const session = useChatSession({ autoCreate: false });
+  return <ImmediateChatBinding session={session} target={target} />;
+}
+
 describe("useChatSession bootstrap", () => {
+  it("honors a child window binding immediately after bootstrap", async () => {
+    const bootstrapChat = chat({ id: "chat-bootstrap", updatedAt: 20 });
+    const boundChat = chat({ id: "chat-bound", updatedAt: 10 });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [bootstrapChat, boundChat] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+
+    render(<ImmediateChatBindingHarness target={boundChat} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("immediate-chat-binding")).toHaveTextContent(boundChat.id),
+    );
+    expect(fetchChatMessages).toHaveBeenCalledWith(boundChat.id, boundChat.projectPath);
+  });
+
   it("loads the newest existing chat and falls back from a stale selected model", async () => {
     const latest = chat({ id: "chat-latest", selectedModel: "stale-model", updatedAt: 20 });
     vi.mocked(fetchModels).mockResolvedValue({
@@ -693,11 +730,9 @@ describe("useChatSession bootstrap", () => {
   });
 });
 
-// 0.3.0 release audit — the composer draft and the staged attachment queue are one app-wide
-// slot (the chat window is a singleton). Switching conversations reset the stream bubble, the
-// grounded answer and the document note, but never the composer: a document attached in chat A
-// was extracted and sent into chat B, possibly under a different model and provider. Content a
-// user staged in one conversation must never ride along into another.
+// 0.3.0 release audit — a session's composer draft and staged attachments must stay bound to its
+// conversation. ADR-0114 now mounts one session per chat window; switching a session still clears
+// its own composer, while sibling windows have independent session instances.
 describe("useChatSession conversation switch — composer isolation", () => {
   async function setupTwoChatSession(): Promise<
     ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>
@@ -1263,6 +1298,12 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
   // never regresses to more than one of each per grounded turn.
   it("issues exactly one messages fetch and one chats fetch per grounded turn", async () => {
     const { result } = await setupGroundedSession();
+
+    // Privacy default is off. This explicit action models the user's Brain-icon activation and
+    // proves that the enabled retrieval request still receives the standard 1,200-token budget.
+    act(() => {
+      result.current.setMemoryEnabled(true);
+    });
 
     // Reset the boot-time fetch counts so we measure only the grounded turn's traffic.
     vi.mocked(fetchChatMessages).mockClear();

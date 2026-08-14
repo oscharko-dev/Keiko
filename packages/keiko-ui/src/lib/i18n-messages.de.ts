@@ -630,6 +630,8 @@ export const DE_MESSAGES = {
   "chat.grounding.connectKnowledgeFailed":
     "Keiko konnte diese Wissensquelle nicht verbinden. Prüfe, ob sie noch verfügbar ist, und versuche es erneut.",
   "chat.memory.panel": "Konversationsspeicher",
+  "chat.memory.enableForChat": "MemoriaViva für diesen Chat aktivieren",
+  "chat.memory.disableForChat": "MemoriaViva für diesen Chat deaktivieren",
   "chat.memory.included": "{count} Erinnerungen einbezogen",
   "chat.memory.noneIncluded": "Keine Erinnerungen einbezogen",
   "chat.memory.disclosurePending": "MemoriaViva-Hinweis erscheint nach der nächsten Antwort.",

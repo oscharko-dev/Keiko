@@ -55,13 +55,13 @@ describe("MemoriaVivaWindow request settings", () => {
     const memorySwitch = screen.getByRole("switch", {
       name: "Use MemoriaViva in chat requests",
     });
-    expect(memorySwitch).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByText("Enabled for chat")).toBeInTheDocument();
+    expect(memorySwitch).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText("Disabled for chat")).toBeInTheDocument();
 
     await user.click(memorySwitch);
 
-    expect(memorySwitch).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByText("Disabled for chat")).toBeInTheDocument();
+    expect(memorySwitch).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText("Enabled for chat")).toBeInTheDocument();
 
     const budgetInput = screen.getByLabelText("Memory context budget");
     expect(budgetInput).toHaveValue(1200);

@@ -38,6 +38,7 @@ const chatSessionMock = vi.hoisted(() => ({
     readonly available: boolean;
   }[],
   loading: false,
+  memoryEnabled: true,
   noEligibleModels: false,
   openChat: vi.fn<(chat: { readonly id: string }) => Promise<void>>(() => Promise.resolve()),
   openNewChat: vi.fn<
@@ -62,6 +63,7 @@ const chatSessionMock = vi.hoisted(() => ({
     Promise.resolve(),
   ),
   replaceChat: vi.fn<(chat: Chat) => void>(),
+  setMemoryEnabled: vi.fn<(enabled: boolean) => void>(),
   sending: false,
 }));
 
@@ -128,6 +130,7 @@ vi.mock("../context/ChatSessionContext", () => ({
     chats: chatSessionMock.chats,
     projects: chatSessionMock.projects,
     loading: chatSessionMock.loading,
+    memoryEnabled: chatSessionMock.memoryEnabled,
     models: [{ id: "model-1" }],
     noEligibleModels: chatSessionMock.noEligibleModels,
     openChat: chatSessionMock.openChat,
@@ -136,9 +139,18 @@ vi.mock("../context/ChatSessionContext", () => ({
     selectedModel: chatSessionMock.selectedModel,
     sendMessage: chatSessionMock.sendMessage,
     replaceChat: chatSessionMock.replaceChat,
+    setMemoryEnabled: chatSessionMock.setMemoryEnabled,
     sending: chatSessionMock.sending,
   }),
 }));
+
+vi.mock("../hooks/useChatSession", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../hooks/useChatSession")>();
+  return {
+    ...actual,
+    useChatSession: (): typeof chatSessionMock => chatSessionMock,
+  };
+});
 
 // These cases assert widget prop mapping, not workspace membership, but every execution surface
 // resolves its root through useWorkspaceManifest. Without a stub the real hook fetches, fails in
@@ -164,9 +176,16 @@ vi.mock("./panels/ChatHistoryPanel", () => ({
   ChatHistoryPanel: ({
     openChatWindow,
   }: {
-    readonly openChatWindow: (chat: { readonly id: string; readonly title: string }) => void;
+    readonly openChatWindow: (chat: {
+      readonly id: string;
+      readonly projectPath: string;
+      readonly title: string;
+    }) => void;
   }) => (
-    <button type="button" onClick={() => openChatWindow({ id: "chat-2", title: "Chat 2" })}>
+    <button
+      type="button"
+      onClick={() => openChatWindow({ id: "chat-2", projectPath: "/repo", title: "Chat 2" })}
+    >
       Open history chat
     </button>
   ),
@@ -642,6 +661,7 @@ beforeEach((): void => {
   chatSessionMock.chats = [chatSessionMock.activeChat];
   chatSessionMock.projects = [chatSessionMock.activeProject];
   chatSessionMock.loading = false;
+  chatSessionMock.memoryEnabled = true;
   chatSessionMock.noEligibleModels = false;
   chatSessionMock.selectedModel = "model-1";
   chatSessionMock.sending = false;
@@ -650,6 +670,7 @@ beforeEach((): void => {
   chatSessionMock.openProject.mockReset().mockResolvedValue(undefined);
   chatSessionMock.sendMessage.mockReset().mockResolvedValue(undefined);
   chatSessionMock.replaceChat.mockReset();
+  chatSessionMock.setMemoryEnabled.mockReset();
   apiMock.updateChat.mockReset();
 });
 
@@ -953,7 +974,7 @@ describe("workspace widget renderer registry", () => {
     });
   });
 
-  it("adopts an in-flight selection chat when the singleton is reset", async (): Promise<void> => {
+  it("adopts an in-flight selection chat when the window request changes", async (): Promise<void> => {
     const ctx = makeCtx();
     const originRoot = "/workspace/origin";
     const originProject = { path: originRoot, available: true };
@@ -1015,6 +1036,7 @@ describe("workspace widget renderer registry", () => {
     expect(chatSessionMock.replaceChat).toHaveBeenCalledWith(renamedChat);
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       chatId: "chat-created",
+      projectPath: originRoot,
       title: "Replacement chat",
       newChatRequestId: undefined,
     });
@@ -1198,6 +1220,7 @@ describe("workspace widget renderer registry", () => {
     await waitFor((): void => {
       expect(ctx.updateCfg).toHaveBeenCalledWith({
         chatId: "chat-created",
+        projectPath: "/repo",
         title: "Created chat",
         newChatRequestId: undefined,
       });
@@ -1442,7 +1465,11 @@ describe("workspace widget renderer registry", () => {
 
     view.rerender(<>{WIN_TYPES.chatHistory.render({}, ctx)}</>);
     fireEvent.click(await screen.findByRole("button", { name: "Open history chat" }));
-    expect(ctx.openWindow).toHaveBeenCalledWith("chat", { chatId: "chat-2", title: "Chat 2" });
+    expect(ctx.openWindow).toHaveBeenCalledWith("chat", {
+      chatId: "chat-2",
+      projectPath: "/repo",
+      title: "Chat 2",
+    });
 
     view.rerender(
       <>
@@ -1490,6 +1517,16 @@ describe("active workspace binding override (Issue #446)", () => {
   it("files renderer falls back to the cfg root in unbound mode", async () => {
     render(<>{WIN_TYPES.files.render({ root: "/cfg/old" }, boundCtx(null))}</>);
     expect(await screen.findByTestId("files-root")).toHaveTextContent("/cfg/old");
+  });
+
+  it("files renderer preserves an explicitly selected folder in unbound mode", async () => {
+    render(
+      <>
+        {WIN_TYPES.files.render({ root: "/picked/folder" }, boundCtx(null, "/workbench/default"))}
+      </>,
+    );
+
+    expect(await screen.findByTestId("files-root")).toHaveTextContent("/picked/folder");
   });
 
   it("terminal renderer scopes projectPath + cwd to the active root", async () => {

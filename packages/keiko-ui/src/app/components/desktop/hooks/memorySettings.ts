@@ -5,20 +5,29 @@ import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 
 const DEFAULT_MEMORY_BUDGET_TOKENS = 1200;
 
-interface ConversationMemorySettingsSnapshot {
+interface ConversationMemoryScopeSnapshot {
   readonly enabled: boolean;
   readonly budgetTokens: number;
+}
+
+interface ConversationMemorySettingsSnapshot extends ConversationMemoryScopeSnapshot {
   readonly mode: CodingWorkbenchMode;
 }
 
-const DEFAULT_MEMORY_SETTINGS: ConversationMemorySettingsSnapshot = {
-  enabled: true,
+const DEFAULT_MEMORY_SCOPE: ConversationMemoryScopeSnapshot = {
+  enabled: false,
   budgetTokens: DEFAULT_MEMORY_BUDGET_TOKENS,
+};
+
+const DEFAULT_MEMORY_SETTINGS: ConversationMemorySettingsSnapshot = {
+  ...DEFAULT_MEMORY_SCOPE,
   mode: "governed-assist",
 };
 
-let currentSettings = DEFAULT_MEMORY_SETTINGS;
+let defaultScopeSettings = DEFAULT_MEMORY_SCOPE;
+let currentMode = DEFAULT_MEMORY_SETTINGS.mode;
 let currentModeRevision = 0;
+const conversationScopes = new Map<string, ConversationMemoryScopeSnapshot>();
 const listeners = new Set<() => void>();
 
 function normalizeBudgetTokens(tokens: number): number {
@@ -26,18 +35,33 @@ function normalizeBudgetTokens(tokens: number): number {
   return Math.floor(tokens);
 }
 
-function publish(next: ConversationMemorySettingsSnapshot): void {
-  if (
-    next.enabled === currentSettings.enabled &&
-    next.budgetTokens === currentSettings.budgetTokens &&
-    next.mode === currentSettings.mode
-  ) {
-    return;
-  }
-  const modeChanged = next.mode !== currentSettings.mode;
-  currentSettings = next;
-  if (modeChanged) currentModeRevision += 1;
+function notifySubscribers(): void {
   for (const listener of listeners) listener();
+}
+
+function scopeSnapshot(scopeKey: string | undefined): ConversationMemoryScopeSnapshot {
+  return scopeKey === undefined
+    ? defaultScopeSettings
+    : (conversationScopes.get(scopeKey) ?? defaultScopeSettings);
+}
+
+function publishScope(
+  scopeKey: string | undefined,
+  patch: Partial<ConversationMemoryScopeSnapshot>,
+): void {
+  const current = scopeSnapshot(scopeKey);
+  const next = { ...current, ...patch };
+  if (next.enabled === current.enabled && next.budgetTokens === current.budgetTokens) return;
+  if (scopeKey === undefined) defaultScopeSettings = next;
+  else conversationScopes.set(scopeKey, next);
+  notifySubscribers();
+}
+
+function publishMode(next: CodingWorkbenchMode): void {
+  if (next === currentMode) return;
+  currentMode = next;
+  currentModeRevision += 1;
+  notifySubscribers();
 }
 
 function subscribe(listener: () => void): () => void {
@@ -45,10 +69,6 @@ function subscribe(listener: () => void): () => void {
   return () => {
     listeners.delete(listener);
   };
-}
-
-function getSnapshot(): ConversationMemorySettingsSnapshot {
-  return currentSettings;
 }
 
 // Synchronous, non-subscribing revision read. Comparing the revision, rather than only the
@@ -59,10 +79,10 @@ export function currentConversationMemoryModeRevision(): number {
 }
 
 export function currentConversationMemoryMode(): CodingWorkbenchMode {
-  return currentSettings.mode;
+  return currentMode;
 }
 
-export function useConversationMemorySettings(): {
+export function useConversationMemorySettings(scopeKey?: string): {
   readonly memoryEnabled: boolean;
   readonly setMemoryEnabled: (next: boolean) => void;
   readonly memoryBudgetTokens: number;
@@ -70,15 +90,26 @@ export function useConversationMemorySettings(): {
   readonly memoryMode: CodingWorkbenchMode;
   readonly setMemoryMode: (next: CodingWorkbenchMode) => void;
 } {
-  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  const setMemoryEnabled = useCallback((next: boolean): void => {
-    publish({ ...currentSettings, enabled: next });
-  }, []);
-  const setMemoryBudgetTokens = useCallback((next: number): void => {
-    publish({ ...currentSettings, budgetTokens: normalizeBudgetTokens(next) });
-  }, []);
+  const getScopeSnapshot = useCallback(
+    (): ConversationMemoryScopeSnapshot => scopeSnapshot(scopeKey),
+    [scopeKey],
+  );
+  const snapshot = useSyncExternalStore(subscribe, getScopeSnapshot, getScopeSnapshot);
+  const mode = useSyncExternalStore(
+    subscribe,
+    currentConversationMemoryMode,
+    currentConversationMemoryMode,
+  );
+  const setMemoryEnabled = useCallback(
+    (next: boolean): void => publishScope(scopeKey, { enabled: next }),
+    [scopeKey],
+  );
+  const setMemoryBudgetTokens = useCallback(
+    (next: number): void => publishScope(scopeKey, { budgetTokens: normalizeBudgetTokens(next) }),
+    [scopeKey],
+  );
   const setMemoryMode = useCallback((next: CodingWorkbenchMode): void => {
-    publish({ ...currentSettings, mode: next });
+    publishMode(next);
   }, []);
 
   return {
@@ -86,11 +117,20 @@ export function useConversationMemorySettings(): {
     setMemoryEnabled,
     memoryBudgetTokens: snapshot.budgetTokens,
     setMemoryBudgetTokens,
-    memoryMode: snapshot.mode,
+    memoryMode: mode,
     setMemoryMode,
   };
 }
 
 export function resetConversationMemorySettingsForTests(): void {
-  publish(DEFAULT_MEMORY_SETTINGS);
+  const changed =
+    defaultScopeSettings !== DEFAULT_MEMORY_SCOPE ||
+    conversationScopes.size > 0 ||
+    currentMode !== DEFAULT_MEMORY_SETTINGS.mode;
+  const modeChanged = currentMode !== DEFAULT_MEMORY_SETTINGS.mode;
+  defaultScopeSettings = DEFAULT_MEMORY_SCOPE;
+  conversationScopes.clear();
+  currentMode = DEFAULT_MEMORY_SETTINGS.mode;
+  if (modeChanged) currentModeRevision += 1;
+  if (changed) notifySubscribers();
 }

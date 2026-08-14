@@ -8,8 +8,8 @@ import { newClientCorrelationId } from "@/lib/http";
 import { useTranslate } from "@/lib/i18n";
 import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 
-import { useChatSessionContext } from "../context/ChatSessionContext";
-import type { ChatSessionApi } from "../hooks/useChatSession";
+import { ChatSessionProvider } from "../context/ChatSessionContext";
+import { useChatSession, type ChatSessionApi } from "../hooks/useChatSession";
 import { useWorkspaceManifest, type WorkspaceManifestView } from "../hooks/useWorkspaceManifest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
@@ -52,6 +52,11 @@ const FilesWidget = dynamic(() => import("./cards/FilesWidget").then((mod) => mo
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
   const value = cfg[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function bool(cfg: Record<string, unknown>, key: string): boolean | undefined {
+  const value = cfg[key];
+  return typeof value === "boolean" ? value : undefined;
 }
 
 // One predicate for "this window targets the bound managed task-workspace root and the paired
@@ -557,6 +562,7 @@ function applyChatCreationResult(
   }
   execution.updateCfg({
     chatId: result.chat.id,
+    projectPath: result.chat.projectPath,
     title: result.chat.title,
     newChatRequestId: undefined,
   });
@@ -664,16 +670,61 @@ export function ChatWindowSessionHost({
   readonly cfg: Record<string, unknown>;
   readonly ctx: WindowRenderContext;
 }): ReactNode {
+  const session = useChatSession({ autoCreate: false });
+  return <BoundChatWindowSessionHost cfg={cfg} ctx={ctx} session={session} />;
+}
+
+function BoundChatWindowSessionHost({
+  cfg,
+  ctx,
+  session,
+}: {
+  readonly cfg: Record<string, unknown>;
+  readonly ctx: WindowRenderContext;
+  readonly session: ChatSessionApi;
+}): ReactNode {
   const agentT = useEditorAgentTranslate();
-  const session = useChatSessionContext();
   const chatId = str(cfg, "chatId");
+  const projectPath = str(cfg, "projectPath");
   const title = str(cfg, "title");
   const selectionHandoffId = str(cfg, "selectionHandoffId");
   const newChatRequestId = str(cfg, "newChatRequestId");
   const { updateCfg } = ctx;
-  const { activeChat, activeProject, chats, loading, openChat, openNewChat, replaceChat } = session;
+  const {
+    activeChat,
+    activeProject,
+    chats,
+    loading,
+    openChat,
+    openNewChat,
+    openProject,
+    projects,
+    replaceChat,
+  } = session;
+  const configuredMemoryEnabled = bool(cfg, "memoryEnabled");
+  const memoryPreferenceRef = useRef({ chatId, value: configuredMemoryEnabled });
+  if (memoryPreferenceRef.current.chatId !== chatId) {
+    memoryPreferenceRef.current = { chatId, value: configuredMemoryEnabled };
+  }
+  const setMemoryEnabled = useCallback(
+    (next: boolean): void => {
+      memoryPreferenceRef.current = { chatId, value: next };
+      session.setMemoryEnabled(next);
+      updateCfg({ memoryEnabled: next });
+    },
+    [chatId, session, updateCfg],
+  );
+  const scopedSession = useMemo<ChatSessionApi>(
+    () => ({ ...session, setMemoryEnabled }),
+    [session, setMemoryEnabled],
+  );
   const activeTarget =
     activeChat !== undefined && activeChat.status !== "closed" ? activeChat : undefined;
+  const targetProject =
+    projectPath === undefined || activeProject?.path === projectPath
+      ? undefined
+      : projects.find((project): boolean => project.path === projectPath);
+  const switchingProject = targetProject !== undefined;
   const creationCoordinator = useChatCreationCoordinator(openNewChat, replaceChat);
   const handoff = useSelectionHandoffControl({
     chatId,
@@ -700,6 +751,22 @@ export function ChatWindowSessionHost({
     if (target !== undefined) void openChat(target);
   }, [chatId, activeTarget?.id, chats, loading, openChat, selectionHandoffId]);
 
+  useEffect((): void => {
+    if (loading || selectionHandoffId !== undefined || targetProject === undefined) return;
+    void openProject(targetProject);
+  }, [loading, openProject, selectionHandoffId, targetProject]);
+
+  const memoryPreference = memoryPreferenceRef.current.value;
+  const hydratingMemoryPreference =
+    chatId !== undefined &&
+    activeTarget?.id === chatId &&
+    memoryPreference !== undefined &&
+    session.memoryEnabled !== memoryPreference;
+  useEffect((): void => {
+    if (!hydratingMemoryPreference || memoryPreference === undefined) return;
+    session.setMemoryEnabled(memoryPreference);
+  }, [hydratingMemoryPreference, memoryPreference, session]);
+
   // `cfg.title` mirrors the chat record. 0.3.0 release audit — this is the ONE place a bound chat
   // window's title changes after creation, so it also owns the structural "still untitled" marker
   // the workspace reads instead of comparing the title against display copy. Materialising the
@@ -717,38 +784,19 @@ export function ChatWindowSessionHost({
     );
   }, [activeTarget?.id, activeTarget?.title, chatId, loading, title, updateCfg]);
 
-  // 0.3.0 release audit — `chats` is the CURRENT project's list, so a window still bound to the
-  // previous project's conversation resolved nothing and was told the conversation "was deleted".
-  // It was not: the singleton chat window simply lagged behind a project switch. The two cases are
-  // distinguishable — a conversation trashed from Chat History stays in the list with status
-  // "closed", while one that belongs to another project is absent entirely — so only the absent
-  // case retargets the window onto the session's active conversation, and the honest deletion
-  // message is left to the case that can actually prove a deletion.
-  const boundChatKnownHere = chatId !== undefined && chats.some((chat) => chat.id === chatId);
-  const retargetChat =
-    chatId !== undefined &&
-    !boundChatKnownHere &&
-    activeTarget !== undefined &&
-    activeTarget.id !== chatId
-      ? activeTarget
-      : undefined;
-
-  useEffect((): void => {
-    if (loading || selectionHandoffId !== undefined || retargetChat === undefined) return;
-    updateCfg({ chatId: retargetChat.id, title: retargetChat.title });
-  }, [loading, retargetChat, selectionHandoffId, updateCfg]);
-
   const targetMissing =
     selectionHandoffId === undefined &&
     chatId !== undefined &&
     !session.loading &&
     activeTarget?.id !== chatId &&
-    retargetChat === undefined &&
+    !switchingProject &&
     !session.chats.some((chat) => chat.id === chatId && chat.status !== "closed");
   const waitingForTarget =
     session.loading ||
     handoff.pending ||
     creatingChat.pending ||
+    switchingProject ||
+    hydratingMemoryPreference ||
     (chatId !== undefined && activeTarget?.id !== chatId);
   const openRunResult = useCallback(
     (message: ChatMessage): void => {
@@ -798,7 +846,7 @@ export function ChatWindowSessionHost({
     );
   }
   return (
-    <>
+    <ChatSessionProvider value={scopedSession}>
       {handoff.noticeKey === null ? null : (
         <p className="lk-alert" role="alert">
           {agentT(handoff.noticeKey)}
@@ -810,7 +858,7 @@ export function ChatWindowSessionHost({
         </p>
       )}
       {body}
-    </>
+    </ChatSessionProvider>
   );
 }
 

@@ -136,7 +136,7 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
     ]);
     const singletonPayload = workspacePayload([
       {
-        type: "chat",
+        type: "chatHistory",
         x: 0,
         y: 0,
         w: 200,

@@ -4441,12 +4441,38 @@ function MemoryDisclosureButton({
       data-tip={disclosure.memoryDisclosureLabel}
       onClick={disclosure.toggleDisclosure}
     >
-      <BrainIcon size={16} />
+      <ChevronIcon size={16} />
       {disclosure.memoryCount > 0 ? (
         <span className="chat-memory-count" aria-hidden="true">
           {disclosure.memoryCountLabel}
         </span>
       ) : null}
+    </button>
+  );
+}
+
+function MemoryActivationButton({
+  enabled,
+  onChange,
+}: {
+  readonly enabled: boolean;
+  readonly onChange: (next: boolean) => void;
+}): ReactNode {
+  const t = useTranslate();
+  const label = enabled ? t("chat.memory.disableForChat") : t("chat.memory.enableForChat");
+  return (
+    <button
+      type="button"
+      className={`chat-memory-activation-toggle ui-tip cmp-tip-end ${styles.memoryActivationButton}`}
+      aria-label={label}
+      aria-pressed={enabled}
+      data-enabled={enabled ? "true" : "false"}
+      data-tip={label}
+      onClick={() => {
+        onChange(!enabled);
+      }}
+    >
+      <BrainIcon size={16} />
     </button>
   );
 }
@@ -5050,6 +5076,8 @@ export function ChatWindow({
     retryPendingCanonicalVoiceTurn,
     discardPendingCanonicalVoiceTurn,
     replaceChat,
+    memoryEnabled,
+    setMemoryEnabled,
     latestMemory,
     lastSentDocuments,
     lastSentImages = [],
@@ -5127,8 +5155,15 @@ export function ChatWindow({
   // GEN-PERF-CHAT-014 — a JSX literal in the header prop would hand ChatScopeHeader a
   // fresh element identity every render and defeat its memo.
   const memoryControl = useMemo(
-    () => <MemoryDisclosureButton disclosure={memoryDisclosure} />,
-    [memoryDisclosure],
+    () => (
+      <div className={styles.memoryControls}>
+        <MemoryActivationButton enabled={memoryEnabled} onChange={setMemoryEnabled} />
+        {latestMemory === undefined ? null : (
+          <MemoryDisclosureButton disclosure={memoryDisclosure} />
+        )}
+      </div>
+    ),
+    [latestMemory, memoryDisclosure, memoryEnabled, setMemoryEnabled],
   );
   const questionAnchorsRef = useRef(new Map<string, HTMLDivElement>());
   const [focusedQuestionId, setFocusedQuestionId] = useState<string | null>(null);

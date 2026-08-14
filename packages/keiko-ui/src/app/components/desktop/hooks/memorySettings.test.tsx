@@ -11,10 +11,10 @@ afterEach(() => {
 });
 
 describe("conversation memory settings store", () => {
-  it("uses the safe mode default on the one existing settings store", () => {
+  it("defaults memory inclusion off until the user explicitly enables it", () => {
     const { result } = renderHook(() => useConversationMemorySettings());
     expect(result.current).toMatchObject({
-      memoryEnabled: true,
+      memoryEnabled: false,
       memoryBudgetTokens: 1200,
       memoryMode: "governed-assist",
     });
@@ -34,6 +34,31 @@ describe("conversation memory settings store", () => {
       first.result.current.setMemoryMode("supervised-coding");
     });
     expect(first.result.current).toBe(unchangedSnapshot);
+  });
+
+  it("isolates memory inclusion and budgets by conversation", () => {
+    const privateChat = renderHook(() => useConversationMemorySettings("chat-private"));
+    const businessChat = renderHook(() => useConversationMemorySettings("chat-business"));
+
+    act(() => {
+      privateChat.result.current.setMemoryEnabled(true);
+      privateChat.result.current.setMemoryBudgetTokens(2400);
+    });
+
+    expect(privateChat.result.current).toMatchObject({
+      memoryEnabled: true,
+      memoryBudgetTokens: 2400,
+    });
+    expect(businessChat.result.current).toMatchObject({
+      memoryEnabled: false,
+      memoryBudgetTokens: 1200,
+    });
+
+    act(() => {
+      privateChat.result.current.setMemoryMode("supervised-coding");
+    });
+    expect(privateChat.result.current.memoryMode).toBe("supervised-coding");
+    expect(businessChat.result.current.memoryMode).toBe("supervised-coding");
   });
 
   it("restores the safe default through the existing reset seam", () => {

@@ -90,7 +90,7 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
   // chat has not been named yet". It must survive the snapshot: a dropped marker would be
   // re-derived from the title TEXT on the next reload, which is the display-string dependency it
   // was introduced to remove.
-  chat: ["chatId", CHAT_TITLE_IS_DEFAULT_CFG_KEY],
+  chat: ["chatId", "memoryEnabled", "projectPath", CHAT_TITLE_IS_DEFAULT_CFG_KEY],
   editor: ["openFiles", "layoutJson", "rootSessionsJson"],
   files: ["activeFilePath", "activeDirectoryPath", "resolvedRoot"],
   figma: ["snapshotRunId", "selectedScreenIdsJson", "selectedScreenName"],
