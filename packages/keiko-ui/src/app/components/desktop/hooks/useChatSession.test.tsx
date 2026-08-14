@@ -2971,6 +2971,60 @@ describe("useChatSession canonical Voice FIFO", () => {
     windowA.unmount();
   });
 
+  it("reconciles a fallback delivery into the remounted target chat session", async () => {
+    const chatA = chat({ id: "chat-a", updatedAt: 2 });
+    const chatB = chat({ id: "chat-b", updatedAt: 1 });
+    const firstRequest = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    const fallbackRequest = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    vi.mocked(sendDesktopChat)
+      .mockImplementationOnce((_request, signal) => {
+        signal?.addEventListener(
+          "abort",
+          () => firstRequest.reject(new DOMException("cancelled", "AbortError")),
+          { once: true },
+        );
+        return firstRequest.promise;
+      })
+      .mockReturnValueOnce(fallbackRequest.promise);
+    const fallbackWindow = await setupVoiceQueueSession([chatA, chatB]);
+    const targetWindow = await setupVoiceQueueSession([chatA, chatB]);
+    await act(async () => targetWindow.result.current.openChat(chatB));
+    let delivery: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      delivery = targetWindow.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("survives remount", "voice-remount", chatB),
+      );
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+
+    targetWindow.unmount();
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledTimes(2));
+    const replacement = await setupVoiceQueueSession([chatA, chatB]);
+    await act(async () => replacement.result.current.openChat(chatB));
+    vi.mocked(fetchChatMessages).mockResolvedValue({
+      messages: [
+        message({ id: "voice-remount-user", chatId: chatB.id, content: "survives remount" }),
+        message({
+          id: "voice-remount-assistant",
+          chatId: chatB.id,
+          content: "Answer: survives remount",
+          role: "assistant",
+        }),
+      ],
+    });
+
+    fallbackRequest.resolve(completedTurn("survives remount", "voice-remount-assistant", chatB.id));
+    await act(async () => {
+      await delivery;
+    });
+
+    expect(replacement.result.current.messages).toContainEqual(
+      expect.objectContaining({ id: "voice-remount-assistant", chatId: chatB.id }),
+    );
+    replacement.unmount();
+    fallbackWindow.unmount();
+  });
+
   it("delivers each queued turn through the chat session that accepted it", async () => {
     const chatA = chat({ id: "chat-a", updatedAt: 2 });
     const chatB = chat({ id: "chat-b", updatedAt: 1 });

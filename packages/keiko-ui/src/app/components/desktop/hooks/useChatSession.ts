@@ -1163,6 +1163,8 @@ interface CanonicalVoiceDeliveryRuntimeRegistration {
   readonly sendRef: { current: SendMessage | null };
   readonly waitForSendSlotRef: { current: (signal: AbortSignal) => Promise<void> };
   readonly onDeliveryDelayed: () => void;
+  readonly activeChatIdRef: { current: string | undefined };
+  readonly reconcilePersistedTarget: (target: CanonicalVoiceSendTarget) => Promise<void>;
 }
 
 interface SelectedCanonicalVoiceDeliveryRuntime {
@@ -1174,11 +1176,16 @@ function selectCanonicalVoiceDeliveryRuntime(
   item: CanonicalVoiceQueueItem,
   fallbackOwner: symbol,
 ): SelectedCanonicalVoiceDeliveryRuntime | undefined {
-  const owner = canonicalVoicePageOutbox.runtimes.has(item.deliveryOwner)
-    ? item.deliveryOwner
-    : fallbackOwner;
-  const registration = canonicalVoicePageOutbox.runtimes.get(owner);
-  return registration === undefined ? undefined : { owner, registration };
+  const targetChatId = item.target.chat.id;
+  const original = canonicalVoicePageOutbox.runtimes.get(item.deliveryOwner);
+  if (original?.activeChatIdRef.current === targetChatId) {
+    return { owner: item.deliveryOwner, registration: original };
+  }
+  for (const [owner, registration] of canonicalVoicePageOutbox.runtimes) {
+    if (registration.activeChatIdRef.current === targetChatId) return { owner, registration };
+  }
+  const fallback = canonicalVoicePageOutbox.runtimes.get(fallbackOwner);
+  return fallback === undefined ? undefined : { owner: fallbackOwner, registration: fallback };
 }
 
 interface CanonicalVoiceDeliveryRuntime {
@@ -1289,6 +1296,21 @@ async function deliverCanonicalVoiceQueueItem(
     if (!(await waitForCanonicalVoiceRetry(runtime.signal))) break;
   }
   return { kind: "aborted" };
+}
+
+async function reconcileCanonicalVoiceTargetRuntimes(
+  item: CanonicalVoiceQueueItem,
+  deliveryOwner: symbol,
+  delivery: CanonicalVoiceQueueDelivery,
+): Promise<void> {
+  if (delivery.kind !== "terminal" || !canonicalVoiceOutcomeIsPersisted(delivery.outcome)) return;
+  const reconciliations: Promise<void>[] = [];
+  for (const [owner, registration] of canonicalVoicePageOutbox.runtimes) {
+    if (owner !== deliveryOwner && registration.activeChatIdRef.current === item.target.chat.id) {
+      reconciliations.push(registration.reconcilePersistedTarget(item.target));
+    }
+  }
+  await Promise.all(reconciliations);
 }
 
 export interface UseChatSessionResult {
@@ -3649,12 +3671,46 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   sendMessageRef.current = sendMessage;
 
+  const reconcilePersistedCanonicalVoiceTarget = useCallback(
+    async (target: CanonicalVoiceSendTarget): Promise<void> => {
+      const chatId = target.chat.id;
+      try {
+        const [messagePayload, chatsPayload] = await Promise.all([
+          fetchChatMessages(chatId, target.project.path),
+          fetchChats(target.project.path),
+        ]);
+        if (!mountedRef.current || activeChatIdRef.current !== chatId) return;
+        const refreshedActive = chatsPayload.chats.find((chat) => chat.id === chatId);
+        setState((previous) =>
+          previous.activeChat?.id !== chatId
+            ? previous
+            : {
+                ...previous,
+                messages: mergeCanonicalVoiceProjections(
+                  messagePayload.messages,
+                  chatId,
+                  canonicalVoiceProjectionRef.current,
+                ),
+                chats: sortChats(chatsPayload.chats),
+                activeChat: refreshedActive ?? previous.activeChat,
+              },
+        );
+      } catch (error_) {
+        if (mountedRef.current && activeChatIdRef.current === chatId)
+          setError(errorMessage(error_));
+      }
+    },
+    [canonicalVoiceProjectionRef],
+  );
+
   useEffect(() => {
     const owner = canonicalVoiceQueueOwnerRef.current;
     const registration: CanonicalVoiceDeliveryRuntimeRegistration = {
       sendRef: sendMessageRef,
       waitForSendSlotRef: waitForCanonicalVoiceSendSlotRef,
       onDeliveryDelayed: () => setError(CANONICAL_VOICE_PENDING_ERROR),
+      activeChatIdRef,
+      reconcilePersistedTarget: reconcilePersistedCanonicalVoiceTarget,
     };
     canonicalVoicePageOutbox.runtimes.set(owner, registration);
     wakeCanonicalVoicePageOutbox();
@@ -3666,7 +3722,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       if (activeDelivery?.runtimeOwner === owner) activeDelivery.abort();
       wakeCanonicalVoicePageOutbox();
     };
-  }, []);
+  }, [reconcilePersistedCanonicalVoiceTarget]);
 
   const releaseCanonicalVoiceProjection = useCallback(
     (item: CanonicalVoiceQueueItem): void => {
@@ -3706,7 +3762,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         abort: abortItem,
       };
       try {
-        return await deliverCanonicalVoiceQueueItem(item, {
+        const delivery = await deliverCanonicalVoiceQueueItem(item, {
           signal: itemController.signal,
           send: sender,
           waitForSendSlot: () =>
@@ -3716,6 +3772,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             releaseCanonicalVoiceProjection(item);
           },
         });
+        await reconcileCanonicalVoiceTargetRuntimes(item, selectedRuntime.owner, delivery);
+        return delivery;
       } finally {
         signal.removeEventListener("abort", abortItem);
         if (canonicalVoicePageOutbox.activeDelivery?.key === item.key) {

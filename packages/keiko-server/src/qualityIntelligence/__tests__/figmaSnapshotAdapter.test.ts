@@ -440,6 +440,46 @@ describe("makeFigmaVisionHintProvider", () => {
     }
   });
 
+  it("omits strict response format when the image model lacks structured output", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-vision-tolerant-"));
+    const seenRequests: GatewayRequest[] = [];
+    try {
+      const { loaded, screen } = recordVisionSnapshot(dir);
+      const port: ModelPort = {
+        call: (request) => {
+          seenRequests.push(request);
+          return Promise.resolve(normalizedResponse(JSON.stringify({ hints: ["Visible CTA"] })));
+        },
+      };
+      const deps = depsWith({
+        config: configWith([
+          capability("vision", {
+            structuredOutput: false,
+            supportsImageInput: true,
+            supportsResponseFormat: true,
+          }),
+        ]),
+        configPresent: true,
+        evidenceDir: dir,
+        modelPortFactory: () => port,
+      });
+
+      await expect(
+        makeFigmaVisionHintProvider(deps)({
+          snapshotRunId: loaded.runId,
+          screenId: screen.screenId,
+          image: screen.image,
+          imageRelativePath: screen.image.relativePath,
+          baselineText: "Screen: Login [s1]",
+        }),
+      ).resolves.toEqual(["Visible CTA"]);
+      expect(seenRequests).toHaveLength(1);
+      expect(seenRequests[0]?.responseFormat).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("accepts strict JSON returned inside a markdown code fence", async () => {
     const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-vision-fenced-json-"));
     try {

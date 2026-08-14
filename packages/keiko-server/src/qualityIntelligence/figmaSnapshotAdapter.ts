@@ -296,6 +296,7 @@ function makeGatewayFigmaVisionCall(
     );
     const structuredOutput =
       closureModelSelection?.modelId === modelId &&
+      closureModelSelection.capability.structuredOutput &&
       closureModelSelection.capability.supportsResponseFormat === true;
     const gatewayRequest = buildVisionRequest(
       request,
