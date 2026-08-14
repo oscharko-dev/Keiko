@@ -60,8 +60,7 @@ function createFakeHotExitStore(): FakeHotExitStore {
   const deletes: string[] = [];
   const store: EditorHotExitStore = {
     snapshotRefFor,
-    write(snapshot) {
-      const snapshotRef = snapshotRefFor(snapshot.workspaceRoot, snapshot.relativePath);
+    write(snapshot, snapshotRef) {
       writes.push(snapshot);
       snapshots.set(snapshotRef, storedSnapshot(snapshot));
       return { snapshotRef, contentSizeBytes: Buffer.byteLength(snapshot.content, "utf8") };
@@ -223,5 +222,35 @@ describe("editor hot-exit routes", () => {
     });
     expect(fake.deletes).toHaveLength(0);
     expect(matchedRead).toMatchObject({ status: 200, body: { found: true } });
+  });
+
+  // KEIKO-0209: write() must persist under the same resolved-root + normalized-path ref that
+  // read/delete always recompute via expectedSnapshotRef/validateSnapshotBinding, not under a ref
+  // recomputed a second time from the raw, un-normalized client fields. A non-canonical
+  // relativePath ("./src/app.ts") exercises this: normalizeRelativePath collapses it to
+  // "src/app.ts", so a write path that bypasses normalization stores under a different ref than
+  // every subsequent read/delete for the identical file expects.
+  it("roundtrips write-then-read for a non-canonical relative path", async () => {
+    const fake = createFakeHotExitStore();
+
+    const write = await handleEditorHotExitWrite(
+      postContext("/api/editor/hot-exit/write", {
+        snapshot: snapshot({ relativePath: "./src/app.ts" }),
+      }),
+      deps(fake.store),
+    );
+    const snapshotRef = (write.body as { readonly snapshotRef: string }).snapshotRef;
+
+    const read = await handleEditorHotExitRead(
+      postContext("/api/editor/hot-exit/read", {
+        workspaceRoot: root,
+        relativePath: "./src/app.ts",
+        snapshotRef,
+      }),
+      deps(fake.store),
+    );
+
+    expect(write.status).toBe(200);
+    expect(read).toMatchObject({ status: 200, body: { found: true } });
   });
 });

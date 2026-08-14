@@ -110,7 +110,7 @@ export async function handleEditorHotExitWrite(
         body: { snapshotRef, contentSizeBytes: 0, suppressed: true },
       };
     }
-    const result = deps.editorHotExitStore.write(snapshot);
+    const result = deps.editorHotExitStore.write(snapshot, snapshotRef);
     return { status: 200, body: result };
   });
 }

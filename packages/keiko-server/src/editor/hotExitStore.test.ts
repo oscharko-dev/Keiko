@@ -49,10 +49,16 @@ describe("editor hot-exit server store", () => {
       stateDir,
       env: { KEIKO_EDITOR_HOT_EXIT_KEY: VAULT_KEY },
     });
-    const stored = snapshot();
+    // updatedAt must be realistic (near the real clock): write() now prunes against the server's
+    // own Date.now() (KEIKO-0367), so a synthetic epoch-relative timestamp would already read as
+    // TTL-expired and be reaped on write.
+    const stored = snapshot({ updatedAt: Date.now() });
 
-    const result = store.write(stored);
-    const recovered = store.read(result.snapshotRef, 1_001);
+    const result = store.write(
+      stored,
+      store.snapshotRefFor(stored.workspaceRoot, stored.relativePath),
+    );
+    const recovered = store.read(result.snapshotRef, stored.updatedAt + 1);
 
     expect(result.snapshotRef).toMatch(/^hot-exit:[a-f0-9]{64}$/u);
     expect(result.snapshotRef).not.toContain("/repo");
@@ -69,7 +75,11 @@ describe("editor hot-exit server store", () => {
       stateDir,
       env: { KEIKO_EDITOR_HOT_EXIT_KEY: VAULT_KEY },
     });
-    const result = store.write(snapshot({ updatedAt: 1 }));
+    const seeded = snapshot({ updatedAt: 1 });
+    const result = store.write(
+      seeded,
+      store.snapshotRefFor(seeded.workspaceRoot, seeded.relativePath),
+    );
 
     expect(store.read(result.snapshotRef, EDITOR_HOT_EXIT_TTL_MS + 2)).toBeNull();
     expect(store.read(result.snapshotRef, 1_001)).toBeNull();
@@ -81,7 +91,11 @@ describe("editor hot-exit server store", () => {
       stateDir,
       env: { KEIKO_EDITOR_HOT_EXIT_KEY: VAULT_KEY },
     });
-    const result = original.write(snapshot());
+    const seeded = snapshot();
+    const result = original.write(
+      seeded,
+      original.snapshotRefFor(seeded.workspaceRoot, seeded.relativePath),
+    );
     const rotated = createEditorHotExitStore({
       stateDir,
       env: { KEIKO_EDITOR_HOT_EXIT_KEY: ROTATED_VAULT_KEY },
@@ -94,24 +108,64 @@ describe("editor hot-exit server store", () => {
 
   it("skips undecryptable old entries while writing a fresh snapshot", () => {
     const stateDir = tempStateDir();
-    createEditorHotExitStore({
+    const original = createEditorHotExitStore({
       stateDir,
       env: { KEIKO_EDITOR_HOT_EXIT_KEY: VAULT_KEY },
-    }).write(snapshot());
+    });
+    const seeded = snapshot();
+    original.write(seeded, original.snapshotRefFor(seeded.workspaceRoot, seeded.relativePath));
     const rotated = createEditorHotExitStore({
       stateDir,
       env: { KEIKO_EDITOR_HOT_EXIT_KEY: ROTATED_VAULT_KEY },
     });
+    // updatedAt must be realistic (near the real clock) for the same reason as above: write()
+    // prunes against Date.now(), so a synthetic epoch-relative timestamp would be reaped on write.
     const next = snapshot({
       relativePath: "src/next.ts",
       content: "next edit\n",
-      updatedAt: 2_000,
+      updatedAt: Date.now(),
     });
 
-    const result = rotated.write(next);
+    const result = rotated.write(
+      next,
+      rotated.snapshotRefFor(next.workspaceRoot, next.relativePath),
+    );
 
-    expect(rotated.read(result.snapshotRef, 2_001)?.content).toBe("next edit\n");
+    expect(rotated.read(result.snapshotRef, next.updatedAt + 1)?.content).toBe("next edit\n");
     const vaultBytes = readFileSync(join(stateDir, "editor-hot-exit", "snapshots.vault"), "utf8");
     expect(vaultBytes).not.toContain("next edit");
+  });
+
+  // KEIKO-0367: the write-time budget prune must use the server's own clock, never the untrusted
+  // client-supplied snapshot.updatedAt, as "now" when deciding whether OTHER entries in the shared
+  // store have expired. A single write carrying an anomalously far-future updatedAt (clock skew,
+  // unit-confusion bug) must not be able to evict every other currently-cached snapshot.
+  it("does not evict other entries when a write carries a far-future client timestamp", () => {
+    const stateDir = tempStateDir();
+    const store = createEditorHotExitStore({
+      stateDir,
+      env: { KEIKO_EDITOR_HOT_EXIT_KEY: VAULT_KEY },
+    });
+    const now = Date.now();
+    const firstSnapshot = snapshot({ relativePath: "src/first.ts", updatedAt: now });
+    const secondSnapshot = snapshot({ relativePath: "src/second.ts", updatedAt: now });
+    const first = store.write(
+      firstSnapshot,
+      store.snapshotRefFor(firstSnapshot.workspaceRoot, firstSnapshot.relativePath),
+    );
+    const second = store.write(
+      secondSnapshot,
+      store.snapshotRefFor(secondSnapshot.workspaceRoot, secondSnapshot.relativePath),
+    );
+
+    const tenYearsMs = 10 * 365 * 24 * 60 * 60 * 1_000;
+    const thirdSnapshot = snapshot({ relativePath: "src/third.ts", updatedAt: now + tenYearsMs });
+    store.write(
+      thirdSnapshot,
+      store.snapshotRefFor(thirdSnapshot.workspaceRoot, thirdSnapshot.relativePath),
+    );
+
+    expect(store.read(first.snapshotRef)?.content).toBe(snapshot().content);
+    expect(store.read(second.snapshotRef)?.content).toBe(snapshot().content);
   });
 });

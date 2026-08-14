@@ -42,7 +42,10 @@ export interface EditorHotExitWriteResult {
 
 export interface EditorHotExitStore {
   readonly snapshotRefFor: (workspaceRoot: string, relativePath: string) => string;
-  readonly write: (snapshot: EditorHotExitSnapshotV1) => EditorHotExitWriteResult;
+  readonly write: (
+    snapshot: EditorHotExitSnapshotV1,
+    snapshotRef: string,
+  ) => EditorHotExitWriteResult;
   readonly read: (snapshotRef: string, nowMs?: number) => EditorHotExitStoredSnapshot | null;
   readonly delete: (snapshotRef: string) => void;
 }
@@ -238,8 +241,7 @@ export function createEditorHotExitStore(
 
   return {
     snapshotRefFor,
-    write(snapshot): EditorHotExitWriteResult {
-      const ref = snapshotRefFor(snapshot.workspaceRoot, snapshot.relativePath);
+    write(snapshot, ref): EditorHotExitWriteResult {
       const payload = payloadFor(snapshot);
       const activeVault = getVault();
       const index = getMetaIndex(activeVault);
@@ -248,7 +250,11 @@ export function createEditorHotExitStore(
         contentSizeBytes: payload.contentSizeBytes,
         updatedAt: payload.updatedAt,
       });
-      prune(activeVault, snapshot.updatedAt, ref);
+      // Use the server's own clock, never the untrusted client-supplied snapshot.updatedAt, to
+      // decide whether OTHER entries in the shared store have expired -- matching read()'s
+      // Date.now() default. Otherwise a single anomalous (e.g. far-future) client timestamp could
+      // evict every other cached snapshot process-wide.
+      prune(activeVault, Date.now(), ref);
       // prune may have evicted the incoming ref if it alone exceeds the budget; only persist and keep
       // the metadata entry when it survived pruning.
       if (index.has(ref)) {
