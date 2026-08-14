@@ -409,15 +409,17 @@ describe("workspace search/replace guard coverage", () => {
     expectInvalidWithReason(validateWorkspaceReplaceApplyRequest(applyRequest({ root })), "root");
   });
 
+  type ApplyFile = WorkspaceReplaceApplyRequest["files"][number];
+
+  function applyFile(overrides: Partial<ApplyFile> = {}): ApplyFile {
+    return { ...applyRequest().files[0], ...overrides } as ApplyFile;
+  }
+
   it.each(["../escape.ts", "/etc/passwd", "src/../../escape.ts", "src\\a.ts", "a\u0000.ts"])(
     "rejects the traversal-shaped apply file path %j",
     (path) => {
       expectInvalidWithReason(
-        validateWorkspaceReplaceApplyRequest(
-          applyRequest({
-            files: [{ ...applyRequest().files[0], path }],
-          }),
-        ),
+        validateWorkspaceReplaceApplyRequest(applyRequest({ files: [applyFile({ path })] })),
         "file path",
       );
     },
@@ -430,9 +432,7 @@ describe("workspace search/replace guard coverage", () => {
   it("rejects an edit whose baseContentHash is not a sha256 hex digest", () => {
     expect(
       validateWorkspaceReplaceApplyRequest(
-        applyRequest({
-          files: [{ ...applyRequest().files[0], baseContentHash: "not-a-hash" }],
-        }),
+        applyRequest({ files: [applyFile({ baseContentHash: "not-a-hash" })] }),
       ).ok,
     ).toBe(false);
   });

@@ -210,6 +210,7 @@ const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]+$/u;
 const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
 // C0 controls plus DEL. A newline or ESC in an identifier that is later interpolated into a log
 // line or an SSE `data:` field is a log-injection / frame-splitting primitive.
+// eslint-disable-next-line no-control-regex -- rejecting C0/DEL in an identifier is the point
 const CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/u;
 
 function isNonEmptyString(value: unknown): value is string {

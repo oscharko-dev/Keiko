@@ -152,6 +152,14 @@ function validateCommandSource(value: unknown, path: string, errors: string[]): 
   if (typeof value.path === "string" && !isWorkspaceRelativeCapabilityPath(value.path)) {
     errors.push(`${path}.path must be workspace-relative`);
   }
+  validateCommandSourceOptionals(value, path, errors);
+}
+
+function validateCommandSourceOptionals(
+  value: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): void {
   if (value.commandKind !== undefined && !isOneOf(value.commandKind, RUNTIME_COMMAND_KINDS)) {
     errors.push(`${path}.commandKind is invalid`);
   }

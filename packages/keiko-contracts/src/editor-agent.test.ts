@@ -2049,7 +2049,7 @@ describe("editor agent action payload bounds", () => {
         },
         newText,
       })),
-    } as Partial<EditorAgentAction>);
+    });
   }
 
   it("rejects an applyTextEdits action whose edit array exceeds the changeset cap", () => {
@@ -2083,7 +2083,7 @@ describe("editor agent action payload bounds", () => {
               newText: "b",
             },
           ],
-        } as Partial<EditorAgentAction>),
+        }),
       ),
     ).toBe(true);
   });
@@ -2094,7 +2094,7 @@ describe("editor agent action payload bounds", () => {
         baseAction({
           type: "applyPatch",
           patch: "x".repeat(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES + 1),
-        } as Partial<EditorAgentAction>),
+        }),
       ),
     ).toBe(false);
   });

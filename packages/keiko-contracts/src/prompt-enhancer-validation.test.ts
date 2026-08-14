@@ -221,7 +221,7 @@ describe("validatePromptTaskAnalysis", () => {
   it("accepts an analyzer-produced analysis for every missing-context topic it can emit", () => {
     const sparse = analyzePrompt({
       ...validRequest(),
-      rawPrompt: "do it",
+      input: { text: "do it", hasConnectedContext: false },
     });
     expect(sparse.missingContext.length).toBeGreaterThan(0);
     expect(validatePromptTaskAnalysis(sparse).ok).toBe(true);

@@ -34,6 +34,6 @@ function freezeInto(value: unknown, seen: WeakSet<object>): void {
  * decision. For a flat record, `Object.freeze` alone is sufficient and clearer.
  */
 export function deepFreeze<T>(value: T): T {
-  freezeInto(value, new WeakSet<object>());
+  freezeInto(value, new WeakSet());
   return value;
 }

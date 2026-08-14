@@ -548,7 +548,7 @@ describe("Atlassian connector egress posture", () => {
       baseUrl: "https://acme.example",
       authRef: AUTH_REF,
       credentials: resolver(),
-      egress: () => ({ ...PERMISSIVE_GATEWAY_EGRESS, noProxy: "acme.example" }),
+      egress: () => ({ ...PERMISSIVE_GATEWAY_EGRESS, noProxy: ["acme.example"] }),
       fetchImpl,
     })({ method: "GET", url: "https://acme.example/rest/api/3/myself", timeoutMs: 30_000 });
     expect(result).toEqual({ kind: "response", status: 200 });
