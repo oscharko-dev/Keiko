@@ -109,7 +109,7 @@ async function expectPersistedCount(
 }
 
 async function openMemoryWindow(page: Page): Promise<Locator> {
-  await page.getByRole("button", { name: "MemoriaViva" }).click();
+  await page.getByRole("button", { name: "MemoriaViva", exact: true }).click();
   const window = page.getByRole("region", { name: "MemoriaViva" });
   await expect(window.getByRole("heading", { name: "MemoriaViva" })).toBeVisible();
   return window;
@@ -150,7 +150,6 @@ async function exerciseDeniedCaptures(context: JournalJourneyContext): Promise<v
   const memorySwitch = memoryWindow.getByRole("switch", {
     name: "Use MemoriaViva in chat requests",
   });
-  await memorySwitch.click();
   await expect(memorySwitch).toHaveAttribute("aria-checked", "false");
   await context.page.getByRole("button", { name: "Close MemoriaViva window" }).click();
   await sendTurn(context.chatWindow, "This disabled-memory turn must not create a Journal entry.");

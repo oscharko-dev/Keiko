@@ -215,7 +215,7 @@ async function openRoundTripSurfaces(page: Page): Promise<RoundTripSurfaces> {
   await page.goto("/");
   await openEditorWorkspace(page);
   const editorWindow = page.locator(`.window[data-window-id="${EDITOR_WINDOW_ID}"]`);
-  const chatWindow = page.getByRole("region", { name: `Chat — ${CHAT_TITLE}` });
+  const chatWindow = page.locator(`.window[data-window-id="${CHAT_WINDOW_ID}"]`);
   await expect(editorWindow.locator(".monaco-editor").first()).toBeVisible();
   await expect(chatWindow.getByRole("textbox", { name: "Chat message" })).toBeVisible();
   await expect(chatWindow.getByRole("button", { name: "Apply to editor" })).toHaveCount(2);
@@ -349,19 +349,20 @@ async function proveSelectionHandoff(
   await selectStrictSubstring(page, surfaces.editorWindow);
   await expectSelectionSnapshot(request, fixture);
   await invokeAskCommand(page);
+  const handoffChatWindow = page.locator('section.window[data-top="true"]');
   const prompt = await waitForPersistedPrompt(request, fixture);
   expect(prompt).toContain(`Root-relative file (JSON): "${RELATIVE_PATH}"`);
   expect(prompt).toContain("Range: L3:C1-L3:C10");
   expect(prompt).toContain(`Selection (JSON):\n"${SELECTED_TEXT}"`);
   expect(prompt).not.toContain(BEFORE_SENTINEL);
   expect(prompt).not.toContain(AFTER_SENTINEL);
-  const promptBubble = surfaces.chatWindow
+  const promptBubble = handoffChatWindow
     .locator('article.chat-msg[data-role="user"]')
     .filter({ hasText: PROMPT_PREFIX })
     .last();
   await expect(promptBubble).toBeVisible();
   await expect(promptBubble.locator(".chat-msg-content")).toHaveText(prompt);
-  await expect(surfaces.chatWindow.getByText(new RegExp(REPLY_MARKER, "u")).last()).toBeVisible({
+  await expect(handoffChatWindow.getByText(new RegExp(REPLY_MARKER, "u")).last()).toBeVisible({
     timeout: 30_000,
   });
   await expect

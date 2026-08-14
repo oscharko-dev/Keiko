@@ -835,6 +835,12 @@ async function voiceMemoryCaptureFlow(page: Page, request: APIRequestContext): P
     }),
   );
   await openComposer(page);
+  const chatWindow = page.locator('section.window[data-top="true"]');
+  const memoryControl = chatWindow.locator(".chat-memory-activation-toggle");
+  await expect(memoryControl).toHaveAccessibleName("Enable MemoriaViva for this chat");
+  await memoryControl.click();
+  await expect(memoryControl).toHaveAttribute("aria-pressed", "true");
+  await expect(memoryControl).toHaveAccessibleName("Disable MemoriaViva for this chat");
 
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
   await dialogSwitch.click();
