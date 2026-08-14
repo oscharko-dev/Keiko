@@ -208,6 +208,32 @@ describe("ConnectionsLayer per-chat activity", () => {
     vi.useRealTimers();
   });
 
+  it("preserves the last grounded intensity while the next send is in flight", async () => {
+    const heavyActivity: ChatWindowGroundingActivity = {
+      groundingKind: "connected-context",
+      contextPack: { usage: { filesRead: 4, excerptBytes: 512 } },
+    };
+    const view = render(
+      <>
+        <ChatActivity id="chat-1" sending={false} latest={heavyActivity} />
+        <ConnectionsLayer wins={wins} conns={conns} connecting={null} api={api()} />
+      </>,
+    );
+    expect(document.querySelector("#conn-path-c-1")).toHaveAttribute("data-intensity", "heavy");
+
+    view.rerender(
+      <>
+        <ChatActivity id="chat-1" sending />
+        <ConnectionsLayer wins={wins} conns={conns} connecting={null} api={api()} />
+      </>,
+    );
+
+    await waitFor((): void =>
+      expect(document.querySelector("#conn-path-c-1")).toHaveAttribute("data-active", "true"),
+    );
+    expect(document.querySelector("#conn-path-c-1")).toHaveAttribute("data-intensity", "heavy");
+  });
+
   it("clears a grounded channel immediately when its activity is cleared", async () => {
     const activity: ChatWindowGroundingActivity = {
       groundingKind: "connected-context",

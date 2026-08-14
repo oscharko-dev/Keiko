@@ -96,7 +96,6 @@ function useChannelFlow(
   const [afterglow, setAfterglow] = useState(false);
   useEffect((): (() => void) | undefined => {
     if (latest === undefined) {
-      setIntensity("light");
       setAfterglow(false);
       return;
     }

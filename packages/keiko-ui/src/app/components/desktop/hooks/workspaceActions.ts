@@ -370,23 +370,69 @@ function allocateNewWindow(args: NewWindowAllocationArgs): {
   };
 }
 
+function reusesExistingWindow(
+  list: readonly AppWindow[],
+  type: WindowType,
+  cfg: AppWindow["cfg"] | undefined,
+): boolean {
+  if (WIN_TYPES[type].singleton === true) return list.some((window) => window.type === type);
+  let identityKey: "chatId" | "runId" | undefined;
+  if (type === "qiRun") identityKey = "runId";
+  if (type === "chat") identityKey = "chatId";
+  if (identityKey === undefined) return false;
+  const identity = cfg?.[identityKey];
+  return (
+    typeof identity === "string" &&
+    identity.length > 0 &&
+    list.some((window) => window.type === type && window.cfg[identityKey] === identity)
+  );
+}
+
+function newWindowGeometry(
+  type: WindowType,
+  cfg: AppWindow["cfg"] | undefined,
+): {
+  readonly defaultH: number;
+  readonly defaultMinH: number;
+  readonly defaultMinW: number;
+  readonly defaultW: number;
+} {
+  const typeDefinition = WIN_TYPES[type];
+  const isFigmaView =
+    type === "figma" &&
+    typeof cfg?.["selectedScreenIdsJson"] === "string" &&
+    cfg["selectedScreenIdsJson"].length > 0;
+  const figmaView = WIN_TYPES.figmaView;
+  return {
+    defaultW: isFigmaView ? figmaView.w : typeDefinition.w,
+    defaultH: isFigmaView ? figmaView.h : typeDefinition.h,
+    defaultMinW: isFigmaView
+      ? Math.max(typeDefinition.min.w, figmaView.min.w)
+      : typeDefinition.min.w,
+    defaultMinH: isFigmaView
+      ? Math.max(typeDefinition.min.h, figmaView.min.h)
+      : typeDefinition.min.h,
+  };
+}
+
 function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
   const { setWins, zc, worldVP } = args;
   return (type, cfg) => {
     const t = WIN_TYPES[type];
-    const isFigmaView =
-      type === "figma" &&
-      typeof cfg?.["selectedScreenIdsJson"] === "string" &&
-      cfg["selectedScreenIdsJson"].length > 0;
+    const currentWins = args.winsRef?.current;
+    if (
+      currentWins !== undefined &&
+      currentWins.length >= MAX_WORKSPACE_WINDOWS &&
+      !reusesExistingWindow(currentWins, type, cfg)
+    ) {
+      if (worldVP() !== null) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
+      return null;
+    }
     // GEN-DUP-NEAR-007 — source the scoped Figma-view card geometry from its registry entry
     // (WIN_TYPES.figmaView) instead of duplicating the literals here. The Math.max clamp against
     // the figma-manager type's minimums (`t`) is preserved, so the effective defaults are
     // unchanged (fv.min.w=300 → Math.max(320,300)=320; fv.min.h=260 → Math.max(360,260)=360).
-    const fv = WIN_TYPES.figmaView;
-    const defaultW = isFigmaView ? fv.w : t.w;
-    const defaultH = isFigmaView ? fv.h : t.h;
-    const defaultMinW = isFigmaView ? Math.max(t.min.w, fv.min.w) : t.min.w;
-    const defaultMinH = isFigmaView ? Math.max(t.min.h, fv.min.h) : t.min.h;
+    const { defaultW, defaultH, defaultMinW, defaultMinH } = newWindowGeometry(type, cfg);
     let createdId: string | null = null;
     let windowLimitReached = false;
     setWins((ws) => {

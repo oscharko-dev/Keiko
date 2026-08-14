@@ -1745,6 +1745,26 @@ describe("makeMutations.add — per-conversation Chat windows", () => {
     expect(wins?.find((window) => window.id === "chat-window-0")?.minimized).toBe(false);
   });
 
+  it("reports a live window-cap rejection before React evaluates a deferred updater", () => {
+    const wins = Array.from({ length: MAX_WORKSPACE_WINDOWS }, (_, index) =>
+      win("chat", { chatId: `chat-${String(index)}` }, `chat-window-${String(index)}`),
+    );
+    const winsRef: MutableRefObject<AppWindow[]> = { current: wins };
+    const setWins = vi.fn<Dispatch<SetStateAction<AppWindow[] | null>>>();
+    const onWindowLimitReached = vi.fn();
+    const { add } = makeMutations({
+      onWindowLimitReached,
+      setWins,
+      winsRef,
+      zc: { current: MAX_WORKSPACE_WINDOWS },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    expect(add("chat", { chatId: "overflow-chat" })).toBeNull();
+    expect(onWindowLimitReached).toHaveBeenCalledExactlyOnceWith(MAX_WORKSPACE_WINDOWS);
+    expect(setWins).not.toHaveBeenCalled();
+  });
+
   it("preserves an explicit memory preference while defaulting a new chat window off", () => {
     let wins: AppWindow[] | null = [];
     const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {

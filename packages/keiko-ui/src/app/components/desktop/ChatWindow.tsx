@@ -4482,6 +4482,11 @@ function MemoryActivationButton({
   );
 }
 
+export function normalizeMemoryBudgetInput(value: string): number {
+  const next = Number(value);
+  return Number.isFinite(next) && next > 0 ? Math.floor(next) : 0;
+}
+
 function MemoryBudgetSetting({
   budgetTokens,
   setBudgetTokens,
@@ -4495,8 +4500,7 @@ function MemoryBudgetSetting({
   const helpId = `${generatedId}-chat-memory-budget-help`;
   const change = useCallback(
     (event: ChangeEvent<HTMLInputElement>): void => {
-      const next = Number(event.target.value);
-      setBudgetTokens(Number.isFinite(next) && next > 0 ? Math.floor(next) : 0);
+      setBudgetTokens(normalizeMemoryBudgetInput(event.target.value));
     },
     [setBudgetTokens],
   );

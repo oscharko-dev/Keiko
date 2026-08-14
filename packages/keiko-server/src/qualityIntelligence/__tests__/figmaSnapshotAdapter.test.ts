@@ -70,6 +70,17 @@ function configWith(
   );
 }
 
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isUnknownRecord(value)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  return value;
+}
+
 function depsWith(over: Partial<UiHandlerDeps>): UiHandlerDeps {
   return {
     config: undefined,
@@ -190,14 +201,15 @@ function expectStructuredVisionRequest(seenRequests: readonly GatewayRequest[]):
       },
     },
   });
-  const responseFormat = request.responseFormat as {
-    readonly type: "json_schema";
-    readonly schema: Record<string, unknown>;
-  };
-  const schema = responseFormat.schema as
-    { readonly properties?: { readonly hints?: Record<string, unknown> } } | undefined;
-  expect(schema?.properties?.hints).not.toHaveProperty("minItems");
-  expect(schema?.properties?.hints).not.toHaveProperty("maxItems");
+  const responseFormat = request.responseFormat;
+  if (responseFormat?.type !== "json_schema") {
+    throw new TypeError("Vision response format must use json_schema");
+  }
+  const schema = requireRecord(responseFormat.schema, "Vision response schema");
+  const properties = requireRecord(schema.properties, "Vision response properties");
+  const hints = requireRecord(properties.hints, "Vision hints schema");
+  expect(hints).not.toHaveProperty("minItems");
+  expect(hints).not.toHaveProperty("maxItems");
 }
 
 // ─── Snapshot loader ──────────────────────────────────────────────────────────────

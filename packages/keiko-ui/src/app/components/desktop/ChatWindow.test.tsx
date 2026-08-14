@@ -20,6 +20,7 @@ import {
   copyableMessageText,
   messageForSelectedResponseVersion,
   MemoryActionForgetButtons,
+  normalizeMemoryBudgetInput,
   rootDisplayName,
 } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
@@ -2273,6 +2274,18 @@ describe("ChatWindow memory controls", () => {
     const budget = screen.getByLabelText("Memory context budget");
     fireEvent.change(budget, { target: { value: "2400" } });
     expect(setMemoryBudgetTokens).toHaveBeenCalledWith(2400);
+    const normalizationCases: readonly (readonly [string, number])[] = [
+      ["", 0],
+      ["0", 0],
+      ["-100", 0],
+      ["1200.75", 1200],
+      ["1e309", 0],
+    ];
+    for (const [value, expected] of normalizationCases) {
+      fireEvent.change(budget, { target: { value } });
+      expect(normalizeMemoryBudgetInput(value)).toBe(expected);
+      expect(setMemoryBudgetTokens).toHaveBeenLastCalledWith(expected);
+    }
   });
 
   it("routes each memory icon only to its owning chat session", async () => {
