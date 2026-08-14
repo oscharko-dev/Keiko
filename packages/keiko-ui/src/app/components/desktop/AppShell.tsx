@@ -95,10 +95,14 @@ export function prepareNewWindowCfg(
   type: WindowType,
   cfg: Cfg,
   newChatRequestId = crypto.randomUUID(),
+  activeProjectPath?: string,
 ): Cfg {
   return type === "chat"
     ? {
         ...cfg,
+        ...(cfg["projectPath"] === undefined && activeProjectPath !== undefined
+          ? { projectPath: activeProjectPath }
+          : {}),
         chatId: undefined,
         selectionHandoffId: undefined,
         newChatRequestId,
@@ -443,10 +447,33 @@ function reportGroundingMutationFailure(message: string): void {
   window.reportError(new Error(`${message} Correlation ID: ${correlationId}`));
 }
 
+class ChatLookupFailure extends Error {
+  constructor() {
+    super("Chat lookup failed.");
+    this.name = "ChatLookupFailure";
+  }
+}
+
+async function resolveChatForUnbind(
+  resolve: (chatWindowId: string) => Promise<Chat | undefined>,
+  chatWindowId: string,
+): Promise<Chat | undefined> {
+  try {
+    return await resolve(chatWindowId);
+  } catch {
+    reportGroundingMutationFailure("Chat lookup failed.");
+    return undefined;
+  }
+}
+
 function groundingMutationFailureKey(
   error: unknown,
   mutationFailedKey: "chat.grounding.connectSourceFailed" | "chat.grounding.connectKnowledgeFailed",
 ): "chat.grounding.recoveryRequired" | "chat.grounding.timeoutBlocked" | typeof mutationFailedKey {
+  if (error instanceof ChatLookupFailure) {
+    reportGroundingMutationFailure("Chat lookup failed.");
+    return mutationFailedKey;
+  }
   if (error instanceof ChatBindingCompensationFailure) {
     reportGroundingMutationFailure("Chat binding compensation failed.");
     return "chat.grounding.recoveryRequired";
@@ -852,7 +879,7 @@ function AppShellInner(): ReactNode {
         rememberGroundingChat(resolved);
         return resolved;
       } catch {
-        return undefined;
+        throw new ChatLookupFailure();
       }
     },
     [rememberGroundingChat, session.activeChat, session.chats],
@@ -990,7 +1017,7 @@ function AppShellInner(): ReactNode {
         groundingMutationQueueRef.current,
         chatKey,
         async (): Promise<void> => {
-          const chat = await resolveChatForWindow(chatWindowId);
+          const chat = await resolveChatForUnbind(resolveChatForWindow, chatWindowId);
           if (chat === undefined) return;
           const next = removeConnectedScope(effectiveScopes(chat), scope);
           try {
@@ -1095,7 +1122,7 @@ function AppShellInner(): ReactNode {
         groundingMutationQueueRef.current,
         chatKey,
         async (): Promise<void> => {
-          const chat = await resolveChatForWindow(chatWindowId);
+          const chat = await resolveChatForUnbind(resolveChatForWindow, chatWindowId);
           if (chat === undefined) return;
           const key =
             scope.kind === "capsule" ? `capsule:${scope.capsuleId}` : `set:${scope.capsuleSetId}`;
@@ -1288,7 +1315,12 @@ function AppShellInner(): ReactNode {
       if (current === null) return;
       const normalizedCfg = current === "editor" ? normalizeEditorWindowCfg(cfg) : cfg;
       const { __connectFilesId, ...windowCfg } = normalizedCfg;
-      const targetWindowCfg = prepareNewWindowCfg(current, windowCfg);
+      const targetWindowCfg = prepareNewWindowCfg(
+        current,
+        windowCfg,
+        undefined,
+        session.activeProject?.path,
+      );
       const createdId = ws.api.add(current, targetWindowCfg);
       if (
         current === "agents" &&
@@ -1308,7 +1340,7 @@ function AppShellInner(): ReactNode {
         focusCreatedWindow(createdId);
       }
     },
-    [pending, ws.api],
+    [pending, session.activeProject?.path, ws.api],
   );
   const closeDialog = useCallback((): void => setPending(null), []);
   const statusRef = useRef<HTMLElement | null>(null);

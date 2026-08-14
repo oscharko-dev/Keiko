@@ -626,6 +626,23 @@ describe("useChatSession bootstrap", () => {
     );
   });
 
+  it("keeps chat mutation broadcasts inside their owning project catalog", async () => {
+    const projectBChat = chat({ id: "chat-b", projectPath: "/repo-b", updatedAt: 20 });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo-b")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [projectBChat] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      notifyChatUpsert(chat({ id: "chat-a", projectPath: "/repo-a", updatedAt: 40 }));
+    });
+
+    expect(result.current.chats.map((candidate) => candidate.id)).toEqual(["chat-b"]);
+    expect(result.current.activeProject?.path).toBe("/repo-b");
+  });
+
   it("drops the API model cache before refreshing after a gateway update", async () => {
     vi.mocked(fetchModels)
       .mockResolvedValueOnce({ models: [model({ id: "chat-before" })] })

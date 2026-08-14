@@ -213,6 +213,7 @@ const OTHER_WORKSPACE = manifestOf("workspace-b", [root("root-x", "/repo-x")]);
 
 function context(overrides: Partial<WindowRenderContext> = {}): WindowRenderContext {
   return {
+    windowId: "window-1",
     activeRoot: null,
     activeBinding: null,
     updateCfg: vi.fn(),
@@ -1565,6 +1566,36 @@ describe("ChatWindowSessionHost target missing", () => {
       await waitFor((): void => expect(chatSessionState.openChat).not.toHaveBeenCalled());
       expect(cfgPatches(ctx).some((patch) => "title" in patch)).toBe(false);
       expect(cfgPatches(ctx)).toContainEqual({ projectPath: chat.projectPath });
+    });
+
+    it("applies a persisted memory preference change without requiring a chat switch", async () => {
+      const chat = chatFixture("chat-memory", "Private", 4);
+      chatSessionState.activeChat = chat;
+      chatSessionState.chats = [chat];
+      chatSessionState.loading = false;
+      chatSessionState.memoryEnabled = false;
+      const ctx = context();
+      const view = render(
+        <I18nProvider>
+          <ChatWindowSessionHost
+            cfg={{ chatId: chat.id, projectPath: chat.projectPath, memoryEnabled: false }}
+            ctx={ctx}
+          />
+        </I18nProvider>,
+      );
+
+      view.rerender(
+        <I18nProvider>
+          <ChatWindowSessionHost
+            cfg={{ chatId: chat.id, projectPath: chat.projectPath, memoryEnabled: true }}
+            ctx={ctx}
+          />
+        </I18nProvider>,
+      );
+
+      await waitFor((): void =>
+        expect(chatSessionState.setMemoryEnabled).toHaveBeenCalledWith(true),
+      );
     });
   });
 });

@@ -25,4 +25,27 @@ describe("prepareNewWindowCfg", (): void => {
     const cfg = { title: "Files", root: "/workspace" };
     expect(prepareNewWindowCfg("files", cfg, "unused-request")).toBe(cfg);
   });
+
+  it("binds a new Chat request to the project selected by the initiating shell", (): void => {
+    expect(
+      prepareNewWindowCfg("chat", { title: "Project B" }, "request-project-b", "/repo-b"),
+    ).toStrictEqual({
+      title: "Project B",
+      projectPath: "/repo-b",
+      chatId: undefined,
+      selectionHandoffId: undefined,
+      newChatRequestId: "request-project-b",
+    });
+  });
+
+  it("does not overwrite an explicitly scoped Chat request", (): void => {
+    expect(
+      prepareNewWindowCfg(
+        "chat",
+        { title: "Explicit", projectPath: "/explicit" },
+        "request-explicit",
+        "/selected",
+      ),
+    ).toMatchObject({ projectPath: "/explicit" });
+  });
 });

@@ -9,6 +9,7 @@ import { useTranslate } from "@/lib/i18n";
 import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 
 import { ChatSessionProvider } from "../context/ChatSessionContext";
+import { usePublishChatWindowActivity } from "../windows/chatWindowActivity";
 import { useChatSession, type ChatSessionApi } from "../hooks/useChatSession";
 import { useWorkspaceManifest, type WorkspaceManifestView } from "../hooks/useWorkspaceManifest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
@@ -815,6 +816,19 @@ function useBoundChatRouting(args: {
   };
 }
 
+interface MemoryPreference {
+  readonly chatId: string | undefined;
+  readonly configured: boolean | undefined;
+  readonly value: boolean | undefined;
+}
+
+function configuredMemoryPreference(
+  chatId: string | undefined,
+  configured: boolean | undefined,
+): MemoryPreference {
+  return { chatId, configured, value: configured };
+}
+
 function useBoundMemorySession(args: {
   readonly activeTarget: Chat | undefined;
   readonly chatId: string | undefined;
@@ -823,13 +837,20 @@ function useBoundMemorySession(args: {
   readonly updateCfg: WindowRenderContext["updateCfg"];
 }): { readonly hydrating: boolean; readonly session: ChatSessionApi } {
   const { activeTarget, chatId, configuredMemoryEnabled, session, updateCfg } = args;
-  const preferenceRef = useRef({ chatId, value: configuredMemoryEnabled });
-  if (preferenceRef.current.chatId !== chatId) {
-    preferenceRef.current = { chatId, value: configuredMemoryEnabled };
+  const preferenceRef = useRef(configuredMemoryPreference(chatId, configuredMemoryEnabled));
+  if (
+    preferenceRef.current.chatId !== chatId ||
+    preferenceRef.current.configured !== configuredMemoryEnabled
+  ) {
+    preferenceRef.current = configuredMemoryPreference(chatId, configuredMemoryEnabled);
   }
   const setMemoryEnabled = useCallback(
     (next: boolean): void => {
-      preferenceRef.current = { chatId, value: next };
+      preferenceRef.current = {
+        chatId,
+        configured: preferenceRef.current.configured,
+        value: next,
+      };
       session.setMemoryEnabled(next);
       updateCfg({ memoryEnabled: next });
     },
@@ -1024,6 +1045,7 @@ function BoundChatWindowSessionHost({
   session,
 }: BoundChatWindowSessionHostProps): ReactNode {
   const configuration = boundChatConfig(cfg);
+  usePublishChatWindowActivity(ctx.windowId, session.sending, session.latestGrounded);
   const routing = useBoundChatRouting({
     chatId: configuration.chatId,
     configuredProjectPath: configuration.projectPath,

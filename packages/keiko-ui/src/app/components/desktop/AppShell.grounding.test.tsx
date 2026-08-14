@@ -436,7 +436,7 @@ describe("AppShell grounding connections", () => {
       configPresent: false,
       effectiveGroundingLimits: DEFAULT_GROUNDING_LIMITS,
     });
-    mocks.fetchChats.mockResolvedValue({ chats: [] });
+    mocks.fetchChats.mockReset().mockResolvedValue({ chats: [] });
     mocks.fetchStartupUpdatePreflight.mockResolvedValue({
       schemaVersion: 1,
       checkedAt: "2026-06-30T12:00:00.000Z",
@@ -797,6 +797,29 @@ describe("AppShell grounding connections", () => {
       expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
     );
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(grounded);
+  });
+
+  it("surfaces a redacted diagnostic when a private chat lookup fails", async (): Promise<void> => {
+    const reportError = vi.fn();
+    vi.stubGlobal("reportError", reportError);
+    mocks.state.workspaceResult = workspaceResult([
+      win("chat", { chatId: "chat-private", projectPath: "/private" }, "private-window"),
+    ]);
+    mocks.fetchChats.mockRejectedValueOnce(new Error("customer-specific upstream detail"));
+
+    await renderMounted();
+    const accepted = await mocks.state.workspaceOptions?.onScopeBind?.(
+      "private-window",
+      fileScope("/repo"),
+    );
+
+    expect(accepted).toBe(false);
+    expect(await screen.findByText(/Keiko could not connect that source/u)).toBeInTheDocument();
+    expect(reportError).toHaveBeenCalledOnce();
+    expect(String(reportError.mock.calls[0]?.[0])).toMatch(
+      /^Error: Chat lookup failed\. Correlation ID: /u,
+    );
+    expect(String(reportError.mock.calls[0]?.[0])).not.toContain("customer-specific");
   });
 
   it("derives a queued bind from the latest confirmed grounding state", async (): Promise<void> => {

@@ -1362,6 +1362,27 @@ interface SessionState {
   selectedModel: string | undefined;
 }
 
+function chatBelongsToSessionCatalog(previous: SessionState, chat: Chat): boolean {
+  return (
+    previous.activeProject?.path === chat.projectPath ||
+    previous.activeChat?.id === chat.id ||
+    previous.chats.some((candidate) => candidate.id === chat.id)
+  );
+}
+
+function applyChatUpsert(previous: SessionState, chat: Chat): SessionState {
+  if (!chatBelongsToSessionCatalog(previous, chat)) return previous;
+  return {
+    ...previous,
+    chats: upsertChatIntoList(previous.chats, chat),
+    activeChat: previous.activeChat?.id === chat.id ? chat : previous.activeChat,
+    selectedModel:
+      previous.activeChat?.id === chat.id
+        ? resolveSelectedModelId(chat.selectedModel, previous.models)
+        : previous.selectedModel,
+  };
+}
+
 function projectOptimisticMessage(
   previous: SessionState,
   chatId: string,
@@ -2615,16 +2636,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   useEffect(() => {
     return subscribeChatMutations((mutation) => {
       if (mutation.type === "upsert") {
-        const { chat } = mutation;
-        setState((previous) => ({
-          ...previous,
-          chats: upsertChatIntoList(previous.chats, chat),
-          activeChat: previous.activeChat?.id === chat.id ? chat : previous.activeChat,
-          selectedModel:
-            previous.activeChat?.id === chat.id
-              ? resolveSelectedModelId(chat.selectedModel, previous.models)
-              : previous.selectedModel,
-        }));
+        setState((previous) => applyChatUpsert(previous, mutation.chat));
         return;
       }
       setState((previous) => ({

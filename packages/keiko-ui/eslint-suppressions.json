@@ -1734,7 +1734,7 @@
   },
   "src/app/components/desktop/windows/ConnectionsLayer.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 3
+      "count": 2
     },
     "complexity": {
       "count": 1
