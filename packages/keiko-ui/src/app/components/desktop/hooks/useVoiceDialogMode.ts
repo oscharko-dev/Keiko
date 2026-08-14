@@ -10,7 +10,7 @@
 // first available persona. The persisted value is the persona ENUM only ("male" | "female" | "neutral")
 // — never a voice id — so nothing content-bearing is written to disk.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
 import { VOICE_PERSONAS, type VoicePersona } from "@oscharko-dev/keiko-contracts";
 import type { VoiceCapabilityResolution } from "@/lib/types";
 import { realtimeVoiceTransportSupported } from "./voice-rtc-transport";
@@ -20,6 +20,36 @@ export const VOICE_PERSONA_STORAGE_KEY = "keiko.voice.dialog.persona";
 export const VOICE_PERSONA_CHANGED_EVENT = "keiko:voice-dialog-persona";
 
 const VALID_PERSONAS: ReadonlySet<string> = new Set(VOICE_PERSONAS);
+let activeVoiceDialogueOwner: string | null = null;
+const voiceDialogueOwnerListeners = new Set<() => void>();
+
+function subscribeVoiceDialogueOwner(listener: () => void): () => void {
+  voiceDialogueOwnerListeners.add(listener);
+  return () => voiceDialogueOwnerListeners.delete(listener);
+}
+
+function voiceDialogueOwnerSnapshot(): string | null {
+  return activeVoiceDialogueOwner;
+}
+
+function claimVoiceDialogueOwner(owner: string): boolean {
+  if (activeVoiceDialogueOwner !== null && activeVoiceDialogueOwner !== owner) return false;
+  if (activeVoiceDialogueOwner === owner) return true;
+  activeVoiceDialogueOwner = owner;
+  for (const listener of voiceDialogueOwnerListeners) listener();
+  return true;
+}
+
+function releaseVoiceDialogueOwner(owner: string): void {
+  if (activeVoiceDialogueOwner !== owner) return;
+  activeVoiceDialogueOwner = null;
+  for (const listener of voiceDialogueOwnerListeners) listener();
+}
+
+export function resetVoiceDialogueOwnerForTests(): void {
+  activeVoiceDialogueOwner = null;
+  for (const listener of voiceDialogueOwnerListeners) listener();
+}
 
 export interface UseVoiceDialogModeOptions {
   readonly capability: VoiceCapabilityResolution | undefined;
@@ -77,6 +107,12 @@ export function writeVoicePersonaPreference(persona: VoicePersona): void {
 
 export function useVoiceDialogMode(options: UseVoiceDialogModeOptions): VoiceDialogMode {
   const { capability } = options;
+  const owner = useId();
+  const currentOwner = useSyncExternalStore(
+    subscribeVoiceDialogueOwner,
+    voiceDialogueOwnerSnapshot,
+    voiceDialogueOwnerSnapshot,
+  );
 
   // The personas are taken straight from the capability (already sorted canonically by the contract).
   // Joined into a stable string so the memo key does not churn on a new-but-equal array each render.
@@ -91,10 +127,11 @@ export function useVoiceDialogMode(options: UseVoiceDialogModeOptions): VoiceDia
   // Voice Dialogue is the product conversation surface and must be true WebRTC realtime speech-to-
   // speech. Requiring the native realtime transport here prevents the old STT -> Chat -> TTS fallback
   // from being offered as a dialogue mode.
-  const available = voiceDialogueModeForResolution(
+  const deploymentAvailable = voiceDialogueModeForResolution(
     capability,
     realtimeVoiceTransportSupported(),
   ).offered;
+  const available = deploymentAvailable && (currentOwner === null || currentOwner === owner);
 
   const [persona, setPersona] = useState<VoicePersona>(
     () => readVoicePersonaPreference(availablePersonas) ?? VOICE_PERSONAS[0]!,
@@ -138,10 +175,18 @@ export function useVoiceDialogMode(options: UseVoiceDialogModeOptions): VoiceDia
   // Leaving is forced the moment the deployment stops offering dialogue, so a capability that flips to
   // unavailable mid-session can never leave the controls stranded in an active state (AC3).
   useEffect(() => {
-    if (!available) {
+    if (!deploymentAvailable) {
       setActive(false);
+      releaseVoiceDialogueOwner(owner);
     }
-  }, [available]);
+  }, [deploymentAvailable, owner]);
+
+  useEffect(
+    () => (): void => {
+      releaseVoiceDialogueOwner(owner);
+    },
+    [owner],
+  );
 
   const selectPersona = useCallback(
     (next: VoicePersona) => {
@@ -157,14 +202,15 @@ export function useVoiceDialogMode(options: UseVoiceDialogModeOptions): VoiceDia
   const enter = useCallback(() => {
     // Fail-closed: entering is a no-op when no dialogue is offered, so the switch can never start a
     // session the deployment cannot hold.
-    if (available) {
+    if (deploymentAvailable && claimVoiceDialogueOwner(owner)) {
       setActive(true);
     }
-  }, [available]);
+  }, [deploymentAvailable, owner]);
 
   const leave = useCallback(() => {
+    releaseVoiceDialogueOwner(owner);
     setActive(false);
-  }, []);
+  }, [owner]);
 
   return {
     available,

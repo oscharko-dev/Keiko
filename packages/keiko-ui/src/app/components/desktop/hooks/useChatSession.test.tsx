@@ -14,6 +14,7 @@ import {
   fetchRunReport,
   fetchModels,
   fetchProjects,
+  patchChatMessage,
   regenerateDesktopChat,
   resetModelRequestCache,
   sendDesktopChat,
@@ -542,6 +543,33 @@ describe("useChatSession bootstrap", () => {
     expect(rendered.result.current.messages).toEqual([pendingSummary]);
   });
 
+  it("keeps a shared run-summary poll alive while another session remains subscribed", async () => {
+    const pendingSummary = message({
+      id: "shared-run-summary",
+      role: "system",
+      runId: "run-shared",
+      workflowStatus: "running",
+    });
+    const completedSummary = { ...pendingSummary, workflowStatus: "completed" as const };
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat()] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [pendingSummary] });
+    vi.mocked(fetchRunReport)
+      .mockResolvedValueOnce({ report: { status: "running" } })
+      .mockResolvedValueOnce({ report: { status: "completed" } });
+    vi.mocked(patchChatMessage).mockResolvedValue({ message: completedSummary });
+
+    const first = renderHook(() => useChatSession({ autoCreate: false }));
+    const second = renderHook(() => useChatSession({ autoCreate: false }));
+    await vi.waitFor(() => expect(fetchRunReport).toHaveBeenCalledOnce());
+
+    first.unmount();
+    await vi.waitFor(() => expect(fetchRunReport).toHaveBeenCalledTimes(2), { timeout: 2_000 });
+    await vi.waitFor(() => expect(second.result.current.messages).toEqual([completedSummary]));
+    expect(patchChatMessage).toHaveBeenCalledOnce();
+  });
+
   it("surfaces regeneration failures and releases the owned send state", async () => {
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
@@ -727,6 +755,27 @@ describe("useChatSession bootstrap", () => {
 
     expect(result.current.activeChat?.id).toBe("other-open");
     expect(result.current.chats.map((item) => item.id)).toEqual(["other-trashed", "other-open"]);
+  });
+
+  it("does not create a replacement chat when an isolated window opens an empty project", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({
+      chats: [chat({ id: "chat-boot", selectedModel: "chat-live" })],
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    vi.mocked(fetchChats).mockResolvedValueOnce({ chats: [] });
+
+    await act(async (): Promise<void> => {
+      await result.current.openProject(project("/empty"));
+    });
+
+    expect(result.current.activeProject?.path).toBe("/empty");
+    expect(result.current.activeChat).toBeUndefined();
+    expect(result.current.messages).toEqual([]);
+    expect(createDesktopChat).not.toHaveBeenCalled();
   });
 });
 

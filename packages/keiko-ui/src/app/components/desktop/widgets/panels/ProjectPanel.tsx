@@ -34,6 +34,7 @@ const PROJ_CARET_BTN_STYLE: CSSProperties = {
   color: "inherit",
   cursor: "pointer",
 };
+const PROJECT_CHAT_GROUP_STYLE: CSSProperties = { border: 0, margin: 0, minWidth: 0 };
 
 interface ProjectRowProps {
   readonly project: ProjectWithAvailability;
@@ -252,8 +253,7 @@ function ProjectChatList({
   onChat,
 }: ProjectChatListProps): ReactNode {
   return (
-    // role="group" groups child treeitems under their parent (APG tree pattern).
-    <div className="proj-chats" role="group" aria-label={project.name}>
+    <fieldset className="proj-chats" aria-label={project.name} style={PROJECT_CHAT_GROUP_STYLE}>
       {isActiveProject && chats.length === 0 && <div className="proj-empty">{"No chats"}</div>}
       {isActiveProject &&
         chats.length > 0 &&
@@ -278,7 +278,7 @@ function ProjectChatList({
           </button>
         ))}
       {!isActiveProject && <div className="proj-empty">{"Select project to load chats"}</div>}
-    </div>
+    </fieldset>
   );
 }
 
@@ -326,7 +326,11 @@ function ProjectRow({
   );
 }
 
-export function ProjectPanel(): ReactNode {
+export function ProjectPanel({
+  openChatWindow = (): void => undefined,
+}: {
+  readonly openChatWindow?: (chat: Chat) => void;
+}): ReactNode {
   const session = useChatSessionCatalog();
   const actions = useChatSessionActions();
   const treeRef = useRef<HTMLDivElement | null>(null);
@@ -364,7 +368,7 @@ export function ProjectPanel(): ReactNode {
                 void actions.openProject(nextProject);
               }}
               onChat={(chat) => {
-                void actions.openChat(chat);
+                openChatWindow(chat);
               }}
             />
           ))}

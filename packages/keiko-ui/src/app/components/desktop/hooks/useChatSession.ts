@@ -292,6 +292,8 @@ async function deletePendingImage(attachment: PendingAttachment): Promise<void> 
 }
 
 const DEFAULT_CHAT_TITLE = "New chat";
+const NO_CONVERSATION_MODEL_MESSAGE =
+  "No conversation-eligible model is configured. Connect a gateway in Settings.";
 const DEFAULT_CONVERSATION_MEMORY_USER_ID = "local-operator";
 const CHAT_UPSERT_EVENT = "keiko:chat-upsert";
 const CHAT_DELETE_EVENT = "keiko:chat-delete";
@@ -1467,6 +1469,8 @@ export function clearChatSessionBootstrapCacheForTests(): void {
   invalidateSharedBootstrap();
   sharedChatListInflight.clear();
   sharedChatMessagesInflight.clear();
+  for (const entry of sharedRunSummarySyncs.values()) entry.controller.abort();
+  sharedRunSummarySyncs.clear();
 }
 
 function isPendingRunSummaryMessage(message: ChatMessage): boolean {
@@ -1533,7 +1537,14 @@ interface RunSummarySyncResult {
   readonly message: ChatMessage;
 }
 
-const sharedRunSummarySyncs = new Map<string, Promise<RunSummarySyncResult | undefined>>();
+interface SharedRunSummarySync {
+  readonly controller: AbortController;
+  promise: Promise<RunSummarySyncResult | undefined>;
+  readonly subscribers: Map<AbortSignal, () => void>;
+  persistentSubscriber: boolean;
+}
+
+const sharedRunSummarySyncs = new Map<string, SharedRunSummarySync>();
 
 function runSummarySharedSyncKey(chat: Chat, projectPath: string, message: ChatMessage): string {
   return `${chat.id}:${projectPath}:${message.id}:${message.runId ?? ""}`;
@@ -1626,24 +1637,62 @@ async function pollRunSummaryPatch(
   return undefined;
 }
 
+function releaseRunSummarySubscriber(entry: SharedRunSummarySync, signal: AbortSignal): void {
+  const listener = entry.subscribers.get(signal);
+  if (listener === undefined) return;
+  signal.removeEventListener("abort", listener);
+  entry.subscribers.delete(signal);
+  if (entry.subscribers.size === 0 && !entry.persistentSubscriber) entry.controller.abort();
+}
+
+function subscribeRunSummary(entry: SharedRunSummarySync, signal?: AbortSignal): void {
+  if (signal === undefined) {
+    entry.persistentSubscriber = true;
+    return;
+  }
+  if (signal.aborted || entry.subscribers.has(signal)) return;
+  const release = (): void => releaseRunSummarySubscriber(entry, signal);
+  entry.subscribers.set(signal, release);
+  signal.addEventListener("abort", release, { once: true });
+}
+
+function clearRunSummarySubscribers(entry: SharedRunSummarySync): void {
+  for (const [signal, listener] of entry.subscribers) {
+    signal.removeEventListener("abort", listener);
+  }
+  entry.subscribers.clear();
+}
+
 function sharedRunSummaryPatch(
   chat: Chat,
   projectPath: string,
   message: ChatMessage,
   signal?: AbortSignal,
 ): Promise<RunSummarySyncResult | undefined> {
+  if (signal?.aborted === true) return Promise.resolve(undefined);
   const key = runSummarySharedSyncKey(chat, projectPath, message);
   const existing = sharedRunSummarySyncs.get(key);
-  if (existing !== undefined) return existing;
-  // GEN-PERF-CHAT-011 — the poll is aborted when the owning hook unmounts (signal from the hook's
-  // AbortController). The shared cache is keyed per (chat, project, message, runId), so reopening
-  // or observing the same run never creates a duplicate poll across isolated window sessions.
-  const pending = pollRunSummaryPatch(chat, projectPath, message, signal).finally(() => {
-    if (sharedRunSummarySyncs.get(key) === pending) {
+  if (existing !== undefined && !existing.controller.signal.aborted) {
+    subscribeRunSummary(existing, signal);
+    return existing.promise;
+  }
+  if (existing !== undefined) sharedRunSummarySyncs.delete(key);
+  const controller = new AbortController();
+  const entry: SharedRunSummarySync = {
+    controller,
+    promise: Promise.resolve(undefined),
+    subscribers: new Map(),
+    persistentSubscriber: false,
+  };
+  subscribeRunSummary(entry, signal);
+  const pending = pollRunSummaryPatch(chat, projectPath, message, controller.signal).finally(() => {
+    clearRunSummarySubscribers(entry);
+    if (sharedRunSummarySyncs.get(key) === entry) {
       sharedRunSummarySyncs.delete(key);
     }
   });
-  sharedRunSummarySyncs.set(key, pending);
+  entry.promise = pending;
+  sharedRunSummarySyncs.set(key, entry);
   return pending;
 }
 
@@ -2734,7 +2783,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     ): Promise<Chat | undefined> => {
       const modelId = resolveSelectedModelId(state.selectedModel, state.models);
       if (modelId === undefined) {
-        setError("No conversation-eligible model is configured. Connect a gateway in Settings.");
+        setError(NO_CONVERSATION_MODEL_MESSAGE);
         return undefined;
       }
       setError(undefined);
@@ -2796,7 +2845,19 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const latest = pickResumableChat(sorted);
         if (latest === undefined) {
           if (activeProjectPathRef.current !== project.path) return;
-          await openNewChat(project);
+          if (autoCreate) {
+            await openNewChat(project);
+          } else {
+            activeChatIdRef.current = undefined;
+            setState((previous) => ({
+              ...previous,
+              chats: sorted,
+              messages: [],
+              activeProject: project,
+              activeChat: undefined,
+            }));
+            setLatestMemory(undefined);
+          }
           return;
         }
         const messagePayload = await sharedFetchChatMessages(latest.id, project.path);
@@ -2820,7 +2881,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setError(errorMessage(error_));
       }
     },
-    [canonicalVoiceProjectionRef, openNewChat, resetComposerForConversationSwitch, state.models],
+    [
+      autoCreate,
+      canonicalVoiceProjectionRef,
+      openNewChat,
+      resetComposerForConversationSwitch,
+      state.models,
+    ],
   );
 
   const openChat = useCallback(
@@ -2888,6 +2955,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const projectPayload = await fetchProjects();
         setState((previous) => ({ ...previous, projects: Array.from(projectPayload.projects) }));
         await openProject(created.project);
+        if (pickChatModelId(state.models) === undefined) setError(NO_CONVERSATION_MODEL_MESSAGE);
         setNotice(projectResponseWarningMessage(created));
         return created.project;
       } catch (error_) {
@@ -2895,7 +2963,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return undefined;
       }
     },
-    [openProject],
+    [openProject, state.models],
   );
 
   // Removes a temp optimistic message from state by id (AC#3 — no partial kept).

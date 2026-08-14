@@ -945,14 +945,22 @@ function chatConversationId(win: AppWindow | undefined): string | undefined {
   return typeof chatId === "string" && chatId.length > 0 ? chatId : undefined;
 }
 
+function chatProjectPath(win: AppWindow | undefined): string | undefined {
+  if (win?.type !== "chat") return undefined;
+  const projectPath = win.cfg["projectPath"];
+  return typeof projectPath === "string" && projectPath.length > 0 ? projectPath : undefined;
+}
+
 function chatBindingTarget(
   chatWindowId: string | null,
   conversationId: string | undefined,
   winById: (id: string) => AppWindow | undefined,
 ): ChatBindingTarget | undefined {
   if (chatWindowId === null) return undefined;
+  const chatWindow = winById(chatWindowId);
   return {
     conversationId,
+    projectPath: chatProjectPath(chatWindow),
     isCurrent: (): boolean => chatConversationId(winById(chatWindowId)) === conversationId,
   };
 }

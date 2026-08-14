@@ -146,22 +146,20 @@ interface JournalJourneyContext {
 }
 
 async function exerciseDeniedCaptures(context: JournalJourneyContext): Promise<void> {
-  let memoryWindow = await openMemoryWindow(context.page);
-  const memorySwitch = memoryWindow.getByRole("switch", {
-    name: "Use MemoriaViva in chat requests",
-  });
-  await expect(memorySwitch).toHaveAttribute("aria-checked", "false");
-  await context.page.getByRole("button", { name: "Close MemoriaViva window" }).click();
+  const memoryControl = context.chatWindow.locator(".chat-memory-activation-toggle");
+  await expect(memoryControl).toHaveAccessibleName("Enable MemoriaViva for this chat");
+  await expect(memoryControl).toHaveAttribute("aria-pressed", "false");
   await sendTurn(context.chatWindow, "This disabled-memory turn must not create a Journal entry.");
   await expectPersistedCount(context.request, context.since, 0);
 
-  memoryWindow = await openMemoryWindow(context.page);
+  const memoryWindow = await openMemoryWindow(context.page);
   await memoryWindow.getByRole("button", { name: "Journal", exact: true }).click();
   await expect(memoryWindow.getByTestId("memory-journal-empty")).toBeVisible();
   await expect(memoryWindow.getByRole("status")).toHaveCount(1);
   await memoryWindow.getByRole("button", { name: "Back" }).click();
-  await memoryWindow.getByRole("switch", { name: "Use MemoriaViva in chat requests" }).click();
   await context.page.getByRole("button", { name: "Close MemoriaViva window" }).click();
+  await memoryControl.click();
+  await expect(memoryControl).toHaveAttribute("aria-pressed", "true");
 
   await sendTurn(
     context.chatWindow,

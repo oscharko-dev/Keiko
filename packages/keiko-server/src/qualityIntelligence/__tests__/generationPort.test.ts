@@ -697,6 +697,35 @@ function configWithSeeding(modelId: string): ReturnType<typeof parseGatewayConfi
   );
 }
 
+interface CandidateSchemaContract {
+  readonly properties: Readonly<Record<string, unknown>>;
+  readonly required: readonly string[];
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isUnknownRecord(value)) throw new TypeError(`${label} must be an object.`);
+  return value;
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function requiredCandidateSchema(schema: unknown): CandidateSchemaContract {
+  const root = requireRecord(schema, "Response schema");
+  const properties = requireRecord(root.properties, "Response schema properties");
+  const testCases = requireRecord(properties.testCases, "testCases schema");
+  const candidate = requireRecord(testCases.items, "Candidate schema");
+  const candidateProperties = requireRecord(candidate.properties, "Candidate properties");
+  const required = candidate.required;
+  if (!isStringArray(required)) throw new TypeError("Candidate required fields must be strings.");
+  return { properties: candidateProperties, required };
+}
+
 describe("createQiGenerationPort.generate — determinism-first parameters", () => {
   // eslint-disable-next-line complexity
   it("sends a json_schema responseFormat when the model supports it", async () => {
@@ -712,20 +741,19 @@ describe("createQiGenerationPort.generate — determinism-first parameters", () 
     }
     expect(responseFormat.name).toBe("quality_intelligence_test_design");
     expect(responseFormat.strict).toBe(true);
-    const responseSchema = responseFormat.schema as {
-      readonly properties?: {
-        readonly testCases?: {
-          readonly items?: {
-            readonly properties?: Readonly<Record<string, unknown>>;
-            readonly required?: readonly string[];
-          };
-        };
-      };
-    };
-    const candidateSchema = responseSchema.properties?.testCases?.items;
-    expect(new Set(candidateSchema?.required)).toEqual(
-      new Set(Object.keys(candidateSchema?.properties ?? {})),
-    );
+    const candidateSchema = requiredCandidateSchema(responseFormat.schema);
+    const expectedCandidateFields = new Set([
+      "title",
+      "preconditions",
+      "steps",
+      "expectedResults",
+      "priority",
+      "riskClass",
+      "tags",
+      "derivedFromEvidenceIndexes",
+    ]);
+    expect(new Set(candidateSchema.required)).toEqual(expectedCandidateFields);
+    expect(new Set(Object.keys(candidateSchema.properties))).toEqual(expectedCandidateFields);
     expect(calls[0]?.request.temperature).toBe(0);
     expect(calls[0]?.request.topP).toBe(1);
     expect(result.modelParameters?.temperature).toBe(0);

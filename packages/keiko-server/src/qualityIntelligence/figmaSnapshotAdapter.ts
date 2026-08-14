@@ -113,7 +113,7 @@ export interface FigmaVisionHintProviderOptions {
 
 const MAX_VISION_IMAGE_BYTES = 4 * 1024 * 1024;
 const MAX_VISION_BASELINE_BYTES = 12_000;
-const MAX_VISION_HINTS = 24;
+export const MAX_VISION_HINTS = 24;
 const FIGMA_VISION_TIMEOUT_MS = 30_000;
 
 const encoder = new TextEncoder();
@@ -216,7 +216,7 @@ const VISION_RESPONSE_FORMAT = {
       hints: {
         type: "array",
         items: { type: "string" },
-        minItems: 1,
+        minItems: 0,
         maxItems: MAX_VISION_HINTS,
       },
     },
@@ -239,7 +239,8 @@ function buildVisionRequest(
         content:
           "You are an additive UI test-generation vision pass. Use the image only to recover " +
           "semantics missing from the structural baseline. Do not contradict, replace, or restate " +
-          'the baseline. Return at least one concise visual hint as JSON: { "hints": string[] }.',
+          'the baseline. Return concise visual hints as JSON: { "hints": string[] }. Return an ' +
+          "empty hints array when the baseline is already complete.",
       },
       {
         role: "user",

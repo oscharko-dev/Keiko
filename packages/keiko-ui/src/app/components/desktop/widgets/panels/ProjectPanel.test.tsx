@@ -349,14 +349,14 @@ describe("ProjectPanel", () => {
   // function still attaches to each rendered chat button.
   it("opens a chat when its treeitem is clicked", async () => {
     const user = userEvent.setup();
-    const openChat = vi.fn();
+    const openChatWindow = vi.fn();
     render(
-      <ChatSessionProvider value={{ ...session(), openChat }}>
-        <ProjectPanel />
+      <ChatSessionProvider value={session()}>
+        <ProjectPanel openChatWindow={openChatWindow} />
       </ChatSessionProvider>,
     );
     await user.click(screen.getByRole("treeitem", { name: /Investigate shell audit/ }));
-    expect(openChat).toHaveBeenCalledWith(
+    expect(openChatWindow).toHaveBeenCalledWith(
       expect.objectContaining({ id: "chat-1", title: "Investigate shell audit" }),
     );
   });

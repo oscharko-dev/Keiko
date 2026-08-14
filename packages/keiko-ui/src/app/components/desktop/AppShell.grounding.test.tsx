@@ -31,6 +31,7 @@ interface WorkspaceHookOptions {
 
 interface ChatBindingTarget {
   readonly conversationId: string | undefined;
+  readonly projectPath?: string | undefined;
   readonly isCurrent: () => boolean;
 }
 
@@ -57,6 +58,7 @@ const mocks = vi.hoisted(() => ({
     rightRailOnTool: undefined as ((id: string) => void) | undefined,
   },
   fetchConfig: vi.fn(),
+  fetchChats: vi.fn(),
   fetchStartupUpdatePreflight: vi.fn(),
   updateChatConnectedScopes: vi.fn(),
   updateChatLocalKnowledgeScopes: vi.fn(),
@@ -113,6 +115,7 @@ function restoreDialogMethod(
 }
 
 vi.mock("@/lib/api", () => ({
+  fetchChats: mocks.fetchChats,
   fetchConfig: mocks.fetchConfig,
   fetchStartupUpdatePreflight: mocks.fetchStartupUpdatePreflight,
   updateChatConnectedScopes: mocks.updateChatConnectedScopes,
@@ -433,6 +436,7 @@ describe("AppShell grounding connections", () => {
       configPresent: false,
       effectiveGroundingLimits: DEFAULT_GROUNDING_LIMITS,
     });
+    mocks.fetchChats.mockResolvedValue({ chats: [] });
     mocks.fetchStartupUpdatePreflight.mockResolvedValue({
       schemaVersion: 1,
       checkedAt: "2026-06-30T12:00:00.000Z",
@@ -760,6 +764,39 @@ describe("AppShell grounding connections", () => {
     expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
     expect(mocks.updateChatLocalKnowledgeScopes).not.toHaveBeenCalled();
     expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
+  });
+
+  it("resolves grounding against the chat window's private project session", async (): Promise<void> => {
+    const privateChat = chat({ id: "chat-private", projectPath: "/private", updatedAt: 4 });
+    const grounded = chat({
+      id: privateChat.id,
+      projectPath: privateChat.projectPath,
+      connectedScopes: [fileScope("/repo")],
+      updatedAt: 5,
+    });
+    mocks.state.workspaceResult = workspaceResult([
+      win(
+        "chat",
+        { chatId: privateChat.id, projectPath: privateChat.projectPath },
+        "private-window",
+      ),
+    ]);
+    mocks.fetchChats.mockResolvedValueOnce({ chats: [privateChat] });
+    mocks.updateChatConnectedScopes.mockResolvedValueOnce({ chat: grounded });
+
+    await renderMounted();
+    const accepted = await mocks.state.workspaceOptions?.onScopeBind?.(
+      "private-window",
+      fileScope("/repo"),
+    );
+
+    expect(accepted).toBe(true);
+    expect(mocks.fetchChats).toHaveBeenCalledWith("/private");
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
+      privateChat.id,
+      expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
+    );
+    expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(grounded);
   });
 
   it("derives a queued bind from the latest confirmed grounding state", async (): Promise<void> => {

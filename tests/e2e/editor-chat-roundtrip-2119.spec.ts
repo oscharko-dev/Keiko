@@ -222,6 +222,27 @@ async function openRoundTripSurfaces(page: Page): Promise<RoundTripSurfaces> {
   return { editorWindow, chatWindow };
 }
 
+async function persistedChatProjectPath(page: Page): Promise<unknown> {
+  return page.evaluate((chatWindowId): unknown => {
+    const raw = window.localStorage.getItem("keiko.workspace.v4");
+    if (raw === null) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    const candidates: readonly unknown[] = parsed;
+    const chatWindow: unknown = candidates.find(
+      (candidate): boolean =>
+        typeof candidate === "object" &&
+        candidate !== null &&
+        "id" in candidate &&
+        candidate.id === chatWindowId,
+    );
+    if (typeof chatWindow !== "object" || chatWindow === null || !("cfg" in chatWindow))
+      return null;
+    const cfg = chatWindow.cfg;
+    return typeof cfg === "object" && cfg !== null && "projectPath" in cfg ? cfg.projectPath : null;
+  }, CHAT_WINDOW_ID);
+}
+
 function normalizeBuffer(text: string): string {
   return text.replace(/\r\n/gu, "\n").replace(/\n+$/u, "");
 }
@@ -574,6 +595,7 @@ test("editor selection and assistant code blocks round-trip through governed rev
   const surfaces = await openRoundTripSurfaces(page);
 
   await proveSelectionHandoff(page, request, fixture, surfaces, testInfo);
+  await expect.poll(() => persistedChatProjectPath(page)).toBe(fixture.root);
   await rejectFirstCandidate(page, fixture, surfaces, testInfo);
   await selectStrictSubstring(page, surfaces.editorWindow);
   await expectSelectionSnapshot(request, fixture);

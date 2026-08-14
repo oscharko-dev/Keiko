@@ -1238,6 +1238,7 @@ function WindowFrameImpl({
       data-selected={booleanDataAttribute(selected)}
       data-dragging={booleanDataAttribute(draggingWindow)}
       data-window-id={win.id}
+      hidden={win.minimized === true}
       style={sectionStyle}
       // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- window regions are keyboard-reachable so Space can toggle multi-selection without a drag gesture
       tabIndex={0}

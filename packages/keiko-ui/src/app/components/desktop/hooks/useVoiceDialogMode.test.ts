@@ -5,7 +5,7 @@
 
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useVoiceDialogMode } from "./useVoiceDialogMode";
+import { resetVoiceDialogueOwnerForTests, useVoiceDialogMode } from "./useVoiceDialogMode";
 import type { VoiceCapabilityResolution } from "@/lib/types";
 import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
 
@@ -81,6 +81,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetVoiceDialogueOwnerForTests();
   localStorage.clear();
   vi.unstubAllGlobals();
 });
@@ -121,6 +122,21 @@ describe("useVoiceDialogMode — availability gating", () => {
     const { result } = renderHook(() => useVoiceDialogMode({ capability: FULL_REALTIME }));
     expect(result.current.available).toBe(true);
     expect(result.current.availablePersonas).toEqual(PERSONAS);
+  });
+
+  it("allows only one mounted chat to own realtime voice at a time", () => {
+    const first = renderHook(() => useVoiceDialogMode({ capability: FULL_REALTIME }));
+    const second = renderHook(() => useVoiceDialogMode({ capability: FULL_REALTIME }));
+
+    act(() => first.result.current.enter());
+    expect(first.result.current.active).toBe(true);
+    expect(second.result.current.available).toBe(false);
+
+    act(() => second.result.current.enter());
+    expect(second.result.current.active).toBe(false);
+
+    act(() => first.result.current.leave());
+    expect(second.result.current.available).toBe(true);
   });
 
   it("is unavailable for full-realtime WITHOUT WebRTC media", () => {

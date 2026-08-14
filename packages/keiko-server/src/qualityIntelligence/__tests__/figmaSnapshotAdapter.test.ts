@@ -23,6 +23,7 @@ import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import {
+  MAX_VISION_HINTS,
   makeFigmaSnapshotLoader,
   makeFigmaVisionHintProvider,
   stripJsonCodeFence,
@@ -165,6 +166,7 @@ function expectStructuredVisionRequest(seenRequests: readonly GatewayRequest[]):
   const request = seenRequests[0];
   if (request === undefined) throw new TypeError("expected one gateway request");
   expect(request.modelId).toBe("vision-low");
+  expect(request.messages.map((message) => message.role)).toEqual(["system", "user"]);
   const user = request.messages[1];
   if (user === undefined) throw new TypeError("expected a vision user message");
   expect(user.content).toContain("Screen id:");
@@ -181,7 +183,14 @@ function expectStructuredVisionRequest(seenRequests: readonly GatewayRequest[]):
       type: "object",
       required: ["hints"],
       additionalProperties: false,
-      properties: { hints: { type: "array", minItems: 1 } },
+      properties: {
+        hints: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 0,
+          maxItems: MAX_VISION_HINTS,
+        },
+      },
     },
   });
 }

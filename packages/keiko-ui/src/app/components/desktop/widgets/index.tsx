@@ -330,7 +330,17 @@ registerWindowRender("chatHistory", (_cfg, ctx) => (
     }}
   />
 ));
-registerWindowRender("project", () => <ProjectPanel />);
+registerWindowRender("project", (_cfg, ctx) => (
+  <ProjectPanel
+    openChatWindow={(chat: Chat): void => {
+      ctx.openWindow("chat", {
+        chatId: chat.id,
+        projectPath: chat.projectPath,
+        title: chat.title,
+      });
+    }}
+  />
+));
 registerWindowRender("promptEnhancer", (_cfg, ctx) => (
   <PromptEnhancerPanel
     connectedRoot={ctx.linkedRoot}

@@ -169,7 +169,7 @@ describe("M1 — empty startup layout", () => {
     expect(screen.queryByText("Empty workspace")).toBeNull();
   });
 
-  it("does not render minimized windows on the workspace surface", () => {
+  it("keeps minimized windows mounted but hidden so background work can continue", () => {
     const wins = [appWindow({ id: "agents-1", type: "agents", minimized: true })];
     const { container } = render(
       <Workspace
@@ -179,7 +179,7 @@ describe("M1 — empty startup layout", () => {
       />,
     );
 
-    expect(container.querySelector('[data-window-id="agents-1"]')).toBeNull();
+    expect(container.querySelector('[data-window-id="agents-1"]')).toHaveAttribute("hidden");
     expect(screen.queryByText("Empty workspace")).toBeNull();
   });
 });

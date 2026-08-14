@@ -42,7 +42,12 @@ import {
   filesChatBindScope,
   totalSourceCap,
 } from "./hooks/workspaceActions";
-import { fetchConfig, updateChatConnectedScopes, updateChatLocalKnowledgeScopes } from "@/lib/api";
+import {
+  fetchChats,
+  fetchConfig,
+  updateChatConnectedScopes,
+  updateChatLocalKnowledgeScopes,
+} from "@/lib/api";
 import { newClientCorrelationId } from "@/lib/http";
 import { I18nProvider, useTranslate } from "@/lib/i18n";
 import type { I18nTranslate } from "@/lib/i18n";
@@ -410,6 +415,12 @@ export function chatWindowIdOf(conn: Connection, a: AppWindow, b: AppWindow): st
 function chatIdFromWindow(win: AppWindow | undefined): string | undefined {
   if (win?.type !== "chat") return undefined;
   const value = win.cfg["chatId"];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function projectPathFromWindow(win: AppWindow | undefined): string | undefined {
+  if (win?.type !== "chat") return undefined;
+  const value = win.cfg["projectPath"];
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
@@ -813,12 +824,12 @@ function AppShellInner(): ReactNode {
   const rememberGroundingChat = useCallback((chat: Chat): void => {
     confirmedGroundingChatsRef.current.set(chat.id, chat);
   }, []);
-  const chatForWindow = useCallback(
-    (chatWindowId: string): Chat | undefined => {
-      const chatId = chatIdFromWindow(
-        wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId),
-      );
+  const resolveChatForWindow = useCallback(
+    async (chatWindowId: string, target?: ChatBindingTarget): Promise<Chat | undefined> => {
+      const windowSnapshot = wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId);
+      const chatId = target?.conversationId ?? chatIdFromWindow(windowSnapshot);
       if (chatId === undefined) return undefined;
+      if (target !== undefined && !target.isCurrent()) return undefined;
       const sessionChat =
         session.chats.find((chat) => chat.id === chatId) ??
         (session.activeChat?.id === chatId ? session.activeChat : undefined);
@@ -828,9 +839,23 @@ function AppShellInner(): ReactNode {
         (sessionChat === undefined || confirmed.updatedAt >= sessionChat.updatedAt)
           ? confirmed
           : sessionChat;
-      return chat?.status === "closed" ? undefined : chat;
+      if (chat !== undefined) return chat.status === "closed" ? undefined : chat;
+      const projectPath = target?.projectPath ?? projectPathFromWindow(windowSnapshot);
+      if (projectPath === undefined) return undefined;
+      try {
+        const response = await fetchChats(projectPath);
+        if (target !== undefined && !target.isCurrent()) return undefined;
+        const currentWindow = wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId);
+        if (chatIdFromWindow(currentWindow) !== chatId) return undefined;
+        const resolved = response.chats.find((candidate) => candidate.id === chatId);
+        if (resolved === undefined || resolved.status === "closed") return undefined;
+        rememberGroundingChat(resolved);
+        return resolved;
+      } catch {
+        return undefined;
+      }
     },
-    [session.activeChat, session.chats],
+    [rememberGroundingChat, session.activeChat, session.chats],
   );
   const groundingMutationQueueRef = useRef<ChatMutationQueue>({
     blocked: new Set(),
@@ -838,8 +863,10 @@ function AppShellInner(): ReactNode {
   });
   const groundingMutationKey = useCallback(
     (chatWindowId: string, target?: ChatBindingTarget): string =>
-      target?.conversationId ?? chatForWindow(chatWindowId)?.id ?? `window:${chatWindowId}`,
-    [chatForWindow],
+      target?.conversationId ??
+      chatIdFromWindow(wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId)) ??
+      `window:${chatWindowId}`,
+    [],
   );
   // Files↔Chat edges bind the Files window's visible scope: repository root, opened folder, or
   // previewed file. The green edge is now the only UI affordance for this binding.
@@ -854,7 +881,7 @@ function AppShellInner(): ReactNode {
       previousScope: ChatConnectedScope | null = null,
       target?: ChatBindingTarget,
     ): Promise<boolean> => {
-      const chat = chatForWindow(chatWindowId);
+      const chat = await resolveChatForWindow(chatWindowId, target);
       if (chat === undefined) {
         return rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
       }
@@ -917,7 +944,7 @@ function AppShellInner(): ReactNode {
     // the whole session object (see comment above).
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
-      chatForWindow,
+      resolveChatForWindow,
       session.replaceChat,
       groundingLimits,
       rejectForLimit,
@@ -963,7 +990,7 @@ function AppShellInner(): ReactNode {
         groundingMutationQueueRef.current,
         chatKey,
         async (): Promise<void> => {
-          const chat = chatForWindow(chatWindowId);
+          const chat = await resolveChatForWindow(chatWindowId);
           if (chat === undefined) return;
           const next = removeConnectedScope(effectiveScopes(chat), scope);
           try {
@@ -979,7 +1006,7 @@ function AppShellInner(): ReactNode {
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
-    [chatForWindow, groundingMutationKey, rememberGroundingChat, session.replaceChat],
+    [groundingMutationKey, rememberGroundingChat, resolveChatForWindow, session.replaceChat],
   );
   // Epic #189 Slice 3 M3 — a Connector↔Chat relationship edge binds/unbinds the connector scope
   // on the active chat's localKnowledgeScopes, so the gesture grounds the chat via vector search.
@@ -992,7 +1019,7 @@ function AppShellInner(): ReactNode {
       attempt: ChatMutationAttempt,
       target?: ChatBindingTarget,
     ): Promise<boolean> => {
-      const chat = chatForWindow(chatWindowId);
+      const chat = await resolveChatForWindow(chatWindowId, target);
       if (chat === undefined) {
         return rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
       }
@@ -1031,7 +1058,7 @@ function AppShellInner(): ReactNode {
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
     [
-      chatForWindow,
+      resolveChatForWindow,
       session.replaceChat,
       groundingLimits,
       rejectForLimit,
@@ -1068,7 +1095,7 @@ function AppShellInner(): ReactNode {
         groundingMutationQueueRef.current,
         chatKey,
         async (): Promise<void> => {
-          const chat = chatForWindow(chatWindowId);
+          const chat = await resolveChatForWindow(chatWindowId);
           if (chat === undefined) return;
           const key =
             scope.kind === "capsule" ? `capsule:${scope.capsuleId}` : `set:${scope.capsuleSetId}`;
@@ -1089,7 +1116,7 @@ function AppShellInner(): ReactNode {
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
-    [chatForWindow, groundingMutationKey, rememberGroundingChat, session.replaceChat],
+    [groundingMutationKey, rememberGroundingChat, resolveChatForWindow, session.replaceChat],
   );
   const [cameraSmoothness, setCameraSmoothness] = useState<number>(readWorkspaceCameraSmoothness);
 

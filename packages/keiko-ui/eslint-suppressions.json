@@ -710,7 +710,7 @@
       "count": 6
     },
     "complexity": {
-      "count": 3
+      "count": 2
     },
     "max-lines-per-function": {
       "count": 6
@@ -1959,9 +1959,6 @@
   },
   "src/app/memoriaviva/components/MemoriaVivaWindow.tsx": {
     "complexity": {
-      "count": 1
-    },
-    "max-lines-per-function": {
       "count": 1
     }
   },

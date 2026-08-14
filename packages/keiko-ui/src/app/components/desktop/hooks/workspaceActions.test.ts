@@ -2504,7 +2504,7 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
 
   it("discards an accepted edge when the chat changed before the bind settled", async (): Promise<void> => {
     const store = { conns: [] as Connection[] };
-    const chatCfg: AppWindow["cfg"] = { chatId: "chat-old" };
+    const chatCfg: AppWindow["cfg"] = { chatId: "chat-old", projectPath: "/repo-old" };
     let observedTarget: ChatBindingTarget | undefined;
     let resolveBind!: (accepted: boolean) => void;
     const acceptance = new Promise<boolean>((resolve): void => {
@@ -2525,6 +2525,7 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
 
     harness.confirmConnect("chat-1", evt);
     expect(observedTarget?.conversationId).toBe("chat-old");
+    expect(observedTarget?.projectPath).toBe("/repo-old");
     expect(observedTarget?.isCurrent()).toBe(true);
     chatCfg["chatId"] = "chat-new";
     expect(observedTarget?.isCurrent()).toBe(false);
