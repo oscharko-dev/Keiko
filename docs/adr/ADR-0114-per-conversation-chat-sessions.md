@@ -8,18 +8,18 @@ Accepted and implemented (2026-08-14).
 
 The desktop canvas originally supported exactly one chat window. `WindowsRegistry` pinned
 `chat` as `singleton: true`, and `workspaceActions.add()` replaced the existing window's
-conversation when a second chat was opened. The guard existed because all window hosts consumed
-one application-wide session:
+conversation when a second chat was opened. Before this decision, all window hosts consumed one
+application-wide session:
 
-- `AppShell` calls `useChatSession()` exactly once and shares the instance app-wide
-  through `ChatSessionProvider`. The hook owns ONE `sendControllerRef`, ONE
-  `streamingAssistantMessage`, ONE `messages` array, and ONE `activeChat` slot.
+- `AppShell` called `useChatSession()` once and shared that instance with every chat window through
+  `ChatSessionProvider`. Conversation selection, messages, streaming state, and cancellation were
+  therefore mutable state in the same shared instance.
 - Issue #152 pinned the invariant "opening a different chat must abort any in-flight
   send so a late response from the prior chat never lands here" — correct for one shared
   slot, and exactly what makes a second concurrent conversation impossible.
-- `ChatWindowSessionHost` (widgets/index.tsx) races every mounted chat-typed window to
-  claim the global `activeChat`; with two differently-bound hosts this would ping-pong
-  aborts, which is why the registry forbids the second window in the first place.
+- Every mounted `ChatWindowSessionHost` would have competed to retarget that shared session; two
+  differently bound hosts would have caused ping-pong aborts, which is why the registry previously
+  forbade the second window.
 
 Users ask for several conversations side by side — the canvas product promise ("open
 many windows, many streams") already holds for agent runs, terminals, and containers,
@@ -62,12 +62,11 @@ windows.
    preserving per-window mutable state.
 2. **D2 — Global shell session.** `AppShell` retains one application session for catalog, project,
    history, and shell consumers. Nested window providers shadow it for all ChatWindow descendants.
-   A window never claims or mutates another window's `activeChat` slot.
+   A window never claims or mutates another window's active conversation state.
 3. **D3 — Issue #152 becomes per-conversation.** "Switching this WINDOW to a different
    conversation aborts THAT conversation's in-flight send" — never a sibling window's.
-   The late-response guard moves from the global `activeChatIdRef` into each
-   conversation entry (responses land keyed by `chatId`, so a settled response can only
-   ever land in its own conversation).
+   Each window session owns its late-response guard (responses land keyed by `chatId`, so a settled
+   response can only ever land in its own conversation).
 4. **D4 — Window binding and restoration.** `chat` is not a singleton. The per-`chatId` dedupe in
    `workspaceActions.add()` stays: opening the same conversation focuses its existing window, while
    a different conversation creates a collision-safe window identity. Durable window state keeps
