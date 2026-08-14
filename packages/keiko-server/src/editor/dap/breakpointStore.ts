@@ -75,8 +75,11 @@ interface InstrumentationRecord {
   // committed. loadRecord treats a mismatch against the CURRENT live identity as absent — the same
   // object-identity reconciliation editorSettingsStore.ts's reconcileRootBinding already applies —
   // so a directory replaced at the same path never inherits the prior occupant's breakpoints,
-  // watches, or revision. Empty string is reserved for the in-memory `emptyRecord` sentinel; every
-  // committed record carries a real digest, stamped centrally by commitRecord.
+  // watches, or revision. An absent record binds this to the LIVE root identity at load time (see
+  // absentRecordBoundToLiveRoot) so its etag varies with the root the same way a committed record's
+  // does; every committed record carries a real digest, stamped centrally by commitRecord. Empty
+  // string survives only when the live identity itself cannot be inspected (unreadable/non-directory
+  // root) — the one case where no real digest is available to bind.
   readonly rootObjectIdentityDigest: string;
   readonly revision: number;
   readonly breakpoints: readonly SourceBreakpoint[];
@@ -501,6 +504,31 @@ function identityMatchesLiveRoot(record: InstrumentationRecord, realRoot: string
   }
 }
 
+// r8 Codex P1 (completes KEIKO-0190): an "absent" record is not identity-free — it is only absent
+// because nothing is persisted for the CURRENT root object yet. Binding it to the "" sentinel would
+// let a client that read revision 0 before any persistence (or right after a mismatch) keep a CAS
+// token that still matches after the root at this path is replaced by another filesystem object, so
+// the first mutation would first-bind the replacement's identity onto content authored for the prior
+// object — the exact resurrection KEIKO-0190 exists to prevent, just shifted one step earlier than
+// the committed-record case it already covers. Mirrors editorSettingsStore.ts's
+// emptyEditorSettingsWorkspaceRecord, which binds its own empty record the same way. "" survives only
+// when the live identity itself cannot be inspected right now; commitRecord's own inspection then
+// either also fails (fails closed, unchanged from before this fix) or transiently succeeds (the
+// existing first-bind fallthrough, also unchanged).
+function absentRecordBoundToLiveRoot(
+  realRoot: string,
+  empty: InstrumentationRecord,
+): InstrumentationRecord {
+  try {
+    return {
+      ...empty,
+      rootObjectIdentityDigest: inspectDebugWorkspaceIdentity(realRoot).objectIdentityDigest,
+    };
+  } catch {
+    return empty;
+  }
+}
+
 function loadRecord(realRoot: string, options: BreakpointStoreOptions): LoadResult {
   const empty = emptyRecord(realRoot);
   const path = breakpointStoreRecordPath(options.stateDir, realRoot);
@@ -509,7 +537,9 @@ function loadRecord(realRoot: string, options: BreakpointStoreOptions): LoadResu
   }
   try {
     const raw = readPersistedText(path, options);
-    if (raw.kind === "missing") return { state: "absent", record: empty };
+    if (raw.kind === "missing") {
+      return { state: "absent", record: absentRecordBoundToLiveRoot(realRoot, empty) };
+    }
     const parsed = parseInstrumentationRecord(
       JSON.parse(raw.text) as unknown,
       empty.workspaceFingerprint,
@@ -520,7 +550,7 @@ function loadRecord(realRoot: string, options: BreakpointStoreOptions): LoadResu
     // fresh absent record (revision 0), never carrying the stale sequence forward.
     return identityMatchesLiveRoot(parsed, realRoot)
       ? { state: "ready", record: parsed }
-      : { state: "absent", record: empty };
+      : { state: "absent", record: absentRecordBoundToLiveRoot(realRoot, empty) };
   } catch {
     return { state: "unavailable", record: empty };
   }
@@ -801,10 +831,13 @@ function commitRecord(
   // loadRecord's validation and this inspection. Rebinding unconditionally would re-stamp the NEW
   // identity onto content only ever validated against the OLD one, resurrecting the prior
   // occupant's breakpoints/watches/filters under the replacement workspace and defeating the very
-  // isolation KEIKO-0190 introduced. A non-empty digest that already matched at load time but no
-  // longer matches here is not a first bind (that is emptyRecord's "" sentinel, handled below by
-  // falling through to the stamp) -- it is a validated binding invalidated mid-mutation, so fail
-  // closed instead of rebinding.
+  // isolation KEIKO-0190 introduced. Since r8 (absentRecordBoundToLiveRoot), this drift check also
+  // covers a record that was "absent" at load time: loadRecord now stamps the live identity it saw
+  // onto even an empty/absent record, so an ordinary first bind arrives here with that SAME digest
+  // and passes straight through as a no-op match, while a root swapped in between still fails
+  // closed exactly like a swap under a committed record. The "" sentinel that skips this check below
+  // now means only one thing -- the live identity could not be inspected AT ALL at load time (a
+  // genuinely unreadable/non-directory root), not "no record existed yet".
   if (
     record.rootObjectIdentityDigest !== "" &&
     record.rootObjectIdentityDigest !== identity.objectIdentityDigest

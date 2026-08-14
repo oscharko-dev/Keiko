@@ -881,6 +881,35 @@ describe("KEIKO-0190 — object-identity reconciliation on load", () => {
     const rawBreakpoints = onDisk.breakpoints as readonly Record<string, unknown>[];
     expect(rawBreakpoints.map((entry) => entry.fileId)).toEqual(["a.ts"]);
   });
+
+  it("rejects a mutation whose revision-0 etag was captured before any record existed, once the root at that path is replaced by another filesystem object", () => {
+    // r8 Codex P1: the absent record returned by loadRecord (no persisted file yet) used to carry
+    // the identity-free "" sentinel unconditionally, so its etag never varied with the live root
+    // identity. A client that read revision 0 before any persistence therefore kept a CAS token
+    // that still matched after the root at this exact path was replaced -- the first mutation would
+    // then first-bind the REPLACEMENT's identity onto content authored against the PRIOR object,
+    // defeating the very isolation KEIKO-0190 introduced. The absent snapshot's etag must bind to
+    // the live root identity from the very first read, so a swap between the read and the write is
+    // caught by the existing conflict/etag path, exactly like a swap between two committed reads.
+    const stateDir = temporaryDirectory("debug-state-absent-identity-bind");
+    const parent = temporaryDirectory("debug-workspace-absent-identity-bind-parent");
+    const root = join(parent, "root");
+    mkdirSync(root);
+    const store = createBreakpointStore({ stateDir, idFactory: (): string => "absent_bind_id" });
+
+    const initial = currentSnapshot(store, root);
+    expect(initial.revision).toBe(0);
+
+    replaceDirectory(root);
+
+    const mutated = store.setBreakpointsForFile(root, initial.revision, initial.etag, "a.ts", [
+      breakpoint(1),
+    ]);
+
+    expect(mutated).toMatchObject({ ok: false, reason: "conflict" });
+    const onDisk = createBreakpointStore({ stateDir }).snapshot(root);
+    expect(onDisk).toMatchObject({ ok: true, snapshot: { revision: 0, breakpoints: [] } });
+  });
 });
 
 describe("KEIKO-0179 — breakpoint re-key on file rename", () => {

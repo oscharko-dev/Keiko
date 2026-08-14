@@ -31,6 +31,11 @@ export interface EditorHotExitStoredSnapshot {
   readonly savedContentHash: string | null;
   readonly contentSizeBytes: number;
   readonly updatedAt: number;
+  // Server receipt clock (Date.now() at the moment write() accepted this entry), persisted
+  // alongside the snapshot so the TTL basis survives a restart -- see ttlBasisFor. Optional and
+  // backward-compatible: a record persisted before this field existed simply omits it, and reads
+  // fall back to the legacy client-`updatedAt` TTL basis for that record only (r8).
+  readonly serverReceivedAt?: number;
   readonly paneId: string;
   readonly windowId: string;
 }
@@ -76,9 +81,11 @@ interface StoredItem {
 // prune, a later write's prune, or read()'s TTL check treat a just-persisted entry as expired. A
 // side effect is that prune's oldest-first eviction ordering becomes server-arrival order rather
 // than client-claimed order -- strictly more robust against a hostile or skewed client. On cold
-// start, entries seeded from disk (see getMetaIndex below) fall back to the persisted client
-// updatedAt because no server receipt time was ever persisted for them; this is unavoidable without
-// widening the on-disk schema and is out of scope here.
+// start (a fresh process, e.g. after a Keiko restart), entries seeded from disk (see getMetaIndex
+// below) use the server-receipt timestamp persisted alongside the snapshot itself
+// (EditorHotExitStoredSnapshot.serverReceivedAt, r8) rather than the client-supplied updatedAt, so
+// the trusted TTL basis survives the restart. Only a record written before that field existed
+// falls back to the legacy client updatedAt.
 interface HotExitMeta {
   readonly contentSizeBytes: number;
   readonly updatedAt: number;
@@ -130,6 +137,7 @@ function isStoredSnapshot(value: unknown): value is EditorHotExitStoredSnapshot 
     (record.savedContentHash === null || typeof record.savedContentHash === "string") &&
     isNonNegativeNumber(record.contentSizeBytes) &&
     isNonNegativeNumber(record.updatedAt) &&
+    (record.serverReceivedAt === undefined || isNonNegativeNumber(record.serverReceivedAt)) &&
     typeof record.paneId === "string" &&
     record.paneId.length > 0 &&
     typeof record.windowId === "string" &&
@@ -174,13 +182,23 @@ function expired(ttlBasisUpdatedAt: number, nowMs: number): boolean {
   return ttlBasisUpdatedAt + EDITOR_HOT_EXIT_TTL_MS < nowMs;
 }
 
-// Resolves the TTL-basis timestamp for a ref being read: the warm index's server-receipt clock
-// when available, else the persisted (client-supplied) updatedAt as a cold-read fallback.
-function ttlBasisFor(meta: HotExitMeta | undefined, fallbackUpdatedAt: number): number {
-  return meta?.updatedAt ?? fallbackUpdatedAt;
+// Resolves the TTL-basis timestamp for a ref being read, in order of trust: the warm index's
+// server-receipt clock (this process already saw a write() for this ref); else the persisted
+// server-receipt timestamp (a prior process's write() -- survives a restart, r8); else the
+// persisted (client-supplied, untrusted) updatedAt as the last-resort legacy fallback for a
+// record that predates the serverReceivedAt field.
+function ttlBasisFor(
+  meta: HotExitMeta | undefined,
+  persistedServerReceivedAt: number | undefined,
+  legacyFallbackUpdatedAt: number,
+): number {
+  return meta?.updatedAt ?? persistedServerReceivedAt ?? legacyFallbackUpdatedAt;
 }
 
-function payloadFor(snapshot: EditorHotExitSnapshotV1): EditorHotExitStoredSnapshot {
+function payloadFor(
+  snapshot: EditorHotExitSnapshotV1,
+  serverReceivedAt: number,
+): EditorHotExitStoredSnapshot {
   return {
     schemaVersion: HOT_EXIT_PAYLOAD_SCHEMA_VERSION,
     content: snapshot.content,
@@ -189,6 +207,7 @@ function payloadFor(snapshot: EditorHotExitSnapshotV1): EditorHotExitStoredSnaps
     savedContentHash: snapshot.savedContentHash,
     contentSizeBytes: contentSizeBytes(snapshot.content),
     updatedAt: snapshot.updatedAt,
+    serverReceivedAt,
     paneId: snapshot.paneId,
     windowId: snapshot.windowId,
   };
@@ -223,10 +242,12 @@ export function createEditorHotExitStore(
       metaIndex = new Map<string, HotExitMeta>();
       // Cold-start build: decrypt each stored snapshot exactly once to seed non-secret metadata.
       // Corrupt/undecodable snapshots are dropped by readStoredSnapshot and simply omitted here.
+      // Prefer the persisted server-receipt clock (r8) over the client-supplied updatedAt so a
+      // restart's cold-start build carries the same trusted TTL basis a warm write would have.
       for (const item of listHotExitItems(activeVault)) {
         metaIndex.set(item.ref, {
           contentSizeBytes: item.snapshot.contentSizeBytes,
-          updatedAt: item.snapshot.updatedAt,
+          updatedAt: item.snapshot.serverReceivedAt ?? item.snapshot.updatedAt,
         });
       }
     }
@@ -267,7 +288,6 @@ export function createEditorHotExitStore(
   return {
     snapshotRefFor,
     write(snapshot, ref): EditorHotExitWriteResult {
-      const payload = payloadFor(snapshot);
       const activeVault = getVault();
       const index = getMetaIndex(activeVault);
       // Use the server's own receipt clock -- never the untrusted client-supplied
@@ -276,7 +296,10 @@ export function createEditorHotExitStore(
       // Date.now() default). A single anomalous client timestamp (far-future OR far-behind) can
       // then neither evict every other cached snapshot process-wide nor make this entry look
       // already expired to the very next read() or prune() (r6; see HotExitMeta.updatedAt).
+      // Persisted into the stored payload itself (serverReceivedAt) so this same trusted basis
+      // survives a process restart, not just this process's in-memory index (r8).
       const receivedAt = Date.now();
+      const payload = payloadFor(snapshot, receivedAt);
       // Record the incoming entry's non-secret metadata BEFORE prune so the budget math sees it.
       index.set(ref, {
         contentSizeBytes: payload.contentSizeBytes,
@@ -302,9 +325,16 @@ export function createEditorHotExitStore(
       // earlier in this process, per r6. Deliberately uses the optional index rather than forcing
       // a cold-start build here, so a read() that happens to be the first call in a fresh process
       // still costs exactly one decrypt (of this ref only), matching the pre-existing hot-path
-      // budget. A ref never touched by write() in this process (true cold read) falls back to the
-      // persisted client updatedAt, matching getMetaIndex's own cold-start seeding.
-      const ttlBasisUpdatedAt = ttlBasisFor(metaIndex?.get(snapshotRef), snapshot.updatedAt);
+      // budget. A ref never touched by write() in this process (true cold read, e.g. the first
+      // read after a restart) falls back to the persisted server-receipt timestamp written
+      // alongside the snapshot, which survives the restart even though the in-memory index does
+      // not (r8); only a record persisted before that field existed falls all the way back to the
+      // legacy, client-supplied updatedAt.
+      const ttlBasisUpdatedAt = ttlBasisFor(
+        metaIndex?.get(snapshotRef),
+        snapshot.serverReceivedAt,
+        snapshot.updatedAt,
+      );
       if (expired(ttlBasisUpdatedAt, nowMs)) {
         activeVault.delete(snapshotRef);
         metaIndex?.delete(snapshotRef);

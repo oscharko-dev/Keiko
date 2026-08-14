@@ -18,6 +18,7 @@ import {
   parseSetWatchesRequest,
   parseStackTraceRequest,
   parseVariablesRequest,
+  type DebugEvent,
   type DebugParseResult,
   type DebugSession,
   type DebugSessionStatus,
@@ -776,6 +777,21 @@ function persistedButNotArmed(result: BreakpointStoreMutationResult): RouteResul
   };
 }
 
+function instrumentationChangeEvent(
+  workspaceId: string,
+  result: Extract<BreakpointStoreMutationResult, { readonly ok: true }>,
+): DebugEvent {
+  return {
+    kind: "breakpoints-changed",
+    workspaceId,
+    revision: result.snapshot.revision,
+    breakpointCount: result.snapshot.breakpoints.length,
+    verifiedCount: result.snapshot.breakpoints.filter(
+      (breakpoint) => breakpoint.verification === "verified",
+    ).length,
+  };
+}
+
 function publishInstrumentationChange(
   service: DapDebugRouteService,
   workspace: AuthorizedWorkspace,
@@ -786,15 +802,7 @@ function publishInstrumentationChange(
       workspacePartitionKey: workspace.partition,
       browserSessionBinding: workspace.browserSessionBinding,
     },
-    {
-      kind: "breakpoints-changed",
-      workspaceId: workspace.workspaceId,
-      revision: result.snapshot.revision,
-      breakpointCount: result.snapshot.breakpoints.length,
-      verifiedCount: result.snapshot.breakpoints.filter(
-        (breakpoint) => breakpoint.verification === "verified",
-      ).length,
-    },
+    instrumentationChangeEvent(workspace.workspaceId, result),
   );
   return published ? undefined : eventUnavailableResponse(result.snapshot);
 }
@@ -962,8 +970,8 @@ async function reconcileActiveBreakpoints(
 function liveDebugWorkspace(
   service: DapDebugRouteService,
   realRoot: string,
+  partition: string,
 ): AuthorizedWorkspace | undefined {
-  const partition = inspectDebugWorkspaceIdentity(realRoot).identityDigest;
   const sessionId = service.manager.workspaceSessionId(partition);
   if (sessionId === undefined) return undefined;
   const binding = service.manager.binding(sessionId);
@@ -1004,13 +1012,31 @@ function renameBreakpointRecords(
 // dispatches that same setBreakpoints shape with an empty list, clearing whatever the adapter had
 // armed there. reconcileActiveBreakpoints is reused verbatim for the new path so its
 // adapter-reported verification lands in the store exactly like any other breakpoint mutation.
+//
+// KEIKO-0179 review round 8 (Codex P2, PR #3141): the old-path clear's outcome used to be discarded
+// outright, so an adapter timeout/reject there was invisible -- the new path still got armed and the
+// change still published as a clean success, leaving the adapter possibly armed at both the old and
+// the new path with nothing to diagnose it. The outcome is now inspected: a non-"response" result is
+// reported through its own diagnostic tag (distinct from the outer best-effort catch below) before
+// falling through to arm the new path regardless. That fallthrough is deliberate, not merely
+// tolerated -- the rename already happened on disk, so a stale old-path arm cannot rebind to real
+// code, while stopping here would strand the new path unarmed too, which is strictly worse than a
+// degraded-but-diagnosed old-path clear.
 async function reconcileRenamedPair(
   service: DapDebugRouteService,
   workspace: AuthorizedWorkspace,
   pair: RenamedInstrumentationFileId,
   latest: Extract<BreakpointStoreMutationResult, { readonly ok: true }>,
 ): Promise<Extract<BreakpointStoreMutationResult, { readonly ok: true }>> {
-  await updateActiveBreakpoints(service, workspace, pair.previousFileId, latest.snapshot);
+  const oldPathClear = await updateActiveBreakpoints(
+    service,
+    workspace,
+    pair.previousFileId,
+    latest.snapshot,
+  );
+  if (oldPathClear.kind !== "response") {
+    emitRenameOldPathClearDegraded(service, workspace.realRoot);
+  }
   const reconciled = await reconcileActiveBreakpoints(service, workspace, pair.nextFileId, latest);
   return reconciled.result.ok ? reconciled.result : latest;
 }
@@ -1032,6 +1058,20 @@ function emitRenameInstrumentationFailure(
   );
 }
 
+function emitRenameOldPathClearDegraded(service: DapDebugRouteService, realRoot: string): void {
+  emitServerDiagnostic(
+    service.diagnosticSink,
+    serverDiagnosticFromError({
+      correlationId: breakpointStoreWorkspaceFingerprint(realRoot),
+      operation: "dap.debug-routes.rename-instrumentation.old-path-clear-degraded",
+      source: "dap.debug-routes.rename-instrumentation",
+      error: new Error("RENAME_OLD_PATH_CLEAR_DEGRADED"),
+      redact: () =>
+        "Debug adapter did not confirm the renamed file's old path was cleared; the new path was armed regardless.",
+    }),
+  );
+}
+
 async function reconcileRenamedInstrumentation(
   service: DapDebugRouteService,
   workspace: AuthorizedWorkspace,
@@ -1043,6 +1083,35 @@ async function reconcileRenamedInstrumentation(
     latest = await reconcileRenamedPair(service, workspace, pair, latest);
   }
   publishInstrumentationChange(service, workspace, latest);
+}
+
+// KEIKO-0179 review round 8 (Codex P2, PR #3141): EditorDebugSessionHost opens the browser's SSE
+// debug-event stream and bootstraps instrumentation before any debuggee launches, so a rename can
+// land while that stream is already subscribed on this workspace's partition yet
+// service.manager.workspaceSessionId(partition) still returns undefined -- liveDebugWorkspace
+// returns undefined in exactly that window, and the panel would otherwise never learn the rename
+// happened until its next bootstrap re-read or a conflict-triggered refresh. DapEventBridge's channel
+// key ({workspacePartitionKey, browserSessionBinding}, dapEventBridge.ts channelKey()) is populated
+// at stream-open (handleDebugEvents -> service.events.subscribe) independent of any
+// DapProcessManager session, so channelsForPartition reads that existing subscription registry to
+// find every stream already listening on this partition and publishes to each directly. There is no
+// adapter to reconcile here -- no session means nothing is armed anywhere -- only the panel(s) to
+// notify.
+function publishSessionlessRenameInstrumentation(
+  service: DapDebugRouteService,
+  realRoot: string,
+  partition: string,
+  latest: Extract<BreakpointStoreMutationResult, { readonly ok: true }>,
+): void {
+  const channels = service.events.channelsForPartition(partition);
+  if (channels.length === 0) return;
+  const workspaceId = breakpointStoreWorkspaceFingerprint(realRoot);
+  const event = instrumentationChangeEvent(workspaceId, latest);
+  for (const channel of channels) {
+    if (!service.events.publish(channel, event)) {
+      emitRenameInstrumentationFailure(service, realRoot, new Error("EVENT_UNAVAILABLE"));
+    }
+  }
 }
 
 // KEIKO-0179 follow-up (Codex P1, twice-raised on PR #3141): a rename during an active debug
@@ -1059,12 +1128,16 @@ async function runRenameInstrumentation(
 ): Promise<void> {
   const { applied, latest } = renameBreakpointRecords(service, realRoot, renames);
   if (latest === undefined) return;
-  // liveDebugWorkspace stays inside the guard: inspectDebugWorkspaceIdentity can throw if the root
-  // becomes unreadable between the store re-key and this lookup, and the method's contract is that
-  // it never rejects — a failure here must degrade to a diagnostic, not a failed rename.
+  // inspectDebugWorkspaceIdentity stays inside the guard: it can throw if the root becomes unreadable
+  // between the store re-key and this lookup, and the method's contract is that it never rejects — a
+  // failure here must degrade to a diagnostic, not a failed rename.
   try {
-    const workspace = liveDebugWorkspace(service, realRoot);
-    if (workspace === undefined) return;
+    const partition = inspectDebugWorkspaceIdentity(realRoot).identityDigest;
+    const workspace = liveDebugWorkspace(service, realRoot, partition);
+    if (workspace === undefined) {
+      publishSessionlessRenameInstrumentation(service, realRoot, partition, latest);
+      return;
+    }
     await reconcileRenamedInstrumentation(service, workspace, applied, latest);
   } catch (error) {
     emitRenameInstrumentationFailure(service, realRoot, error);

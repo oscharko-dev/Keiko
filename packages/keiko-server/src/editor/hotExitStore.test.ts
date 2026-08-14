@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createLocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault";
 import {
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
   EDITOR_HOT_EXIT_TTL_MS,
@@ -208,5 +209,82 @@ describe("editor hot-exit server store", () => {
     // `updatedAt` field (contract data shown to the user) stays the untouched client value;
     // only the internal eviction/TTL bookkeeping moved to server-arrival time.
     expect(store.read(result.snapshotRef)?.content).toBe(stale.content);
+  });
+
+  // r8: r6 anchored the TTL basis to the server's own receipt clock, but only in the in-process
+  // metaIndex -- the persisted vault payload never carried that receipt time. After a Keiko
+  // restart (fresh process, fresh store instance, empty metaIndex) the very first read() of a
+  // ref has no warm meta entry to consult, so it fell straight back to the persisted (client-
+  // supplied, untrusted) `updatedAt`. A snapshot from a client clock more than one TTL window
+  // behind the server is then TTL-deleted on the first recovery read after restart -- precisely
+  // the crash/restart scenario hot-exit exists to survive.
+  it("recovers a snapshot on cold read after a restart even when the client clock is far behind the server", () => {
+    const stateDir = tempStateDir();
+    const store = createEditorHotExitStore({
+      stateDir,
+      env: { KEIKO_EDITOR_HOT_EXIT_KEY: VAULT_KEY },
+    });
+    const staleUpdatedAt = Date.now() - 10 * EDITOR_HOT_EXIT_TTL_MS;
+    const stale = snapshot({ updatedAt: staleUpdatedAt });
+    const ref = store.snapshotRefFor(stale.workspaceRoot, stale.relativePath);
+    store.write(stale, ref);
+
+    // Simulate a Keiko restart: a brand-new store instance over the same on-disk stateDir has no
+    // in-process metaIndex at all, exactly like the scale/cold-start tests model a cold process.
+    const restarted = createEditorHotExitStore({
+      stateDir,
+      env: { KEIKO_EDITOR_HOT_EXIT_KEY: VAULT_KEY },
+    });
+
+    expect(restarted.read(ref)?.content).toBe(stale.content);
+  });
+
+  // r8: a stored record written before this fix (or by any writer that never persisted a server
+  // receipt timestamp) must keep working under the pre-existing client-updatedAt TTL fallback --
+  // adding the new field must be backward-compatible, never a crash or a hard requirement.
+  it("still applies the legacy client-updatedAt TTL fallback for a stored record with no persisted server receipt", () => {
+    const stateDir = tempStateDir();
+    const storePath = join(stateDir, "editor-hot-exit", "snapshots.vault");
+    const vault = createLocalSecretVault({
+      key: Buffer.from(VAULT_KEY, "base64"),
+      storePath,
+    });
+    const store = createEditorHotExitStore({
+      stateDir,
+      env: { KEIKO_EDITOR_HOT_EXIT_KEY: VAULT_KEY },
+      vault,
+    });
+    const fresh = snapshot({ updatedAt: Date.now() });
+    const freshRef = store.snapshotRefFor(fresh.workspaceRoot, fresh.relativePath);
+    const stale = snapshot({
+      relativePath: "src/legacy.ts",
+      updatedAt: Date.now() - 10 * EDITOR_HOT_EXIT_TTL_MS,
+    });
+    const staleRef = store.snapshotRefFor(stale.workspaceRoot, stale.relativePath);
+    // Seed the vault directly with the pre-fix stored shape (no `serverReceivedAt` field),
+    // bypassing store.write() so no server receipt time is ever recorded for these entries.
+    for (const [ref, entry] of [[freshRef, fresh] as const, [staleRef, stale] as const]) {
+      vault.set(
+        ref,
+        JSON.stringify({
+          schemaVersion: 1,
+          content: entry.content,
+          baseVersion: entry.baseVersion,
+          contentHash: entry.contentHash,
+          savedContentHash: entry.savedContentHash,
+          contentSizeBytes: Buffer.byteLength(entry.content, "utf8"),
+          updatedAt: entry.updatedAt,
+          paneId: entry.paneId,
+          windowId: entry.windowId,
+        }),
+      );
+    }
+
+    // A legacy record within the TTL window (measured against its own client updatedAt) still
+    // reads back successfully.
+    expect(store.read(freshRef)?.content).toBe(fresh.content);
+    // A legacy record whose client updatedAt is far in the past still expires under the old
+    // fallback semantics -- unchanged behaviour for records that never got a server receipt.
+    expect(store.read(staleRef)).toBeNull();
   });
 });

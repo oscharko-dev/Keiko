@@ -46,6 +46,11 @@ export interface DapEventBridge {
     readonly onEvent: (event: DebugEventEnvelope) => void;
   }): DebugEventSubscriptionResult;
   snapshot(channel: DebugEventChannel): DebugEventReplaySnapshot;
+  // Read-only lookup over the bridge's own subscription registry: every channel currently known for
+  // this partition, regardless of which browserSessionBinding subscribed it. Lets a caller that has
+  // no DapProcessManager session (and therefore no single browserSessionBinding to address) reach
+  // every stream already open on the partition instead of guessing at one binding.
+  channelsForPartition(workspacePartitionKey: string): readonly DebugEventChannel[];
   disposeChannel(channel: DebugEventChannel): void;
   disposeAll(): void;
 }
@@ -56,6 +61,7 @@ interface RetainedEvent {
 }
 
 interface ChannelState {
+  readonly channel: DebugEventChannel;
   readonly replay: RetainedEvent[];
   readonly subscribers: Map<number, (event: DebugEventEnvelope) => void>;
   sequence: number;
@@ -69,8 +75,9 @@ function channelKey(channel: DebugEventChannel): string {
   return `${channel.workspacePartitionKey}\u0000${channel.browserSessionBinding}`;
 }
 
-function createState(): ChannelState {
+function createState(channel: DebugEventChannel): ChannelState {
   return {
+    channel,
     replay: [],
     subscribers: new Map(),
     sequence: 0,
@@ -81,7 +88,11 @@ function createState(): ChannelState {
   };
 }
 
-function acquireState(channels: Map<string, ChannelState>, key: string): ChannelState | undefined {
+function acquireState(
+  channels: Map<string, ChannelState>,
+  key: string,
+  channel: DebugEventChannel,
+): ChannelState | undefined {
   const existing = channels.get(key);
   if (existing !== undefined) return existing;
   if (channels.size >= DEBUG_EVENT_CHANNEL_CAP) {
@@ -89,7 +100,7 @@ function acquireState(channels: Map<string, ChannelState>, key: string): Channel
     if (idle === undefined) return undefined;
     channels.delete(idle[0]);
   }
-  const created = createState();
+  const created = createState(channel);
   channels.set(key, created);
   return created;
 }
@@ -197,13 +208,13 @@ export function createDapEventBridge(): DapEventBridge {
   return {
     publish: (channel, event): boolean => {
       const key = channelKey(channel);
-      const state = acquireState(channels, key);
+      const state = acquireState(channels, key, channel);
       if (state === undefined) return false;
       return publish(state, event);
     },
     subscribe: ({ channel, lastSequence, onEvent }): DebugEventSubscriptionResult => {
       const key = channelKey(channel);
-      const state = acquireState(channels, key);
+      const state = acquireState(channels, key, channel);
       if (state === undefined) {
         return { kind: "subscriberLimit", snapshot: snapshot(undefined) };
       }
@@ -224,6 +235,10 @@ export function createDapEventBridge(): DapEventBridge {
       };
     },
     snapshot: (channel) => snapshot(channels.get(channelKey(channel))),
+    channelsForPartition: (workspacePartitionKey): readonly DebugEventChannel[] =>
+      [...channels.values()]
+        .filter((state) => state.channel.workspacePartitionKey === workspacePartitionKey)
+        .map((state) => state.channel),
     disposeChannel: (channel): void => {
       channels.delete(channelKey(channel));
     },
