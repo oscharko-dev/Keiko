@@ -2,6 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   currentConversationMemoryModeRevision,
+  removeConversationMemorySettings,
   resetConversationMemorySettingsForTests,
   useConversationMemorySettings,
 } from "./memorySettings";
@@ -68,6 +69,27 @@ describe("conversation memory settings store", () => {
       resetConversationMemorySettingsForTests();
     });
     expect(result.current.memoryMode).toBe("governed-assist");
+  });
+
+  it("removes a closed conversation scope and restores the privacy default", () => {
+    const { result } = renderHook(() => useConversationMemorySettings("chat-closed"));
+    act(() => {
+      result.current.setMemoryEnabled(true);
+      result.current.setMemoryBudgetTokens(2400);
+      removeConversationMemorySettings("chat-closed");
+    });
+    expect(result.current).toMatchObject({ memoryEnabled: false, memoryBudgetTokens: 1200 });
+  });
+
+  it("does not notify subscribers when reset leaves effective settings unchanged", () => {
+    const { result } = renderHook(() => useConversationMemorySettings());
+    act(() => {
+      result.current.setMemoryBudgetTokens(800);
+      result.current.setMemoryBudgetTokens(1200);
+    });
+    const unchangedSnapshot = result.current;
+    act(() => resetConversationMemorySettingsForTests());
+    expect(result.current).toBe(unchangedSnapshot);
   });
 
   it("tracks every effective settings change, including an ABA mode transition", () => {

@@ -74,6 +74,7 @@ import { canonicalVoiceSha256Hex } from "./canonical-voice-hasher";
 import { extractDocumentContext, type PendingDocument } from "./documentContext";
 import {
   currentConversationMemoryModeRevision,
+  removeConversationMemorySettings,
   useConversationMemorySettings,
 } from "./memorySettings";
 
@@ -645,6 +646,7 @@ export function notifyChatUpsert(chat: Chat): void {
 
 export function notifyChatDeleted(chatId: string): void {
   invalidateSharedBootstrap();
+  removeConversationMemorySettings(chatId);
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(CHAT_DELETE_EVENT, { detail: { chatId } }));
 }

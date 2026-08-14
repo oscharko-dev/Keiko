@@ -651,10 +651,14 @@ describe("useChatSession bootstrap", () => {
     notifyChatUpsert(chat({ id: "chat-new", selectedModel: "chat-live", updatedAt: 40 }));
     await waitFor(() => expect(result.current.chats[0]?.id).toBe("chat-new"));
 
+    const memory = renderHook(() => useConversationMemorySettings("chat-new"));
+    act(() => memory.result.current.setMemoryEnabled(true));
+
     notifyChatDeleted("chat-new");
     await waitFor(() =>
       expect(result.current.chats.some((item) => item.id === "chat-new")).toBe(false),
     );
+    expect(memory.result.current.memoryEnabled).toBe(false);
   });
 
   it("keeps chat mutation broadcasts inside their owning project catalog", async () => {

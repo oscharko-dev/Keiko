@@ -30,6 +30,13 @@ let currentModeRevision = 0;
 const conversationScopes = new Map<string, ConversationMemoryScopeSnapshot>();
 const listeners = new Set<() => void>();
 
+function scopeSettingsEqual(
+  left: ConversationMemoryScopeSnapshot,
+  right: ConversationMemoryScopeSnapshot,
+): boolean {
+  return left.enabled === right.enabled && left.budgetTokens === right.budgetTokens;
+}
+
 function normalizeBudgetTokens(tokens: number): number {
   if (!Number.isFinite(tokens) || tokens <= 0) return 0;
   return Math.floor(tokens);
@@ -51,7 +58,7 @@ function publishScope(
 ): void {
   const current = scopeSnapshot(scopeKey);
   const next = { ...current, ...patch };
-  if (next.enabled === current.enabled && next.budgetTokens === current.budgetTokens) return;
+  if (scopeSettingsEqual(next, current)) return;
   if (scopeKey === undefined) defaultScopeSettings = next;
   else conversationScopes.set(scopeKey, next);
   notifySubscribers();
@@ -80,6 +87,13 @@ export function currentConversationMemoryModeRevision(): number {
 
 export function currentConversationMemoryMode(): CodingWorkbenchMode {
   return currentMode;
+}
+
+export function removeConversationMemorySettings(scopeKey: string): void {
+  const removed = conversationScopes.get(scopeKey);
+  if (removed === undefined) return;
+  conversationScopes.delete(scopeKey);
+  if (!scopeSettingsEqual(removed, defaultScopeSettings)) notifySubscribers();
 }
 
 export function useConversationMemorySettings(scopeKey?: string): {
@@ -124,8 +138,10 @@ export function useConversationMemorySettings(scopeKey?: string): {
 
 export function resetConversationMemorySettingsForTests(): void {
   const changed =
-    defaultScopeSettings !== DEFAULT_MEMORY_SCOPE ||
-    conversationScopes.size > 0 ||
+    !scopeSettingsEqual(defaultScopeSettings, DEFAULT_MEMORY_SCOPE) ||
+    [...conversationScopes.values()].some(
+      (scope) => !scopeSettingsEqual(scope, DEFAULT_MEMORY_SCOPE),
+    ) ||
     currentMode !== DEFAULT_MEMORY_SETTINGS.mode;
   const modeChanged = currentMode !== DEFAULT_MEMORY_SETTINGS.mode;
   defaultScopeSettings = DEFAULT_MEMORY_SCOPE;
