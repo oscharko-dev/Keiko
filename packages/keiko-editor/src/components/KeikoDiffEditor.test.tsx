@@ -426,6 +426,28 @@ describe("KeikoDiffEditor — runtime and load state", () => {
     expect(screen.getByTestId("mock-diff")).toBeInTheDocument();
   });
 
+  it("re-applies the theme on a theme-variant change without remounting (Issue 2.2)", async () => {
+    // jsdom exposes no --ed-* design tokens, so resolveEditorThemeTokensFromDom throws every time it
+    // runs (see diff-mount.test.ts); the throw surfacing again through onRuntimeError on rerender is
+    // the observable that the re-theme path re-ran against the SAME mounted editor instance, not that
+    // a remount re-registered it from scratch. Mirrors KeikoCodeEditor.test.tsx's identical assertion
+    // for the code editor's own Issue 2.2 fix.
+    const onRuntimeError = vi.fn();
+    const { rerender } = render(
+      <KeikoDiffEditor {...baseDiffProps({ onRuntimeError, themeVariant: "dark" })} />,
+    );
+    await flushMount();
+    expect(onRuntimeError).toHaveBeenCalledTimes(1);
+    onRuntimeError.mockClear();
+
+    rerender(<KeikoDiffEditor {...baseDiffProps({ onRuntimeError, themeVariant: "light" })} />);
+    await flushMount();
+    expect(onRuntimeError).toHaveBeenCalledTimes(1);
+    // Still the same mounted diff editor -- no remount (hunk navigation still routes to the one
+    // captured Monaco controller).
+    expect(screen.getByTestId("mock-diff")).toBeInTheDocument();
+  });
+
   it("shows a loading placeholder while the runtime loads", () => {
     render(<KeikoDiffEditor {...baseDiffProps({ loadState: { status: "loading" } })} />);
     expect(screen.getByTestId("keiko-diff-pane-loading")).toBeInTheDocument();

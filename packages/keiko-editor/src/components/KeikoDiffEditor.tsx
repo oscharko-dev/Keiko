@@ -23,6 +23,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
+  type RefObject,
 } from "react";
 
 import type { EditorThemeVariant } from "../monaco/theme.js";
@@ -33,6 +34,7 @@ import {
   type DiffMountController,
   type MountDiffMonaco,
 } from "./diff-mount.js";
+import { reapplyEditorTheme, type MountMonaco } from "./on-mount.js";
 import {
   deriveDiffSummary,
   deriveDiffTruncationNote,
@@ -428,12 +430,41 @@ interface DiffController {
   readonly goToNext: () => void;
 }
 
+/**
+ * Re-theme the live diff editor when `themeVariant` changes after mount, instead of remounting the
+ * `<DiffEditor>` (mirrors the code editor's Issue 2.2 fix — use-editor-handlers.ts's
+ * `useThemeReapply`). The mount run is skipped: `wireDiffEditorOnMount` already registered the theme
+ * once, so only a LATER change re-defines the variant from the now-current DOM tokens and re-applies
+ * it through the same editor instance, leaving the diff view's scroll position and revealed hunk
+ * untouched.
+ */
+function useDiffThemeReapply(
+  themeVariant: EditorThemeVariant,
+  onThemeError: ((message: string) => void) | undefined,
+  monacoRef: RefObject<MountMonaco | null>,
+  containerRef: RefObject<HTMLElement | null>,
+): void {
+  const mounted = useRef(false);
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    const monaco = monacoRef.current;
+    const container = containerRef.current;
+    if (monaco === null || container === null) return;
+    reapplyEditorTheme({ monaco, container, themeVariant, onThemeError });
+  }, [themeVariant, onThemeError, monacoRef, containerRef]);
+}
+
 /** Hold the imperative diff-editor handle and expose the mount + hunk-navigation callbacks. */
 function useDiffController(
   themeVariant: EditorThemeVariant,
   onThemeError: ((message: string) => void) | undefined,
 ): DiffController {
   const controllerRef = useRef<DiffMountController | null>(null);
+  const monacoRef = useRef<MountMonaco | null>(null);
+  const containerRef = useRef<HTMLElement | null>(null);
   const onMount = useCallback<DiffOnMount>(
     (editor, monaco): void => {
       controllerRef.current?.dispose();
@@ -446,6 +477,12 @@ function useDiffController(
         themeVariant,
         onThemeError,
       });
+      // Retain the live monaco/container handles so a later themeVariant change (useDiffThemeReapply)
+      // can re-register the theme through the SAME editor instance instead of remounting (cf.
+      // use-editor-handlers.ts's initializeRuntimeMountRefs, which casts the same live namespace the
+      // same way for the code editor).
+      monacoRef.current = monaco as MountMonaco;
+      containerRef.current = editor.getContainerDomNode();
     },
     [themeVariant, onThemeError],
   );
@@ -456,6 +493,7 @@ function useDiffController(
     },
     [],
   );
+  useDiffThemeReapply(themeVariant, onThemeError, monacoRef, containerRef);
   const goToPrev = useCallback((): void => controllerRef.current?.goToPreviousDiff(), []);
   const goToNext = useCallback((): void => controllerRef.current?.goToNextDiff(), []);
   return { onMount, goToPrev, goToNext };
