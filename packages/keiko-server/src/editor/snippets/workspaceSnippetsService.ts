@@ -20,6 +20,9 @@ import type { WorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 
 const MAX_RECORD_BYTES = 512 * 1024;
 const MAX_IDEMPOTENCY_RECORDS = 64;
+// GEN-PERF-SSE-STREAMING-CHAT-PERF-001: bound the fan-out Set the same way workspaceWatchService
+// bounds its subscribers, so an unbounded stream of SSE clients cannot grow server memory forever.
+const DEFAULT_MAX_SUBSCRIBERS = 64;
 
 type WorkspaceSnippetsStoreState = "absent" | "ready" | "unavailable";
 
@@ -49,8 +52,16 @@ export interface WorkspaceSnippetsService {
   readonly completions: (
     request: WorkspaceSnippetCompletionRequest,
   ) => readonly EditorM7SnippetCompletion[];
-  readonly subscribe: (listener: WorkspaceSnippetsEventListener) => () => void;
+  readonly subscribe: (
+    listener: WorkspaceSnippetsEventListener,
+  ) => WorkspaceSnippetsSubscribeResult;
 }
+
+// Mirrors WorkspaceWatchSubscribeResult (workspaceWatchService.ts): subscribing returns a
+// discriminated result at subscribe time rather than an unconditional unsubscribe function, so the
+// subscriber cap lives on the service contract itself and cannot race a route-level count check.
+export type WorkspaceSnippetsSubscribeResult =
+  { readonly kind: "ok"; readonly unsubscribe: () => void } | { readonly kind: "subscriberLimit" };
 
 export interface WorkspaceSnippetsServiceOptions {
   readonly stateDir: string;
@@ -58,6 +69,7 @@ export interface WorkspaceSnippetsServiceOptions {
   readonly save?: ((path: string, value: Record<string, unknown>) => void) | undefined;
   readonly read?: ((path: string) => string) | undefined;
   readonly size?: ((path: string) => number) | undefined;
+  readonly maxSubscribers?: number | undefined;
 }
 
 export interface WorkspaceSnippetsChangeEvent {
@@ -395,10 +407,12 @@ function completeWorkspaceSnippets(
 
 function subscribeWorkspaceSnippets(
   listeners: Set<WorkspaceSnippetsEventListener>,
+  maxSubscribers: number,
 ): WorkspaceSnippetsService["subscribe"] {
-  return (listener: WorkspaceSnippetsEventListener): (() => void) => {
+  return (listener: WorkspaceSnippetsEventListener): WorkspaceSnippetsSubscribeResult => {
+    if (listeners.size >= maxSubscribers) return { kind: "subscriberLimit" };
     listeners.add(listener);
-    return () => listeners.delete(listener);
+    return { kind: "ok", unsubscribe: () => listeners.delete(listener) };
   };
 }
 
@@ -406,6 +420,7 @@ export function createWorkspaceSnippetsService(
   options: WorkspaceSnippetsServiceOptions,
 ): WorkspaceSnippetsService {
   const listeners = new Set<WorkspaceSnippetsEventListener>();
+  const maxSubscribers = options.maxSubscribers ?? DEFAULT_MAX_SUBSCRIBERS;
   let sequence = 0;
   const nextSequence = (): number => {
     sequence += 1;
@@ -416,6 +431,6 @@ export function createWorkspaceSnippetsService(
     read: readWorkspaceSnippets(options),
     mutate: mutateWorkspaceSnippets(options, listeners, nextSequence),
     completions: completeWorkspaceSnippets(options),
-    subscribe: subscribeWorkspaceSnippets(listeners),
+    subscribe: subscribeWorkspaceSnippets(listeners, maxSubscribers),
   };
 }

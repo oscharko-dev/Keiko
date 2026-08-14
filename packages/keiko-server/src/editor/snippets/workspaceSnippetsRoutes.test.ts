@@ -20,6 +20,7 @@ import { STREAMING, type RouteContext } from "../../routes.js";
 import type {
   WorkspaceSnippetsChangeEvent,
   WorkspaceSnippetsService,
+  WorkspaceSnippetsSubscribeResult,
 } from "./workspaceSnippetsService.js";
 import {
   handleGetWorkspaceSnippets,
@@ -89,15 +90,50 @@ function fakeService(): WorkspaceSnippetsService & {
       }),
     ),
     completions: () => [],
-    subscribe: (listener) => {
+    subscribe: (listener): WorkspaceSnippetsSubscribeResult => {
       listeners.add(listener);
-      return () => listeners.delete(listener);
+      return { kind: "ok", unsubscribe: () => listeners.delete(listener) };
     },
     listenerCount: () => listeners.size,
     emit: (event): void => {
       for (const listener of listeners) listener(event);
     },
   };
+}
+
+interface FakeSnippetsSseRes {
+  res: ServerResponse;
+  readonly chunks: string[];
+  destroyCount: number;
+  writeHeadCount: number;
+  writeReturns: boolean;
+}
+
+function makeFakeSnippetsSseRes(): FakeSnippetsSseRes {
+  const chunks: string[] = [];
+  const emitter = new EventEmitter();
+  const state: FakeSnippetsSseRes = {
+    res: undefined as unknown as ServerResponse,
+    chunks,
+    destroyCount: 0,
+    writeHeadCount: 0,
+    writeReturns: true,
+  };
+  const res = Object.assign(emitter, {
+    writeHead: (): ServerResponse => {
+      state.writeHeadCount += 1;
+      return res as unknown as ServerResponse;
+    },
+    write: (chunk: string): boolean => {
+      chunks.push(chunk);
+      return state.writeReturns;
+    },
+    destroy: (): void => {
+      state.destroyCount += 1;
+    },
+  });
+  state.res = res as unknown as ServerResponse;
+  return state;
 }
 
 function deps(service: WorkspaceSnippetsService | undefined): UiHandlerDeps {
@@ -278,5 +314,61 @@ describe("workspace snippet routes", () => {
     expect(service.listenerCount()).toBe(0);
     expect(chunks.join("")).toContain("event: ready");
     expect(chunks.join("")).toContain("editor-snippets:changed");
+  });
+
+  // GEN-PERF-SSE-STREAMING-CHAT-PERF-001 (KEIKO-0366): a client that stops draining must not be
+  // allowed to grow Node's write buffer without bound. Mirrors command-runner-routes.test.ts's
+  // "openCommandSseStream backpressure" block: a fake res whose write() always returns false must
+  // cause the handler to destroy the socket (via writeOrDestroy) and unsubscribe from the service.
+  it("destroys the socket and unsubscribes when res.write reports backpressure", () => {
+    const service = fakeService();
+    const fake = makeFakeSnippetsSseRes();
+    fake.writeReturns = false;
+    const eventContext = context("/api/editor/snippets/events", undefined, {}, fake.res);
+
+    const result = handleWorkspaceSnippetsEvents(eventContext, deps(service));
+
+    expect(result).toBe(STREAMING);
+    // The ready frame itself is rejected, which must trip the abort+destroy path exactly once and
+    // unsubscribe from the service immediately.
+    expect(fake.destroyCount).toBe(1);
+    expect(service.listenerCount()).toBe(0);
+
+    const chunksBeforeEvent = fake.chunks.length;
+    service.emit({
+      schemaVersion: EDITOR_M7_SNIPPET_COLLECTION_VERSION,
+      sequence: 1,
+      workspaceFingerprint: "abcdef1234567890",
+      revision: 1,
+      action: "replace",
+      snippetCount: 1,
+    });
+
+    // Already unsubscribed by the abort, so a subsequent change event produces no further writes
+    // and does not re-trigger destroy.
+    expect(fake.chunks).toHaveLength(chunksBeforeEvent);
+    expect(fake.destroyCount).toBe(1);
+
+    expect(() => {
+      fake.res.emit("close");
+    }).not.toThrow();
+  });
+
+  it("rejects a new stream with 429 SUBSCRIBER_LIMIT before opening the SSE response", () => {
+    const base = fakeService();
+    const service = {
+      ...base,
+      subscribe: (): WorkspaceSnippetsSubscribeResult => ({ kind: "subscriberLimit" }),
+    };
+    const fake = makeFakeSnippetsSseRes();
+    const eventContext = context("/api/editor/snippets/events", undefined, {}, fake.res);
+
+    const result = handleWorkspaceSnippetsEvents(eventContext, deps(service));
+
+    expect(result).toMatchObject({
+      status: 429,
+      body: { error: { code: "SUBSCRIBER_LIMIT" } },
+    });
+    expect(fake.writeHeadCount).toBe(0);
   });
 });

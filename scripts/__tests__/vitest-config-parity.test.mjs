@@ -24,6 +24,7 @@ const CONFIGS = [
   { name: "keiko-ui coverage gate", path: "packages/keiko-ui/vitest.coverage.config.ts" },
   { name: "keiko-ui suite", path: "packages/keiko-ui/vitest.config.ts" },
   { name: "keiko-local-knowledge suite", path: "packages/keiko-local-knowledge/vitest.config.ts" },
+  { name: "keiko-editor suite", path: "packages/keiko-editor/vitest.config.ts" },
 ];
 
 function readPackageScripts() {

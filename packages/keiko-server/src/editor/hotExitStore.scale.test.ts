@@ -94,14 +94,20 @@ describe("editor hot-exit store write hot path (GEN-PERF-PERSISTENCE-002)", () =
       vault: instrumented.vault,
     });
 
+    // updatedAt values stay near the real clock: write() prunes against Date.now() (KEIKO-0367),
+    // so a synthetic epoch-relative timestamp would already read as TTL-expired and be reaped by
+    // its own write, defeating this test's setup.
+    const base = Date.now();
     const N = 50;
     for (let i = 0; i < N; i += 1) {
-      store.write(snapshot(i, 1_000 + i));
+      const item = snapshot(i, base + i);
+      store.write(item, store.snapshotRefFor(item.workspaceRoot, item.relativePath));
     }
 
     // Warm the store: metadata index is now seeded. Measure decrypts for one additional write.
     instrumented.reset();
-    store.write(snapshot(0, 2_000));
+    const warm = snapshot(0, base + N);
+    store.write(warm, store.snapshotRefFor(warm.workspaceRoot, warm.relativePath));
 
     // A warm write must not decrypt the other stored snapshots. Pre-fix, prune() called vault.get
     // for every stored ref => >= N decrypts. Fixed code decrypts none on the write path.
@@ -118,13 +124,17 @@ describe("editor hot-exit store write hot path (GEN-PERF-PERSISTENCE-002)", () =
     });
 
     // Large payloads so total approaches MAX_TOTAL_BYTES (8 MiB) and prune eviction engages.
+    // updatedAt values stay near the real clock for the same reason as the previous test.
+    const base = Date.now();
     const big = "x".repeat(120 * 1024);
     for (let i = 0; i < 50; i += 1) {
-      store.write({ ...snapshot(i, 1_000 + i), content: `${big}${String(i)}` });
+      const item = { ...snapshot(i, base + i), content: `${big}${String(i)}` };
+      store.write(item, store.snapshotRefFor(item.workspaceRoot, item.relativePath));
     }
 
     instrumented.reset();
-    store.write({ ...snapshot(999, 3_000), content: `${big}999` });
+    const evictor = { ...snapshot(999, base + 1_000), content: `${big}999` };
+    store.write(evictor, store.snapshotRefFor(evictor.workspaceRoot, evictor.relativePath));
 
     // O(1) decrypts regardless of N. A pre-fix O(N) prune decrypts every stored ref (>= 50);
     // the fixed code stays under a small constant with 3-5x headroom.
@@ -140,9 +150,14 @@ describe("editor hot-exit store write hot path (GEN-PERF-PERSISTENCE-002)", () =
       env: { KEIKO_EDITOR_HOT_EXIT_KEY: VAULT_KEY.toString("base64") },
       vault: seed.vault,
     });
+    // updatedAt values stay near the real clock: write() prunes against Date.now() (KEIKO-0367),
+    // so a synthetic epoch-relative timestamp would already read as TTL-expired and be reaped by
+    // its own write, leaving nothing for the cold store below to find on disk.
+    const base = Date.now();
     const N = 20;
     for (let i = 0; i < N; i += 1) {
-      seedStore.write(snapshot(i, 1_000 + i));
+      const item = snapshot(i, base + i);
+      seedStore.write(item, seedStore.snapshotRefFor(item.workspaceRoot, item.relativePath));
     }
 
     const cold = countingVault(stateDir);
@@ -153,12 +168,20 @@ describe("editor hot-exit store write hot path (GEN-PERF-PERSISTENCE-002)", () =
     });
 
     // First write on a cold store triggers the one-time metadata build (N decrypts) plus the write.
-    coldStore.write(snapshot(0, 5_000));
+    const coldFirst = snapshot(0, base + N);
+    coldStore.write(
+      coldFirst,
+      coldStore.snapshotRefFor(coldFirst.workspaceRoot, coldFirst.relativePath),
+    );
     const afterCold = cold.getCount();
 
     // Second write must reuse the warm index: no further bulk decrypt.
     cold.reset();
-    coldStore.write(snapshot(1, 6_000));
+    const coldSecond = snapshot(1, base + N + 1);
+    coldStore.write(
+      coldSecond,
+      coldStore.snapshotRefFor(coldSecond.workspaceRoot, coldSecond.relativePath),
+    );
 
     expect(afterCold).toBeGreaterThanOrEqual(N); // cold build decrypts existing entries once
     expect(cold.getCount()).toBeLessThan(5); // warm write decrypts nothing bulk

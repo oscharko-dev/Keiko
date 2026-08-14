@@ -140,6 +140,8 @@ describe("deriveEditorStatusBar diagnostics field", () => {
     const problems = field(view, "problems");
     expect(problems?.tone).toBe("default");
     expect(problems?.ariaLabel).toBe("Problems: 2 infos");
+    expect(problems?.label).not.toBe("0 ⚠ 0");
+    expect(problems?.label).toBe("2 infos");
   });
 });
 

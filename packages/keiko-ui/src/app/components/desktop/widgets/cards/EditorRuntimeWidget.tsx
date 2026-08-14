@@ -6613,18 +6613,34 @@ function EditorRuntimeWidget({
     }
   };
 
-  const renderLocalHistoryProtectionBanner = (): ReactNode =>
-    localHistoryProtection?.status === "degraded" ? (
-      <output className="ed-recovery" data-testid="editor-local-history-protection">
-        <span>
-          {commonT("editor.localHistoryProtection.savedUnprotected")}{" "}
-          {localHistoryProtectionGuidance(localHistoryProtection.reason)}{" "}
-          {commonT("editor.localHistoryProtection.diagnosticReference", {
-            correlationId: localHistoryProtection.correlationId,
-          })}
-        </span>
-      </output>
-    ) : null;
+  const renderLocalHistoryProtectionBanner = (): ReactNode => {
+    if (localHistoryProtection?.status === "degraded") {
+      return (
+        <output className="ed-recovery" data-testid="editor-local-history-protection">
+          <span>
+            {commonT("editor.localHistoryProtection.savedUnprotected")}{" "}
+            {localHistoryProtectionGuidance(localHistoryProtection.reason)}{" "}
+            {commonT("editor.localHistoryProtection.diagnosticReference", {
+              correlationId: localHistoryProtection.correlationId,
+            })}
+          </span>
+        </output>
+      );
+    }
+    if (localHistoryProtection?.status === "suppressed") {
+      return (
+        <output className="ed-recovery" data-testid="editor-local-history-protection">
+          <span>
+            {commonT("editor.localHistoryProtection.suppressedSecretDetected")}{" "}
+            {commonT("editor.localHistoryProtection.diagnosticReference", {
+              correlationId: localHistoryProtection.correlationId,
+            })}
+          </span>
+        </output>
+      );
+    }
+    return null;
+  };
 
   const renderExternalChangeBanner = (): ReactNode => (
     <>

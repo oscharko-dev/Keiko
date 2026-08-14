@@ -41,6 +41,7 @@ import type { FilesContentResponse as FilesContentWireResponse } from "@oscharko
 import { containsPath } from "@oscharko-dev/keiko-git";
 import { notifyHostLspWorkspaceFileChanged } from "./editor/lsp/hostLanguageOperation.js";
 import { captureEditorLocalHistorySafely } from "./editor/localHistory/localHistoryCapture.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
 import {
   STREAMING,
@@ -2052,6 +2053,7 @@ export async function createFilesEntry(args: {
   } catch (error) {
     throw mapNodeFsError(error);
   }
+  notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 1);
   return { root: target.root, path: target.relativePath, kind: args.kind };
 }
 
@@ -2161,6 +2163,9 @@ async function executeContainedRename(
 export async function renameFilesEntry(args: RenameFilesEntryArgs): Promise<FilesMutationResponse> {
   const { source, target, kind } = await resolveRenameFilesPlan(args);
   await executeContainedRename(source, target, kind);
+  // LSP spec pair for a rename: the old path is Deleted, the new path is Created.
+  notifyHostLspWorkspaceFileChanged(source.realRoot, source.path, 3);
+  notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 1);
   return {
     root: target.root,
     path: target.relativePath,
@@ -2205,6 +2210,7 @@ export async function deleteFilesEntry(args: {
   } catch (error) {
     throw mapNodeFsError(error);
   }
+  notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 3);
   return { root: target.root, path: target.relativePath, kind };
 }
 
@@ -2269,6 +2275,9 @@ export async function copyFilesEntry(args: {
     if (error instanceof FilesError) throw error;
     throw mapNodeFsError(error);
   }
+  // The copy created a new watched file at the destination; the source is untouched and needs no
+  // event (mirrors renameFilesEntry's Deleted+Created pair, minus the Deleted half a copy never has).
+  notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 1);
   return {
     root: target.root,
     path: target.relativePath,
@@ -2573,6 +2582,81 @@ function parseOptionalBaseVersion(
   return { version: parsed.value };
 }
 
+// KEIKO-0179: maps one renamed breakpoint fileId (the exact source path, or a path inside a renamed
+// directory) to its post-rename fileId. `undefined` means this fileId is unaffected by the rename.
+function renamedBreakpointFileId(
+  fileId: string,
+  previousPath: string,
+  nextPath: string,
+): string | undefined {
+  if (fileId === previousPath) return nextPath;
+  if (fileId.startsWith(`${previousPath}/`))
+    return `${nextPath}${fileId.slice(previousPath.length)}`;
+  return undefined;
+}
+
+type DapDebugService = NonNullable<UiHandlerDeps["dapDebug"]>;
+
+// KEIKO-0179: computes the affected-fileId pairs for a successful rename -- one entry per distinct
+// fileId currently filed under the old path (the exact source path, or a path inside a renamed
+// directory), never a blind string-prefix rewrite, so each destination fileId is validated on its
+// own by whatever consumes the list.
+function affectedRenamedFileIds(
+  snapshot: Extract<ReturnType<DapDebugService["breakpoints"]["snapshot"]>, { readonly ok: true }>,
+  previousPath: string,
+  nextPath: string,
+): readonly { readonly previousFileId: string; readonly nextFileId: string }[] {
+  const seen = new Set<string>();
+  const renames: { readonly previousFileId: string; readonly nextFileId: string }[] = [];
+  for (const entry of snapshot.snapshot.breakpoints) {
+    if (seen.has(entry.fileId)) continue;
+    const nextFileId = renamedBreakpointFileId(entry.fileId, previousPath, nextPath);
+    if (nextFileId === undefined) continue;
+    seen.add(entry.fileId);
+    renames.push({ previousFileId: entry.fileId, nextFileId });
+  }
+  return renames;
+}
+
+// KEIKO-0179 follow-up (Codex P1, twice-raised on PR #3141): fans out a successful rename to the DAP
+// breakpoint store AND, when a debug session is live, the adapter itself -- both now live in
+// dapDebugRoutes.ts's DapDebugRouteService.renameInstrumentation, the layer that already owns the
+// reconciliation helpers a normal breakpoint mutation runs through. files.ts only computes which
+// fileIds are affected and delegates once; it never re-keys the store or touches the adapter
+// directly. Deliberately best-effort end to end: the filesystem rename already succeeded, so a
+// store or adapter failure downstream must not turn a completed rename into an error response.
+async function reKeyRenamedBreakpoints(
+  deps: UiHandlerDeps,
+  realRoot: string,
+  previousPath: string,
+  nextPath: string,
+): Promise<void> {
+  const service = deps.dapDebug;
+  if (service === undefined) return;
+  const snapshot = service.breakpoints.snapshot(realRoot);
+  if (!snapshot.ok) {
+    // Codex review round 6 on PR #3141: an unavailable snapshot (corrupt record, transient
+    // identity-inspection failure) used to skip the whole migration silently, bypassing the
+    // service-side rejection diagnostic entirely. The rename still must not fail — but the skipped
+    // migration has to be observable, mirroring the service's own redacted, body-free convention.
+    emitServerDiagnostic(
+      service.diagnosticSink,
+      serverDiagnosticFromError({
+        correlationId: `files-rename-${randomUUID()}`,
+        operation: "files.rename.breakpoint-migration-skipped",
+        source: "files.rename",
+        error: new Error("BREAKPOINT_SNAPSHOT_UNAVAILABLE"),
+        redact: () =>
+          "Breakpoint migration for a rename was skipped: the instrumentation snapshot is " +
+          "unavailable; breakpoints remain under the old path.",
+      }),
+    );
+    return;
+  }
+  const renames = affectedRenamedFileIds(snapshot, previousPath, nextPath);
+  if (renames.length > 0) await service.renameInstrumentation(realRoot, renames);
+}
+
 export async function handleFilesRename(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -2592,18 +2676,28 @@ export async function handleFilesRename(
     const resolvedRoot = await resolveRequestRoot(ctx, deps, rootInput);
     const baseVersion = parseOptionalBaseVersion(body);
     if (isRouteResult(baseVersion)) return baseVersion;
-    return {
-      status: 200,
-      body: await renameFilesEntry({
-        store: deps.store,
-        rootInput,
-        pathInput,
-        newPathInput,
-        baseVersion: baseVersion.version,
-        redactor: deps.redactor,
-        resolvedRoot,
-      }),
-    };
+    const result = await renameFilesEntry({
+      store: deps.store,
+      rootInput,
+      pathInput,
+      newPathInput,
+      baseVersion: baseVersion.version,
+      redactor: deps.redactor,
+      resolvedRoot,
+    });
+    if (result.previousPath !== undefined) {
+      // Deliberately NOT awaited (Codex P1 on PR #3141): the synchronous prefix — computing the
+      // affected fileIds, the store re-key commits, rejection diagnostics, and the sessionless
+      // browser publish — runs to completion before this expression yields, so the response body
+      // and any immediately-following instrumentation read already see the migrated store. Only the
+      // per-file adapter round-trips (3s deadline each) continue in the background; awaiting them
+      // could hold this response for minutes on a directory rename against an unavailable adapter,
+      // turning a long-completed filesystem rename into a UI timeout. renameInstrumentation's
+      // contract is that it never rejects (failures degrade to redacted diagnostics), so nothing is
+      // silently lost by detaching.
+      void reKeyRenamedBreakpoints(deps, resolvedRoot.realRoot, result.previousPath, result.path);
+    }
+    return { status: 200, body: result };
   });
 }
 

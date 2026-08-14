@@ -54,4 +54,32 @@ describe("createLspRestartThrottle", () => {
     expect(throttle.recordCrashAndMayRestart(2)).toBe(false);
     expect(throttle.restartCount()).toBe(2);
   });
+
+  // KEIKO-0483: pins LSP's "retain-on-deny" boundary semantics — a throttled crash's timestamp
+  // stays in the window instead of being dropped, unlike the DAP restart throttle's "drop-on-deny"
+  // semantics (dapRestartThrottle.ts). The two are equivalent for an isolated two-attempt burst but
+  // diverge under sustained rapid retries. This sequence proves the divergence: two crashes are
+  // permitted, a third (rapid) crash is throttled, then the clock advances to t = windowMs — the
+  // instant by which a drop-on-deny throttle configured identically would have (a) aged both
+  // permitted crashes (t=0, t=1) out of its window and (b) never recorded the throttled crash (t=2)
+  // at all, so it would permit a fourth call (see rollingWindowThrottle.test.ts, which replays this
+  // exact sequence against both semantics side by side and asserts the divergence directly). LSP's
+  // real, retain-on-deny throttle instead kept the throttled crash's timestamp (t=2) in the window
+  // the whole time, so at t=windowMs it is still in-window (2 > 1000-1000=0) alongside the fourth
+  // attempt itself, saturating the window again — the fourth call must still be denied. If a future
+  // refactor silently rewires LSP onto drop-on-deny, this assertion flips to `true` and fails.
+  it("stays throttled by a retained denied crash after the permitted crashes have aged out", () => {
+    const windowMs = 1_000;
+    const throttle = createLspRestartThrottle(windowMs, 2);
+
+    expect(throttle.recordCrashAndMayRestart(0)).toBe(true);
+    expect(throttle.recordCrashAndMayRestart(1)).toBe(true);
+    // Third crash within the window: 3 > 2 → throttled, but its timestamp (2) is retained.
+    expect(throttle.recordCrashAndMayRestart(2)).toBe(false);
+    // Fourth crash at t = windowMs: cutoff is 0, so only t=0 has aged out (0 > 0 is false); t=1,
+    // t=2 (the throttled one), and the new t=1000 are all still in-window ([1, 2, 1000], length 3),
+    // which is > maxInWindow(2) → still denied.
+    expect(throttle.recordCrashAndMayRestart(windowMs)).toBe(false);
+    expect(throttle.restartCount()).toBe(2);
+  });
 });

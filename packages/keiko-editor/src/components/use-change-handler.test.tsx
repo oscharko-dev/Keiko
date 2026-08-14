@@ -15,6 +15,8 @@
  * The mechanism (construction count / encode call count) is asserted directly, so the proof does
  * not depend on wall-clock timing.
  */
+import "../../vitest.setup";
+
 import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { editor } from "monaco-editor";

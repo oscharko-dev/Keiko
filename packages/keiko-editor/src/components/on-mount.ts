@@ -51,6 +51,7 @@ import {
   type EditorBlameBridge,
   type EditorBlameHost,
   type MonacoBlameEditor,
+  type MonacoBlameModel,
 } from "./blame-bridge.js";
 import {
   registerEditorGitGutter,
@@ -492,6 +493,14 @@ export interface MountEditor {
       cursorStateComputer: () => monaco.Selection[] | null,
     ): unknown;
     pushStackElement?(): void;
+    // Blame decoration-clear model targeting (Codex P2 / KEIKO-0378 follow-up): a Monaco model
+    // exposes its own `deltaDecorations`/`isDisposed`, independent of the editor it is currently
+    // attached to -- see `installBlame` below.
+    deltaDecorations?(
+      oldDecorations: string[],
+      newDecorations: monaco.editor.IModelDeltaDecoration[],
+    ): string[];
+    isDisposed?(): boolean;
   } | null;
   getContainerDomNode(): HTMLElement;
   saveViewState(): unknown;
@@ -1099,17 +1108,39 @@ function installGitGutter(args: WireEditorOnMountArgs): EditorGitGutterBridge | 
   return bridge;
 }
 
+// Wraps the live editor's current model in the minimal shape `clearTarget` (blame-bridge.ts) needs
+// to clear decorations directly off a superseded model. Null when the host model carries no
+// `deltaDecorations` of its own, so the bridge falls back to its pre-follow-up editor-only path.
+function blameModelHandle(editor: MountEditor): MonacoBlameModel | null {
+  const model = editor.getModel?.();
+  if (model?.deltaDecorations === undefined) return null;
+  return {
+    deltaDecorations: (oldIds, decorations) =>
+      model.deltaDecorations?.(oldIds, [...decorations]) ?? [],
+    ...(model.isDisposed === undefined
+      ? {}
+      : { isDisposed: (): boolean => model.isDisposed?.() ?? false }),
+  };
+}
+
 function installBlame(args: WireEditorOnMountArgs): EditorBlameBridge | null {
   const blame = args.blame;
   const targetType = args.monaco.editor.MouseTargetType?.GUTTER_GLYPH_MARGIN;
-  if (blame === undefined || targetType === undefined || args.editor.onMouseDown === undefined) {
+  if (
+    blame === undefined ||
+    targetType === undefined ||
+    args.editor.onMouseDown === undefined ||
+    args.editor.onDidChangeModel === undefined
+  ) {
     return null;
   }
   const editor: MonacoBlameEditor = {
     deltaDecorations: (oldIds, decorations) =>
       args.editor.deltaDecorations(oldIds, [...decorations]),
     getPosition: () => args.editor.getPosition?.() ?? null,
+    getModel: () => blameModelHandle(args.editor),
     onMouseDown: args.editor.onMouseDown.bind(args.editor),
+    onDidChangeModel: args.editor.onDidChangeModel.bind(args.editor),
     addAction: (descriptor) => args.editor.addAction(descriptor),
   };
   return registerEditorBlame({ ...blame, editor, glyphMarginTargetType: targetType });

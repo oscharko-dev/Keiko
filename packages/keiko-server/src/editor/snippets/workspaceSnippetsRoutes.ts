@@ -10,6 +10,8 @@ import type { UiHandlerDeps } from "../../deps.js";
 import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../../files.js";
 import { errorBody, STREAMING, type RouteContext, type RouteResult } from "../../routes.js";
 import { SSE_HEADERS, startSseHeartbeat } from "../../sse.js";
+import { writeOrDestroy } from "../../sse-write.js";
+import type { WorkspaceSnippetsChangeEvent } from "./workspaceSnippetsService.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_ROOT_CHARS = 4_096;
@@ -209,6 +211,10 @@ export async function handlePreviewWorkspaceSnippet(ctx: RouteContext): Promise<
   return { status: 200, body: { ok: true, preview: parsed.value } };
 }
 
+function snippetsChangedFrame(event: WorkspaceSnippetsChangeEvent): string {
+  return `event: editor-snippets:changed\ndata: ${JSON.stringify(event)}\n\n`;
+}
+
 export function handleWorkspaceSnippetsEvents(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -219,16 +225,26 @@ export function handleWorkspaceSnippetsEvents(
       body: errorBody("STATE_UNAVAILABLE", "Workspace snippets are unavailable."),
     };
   }
+  // Subscribe (and check the subscriber cap) before writing any response head: a capacity-rejected
+  // subscription must still be answerable as a plain 429, not an SSE stream that opens then closes.
+  const controller = new AbortController();
+  const subscription = deps.workspaceSnippets.subscribe((event) => {
+    writeOrDestroy(ctx.res, snippetsChangedFrame(event), controller);
+  });
+  if (subscription.kind === "subscriberLimit") {
+    return { status: 429, body: errorBody("SUBSCRIBER_LIMIT", "Too many snippet subscribers.") };
+  }
   ctx.res.writeHead(200, SSE_HEADERS);
   const stopHeartbeat = startSseHeartbeat(ctx.res);
-  const unsubscribe = deps.workspaceSnippets.subscribe((event) => {
-    ctx.res.write(`event: editor-snippets:changed\n`);
-    ctx.res.write(`data: ${JSON.stringify(event)}\n\n`);
-  });
-  ctx.res.on("close", () => {
+  let stopped = false;
+  const stop = (): void => {
+    if (stopped) return;
+    stopped = true;
     stopHeartbeat();
-    unsubscribe();
-  });
-  ctx.res.write(`event: ready\ndata: {"ok":true}\n\n`);
+    subscription.unsubscribe();
+  };
+  controller.signal.addEventListener("abort", stop, { once: true });
+  ctx.res.on("close", stop);
+  writeOrDestroy(ctx.res, `event: ready\ndata: {"ok":true}\n\n`, controller);
   return STREAMING;
 }

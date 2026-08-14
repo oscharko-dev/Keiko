@@ -24,6 +24,11 @@ import {
   deriveCanonicalDebugProvisioningDigest,
 } from "./debugCapsulePlan.js";
 import {
+  deriveDebugRuntimeMountIdentityDigest,
+  deriveDebugSpawnEnvelopeIdentityDigest,
+  sha256Json,
+} from "./debugIdentityDigest.js";
+import {
   deriveCatalogDebugTarget,
   deriveFileDebugTarget,
   type DebugLaunchCatalogDeps,
@@ -217,7 +222,7 @@ function runtimeIdentityValid(
     context.runtimeMount.inode === stat.ino &&
     context.runtimeMount.modeBits === stat.mode &&
     context.runtimeMount.ownerUid === stat.uid &&
-    context.runtimeMount.identityDigest === hash([runtime, stat.dev, stat.ino, stat.mode, stat.uid])
+    context.runtimeMount.identityDigest === deriveDebugRuntimeMountIdentityDigest(runtime, stat)
   );
 }
 
@@ -513,10 +518,6 @@ export function deriveDebugProvisioningDigest(context: DebugLaunchRuntimeContext
   );
 }
 
-function hash(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
-
 /** @internal Derives the exact closed input passed to the enforcing capsule planner. */
 export function deriveStrictDebugCapsuleInput(
   input: DebugCapsuleLayer2Input,
@@ -628,7 +629,7 @@ function spawnEnvelope(args: SpawnEnvelopeInput): DebugSpawnEnvelope {
     activationRevision: input.binding.activationRevision,
     ...clock,
   };
-  const identityDigest = hash(values);
+  const identityDigest = deriveDebugSpawnEnvelopeIdentityDigest(values);
   return Object.freeze({ ...values, planId: identityDigest, identityDigest });
 }
 
@@ -767,7 +768,7 @@ function assemblePlan(
   candidate: OpaqueTarget,
   provisioningDigest: string,
 ): Layer2DebugCapsulePlan {
-  const runtimeDigest = hash([context.runtimeMount.identityDigest, immutableMounts(context)]);
+  const runtimeDigest = sha256Json([context.runtimeMount.identityDigest, immutableMounts(context)]);
   const capsule = (deps.planCapsule ?? planStrictDebugCapsule)(
     deriveStrictDebugCapsuleInput(input, context, runtimeDigest),
   );
@@ -786,7 +787,7 @@ function assemblePlan(
     runtimeIdentityDigest: runtimeDigest,
     provisioningDigest,
   });
-  const launchIdentityDigest = hash([
+  const launchIdentityDigest = sha256Json([
     input.binding,
     provisioningDigest,
     target,

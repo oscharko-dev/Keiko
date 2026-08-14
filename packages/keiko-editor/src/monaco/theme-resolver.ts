@@ -31,18 +31,45 @@ function toByte(value: number): string {
   return clamped.toString(16).padStart(2, "0");
 }
 
-function channelToByte(token: string): string {
+function parseRgbChannel(token: string): number {
   const text = token.trim();
-  if (text.endsWith("%")) {
-    return toByte((Number.parseFloat(text) / 100) * 255);
-  }
-  return toByte(Number.parseFloat(text));
+  return text.endsWith("%") ? (Number.parseFloat(text) / 100) * 255 : Number.parseFloat(text);
 }
 
-function alphaToByte(token: string): string {
+function parseRgbAlpha(token: string): number {
   const text = token.trim();
-  const value = text.endsWith("%") ? Number.parseFloat(text) / 100 : Number.parseFloat(text);
-  return toByte(value * 255);
+  return text.endsWith("%") ? Number.parseFloat(text) / 100 : Number.parseFloat(text);
+}
+
+interface RgbChannels {
+  readonly rValue: number;
+  readonly gValue: number;
+  readonly bValue: number;
+  readonly alphaValueParsed: number | undefined;
+}
+
+/** Parse and validate rgb()/rgba() channel + alpha tokens, throwing (naming the colour) on any
+ * non-finite value instead of letting a corrupted `NaN` byte reach the caller's hex string. */
+function parseRgbChannels(
+  color: string,
+  r: string,
+  g: string,
+  b: string,
+  alpha: string | undefined,
+): RgbChannels {
+  const rValue = parseRgbChannel(r);
+  const gValue = parseRgbChannel(g);
+  const bValue = parseRgbChannel(b);
+  const alphaValueParsed = alpha === undefined ? undefined : parseRgbAlpha(alpha);
+  const allFinite =
+    Number.isFinite(rValue) &&
+    Number.isFinite(gValue) &&
+    Number.isFinite(bValue) &&
+    (alphaValueParsed === undefined || Number.isFinite(alphaValueParsed));
+  if (!allFinite) {
+    throw new Error(`Keiko editor theme: unparseable rgb colour "${color}".`);
+  }
+  return { rValue, gValue, bValue, alphaValueParsed };
 }
 
 function alphaValue(token: string | undefined): number {
@@ -87,11 +114,12 @@ function hexFromRgbColor(color: string): string | undefined {
   if (r === undefined || g === undefined || b === undefined) {
     throw new Error(`Keiko editor theme: unparseable rgb colour "${color}".`);
   }
-  const base = `#${channelToByte(r)}${channelToByte(g)}${channelToByte(b)}`;
-  if (alpha === undefined) {
+  const { rValue, gValue, bValue, alphaValueParsed } = parseRgbChannels(color, r, g, b, alpha);
+  const base = `#${toByte(rValue)}${toByte(gValue)}${toByte(bValue)}`;
+  if (alphaValueParsed === undefined) {
     return base;
   }
-  const alphaByte = alphaToByte(alpha);
+  const alphaByte = toByte(alphaValueParsed * 255);
   return alphaByte === "ff" ? base : `${base}${alphaByte}`;
 }
 

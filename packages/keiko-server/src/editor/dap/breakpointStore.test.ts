@@ -4,6 +4,7 @@ import {
   readFileSync,
   realpathSync,
   readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -20,6 +21,7 @@ import {
 
 import type { ServerDiagnosticRecord } from "../../diagnostics-log.js";
 import { savePrivateJson } from "../../private-json.js";
+import { inspectDebugWorkspaceIdentity } from "./debugLaunchContext.js";
 import {
   BREAKPOINT_STORE_LIMITS,
   breakpointStoreRecordPath,
@@ -98,6 +100,7 @@ function validRecord(root: string): Record<string, unknown> {
   return {
     schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
     workspaceFingerprint: breakpointStoreWorkspaceFingerprint(root),
+    rootObjectIdentityDigest: inspectDebugWorkspaceIdentity(root).objectIdentityDigest,
     revision: 0,
     breakpoints: [],
     exceptionFilters: DEFAULT_NODE_EXCEPTION_FILTERS,
@@ -118,6 +121,21 @@ function expectUnavailable(store: BreakpointStore, root: string): void {
     exceptionFilters: DEFAULT_NODE_EXCEPTION_FILTERS,
     watches: [],
   });
+}
+
+/**
+ * Replace the directory at `path` with a genuinely different filesystem object. The replacement is
+ * created BEFORE the original is removed, so its inode was allocated while the old one was still in
+ * use and can never be the recycled one — deleting and re-creating in place is not deterministic,
+ * since Linux commonly hands the freed inode straight back (mirrors editorSettingsStore.test.ts's
+ * identical helper, the reference implementation for this exact "root replaced at the same path"
+ * scenario).
+ */
+function replaceDirectory(path: string): void {
+  const staged = `${path}.replacement`;
+  mkdirSync(staged);
+  rmSync(path, { recursive: true, force: true });
+  renameSync(staged, path);
 }
 
 function parseJsonRecord(text: string): Record<string, unknown> {
@@ -711,6 +729,7 @@ describe("canonical breakpoint and watch persistence", () => {
     expect(Object.keys(raw)).toEqual([
       "schemaVersion",
       "workspaceFingerprint",
+      "rootObjectIdentityDigest",
       "revision",
       "breakpoints",
       "exceptionFilters",
@@ -728,5 +747,297 @@ describe("canonical breakpoint and watch persistence", () => {
     ]) {
       expect(keys).not.toContain(forbidden);
     }
+  });
+});
+
+describe("KEIKO-0190 — object-identity reconciliation on load", () => {
+  it("treats a workspace root replaced at the same path as absent, never carrying forward the prior occupant's breakpoints, watches, or revision", () => {
+    // The store was keyed by sha256(realRoot) alone, so breakpoints set for one directory were
+    // silently resumed by whatever directory later occupied that path. The record now binds the
+    // root's filesystem-object identity, mirroring editorSettingsStore's reconcileRootBinding.
+    const stateDir = temporaryDirectory("debug-state-root-replaced");
+    const parent = temporaryDirectory("debug-workspace-root-replaced");
+    const root = join(parent, "root");
+    mkdirSync(root);
+    const store = createBreakpointStore({ stateDir, idFactory: (): string => "replaced_id" });
+    const armed = setBreakpoints(store, root, "a.ts", [breakpoint(1)]);
+    expect(armed.ok).toBe(true);
+    setWatches(store, root, [watch(1)]);
+    expect(currentSnapshot(store, root).breakpoints).toHaveLength(1);
+
+    replaceDirectory(root);
+
+    const reloaded = store.snapshot(root);
+    expect(reloaded.ok).toBe(true);
+    expect(reloaded.snapshot).toMatchObject({ revision: 0, breakpoints: [], watches: [] });
+  });
+
+  it("stamps the live object identity into every committed record", () => {
+    const stateDir = temporaryDirectory("debug-state-root-stamp");
+    const root = temporaryDirectory("debug-workspace-root-stamp");
+    const store = createBreakpointStore({ stateDir, idFactory: (): string => "stamp_id" });
+
+    expect(setBreakpoints(store, root, "a.ts", [breakpoint(1)]).ok).toBe(true);
+
+    const persisted = parseJsonRecord(
+      readFileSync(breakpointStoreRecordPath(stateDir, root), "utf8"),
+    );
+    expect(persisted.rootObjectIdentityDigest).toBe(
+      inspectDebugWorkspaceIdentity(root).objectIdentityDigest,
+    );
+  });
+
+  it("treats a legacy record with no rootObjectIdentityDigest key as absent, not unavailable, and accepts a subsequent mutation", () => {
+    // A record persisted before this feature shipped has the pre-KEIKO-0190 shape: the key is
+    // entirely absent, not present-and-empty. That must parse successfully (empty-string sentinel,
+    // which can never match a live digest) and fall into the existing mismatch->absent path, rather
+    // than permanently locking the workspace out of mutation as "unavailable".
+    const stateDir = temporaryDirectory("debug-state-legacy-record");
+    const root = temporaryDirectory("debug-workspace-legacy-record");
+    const legacyRecord = {
+      schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
+      workspaceFingerprint: breakpointStoreWorkspaceFingerprint(root),
+      revision: 7,
+      breakpoints: [],
+      exceptionFilters: DEFAULT_NODE_EXCEPTION_FILTERS,
+      watches: [],
+    };
+    expect(Object.keys(legacyRecord)).not.toContain("rootObjectIdentityDigest");
+    writeRecord(stateDir, root, legacyRecord);
+    const store = createBreakpointStore({ stateDir, idFactory: (): string => "legacy_id" });
+
+    const snapshot = store.snapshot(root);
+    expect(snapshot).toMatchObject({
+      ok: true,
+      snapshot: { revision: 0, breakpoints: [], watches: [] },
+    });
+
+    const mutated = store.setBreakpointsForFile(
+      root,
+      snapshot.snapshot.revision,
+      snapshot.snapshot.etag,
+      "a.ts",
+      [breakpoint(1)],
+    );
+    expect(mutated).toMatchObject({ ok: true, snapshot: { revision: 1 } });
+  });
+
+  it("treats a present but non-string rootObjectIdentityDigest as a schema violation (unavailable)", () => {
+    const stateDir = temporaryDirectory("debug-state-bad-digest-type");
+    const root = temporaryDirectory("debug-workspace-bad-digest-type");
+    writeRecord(stateDir, root, {
+      schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
+      workspaceFingerprint: breakpointStoreWorkspaceFingerprint(root),
+      rootObjectIdentityDigest: 12345,
+      revision: 0,
+      breakpoints: [],
+      exceptionFilters: DEFAULT_NODE_EXCEPTION_FILTERS,
+      watches: [],
+    });
+    const store = createBreakpointStore({ stateDir });
+
+    expectUnavailable(store, root);
+  });
+
+  it("rejects a commit whose live root identity drifted after loadRecord validated it, never re-stamping the new identity onto content read from the old occupant", () => {
+    // Codex P1: commitRecord used to stamp whatever identity was live AT COMMIT TIME unconditionally.
+    // If the root is replaced by another filesystem object between loadRecord's validation (which
+    // passed against identity A) and commitRecord's own inspectDebugWorkspaceIdentity call, the old
+    // occupant's record content got re-stamped with the NEW identity B and persisted as if it were
+    // B's own state -- defeating the KEIKO-0190 isolation under exactly this root-swap race. The
+    // idFactory hook runs after loadRecord has already validated against A but before commitRecord
+    // re-inspects, so it is the injection point that reproduces the race deterministically.
+    const stateDir = temporaryDirectory("debug-state-identity-drift");
+    const parent = temporaryDirectory("debug-workspace-identity-drift-parent");
+    const root = join(parent, "root");
+    mkdirSync(root);
+    const seedStore = createBreakpointStore({ stateDir, idFactory: (): string => "drift_seed_id" });
+    expect(setBreakpoints(seedStore, root, "a.ts", [breakpoint(1)]).ok).toBe(true);
+    const before = currentSnapshot(seedStore, root);
+    const digestBeforeSwap = inspectDebugWorkspaceIdentity(root).objectIdentityDigest;
+    const seededOnDisk = parseJsonRecord(
+      readFileSync(breakpointStoreRecordPath(stateDir, root), "utf8"),
+    );
+    expect(seededOnDisk.rootObjectIdentityDigest).toBe(digestBeforeSwap);
+
+    const driftingStore = createBreakpointStore({
+      stateDir,
+      idFactory: (): string => {
+        replaceDirectory(root);
+        return "drift_new_id";
+      },
+    });
+
+    const result = driftingStore.setBreakpointsForFile(root, before.revision, before.etag, "b.ts", [
+      breakpoint(9),
+    ]);
+
+    expect(result).toMatchObject({ ok: false, reason: "state_unavailable" });
+    const onDisk = parseJsonRecord(readFileSync(breakpointStoreRecordPath(stateDir, root), "utf8"));
+    expect(onDisk.rootObjectIdentityDigest).toBe(digestBeforeSwap);
+    expect(onDisk.rootObjectIdentityDigest).not.toBe(
+      inspectDebugWorkspaceIdentity(root).objectIdentityDigest,
+    );
+    const rawBreakpoints = onDisk.breakpoints as readonly Record<string, unknown>[];
+    expect(rawBreakpoints.map((entry) => entry.fileId)).toEqual(["a.ts"]);
+  });
+
+  it("rejects a mutation whose revision-0 etag was captured before any record existed, once the root at that path is replaced by another filesystem object", () => {
+    // r8 Codex P1: the absent record returned by loadRecord (no persisted file yet) used to carry
+    // the identity-free "" sentinel unconditionally, so its etag never varied with the live root
+    // identity. A client that read revision 0 before any persistence therefore kept a CAS token
+    // that still matched after the root at this exact path was replaced -- the first mutation would
+    // then first-bind the REPLACEMENT's identity onto content authored against the PRIOR object,
+    // defeating the very isolation KEIKO-0190 introduced. The absent snapshot's etag must bind to
+    // the live root identity from the very first read, so a swap between the read and the write is
+    // caught by the existing conflict/etag path, exactly like a swap between two committed reads.
+    const stateDir = temporaryDirectory("debug-state-absent-identity-bind");
+    const parent = temporaryDirectory("debug-workspace-absent-identity-bind-parent");
+    const root = join(parent, "root");
+    mkdirSync(root);
+    const store = createBreakpointStore({ stateDir, idFactory: (): string => "absent_bind_id" });
+
+    const initial = currentSnapshot(store, root);
+    expect(initial.revision).toBe(0);
+
+    replaceDirectory(root);
+
+    const mutated = store.setBreakpointsForFile(root, initial.revision, initial.etag, "a.ts", [
+      breakpoint(1),
+    ]);
+
+    expect(mutated).toMatchObject({ ok: false, reason: "conflict" });
+    const onDisk = createBreakpointStore({ stateDir }).snapshot(root);
+    expect(onDisk).toMatchObject({ ok: true, snapshot: { revision: 0, breakpoints: [] } });
+  });
+});
+
+describe("KEIKO-0179 — breakpoint re-key on file rename", () => {
+  it("re-keys breakpoints to the new fileId, bumping revision exactly once", () => {
+    const stateDir = temporaryDirectory("debug-state-rename");
+    const root = temporaryDirectory("debug-workspace-rename");
+    let id = 0;
+    const store = createBreakpointStore({ stateDir, idFactory: () => `rename_${String(id++)}` });
+    const accepted = setBreakpoints(store, root, "a.ts", [breakpoint(1), breakpoint(2)]);
+    expect(accepted.ok).toBe(true);
+    const before = currentSnapshot(store, root);
+
+    const renamed = store.renameFile(root, "a.ts", "b.ts");
+
+    expect(renamed).toMatchObject({
+      ok: true,
+      snapshot: {
+        revision: before.revision + 1,
+        breakpoints: [
+          { fileId: "b.ts", line: 1 },
+          { fileId: "b.ts", line: 2 },
+        ],
+      },
+    });
+    const afterFileIds = currentSnapshot(store, root).breakpoints.map((entry) => entry.fileId);
+    expect(afterFileIds).not.toContain("a.ts");
+  });
+
+  it("no-ops without bumping revision when no breakpoint is filed under the previous fileId", () => {
+    const stateDir = temporaryDirectory("debug-state-rename-noop");
+    const root = temporaryDirectory("debug-workspace-rename-noop");
+    const store = createBreakpointStore({ stateDir });
+    const before = currentSnapshot(store, root);
+
+    const result = store.renameFile(root, "a.ts", "b.ts");
+
+    expect(result).toMatchObject({ ok: true, snapshot: before });
+  });
+
+  it("keeps both breakpoint sets when the rename target already has breakpoints of its own", () => {
+    const stateDir = temporaryDirectory("debug-state-rename-collision");
+    const root = temporaryDirectory("debug-workspace-rename-collision");
+    let id = 0;
+    const store = createBreakpointStore({ stateDir, idFactory: () => `collide_${String(id++)}` });
+    setBreakpoints(store, root, "a.ts", [breakpoint(1)]);
+    setBreakpoints(store, root, "b.ts", [breakpoint(9)]);
+
+    const renamed = store.renameFile(root, "a.ts", "b.ts");
+
+    expect(renamed.ok).toBe(true);
+    const lines = currentSnapshot(store, root)
+      .breakpoints.filter((entry) => entry.fileId === "b.ts")
+      .map((entry) => entry.line)
+      .sort();
+    expect(lines).toEqual([1, 9]);
+  });
+
+  it("rejects a rename whose merged destination would exceed the per-file breakpoint cap, leaving the record readable afterward", () => {
+    // KEIKO-0179 collision policy keeps both breakpoint sets under the destination fileId. If the
+    // merged count is not checked against the same per-file cap setBreakpointsForFile enforces, the
+    // over-cap record still commits successfully here but then fails validBreakpointCollection on
+    // every subsequent load, bricking the whole workspace instrumentation store as "unavailable"
+    // until an operator manually deletes the file.
+    const stateDir = temporaryDirectory("debug-state-rename-cap");
+    const root = temporaryDirectory("debug-workspace-rename-cap");
+    let id = 0;
+    const store = createBreakpointStore({
+      stateDir,
+      idFactory: () => `rename_cap_${String(id++)}`,
+    });
+    const cap = BREAKPOINT_STORE_LIMITS.maxBreakpointsPerFile;
+    const destinationCount = Math.floor(cap / 2);
+    const matchingCount = cap - destinationCount + 1;
+    setBreakpoints(
+      store,
+      root,
+      "a.ts",
+      Array.from({ length: matchingCount }, (_, index) => breakpoint(index + 1)),
+    );
+    setBreakpoints(
+      store,
+      root,
+      "b.ts",
+      Array.from({ length: destinationCount }, (_, index) => breakpoint(index + 1)),
+    );
+    const before = currentSnapshot(store, root);
+
+    const renamed = store.renameFile(root, "a.ts", "b.ts");
+
+    expect(renamed).toMatchObject({ ok: false, reason: "cap_exceeded", snapshot: before });
+    const afterFileIds = currentSnapshot(store, root).breakpoints.map((entry) => entry.fileId);
+    expect(afterFileIds).toContain("a.ts");
+
+    const reopened = createBreakpointStore({ stateDir }).snapshot(root);
+    expect(reopened).toMatchObject({ ok: true });
+  });
+
+  it("rejects an invalid destination fileId without mutating the record", () => {
+    const stateDir = temporaryDirectory("debug-state-rename-invalid");
+    const root = temporaryDirectory("debug-workspace-rename-invalid");
+    const store = createBreakpointStore({ stateDir, idFactory: (): string => "invalid_id" });
+    setBreakpoints(store, root, "a.ts", [breakpoint(1)]);
+    const before = currentSnapshot(store, root);
+
+    const rejected = store.renameFile(root, "a.ts", "/absolute/escape.ts");
+
+    expect(rejected).toMatchObject({ ok: false, reason: "invalid", snapshot: before });
+  });
+
+  it("does not resurrect stale breakpoints when renaming against an identity-mismatched (absent) record", () => {
+    // Co-tests KEIKO-0190 and KEIKO-0179: a rename that lands on a root whose persisted record was
+    // just invalidated by an object-identity mismatch must observe the fresh absent record, never
+    // the prior occupant's breakpoints — so nothing is re-keyed and no stale state is written back.
+    const stateDir = temporaryDirectory("debug-state-rename-after-mismatch");
+    const parent = temporaryDirectory("debug-workspace-rename-after-mismatch");
+    const root = join(parent, "root");
+    mkdirSync(root);
+    const store = createBreakpointStore({ stateDir, idFactory: (): string => "stale_id" });
+    setBreakpoints(store, root, "a.ts", [breakpoint(1)]);
+    expect(currentSnapshot(store, root).breakpoints).toHaveLength(1);
+
+    replaceDirectory(root);
+
+    const renamed = store.renameFile(root, "a.ts", "b.ts");
+
+    expect(renamed).toMatchObject({ ok: true, retainedCount: 0 });
+    const snapshot = currentSnapshot(store, root);
+    expect(snapshot.revision).toBe(0);
+    expect(snapshot.breakpoints).toEqual([]);
   });
 });

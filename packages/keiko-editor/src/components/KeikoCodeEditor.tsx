@@ -201,7 +201,11 @@ function EditorStatusFooter(props: {
         {props.status.message}
       </div>
       {props.overLimit ? (
-        <div data-testid="keiko-editor-limit" role="note">
+        // The accessible announcement for this state now lives in the live status region above
+        // (status-text.ts's `overLimit` branch, Issue #2898/KEIKO-0259); this banner is a
+        // sighted-only visual reinforcement and must not be independently exposed to assistive
+        // tech, or the size-limit condition would be announced twice.
+        <div data-testid="keiko-editor-limit" role="note" aria-hidden="true">
           {`File exceeds the ${String(props.maxSizeBytes)}-byte editor limit and is read-only.`}
         </div>
       ) : null}

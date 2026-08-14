@@ -11,6 +11,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { LanguageServiceRequest } from "@oscharko-dev/keiko-contracts";
@@ -22,6 +23,7 @@ import { writeExecutableFixture } from "./testing/executableFixture.js";
 import {
   disposeHostLspPoolEntry,
   initializeHostLanguageProvider,
+  notifyHostLspWorkspaceFileChanged,
   runHostLanguageOperation,
   shutdownHostLspPool,
 } from "./hostLanguageOperation.js";
@@ -284,5 +286,119 @@ describe("runHostLanguageOperation pooling (GEN-PERF-EDITOR-007)", () => {
     } finally {
       rmSync(otherRoot, { recursive: true, force: true });
     }
+  });
+});
+
+// r7-lsp-didclose regression: a Deleted watched-file event must close and forget the affected
+// overlay(s) in the pool BEFORE the watched-file notification goes out. Otherwise the next op for
+// that URI reaches syncDocument with the entry still present and sends didChange instead of
+// didOpen, so diagnostics/symbols keep serving the deleted (or a renamed-away) path's stale
+// content until the pooled process is next idle-evicted.
+describe("notifyHostLspWorkspaceFileChanged Deleted closes stale overlays (r7-lsp-didclose)", () => {
+  function pathRequest(root: string, relPath: string): LanguageServiceRequest {
+    return {
+      operation: "diagnostics",
+      root,
+      document: { path: relPath, languageId: "go", text: "package main\nfunc main() {}\n" },
+    };
+  }
+
+  function runPathAt(
+    root: string,
+    relPath: string,
+    spawn: LspSpawnFn,
+  ): ReturnType<typeof runHostLanguageOperation> {
+    return runHostLanguageOperation(pathRequest(root, relPath), {
+      workspace: workspaceAt(root),
+      processEnv: { PATH: binDir, KEIKO_EDITOR_LSP_GO: "1" },
+      commandRules: [{ executable: "gopls" }],
+      overlayAbsolutePath: join(root, relPath),
+      signal: new AbortController().signal,
+      spawn,
+    });
+  }
+
+  function trackingSpawn(): {
+    spawn: LspSpawnFn;
+    notifications: () => readonly { method: string; params: unknown }[];
+  } {
+    const notifications: { method: string; params: unknown }[] = [];
+    const spawn: LspSpawnFn = () => {
+      const controller = createFakeLspProcess({
+        results: DIAGNOSTIC_RESULTS,
+        onMessage: (method, params): void => {
+          notifications.push({ method, params });
+        },
+      });
+      return controller.handle;
+    };
+    return {
+      spawn,
+      notifications: (): readonly { method: string; params: unknown }[] => notifications,
+    };
+  }
+
+  function urisFor(
+    notifications: readonly { method: string; params: unknown }[],
+    method: string,
+  ): readonly string[] {
+    return notifications
+      .filter((entry) => entry.method === method)
+      .map((entry) => {
+        const params = entry.params as { textDocument?: { uri?: unknown } };
+        return typeof params.textDocument?.uri === "string" ? params.textDocument.uri : "";
+      });
+  }
+
+  it("closes the deleted file's overlay so the next op re-opens it instead of resuming with didChange", async () => {
+    makeExecutable("gopls");
+    const { spawn, notifications } = trackingSpawn();
+    const mainUri = pathToFileURL(join(workspaceRoot, "main.go")).href;
+
+    await runPathAt(workspaceRoot, "main.go", spawn);
+    expect(urisFor(notifications(), "textDocument/didOpen")).toEqual([mainUri]);
+
+    notifyHostLspWorkspaceFileChanged(workspaceRoot, join(workspaceRoot, "main.go"), 3);
+    // sendNotification only buffers a write on the fake process's stdin PassThrough; the fake's
+    // own async read loop drains it on a later tick. The next op's awaited request/response round
+    // trip travels the SAME stream, so by the time it resolves every frame written earlier —
+    // including this didClose — is guaranteed to have already been read (FIFO single stream).
+    await runPathAt(workspaceRoot, "main.go", spawn);
+
+    expect(urisFor(notifications(), "textDocument/didOpen")).toEqual([mainUri, mainUri]);
+    expect(urisFor(notifications(), "textDocument/didClose")).toEqual([mainUri]);
+    expect(urisFor(notifications(), "textDocument/didChange")).toEqual([]);
+    expect(
+      notifications().some((entry) => entry.method === "workspace/didChangeWatchedFiles"),
+    ).toBe(true);
+  });
+
+  it("closes every overlay nested under a deleted directory using a path-segment-safe prefix match", async () => {
+    makeExecutable("gopls");
+    const { spawn, notifications } = trackingSpawn();
+    const nestedUri = pathToFileURL(join(workspaceRoot, "pkg/nested.go")).href;
+    const siblingUri = pathToFileURL(join(workspaceRoot, "pkg-sibling/other.go")).href;
+
+    await runPathAt(workspaceRoot, "pkg/nested.go", spawn);
+    await runPathAt(workspaceRoot, "pkg-sibling/other.go", spawn);
+    expect(urisFor(notifications(), "textDocument/didOpen")).toEqual([nestedUri, siblingUri]);
+
+    // Deleting directory "pkg" must not treat "pkg-sibling" as nested under it — a raw string
+    // prefix match would wrongly close/reopen the sibling too.
+    notifyHostLspWorkspaceFileChanged(workspaceRoot, join(workspaceRoot, "pkg"), 3);
+    // See the sibling test above for why these ops must be awaited before the notification
+    // arrays are asserted: the fake process drains its stdin asynchronously, and only an awaited
+    // request/response round trip over the same stream proves everything written earlier landed.
+    await runPathAt(workspaceRoot, "pkg/nested.go", spawn);
+    await runPathAt(workspaceRoot, "pkg-sibling/other.go", spawn);
+
+    expect(urisFor(notifications(), "textDocument/didOpen")).toEqual([
+      nestedUri,
+      siblingUri,
+      nestedUri,
+    ]);
+    expect(urisFor(notifications(), "textDocument/didClose")).toEqual([nestedUri]);
+    // The sibling stayed open the whole time, so its second op is a didChange, not a re-didOpen.
+    expect(urisFor(notifications(), "textDocument/didChange")).toEqual([siblingUri]);
   });
 });
