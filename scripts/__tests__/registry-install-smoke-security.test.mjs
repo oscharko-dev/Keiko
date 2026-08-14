@@ -1107,6 +1107,35 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(prepare).toBeLessThan(prune);
   });
 
+  it("bounds every step that may reach the package-manager host", () => {
+    const workflow = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
+    // Preparation is the one smoke step that may download; the child call is bounded inside the
+    // script, this bounds anything outside it. Without a step bound a hang runs to the 360-minute
+    // runner default.
+    const steps = workflow
+      .split(/^ {6}- name: /mu)
+      .filter((step) => step.includes("provision:smoke"));
+    expect(steps.length).toBeGreaterThan(0);
+    for (const step of steps) {
+      expect(step).toMatch(/^\s*timeout-minutes: \d+$/mu);
+    }
+  });
+
+  it("runs the zizmor anchor check before the scanner whose finding it explains", () => {
+    const hygiene = readFileSync(
+      join(ROOT, ".github", "workflows", "workflow-hygiene.yml"),
+      "utf8",
+    );
+    // `.github/zizmor.yml` ignores are line numbers: a line inserted above one drops a reviewed
+    // risk acceptance, and the scanner then reports the underlying finding with no hint of the
+    // cause. Ordering the check first makes the required context name the corrected line (#3130).
+    const check = hygiene.indexOf("node scripts/check-zizmor-anchors.mjs");
+    const scanner = hygiene.indexOf("- name: Run zizmor");
+    expect(check).toBeGreaterThan(-1);
+    expect(scanner).toBeGreaterThan(-1);
+    expect(check).toBeLessThan(scanner);
+  });
+
   it("seeds the vendored registry before packRoot prunes native optionals", () => {
     // Observes the production calls rather than their source positions: a text-order pin would
     // stay green if a refactor moved the effective call and left the statement text in place.

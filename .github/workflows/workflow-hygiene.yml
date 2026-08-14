@@ -120,6 +120,12 @@ jobs:
             exit 1
           fi
           echo "All action references are pinned to full commit SHAs."
+      - name: Verify the zizmor ignore anchors still point at what they document
+        # `.github/zizmor.yml` scopes every risk acceptance to a LINE NUMBER, so inserting a line
+        # above one silently drops it and the next step reports the underlying finding instead of
+        # the cause. Running the anchor check FIRST turns that into a message naming the corrected
+        # line. The script uses only Node builtins, so it needs no dependency install (#3130).
+        run: node scripts/check-zizmor-anchors.mjs
       - name: Run zizmor
         # The standalone `zizmor` job's job-level `if:` reproduced verbatim at step level. A job
         # never skips because a sibling job failed, so `!cancelled()` is what makes the step-level

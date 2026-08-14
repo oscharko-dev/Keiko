@@ -338,6 +338,7 @@ jobs:
           npm run check:editor-bundle-size -- --require-static-export
           npm run check:editor-release-evidence
       - name: Package surface and installable smoke
+        timeout-minutes: 45
         run: |
           npm run build
           npm run prepare:bin
@@ -884,6 +885,9 @@ jobs:
           npm run build:ui
           npm run check:editor-release-evidence
       - name: Prepare the offline smoke (pinned Yarn + vendor seed) (#3130)
+        # The only step in the smoke flow that may reach the package-manager host. The child call
+        # is already bounded inside the script; this bounds anything outside it.
+        timeout-minutes: 10
         run: npm run provision:smoke
       - name: Installable-package smoke (Issue #169 AC2)
         run: npm run smoke:install
@@ -1024,6 +1028,9 @@ jobs:
       - name: Build UI (static export)
         run: npm run build:ui
       - name: Prepare the offline smoke (pinned Yarn + vendor seed) (#3130)
+        # The only step in the smoke flow that may reach the package-manager host. The child call
+        # is already bounded inside the script; this bounds anything outside it.
+        timeout-minutes: 10
         run: npm run provision:smoke
       - name: Installable-package smoke (Issue #169 AC2 / #284 AC4 cross-platform)
         env:

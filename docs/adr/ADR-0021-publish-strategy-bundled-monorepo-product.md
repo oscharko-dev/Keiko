@@ -218,10 +218,14 @@ own `.yarnrc.yml` under a temporary directory, not machine-wide — pointing at 
 which serves the packed
 root plus the third-party closure seeded from this repository's installed tree — the versions
 `package-lock.json` already pins — and returns 404 for anything else. Optional dependency edges are
-preserved so the running platform's real native binding still installs and is still proven;
-foreign-platform prebuilds, which no host would link, resolve to inert stubs carrying an `os`/`cpu`
-pair that matches nothing. A dependency that is absent and *not* optional remains a hard failure,
-so the stub path cannot mask a genuine gap.
+preserved — the served manifest keeps the `optionalDependencies` block its published counterpart
+carries — so the running platform's real native binding still installs. That it installed is
+asserted, not assumed: `assertHostBindingsAreReal` derives the host's binding names from the
+running `platform`/`arch`/libc triple, and fails the lane if any of them resolved to a stub
+instead of the real package at the version its parent declares. Foreign-platform prebuilds, which
+no host would link, are the ones that resolve to inert stubs carrying an `os`/`cpu` pair that
+matches nothing. A dependency that is absent and *not* optional remains a hard failure, so the
+stub path cannot mask a genuine gap.
 
 The trade-off is deliberate and bounded: the lane no longer certifies that a consumer's foreign
 platform packages are published and resolvable — that is exactly the third-party coupling this
