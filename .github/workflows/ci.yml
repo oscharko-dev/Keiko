@@ -338,9 +338,13 @@ jobs:
           npm run check:editor-bundle-size -- --require-static-export
           npm run check:editor-release-evidence
       - name: Package surface and installable smoke
+        timeout-minutes: 45
         run: |
           npm run build
           npm run prepare:bin
+          # Seeds the offline smoke registry BEFORE the prune below deletes the native optional
+          # packages; a seed taken afterwards would serve stubs where the host binding belongs.
+          npm run provision:smoke
           npm run prune:package-build-artifacts
           npm run prune:package-native-optionals
           npm run check:package-surface
@@ -880,6 +884,11 @@ jobs:
           npm run prepare:bin
           npm run build:ui
           npm run check:editor-release-evidence
+      - name: Prepare the offline smoke (pinned Yarn + vendor seed) (#3130)
+        # The only step in the smoke flow that may reach the package-manager host. The child call
+        # is already bounded inside the script; this bounds anything outside it.
+        timeout-minutes: 10
+        run: npm run provision:smoke
       - name: Installable-package smoke (Issue #169 AC2)
         run: npm run smoke:install
       - name: Installable-package smoke with optional dependencies
@@ -1018,6 +1027,11 @@ jobs:
         run: npm run prepare:bin
       - name: Build UI (static export)
         run: npm run build:ui
+      - name: Prepare the offline smoke (pinned Yarn + vendor seed) (#3130)
+        # The only step in the smoke flow that may reach the package-manager host. The child call
+        # is already bounded inside the script; this bounds anything outside it.
+        timeout-minutes: 10
+        run: npm run provision:smoke
       - name: Installable-package smoke (Issue #169 AC2 / #284 AC4 cross-platform)
         env:
           # Pack the dist already built by the steps above instead of re-running the Linux-oriented

@@ -7,14 +7,17 @@
 // fire BEFORE publish so a broken bundle can never reach users.
 
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
+  createReadStream,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -22,7 +25,7 @@ import {
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import ts from "typescript";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
@@ -344,27 +347,974 @@ function registryPackument(registryUrl, artifact, tarballBytes) {
   };
 }
 
-function localRegistryHandler(artifact, tarballBytes, registryUrl, requests) {
+// The published root declares 23 bundled private workspaces plus a handful of genuine third-party
+// runtime dependencies. Everything the Yarn consumer resolves therefore has to come from somewhere,
+// and before #3130 only the `oscharko-dev` scope was pointed at this local registry — the rest was
+// resolved live from the public npm registry, on every run. That made a required gate depend on a
+// stranger's publish timing: on 2026-08-13 `@napi-rs/canvas` 1.0.6 was published 22 minutes before
+// its own `linux-x64-musl` platform package, and every Keiko pull request went red in that window.
+// The closure below is seeded from THIS repository's `node_modules`, i.e. exactly the versions the
+// committed `package-lock.json` already pins, so the smoke answers the Yarn-compatibility question
+// offline and deterministically.
+function workspaceThirdPartyRequirements(workspace, packagesRoot) {
+  // A bundled workspace outside the product scope would leave `@other/foo` in the path and miss
+  // its manifest, silently dropping that workspace's third-party dependencies from the closure —
+  // Yarn would then request a package this registry never seeded. Both that case and a genuinely
+  // absent manifest fail loudly instead, naming the workspace.
+  const scoped = /^@oscharko-dev\/(?<name>[^/]+)$/u.exec(workspace);
+  const directory = scoped?.groups?.name;
+  if (directory === undefined) {
+    fail(
+      `bundled workspace ${workspace} is outside the @oscharko-dev scope, so its third-party ` +
+        `dependencies cannot be located for the offline closure`,
+    );
+  }
+  const manifestPath = join(packagesRoot, "packages", directory ?? "", "package.json");
+  if (!existsSync(manifestPath)) {
+    fail(
+      `bundled workspace ${workspace} has no manifest at packages/${directory ?? ""}, so its ` +
+        `third-party dependencies cannot be added to the offline closure`,
+    );
+  }
+  const workspaceManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  // Same npm precedence as any other manifest: an optional entry overrides a same-named required
+  // one within this file. Flattening both groups separately would emit a required record for a
+  // name npm treats as optional.
+  return manifestRequirements(workspaceManifest).filter(
+    ({ name }) => !name.startsWith("@oscharko-dev/"),
+  );
+}
+
+/**
+ * A concrete version that satisfies `range`, used only to name an inert stub for an optional
+ * dependency this repository does not install. Handles the npm forms that actually occur —
+ * exact, `^`, `~`, `>=`, `v`-prefixed, x-ranges and `*` — and returns `undefined` for anything
+ * else, which `recordAbsent` treats as fatal. Guessing at a grammar this does not model would
+ * serve a stub that does not satisfy the requested range, and Yarn would fail with a confusing
+ * "no candidates" error instead of a diagnosable one.
+ */
+export function minimumSatisfyingVersion(range) {
+  const trimmed = (range ?? "").trim();
+  if (trimmed === "" || trimmed === "*" || trimmed === "x" || trimmed === "latest") return "0.0.0";
+  // A strict `>` or `<` excludes the boundary version, so the lowest member of the range is not
+  // derivable this way. Those return undefined and the absence becomes fatal, rather than serving
+  // a stub the descriptor itself rejects.
+  if (/^[<>]\s*[^=]/u.test(trimmed)) return undefined;
+  // Anchored, with disjoint leading operators and digits, so there is nothing to backtrack over.
+  // The prerelease suffix is preserved: an exact `1.2.3-beta.1` is satisfied only by itself, so
+  // dropping it would again produce a stub the range rejects.
+  const exact = /^[\s^~>=v]*(\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?)/u.exec(trimmed);
+  if (exact !== null) return exact[1];
+  // x-ranges: 1.x, 1.2.x, 1.*
+  return partialRangeVersion(trimmed);
+}
+
+/** x-ranges (`1.x`, `1.2.x`, `1.*`) and a bare major, each resolving to the range's lowest member. */
+function partialRangeVersion(trimmed) {
+  // Every partial form npm accepts resolves to the lowest member of its range: an x-range
+  // (`1.x`, `1.2.*`), a two-part version (`1.2`, `~1.2`, `^1.2`) or a bare major (`3`, `^3`).
+  const partial = /^[\s^~>=v]*(\d+)(?:\.(\d+))?(?:\.[x*])?$/u.exec(trimmed);
+  if (partial !== null) return `${partial[1]}.${partial[2] ?? "0"}.0`;
+  const xRange = /^[\s^~>=v]*(\d+)(?:\.(\d+))?\.[x*]/u.exec(trimmed);
+  return xRange === null ? undefined : `${xRange[1]}.${xRange[2] ?? "0"}.0`;
+}
+
+/**
+ * npm's package-json documentation: "Entries in optionalDependencies will override entries of the
+ * same name in dependencies." That precedence is applied per manifest, so a name listed in both is
+ * treated as optional. Across DIFFERENT manifests a genuine required edge still wins — see
+ * `record()` — because another package really does need it.
+ */
+function manifestRequirements(manifest, bundledSet = new Set()) {
+  const merged = new Map();
+  for (const [name, range] of Object.entries(manifest.dependencies ?? {})) {
+    merged.set(name, { name, range, optional: false });
+  }
+  for (const [name, range] of Object.entries(manifest.optionalDependencies ?? {})) {
+    merged.set(name, { name, range, optional: true });
+  }
+  return [...merged.values()].filter((requirement) => !bundledSet.has(requirement.name));
+}
+
+export function vendoredDependencyRequirements(
+  manifest = rootPackageJson,
+  packagesRoot = repoRoot,
+) {
+  const bundled = manifest.bundleDependencies ?? manifest.bundledDependencies ?? [];
+  const bundledSet = new Set(bundled);
+  const requirements = new Map();
+  // Keyed by name, but every distinct OPTIONAL range is kept: two bundled workspaces may declare
+  // the same absent optional dependency under non-overlapping ranges, and Yarn has to resolve both
+  // descriptors. A required edge from any manifest supersedes them all, since that one must
+  // genuinely be present, and its own range is the binding one.
+  const record = ({ name, range, optional }) => {
+    const existing = requirements.get(name) ?? {
+      name,
+      required: undefined,
+      optionalRanges: new Set(),
+    };
+    if (optional) existing.optionalRanges.add(range);
+    else existing.required = range;
+    requirements.set(name, existing);
+  };
+  // The staged root carries optional entries too — `promoteWorkspacePeers` lifts a workspace's
+  // optional third-party peers into exactly that field — so both groups belong in the closure.
+  for (const requirement of manifestRequirements(manifest, bundledSet)) record(requirement);
+  // A bundled workspace ships inside the tarball, but its own third-party dependencies do not:
+  // the consumer's package manager still resolves those from a registry. `keiko-local-knowledge`
+  // declaring `@napi-rs/canvas` is exactly how the 2026-08-13 upstream publish race reached a
+  // required Keiko gate, so the closure has to include them.
+  for (const workspace of bundled) {
+    for (const requirement of workspaceThirdPartyRequirements(workspace, packagesRoot)) {
+      record(requirement);
+    }
+  }
+  return [...requirements.values()]
+    .sort((left, right) => compareStrings(left.name, right.name))
+    .flatMap(({ name, required, optionalRanges }) =>
+      required === undefined
+        ? [...optionalRanges].map((range) => ({ name, range, optional: true }))
+        : [{ name, range: required, optional: false }],
+    );
+}
+
+export function vendoredDependencyNames(manifest = rootPackageJson, packagesRoot = repoRoot) {
+  return vendoredDependencyRequirements(manifest, packagesRoot).map(({ name }) => name);
+}
+
+/**
+ * Yarn resolves every `optionalDependencies` entry unless the supported architectures are pinned,
+ * which for a package like `@napi-rs/canvas` means all eleven prebuilt platform packages. Only the
+ * running platform's variant is installed here, so narrowing this to the current host keeps the
+ * offline closure both small and complete. `glibcVersionRuntime` is absent on musl builds.
+ */
+function linuxLibc() {
+  if (process.platform !== "linux") return undefined;
+  const glibc = process.report?.getReport?.()?.header?.glibcVersionRuntime;
+  return glibc === undefined ? "musl" : "glibc";
+}
+
+export function supportedArchitectures() {
+  const libc = linuxLibc();
+  return {
+    os: [process.platform],
+    cpu: [process.arch],
+    ...(libc === undefined ? {} : { libc: [libc] }),
+  };
+}
+
+function compareStrings(left, right) {
+  if (left < right) return -1;
+  return left > right ? 1 : 0;
+}
+
+function readInstalledManifest(name, modulesRoot) {
+  const manifestPath = join(modulesRoot, ...name.split("/"), "package.json");
+  if (!existsSync(manifestPath)) return undefined;
+  return JSON.parse(readFileSync(manifestPath, "utf8"));
+}
+
+/**
+ * npm hoists what it can and nests the rest, so one dependency name can be installed at several
+ * versions across the workspace tree (`@napi-rs/canvas` is hoisted at 1.0.0 while
+ * `keiko-local-knowledge` carries 1.0.2 for its own `^1.0.2` range). The offline registry has to
+ * offer every installed copy, or Yarn resolves a range this repository genuinely satisfies against
+ * a packument that happens to omit it.
+ */
+export function findInstalledCopies(name, modulesRoot, packagesRoot = repoRoot) {
+  const copies = new Map();
+  const record = (root) => {
+    const manifest = readInstalledManifest(name, root);
+    if (manifest === undefined) return;
+    // Keyed by TARGET name and version: two parents may use one alias key for different targets at
+    // the same version (`codec: "npm:foo@1.0.0"` and `codec: "npm:bar@1.0.0"`), and npm installs
+    // both. A version-only key would discard whichever was scanned second, and Yarn would then ask
+    // for a packument this registry never seeded.
+    const copyKey = `${typeof manifest.name === "string" ? manifest.name : name}@${manifest.version}`;
+    if (copies.has(copyKey)) return;
+    copies.set(copyKey, {
+      // An `npm:real@1.0.0` alias is installed under the alias directory, but Yarn requests the
+      // packument under the TARGET name from the manifest, so that is the key to serve it by.
+      name: typeof manifest.name === "string" && manifest.name.length > 0 ? manifest.name : name,
+      version: manifest.version,
+      directory: join(root, ...name.split("/")),
+      manifest,
+    });
+  };
+  for (const root of installedModuleRoots(modulesRoot, packagesRoot)) record(root);
+  return [...copies.values()];
+}
+
+/**
+ * npm hoists what it can, nests the rest under `packages/<workspace>/node_modules`, and nests a
+ * third conflicting version under `node_modules/<pkg>/node_modules`. All three are searched, so a
+ * version this repository genuinely pins can never be missing from the served packument.
+ */
+const moduleRootCache = new Map();
+
+function installedModuleRoots(modulesRoot, packagesRoot) {
+  // The root set cannot change during a run, and this walk is otherwise repeated for every visited
+  // package name, multiplying syscalls in a required gate.
+  const cacheKey = `${modulesRoot}\u0000${packagesRoot}`;
+  const cached = moduleRootCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+  const roots = [modulesRoot];
+  const workspacesDir = join(packagesRoot, "packages");
+  if (existsSync(workspacesDir)) {
+    for (const workspace of readdirSync(workspacesDir)) {
+      roots.push(join(workspacesDir, workspace, "node_modules"));
+    }
+  }
+  // Every root is scanned recursively, workspace roots included: npm nests a conflict under a
+  // workspace exactly as it does under the hoisted tree.
+  const all = [...roots, ...roots.flatMap((root) => nestedModuleRoots(root))];
+  moduleRootCache.set(cacheKey, all);
+  return all;
+}
+
+// npm resolves a conflict below an already nested dependency too
+// (`node_modules/a/node_modules/b/node_modules/c`), and a chain of incompatible peer ranges can go
+// deeper still. The walk is therefore complete rather than capped at an arbitrary depth: a fixed
+// limit would silently omit a package the committed installation genuinely contains, and the gate
+// would report it missing or serve a stub in its place. Termination comes from a visited set over
+// resolved paths, which also breaks symlink cycles; the whole walk is memoized once per run.
+function nestedModuleRoots(modulesRoot, visited = new Set()) {
+  if (!existsSync(modulesRoot)) return [];
+  const resolvedRoot = realpathSync(modulesRoot);
+  if (visited.has(resolvedRoot)) return [];
+  visited.add(resolvedRoot);
+  const roots = [];
+  for (const entry of readdirSync(modulesRoot)) {
+    if (entry.startsWith(".")) continue;
+    const owners = entry.startsWith("@")
+      ? readdirSync(join(modulesRoot, entry)).map((scoped) => join(modulesRoot, entry, scoped))
+      : [join(modulesRoot, entry)];
+    for (const owner of owners) {
+      const nested = join(owner, "node_modules");
+      if (!existsSync(nested)) continue;
+      roots.push(nested, ...nestedModuleRoots(nested, visited));
+    }
+  }
+  return roots;
+}
+
+/**
+ * Walks the third-party dependency closure the Yarn consumer has to resolve — the root's own
+ * non-bundled dependencies plus those declared by the bundled workspaces — against this
+ * repository's installed tree, i.e. the versions `package-lock.json` already pins. A dependency
+ * that is only reachable as an optional entry and is not installed here is not an error: Yarn is
+ * told not to ask for it via `supportedArchitectures`.
+ */
+export function resolveVendorClosure(
+  modulesRoot,
+  manifest = rootPackageJson,
+  packagesRoot = repoRoot,
+) {
+  // `manifest` should be the STAGED manifest (`artifact.manifest`), not the repo root:
+  // `promoteWorkspacePeers` in stage-publish-package.mjs lifts a bundled workspace's third-party
+  // peer dependencies into the staged root, and a closure that re-derived only the workspace's
+  // own dependency fields would miss them — the consumer would then request a package this
+  // registry never seeded. Deriving from the producer's output keeps the two in step.
+  const resolved = new Map();
+  const missing = [];
+  const stubs = new Map();
+  // A package first seen through an optional edge may later be REQUIRED by another parent. Keeping
+  // the stub there would serve an inert package for a genuinely required dependency and let the
+  // smoke pass without it, so the required edge withdraws the stub and the absence becomes fatal.
+  const resolveAgainstExistingStub = (name, requirement, stubKey) => {
+    if (requirement?.optional !== false) return;
+    stubs.delete(stubKey);
+    missing.push(name);
+  };
+  const visit = (name, requirement) => {
+    if (resolved.has(name) || missing.includes(name)) return;
+    // No derivable version means no stub can exist for this descriptor, so the lookup is skipped
+    // rather than probing a `name@` key that is never written.
+    const stubVersion = minimumSatisfyingVersion(requirement?.range);
+    const stubKey = stubVersion === undefined ? undefined : `${name}@${stubVersion}`;
+    if (stubKey !== undefined && stubs.has(stubKey)) {
+      resolveAgainstExistingStub(name, requirement, stubKey);
+      return;
+    }
+    const copies = findInstalledCopies(name, modulesRoot, packagesRoot);
+    if (copies.length === 0) {
+      recordAbsent(name, requirement);
+      return;
+    }
+    resolved.set(name, copies);
+    for (const copy of copies) visitDependenciesOf(copy);
+  };
+  // npm drops an optional dependency entirely when its platform prebuild cannot be installed, so
+  // the tree genuinely may not contain it — that is how `@napi-rs/canvas` is present on macOS here
+  // and absent on Linux CI. Yarn still insists on RESOLVING it, so an absent optional package
+  // becomes an inert stub: resolvable, never linked. A non-optional absence stays fatal.
+  const recordAbsent = (name, requirement) => {
+    const version = minimumSatisfyingVersion(requirement?.range);
+    if (requirement?.optional === true && version !== undefined) {
+      // Keyed by name AND version: canvas 1.0.0 and 1.0.2 each demand their own platform build,
+      // so a name-only key would serve one version's stub for the other's requirement.
+      stubs.set(`${name}@${version}`, { name, version });
+      return;
+    }
+    missing.push(name);
+  };
+  const visitDependenciesOf = (copy) => {
+    // Same npm precedence as the root manifest: a name in both fields is optional here.
+    for (const requirement of manifestRequirements(copy.manifest))
+      visit(requirement.name, requirement);
+  };
+  for (const requirement of vendoredDependencyRequirements(manifest, packagesRoot)) {
+    visit(requirement.name, requirement);
+  }
+  return {
+    packages: [...resolved.values()].flat(),
+    stubs: [...stubs.values()],
+    missing,
+  };
+}
+
+function packVendoredPackage(entry, destination) {
+  // npm names its output `<flattened-name>-<version>.tgz`, which collides across the scope
+  // boundary: `@foo/bar@1.2.3` and `foo-bar@1.2.3` both produce `foo-bar-1.2.3.tgz`. A per-package
+  // directory keeps the second pack from overwriting the first after its integrity was recorded,
+  // which would hand Yarn the wrong bytes.
+  // Keyed by a digest of the exact name, not a character-class replacement: collapsing every
+  // separator to "-" maps `@foo/bar-baz` and `@foo-bar/baz` onto the same directory, and npm then
+  // names both archives `foo-bar-baz-1.2.3.tgz`, so the second overwrites the first after its
+  // integrity was recorded and Yarn receives bytes that fail the checksum it was handed.
+  const nameDigest = createHash("sha256").update(entry.name).digest("hex").slice(0, 16);
+  const packDir = join(destination, `pack-${nameDigest}`);
+  mkdirSync(packDir, { recursive: true });
+  const result = run(
+    "npm",
+    ["pack", entry.directory, "--pack-destination", packDir, "--ignore-scripts", "--json"],
+    { cwd: repoRoot, timeout: NPM_INSTALL_TIMEOUT_MS },
+  );
+  if (result.status !== 0) {
+    fail(
+      `npm pack of vendored dependency ${entry.name} exited ${String(result.status)}: ` +
+        `${(result.stderr || result.stdout).trim()}`,
+    );
+  }
+  const produced = JSON.parse(result.stdout).at(0)?.filename;
+  if (typeof produced !== "string" || produced.length === 0) {
+    fail(`npm pack of vendored dependency ${entry.name} printed no tarball name`);
+  }
+  return join(packDir, produced);
+}
+
+/**
+ * A stub carries the real name and a satisfying version so the resolution graph closes, and an
+ * `os`/`cpu` pair that matches no host so the package manager never links it. It exists only for
+ * optional dependencies this repository does not install; nothing real is ever replaced by one.
+ */
+// Yarn evaluates platform compatibility from packument metadata, not only from the tarball, so
+// these guards have to appear in BOTH. Without them in the packument, an absent optional package
+// would be linked as an empty stub and a native-binding regression could pass unnoticed (#3130).
+const STUB_INCOMPATIBLE_PLATFORM = "keiko-smoke-never-matches";
+
+export function stubManifest(name, version) {
+  return {
+    name,
+    version,
+    description:
+      "Inert offline stub served by the Keiko installable-package smoke (#3130). Never linked.",
+    os: [STUB_INCOMPATIBLE_PLATFORM],
+    cpu: [STUB_INCOMPATIBLE_PLATFORM],
+  };
+}
+
+function packStubPackage(entry, destination) {
+  const stubDir = mkdtempSync(join(destination, "stub-"));
+  mkdirSync(stubDir, { recursive: true });
+  writeFileSync(
+    join(stubDir, "package.json"),
+    `${JSON.stringify(stubManifest(entry.name, entry.version), null, 2)}\n`,
+    "utf8",
+  );
+  try {
+    return packVendoredPackage({ name: entry.name, directory: stubDir }, destination);
+  } finally {
+    // The tarball is already written to `destination`; the scaffolding directory is not needed
+    // beyond this point, so it goes immediately rather than lingering until the caller cleans up.
+    rmSync(stubDir, { recursive: true, force: true });
+  }
+}
+
+const isStubEntry = (entry) => entry?.manifest?.os?.[0] === STUB_INCOMPATIBLE_PLATFORM;
+
+/**
+ * A stub is only ever legitimate for a FOREIGN platform prebuild. If a package is seeded for real
+ * but the optional binding matching this host is a stub, the install would run without the native
+ * binding while ADR-0021 D7 claims the running platform's binding is installed and proven — so the
+ * gate says so instead of quietly shipping the weaker guarantee (#3130).
+ */
+function stubbedHostBindings(seeded, entry, hostSuffixes) {
+  if (isStubEntry(entry)) return [];
+  return Object.entries(entry.manifest?.optionalDependencies ?? {})
+    .filter(([optional]) => hostSuffixes.some((suffix) => optional.endsWith(suffix)))
+    .filter(([optional, range]) => {
+      // The version THIS parent declares, not any version under the name. The lockfile carries
+      // canvas 1.0.0 and 1.0.2, so an aggregate check passes as soon as one binding is real while
+      // the other parent still resolves its exact binding to a stub.
+      const required = minimumSatisfyingVersion(range);
+      const versions = seeded.get(optional);
+      if (versions === undefined || required === undefined) return false;
+      const candidate = versions.get(required);
+      return candidate !== undefined && isStubEntry(candidate);
+    })
+    .map(([optional, range]) => `${entry.name}@${entry.version} -> ${optional}@${range}`);
+}
+
+/**
+ * Prebuilt binding names carry an ABI suffix on some platforms — `-linux-x64-gnu`, `-linux-x64-musl`,
+ * `-win32-x64-msvc` — so a bare `-<platform>-<arch>` suffix matches nothing on exactly the lanes CI
+ * runs. The set is derived from the same libc detection `supportedArchitectures()` uses, so a glibc
+ * host does not accept the musl build as its own.
+ */
+/** The toolchain spellings a Linux prebuild for this libc and architecture may carry. */
+function linuxBindingAbis(libc, arch) {
+  if (libc === "musl") return ["musl"];
+  if (arch === "arm") return ["gnueabihf", "gnu"];
+  return ["gnu"];
+}
+
+export function hostBindingSuffixes(
+  platform = process.platform,
+  arch = process.arch,
+  libc = undefined,
+) {
+  const base = `-${platform}-${arch}`;
+  if (platform === "linux") {
+    const resolvedLibc = libc ?? linuxLibc();
+    // `linuxLibc()` yields the value Yarn's `supportedArchitectures` expects — `glibc` — while the
+    // prebuilt packages are named with the toolchain, `-gnu`. Using the Yarn spelling here would
+    // generate `-linux-x64-glibc`, which matches no published binding, and the guard would be
+    // inert on the glibc lane exactly as the bare suffix was on every lane.
+    //
+    // 32-bit ARM is the one architecture where "the toolchain" is not `gnu`: its glibc builds are
+    // hard-float, spelled `gnueabihf`, and `package-lock.json` carries exactly that name
+    // (`@napi-rs/canvas-linux-arm-gnueabihf`). Emitting only `-linux-arm-gnu` there would match no
+    // published binding, so a stubbed host binding would pass unnoticed on that lane — the very
+    // gap this helper closes everywhere else (Codex thread 3780358321). Both spellings are
+    // returned rather than one, because the suffix set is matched with `endsWith` and a name that
+    // does not exist can never produce a false positive.
+    return [base, ...linuxBindingAbis(resolvedLibc, arch).map((abi) => `${base}-${abi}`)];
+  }
+  if (platform === "win32") return [base, `${base}-msvc`];
+  return [base];
+}
+
+/**
+ * npm's `os`/`cpu` semantics, including the `!` negation form: an empty or absent list means "every
+ * platform", a negated list excludes what it names, and a plain list is an allowlist.
+ */
+function platformListAllows(list, value) {
+  if (!Array.isArray(list) || list.length === 0) return true;
+  const entries = list.filter((item) => typeof item === "string");
+  // npm evaluates BOTH halves of a mixed list: any matching negation rejects outright, and when
+  // positive entries exist one of them must also match. Treating the presence of a negation as the
+  // whole answer made `os: ["darwin", "!win32"]` allow Linux, which would classify a legitimately
+  // foreign stub as host-installable (Codex thread 3780652044).
+  if (entries.some((item) => item.startsWith("!") && item.slice(1) === value)) return false;
+  const positive = entries.filter((item) => !item.startsWith("!"));
+  return positive.length === 0 || positive.includes(value);
+}
+
+// Keyed by PATH, not a single bare cache. `assertStubsAreForeignOnly` takes `lockfilePath` as an
+// injectable parameter, so an unkeyed cache would answer every later call from whichever file
+// happened to be read first — the argument silently ignored, the result decided by call order.
+// Production passes one path and would never notice; a fixture would (CodeRabbit thread
+// 3780586007).
+const lockfilePlatformScopes = new Map();
+
+/** The `os`/`cpu` `package-lock.json` records for a name, or `undefined` if it pins no such name. */
+function lockfilePlatformScope(name, lockfilePath) {
+  let scopes = lockfilePlatformScopes.get(lockfilePath);
+  if (scopes === undefined) {
+    scopes = new Map();
+    const raw = existsSync(lockfilePath) ? JSON.parse(readFileSync(lockfilePath, "utf8")) : {};
+    for (const [path, entry] of Object.entries(raw.packages ?? {})) {
+      const pinned = path.split("node_modules/").at(-1);
+      if (pinned === undefined || pinned === "" || scopes.has(pinned)) continue;
+      scopes.set(pinned, { cpu: entry.cpu, os: entry.os });
+    }
+    lockfilePlatformScopes.set(lockfilePath, scopes);
+  }
+  return scopes.get(name);
+}
+
+/**
+ * A stub is legitimate ONLY for a package this host would never link. `package-lock.json` is what
+ * says which those are, and it is more than the platform-suffix heuristic knows: it covers `cpu` as
+ * well as `os`, and it covers packages whose NAME carries no platform at all.
+ *
+ * `@napi-rs/canvas` is exactly that case. `keiko-local-knowledge` declares the parent package
+ * itself optional and the lockfile records no `os`/`cpu` for it, so it installs everywhere — yet an
+ * optional-fetch failure would stub it, `stubbedHostBindings` returns early on a stubbed parent,
+ * and the lane would go green with no Canvas implementation at all, against the guarantee
+ * ADR-0021 D7 makes (Codex thread 3780501190).
+ *
+ * A name the lockfile does not pin is not judged here: that is a closure defect, which the missing
+ * list and `assertRegistryOnlyDescriptors` already govern, not a platform question.
+ */
+/** Whether the lockfile pins this name AND records no platform scope excluding the running host. */
+function installsOnThisHost(name, lockfilePath) {
+  const scope = lockfilePlatformScope(name, lockfilePath);
+  if (scope === undefined) return false;
+  return (
+    platformListAllows(scope.os, process.platform) && platformListAllows(scope.cpu, process.arch)
+  );
+}
+
+export function assertStubsAreForeignOnly(
+  seeded,
+  lockfilePath = join(repoRoot, "package-lock.json"),
+) {
+  const offenders = [...seeded].flatMap(([name, versions]) =>
+    [...versions.values()]
+      .filter((entry) => isStubEntry(entry) && installsOnThisHost(name, lockfilePath))
+      .map((entry) => `${name}@${entry.version}`),
+  );
+  if (offenders.length > 0) {
+    fail(
+      `these packages install on this host but were seeded as inert stubs, so the Yarn arm would ` +
+        `resolve them and link nothing: ${offenders.join(", ")} — run \`npm install\` before the ` +
+        `installable-package smoke`,
+    );
+  }
+}
+
+export function assertHostBindingsAreReal(seeded) {
+  const hostSuffixes = hostBindingSuffixes();
+  const offenders = [...seeded.values()].flatMap((versions) =>
+    [...versions.values()].flatMap((entry) => stubbedHostBindings(seeded, entry, hostSuffixes)),
+  );
+  if (offenders.length > 0) {
+    fail(
+      `this host's native bindings are not installed, so the Yarn arm would pass without them: ` +
+        `${offenders.join(", ")} — run \`npm install\` before the installable-package smoke`,
+    );
+  }
+}
+
+/**
+ * An entry seeded by an earlier pass wins — it was captured before `prepack` pruned the tree,
+ * including entries restored from a previous PROCESS through the index. The one exception is a
+ * cached STUB: once the real package is installed again it must supersede the placeholder, or the
+ * lane would keep skipping a native binding that is now available.
+ */
+function shouldSeed(seeded, entry) {
+  const existing = seeded.get(entry.name)?.get(entry.version);
+  if (existing === undefined) return true;
+  return isStubEntry(existing) && !isStubEntry(entry);
+}
+
+function seedEntry(seeded, entry, tarballPath) {
+  const versions = seeded.get(entry.name) ?? new Map();
+  versions.set(entry.version, {
+    ...entry,
+    tarballPath,
+    integrity: tarballIntegrity(tarballPath),
+  });
+  seeded.set(entry.name, versions);
+}
+
+const SEED_INDEX_FILE = "seed-index.json";
+
+/**
+ * The seed has to survive across processes, not just across calls: CI runs this script twice and
+ * the first run's `prepack` prunes the native optionals out of `node_modules`. A directory alone
+ * is not enough — without an index the second process starts from an empty map, re-derives from
+ * the pruned tree, and overwrites the real archives with stubs. The index is what makes the
+ * pre-prune artifacts reusable (#3130).
+ */
+export function loadSeedIndex(destination) {
+  const indexPath = join(destination, SEED_INDEX_FILE);
+  if (!existsSync(indexPath)) return new Map();
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(indexPath, "utf8"));
+  } catch {
+    // A malformed index is recoverable state, not a reason to fail a required gate: the closure is
+    // simply re-packed from the tree. Failing here would turn an interrupted previous run into a
+    // red build that no change to this checkout could fix.
+    return new Map();
+  }
+  // A document that parses but is not an index object would throw on Object.entries outside the
+  // try, defeating the recovery this function documents.
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return new Map();
+  const seeded = new Map();
+  for (const [name, versions] of Object.entries(raw)) {
+    const restored = new Map();
+    for (const [version, entry] of Object.entries(versions)) {
+      // An indexed entry is only reused when its archive still exists, lives INSIDE this cache,
+      // and still hashes to the integrity that was recorded for it. Anything else is dropped and
+      // re-packed from the tree rather than served on trust.
+      if (isReusableSeedEntry(destination, entry))
+        restored.set(version, { ...entry, name, version });
+    }
+    if (restored.size > 0) seeded.set(name, restored);
+  }
+  return seeded;
+}
+
+function isReusableSeedEntry(destination, entry) {
+  if (typeof entry?.tarballPath !== "string" || !existsSync(entry.tarballPath)) return false;
+  // Containment: an index that points outside the cache could otherwise name any file on disk.
+  const resolvedRoot = realpathSync(destination);
+  const resolved = realpathSync(entry.tarballPath);
+  if (resolved !== resolvedRoot && !resolved.startsWith(`${resolvedRoot}${sep}`)) return false;
+  return entry.integrity === tarballIntegrity(resolved);
+}
+
+/**
+ * A stub for something this host would actually link. Judged by the same criterion
+ * `assertStubsAreForeignOnly` rejects on — what `package-lock.json` scopes to this host — because
+ * the two must not disagree. They did: this filter matched host-binding NAME SUFFIXES, so a
+ * platform-agnostic parent like `@napi-rs/canvas` carried no suffix, was published to the shared
+ * index, and the assertion below then rejected it — leaving an integrity-valid poisoned entry that
+ * every later invocation reloaded and rejected again (Codex thread 3780652032).
+ *
+ * The lockfile criterion subsumes the suffix one: a host binding is scoped to this host by its own
+ * `os`/`cpu`, so it is still caught, and a foreign binding is still shareable.
+ */
+function isNonDurableStub(name, entry) {
+  if (!isStubEntry(entry)) return false;
+  // The UNION of both criteria, because neither covers the other. The lockfile answers for a pinned
+  // package including a platform-agnostic parent, but says nothing about a name it does not pin;
+  // the suffix answers for this host's own binding by name, whether pinned or not. Using only the
+  // lockfile let an unpinned host-binding stub through, which the suffix rule had been catching.
+  if (hostBindingSuffixes().some((suffix) => name.endsWith(suffix))) return true;
+  return installsOnThisHost(name, join(repoRoot, "package-lock.json"));
+}
+
+export function writeSeedIndex(destination, seeded) {
+  // Published by rename so a concurrent reader never sees a half-written file: two smoke commands
+  // share this path within one checkout, and an interrupted write would otherwise leave malformed
+  // JSON that the next invocation cannot parse.
+  //
+  // A stub for THIS HOST'S OWN binding is never persisted (Codex thread 3780203131). Two
+  // invocations sharing this cache read the index before either publishes, so a process that
+  // seeded AFTER a prune — where the native packages are gone and every binding stubs — would
+  // otherwise publish the host's own binding as a stub with a matching integrity value. The other
+  // process would read it, pass the integrity check precisely because the stub is intact, and run
+  // the Yarn arm against a placeholder where the real binding belongs.
+  //
+  // FOREIGN-platform stubs must be persisted, and the first revision of this filter dropped them
+  // too — which broke the CI sequence outright. There the seed is taken from the intact tree and
+  // `prune:package-native-optionals` then deletes the native packages, so the second process can
+  // no longer read `@napi-rs/canvas@1.0.2`'s manifest to learn that it declares
+  // `canvas-android-arm64@1.0.2`: that stub is only derivable BEFORE the prune, and without it
+  // Yarn 404s on a package the lockfile genuinely pins. A foreign stub is also not a poisoning
+  // vector — it is the correct artifact for a platform no host here would link.
+  //
+  // Real archives are safe to share regardless: they are integrity-verified on read, so a replaced
+  // or torn one is rejected and re-packed.
+  const serializable = {};
+  for (const [name, versions] of seeded) {
+    const durable = [...versions].filter(([, entry]) => !isNonDurableStub(name, entry));
+    if (durable.length === 0) continue;
+    serializable[name] = Object.fromEntries(
+      durable.map(([version, entry]) => [
+        version,
+        { tarballPath: entry.tarballPath, integrity: entry.integrity, manifest: entry.manifest },
+      ]),
+    );
+  }
+  const target = join(destination, SEED_INDEX_FILE);
+  const staging = `${target}.${String(process.pid)}.tmp`;
+  writeFileSync(staging, `${JSON.stringify(serializable, null, 2)}\n`);
+  renameSync(staging, target);
+}
+
+export function seedVendoredRegistry(
+  destination,
+  modulesRoot = join(repoRoot, "node_modules"),
+  manifest = rootPackageJson,
+  seeded = loadSeedIndex(destination),
+) {
+  const { packages, stubs, missing } = resolveVendorClosure(modulesRoot, manifest);
+  // A name already restored from the index was captured from an intact tree by an earlier process;
+  // its absence now is `prepack`'s pruning, not a broken checkout. Likewise a stub must never
+  // replace a real archive we already hold.
+  const restored = (name) => seeded.has(name);
+  const genuinelyMissing = missing.filter((name) => !restored(name));
+  const neededStubs = stubs.filter((entry) => !restored(entry.name));
+  if (genuinelyMissing.length > 0) {
+    fail(
+      `vendored dependency closure is not installed: ${genuinelyMissing.join(", ")} — ` +
+        `run \`npm install\` before the installable-package smoke`,
+    );
+  }
+  const pending = [
+    ...packages.map((entry) => ({ entry, pack: packVendoredPackage })),
+    ...neededStubs.map((entry) => ({
+      entry: { ...entry, manifest: stubManifest(entry.name, entry.version) },
+      pack: packStubPackage,
+    })),
+  ];
+  for (const { entry, pack } of pending) {
+    if (shouldSeed(seeded, entry)) seedEntry(seeded, entry, pack(entry, destination));
+  }
+  writeSeedIndex(destination, seeded);
+  assertHostBindingsAreReal(seeded);
+  // Broader than the check above and derived from a different source: that one asks whether the
+  // host's own BINDING resolved to a stub, from the running platform triple; this one asks whether
+  // ANY package the lockfile installs here did, including a platform-agnostic parent like
+  // `@napi-rs/canvas` whose name carries no platform to match on.
+  assertStubsAreForeignOnly(seeded);
+  return seeded;
+}
+
+function tarballIntegrity(tarballPath) {
+  return `sha512-${createHash("sha512").update(readFileSync(tarballPath)).digest("base64")}`;
+}
+
+function rootTarballPath(name, version) {
+  return `${name}/-/${name.split("/").at(-1)}-${version}.tgz`;
+}
+
+function seededTarball(seeded, requested) {
+  for (const [name, versions] of seeded) {
+    if (!requested.startsWith(`${name}/-/`)) continue;
+    return [...versions.values()].find(
+      (entry) => requested === `${name}/-/${tarballFileName(name, entry.version)}`,
+    );
+  }
+  return undefined;
+}
+
+function tarballFileName(name, version) {
+  return `${name.split("/").at(-1)}-${version}.tgz`;
+}
+
+function releaseSegments(version) {
+  const [core = ""] = version.split("+");
+  const [release = "", ...prerelease] = core.split("-");
+  return {
+    numbers: release.split(".").map((part) => Number.parseInt(part, 10) || 0),
+    prerelease: prerelease.join("-"),
+  };
+}
+
+function compareIdentifier(left, right) {
+  const [numericLeft, numericRight] = [/^\d+$/u.test(left), /^\d+$/u.test(right)];
+  if (numericLeft && numericRight) {
+    return Number.parseInt(left, 10) - Number.parseInt(right, 10);
+  }
+  // SemVer §11: numeric identifiers always rank below alphanumeric ones.
+  if (numericLeft !== numericRight) return numericLeft ? -1 : 1;
+  return compareStrings(left, right);
+}
+
+function comparePrereleaseIdentifiers(left, right) {
+  // SemVer §11: a version WITH a prerelease ranks below the same version without one.
+  if (left === right) return 0;
+  if (left === "") return 1;
+  if (right === "") return -1;
+  const leftParts = left.split(".");
+  const rightParts = right.split(".");
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const [a, b] = [leftParts[index], rightParts[index]];
+    if (a === undefined || b === undefined) return a === undefined ? -1 : 1;
+    const difference = compareIdentifier(a, b);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function compareVersions(left, right) {
+  const [a, b] = [releaseSegments(left), releaseSegments(right)];
+  for (let index = 0; index < Math.max(a.numbers.length, b.numbers.length); index += 1) {
+    const difference = (a.numbers[index] ?? 0) - (b.numbers[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return comparePrereleaseIdentifiers(a.prerelease, b.prerelease);
+}
+
+// An ALLOWLIST, not a denylist. A denylist of bad protocols is wrong by construction: it was
+// missing `ssh:` and `ssh+git:` — which Yarn's Git resolver accepts and whose error output echoes
+// the full descriptor, credentials included — and the next protocol would have slipped through the
+// same way. Only a registry descriptor is acceptable here: no protocol at all (a semver range, a
+// tag, `*`), or an explicit `npm:` alias. Everything else resolves outside the loopback registry
+// and is refused before Yarn starts (#3130).
+const REGISTRY_PROTOCOL = /^npm:/iu;
+const HAS_PROTOCOL = /^[a-z][a-z0-9+.-]*:/iu;
+// Yarn also accepts a colon-less forge shorthand (`owner/repo`, `owner/repo#semver:^1.0.0`), which
+// it fetches straight from GitHub. A leading `@` is excluded so a scoped package name is not
+// mistaken for one.
+const FORGE_SHORTHAND = /^[^@\s/][^\s/]*\/[^\s/]+$/u;
+
+/** A descriptor's shape, never its value: the value may carry a token or a private endpoint. */
+function descriptorClass(range) {
+  const protocol = /^([a-z][a-z0-9+.-]*):/iu.exec(range)?.[1];
+  if (protocol !== undefined) return `${protocol.toLowerCase()}:`;
+  return FORGE_SHORTHAND.test(range) ? "forge-shorthand" : "unknown";
+}
+
+function isNonRegistryDescriptor(range) {
+  if (HAS_PROTOCOL.test(range)) return !REGISTRY_PROTOCOL.test(range);
+  return FORGE_SHORTHAND.test(range);
+}
+
+function manifestProtocolOffenders(name, entry) {
+  return ["dependencies", "optionalDependencies", "peerDependencies"]
+    .flatMap((group) => Object.entries(entry.manifest?.[group] ?? {}))
+    .filter(([, range]) => typeof range === "string" && isNonRegistryDescriptor(range))
+    .map(
+      // The descriptor VALUE never reaches the log: `git+https://token@host/pkg.git` would carry a
+      // credential into a required gate's output. Only the owning package, the dependency name and
+      // the descriptor's shape are reported, per the repository's body-free evidence rule.
+      ([dependency, range]) =>
+        `${name}@${entry.version} -> ${dependency} (${descriptorClass(range)})`,
+    );
+}
+
+/**
+ * `stage-publish-package.mjs` writes exactly one vendor shape — its `archivePath` is built as
+ * `vendor/${archiveName}`, so the descriptor is always `file:vendor/<archive>.tgz`: one segment
+ * directly under the staged `vendor/` directory. Matching that shape rather than the `file:vendor/`
+ * PREFIX is the point. A prefix test also accepts `file:vendor/../../ambient-package`, which Yarn
+ * resolves straight from the filesystem and therefore outside the loopback registry — the exact
+ * hermeticity this check exists to enforce (KfQ thread 3780151719).
+ */
+export function isStagedVendorArchive(range) {
+  const archive = /^file:vendor[/\\]([^/\\]+)$/u.exec(range)?.[1];
+  return archive !== undefined && archive !== ".." && archive.endsWith(".tgz");
+}
+
+/**
+ * The staged root's own non-bundled dependencies are checked too: a `git+https:` or tarball-URL
+ * descriptor there would be resolved by Yarn outside the loopback registry just as surely as one
+ * in a seeded manifest. The staged vendor archives are the intentional exception — that is how
+ * `stage-publish-package.mjs` points at the tarball-local private workspaces (ADR-0021 / #3101),
+ * and they never leave the installed package.
+ */
+export function assertStagedRootDescriptors(manifest) {
+  const offenders = ["dependencies", "optionalDependencies"]
+    .flatMap((group) => Object.entries(manifest?.[group] ?? {}))
+    .filter(([, range]) => typeof range === "string")
+    .filter(([, range]) => !isStagedVendorArchive(range))
+    .filter(([, range]) => isNonRegistryDescriptor(range))
+    .map(([dependency, range]) => `${dependency} (${descriptorClass(range)})`);
+  if (offenders.length > 0) {
+    fail(
+      `staged root declares non-registry dependency protocols outside its vendor archives: ` +
+        `${offenders.join(", ")}`,
+    );
+  }
+}
+
+export function assertRegistryOnlyDescriptors(seeded) {
+  const offenders = [...seeded].flatMap(([name, versions]) =>
+    [...versions.values()].flatMap((entry) => manifestProtocolOffenders(name, entry)),
+  );
+  if (offenders.length > 0) {
+    fail(
+      `vendored closure declares non-registry dependency protocols, which would resolve outside ` +
+        `the offline registry: ${offenders.join(", ")}`,
+    );
+  }
+}
+
+function vendoredPackument(name, versions, registryUrl) {
+  const sorted = [...versions.values()].sort((left, right) =>
+    compareVersions(left.version, right.version),
+  );
+  const entries = {};
+  for (const entry of sorted) {
+    // Optional edges are preserved so the running platform's real native binding still installs
+    // and is still proven; the foreign-platform prebuilds resolve to inert stubs instead (#3130).
+    entries[entry.version] = {
+      ...entry.manifest,
+      dist: {
+        integrity: entry.integrity,
+        tarball: `${registryUrl}/${name}/-/${tarballFileName(name, entry.version)}`,
+      },
+    };
+  }
+  return {
+    name,
+    "dist-tags": { latest: sorted.at(-1)?.version },
+    versions: entries,
+  };
+}
+
+function localRegistryHandler(artifact, tarballBytes, registryUrl, requests, vendored) {
   const packument = registryPackument(registryUrl, artifact, tarballBytes);
+  const seeded = vendored ?? new Map();
   return (request, response) => {
     const pathname = new URL(request.url ?? "/", registryUrl).pathname;
     requests.push(pathname);
-    if (pathname.endsWith(".tgz")) {
-      response.writeHead(200, { "content-type": "application/octet-stream" });
-      response.end(tarballBytes);
+    // Decoding is REQUIRED, not incidental: npm encodes the scope separator, so a scoped package
+    // arrives as `@oscharko-dev%2fkeiko/-/keiko-0.3.7.tgz` and every comparison below is written
+    // against the decoded form. It is also the one call here that can throw — `new URL()` passes
+    // `%zz` through untouched and `decodeURIComponent` raises `URIError` on it. Unhandled inside an
+    // http handler that is an uncaught exception: the registry dies mid-install and the gate
+    // reports a crash instead of a verdict (KfQ thread 3780494646). Answer it as the bad request
+    // it is and keep serving.
+    let requested;
+    try {
+      requested = decodeURIComponent(pathname.slice(1));
+    } catch {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "malformed request path" }));
       return;
     }
-    if (decodeURIComponent(pathname.slice(1)).toLowerCase() === rootPackageJson.name) {
+    // Classified by the registry's ARCHIVE ROUTE shape, `<name>/-/<file>.tgz`, not by the
+    // extension alone. `foo.tgz` and `@scope/foo.tgz` are valid npm package names, so a packument
+    // request for one ends in `.tgz` without being an archive request — the extension test alone
+    // would route it here and 404 a package the registry holds (Codex thread 3780358326). Both
+    // serving paths below already require the `/-/` segment, so narrowing the branch to it can
+    // serve nothing less than before.
+    if (requested.includes("/-/") && pathname.endsWith(".tgz")) {
+      if (requested === rootTarballPath(rootPackageJson.name, rootVersion)) {
+        response.writeHead(200, { "content-type": "application/octet-stream" });
+        response.end(tarballBytes);
+        return;
+      }
+      const served = seededTarball(seeded, requested);
+      if (served === undefined) {
+        // An unseeded or wrong-version tarball is never answered with the root artifact: serving
+        // real bytes under a foreign name would be a silent substitution, not a hermetic registry.
+        response.writeHead(404, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: "not_found" }));
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/octet-stream" });
+      const stream = createReadStream(served.tarballPath);
+      // An unhandled stream error would take the registry — and with it the gate — down with an
+      // opaque crash; destroying the response instead surfaces as a failed fetch Yarn can report.
+      stream.on("error", () => response.destroy());
+      // `pipe()` only unpipes and pauses the source when the destination goes away, leaving its
+      // descriptor open, so an aborted download would accumulate descriptors until EMFILE.
+      response.on("close", () => stream.destroy());
+      stream.pipe(response);
+      return;
+    }
+    // Exact match only. A registry should answer for the name it was asked for and nothing else;
+    // case-folding here would serve the root packument under a name npm would treat as different.
+    if (requested === rootPackageJson.name) {
       response.writeHead(200, { "content-type": "application/vnd.npm.install-v1+json" });
       response.end(JSON.stringify(packument));
       return;
     }
+    const vendoredVersions = seeded.get(requested);
+    if (vendoredVersions !== undefined) {
+      response.writeHead(200, { "content-type": "application/vnd.npm.install-v1+json" });
+      response.end(JSON.stringify(vendoredPackument(requested, vendoredVersions, registryUrl)));
+      return;
+    }
+    // A 404 here is the hermeticity guarantee, not an oversight: the install may only see packages
+    // this repository already pins. An unexpected request fails the gate loudly instead of silently
+    // reaching the public registry (#3130).
     response.writeHead(404, { "content-type": "application/json" });
     response.end(JSON.stringify({ error: "not_found" }));
   };
 }
 
-export async function startLocalRegistry(artifact) {
+export async function startLocalRegistry(artifact, vendored) {
   const tarballBytes = readFileSync(artifact.tarballPath);
   const requests = [];
   let handler;
@@ -383,7 +1333,7 @@ export async function startLocalRegistry(artifact) {
     throw new Error("local package registry did not bind a TCP port");
   }
   const registryUrl = `http://127.0.0.1:${String(address.port)}`;
-  handler = localRegistryHandler(artifact, tarballBytes, registryUrl, requests);
+  handler = localRegistryHandler(artifact, tarballBytes, registryUrl, requests, vendored);
   try {
     const health = await globalThis.fetch(
       `${registryUrl}/${encodeURIComponent(rootPackageJson.name)}`,
@@ -404,15 +1354,233 @@ export async function startLocalRegistry(artifact) {
   };
 }
 
-export async function installIntoWithYarn(tmp, artifact) {
-  const registry = await startLocalRegistry(artifact);
+/**
+ * Yarn reads `YARN_*` environment variables at a HIGHER precedence than `.yarnrc.yml`, so an
+ * ambient `YARN_NPM_REGISTRY_SERVER` on a runner or developer machine would silently send this
+ * install back to a live registry and past the fail-closed 404s. Registry-affecting variables are
+ * therefore dropped and the loopback server is re-asserted through the environment as well (#3130).
+ */
+/**
+ * Yarn reads `.yarnrc.yml` from the home directory and from every ancestor of the project, so
+ * sanitizing environment variables alone leaves an ambient rc able to switch on hardened mode,
+ * register plugins, or inject `packageExtensions` inside a gate that claims to be hermetic. The
+ * child therefore gets a private, empty home; provisioning uses the same one so both agree on
+ * Corepack's cache location (#3130).
+ */
+/**
+ * Corepack caches package managers under `COREPACK_HOME`, which defaults to a path inside `HOME`.
+ * Since the child gets a private, empty home for rc isolation, leaving the cache to follow it would
+ * make every run download Yarn afresh — turning an occasional network dependency into a per-run
+ * one. The cache therefore lives at a stable path of its own, keyed by the pinned version so a
+ * bump does not reuse the previous tool (#3130).
+ */
+export function corepackCacheDir() {
+  // This directory holds an EXECUTABLE that Corepack will run, so it gets the same fail-closed
+  // validation as the vendor seed cache — and it needs it more. A predictable path on a shared
+  // POSIX host is pre-creatable by another account, and Corepack trusts a `.corepack` metadata
+  // file it finds there and executes the binary it names, networking disabled or not. The uid is
+  // part of the name so two accounts never contend for one path in the first place.
+  const owner = process.getuid === undefined ? "win" : String(process.getuid());
+  const version = PINNED_YARN.replace(/[^a-zA-Z0-9.]+/gu, "-");
+  const dir = join(tmpdir(), `keiko-corepack-${version}-${owner}`);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  assertPrivateDirectory(dir);
+  return dir;
+}
+
+export function privateYarnHome() {
+  const home = mkdtempSync(join(tmpdir(), "keiko-yarn-home-"));
+  return home;
+}
+
+/**
+ * A private, unpredictable rc filename for the throwaway project.
+ *
+ * Yarn merges `.yarnrc.yml` from EVERY ancestor of the project, not only from the project and the
+ * home directory — and the project lives directly under `os.tmpdir()`, which is world-writable on
+ * Linux. A planted `/tmp/.yarnrc.yml` therefore reaches this install and can add plugins,
+ * `packageExtensions` or network settings to the gate whose entire purpose is hermeticity. The
+ * private home closed the `~/.yarnrc.yml` half of the problem and left this half open; proved by
+ * planting a probe at the tmpdir root, which failed the install on an unrecognized setting
+ * (Codex thread 3780424132).
+ *
+ * Naming the file per run closes it: Yarn walks the ancestors looking for THIS name, and nothing
+ * up the tree carries it. The `YARN_*` settings the gate depends on are re-asserted through the
+ * environment as well, which outranks any rc file — this protects the settings it does NOT pin,
+ * `plugins` above all, since a plugin is executable code.
+ */
+export const YARN_RC_FILENAME = `.yarnrc-keiko-${randomBytes(9).toString("hex")}.yml`;
+
+export function yarnChildEnv(registryUrl, baseEnv = process.env, home = undefined) {
+  // Every `YARN_*` variable is dropped, not a curated subset: Yarn maps each of its settings to
+  // one, and an ambient `YARN_NODE_LINKER=pnp` or `YARN_RC_FILENAME` would change the install
+  // shape just as surely as a registry override. The gate then re-asserts only what it needs, so
+  // its outcome cannot depend on the machine it runs on (#3130).
+  // `COREPACK_*` is stripped for the same reason as `YARN_*`: `COREPACK_ENABLE_PROJECT_SPEC=0`
+  // makes Corepack ignore the project's `packageManager` field and run its system-wide Yarn, so
+  // the gate would exercise an unreviewed version despite the pin.
+  const env = Object.fromEntries(
+    Object.entries(baseEnv).filter(([key]) => !/^(?:YARN_|COREPACK_)/u.test(key)),
+  );
+  return {
+    ...env,
+    // A private home keeps an ambient `~/.yarnrc.yml` out of this install entirely.
+    ...(home === undefined ? {} : { HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: home }),
+    // Explicit, so the cache does not follow the private home and vanish between runs.
+    COREPACK_HOME: corepackCacheDir(),
+    COREPACK_ENABLE_PROJECT_SPEC: "1",
+    YARN_ENABLE_GLOBAL_CACHE: "false",
+    YARN_ENABLE_TELEMETRY: "false",
+    YARN_NODE_LINKER: "node-modules",
+    YARN_NPM_REGISTRY_SERVER: registryUrl,
+    // Points Yarn at the private rc name above, so the ancestor walk finds only our own file.
+    YARN_RC_FILENAME,
+    YARN_UNSAFE_HTTP_WHITELIST: "127.0.0.1",
+    // Corepack must not reach repo.yarnpkg.com during the install: the pinned tool is provisioned
+    // beforehand, so an outage there cannot fail a gate that claims to resolve offline (#3130).
+    COREPACK_ENABLE_NETWORK: "0",
+  };
+}
+
+const PINNED_YARN = "yarn@4.9.1";
+
+/**
+ * Downloads the pinned Yarn into Corepack's cache if it is not there yet. This is the one network
+ * call the smoke may still make, and it is tool provisioning rather than dependency resolution:
+ * it happens before the install, its failure names Corepack explicitly, and the install itself
+ * then runs with `COREPACK_ENABLE_NETWORK=0`.
+ *
+ * `--cache-only` matters: a plain `--global` install would make this version Corepack's system-wide
+ * default and change unrelated invocations on a developer machine or shared runner. A gate must not
+ * mutate the environment it runs in; the throwaway project's own `packageManager` field is what
+ * selects Yarn here.
+ */
+/**
+ * Setup entry point: caches the pinned Yarn AND seeds the vendored registry, both before any step
+ * that mutates the installed tree. `prune:package-native-optionals` runs ahead of the smoke in the
+ * `core-quality` job, so a seed created afterwards would hold stubs where the real native packages
+ * belong — the same defect the two-invocation ordering had, in a different job. Seeding here makes
+ * the fixture independent of where the prune sits in any given lane (#3130).
+ */
+export function prepareOfflineSmokeForSetup() {
+  provisionPinnedYarnForSetup();
+  const destination = persistentVendorSeedDir();
+  const seeded = seedVendoredRegistry(destination);
+  console.log(
+    `prepare-offline-smoke: seeded ${String(seeded.size)} package name(s) into ${destination}.`,
+  );
+}
+
+/** Caches the pinned Yarn, so no gate has to reach the package-manager host mid-run. */
+export function provisionPinnedYarnForSetup() {
+  if (isPinnedYarnCached()) {
+    console.log(`provision-pinned-yarn: ${PINNED_YARN} already cached; no request made.`);
+    return;
+  }
+  // No registry and no private home, and both are correct here rather than omissions. This step
+  // runs BEFORE any local registry exists and downloads the Yarn TOOL from upstream — it resolves
+  // no project dependency, because there is no project: `corepack install --cache-only` only
+  // populates the package-manager cache. Node drops an env entry whose value is `undefined`, so
+  // the child sees no `YARN_NPM_REGISTRY_SERVER` at all rather than a broken one. The hermeticity
+  // guarantee belongs to the INSTALL, which runs with `COREPACK_ENABLE_NETWORK: "0"` and the
+  // loopback registry asserted — and which this step is what makes possible offline (#3130).
+  provisionPinnedYarn(undefined, undefined);
+  console.log(`provision-pinned-yarn: ${PINNED_YARN} cached in ${corepackCacheDir()}.`);
+}
+
+function isPinnedYarnCached() {
+  const cache = join(corepackCacheDir(), "v1", "yarn");
+  if (!existsSync(cache)) return false;
+  return readdirSync(cache).includes(PINNED_YARN.split("@").at(-1) ?? "");
+}
+
+function provisionPinnedYarn(registryUrl, home) {
+  // Already cached from an earlier run or a CI setup step: no network call at all. That keeps an
+  // outage at the package-manager host from failing a gate whose dependency install is offline.
+  if (isPinnedYarnCached()) return;
+  // Provisioning must see the SAME sanitized environment as the install, or `COREPACK_HOME` is
+  // honoured here and stripped there — Corepack would then cache the tool in one place and search
+  // another with networking already disabled. Only the network flag differs.
+  const env = { ...yarnChildEnv(registryUrl, process.env, home), COREPACK_ENABLE_NETWORK: "1" };
+  const result = run("corepack", ["install", "--global", "--cache-only", PINNED_YARN], {
+    timeout: NPM_INSTALL_TIMEOUT_MS,
+    env,
+  });
+  if (result.status !== 0) {
+    // The other children in this gate run against the local tree or the loopback registry, so
+    // their stderr is echoed verbatim, as every sibling smoke gate does — that is what makes them
+    // debuggable. Corepack is the one child that contacts a remote host, so it is the one whose
+    // output can carry an endpoint, a proxy URL, or the credentials embedded in one. It is
+    // therefore classified rather than quoted (KfQ thread 3780151718).
+    fail(
+      `corepack could not provision ${PINNED_YARN} before the offline install ` +
+        `(exit ${String(result.status)}, ${classifyProvisionFailure(result)}) — re-run ` +
+        `\`npm run provision:smoke\` on a host with network access to populate the cache`,
+    );
+  }
+}
+
+// Matched against the failed downloader's output to route the failure. Only the right-hand label
+// is ever emitted; the text that matched never is.
+const PROVISION_FAILURE_CLASSES = [
+  {
+    pattern: /ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENETUNREACH/u,
+    label: "the host was unreachable",
+  },
+  {
+    pattern: /EINTEGRITY|integrity|checksum|hash mismatch/iu,
+    label: "the archive failed its integrity check",
+  },
+  {
+    pattern: /\b40[13]\b|unauthorized|forbidden|authentication/iu,
+    label: "the request was rejected as unauthorized",
+  },
+  { pattern: /\b404\b|not found/iu, label: "the requested version was not found" },
+];
+
+export function classifyProvisionFailure(result) {
+  if (result.signal !== null && result.signal !== undefined) return "terminated after the timeout";
+  const combined = `${result.stderr ?? ""}\n${result.stdout ?? ""}`;
+  const matched = PROVISION_FAILURE_CLASSES.find((entry) => entry.pattern.test(combined));
+  return matched === undefined ? "the failure matched no known class" : matched.label;
+}
+
+function writeYarnConfiguration(tmp, registryUrl) {
+  const architectureLines = Object.entries(supportedArchitectures()).flatMap(([key, values]) => [
+    `  ${key}:`,
+    ...values.map((value) => `    - ${value}`),
+  ]);
+  const lines = [
+    "nodeLinker: node-modules",
+    "enableGlobalCache: false",
+    "enableTelemetry: false",
+    "globalFolder: .yarn/global",
+    "cacheFolder: .yarn/cache",
+    `npmRegistryServer: ${registryUrl}`,
+    "npmScopes:",
+    "  oscharko-dev:",
+    `    npmRegistryServer: ${registryUrl}`,
+    "supportedArchitectures:",
+    ...architectureLines,
+    "unsafeHttpWhitelist:",
+    "  - 127.0.0.1",
+  ];
+  writeFileSync(join(tmp, YARN_RC_FILENAME), `${lines.join("\n")}\n`);
+}
+
+export async function installIntoWithYarn(tmp, artifact, vendored) {
+  assertRegistryOnlyDescriptors(vendored ?? new Map());
+  assertStagedRootDescriptors(artifact.manifest);
+  const registry = await startLocalRegistry(artifact, vendored);
+  const yarnHome = privateYarnHome();
+  provisionPinnedYarn(registry.registryUrl, yarnHome);
   writeFileSync(
     join(tmp, "package.json"),
     `${JSON.stringify(
       {
         private: true,
         type: "module",
-        packageManager: "yarn@4.9.1",
+        packageManager: PINNED_YARN,
         dependencies: { [rootPackageJson.name]: rootVersion },
       },
       null,
@@ -421,10 +1589,12 @@ export async function installIntoWithYarn(tmp, artifact) {
     "utf8",
   );
   rmSync(join(tmp, "yarn.lock"), { force: true });
-  writeFileSync(
-    join(tmp, ".yarnrc.yml"),
-    `nodeLinker: node-modules\nenableGlobalCache: false\nglobalFolder: .yarn/global\ncacheFolder: .yarn/cache\nnpmScopes:\n  oscharko-dev:\n    npmRegistryServer: ${registry.registryUrl}\nunsafeHttpWhitelist:\n  - 127.0.0.1\n`,
-  );
+  // `npmRegistryServer` is set GLOBALLY, not only for the `oscharko-dev` scope (#3130): every
+  // package this install resolves must come from the local registry, which serves the packed root
+  // plus the repository-pinned third-party closure and 404s everything else. Scoping it made the
+  // gate depend on live npm for the transitive graph, so an unrelated upstream publish could — and
+  // did — turn every Keiko pull request red.
+  writeYarnConfiguration(tmp, registry.registryUrl);
   try {
     const result = await runAsync(
       "corepack",
@@ -432,7 +1602,7 @@ export async function installIntoWithYarn(tmp, artifact) {
       {
         cwd: tmp,
         timeout: NPM_INSTALL_TIMEOUT_MS,
-        env: { ...process.env, YARN_ENABLE_GLOBAL_CACHE: "false" },
+        env: yarnChildEnv(registry.registryUrl, process.env, yarnHome),
       },
     );
     if (result.timedOut === true || result.error !== undefined || result.status !== 0) {
@@ -446,6 +1616,7 @@ export async function installIntoWithYarn(tmp, artifact) {
     }
   } finally {
     await registry.close();
+    rmSync(yarnHome, { recursive: true, force: true });
   }
 }
 
@@ -908,12 +2079,90 @@ async function assertPackagedLifecycleCommands(tmp) {
   }
 }
 
+/**
+ * CI runs this script twice — `smoke:install` then `smoke:install:optional` — as separate
+ * processes against one checkout. The first run's `prepack` permanently prunes `@napi-rs/canvas`
+ * and its bindings out of `node_modules`, so a second run seeding from that tree would substitute
+ * inert stubs and let the optional lane pass without the native binding it exists to prove.
+ *
+ * The seed directory is therefore stable and keyed by the lockfile, so the second invocation
+ * reuses the pre-prune artifacts the first one packed instead of re-deriving them from a mutated
+ * tree (#3130).
+ */
+export function persistentVendorSeedDir(lockfilePath = join(repoRoot, "package-lock.json")) {
+  // Keyed by the CHECKOUT as well as the lockfile: two checkouts sharing a lockfile must not share
+  // a cache, and a predictable path on a shared host is otherwise pre-creatable by another user.
+  // The lockfile is hashed as BYTES. Interpolating the Buffer into a template string would decode
+  // it as UTF-8 first, and any byte sequence that does not survive that round trip would map two
+  // distinct lockfiles onto one cache directory.
+  const digest = createHash("sha256").update(repoRoot).update("\u0000");
+  digest.update(existsSync(lockfilePath) ? readFileSync(lockfilePath) : "no-lockfile");
+  // The implementation is part of the key: switching revisions in one worktree without touching
+  // the lockfile would otherwise run new packing, manifest-projection or stub logic against
+  // tarballs produced by the old logic, and the gate could stay green over the very regression it
+  // is meant to catch.
+  digest.update("\u0000").update(readFileSync(fileURLToPath(import.meta.url)));
+  const key = digest.digest("hex").slice(0, 24);
+  const dir = join(tmpdir(), `keiko-yarn-vendor-seed-${key}`);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  assertPrivateDirectory(dir);
+  return dir;
+}
+
+/** A cache another account can write is a cache that can hand this gate unverified bytes. */
+function assertPrivateDirectory(dir) {
+  const stats = lstatSync(dir);
+  if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    fail(`vendor seed cache ${dir} is not a real directory`);
+  }
+  if (process.getuid !== undefined && stats.uid !== process.getuid()) {
+    fail(`vendor seed cache ${dir} is not owned by this user`);
+  }
+  // Group/other write bits would let another account replace an archive between runs. POSIX mode
+  // bits carry no meaning on Windows — Node reports a synthetic mode there and exposes no ACL API —
+  // so the check is skipped rather than evaluated against a value that says nothing. That platform
+  // is not left unguarded: `os.tmpdir()` is per-user on Windows
+  // (`%LOCALAPPDATA%\Temp`), so the shared-directory exposure this check addresses does not arise
+  // by default, and the containment plus integrity checks in `isReusableSeedEntry` apply on every
+  // platform regardless.
+  if (process.platform !== "win32" && (stats.mode & 0o022) !== 0) {
+    fail(`vendor seed cache ${dir} is group- or world-writable`);
+  }
+}
+
+/**
+ * Seeds the offline registry and THEN packs the publish artifact, in that order, because
+ * `packRoot()` runs `prepack`, whose `prune:package-native-optionals` step deletes
+ * `@napi-rs/canvas` and its platform bindings out of `node_modules`. Seeding afterwards would find
+ * them gone, serve inert stubs in their place, and let the Yarn arm pass without the native
+ * binding it exists to prove (#3130).
+ *
+ * Dependency-injected so the ordering is observable in a test: a pin comparing source positions
+ * would stay green if a refactor moved the effective call and left the statement text in place.
+ */
+export function seedThenPack(vendorTmp, deps) {
+  const seed = deps?.seedVendoredRegistry ?? seedVendoredRegistry;
+  const pack = deps?.packRoot ?? packRoot;
+  const vendored = seed(vendorTmp);
+  const artifact = pack();
+  return { vendored, artifact };
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const artifact = packRoot();
-  const tmp = mkdtempSync(join(tmpdir(), "keiko-install-smoke-"));
-  const yarnTmp = mkdtempSync(join(tmpdir(), "keiko-yarn-install-smoke-"));
+  // Stable and lockfile-keyed, so the second CI invocation reuses the pre-prune artifacts.
+  const vendorTmp = persistentVendorSeedDir();
+  // Both directories are created INSIDE the try, so a failure creating the second does not strand
+  // the first; the finally tolerates either being unassigned.
+  let tmp;
+  let yarnTmp;
+  let artifact;
   try {
+    tmp = mkdtempSync(join(tmpdir(), "keiko-install-smoke-"));
+    yarnTmp = mkdtempSync(join(tmpdir(), "keiko-yarn-install-smoke-"));
+    const seeded = seedThenPack(vendorTmp);
+    const { vendored } = seeded;
+    artifact = seeded.artifact;
     installInto(tmp, artifact.tarballPath, options);
     assertCliExecutable(tmp);
     assertVendoredPayload(tmp);
@@ -923,7 +2172,11 @@ async function main() {
     assertInstalledRootTypeSurface(tmp);
     await assertPackagedUi(tmp);
     await assertPackagedLifecycleCommands(tmp);
-    await installIntoWithYarn(yarnTmp, artifact);
+    // Top up from the STAGED manifest: `promoteWorkspacePeers` can lift third-party peers into it
+    // that the repository manifest never named. Anything already captured above is kept as-is, so
+    // the pre-prune copies win.
+    seedVendoredRegistry(vendorTmp, undefined, artifact.manifest, vendored);
+    await installIntoWithYarn(yarnTmp, artifact, vendored);
     assertCliExecutable(yarnTmp);
     assertVendoredPayload(yarnTmp);
     assertProductiveTypeScriptRuntime(yarnTmp);
@@ -934,9 +2187,11 @@ async function main() {
       `installable-smoke ok: npm tarball + Yarn registry installs passed (${options.includeOptional ? "optional deps included" : "optional deps omitted"}), ${String(runtimeWorkspaces.length)} vendored packages present, root runtime/types + CLI + UI/lifecycle reachable.`,
     );
   } finally {
-    rmSync(tmp, { recursive: true, force: true });
-    rmSync(yarnTmp, { recursive: true, force: true });
-    artifact.cleanup();
+    if (tmp !== undefined) rmSync(tmp, { recursive: true, force: true });
+    if (yarnTmp !== undefined) rmSync(yarnTmp, { recursive: true, force: true });
+    // vendorTmp is deliberately NOT removed: it is the lockfile-keyed cache the next invocation
+    // reuses, and it lives under the OS temp directory.
+    artifact?.cleanup();
   }
 }
 
