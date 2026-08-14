@@ -1785,14 +1785,12 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   const chatModels = modelPayload.models.filter(isConversationEligibleModel);
   const defaultModel = pickChatModelId(chatModels);
 
-  const projectPayload = await fetchProjects().catch(() => ({ projects: [] }));
+  const projectPayload = await fetchProjects();
   const projects = sortProjects(projectPayload.projects);
   const project = projects.find((item) => item.available) ?? projects[0];
 
   const chatPayload =
-    project === undefined
-      ? { chats: [] as readonly Chat[] }
-      : await sharedFetchChats(project.path).catch(() => ({ chats: [] as readonly Chat[] }));
+    project === undefined ? { chats: [] as readonly Chat[] } : await sharedFetchChats(project.path);
   const sortedChats = sortChats(chatPayload.chats);
   const latestChat = pickResumableChat(sortedChats);
   if (project !== undefined && latestChat !== undefined) {

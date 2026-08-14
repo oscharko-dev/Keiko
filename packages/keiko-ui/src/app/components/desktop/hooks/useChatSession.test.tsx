@@ -291,6 +291,29 @@ describe("useChatSession bootstrap", () => {
     expect(result.current.messages).toHaveLength(1);
   });
 
+  it("surfaces a project catalog bootstrap failure instead of treating it as empty", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockRejectedValue(new TypeError("project catalog unavailable"));
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toContain("project catalog unavailable");
+    expect(fetchChats).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a chat catalog bootstrap failure instead of treating it as empty", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockRejectedValue(new TypeError("chat catalog unavailable"));
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toContain("chat catalog unavailable");
+    expect(result.current.activeProject).toBeUndefined();
+  });
+
   it("shares concurrent cold bootstrap requests across session instances", async () => {
     const latest = chat({ id: "chat-latest", selectedModel: "chat-live", updatedAt: 20 });
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
