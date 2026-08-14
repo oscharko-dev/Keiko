@@ -751,6 +751,30 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   }, 60_000);
 
+  // The counterpart to the test above, and the reason sharing this cache is safe. Two invocations
+  // share it within one checkout and both read the index before either publishes, so a process
+  // that seeded AFTER the prune would otherwise publish stubs carrying a matching integrity value
+  // — and the other process would accept them precisely because the stub is intact. A real archive
+  // is integrity-verified on read and self-heals; a stub is a legitimate artifact for a foreign
+  // platform and cannot be told apart from one by integrity (Codex thread 3780203131).
+  it("never publishes a stub into the shared seed index", () => {
+    const tree = mkdtempSync(join(tmpdir(), "keiko-stub-index-tree-"));
+    const seedDir = mkdtempSync(join(tmpdir(), "keiko-stub-index-seed-"));
+    const manifest = { optionalDependencies: { "demo-native": "^1.0.0" }, bundleDependencies: [] };
+    try {
+      mkdirSync(join(tree, "node_modules"), { recursive: true });
+      // Seeded from a tree where the optional package is absent: this run produces a stub.
+      const pruned = seedVendoredRegistry(seedDir, join(tree, "node_modules"), manifest);
+      expect(pruned.get("demo-native")?.get("1.0.0")?.manifest?.os).toBeDefined();
+
+      // A concurrent invocation reading the shared index must not inherit it.
+      expect(loadSeedIndex(seedDir).get("demo-native")).toBeUndefined();
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+      rmSync(seedDir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("validates the staged root's own descriptors, allowing only its vendor archives", () => {
     // `file:vendor/...` is how stage-publish-package points at the tarball-local private
     // workspaces; anything else external must be rejected before Yarn can resolve it.

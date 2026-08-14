@@ -877,10 +877,22 @@ export function writeSeedIndex(destination, seeded) {
   // Published by rename so a concurrent reader never sees a half-written file: two smoke commands
   // share this path within one checkout, and an interrupted write would otherwise leave malformed
   // JSON that the next invocation cannot parse.
+  //
+  // STUBS ARE NEVER PERSISTED (Codex thread 3780203131). Two invocations sharing this cache read
+  // the index before either publishes, so a process that seeded AFTER a prune — where the native
+  // packages are gone and every binding stubs — would otherwise publish those stubs with a
+  // matching integrity value. The other process would then read them, pass the integrity check
+  // precisely because the stub is intact, and run the Yarn arm against a placeholder where the
+  // host binding belongs. Real archives are safe to share: they are integrity-verified on read and
+  // a replaced or torn one is rejected and re-packed. A stub is not, because it is a legitimate
+  // artifact for a FOREIGN platform and indistinguishable from one by integrity alone. Stubs are
+  // synthetic and cost nothing to rebuild, so each process makes its own.
   const serializable = {};
   for (const [name, versions] of seeded) {
+    const durable = [...versions].filter(([, entry]) => !isStubEntry(entry));
+    if (durable.length === 0) continue;
     serializable[name] = Object.fromEntries(
-      [...versions].map(([version, entry]) => [
+      durable.map(([version, entry]) => [
         version,
         { tarballPath: entry.tarballPath, integrity: entry.integrity, manifest: entry.manifest },
       ]),

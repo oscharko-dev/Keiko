@@ -121,6 +121,11 @@ jobs:
           fi
           echo "All action references are pinned to full commit SHAs."
       - name: Verify the zizmor ignore anchors still point at what they document
+        # Same guard as the scanner steps around it (ADR-0159): each tool in this consolidated job
+        # reports independently, so one tool's failure never hides another's. Without it this step
+        # would be skipped whenever an earlier step failed, while the guarded `Run zizmor` below
+        # still executed — the diagnostic would go missing in exactly the run that needs it.
+        if: ${{ !cancelled() && steps.checkout.outcome != 'failure' }}
         # `.github/zizmor.yml` scopes every risk acceptance to a LINE NUMBER, so inserting a line
         # above one silently drops it and the next step reports the underlying finding instead of
         # the cause. Running the anchor check FIRST turns that into a message naming the corrected
