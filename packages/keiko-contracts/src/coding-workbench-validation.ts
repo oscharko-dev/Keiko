@@ -30,6 +30,7 @@ import {
   type CodingWorkbenchRuntimeEventKind,
   type CodingWorkbenchRuntimeEvent,
   type CodingWorkbenchValidationResult,
+  isCodingWorkbenchModeWidening,
 } from "./coding-workbench.js";
 
 const HEX_64_PATTERN = /^[a-f0-9]{64}$/u;
@@ -993,10 +994,11 @@ function validateRuntimeEventModeOrdering(value: Record<string, unknown>, errors
   ) {
     return;
   }
-  if (
-    CODING_WORKBENCH_MODES.indexOf(value.effectiveMode) >
-    CODING_WORKBENCH_MODES.indexOf(value.requestedMode)
-  ) {
+  // Authority ordering is decided by the package's own comparator, not by array position. Reading
+  // the order off CODING_WORKBENCH_MODES.indexOf forked the single source of truth the package
+  // declares for mode authority: reordering that array — a change that looks purely cosmetic —
+  // would silently invert this check while every other authority decision stayed correct.
+  if (isCodingWorkbenchModeWidening(value.requestedMode, value.effectiveMode)) {
     errors.push("event.effectiveMode must be no higher than event.requestedMode");
   }
 }

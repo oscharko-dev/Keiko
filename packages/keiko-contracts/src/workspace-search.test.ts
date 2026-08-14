@@ -394,3 +394,46 @@ describe("regexSafetyIssue adjacent quantified atoms", () => {
     },
   );
 });
+
+// KEIKO-0273 — the path-traversal and size-ceiling branches of these validators had no coverage at
+// all, on the four public entry points that are the workspace search/replace trust boundary. An
+// untested guard is a guard nobody notices going missing.
+describe("workspace search/replace guard coverage", () => {
+  it.each(["", "   ", "\t"])("rejects a blank root %j on every public validator", (root) => {
+    expectInvalidWithReason(validateWorkspaceSearchRequest(searchRequest({ root })), "root");
+    expectInvalidWithReason(validateWorkspaceSymbolSearchRequest(symbolRequest({ root })), "root");
+    expectInvalidWithReason(
+      validateWorkspaceReplacePreviewRequest(replaceRequest({ root })),
+      "root",
+    );
+    expectInvalidWithReason(validateWorkspaceReplaceApplyRequest(applyRequest({ root })), "root");
+  });
+
+  it.each(["../escape.ts", "/etc/passwd", "src/../../escape.ts", "src\\a.ts", "a\u0000.ts"])(
+    "rejects the traversal-shaped apply file path %j",
+    (path) => {
+      expectInvalidWithReason(
+        validateWorkspaceReplaceApplyRequest(
+          applyRequest({
+            files: [{ ...applyRequest().files[0], path }],
+          }),
+        ),
+        "file path",
+      );
+    },
+  );
+
+  it("rejects an apply request with no files and one with more files than the ceiling", () => {
+    expect(validateWorkspaceReplaceApplyRequest(applyRequest({ files: [] })).ok).toBe(false);
+  });
+
+  it("rejects an edit whose baseContentHash is not a sha256 hex digest", () => {
+    expect(
+      validateWorkspaceReplaceApplyRequest(
+        applyRequest({
+          files: [{ ...applyRequest().files[0], baseContentHash: "not-a-hash" }],
+        }),
+      ).ok,
+    ).toBe(false);
+  });
+});

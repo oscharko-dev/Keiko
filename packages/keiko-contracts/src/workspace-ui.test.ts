@@ -21,6 +21,9 @@ import {
   workspaceChordsCollide,
   workspacePlatformModifiers,
   type WorkspaceKeyChord,
+  workspaceActionLabel,
+  workspaceInverseAction,
+  type WorkspaceUiAction,
 } from "./workspace-ui.js";
 
 describe("workspace chord vocabulary — platform collapse", () => {
@@ -142,5 +145,79 @@ describe("workspace chord vocabulary — reservation", () => {
     { key: "t", mod: [] },
   ] as readonly WorkspaceKeyChord[])("leaves the shipped chord %j unreserved", (chord) => {
     expect(isWorkspaceReservedChord(chord)).toBe(false);
+  });
+});
+
+// KEIKO-0248 — workspaceActionLabel and workspaceInverseAction are the 11-branch functions the
+// undo/redo stack is built on, and the suite exercised neither. A wrong branch in either is a
+// silently wrong undo: the stack would happily apply an inverse that does not undo the action.
+describe("workspace UI action label and inverse", () => {
+  const RECT_A = { x: 0, y: 0, w: 100, h: 100 };
+  const RECT_B = { x: 10, y: 20, w: 200, h: 150 };
+  const VIEW_A = { zoom: 1, x: 0, y: 0 };
+  const VIEW_B = { zoom: 2, x: 40, y: 60 };
+  const SNAPSHOT = { id: "w-1", type: "chat", rect: RECT_A, z: 3 };
+  const SELECTION_A = { focusedWindowId: null, selectedWindowIds: [] };
+  const SELECTION_B = { focusedWindowId: "w-1", selectedWindowIds: ["w-1"] };
+
+  const ACTIONS: readonly WorkspaceUiAction[] = [
+    { kind: "ui.window.move", windowId: "w-1", before: RECT_A, after: RECT_B },
+    { kind: "ui.window.resize", windowId: "w-1", before: RECT_A, after: RECT_B },
+    { kind: "ui.window.zorder", windowId: "w-1", before: 1, after: 5 },
+    { kind: "ui.window.close", windowId: "w-1", windowSnapshot: SNAPSHOT },
+    { kind: "ui.window.open", windowId: "w-1", windowSnapshot: SNAPSHOT },
+    { kind: "ui.workspace.pan", before: VIEW_A, after: VIEW_B },
+    { kind: "ui.workspace.zoom", before: VIEW_A, after: VIEW_B },
+    { kind: "ui.workspace.fit", before: VIEW_A, after: VIEW_B },
+    { kind: "ui.panel.toggle", panel: "search", before: false, after: true },
+    { kind: "ui.selection.change", before: SELECTION_A, after: SELECTION_B },
+    { kind: "ui.tab.switch", before: "tab-a", after: "tab-b" },
+  ];
+
+  it("covers every action kind in the union", () => {
+    expect(new Set(ACTIONS.map((action) => action.kind)).size).toBe(ACTIONS.length);
+  });
+
+  it.each(ACTIONS.map((action) => [action.kind, action] as const))(
+    "labels %s with a non-empty human-readable string",
+    (_kind, action) => {
+      const label = workspaceActionLabel(action);
+      expect(typeof label).toBe("string");
+      expect(label.length).toBeGreaterThan(0);
+      expect(label).not.toContain("ui.");
+    },
+  );
+
+  it("gives every action kind a distinct label", () => {
+    const labels = ACTIONS.map((action) => workspaceActionLabel(action));
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  it.each(ACTIONS.map((action) => [action.kind, action] as const))(
+    "inverts %s such that applying the inverse twice returns the original",
+    (_kind, action) => {
+      expect(workspaceInverseAction(workspaceInverseAction(action))).toEqual(action);
+    },
+  );
+
+  it("swaps before and after on every state-transition action", () => {
+    for (const action of ACTIONS) {
+      const inverse = workspaceInverseAction(action);
+      if ("before" in action && "after" in action) {
+        expect(inverse).toMatchObject({ before: action.after, after: action.before });
+      }
+    }
+  });
+
+  it("turns a close into an open and an open into a close, keeping the snapshot", () => {
+    const close: WorkspaceUiAction = {
+      kind: "ui.window.close",
+      windowId: "w-1",
+      windowSnapshot: SNAPSHOT,
+    };
+    const inverse = workspaceInverseAction(close);
+    expect(inverse.kind).toBe("ui.window.open");
+    expect(inverse).toMatchObject({ windowSnapshot: SNAPSHOT });
+    expect(workspaceInverseAction(inverse).kind).toBe("ui.window.close");
   });
 });
