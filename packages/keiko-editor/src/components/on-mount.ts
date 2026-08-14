@@ -1102,7 +1102,12 @@ function installGitGutter(args: WireEditorOnMountArgs): EditorGitGutterBridge | 
 function installBlame(args: WireEditorOnMountArgs): EditorBlameBridge | null {
   const blame = args.blame;
   const targetType = args.monaco.editor.MouseTargetType?.GUTTER_GLYPH_MARGIN;
-  if (blame === undefined || targetType === undefined || args.editor.onMouseDown === undefined) {
+  if (
+    blame === undefined ||
+    targetType === undefined ||
+    args.editor.onMouseDown === undefined ||
+    args.editor.onDidChangeModel === undefined
+  ) {
     return null;
   }
   const editor: MonacoBlameEditor = {
@@ -1110,6 +1115,7 @@ function installBlame(args: WireEditorOnMountArgs): EditorBlameBridge | null {
       args.editor.deltaDecorations(oldIds, [...decorations]),
     getPosition: () => args.editor.getPosition?.() ?? null,
     onMouseDown: args.editor.onMouseDown.bind(args.editor),
+    onDidChangeModel: args.editor.onDidChangeModel.bind(args.editor),
     addAction: (descriptor) => args.editor.addAction(descriptor),
   };
   return registerEditorBlame({ ...blame, editor, glyphMarginTargetType: targetType });

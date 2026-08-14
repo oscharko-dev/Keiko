@@ -30,6 +30,7 @@ function fixture(): {
   run(id: string): void;
   click(line: number): void;
   rawClick(type: number, line?: number): void;
+  swapModel(): void;
 } {
   const actions = new Map<string, () => void>();
   let mouseListener = (_event: {
@@ -38,6 +39,7 @@ function fixture(): {
       readonly position?: { readonly lineNumber: number } | undefined;
     };
   }): void => undefined;
+  let modelListener = (): void => undefined;
   const calls: (readonly [string[], Parameters<MonacoBlameEditor["deltaDecorations"]>[1]])[] = [];
   return {
     calls,
@@ -49,6 +51,10 @@ function fixture(): {
       getPosition: () => ({ lineNumber: 2, column: 1 }),
       onMouseDown: (listener): { dispose(): void } => {
         mouseListener = listener;
+        return { dispose: (): void => undefined };
+      },
+      onDidChangeModel: (listener): { dispose(): void } => {
+        modelListener = listener;
         return { dispose: (): void => undefined };
       },
       addAction: (action): { dispose(): void } => {
@@ -65,6 +71,9 @@ function fixture(): {
     rawClick: (type, line): void => {
       const position = line === undefined ? undefined : { lineNumber: line };
       mouseListener({ target: { type, ...(position === undefined ? {} : { position }) } });
+    },
+    swapModel: (): void => {
+      modelListener();
     },
   };
 }
@@ -167,6 +176,76 @@ describe("registerEditorBlame", () => {
     view.click(3);
     expect(onCommit).toHaveBeenCalledTimes(2);
     expect(onCommit).toHaveBeenLastCalledWith("a".repeat(40));
+  });
+
+  it("clears the cache, disables blame, and never resolves a stale commit after a model swap (KEIKO-0378)", async () => {
+    const view = fixture();
+    const onCommit = vi.fn();
+    registerEditorBlame({
+      editor: view.editor,
+      resolve: () => Promise.resolve(RESPONSE),
+      degraded: false,
+      glyphMarginTargetType: 7,
+      dirty: () => false,
+      describe: (line, age) => `${line.author} · ${age}`,
+      formatAge: () => "1 month ago",
+      labels: {
+        toggle: "Toggle blame",
+        openCommit: "Open commit",
+        dirtyNotice: "Blame reflects HEAD.",
+        truncated: "Blame was truncated.",
+      },
+      onCommit,
+    });
+
+    // Model A: toggle blame on, resolve, and confirm a click surfaces A's commit.
+    view.run("keiko.editor.toggleBlame");
+    await flush();
+    view.click(2);
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onCommit).toHaveBeenLastCalledWith("a".repeat(40));
+
+    // Swap to model B: the cache and decorations must clear and blame must fail closed.
+    view.swapModel();
+    expect(view.calls.at(-2)?.[1]).toEqual([]);
+    expect(view.calls.at(-1)?.[1]).toEqual([]);
+
+    // A click at the same line number in B must never resolve A's stale commit, whether via the
+    // mouse handler or the "Open commit" keyboard action -- both gate on `state.enabled`, which
+    // the swap disabled, requiring an explicit re-toggle before B can be blamed.
+    onCommit.mockClear();
+    view.click(2);
+    view.run("keiko.editor.openBlameCommit");
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("discards an in-flight blame response for the superseded model after a swap (KEIKO-0378)", async () => {
+    const view = fixture();
+    const onCommit = vi.fn();
+    let resolvePending = (_response: GitEditorBlameResponse): void => undefined;
+    const pending = new Promise<GitEditorBlameResponse>((resolve) => {
+      resolvePending = resolve;
+    });
+    registerEditorBlame({
+      editor: view.editor,
+      resolve: () => pending,
+      degraded: false,
+      glyphMarginTargetType: 7,
+      dirty: () => false,
+      describe: () => "line",
+      formatAge: () => "age",
+      labels: { toggle: "Toggle", openCommit: "Open", dirtyNotice: "HEAD", truncated: "More" },
+      onCommit,
+    });
+
+    view.run("keiko.editor.toggleBlame");
+    view.swapModel();
+    resolvePending(RESPONSE);
+    await flush();
+
+    expect(view.calls.every((call) => call[1].length === 0)).toBe(true);
+    view.click(2);
+    expect(onCommit).not.toHaveBeenCalled();
   });
 
   it("does zero work when degraded and discards a stale response after disable", async () => {

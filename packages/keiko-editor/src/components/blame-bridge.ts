@@ -41,6 +41,7 @@ export interface MonacoBlameEditor {
   deltaDecorations(oldDecorations: string[], next: readonly MonacoBlameDecoration[]): string[];
   getPosition?(): { readonly lineNumber: number; readonly column: number } | null;
   onMouseDown(listener: (event: MonacoMouseEventLike) => void): MonacoDisposable;
+  onDidChangeModel(listener: () => void): MonacoDisposable;
   addAction(descriptor: {
     readonly id: string;
     readonly label: string;
@@ -167,6 +168,19 @@ function openBlameLine(state: BlameState, args: RegisterEditorBlameArgs, lineNum
   if (line !== undefined && !ZERO_HASH.test(line.commitHash)) args.onCommit(line.commitHash);
 }
 
+// KEIKO-0378: a model swap (the host reassigns the editor's active document, e.g. switching files
+// in the same pane) must never let a click resolve a commit fetched for the previous file. Bump
+// the sequence so the existing `request !== state.sequence` guard in `requestBlame` discards any
+// in-flight response for the old model, clear the cache and decorations, and fail closed by
+// disabling blame outright -- both call sites of `openBlameLine` gate on `state.enabled`, so
+// re-enabling requires an explicit re-toggle that fetches fresh data for the new model (matching
+// diagnostics-bridge.ts's model-swap handling).
+function handleModelSwap(state: BlameState, args: RegisterEditorBlameArgs): void {
+  state.sequence += 1;
+  clearBlame(state, args);
+  state.enabled = false;
+}
+
 export function registerEditorBlame(args: RegisterEditorBlameArgs): EditorBlameBridge {
   if (args.degraded) return inertBridge();
   const state: BlameState = {
@@ -182,6 +196,9 @@ export function registerEditorBlame(args: RegisterEditorBlameArgs): EditorBlameB
     if (state.enabled && event.target.type === args.glyphMarginTargetType && line !== undefined) {
       openBlameLine(state, args, line);
     }
+  });
+  const modelChange = args.editor.onDidChangeModel(() => {
+    handleModelSwap(state, args);
   });
   const toggleAction = args.editor.addAction({
     id: "keiko.editor.toggleBlame",
@@ -207,6 +224,7 @@ export function registerEditorBlame(args: RegisterEditorBlameArgs): EditorBlameB
       state.enabled = false;
       state.sequence += 1;
       mouse.dispose();
+      modelChange.dispose();
       toggleAction.dispose();
       openAction.dispose();
       clearBlame(state, args);
