@@ -1181,9 +1181,39 @@ describe("redactPathInDiagnostic", () => {
     );
   });
 
+  // The invariant this pins is the prefix-with-separator gate: `/Users/foobar` must NOT be misread
+  // as `/Users/foo` + `bar` and rewritten to `~bar/x`. That still holds. What changed (KEIKO-1039)
+  // is the fallback for a path that matches NO rewrite: it used to be returned byte-for-byte, which
+  // leaked the directory layout and another account's username into diagnostic text.
   it("does not collapse `/Users/foobar` into `/Users/foo` (prefix-with-separator gate)", () => {
-    expect(redactPathInDiagnostic("/Users/foobar/x", { homePrefix: "/Users/foo" })).toBe(
-      "/Users/foobar/x",
+    const redacted = redactPathInDiagnostic("/Users/foobar/x", { homePrefix: "/Users/foo" });
+    expect(redacted).not.toContain("~");
+    expect(redacted).not.toContain("foobar");
+    expect(redacted).toBe("<path>/x");
+  });
+
+  // KEIKO-1039: the two rewrites are an allowlist of transforms, so an absolute path under neither
+  // the configured HOME nor a Windows drive was passed through raw. isSafeScopePath explicitly
+  // accepts such paths as legitimate pod scopes (external volume, other account, mounted share).
+  it.each([
+    ["/Volumes/External/docs/secret.pdf", "<path>/secret.pdf"],
+    ["/srv/share/other-user/notes.md", "<path>/notes.md"],
+    ["/etc/passwd", "<path>/passwd"],
+    ["//server/share/report.docx", "<unc>/report.docx"],
+  ])("redacts the non-home absolute path %s", (input, expected) => {
+    expect(redactPathInDiagnostic(input, { homePrefix: "/Users/foo" })).toBe(expected);
+  });
+
+  it("never returns a non-home absolute path verbatim", () => {
+    for (const input of ["/a/b/c", "/Volumes/x/y", "//unc/share/f"]) {
+      expect(redactPathInDiagnostic(input, { homePrefix: "/Users/foo" })).not.toBe(input);
+    }
+  });
+
+  it("leaves relative paths and home-rewritten paths alone", () => {
+    expect(redactPathInDiagnostic("docs/report.pdf")).toBe("docs/report.pdf");
+    expect(redactPathInDiagnostic("/Users/foo/secret.txt", { homePrefix: "/Users/foo" })).toBe(
+      "~/secret.txt",
     );
   });
 

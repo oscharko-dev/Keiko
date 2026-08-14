@@ -533,8 +533,18 @@ export function resolveContextTokenAccounting(
 function calibratedTokenCount(fallbackTokens: number, accounting: ContextTokenAccounting): number {
   const scaleMilli = accounting.scaleMilli ?? 1_000;
   const offsetTokens = accounting.offsetTokens ?? 0;
-  // Clamp defends callers that construct a ContextTokenAccounting object literal directly (the
-  // type system permits it) without passing through validateContextProfile.
+  // An out-of-range calibration falls back to the UNCALIBRATED estimate rather than through the
+  // clamp. `??` does not substitute for 0, so `scaleMilli: 0` survived and the whole expression
+  // collapsed to Math.max(0, 0) — every text reported as costing zero tokens. That is the permissive
+  // direction: this is the single canonical token currency, so a silent uniform under-count makes
+  // every lane, prompt segment and compaction decision believe its content is free, and the failure
+  // surfaces only as a provider-side context overflow with nothing pointing at the calibration.
+  // The rule mirrors the sibling validator (context-engineering-validation.ts), expressed inline
+  // because this is a hot per-segment path.
+  if (!Number.isInteger(scaleMilli) || scaleMilli <= 0) return fallbackTokens;
+  if (!Number.isInteger(offsetTokens) || offsetTokens < 0) return fallbackTokens;
+  // Floor only on the valid-calibration path: it defends callers that build a
+  // ContextTokenAccounting literal directly (the type system permits it) without validating it.
   return Math.max(0, Math.ceil((fallbackTokens * scaleMilli) / 1_000 + offsetTokens));
 }
 

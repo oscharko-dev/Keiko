@@ -60,11 +60,22 @@ export const RETRIEVAL_CONTEXT_SOURCE_KINDS: readonly RetrievalContextSourceKind
   "entailment-evidence",
 ] as const;
 
+// `external-connected` exists because connected-context carries GitHub/Jira content that anyone with
+// issue- or PR-creation rights on a tracked repository can author. Bucketing it with the user's own
+// files under `first-party-workspace` destroyed the one structured governance signal that tells the
+// two apart, so an auditor reading an evidence manifest's tierCounts could not say how much of the
+// first-party count actually originated outside the workspace. The item-level `untrusted: true`
+// labelling the connector applies is a separate, additive signal — this tier does not replace it.
 export type RetrievalContextSourceTier =
-  "first-party-workspace" | "indexed-knowledge" | "retained-memory" | "derived-evidence";
+  | "first-party-workspace"
+  | "external-connected"
+  | "indexed-knowledge"
+  | "retained-memory"
+  | "derived-evidence";
 
 export const RETRIEVAL_CONTEXT_SOURCE_TIERS: readonly RetrievalContextSourceTier[] = [
   "first-party-workspace",
+  "external-connected",
   "indexed-knowledge",
   "retained-memory",
   "derived-evidence",
@@ -77,7 +88,7 @@ export const RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND: Readonly<
   "files-focus": "first-party-workspace",
   "editor-state": "first-party-workspace",
   "git-context": "first-party-workspace",
-  "connected-context": "first-party-workspace",
+  "connected-context": "external-connected",
   "local-knowledge": "indexed-knowledge",
   memory: "retained-memory",
   "quality-intelligence": "derived-evidence",

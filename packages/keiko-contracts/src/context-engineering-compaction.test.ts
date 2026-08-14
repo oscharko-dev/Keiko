@@ -140,6 +140,55 @@ describe("isContextProvenanceRefKind", () => {
   });
 });
 
+// KEIKO-0338 — every scopePath in these contracts is documented as a RELATIVE workspace path that is
+// "deny-checked before use", but the validators checked non-emptiness only, so an absolute path or a
+// traversal segment validated. A compaction record is persisted state a later turn rehydrates, and
+// this structural validator is the only gate before the rehydration caller reads it.
+describe("compaction validators reject non-relative scope paths", () => {
+  const HOSTILE_PATHS = [
+    "/etc/passwd",
+    "../../secrets",
+    "src/../../escape.ts",
+    "C:\\Windows\\system32",
+    "src\\index.ts",
+  ];
+  // NOTE: `~/x` is NOT in this list. isValidScopePath — the package's shared relative-path predicate,
+  // and the one this validator now uses — does not reject a leading `~`, while the sibling
+  // isPortableWorkspaceRelativePath does. That divergence between two shared predicates is a real
+  // inconsistency but a separate one; `~` is meaningful only to a shell, so it resolves as a literal
+  // directory name here rather than as a traversal.
+
+  it.each(HOSTILE_PATHS)("rejects a provenance ref scopePath of %s", (scopePath) => {
+    expect(validateContextProvenanceRef({ ...happyRef(), scopePath }).ok).toBe(false);
+  });
+
+  it.each(HOSTILE_PATHS)("rejects an invalidation-key scopePath of %s", (scopePath) => {
+    expect(validateContextInvalidationKey({ scopePath, contentHash: "a".repeat(64) }).ok).toBe(
+      false,
+    );
+  });
+
+  it.each(HOSTILE_PATHS)("rejects a rehydration-handle scopePath of %s", (scopePath) => {
+    expect(validateContextRehydrationHandle({ ...minimalHandle(), scopePath }).ok).toBe(false);
+  });
+
+  it("rejects a compaction record whose filesChanged carries an absolute path", () => {
+    expect(
+      validateContextCompactionRecord({ ...richRecord(), filesChanged: ["/tmp/secret"] }).ok,
+    ).toBe(false);
+    expect(
+      validateContextCompactionRecord({ ...richRecord(), filesInspected: ["../../etc/hosts"] }).ok,
+    ).toBe(false);
+  });
+
+  it("still accepts genuine workspace-relative paths", () => {
+    expect(validateContextProvenanceRef({ ...happyRef(), scopePath: "src/a/b.ts" }).ok).toBe(true);
+    expect(
+      validateContextCompactionRecord({ ...richRecord(), filesChanged: ["src/a.ts"] }).ok,
+    ).toBe(true);
+  });
+});
+
 // ─── validateContextProvenanceRef ───────────────────────────────────────────────
 describe("validateContextProvenanceRef", () => {
   it("accepts the happy fixture", () => {

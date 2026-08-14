@@ -291,7 +291,10 @@ describe("assembleCodingContext", () => {
     const connected = pack.excerpts.find((e) => e.citation.sourceKind === "connected-context");
 
     expect(connected).toBeDefined();
-    expect(connected?.citation.sourceTier).toBe("first-party-workspace");
+    // KEIKO-0176: connected-context is externally authored (GitHub/Jira), so it carries its own
+    // tier — bucketing it with the user's own workspace files hid exactly that distinction from the
+    // evidence manifest.
+    expect(connected?.citation.sourceTier).toBe("external-connected");
     expect(connected?.citation.citationRef).toBe("untrusted-source-control-issue-42");
     expect(connected?.text).toContain(CONNECTED_ISSUE_TITLE);
     expect(connected?.text).toContain("Repro attached.");

@@ -1,3 +1,4 @@
+import { deepFreeze } from "./deep-freeze.js";
 import type {
   CodingWorkbenchActionClass,
   CodingWorkbenchAuthorityEnvelope,
@@ -188,9 +189,11 @@ export interface CodingWorkbenchRuntimeAdapterPort {
   readonly stop: (runId: string) => Promise<void>;
 }
 
+// deepFreeze: a shallow freeze left every per-state array writable, so
+// `LEGAL_TRANSITIONS.succeeded.push("running")` succeeded against the transition guard that reads it.
 const LEGAL_TRANSITIONS: Readonly<
   Record<CodingWorkbenchRuntimeStateName, readonly CodingWorkbenchRuntimeStateName[]>
-> = Object.freeze({
+> = deepFreeze({
   unavailable: ["idle", "recovery-required"],
   idle: ["starting", "unavailable", "recovery-required"],
   starting: ["ready", "failed", "cancelled", "taken-over", "recovery-required"],

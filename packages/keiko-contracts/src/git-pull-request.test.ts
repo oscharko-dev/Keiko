@@ -361,6 +361,43 @@ describe("guards and parse", () => {
     expect(parsed.ok).toBe(true);
   });
 
+  // KEIKO-0329 (PR mirror): reviewReady implies the object exists and carries no blocking blocker,
+  // and blocking entries precede advisory ones. Neither was checked.
+  it("rejects a summary claiming reviewReady while carrying a blocking blocker", () => {
+    const parsed = parseGitPullRequestReadinessSummary({
+      schemaVersion: "1",
+      objectExists: true,
+      reviewReady: true,
+      blockers: [{ code: "merge-conflict", severity: "blocking", remediation: "user-actionable" }],
+    });
+    expect(parsed.ok).toBe(false);
+  });
+
+  it("rejects a summary claiming reviewReady for a PR that does not exist", () => {
+    expect(
+      isGitPullRequestReadinessSummary({
+        schemaVersion: "1",
+        objectExists: false,
+        reviewReady: true,
+        blockers: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects blockers that are not severity-ranked", () => {
+    expect(
+      isGitPullRequestReadinessSummary({
+        schemaVersion: "1",
+        objectExists: true,
+        reviewReady: false,
+        blockers: [
+          { code: "draft-pr", severity: "advisory", remediation: "user-actionable" },
+          { code: "merge-conflict", severity: "blocking", remediation: "user-actionable" },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("rejects a malformed readiness summary", () => {
     expect(isGitPullRequestReadinessSummary({ objectExists: true })).toBe(false);
     const parsed = parseGitPullRequestReadinessSummary({ nope: 1 });

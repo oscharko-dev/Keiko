@@ -124,6 +124,16 @@ describe("isRetrievalContextCitation", () => {
     expect(isRetrievalContextCitation({ ...citation, content: "secret" })).toBe(false);
   });
 
+  // KEIKO-0176: externally-authored connected content must not share the tier that means "the
+  // user's own workspace files", or an evidence manifest's tierCounts cannot separate the two.
+  it("gives externally-authored connected context its own trust tier", () => {
+    expect(tierForRetrievalContextSource("connected-context")).toBe("external-connected");
+    for (const kind of ["repo-search", "files-focus", "editor-state", "git-context"] as const) {
+      expect(tierForRetrievalContextSource(kind)).toBe("first-party-workspace");
+    }
+    expect(RETRIEVAL_CONTEXT_SOURCE_TIERS).toContain("external-connected");
+  });
+
   // KEIKO-0400: sourceKind and sourceTier were two independent membership checks, so a citation
   // could declare a tier that is not the one this package assigns to its own kind — letting it
   // misrepresent its trust tier to any consumer that reads sourceTier rather than re-deriving it.

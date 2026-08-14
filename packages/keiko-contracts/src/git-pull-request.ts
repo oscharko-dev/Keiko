@@ -585,6 +585,27 @@ function isBlockerArray(value: unknown): value is readonly GitPullRequestReadine
   return Array.isArray(value) && value.every(isGitPullRequestReadinessBlocker);
 }
 
+function hasBlockingBlocker(blockers: readonly GitPullRequestReadinessBlocker[]): boolean {
+  return blockers.some((blocker) => blocker.severity === "blocking");
+}
+
+// "Severity-ranked" means every blocking entry precedes every advisory one: once an advisory has
+// been seen, no blocking entry may follow.
+function isSeverityRanked(blockers: readonly GitPullRequestReadinessBlocker[]): boolean {
+  let sawAdvisory = false;
+  for (const blocker of blockers) {
+    if (blocker.severity === "advisory") {
+      sawAdvisory = true;
+    } else if (sawAdvisory) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Same gap as isGitMergeReadinessSummary: the documented invariants (reviewReady implies the object
+// exists and carries no blocking blocker; blocking entries precede advisory ones) were unchecked, so
+// a summary could assert reviewReady while carrying a blocking blocker.
 export function isGitPullRequestReadinessSummary(
   value: unknown,
 ): value is GitPullRequestReadinessSummary {
@@ -593,7 +614,9 @@ export function isGitPullRequestReadinessSummary(
     value.schemaVersion === GIT_PULL_REQUEST_SCHEMA_VERSION &&
     isBoolean(value.objectExists) &&
     isBoolean(value.reviewReady) &&
-    isBlockerArray(value.blockers)
+    isBlockerArray(value.blockers) &&
+    (!value.reviewReady || (value.objectExists && !hasBlockingBlocker(value.blockers))) &&
+    isSeverityRanked(value.blockers)
   );
 }
 

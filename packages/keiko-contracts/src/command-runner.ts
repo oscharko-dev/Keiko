@@ -8,6 +8,7 @@
 // Discovery and execution live in keiko-server (composing keiko-tools `runCommand`), so the browser
 // never gains process, shell, or filesystem authority.
 
+import { deepFreeze } from "./deep-freeze.js";
 import type { CommandRule } from "./tools.js";
 
 export const COMMAND_RUNNER_SCHEMA_VERSION = "1" as const;
@@ -126,7 +127,10 @@ export interface CommandRunnerEvent {
 // the test/build/run surface cannot widen either: only the package-manager `run`/`test` subcommands
 // back a task, and shell-spawning / scope-shifting flags are denied even though discovery only ever
 // emits a frozen `["run", <script>]` argv (defense in depth).
-export const COMMAND_TASK_RULES: readonly CommandRule[] = Object.freeze([
+// deepFreeze: the array and the inner allowedSubcommands/denyFlags arrays were frozen individually,
+// but the RULE OBJECTS were not — `COMMAND_TASK_RULES[0].executable = "bash"` and
+// `COMMAND_TASK_RULES[0].denyFlags = []` both succeeded against the deny-by-default allowlist.
+export const COMMAND_TASK_RULES: readonly CommandRule[] = deepFreeze([
   {
     executable: "npm",
     allowedSubcommands: Object.freeze(["run", "test"]),

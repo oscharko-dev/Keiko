@@ -421,6 +421,37 @@ describe("guards + parse", () => {
     expect(parsed.ok).toBe(true);
   });
 
+  // KEIKO-0329: the two invariants the type documents — `mergeable` is true iff there is no BLOCKING
+  // blocker, and blocking entries precede advisory ones — were unchecked, so a summary crossing a
+  // package or process boundary could claim mergeable while carrying a blocking conflict.
+  it("rejects a summary claiming mergeable while carrying a blocking blocker", () => {
+    const parsed = parseGitMergeReadinessSummary({
+      schemaVersion: "1",
+      mergeable: true,
+      blockers: [{ code: "conflicts", severity: "blocking", remediation: "user-actionable" }],
+    });
+    expect(parsed.ok).toBe(false);
+  });
+
+  it("rejects a summary claiming not-mergeable with no blocking blocker", () => {
+    expect(isGitMergeReadinessSummary({ schemaVersion: "1", mergeable: false, blockers: [] })).toBe(
+      false,
+    );
+  });
+
+  it("rejects blockers that are not severity-ranked", () => {
+    expect(
+      isGitMergeReadinessSummary({
+        schemaVersion: "1",
+        mergeable: false,
+        blockers: [
+          { code: "checks-pending", severity: "advisory", remediation: "internal" },
+          { code: "conflicts", severity: "blocking", remediation: "user-actionable" },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("rejects an invalid readiness summary", () => {
     expect(isGitMergeReadinessSummary({ schemaVersion: "1", mergeable: "yes", blockers: [] })).toBe(
       false,
