@@ -1261,7 +1261,23 @@ const PINNED_YARN = "yarn@4.9.1";
  * mutate the environment it runs in; the throwaway project's own `packageManager` field is what
  * selects Yarn here.
  */
-/** Entry point for the setup step, so provisioning happens before the gate rather than inside it. */
+/**
+ * Setup entry point: caches the pinned Yarn AND seeds the vendored registry, both before any step
+ * that mutates the installed tree. `prune:package-native-optionals` runs ahead of the smoke in the
+ * `core-quality` job, so a seed created afterwards would hold stubs where the real native packages
+ * belong — the same defect the two-invocation ordering had, in a different job. Seeding here makes
+ * the fixture independent of where the prune sits in any given lane (#3130).
+ */
+export function prepareOfflineSmokeForSetup() {
+  provisionPinnedYarnForSetup();
+  const destination = persistentVendorSeedDir();
+  const seeded = seedVendoredRegistry(destination);
+  console.log(
+    `prepare-offline-smoke: seeded ${String(seeded.size)} package name(s) into ${destination}.`,
+  );
+}
+
+/** Caches the pinned Yarn, so no gate has to reach the package-manager host mid-run. */
 export function provisionPinnedYarnForSetup() {
   if (isPinnedYarnCached()) {
     console.log(`provision-pinned-yarn: ${PINNED_YARN} already cached; no request made.`);

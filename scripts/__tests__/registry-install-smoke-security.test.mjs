@@ -1088,6 +1088,25 @@ describe("installable package smoke optional-dependency coverage", () => {
   // `prepack` runs `prune:package-native-optionals`, which deletes @napi-rs/canvas out of
   // node_modules. Seeding after packRoot() would therefore stub the current host's native binding
   // and let the Yarn arm pass without it, so main() must seed BEFORE packing.
+  // Every job that runs a smoke must prepare the offline fixture first, and in core-quality that
+  // preparation has to precede `prune:package-native-optionals` — a seed taken after the prune
+  // serves stubs where the host binding belongs.
+  it("prepares the offline smoke in every workflow job that runs one, before any prune", () => {
+    const workflow = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
+    const smokeSites = [...workflow.matchAll(/npm run smoke:install(?::optional)?/gu)];
+    expect(smokeSites.length).toBeGreaterThan(0);
+    // Each smoke invocation is preceded somewhere above by the preparation step.
+    for (const site of smokeSites) {
+      const before = workflow.slice(0, site.index ?? 0);
+      expect(before).toContain("npm run provision:smoke");
+    }
+    // In core-quality the preparation precedes the destructive prune, not merely the smoke.
+    const prune = workflow.indexOf("npm run prune:package-native-optionals");
+    const prepare = workflow.indexOf("npm run provision:smoke");
+    expect(prepare).toBeGreaterThan(-1);
+    expect(prepare).toBeLessThan(prune);
+  });
+
   it("seeds the vendored registry before packRoot prunes native optionals", () => {
     // Observes the production calls rather than their source positions: a text-order pin would
     // stay green if a refactor moved the effective call and left the statement text in place.
