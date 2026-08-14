@@ -70,6 +70,41 @@ describe("buildPatchPreview — file classification", () => {
     expect(model.createdCount).toBe(1);
   });
 
+  it("flags a new-file change as unsupported when real source content already exists at that uri", () => {
+    const model = buildPatchPreview({
+      patch: patch([
+        change({
+          uri: "keiko://doc/new.ts",
+          isNewFile: true,
+          edits: replaceWholeFile("export const a = 1;\n"),
+        }),
+      ]),
+      sources: { "keiko://doc/new.ts": source("src/new.ts", "export const existing = 0;\n") },
+    });
+    const file = model.files[0];
+    expect(file?.status).not.toBe("created");
+    expect(file?.status).toBe("unsupported");
+    expect(file?.original).toBe("");
+    expect(file?.modified).toBe("");
+    expect(file?.note).toMatch(/existing content/i);
+  });
+
+  it("still classifies a new-file change as created when the matching source is empty", () => {
+    const model = buildPatchPreview({
+      patch: patch([
+        change({
+          uri: "keiko://doc/new-empty.ts",
+          isNewFile: true,
+          edits: replaceWholeFile("export const a = 1;\n"),
+        }),
+      ]),
+      sources: { "keiko://doc/new-empty.ts": source("src/new-empty.ts", "") },
+    });
+    const file = model.files[0];
+    expect(file?.status).toBe("created");
+    expect(file?.modified).toBe("export const a = 1;\n");
+  });
+
   it("classifies a modified file by applying edits to the provided original", () => {
     const model = buildPatchPreview({
       patch: patch([
