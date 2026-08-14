@@ -190,8 +190,10 @@ function expectStructuredVisionRequest(seenRequests: readonly GatewayRequest[]):
       },
     },
   });
-  const responseFormat = request.responseFormat as
-    { readonly type: "json_schema"; readonly schema: Record<string, unknown> } | undefined;
+  const responseFormat = request.responseFormat as {
+    readonly type: "json_schema";
+    readonly schema: Record<string, unknown>;
+  };
   const schema = responseFormat.schema as
     { readonly properties?: { readonly hints?: Record<string, unknown> } } | undefined;
   expect(schema?.properties?.hints).not.toHaveProperty("minItems");
