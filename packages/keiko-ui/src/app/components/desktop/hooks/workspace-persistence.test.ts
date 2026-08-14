@@ -794,6 +794,16 @@ describe("workspace-persistence", () => {
     expect(sanitizePersistedConnections(conns, endpoints)).toHaveLength(512);
   });
 
+  it("keeps only the frontmost persisted window for each bound chat identity", () => {
+    const persisted = sanitizePersistedWindows([
+      win({ id: "chat-old", type: "chat", z: 2, cfg: { chatId: "chat-a" } }),
+      win({ id: "chat-other", type: "chat", z: 4, cfg: { chatId: "chat-b" } }),
+      win({ id: "chat-front", type: "chat", z: 8, cfg: { chatId: "chat-a" } }),
+    ]);
+
+    expect(persisted.map((window) => window.id)).toEqual(["chat-other", "chat-front"]);
+  });
+
   it("rejects over-length generic text cfg values (reject, not truncate)", () => {
     const longPath = `src/${"a".repeat(3000)}.ts`;
     const okPath = "src/components/app.ts";

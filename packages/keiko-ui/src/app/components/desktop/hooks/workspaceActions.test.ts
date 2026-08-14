@@ -1936,6 +1936,28 @@ describe("makeMutations.openEditorFile", () => {
     });
   });
 
+  it("rejects a new editor when the workspace-wide window limit is reached", () => {
+    const initial = Array.from({ length: MAX_WORKSPACE_WINDOWS }, (_, index) =>
+      win("files", {}, `files-${String(index)}`),
+    );
+    const store = { value: initial as AppWindow[] | null };
+    const winsRef: MutableRefObject<AppWindow[]> = { current: initial };
+    const onWindowLimitReached = vi.fn();
+    const { openEditorFile } = makeMutations({
+      onWindowLimitReached,
+      setWins: (update) => applyState(store, update),
+      zc: { current: MAX_WORKSPACE_WINDOWS },
+      worldVP: () => layoutViewport,
+      winsRef,
+    });
+
+    const result = openEditorFile({ root: "/repo", path: "src/a.ts" });
+
+    expect(result.ok).toBe(false);
+    expect(store.value).toHaveLength(MAX_WORKSPACE_WINDOWS);
+    expect(onWindowLimitReached).toHaveBeenCalledExactlyOnceWith(MAX_WORKSPACE_WINDOWS);
+  });
+
   it("strips a re-included root prefix so an absolute reference stays root-relative (#1374)", () => {
     // Issue #1374: a reference that re-includes the selected root (e.g. "/repo/src/a.ts") must be
     // reduced to the bare root-relative identifier the BFF expects, not persisted as a malformed
@@ -2173,6 +2195,29 @@ describe("makeMutations.toggleTool — Local Knowledge singleton", () => {
 
     toggleTool("localKnowledge");
     expect(wins?.filter((w) => w.type === "localKnowledge")).toHaveLength(0);
+  });
+
+  it("does not open a tool beyond the workspace-wide window limit", () => {
+    let wins: AppWindow[] | null = Array.from({ length: MAX_WORKSPACE_WINDOWS }, (_, index) =>
+      win("files", {}, `files-${String(index)}`),
+    );
+    const winsRef: MutableRefObject<AppWindow[]> = { current: wins };
+    const onWindowLimitReached = vi.fn();
+    const { toggleTool } = makeMutations({
+      onWindowLimitReached,
+      setWins: (update) => {
+        wins = typeof update === "function" ? update(wins) : update;
+        winsRef.current = wins ?? [];
+      },
+      zc: { current: MAX_WORKSPACE_WINDOWS },
+      worldVP: () => layoutViewport,
+      winsRef,
+    });
+
+    toggleTool("localKnowledge");
+
+    expect(wins).toHaveLength(MAX_WORKSPACE_WINDOWS);
+    expect(onWindowLimitReached).toHaveBeenCalledExactlyOnceWith(MAX_WORKSPACE_WINDOWS);
   });
 
   it("merges cfg into an existing singleton when add focuses it", () => {

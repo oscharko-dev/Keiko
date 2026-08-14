@@ -754,16 +754,30 @@ function migrateLegacyFigmaWindow(win: AppWindow): AppWindow {
   };
 }
 
-function dedupeSingletonWindows(wins: readonly AppWindow[]): AppWindow[] {
-  const keepers = new Map<WindowType, AppWindow>();
+function workspaceWindowIdentity(win: AppWindow): string | undefined {
+  if (WIN_TYPES[win.type].singleton === true) return `singleton:${win.type}`;
+  let identity: unknown;
+  if (win.type === "chat") identity = win.cfg["chatId"];
+  else if (win.type === "qiRun") identity = win.cfg["runId"];
+  return typeof identity === "string" && identity.length > 0
+    ? `${win.type}:${identity}`
+    : undefined;
+}
+
+export function enforceWorkspaceWindowInvariants(wins: AppWindow[]): AppWindow[] {
+  const keepers = new Map<string, AppWindow>();
   for (const win of wins) {
-    if (WIN_TYPES[win.type].singleton !== true) continue;
-    const current = keepers.get(win.type);
-    if (current === undefined || win.z > current.z) keepers.set(win.type, win);
+    const identity = workspaceWindowIdentity(win);
+    if (identity === undefined) continue;
+    const current = keepers.get(identity);
+    if (current === undefined || win.z > current.z) keepers.set(identity, win);
   }
-  return wins.filter(
-    (win) => WIN_TYPES[win.type].singleton !== true || keepers.get(win.type) === win,
-  );
+  const filtered = wins.filter((win) => {
+    const identity = workspaceWindowIdentity(win);
+    return identity === undefined || keepers.get(identity) === win;
+  });
+  if (filtered.length === wins.length && wins.length <= MAX_WORKSPACE_WINDOWS) return wins;
+  return filtered.slice(0, MAX_WORKSPACE_WINDOWS);
 }
 
 export function sanitizePersistedWindows(wins: readonly AppWindow[]): AppWindow[] {
@@ -775,7 +789,7 @@ export function sanitizePersistedWindows(wins: readonly AppWindow[]): AppWindow[
     // never round-trip through the server snapshot anyway.
     if (out.length >= MAX_WORKSPACE_WINDOWS) break;
   }
-  return dedupeSingletonWindows(out);
+  return enforceWorkspaceWindowInvariants(out);
 }
 
 export function parsePersistedWindows(raw: string | null): AppWindow[] | null {

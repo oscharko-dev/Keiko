@@ -557,6 +557,13 @@ function makeOpenEditorFile(args: MutateArgs): WorkspaceApi["openEditorFile"] {
       });
       return result;
     }
+    if (currentWins.length >= MAX_WORKSPACE_WINDOWS) {
+      args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
+      return {
+        ok: false,
+        message: "Unable to open editor because the workspace window limit is reached.",
+      };
+    }
     const t = WIN_TYPES.editor;
     const { x, y } = addPosition(vp, t.w, t.h, currentWins.length, 40);
     const id = `editor-${Date.now().toString(36)}`;
@@ -602,6 +609,16 @@ function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
   const { setWins, zc, worldVP } = args;
   return (type) => {
     const t = WIN_TYPES[type];
+    const currentWins = args.winsRef?.current;
+    if (
+      currentWins !== undefined &&
+      currentWins.length >= MAX_WORKSPACE_WINDOWS &&
+      !currentWins.some((window) => window.type === type)
+    ) {
+      if (worldVP() !== null) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
+      return;
+    }
+    let windowLimitReached = false;
     setWins((ws) => {
       const vp = worldVP();
       if (vp === null) return ws;
@@ -615,12 +632,17 @@ function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
       if (existing !== undefined) {
         return list.filter((w) => w.type !== type);
       }
+      if (list.length >= MAX_WORKSPACE_WINDOWS) {
+        windowLimitReached = true;
+        return list;
+      }
       const { x, y } = addPosition(vp, t.w, t.h, list.length, 28);
       return [
         ...list,
         { id: type, type, x, y, w: t.w, h: t.h, z: ++zc.current, cfg: {}, max: false, zoom: 1 },
       ];
     });
+    if (windowLimitReached) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
   };
 }
 

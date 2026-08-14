@@ -24,6 +24,8 @@ import type {
   WorkspaceApi,
 } from "./useWorkspace.types";
 import {
+  MAX_WORKSPACE_WINDOWS,
+  enforceWorkspaceWindowInvariants,
   parsePersistedConnections,
   parsePersistedWindows,
   sanitizePersistedConnections,
@@ -1628,11 +1630,25 @@ function unbindClosedWindowConnection(
   }
 }
 
+function useWorkspaceWindowState(): {
+  readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
+  readonly wins: AppWindow[] | null;
+} {
+  const [wins, setWins] = useState<AppWindow[] | null>(null);
+  const setBoundedWins = useCallback<Dispatch<SetStateAction<AppWindow[] | null>>>((update) => {
+    setWins((current) => {
+      const next = typeof update === "function" ? update(current) : update;
+      return next === null ? null : enforceWorkspaceWindowInvariants(next);
+    });
+  }, []);
+  return { setWins: setBoundedWins, wins };
+}
+
 export function useWorkspace(
   wsRef: RefObject<HTMLElement | null>,
   opts: UseWorkspaceOptions = {},
 ): UseWorkspaceResult {
-  const [wins, setWins] = useState<AppWindow[] | null>(null);
+  const { setWins, wins } = useWorkspaceWindowState();
   const [selection, setSelection] = useState<WorkspaceUiSelectionState>({
     focusedWindowId: null,
     selectedWindowIds: [],
@@ -2039,12 +2055,14 @@ export function useWorkspace(
       pasteOffsetPx: WORKSPACE_CLIPBOARD_PASTE_OFFSET_PX * workspaceClipboardPasteCountRef.current,
     });
     if (result === null) return false;
+    if (result.limitReached) stableWindowLimitReached(MAX_WORKSPACE_WINDOWS);
+    if (result.pastedWindowIds.length === 0) return false;
     zc.current = result.nextZ;
     workspaceClipboardPasteCountRef.current += 1;
     setWins(result.wins as AppWindow[]);
     setSelection(replaceWorkspaceSelection(result.wins, result.pastedWindowIds));
     return true;
-  }, [setWins, winsReadyRef, winsRef, worldVP, zc]);
+  }, [setWins, stableWindowLimitReached, winsReadyRef, winsRef, worldVP, zc]);
 
   // Component unmount must also drop the global listener.
   useEffect(
