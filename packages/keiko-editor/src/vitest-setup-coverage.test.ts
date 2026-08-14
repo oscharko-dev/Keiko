@@ -16,8 +16,13 @@ import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-const JSDOM_PRAGMA = "@vitest-environment jsdom";
-const SETUP_IMPORT_MARKER = "vitest.setup";
+// Both patterns below are anchored to a whole line (`^...$/m`) on purpose: a bare `.includes()`
+// on the pragma text or the module name matches this very file's own explanatory prose (the
+// sentence above quotes both `@vitest-environment jsdom` and `vitest.setup` verbatim), which
+// would silently fold this guard file into the guarded set and then pass it on comment text
+// alone -- exactly the false-positive class this guard exists to catch in every other file.
+const JSDOM_PRAGMA_LINE = /^\/\/\s*@vitest-environment\s+jsdom\s*$/m;
+const SETUP_IMPORT_STATEMENT = /^import\s+["']\.\.?\/(\.\.\/)?vitest\.setup(\.js)?["'];?$/m;
 
 interface GuardedFile {
   readonly relativePath: string;
@@ -40,7 +45,7 @@ function listTestFiles(dir: string): string[] {
 }
 
 function requiresSetupImport(filePath: string, source: string): boolean {
-  return filePath.endsWith(".test.tsx") || source.includes(JSDOM_PRAGMA);
+  return filePath.endsWith(".test.tsx") || JSDOM_PRAGMA_LINE.test(source);
 }
 
 function collectGuardedFiles(): GuardedFile[] {
@@ -63,9 +68,10 @@ describe("vitest.setup import coverage (KEIKO-0134)", () => {
     "%s imports the shared vitest.setup module",
     (relativePath, source) => {
       expect(
-        source.includes(SETUP_IMPORT_MARKER),
-        `${relativePath} must import "../../vitest.setup" so jest-dom matchers and the canvas ` +
-          "facade are active in every required-CI lane that collects this file (KEIKO-0134)",
+        SETUP_IMPORT_STATEMENT.test(source),
+        `${relativePath} must import "../../vitest.setup" via an actual side-effect import ` +
+          "statement (mentioning it in a comment does not count) so jest-dom matchers and the " +
+          "canvas facade are active in every required-CI lane that collects this file (KEIKO-0134)",
       ).toBe(true);
     },
   );

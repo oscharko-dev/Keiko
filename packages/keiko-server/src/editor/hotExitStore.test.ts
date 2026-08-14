@@ -75,14 +75,19 @@ describe("editor hot-exit server store", () => {
       stateDir,
       env: { KEIKO_EDITOR_HOT_EXIT_KEY: VAULT_KEY },
     });
-    const seeded = snapshot({ updatedAt: 1 });
+    // r6: read()'s TTL check is anchored to the server receipt clock recorded at write time
+    // (Date.now() inside write()), not the persisted client updatedAt -- so nowMs values passed
+    // to read() must be offsets from that same real-clock write moment, not a tiny synthetic
+    // epoch, to land on either side of the TTL boundary.
+    const writeNow = Date.now();
+    const seeded = snapshot({ updatedAt: writeNow });
     const result = store.write(
       seeded,
       store.snapshotRefFor(seeded.workspaceRoot, seeded.relativePath),
     );
 
-    expect(store.read(result.snapshotRef, EDITOR_HOT_EXIT_TTL_MS + 2)).toBeNull();
-    expect(store.read(result.snapshotRef, 1_001)).toBeNull();
+    expect(store.read(result.snapshotRef, writeNow + EDITOR_HOT_EXIT_TTL_MS + 2)).toBeNull();
+    expect(store.read(result.snapshotRef, writeNow + 1_001)).toBeNull();
   });
 
   it("treats an undecryptable snapshot entry as a miss and removes it", () => {
@@ -194,11 +199,14 @@ describe("editor hot-exit server store", () => {
 
     // Prove the write path actually persisted the entry, using a nowMs consistent with the
     // fixture's own (stale) clock rather than the real wall clock -- this isolates the write-time
-    // persistence bug from read()'s separate, expected TTL policy (asserted below).
+    // persistence bug from read()'s TTL policy (asserted below).
     expect(store.read(result.snapshotRef, staleUpdatedAt + 1)?.content).toBe(stale.content);
-    // read()'s own TTL check (against the real Date.now() default) independently treats a
-    // clock-skewed snapshot as already expired -- that is expected and orthogonal to this
-    // regression, which is specifically about write() silently skipping persistence.
-    expect(store.read(result.snapshotRef)).toBeNull();
+    // r6: the TTL basis the store tracks internally is now the server's own receipt clock
+    // (Date.now() at write time), never the untrusted client-supplied updatedAt -- so a client
+    // clock that is far behind the server no longer makes the very next read() (at the real
+    // wall clock) treat a just-written snapshot as already expired. The persisted payload's
+    // `updatedAt` field (contract data shown to the user) stays the untouched client value;
+    // only the internal eviction/TTL bookkeeping moved to server-arrival time.
+    expect(store.read(result.snapshotRef)?.content).toBe(stale.content);
   });
 });

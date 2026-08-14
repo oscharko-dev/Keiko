@@ -39,7 +39,6 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type { FilesContentResponse as FilesContentWireResponse } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { containsPath } from "@oscharko-dev/keiko-git";
-import { inspectDebugWorkspaceIdentity } from "./editor/dap/debugLaunchContext.js";
 import { notifyHostLspWorkspaceFileChanged } from "./editor/lsp/hostLanguageOperation.js";
 import { captureEditorLocalHistorySafely } from "./editor/localHistory/localHistoryCapture.js";
 import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
@@ -2275,6 +2274,9 @@ export async function copyFilesEntry(args: {
     if (error instanceof FilesError) throw error;
     throw mapNodeFsError(error);
   }
+  // The copy created a new watched file at the destination; the source is untouched and needs no
+  // event (mirrors renameFilesEntry's Deleted+Created pair, minus the Deleted half a copy never has).
+  notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 1);
   return {
     root: target.root,
     path: target.relativePath,
@@ -2594,67 +2596,47 @@ function renamedBreakpointFileId(
 
 type DapDebugService = NonNullable<UiHandlerDeps["dapDebug"]>;
 
-// KEIKO-0179 follow-up (Codex P1 on PR #3141): tells an active debug session's browser panel that
-// the instrumentation snapshot moved, reusing the exact DapEventBridge channel and
-// "breakpoints-changed" event that handleSetDebugBreakpoints already publishes in
-// dapDebugRoutes.ts (see publishInstrumentationChange). The live session's own binding is read via
-// manager.workspaceSessionId/binding, so no request cookie or new subsystem is needed, and this is
-// a no-op when no debug session is bound to the workspace. Re-arming the DAP adapter's own
-// breakpoint set at the new path is out of scope: reaching dapDebugRoutes.ts's reconciliation
-// helpers from here would create an import cycle between the two route modules, so that stays a
-// follow-up.
-function notifyRenamedBreakpoints(service: DapDebugService, realRoot: string): void {
-  const partition = inspectDebugWorkspaceIdentity(realRoot).identityDigest;
-  const sessionId = service.manager.workspaceSessionId(partition);
-  if (sessionId === undefined) return;
-  const binding = service.manager.binding(sessionId);
-  if (binding === undefined) return;
-  const snapshot = service.breakpoints.snapshot(realRoot);
-  if (!snapshot.ok) return;
-  service.events.publish(
-    {
-      workspacePartitionKey: binding.workspacePartitionKey,
-      browserSessionBinding: binding.browserSessionBinding,
-    },
-    {
-      kind: "breakpoints-changed",
-      workspaceId: binding.workspaceId,
-      revision: snapshot.snapshot.revision,
-      breakpointCount: snapshot.snapshot.breakpoints.length,
-      verifiedCount: snapshot.snapshot.breakpoints.filter(
-        (entry) => entry.verification === "verified",
-      ).length,
-    },
-  );
+// KEIKO-0179: computes the affected-fileId pairs for a successful rename -- one entry per distinct
+// fileId currently filed under the old path (the exact source path, or a path inside a renamed
+// directory), never a blind string-prefix rewrite, so each destination fileId is validated on its
+// own by whatever consumes the list.
+function affectedRenamedFileIds(
+  store: DapDebugService["breakpoints"],
+  realRoot: string,
+  previousPath: string,
+  nextPath: string,
+): readonly { readonly previousFileId: string; readonly nextFileId: string }[] {
+  const snapshot = store.snapshot(realRoot);
+  if (!snapshot.ok) return [];
+  const seen = new Set<string>();
+  const renames: { readonly previousFileId: string; readonly nextFileId: string }[] = [];
+  for (const entry of snapshot.snapshot.breakpoints) {
+    if (seen.has(entry.fileId)) continue;
+    const nextFileId = renamedBreakpointFileId(entry.fileId, previousPath, nextPath);
+    if (nextFileId === undefined) continue;
+    seen.add(entry.fileId);
+    renames.push({ previousFileId: entry.fileId, nextFileId });
+  }
+  return renames;
 }
 
-// KEIKO-0179: fans out a successful rename to the DAP breakpoint store so debugging configuration
-// follows the file instead of lingering, orphaned, against the now-nonexistent old path. A directory
-// rename affects every breakpoint filed under the old prefix, re-keyed one fileId at a time (never a
-// blind string-prefix rewrite) so each destination fileId is validated on its own. Deliberately
-// best-effort: the filesystem rename already succeeded, so a store-side rejection here (corrupt
-// store, malformed id) must not turn a completed rename into an error response.
-function reKeyRenamedBreakpoints(
+// KEIKO-0179 follow-up (Codex P1, twice-raised on PR #3141): fans out a successful rename to the DAP
+// breakpoint store AND, when a debug session is live, the adapter itself -- both now live in
+// dapDebugRoutes.ts's DapDebugRouteService.renameInstrumentation, the layer that already owns the
+// reconciliation helpers a normal breakpoint mutation runs through. files.ts only computes which
+// fileIds are affected and delegates once; it never re-keys the store or touches the adapter
+// directly. Deliberately best-effort end to end: the filesystem rename already succeeded, so a
+// store or adapter failure downstream must not turn a completed rename into an error response.
+async function reKeyRenamedBreakpoints(
   deps: UiHandlerDeps,
   realRoot: string,
   previousPath: string,
   nextPath: string,
-): void {
+): Promise<void> {
   const service = deps.dapDebug;
   if (service === undefined) return;
-  const store = service.breakpoints;
-  const snapshot = store.snapshot(realRoot);
-  if (!snapshot.ok) return;
-  const affected = new Set(
-    snapshot.snapshot.breakpoints
-      .map((entry) => entry.fileId)
-      .filter((fileId) => renamedBreakpointFileId(fileId, previousPath, nextPath) !== undefined),
-  );
-  for (const fileId of affected) {
-    const nextFileId = renamedBreakpointFileId(fileId, previousPath, nextPath);
-    if (nextFileId !== undefined) store.renameFile(realRoot, fileId, nextFileId);
-  }
-  if (affected.size > 0) notifyRenamedBreakpoints(service, realRoot);
+  const renames = affectedRenamedFileIds(service.breakpoints, realRoot, previousPath, nextPath);
+  if (renames.length > 0) await service.renameInstrumentation(realRoot, renames);
 }
 
 export async function handleFilesRename(
@@ -2686,7 +2668,7 @@ export async function handleFilesRename(
       resolvedRoot,
     });
     if (result.previousPath !== undefined) {
-      reKeyRenamedBreakpoints(deps, resolvedRoot.realRoot, result.previousPath, result.path);
+      await reKeyRenamedBreakpoints(deps, resolvedRoot.realRoot, result.previousPath, result.path);
     }
     return { status: 200, body: result };
   });

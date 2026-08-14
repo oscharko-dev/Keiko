@@ -342,6 +342,10 @@ function debugService(): DapDebugRouteService {
         diagnosticRecords.push(record);
       },
     },
+    // Unit-level fixture: nothing built via this hand-rolled service exercises a rename. Coverage
+    // for the real reconciliation behavior lives on the createDapDebugRouteService-built instance in
+    // the "renameInstrumentation" describe block below.
+    renameInstrumentation: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -649,6 +653,7 @@ describe("governed DAP debug routes", () => {
       "references",
       "events",
       "activation",
+      "renameInstrumentation",
     ]);
     expect("registry" in service).toBe(false);
     expect("lifecycleLedger" in service).toBe(false);
@@ -2001,6 +2006,186 @@ describe("governed DAP debug routes", () => {
       expect(response.writes).toHaveLength(writesAfterClose);
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+// KEIKO-0179 follow-up (Codex P1, twice-raised on PR #3141): a rename during an active debug
+// session used to re-key the persisted store and tell the browser panel something changed, while
+// the live DAP adapter stayed armed on the now-nonexistent old path. renameInstrumentation is the
+// single owning-layer entry point files.ts's rename route now delegates to; these tests exercise it
+// directly against a fake bound session + fake adapter transport (FakeDebugManager), reusing this
+// file's existing fixtures rather than standing up a second one.
+describe("renameInstrumentation orchestration (KEIKO-0179 follow-up, Codex P1 on PR #3141)", () => {
+  // debugService() (used by the rest of this file) is a hand-rolled fixture whose
+  // renameInstrumentation is a no-op stub -- these tests need the real, wired implementation, which
+  // only the production factory attaches (createDapDebugRouteService's self-referencing closure).
+  function buildRenameService(): DapDebugRouteService {
+    return createDapDebugRouteService({
+      production: { manager, eventBridge: createDapEventBridge() },
+      stateDir,
+      now: () => now,
+      activation: () =>
+        Promise.resolve({
+          ok: true,
+          schemaVersion: "1",
+          adapterId: "node-typescript",
+          revision: ACTIVATION_REVISION,
+          state: "available",
+          reasonCode: "AVAILABLE",
+          policyResult: "allowed",
+        }),
+    });
+  }
+
+  async function bindLiveSession(browserSessionBinding: string): Promise<void> {
+    await manager.start({
+      identity: {
+        sessionId: `${browserSessionBinding}-session`,
+        workspaceId,
+        workspacePartitionKey: workspacePartition,
+        browserSessionBinding,
+        targetKind: "file",
+        activationRevision: ACTIVATION_REVISION,
+        network: "none",
+        filesystem: "executionRoot",
+      },
+      adapterRuntime: "node",
+      adapterProviderId: "node-typescript",
+      planCandidate: {},
+    });
+  }
+
+  it("clears the old path and arms the new one on the adapter, publishing the change exactly once", async () => {
+    const service = buildRenameService();
+    const initial = service.breakpoints.snapshot(workspaceRoot);
+    if (!initial.ok) throw new Error("expected an available breakpoint snapshot");
+    const armed = service.breakpoints.setBreakpointsForFile(
+      workspaceRoot,
+      initial.snapshot.revision,
+      initial.snapshot.etag,
+      "src/app.ts",
+      [{ line: 4, enabled: true }],
+    );
+    expect(armed.ok).toBe(true);
+    await bindLiveSession("rename-binding");
+    const publishSpy = vi.spyOn(service.events, "publish");
+
+    await service.renameInstrumentation(workspaceRoot, [
+      { previousFileId: "src/app.ts", nextFileId: "src/renamed.ts" },
+    ]);
+
+    const setBreakpointsCalls = manager.requests.filter(
+      (entry) => entry.command === "setBreakpoints",
+    );
+    expect(setBreakpointsCalls).toHaveLength(2);
+    expect(setBreakpointsCalls[0]?.args).toMatchObject({
+      source: { path: "/keiko-execution-root/src/app.ts" },
+      breakpoints: [],
+    });
+    const armCall = setBreakpointsCalls[1]?.args as { readonly breakpoints: readonly unknown[] };
+    expect(setBreakpointsCalls[1]?.args).toMatchObject({
+      source: { path: "/keiko-execution-root/src/renamed.ts" },
+    });
+    expect(armCall.breakpoints).toHaveLength(1);
+
+    expect(publishSpy).toHaveBeenCalledExactlyOnceWith(
+      { workspacePartitionKey: workspacePartition, browserSessionBinding: "rename-binding" },
+      expect.objectContaining({ kind: "breakpoints-changed", workspaceId }),
+    );
+
+    const migrated = service.breakpoints.snapshot(workspaceRoot);
+    expect(migrated.ok).toBe(true);
+    if (migrated.ok) {
+      expect(migrated.snapshot.breakpoints.map((entry) => entry.fileId)).toEqual([
+        "src/renamed.ts",
+      ]);
+      expect(migrated.snapshot.breakpoints[0]?.verification).toBe("verified");
+    }
+  });
+
+  it("re-keys the store but never touches the adapter when no debug session is bound", async () => {
+    const service = buildRenameService();
+    const initial = service.breakpoints.snapshot(workspaceRoot);
+    if (!initial.ok) throw new Error("expected an available breakpoint snapshot");
+    const armed = service.breakpoints.setBreakpointsForFile(
+      workspaceRoot,
+      initial.snapshot.revision,
+      initial.snapshot.etag,
+      "src/app.ts",
+      [{ line: 4, enabled: true }],
+    );
+    expect(armed.ok).toBe(true);
+    const publishSpy = vi.spyOn(service.events, "publish");
+
+    await service.renameInstrumentation(workspaceRoot, [
+      { previousFileId: "src/app.ts", nextFileId: "src/renamed.ts" },
+    ]);
+
+    expect(manager.requests.filter((entry) => entry.command === "setBreakpoints")).toHaveLength(0);
+    expect(publishSpy).not.toHaveBeenCalled();
+    const migrated = service.breakpoints.snapshot(workspaceRoot);
+    expect(migrated.ok).toBe(true);
+    if (migrated.ok) {
+      expect(migrated.snapshot.breakpoints.map((entry) => entry.fileId)).toEqual([
+        "src/renamed.ts",
+      ]);
+    }
+  });
+
+  it("reconciles every pair in one call and publishes once for a directory rename", async () => {
+    const service = buildRenameService();
+    const initial = service.breakpoints.snapshot(secondWorkspaceRoot);
+    if (!initial.ok) throw new Error("expected an available breakpoint snapshot");
+    const first = service.breakpoints.setBreakpointsForFile(
+      secondWorkspaceRoot,
+      initial.snapshot.revision,
+      initial.snapshot.etag,
+      "src/app.ts",
+      [{ line: 1, enabled: true }],
+    );
+    expect(first.ok).toBe(true);
+    const second = service.breakpoints.setBreakpointsForFile(
+      secondWorkspaceRoot,
+      first.snapshot.revision,
+      first.snapshot.etag,
+      "src/lib.ts",
+      [{ line: 2, enabled: true }],
+    );
+    expect(second.ok).toBe(true);
+    const secondWorkspacePartition =
+      inspectDebugWorkspaceIdentity(secondWorkspaceRoot).identityDigest;
+    await manager.start({
+      identity: {
+        sessionId: "dir-rename-session",
+        workspaceId: secondWorkspaceId,
+        workspacePartitionKey: secondWorkspacePartition,
+        browserSessionBinding: "dir-rename-binding",
+        targetKind: "file",
+        activationRevision: ACTIVATION_REVISION,
+        network: "none",
+        filesystem: "executionRoot",
+      },
+      adapterRuntime: "node",
+      adapterProviderId: "node-typescript",
+      planCandidate: {},
+    });
+    const publishSpy = vi.spyOn(service.events, "publish");
+
+    await service.renameInstrumentation(secondWorkspaceRoot, [
+      { previousFileId: "src/app.ts", nextFileId: "lib/app.ts" },
+      { previousFileId: "src/lib.ts", nextFileId: "lib/lib.ts" },
+    ]);
+
+    expect(manager.requests.filter((entry) => entry.command === "setBreakpoints")).toHaveLength(4);
+    expect(publishSpy).toHaveBeenCalledTimes(1);
+    const migrated = service.breakpoints.snapshot(secondWorkspaceRoot);
+    expect(migrated.ok).toBe(true);
+    if (migrated.ok) {
+      expect(migrated.snapshot.breakpoints.map((entry) => entry.fileId).sort()).toEqual([
+        "lib/app.ts",
+        "lib/lib.ts",
+      ]);
     }
   });
 });

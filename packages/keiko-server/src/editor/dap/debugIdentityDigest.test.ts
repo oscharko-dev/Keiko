@@ -139,4 +139,30 @@ describe("producer/validator formula centralization (KEIKO-0168)", () => {
     expect(source).not.toMatch(/function digest\(value: unknown\): string \{/u);
     expect(source).toMatch(/from "\.\/debugIdentityDigest\.js"/u);
   });
+
+  // The two guards above only reject the exact legacy declaration signatures
+  // (`function hash(...)`/`function digest(...)`), so a re-derivation under any other name --
+  // an arrow function, a `const`, or an inline expression at a call site -- would slip past them
+  // undetected. `.update(JSON.stringify(` is the one substring every shape of that formula must
+  // contain, so matching it directly closes that gap regardless of naming.
+  //
+  // Verified by grep over these same four files: every legitimate `createHash("sha256")` call
+  // site here feeds a file buffer -- `.update(readFileSync(...))` in debugLaunchContext.ts /
+  // debugLaunchPlan.ts / dapNodeCapsuleLauncher.ts, `.update(content)` in debugLaunchCatalog.ts --
+  // never `JSON.stringify`. The only production line that legitimately pairs `.update(` with
+  // `JSON.stringify(` is `sha256Json` itself in ./debugIdentityDigest.ts, which is outside this
+  // file set, so this substring can only appear here if the centralized formula is re-derived
+  // locally.
+  it("no digest consumer file locally re-derives .update(JSON.stringify(...)) under any name or form", () => {
+    const allDigestConsumerFiles = [...producerAndValidatorFiles, "debugLaunchCatalog.ts"] as const;
+    for (const basename of allDigestConsumerFiles) {
+      const source = productionSource(basename);
+      expect(
+        source,
+        `${basename} must not locally re-derive .update(JSON.stringify(...)) in any form ` +
+          "(arrow function, const, or inline) -- import sha256Json from ./debugIdentityDigest.js " +
+          "instead",
+      ).not.toMatch(/\.update\(\s*JSON\.stringify\(/u);
+    }
+  });
 });

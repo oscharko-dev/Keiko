@@ -1418,7 +1418,12 @@ describe("desktop files mutations (create / rename / delete)", () => {
     expect(await readFile(join(root, "src", "renamed.ts"), "utf8")).toBe("export const a = 1;\n");
   });
 
-  it("re-keys breakpoints through the rename route when a DAP breakpoint store is wired (KEIKO-0179)", async () => {
+  // KEIKO-0179 follow-up (Codex P1, twice-raised on PR #3141): the actual store re-keying, adapter
+  // re-arming, and single breakpoints-changed publish now live entirely in
+  // dapDebugRoutes.ts's DapDebugRouteService.renameInstrumentation (see dapDebugRoutes.test.ts for
+  // that behavior). These tests cover only files.ts's side of the seam: which affected fileIds it
+  // computes from the live store and that it delegates them in exactly one call.
+  it("delegates every affected fileId to the DAP service in one call on a file rename (KEIKO-0179)", async () => {
     const debugStateDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-mut-dap-")));
     const breakpoints = createBreakpointStore({ stateDir: debugStateDir });
     const initial = breakpoints.snapshot(root);
@@ -1431,17 +1436,14 @@ describe("desktop files mutations (create / rename / delete)", () => {
       [{ line: 1, enabled: true }],
     );
     expect(armed.ok).toBe(true);
+    const renameInstrumentation = vi.fn().mockResolvedValue(undefined);
 
     const result = await handleFilesRename(
       patchContentContext({ root, path: "src/app.ts", newPath: "src/renamed.ts" }),
       {
         store,
         redactor: buildRedactor({}),
-        dapDebug: {
-          breakpoints,
-          manager: { workspaceSessionId: vi.fn().mockReturnValue(undefined), binding: vi.fn() },
-          events: { publish: vi.fn() },
-        },
+        dapDebug: { breakpoints, renameInstrumentation },
       } as unknown as UiHandlerDeps,
     );
 
@@ -1449,18 +1451,15 @@ describe("desktop files mutations (create / rename / delete)", () => {
       status: 200,
       body: { path: "src/renamed.ts", previousPath: "src/app.ts" },
     });
-    const migrated = breakpoints.snapshot(root);
-    expect(migrated.ok).toBe(true);
-    if (migrated.ok) {
-      expect(migrated.snapshot.breakpoints.map((entry) => entry.fileId)).toEqual([
-        "src/renamed.ts",
-      ]);
-    }
+    expect(renameInstrumentation).toHaveBeenCalledExactlyOnceWith(root, [
+      { previousFileId: "src/app.ts", nextFileId: "src/renamed.ts" },
+    ]);
     await rm(debugStateDir, { recursive: true, force: true });
   });
 
-  it("publishes breakpoints-changed to the active debug session's browser panel on rename (KEIKO-0179 follow-up, Codex P1 on PR #3141)", async () => {
-    const debugStateDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-mut-dap-evt-")));
+  it("delegates every fileId under a renamed directory in one call (KEIKO-0179)", async () => {
+    await writeFile(join(root, "src", "lib.ts"), "export const b = 2;\n");
+    const debugStateDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-mut-dap-dir-")));
     const breakpoints = createBreakpointStore({ stateDir: debugStateDir });
     const initial = breakpoints.snapshot(root);
     if (!initial.ok) throw new Error("expected an available breakpoint snapshot");
@@ -1472,42 +1471,34 @@ describe("desktop files mutations (create / rename / delete)", () => {
       [{ line: 1, enabled: true }],
     );
     expect(armed.ok).toBe(true);
-
-    const publish = vi.fn().mockReturnValue(true);
-    const binding = {
-      workspaceId: "ws-1",
-      workspacePartitionKey: "partition-1",
-      browserSessionBinding: "binding-1",
-    };
-    const manager = {
-      workspaceSessionId: vi.fn().mockReturnValue("session-1"),
-      binding: vi.fn().mockReturnValue(binding),
-    };
+    const rearmed = breakpoints.setBreakpointsForFile(
+      root,
+      armed.snapshot.revision,
+      armed.snapshot.etag,
+      "src/lib.ts",
+      [{ line: 2, enabled: true }],
+    );
+    expect(rearmed.ok).toBe(true);
+    const renameInstrumentation = vi.fn().mockResolvedValue(undefined);
 
     const result = await handleFilesRename(
-      patchContentContext({ root, path: "src/app.ts", newPath: "src/renamed.ts" }),
+      patchContentContext({ root, path: "src", newPath: "lib" }),
       {
         store,
         redactor: buildRedactor({}),
-        dapDebug: { breakpoints, manager, events: { publish } },
+        dapDebug: { breakpoints, renameInstrumentation },
       } as unknown as UiHandlerDeps,
     );
 
-    expect(result).toMatchObject({ status: 200 });
-    expect(publish).toHaveBeenCalledTimes(1);
-    expect(publish).toHaveBeenCalledWith(
-      { workspacePartitionKey: "partition-1", browserSessionBinding: "binding-1" },
-      expect.objectContaining({
-        kind: "breakpoints-changed",
-        workspaceId: "ws-1",
-        breakpointCount: 1,
-        verifiedCount: 0,
-      }),
-    );
+    expect(result).toMatchObject({ status: 200, body: { path: "lib", previousPath: "src" } });
+    expect(renameInstrumentation).toHaveBeenCalledExactlyOnceWith(root, [
+      { previousFileId: "src/app.ts", nextFileId: "lib/app.ts" },
+      { previousFileId: "src/lib.ts", nextFileId: "lib/lib.ts" },
+    ]);
     await rm(debugStateDir, { recursive: true, force: true });
   });
 
-  it("does not publish when no debug session is bound to the workspace (plain rename)", async () => {
+  it("does not call the DAP service when no breakpoints are affected by a rename (KEIKO-0179)", async () => {
     const debugStateDir = await realpath(
       await mkdtemp(join(tmpdir(), "keiko-files-mut-dap-noevt-")),
     );
@@ -1518,26 +1509,23 @@ describe("desktop files mutations (create / rename / delete)", () => {
       root,
       initial.snapshot.revision,
       initial.snapshot.etag,
-      "src/app.ts",
+      "src/unrelated.ts",
       [{ line: 1, enabled: true }],
     );
     expect(armed.ok).toBe(true);
-
-    const publish = vi.fn().mockReturnValue(true);
-    const manager = { workspaceSessionId: vi.fn().mockReturnValue(undefined), binding: vi.fn() };
+    const renameInstrumentation = vi.fn().mockResolvedValue(undefined);
 
     const result = await handleFilesRename(
       patchContentContext({ root, path: "src/app.ts", newPath: "src/renamed.ts" }),
       {
         store,
         redactor: buildRedactor({}),
-        dapDebug: { breakpoints, manager, events: { publish } },
+        dapDebug: { breakpoints, renameInstrumentation },
       } as unknown as UiHandlerDeps,
     );
 
     expect(result).toMatchObject({ status: 200 });
-    expect(manager.binding).not.toHaveBeenCalled();
-    expect(publish).not.toHaveBeenCalled();
+    expect(renameInstrumentation).not.toHaveBeenCalled();
     await rm(debugStateDir, { recursive: true, force: true });
   });
 
@@ -1630,6 +1618,22 @@ describe("desktop files mutations (create / rename / delete)", () => {
   it("notifies pooled host LSP processes of a Deleted watched-file event on delete", async () => {
     await deleteFilesEntry({ store, rootInput: root, pathInput: "src/app.ts" });
     expect(notifyHostLspMock).toHaveBeenCalledExactlyOnceWith(root, join(root, "src", "app.ts"), 3);
+  });
+
+  // Codex P2 on PR #3141: a copy creates a new watched file at the destination only -- the source is
+  // untouched, so (unlike rename) there is no Deleted half of the pair.
+  it("notifies pooled host LSP processes of a Created watched-file event on copy", async () => {
+    await copyFilesEntry({
+      store,
+      rootInput: root,
+      sourcePathInput: "src/app.ts",
+      destPathInput: "src/app-copy.ts",
+    });
+    expect(notifyHostLspMock).toHaveBeenCalledExactlyOnceWith(
+      root,
+      join(root, "src", "app-copy.ts"),
+      1,
+    );
   });
 
   it("does not notify pooled host LSP processes when a mutation fails", async () => {

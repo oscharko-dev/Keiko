@@ -68,6 +68,17 @@ interface StoredItem {
 // snapshot on the 400ms keystroke-flush hot path. Only size + timestamp (both non-secret and already
 // surfaced in write results) are cached; snapshot content stays AES-GCM sealed at rest and is never
 // materialized here.
+//
+// `updatedAt` here is the TTL-basis timestamp, and it is deliberately NOT the persisted snapshot's
+// contract `updatedAt` (which is client-supplied and untrusted for clock purposes). write() stamps
+// it with the server's own receipt clock (Date.now()) at the moment the entry is accepted, so a
+// client clock that is arbitrarily far behind (or ahead of) the server can never make write()'s own
+// prune, a later write's prune, or read()'s TTL check treat a just-persisted entry as expired. A
+// side effect is that prune's oldest-first eviction ordering becomes server-arrival order rather
+// than client-claimed order -- strictly more robust against a hostile or skewed client. On cold
+// start, entries seeded from disk (see getMetaIndex below) fall back to the persisted client
+// updatedAt because no server receipt time was ever persisted for them; this is unavoidable without
+// widening the on-disk schema and is out of scope here.
 interface HotExitMeta {
   readonly contentSizeBytes: number;
   readonly updatedAt: number;
@@ -157,8 +168,16 @@ function readStoredSnapshot(
   return snapshot;
 }
 
-function expired(snapshot: EditorHotExitStoredSnapshot, nowMs: number): boolean {
-  return snapshot.updatedAt + EDITOR_HOT_EXIT_TTL_MS < nowMs;
+// TTL expiry is always evaluated against a TTL-basis timestamp, never the persisted snapshot's
+// own (client-supplied) `updatedAt` -- see the HotExitMeta.updatedAt comment for why.
+function expired(ttlBasisUpdatedAt: number, nowMs: number): boolean {
+  return ttlBasisUpdatedAt + EDITOR_HOT_EXIT_TTL_MS < nowMs;
+}
+
+// Resolves the TTL-basis timestamp for a ref being read: the warm index's server-receipt clock
+// when available, else the persisted (client-supplied) updatedAt as a cold-read fallback.
+function ttlBasisFor(meta: HotExitMeta | undefined, fallbackUpdatedAt: number): number {
+  return meta?.updatedAt ?? fallbackUpdatedAt;
 }
 
 function payloadFor(snapshot: EditorHotExitSnapshotV1): EditorHotExitStoredSnapshot {
@@ -220,11 +239,11 @@ export function createEditorHotExitStore(
     const index = getMetaIndex(activeVault);
     const retained: { ref: string; meta: HotExitMeta }[] = [];
     for (const [ref, meta] of index) {
-      // The incoming ref is exempt from TTL-expiry here: it is being written right now, so a
-      // client clock that is far behind the server must not make write() self-expire the entry
-      // it was just asked to persist (that would silently skip the vault.set() below while still
-      // returning a success-shaped result). It remains excluded from `retained` either way, so it
-      // stays subject to byte-budget accounting via `incomingSize` exactly as before.
+      // The incoming ref is exempt from this TTL-expiry loop: its meta.updatedAt is the server's
+      // own receipt clock (see write(), r6), so it can never independently expire against the
+      // same nowMs anyway -- this skip exists so it stays out of `retained` (and thus out of the
+      // oldest-first budget-eviction sort below) and is instead subject to byte-budget accounting
+      // via `incomingSize`, exactly as before.
       if (ref === incomingRef) continue;
       if (meta.updatedAt + EDITOR_HOT_EXIT_TTL_MS < nowMs) {
         activeVault.delete(ref);
@@ -251,16 +270,19 @@ export function createEditorHotExitStore(
       const payload = payloadFor(snapshot);
       const activeVault = getVault();
       const index = getMetaIndex(activeVault);
+      // Use the server's own receipt clock -- never the untrusted client-supplied
+      // snapshot.updatedAt -- both as the TTL basis recorded for this entry and as "now" for
+      // deciding whether OTHER entries in the shared store have expired (matching read()'s
+      // Date.now() default). A single anomalous client timestamp (far-future OR far-behind) can
+      // then neither evict every other cached snapshot process-wide nor make this entry look
+      // already expired to the very next read() or prune() (r6; see HotExitMeta.updatedAt).
+      const receivedAt = Date.now();
       // Record the incoming entry's non-secret metadata BEFORE prune so the budget math sees it.
       index.set(ref, {
         contentSizeBytes: payload.contentSizeBytes,
-        updatedAt: payload.updatedAt,
+        updatedAt: receivedAt,
       });
-      // Use the server's own clock, never the untrusted client-supplied snapshot.updatedAt, to
-      // decide whether OTHER entries in the shared store have expired -- matching read()'s
-      // Date.now() default. Otherwise a single anomalous (e.g. far-future) client timestamp could
-      // evict every other cached snapshot process-wide.
-      prune(activeVault, Date.now(), ref);
+      prune(activeVault, receivedAt, ref);
       // prune may have evicted the incoming ref if it alone exceeds the budget; only persist and keep
       // the metadata entry when it survived pruning.
       if (index.has(ref)) {
@@ -276,15 +298,23 @@ export function createEditorHotExitStore(
         metaIndex?.delete(snapshotRef);
         return null;
       }
-      if (expired(snapshot, nowMs)) {
+      // TTL basis: prefer the (already-warm) index's server-receipt timestamp -- set by a write()
+      // earlier in this process, per r6. Deliberately uses the optional index rather than forcing
+      // a cold-start build here, so a read() that happens to be the first call in a fresh process
+      // still costs exactly one decrypt (of this ref only), matching the pre-existing hot-path
+      // budget. A ref never touched by write() in this process (true cold read) falls back to the
+      // persisted client updatedAt, matching getMetaIndex's own cold-start seeding.
+      const ttlBasisUpdatedAt = ttlBasisFor(metaIndex?.get(snapshotRef), snapshot.updatedAt);
+      if (expired(ttlBasisUpdatedAt, nowMs)) {
         activeVault.delete(snapshotRef);
         metaIndex?.delete(snapshotRef);
         return null;
       }
-      // Keep the metadata index consistent with what was actually observed on disk.
+      // Keep the metadata index consistent with what was actually observed on disk, preserving
+      // the resolved TTL basis rather than overwriting it with the client-supplied updatedAt.
       metaIndex?.set(snapshotRef, {
         contentSizeBytes: snapshot.contentSizeBytes,
-        updatedAt: snapshot.updatedAt,
+        updatedAt: ttlBasisUpdatedAt,
       });
       return snapshot;
     },
