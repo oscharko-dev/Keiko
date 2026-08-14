@@ -24,8 +24,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 // Trailing text is allowed after the environment name (vitest's own pragma scan tolerates it, so a
 // file carrying "// @vitest-environment jsdom // reason" WOULD run under jsdom and must therefore
 // still be guarded); a word boundary keeps "jsdomX" from matching.
-const JSDOM_PRAGMA_LINE = /^\/\/\s*@vitest-environment\s+jsdom\b/m;
-const SETUP_IMPORT_STATEMENT = /^import\s+["']\.\.?\/(\.\.\/)?vitest\.setup(\.js)?["'];?$/m;
+const JSDOM_PRAGMA_LINE = /^\s*\/\/\s*@vitest-environment\s+jsdom\b/m;
+const SETUP_IMPORT_STATEMENT =
+  /^import\s+["']\.\.?\/(\.\.\/)?vitest\.setup(\.js)?["'];?\s*(\/\/.*)?$/m;
 
 interface GuardedFile {
   readonly relativePath: string;
