@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -851,6 +852,20 @@ describe("installable package smoke optional-dependency coverage", () => {
     ]);
     rejectProcessExit();
     expect(() => assertHostBindingsAreReal(seeded)).toThrow(/process\.exit\(1\)/u);
+  });
+
+  // The Corepack cache holds an executable Corepack will run, so a predictable shared path is a
+  // code-execution surface, not merely a data one: another account could pre-create it with a
+  // forged `.corepack` metadata file and binary.
+  it("keeps the Corepack cache private and per-user", () => {
+    const dir = corepackCacheDir();
+    expect(existsSync(dir)).toBe(true);
+    // Separate paths per account, so two users never contend for one directory.
+    if (process.getuid !== undefined) {
+      expect(dir.endsWith(`-${String(process.getuid())}`)).toBe(true);
+      const mode = statSync(dir).mode & 0o777;
+      expect(mode & 0o022).toBe(0);
+    }
   });
 
   it("keeps the Corepack cache off the private home so it survives between runs", () => {

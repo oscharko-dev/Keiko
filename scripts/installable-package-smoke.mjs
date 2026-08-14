@@ -1201,8 +1201,16 @@ export async function startLocalRegistry(artifact, vendored) {
  * bump does not reuse the previous tool (#3130).
  */
 export function corepackCacheDir() {
-  const dir = join(tmpdir(), `keiko-corepack-${PINNED_YARN.replace(/[^a-zA-Z0-9.]+/gu, "-")}`);
-  mkdirSync(dir, { recursive: true });
+  // This directory holds an EXECUTABLE that Corepack will run, so it gets the same fail-closed
+  // validation as the vendor seed cache — and it needs it more. A predictable path on a shared
+  // POSIX host is pre-creatable by another account, and Corepack trusts a `.corepack` metadata
+  // file it finds there and executes the binary it names, networking disabled or not. The uid is
+  // part of the name so two accounts never contend for one path in the first place.
+  const owner = process.getuid === undefined ? "win" : String(process.getuid());
+  const version = PINNED_YARN.replace(/[^a-zA-Z0-9.]+/gu, "-");
+  const dir = join(tmpdir(), `keiko-corepack-${version}-${owner}`);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  assertPrivateDirectory(dir);
   return dir;
 }
 
