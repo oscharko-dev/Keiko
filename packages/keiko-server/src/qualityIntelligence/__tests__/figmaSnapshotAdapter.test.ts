@@ -23,6 +23,7 @@ import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import {
+  MAX_VISION_HINTS,
   makeFigmaSnapshotLoader,
   makeFigmaVisionHintProvider,
   stripJsonCodeFence,
@@ -199,7 +200,7 @@ function expectStructuredVisionRequest(seenRequests: readonly GatewayRequest[]):
   const properties = requireRecord(schema.properties, "Vision response properties");
   const hints = requireRecord(properties.hints, "Vision hints schema");
   expect(hints).not.toHaveProperty("minItems");
-  expect(hints).not.toHaveProperty("maxItems");
+  expect(hints.maxItems).toBe(MAX_VISION_HINTS);
 }
 
 // ─── Snapshot loader ──────────────────────────────────────────────────────────────
