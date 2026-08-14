@@ -315,10 +315,19 @@ function tightenNodeMode(node: RuntimeStateNode, targetMode: number): boolean {
 }
 
 function tightenOpenFlagCandidates(): readonly number[] {
-  return [
-    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
-    fsConstants.O_WRONLY | fsConstants.O_NOFOLLOW,
-  ];
+  // `O_NOFOLLOW` is POSIX-only, but `@types/node` declares it as a plain `number`, so a platform
+  // that does not define it yields `undefined` at runtime — and `X | undefined` evaluates to `X`,
+  // silently dropping the very bit these flags exist for. The result would be an open that follows
+  // a symlink, then an fchmod on whatever it pointed at.
+  //
+  // Unreachable today: `checkRuntimeStateArtifacts` returns before this on win32, the only platform
+  // in question. That is exactly why the guard belongs here — otherwise the no-follow guarantee
+  // rests on an early return in another function, and removing that early return would weaken this
+  // one silently (KfQ thread 3780545514). With no candidates, `tightenNodeMode` refuses and the
+  // operator sees the entry reported, which is the documented fail-closed path.
+  const noFollow = (fsConstants as { readonly O_NOFOLLOW?: number }).O_NOFOLLOW;
+  if (noFollow === undefined) return [];
+  return [fsConstants.O_RDONLY | noFollow, fsConstants.O_WRONLY | noFollow];
 }
 
 function tightenViaOpenFlag(node: RuntimeStateNode, targetMode: number, flags: number): boolean {

@@ -327,6 +327,10 @@ describe("installable package smoke optional-dependency coverage", () => {
     process.env.PATH = `${binDir}${delimiter}${previousPath}`;
     try {
       await installIntoWithYarn(projectDir, artifact, new Map());
+      // The default name must NOT be present. Writing under a private name is only half of the
+      // isolation — leaving a `.yarnrc.yml` behind would restore exactly the ancestor-and-default
+      // discovery the private name exists to defeat (KfQ thread 3780545615).
+      expect(existsSync(join(projectDir, ".yarnrc.yml"))).toBe(false);
       const rc = readFileSync(join(projectDir, YARN_RC_FILENAME), "utf8");
       const globalRegistry = /^npmRegistryServer: (http:\/\/127\.0\.0\.1:\d+)$/mu.exec(rc);
       expect(globalRegistry).not.toBeNull();
