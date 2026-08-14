@@ -50,6 +50,10 @@ function response(body: object): Response {
   return new Response(JSON.stringify(body), { status: 200 });
 }
 
+function conflictResponse(body: object = { error: "conflict" }): Response {
+  return new Response(JSON.stringify(body), { status: 409 });
+}
+
 function session(status: "paused" | "running" = "paused", pauseGeneration = 2): object {
   return {
     schemaVersion: "1",
@@ -869,6 +873,106 @@ describe("useDebugSession", () => {
       method: "PUT",
       headers: expect.objectContaining({ "x-keiko-csrf": "1", "if-match": "debug-etag" }),
     });
+  });
+
+  it("retries a breakpoint save exactly once after a spurious 409, using a freshly refetched revision", async () => {
+    let breakpointCalls = 0;
+    let instrumentationCalls = 0;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
+        instrumentationCalls += 1;
+        return response(
+          instrumentationCalls === 1
+            ? instrumentation()
+            : { ...instrumentation(), revision: 5, etag: "fresh-etag" },
+        );
+      }
+      if (url === "/api/editor/debug/breakpoints") {
+        breakpointCalls += 1;
+        if (breakpointCalls === 1) return conflictResponse();
+        return response(
+          mutationSnapshot({
+            revision: 6,
+            etag: "post-save-etag",
+            breakpoints: [
+              {
+                id: "line-4",
+                fileId: "src/program.ts",
+                line: 4,
+                enabled: true,
+                kind: "line",
+                verification: "pending",
+              },
+            ],
+          }),
+        );
+      }
+      return response({});
+    });
+    const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() => expect(result.current.snapshot.instrumentation).not.toBeNull());
+
+    await act(async () => {
+      await result.current.actions.saveBreakpoints("src/program.ts", [
+        {
+          id: "line-4",
+          fileId: "src/program.ts",
+          line: 4,
+          enabled: true,
+          kind: "line",
+          verification: "pending",
+        },
+      ]);
+    });
+
+    expect(breakpointCalls).toBe(2);
+    const breakpointRequests = vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) => url === "/api/editor/debug/breakpoints");
+    expect(breakpointRequests[0]?.[1]).toMatchObject({
+      headers: expect.objectContaining({ "if-match": "debug-etag" }),
+    });
+    expect(parsedRequestBody(breakpointRequests[0]?.[1])).toMatchObject({ expectedRevision: 0 });
+    expect(breakpointRequests[1]?.[1]).toMatchObject({
+      headers: expect.objectContaining({ "if-match": "fresh-etag" }),
+    });
+    expect(parsedRequestBody(breakpointRequests[1]?.[1])).toMatchObject({ expectedRevision: 5 });
+    expect(result.current.snapshot.instrumentation?.revision).toBe(6);
+  });
+
+  it("surfaces a real error when the retried save mutation conflicts again", async () => {
+    let breakpointCalls = 0;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      if (url.endsWith("/instrumentation?workspaceId=canonical-workspace-id")) {
+        return response(instrumentation());
+      }
+      if (url === "/api/editor/debug/breakpoints") {
+        breakpointCalls += 1;
+        return conflictResponse();
+      }
+      return response({});
+    });
+    const { result } = renderHook(() => useDebugSession("canonical-workspace-id", true));
+    await waitFor(() => expect(result.current.snapshot.instrumentation).not.toBeNull());
+
+    await expect(
+      act(async () => {
+        await result.current.actions.saveBreakpoints("src/program.ts", [
+          {
+            id: "line-4",
+            fileId: "src/program.ts",
+            line: 4,
+            enabled: true,
+            kind: "line",
+            verification: "pending",
+          },
+        ]);
+      }),
+    ).rejects.toThrow("Debug request was rejected.");
+
+    expect(breakpointCalls).toBe(2);
   });
 
   it("starts only a structured file target and persists its bounded breakpoint projection", async () => {

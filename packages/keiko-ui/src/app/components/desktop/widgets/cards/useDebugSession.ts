@@ -730,10 +730,24 @@ function sharedInstrumentation(workspaceId: string): Promise<InstrumentationSnap
   return request;
 }
 
+class DebugRequestError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "DebugRequestError";
+  }
+}
+
+function isRevisionConflict(error: unknown): boolean {
+  return error instanceof DebugRequestError && error.status === 409;
+}
+
 async function requestJson(url: string, init?: RequestInit): Promise<unknown> {
   const response = await fetch(url, { credentials: "same-origin", ...init });
   const body = (await response.json()) as unknown;
-  if (!response.ok) throw new Error("Debug request was rejected.");
+  if (!response.ok) throw new DebugRequestError(response.status, "Debug request was rejected.");
   return body;
 }
 
@@ -1187,6 +1201,33 @@ export function useDebugSession(
     return refreshed;
   }, [bootstrap, enabled, refreshInstrumentationAtLeast, stableWorkspaceId]);
 
+  // Breakpoints, watches, and exception filters are gated by one shared per-workspace
+  // revision/etag, so two logically unrelated edits issued close together can race it: the
+  // second request's expectedRevision is already stale by the time it reaches the server, even
+  // though it does not conflict with the first edit's content. Retry exactly once, forcing a
+  // fresh (non-cached) instrumentation read so the retried request carries the current
+  // revision/etag; a second conflict is a real, persistent one and must surface to the caller.
+  const mutateInstrumentationWithConflictRetry = useCallback(
+    async (
+      url: string,
+      instrumentation: InstrumentationSnapshot,
+      buildInit: (current: InstrumentationSnapshot) => RequestInit,
+    ): Promise<unknown> => {
+      try {
+        return await trackedRequest(url, buildInit(instrumentation));
+      } catch (error: unknown) {
+        if (!isRevisionConflict(error)) throw error;
+        const refreshedOk = await refreshInstrumentationAtLeast();
+        const refreshed = refreshedOk
+          ? debugSessionSnapshot(stableWorkspaceId).instrumentation
+          : null;
+        if (refreshed === null) throw error;
+        return await trackedRequest(url, buildInit(refreshed));
+      }
+    },
+    [refreshInstrumentationAtLeast, stableWorkspaceId, trackedRequest],
+  );
+
   const refreshSessionAtFence = useCallback(
     async (sessionId: string, lifecycleFence: symbol): Promise<boolean> => {
       if (!enabled) return false;
@@ -1409,24 +1450,26 @@ export function useDebugSession(
     async (fileId: string, breakpoints: readonly SourceBreakpoint[]): Promise<void> => {
       const instrumentation = await mutationInstrumentation();
       if (instrumentation === null) return;
-      const response = await trackedRequest(
+      const response = await mutateInstrumentationWithConflictRetry(
         "/api/editor/debug/breakpoints",
-        debugMutation(
-          {
-            schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
-            workspaceId: stableWorkspaceId,
-            expectedRevision: instrumentation.revision,
-            fileId,
-            breakpoints,
-          },
-          "PUT",
-          instrumentation.etag,
-        ),
+        instrumentation,
+        (current) =>
+          debugMutation(
+            {
+              schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
+              workspaceId: stableWorkspaceId,
+              expectedRevision: current.revision,
+              fileId,
+              breakpoints,
+            },
+            "PUT",
+            current.etag,
+          ),
       );
       const result = mutationProjection(response);
       if (result !== null) setDebugInstrumentation(stableWorkspaceId, result.snapshot);
     },
-    [mutationInstrumentation, stableWorkspaceId, trackedRequest],
+    [mutateInstrumentationWithConflictRetry, mutationInstrumentation, stableWorkspaceId],
   );
 
   const control = useCallback(
@@ -1623,18 +1666,20 @@ export function useDebugSession(
     async (watches: readonly WatchExpression[]): Promise<void> => {
       const instrumentation = await mutationInstrumentation();
       if (instrumentation === null) return;
-      const response = await trackedRequest(
+      const response = await mutateInstrumentationWithConflictRetry(
         "/api/editor/debug/watches",
-        debugMutation(
-          {
-            schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
-            workspaceId: stableWorkspaceId,
-            expectedRevision: instrumentation.revision,
-            watches,
-          },
-          "PUT",
-          instrumentation.etag,
-        ),
+        instrumentation,
+        (current) =>
+          debugMutation(
+            {
+              schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
+              workspaceId: stableWorkspaceId,
+              expectedRevision: current.revision,
+              watches,
+            },
+            "PUT",
+            current.etag,
+          ),
       );
       const result = mutationProjection(response);
       if (result !== null)
@@ -1645,25 +1690,27 @@ export function useDebugSession(
           result.snapshot.etag,
         );
     },
-    [mutationInstrumentation, stableWorkspaceId, trackedRequest],
+    [mutateInstrumentationWithConflictRetry, mutationInstrumentation, stableWorkspaceId],
   );
 
   const saveExceptionFilters = useCallback(
     async (filters: readonly ExceptionBreakpointFilter[]): Promise<void> => {
       const instrumentation = await mutationInstrumentation();
       if (instrumentation === null) return;
-      const response = await trackedRequest(
+      const response = await mutateInstrumentationWithConflictRetry(
         "/api/editor/debug/exception-breakpoints",
-        debugMutation(
-          {
-            schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
-            workspaceId: stableWorkspaceId,
-            expectedRevision: instrumentation.revision,
-            filters,
-          },
-          "PUT",
-          instrumentation.etag,
-        ),
+        instrumentation,
+        (current) =>
+          debugMutation(
+            {
+              schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
+              workspaceId: stableWorkspaceId,
+              expectedRevision: current.revision,
+              filters,
+            },
+            "PUT",
+            current.etag,
+          ),
       );
       const result = mutationProjection(response);
       if (result !== null)
@@ -1674,7 +1721,7 @@ export function useDebugSession(
           result.snapshot.etag,
         );
     },
-    [mutationInstrumentation, stableWorkspaceId, trackedRequest],
+    [mutateInstrumentationWithConflictRetry, mutationInstrumentation, stableWorkspaceId],
   );
 
   const evaluateWatch = useCallback(
