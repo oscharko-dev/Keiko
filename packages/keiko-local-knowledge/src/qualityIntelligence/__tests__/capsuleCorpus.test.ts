@@ -35,6 +35,13 @@ function seedDocumentText(capsuleId: string, documentId: string, text: string): 
   const now = store._internal.now();
   const sourceId = `src-${capsuleId}`;
 
+  // knowledge_sources first: capsule_sources.id FKs into it (ON DELETE RESTRICT). The constraint
+  // shipped on fresh installs but was missing from every store upgraded from v1 until the v33
+  // migration added it (KEIKO-0371), which is why this fixture used to get away without the row.
+  db.prepare(
+    "INSERT OR IGNORE INTO knowledge_sources (id, display_name, tags_json, scope_kind, scope_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  ).run(sourceId, "Source 1", "[]", "folder", "{}", now, now);
+
   // Insert a minimal capsule_sources row (one source per capsule).
   db.prepare(
     "INSERT OR IGNORE INTO capsule_sources (id, capsule_id, display_name, tags_json, scope_kind, scope_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
