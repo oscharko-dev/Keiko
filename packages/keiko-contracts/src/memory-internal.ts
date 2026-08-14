@@ -6,6 +6,8 @@
 // Bounded text caps. Chosen to keep audit summaries and rationales safe to ship to a
 // browser surface without truncation, and to keep the body cap aligned with a comfortable
 // MemoriaViva card without scrolling.
+import { stripUnsafeFormatChars } from "./text-safety.js";
+
 export const MEMORY_BODY_MAX_CHARS = 4096;
 export const MEMORY_RATIONALE_MAX_CHARS = 1024;
 export const MEMORY_REASON_MAX_CHARS = 1024;
@@ -115,9 +117,35 @@ export function pushNestedErrors(prefix: string, result: NestedValidation, error
   }
 }
 
+// Memory ids are branded identifiers that reach the memory store, evidence exports and the browser,
+// exactly like the sibling prompt-enhancer ids — but they were checked for non-emptiness alone. A
+// memory id could carry surrounding whitespace, an unbounded length, a control character, a
+// bidi-override that makes it render as a different id, or a `../` traversal fragment. The rules
+// below mirror validatePromptEnhancerIdString; only the reported field name differs.
+const MEMORY_ID_MAX_LENGTH = 256;
+const MEMORY_ID_FORBIDDEN_FRAGMENTS: readonly string[] = ["..", "/", "\\"];
+
+function memoryIdReason(value: unknown): string | null {
+  if (typeof value !== "string") return "must be a non-empty string";
+  if (value.length === 0 || value.trim().length === 0) return "must be a non-empty string";
+  if (value !== value.trim()) return "must not have leading or trailing whitespace";
+  if (value.length > MEMORY_ID_MAX_LENGTH) {
+    return `exceeds max length ${String(MEMORY_ID_MAX_LENGTH)}`;
+  }
+  if (value.normalize("NFKC") !== value) return "must be NFKC-normalised";
+  if (stripUnsafeFormatChars(value) !== value) {
+    return "contains control or invisible characters";
+  }
+  if (MEMORY_ID_FORBIDDEN_FRAGMENTS.some((fragment) => value.includes(fragment))) {
+    return "contains a forbidden path fragment";
+  }
+  return null;
+}
+
 export function validateMemoryIdString(field: string, value: unknown, errors: string[]): void {
-  if (!isNonEmptyTrimmedString(value)) {
-    errors.push(`${field} must be a non-empty string`);
+  const reason = memoryIdReason(value);
+  if (reason !== null) {
+    errors.push(`${field} ${reason}`);
   }
 }
 

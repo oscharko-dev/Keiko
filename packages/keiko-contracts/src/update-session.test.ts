@@ -18,6 +18,7 @@ import {
   type UpdatePortableInstallSummary,
   type UpdatePortableSidecarSummary,
   type UpdatePortableStagingSummary,
+  validTargetVersion,
 } from "./update-session.js";
 
 describe("update session portable contract", () => {
@@ -132,5 +133,29 @@ describe("update session portable contract", () => {
   it("keeps session start requests stable-only", () => {
     expect(parseUpdateSessionStartRequest({ targetVersion: "0.2.14" }).ok).toBe(true);
     expect(parseUpdateSessionStartRequest({ targetVersion: "0.2.14-beta.1" }).ok).toBe(false);
+  });
+});
+
+// KEIKO-0326: the target-version shape rule existed as a byte-identical copy in update-session.ts
+// and update-remediation.ts (pattern plus length bound, twice). Two copies drift silently — each
+// keeps validating, just against a different definition of "a valid target version". They are now
+// one exported predicate, and update-remediation.ts's parseTargetVersion calls it.
+describe("target version shape is one shared rule (KEIKO-0326)", () => {
+  it.each(["1.2.3", "0.0.0", "10.20.30"])("accepts %s", (version) => {
+    expect(validTargetVersion(version)).toBe(true);
+  });
+
+  it.each([
+    "1.2",
+    "1.2.3.4",
+    "v1.2.3",
+    "01.2.3",
+    "1.2.3-rc1",
+    "",
+    " 1.2.3",
+    "1.2.3 ",
+    "1".repeat(65),
+  ])("rejects %j", (version) => {
+    expect(validTargetVersion(version)).toBe(false);
   });
 });
