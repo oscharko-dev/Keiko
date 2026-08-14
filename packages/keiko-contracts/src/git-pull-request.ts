@@ -157,14 +157,23 @@ export interface GitPullRequestReadinessSummary {
 
 // ─── Draft-vs-ready recommendation ──────────────────────────────────────────────────────────────────
 
+// "keep-as-is" is the no-op outcome for a PR that already exists, is already ready for review, and
+// has nothing outstanding. Without it the derivation had to reuse "update-to-ready" for that case,
+// which is what made the recommendation meaningless for the PRs it was supposed to serve.
 export type GitPullRequestRecommendation =
-  "create-as-draft" | "create-as-ready" | "update-to-ready" | "keep-as-draft" | "blocked";
+  | "create-as-draft"
+  | "create-as-ready"
+  | "update-to-ready"
+  | "keep-as-draft"
+  | "keep-as-is"
+  | "blocked";
 
 export const GIT_PR_RECOMMENDATIONS: readonly GitPullRequestRecommendation[] = [
   "create-as-draft",
   "create-as-ready",
   "update-to-ready",
   "keep-as-draft",
+  "keep-as-is",
   "blocked",
 ] as const;
 
@@ -473,9 +482,19 @@ export function gitPullRequestRecommendationFor(
   if (!readiness.objectExists) {
     return riskDigest.isDraft ? "create-as-draft" : "create-as-ready";
   }
-  // The PR exists and has no blocking blockers. Advisory blockers (pending checks, missing approvals)
-  // counsel keeping it as a draft; a clean PR is recommended for the move to ready-for-review.
-  return readiness.blockers.length > 0 ? "keep-as-draft" : "update-to-ready";
+  // The PR exists and has no blocking blockers. Its OWN draftness is recorded as the `draft-pr`
+  // advisory, so counting the raw blocker list inverted both draft-lifecycle recommendations:
+  // every clean draft was told to stay a draft, and every already-ready PR got a no-op
+  // `update-to-ready`. Draftness is read from `reviewReady` instead — on this branch (PR exists, no
+  // blocking blockers) it is exactly `!isDraft` by its own definition above, so no re-derivation
+  // from the blockers array and no wire-shape change is needed.
+  if (readiness.reviewReady) {
+    return "keep-as-is";
+  }
+  // Genuine advisories (pending checks, missing approvals) counsel keeping the draft; a draft with
+  // nothing else outstanding is the one PR the promotion to ready-for-review can apply to.
+  const otherAdvisories = readiness.blockers.filter((b) => b.code !== "draft-pr");
+  return otherAdvisories.length > 0 ? "keep-as-draft" : "update-to-ready";
 }
 
 // ─── Suggestion derivations (PURE, deterministic) ───────────────────────────────────────────────────
@@ -524,7 +543,15 @@ export function gitPullRequestLabelSuggestionsFor(
 
 // Extracts issue-ref tokens from the head branch name only (e.g. "claude/issue-477-..." → "#477",
 // "fix/1234-..." → "#1234"). Deterministic; never scans commit bodies in this leaf.
-const BRANCH_ISSUE_RE = /(?:issue[-/])?(\d{1,7})/gi;
+//
+// A digit run only counts when it is a token in its own right: either behind an explicit
+// `issue-`/`issue/` marker, or starting a segment (string start, `/`, `_`, `-`) and ending at one
+// (string end, `/`, `_`, `-`). Without those boundaries every digit run in a branch name became an
+// issue ref — "feat/v2-api" suggested #2, "fix/utf8-bug" suggested #8 — and a run longer than the
+// cap was truncated into a DIFFERENT issue plus a stray ref ("12345678" → #1234567 and #8). These
+// refs reach the PR preview, where a consumer rendering them as closing keywords would close
+// unrelated issues on merge. A run longer than the cap now matches nothing rather than truncating.
+const BRANCH_ISSUE_RE = /(?:^|[/_-])(?:issue[-/])?(\d{1,7})(?=$|[/_-])/gi;
 
 export function gitPullRequestLinkageSuggestionsFor(
   headBranch: string,

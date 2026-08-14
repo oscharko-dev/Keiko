@@ -2312,6 +2312,7 @@ export {
 // ─── Shared text-safety primitive (Epic #177/#189 grounding hardening, GRD-001) ──
 export {
   containsAbsolutePath,
+  containsBidiOrZeroWidth,
   containsPseudoRoleMarker,
   redactAbsolutePaths,
   stripUnsafeFormatChars,

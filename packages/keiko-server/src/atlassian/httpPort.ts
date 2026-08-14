@@ -53,6 +53,26 @@ function boundedTimeoutMs(requested: number): number {
   return Math.min(Math.trunc(requested), MAX_TIMEOUT_MS);
 }
 
+// Connector-lane egress posture (KEIKO-0316). The caller hands us the LIVE model-gateway egress
+// config, whose `allowPrivateNetwork` / `allowLinkLocalAndMetadata` opt-ins exist for an
+// operator's own approved, customer-hosted MODEL provider. An Atlassian base URL is
+// client-supplied through the connector-management routes, so inheriting those opt-ins would let
+// a connector be pointed at an internal service and turn the `/verify` probe into an
+// internal-reconnaissance oracle. Only the transport settings (proxy, CA bundle) carry over;
+// `denyLoopback` is pinned on. Mirrors researchEgressConfig() in
+// coding-runtime/researchEgressPort.ts, which already solves this for the research lane.
+function connectorEgressConfig(
+  base: OutboundHttpEgressConfig | undefined,
+): OutboundHttpEgressConfig {
+  return {
+    denyLoopback: true,
+    ...(base?.httpProxy !== undefined ? { httpProxy: base.httpProxy } : {}),
+    ...(base?.httpsProxy !== undefined ? { httpsProxy: base.httpsProxy } : {}),
+    ...(base?.noProxy !== undefined ? { noProxy: base.noProxy } : {}),
+    ...(base?.caBundlePath !== undefined ? { caBundlePath: base.caBundlePath } : {}),
+  };
+}
+
 // The single-host allowlist re-check (ADR-0128 D3, "enforced twice"): the request URL must be an
 // https URL on exactly the connector's base host, with no embedded credentials.
 function assertAllowlistedTarget(base: URL, requestUrl: string): URL {
@@ -114,7 +134,7 @@ export function createGatewayAtlassianHttpPort(
     const target = assertAllowlistedTarget(base, request.url);
     // Resolved immediately before the outbound call; never stored on the port instance.
     const credential = options.credentials.resolveForExecution(options.authRef);
-    const egress = options.egress?.();
+    const egress = connectorEgressConfig(options.egress?.());
     try {
       const response = await gatewayFetch(target.toString(), {
         method: request.method,
@@ -123,7 +143,7 @@ export function createGatewayAtlassianHttpPort(
           accept: "application/json",
         },
         signal: AbortSignal.timeout(boundedTimeoutMs(request.timeoutMs)),
-        ...(egress === undefined ? {} : { egress }),
+        egress,
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       });
       await discardBody(response);
@@ -223,7 +243,7 @@ export function createGatewayAtlassianHttpBodyPort(
     assertValidRequestBody(request);
     // Resolved immediately before the outbound call; never stored on the port instance.
     const credential = options.credentials.resolveForExecution(options.authRef);
-    const egress = options.egress?.();
+    const egress = connectorEgressConfig(options.egress?.());
     try {
       const response = await gatewayFetch(target.toString(), {
         method: request.method,
@@ -234,7 +254,7 @@ export function createGatewayAtlassianHttpBodyPort(
         },
         ...(request.bodyJson === undefined ? {} : { body: request.bodyJson }),
         signal: composeBodyRequestSignal(request),
-        ...(egress === undefined ? {} : { egress }),
+        egress,
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       });
       const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"), Date.now());

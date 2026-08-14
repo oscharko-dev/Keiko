@@ -413,6 +413,12 @@ function validateReplaceEdit(value: unknown, reasons: string[]): void {
     !isPositiveInteger(range.endColumn)
   ) {
     reasons.push("edit range invalid");
+  } else if (isBackwardsRange(range.startLine, range.startColumn, range.endLine, range.endColumn)) {
+    // Each bound was previously checked in isolation, so a backwards range reached the patch
+    // applier, which would slice from a start position after its end. The sibling isValidLineRange
+    // in connected-context.ts already enforces this ordering rule for line ranges; an out-of-order
+    // range is malformed and is rejected, never silently swapped.
+    reasons.push("edit range invalid");
   }
   if (typeof value.originalText !== "string" || typeof value.newText !== "string") {
     reasons.push("edit text invalid");
@@ -421,6 +427,17 @@ function validateReplaceEdit(value: unknown, reasons: string[]): void {
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1;
+}
+
+// A zero-width range (end === start) is a legal insertion point and stays accepted.
+function isBackwardsRange(
+  startLine: number,
+  startColumn: number,
+  endLine: number,
+  endColumn: number,
+): boolean {
+  if (endLine < startLine) return true;
+  return endLine === startLine && endColumn < startColumn;
 }
 
 function validateApplyFile(value: unknown, reasons: string[]): void {

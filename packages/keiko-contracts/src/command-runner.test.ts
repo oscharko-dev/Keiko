@@ -164,6 +164,54 @@ describe("parseCommandTaskRunRequest rejections", () => {
       }
     }
   });
+
+  // KEIKO-0456. This boundary's own comment promises that "an oversized or non-token value cannot
+  // reach the manager, the audit ledger, or the SSE fan-out", but only requestId was both bounded
+  // and patterned: projectId had no bound at all and taskId no pattern. A newline or control
+  // character in an identifier that is later interpolated into a log line or an SSE `data:` field is
+  // a log-injection / frame-splitting primitive, which is exactly what this boundary exists to stop.
+  it("bounds projectId, which is a filesystem path and so cannot take a token pattern", () => {
+    expect(parseCommandTaskRunRequest({ ...baseRequest(), projectId: "x".repeat(4_097) }).ok).toBe(
+      false,
+    );
+    expect(parseCommandTaskRunRequest({ ...baseRequest(), projectId: "/work/a b/proj" }).ok).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    ["newline", "/work/proj\ninjected"],
+    ["carriage return", "/work/proj\rinjected"],
+    ["NUL", "/work/proj\u0000"],
+    ["escape", "/work/proj\u001b[31m"],
+  ])("rejects a projectId containing a %s control character", (_label, projectId) => {
+    expect(parseCommandTaskRunRequest({ ...baseRequest(), projectId }).ok).toBe(false);
+  });
+
+  it.each([
+    ["space", "npm-script:my test"],
+    ["newline", "npm-script:test\ndata: injected"],
+    ["traversal", "../../etc/passwd"],
+    ["quote", 'npm-script:"test"'],
+    ["leading punctuation", "-npm-script:test"],
+  ])("rejects a taskId that is not the discovered-script token shape (%s)", (_label, taskId) => {
+    expect(parseCommandTaskRunRequest({ ...baseRequest(), taskId }).ok).toBe(false);
+  });
+
+  it("keeps accepting the real discovered-script token shape", () => {
+    for (const taskId of ["npm-script:test", "a", "A1._:-", "npm-script:build.prod"]) {
+      expect(parseCommandTaskRunRequest({ ...baseRequest(), taskId }).ok).toBe(true);
+    }
+  });
+
+  it.each([
+    ["fractional", 1.5],
+    ["beyond the safe integer range", 1e300],
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+  ])("rejects a timeoutMs that is %s", (_label, timeoutMs) => {
+    expect(parseCommandTaskRunRequest({ ...baseRequest(), timeoutMs }).ok).toBe(false);
+  });
 });
 
 describe("validateCommandTaskCatalog", () => {

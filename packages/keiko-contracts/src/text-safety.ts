@@ -28,6 +28,16 @@ const CHAT_ROLE_MARKERS = ["user", "assistant", "system"] as const;
 // range makes this canonical stripper a true superset of the keiko-tools git-ref sanitizer
 // (GEN-DUP-NEAR-003 case B); it is additive — it can only remove more. Numeric scan keeps the
 // set auditable and avoids embedding invisible literals in the source.
+// Exported so no consumer needs a private copy: two had already drifted from this canonical set
+// (the QI source-envelope guard was missing the whole U+2060-U+206F block, and the QI branded-id
+// validator had no bidi check at all). One definition, one behaviour.
+export function containsBidiOrZeroWidth(value: string): boolean {
+  for (const ch of value) {
+    if (isBidiOrZeroWidthCodePoint(ch.codePointAt(0) ?? 0)) return true;
+  }
+  return false;
+}
+
 function isBidiOrZeroWidthCodePoint(cp: number): boolean {
   return (
     cp === 0x061c ||

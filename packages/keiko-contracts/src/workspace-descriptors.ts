@@ -308,11 +308,39 @@ function presentError(
   return error === null ? [] : [error];
 }
 
+// R0 (cardinality) — the enum rules are `.filter().map()` over the input array, and an empty array
+// filters to nothing, so a registration that omitted its lifecycle states or its trust boundary
+// entirely passed every rule silently. R2 in particular is satisfied by [] exactly as it is by
+// ["ui"]. An empty array is invalid unconditionally, for every meta.
+function validateLifecycleNonEmpty(
+  objectType: string,
+  lifecycle: readonly WorkspaceObjectLifecycleState[],
+): WorkspaceDescriptorValidationError | null {
+  return lifecycle.length === 0
+    ? { objectType, field: "lifecycle", message: "lifecycle must declare at least one state" }
+    : null;
+}
+
+function validateTrustBoundaryNonEmpty(
+  objectType: string,
+  trustBoundary: readonly WorkspaceObjectTrustBoundary[],
+): WorkspaceDescriptorValidationError | null {
+  return trustBoundary.length === 0
+    ? {
+        objectType,
+        field: "trustBoundary",
+        message: "trustBoundary must declare at least one tier",
+      }
+    : null;
+}
+
 export function validateWorkspaceDescriptorMeta(
   objectType: string,
   meta: WorkspaceDescriptorMeta,
 ): readonly WorkspaceDescriptorValidationError[] {
   return [
+    ...presentError(validateLifecycleNonEmpty(objectType, meta.lifecycle)),
+    ...presentError(validateTrustBoundaryNonEmpty(objectType, meta.trustBoundary)),
     ...validateLifecycleEnum(objectType, meta.lifecycle),
     ...validateTrustBoundaryEnum(objectType, meta.trustBoundary),
     ...presentError(validateAuthorityEnum(objectType, meta.authority)),

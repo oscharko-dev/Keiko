@@ -15,6 +15,7 @@
 // Provenance + integrity hash give the audit ledger (#274) a stable footprint without
 // embedding any payload.
 
+import { containsBidiOrZeroWidth } from "../text-safety.js";
 import type { QualityIntelligenceSourceEnvelopeId } from "./ids.js";
 
 export type QualityIntelligenceSourceKind =
@@ -94,25 +95,11 @@ export type QualityIntelligenceSourceEnvelope =
   | QualityIntelligenceHumanContextEnvelope
   | QualityIntelligenceConnectorDocumentEnvelope;
 
-// True for a bidi-override/isolate, zero-width, BOM, LRM/RLM, or Arabic-letter-mark code point — the
-// invisible / text-reordering characters that can spoof a display surface's reading order. A numeric
-// scan (rather than a regex) keeps the set auditable and avoids embedding invisible literals in the
-// source. All targets are ≥ U+061C, so no control-range regex / `no-control-regex` concern arises.
-// Mirrors keiko-quality-intelligence `isUnsafeHigh`; kept inline because keiko-contracts is the base
-// layer and must not depend on the QI domain package.
-const isBidiOrZeroWidthCodePoint = (cp: number): boolean =>
-  cp === 0x061c ||
-  (cp >= 0x200b && cp <= 0x200f) ||
-  (cp >= 0x202a && cp <= 0x202e) ||
-  (cp >= 0x2066 && cp <= 0x2069) ||
-  cp === 0xfeff;
-
-const containsBidiOrZeroWidth = (value: string): boolean => {
-  for (const ch of value) {
-    if (isBidiOrZeroWidthCodePoint(ch.codePointAt(0) ?? 0)) return true;
-  }
-  return false;
-};
+// The bidi/zero-width predicate is imported from ../text-safety.js, the canonical base-layer
+// definition. The private copy this file used to carry had already drifted from it — it was missing
+// the entire U+2060-U+206F block (word joiner, invisible operators, deprecated shaping controls)
+// while its own comment asserted equality with a mirror that does cover that range. Importing the
+// one definition removes the drift and the false claim together.
 
 /**
  * Returns `true` if a field value looks safe to surface in a browser context.

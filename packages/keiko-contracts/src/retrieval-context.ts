@@ -217,9 +217,19 @@ function isOptionalString(value: unknown): boolean {
 }
 
 function retrievalCitationShapeValid(value: Record<string, unknown>): boolean {
+  const sourceKindValid = RETRIEVAL_CONTEXT_SOURCE_KINDS.includes(
+    value.sourceKind as RetrievalContextSourceKind,
+  );
   return [
-    RETRIEVAL_CONTEXT_SOURCE_KINDS.includes(value.sourceKind as RetrievalContextSourceKind),
+    sourceKindValid,
     RETRIEVAL_CONTEXT_SOURCE_TIERS.includes(value.sourceTier as RetrievalContextSourceTier),
+    // The two membership checks above are independent, so a citation could claim a sourceKind whose
+    // canonical tier is `retained-memory` while carrying `first-party-workspace` — misrepresenting
+    // its own trust tier to any consumer that reads sourceTier instead of re-deriving it. The tier
+    // is not an independent field: this table is its only authority.
+    !sourceKindValid ||
+      value.sourceTier ===
+        tierForRetrievalContextSource(value.sourceKind as RetrievalContextSourceKind),
     typeof value.id === "string",
     typeof value.score === "number",
     typeof value.rank === "number",

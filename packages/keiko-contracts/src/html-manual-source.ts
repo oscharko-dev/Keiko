@@ -122,11 +122,18 @@ export function isSafeManualOrigin(origin: string): boolean {
 export function isSafeManualPathPrefix(prefix: string | null): boolean {
   if (prefix === null) return true;
   if (prefix.length === 0 || !prefix.startsWith("/")) return false;
+  // A prefix beginning `//` (or `/\`, which browsers normalise to `//`) is a protocol-relative
+  // reference, not a path: resolved against the approved origin it names a DIFFERENT authority
+  // (`new URL("//attacker.example/x", "https://intranet.local")` is `https://attacker.example/x`).
+  // Certifying that as a same-origin prefix would be an approval-scope escape, so it is rejected
+  // here rather than left to each consumer to re-check.
+  if (prefix.startsWith("//") || prefix.startsWith("/\\")) return false;
   if (
     prefix.includes("\0") ||
     prefix.includes("?") ||
     prefix.includes("#") ||
-    prefix.includes("@")
+    prefix.includes("@") ||
+    prefix.includes("\\")
   ) {
     return false;
   }

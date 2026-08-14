@@ -12,6 +12,10 @@ import {
   isCodingContextPurpose,
   tierForCodingContextSource,
   toCodingContextWirePack,
+  CODING_CONTEXT_CAPSULE_ID_MAX_CHARS,
+  CODING_CONTEXT_CHANGED_FILES_MAX_COUNT,
+  CODING_CONTEXT_QUERY_TEXT_MAX_CHARS,
+  CODING_CONTEXT_SYMBOL_MAX_CHARS,
   validateCodingContextRequest,
   type CodingContextCitation,
   type CodingContextExcerpt,
@@ -244,5 +248,56 @@ describe("validateCodingContextRequest", () => {
     if (!result.ok) {
       expect(result.reasons).toContain("request.localKnowledgeScope ambiguous");
     }
+  });
+
+  // KEIKO-0420: the only bounded field was editorSessionId. documentPath was checked for
+  // non-emptiness alone, and symbol/queryText/capsuleId/capsuleSetId/changedFiles had no bound at
+  // all — so a traversal path and multi-megabyte free text both returned ok:true from a function
+  // named validateCodingContextRequest. The route re-validates, but a caller reading ok:true will
+  // reasonably treat the request as vetted; the contract has to hold the property it claims.
+  it.each([
+    ["traversal", "../../../../etc/shadow"],
+    ["absolute", "/etc/shadow"],
+    ["home-relative", "~/secrets.txt"],
+    ["windows-absolute", "C:\\secrets.txt"],
+    ["backslash separator", "src\\a.ts"],
+    ["dot segment", "src/./a.ts"],
+    ["NUL byte", "src/a\u0000.ts"],
+  ])("rejects a %s documentPath", (_label, documentPath) => {
+    expect(validateCodingContextRequest(validRequest({ documentPath })).ok).toBe(false);
+  });
+
+  it("rejects a changedFiles entry with the same path shapes it rejects for documentPath", () => {
+    expect(
+      validateCodingContextRequest(validRequest({ changedFiles: ["src/../src/a.ts"] })).ok,
+    ).toBe(false);
+    expect(validateCodingContextRequest(validRequest({ changedFiles: ["/etc/shadow"] })).ok).toBe(
+      false,
+    );
+  });
+
+  it("caps the changedFiles list at the same count the route enforces", () => {
+    const withinCap = Array.from(
+      { length: CODING_CONTEXT_CHANGED_FILES_MAX_COUNT },
+      (_unused, index) => `src/f${String(index)}.ts`,
+    );
+    expect(validateCodingContextRequest(validRequest({ changedFiles: withinCap })).ok).toBe(true);
+    expect(
+      validateCodingContextRequest(
+        validRequest({ changedFiles: [...withinCap, "src/overflow.ts"] }),
+      ).ok,
+    ).toBe(false);
+  });
+
+  it.each([
+    ["symbol", CODING_CONTEXT_SYMBOL_MAX_CHARS],
+    ["queryText", CODING_CONTEXT_QUERY_TEXT_MAX_CHARS],
+    ["capsuleId", CODING_CONTEXT_CAPSULE_ID_MAX_CHARS],
+    ["capsuleSetId", CODING_CONTEXT_CAPSULE_ID_MAX_CHARS],
+  ])("bounds the free-text field %s", (field, max) => {
+    expect(validateCodingContextRequest(validRequest({ [field]: "a".repeat(max) })).ok).toBe(true);
+    expect(validateCodingContextRequest(validRequest({ [field]: "a".repeat(max + 1) })).ok).toBe(
+      false,
+    );
   });
 });

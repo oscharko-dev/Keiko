@@ -11,6 +11,7 @@ import {
   type AtlassianCredentialExecutionResolver,
   type AtlassianResolvedCredential,
 } from "@oscharko-dev/keiko-connectors";
+import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { createGatewayAtlassianHttpBodyPort, createGatewayAtlassianHttpPort } from "./httpPort.js";
 
 const SYNTHETIC_TOKEN = ["ATATT", "port", "test", "0123456789", "abcdefghij"].join("");
@@ -476,5 +477,81 @@ describe("createGatewayAtlassianHttpBodyPort — write channel (Issue #2244)", (
       }),
     ).rejects.toBeInstanceOf(AtlassianCredentialCustodyError);
     expect(calls).toHaveLength(0);
+  });
+});
+
+// ─── Connector egress posture (KEIKO-0316) ───────────────────────────────────
+// The connector lane must never inherit the model gateway's private-network opt-ins. Those
+// flags exist for an operator's own approved, customer-hosted MODEL provider; an Atlassian
+// connector base URL is client-supplied through the connector-management routes, so inheriting
+// them would turn the `/verify` probe into an internal-reconnaissance oracle. Both port
+// factories therefore derive their own egress config: proxy/CA transport settings are honoured,
+// `denyLoopback` is pinned on, and `allowPrivateNetwork`/`allowLinkLocalAndMetadata` are never
+// carried over — mirroring researchEgressConfig() in coding-runtime/researchEgressPort.ts.
+
+const PERMISSIVE_GATEWAY_EGRESS: OutboundHttpEgressConfig = {
+  allowPrivateNetwork: true,
+  allowLinkLocalAndMetadata: true,
+};
+
+const INTERNAL_BASE_URLS = [
+  "https://127.0.0.1",
+  "https://localhost",
+  "https://10.0.0.5",
+  "https://172.16.4.9",
+  "https://192.168.1.20",
+  "https://169.254.169.254",
+] as const;
+
+describe("Atlassian connector egress posture", () => {
+  it.each(INTERNAL_BASE_URLS)(
+    "blocks %s even when the shared gateway egress opts into private networks",
+    async (baseUrl) => {
+      const { fetchImpl, calls } = fetchFake(200);
+      const result = await createGatewayAtlassianHttpPort({
+        baseUrl,
+        authRef: AUTH_REF,
+        credentials: resolver(),
+        egress: () => PERMISSIVE_GATEWAY_EGRESS,
+        fetchImpl,
+      })({ method: "GET", url: `${baseUrl}/rest/api/3/myself`, timeoutMs: 30_000 });
+      expect(result).toEqual({ kind: "network-error" });
+      expect(calls).toHaveLength(0);
+    },
+  );
+
+  it.each(INTERNAL_BASE_URLS)(
+    "blocks %s on the bounded-body channel under the same permissive gateway egress",
+    async (baseUrl) => {
+      const { fetchImpl, calls } = writeFetchFake(200, "{}");
+      const result = await createGatewayAtlassianHttpBodyPort({
+        baseUrl,
+        authRef: AUTH_REF,
+        credentials: resolver(),
+        egress: () => PERMISSIVE_GATEWAY_EGRESS,
+        fetchImpl,
+      })({
+        method: "POST",
+        url: `${baseUrl}/rest/api/3/issue`,
+        timeoutMs: 30_000,
+        maxBodyBytes: 1_000,
+        bodyJson: "{}",
+      });
+      expect(result).toEqual({ kind: "network-error" });
+      expect(calls).toHaveLength(0);
+    },
+  );
+
+  it("still reaches the connector's own public host and keeps the operator's proxy/CA settings", async () => {
+    const { fetchImpl, calls } = fetchFake(200);
+    const result = await createGatewayAtlassianHttpPort({
+      baseUrl: "https://acme.example",
+      authRef: AUTH_REF,
+      credentials: resolver(),
+      egress: () => ({ ...PERMISSIVE_GATEWAY_EGRESS, noProxy: "acme.example" }),
+      fetchImpl,
+    })({ method: "GET", url: "https://acme.example/rest/api/3/myself", timeoutMs: 30_000 });
+    expect(result).toEqual({ kind: "response", status: 200 });
+    expect(calls).toHaveLength(1);
   });
 });

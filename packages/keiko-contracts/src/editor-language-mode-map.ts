@@ -68,12 +68,20 @@ export const EDITOR_LANGUAGE_MODE_IDS: readonly string[] = Object.freeze(
 
 // Extension -> languageId, derived from the map. Frozen. Every extension in the map appears here.
 export const EDITOR_LANGUAGE_MODE_BY_EXTENSION: Readonly<Record<string, string>> = Object.freeze(
-  EDITOR_LANGUAGE_MODE_MAP.reduce<Record<string, string>>((accumulator, mode) => {
-    for (const extension of mode.fileExtensions) {
-      accumulator[extension] = mode.languageId;
-    }
-    return accumulator;
-  }, {}),
+  EDITOR_LANGUAGE_MODE_MAP.reduce<Record<string, string>>(
+    (accumulator, mode) => {
+      for (const extension of mode.fileExtensions) {
+        accumulator[extension] = mode.languageId;
+      }
+      return accumulator;
+      // Seeded with a null-prototype object: a `{}` seed leaves the frozen table inheriting
+      // Object.prototype, so a lookup for an all-lowercase prototype member (`constructor`,
+      // `__proto__`, `tostring`…) returned an inherited value that `?? null` cannot catch, and
+      // inferEditorLanguageModeId answered with a function instead of the documented safe-degrade
+      // `null`. This closes the whole prototype-member class, not the two reachable names.
+    },
+    Object.create(null) as Record<string, string>,
+  ),
 );
 
 // Final path segment (basename) from a POSIX or Windows path. Pure, allocation-light.

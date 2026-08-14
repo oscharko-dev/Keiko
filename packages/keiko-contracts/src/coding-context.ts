@@ -3,6 +3,7 @@
 // byte-identical. Neutral-only purposes and source kinds are deliberately rejected here.
 
 import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
+import { isPortableWorkspaceRelativePath } from "./workspace-contract-primitives.js";
 import {
   CODING_CONTEXT_PURPOSES,
   CODING_CONTEXT_SOURCE_KINDS,
@@ -78,12 +79,32 @@ export function isBoundedEditorSessionId(value: unknown): value is string {
   );
 }
 
-function isOptionalString(value: unknown): boolean {
-  return value === undefined || typeof value === "string";
+// Per-field bounds for the request boundary. Without them the only bounded field was
+// editorSessionId, so a traversal documentPath and multi-megabyte free text both returned ok:true
+// from a validator whose callers reasonably read that as "vetted". The changed-file cap is the same
+// number keiko-server's MAX_CONTEXT_CHANGED_FILES enforces on the route, so the two agree.
+export const CODING_CONTEXT_SYMBOL_MAX_CHARS = 512;
+export const CODING_CONTEXT_QUERY_TEXT_MAX_CHARS = 4_096;
+export const CODING_CONTEXT_CAPSULE_ID_MAX_CHARS = 128;
+export const CODING_CONTEXT_CHANGED_FILES_MAX_COUNT = 64;
+
+function isBoundedOptionalString(value: unknown, maxChars: number): boolean {
+  return value === undefined || (typeof value === "string" && value.length <= maxChars);
 }
 
-function isOptionalStringArray(value: unknown): boolean {
-  return value === undefined || (Array.isArray(value) && value.every((v) => typeof v === "string"));
+// Every path-like field takes the same shape check the peer contracts already use
+// (coding-workbench-runtime-approval-review.ts, code-task-acceptance.ts): workspace-relative, no
+// traversal, no absolute or drive-qualified form, no backslash, no NUL.
+function isWorkspaceRelativeDocumentPath(value: unknown): value is string {
+  // isPortableWorkspaceRelativePath accepts a blank segment, so the pre-existing non-blank rule is
+  // composed with it rather than replaced — a whitespace-only path stays rejected.
+  return isNonEmptyString(value) && isPortableWorkspaceRelativePath(value);
+}
+
+function isOptionalWorkspaceRelativePathList(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length > CODING_CONTEXT_CHANGED_FILES_MAX_COUNT) return false;
+  return value.every((entry) => isWorkspaceRelativeDocumentPath(entry));
 }
 
 export function isCodingContextPurpose(value: unknown): value is CodingContextPurpose {
@@ -118,12 +139,24 @@ export function validateCodingContextRequest(value: unknown): CodingContextValid
       value.editorSessionId === undefined || isBoundedEditorSessionId(value.editorSessionId),
       "request.editorSessionId invalid",
     ],
-    [isNonEmptyString(value.documentPath), "request.documentPath empty"],
-    [isOptionalString(value.symbol), "request.symbol invalid"],
-    [isOptionalString(value.queryText), "request.queryText invalid"],
-    [isOptionalStringArray(value.changedFiles), "request.changedFiles invalid"],
-    [isOptionalString(value.capsuleId), "request.capsuleId invalid"],
-    [isOptionalString(value.capsuleSetId), "request.capsuleSetId invalid"],
+    [isWorkspaceRelativeDocumentPath(value.documentPath), "request.documentPath invalid"],
+    [
+      isBoundedOptionalString(value.symbol, CODING_CONTEXT_SYMBOL_MAX_CHARS),
+      "request.symbol invalid",
+    ],
+    [
+      isBoundedOptionalString(value.queryText, CODING_CONTEXT_QUERY_TEXT_MAX_CHARS),
+      "request.queryText invalid",
+    ],
+    [isOptionalWorkspaceRelativePathList(value.changedFiles), "request.changedFiles invalid"],
+    [
+      isBoundedOptionalString(value.capsuleId, CODING_CONTEXT_CAPSULE_ID_MAX_CHARS),
+      "request.capsuleId invalid",
+    ],
+    [
+      isBoundedOptionalString(value.capsuleSetId, CODING_CONTEXT_CAPSULE_ID_MAX_CHARS),
+      "request.capsuleSetId invalid",
+    ],
     [
       !(typeof value.capsuleId === "string" && typeof value.capsuleSetId === "string"),
       "request.localKnowledgeScope ambiguous",

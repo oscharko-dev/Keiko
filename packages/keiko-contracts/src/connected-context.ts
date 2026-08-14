@@ -609,6 +609,13 @@ export function isWithinBudget(usage: ExplorationUsage, budget: ExplorationBudge
   for (const dim of dims) {
     const used = dim[0];
     const cap = dim[1];
+    // The cap side must be validated FIRST. `used > cap` is false whenever cap is undefined or NaN,
+    // so an unchecked cap made a partially-constructed budget report every usage as in-budget — the
+    // guard that stops a runaway exploration loop failing OPEN. checkBudgetDimension below already
+    // validates the cap before the usage; this is the same rule on the spend path.
+    if (!isFiniteNonNegativeInteger(cap)) {
+      return false;
+    }
     if (!Number.isFinite(used) || used < 0) {
       return false;
     }

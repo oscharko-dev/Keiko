@@ -212,6 +212,19 @@ describe("looksLikeBrowserSafeSourceEnvelope", () => {
     expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
   });
 
+  // KEIKO-0394: the tests above pin only the three code points every copy of the predicate agreed
+  // on, which is exactly why the drift was invisible. The private copy this file carried was
+  // missing the whole U+2060-U+206F block (word joiner, invisible operators, deprecated shaping
+  // controls) while asserting equality with a mirror that covers it. The full block is pinned here
+  // so a future divergence from ../text-safety.js fails the suite.
+  it.each(Array.from({ length: 0x206f - 0x2060 + 1 }, (_unused, index) => 0x2060 + index))(
+    "rejects a displayLabel containing U+%s",
+    (codePoint) => {
+      const env = { ...makeRepo(), displayLabel: `spec${String.fromCodePoint(codePoint)}name` };
+      expect(looksLikeBrowserSafeSourceEnvelope(env)).toBe(false);
+    },
+  );
+
   it("accepts a clean connector-document envelope", () => {
     expect(looksLikeBrowserSafeSourceEnvelope(makeConnector())).toBe(true);
   });

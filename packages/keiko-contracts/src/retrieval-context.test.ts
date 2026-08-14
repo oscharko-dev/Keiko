@@ -16,8 +16,10 @@ import {
   RETRIEVAL_CONTEXT_PURPOSES,
   RETRIEVAL_CONTEXT_SCHEMA_VERSION,
   RETRIEVAL_CONTEXT_SOURCE_KINDS,
+  RETRIEVAL_CONTEXT_SOURCE_TIERS,
   isRetrievalContextCitation,
   isRetrievalContextPurpose,
+  tierForRetrievalContextSource,
   toRetrievalContextWirePack,
   type RetrievalContextPack,
   type RetrievalContextRequest,
@@ -120,5 +122,22 @@ describe("isRetrievalContextCitation", () => {
     expect(isRetrievalContextCitation({ ...citation, text: "secret" })).toBe(false);
     expect(isRetrievalContextCitation({ ...citation, excerpt: "secret" })).toBe(false);
     expect(isRetrievalContextCitation({ ...citation, content: "secret" })).toBe(false);
+  });
+
+  // KEIKO-0400: sourceKind and sourceTier were two independent membership checks, so a citation
+  // could declare a tier that is not the one this package assigns to its own kind — letting it
+  // misrepresent its trust tier to any consumer that reads sourceTier rather than re-deriving it.
+  it("rejects a citation whose sourceTier is not the canonical tier for its sourceKind", () => {
+    for (const sourceKind of RETRIEVAL_CONTEXT_SOURCE_KINDS) {
+      const canonical = tierForRetrievalContextSource(sourceKind);
+      const wrong = RETRIEVAL_CONTEXT_SOURCE_TIERS.find((tier) => tier !== canonical);
+      expect(wrong).toBeDefined();
+      expect(isRetrievalContextCitation({ ...citation, sourceKind, sourceTier: canonical })).toBe(
+        true,
+      );
+      expect(isRetrievalContextCitation({ ...citation, sourceKind, sourceTier: wrong })).toBe(
+        false,
+      );
+    }
   });
 });

@@ -286,6 +286,54 @@ describe("workspace replace apply wire validators", () => {
       "edit range",
     );
   });
+
+  // KEIKO-0498: the four bounds were each checked in isolation, so a backwards range passed the
+  // contract and reached the patch applier, which would then slice from a start position after its
+  // end. The sibling isValidLineRange in connected-context.ts already enforces this ordering rule.
+  it.each([
+    ["end line before start line", { startLine: 10, startColumn: 1, endLine: 1, endColumn: 1 }],
+    [
+      "same line, end column before start column",
+      { startLine: 3, startColumn: 9, endLine: 3, endColumn: 4 },
+    ],
+  ])("rejects an edit range whose end precedes its start (%s)", (_label, range) => {
+    expectInvalidWithReason(
+      validateWorkspaceReplaceApplyRequest(
+        applyRequest({
+          files: [
+            {
+              path: "src/config.ts",
+              baseContentHash: "a".repeat(64),
+              edits: [{ range, originalText: "old", newText: "new" }],
+            },
+          ],
+        }),
+      ),
+      "edit range",
+    );
+  });
+
+  it("accepts an empty (zero-width) range where end equals start", () => {
+    expect(
+      validateWorkspaceReplaceApplyRequest(
+        applyRequest({
+          files: [
+            {
+              path: "src/config.ts",
+              baseContentHash: "a".repeat(64),
+              edits: [
+                {
+                  range: { startLine: 3, startColumn: 4, endLine: 3, endColumn: 4 },
+                  originalText: "",
+                  newText: "inserted",
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    ).toEqual({ ok: true });
+  });
 });
 
 // SonarCloud S8786: the old `/\([^)]*\)[+*{]|\[[^\]]*\][+*{]/` check is unanchored, so a
