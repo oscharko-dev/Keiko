@@ -2052,6 +2052,7 @@ export async function createFilesEntry(args: {
   } catch (error) {
     throw mapNodeFsError(error);
   }
+  notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 1);
   return { root: target.root, path: target.relativePath, kind: args.kind };
 }
 
@@ -2161,6 +2162,9 @@ async function executeContainedRename(
 export async function renameFilesEntry(args: RenameFilesEntryArgs): Promise<FilesMutationResponse> {
   const { source, target, kind } = await resolveRenameFilesPlan(args);
   await executeContainedRename(source, target, kind);
+  // LSP spec pair for a rename: the old path is Deleted, the new path is Created.
+  notifyHostLspWorkspaceFileChanged(source.realRoot, source.path, 3);
+  notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 1);
   return {
     root: target.root,
     path: target.relativePath,
@@ -2205,6 +2209,7 @@ export async function deleteFilesEntry(args: {
   } catch (error) {
     throw mapNodeFsError(error);
   }
+  notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 3);
   return { root: target.root, path: target.relativePath, kind };
 }
 

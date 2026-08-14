@@ -239,13 +239,16 @@ export function listHostLspHealthSnapshotsForRoot(
   });
 }
 
+// FileChangeType per the LSP spec: Created=1, Changed=2, Deleted=3. Defaults to Changed so the
+// existing content-save call site (files.ts writeFilesContentRoute) needs no change.
 export function notifyHostLspWorkspaceFileChanged(
   workspaceRoot: string,
   absolutePath: string,
+  changeType: 1 | 2 | 3 = 2,
 ): void {
   if (!isWithinWorkspace(workspaceRoot, absolutePath)) return;
   const prefix = `${workspaceRoot}\0`;
-  const params = { changes: [{ uri: pathToFileURL(absolutePath).href, type: 2 }] };
+  const params = { changes: [{ uri: pathToFileURL(absolutePath).href, type: changeType }] };
   for (const [key, entry] of LSP_PROCESS_POOL) {
     if (key.startsWith(prefix) && !entry.disposed) {
       entry.manager.sendNotification("workspace/didChangeWatchedFiles", params);

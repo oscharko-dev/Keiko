@@ -15,9 +15,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EDITOR_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 import type { LocalSecretVault } from "@oscharko-dev/keiko-security/secret-vault";
+
+// KEIKO-0192 regression: create/rename/delete must forward workspace/didChangeWatchedFiles to
+// pooled host LSP processes, the same way writeFilesContentRoute already does for content saves.
+// Spy on the real module (keeping every other export intact) so only this one call is observable.
+vi.mock("./editor/lsp/hostLanguageOperation.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./editor/lsp/hostLanguageOperation.js")>();
+  return { ...actual, notifyHostLspWorkspaceFileChanged: vi.fn() };
+});
+
 import {
   buildRedactor,
   createFilesEntry,
@@ -42,7 +51,10 @@ import type {
   EditorLocalHistoryCaptureInput,
   EditorLocalHistoryStore,
 } from "./editor/localHistory/localHistoryStore.js";
+import { notifyHostLspWorkspaceFileChanged } from "./editor/lsp/hostLanguageOperation.js";
 import type { UiStore } from "./store/index.js";
+
+const notifyHostLspMock = vi.mocked(notifyHostLspWorkspaceFileChanged);
 
 // Mirrors the (non-exported) editable size limit in files.ts; used for boundary tests.
 const MAX_TEXT_PREVIEW_BYTES = 1_000_000;
@@ -1337,6 +1349,7 @@ describe("desktop files mutations (create / rename / delete)", () => {
     await writeFile(join(root, "src", "app.ts"), "export const a = 1;\n");
     store = createInMemoryUiStore();
     store.createProject(root, "fixture");
+    notifyHostLspMock.mockClear();
   });
 
   afterEach(async () => {
@@ -1505,6 +1518,35 @@ describe("desktop files mutations (create / rename / delete)", () => {
     const dir = await deleteFilesEntry({ store, rootInput: root, pathInput: "pkg" });
     expect(dir).toMatchObject({ path: "pkg", kind: "directory" });
     await expect(stat(join(root, "pkg"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("notifies pooled host LSP processes of a Created watched-file event on create", async () => {
+    await createFilesEntry({ store, rootInput: root, pathInput: "src/new.ts", kind: "file" });
+    expect(notifyHostLspMock).toHaveBeenCalledExactlyOnceWith(root, join(root, "src", "new.ts"), 1);
+  });
+
+  it("notifies pooled host LSP processes of a Deleted+Created pair on rename", async () => {
+    await renameFilesEntry({
+      store,
+      rootInput: root,
+      pathInput: "src/app.ts",
+      newPathInput: "src/renamed.ts",
+    });
+    expect(notifyHostLspMock).toHaveBeenCalledTimes(2);
+    expect(notifyHostLspMock).toHaveBeenNthCalledWith(1, root, join(root, "src", "app.ts"), 3);
+    expect(notifyHostLspMock).toHaveBeenNthCalledWith(2, root, join(root, "src", "renamed.ts"), 1);
+  });
+
+  it("notifies pooled host LSP processes of a Deleted watched-file event on delete", async () => {
+    await deleteFilesEntry({ store, rootInput: root, pathInput: "src/app.ts" });
+    expect(notifyHostLspMock).toHaveBeenCalledExactlyOnceWith(root, join(root, "src", "app.ts"), 3);
+  });
+
+  it("does not notify pooled host LSP processes when a mutation fails", async () => {
+    await expect(
+      createFilesEntry({ store, rootInput: root, pathInput: "src/app.ts", kind: "file" }),
+    ).rejects.toMatchObject({ status: 409, code: "ALREADY_EXISTS" });
+    expect(notifyHostLspMock).not.toHaveBeenCalled();
   });
 
   it("refuses to delete the root, denied paths, or symlinks", async () => {
