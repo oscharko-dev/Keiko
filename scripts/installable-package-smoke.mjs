@@ -1151,7 +1151,21 @@ function localRegistryHandler(artifact, tarballBytes, registryUrl, requests, ven
   return (request, response) => {
     const pathname = new URL(request.url ?? "/", registryUrl).pathname;
     requests.push(pathname);
-    const requested = decodeURIComponent(pathname.slice(1));
+    // Decoding is REQUIRED, not incidental: npm encodes the scope separator, so a scoped package
+    // arrives as `@oscharko-dev%2fkeiko/-/keiko-0.3.7.tgz` and every comparison below is written
+    // against the decoded form. It is also the one call here that can throw — `new URL()` passes
+    // `%zz` through untouched and `decodeURIComponent` raises `URIError` on it. Unhandled inside an
+    // http handler that is an uncaught exception: the registry dies mid-install and the gate
+    // reports a crash instead of a verdict (KfQ thread 3780494646). Answer it as the bad request
+    // it is and keep serving.
+    let requested;
+    try {
+      requested = decodeURIComponent(pathname.slice(1));
+    } catch {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "malformed request path" }));
+      return;
+    }
     // Classified by the registry's ARCHIVE ROUTE shape, `<name>/-/<file>.tgz`, not by the
     // extension alone. `foo.tgz` and `@scope/foo.tgz` are valid npm package names, so a packument
     // request for one ends in `.tgz` without being an archive request — the extension test alone

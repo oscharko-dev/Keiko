@@ -126,6 +126,9 @@ jobs:
         # would be skipped whenever an earlier step failed, while the guarded `Run zizmor` below
         # still executed — the diagnostic would go missing in exactly the run that needs it.
         if: ${{ !cancelled() && steps.checkout.outcome != 'failure' }}
+        # Reads the repository with Node builtins and makes no network call, so this bounds a stall
+        # rather than a download; the job's own 15-minute bound would otherwise be the only limit.
+        timeout-minutes: 2
         # `.github/zizmor.yml` scopes every risk acceptance to a LINE NUMBER, so inserting a line
         # above one silently drops it and the next step reports the underlying finding instead of
         # the cause. Running the anchor check FIRST turns that into a message naming the corrected

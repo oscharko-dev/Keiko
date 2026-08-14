@@ -197,6 +197,30 @@ describe("registry install smoke security posture", () => {
 });
 
 describe("installable package smoke optional-dependency coverage", () => {
+  // `new URL()` passes `%zz` through untouched and `decodeURIComponent` raises `URIError` on it.
+  // Unhandled inside an http handler that is an uncaught exception, so the registry would die
+  // mid-install and the gate would report a crash instead of a verdict. The second half of this
+  // test is the point: the server must still be serving afterwards (KfQ thread 3780494646).
+  it("answers a malformed request path instead of dying on it", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-local-registry-malformed-test-"));
+    const artifact = localRegistryArtifact(root);
+    const registry = await startLocalRegistry(artifact);
+    try {
+      for (const malformed of ["/%zz", "/%", "/foo%E0%A4%A.tgz", "/%2f-%2f%ff.tgz"]) {
+        const response = await globalThis.fetch(`${registry.registryUrl}${malformed}`);
+        expect(response.status, `${malformed} must be answered, not crash the server`).toBe(400);
+      }
+      // Still serving: a request that used to be unreachable once the process had died.
+      const packument = await globalThis.fetch(
+        `${registry.registryUrl}/${encodeURIComponent(ROOT_MANIFEST.name)}`,
+      );
+      expect(packument.ok).toBe(true);
+    } finally {
+      await registry.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("serves a registry packument, tarball, and fail-closed missing response", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-local-registry-test-"));
     const artifact = localRegistryArtifact(root);
