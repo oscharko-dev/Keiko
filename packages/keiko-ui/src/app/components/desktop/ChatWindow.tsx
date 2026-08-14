@@ -3060,9 +3060,9 @@ function ComposerCoreImpl({
       return;
     }
     primeAudioOutput();
+    if (!voiceDialog.enter()) return;
     setPendingVoiceAnswer(null);
     voiceDialogSessionChatIdRef.current = activeChat?.id;
-    voiceDialog.enter();
     realtimeVoice.start();
   }, [activeChat?.id, primeAudioOutput, voiceDialog, voiceDialogAvailable, realtimeVoice]);
   const leaveVoiceDialog = useCallback(() => {

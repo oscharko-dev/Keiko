@@ -139,6 +139,29 @@ describe("useVoiceDialogMode — availability gating", () => {
     expect(second.result.current.available).toBe(true);
   });
 
+  it("blocks a second capture lease even when both modes belong to one chat", () => {
+    const first = renderHook(() =>
+      useVoiceDialogMode({ capability: FULL_REALTIME, captureOwner: "chat-a" }),
+    );
+    const second = renderHook(() =>
+      useVoiceDialogMode({ capability: FULL_REALTIME, captureOwner: "chat-a" }),
+    );
+
+    let firstClaimed = false;
+    act(() => {
+      firstClaimed = first.result.current.enter();
+    });
+    expect(firstClaimed).toBe(true);
+    expect(second.result.current.available).toBe(false);
+
+    let secondClaimed = true;
+    act(() => {
+      secondClaimed = second.result.current.enter();
+    });
+    expect(secondClaimed).toBe(false);
+    expect(second.result.current.active).toBe(false);
+  });
+
   it("is unavailable for full-realtime WITHOUT WebRTC media", () => {
     const { result } = renderHook(() =>
       useVoiceDialogMode({ capability: FULL_REALTIME_NO_WEBRTC }),

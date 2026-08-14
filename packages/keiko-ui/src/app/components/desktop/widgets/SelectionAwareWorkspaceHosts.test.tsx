@@ -81,6 +81,7 @@ const chatSessionState = vi.hoisted(() => ({
   chats: [] as Chat[],
   projects: [] as ProjectWithAvailability[],
   loading: false,
+  error: undefined as string | undefined,
   memoryEnabled: true,
   openChat: vi.fn(async (_chat: Chat): Promise<void> => undefined),
   openNewChat: vi.fn(async (): Promise<Chat | undefined> => undefined),
@@ -309,6 +310,7 @@ afterEach(() => {
   chatSessionState.chats = [];
   chatSessionState.projects = [];
   chatSessionState.loading = false;
+  chatSessionState.error = undefined;
   chatSessionState.memoryEnabled = true;
   useChatSessionMock.mockReset();
   useChatSessionMock.mockImplementation(() => chatSessionState);
@@ -1552,6 +1554,17 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(chatSessionState.openProject).toHaveBeenCalledWith(projectA);
 
     chatSessionState.activeProject = projectA;
+    chatSessionState.loading = true;
+    view.rerender(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={cfg} ctx={ctx} />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByText("Opening chat...")).toBeInTheDocument();
+    expect(screen.queryByText("Chat not found")).not.toBeInTheDocument();
+
+    chatSessionState.loading = false;
     chatSessionState.activeChat = chatA;
     chatSessionState.chats = [chatA];
     view.rerender(
@@ -1562,6 +1575,34 @@ describe("ChatWindowSessionHost target missing", () => {
 
     expect(await screen.findByTestId("chat-window")).toBeInTheDocument();
     expect(ctx.updateCfg).not.toHaveBeenCalledWith(expect.objectContaining({ chatId: chatB.id }));
+  });
+
+  it("surfaces a configured project restoration failure without reporting deletion", async () => {
+    const projectA: ProjectWithAvailability = {
+      path: "/repo-a",
+      name: "Repo A",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+    };
+    const projectB: ProjectWithAvailability = { ...projectA, path: "/repo-b", name: "Repo B" };
+    const chatB = { ...chatFixture("chat-b", "Chat B", 2), projectPath: projectB.path };
+    const cfg = { chatId: "chat-a", projectPath: projectA.path, title: "Chat A" };
+    chatSessionState.activeProject = projectA;
+    chatSessionState.activeChat = chatB;
+    chatSessionState.projects = [projectA, projectB];
+    chatSessionState.chats = [chatB];
+    chatSessionState.error = "temporary project restoration failure";
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={cfg} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not open chat.");
+    expect(screen.queryByText("Chat not found")).not.toBeInTheDocument();
   });
 
   // The honest case stays honest: a conversation trashed from Chat History remains in the list

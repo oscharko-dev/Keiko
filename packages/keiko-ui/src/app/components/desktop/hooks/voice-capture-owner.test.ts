@@ -4,26 +4,28 @@ import {
   releaseVoiceCapture,
   resetVoiceCaptureOwnerForTests,
   subscribeVoiceCaptureOwner,
+  voiceCaptureLeaseAvailable,
   voiceCaptureOwnerSnapshot,
 } from "./voice-capture-owner";
 
 afterEach(() => resetVoiceCaptureOwnerForTests());
 
 describe("voice capture owner", () => {
-  it("allows multiple capture leases for one chat and blocks every other chat", () => {
+  it("allows one idempotent lease and blocks every overlapping capture mode", () => {
     const dialogueLease = Symbol("dialogue");
     const dictationLease = Symbol("dictation");
     const otherChatLease = Symbol("other-chat");
 
+    expect(voiceCaptureLeaseAvailable("chat-a", dialogueLease)).toBe(true);
     expect(claimVoiceCapture("chat-a", dialogueLease)).toBe(true);
-    expect(claimVoiceCapture("chat-a", dictationLease)).toBe(true);
+    expect(claimVoiceCapture("chat-a", dialogueLease)).toBe(true);
+    expect(voiceCaptureLeaseAvailable("chat-a", dialogueLease)).toBe(true);
+    expect(voiceCaptureLeaseAvailable("chat-a", dictationLease)).toBe(false);
+    expect(claimVoiceCapture("chat-a", dictationLease)).toBe(false);
     expect(claimVoiceCapture("chat-b", otherChatLease)).toBe(false);
 
     releaseVoiceCapture(dialogueLease);
-    expect(voiceCaptureOwnerSnapshot()).toBe("chat-a");
-    expect(claimVoiceCapture("chat-b", otherChatLease)).toBe(false);
-
-    releaseVoiceCapture(dictationLease);
+    expect(voiceCaptureOwnerSnapshot()).toBeNull();
     expect(claimVoiceCapture("chat-b", otherChatLease)).toBe(true);
     expect(voiceCaptureOwnerSnapshot()).toBe("chat-b");
   });

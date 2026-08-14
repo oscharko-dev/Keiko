@@ -822,6 +822,51 @@ function projectToOpen(
   return session.projects.find((project): boolean => project.path === projectPath);
 }
 
+function useProjectRouting(
+  targetProject: ProjectWithAvailability | undefined,
+  selectionHandoffId: string | undefined,
+  session: ChatSessionApi,
+): boolean {
+  const attemptedPath = useRef<string | undefined>(undefined);
+  const attemptGeneration = useRef(0);
+  const [pendingPath, setPendingPath] = useState<string | undefined>();
+  useEffect(
+    () => (): void => {
+      attemptGeneration.current += 1;
+    },
+    [],
+  );
+  useEffect((): void => {
+    if (session.loading || selectionHandoffId !== undefined || targetProject === undefined) return;
+    if (attemptedPath.current === targetProject.path) return;
+    attemptedPath.current = targetProject.path;
+    const generation = ++attemptGeneration.current;
+    setPendingPath(targetProject.path);
+    const settle = (): void => {
+      if (attemptGeneration.current === generation) setPendingPath(undefined);
+    };
+    void session.openProject(targetProject).then(settle, settle);
+  }, [selectionHandoffId, session, targetProject]);
+  useEffect((): void => {
+    if (targetProject === undefined && pendingPath === undefined) attemptedPath.current = undefined;
+  }, [pendingPath, targetProject]);
+  return targetProject !== undefined || pendingPath !== undefined;
+}
+
+function projectRestoreFailed(
+  args: { readonly configuredProjectPath: string | undefined; readonly session: ChatSessionApi },
+  switchingProject: boolean,
+  liveTargetPresent: boolean,
+): boolean {
+  return (
+    args.configuredProjectPath !== undefined &&
+    args.session.activeProject?.path === args.configuredProjectPath &&
+    !switchingProject &&
+    args.session.error !== undefined &&
+    !liveTargetPresent
+  );
+}
+
 function useBoundChatRouting(args: {
   readonly chatId: string | undefined;
   readonly configuredProjectPath: string | undefined;
@@ -840,6 +885,12 @@ function useBoundChatRouting(args: {
     updateCfg: args.updateCfg,
   });
   const targetProject = projectToOpen(legacyProject.path, session);
+  const switchingProject = useProjectRouting(targetProject, selectionHandoffId, session);
+  const liveTargetPresent = session.chats.some(
+    (chat): boolean => chat.id === chatId && chat.status !== "closed",
+  );
+  const lookupFailed =
+    legacyProject.failed || projectRestoreFailed(args, switchingProject, liveTargetPresent);
   useEffect((): void => {
     if (session.loading || selectionHandoffId !== undefined || chatId === undefined) return;
     if (activeTarget?.id === chatId) return;
@@ -848,24 +899,19 @@ function useBoundChatRouting(args: {
     );
     if (target !== undefined) void session.openChat(target);
   }, [activeTarget?.id, chatId, selectionHandoffId, session]);
-  useEffect((): void => {
-    if (session.loading || selectionHandoffId !== undefined || targetProject === undefined) return;
-    void session.openProject(targetProject);
-  }, [selectionHandoffId, session, targetProject]);
-  const switchingProject = targetProject !== undefined;
   const targetMissing = boundChatTargetMissing({
     activeTargetId: activeTarget?.id,
     chatId,
     legacyProjectPending: legacyProject.pending,
-    lookupFailed: legacyProject.failed,
-    liveTargetPresent: session.chats.some((chat) => chat.id === chatId && chat.status !== "closed"),
+    lookupFailed,
+    liveTargetPresent,
     loading: session.loading,
     selectionHandoffId,
     switchingProject,
   });
   return {
     activeTarget,
-    lookupFailed: legacyProject.failed,
+    lookupFailed,
     resolvingLegacyProject: legacyProject.pending,
     switchingProject,
     targetMissing,

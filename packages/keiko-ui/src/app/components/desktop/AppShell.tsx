@@ -91,6 +91,17 @@ import styles from "./AppShell.module.css";
 const APP_BOOT_RECOVERY_RELOAD_KEY = "keiko.app-boot-recovery-reload-count";
 const EMPTY_SHELL_SHORTCUT_STATE: ShellShortcutState = { labels: new Map(), bindings: [] };
 
+function validProjectPath(value: Cfg[string]): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function newChatProjectCfg(cfg: Cfg, activeProjectPath: string | undefined): Cfg {
+  const configuredProjectPath = validProjectPath(cfg["projectPath"]);
+  const selectedProjectPath = validProjectPath(activeProjectPath);
+  const projectPath = configuredProjectPath ?? selectedProjectPath;
+  return cfg["projectPath"] === undefined && projectPath === undefined ? {} : { projectPath };
+}
+
 export function prepareNewWindowCfg(
   type: WindowType,
   cfg: Cfg,
@@ -100,9 +111,7 @@ export function prepareNewWindowCfg(
   return type === "chat"
     ? {
         ...cfg,
-        ...(cfg["projectPath"] === undefined && activeProjectPath !== undefined
-          ? { projectPath: activeProjectPath }
-          : {}),
+        ...newChatProjectCfg(cfg, activeProjectPath),
         chatId: undefined,
         selectionHandoffId: undefined,
         newChatRequestId,

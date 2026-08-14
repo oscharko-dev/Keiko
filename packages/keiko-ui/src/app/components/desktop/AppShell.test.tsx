@@ -48,4 +48,21 @@ describe("prepareNewWindowCfg", (): void => {
       ),
     ).toMatchObject({ projectPath: "/explicit" });
   });
+
+  it("replaces an empty project scope with the project selected by the initiating shell", (): void => {
+    expect(
+      prepareNewWindowCfg(
+        "chat",
+        { title: "Project B", projectPath: "" },
+        "request-project-b",
+        "/repo-b",
+      ),
+    ).toMatchObject({ projectPath: "/repo-b" });
+  });
+
+  it("removes an empty project scope when no selected project is available", (): void => {
+    expect(
+      prepareNewWindowCfg("chat", { title: "Unscoped", projectPath: "" }, "request-unscoped"),
+    ).toMatchObject({ projectPath: undefined });
+  });
 });

@@ -28,7 +28,7 @@ import {
   releaseVoiceCapture,
   resetVoiceCaptureOwnerForTests,
   subscribeVoiceCaptureOwner,
-  voiceCaptureOwnerSnapshot,
+  voiceCaptureLeaseAvailable,
 } from "./voice-capture-owner";
 
 export const VOICE_PERSONA_STORAGE_KEY = "keiko.voice.dialog.persona";
@@ -55,7 +55,7 @@ export interface VoiceDialogMode {
   readonly selectPersona: (persona: VoicePersona) => void;
   // Whether the user has entered spoken dialogue. Always false while unavailable.
   readonly active: boolean;
-  readonly enter: () => void;
+  readonly enter: () => boolean;
   readonly leave: () => void;
 }
 
@@ -100,10 +100,10 @@ export function useVoiceDialogMode(options: UseVoiceDialogModeOptions): VoiceDia
   const internalOwner = useId();
   const owner = options.captureOwner ?? internalOwner;
   const leaseRef = useRef(Symbol("voice-dialogue-capture"));
-  const currentOwner = useSyncExternalStore(
+  const captureAvailable = useSyncExternalStore(
     subscribeVoiceCaptureOwner,
-    voiceCaptureOwnerSnapshot,
-    voiceCaptureOwnerSnapshot,
+    () => voiceCaptureLeaseAvailable(owner, leaseRef.current),
+    () => voiceCaptureLeaseAvailable(owner, leaseRef.current),
   );
 
   // The personas are taken straight from the capability (already sorted canonically by the contract).
@@ -123,7 +123,7 @@ export function useVoiceDialogMode(options: UseVoiceDialogModeOptions): VoiceDia
     capability,
     realtimeVoiceTransportSupported(),
   ).offered;
-  const available = deploymentAvailable && (currentOwner === null || currentOwner === owner);
+  const available = deploymentAvailable && captureAvailable;
 
   const [persona, setPersona] = useState<VoicePersona>(
     () => readVoicePersonaPreference(availablePersonas) ?? VOICE_PERSONAS[0]!,
@@ -191,12 +191,14 @@ export function useVoiceDialogMode(options: UseVoiceDialogModeOptions): VoiceDia
     [availablePersonas],
   );
 
-  const enter = useCallback(() => {
+  const enter = useCallback((): boolean => {
     // Fail-closed: entering is a no-op when no dialogue is offered, so the switch can never start a
     // session the deployment cannot hold.
     if (deploymentAvailable && claimVoiceCapture(owner, leaseRef.current)) {
       setActive(true);
+      return true;
     }
+    return false;
   }, [deploymentAvailable, owner]);
 
   const leave = useCallback(() => {
