@@ -20,6 +20,10 @@ import {
   type GroundingPlan,
   type PromptEnhancementRequest,
 } from "./index.js";
+// Imported from the producing module, not re-exported through index.js: these tables are internal
+// to the prompt-enhancer pair and adding them to the package's public surface would be a surface
+// change this fix does not need.
+import { ASSUMPTION_TEMPLATES, CLARIFICATION_TEMPLATES } from "./prompt-enhancer-analyzer.js";
 
 function validRequest(): PromptEnhancementRequest {
   return {
@@ -206,6 +210,29 @@ describe("validatePromptTaskAnalysis", () => {
 
   it("accepts an analyzer-produced analysis", () => {
     expect(validatePromptTaskAnalysis(analysis).ok).toBe(true);
+  });
+
+  // KEIKO-0249 / KEIKO-1025: the validator compared the analyzer's clarification/assumption strings
+  // against its OWN copy of the template tables. Two copies of the same constants can drift, and
+  // when they do the validator rejects the analyzer's own output — a failure neither copy can
+  // detect, because catching it requires the two to be the same object. They are now one import;
+  // this exercises the comparison for every topic the analyzer can emit rather than only the topics
+  // the default fixture happens to trigger.
+  it("accepts an analyzer-produced analysis for every missing-context topic it can emit", () => {
+    const sparse = analyzePrompt({
+      ...validRequest(),
+      rawPrompt: "do it",
+    });
+    expect(sparse.missingContext.length).toBeGreaterThan(0);
+    expect(validatePromptTaskAnalysis(sparse).ok).toBe(true);
+    // An item is either a clarification (question) or an assumption (statement), never both.
+    for (const item of sparse.missingContext) {
+      if (item.kind === "clarification") {
+        expect(item.question).toBe(CLARIFICATION_TEMPLATES[item.topic]);
+      } else {
+        expect(item.statement).toBe(ASSUMPTION_TEMPLATES[item.topic]);
+      }
+    }
   });
 
   it("round-trips an analysis through JSON and still validates", () => {

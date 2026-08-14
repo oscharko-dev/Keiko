@@ -66,6 +66,7 @@ import {
   validatePromptSafetyAssessment,
   type PromptSafetyAssessment,
 } from "./prompt-enhancer-safety.js";
+import { ASSUMPTION_TEMPLATES, CLARIFICATION_TEMPLATES } from "./prompt-enhancer-analyzer.js";
 
 // ─── Result types ────────────────────────────────────────────────────────────────
 export interface ValidationOk<T> {
@@ -165,26 +166,6 @@ interface ValidCitationShape {
   readonly discipline: (typeof CITATION_DISCIPLINES)[number];
   readonly granularity: (typeof CITATION_GRANULARITIES)[number];
 }
-
-const CLARIFICATION_TEMPLATES: Readonly<Record<string, string>> = {
-  subject: "What specific subject or task should this prompt address?",
-  scope: "Which part of the work should the task focus on?",
-  audience: "Who is the intended audience for the output?",
-  "output-format": "What output format is expected (for example JSON, a table, or prose)?",
-  constraints: "Are there language, framework, or length constraints to honor?",
-  "data-source": "Which files, documents, or sources should ground the answer?",
-  "success-criteria": "What defines a successful outcome for this task?",
-};
-
-const ASSUMPTION_TEMPLATES: Readonly<Record<string, string>> = {
-  subject: "Assuming the broadest reasonable interpretation of the requested subject.",
-  scope: "Assuming the task applies to the most relevant available scope.",
-  audience: "Assuming a general professional audience.",
-  "output-format": "Assuming a structured format appropriate to the task.",
-  constraints: "Assuming no constraints beyond standard best practices.",
-  "data-source": "Assuming the answer should rely only on supplied context, with gaps flagged.",
-  "success-criteria": "Assuming correctness and completeness are the primary success criteria.",
-};
 
 // ─── Pure predicates ─────────────────────────────────────────────────────────────
 const isRecord = (value: unknown): value is Record<string, unknown> =>
