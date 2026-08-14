@@ -33,6 +33,28 @@ describe("embedding profile compatibility", () => {
     expect(embeddingProfileKey(profile)).toContain("text-embedding-3-small");
   });
 
+  // KEIKO-0418: a model revision IS a different embedding space — re-embedding the same text under a
+  // new revision of the same modelId produces vectors that are not comparable with the old ones.
+  // With modelRevision outside both the comparison and the profile key, two revisions of one model
+  // compared as identical, so no reindex was recommended and stale vectors were searched against
+  // fresh queries.
+  it("treats two revisions of the same model as different embedding spaces", () => {
+    const left = hardenedProfile({ modelRevision: "2024-05" });
+    const right = hardenedProfile({ modelRevision: "2025-01" });
+
+    expect(compareEmbeddingProfiles(left, right).reason).toBe("model-revision-mismatch");
+    expect(compareEmbeddingProfiles(left, right).compatible).toBe(false);
+    expect(embeddingProfileKey(left)).not.toBe(embeddingProfileKey(right));
+  });
+
+  it("distinguishes a revisioned profile from an unversioned one", () => {
+    const versioned = hardenedProfile({ modelRevision: "2025-01" });
+    const unversioned = hardenedProfile();
+
+    expect(compareEmbeddingProfiles(versioned, unversioned).reason).toBe("model-revision-mismatch");
+    expect(embeddingProfileKey(versioned)).not.toBe(embeddingProfileKey(unversioned));
+  });
+
   it("treats identical hardened profiles as same and query-embedding eligible", () => {
     const profile = hardenedProfile();
     const decision = compareEmbeddingProfiles(profile, { ...profile });

@@ -40,6 +40,7 @@ export type EmbeddingProfileCompatibilityReason =
   | "missing-right-profile"
   | "provider-mismatch"
   | "model-mismatch"
+  | "model-revision-mismatch"
   | "model-family-mismatch"
   | "dimension-mismatch"
   | "metric-mismatch"
@@ -63,6 +64,7 @@ export const EMBEDDING_PROFILE_COMPATIBILITY_REASONS: readonly EmbeddingProfileC
     "missing-right-profile",
     "provider-mismatch",
     "model-mismatch",
+    "model-revision-mismatch",
     "model-family-mismatch",
     "dimension-mismatch",
     "metric-mismatch",
@@ -118,6 +120,14 @@ interface ProfileComparison {
 const PROFILE_COMPARISONS: readonly ProfileComparison[] = [
   { reason: "provider-mismatch", matches: (left, right) => left.provider === right.provider },
   { reason: "model-mismatch", matches: (left, right) => left.modelId === right.modelId },
+  // A model revision is a different embedding space: re-embedding the same text under a new revision
+  // of the same modelId yields vectors that are not comparable with the old ones. Leaving it out of
+  // both the comparison and the key made two revisions of one model compare as the SAME space, so a
+  // reindex was never recommended and stale vectors were silently searched against fresh queries.
+  {
+    reason: "model-revision-mismatch",
+    matches: (left, right) => left.modelRevision === right.modelRevision,
+  },
   {
     reason: "model-family-mismatch",
     matches: (left, right) => left.modelFamily === right.modelFamily,
@@ -203,6 +213,7 @@ export function embeddingProfileKey(profile: EmbeddingProfileIdentity): string {
   return [
     profile.provider,
     profile.modelId,
+    profile.modelRevision ?? "unversioned",
     profile.modelFamily,
     String(profile.vectorDimensions),
     profile.vectorMetric,

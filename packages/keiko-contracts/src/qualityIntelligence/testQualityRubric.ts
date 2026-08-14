@@ -13,6 +13,21 @@ export const TEST_QUALITY_RUBRIC_DIMENSIONS = [
 
 export type TestQualityDimensionName = (typeof TEST_QUALITY_RUBRIC_DIMENSIONS)[number];
 
+/**
+ * Upper bound on every model-supplied rationale string. The schema is the enforcement point for a
+ * MODEL's response, so an unbounded string here is an unbounded allocation driven by the model's
+ * output — and these rationales are carried into evidence.
+ */
+export const TEST_QUALITY_RATIONALE_MAX_CHARS = 2_000;
+
+export const TEST_QUALITY_SCORE_MIN = 0;
+export const TEST_QUALITY_SCORE_MAX = 100;
+
+// Every bound the surrounding types DOCUMENT is declared here too. The schema is what the provider
+// enforces on the model's structured output, so a bound that lives only in a TypeScript comment
+// ("Integer in [0, 100]") is not enforced anywhere at runtime: a score of -5 or 10_000, a
+// dimensions array repeating one dimension a thousand times, and a megabyte rationale all satisfied
+// the previous schema.
 export const TEST_QUALITY_JUDGE_RESPONSE_SCHEMA: Readonly<Record<string, unknown>> = Object.freeze({
   type: "object",
   additionalProperties: false,
@@ -20,18 +35,24 @@ export const TEST_QUALITY_JUDGE_RESPONSE_SCHEMA: Readonly<Record<string, unknown
   properties: {
     dimensions: {
       type: "array",
+      minItems: TEST_QUALITY_RUBRIC_DIMENSIONS.length,
+      maxItems: TEST_QUALITY_RUBRIC_DIMENSIONS.length,
       items: {
         type: "object",
         additionalProperties: false,
         required: ["name", "score", "rationale"],
         properties: {
           name: { type: "string", enum: [...TEST_QUALITY_RUBRIC_DIMENSIONS] },
-          score: { type: "integer" },
-          rationale: { type: "string" },
+          score: {
+            type: "integer",
+            minimum: TEST_QUALITY_SCORE_MIN,
+            maximum: TEST_QUALITY_SCORE_MAX,
+          },
+          rationale: { type: "string", maxLength: TEST_QUALITY_RATIONALE_MAX_CHARS },
         },
       },
     },
-    overallRationale: { type: "string" },
+    overallRationale: { type: "string", maxLength: TEST_QUALITY_RATIONALE_MAX_CHARS },
   },
 });
 
