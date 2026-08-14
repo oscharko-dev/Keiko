@@ -103,12 +103,13 @@ function isUnknownArray(value: unknown): value is readonly unknown[] {
 
 function tryParseJsonRecord(raw: string | null): Record<string, unknown> | null {
   if (raw === null) return null;
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    return isRecord(parsed) ? parsed : null;
+    parsed = JSON.parse(raw);
   } catch {
-    return null;
+    throw new TypeError("Invalid persisted workspace JSON.");
   }
+  return isRecord(parsed) ? parsed : null;
 }
 
 function parseJsonRecord(raw: string, context: string): Record<string, unknown> {

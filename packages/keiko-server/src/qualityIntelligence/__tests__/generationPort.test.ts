@@ -753,6 +753,7 @@ describe("createQiGenerationPort.generate — determinism-first parameters", () 
       "tags",
       "derivedFromEvidenceIndexes",
     ]);
+    expect(candidateSchema.required).toHaveLength(expectedCandidateFields.size);
     expect(new Set(candidateSchema.required)).toEqual(expectedCandidateFields);
     expect(new Set(Object.keys(candidateSchema.properties))).toEqual(expectedCandidateFields);
     expect(calls[0]?.request.temperature).toBe(0);

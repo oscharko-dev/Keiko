@@ -327,9 +327,9 @@ function ProjectRow({
 }
 
 export function ProjectPanel({
-  openChatWindow = (): void => undefined,
+  openChatWindow,
 }: {
-  readonly openChatWindow?: (chat: Chat) => void;
+  readonly openChatWindow: (chat: Chat) => void;
 }): ReactNode {
   const session = useChatSessionCatalog();
   const actions = useChatSessionActions();

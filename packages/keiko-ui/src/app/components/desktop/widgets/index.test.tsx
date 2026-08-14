@@ -774,6 +774,57 @@ describe("workspace widget renderer registry", () => {
     await waitFor(() => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
   });
 
+  it("creates a chat after routing a selection into an empty originating project", async () => {
+    const ctx = makeCtx();
+    const originRoot = "/workspace/empty-origin";
+    const wrongProject = { path: "/workspace/wrong", available: true };
+    const originProject = { path: originRoot, available: true };
+    const createdChat = {
+      id: "chat-created-after-routing",
+      title: "Created chat",
+      status: "open" as const,
+      projectPath: originRoot,
+    };
+    chatSessionMock.activeProject = wrongProject;
+    chatSessionMock.activeChat = undefined;
+    chatSessionMock.projects = [wrongProject, originProject];
+    chatSessionMock.chats = [];
+    chatSessionMock.openProject.mockImplementation(async (project) => {
+      chatSessionMock.activeProject = project;
+      chatSessionMock.activeChat = undefined;
+      chatSessionMock.chats = [];
+    });
+    chatSessionMock.openNewChat.mockImplementation(async () => {
+      chatSessionMock.activeChat = createdChat;
+      chatSessionMock.chats = [createdChat];
+      return createdChat;
+    });
+    const view = render(
+      <>{WIN_TYPES.editor.render({ root: originRoot, file: "src/app.ts" }, ctx)}</>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Ask editor selection" }));
+    const openCfg = ctx.openWindow.mock.calls.at(-1)?.[1] as AppWindow["cfg"] | undefined;
+    const selectionHandoffId = openCfg?.["selectionHandoffId"];
+    if (typeof selectionHandoffId !== "string") throw new Error("selection handoff id missing");
+    view.rerender(<>{WIN_TYPES.chat.render({ selectionHandoffId }, ctx)}</>);
+
+    await waitFor((): void =>
+      expect(chatSessionMock.openProject).toHaveBeenCalledWith(originProject),
+    );
+    await waitFor((): void =>
+      expect(chatSessionMock.openNewChat).toHaveBeenCalledWith(originProject, undefined),
+    );
+    await waitFor((): void => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: createdChat.id,
+      projectPathPrivacy: "omit",
+      title: createdChat.title,
+      selectionHandoffId: undefined,
+      newChatRequestId: undefined,
+    });
+  });
+
   it("keeps an asynchronous selection handoff through a StrictMode effect remount", async (): Promise<void> => {
     const ctx = makeCtx();
     const originRoot = "/workspace/origin";

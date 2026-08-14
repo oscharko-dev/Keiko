@@ -297,7 +297,7 @@ const NO_CONVERSATION_MODEL_MESSAGE =
 const DEFAULT_CONVERSATION_MEMORY_USER_ID = "local-operator";
 const CHAT_UPSERT_EVENT = "keiko:chat-upsert";
 const CHAT_DELETE_EVENT = "keiko:chat-delete";
-const RUN_SUMMARY_SYNC_INTERVAL_MS = 1_000;
+export const RUN_SUMMARY_SYNC_INTERVAL_MS = 1_000;
 const RUN_SUMMARY_SYNC_MAX_ATTEMPTS = 120;
 const RUN_SUMMARY_SYNC_MAX_INTERVAL_MS = 15_000;
 const CANONICAL_VOICE_QUEUE_REGULAR_MAX_ITEMS = 128;
@@ -679,6 +679,14 @@ function hasGroundingScope(chat: Chat): boolean {
     chat.localKnowledgeScope !== undefined ||
     (chat.localKnowledgeScopes !== undefined && chat.localKnowledgeScopes.length > 0)
   );
+}
+
+function clearLatestChatContext(
+  setLatestGrounded: (value: undefined) => void,
+  setLatestMemory: (value: undefined) => void,
+): void {
+  setLatestGrounded(undefined);
+  setLatestMemory(undefined);
 }
 
 export type ChatSessionApi = UseChatSessionResult;
@@ -2899,7 +2907,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
               activeProject: project,
               activeChat: undefined,
             }));
-            setLatestMemory(undefined);
+            clearLatestChatContext(setLatestGrounded, setLatestMemory);
           }
           return;
         }

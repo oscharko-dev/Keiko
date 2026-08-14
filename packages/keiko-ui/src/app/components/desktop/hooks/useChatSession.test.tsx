@@ -32,6 +32,7 @@ import {
   notifyChatDeleted,
   notifyChatUpsert,
   pickChatModelId,
+  RUN_SUMMARY_SYNC_INTERVAL_MS,
   resolveSelectedModelId,
   type SendMessageOutcome,
   type ChatSessionApi,
@@ -570,7 +571,9 @@ describe("useChatSession bootstrap", () => {
     await vi.waitFor(() => expect(fetchRunReport).toHaveBeenCalledOnce());
 
     first.unmount();
-    await vi.waitFor(() => expect(fetchRunReport).toHaveBeenCalledTimes(2), { timeout: 2_000 });
+    await vi.waitFor(() => expect(fetchRunReport).toHaveBeenCalledTimes(2), {
+      timeout: RUN_SUMMARY_SYNC_INTERVAL_MS + 1_000,
+    });
     await vi.waitFor(() => expect(second.result.current.messages).toEqual([completedSummary]));
     expect(patchChatMessage).toHaveBeenCalledOnce();
   });
@@ -780,14 +783,27 @@ describe("useChatSession bootstrap", () => {
   });
 
   it("does not create a replacement chat when an isolated window opens an empty project", async () => {
+    const groundedChat = chat({
+      id: "chat-boot",
+      selectedModel: "chat-live",
+      connectedScopes: [
+        { kind: "workspace-root", root: "/repo", relativePaths: [], connectedAtMs: 1 },
+      ],
+    });
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
-    vi.mocked(fetchChats).mockResolvedValue({
-      chats: [chat({ id: "chat-boot", selectedModel: "chat-live" })],
-    });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [groundedChat] });
     vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(askGrounded).mockResolvedValue({
+      answer: "grounded reply",
+      citations: [],
+    } as unknown as Awaited<ReturnType<typeof askGrounded>>);
     const { result } = renderHook(() => useChatSession({ autoCreate: false }));
     await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async (): Promise<void> => {
+      await result.current.sendMessage({ text: "Ground this first." });
+    });
+    expect(result.current.latestGrounded).toBeDefined();
     vi.mocked(fetchChats).mockResolvedValueOnce({ chats: [] });
 
     await act(async (): Promise<void> => {
@@ -797,6 +813,7 @@ describe("useChatSession bootstrap", () => {
     expect(result.current.activeProject?.path).toBe("/empty");
     expect(result.current.activeChat).toBeUndefined();
     expect(result.current.messages).toEqual([]);
+    expect(result.current.latestGrounded).toBeUndefined();
     expect(createDesktopChat).not.toHaveBeenCalled();
   });
 });

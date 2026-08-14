@@ -35,6 +35,11 @@ export interface ChatBindingTarget {
   readonly isCurrent: () => boolean;
 }
 
+export interface ChatUnbindTarget {
+  readonly conversationId: string;
+  readonly projectPath: string | undefined;
+}
+
 export type OpenEditorFileResult =
   | { readonly ok: true; readonly windowId: string }
   | { readonly ok: false; readonly message: string };

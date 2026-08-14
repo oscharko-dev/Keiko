@@ -710,7 +710,7 @@
       "count": 2
     },
     "max-lines-per-function": {
-      "count": 6
+      "count": 5
     }
   },
   "src/app/components/desktop/widgets/cards/AgentConflictBanner.test.tsx": {

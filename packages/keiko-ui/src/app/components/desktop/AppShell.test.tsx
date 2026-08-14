@@ -65,4 +65,26 @@ describe("prepareNewWindowCfg", (): void => {
       prepareNewWindowCfg("chat", { title: "Unscoped", projectPath: "" }, "request-unscoped"),
     ).toMatchObject({ projectPath: undefined });
   });
+
+  it("removes a malformed project scope when no valid selected project is available", (): void => {
+    expect(
+      prepareNewWindowCfg(
+        "chat",
+        { title: "Malformed", projectPath: ["hostile"] },
+        "request-malformed",
+        "",
+      ),
+    ).toMatchObject({ projectPath: undefined });
+  });
+
+  it("replaces a malformed project scope with the valid selected project", (): void => {
+    expect(
+      prepareNewWindowCfg(
+        "chat",
+        { title: "Malformed", projectPath: 42 },
+        "request-selected",
+        "/selected",
+      ),
+    ).toMatchObject({ projectPath: "/selected" });
+  });
 });

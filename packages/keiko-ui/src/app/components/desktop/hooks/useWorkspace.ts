@@ -18,6 +18,7 @@ import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../
 import { clampWorkspaceWindowOrigin } from "../windowRecovery";
 import type {
   ChatBindingTarget,
+  ChatUnbindTarget,
   UseWorkspaceResult,
   ViewportWorld,
   WorkspaceApi,
@@ -37,6 +38,7 @@ import {
   boundConnectorScopeOf,
   connectorChatBind,
   boundScopeOf,
+  chatUnbindTarget,
   filesChatBindScope,
   isWorkspaceWindowSelectable,
   makeConnectActions,
@@ -1551,7 +1553,9 @@ export interface UseWorkspaceOptions {
         target?: ChatBindingTarget,
       ) => boolean | Promise<boolean>)
     | undefined;
-  readonly onScopeUnbind?: ((chatWindowId: string, scope: ChatConnectedScope) => void) | undefined;
+  readonly onScopeUnbind?:
+    | ((chatWindowId: string, scope: ChatConnectedScope, target?: ChatUnbindTarget) => void)
+    | undefined;
   readonly onConnectorBind?:
     | ((
         chatWindowId: string,
@@ -1560,7 +1564,8 @@ export interface UseWorkspaceOptions {
       ) => boolean | Promise<boolean>)
     | undefined;
   readonly onConnectorUnbind?:
-    ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => void) | undefined;
+    | ((chatWindowId: string, scope: ChatLocalKnowledgeScope, target?: ChatUnbindTarget) => void)
+    | undefined;
 }
 
 // S3776 — closeWithTeardown's per-connection unbind logic (below) used to run inside a
@@ -1601,19 +1606,25 @@ function unbindClosedWindowConnection(
   closedWin: AppWindow,
   conn: Connection,
   winsById: ReadonlyMap<string, AppWindow>,
-  unbindScope: (chatWindowId: string, scope: ChatConnectedScope) => void,
-  unbindConnectorScope: (chatWindowId: string, scope: ChatLocalKnowledgeScope) => void,
+  unbindScope: (chatWindowId: string, scope: ChatConnectedScope, target?: ChatUnbindTarget) => void,
+  unbindConnectorScope: (
+    chatWindowId: string,
+    scope: ChatLocalKnowledgeScope,
+    target?: ChatUnbindTarget,
+  ) => void,
 ): void {
   const otherId = connectionOtherEndpoint(conn, closedWindowId);
   if (otherId === null) return;
   const other = winsById.get(otherId);
   if (other === undefined) return;
   const chatWindowId = connectionChatWindowId(conn, closedWin, other);
+  const chatWindow = chatWindowId === closedWin.id ? closedWin : winsById.get(chatWindowId ?? "");
+  const target = chatUnbindTarget(chatWindow);
   const scope = connectionUnbindScope(conn, closedWin, other);
-  if (scope !== null && chatWindowId !== null) unbindScope(chatWindowId, scope);
+  if (scope !== null && chatWindowId !== null) unbindScope(chatWindowId, scope, target);
   const connectorScope = boundConnectorScopeOf(conn) ?? connectorChatBind(closedWin, other);
   if (connectorScope !== null && chatWindowId !== null) {
-    unbindConnectorScope(chatWindowId, connectorScope);
+    unbindConnectorScope(chatWindowId, connectorScope, target);
   }
 }
 
@@ -1667,9 +1678,12 @@ export function useWorkspace(
     ): boolean | Promise<boolean> => onScopeBindRef.current?.(chatWindowId, scope, target) ?? true,
     [],
   );
-  const stableScopeUnbind = useCallback((chatWindowId: string, scope: ChatConnectedScope): void => {
-    onScopeUnbindRef.current?.(chatWindowId, scope);
-  }, []);
+  const stableScopeUnbind = useCallback(
+    (chatWindowId: string, scope: ChatConnectedScope, target?: ChatUnbindTarget): void => {
+      onScopeUnbindRef.current?.(chatWindowId, scope, target);
+    },
+    [],
+  );
   const stableConnectorBind = useCallback(
     (
       chatWindowId: string,
@@ -1680,8 +1694,8 @@ export function useWorkspace(
     [],
   );
   const stableConnectorUnbind = useCallback(
-    (chatWindowId: string, scope: ChatLocalKnowledgeScope): void => {
-      onConnectorUnbindRef.current?.(chatWindowId, scope);
+    (chatWindowId: string, scope: ChatLocalKnowledgeScope, target?: ChatUnbindTarget): void => {
+      onConnectorUnbindRef.current?.(chatWindowId, scope, target);
     },
     [],
   );

@@ -1496,6 +1496,8 @@ describe("ChatWindowSessionHost target missing", () => {
   });
 
   it("surfaces a legacy project lookup failure without caching it as deletion", async () => {
+    const reportError = vi.fn();
+    vi.stubGlobal("reportError", reportError);
     const projectA: ProjectWithAvailability = {
       path: "/repo-a",
       name: "Repo A",
@@ -1524,6 +1526,31 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not open chat.");
     expect(screen.queryByText("Chat not found")).not.toBeInTheDocument();
     expect(chatSessionState.openProject).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledOnce();
+    const reported = reportError.mock.calls[0]?.[0];
+    expect(reported).toBeInstanceOf(Error);
+    expect((reported as Error).message).toMatch(
+      /^Chat project lookup failed\. Correlation ID: [A-Za-z0-9._-]{8,128}$/u,
+    );
+    expect((reported as Error).message).not.toContain("temporary lookup failure");
+  });
+
+  it("surfaces a failed empty project catalog without claiming deletion", async () => {
+    chatSessionState.activeProject = undefined;
+    chatSessionState.activeChat = undefined;
+    chatSessionState.projects = [];
+    chatSessionState.chats = [];
+    chatSessionState.loading = false;
+    chatSessionState.error = "temporary bootstrap failure";
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: "legacy-chat" }} ctx={context()} />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not open chat.");
+    expect(screen.queryByText("Chat not found")).not.toBeInTheDocument();
   });
 
   it("restores a persisted chat from its owning project without replacing its binding", async () => {

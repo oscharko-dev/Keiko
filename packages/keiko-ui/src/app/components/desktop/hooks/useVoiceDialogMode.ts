@@ -173,12 +173,13 @@ export function useVoiceDialogMode(options: UseVoiceDialogModeOptions): VoiceDia
     }
   }, [deploymentAvailable, owner]);
 
-  useEffect(
-    () => (): void => {
-      releaseVoiceCapture(leaseRef.current);
-    },
-    [owner],
-  );
+  useEffect((): (() => void) => {
+    const lease = leaseRef.current;
+    setActive(false);
+    return (): void => {
+      releaseVoiceCapture(lease);
+    };
+  }, [owner]);
 
   const selectPersona = useCallback(
     (next: VoicePersona) => {

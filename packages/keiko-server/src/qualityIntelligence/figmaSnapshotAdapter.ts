@@ -216,8 +216,6 @@ const VISION_RESPONSE_FORMAT = {
       hints: {
         type: "array",
         items: { type: "string" },
-        minItems: 0,
-        maxItems: MAX_VISION_HINTS,
       },
     },
   },
@@ -239,7 +237,8 @@ function buildVisionRequest(
         content:
           "You are an additive UI test-generation vision pass. Use the image only to recover " +
           "semantics missing from the structural baseline. Do not contradict, replace, or restate " +
-          'the baseline. Return concise visual hints as JSON: { "hints": string[] }. Return an ' +
+          "the baseline. Return concise visual hints as JSON, for example " +
+          '{ "hints": ["hint"] }. Return an ' +
           "empty hints array when the baseline is already complete.",
       },
       {

@@ -858,9 +858,9 @@ describe("ChatWindow memory disclosure", () => {
     expect(screen.getByText(/Used 42 of 1200 MemoriaViva tokens/i)).toBeInTheDocument();
   });
 
-  it("renders the activation and per-chat settings controls before the first response", async () => {
+  it("keeps an explicitly activated chat enabled before its first response", async () => {
     const user = userEvent.setup();
-    renderWindow(makeSession({ activeChat: makeChat() }));
+    renderWindow(makeSession({ activeChat: makeChat(), memoryEnabled: true }));
 
     const activationButton = screen.getByRole("button", {
       name: "Disable MemoriaViva for this chat",

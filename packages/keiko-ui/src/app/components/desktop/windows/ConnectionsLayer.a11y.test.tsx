@@ -207,4 +207,30 @@ describe("ConnectionsLayer per-chat activity", () => {
     vi.runOnlyPendingTimers();
     vi.useRealTimers();
   });
+
+  it("clears a grounded channel immediately when its activity is cleared", async () => {
+    const activity: ChatWindowGroundingActivity = {
+      groundingKind: "connected-context",
+      contextPack: { usage: { filesRead: 4, excerptBytes: 512 } },
+    };
+    const view = render(
+      <>
+        <ChatActivity id="chat-1" sending={false} latest={activity} />
+        <ConnectionsLayer wins={wins} conns={conns} connecting={null} api={api()} />
+      </>,
+    );
+    expect(document.querySelector("#conn-path-c-1")).toHaveAttribute("data-active", "true");
+
+    view.rerender(
+      <>
+        <ChatActivity id="chat-1" sending={false} />
+        <ConnectionsLayer wins={wins} conns={conns} connecting={null} api={api()} />
+      </>,
+    );
+
+    await waitFor((): void =>
+      expect(document.querySelector("#conn-path-c-1")).not.toHaveAttribute("data-active"),
+    );
+    expect(document.querySelector("#conn-path-c-1")).not.toHaveAttribute("data-intensity");
+  });
 });

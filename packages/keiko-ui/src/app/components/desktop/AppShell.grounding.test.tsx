@@ -22,19 +22,32 @@ interface WorkspaceHookOptions {
     scope: ChatConnectedScope,
     target?: ChatBindingTarget,
   ) => boolean | Promise<boolean>;
-  readonly onScopeUnbind?: (chatWindowId: string, scope: ChatConnectedScope) => void;
+  readonly onScopeUnbind?: (
+    chatWindowId: string,
+    scope: ChatConnectedScope,
+    target?: ChatUnbindTarget,
+  ) => void;
   readonly onConnectorBind?: (
     chatWindowId: string,
     scope: ChatLocalKnowledgeScope,
     target?: ChatBindingTarget,
   ) => boolean | Promise<boolean>;
-  readonly onConnectorUnbind?: (chatWindowId: string, scope: ChatLocalKnowledgeScope) => void;
+  readonly onConnectorUnbind?: (
+    chatWindowId: string,
+    scope: ChatLocalKnowledgeScope,
+    target?: ChatUnbindTarget,
+  ) => void;
 }
 
 interface ChatBindingTarget {
   readonly conversationId: string | undefined;
   readonly projectPath?: string | undefined;
   readonly isCurrent: () => boolean;
+}
+
+interface ChatUnbindTarget {
+  readonly conversationId: string;
+  readonly projectPath: string | undefined;
 }
 
 interface TestSession {
@@ -1088,6 +1101,38 @@ describe("AppShell grounding connections", () => {
       "chat-1",
       expect.arrayContaining([expect.objectContaining({ capsuleId: "cap-b" })]),
     );
+    expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(updated);
+  });
+
+  it("unbinds a detached private-project chat from its immutable close snapshot", async () => {
+    const privateScope = fileScope("/private/source");
+    const privateChat = chat({
+      id: "chat-private",
+      projectPath: "/private",
+      connectedScopes: [privateScope],
+      updatedAt: 4,
+    });
+    const updated = chat({
+      id: privateChat.id,
+      projectPath: privateChat.projectPath,
+      connectedScopes: [],
+      updatedAt: 5,
+    });
+    mocks.fetchChats.mockResolvedValueOnce({ chats: [privateChat] });
+    mocks.updateChatConnectedScopes.mockResolvedValueOnce({ chat: updated });
+    await renderMounted();
+
+    act((): void => {
+      mocks.state.workspaceOptions?.onScopeUnbind?.("closed-window", privateScope, {
+        conversationId: privateChat.id,
+        projectPath: privateChat.projectPath,
+      });
+    });
+
+    await waitFor((): void => {
+      expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(privateChat.id, null);
+    });
+    expect(mocks.fetchChats).toHaveBeenCalledWith("/private");
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(updated);
   });
 

@@ -91,11 +91,13 @@ function session(): ChatSessionApi {
   };
 }
 
+const ignoreOpenChatWindow = (): void => undefined;
+
 describe("ProjectPanel", () => {
   it("renders live projects and chats from the chat-session context", () => {
     render(
       <ChatSessionProvider value={session()}>
-        <ProjectPanel />
+        <ProjectPanel openChatWindow={ignoreOpenChatWindow} />
       </ChatSessionProvider>,
     );
 
@@ -108,7 +110,7 @@ describe("ProjectPanel", () => {
   it("exposes aria-expanded, aria-current, and chat aria-pressed for the active project (issue #644)", () => {
     render(
       <ChatSessionProvider value={session()}>
-        <ProjectPanel />
+        <ProjectPanel openChatWindow={ignoreOpenChatWindow} />
       </ChatSessionProvider>,
     );
     const projectButton = screen.getByRole("treeitem", { name: /Keiko/ });
@@ -122,7 +124,7 @@ describe("ProjectPanel", () => {
   it("wraps projects in a role=tree container (PA-03)", () => {
     render(
       <ChatSessionProvider value={session()}>
-        <ProjectPanel />
+        <ProjectPanel openChatWindow={ignoreOpenChatWindow} />
       </ChatSessionProvider>,
     );
     expect(screen.getByRole("tree", { name: "Projects" })).toBeInTheDocument();
@@ -131,7 +133,7 @@ describe("ProjectPanel", () => {
   it("project row has role=treeitem at aria-level 1 (PA-03)", () => {
     render(
       <ChatSessionProvider value={session()}>
-        <ProjectPanel />
+        <ProjectPanel openChatWindow={ignoreOpenChatWindow} />
       </ChatSessionProvider>,
     );
     const treeitem = screen.getByRole("treeitem", { name: /Keiko/ });
@@ -142,7 +144,7 @@ describe("ProjectPanel", () => {
   it("child chat row has role=treeitem at aria-level 2 with aria-selected (PA-03)", () => {
     render(
       <ChatSessionProvider value={session()}>
-        <ProjectPanel />
+        <ProjectPanel openChatWindow={ignoreOpenChatWindow} />
       </ChatSessionProvider>,
     );
     const chatItem = screen.getByRole("treeitem", { name: /Investigate shell audit/ });
@@ -153,7 +155,7 @@ describe("ProjectPanel", () => {
   it("child group has role=group (PA-03)", () => {
     render(
       <ChatSessionProvider value={session()}>
-        <ProjectPanel />
+        <ProjectPanel openChatWindow={ignoreOpenChatWindow} />
       </ChatSessionProvider>,
     );
     expect(screen.getByRole("group", { name: "Keiko" })).toBeInTheDocument();
@@ -206,7 +208,7 @@ describe("ProjectPanel", () => {
     const user = userEvent.setup();
     render(
       <ChatSessionProvider value={session()}>
-        <ProjectPanel />
+        <ProjectPanel openChatWindow={ignoreOpenChatWindow} />
       </ChatSessionProvider>,
     );
     screen.getByRole("treeitem", { name: startName }).focus();
@@ -219,7 +221,7 @@ describe("ProjectPanel", () => {
     const user = userEvent.setup();
     render(
       <ChatSessionProvider value={session()}>
-        <ProjectPanel />
+        <ProjectPanel openChatWindow={ignoreOpenChatWindow} />
       </ChatSessionProvider>,
     );
     const projectItem = screen.getByRole("treeitem", { name: /Keiko/ });
@@ -234,7 +236,7 @@ describe("ProjectPanel", () => {
     const user = userEvent.setup();
     render(
       <ChatSessionProvider value={session()}>
-        <ProjectPanel />
+        <ProjectPanel openChatWindow={ignoreOpenChatWindow} />
       </ChatSessionProvider>,
     );
     const projectItem = screen.getByRole("treeitem", { name: /Keiko/ });
@@ -264,7 +266,7 @@ describe("ProjectPanel", () => {
       <ChatSessionProvider
         value={{ ...session(), openProject, projects: [session().projects[0]!, otherProject] }}
       >
-        <ProjectPanel />
+        <ProjectPanel openChatWindow={ignoreOpenChatWindow} />
       </ChatSessionProvider>,
     );
     const other = screen.getByRole("treeitem", { name: /OtherProject/ });
@@ -284,7 +286,7 @@ describe("ProjectPanel", () => {
     const user = userEvent.setup();
     render(
       <ChatSessionProvider value={session()}>
-        <ProjectPanel />
+        <ProjectPanel openChatWindow={ignoreOpenChatWindow} />
       </ChatSessionProvider>,
     );
     const projectItem = screen.getByRole("treeitem", { name: /Keiko/ });
@@ -309,7 +311,7 @@ describe("ProjectPanel", () => {
       <ChatSessionProvider
         value={{ ...session(), projects: [session().projects[0]!, otherProject] }}
       >
-        <ProjectPanel />
+        <ProjectPanel openChatWindow={ignoreOpenChatWindow} />
       </ChatSessionProvider>,
     );
     // OtherProject starts collapsed (it is not the active project); expand it.
@@ -322,7 +324,7 @@ describe("ProjectPanel", () => {
   it("shows a no-chats message for the active project once it has none (S3358)", () => {
     render(
       <ChatSessionProvider value={{ ...session(), chats: [] }}>
-        <ProjectPanel />
+        <ProjectPanel openChatWindow={ignoreOpenChatWindow} />
       </ChatSessionProvider>,
     );
     const group = screen.getByRole("group", { name: "Keiko" });
@@ -334,7 +336,7 @@ describe("ProjectPanel", () => {
   it("gives the caret a >=24x24 CSS-px pointer target (WCAG 2.5.8)", () => {
     render(
       <ChatSessionProvider value={session()}>
-        <ProjectPanel />
+        <ProjectPanel openChatWindow={ignoreOpenChatWindow} />
       </ChatSessionProvider>,
     );
     const caret = document.querySelector<HTMLButtonElement>("button.proj-caret-btn");
@@ -350,8 +352,9 @@ describe("ProjectPanel", () => {
   it("opens a chat when its treeitem is clicked", async () => {
     const user = userEvent.setup();
     const openChatWindow = vi.fn();
+    const value = session();
     render(
-      <ChatSessionProvider value={session()}>
+      <ChatSessionProvider value={value}>
         <ProjectPanel openChatWindow={openChatWindow} />
       </ChatSessionProvider>,
     );
@@ -359,6 +362,7 @@ describe("ProjectPanel", () => {
     expect(openChatWindow).toHaveBeenCalledWith(
       expect.objectContaining({ id: "chat-1", title: "Investigate shell audit" }),
     );
+    expect(value.openChat).not.toHaveBeenCalled();
   });
 
   // #2723 (S3358): the chat-meta branchLabel span's "undefined" (null) branch — the default
@@ -372,7 +376,7 @@ describe("ProjectPanel", () => {
           chats: withoutBranch.chats.map((chat) => ({ ...chat, branchLabel: undefined })),
         }}
       >
-        <ProjectPanel />
+        <ProjectPanel openChatWindow={ignoreOpenChatWindow} />
       </ChatSessionProvider>,
     );
     const chatItem = screen.getByRole("treeitem", { name: /Investigate shell audit/ });

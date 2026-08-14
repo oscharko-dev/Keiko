@@ -42,7 +42,7 @@ import type { AppWindow, Connection, ConnectingState, View } from "../windows/ty
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
-import type { ChatBindingTarget } from "./useWorkspace.types";
+import type { ChatBindingTarget, ChatUnbindTarget } from "./useWorkspace.types";
 import {
   EDITOR_SIDEBAR_DEFAULT_WIDTH,
   EDITOR_SIDEBAR_MIN_WIDTH,
@@ -438,13 +438,21 @@ interface ConnectHarnessOverrides {
     scope: ChatConnectedScope,
     target?: ChatBindingTarget,
   ) => boolean | Promise<boolean>;
-  readonly onScopeUnbind?: (chatWindowId: string, scope: ChatConnectedScope) => void;
+  readonly onScopeUnbind?: (
+    chatWindowId: string,
+    scope: ChatConnectedScope,
+    target?: ChatUnbindTarget,
+  ) => void;
   readonly onConnectorBind?: (
     chatWindowId: string,
     scope: ChatLocalKnowledgeScope,
     target?: ChatBindingTarget,
   ) => boolean | Promise<boolean>;
-  readonly onConnectorUnbind?: (chatWindowId: string, scope: ChatLocalKnowledgeScope) => void;
+  readonly onConnectorUnbind?: (
+    chatWindowId: string,
+    scope: ChatLocalKnowledgeScope,
+    target?: ChatUnbindTarget,
+  ) => void;
 }
 
 function makeConnectHarness(
@@ -2650,6 +2658,27 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
 // Release 0.2.0 — unbind must remove the source the edge BOUND, not whatever the window's cfg
 // points at NOW (the user may have navigated the Files window / re-selected another capsule).
 describe("removeConn — unbinds the bind-time snapshot, not the current cfg", () => {
+  it("passes an immutable chat target to asynchronous unbind handlers", () => {
+    const onScopeUnbind = vi.fn();
+    const files = win("files", { resolvedRoot: "/data/docs" }, "files-1");
+    const chat = win("chat", { chatId: "chat-private", projectPath: "/private" }, "chat-1");
+    const edge: Connection = {
+      id: "files-1~chat-1",
+      a: "files-1",
+      b: "chat-1",
+      boundRoot: "/data/docs",
+    };
+    const harness = makeConnectHarness([files, chat], [edge], { onScopeUnbind });
+
+    harness.removeConn(edge.id);
+
+    expect(onScopeUnbind).toHaveBeenCalledWith(
+      "chat-1",
+      expect.objectContaining({ root: "/data/docs" }),
+      { conversationId: "chat-private", projectPath: "/private" },
+    );
+  });
+
   it("can remove a reset edge without mutating the conversation it previously bound", (): void => {
     const unboundScopes: ChatConnectedScope[] = [];
     const unboundConnectors: ChatLocalKnowledgeScope[] = [];

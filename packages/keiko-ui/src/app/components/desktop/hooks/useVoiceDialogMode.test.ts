@@ -162,6 +162,26 @@ describe("useVoiceDialogMode — availability gating", () => {
     expect(second.result.current.active).toBe(false);
   });
 
+  it("deactivates and releases capture when the owner identity changes", () => {
+    const first = renderHook(
+      ({ owner }: { readonly owner: string }) =>
+        useVoiceDialogMode({ capability: FULL_REALTIME, captureOwner: owner }),
+      { initialProps: { owner: "chat-a" } },
+    );
+    const second = renderHook(() =>
+      useVoiceDialogMode({ capability: FULL_REALTIME, captureOwner: "chat-b" }),
+    );
+
+    act(() => first.result.current.enter());
+    expect(first.result.current.active).toBe(true);
+    expect(second.result.current.available).toBe(false);
+
+    first.rerender({ owner: "chat-a-replacement" });
+
+    expect(first.result.current.active).toBe(false);
+    expect(second.result.current.available).toBe(true);
+  });
+
   it("is unavailable for full-realtime WITHOUT WebRTC media", () => {
     const { result } = renderHook(() =>
       useVoiceDialogMode({ capability: FULL_REALTIME_NO_WEBRTC }),

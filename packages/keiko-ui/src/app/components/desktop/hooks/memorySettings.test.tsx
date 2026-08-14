@@ -83,7 +83,7 @@ describe("conversation memory settings store", () => {
     expect(currentConversationMemoryModeRevision()).toBe(initialRevision + 2);
   });
 
-  it.each([-5, 0, Number.NaN, Number.POSITIVE_INFINITY])(
+  it.each([-5, 0, Number.NaN, Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY])(
     "fails closed to a zero-token budget for invalid input %s",
     (budget) => {
       const { result } = renderHook(() => useConversationMemorySettings("chat-invalid-budget"));

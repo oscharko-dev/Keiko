@@ -80,6 +80,9 @@ function Harness(options: UseWorkspaceOptions = {}): ReactElement {
       <button type="button" onClick={() => workspace.api.close("files-1")}>
         close files
       </button>
+      <button type="button" onClick={() => workspace.api.close("chat-1")}>
+        close chat
+      </button>
       <button
         type="button"
         onClick={() =>
@@ -445,6 +448,28 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
 
     await waitFor(() => expect(readWins().some((w) => w.id === "files-1")).toBe(false));
     expect(onScopeUnbind).not.toHaveBeenCalled();
+  });
+
+  it("snapshots the chat owner before closing a bound chat window", async () => {
+    const onScopeUnbind = vi.fn();
+    persistWorkspace([
+      filesWindow(),
+      appWindow({ cfg: { chatId: "chat-private", projectPath: "/private" } }),
+    ]);
+    render(<Harness onScopeUnbind={onScopeUnbind} />);
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "connect" }));
+    await waitFor(() => expect(readConns()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "close chat" }));
+
+    await waitFor(() => expect(readWins().some((win) => win.id === "chat-1")).toBe(false));
+    expect(onScopeUnbind).toHaveBeenCalledWith(
+      "chat-1",
+      expect.objectContaining({ root: "/repo" }),
+      { conversationId: "chat-private", projectPath: "/private" },
+    );
   });
 
   it("updates the persisted connection snapshot when a Files window changes visible scope", async () => {

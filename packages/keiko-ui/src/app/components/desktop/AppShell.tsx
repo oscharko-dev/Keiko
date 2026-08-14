@@ -59,7 +59,7 @@ import type {
   GroundingLimits,
 } from "@/lib/types";
 import { recordReadsContextRelationship } from "../../relationships/connector-relationship";
-import type { ChatBindingTarget, WorkspaceApi } from "./hooks/useWorkspace.types";
+import type { ChatBindingTarget, ChatUnbindTarget, WorkspaceApi } from "./hooks/useWorkspace.types";
 import { useUndoStack } from "./hooks/useUndoStack";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { useModalInteractionLockState } from "./hooks/useModalInteractionLock";
@@ -449,6 +449,8 @@ interface ChatMutationAttempt {
   readonly isCurrent: () => boolean;
 }
 
+type ChatLookupTarget = ChatBindingTarget | ChatUnbindTarget;
+
 export const CHAT_MUTATION_TIMEOUT_MS = 15_000;
 
 function reportGroundingMutationFailure(message: string): void {
@@ -464,15 +466,24 @@ class ChatLookupFailure extends Error {
 }
 
 async function resolveChatForUnbind(
-  resolve: (chatWindowId: string) => Promise<Chat | undefined>,
+  resolve: (chatWindowId: string, target?: ChatLookupTarget) => Promise<Chat | undefined>,
   chatWindowId: string,
+  target?: ChatUnbindTarget,
 ): Promise<Chat | undefined> {
   try {
-    return await resolve(chatWindowId);
+    return await resolve(chatWindowId, target);
   } catch {
     reportGroundingMutationFailure("Chat lookup failed.");
     return undefined;
   }
+}
+
+function chatLookupTargetIsCurrent(target: ChatLookupTarget | undefined): boolean {
+  return target === undefined || !("isCurrent" in target) || target.isCurrent();
+}
+
+function chatLookupRequiresMountedWindow(target: ChatLookupTarget | undefined): boolean {
+  return target === undefined || "isCurrent" in target;
 }
 
 function groundingMutationFailureKey(
@@ -867,11 +878,11 @@ function AppShellInner(): ReactNode {
     confirmedGroundingChatsRef.current.set(chat.id, chat);
   }, []);
   const resolveChatForWindow = useCallback(
-    async (chatWindowId: string, target?: ChatBindingTarget): Promise<Chat | undefined> => {
+    async (chatWindowId: string, target?: ChatLookupTarget): Promise<Chat | undefined> => {
       const windowSnapshot = wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId);
       const chatId = target?.conversationId ?? chatIdFromWindow(windowSnapshot);
       if (chatId === undefined) return undefined;
-      if (target !== undefined && !target.isCurrent()) return undefined;
+      if (!chatLookupTargetIsCurrent(target)) return undefined;
       const sessionChat =
         session.chats.find((chat) => chat.id === chatId) ??
         (session.activeChat?.id === chatId ? session.activeChat : undefined);
@@ -886,9 +897,11 @@ function AppShellInner(): ReactNode {
       if (projectPath === undefined) return undefined;
       try {
         const response = await fetchChats(projectPath);
-        if (target !== undefined && !target.isCurrent()) return undefined;
-        const currentWindow = wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId);
-        if (chatIdFromWindow(currentWindow) !== chatId) return undefined;
+        if (!chatLookupTargetIsCurrent(target)) return undefined;
+        if (chatLookupRequiresMountedWindow(target)) {
+          const currentWindow = wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId);
+          if (chatIdFromWindow(currentWindow) !== chatId) return undefined;
+        }
         const resolved = response.chats.find((candidate) => candidate.id === chatId);
         if (resolved === undefined || resolved.status === "closed") return undefined;
         rememberGroundingChat(resolved);
@@ -904,7 +917,7 @@ function AppShellInner(): ReactNode {
     tails: new Map(),
   });
   const groundingMutationKey = useCallback(
-    (chatWindowId: string, target?: ChatBindingTarget): string =>
+    (chatWindowId: string, target?: ChatLookupTarget): string =>
       target?.conversationId ??
       chatIdFromWindow(wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId)) ??
       `window:${chatWindowId}`,
@@ -1026,13 +1039,13 @@ function AppShellInner(): ReactNode {
     [replaceFilesScope],
   );
   const handleScopeUnbind = useCallback(
-    (chatWindowId: string, scope: ChatConnectedScope): void => {
-      const chatKey = groundingMutationKey(chatWindowId);
+    (chatWindowId: string, scope: ChatConnectedScope, target?: ChatUnbindTarget): void => {
+      const chatKey = groundingMutationKey(chatWindowId, target);
       void serializeChatMutation(
         groundingMutationQueueRef.current,
         chatKey,
         async (): Promise<void> => {
-          const chat = await resolveChatForUnbind(resolveChatForWindow, chatWindowId);
+          const chat = await resolveChatForUnbind(resolveChatForWindow, chatWindowId, target);
           if (chat === undefined) return;
           const next = removeConnectedScope(effectiveScopes(chat), scope);
           try {
@@ -1131,13 +1144,13 @@ function AppShellInner(): ReactNode {
     [groundingMutationKey, handleConnectorBindNow, rejectForConnectionFailure, t],
   );
   const handleConnectorUnbind = useCallback(
-    (chatWindowId: string, scope: ChatLocalKnowledgeScope): void => {
-      const chatKey = groundingMutationKey(chatWindowId);
+    (chatWindowId: string, scope: ChatLocalKnowledgeScope, target?: ChatUnbindTarget): void => {
+      const chatKey = groundingMutationKey(chatWindowId, target);
       void serializeChatMutation(
         groundingMutationQueueRef.current,
         chatKey,
         async (): Promise<void> => {
-          const chat = await resolveChatForUnbind(resolveChatForWindow, chatWindowId);
+          const chat = await resolveChatForUnbind(resolveChatForWindow, chatWindowId, target);
           if (chat === undefined) return;
           const key =
             scope.kind === "capsule" ? `capsule:${scope.capsuleId}` : `set:${scope.capsuleSetId}`;

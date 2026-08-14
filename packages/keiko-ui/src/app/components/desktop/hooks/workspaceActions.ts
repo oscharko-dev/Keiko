@@ -17,6 +17,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type {
   ChatBindingTarget,
+  ChatUnbindTarget,
   FilesWindowContext,
   OpenEditorFileResult,
   ViewportWorld,
@@ -959,7 +960,9 @@ interface ConnectArgs {
         target?: ChatBindingTarget,
       ) => boolean | Promise<boolean>)
     | undefined;
-  readonly onScopeUnbind?: ((chatWindowId: string, scope: ChatConnectedScope) => void) | undefined;
+  readonly onScopeUnbind?:
+    | ((chatWindowId: string, scope: ChatConnectedScope, target?: ChatUnbindTarget) => void)
+    | undefined;
   // Epic #189 Slice 3 M3 — invoked when a Connector↔Chat relationship edge is created/removed,
   // with the selected ChatLocalKnowledgeScope from the connector window's cfg. The composition
   // root (AppShell) appends/removes it from the active chat's localKnowledgeScopes.
@@ -971,7 +974,8 @@ interface ConnectArgs {
       ) => boolean | Promise<boolean>)
     | undefined;
   readonly onConnectorUnbind?:
-    ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => void) | undefined;
+    | ((chatWindowId: string, scope: ChatLocalKnowledgeScope, target?: ChatUnbindTarget) => void)
+    | undefined;
 }
 
 function isDuplicate(cs: readonly Connection[], a: string, b: string): boolean {
@@ -994,6 +998,12 @@ function chatProjectPath(win: AppWindow | undefined): string | undefined {
   if (win?.type !== "chat") return undefined;
   const projectPath = win.cfg["projectPath"];
   return typeof projectPath === "string" && projectPath.length > 0 ? projectPath : undefined;
+}
+
+export function chatUnbindTarget(win: AppWindow | undefined): ChatUnbindTarget | undefined {
+  const conversationId = chatConversationId(win);
+  if (conversationId === undefined) return undefined;
+  return { conversationId, projectPath: chatProjectPath(win) };
 }
 
 function chatBindingTarget(
@@ -1432,14 +1442,17 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const b = winById(conn.b);
     const bothLive = a !== undefined && b !== undefined;
     const chatWindowId = conn.boundChatWindowId ?? (bothLive ? chatWindowIdInPair(a, b) : null);
+    const target = chatUnbindTarget(chatWindowId === null ? undefined : winById(chatWindowId));
     const boundScope =
       boundScopeOf(conn) ??
       (conn.boundScopeElided === true || !bothLive ? null : filesChatBindScope(a, b, Date.now()));
-    if (boundScope !== null && chatWindowId !== null) onScopeUnbind?.(chatWindowId, boundScope);
+    if (boundScope !== null && chatWindowId !== null) {
+      onScopeUnbind?.(chatWindowId, boundScope, target);
+    }
     const connectorScope =
       boundConnectorScopeOf(conn) ?? (bothLive ? connectorChatBind(a, b) : null);
     if (connectorScope !== null && chatWindowId !== null) {
-      onConnectorUnbind?.(chatWindowId, connectorScope);
+      onConnectorUnbind?.(chatWindowId, connectorScope, target);
     }
   };
 

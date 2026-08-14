@@ -95,7 +95,11 @@ function useChannelFlow(
   const [intensity, setIntensity] = useState<ChatWindowFlowIntensity>("light");
   const [afterglow, setAfterglow] = useState(false);
   useEffect((): (() => void) | undefined => {
-    if (latest === undefined) return;
+    if (latest === undefined) {
+      setIntensity("light");
+      setAfterglow(false);
+      return;
+    }
     setIntensity(groundingIntensity(latest));
     setAfterglow(true);
     const timer = setTimeout((): void => setAfterglow(false), FLOW_AFTERGLOW_MS);

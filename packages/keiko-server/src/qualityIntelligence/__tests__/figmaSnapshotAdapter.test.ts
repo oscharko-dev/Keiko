@@ -186,12 +186,16 @@ function expectStructuredVisionRequest(seenRequests: readonly GatewayRequest[]):
         hints: {
           type: "array",
           items: { type: "string" },
-          minItems: 0,
-          maxItems: 24,
         },
       },
     },
   });
+  const responseFormat = request.responseFormat as
+    { readonly type: "json_schema"; readonly schema: Record<string, unknown> } | undefined;
+  const schema = responseFormat.schema as
+    { readonly properties?: { readonly hints?: Record<string, unknown> } } | undefined;
+  expect(schema?.properties?.hints).not.toHaveProperty("minItems");
+  expect(schema?.properties?.hints).not.toHaveProperty("maxItems");
 }
 
 // ─── Snapshot loader ──────────────────────────────────────────────────────────────
