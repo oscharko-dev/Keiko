@@ -84,7 +84,11 @@ function unknownKeys(
 // free text across the acceptance boundary (mirrors the code-task-acceptance content-free rule).
 const REASON_CODE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/u;
 
-function isContentFreeReasonCode(value: unknown): value is string {
+// Exported: this is the ONE definition of the content-free reason-code rule. It was previously
+// re-declared verbatim in code-task-auxiliary.ts and enforced as a length-only check in
+// code-task-run-control.ts, so the "cannot smuggle secrets or free text" guarantee held in one of
+// the three places that claimed it — "Denied: /Users/alice/secret" is 64 characters or fewer.
+export function isContentFreeReasonCode(value: unknown): value is string {
   return typeof value === "string" && REASON_CODE_PATTERN.test(value);
 }
 

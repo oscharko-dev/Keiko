@@ -186,6 +186,19 @@ describe("validateAtlassianConnectorDescriptor (hostile input)", () => {
     }
   });
 
+  // KEIKO-0264: onlyKnownKeys returned on the FIRST offending key, so a payload carrying several
+  // credential-bearing fields surfaced only one of them. The record was still rejected, but the
+  // operator was told less than the validator knew — and the suite never noticed, because every
+  // existing case adds exactly one forbidden key at a time.
+  it("reports every forbidden key on a payload, not just the first", () => {
+    const errors = errorsOf(
+      validateAtlassianConnectorDescriptor(descriptor({ secret: "x", token: "y", password: "z" })),
+    );
+    for (const key of ["secret", "token", "password"]) {
+      expect(errors.some((error) => error.includes(`must not include ${key}`))).toBe(true);
+    }
+  });
+
   it.each([
     ["an http base URL", "http://example.atlassian.net"],
     ["a credentialed base URL", "https://user:token@example.atlassian.net"],

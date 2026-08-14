@@ -24,6 +24,7 @@ import {
   isCodeTaskRunId,
   isCodeTaskTaskId,
   isCodeTaskWorkspaceId,
+  isContentFreeReasonCode,
 } from "./code-task-governance.js";
 import { CODING_WORKBENCH_AUXILIARY_STATUSES } from "./coding-workbench.js";
 import type {
@@ -67,8 +68,6 @@ const RESERVED_DOMAIN_NAMES = Object.freeze([
   "invalid",
   "example",
 ]);
-// Content-free bounded reason code (mirrors the code-task-governance content-free rule).
-const REASON_CODE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/u;
 
 export function isCodeTaskSkillId(value: unknown): value is CodeTaskSkillId {
   return typeof value === "string" && SKILL_ID_PATTERN.test(value);
@@ -120,10 +119,6 @@ function isPositiveInteger(value: unknown): value is number {
 
 function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
   return typeof value === "string" && (allowed as readonly string[]).includes(value);
-}
-
-function isContentFreeReasonCode(value: unknown): value is string {
-  return typeof value === "string" && REASON_CODE_PATTERN.test(value);
 }
 
 function unknownKeys(

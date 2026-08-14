@@ -155,6 +155,16 @@ describe("parseCommandTaskRunRequest rejections", () => {
     }
   });
 
+  // KEIKO-0302: every peer validator in this territory enforces a closed key set precisely so an
+  // unexpected field on a documented content-free contract cannot ride through into evidence. These
+  // did not, and the accepted object is passed on as `value`.
+  it("rejects an unknown top-level key on a run request", () => {
+    const parsed = parseCommandTaskRunRequest({ ...baseRequest(), promptText: "leak me" });
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.errors.some((error) => error.includes("promptText"))).toBe(true);
+  });
+
   it("rejects a requestId with illegal characters or excessive length", () => {
     for (const bad of ["has space", "semi;colon", "x".repeat(129)]) {
       const parsed = parseCommandTaskRunRequest({ ...baseRequest(), requestId: bad });
@@ -218,6 +228,23 @@ describe("validateCommandTaskCatalog", () => {
   it("accepts a well-formed catalog", () => {
     const parsed = validateCommandTaskCatalog(baseCatalog());
     expect(parsed.ok).toBe(true);
+  });
+
+  // KEIKO-0302: every peer validator in this territory enforces a closed key set precisely so an
+  // unexpected field on a documented content-free contract cannot ride through into evidence — the
+  // accepted object is handed on as `value`.
+  it("rejects an unknown key on the catalog and on a task", () => {
+    expect(validateCommandTaskCatalog({ ...baseCatalog(), promptText: "leak me" }).ok).toBe(false);
+    const catalog = baseCatalog();
+    const firstTask = catalog.tasks[0];
+    expect(firstTask).toBeDefined();
+    if (firstTask === undefined) return;
+    expect(
+      validateCommandTaskCatalog({
+        ...catalog,
+        tasks: [{ ...firstTask, promptText: "leak me" }],
+      }).ok,
+    ).toBe(false);
   });
 
   it("rejects a non-object", () => {
@@ -302,6 +329,10 @@ describe("validateCommandTaskCatalog", () => {
 describe("validateCommandTaskRunResult", () => {
   it("accepts a well-formed result", () => {
     expect(validateCommandTaskRunResult(baseResult()).ok).toBe(true);
+  });
+
+  it("rejects an unknown key on a run result (KEIKO-0302)", () => {
+    expect(validateCommandTaskRunResult({ ...baseResult(), promptText: "leak me" }).ok).toBe(false);
   });
 
   it("accepts a null exit code (timed-out / cancelled run)", () => {

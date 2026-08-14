@@ -107,10 +107,13 @@ function onlyKnownKeys(
   errors: string[],
 ): void {
   const allowedSet = new Set(allowed);
+  // No early return: these validators exist to catch EVERY credential- or body-like field a hostile
+  // or buggy caller smuggled onto a payload, so stopping at the first understated the scope of what
+  // was rejected. Matches `exactKeys` in coding-workbench-runtime-api-validation.ts and the
+  // enumerate-every-reason convention the rest of the package follows.
   for (const key of Object.keys(value)) {
     if (!allowedSet.has(key)) {
       errors.push(`${field} must not include ${key}`);
-      return;
     }
   }
 }

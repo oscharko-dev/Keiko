@@ -192,9 +192,57 @@ function factErrors(
   return [`${path}.outcome must be known, unknown, unavailable, or absent`];
 }
 
+// Closed key sets. Every peer validator in this territory enforces one and says why — an unexpected
+// field on a documented content-free contract must never ride through into evidence. These four did
+// not, so a payload could carry `promptText` (or any other free-text field) alongside the validated
+// ones and be accepted, then be handed on as `value`. Mirrors code-task-governance.ts's unknownKeys.
+function unknownKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  path: string,
+): readonly string[] {
+  return Object.keys(value)
+    .filter((key) => !allowed.includes(key))
+    .map((key) => `${path}.${key} is not allowed`);
+}
+
+const CONTRIBUTION_KEYS = [
+  "kind",
+  "schemaVersion",
+  "epicIssue",
+  "childIssue",
+  "sourceCommitSha",
+  "sourceTreeSha",
+  "scenarios",
+  "salvage",
+  "knownLimitations",
+  "cleanup",
+] as const;
+
+const SCENARIO_KEYS = [
+  "scenarioId",
+  "evidenceClass",
+  "platform",
+  "outcome",
+  "recordedAt",
+  "artifactDigests",
+  "receiptDigest",
+] as const;
+
+const SALVAGE_KEYS = [
+  "sourceBranch",
+  "sourceSha",
+  "path",
+  "disposition",
+  "reshaping",
+  "verifiedAtSha",
+] as const;
+
+const CLEANUP_KEYS = ["state", "residueCount"] as const;
+
 function scenarioErrors(value: unknown, path: string): readonly string[] {
   if (!isRecord(value)) return [`${path} must be an object`];
-  const errors: string[] = [];
+  const errors: string[] = [...unknownKeys(value, SCENARIO_KEYS, path)];
   if (!isCodeTaskScenarioId(value.scenarioId)) errors.push(`${path}.scenarioId is invalid`);
   if (!isOneOf(value.evidenceClass, CODE_TASK_EVIDENCE_CLASSES)) {
     errors.push(`${path}.evidenceClass is not a registered evidence class`);
@@ -220,7 +268,7 @@ function scenarioErrors(value: unknown, path: string): readonly string[] {
 
 function salvageErrors(value: unknown, path: string): readonly string[] {
   if (!isRecord(value)) return [`${path} must be an object`];
-  const errors: string[] = [];
+  const errors: string[] = [...unknownKeys(value, SALVAGE_KEYS, path)];
   if (!isCodeTaskContentFreeNote(value.sourceBranch)) {
     errors.push(`${path}.sourceBranch must be a bounded content-free reference`);
   }
@@ -238,15 +286,18 @@ function salvageErrors(value: unknown, path: string): readonly string[] {
 
 function cleanupErrors(value: unknown): readonly string[] {
   if (!isRecord(value)) return ["cleanup must be an object"];
+  const unknown = unknownKeys(value, CLEANUP_KEYS, "cleanup");
   if (value.state === "complete") {
-    return "residueCount" in value ? ["cleanup.residueCount is only valid when incomplete"] : [];
+    return "residueCount" in value
+      ? [...unknown, "cleanup.residueCount is only valid when incomplete"]
+      : unknown;
   }
   if (value.state === "incomplete") {
     return isPositiveInteger(value.residueCount)
-      ? []
-      : ["cleanup.residueCount must be a positive integer when incomplete"];
+      ? unknown
+      : [...unknown, "cleanup.residueCount must be a positive integer when incomplete"];
   }
-  return ["cleanup.state must be complete or incomplete"];
+  return [...unknown, "cleanup.state must be complete or incomplete"];
 }
 
 function contributionHeaderErrors(value: Record<string, unknown>): readonly string[] {
@@ -294,7 +345,11 @@ export function validateCodeTaskAcceptanceContribution(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodeTaskAcceptanceContributionV1> {
   if (!isRecord(value)) return { ok: false, errors: ["contribution must be an object"] };
-  const errors = [...contributionHeaderErrors(value), ...contributionBodyErrors(value)];
+  const errors = [
+    ...unknownKeys(value, CONTRIBUTION_KEYS, "contribution"),
+    ...contributionHeaderErrors(value),
+    ...contributionBodyErrors(value),
+  ];
   return errors.length > 0
     ? { ok: false, errors }
     : { ok: true, value: value as unknown as CodeTaskAcceptanceContributionV1 };

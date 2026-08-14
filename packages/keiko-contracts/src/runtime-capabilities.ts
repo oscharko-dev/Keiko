@@ -125,6 +125,16 @@ function validateStringField(
   }
 }
 
+// Same shape as verification.ts's isCanonicalRelativePath: no absolute POSIX root, no Windows drive
+// or UNC prefix, no backslash separator, no NUL, no traversal segment.
+function isWorkspaceRelativeCapabilityPath(value: string): boolean {
+  if (value.length === 0) return false;
+  if (value.startsWith("/") || value.startsWith("\\")) return false;
+  if (/^[A-Za-z]:/u.test(value)) return false;
+  if (value.includes("\0") || value.includes("\\")) return false;
+  return !value.split("/").some((segment) => segment === ".." || segment === ".");
+}
+
 function validateCommandSource(value: unknown, path: string, errors: string[]): void {
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
@@ -134,6 +144,14 @@ function validateCommandSource(value: unknown, path: string, errors: string[]): 
     errors.push(`${path}.type is invalid`);
   }
   validateStringField(value, "path", errors, false, `${path}.path`);
+  // A capability response is UI-facing and evidence-adjacent, so an absolute path here would reveal
+  // the operator's home directory name, repository location, or container layout. The sibling
+  // contract (verification.ts) already shape-checks its own path field; this one only required a
+  // non-empty string, and the single test that claimed to prove "content-free" output asserted
+  // against a hand-written literal rather than any validator behaviour.
+  if (typeof value.path === "string" && !isWorkspaceRelativeCapabilityPath(value.path)) {
+    errors.push(`${path}.path must be workspace-relative`);
+  }
   if (value.commandKind !== undefined && !isOneOf(value.commandKind, RUNTIME_COMMAND_KINDS)) {
     errors.push(`${path}.commandKind is invalid`);
   }

@@ -47,6 +47,36 @@ describe("runtime capability contracts", () => {
     expect(JSON.stringify(response)).not.toContain("/repo");
   });
 
+  // KEIKO-0239: source.path was validated as a non-empty string only, so an absolute path — which
+  // would reveal the operator's home directory, repository location, or container layout in a
+  // UI-facing, evidence-adjacent response — was accepted. The one test that claimed to prove
+  // "content-free" output asserted `not.toContain("/repo")` against a hand-written "package.json"
+  // literal, so it could never have failed.
+  it.each([
+    ["a POSIX absolute path", "/Users/alice/repo/package.json"],
+    ["a Windows drive path", "C:\\repo\\package.json"],
+    ["a UNC path", "\\\\host\\share\\package.json"],
+    ["a backslash separator", "sub\\package.json"],
+    ["a traversal segment", "../../etc/package.json"],
+    ["a NUL byte", "package.json\u0000"],
+  ])("rejects a command source whose path is %s", (_label, path) => {
+    const response: RuntimeCapabilitiesResponse = {
+      schemaVersion: RUNTIME_CAPABILITY_SCHEMA_VERSION,
+      generatedAtMs: 1_234,
+      deadlineMs: 250,
+      capabilities: [
+        {
+          id: "command-source:package.json:test",
+          kind: "command-source",
+          label: "Test command source",
+          state: "available",
+          source: { type: "package-json-script", path, commandKind: "test" },
+        },
+      ],
+    };
+    expect(validateRuntimeCapabilitiesResponse(response).ok).toBe(false);
+  });
+
   it("rejects malformed capability states and source shapes without throwing", () => {
     const result = validateRuntimeCapabilitiesResponse({
       schemaVersion: "1",

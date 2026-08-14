@@ -216,6 +216,45 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+// Closed key sets. Every peer validator in this territory enforces one — an unexpected field on a
+// documented content-free contract must never ride through — and these four did not, so a payload
+// carrying free text alongside the validated fields was accepted and passed on as `value`.
+function unknownKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  path: string,
+): readonly string[] {
+  return Object.keys(value)
+    .filter((key) => !allowed.includes(key))
+    .map((key) => `${path}.${key} is not allowed`);
+}
+
+const RUN_REQUEST_KEYS = ["projectId", "taskId", "timeoutMs", "requestId"] as const;
+const TASK_KEYS = [
+  "id",
+  "kind",
+  "label",
+  "executable",
+  "args",
+  "source",
+  "trustState",
+  "trustReason",
+] as const;
+const CATALOG_KEYS = ["schemaVersion", "projectId", "tasks"] as const;
+const RUN_RESULT_KEYS = [
+  "schemaVersion",
+  "runId",
+  "taskId",
+  "kind",
+  "exitCode",
+  "durationMs",
+  "truncated",
+  "timedOut",
+  "failureReason",
+  "stdout",
+  "stderr",
+] as const;
+
 function isBoundedNonEmptyString(value: unknown, maxLength: number): value is string {
   return isNonEmptyString(value) && value.length <= maxLength;
 }
@@ -259,6 +298,7 @@ export function parseCommandTaskRunRequest(input: unknown): CommandTaskRunReques
   if (!isRecord(input)) {
     return { ok: false, errors: ["request must be an object"] };
   }
+  errors.push(...unknownKeys(input, RUN_REQUEST_KEYS, "request"));
   if (!isBoundedControlFreeString(input.projectId, MAX_PROJECT_ID_LENGTH)) {
     errors.push("projectId must be a non-empty string");
   }
@@ -291,6 +331,7 @@ function validateTask(value: unknown, index: number, errors: string[]): void {
     errors.push(`${path} must be an object`);
     return;
   }
+  errors.push(...unknownKeys(value, TASK_KEYS, path));
   if (!isNonEmptyString(value.id)) errors.push(`${path}.id must be a non-empty string`);
   if (!isNonEmptyString(value.label)) errors.push(`${path}.label must be a non-empty string`);
   if (!isNonEmptyString(value.executable)) {
@@ -312,6 +353,7 @@ export function validateCommandTaskCatalog(value: unknown): CommandTaskCatalogPa
   if (!isRecord(value)) {
     return { ok: false, errors: ["catalog must be an object"] };
   }
+  errors.push(...unknownKeys(value, CATALOG_KEYS, "catalog"));
   if (value.schemaVersion !== COMMAND_RUNNER_SCHEMA_VERSION) {
     errors.push("schemaVersion is invalid");
   }
@@ -369,6 +411,7 @@ export function validateCommandTaskRunResult(value: unknown): CommandTaskRunResu
   if (!isRecord(value)) {
     return { ok: false, errors: ["result must be an object"] };
   }
+  errors.push(...unknownKeys(value, RUN_RESULT_KEYS, "result"));
   validateResultScalars(value, errors);
   validateResultRuntime(value, errors);
   if (errors.length > 0) {

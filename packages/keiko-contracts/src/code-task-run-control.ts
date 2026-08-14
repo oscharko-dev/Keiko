@@ -29,6 +29,7 @@ import {
   isCodeTaskRunId,
   isCodeTaskTaskId,
   isCodeTaskWorkspaceId,
+  isContentFreeReasonCode,
 } from "./code-task-governance.js";
 import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
 
@@ -105,7 +106,9 @@ function grantRefErrors(value: unknown, index: number): string[] {
 function boundedStringFactErrors(value: unknown, path: string): string[] {
   if (!isRecord(value)) return [`${path} must be a tagged fact object`];
   if (value.outcome === "known") {
-    return typeof value.value === "string" && value.value.length > 0 && value.value.length <= 128
+    // recoveryRef is documented as a content-free handle, so it takes the same lower-kebab shape
+    // rather than a bare length bound that a filesystem path would pass.
+    return isContentFreeReasonCode(value.value)
       ? []
       : [`${path}.value must be a bounded content-free reference`];
   }
@@ -344,11 +347,9 @@ function outcomeBodyErrors(value: Record<string, unknown>): string[] {
     return errors;
   }
   const errors = unknownKeys(value, ["kind", "schemaVersion", "status", "reasonCode"], "outcome");
-  if (
-    typeof value.reasonCode !== "string" ||
-    value.reasonCode.length === 0 ||
-    value.reasonCode.length > 64
-  ) {
+  // Length alone is not content-freeness: "Denied: /Users/alice/secret" is well under 64 characters.
+  // The shared lower-kebab predicate is the rule this message already claims to enforce.
+  if (!isContentFreeReasonCode(value.reasonCode)) {
     errors.push("reasonCode must be a bounded content-free reason code");
   }
   return errors;
