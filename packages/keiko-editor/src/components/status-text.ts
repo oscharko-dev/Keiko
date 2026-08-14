@@ -19,6 +19,7 @@ export interface StatusViewModelArgs {
   readonly saveError?: string | undefined;
   readonly dirty: boolean;
   readonly truncated: boolean;
+  readonly overLimit: boolean;
   readonly modifiedAt?: number | undefined;
 }
 
@@ -62,9 +63,24 @@ function saveMessage(args: StatusViewModelArgs): string {
   }
 }
 
+/** The persistent read-only notice appended to the base status, if any (Issue #2898/KEIKO-0259).
+ * `overLimit` and `truncated` are independent, equally-weighted read-only triggers (see
+ * `effectiveReadOnly` in save-state.ts); both must be announced through this live status region
+ * rather than only one of them. */
+function readOnlyNotice(args: StatusViewModelArgs): string {
+  if (args.overLimit) {
+    return " File exceeds the size limit and is read-only.";
+  }
+  if (args.truncated) {
+    return " File is truncated (read-only): it exceeds the display limit.";
+  }
+  return "";
+}
+
 /**
  * Derive the status region role and message. Error/conflict/load-error are assertive (`alert`);
- * everything else is polite (`status`). Truncation is appended as a persistent notice.
+ * everything else is polite (`status`). Truncation and the size limit are appended as persistent
+ * notices.
  */
 export function deriveStatusViewModel(args: StatusViewModelArgs): EditorStatusViewModel {
   if (args.loadState.status !== "ready") {
@@ -73,9 +89,6 @@ export function deriveStatusViewModel(args: StatusViewModelArgs): EditorStatusVi
   }
   const isAlert = args.saveStatus === "error" || args.saveStatus === "conflict";
   const role: EditorStatusRole = isAlert ? "alert" : "status";
-  const base = saveMessage(args);
-  const message = args.truncated
-    ? `${base} File is truncated (read-only): it exceeds the display limit.`
-    : base;
+  const message = `${saveMessage(args)}${readOnlyNotice(args)}`;
   return { role, ariaLive: ariaLiveForRole(role), message };
 }

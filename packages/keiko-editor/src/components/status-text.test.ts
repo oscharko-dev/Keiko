@@ -12,6 +12,7 @@ describe("deriveStatusViewModel", () => {
       saveStatus: "idle",
       dirty: false,
       truncated: false,
+      overLimit: false,
     });
     expect(vm.role).toBe("status");
     expect(vm.ariaLive).toBe("polite");
@@ -24,6 +25,7 @@ describe("deriveStatusViewModel", () => {
       saveStatus: "idle",
       dirty: false,
       truncated: false,
+      overLimit: false,
     });
     expect(vm.role).toBe("alert");
     expect(vm.ariaLive).toBe("assertive");
@@ -36,6 +38,7 @@ describe("deriveStatusViewModel", () => {
       saveStatus: "idle",
       dirty: true,
       truncated: false,
+      overLimit: false,
     });
     expect(vm.role).toBe("status");
     expect(vm.message).toBe("Unsaved changes");
@@ -47,6 +50,7 @@ describe("deriveStatusViewModel", () => {
       saveStatus: "saving",
       dirty: true,
       truncated: false,
+      overLimit: false,
     });
     expect(vm.role).toBe("status");
     expect(vm.message).toBe("Saving…");
@@ -59,6 +63,7 @@ describe("deriveStatusViewModel", () => {
       saveStatus: "saved",
       dirty: false,
       truncated: false,
+      overLimit: false,
       modifiedAt: at,
     });
     expect(vm.message).toContain(new Date(at).toISOString());
@@ -71,6 +76,7 @@ describe("deriveStatusViewModel", () => {
       saveError: "disk full",
       dirty: true,
       truncated: false,
+      overLimit: false,
     });
     expect(vm.role).toBe("alert");
     expect(vm.message).toContain("disk full");
@@ -82,6 +88,7 @@ describe("deriveStatusViewModel", () => {
       saveStatus: "conflict",
       dirty: true,
       truncated: false,
+      overLimit: false,
     });
     expect(vm.role).toBe("alert");
     expect(vm.message).toContain("conflict");
@@ -93,7 +100,34 @@ describe("deriveStatusViewModel", () => {
       saveStatus: "idle",
       dirty: false,
       truncated: true,
+      overLimit: false,
     });
     expect(vm.message).toContain("truncated");
+  });
+
+  it("appends a size-limit notice when overLimit is true (KEIKO-0259)", () => {
+    const vm = deriveStatusViewModel({
+      loadState: ready,
+      saveStatus: "idle",
+      dirty: false,
+      truncated: false,
+      overLimit: true,
+    });
+    expect(vm.role).toBe("status");
+    expect(vm.ariaLive).toBe("polite");
+    expect(vm.message).toContain("size limit");
+    expect(vm.message).toContain("read-only");
+  });
+
+  it("prefers the size-limit notice over the truncation notice when both are true", () => {
+    const vm = deriveStatusViewModel({
+      loadState: ready,
+      saveStatus: "idle",
+      dirty: false,
+      truncated: true,
+      overLimit: true,
+    });
+    expect(vm.message).toContain("size limit");
+    expect(vm.message).not.toContain("display limit");
   });
 });
