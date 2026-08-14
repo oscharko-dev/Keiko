@@ -816,20 +816,27 @@ function platformListAllows(list, value) {
   return list.includes(value);
 }
 
-let lockfilePlatformScopes;
+// Keyed by PATH, not a single bare cache. `assertStubsAreForeignOnly` takes `lockfilePath` as an
+// injectable parameter, so an unkeyed cache would answer every later call from whichever file
+// happened to be read first — the argument silently ignored, the result decided by call order.
+// Production passes one path and would never notice; a fixture would (CodeRabbit thread
+// 3780586007).
+const lockfilePlatformScopes = new Map();
 
 /** The `os`/`cpu` `package-lock.json` records for a name, or `undefined` if it pins no such name. */
 function lockfilePlatformScope(name, lockfilePath) {
-  if (lockfilePlatformScopes === undefined) {
-    lockfilePlatformScopes = new Map();
+  let scopes = lockfilePlatformScopes.get(lockfilePath);
+  if (scopes === undefined) {
+    scopes = new Map();
     const raw = existsSync(lockfilePath) ? JSON.parse(readFileSync(lockfilePath, "utf8")) : {};
     for (const [path, entry] of Object.entries(raw.packages ?? {})) {
       const pinned = path.split("node_modules/").at(-1);
-      if (pinned === undefined || pinned === "" || lockfilePlatformScopes.has(pinned)) continue;
-      lockfilePlatformScopes.set(pinned, { cpu: entry.cpu, os: entry.os });
+      if (pinned === undefined || pinned === "" || scopes.has(pinned)) continue;
+      scopes.set(pinned, { cpu: entry.cpu, os: entry.os });
     }
+    lockfilePlatformScopes.set(lockfilePath, scopes);
   }
-  return lockfilePlatformScopes.get(name);
+  return scopes.get(name);
 }
 
 /**

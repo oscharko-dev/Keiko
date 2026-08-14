@@ -838,6 +838,52 @@ describe("installable package smoke optional-dependency coverage", () => {
   // parent, so the host-binding guard alone would let the lane pass with no Canvas implementation
   // at all (Codex thread 3780501190). Platform data comes from `package-lock.json` rather than a
   // literal, so a package that gains or loses a platform restriction is judged by what it pins.
+  // The scope cache is keyed by path. Unkeyed, the SECOND fixture below would be answered from the
+  // FIRST file's scopes — the `lockfilePath` argument ignored and the verdict decided by call
+  // order, which is the one property `scripts/**` tooling must not have (CodeRabbit thread
+  // 3780586007).
+  it("reads the lockfile it is given, not the one it read first", () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-lockfile-scope-"));
+    const write = (file, scope) => {
+      const path = join(dir, file);
+      writeFileSync(
+        path,
+        JSON.stringify({
+          packages: { "node_modules/demo-native": { version: "1.0.2", ...scope } },
+        }),
+        "utf8",
+      );
+      return path;
+    };
+    const stubbed = new Map([
+      [
+        "demo-native",
+        new Map([
+          [
+            "1.0.2",
+            {
+              manifest: stubManifest("demo-native", "1.0.2"),
+              name: "demo-native",
+              version: "1.0.2",
+            },
+          ],
+        ]),
+      ],
+    ]);
+    try {
+      // Pins it with no platform scope: installs everywhere, so a stub is wrong.
+      const everywhere = write("everywhere.json", {});
+      rejectProcessExit();
+      expect(() => assertStubsAreForeignOnly(stubbed, everywhere)).toThrow(/process\.exit\(1\)/u);
+
+      // A DIFFERENT lockfile scoping it away from this host: the same stub is now correct.
+      const foreign = write("foreign.json", { cpu: ["mips"], os: ["aix"] });
+      expect(() => assertStubsAreForeignOnly(stubbed, foreign)).not.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a stub for a package the lockfile installs on this host", () => {
     const stubbed = (name) =>
       new Map([

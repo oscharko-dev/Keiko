@@ -222,7 +222,13 @@ preserved — the served manifest keeps the `optionalDependencies` block its pub
 carries — so the running platform's real native binding still installs. That it installed is
 asserted, not assumed: `assertHostBindingsAreReal` derives the host's binding names from the
 running `platform`/`arch`/libc triple, and fails the lane if any of them resolved to a stub
-instead of the real package at the version its parent declares. Foreign-platform prebuilds, which
+instead of the real package at the version its parent declares. A second guard,
+`assertStubsAreForeignOnly`, answers the same question from `package-lock.json` instead: it rejects
+a stub for any pinned package the lockfile installs on this host, `cpu` as well as `os`. That
+covers what a name-derived check cannot see — a platform-agnostic PARENT such as `@napi-rs/canvas`,
+declared optional by `keiko-local-knowledge` and carrying no platform in its name to match on. If
+an optional fetch dropped it, the lane would otherwise pass with no Canvas implementation at all.
+Foreign-platform prebuilds, which
 no host would link, are the ones that resolve to inert stubs carrying an `os`/`cpu` pair that
 matches nothing. A dependency that is absent and *not* optional remains a hard failure, so the
 stub path cannot mask a genuine gap.
