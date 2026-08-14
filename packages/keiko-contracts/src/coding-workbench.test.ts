@@ -442,6 +442,45 @@ describe("coding workbench Codex subscription profile", () => {
     });
   });
 
+  // KEIKO-0445: a setup plan's method DETERMINES its command label, whether a secret is typed, and
+  // how that secret travels — but the three fields were each validated in isolation, so a plan could
+  // name chatgpt-browser-login while carrying the access-token command label and requiresSecretInput
+  // true. That is a login flow that does not exist and no operator could act on.
+  it.each([
+    ["a command label from a different method", { commandLabel: "codex-login" }],
+    ["requiresSecretInput disagreeing with the method", { requiresSecretInput: false }],
+    ["a credentialTransport the method does not use", { credentialTransport: undefined }],
+  ])("rejects a setup plan carrying %s", (_label, override) => {
+    expect(validateCodingWorkbenchCodexAuthSetupPlan({ ...codexSetupPlan(), ...override }).ok).toBe(
+      false,
+    );
+  });
+
+  it("accepts the consistent plan for every auth method", () => {
+    const browser = {
+      ...codexSetupPlan(),
+      method: "chatgpt-browser-login" as const,
+      commandLabel: "codex-login" as const,
+      requiresSecretInput: false,
+      credentialTransport: undefined,
+    };
+    expect(validateCodingWorkbenchCodexAuthSetupPlan(browser).ok).toBe(true);
+
+    const device = {
+      ...browser,
+      method: "chatgpt-device-code" as const,
+      commandLabel: "codex-login-device-auth" as const,
+    };
+    expect(validateCodingWorkbenchCodexAuthSetupPlan(device).ok).toBe(true);
+    // …and each method rejects the other's command label.
+    expect(
+      validateCodingWorkbenchCodexAuthSetupPlan({
+        ...browser,
+        commandLabel: "codex-login-device-auth",
+      }).ok,
+    ).toBe(false);
+  });
+
   it("keeps Codex subscription authority bounded by the same envelope policy", () => {
     const envelope = {
       ...baseAuthorityEnvelope(),

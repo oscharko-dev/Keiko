@@ -356,6 +356,51 @@ function validateSetupPlanPolicy(record: Record<string, unknown>, errors: string
   }
 }
 
+// A setup plan's method DETERMINES its command label, whether a secret is typed, and how that
+// secret travels. Those three fields were each validated in isolation, so a plan could name
+// `chatgpt-browser-login` while carrying the access-token command label and requiresSecretInput
+// true — a combination no producer emits and no operator could act on, describing a login flow that
+// does not exist. This table is the same rule the producer applies (commandLabelFor plus
+// `accessToken = method === "codex-access-token"` in keiko-server's coding-codex-subscription.ts),
+// stated once so a plan cannot disagree with its own method.
+interface CodexAuthMethodRow {
+  readonly commandLabel: CodingWorkbenchCodexAuthCommandLabel;
+  readonly requiresSecretInput: boolean;
+  readonly credentialTransport?: CodingWorkbenchCodexCredentialTransport | undefined;
+}
+
+const CODEX_AUTH_METHOD_ROWS: Readonly<Record<CodingWorkbenchCodexAuthMethod, CodexAuthMethodRow>> =
+  Object.freeze({
+    "chatgpt-browser-login": { commandLabel: "codex-login", requiresSecretInput: false },
+    "chatgpt-device-code": {
+      commandLabel: "codex-login-device-auth",
+      requiresSecretInput: false,
+    },
+    "codex-access-token": {
+      commandLabel: "codex-login-with-access-token",
+      requiresSecretInput: true,
+      credentialTransport: "stdin",
+    },
+  });
+
+function validateSetupPlanMethodConsistency(
+  record: Record<string, unknown>,
+  errors: string[],
+): void {
+  const method = record.method;
+  if (!isOneOf(method, CODING_WORKBENCH_CODEX_AUTH_METHODS)) return;
+  const row = CODEX_AUTH_METHOD_ROWS[method];
+  if (record.commandLabel !== row.commandLabel) {
+    errors.push("setup.commandLabel does not match setup.method");
+  }
+  if (record.requiresSecretInput !== row.requiresSecretInput) {
+    errors.push("setup.requiresSecretInput does not match setup.method");
+  }
+  if (record.credentialTransport !== row.credentialTransport) {
+    errors.push("setup.credentialTransport does not match setup.method");
+  }
+}
+
 export function validateCodingWorkbenchCodexAuthSetupPlan(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchCodexAuthSetupPlan> {
@@ -369,6 +414,7 @@ export function validateCodingWorkbenchCodexAuthSetupPlan(
   if (value.credentialTransport !== undefined && value.credentialTransport !== "stdin") {
     errors.push("setup.credentialTransport is invalid");
   }
+  validateSetupPlanMethodConsistency(value, errors);
   return errors.length > 0
     ? { ok: false, errors }
     : { ok: true, value: value as unknown as CodingWorkbenchCodexAuthSetupPlan };
