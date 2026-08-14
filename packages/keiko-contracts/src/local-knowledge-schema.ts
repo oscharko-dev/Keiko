@@ -29,7 +29,17 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 33 as const;
+// NOTE (KEIKO-0371, still open): capsule_sources carries `FOREIGN KEY (id) REFERENCES
+// knowledge_sources(id) ON DELETE RESTRICT` on a FRESH install, but no migration adds it to a store
+// created at v1, and SQLite cannot ALTER a foreign key onto an existing table. The obvious repair —
+// the create/copy/DROP/rename rebuild used elsewhere in this file — is NOT safe here: ten tables
+// (documents, chunks, vectors, …) reference capsule_sources with ON DELETE CASCADE, the store opens
+// with `PRAGMA foreign_keys = ON` (store.ts), and migrations run inside BEGIN/COMMIT where that
+// pragma is a no-op. The DROP would therefore cascade and silently delete every upgraded store's
+// indexed content. Closing this needs migration-engine support for running a rebuild with foreign
+// keys disabled outside the transaction, plus a populated pre-upgrade fixture proving no dependent
+// row is lost.
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 32 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -1253,50 +1263,6 @@ SELECT id, capsule_id, kind, source_id, job_id, error_code, processed_documents,
 FROM capsule_audit_events;
 `.trim();
 
-// v33 (KEIKO-0371). capsule_sources carries a `FOREIGN KEY (id) REFERENCES knowledge_sources(id)
-// ON DELETE RESTRICT` clause on a FRESH install, but no migration ever added it to a store created
-// at v1 — and SQLite cannot ALTER a foreign key onto an existing table, so the constraint was
-// silently absent for every upgraded store. That is the constraint stopping a knowledge_sources row
-// from being deleted while a capsule still references it, so upgraded stores could reach a state
-// fresh installs cannot. Rebuilt with the standard create-copy-drop-rename shape already used for
-// the audit tables.
-const CREATE_CAPSULE_SOURCES_V33 = `
-CREATE TABLE capsule_sources_v33 (
-  id TEXT PRIMARY KEY NOT NULL,
-  capsule_id TEXT NOT NULL,
-  display_name TEXT NOT NULL,
-  description TEXT,
-  tags_json TEXT NOT NULL,
-  scope_kind TEXT NOT NULL,
-  scope_json TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
-  FOREIGN KEY (id) REFERENCES knowledge_sources(id) ON DELETE RESTRICT,
-  UNIQUE (capsule_id, id)
-) STRICT;
-`.trim();
-
-// Only rows whose source still exists are carried over: a row referencing a missing
-// knowledge_sources id could not satisfy the constraint being added, and it is already unusable —
-// the join it exists for returns nothing. Dropping it is what makes the rebuild total.
-const COPY_CAPSULE_SOURCES_TO_V33 = `
-INSERT INTO capsule_sources_v33 (
-  id, capsule_id, display_name, description, tags_json, scope_kind, scope_json, created_at, updated_at
-)
-SELECT s.id, s.capsule_id, s.display_name, s.description, s.tags_json, s.scope_kind, s.scope_json,
-  s.created_at, s.updated_at
-FROM capsule_sources AS s
-WHERE EXISTS (SELECT 1 FROM knowledge_sources AS k WHERE k.id = s.id);
-`.trim();
-
-const REBUILD_CAPSULE_SOURCES_FOR_SOURCE_FK: readonly string[] = [
-  CREATE_CAPSULE_SOURCES_V33,
-  COPY_CAPSULE_SOURCES_TO_V33,
-  "DROP TABLE capsule_sources;",
-  "ALTER TABLE capsule_sources_v33 RENAME TO capsule_sources;",
-] as const;
-
 const REBUILD_AUDIT_TABLES_FOR_DELETE_DURABILITY: readonly string[] = [
   CREATE_CAPSULE_MEMBERSHIP_CHANGES_V5,
   COPY_CAPSULE_MEMBERSHIP_CHANGES_TO_V5,
@@ -1613,17 +1579,6 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       CREATE_VECTORS_INDEX_STATE_UPDATE_TRIGGER,
       CREATE_VECTORS_INDEX_STATE_DELETE_TRIGGER,
     ],
-  },
-  {
-    version: 33,
-    reason:
-      "Add the knowledge_sources foreign key to capsule_sources for stores upgraded from v1. " +
-      "A fresh install has carried FOREIGN KEY (id) REFERENCES knowledge_sources(id) ON DELETE " +
-      "RESTRICT since the table was introduced, but SQLite cannot ALTER a foreign key onto an " +
-      "existing table, so no migration ever added it and every upgraded store ran without the " +
-      "constraint that stops a knowledge_sources row being deleted while a capsule references it " +
-      "(KEIKO-0371).",
-    up: REBUILD_CAPSULE_SOURCES_FOR_SOURCE_FK,
   },
 ] as const;
 

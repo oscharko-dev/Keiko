@@ -928,11 +928,16 @@ function preparedTextBytes(files: readonly EditorAgentPreparedChangesetFile[]): 
 // Structural edit count over UNVALIDATED files: used only to reject an oversized payload before the
 // expensive per-file validation runs. A non-array textEdits contributes 0 and is caught downstream.
 function declaredEditCount(files: readonly unknown[]): number {
-  return files.reduce<number>(
-    (total, file) =>
-      total + (isRecord(file) && Array.isArray(file.textEdits) ? file.textEdits.length : 0),
-    0,
-  );
+  // A non-array `textEdits` counts as OVER the bound, not as zero. Counting it as zero let a
+  // malformed file slip past the cheap aggregate check on its way to the structural one; the
+  // structural check does reject it, but "unmeasurable" should read as "too big" at a bound whose
+  // whole job is to stop work early.
+  return files.reduce<number>((total, file) => {
+    if (!isRecord(file) || !Array.isArray(file.textEdits)) {
+      return Number.POSITIVE_INFINITY;
+    }
+    return total + file.textEdits.length;
+  }, 0);
 }
 
 export function isEditorAgentPreparedChangeset(

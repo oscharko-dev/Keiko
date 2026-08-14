@@ -615,35 +615,22 @@ function comparePositions(left: LanguagePosition, right: LanguagePosition): numb
 // client-supplied request", but `path` was only required to be a non-empty string — nothing rejected
 // `../../../../etc/passwd`, an absolute path, or a NUL byte — and nothing bounded `text` against
 // DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes even though the error vocabulary already carries
-// DOCUMENT_TOO_LARGE for exactly that case. The server route does re-resolve and contain the path
-// (resolveOverlayPath in keiko-server/src/editor/languageRoutes.ts rejects absolute, denied and
-// symlink-escaping paths), so this is defence in depth at the layer that claims to own the check —
-// and the byte bound is enforced nowhere else at all.
+// DOCUMENT_TOO_LARGE for exactly that case.
+//
+// The BYTE bound is deliberately not enforced here: runLanguageOperation already measures the same
+// UTF-8 length against the CONFIGURABLE limits and returns the typed DOCUMENT_TOO_LARGE, which the
+// route maps to 413. Repeating it at parse time downgraded that to a generic 400 and ignored the
+// configured limit. Containment is likewise the route's verdict (resolveOverlayPath rejects
+// absolute, denied and symlink-escaping paths and answers 403 DENIED). What was genuinely unbounded
+// is the path itself, so that is what this guard owns: a length cap and a control-character check.
 export function isLanguageDocumentOverlay(value: unknown): value is LanguageDocumentOverlay {
   return (
     isRecord(value) &&
     isWorkspaceRelativeOverlayPath(value.path) &&
     isNonEmptyString(value.languageId) &&
-    typeof value.text === "string" &&
-    !isOversizedDocument(value.text)
+    typeof value.text === "string"
   );
 }
-
-// An oversized document is REJECTED, never truncated: silently clamping the text would hand the
-// language service a different document than the client believes it sent.
-function isOversizedDocument(text: string): boolean {
-  // Fast path: UTF-8 is at most 3 bytes per UTF-16 code unit for BMP and 4 for astral pairs, so a
-  // string whose length already exceeds the cap cannot possibly fit, and one whose length is under
-  // a quarter of the cap always does. Only the band between them needs a full encode.
-  if (text.length > DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes) return true;
-  if (text.length * 4 <= DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes) return false;
-  return (
-    LANGUAGE_SERVICE_TEXT_ENCODER.encode(text).length >
-    DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes
-  );
-}
-
-const LANGUAGE_SERVICE_TEXT_ENCODER = new TextEncoder();
 
 // Mirrors the shape rule the server route enforces before any read: workspace-relative, no absolute
 // root, no drive or UNC prefix, no traversal or blank segment, no backslash, no NUL.

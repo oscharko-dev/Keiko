@@ -256,9 +256,8 @@ function listSqliteMaster(
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 33 and is distinct from the contract-surface string version", () => {
-    // 33 since KEIKO-0371 added the capsule_sources -> knowledge_sources foreign-key migration.
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(33);
+  it("is the integer 32 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(32);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -1308,42 +1307,6 @@ describe("validateCapsuleRowShape", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errors.some((e) => e.includes("lifecycleState"))).toBe(true);
-    }
-  });
-});
-
-// KEIKO-0371 — capsule_sources carries a knowledge_sources foreign key on a FRESH install, but
-// SQLite cannot ALTER a foreign key onto an existing table, so no migration ever added it and every
-// store upgraded from v1 ran without the constraint that stops a knowledge_sources row being
-// deleted while a capsule still references it. Upgraded stores could therefore reach a state fresh
-// installs cannot.
-describe("capsule_sources knowledge_sources foreign key (KEIKO-0371)", () => {
-  function foreignKeyTargets(db: DatabaseSync, table: string): readonly string[] {
-    return (db.prepare(`PRAGMA foreign_key_list(${table})`).all() as { table: string }[]).map(
-      (row) => row.table,
-    );
-  }
-
-  it("declares the knowledge_sources foreign key after the full migration chain", () => {
-    const db = openSchemaDb();
-    try {
-      expect(foreignKeyTargets(db, "capsule_sources")).toContain("knowledge_sources");
-      expect(foreignKeyTargets(db, "capsule_sources")).toContain("capsules");
-    } finally {
-      db.close();
-    }
-  });
-
-  it("enforces ON DELETE RESTRICT: a referenced knowledge source cannot be deleted", () => {
-    const db = openSchemaDb();
-    try {
-      db.exec("PRAGMA foreign_keys = ON;");
-      const handles = seedFullLineage(db);
-      expect(() => {
-        db.exec(`DELETE FROM knowledge_sources WHERE id = '${handles.sourceId}'`);
-      }).toThrow();
-    } finally {
-      db.close();
     }
   });
 });

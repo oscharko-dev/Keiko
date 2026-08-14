@@ -670,22 +670,11 @@ describe("language document overlay trust boundary", () => {
     ).toBe(false);
   });
 
-  it("rejects a document whose text exceeds maxDocumentBytes, and does not truncate it", () => {
+  // The BYTE bound is the ROUTE's business: runLanguageOperation measures the same UTF-8 length
+  // against the CONFIGURABLE limits and returns the typed DOCUMENT_TOO_LARGE (413). Enforcing it
+  // here downgraded that to a generic 400 and ignored the configured limit.
+  it("leaves the document-size verdict to the service, which answers DOCUMENT_TOO_LARGE", () => {
     const oversized = "x".repeat(DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes + 1);
-    expect(isLanguageDocumentOverlay({ ...overlay, text: oversized })).toBe(false);
-    expect(
-      isLanguageDocumentOverlay({
-        ...overlay,
-        text: "x".repeat(DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes),
-      }),
-    ).toBe(true);
-  });
-
-  it("measures the document in UTF-8 bytes, not UTF-16 code units", () => {
-    // 3 UTF-8 bytes per character, 1 code unit each: under the cap by length, over it by bytes.
-    const characters = Math.floor(DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes / 3) + 1;
-    expect(isLanguageDocumentOverlay({ ...overlay, text: "\u4e2d".repeat(characters) })).toBe(
-      false,
-    );
+    expect(isLanguageDocumentOverlay({ ...overlay, text: oversized })).toBe(true);
   });
 });

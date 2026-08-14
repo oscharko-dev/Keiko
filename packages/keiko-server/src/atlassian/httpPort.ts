@@ -54,18 +54,25 @@ function boundedTimeoutMs(requested: number): number {
 }
 
 // Connector-lane egress posture (KEIKO-0316). The caller hands us the LIVE model-gateway egress
-// config, whose `allowPrivateNetwork` / `allowLinkLocalAndMetadata` opt-ins exist for an
-// operator's own approved, customer-hosted MODEL provider. An Atlassian base URL is
-// client-supplied through the connector-management routes, so inheriting those opt-ins would let
-// a connector be pointed at an internal service and turn the `/verify` probe into an
-// internal-reconnaissance oracle. Only the transport settings (proxy, CA bundle) carry over;
-// `denyLoopback` is pinned on. Mirrors researchEgressConfig() in
-// coding-runtime/researchEgressPort.ts, which already solves this for the research lane.
+// config, whose `allowPrivateNetwork` / `allowLinkLocalAndMetadata` opt-ins exist for an operator's
+// own approved, customer-hosted MODEL provider. An Atlassian base URL is client-supplied through the
+// connector-management routes, so inheriting those opt-ins let a connector be pointed at an RFC1918
+// service or at 169.254.169.254 and turned the `/verify` probe into an internal-reconnaissance
+// oracle. Only the transport settings (proxy, CA bundle) carry over; neither opt-in is inherited, so
+// private and cloud-metadata targets are blocked for this lane whatever the model gateway allows.
+//
+// `denyLoopback` is deliberately NOT pinned here, unlike researchEgressConfig() in
+// coding-runtime/researchEgressPort.ts. That flag is overloaded in the gateway:
+// refuseUnpinnableResearchEgress() throws for ANY request that has a proxy configured while
+// denyLoopback is set, because the research lane needs DNS pinning that a proxy defeats. Setting it
+// here made every Atlassian request fail before transport in any deployment whose proxy covers the
+// Atlassian host — verification and sync would stop working entirely. Loopback therefore remains
+// reachable for this lane; closing that half needs either a target-class check exported from
+// keiko-model-gateway or the flag's two meanings separated, and is tracked on KEIKO-0316.
 function connectorEgressConfig(
   base: OutboundHttpEgressConfig | undefined,
 ): OutboundHttpEgressConfig {
   return {
-    denyLoopback: true,
     ...(base?.httpProxy !== undefined ? { httpProxy: base.httpProxy } : {}),
     ...(base?.httpsProxy !== undefined ? { httpsProxy: base.httpsProxy } : {}),
     ...(base?.noProxy !== undefined ? { noProxy: base.noProxy } : {}),

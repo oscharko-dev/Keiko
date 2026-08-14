@@ -494,9 +494,12 @@ const PERMISSIVE_GATEWAY_EGRESS: OutboundHttpEgressConfig = {
   allowLinkLocalAndMetadata: true,
 };
 
+// Loopback is NOT in this list: `denyLoopback` is overloaded in the gateway
+// (refuseUnpinnableResearchEgress throws for any proxied request that sets it), so pinning it here
+// broke every proxied Atlassian deployment. The private and cloud-metadata classes — the actual
+// escalation vectors the finding reports — are blocked by NOT inheriting the model gateway's
+// opt-ins, which is what these cases prove. The loopback half is tracked on KEIKO-0316.
 const INTERNAL_BASE_URLS = [
-  "https://127.0.0.1",
-  "https://localhost",
   "https://10.0.0.5",
   "https://172.16.4.9",
   "https://192.168.1.20",
