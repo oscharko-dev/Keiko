@@ -105,6 +105,36 @@ describe("buildPatchPreview — file classification", () => {
     expect(file?.modified).toBe("export const a = 1;\n");
   });
 
+  it("flags a new-file change as unsupported when the matching source is truncated", () => {
+    // A truncated source, by definition, proves a non-empty file exists at this uri even though
+    // the reported `text` slice may itself be short — the conflict guard must not depend on the
+    // reported text being non-empty when the producer already told us it clamped a real file.
+    const truncatedSource: PatchPreviewSource = {
+      content: {
+        relativePath: "src/new-trunc.ts",
+        sizeBytes: 999,
+        text: "partial",
+        truncated: true,
+      },
+    };
+    const model = buildPatchPreview({
+      patch: patch([
+        change({
+          uri: "keiko://doc/new-trunc.ts",
+          isNewFile: true,
+          edits: replaceWholeFile("export const a = 1;\n"),
+        }),
+      ]),
+      sources: { "keiko://doc/new-trunc.ts": truncatedSource },
+    });
+    const file = model.files[0];
+    expect(file?.status).not.toBe("created");
+    expect(file?.status).toBe("unsupported");
+    expect(file?.original).toBe("");
+    expect(file?.modified).toBe("");
+    expect(file?.note).toMatch(/existing content/i);
+  });
+
   it("classifies a modified file by applying edits to the provided original", () => {
     const model = buildPatchPreview({
       patch: patch([

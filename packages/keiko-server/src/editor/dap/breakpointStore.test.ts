@@ -895,6 +895,46 @@ describe("KEIKO-0179 — breakpoint re-key on file rename", () => {
     expect(lines).toEqual([1, 9]);
   });
 
+  it("rejects a rename whose merged destination would exceed the per-file breakpoint cap, leaving the record readable afterward", () => {
+    // KEIKO-0179 collision policy keeps both breakpoint sets under the destination fileId. If the
+    // merged count is not checked against the same per-file cap setBreakpointsForFile enforces, the
+    // over-cap record still commits successfully here but then fails validBreakpointCollection on
+    // every subsequent load, bricking the whole workspace instrumentation store as "unavailable"
+    // until an operator manually deletes the file.
+    const stateDir = temporaryDirectory("debug-state-rename-cap");
+    const root = temporaryDirectory("debug-workspace-rename-cap");
+    let id = 0;
+    const store = createBreakpointStore({
+      stateDir,
+      idFactory: () => `rename_cap_${String(id++)}`,
+    });
+    const cap = BREAKPOINT_STORE_LIMITS.maxBreakpointsPerFile;
+    const destinationCount = Math.floor(cap / 2);
+    const matchingCount = cap - destinationCount + 1;
+    setBreakpoints(
+      store,
+      root,
+      "a.ts",
+      Array.from({ length: matchingCount }, (_, index) => breakpoint(index + 1)),
+    );
+    setBreakpoints(
+      store,
+      root,
+      "b.ts",
+      Array.from({ length: destinationCount }, (_, index) => breakpoint(index + 1)),
+    );
+    const before = currentSnapshot(store, root);
+
+    const renamed = store.renameFile(root, "a.ts", "b.ts");
+
+    expect(renamed).toMatchObject({ ok: false, reason: "cap_exceeded", snapshot: before });
+    const afterFileIds = currentSnapshot(store, root).breakpoints.map((entry) => entry.fileId);
+    expect(afterFileIds).toContain("a.ts");
+
+    const reopened = createBreakpointStore({ stateDir }).snapshot(root);
+    expect(reopened).toMatchObject({ ok: true });
+  });
+
   it("rejects an invalid destination fileId without mutating the record", () => {
     const stateDir = temporaryDirectory("debug-state-rename-invalid");
     const root = temporaryDirectory("debug-workspace-rename-invalid");

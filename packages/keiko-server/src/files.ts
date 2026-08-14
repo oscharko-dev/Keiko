@@ -39,6 +39,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type { FilesContentResponse as FilesContentWireResponse } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { containsPath } from "@oscharko-dev/keiko-git";
+import { inspectDebugWorkspaceIdentity } from "./editor/dap/debugLaunchContext.js";
 import { notifyHostLspWorkspaceFileChanged } from "./editor/lsp/hostLanguageOperation.js";
 import { captureEditorLocalHistorySafely } from "./editor/localHistory/localHistoryCapture.js";
 import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
@@ -2591,6 +2592,42 @@ function renamedBreakpointFileId(
   return undefined;
 }
 
+type DapDebugService = NonNullable<UiHandlerDeps["dapDebug"]>;
+
+// KEIKO-0179 follow-up (Codex P1 on PR #3141): tells an active debug session's browser panel that
+// the instrumentation snapshot moved, reusing the exact DapEventBridge channel and
+// "breakpoints-changed" event that handleSetDebugBreakpoints already publishes in
+// dapDebugRoutes.ts (see publishInstrumentationChange). The live session's own binding is read via
+// manager.workspaceSessionId/binding, so no request cookie or new subsystem is needed, and this is
+// a no-op when no debug session is bound to the workspace. Re-arming the DAP adapter's own
+// breakpoint set at the new path is out of scope: reaching dapDebugRoutes.ts's reconciliation
+// helpers from here would create an import cycle between the two route modules, so that stays a
+// follow-up.
+function notifyRenamedBreakpoints(service: DapDebugService, realRoot: string): void {
+  const partition = inspectDebugWorkspaceIdentity(realRoot).identityDigest;
+  const sessionId = service.manager.workspaceSessionId(partition);
+  if (sessionId === undefined) return;
+  const binding = service.manager.binding(sessionId);
+  if (binding === undefined) return;
+  const snapshot = service.breakpoints.snapshot(realRoot);
+  if (!snapshot.ok) return;
+  service.events.publish(
+    {
+      workspacePartitionKey: binding.workspacePartitionKey,
+      browserSessionBinding: binding.browserSessionBinding,
+    },
+    {
+      kind: "breakpoints-changed",
+      workspaceId: binding.workspaceId,
+      revision: snapshot.snapshot.revision,
+      breakpointCount: snapshot.snapshot.breakpoints.length,
+      verifiedCount: snapshot.snapshot.breakpoints.filter(
+        (entry) => entry.verification === "verified",
+      ).length,
+    },
+  );
+}
+
 // KEIKO-0179: fans out a successful rename to the DAP breakpoint store so debugging configuration
 // follows the file instead of lingering, orphaned, against the now-nonexistent old path. A directory
 // rename affects every breakpoint filed under the old prefix, re-keyed one fileId at a time (never a
@@ -2603,8 +2640,9 @@ function reKeyRenamedBreakpoints(
   previousPath: string,
   nextPath: string,
 ): void {
-  const store = deps.dapDebug?.breakpoints;
-  if (store === undefined) return;
+  const service = deps.dapDebug;
+  if (service === undefined) return;
+  const store = service.breakpoints;
   const snapshot = store.snapshot(realRoot);
   if (!snapshot.ok) return;
   const affected = new Set(
@@ -2616,6 +2654,7 @@ function reKeyRenamedBreakpoints(
     const nextFileId = renamedBreakpointFileId(fileId, previousPath, nextPath);
     if (nextFileId !== undefined) store.renameFile(realRoot, fileId, nextFileId);
   }
+  if (affected.size > 0) notifyRenamedBreakpoints(service, realRoot);
 }
 
 export async function handleFilesRename(

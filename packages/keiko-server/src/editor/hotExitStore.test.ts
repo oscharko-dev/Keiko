@@ -168,4 +168,37 @@ describe("editor hot-exit server store", () => {
     expect(store.read(first.snapshotRef)?.content).toBe(snapshot().content);
     expect(store.read(second.snapshotRef)?.content).toBe(snapshot().content);
   });
+
+  // Regression: the KEIKO-0367 fix moved the write-time budget prune from the untrusted client
+  // updatedAt to the server's own Date.now(). That correctly stops a single write from evicting
+  // OTHER cached entries (covered above), but prune() also runs the TTL-expiry branch over the
+  // incoming ref itself: a client clock more than one TTL window behind the server makes the
+  // just-added metadata look already expired, so prune deletes it from the index before the
+  // vault.set() persist gate is even reached. write() still returns a success-shaped result
+  // (snapshotRef + contentSizeBytes) even though nothing was written to the vault -- a silent
+  // failure with no recovery snapshot on the far side.
+  it("still persists a write whose client clock is far behind the server (clock skew)", () => {
+    const stateDir = tempStateDir();
+    const store = createEditorHotExitStore({
+      stateDir,
+      env: { KEIKO_EDITOR_HOT_EXIT_KEY: VAULT_KEY },
+    });
+    // Client clock is more than one TTL window behind the server's real Date.now().
+    const staleUpdatedAt = Date.now() - 10 * EDITOR_HOT_EXIT_TTL_MS;
+    const stale = snapshot({ updatedAt: staleUpdatedAt });
+
+    const result = store.write(
+      stale,
+      store.snapshotRefFor(stale.workspaceRoot, stale.relativePath),
+    );
+
+    // Prove the write path actually persisted the entry, using a nowMs consistent with the
+    // fixture's own (stale) clock rather than the real wall clock -- this isolates the write-time
+    // persistence bug from read()'s separate, expected TTL policy (asserted below).
+    expect(store.read(result.snapshotRef, staleUpdatedAt + 1)?.content).toBe(stale.content);
+    // read()'s own TTL check (against the real Date.now() default) independently treats a
+    // clock-skewed snapshot as already expired -- that is expected and orthogonal to this
+    // regression, which is specifically about write() silently skipping persistence.
+    expect(store.read(result.snapshotRef)).toBeNull();
+  });
 });

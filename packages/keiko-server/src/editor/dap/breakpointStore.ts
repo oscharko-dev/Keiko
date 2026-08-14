@@ -898,6 +898,14 @@ function commitBreakpointReplacement(
 // rename against no matching entries is a true no-op — it must not consume a revision for nothing.
 // Entries already filed under `nextFileId` are retained, never dropped, so a rename that lands on
 // an already-tracked destination path keeps both breakpoint sets rather than silently losing one.
+//
+// KEIKO-2898: the keep-both-sets merge can push the destination past MAX_BREAKPOINTS_PER_FILE, the
+// same per-file cap setBreakpoints enforces. An over-cap record still commits fine here (nothing
+// else re-validates it before writing), but every later loadRecord runs it back through
+// parseBreakpoints -> validBreakpointCollection, which rejects it — bricking the whole workspace
+// instrumentation store as "unavailable" until an operator manually deletes the file. Reject the
+// migration up front instead: the filesystem rename already succeeded, so leaving the record
+// unchanged only leaves the old-path breakpoints orphaned (recoverable), never unavailable.
 function renameFileEntries(
   options: BreakpointStoreOptions,
   realRoot: string,
@@ -911,6 +919,12 @@ function renameFileEntries(
   }
   const matching = load.record.breakpoints.filter((entry) => entry.fileId === previousFileId);
   if (matching.length === 0) return success(load.record, 0);
+  const destinationCount = load.record.breakpoints.filter(
+    (entry) => entry.fileId === nextFileId,
+  ).length;
+  if (destinationCount + matching.length > MAX_BREAKPOINTS_PER_FILE) {
+    return rejected("cap_exceeded", load.record, destinationCount, matching.length);
+  }
   const retained = load.record.breakpoints.filter((entry) => entry.fileId !== previousFileId);
   const rekeyed = matching.map((entry) => ({ ...entry, fileId: nextFileId }));
   const next = {

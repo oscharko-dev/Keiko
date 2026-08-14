@@ -220,10 +220,16 @@ export function createEditorHotExitStore(
     const index = getMetaIndex(activeVault);
     const retained: { ref: string; meta: HotExitMeta }[] = [];
     for (const [ref, meta] of index) {
+      // The incoming ref is exempt from TTL-expiry here: it is being written right now, so a
+      // client clock that is far behind the server must not make write() self-expire the entry
+      // it was just asked to persist (that would silently skip the vault.set() below while still
+      // returning a success-shaped result). It remains excluded from `retained` either way, so it
+      // stays subject to byte-budget accounting via `incomingSize` exactly as before.
+      if (ref === incomingRef) continue;
       if (meta.updatedAt + EDITOR_HOT_EXIT_TTL_MS < nowMs) {
         activeVault.delete(ref);
         index.delete(ref);
-      } else if (ref !== incomingRef) {
+      } else {
         retained.push({ ref, meta });
       }
     }

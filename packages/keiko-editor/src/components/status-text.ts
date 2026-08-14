@@ -65,16 +65,15 @@ function saveMessage(args: StatusViewModelArgs): string {
 
 /** The persistent read-only notice appended to the base status, if any (Issue #2898/KEIKO-0259).
  * `overLimit` and `truncated` are independent, equally-weighted read-only triggers (see
- * `effectiveReadOnly` in save-state.ts); both must be announced through this live status region
- * rather than only one of them. */
+ * `effectiveReadOnly` in save-state.ts); both are composed into the message when both are true so
+ * an AT user is never left unaware of the truncation just because the file also exceeds the size
+ * limit. */
 function readOnlyNotice(args: StatusViewModelArgs): string {
-  if (args.overLimit) {
-    return " File exceeds the size limit and is read-only.";
-  }
-  if (args.truncated) {
-    return " File is truncated (read-only): it exceeds the display limit.";
-  }
-  return "";
+  const overLimitNotice = args.overLimit ? " File exceeds the size limit and is read-only." : "";
+  const truncatedNotice = args.truncated
+    ? " File is truncated (read-only): it exceeds the display limit."
+    : "";
+  return `${overLimitNotice}${truncatedNotice}`;
 }
 
 /**

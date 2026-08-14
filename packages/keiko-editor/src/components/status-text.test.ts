@@ -119,7 +119,7 @@ describe("deriveStatusViewModel", () => {
     expect(vm.message).toContain("read-only");
   });
 
-  it("prefers the size-limit notice over the truncation notice when both are true", () => {
+  it("composes both notices when the file is truncated and over the size limit (#2898)", () => {
     const vm = deriveStatusViewModel({
       loadState: ready,
       saveStatus: "idle",
@@ -128,6 +128,10 @@ describe("deriveStatusViewModel", () => {
       overLimit: true,
     });
     expect(vm.message).toContain("size limit");
-    expect(vm.message).not.toContain("display limit");
+    expect(vm.message).toContain("display limit");
+    expect(vm.message).toBe(
+      "Ready File exceeds the size limit and is read-only." +
+        " File is truncated (read-only): it exceeds the display limit.",
+    );
   });
 });

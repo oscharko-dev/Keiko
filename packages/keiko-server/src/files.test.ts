@@ -1434,7 +1434,15 @@ describe("desktop files mutations (create / rename / delete)", () => {
 
     const result = await handleFilesRename(
       patchContentContext({ root, path: "src/app.ts", newPath: "src/renamed.ts" }),
-      { store, redactor: buildRedactor({}), dapDebug: { breakpoints } } as unknown as UiHandlerDeps,
+      {
+        store,
+        redactor: buildRedactor({}),
+        dapDebug: {
+          breakpoints,
+          manager: { workspaceSessionId: vi.fn().mockReturnValue(undefined), binding: vi.fn() },
+          events: { publish: vi.fn() },
+        },
+      } as unknown as UiHandlerDeps,
     );
 
     expect(result).toMatchObject({
@@ -1448,6 +1456,88 @@ describe("desktop files mutations (create / rename / delete)", () => {
         "src/renamed.ts",
       ]);
     }
+    await rm(debugStateDir, { recursive: true, force: true });
+  });
+
+  it("publishes breakpoints-changed to the active debug session's browser panel on rename (KEIKO-0179 follow-up, Codex P1 on PR #3141)", async () => {
+    const debugStateDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-mut-dap-evt-")));
+    const breakpoints = createBreakpointStore({ stateDir: debugStateDir });
+    const initial = breakpoints.snapshot(root);
+    if (!initial.ok) throw new Error("expected an available breakpoint snapshot");
+    const armed = breakpoints.setBreakpointsForFile(
+      root,
+      initial.snapshot.revision,
+      initial.snapshot.etag,
+      "src/app.ts",
+      [{ line: 1, enabled: true }],
+    );
+    expect(armed.ok).toBe(true);
+
+    const publish = vi.fn().mockReturnValue(true);
+    const binding = {
+      workspaceId: "ws-1",
+      workspacePartitionKey: "partition-1",
+      browserSessionBinding: "binding-1",
+    };
+    const manager = {
+      workspaceSessionId: vi.fn().mockReturnValue("session-1"),
+      binding: vi.fn().mockReturnValue(binding),
+    };
+
+    const result = await handleFilesRename(
+      patchContentContext({ root, path: "src/app.ts", newPath: "src/renamed.ts" }),
+      {
+        store,
+        redactor: buildRedactor({}),
+        dapDebug: { breakpoints, manager, events: { publish } },
+      } as unknown as UiHandlerDeps,
+    );
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledWith(
+      { workspacePartitionKey: "partition-1", browserSessionBinding: "binding-1" },
+      expect.objectContaining({
+        kind: "breakpoints-changed",
+        workspaceId: "ws-1",
+        breakpointCount: 1,
+        verifiedCount: 0,
+      }),
+    );
+    await rm(debugStateDir, { recursive: true, force: true });
+  });
+
+  it("does not publish when no debug session is bound to the workspace (plain rename)", async () => {
+    const debugStateDir = await realpath(
+      await mkdtemp(join(tmpdir(), "keiko-files-mut-dap-noevt-")),
+    );
+    const breakpoints = createBreakpointStore({ stateDir: debugStateDir });
+    const initial = breakpoints.snapshot(root);
+    if (!initial.ok) throw new Error("expected an available breakpoint snapshot");
+    const armed = breakpoints.setBreakpointsForFile(
+      root,
+      initial.snapshot.revision,
+      initial.snapshot.etag,
+      "src/app.ts",
+      [{ line: 1, enabled: true }],
+    );
+    expect(armed.ok).toBe(true);
+
+    const publish = vi.fn().mockReturnValue(true);
+    const manager = { workspaceSessionId: vi.fn().mockReturnValue(undefined), binding: vi.fn() };
+
+    const result = await handleFilesRename(
+      patchContentContext({ root, path: "src/app.ts", newPath: "src/renamed.ts" }),
+      {
+        store,
+        redactor: buildRedactor({}),
+        dapDebug: { breakpoints, manager, events: { publish } },
+      } as unknown as UiHandlerDeps,
+    );
+
+    expect(result).toMatchObject({ status: 200 });
+    expect(manager.binding).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
     await rm(debugStateDir, { recursive: true, force: true });
   });
 
