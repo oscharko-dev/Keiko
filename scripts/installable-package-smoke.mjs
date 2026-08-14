@@ -1308,6 +1308,13 @@ export function provisionPinnedYarnForSetup() {
     console.log(`provision-pinned-yarn: ${PINNED_YARN} already cached; no request made.`);
     return;
   }
+  // No registry and no private home, and both are correct here rather than omissions. This step
+  // runs BEFORE any local registry exists and downloads the Yarn TOOL from upstream — it resolves
+  // no project dependency, because there is no project: `corepack install --cache-only` only
+  // populates the package-manager cache. Node drops an env entry whose value is `undefined`, so
+  // the child sees no `YARN_NPM_REGISTRY_SERVER` at all rather than a broken one. The hermeticity
+  // guarantee belongs to the INSTALL, which runs with `COREPACK_ENABLE_NETWORK: "0"` and the
+  // loopback registry asserted — and which this step is what makes possible offline (#3130).
   provisionPinnedYarn(undefined, undefined);
   console.log(`provision-pinned-yarn: ${PINNED_YARN} cached in ${corepackCacheDir()}.`);
 }

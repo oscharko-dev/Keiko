@@ -304,9 +304,18 @@ describe("installable package smoke optional-dependency coverage", () => {
       const rc = readFileSync(join(projectDir, ".yarnrc.yml"), "utf8");
       const globalRegistry = /^npmRegistryServer: (http:\/\/127\.0\.0\.1:\d+)$/mu.exec(rc);
       expect(globalRegistry).not.toBeNull();
-      // The scoped entry must point at the same loopback registry, so no resolution path is left
-      // pointing at the public registry.
-      expect(rc).toContain(`    npmRegistryServer: ${globalRegistry?.[1] ?? ""}`);
+      // EVERY scoped entry must equal the global loopback registry, compared as a whole value
+      // rather than searched for as a substring. `toContain` would also accept a scoped entry
+      // that merely STARTS with the loopback URL — `http://127.0.0.1:12345.evil.example/` embeds
+      // `http://127.0.0.1:12345` and would have passed, leaving that scope resolving off-host
+      // while the assertion stayed green (KfQ thread 3780296820).
+      const scopedRegistries = [...rc.matchAll(/^ {4}npmRegistryServer: (\S+)$/gmu)].map(
+        (match) => match[1],
+      );
+      expect(scopedRegistries.length).toBeGreaterThan(0);
+      for (const scoped of scopedRegistries) {
+        expect(scoped).toBe(globalRegistry?.[1]);
+      }
       // No resolution path may reference a public registry, and the architecture narrowing the
       // offline closure depends on must be present.
       expect(rc).not.toMatch(/registry\.(?:npmjs|yarnpkg)\.(?:org|com)/u);
