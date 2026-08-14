@@ -888,23 +888,41 @@ function isReusableSeedEntry(destination, entry) {
   return entry.integrity === tarballIntegrity(resolved);
 }
 
+/**
+ * A stub standing in for the binding this very host would link. Foreign-platform stubs are
+ * legitimate and shareable; this one is the placeholder `assertHostBindingsAreReal` exists to
+ * reject, so it must never outlive the process that made it.
+ */
+function isHostBindingStub(name, entry) {
+  if (!isStubEntry(entry)) return false;
+  return hostBindingSuffixes().some((suffix) => name.endsWith(suffix));
+}
+
 export function writeSeedIndex(destination, seeded) {
   // Published by rename so a concurrent reader never sees a half-written file: two smoke commands
   // share this path within one checkout, and an interrupted write would otherwise leave malformed
   // JSON that the next invocation cannot parse.
   //
-  // STUBS ARE NEVER PERSISTED (Codex thread 3780203131). Two invocations sharing this cache read
-  // the index before either publishes, so a process that seeded AFTER a prune — where the native
-  // packages are gone and every binding stubs — would otherwise publish those stubs with a
-  // matching integrity value. The other process would then read them, pass the integrity check
-  // precisely because the stub is intact, and run the Yarn arm against a placeholder where the
-  // host binding belongs. Real archives are safe to share: they are integrity-verified on read and
-  // a replaced or torn one is rejected and re-packed. A stub is not, because it is a legitimate
-  // artifact for a FOREIGN platform and indistinguishable from one by integrity alone. Stubs are
-  // synthetic and cost nothing to rebuild, so each process makes its own.
+  // A stub for THIS HOST'S OWN binding is never persisted (Codex thread 3780203131). Two
+  // invocations sharing this cache read the index before either publishes, so a process that
+  // seeded AFTER a prune — where the native packages are gone and every binding stubs — would
+  // otherwise publish the host's own binding as a stub with a matching integrity value. The other
+  // process would read it, pass the integrity check precisely because the stub is intact, and run
+  // the Yarn arm against a placeholder where the real binding belongs.
+  //
+  // FOREIGN-platform stubs must be persisted, and the first revision of this filter dropped them
+  // too — which broke the CI sequence outright. There the seed is taken from the intact tree and
+  // `prune:package-native-optionals` then deletes the native packages, so the second process can
+  // no longer read `@napi-rs/canvas@1.0.2`'s manifest to learn that it declares
+  // `canvas-android-arm64@1.0.2`: that stub is only derivable BEFORE the prune, and without it
+  // Yarn 404s on a package the lockfile genuinely pins. A foreign stub is also not a poisoning
+  // vector — it is the correct artifact for a platform no host here would link.
+  //
+  // Real archives are safe to share regardless: they are integrity-verified on read, so a replaced
+  // or torn one is rejected and re-packed.
   const serializable = {};
   for (const [name, versions] of seeded) {
-    const durable = [...versions].filter(([, entry]) => !isStubEntry(entry));
+    const durable = [...versions].filter(([, entry]) => !isHostBindingStub(name, entry));
     if (durable.length === 0) continue;
     serializable[name] = Object.fromEntries(
       durable.map(([version, entry]) => [

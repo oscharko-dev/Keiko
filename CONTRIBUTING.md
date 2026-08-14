@@ -35,7 +35,9 @@ All required status checks must pass on the current pull-request head before a c
 10. `Socket Security: Pull Request Alerts`
 
 `workflow hygiene` runs actionlint, the pinned-SHA verification, zizmor and the OSV lockfile scan as
-one context (ADR-0159); the tools, pinned versions and rule sets are unchanged. The hosted contexts
+one context (ADR-0159); the tools, pinned versions and rule sets are unchanged. It also runs the
+repository-owned `check:zizmor-anchors` ahead of zizmor, so a line anchor that drifted out of
+`.github/zizmor.yml` reports as itself rather than as the finding it silently stopped suppressing. The hosted contexts
 and their bounded zero-cost eligibility are recorded in
 [`docs/qa/external-quality-gates.md`](docs/qa/external-quality-gates.md).
 

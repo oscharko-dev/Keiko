@@ -9,7 +9,7 @@ const hygiene = readFileSync(resolve(repoRoot, ".github/workflows/workflow-hygie
 const ci = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
 
 // ADR-0159: the four workflow-hygiene micro-gates run as serial steps of one job producing the
-// single required `workflow hygiene` context. The bundling is only legitimate while every tool runs
+// single required `workflow hygiene` context, joined by the repository-owned zizmor anchor check. The bundling is only legitimate while every tool runs
 // at the same pinned version, with the same configuration, over the same evaluation surface - so
 // that is what this file pins, machine-checked rather than asserted in a pull-request description.
 
@@ -38,14 +38,21 @@ function jobSteps(source, jobId) {
   return steps;
 }
 
-// The four gates, in the order the job runs them, and the two steps that are not gates: the shared
+// The gates, in the order the job runs them, and the two steps that are not gates: the shared
 // checkout, and downloading the actionlint binary, which is a prerequisite of `Run actionlint`.
+// Four came from the consolidated micro-gates; the anchor check is repository-owned and runs no
+// external tool, but it is a gate by the only definition that matters here — it fails the required
+// context on a real defect and must report independently of the others (#3130).
 const BUNDLED_JOB = "workflow-hygiene";
 const CHECKOUT_STEP = "Check out repository";
 const ACTIONLINT_PREREQUISITE = "Download and verify actionlint";
 const GATE_STEPS = [
   "Run actionlint",
   "Assert all action references are pinned to 40-hex SHAs",
+  // Ahead of `Run zizmor` on purpose: `.github/zizmor.yml` scopes each risk acceptance to a LINE
+  // NUMBER, so a drifted anchor surfaces as the finding it was accepted for rather than as its
+  // cause. Running the check first makes the required context name the corrected line.
+  "Verify the zizmor ignore anchors still point at what they document",
   "Run zizmor",
   "Scan dependency manifests with OSV Scanner",
 ];

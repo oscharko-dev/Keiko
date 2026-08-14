@@ -766,18 +766,31 @@ describe("installable package smoke optional-dependency coverage", () => {
   // — and the other process would accept them precisely because the stub is intact. A real archive
   // is integrity-verified on read and self-heals; a stub is a legitimate artifact for a foreign
   // platform and cannot be told apart from one by integrity (Codex thread 3780203131).
-  it("never publishes a stub into the shared seed index", () => {
+  it("persists a foreign-platform stub but never this host's own binding stub", () => {
     const tree = mkdtempSync(join(tmpdir(), "keiko-stub-index-tree-"));
     const seedDir = mkdtempSync(join(tmpdir(), "keiko-stub-index-seed-"));
-    const manifest = { optionalDependencies: { "demo-native": "^1.0.0" }, bundleDependencies: [] };
+    // One binding this host would link, one it never would. Both stub here, because neither is
+    // installed in this empty tree — the difference is only which one may outlive the process.
+    const hostBinding = `demo-native${hostBindingSuffixes().at(-1)}`;
+    const foreignBinding = "demo-native-aix-ppc64";
+    const manifest = {
+      optionalDependencies: { [foreignBinding]: "^1.0.0", [hostBinding]: "^1.0.0" },
+      bundleDependencies: [],
+    };
     try {
       mkdirSync(join(tree, "node_modules"), { recursive: true });
-      // Seeded from a tree where the optional package is absent: this run produces a stub.
-      const pruned = seedVendoredRegistry(seedDir, join(tree, "node_modules"), manifest);
-      expect(pruned.get("demo-native")?.get("1.0.0")?.manifest?.os).toBeDefined();
+      const seeded = seedVendoredRegistry(seedDir, join(tree, "node_modules"), manifest);
+      expect(seeded.get(hostBinding)?.get("1.0.0")?.manifest?.os).toBeDefined();
+      expect(seeded.get(foreignBinding)?.get("1.0.0")?.manifest?.os).toBeDefined();
 
-      // A concurrent invocation reading the shared index must not inherit it.
-      expect(loadSeedIndex(seedDir).get("demo-native")).toBeUndefined();
+      const published = loadSeedIndex(seedDir);
+      // The host's own binding must not be inheritable: a process seeding after the prune would
+      // otherwise hand the next one a placeholder that passes integrity precisely by being intact.
+      expect(published.get(hostBinding)).toBeUndefined();
+      // The foreign stub must survive. CI seeds from the intact tree and then prunes the native
+      // packages, so a stub only derivable from a parent manifest that the prune deletes cannot be
+      // rebuilt by the second process — dropping it 404s a package the lockfile genuinely pins.
+      expect(published.get(foreignBinding)?.get("1.0.0")).toBeDefined();
     } finally {
       rmSync(tree, { recursive: true, force: true });
       rmSync(seedDir, { recursive: true, force: true });

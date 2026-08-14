@@ -460,7 +460,9 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 
   `workflow hygiene` is one context running actionlint, the pinned-SHA grep, zizmor and the OSV
   lockfile scan as serial steps of one job (ADR-0159) — same tools, same pinned versions, same rule
-  sets as the four separate contexts it replaced.
+  sets as the four separate contexts it replaced — plus the repository-owned `check:zizmor-anchors`,
+  which runs ahead of zizmor so a drifted line anchor names its own cause instead of surfacing as
+  the finding it was accepted for (#3130).
 
   No human approving review is required for `dev`. CodeRabbit reviews every `dev` pull request and
   every subsequent push without auto-pause. Its status is not required because quota can omit a

@@ -85,6 +85,15 @@ with `--config=osv-scanner.toml --recursive ./`. The job holds `permissions: con
 union of the four, which is also each of the four, so no step gains an authority its own job did not
 have.
 
+Since #3130 the job also runs `node scripts/check-zizmor-anchors.mjs` immediately ahead of zizmor.
+It is not a fifth external tool and adds no authority — it reads the repository with Node builtins
+and needs no dependency install. It is here because the finding it explains is emitted by the step
+that follows it: `.github/zizmor.yml` scopes every risk acceptance to a LINE NUMBER, so a diff that
+inserts a line above one silently drops a reviewed acceptance and zizmor then reports the underlying
+finding with nothing pointing at the cause. That has now turned this required context red three
+times on unrelated changes. Running the check first makes the context name the corrected line. It
+carries the same guard as the gates around it, so it reports independently of them.
+
 No step carries `continue-on-error`. A failing step fails the job and the single context is red.
 
 This is direct tool execution, not an aggregate over check results. ADR-0135 D3's prohibition on a
