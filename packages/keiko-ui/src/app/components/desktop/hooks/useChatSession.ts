@@ -2847,12 +2847,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const targetPath = projectOverride?.path ?? state.activeProject?.path;
         if (targetPath !== undefined) input.projectPath = targetPath;
         const created = await createDesktopChat(input);
+        notifyChatUpsert(created.chat);
         if (targetPath !== undefined && activeProjectPathRef.current !== targetPath) {
           return created.chat;
         }
         activeChatIdRef.current = created.chat.id;
         activeProjectPathRef.current = created.project.path;
-        notifyChatUpsert(created.chat);
         setState({
           projects: Array.from(created.projects),
           chats: sortChats(created.chats),

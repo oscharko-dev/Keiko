@@ -412,6 +412,8 @@ describe("useChatSession bootstrap", () => {
     });
     const otherChat = chat({ id: "chat-other", projectPath: "/other", title: "Other chat" });
     const creation = deferred<Awaited<ReturnType<typeof createDesktopChat>>>();
+    const upsertListener = vi.fn();
+    window.addEventListener("keiko:chat-upsert", upsertListener);
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
     vi.mocked(fetchProjects).mockResolvedValue({
       projects: [project("/repo"), project("/other")],
@@ -445,6 +447,9 @@ describe("useChatSession bootstrap", () => {
     await expect(creationPromise!).resolves.toEqual(created);
     expect(result.current.activeProject?.path).toBe("/other");
     expect(result.current.activeChat?.id).toBe(otherChat.id);
+    expect(upsertListener).toHaveBeenCalledOnce();
+    expect((upsertListener.mock.calls[0]?.[0] as CustomEvent<Chat>).detail).toEqual(created);
+    window.removeEventListener("keiko:chat-upsert", upsertListener);
   });
 
   it("selects a newly added folder even when no conversation model can create a chat", async () => {

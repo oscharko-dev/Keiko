@@ -1020,6 +1020,9 @@ function runPublish({
     KEIKO_PORTABLE_ASSETS_WORKFLOW_PATH: ".github/workflows/portable-assets.yml",
     KEIKO_RELEASE_IMPACT_CATALOG_PATH: catalogFile,
     KEIKO_RELEASE_OWNER_GITHUB_LOGINS: "release-owner",
+    // The real orchestrator must never inherit a developer's private registry credential. Tests
+    // choose every auth source explicitly through qualificationEnv below.
+    KEIKO_RELEASE_DISABLE_DOTENV_TOKEN: "1",
     // Deterministic npmrc generation; the stub npm never uses this token.
     NPM_CONFIG_STRICT_SSL: "true",
     NODE_AUTH_TOKEN: "stub-token-never-sent",

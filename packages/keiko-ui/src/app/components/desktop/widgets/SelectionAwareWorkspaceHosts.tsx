@@ -436,7 +436,7 @@ function useSelectionHandoffControl(args: {
       }
       args.ctx.updateCfg({
         chatId: route.chat.id,
-        projectPath: route.chat.projectPath,
+        projectPathPrivacy: "omit",
         title: route.chat.title,
         selectionHandoffId: undefined,
         newChatRequestId: undefined,
@@ -703,6 +703,7 @@ interface LegacyChatProjectPathArgs {
   readonly chats: readonly Chat[];
   readonly configuredProjectPath: string | undefined;
   readonly loading: boolean;
+  readonly persistProjectPath: boolean;
   readonly projects: readonly ProjectWithAvailability[];
   readonly updateCfg: WindowRenderContext["updateCfg"];
 }
@@ -713,6 +714,7 @@ interface LegacyChatLookupEffectArgs {
   readonly loading: boolean;
   readonly local: Chat | undefined;
   readonly lookup: ChatProjectLookup | undefined;
+  readonly persistProjectPath: boolean;
   readonly projects: readonly ProjectWithAvailability[];
   readonly setLookup: (chatId: string, result: ChatProjectLookup) => void;
   readonly updateCfg: WindowRenderContext["updateCfg"];
@@ -722,7 +724,7 @@ function synchronizeLocalChatProjectLookup(args: LegacyChatLookupEffectArgs): bo
   if (args.local === undefined || args.chatId === undefined) return false;
   if (args.lookup?.kind === "found" && args.lookup.path === args.local.projectPath) return true;
   args.setLookup(args.chatId, { kind: "found", path: args.local.projectPath });
-  args.updateCfg({ projectPath: args.local.projectPath });
+  if (args.persistProjectPath) args.updateCfg({ projectPath: args.local.projectPath });
   return true;
 }
 
@@ -738,7 +740,9 @@ function startRemoteChatProjectLookup(
   void findChatProjectPath(args.chatId, args.projects).then((result): void => {
     if (!active) return;
     args.setLookup(args.chatId, result);
-    if (result.kind === "found") args.updateCfg({ projectPath: result.path });
+    if (result.kind === "found" && args.persistProjectPath) {
+      args.updateCfg({ projectPath: result.path });
+    }
   });
   return (): void => {
     active = false;
@@ -756,7 +760,8 @@ function useLegacyChatProjectPath(args: LegacyChatProjectPathArgs): {
   readonly path: string | undefined;
   readonly pending: boolean;
 } {
-  const { chatId, chats, configuredProjectPath, loading, projects, updateCfg } = args;
+  const { chatId, chats, configuredProjectPath, loading, persistProjectPath, projects, updateCfg } =
+    args;
   const [lookups, setLookups] = useState<ReadonlyMap<string, ChatProjectLookup>>(() => new Map());
   const local = chats.find((chat): boolean => chat.id === chatId && chat.status !== "closed");
   const lookup = chatId === undefined ? undefined : lookups.get(chatId);
@@ -771,11 +776,22 @@ function useLegacyChatProjectPath(args: LegacyChatProjectPathArgs): {
         loading,
         local,
         lookup,
+        persistProjectPath,
         projects,
         setLookup,
         updateCfg,
       }),
-    [chatId, configuredProjectPath, loading, local, lookup, projects, setLookup, updateCfg],
+    [
+      chatId,
+      configuredProjectPath,
+      loading,
+      local,
+      lookup,
+      persistProjectPath,
+      projects,
+      setLookup,
+      updateCfg,
+    ],
   );
   const path =
     configuredProjectPath ??
@@ -867,9 +883,26 @@ function projectRestoreFailed(
   );
 }
 
+function routingResult(
+  activeTarget: Chat | undefined,
+  legacyProject: ReturnType<typeof useLegacyChatProjectPath>,
+  lookupFailed: boolean,
+  switchingProject: boolean,
+  targetMissing: boolean,
+): BoundChatRouting {
+  return {
+    activeTarget,
+    lookupFailed,
+    resolvingLegacyProject: legacyProject.pending,
+    switchingProject,
+    targetMissing,
+  };
+}
+
 function useBoundChatRouting(args: {
   readonly chatId: string | undefined;
   readonly configuredProjectPath: string | undefined;
+  readonly projectPathPrivacy: "omit" | undefined;
   readonly selectionHandoffId: string | undefined;
   readonly session: ChatSessionApi;
   readonly updateCfg: WindowRenderContext["updateCfg"];
@@ -881,6 +914,7 @@ function useBoundChatRouting(args: {
     chats: session.chats,
     configuredProjectPath: args.configuredProjectPath,
     loading: session.loading,
+    persistProjectPath: args.projectPathPrivacy !== "omit",
     projects: session.projects,
     updateCfg: args.updateCfg,
   });
@@ -909,13 +943,7 @@ function useBoundChatRouting(args: {
     selectionHandoffId,
     switchingProject,
   });
-  return {
-    activeTarget,
-    lookupFailed,
-    resolvingLegacyProject: legacyProject.pending,
-    switchingProject,
-    targetMissing,
-  };
+  return routingResult(activeTarget, legacyProject, lookupFailed, switchingProject, targetMissing);
 }
 
 interface MemoryPreference {
@@ -1055,16 +1083,19 @@ interface BoundChatConfig {
   readonly memoryEnabled: boolean | undefined;
   readonly newChatRequestId: string | undefined;
   readonly projectPath: string | undefined;
+  readonly projectPathPrivacy: "omit" | undefined;
   readonly selectionHandoffId: string | undefined;
   readonly title: string | undefined;
 }
 
 function boundChatConfig(cfg: Record<string, unknown>): BoundChatConfig {
+  const projectPathPrivacy = cfg["projectPathPrivacy"] === "omit" ? "omit" : undefined;
   return {
     chatId: str(cfg, "chatId"),
     memoryEnabled: bool(cfg, "memoryEnabled"),
     newChatRequestId: str(cfg, "newChatRequestId"),
     projectPath: str(cfg, "projectPath"),
+    projectPathPrivacy,
     selectionHandoffId: str(cfg, "selectionHandoffId"),
     title: str(cfg, "title"),
   };
@@ -1176,6 +1207,7 @@ function BoundChatWindowSessionHost({
   const routing = useBoundChatRouting({
     chatId: configuration.chatId,
     configuredProjectPath: configuration.projectPath,
+    projectPathPrivacy: configuration.projectPathPrivacy,
     selectionHandoffId: configuration.selectionHandoffId,
     session,
     updateCfg: ctx.updateCfg,
@@ -1447,7 +1479,10 @@ function editorSessionBaseProps(
       if (targetRoot === undefined) return false;
       const selectionHandoffId = registerEditorSelectionHandoff(targetRoot, handoff);
       if (selectionHandoffId === null) return false;
-      const chatWindowId = ctx.openWindow("chat", { selectionHandoffId });
+      const chatWindowId = ctx.openWindow("chat", {
+        projectPathPrivacy: "omit",
+        selectionHandoffId,
+      });
       if (chatWindowId !== null) return true;
       discardEditorSelectionHandoff(selectionHandoffId);
       return false;

@@ -232,6 +232,56 @@
   outline-offset: 2px;
 }
 
+.memoryBudgetSetting {
+  display: grid;
+  gap: 0.35rem;
+  margin-block: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.6rem;
+  background: var(--surface-secondary);
+}
+
+.memoryBudgetSetting > label {
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.memoryBudgetSetting > p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.memoryBudgetControl {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.memoryBudgetControl input {
+  width: min(10rem, 100%);
+  min-width: 0;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.45rem;
+  color: var(--text-primary);
+  background: var(--surface-primary);
+  font: inherit;
+}
+
+.memoryBudgetControl input:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.memoryBudgetControl span {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
 .responseVersionControl {
   align-items: center;
   display: flex;

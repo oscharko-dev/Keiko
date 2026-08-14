@@ -738,6 +738,7 @@ describe("workspace widget renderer registry", () => {
     const openCfg = ctx.openWindow.mock.calls.at(-1)?.[1] as AppWindow["cfg"] | undefined;
     const selectionHandoffId = openCfg?.["selectionHandoffId"];
     expect(ctx.openWindow).toHaveBeenCalledWith("chat", {
+      projectPathPrivacy: "omit",
       selectionHandoffId: expect.any(String),
     });
     expect(typeof selectionHandoffId).toBe("string");
@@ -745,7 +746,11 @@ describe("workspace widget renderer registry", () => {
     expect(JSON.stringify(openCfg)).not.toContain(originRoot);
     if (typeof selectionHandoffId !== "string") return;
 
-    const chatCfg = { chatId: "chat-wrong", selectionHandoffId };
+    const chatCfg = {
+      chatId: "chat-wrong",
+      projectPathPrivacy: "omit" as const,
+      selectionHandoffId,
+    };
     view.rerender(<>{WIN_TYPES.chat.render(chatCfg, ctx)}</>);
     await waitFor(() => expect(chatSessionMock.openProject).toHaveBeenCalledWith(originProject));
     await waitFor(() => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
@@ -756,13 +761,14 @@ describe("workspace widget renderer registry", () => {
     expect(prompt).toContain('"const selected = true;\\r\\n"');
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       chatId: "chat-origin",
-      projectPath: originRoot,
+      projectPathPrivacy: "omit",
       title: "Origin chat",
       selectionHandoffId: undefined,
       newChatRequestId: undefined,
     });
     expect(ctx.focusWindow).toHaveBeenCalledWith("ctx-window");
     expect(JSON.stringify(ctx.updateCfg.mock.calls)).not.toContain("const selected = true");
+    expect(JSON.stringify(ctx.updateCfg.mock.calls)).not.toContain(originRoot);
 
     view.rerender(<>{WIN_TYPES.chat.render(chatCfg, ctx)}</>);
     await waitFor(() => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
@@ -968,7 +974,7 @@ describe("workspace widget renderer registry", () => {
     expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce();
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       chatId: "chat-created",
-      projectPath: originRoot,
+      projectPathPrivacy: "omit",
       title: "Created chat",
       selectionHandoffId: undefined,
       newChatRequestId: undefined,
@@ -1139,7 +1145,7 @@ describe("workspace widget renderer registry", () => {
     expect(chatSessionMock.replaceChat).toHaveBeenCalledWith(renamedChat);
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       chatId: "chat-created",
-      projectPath: renamedChat.projectPath,
+      projectPathPrivacy: "omit",
       title: renamedChat.title,
       selectionHandoffId: undefined,
       newChatRequestId: undefined,
@@ -1176,7 +1182,7 @@ describe("workspace widget renderer registry", () => {
     await waitFor((): void => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       chatId: existingChat.id,
-      projectPath: existingChat.projectPath,
+      projectPathPrivacy: "omit",
       title: existingChat.title,
       selectionHandoffId: undefined,
       newChatRequestId: undefined,

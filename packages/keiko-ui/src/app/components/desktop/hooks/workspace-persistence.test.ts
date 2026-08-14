@@ -459,6 +459,28 @@ describe("workspace-persistence", () => {
     ]);
   });
 
+  it("never persists a private editor-handoff project path", () => {
+    const persisted = sanitizePersistedWindows([
+      win({
+        id: "chat-private-handoff",
+        type: "chat",
+        cfg: {
+          chatId: "private-chat",
+          projectPath: "/Users/customer/private-repository",
+          projectPathPrivacy: "omit",
+          title: "Private handoff",
+        },
+      }),
+    ]);
+
+    expect(persisted[0]?.cfg).toEqual({
+      chatId: "private-chat",
+      projectPathPrivacy: "omit",
+      title: "Private handoff",
+    });
+    expect(JSON.stringify(persisted)).not.toContain("/Users/customer/private-repository");
+  });
+
   it("preserves standalone Figma JSON references without persisting raw JSON payloads", () => {
     const persisted = sanitizePersistedWindows([
       win({

@@ -4482,6 +4482,44 @@ function MemoryActivationButton({
   );
 }
 
+function MemoryBudgetSetting({
+  budgetTokens,
+  setBudgetTokens,
+}: {
+  readonly budgetTokens: number;
+  readonly setBudgetTokens: (next: number) => void;
+}): ReactNode {
+  const t = useTranslate();
+  const generatedId = useId();
+  const inputId = `${generatedId}-chat-memory-budget`;
+  const helpId = `${generatedId}-chat-memory-budget-help`;
+  const change = useCallback(
+    (event: ChangeEvent<HTMLInputElement>): void => {
+      const next = Number(event.target.value);
+      setBudgetTokens(Number.isFinite(next) && next > 0 ? Math.floor(next) : 0);
+    },
+    [setBudgetTokens],
+  );
+  return (
+    <div className={styles.memoryBudgetSetting}>
+      <label htmlFor={inputId}>{t("memoria.settings.budget")}</label>
+      <div className={styles.memoryBudgetControl}>
+        <input
+          id={inputId}
+          type="number"
+          min={0}
+          step={100}
+          value={budgetTokens}
+          aria-describedby={helpId}
+          onChange={change}
+        />
+        <span>{t("memoria.settings.budgetUnit")}</span>
+      </div>
+      <p id={helpId}>{t("memoria.settings.budgetHelp")}</p>
+    </div>
+  );
+}
+
 // Extracted from MemoryPanelImpl (SonarCloud S3358) — the memory-disclosure summary line: pending
 // while no result has arrived yet, else the token-budget copy, else "memory disabled".
 function memorySummaryLabel(
@@ -4507,12 +4545,16 @@ function memoryActionKey(action: ConversationMemoryActionWire): string {
 
 function MemoryPanelImpl({
   latestMemory,
+  memoryBudgetTokens,
+  setMemoryBudgetTokens,
   acceptCandidate,
   rejectCandidate,
   forgetMemoryAction,
   disclosure,
 }: {
   readonly latestMemory: ConversationMemoryResultWire | undefined;
+  readonly memoryBudgetTokens: number;
+  readonly setMemoryBudgetTokens: (next: number) => void;
   readonly acceptCandidate: (proposalId: string) => Promise<void>;
   readonly rejectCandidate: (proposalId: string) => Promise<void>;
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
@@ -4525,6 +4567,10 @@ function MemoryPanelImpl({
     <section className="chat-memory-panel" aria-label={t("chat.memory.panel")}>
       <div id={disclosure.disclosureId} className="chat-memory-disclosure">
         <p className="chat-memory-summary">{memorySummaryLabel(latestMemory, t)}</p>
+        <MemoryBudgetSetting
+          budgetTokens={memoryBudgetTokens}
+          setBudgetTokens={setMemoryBudgetTokens}
+        />
         {latestMemory?.context.memories.map((memory) => (
           <article key={memory.memoryId} className="chat-memory-item">
             <div className="chat-memory-item-head">
@@ -4684,6 +4730,8 @@ function ChatWindowStatusHeader({
   replaceChat,
   memoryControl,
   latestMemory,
+  memoryBudgetTokens,
+  setMemoryBudgetTokens,
   acceptMemoryCandidate,
   rejectMemoryCandidate,
   forgetMemoryAction,
@@ -4695,6 +4743,8 @@ function ChatWindowStatusHeader({
   readonly replaceChat: (chat: Chat) => void;
   readonly memoryControl: ReactNode;
   readonly latestMemory: ConversationMemoryResultWire | undefined;
+  readonly memoryBudgetTokens: number;
+  readonly setMemoryBudgetTokens: (next: number) => void;
   readonly acceptMemoryCandidate: (proposalId: string) => Promise<void>;
   readonly rejectMemoryCandidate: (proposalId: string) => Promise<void>;
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
@@ -4714,6 +4764,8 @@ function ChatWindowStatusHeader({
       {activeChat !== undefined ? (
         <MemoryPanel
           latestMemory={latestMemory}
+          memoryBudgetTokens={memoryBudgetTokens}
+          setMemoryBudgetTokens={setMemoryBudgetTokens}
           acceptCandidate={acceptMemoryCandidate}
           rejectCandidate={rejectMemoryCandidate}
           forgetMemoryAction={forgetMemoryAction}
@@ -5083,6 +5135,8 @@ export function ChatWindow({
     replaceChat,
     memoryEnabled,
     setMemoryEnabled,
+    memoryBudgetTokens,
+    setMemoryBudgetTokens,
     latestMemory,
     lastSentDocuments,
     lastSentImages = [],
@@ -5163,12 +5217,10 @@ export function ChatWindow({
     () => (
       <div className={styles.memoryControls}>
         <MemoryActivationButton enabled={memoryEnabled} onChange={setMemoryEnabled} />
-        {latestMemory === undefined ? null : (
-          <MemoryDisclosureButton disclosure={memoryDisclosure} />
-        )}
+        <MemoryDisclosureButton disclosure={memoryDisclosure} />
       </div>
     ),
-    [latestMemory, memoryDisclosure, memoryEnabled, setMemoryEnabled],
+    [memoryDisclosure, memoryEnabled, setMemoryEnabled],
   );
   const questionAnchorsRef = useRef(new Map<string, HTMLDivElement>());
   const [focusedQuestionId, setFocusedQuestionId] = useState<string | null>(null);
@@ -5255,6 +5307,8 @@ export function ChatWindow({
         replaceChat={replaceChat}
         memoryControl={memoryControl}
         latestMemory={latestMemory}
+        memoryBudgetTokens={memoryBudgetTokens}
+        setMemoryBudgetTokens={setMemoryBudgetTokens}
         acceptMemoryCandidate={acceptMemoryCandidate}
         rejectMemoryCandidate={rejectMemoryCandidate}
         forgetMemoryAction={forgetMemoryAction}

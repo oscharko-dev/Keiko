@@ -90,7 +90,13 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
   // chat has not been named yet". It must survive the snapshot: a dropped marker would be
   // re-derived from the title TEXT on the next reload, which is the display-string dependency it
   // was introduced to remove.
-  chat: ["chatId", "memoryEnabled", "projectPath", CHAT_TITLE_IS_DEFAULT_CFG_KEY],
+  chat: [
+    "chatId",
+    "memoryEnabled",
+    "projectPath",
+    "projectPathPrivacy",
+    CHAT_TITLE_IS_DEFAULT_CFG_KEY,
+  ],
   editor: ["openFiles", "layoutJson", "rootSessionsJson"],
   files: ["activeFilePath", "activeDirectoryPath", "resolvedRoot"],
   figma: ["snapshotRunId", "selectedScreenIdsJson", "selectedScreenName"],
@@ -619,6 +625,9 @@ function sanitizeConfigValue(
   key: string,
   value: unknown,
 ): AppWindow["cfg"][string] {
+  if (type === "chat" && key === "projectPathPrivacy") {
+    return value === "omit" ? value : undefined;
+  }
   if (type === "editor") return sanitizeEditorConfigValue(key, value);
   if (type === "pdfCitationPreview") {
     return sanitizePdfCitationPreviewConfigValue(key, value);
@@ -660,6 +669,9 @@ function sanitizeCfgForPersistence(type: WindowType, cfg: unknown): AppWindow["c
     if (!allowedKeys.has(key)) continue;
     const next = sanitizeConfigValue(type, key, value);
     if (next !== undefined) out[key] = next;
+  }
+  if (type === "chat" && out["projectPathPrivacy"] === "omit") {
+    delete out["projectPath"];
   }
   return out;
 }

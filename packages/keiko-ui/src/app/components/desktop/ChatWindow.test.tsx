@@ -858,7 +858,8 @@ describe("ChatWindow memory disclosure", () => {
     expect(screen.getByText(/Used 42 of 1200 MemoriaViva tokens/i)).toBeInTheDocument();
   });
 
-  it("renders the active memory brain in its enabled state before the first response", () => {
+  it("renders the activation and per-chat settings controls before the first response", async () => {
+    const user = userEvent.setup();
     renderWindow(makeSession({ activeChat: makeChat() }));
 
     const activationButton = screen.getByRole("button", {
@@ -868,7 +869,10 @@ describe("ChatWindow memory disclosure", () => {
     expect(activationButton).toHaveAttribute("aria-pressed", "true");
     expect(document.querySelector(".chat-scope-header")).toContainElement(activationButton);
     expect(activationButton.querySelector("svg")).not.toBeNull();
-    expect(screen.queryByRole("button", { name: /no memories included/i })).toBeNull();
+    const disclosure = screen.getByRole("button", { name: /no memories included/i });
+    expect(disclosure.querySelector("svg")).not.toBeNull();
+    await user.click(disclosure);
+    expect(screen.getByLabelText("Memory context budget")).toHaveValue(1200);
     expect(screen.queryByText("No memories included")).toBeNull();
   });
 
@@ -2242,12 +2246,15 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
 describe("ChatWindow memory controls", () => {
   it("uses the branded brain icon as the per-conversation MemoriaViva control", async () => {
     const setMemoryEnabled = vi.fn();
+    const setMemoryBudgetTokens = vi.fn();
     const user = userEvent.setup();
     renderWindow(
       makeSession({
         activeChat: makeChat(),
         memoryEnabled: true,
         setMemoryEnabled,
+        memoryBudgetTokens: 1200,
+        setMemoryBudgetTokens,
       }),
     );
 
@@ -2262,7 +2269,10 @@ describe("ChatWindow memory controls", () => {
     await user.click(toggle);
     expect(setMemoryEnabled).toHaveBeenCalledWith(false);
     expect(document.querySelector(".chat-memory-budget")).toBeNull();
-    expect(screen.queryByRole("button", { name: /no memories included/i })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /no memories included/i }));
+    const budget = screen.getByLabelText("Memory context budget");
+    fireEvent.change(budget, { target: { value: "2400" } });
+    expect(setMemoryBudgetTokens).toHaveBeenCalledWith(2400);
   });
 
   it("routes each memory icon only to its owning chat session", async () => {
@@ -2311,7 +2321,47 @@ describe("ChatWindow memory controls", () => {
     expect(setPrivateMemoryEnabled).not.toHaveBeenCalled();
   });
 
-  it("shows no disclosure action before any memory result has arrived", () => {
+  it("routes each memory budget control only to its owning chat session", async () => {
+    const privateBudget = vi.fn();
+    const businessBudget = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <>
+        <section data-testid="private-budget-chat">
+          <ChatSessionProvider
+            value={makeSession({
+              activeChat: makeChat({ id: "private-budget" }),
+              setMemoryBudgetTokens: privateBudget,
+            })}
+          >
+            <ChatWindow />
+          </ChatSessionProvider>
+        </section>
+        <section data-testid="business-budget-chat">
+          <ChatSessionProvider
+            value={makeSession({
+              activeChat: makeChat({ id: "business-budget" }),
+              setMemoryBudgetTokens: businessBudget,
+            })}
+          >
+            <ChatWindow />
+          </ChatSessionProvider>
+        </section>
+      </>,
+    );
+
+    const business = within(screen.getByTestId("business-budget-chat"));
+    await user.click(business.getByRole("button", { name: /no memories included/i }));
+    fireEvent.change(business.getByLabelText("Memory context budget"), {
+      target: { value: "1800" },
+    });
+
+    expect(businessBudget).toHaveBeenCalledWith(1800);
+    expect(privateBudget).not.toHaveBeenCalled();
+  });
+
+  it("opens per-chat memory settings before any memory result has arrived", async () => {
+    const user = userEvent.setup();
     renderWindow(
       makeSession({
         activeChat: makeChat(),
@@ -2319,7 +2369,9 @@ describe("ChatWindow memory controls", () => {
       }),
     );
 
-    expect(screen.queryByRole("button", { name: /no memories included/i })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /no memories included/i }));
+    expect(screen.getByLabelText("Memory context budget")).toHaveValue(1200);
+    expect(screen.getByText(/appears after the next response/i)).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Disable MemoriaViva for this chat" }),
     ).toBeInTheDocument();
