@@ -252,20 +252,31 @@ describe("validateCodingContextRequest", () => {
 
   // KEIKO-0420: the only bounded field was editorSessionId. documentPath was checked for
   // non-emptiness alone, and symbol/queryText/capsuleId/capsuleSetId/changedFiles had no bound at
-  // all — so a traversal path and multi-megabyte free text both returned ok:true from a function
-  // named validateCodingContextRequest. The route re-validates, but a caller reading ok:true will
-  // reasonably treat the request as vetted; the contract has to hold the property it claims.
+  // all — so multi-megabyte free text returned ok:true from a function named
+  // validateCodingContextRequest. A caller reading ok:true reasonably treats the request as vetted,
+  // so the contract has to hold the bounds it claims. Containment stays the route's verdict (below).
   it.each([
-    ["traversal", "../../../../etc/shadow"],
-    ["absolute", "/etc/shadow"],
-    ["home-relative", "~/secrets.txt"],
-    ["windows-absolute", "C:\\secrets.txt"],
-    ["backslash separator", "src\\a.ts"],
-    ["dot segment", "src/./a.ts"],
     ["NUL byte", "src/a\u0000.ts"],
+    ["newline", "src/a\n.ts"],
+    ["escape", "src/a\u001b[31m.ts"],
+    ["whitespace only", "   "],
+    ["empty", ""],
+    ["over the length bound", `src/${"a".repeat(4_096)}.ts`],
   ])("rejects a %s documentPath", (_label, documentPath) => {
     expect(validateCodingContextRequest(validRequest({ documentPath })).ok).toBe(false);
   });
+
+  // Containment is the ROUTE's verdict: keiko-server answers 403 DENIED for a documentPath that
+  // escapes the workspace root — an authority outcome, not a malformed-request one — and that
+  // status is pinned (contextRoutes.test.ts, editorSecurityBoundary.test.ts). Rejecting traversal
+  // structurally here would collapse a workspace-escape attempt into a generic 400 and lose the
+  // governance signal, so this validator bounds and character-checks the field and stops there.
+  it.each(["../../../../etc/shadow", "/etc/shadow", "C:\\secrets.txt"])(
+    "leaves the containment verdict for %j to the route, which answers 403 DENIED",
+    (documentPath) => {
+      expect(validateCodingContextRequest(validRequest({ documentPath })).ok).toBe(true);
+    },
+  );
 
   it("rejects a changedFiles entry with the same path shapes it rejects for documentPath", () => {
     expect(

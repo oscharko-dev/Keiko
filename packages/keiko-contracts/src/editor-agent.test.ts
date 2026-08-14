@@ -2065,7 +2065,10 @@ describe("editor agent action payload bounds", () => {
     ).toBe(false);
   });
 
-  it("rejects overlapping ranges on an action exactly as the changeset path does", () => {
+  // Overlap/inversion is the ROUTE's business: it answers 409 INVALID_EDITS, a conflict the client
+  // can act on, and that status is pinned. This guard owns the BOUNDS the route does not check, so
+  // an overlapping edit array passes here and is classified there.
+  it("leaves overlap detection to the route's 409 classifier rather than failing the shape", () => {
     expect(
       isEditorAgentAction(
         baseAction({
@@ -2082,7 +2085,7 @@ describe("editor agent action payload bounds", () => {
           ],
         } as Partial<EditorAgentAction>),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("rejects an applyPatch action whose patch string exceeds the byte cap", () => {

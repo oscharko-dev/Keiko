@@ -1534,8 +1534,7 @@ function isTextEdit(
 
 // The applyTextEdits / applyPatch primitives carry the SAME payload shapes a prepared changeset
 // caps, but were unbounded here: an action could hand over an unlimited edit array with unlimited
-// newText, and overlapping or inverted ranges that the changeset path rejects. Same payload, same
-// trust boundary, so the same bounds and the same overlap check apply.
+// newText. Same payload, same trust boundary, so the same bounds apply.
 function isTextEditArray(
   value: unknown,
 ): value is readonly { readonly range: LanguageRange; readonly newText: string }[] {
@@ -1548,8 +1547,12 @@ function isTextEditArray(
     (total, edit) => total + EDITOR_AGENT_TEXT_ENCODER.encode(edit.newText).length,
     0,
   );
-  if (bytes > EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES) return false;
-  return validateAgentTextEdits(edits) === null;
+  return bytes <= EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES;
+  // NOTE: overlap/inversion detection deliberately does NOT run here. keiko-server's editor-action
+  // route already detects it and answers 409 INVALID_EDITS — a conflict the client can act on —
+  // and that classification is pinned. Rejecting it structurally here would collapse it into a
+  // generic 400 and destroy the distinction. This guard owns the BOUNDS (which nothing else
+  // enforced); the route owns the conflict semantics.
 }
 
 export function isEditorAgentAction(value: unknown): value is EditorAgentAction {
@@ -1575,9 +1578,12 @@ export function isEditorAgentAction(value: unknown): value is EditorAgentAction 
     value.type === "applyTextEdits" || value.type === "applyPatch"
       ? isUndefinedOr(value.textEdits, isTextEditArray)
       : value.textEdits === undefined,
+    // isUtf8StringWithin, not isBoundedUtf8String: an EMPTY patch is a semantic problem the route
+    // already answers with 409 INVALID_EDITS (pinned), not a shape problem. This bounds the size —
+    // the gap the finding is about — without swallowing that classification into a generic 400.
     value.type === "applyPatch"
       ? isUndefinedOr(value.patch, (patch) =>
-          isBoundedUtf8String(patch, EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES),
+          isUtf8StringWithin(patch, EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES),
         )
       : value.patch === undefined,
     value.type === "applyChangeset"

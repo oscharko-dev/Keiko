@@ -1,5 +1,5 @@
 import {
-  isDebugLifecycleEvidence,
+  isDebugLifecycleEvent,
   type DebugLifecycleEvent,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-contracts";
@@ -31,9 +31,10 @@ function validateProjection(partition: string, projection: DebugLiveEvidenceProj
   }
 }
 
+// The contract now owns this guard (isDebugLifecycleEvent), so the sequence domain is stated once,
+// where the type lives, instead of being re-derived by every consumer through a rest-spread.
 function validEvent(event: DebugLifecycleEvent): boolean {
-  const { sequence, ...evidence } = event;
-  return Number.isSafeInteger(sequence) && sequence > 0 && isDebugLifecycleEvidence(evidence);
+  return isDebugLifecycleEvent(event);
 }
 
 function projectionJson(projection: DebugLiveEvidenceProjection): string {

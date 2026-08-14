@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isDebugLifecycleEvidence } from "./debug-lifecycle.js";
+import { isDebugLifecycleEvent, isDebugLifecycleEvidence } from "./debug-lifecycle.js";
 
 const valid = {
   schemaVersion: "1",
@@ -184,5 +184,37 @@ describe("debug lifecycle evidence", () => {
     const inherited = Object.create(valid) as unknown;
     expect(Object.keys(inherited as object)).toEqual([]);
     expect(isDebugLifecycleEvidence(inherited)).toBe(false);
+  });
+});
+
+// KEIKO-0383 — DebugLifecycleEvent is statically a DebugLifecycleEvidence, but the evidence guard
+// scans for an EXACT key set and so rejects the extra `sequence` field. Every consumer therefore
+// hand-rolled its own check, and the one in keiko-server bounded `sequence` only as "> 0" without
+// stating the domain anywhere the type could be read from.
+describe("isDebugLifecycleEvent", () => {
+  it("accepts a valid evidence record carrying a 1-based sequence", () => {
+    expect(isDebugLifecycleEvent({ ...valid, sequence: 1 })).toBe(true);
+    expect(isDebugLifecycleEvent({ ...valid, sequence: 42 })).toBe(true);
+  });
+
+  it("rejects an evidence record with no sequence at all", () => {
+    expect(isDebugLifecycleEvent(valid)).toBe(false);
+  });
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "1", null])(
+    "rejects the out-of-domain sequence %p",
+    (sequence) => {
+      expect(isDebugLifecycleEvent({ ...valid, sequence })).toBe(false);
+    },
+  );
+
+  it("rejects an unknown extra key alongside a valid sequence", () => {
+    expect(isDebugLifecycleEvent({ ...valid, sequence: 1, extra: "x" })).toBe(false);
+  });
+
+  it("stays disjoint from the evidence guard in both directions", () => {
+    expect(isDebugLifecycleEvidence({ ...valid, sequence: 1 })).toBe(false);
+    expect(isDebugLifecycleEvent(valid)).toBe(false);
+    expect(isDebugLifecycleEvidence(valid)).toBe(true);
   });
 });

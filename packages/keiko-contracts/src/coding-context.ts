@@ -92,19 +92,23 @@ function isBoundedOptionalString(value: unknown, maxChars: number): boolean {
   return value === undefined || (typeof value === "string" && value.length <= maxChars);
 }
 
-// Every path-like field takes the same shape check the peer contracts already use
-// (coding-workbench-runtime-approval-review.ts, code-task-acceptance.ts): workspace-relative, no
-// traversal, no absolute or drive-qualified form, no backslash, no NUL.
-function isWorkspaceRelativeDocumentPath(value: unknown): value is string {
-  // isPortableWorkspaceRelativePath accepts a blank segment, so the pre-existing non-blank rule is
-  // composed with it rather than replaced — a whitespace-only path stays rejected.
-  return isNonEmptyString(value) && isPortableWorkspaceRelativePath(value);
+// documentPath is BOUNDED and character-checked here, but its containment verdict is deliberately
+// left to the route: keiko-server answers 403 DENIED for a path that escapes the workspace root — an
+// authority outcome, not a malformed-request one — and that status is pinned. Rejecting traversal
+// structurally here would collapse a workspace-escape attempt into a generic 400 and lose the
+// governance signal.
+const CODING_CONTEXT_PATH_MAX_CHARS = 4_096;
+
+function isBoundedDocumentPath(value: unknown): value is string {
+  if (!isNonEmptyString(value) || value.length > CODING_CONTEXT_PATH_MAX_CHARS) return false;
+  // eslint-disable-next-line no-control-regex -- rejecting C0/DEL in a path is the point
+  return !/[\u0000-\u001f\u007f]/u.test(value);
 }
 
 function isOptionalWorkspaceRelativePathList(value: unknown): boolean {
   if (value === undefined) return true;
   if (!Array.isArray(value) || value.length > CODING_CONTEXT_CHANGED_FILES_MAX_COUNT) return false;
-  return value.every((entry) => isWorkspaceRelativeDocumentPath(entry));
+  return value.every((entry) => isNonEmptyString(entry) && isPortableWorkspaceRelativePath(entry));
 }
 
 export function isCodingContextPurpose(value: unknown): value is CodingContextPurpose {
@@ -139,7 +143,7 @@ export function validateCodingContextRequest(value: unknown): CodingContextValid
       value.editorSessionId === undefined || isBoundedEditorSessionId(value.editorSessionId),
       "request.editorSessionId invalid",
     ],
-    [isWorkspaceRelativeDocumentPath(value.documentPath), "request.documentPath invalid"],
+    [isBoundedDocumentPath(value.documentPath), "request.documentPath invalid"],
     [
       isBoundedOptionalString(value.symbol, CODING_CONTEXT_SYMBOL_MAX_CHARS),
       "request.symbol invalid",

@@ -700,6 +700,7 @@ export type {
 } from "./debug/debug-lifecycle.js";
 export {
   DEBUG_LIFECYCLE_SCHEMA_VERSION,
+  isDebugLifecycleEvent,
   isDebugLifecycleEvidence,
 } from "./debug/debug-lifecycle.js";
 

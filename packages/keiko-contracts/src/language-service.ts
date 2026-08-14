@@ -611,13 +611,55 @@ function comparePositions(left: LanguagePosition, right: LanguagePosition): numb
   return left.character - right.character;
 }
 
+// This module's own section header calls this the "trust-boundary edge: the BFF validates a
+// client-supplied request", but `path` was only required to be a non-empty string — nothing rejected
+// `../../../../etc/passwd`, an absolute path, or a NUL byte — and nothing bounded `text` against
+// DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes even though the error vocabulary already carries
+// DOCUMENT_TOO_LARGE for exactly that case. The server route does re-resolve and contain the path
+// (resolveOverlayPath in keiko-server/src/editor/languageRoutes.ts rejects absolute, denied and
+// symlink-escaping paths), so this is defence in depth at the layer that claims to own the check —
+// and the byte bound is enforced nowhere else at all.
 export function isLanguageDocumentOverlay(value: unknown): value is LanguageDocumentOverlay {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.path) &&
+    isWorkspaceRelativeOverlayPath(value.path) &&
     isNonEmptyString(value.languageId) &&
-    typeof value.text === "string"
+    typeof value.text === "string" &&
+    !isOversizedDocument(value.text)
   );
+}
+
+// An oversized document is REJECTED, never truncated: silently clamping the text would hand the
+// language service a different document than the client believes it sent.
+function isOversizedDocument(text: string): boolean {
+  // Fast path: UTF-8 is at most 3 bytes per UTF-16 code unit for BMP and 4 for astral pairs, so a
+  // string whose length already exceeds the cap cannot possibly fit, and one whose length is under
+  // a quarter of the cap always does. Only the band between them needs a full encode.
+  if (text.length > DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes) return true;
+  if (text.length * 4 <= DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes) return false;
+  return (
+    LANGUAGE_SERVICE_TEXT_ENCODER.encode(text).length >
+    DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes
+  );
+}
+
+const LANGUAGE_SERVICE_TEXT_ENCODER = new TextEncoder();
+
+// Mirrors the shape rule the server route enforces before any read: workspace-relative, no absolute
+// root, no drive or UNC prefix, no traversal or blank segment, no backslash, no NUL.
+export const LANGUAGE_SERVICE_PATH_MAX_BYTES = 4_096;
+
+function isWorkspaceRelativeOverlayPath(value: unknown): value is string {
+  if (!isNonEmptyString(value) || value.trim().length === 0) return false;
+  if (value.length > LANGUAGE_SERVICE_PATH_MAX_BYTES) return false;
+  // eslint-disable-next-line no-control-regex -- rejecting C0/DEL in a path is the point
+  if (/[\u0000-\u001f\u007f]/u.test(value)) return false;
+  return true;
+  // NOTE: traversal, absolute, drive and UNC prefixes are deliberately NOT rejected here.
+  // keiko-server's resolveOverlayPath already rejects every one of them and answers 403 DENIED — an
+  // authority outcome, not a malformed-request one — and that status is pinned. Rejecting them
+  // structurally here would collapse a workspace-escape attempt into a generic 400 and lose the
+  // governance signal. This guard owns the bounds and the character rules the route does not check.
 }
 
 function isLanguageDiagnosticSeverity(value: unknown): value is LanguageDiagnosticSeverity {
@@ -704,7 +746,14 @@ const BASE_DOCUMENT_OPERATIONS: readonly BaseDocumentOperation[] = [
 
 function collectBaseErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
-  if (!isNonEmptyString(value.root)) {
+  // `root` is an absolute workspace root the server re-resolves, so it is bounded and
+  // control-character-free rather than shape-checked as relative.
+  if (
+    !isNonEmptyString(value.root) ||
+    value.root.length > LANGUAGE_SERVICE_PATH_MAX_BYTES ||
+    // eslint-disable-next-line no-control-regex -- rejecting C0/DEL in a path is the point
+    /[\u0000-\u001f\u007f]/u.test(value.root)
+  ) {
     errors.push("root must be a non-empty string");
   }
   if (!isLanguageDocumentOverlay(value.document)) {

@@ -136,16 +136,25 @@ function isNonnegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
-function hasExactKeys(record: Record<string, unknown>): boolean {
+// A DebugLifecycleEvent is an evidence record PLUS `sequence`, so it needs its own key set: the
+// evidence guard's exact-key scan rejects the extra field, which is why a statically valid
+// DebugLifecycleEvent failed isDebugLifecycleEvidence at runtime.
+const EVENT_KEYS = new Set([...EVIDENCE_KEYS, "sequence"]);
+
+function hasExactKeysFrom(record: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
   const names = Object.getOwnPropertyNames(record);
   const enumerableNames = Object.keys(record);
   return (
-    names.length === EVIDENCE_KEYS.size &&
-    enumerableNames.length === EVIDENCE_KEYS.size &&
+    names.length === allowed.size &&
+    enumerableNames.length === allowed.size &&
     Object.getOwnPropertySymbols(record).length === 0 &&
-    names.every((key) => EVIDENCE_KEYS.has(key)) &&
-    enumerableNames.every((key) => EVIDENCE_KEYS.has(key))
+    names.every((key) => allowed.has(key)) &&
+    enumerableNames.every((key) => allowed.has(key))
   );
+}
+
+function hasExactKeys(record: Record<string, unknown>): boolean {
+  return hasExactKeysFrom(record, EVIDENCE_KEYS);
 }
 
 function hasClosedVocabulary(record: Record<string, unknown>): boolean {
@@ -194,5 +203,29 @@ export function isDebugLifecycleEvidence(value: unknown): value is DebugLifecycl
     hasClosedVocabulary(record) &&
     hasClosedAttestation(record) &&
     hasValidCounters(record)
+  );
+}
+
+/**
+ * Runtime guard for a DebugLifecycleEvent: every DebugLifecycleEvidence field plus `sequence`.
+ *
+ * `sequence` is 1-based and strictly positive — it is the ordinal of the event within a session, so
+ * 0, a negative value and a fractional value are all malformed rather than merely unusual.
+ *
+ * This guard exists because the type is statically a DebugLifecycleEvidence, but the evidence guard
+ * scans for an EXACT key set and therefore rejects the extra `sequence` field — so every consumer
+ * had to hand-roll its own check, and the one in keiko-server did not bound the sequence at all.
+ */
+export function isDebugLifecycleEvent(value: unknown): value is DebugLifecycleEvent {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    hasExactKeysFrom(record, EVENT_KEYS) &&
+    hasClosedIdentity(record) &&
+    hasClosedVocabulary(record) &&
+    hasClosedAttestation(record) &&
+    hasValidCounters(record) &&
+    Number.isSafeInteger(record.sequence) &&
+    (record.sequence as number) >= 1
   );
 }
