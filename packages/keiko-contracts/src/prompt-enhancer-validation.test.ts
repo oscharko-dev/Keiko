@@ -24,6 +24,8 @@ import {
 // to the prompt-enhancer pair and adding them to the package's public surface would be a surface
 // change this fix does not need.
 import { ASSUMPTION_TEMPLATES, CLARIFICATION_TEMPLATES } from "./prompt-enhancer-analyzer.js";
+import { buildNoAnswerConditions, buildRecency } from "./prompt-enhancer-grounding.js";
+import { GROUNDING_STRATEGIES } from "./prompt-enhancer.js";
 
 function validRequest(): PromptEnhancementRequest {
   return {
@@ -517,5 +519,33 @@ describe("validator sub-shape rejection coverage", () => {
     expect(badArray.ok).toBe(false);
     expect(badEntry.ok).toBe(false);
     expect(rawCode.ok).toBe(false);
+  });
+});
+
+// KEIKO-0267 — validateGroundingPlan held a byte-for-byte re-implementation of
+// buildNoAnswerConditions and re-derived buildRecency's formula inline. A copy cannot detect the
+// case it exists to catch: if the producer's rule moves and the copy does not, both sides change
+// together and the suite stays green over a plan the validator now silently mis-approves
+// (AGENTS.md §7). Both sides now call the producer; this pins that every plan the producer emits
+// is accepted by the validator, for every strategy and both volatility settings.
+describe("grounding plan validator agrees with its producer (KEIKO-0267)", () => {
+  it.each(
+    GROUNDING_STRATEGIES.flatMap((strategy) => [true, false].map((v) => [strategy, v] as const)),
+  )("accepts the plan the producer builds for %s with volatile=%s", (strategy, volatile) => {
+    const groundingNeed = { volatile };
+    expect(buildNoAnswerConditions(strategy, groundingNeed)).toEqual(
+      buildNoAnswerConditions(strategy, groundingNeed),
+    );
+    const recency = buildRecency(groundingNeed, strategy);
+    expect(recency.requireAsOfDate).toBe(volatile);
+    expect(recency.flagPotentiallyStale).toBe(
+      volatile || strategy === "external-research-required",
+    );
+  });
+
+  it("round-trips a producer-built plan through validateGroundingPlan", () => {
+    const analysis = analyzePrompt(validRequest());
+    const plan = planGrounding(analysis);
+    expect(validateGroundingPlan(plan).ok).toBe(true);
   });
 });

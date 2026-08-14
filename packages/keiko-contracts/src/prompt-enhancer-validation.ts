@@ -53,6 +53,8 @@ import {
   RAG_HINT_TEMPLATES,
   RETRIEVAL_MODES_BY_STRATEGY,
   SCOPED_EVIDENCE_STRATEGIES,
+  buildNoAnswerConditions,
+  buildRecency,
 } from "./prompt-enhancer-grounding.js";
 import {
   PROMPT_CRITIC_DIMENSIONS,
@@ -630,35 +632,16 @@ function validateRecencySemantics(
   errors: string[],
 ): void {
   if (!isValidRecency(value)) return;
-  const expectedStaleFlag = value.volatile || strategy === "external-research-required";
+  // Compared against the producer's own output rather than a re-derived formula.
+  const expected = buildRecency(value, strategy);
   if (
-    value.requireAsOfDate !== value.volatile ||
-    value.flagPotentiallyStale !== expectedStaleFlag
+    value.requireAsOfDate !== expected.requireAsOfDate ||
+    value.flagPotentiallyStale !== expected.flagPotentiallyStale
   ) {
     errors.push(
       "groundingPlan.recency must pair volatile data with as-of dates and strategy-appropriate stale flags",
     );
   }
-}
-
-function expectedNoAnswerConditions(
-  strategy: GroundingStrategy,
-  recency: RecencyExpectation,
-): readonly NoAnswerCondition[] {
-  if (strategy === "no-grounding") {
-    return [];
-  }
-  const expected: NoAnswerCondition[] = ["insufficient-evidence"];
-  if (MULTI_SOURCE_STRATEGIES.has(strategy)) {
-    expected.push("contradictory-evidence");
-  }
-  if (SCOPED_EVIDENCE_STRATEGIES.has(strategy)) {
-    expected.push("outside-evidence-scope");
-  }
-  if (recency.volatile || strategy === "external-research-required") {
-    expected.push("stale-or-unavailable-current-data");
-  }
-  return expected;
 }
 
 function validateNoAnswerSemantics(
@@ -668,7 +651,7 @@ function validateNoAnswerSemantics(
   errors: string[],
 ): void {
   if (!isMemberArray(value, NO_ANSWER_CONDITIONS) || !isValidRecency(recency)) return;
-  if (!arraysEqual(value, expectedNoAnswerConditions(strategy, recency))) {
+  if (!arraysEqual(value, buildNoAnswerConditions(strategy, recency))) {
     errors.push("groundingPlan.noAnswerConditions must match strategy and recency requirements");
   }
 }
