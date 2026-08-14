@@ -856,6 +856,12 @@ function AppShellInner(): ReactNode {
     setSourceConnectionNotice(message);
     return false;
   }, []);
+  const reportWindowLimit = useCallback(
+    (limit: number): void => {
+      setSourceConnectionNotice(t("workspace.windowLimitReached", { limit }));
+    },
+    [t],
+  );
   const confirmedGroundingChatsRef = useRef(new Map<string, Chat>());
   const rememberGroundingChat = useCallback((chat: Chat): void => {
     confirmedGroundingChatsRef.current.set(chat.id, chat);
@@ -1173,6 +1179,7 @@ function AppShellInner(): ReactNode {
     onScopeUnbind: handleScopeUnbind,
     onConnectorBind: handleConnectorBind,
     onConnectorUnbind: handleConnectorUnbind,
+    onWindowLimitReached: reportWindowLimit,
   });
   wsWinsForBindingRef.current = ws.wins;
 
@@ -1585,7 +1592,7 @@ function AppShellInner(): ReactNode {
                             <button
                               type="button"
                               className="source-limit-alert-dismiss"
-                              aria-label="Dismiss source connection notice"
+                              aria-label={t("workspace.notice.dismiss")}
                               onClick={() => setSourceConnectionNotice(null)}
                             >
                               ×

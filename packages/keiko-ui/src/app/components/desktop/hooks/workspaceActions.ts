@@ -67,6 +67,7 @@ function initialWindowCfg(type: WindowType, cfg: AppWindow["cfg"] | undefined): 
 }
 
 interface MutateArgs {
+  readonly onWindowLimitReached?: ((limit: number) => void) | undefined;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly zc: RefObject<number>;
   readonly worldVP: () => ViewportWorld | null;
@@ -386,6 +387,7 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
     const defaultMinW = isFigmaView ? Math.max(t.min.w, fv.min.w) : t.min.w;
     const defaultMinH = isFigmaView ? Math.max(t.min.h, fv.min.h) : t.min.h;
     let createdId: string | null = null;
+    let windowLimitReached = false;
     setWins((ws) => {
       const vp = worldVP();
       if (vp === null) return ws;
@@ -449,8 +451,10 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
         zc,
       });
       createdId = allocation.id;
+      windowLimitReached = allocation.id === null;
       return [...allocation.windows];
     });
+    if (windowLimitReached) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
     return createdId;
   };
 }

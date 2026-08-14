@@ -1274,6 +1274,9 @@ export const DE_MESSAGES = {
   "updates.phase.cancelled": "Update abgebrochen",
   "select.placeholder": "Option auswählen",
   "workspace.empty.openWindow": "Neues Fenster öffnen",
+  "workspace.notice.dismiss": "Arbeitsbereichshinweis schließen",
+  "workspace.windowLimitReached":
+    "Im Arbeitsbereich sind bereits {limit} Fenster geöffnet. Schließe ein Fenster und versuche es erneut.",
   "workspace.empty.description": "Der Workspace ist leer. Öffne ein Fenster, um zu beginnen.",
   "workspace.empty.title": "Leerer Workspace",
   "workspace.empty.subtitle": "Fenster öffnen und loslegen",

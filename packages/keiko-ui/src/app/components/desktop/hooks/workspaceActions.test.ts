@@ -1721,15 +1721,19 @@ describe("makeMutations.add — per-conversation Chat windows", () => {
     const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
       wins = typeof fn === "function" ? fn(wins) : fn;
     };
+    const onWindowLimitReached = vi.fn();
     const { add } = makeMutations({
+      onWindowLimitReached,
       setWins,
       zc: { current: MAX_WORKSPACE_WINDOWS },
       worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
     });
 
     expect(add("chat", { chatId: "overflow-chat" })).toBeNull();
+    expect(onWindowLimitReached).toHaveBeenCalledExactlyOnceWith(MAX_WORKSPACE_WINDOWS);
     expect(wins).toHaveLength(MAX_WORKSPACE_WINDOWS);
     expect(add("chat", { chatId: "chat-0" })).toBe("chat-window-0");
+    expect(onWindowLimitReached).toHaveBeenCalledOnce();
     expect(wins?.find((window) => window.id === "chat-window-0")?.minimized).toBe(false);
   });
 

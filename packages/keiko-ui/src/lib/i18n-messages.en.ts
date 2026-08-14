@@ -1242,6 +1242,9 @@ export const EN_MESSAGES = {
   "updates.phase.cancelled": "Update cancelled",
   "select.placeholder": "Select an option",
   "workspace.empty.openWindow": "Open a new window",
+  "workspace.notice.dismiss": "Dismiss workspace notice",
+  "workspace.windowLimitReached":
+    "The workspace already has {limit} open windows. Close a window and try again.",
   "workspace.empty.description": "Empty workspace. Open a window to start working.",
   "workspace.empty.title": "Empty workspace",
   "workspace.empty.subtitle": "Open a window to start working",

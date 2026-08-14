@@ -1449,7 +1449,7 @@ function useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef }: UseKeybo
         runContentZoomChord(e, setWins, zoomKey, targetId);
         return;
       }
-      if (!/^Arrow/.test(e.key)) return;
+      if (!e.key.startsWith("Arrow")) return;
       // GEN-UI-KEYBOARD-009 — Cmd/Ctrl+Alt+Arrow snaps the focused window to a
       // half/maximized region (the keyboard equivalent of an edge/quadrant drag
       // snap). Checked before the move/resize branch below because it shares the
@@ -1543,6 +1543,7 @@ function useConnectionPrune(
 // reached or persistence failed) vetoes the edge so no dangling ungrounded edge is drawn.
 export interface UseWorkspaceOptions {
   readonly cameraSmoothness?: number | undefined;
+  readonly onWindowLimitReached?: ((limit: number) => void) | undefined;
   readonly onScopeBind?:
     | ((
         chatWindowId: string,
@@ -1640,6 +1641,7 @@ export function useWorkspace(
     onScopeUnbind,
     onConnectorBind,
     onConnectorUnbind,
+    onWindowLimitReached,
   } = opts;
   // GEN-PERF-RENDER-001 — route the optional scope-bind callbacks through refs so the
   // connectActions/api memos never rebind when a parent (AppShell) passes NEW callback
@@ -1655,6 +1657,8 @@ export function useWorkspace(
   onConnectorBindRef.current = onConnectorBind;
   const onConnectorUnbindRef = useRef(onConnectorUnbind);
   onConnectorUnbindRef.current = onConnectorUnbind;
+  const onWindowLimitReachedRef = useRef(onWindowLimitReached);
+  onWindowLimitReachedRef.current = onWindowLimitReached;
   const stableScopeBind = useCallback(
     (
       chatWindowId: string,
@@ -1681,6 +1685,9 @@ export function useWorkspace(
     },
     [],
   );
+  const stableWindowLimitReached = useCallback((limit: number): void => {
+    onWindowLimitReachedRef.current?.(limit);
+  }, []);
 
   const zc = useRef<number>(3);
   const snapZone = useRef<SnapZone | null>(null);
@@ -1822,8 +1829,15 @@ export function useWorkspace(
   // now routed through refs (stable* wrappers, GEN-PERF-RENDER-001), so even a parent
   // swapping their identities every render no longer rebinds connectActions/api.
   const mutations = useMemo(
-    () => makeMutations({ setWins, zc, worldVP, winsRef }),
-    [setWins, zc, worldVP, winsRef],
+    () =>
+      makeMutations({
+        onWindowLimitReached: stableWindowLimitReached,
+        setWins,
+        zc,
+        worldVP,
+        winsRef,
+      }),
+    [setWins, stableWindowLimitReached, worldVP, winsRef],
   );
   const focusWindow = useCallback<WorkspaceApi["focus"]>(
     (id) => {

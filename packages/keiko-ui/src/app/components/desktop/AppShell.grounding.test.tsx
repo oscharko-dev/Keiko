@@ -11,10 +11,12 @@ import type {
   GroundingLimits,
 } from "@/lib/types";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
+import { MAX_WORKSPACE_WINDOWS } from "./hooks/workspace-persistence";
 import type { AppWindow, Connection } from "./windows/types";
 import appShellStyles from "./AppShell.module.css";
 
 interface WorkspaceHookOptions {
+  readonly onWindowLimitReached?: (limit: number) => void;
   readonly onScopeBind?: (
     chatWindowId: string,
     scope: ChatConnectedScope,
@@ -1014,11 +1016,24 @@ describe("AppShell grounding connections", () => {
     const notice = await screen.findByText(/already has 16 of 16 connected sources/u);
     expect(notice.closest(".source-limit-alert")).toHaveAttribute("role", "alert");
 
-    await user.click(screen.getByRole("button", { name: "Dismiss source connection notice" }));
+    await user.click(screen.getByRole("button", { name: "Dismiss workspace notice" }));
 
     await waitFor(() => {
       expect(document.querySelector(".source-limit-alert")).toBeNull();
     });
+  });
+
+  it("surfaces and announces a rejected window allocation", async () => {
+    await renderMounted();
+
+    act(() => {
+      mocks.state.workspaceOptions?.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
+    });
+
+    const notice = await screen.findByText(
+      `The workspace already has ${String(MAX_WORKSPACE_WINDOWS)} open windows. Close a window and try again.`,
+    );
+    expect(notice.closest(".source-limit-alert")).toHaveAttribute("role", "alert");
   });
 
   it("lets the user dismiss the missing-ready-chat source connection notice", async () => {
@@ -1044,7 +1059,7 @@ describe("AppShell grounding connections", () => {
     const notice = await screen.findByText("Open a ready chat window before connecting a source.");
     expect(notice.closest(".source-limit-alert")).toHaveAttribute("role", "alert");
 
-    await user.click(screen.getByRole("button", { name: "Dismiss source connection notice" }));
+    await user.click(screen.getByRole("button", { name: "Dismiss workspace notice" }));
 
     await waitFor(() => {
       expect(document.querySelector(".source-limit-alert")).toBeNull();
