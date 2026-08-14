@@ -166,7 +166,8 @@ describe("workspace snippets service", () => {
       },
     });
     const events: unknown[] = [];
-    const unsubscribe = control.subscribe((event) => events.push(event));
+    const subscription = control.subscribe((event) => events.push(event));
+    if (subscription.kind !== "ok") throw new Error("expected subscription to succeed");
     const mutation = {
       action: "reset" as const,
       expectedRevision: 0,
@@ -176,12 +177,45 @@ describe("workspace snippets service", () => {
 
     const first = await control.mutate(mutation);
     const replay = await control.mutate(mutation);
-    unsubscribe();
+    subscription.unsubscribe();
 
     expect(first).toMatchObject({ kind: "ok", changed: false, revision: 0 });
     expect(replay).toMatchObject({ kind: "ok", changed: false, revision: 0 });
     expect(events).toEqual([]);
     expect(saves).toHaveLength(1);
+  });
+
+  // GEN-PERF-SSE-STREAMING-CHAT-PERF-001 (KEIKO-0366): the listener Set must not grow without bound.
+  // Mirrors workspaceWatchService's subscriberLimit contract -- the (N+1)th subscribe() call is
+  // rejected at the service layer itself, not merely by a route-level count check, so the cap holds
+  // even under concurrent subscribe calls that race a route-level check.
+  it("rejects a subscription once the configured subscriber cap is reached", () => {
+    const stateDir = temporaryDirectory("editor-snippets-cap-state");
+    const control = createWorkspaceSnippetsService({
+      stateDir,
+      mutex: createWorkspaceMutexRegistry(),
+      maxSubscribers: 2,
+    });
+    const unsubscribes: (() => void)[] = [];
+
+    const first = control.subscribe(() => undefined);
+    const second = control.subscribe(() => undefined);
+    const third = control.subscribe(() => undefined);
+
+    expect(first.kind).toBe("ok");
+    expect(second.kind).toBe("ok");
+    expect(third).toEqual({ kind: "subscriberLimit" });
+
+    if (first.kind === "ok") unsubscribes.push(first.unsubscribe);
+    if (second.kind === "ok") unsubscribes.push(second.unsubscribe);
+
+    // Freeing a slot lets a new subscriber back in.
+    unsubscribes[0]?.();
+    const fourth = control.subscribe(() => undefined);
+    expect(fourth.kind).toBe("ok");
+    if (fourth.kind === "ok") unsubscribes.push(fourth.unsubscribe);
+
+    for (const unsubscribe of unsubscribes) unsubscribe();
   });
 
   it("fails closed for malformed and future-versioned private records", async () => {
