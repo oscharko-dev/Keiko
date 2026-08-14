@@ -1052,6 +1052,7 @@ interface ConnectArgs {
         target?: ChatUnbindTarget,
       ) => boolean | Promise<boolean>)
     | undefined;
+  readonly onConnectionUnbindFailure?: (() => void) | undefined;
 }
 
 function isDuplicate(cs: readonly Connection[], a: string, b: string): boolean {
@@ -1142,6 +1143,7 @@ async function connectionUnbindAccepted(
   target: ChatUnbindTarget | undefined,
   onScopeUnbind: ConnectArgs["onScopeUnbind"],
   onConnectorUnbind: ConnectArgs["onConnectorUnbind"],
+  onConnectionUnbindFailure: ConnectArgs["onConnectionUnbindFailure"],
 ): Promise<boolean> {
   try {
     const results: Promise<boolean>[] = [];
@@ -1154,6 +1156,7 @@ async function connectionUnbindAccepted(
     const resolved = await Promise.all(results);
     return resolved.every(Boolean);
   } catch {
+    onConnectionUnbindFailure?.();
     return false;
   }
 }
@@ -1368,6 +1371,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     onScopeUnbind,
     onConnectorBind,
     onConnectorUnbind,
+    onConnectionUnbindFailure,
   } = args;
 
   const winById = (id: string): AppWindow | undefined =>
@@ -1568,6 +1572,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       target,
       onScopeUnbind,
       onConnectorUnbind,
+      onConnectionUnbindFailure,
     ).then((accepted): void => {
       pendingConnectionRemovals.delete(id);
       if (accepted) removeStoredConnection(id);

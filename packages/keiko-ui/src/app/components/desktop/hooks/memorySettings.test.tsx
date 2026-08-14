@@ -81,6 +81,28 @@ describe("conversation memory settings store", () => {
     expect(result.current).toMatchObject({ memoryEnabled: false, memoryBudgetTokens: 1200 });
   });
 
+  it("does not notify subscribers when an absent conversation scope is removed", () => {
+    const { result } = renderHook(() => useConversationMemorySettings("chat-active"));
+    const unchangedSnapshot = result.current;
+
+    act(() => removeConversationMemorySettings("chat-missing"));
+
+    expect(result.current).toBe(unchangedSnapshot);
+  });
+
+  it("does not notify subscribers when a removed scope already equals the privacy default", () => {
+    const { result } = renderHook(() => useConversationMemorySettings("chat-default"));
+    act(() => {
+      result.current.setMemoryEnabled(true);
+      result.current.setMemoryEnabled(false);
+    });
+    const unchangedSnapshot = result.current;
+
+    act(() => removeConversationMemorySettings("chat-default"));
+
+    expect(result.current).toBe(unchangedSnapshot);
+  });
+
   it("does not notify subscribers when reset leaves effective settings unchanged", () => {
     const { result } = renderHook(() => useConversationMemorySettings());
     act(() => {

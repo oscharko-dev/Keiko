@@ -464,6 +464,7 @@ interface ConnectHarnessOverrides {
     scope: ChatLocalKnowledgeScope,
     target?: ChatUnbindTarget,
   ) => boolean | Promise<boolean>;
+  readonly onConnectionUnbindFailure?: () => void;
 }
 
 function makeConnectHarness(
@@ -499,6 +500,7 @@ function makeConnectHarness(
     onScopeUnbind: overrides.onScopeUnbind,
     onConnectorBind: overrides.onConnectorBind,
     onConnectorUnbind: overrides.onConnectorUnbind,
+    onConnectionUnbindFailure: overrides.onConnectionUnbindFailure,
   });
 }
 
@@ -2745,21 +2747,56 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
     };
     const store = { conns: [edge] };
     const unbind = deferredValue<boolean>();
+    const onScopeUnbind = vi.fn((): boolean | Promise<boolean> =>
+      onScopeUnbind.mock.calls.length === 1 ? unbind.promise : false,
+    );
     const setConns: Dispatch<SetStateAction<Connection[]>> = (action): void => {
       store.conns = typeof action === "function" ? action(store.conns) : action;
     };
     const harness = makeConnectHarness([files, chat], [edge], {
       setConns,
-      onScopeUnbind: () => unbind.promise,
+      onScopeUnbind,
     });
 
     harness.removeConn(edge.id);
+    expect(onScopeUnbind).toHaveBeenCalledOnce();
     expect(store.conns).toEqual([edge]);
     unbind.resolve(false);
     await unbind.promise;
-    await Promise.resolve();
-    await Promise.resolve();
 
+    await vi.waitFor(() => {
+      harness.removeConn(edge.id);
+      expect(onScopeUnbind).toHaveBeenCalledTimes(2);
+    });
+
+    expect(store.conns).toEqual([edge]);
+  });
+
+  it("notifies the redacted diagnostic boundary when an unbind callback rejects", async () => {
+    const onConnectionUnbindFailure = vi.fn();
+    const files = win("files", { resolvedRoot: "/data/docs" }, "files-1");
+    const chat = win("chat", { chatId: "chat-private", projectPath: "/private" }, "chat-1");
+    const edge: Connection = {
+      id: "files-1~chat-1",
+      a: "files-1",
+      b: "chat-1",
+      boundRoot: "/data/docs",
+    };
+    const store = { conns: [edge] };
+    const setConns: Dispatch<SetStateAction<Connection[]>> = (action): void => {
+      store.conns = typeof action === "function" ? action(store.conns) : action;
+    };
+    const harness = makeConnectHarness([files, chat], [edge], {
+      setConns,
+      onScopeUnbind: () => Promise.reject(new TypeError("customer-specific detail")),
+      onConnectionUnbindFailure,
+    });
+
+    harness.removeConn(edge.id);
+
+    await vi.waitFor(() => {
+      expect(onConnectionUnbindFailure).toHaveBeenCalledOnce();
+    });
     expect(store.conns).toEqual([edge]);
   });
 

@@ -852,6 +852,41 @@ describe("AppShell grounding connections", () => {
     }
   });
 
+  it("resolves a transient private chat before its workspace snapshot is committed", async () => {
+    const privateChat = chat({ id: "chat-private", projectPath: "/private", updatedAt: 4 });
+    const grounded = chat({
+      id: privateChat.id,
+      projectPath: privateChat.projectPath,
+      connectedScopes: [fileScope("/repo")],
+      updatedAt: 5,
+    });
+    mocks.state.workspaceResult = workspaceResult([]);
+    mocks.fetchChats.mockResolvedValueOnce({ chats: [privateChat] });
+    mocks.updateChatConnectedScopes.mockResolvedValueOnce({ chat: grounded });
+    const unregister = registerChatWindowRuntime("private-window", {
+      conversationId: privateChat.id,
+      projectPath: privateChat.projectPath,
+      acceptSelectionHandoff: vi.fn(),
+    });
+
+    try {
+      await renderMounted();
+      const accepted = await mocks.state.workspaceOptions?.onScopeBind?.(
+        "private-window",
+        fileScope("/repo"),
+      );
+
+      expect(accepted).toBe(true);
+      expect(mocks.fetchChats).toHaveBeenCalledWith("/private");
+      expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
+        privateChat.id,
+        expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
+      );
+    } finally {
+      unregister();
+    }
+  });
+
   it("surfaces a redacted diagnostic when a private chat lookup fails", async (): Promise<void> => {
     const reportError = vi.fn();
     vi.stubGlobal("reportError", reportError);

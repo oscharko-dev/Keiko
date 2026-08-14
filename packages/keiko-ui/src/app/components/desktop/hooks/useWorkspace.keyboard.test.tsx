@@ -2,6 +2,7 @@ import { useRef, useState, type PointerEvent as ReactPointerEvent, type ReactEle
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkspace, type UseWorkspaceOptions } from "./useWorkspace";
+import { MAX_WORKSPACE_WINDOWS } from "./workspace-persistence";
 import type { AppWindow, Connection } from "../windows/types";
 
 const WORKSPACE_STORAGE_KEY = "keiko.workspace.v4";
@@ -185,12 +186,12 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
   it("reserves workspace capacity across editor allocations queued in one event", async () => {
     const onWindowLimitReached = vi.fn();
     persistWorkspace(
-      Array.from({ length: 127 }, (_unused, index) =>
+      Array.from({ length: MAX_WORKSPACE_WINDOWS - 1 }, (_unused, index) =>
         filesWindow({ id: `files-${String(index)}` }),
       ),
     );
     render(<Harness onWindowLimitReached={onWindowLimitReached} />);
-    await waitFor(() => expect(readWins()).toHaveLength(127));
+    await waitFor(() => expect(readWins()).toHaveLength(MAX_WORKSPACE_WINDOWS - 1));
     mockWorkspaceRect();
 
     fireEvent.click(screen.getByRole("button", { name: "open two editors" }));
@@ -201,9 +202,9 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
         false,
       ]);
     });
-    expect(readWins()).toHaveLength(128);
+    expect(readWins()).toHaveLength(MAX_WORKSPACE_WINDOWS);
     expect(readWins().filter((win) => win.type === "editor")).toHaveLength(1);
-    expect(onWindowLimitReached).toHaveBeenCalledExactlyOnceWith(128);
+    expect(onWindowLimitReached).toHaveBeenCalledExactlyOnceWith(MAX_WORKSPACE_WINDOWS);
   });
 
   it("adopts workspace snapshots written by another tab", async () => {

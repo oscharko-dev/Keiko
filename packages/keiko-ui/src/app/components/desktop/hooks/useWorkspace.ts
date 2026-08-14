@@ -868,6 +868,10 @@ function surfaceWorkspaceKeepaliveOvercap(byteLength: number): void {
   );
 }
 
+export function reportConnectionUnbindFailure(): void {
+  reportClientDiagnostic("[keiko] workspace connection unbind callback failed");
+}
+
 // Server sync failures were swallowed by bare `catch { return null; }` — network
 // errors, non-OK statuses (e.g. a 413 over the server body cap) and malformed
 // payloads were indistinguishable and invisible, silently degrading the workspace
@@ -1930,6 +1934,7 @@ export function useWorkspace(
         onScopeUnbind: stableScopeUnbind,
         onConnectorBind: stableConnectorBind,
         onConnectorUnbind: stableConnectorUnbind,
+        onConnectionUnbindFailure: reportConnectionUnbindFailure,
       }),
     [
       wsRef,

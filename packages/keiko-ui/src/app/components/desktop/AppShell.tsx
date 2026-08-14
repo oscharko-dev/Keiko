@@ -13,7 +13,6 @@ import { AnnouncerProvider } from "./context/AnnouncerContext";
 import { useActiveWorkspaceState } from "./hooks/useActiveWorkspaceState";
 import { TwinProvider, useTwin } from "./context/TwinContext";
 import { WsContext, type WsContextValue } from "./context/WsContext";
-import { Footer } from "./Footer";
 import { Header, type HeaderStatusTone } from "./Header";
 import { LeftRail } from "./LeftRail";
 import { RightRail } from "./RightRail";
@@ -204,6 +203,18 @@ const UnifiedQuickAccessPalette = dynamic(
   () => import("./modals/UnifiedQuickAccessPalette").then((mod) => mod.UnifiedQuickAccessPalette),
   { ssr: false, loading: () => null },
 );
+
+function FooterLoading(): ReactNode {
+  return <div className="footer mono" aria-hidden="true" />;
+}
+
+// The status footer is not required to make the initial workspace interactive. Keep its stable
+// layout slot in the shell while loading its health probe and window-palette implementation in a
+// separate chunk, just like the other non-critical desktop controls below.
+const Footer = dynamic(() => import("./Footer").then((mod) => mod.Footer), {
+  ssr: false,
+  loading: FooterLoading,
+});
 
 // Issue #1207 (ADR-0042 D3.6) — the new-window dialog is reached only by an explicit gesture
 // (`pending !== null`), exactly like the quick-access palette and the gateway setup dialog above, so
@@ -476,7 +487,7 @@ function chatLookupTargetIsCurrent(target: ChatLookupTarget | undefined): boolea
 }
 
 function chatLookupRequiresMountedWindow(target: ChatLookupTarget | undefined): boolean {
-  return target === undefined || "isCurrent" in target;
+  return target !== undefined && "isCurrent" in target;
 }
 
 function groundingMutationFailureKey(

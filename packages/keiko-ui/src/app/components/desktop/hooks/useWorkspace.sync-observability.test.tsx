@@ -14,6 +14,7 @@ import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   readWorkspaceSyncFailureCount,
+  reportConnectionUnbindFailure,
   resetWorkspaceSyncFailureSurface,
   useWorkspace,
 } from "./useWorkspace";
@@ -145,5 +146,12 @@ describe("workspace server-sync failure surfacing", () => {
     expect(warnings.some((message) => message.includes("put failed (network error)"))).toBe(true);
     expect(warnings.every((message) => !message.includes("/repo"))).toBe(true);
     expect(readWorkspaceSyncFailureCount()).toBeGreaterThanOrEqual(1);
+  });
+
+  it("surfaces an unbind callback failure without forwarding the thrown body", () => {
+    reportConnectionUnbindFailure();
+
+    expect(warnSpy).toHaveBeenCalledWith("[keiko] workspace connection unbind callback failed");
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("customer-specific"));
   });
 });
