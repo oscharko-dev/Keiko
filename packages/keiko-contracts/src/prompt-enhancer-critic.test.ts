@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   asEnhancedPromptId,
+  asPromptEnhancementRequestId,
   isPromptCandidateRejectionReason,
   isPromptCriticDimension,
   PROMPT_CANDIDATE_REJECTION_REASONS,
@@ -13,6 +14,10 @@ import {
   type PromptCandidateSelection,
   type PromptSafetyAssessment,
 } from "./index.js";
+import {
+  PROMPT_CANDIDATE_RANKING_EXPECTED_ORDER,
+  PROMPT_CANDIDATE_RANKING_FIXTURE,
+} from "./prompt-enhancer-ranking-fixture.js";
 
 function validScorecard(
   candidateId = "req-1-technical",
@@ -368,5 +373,48 @@ describe("validatePromptCandidateSelection", () => {
         ],
       }).ok,
     ).toBe(false);
+  });
+});
+
+// KEIKO-1026 — see prompt-enhancer-ranking-fixture.ts. The gateway's rankCandidates asserts the same
+// expected order against the same fixture, so a change to either comparator turns exactly one of
+// these two suites red.
+describe("shared ranking-order fixture (KEIKO-1026)", () => {
+  const inExpectedOrder = PROMPT_CANDIDATE_RANKING_EXPECTED_ORDER.map((id) => {
+    const card = PROMPT_CANDIDATE_RANKING_FIXTURE.find((c) => c.candidateId === id);
+    if (card === undefined) throw new Error(`fixture missing ${id}`);
+    return card;
+  });
+
+  // The selection contract carries far more than `ranked`; only the ranked list and the fields the
+  // sortedness rule reads are swapped in, so this exercises the ordering rule and nothing else.
+  function selectionOf(ordered: readonly PromptCandidateScorecard[]): PromptCandidateSelection {
+    const [winner] = ordered;
+    if (winner === undefined) throw new Error("fixture must not be empty");
+    const base = validSelection();
+    return {
+      ...base,
+      winner,
+      ranked: ordered,
+      rankedPrompts: ordered.map((card) => validEnhancedPrompt(card.candidateId)),
+      winnerSafetyAssessment: validSafetyAssessment(winner.candidateId),
+      rankedSafetyAssessments: ordered.map((card) => validSafetyAssessment(card.candidateId)),
+      candidatesConsidered: ordered.length,
+      rejected: [],
+      bounds: { ...base.bounds, candidateCount: ordered.length },
+    };
+  }
+
+  it("accepts a selection ranked in the one expected order", () => {
+    expect(validatePromptCandidateSelection(selectionOf(inExpectedOrder)).ok).toBe(true);
+  });
+
+  it("rejects a selection whose ranked list swaps two adjacent entries", () => {
+    const swapped = [...inExpectedOrder];
+    const [a, b] = [swapped[0], swapped[1]];
+    if (a === undefined || b === undefined) throw new Error("fixture too small");
+    swapped[0] = b;
+    swapped[1] = a;
+    expect(validatePromptCandidateSelection(selectionOf(swapped)).ok).toBe(false);
   });
 });
