@@ -404,6 +404,16 @@ function parseExceptionFilters(value: unknown): readonly ExceptionBreakpointFilt
     : undefined;
 }
 
+// A record persisted before KEIKO-0190 shipped has no rootObjectIdentityDigest key at all — that
+// is a legacy shape, not a schema violation, so it parses to the empty-string sentinel (which no
+// live digest ever equals) and falls into loadRecord's existing mismatch->absent path instead of
+// permanently locking the workspace out as "unavailable". A digest key that IS present but not a
+// string is a genuine schema violation and stays rejected (undefined).
+function parseRootObjectIdentityDigest(value: unknown): string | undefined {
+  if (value === undefined) return "";
+  return typeof value === "string" ? value : undefined;
+}
+
 function parseInstrumentationRecord(
   value: unknown,
   fingerprint: string,
@@ -423,7 +433,8 @@ function parseInstrumentationRecord(
   if (value.workspaceFingerprint !== fingerprint || !isNonnegativeRevision(value.revision)) {
     return undefined;
   }
-  if (typeof value.rootObjectIdentityDigest !== "string") return undefined;
+  const rootObjectIdentityDigest = parseRootObjectIdentityDigest(value.rootObjectIdentityDigest);
+  if (rootObjectIdentityDigest === undefined) return undefined;
   const breakpoints = parseBreakpoints(value.breakpoints);
   const exceptionFilters = parseExceptionFilters(value.exceptionFilters);
   const watches = parseWatches(value.watches);
@@ -433,7 +444,7 @@ function parseInstrumentationRecord(
   return {
     schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
     workspaceFingerprint: fingerprint,
-    rootObjectIdentityDigest: value.rootObjectIdentityDigest,
+    rootObjectIdentityDigest,
     revision: value.revision,
     breakpoints,
     exceptionFilters,

@@ -786,6 +786,58 @@ describe("KEIKO-0190 — object-identity reconciliation on load", () => {
       inspectDebugWorkspaceIdentity(root).objectIdentityDigest,
     );
   });
+
+  it("treats a legacy record with no rootObjectIdentityDigest key as absent, not unavailable, and accepts a subsequent mutation", () => {
+    // A record persisted before this feature shipped has the pre-KEIKO-0190 shape: the key is
+    // entirely absent, not present-and-empty. That must parse successfully (empty-string sentinel,
+    // which can never match a live digest) and fall into the existing mismatch->absent path, rather
+    // than permanently locking the workspace out of mutation as "unavailable".
+    const stateDir = temporaryDirectory("debug-state-legacy-record");
+    const root = temporaryDirectory("debug-workspace-legacy-record");
+    const legacyRecord = {
+      schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
+      workspaceFingerprint: breakpointStoreWorkspaceFingerprint(root),
+      revision: 7,
+      breakpoints: [],
+      exceptionFilters: DEFAULT_NODE_EXCEPTION_FILTERS,
+      watches: [],
+    };
+    expect(Object.keys(legacyRecord)).not.toContain("rootObjectIdentityDigest");
+    writeRecord(stateDir, root, legacyRecord);
+    const store = createBreakpointStore({ stateDir, idFactory: (): string => "legacy_id" });
+
+    const snapshot = store.snapshot(root);
+    expect(snapshot).toMatchObject({
+      ok: true,
+      snapshot: { revision: 0, breakpoints: [], watches: [] },
+    });
+
+    const mutated = store.setBreakpointsForFile(
+      root,
+      snapshot.snapshot.revision,
+      snapshot.snapshot.etag,
+      "a.ts",
+      [breakpoint(1)],
+    );
+    expect(mutated).toMatchObject({ ok: true, snapshot: { revision: 1 } });
+  });
+
+  it("treats a present but non-string rootObjectIdentityDigest as a schema violation (unavailable)", () => {
+    const stateDir = temporaryDirectory("debug-state-bad-digest-type");
+    const root = temporaryDirectory("debug-workspace-bad-digest-type");
+    writeRecord(stateDir, root, {
+      schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
+      workspaceFingerprint: breakpointStoreWorkspaceFingerprint(root),
+      rootObjectIdentityDigest: 12345,
+      revision: 0,
+      breakpoints: [],
+      exceptionFilters: DEFAULT_NODE_EXCEPTION_FILTERS,
+      watches: [],
+    });
+    const store = createBreakpointStore({ stateDir });
+
+    expectUnavailable(store, root);
+  });
 });
 
 describe("KEIKO-0179 — breakpoint re-key on file rename", () => {
