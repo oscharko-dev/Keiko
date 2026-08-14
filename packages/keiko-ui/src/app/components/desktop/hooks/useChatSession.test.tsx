@@ -2949,6 +2949,47 @@ describe("useChatSession canonical Voice FIFO", () => {
     windowA.unmount();
   });
 
+  it("delivers each queued turn through the chat session that accepted it", async () => {
+    const chatA = chat({ id: "chat-a", updatedAt: 2 });
+    const chatB = chat({ id: "chat-b", updatedAt: 1 });
+    const firstRequest = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    vi.mocked(sendDesktopChat)
+      .mockReturnValueOnce(firstRequest.promise)
+      .mockResolvedValueOnce(completedTurn("voice from B", "assistant-b", chatB.id));
+    const windowA = await setupVoiceQueueSession([chatA, chatB]);
+    const windowB = await setupVoiceQueueSession([chatA, chatB]);
+    await act(async () => windowB.result.current.openChat(chatB));
+
+    let first: Promise<SendMessageOutcome> | undefined;
+    let second: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      first = windowA.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("voice from A", "voice-owner-a", chatA),
+      );
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+    act(() => {
+      second = windowB.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("voice from B", "voice-owner-b", chatB),
+      );
+    });
+
+    firstRequest.resolve(completedTurn("voice from A", "assistant-a", chatA.id));
+    await act(async () => {
+      await first;
+      await second;
+    });
+
+    expect(windowA.result.current.messages).toContainEqual(
+      expect.objectContaining({ id: "assistant-a", chatId: chatA.id }),
+    );
+    expect(windowB.result.current.messages).toContainEqual(
+      expect.objectContaining({ id: "assistant-b", chatId: chatB.id }),
+    );
+    windowA.unmount();
+    windowB.unmount();
+  });
+
   it("keeps a final bound to its chat project while another project is opening", async () => {
     const originalProject = project("/repo");
     const nextProject = project("/next");

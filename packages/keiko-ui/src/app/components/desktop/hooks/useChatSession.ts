@@ -870,6 +870,9 @@ interface CanonicalVoiceQueueItem {
   readonly byteLength: number;
   readonly promise: Promise<SendMessageOutcome>;
   readonly resolve: (outcome: SendMessageOutcome) => void;
+  // The hook that accepted this turn owns its React-visible delivery. A different hook may hold the
+  // page FIFO drain lease, but it must dispatch through this runtime while the owner remains mounted.
+  readonly deliveryOwner: symbol;
 }
 
 interface CanonicalVoiceProjection {
@@ -907,7 +910,9 @@ interface CanonicalVoicePageOutbox {
   };
   readonly settledRef: { current: Map<string, CanonicalVoiceSettledDelivery> };
   drainingOwner: symbol | undefined;
-  activeDelivery: { readonly key: string; readonly abort: () => void } | undefined;
+  activeDelivery:
+    { readonly key: string; readonly runtimeOwner: symbol; readonly abort: () => void } | undefined;
+  readonly runtimes: Map<symbol, CanonicalVoiceDeliveryRuntimeRegistration>;
   readonly wakes: Set<() => void>;
   readonly statusSubscribers: Set<(status: CanonicalVoiceOutboxStatus) => void>;
   status: CanonicalVoiceOutboxStatus;
@@ -926,6 +931,7 @@ const canonicalVoicePageOutbox: CanonicalVoicePageOutbox = {
   settledRef: { current: new Map() },
   drainingOwner: undefined,
   activeDelivery: undefined,
+  runtimes: new Map(),
   wakes: new Set(),
   statusSubscribers: new Set(),
   status: { suspendedChatId: undefined, revision: 0 },
@@ -1088,6 +1094,7 @@ export function clearCanonicalVoicePageOutboxForTests(): void {
   canonicalVoicePageOutbox.drainingOwner = undefined;
   canonicalVoicePageOutbox.activeDelivery?.abort();
   canonicalVoicePageOutbox.activeDelivery = undefined;
+  canonicalVoicePageOutbox.runtimes.clear();
   canonicalVoicePageOutbox.wakes.clear();
   setCanonicalVoicePageOutboxSuspended(undefined);
   canonicalVoicePageOutbox.statusSubscribers.clear();
@@ -1142,6 +1149,28 @@ function completedSendOutcome(
 interface SendMessage {
   (options: SendMessageOptions & { readonly reportOutcome: true }): Promise<SendMessageOutcome>;
   (options?: SendMessageOptions): Promise<void>;
+}
+
+interface CanonicalVoiceDeliveryRuntimeRegistration {
+  readonly sendRef: { current: SendMessage | null };
+  readonly waitForSendSlotRef: { current: (signal: AbortSignal) => Promise<void> };
+  readonly onDeliveryDelayed: () => void;
+}
+
+interface SelectedCanonicalVoiceDeliveryRuntime {
+  readonly owner: symbol;
+  readonly registration: CanonicalVoiceDeliveryRuntimeRegistration;
+}
+
+function selectCanonicalVoiceDeliveryRuntime(
+  item: CanonicalVoiceQueueItem,
+  fallbackOwner: symbol,
+): SelectedCanonicalVoiceDeliveryRuntime | undefined {
+  const owner = canonicalVoicePageOutbox.runtimes.has(item.deliveryOwner)
+    ? item.deliveryOwner
+    : fallbackOwner;
+  const registration = canonicalVoicePageOutbox.runtimes.get(owner);
+  return registration === undefined ? undefined : { owner, registration };
 }
 
 interface CanonicalVoiceDeliveryRuntime {
@@ -2160,7 +2189,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         // chat failure, and keiko-ui has no client-side diagnostic sink to route through instead
         // of console.*, which product code must not call directly).
       });
-    return () => {
+    return (): void => {
       active = false;
     };
   }, [loadMemoryAutonomyModeImpl, setMemoryMode]);
@@ -2458,6 +2487,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       if (!isInFlight(sendStatusRef.current)) release();
     });
   }, []);
+  const waitForCanonicalVoiceSendSlotRef = useRef(waitForCanonicalVoiceSendSlot);
+  waitForCanonicalVoiceSendSlotRef.current = waitForCanonicalVoiceSendSlot;
 
   const updateOwnedSendStatus = useCallback(
     (signal: AbortSignal, next: SendStatus): void => {
@@ -2607,7 +2638,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       }
     }
     void run();
-    return () => {
+    return (): void => {
       cancelled = true;
     };
   }, [autoCreate, canonicalVoiceProjectionRef]);
@@ -2627,7 +2658,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       });
     };
     window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshModels);
-    return () => {
+    return (): void => {
       cancelled = true;
       window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshModels);
     };
@@ -2659,7 +2690,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     if (canonicalVoiceQueueControllerRef.current.signal.aborted) {
       canonicalVoiceQueueControllerRef.current = new AbortController();
     }
-    return () => {
+    return (): void => {
       mountedRef.current = false;
       sendStatusRef.current = "cancelled";
       sendControllerRef.current?.abort();
@@ -3610,6 +3641,25 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   sendMessageRef.current = sendMessage;
 
+  useEffect(() => {
+    const owner = canonicalVoiceQueueOwnerRef.current;
+    const registration: CanonicalVoiceDeliveryRuntimeRegistration = {
+      sendRef: sendMessageRef,
+      waitForSendSlotRef: waitForCanonicalVoiceSendSlotRef,
+      onDeliveryDelayed: () => setError(CANONICAL_VOICE_PENDING_ERROR),
+    };
+    canonicalVoicePageOutbox.runtimes.set(owner, registration);
+    wakeCanonicalVoicePageOutbox();
+    return (): void => {
+      if (canonicalVoicePageOutbox.runtimes.get(owner) === registration) {
+        canonicalVoicePageOutbox.runtimes.delete(owner);
+      }
+      const activeDelivery = canonicalVoicePageOutbox.activeDelivery;
+      if (activeDelivery?.runtimeOwner === owner) activeDelivery.abort();
+      wakeCanonicalVoicePageOutbox();
+    };
+  }, []);
+
   const releaseCanonicalVoiceProjection = useCallback(
     (item: CanonicalVoiceQueueItem): void => {
       const projection = canonicalVoiceProjectionRef.current.get(item.key);
@@ -3632,20 +3682,28 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       item: CanonicalVoiceQueueItem,
       signal: AbortSignal,
     ): Promise<CanonicalVoiceQueueDelivery | undefined> => {
-      const sender = sendMessageRef.current;
+      const selectedRuntime = selectCanonicalVoiceDeliveryRuntime(
+        item,
+        canonicalVoiceQueueOwnerRef.current,
+      );
+      if (selectedRuntime === undefined) return undefined;
+      const sender = selectedRuntime.registration.sendRef.current;
       if (sender === null) return undefined;
       const itemController = new AbortController();
       const abortItem = (): void => itemController.abort();
       signal.addEventListener("abort", abortItem, { once: true });
-      canonicalVoicePageOutbox.activeDelivery = { key: item.key, abort: abortItem };
+      canonicalVoicePageOutbox.activeDelivery = {
+        key: item.key,
+        runtimeOwner: selectedRuntime.owner,
+        abort: abortItem,
+      };
       try {
         return await deliverCanonicalVoiceQueueItem(item, {
           signal: itemController.signal,
           send: sender,
-          waitForSendSlot: () => waitForCanonicalVoiceSendSlot(itemController.signal),
-          onDeliveryDelayed: () => {
-            setError(CANONICAL_VOICE_PENDING_ERROR);
-          },
+          waitForSendSlot: () =>
+            selectedRuntime.registration.waitForSendSlotRef.current(itemController.signal),
+          onDeliveryDelayed: selectedRuntime.registration.onDeliveryDelayed,
           onUserPersisted: () => {
             releaseCanonicalVoiceProjection(item);
           },
@@ -3657,7 +3715,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         }
       }
     },
-    [releaseCanonicalVoiceProjection, waitForCanonicalVoiceSendSlot],
+    [releaseCanonicalVoiceProjection],
   );
 
   const settleQueuedCanonicalVoiceDelivery = useCallback(
@@ -3735,7 +3793,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     settleQueuedCanonicalVoiceDelivery,
   ]);
 
-  drainCanonicalVoiceQueueRef.current = () => {
+  drainCanonicalVoiceQueueRef.current = (): void => {
     void drainCanonicalVoiceQueue();
   };
 
@@ -3745,7 +3803,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     };
     canonicalVoicePageOutbox.statusSubscribers.add(observeStatus);
     observeStatus(canonicalVoicePageOutbox.status);
-    return () => {
+    return (): void => {
       canonicalVoicePageOutbox.statusSubscribers.delete(observeStatus);
     };
   }, []);
@@ -3762,7 +3820,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     };
     canonicalVoicePageOutbox.wakes.add(wake);
     wake();
-    return () => {
+    return (): void => {
       canonicalVoicePageOutbox.wakes.delete(wake);
     };
   }, [loading]);
@@ -3854,6 +3912,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         byteLength,
         promise,
         resolve: resolveOutcome,
+        deliveryOwner: canonicalVoiceQueueOwnerRef.current,
       };
       canonicalVoiceDeliveriesRef.current.set(key, { contentDigest, promise });
       canonicalVoiceQueueRef.current.push(item);

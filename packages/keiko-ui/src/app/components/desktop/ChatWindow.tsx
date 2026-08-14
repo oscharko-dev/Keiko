@@ -2851,6 +2851,7 @@ function ComposerCoreImpl({
   const playbackButtonRef = useRef<HTMLButtonElement>(null);
   const voiceDialogButtonRef = useRef<HTMLButtonElement>(null);
   const normalVoiceDialogButtonRef = useRef<HTMLButtonElement>(null);
+  const voiceCaptureOwner = useId();
   // Insert appends the reviewed transcript into the existing draft (separated by a space) and returns
   // focus to the composer so the keyboard-first text workflow is preserved; it never auto-sends.
   const insertTranscript = useCallback(
@@ -2865,12 +2866,16 @@ function ComposerCoreImpl({
   );
   const dictation = useDictation({
     onInsert: insertTranscript,
+    captureOwner: voiceCaptureOwner,
     realtime: { enabled: liveDictationEnabled },
   });
   // Issue #1559/#1560 — dialog-mode availability + persona selection. Voice Dialogue combines
   // WebRTC input/transcription with canonical chat and independent TTS; Realtime never answers.
   // Batch STT dictation remains a separate "speech to draft" feature.
-  const voiceDialog = useVoiceDialogMode({ capability: voiceCapability });
+  const voiceDialog = useVoiceDialogMode({
+    capability: voiceCapability,
+    captureOwner: voiceCaptureOwner,
+  });
   // The canonical send result identifies the assistant row created for this exact spoken turn. TTS
   // remains disabled until that row is visible in the active chat; no latest-message or timestamp
   // heuristic may associate an unrelated concurrent answer with the voice turn.

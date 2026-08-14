@@ -10,49 +10,39 @@
 // first available persona. The persisted value is the persona ENUM only ("male" | "female" | "neutral")
 // — never a voice id — so nothing content-bearing is written to disk.
 
-import { useCallback, useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { VOICE_PERSONAS, type VoicePersona } from "@oscharko-dev/keiko-contracts";
 import type { VoiceCapabilityResolution } from "@/lib/types";
 import { realtimeVoiceTransportSupported } from "./voice-rtc-transport";
 import { voiceDialogueModeForResolution } from "./voice-dialogue-session";
+import {
+  claimVoiceCapture,
+  releaseVoiceCapture,
+  resetVoiceCaptureOwnerForTests,
+  subscribeVoiceCaptureOwner,
+  voiceCaptureOwnerSnapshot,
+} from "./voice-capture-owner";
 
 export const VOICE_PERSONA_STORAGE_KEY = "keiko.voice.dialog.persona";
 export const VOICE_PERSONA_CHANGED_EVENT = "keiko:voice-dialog-persona";
 
 const VALID_PERSONAS: ReadonlySet<string> = new Set(VOICE_PERSONAS);
-let activeVoiceDialogueOwner: string | null = null;
-const voiceDialogueOwnerListeners = new Set<() => void>();
-
-function subscribeVoiceDialogueOwner(listener: () => void): () => void {
-  voiceDialogueOwnerListeners.add(listener);
-  return () => voiceDialogueOwnerListeners.delete(listener);
-}
-
-function voiceDialogueOwnerSnapshot(): string | null {
-  return activeVoiceDialogueOwner;
-}
-
-function claimVoiceDialogueOwner(owner: string): boolean {
-  if (activeVoiceDialogueOwner !== null && activeVoiceDialogueOwner !== owner) return false;
-  if (activeVoiceDialogueOwner === owner) return true;
-  activeVoiceDialogueOwner = owner;
-  for (const listener of voiceDialogueOwnerListeners) listener();
-  return true;
-}
-
-function releaseVoiceDialogueOwner(owner: string): void {
-  if (activeVoiceDialogueOwner !== owner) return;
-  activeVoiceDialogueOwner = null;
-  for (const listener of voiceDialogueOwnerListeners) listener();
-}
 
 export function resetVoiceDialogueOwnerForTests(): void {
-  activeVoiceDialogueOwner = null;
-  for (const listener of voiceDialogueOwnerListeners) listener();
+  resetVoiceCaptureOwnerForTests();
 }
 
 export interface UseVoiceDialogModeOptions {
   readonly capability: VoiceCapabilityResolution | undefined;
+  readonly captureOwner?: string | undefined;
 }
 
 export interface VoiceDialogMode {
@@ -107,11 +97,13 @@ export function writeVoicePersonaPreference(persona: VoicePersona): void {
 
 export function useVoiceDialogMode(options: UseVoiceDialogModeOptions): VoiceDialogMode {
   const { capability } = options;
-  const owner = useId();
+  const internalOwner = useId();
+  const owner = options.captureOwner ?? internalOwner;
+  const leaseRef = useRef(Symbol("voice-dialogue-capture"));
   const currentOwner = useSyncExternalStore(
-    subscribeVoiceDialogueOwner,
-    voiceDialogueOwnerSnapshot,
-    voiceDialogueOwnerSnapshot,
+    subscribeVoiceCaptureOwner,
+    voiceCaptureOwnerSnapshot,
+    voiceCaptureOwnerSnapshot,
   );
 
   // The personas are taken straight from the capability (already sorted canonically by the contract).
@@ -177,13 +169,13 @@ export function useVoiceDialogMode(options: UseVoiceDialogModeOptions): VoiceDia
   useEffect(() => {
     if (!deploymentAvailable) {
       setActive(false);
-      releaseVoiceDialogueOwner(owner);
+      releaseVoiceCapture(leaseRef.current);
     }
   }, [deploymentAvailable, owner]);
 
   useEffect(
     () => (): void => {
-      releaseVoiceDialogueOwner(owner);
+      releaseVoiceCapture(leaseRef.current);
     },
     [owner],
   );
@@ -202,15 +194,15 @@ export function useVoiceDialogMode(options: UseVoiceDialogModeOptions): VoiceDia
   const enter = useCallback(() => {
     // Fail-closed: entering is a no-op when no dialogue is offered, so the switch can never start a
     // session the deployment cannot hold.
-    if (deploymentAvailable && claimVoiceDialogueOwner(owner)) {
+    if (deploymentAvailable && claimVoiceCapture(owner, leaseRef.current)) {
       setActive(true);
     }
   }, [deploymentAvailable, owner]);
 
   const leave = useCallback(() => {
-    releaseVoiceDialogueOwner(owner);
+    releaseVoiceCapture(leaseRef.current);
     setActive(false);
-  }, [owner]);
+  }, []);
 
   return {
     available,
