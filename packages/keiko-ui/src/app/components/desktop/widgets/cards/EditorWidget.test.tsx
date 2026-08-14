@@ -1166,6 +1166,34 @@ describe("EditorWidget — edit and save", () => {
     expect(warning).toHaveTextContent("filesystem-identity-correlation");
   });
 
+  it("explains when a save is suppressed because the content looks like a secret (#2898)", async () => {
+    await renderLoaded();
+    vi.mocked(saveFilesContent).mockResolvedValueOnce(
+      fileResponse({
+        modifiedAt: 2,
+        content: "const value = 2;\n",
+        localHistoryProtection: {
+          status: "suppressed",
+          reason: "secret-detected",
+          correlationId: "secret-suppressed-correlation",
+        },
+      }),
+    );
+    act(() => {
+      surface.props?.onContentChange({ text: "const value = 2;\n", sizeBytes: 17 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+
+    const warning = await screen.findByTestId("editor-local-history-protection");
+    expect(warning).toHaveTextContent(
+      "This save was not checkpointed: the content looks like it contains a secret.",
+    );
+    expect(warning).toHaveTextContent("Local History recovery is unavailable for this save.");
+    expect(warning).toHaveTextContent("secret-suppressed-correlation");
+    expect(surface.props?.saveStatus).toBe("saved");
+    expect(surface.props?.fileModel.dirty).toBe(false);
+  });
+
   it("surfaces a clean external disk edit and reloads only after the user chooses Reload", async () => {
     const FakeSource = installFakeEventSource();
     await renderLoaded();

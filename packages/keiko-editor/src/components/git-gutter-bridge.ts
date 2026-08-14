@@ -112,13 +112,20 @@ function decoration(
   };
 }
 
+// Monaco lines are 1-based, but a hunk's unclamped new-file start can be 0 (standard unified-diff
+// shape for a deletion with no remaining leading context). Both the rendered decoration and hit
+// testing must agree on the same clamped line, or a click can silently miss the hunk it renders.
+function effectiveStartLine(hunk: GitEditorDiffHunk): number {
+  return Math.max(1, hunk.newStart);
+}
+
 function decorationsForHunk(
   hunk: GitEditorDiffHunk,
   layer: EditorGitGutterLayer,
   labels: EditorGitGutterLabels,
 ): readonly MonacoGutterDecoration[] {
   const kind = changeKind(hunk);
-  if (kind === "deleted") return [decoration(Math.max(1, hunk.newStart), kind, layer, labels)];
+  if (kind === "deleted") return [decoration(effectiveStartLine(hunk), kind, layer, labels)];
   const lines = new Set(
     hunk.lines.flatMap((line) =>
       line.kind === "add" && line.newLine !== null ? [line.newLine] : [],
@@ -128,8 +135,9 @@ function decorationsForHunk(
 }
 
 function containsLine(hunk: GitEditorDiffHunk, line: number): boolean {
+  const start = effectiveStartLine(hunk);
   const count = Math.max(1, hunk.newCount);
-  return line >= hunk.newStart && line < hunk.newStart + count;
+  return line >= start && line < start + count;
 }
 
 function peekAtLine(changes: EditorGitGutterChanges, line: number): EditorGitGutterPeek | null {

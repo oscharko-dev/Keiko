@@ -875,6 +875,27 @@ describe("workspace search & replace over secret-shaped source text", () => {
     ).toBe(true);
   });
 
+  it("redacts the secret-shaped line inside a search snippet window", async () => {
+    await writeFile(
+      join(root, "src", "secret-snippet.ts"),
+      [SECRET_LINE, 'export const marker = "needlenearsecret";', ""].join("\n"),
+      "utf8",
+    );
+
+    const result = await handleEditorWorkspaceSearch(
+      postContext(
+        searchBody({ query: "needlenearsecret", includeGlobs: ["src/secret-snippet.ts"] }),
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { results: { snippet: string }[] };
+    const snippets = body.results.map((entry) => entry.snippet).join("\n");
+    expect(snippets).toContain("[REDACTED]");
+    expect(snippets).not.toContain("s3cr3tlookupvalue");
+  });
+
   it("finds a match that only exists inside the redacted region itself", async () => {
     await writeFile(join(root, "src", "secret-only.ts"), `${SECRET_LINE}\n`, "utf8");
 
@@ -1158,5 +1179,6 @@ describe("replace preview payload crosses the wire verbatim", () => {
     const snippets = body.results.map((entry) => entry.snippet).join("\n");
     expect(snippets).toContain("needleinsearchlane");
     expect(snippets).not.toContain("hunter2placeholder");
+    expect(snippets).toContain("[REDACTED]");
   });
 });

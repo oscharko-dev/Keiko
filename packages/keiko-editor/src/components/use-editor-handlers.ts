@@ -199,10 +199,11 @@ function applyRevealRequest(
   const editor = refs.editorRef.current;
   if (editor === null || revealRequest === undefined) return;
   const monacoRange = editorRangeToMonaco(revealRequest.range);
+  const startLineNumber = Math.max(1, monacoRange.startLineNumber);
   const safeRange = {
-    startLineNumber: Math.max(1, monacoRange.startLineNumber),
+    startLineNumber,
     startColumn: 1,
-    endLineNumber: Math.max(monacoRange.startLineNumber, monacoRange.endLineNumber),
+    endLineNumber: Math.max(startLineNumber, monacoRange.endLineNumber),
     endColumn: Math.max(1, monacoRange.endColumn),
   };
   clearRevealDecoration(refs);

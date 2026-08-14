@@ -14,6 +14,10 @@ import {
 } from "./debugCapsulePlan.js";
 import { DapProcessManagerError, type DebugCapsuleLauncher } from "./dapProcessManager.js";
 import type { QualifiedDebugCapsuleHandle } from "./dapCapsuleSupervisor.js";
+import {
+  deriveDebugRuntimeMountIdentityDigest,
+  deriveDebugSpawnEnvelopeIdentityDigest,
+} from "./debugIdentityDigest.js";
 import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
 
 export interface DebugCapsuleLauncherDeps {
@@ -32,15 +36,8 @@ export type DebugCapsuleSpawnProcess = (
   options: SpawnOptions,
 ) => ChildProcess;
 
-function hash(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
-
 function envelopeDigest(envelope: DebugSpawnEnvelope): string {
-  const values = Object.fromEntries(
-    Object.entries(envelope).filter(([key]) => key !== "identityDigest" && key !== "planId"),
-  );
-  return hash(values);
+  return deriveDebugSpawnEnvelopeIdentityDigest(envelope);
 }
 
 function artifactPathUnchanged(
@@ -127,7 +124,7 @@ function runtimeUnchanged(envelope: DebugSpawnEnvelope, endpoint: PosixDebugEndp
     return (
       runtimePathUnchanged(envelope, endpoint, realPath) &&
       runtimeStatUnchanged(envelope, stat) &&
-      hash([realPath, stat.dev, stat.ino, stat.mode, stat.uid]) ===
+      deriveDebugRuntimeMountIdentityDigest(realPath, stat) ===
         envelope.runtimeDirectoryIdentity.identityDigest
     );
   } catch {

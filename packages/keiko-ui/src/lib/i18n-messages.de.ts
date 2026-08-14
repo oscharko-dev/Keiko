@@ -49,6 +49,8 @@ export const DE_MESSAGES = {
     "Verschieben Sie dieses Projekt auf ein Dateisystem mit stabiler Dateiidentität, bevor Sie sich auf den lokalen Verlauf verlassen.",
   "editor.localHistoryProtection.historyUnavailable":
     "Speichern Sie erneut, sobald der lokale Verlauf verfügbar ist.",
+  "editor.localHistoryProtection.suppressedSecretDetected":
+    "Dieser Speichervorgang wurde nicht als Wiederherstellungspunkt gesichert: Der Inhalt scheint ein Secret zu enthalten. Die Wiederherstellung über den lokalen Verlauf ist für diesen Speichervorgang nicht verfügbar.",
   "editor.localHistoryProtection.diagnosticReference": "Diagnosereferenz: {correlationId}",
   "editor.callHierarchy.title": "Aufrufhierarchie",
   "editor.callHierarchy.incoming": "Eingehende Aufrufe",

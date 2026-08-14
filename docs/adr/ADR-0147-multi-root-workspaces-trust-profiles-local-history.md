@@ -297,6 +297,24 @@ file, environment key name, keychain service, and keyfile namespace; it reuses t
 `LocalSecretVault`/AES-256-GCM primitive but not hot exit's key or records. The keyfile tier remains
 honestly documented as weaker, and plaintext exists in process memory during an authorized read.
 
+Capture also fails closed on secret-shaped content itself (#2898), mirroring hot exit's
+`containsRedactableSecret` gate (ADR-0065 D2) rather than relying on encryption-at-rest alone: before
+any vault or index write, `capture()` scans `input.content` and, on a match, throws
+`SECRET_CONTENT_SUPPRESSED` without writing a checkpoint body, an index entry, or any other record of
+the attempt — list/entry/read stay exactly as they were before the call. Unlike hot exit's single
+overwritten snapshot, a suppressed Local History checkpoint has no prior version to fall back to and
+no in-place row to mark, so suppression is a thrown error the caller must handle rather than a stored
+`suppressed: true` flag. `captureEditorLocalHistorySafely` maps that error to its own
+`FilesContentResponse.localHistoryProtection` status — `{status: "suppressed", reason:
+"secret-detected", correlationId}` — kept apart from the unavailable-infrastructure `degraded` status
+because a suppression is the protection working as intended, not a failure of it; the editor's save
+still succeeds. The 90-day TTL below was reconsidered and deliberately kept: unlike hot exit's single
+fire-and-forget recovery snapshot, Local History is a listed, diffable, user-facing checkpoint feed,
+so a materially shorter default would reduce the feature's value for its actual purpose (recovering
+an earlier revision of ordinary source) without narrowing the risk this change already closes — the
+gap was the unfiltered capture of secret-shaped content, not the retention window applied to
+everything else.
+
 Normative fixed V1 bounds are 512 entries/workspace, 8 MiB/entry, 256 MiB/workspace, 64 MiB pinned,
 50 versions/file, and 90 days TTL. Pruning is deterministic oldest-accessed first with checkpoint-id
 tie-break, satisfies count and byte pressure, and never selects pins. If pins prevent required

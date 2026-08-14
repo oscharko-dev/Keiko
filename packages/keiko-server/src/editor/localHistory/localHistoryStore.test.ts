@@ -604,6 +604,36 @@ describe("editor local-history store", () => {
     },
   );
 
+  it("suppresses a checkpoint whose content contains a redactable secret shape, leaving no phantom entry", () => {
+    const fx = fixture();
+    const store = createEditorLocalHistoryStore(storeOptions(fx));
+    const baseline = store.capture(captureInput(fx, "safe before\n", "user-save", 1_000)).entry;
+
+    const secretValue = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+    const secretContent = `AWS_SECRET_ACCESS_KEY=${secretValue}\n`;
+    expect(() => store.capture(captureInput(fx, secretContent, "user-save", 2_000))).toThrow(
+      expect.objectContaining({ code: "SECRET_CONTENT_SUPPRESSED" }),
+    );
+
+    // list()/entry() stay exactly as before the suppressed call: no phantom entry, no orphaned body.
+    expect(store.list(fx.scope, "src/app.ts", 2_001).map((entry) => entry.entryRef)).toEqual([
+      baseline.entryRef,
+    ]);
+    expect(bodyFiles(fx.stateDir)).toHaveLength(1);
+
+    // The raw secret never reaches disk anywhere in the store (index or sealed checkpoint bodies).
+    const stored = readAllFiles(join(fx.stateDir, "editor-local-history"));
+    for (const bytes of stored) expect(bytes).not.toContain(secretValue);
+
+    // Non-secret content saved afterward is still captured and reads back exactly as before.
+    const after = store.capture(captureInput(fx, "safe after\n", "user-save", 3_000)).entry;
+    expect(store.read(fx.scope, after.entryRef, 3_001).content).toBe("safe after\n");
+    expect(store.list(fx.scope, "src/app.ts", 3_002).map((entry) => entry.entryRef)).toEqual([
+      after.entryRef,
+      baseline.entryRef,
+    ]);
+  });
+
   it("guards pinned capacity: pinning beyond the byte budget and capture blocked by pins", () => {
     const fx = fixture();
     const store = createEditorLocalHistoryStore({

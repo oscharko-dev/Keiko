@@ -334,6 +334,23 @@ function classifySides(
     return deletedSides(source, maxBytesPerFile);
   }
   if (change.isNewFile) {
+    // The patch claims no prior content, but a host-supplied source can still disagree (e.g. the
+    // producer's isNewFile flag is wrong, or `sources` was built for every referenced uri regardless
+    // of the patch's own flags). Fail safe like deletedSides/modifiedSides rather than silently
+    // discarding real content behind an empty-original "created" preview. A truncated source proves
+    // a non-empty file exists even when the reported `text` slice is itself short or empty, so
+    // truncation alone must trip this guard — only an untruncated empty-string source is a genuine
+    // "nothing here yet" and still classifies as created.
+    if (source !== undefined && (source.content.truncated || source.content.text !== "")) {
+      return {
+        status: "unsupported",
+        original: "",
+        modified: "",
+        originalTruncated: false,
+        modifiedTruncated: false,
+        note: "Patch claims this is a new file, but existing content was found at this path — preview unavailable.",
+      };
+    }
     // Applying edits to an empty original cannot overlap (every position clamps to offset 0), so no
     // overlap guard is needed here — unlike the modified path, which diffs against real content.
     const modified = applyTextEditsToTextWithinLimit("", change.edits, maxBytesPerFile);

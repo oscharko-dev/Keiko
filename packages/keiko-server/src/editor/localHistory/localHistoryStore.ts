@@ -15,6 +15,7 @@ import {
   type LocalSecretVault,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
+import { containsRedactableSecret } from "@oscharko-dev/keiko-security";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import {
   EDITOR_LOCAL_HISTORY_ENCRYPTION,
@@ -70,7 +71,8 @@ export type EditorLocalHistoryErrorCode =
   | "PINNED_CAPACITY_EXHAUSTED"
   | "PINNED_BYTE_LIMIT"
   | "INVALID_CAPTURE"
-  | "VAULT_WRITE_FAILED";
+  | "VAULT_WRITE_FAILED"
+  | "SECRET_CONTENT_SUPPRESSED";
 
 export class EditorLocalHistoryError extends Error {
   public constructor(
@@ -990,6 +992,17 @@ export function createEditorLocalHistoryStore(
       const byteLength = Buffer.byteLength(input.content, "utf8");
       if (byteLength > limits.maxEntryBytes) {
         throw new EditorLocalHistoryError("ENTRY_TOO_LARGE", "Local-history entry is too large.");
+      }
+      // Fail closed on secret-shaped content BEFORE any vault or index write (#2898): unlike
+      // hot-exit's single overwritten snapshot, a Local History checkpoint is listed, diffed, and
+      // restored, so a secret sealed into it would sit in durable state for the full retention
+      // window rather than one 24-hour recovery slot. Checked ahead of every stateful step so a
+      // suppressed capture leaves no entry, no body, and no index write behind.
+      if (containsRedactableSecret(input.content)) {
+        throw new EditorLocalHistoryError(
+          "SECRET_CONTENT_SUPPRESSED",
+          "Local-history capture was suppressed because the content contains secret-shaped material.",
+        );
       }
       const nowMs = input.nowMs ?? Date.now();
       if (!Number.isFinite(nowMs)) {

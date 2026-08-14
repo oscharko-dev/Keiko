@@ -44,6 +44,7 @@ import { DENIED_MESSAGE, pathIsDenied } from "../files-deny.js";
 import { openStoreForDeps } from "../local-knowledge-grounded-qa.js";
 import { assembleCodingContext } from "./codingContext.js";
 import { recordCodingContextEvidence } from "./codingContextEvidence.js";
+import { clientAbortSignal } from "./languageRoutes.js";
 import {
   buildLocalKnowledgeScope,
   retrieveEditorLocalKnowledge,
@@ -108,21 +109,6 @@ function assertContained(realRoot: string, relativePath: string): void {
   } catch {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
-}
-
-function clientAbortSignal(ctx: RouteContext): AbortSignal {
-  const controller = new AbortController();
-  ctx.req.on("close", () => {
-    controller.abort();
-  });
-  if (typeof ctx.res.on === "function") {
-    ctx.res.on("close", () => {
-      if (!ctx.res.writableEnded) {
-        controller.abort();
-      }
-    });
-  }
-  return controller.signal;
 }
 
 function buildInternalRequest(body: Record<string, unknown>): CodingContextRequest {

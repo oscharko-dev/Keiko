@@ -175,6 +175,7 @@ function routeService(stateDir: string): DapDebugRouteService {
         reasonCode: "AVAILABLE",
         policyResult: "allowed",
       }),
+    renameInstrumentation: vi.fn().mockResolvedValue(undefined),
   };
 }
 

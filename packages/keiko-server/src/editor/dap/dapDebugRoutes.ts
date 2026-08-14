@@ -18,6 +18,7 @@ import {
   parseSetWatchesRequest,
   parseStackTraceRequest,
   parseVariablesRequest,
+  type DebugEvent,
   type DebugParseResult,
   type DebugSession,
   type DebugSessionStatus,
@@ -113,6 +114,15 @@ const EVALUATE_RESPONSE_KEYS = [
   "valueLocationReference",
 ] as const;
 
+// Deliberately not exported: files.ts's rename fan-out passes the shape structurally so no
+// files.ts -> dapDebugRoutes.ts import edge exists (dapDebugRoutes.ts already imports from
+// files.ts), and knip rightly rejects an export nothing names. The exported service interface
+// below spells the shape inline for the same reason.
+interface RenamedInstrumentationFileId {
+  readonly previousFileId: string;
+  readonly nextFileId: string;
+}
+
 export interface DapDebugRouteService {
   readonly manager: DapProcessManager;
   readonly breakpoints: BreakpointStore;
@@ -120,6 +130,16 @@ export interface DapDebugRouteService {
   readonly references: DebugReferenceStore;
   readonly events: DapEventBridge;
   readonly activation: (realRoot: string) => Promise<DebugActivationSummary>;
+  // KEIKO-0179 follow-up (Codex P1, twice-raised on PR #3141): the single entry point files.ts's
+  // rename route calls to re-key the persisted breakpoint store AND, when a debug session is live,
+  // reconcile the adapter's own armed breakpoints -- clearing the old path and arming the new one --
+  // through the same reconciliation helpers a normal breakpoint mutation uses. Best-effort: never
+  // throws (a failure is a redacted diagnostic, not a rejected promise), so a rename can never fail
+  // because reconciliation did.
+  readonly renameInstrumentation: (
+    realRoot: string,
+    renames: readonly { readonly previousFileId: string; readonly nextFileId: string }[],
+  ) => Promise<void>;
   readonly diagnosticSink?: ServerDiagnosticSink | undefined;
 }
 
@@ -134,7 +154,7 @@ export interface DapDebugRouteServiceOptions {
 export function createDapDebugRouteService(
   options: DapDebugRouteServiceOptions,
 ): DapDebugRouteService {
-  return Object.freeze({
+  const base = {
     manager: options.production.manager,
     breakpoints: createBreakpointStore({
       stateDir: options.stateDir,
@@ -145,7 +165,20 @@ export function createDapDebugRouteService(
     events: options.production.eventBridge,
     activation: options.activation,
     ...(options.diagnosticSink === undefined ? {} : { diagnosticSink: options.diagnosticSink }),
+  };
+  // Self-referencing: the public method closes over `service` (assigned below) rather than
+  // duplicating the object's own fields, so it always dispatches through the exact frozen instance
+  // callers observe -- same pattern as any method needing the full service, just built outside the
+  // literal because runRenameInstrumentation is itself implemented in terms of the other private
+  // reconciliation helpers in this module.
+  const service: DapDebugRouteService = Object.freeze({
+    ...base,
+    renameInstrumentation: (
+      realRoot: string,
+      renames: readonly RenamedInstrumentationFileId[],
+    ): Promise<void> => runRenameInstrumentation(service, realRoot, renames),
   });
+  return service;
 }
 
 interface DebugWorkspace {
@@ -744,6 +777,21 @@ function persistedButNotArmed(result: BreakpointStoreMutationResult): RouteResul
   };
 }
 
+function instrumentationChangeEvent(
+  workspaceId: string,
+  result: Extract<BreakpointStoreMutationResult, { readonly ok: true }>,
+): DebugEvent {
+  return {
+    kind: "breakpoints-changed",
+    workspaceId,
+    revision: result.snapshot.revision,
+    breakpointCount: result.snapshot.breakpoints.length,
+    verifiedCount: result.snapshot.breakpoints.filter(
+      (breakpoint) => breakpoint.verification === "verified",
+    ).length,
+  };
+}
+
 function publishInstrumentationChange(
   service: DapDebugRouteService,
   workspace: AuthorizedWorkspace,
@@ -754,15 +802,7 @@ function publishInstrumentationChange(
       workspacePartitionKey: workspace.partition,
       browserSessionBinding: workspace.browserSessionBinding,
     },
-    {
-      kind: "breakpoints-changed",
-      workspaceId: workspace.workspaceId,
-      revision: result.snapshot.revision,
-      breakpointCount: result.snapshot.breakpoints.length,
-      verifiedCount: result.snapshot.breakpoints.filter(
-        (breakpoint) => breakpoint.verification === "verified",
-      ).length,
-    },
+    instrumentationChangeEvent(workspace.workspaceId, result),
   );
   return published ? undefined : eventUnavailableResponse(result.snapshot);
 }
@@ -925,6 +965,226 @@ async function reconcileActiveBreakpoints(
     ),
     activation: "armed",
   };
+}
+
+function liveDebugWorkspace(
+  service: DapDebugRouteService,
+  realRoot: string,
+  partition: string,
+): AuthorizedWorkspace | undefined {
+  const sessionId = service.manager.workspaceSessionId(partition);
+  if (sessionId === undefined) return undefined;
+  const binding = service.manager.binding(sessionId);
+  if (binding === undefined) return undefined;
+  return {
+    workspaceId: binding.workspaceId,
+    realRoot,
+    partition,
+    browserSessionBinding: binding.browserSessionBinding,
+  };
+}
+
+interface RenamedBreakpointRecords {
+  readonly applied: readonly RenamedInstrumentationFileId[];
+  readonly latest: Extract<BreakpointStoreMutationResult, { readonly ok: true }> | undefined;
+  readonly rejectedCount: number;
+}
+
+function renameBreakpointRecords(
+  service: DapDebugRouteService,
+  realRoot: string,
+  renames: readonly RenamedInstrumentationFileId[],
+): RenamedBreakpointRecords {
+  const applied: RenamedInstrumentationFileId[] = [];
+  let latest: Extract<BreakpointStoreMutationResult, { readonly ok: true }> | undefined;
+  let rejectedCount = 0;
+  for (const pair of renames) {
+    const renamed = service.breakpoints.renameFile(realRoot, pair.previousFileId, pair.nextFileId);
+    if (renamed.ok) {
+      latest = renamed;
+      applied.push(pair);
+    } else {
+      rejectedCount += 1;
+    }
+  }
+  return { applied, latest, rejectedCount };
+}
+
+// A rename is a server-observed filesystem event, not a client-authored setBreakpoints edit, so
+// there is no fresh client breakpoint list to send for the old path -- the post-rename snapshot
+// already carries zero breakpoints under previousFileId, so reusing updateActiveBreakpoints as-is
+// dispatches that same setBreakpoints shape with an empty list, clearing whatever the adapter had
+// armed there. reconcileActiveBreakpoints is reused verbatim for the new path so its
+// adapter-reported verification lands in the store exactly like any other breakpoint mutation.
+//
+// KEIKO-0179 review round 8 (Codex P2, PR #3141): the old-path clear's outcome used to be discarded
+// outright, so an adapter timeout/reject there was invisible -- the new path still got armed and the
+// change still published as a clean success, leaving the adapter possibly armed at both the old and
+// the new path with nothing to diagnose it. The outcome is now inspected: a non-"response" result is
+// reported through its own diagnostic tag (distinct from the outer best-effort catch below) before
+// falling through to arm the new path regardless. That fallthrough is deliberate, not merely
+// tolerated -- the rename already happened on disk, so a stale old-path arm cannot rebind to real
+// code, while stopping here would strand the new path unarmed too, which is strictly worse than a
+// degraded-but-diagnosed old-path clear.
+async function reconcileRenamedPair(
+  service: DapDebugRouteService,
+  workspace: AuthorizedWorkspace,
+  pair: RenamedInstrumentationFileId,
+  latest: Extract<BreakpointStoreMutationResult, { readonly ok: true }>,
+): Promise<Extract<BreakpointStoreMutationResult, { readonly ok: true }>> {
+  const oldPathClear = await updateActiveBreakpoints(
+    service,
+    workspace,
+    pair.previousFileId,
+    latest.snapshot,
+  );
+  if (oldPathClear.kind !== "response") {
+    emitRenameOldPathClearDegraded(service, workspace.realRoot);
+  }
+  const reconciled = await reconcileActiveBreakpoints(service, workspace, pair.nextFileId, latest);
+  return reconciled.result.ok ? reconciled.result : latest;
+}
+
+function emitRenameInstrumentationFailure(
+  service: DapDebugRouteService,
+  realRoot: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    service.diagnosticSink,
+    serverDiagnosticFromError({
+      correlationId: breakpointStoreWorkspaceFingerprint(realRoot),
+      operation: "dap.debug-routes.rename-instrumentation",
+      source: "dap.debug-routes.rename-instrumentation",
+      error,
+      redact: () => "Debug adapter re-arm after a rename failed.",
+    }),
+  );
+}
+
+// Codex review round 5 on PR #3141: a renameFile rejection (per-file cap at the destination, store
+// unavailable, invalid id) previously vanished — the pair was skipped with no diagnostic, and when
+// EVERY pair rejected the whole migration returned silently, contradicting this module's stated
+// best-effort-with-diagnostics contract. Counts only, never file ids: diagnostics stay body-free.
+function emitRenameReKeyRejected(
+  service: DapDebugRouteService,
+  realRoot: string,
+  rejectedCount: number,
+  totalCount: number,
+): void {
+  emitServerDiagnostic(
+    service.diagnosticSink,
+    serverDiagnosticFromError({
+      correlationId: breakpointStoreWorkspaceFingerprint(realRoot),
+      operation: "dap.debug-routes.rename-instrumentation.re-key-rejected",
+      source: "dap.debug-routes.rename-instrumentation",
+      error: new Error("RENAME_RE_KEY_REJECTED"),
+      redact: () =>
+        `Breakpoint re-key after a rename was rejected for ${String(rejectedCount)} of ` +
+        `${String(totalCount)} affected file id(s); their breakpoints remain under the old path.`,
+    }),
+  );
+}
+
+function emitRenameOldPathClearDegraded(service: DapDebugRouteService, realRoot: string): void {
+  emitServerDiagnostic(
+    service.diagnosticSink,
+    serverDiagnosticFromError({
+      correlationId: breakpointStoreWorkspaceFingerprint(realRoot),
+      operation: "dap.debug-routes.rename-instrumentation.old-path-clear-degraded",
+      source: "dap.debug-routes.rename-instrumentation",
+      error: new Error("RENAME_OLD_PATH_CLEAR_DEGRADED"),
+      redact: () =>
+        "Debug adapter did not confirm the renamed file's old path was cleared; the new path was armed regardless.",
+    }),
+  );
+}
+
+async function reconcileRenamedInstrumentation(
+  service: DapDebugRouteService,
+  workspace: AuthorizedWorkspace,
+  applied: readonly RenamedInstrumentationFileId[],
+  initial: Extract<BreakpointStoreMutationResult, { readonly ok: true }>,
+): Promise<void> {
+  let latest = initial;
+  for (const pair of applied) {
+    latest = await reconcileRenamedPair(service, workspace, pair, latest);
+  }
+  publishInstrumentationChange(service, workspace, latest);
+}
+
+// KEIKO-0179 review round 8 (Codex P2, PR #3141): EditorDebugSessionHost opens the browser's SSE
+// debug-event stream and bootstraps instrumentation before any debuggee launches, so a rename can
+// land while that stream is already subscribed on this workspace's partition yet
+// service.manager.workspaceSessionId(partition) still returns undefined -- liveDebugWorkspace
+// returns undefined in exactly that window, and the panel would otherwise never learn the rename
+// happened until its next bootstrap re-read or a conflict-triggered refresh. DapEventBridge's channel
+// key ({workspacePartitionKey, browserSessionBinding}, dapEventBridge.ts channelKey()) is populated
+// at stream-open (handleDebugEvents -> service.events.subscribe) independent of any
+// DapProcessManager session, so channelsForPartition reads that existing subscription registry to
+// find every stream already listening on this partition and publishes to each directly. There is no
+// adapter to reconcile here -- no session means nothing is armed anywhere -- only the panel(s) to
+// notify.
+function publishSessionlessRenameInstrumentation(
+  service: DapDebugRouteService,
+  realRoot: string,
+  partition: string,
+  latest: Extract<BreakpointStoreMutationResult, { readonly ok: true }>,
+): void {
+  const channels = service.events.channelsForPartition(partition);
+  if (channels.length === 0) return;
+  const workspaceId = breakpointStoreWorkspaceFingerprint(realRoot);
+  const event = instrumentationChangeEvent(workspaceId, latest);
+  for (const channel of channels) {
+    if (!service.events.publish(channel, event)) {
+      emitRenameInstrumentationFailure(service, realRoot, new Error("EVENT_UNAVAILABLE"));
+    }
+  }
+}
+
+// KEIKO-0179 follow-up (Codex P1, twice-raised on PR #3141): a rename during an active debug
+// session must re-arm the live adapter at the new path and clear it at the old one, not merely
+// re-key the persisted store and tell the browser panel something changed. This is the owning-layer
+// implementation behind DapDebugRouteService.renameInstrumentation -- files.ts's rename route calls
+// the public method, never these helpers directly. Best-effort throughout: the filesystem rename
+// already succeeded, so a store or adapter failure here is reported as a redacted diagnostic, never
+// allowed to surface as a failed rename.
+async function runRenameInstrumentation(
+  service: DapDebugRouteService,
+  realRoot: string,
+  renames: readonly RenamedInstrumentationFileId[],
+): Promise<void> {
+  const { applied, latest, rejectedCount } = renameBreakpointRecords(service, realRoot, renames);
+  // Rejections are reported even when nothing else proceeds: an all-rejected migration must leave a
+  // diagnostic behind, not return as if there had been nothing to migrate.
+  if (rejectedCount > 0) emitRenameReKeyRejected(service, realRoot, rejectedCount, renames.length);
+  if (latest === undefined) return;
+  // inspectDebugWorkspaceIdentity stays inside the guard: it can throw if the root becomes unreadable
+  // between the store re-key and this lookup, and the method's contract is that it never rejects — a
+  // failure here must degrade to a diagnostic, not a failed rename.
+  try {
+    const partition = inspectDebugWorkspaceIdentity(realRoot).identityDigest;
+    const workspace = liveDebugWorkspace(service, realRoot, partition);
+    if (workspace === undefined) {
+      publishSessionlessRenameInstrumentation(service, realRoot, partition, latest);
+      return;
+    }
+    // Codex P2 (real, PR #3141): reconciliation (adapter re-arm + verification) is nested in its own
+    // try so a throw there -- a malformed adapter response or any other unexpected error -- cannot
+    // strand the browser on the pre-rename snapshot. The store already committed the migrated `latest`
+    // above; on a reconciliation failure this still publishes it (unverified) so the panel picks up
+    // the new fileIds/revision instead of nothing. The success path is untouched: on a clean run,
+    // reconcileRenamedInstrumentation publishes the verification-updated snapshot itself and this
+    // fallback is never reached, so there is no double publish.
+    try {
+      await reconcileRenamedInstrumentation(service, workspace, applied, latest);
+    } catch (error) {
+      emitRenameInstrumentationFailure(service, realRoot, error);
+      publishInstrumentationChange(service, workspace, latest);
+    }
+  } catch (error) {
+    emitRenameInstrumentationFailure(service, realRoot, error);
+  }
 }
 
 async function updateActiveExceptionBreakpoints(

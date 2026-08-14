@@ -37,6 +37,20 @@ function hunk(kind: "add" | "del", line: number): GitEditorDiffHunk {
   };
 }
 
+// KEIKO-0389: a deletion at the very start of the file (no remaining context) is standard
+// unified-diff shape with newStart=0, newCount=0 -- schema-valid per hasValidHunkCoordinates.
+function deletionAtStart(): GitEditorDiffHunk {
+  return {
+    header: "@@ -1,1 +0,0 @@",
+    oldStart: 1,
+    oldCount: 1,
+    newStart: 0,
+    newCount: 0,
+    lines: [{ kind: "del", text: "change", oldLine: 1, newLine: null }],
+    truncated: false,
+  };
+}
+
 interface EditorFixture {
   readonly editor: MonacoGitGutterEditor;
   readonly decorationCalls: (readonly [
@@ -207,6 +221,26 @@ describe("registerEditorGitGutter", () => {
     fixture.runAction(3);
     expect(onPeek).toHaveBeenNthCalledWith(1, expect.objectContaining({ layer: "unstaged" }));
     expect(onPeek).toHaveBeenNthCalledWith(2, expect.objectContaining({ layer: "staged" }));
+  });
+
+  it("opens a deletion hunk whose new-file start is line 0 via glyph click (KEIKO-0389)", async () => {
+    const fixture = editorFixture();
+    const onPeek = vi.fn();
+    const deletion = deletionAtStart();
+    registerEditorGitGutter({
+      editor: fixture.editor,
+      resolve: () => Promise.resolve({ staged: [], unstaged: [deletion] }),
+      labels: LABELS,
+      glyphMarginTargetType: 7,
+      degraded: false,
+      onPeek,
+    });
+    await flush();
+    expect(fixture.decorationCalls[1]?.[1][0]?.range.startLineNumber).toBe(1);
+    fixture.click(1);
+    expect(onPeek).toHaveBeenCalledWith(
+      expect.objectContaining({ hunk: deletion, layer: "unstaged" }),
+    );
   });
 
   it("does zero work in degraded mode at the large-file boundary", async () => {

@@ -46,6 +46,8 @@ export const EN_MESSAGES = {
     "Move this project to a filesystem with stable file identity before relying on Local History.",
   "editor.localHistoryProtection.historyUnavailable":
     "Save again after Local History is available.",
+  "editor.localHistoryProtection.suppressedSecretDetected":
+    "This save was not checkpointed: the content looks like it contains a secret. Local History recovery is unavailable for this save.",
   "editor.localHistoryProtection.diagnosticReference": "Diagnostic reference: {correlationId}",
   "editor.callHierarchy.title": "Call hierarchy",
   "editor.callHierarchy.incoming": "Incoming calls",
