@@ -3676,8 +3676,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       const chatId = target.chat.id;
       try {
         const [messagePayload, chatsPayload] = await Promise.all([
-          fetchChatMessages(chatId, target.project.path),
-          fetchChats(target.project.path),
+          sharedFetchChatMessages(chatId, target.project.path),
+          sharedFetchChats(target.project.path),
         ]);
         if (!mountedRef.current || activeChatIdRef.current !== chatId) return;
         const refreshedActive = chatsPayload.chats.find((chat) => chat.id === chatId);

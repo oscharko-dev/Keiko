@@ -3022,8 +3022,14 @@ describe("useChatSession canonical Voice FIFO", () => {
 
     targetWindow.unmount();
     await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledTimes(2));
-    const replacement = await setupVoiceQueueSession([chatA, chatB]);
-    await act(async () => replacement.result.current.openChat(chatB));
+    const replacementA = await setupVoiceQueueSession([chatA, chatB]);
+    const replacementB = await setupVoiceQueueSession([chatA, chatB]);
+    await act(async () => {
+      await Promise.all([
+        replacementA.result.current.openChat(chatB),
+        replacementB.result.current.openChat(chatB),
+      ]);
+    });
     vi.mocked(fetchChatMessages).mockResolvedValue({
       messages: [
         message({ id: "voice-remount-user", chatId: chatB.id, content: "survives remount" }),
@@ -3035,16 +3041,22 @@ describe("useChatSession canonical Voice FIFO", () => {
         }),
       ],
     });
+    vi.mocked(fetchChatMessages).mockClear();
+    vi.mocked(fetchChats).mockClear();
 
     fallbackRequest.resolve(completedTurn("survives remount", "voice-remount-assistant", chatB.id));
     await act(async () => {
       await delivery;
     });
 
-    expect(replacement.result.current.messages).toContainEqual(
-      expect.objectContaining({ id: "voice-remount-assistant", chatId: chatB.id }),
-    );
-    replacement.unmount();
+    for (const replacement of [replacementA, replacementB]) {
+      expect(replacement.result.current.messages).toContainEqual(
+        expect.objectContaining({ id: "voice-remount-assistant", chatId: chatB.id }),
+      );
+      replacement.unmount();
+    }
+    expect(fetchChatMessages).toHaveBeenCalledOnce();
+    expect(fetchChats).toHaveBeenCalledOnce();
     fallbackWindow.unmount();
   });
 
