@@ -151,12 +151,12 @@ describe("compaction validators reject non-relative scope paths", () => {
     "src/../../escape.ts",
     "C:\\Windows\\system32",
     "src\\index.ts",
+    // `~/x` is rejected again: the two shared relative-path predicates disagreed about a leading
+    // tilde, and isValidScopePath (the one these validators use) allowed it. They now share one
+    // definition, pinned in workspace-contract-primitives.test.ts.
+    "~/secrets",
+    "~",
   ];
-  // NOTE: `~/x` is NOT in this list. isValidScopePath — the package's shared relative-path predicate,
-  // and the one this validator now uses — does not reject a leading `~`, while the sibling
-  // isPortableWorkspaceRelativePath does. That divergence between two shared predicates is a real
-  // inconsistency but a separate one; `~` is meaningful only to a shell, so it resolves as a literal
-  // directory name here rather than as a traversal.
 
   it.each(HOSTILE_PATHS)("rejects a provenance ref scopePath of %s", (scopePath) => {
     expect(validateContextProvenanceRef({ ...happyRef(), scopePath }).ok).toBe(false);
