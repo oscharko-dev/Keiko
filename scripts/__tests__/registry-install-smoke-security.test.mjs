@@ -24,6 +24,7 @@ import {
   resolveVendorClosure,
   assertRegistryOnlyDescriptors,
   assertHostBindingsAreReal,
+  assertStubsAreForeignOnly,
   hostBindingSuffixes,
   corepackCacheDir,
   privateYarnHome,
@@ -826,6 +827,38 @@ describe("installable package smoke optional-dependency coverage", () => {
       rmSync(seedDir, { recursive: true, force: true });
     }
   }, 60_000);
+
+  // `keiko-local-knowledge` declares `@napi-rs/canvas` — the PARENT, not a platform child —
+  // optional, and the lockfile records no `os`/`cpu` for it, so it installs everywhere. An
+  // optional-fetch failure would stub it, and `stubbedHostBindings` returns early on a stubbed
+  // parent, so the host-binding guard alone would let the lane pass with no Canvas implementation
+  // at all (Codex thread 3780501190). Platform data comes from `package-lock.json` rather than a
+  // literal, so a package that gains or loses a platform restriction is judged by what it pins.
+  it("rejects a stub for a package the lockfile installs on this host", () => {
+    const stubbed = (name) =>
+      new Map([
+        [
+          name,
+          new Map([["1.0.2", { manifest: stubManifest(name, "1.0.2"), name, version: "1.0.2" }]]),
+        ],
+      ]);
+
+    // Platform-agnostic parent: a stub here means the capability is absent, on every host.
+    rejectProcessExit();
+    expect(() => assertStubsAreForeignOnly(stubbed("@napi-rs/canvas"))).toThrow(
+      /process\.exit\(1\)/u,
+    );
+
+    // A binding for a platform this host is not: the stub is the correct artifact.
+    const foreign =
+      process.platform === "android"
+        ? "@napi-rs/canvas-win32-x64-msvc"
+        : "@napi-rs/canvas-android-arm64";
+    expect(() => assertStubsAreForeignOnly(stubbed(foreign))).not.toThrow();
+
+    // A name the lockfile pins no platform data for is a closure question, not a platform one.
+    expect(() => assertStubsAreForeignOnly(stubbed("not-in-the-lockfile-at-all"))).not.toThrow();
+  });
 
   it("validates the staged root's own descriptors, allowing only its vendor archives", () => {
     // `file:vendor/...` is how stage-publish-package points at the tarball-local private

@@ -805,6 +805,74 @@ export function hostBindingSuffixes(
   return [base];
 }
 
+/**
+ * npm's `os`/`cpu` semantics, including the `!` negation form: an empty or absent list means "every
+ * platform", a negated list excludes what it names, and a plain list is an allowlist.
+ */
+function platformListAllows(list, value) {
+  if (!Array.isArray(list) || list.length === 0) return true;
+  const negated = list.filter((item) => typeof item === "string" && item.startsWith("!"));
+  if (negated.length > 0) return !negated.some((item) => item.slice(1) === value);
+  return list.includes(value);
+}
+
+let lockfilePlatformScopes;
+
+/** The `os`/`cpu` `package-lock.json` records for a name, or `undefined` if it pins no such name. */
+function lockfilePlatformScope(name, lockfilePath) {
+  if (lockfilePlatformScopes === undefined) {
+    lockfilePlatformScopes = new Map();
+    const raw = existsSync(lockfilePath) ? JSON.parse(readFileSync(lockfilePath, "utf8")) : {};
+    for (const [path, entry] of Object.entries(raw.packages ?? {})) {
+      const pinned = path.split("node_modules/").at(-1);
+      if (pinned === undefined || pinned === "" || lockfilePlatformScopes.has(pinned)) continue;
+      lockfilePlatformScopes.set(pinned, { cpu: entry.cpu, os: entry.os });
+    }
+  }
+  return lockfilePlatformScopes.get(name);
+}
+
+/**
+ * A stub is legitimate ONLY for a package this host would never link. `package-lock.json` is what
+ * says which those are, and it is more than the platform-suffix heuristic knows: it covers `cpu` as
+ * well as `os`, and it covers packages whose NAME carries no platform at all.
+ *
+ * `@napi-rs/canvas` is exactly that case. `keiko-local-knowledge` declares the parent package
+ * itself optional and the lockfile records no `os`/`cpu` for it, so it installs everywhere — yet an
+ * optional-fetch failure would stub it, `stubbedHostBindings` returns early on a stubbed parent,
+ * and the lane would go green with no Canvas implementation at all, against the guarantee
+ * ADR-0021 D7 makes (Codex thread 3780501190).
+ *
+ * A name the lockfile does not pin is not judged here: that is a closure defect, which the missing
+ * list and `assertRegistryOnlyDescriptors` already govern, not a platform question.
+ */
+/** Whether the lockfile pins this name AND records no platform scope excluding the running host. */
+function installsOnThisHost(name, lockfilePath) {
+  const scope = lockfilePlatformScope(name, lockfilePath);
+  if (scope === undefined) return false;
+  return (
+    platformListAllows(scope.os, process.platform) && platformListAllows(scope.cpu, process.arch)
+  );
+}
+
+export function assertStubsAreForeignOnly(
+  seeded,
+  lockfilePath = join(repoRoot, "package-lock.json"),
+) {
+  const offenders = [...seeded].flatMap(([name, versions]) =>
+    [...versions.values()]
+      .filter((entry) => isStubEntry(entry) && installsOnThisHost(name, lockfilePath))
+      .map((entry) => `${name}@${entry.version}`),
+  );
+  if (offenders.length > 0) {
+    fail(
+      `these packages install on this host but were seeded as inert stubs, so the Yarn arm would ` +
+        `resolve them and link nothing: ${offenders.join(", ")} — run \`npm install\` before the ` +
+        `installable-package smoke`,
+    );
+  }
+}
+
 export function assertHostBindingsAreReal(seeded) {
   const hostSuffixes = hostBindingSuffixes();
   const offenders = [...seeded.values()].flatMap((versions) =>
@@ -968,6 +1036,11 @@ export function seedVendoredRegistry(
   }
   writeSeedIndex(destination, seeded);
   assertHostBindingsAreReal(seeded);
+  // Broader than the check above and derived from a different source: that one asks whether the
+  // host's own BINDING resolved to a stub, from the running platform triple; this one asks whether
+  // ANY package the lockfile installs here did, including a platform-agnostic parent like
+  // `@napi-rs/canvas` whose name carries no platform to match on.
+  assertStubsAreForeignOnly(seeded);
   return seeded;
 }
 
