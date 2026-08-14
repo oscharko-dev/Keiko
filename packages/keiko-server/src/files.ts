@@ -2668,7 +2668,16 @@ export async function handleFilesRename(
       resolvedRoot,
     });
     if (result.previousPath !== undefined) {
-      await reKeyRenamedBreakpoints(deps, resolvedRoot.realRoot, result.previousPath, result.path);
+      // Deliberately NOT awaited (Codex P1 on PR #3141): the synchronous prefix — computing the
+      // affected fileIds, the store re-key commits, rejection diagnostics, and the sessionless
+      // browser publish — runs to completion before this expression yields, so the response body
+      // and any immediately-following instrumentation read already see the migrated store. Only the
+      // per-file adapter round-trips (3s deadline each) continue in the background; awaiting them
+      // could hold this response for minutes on a directory rename against an unavailable adapter,
+      // turning a long-completed filesystem rename into a UI timeout. renameInstrumentation's
+      // contract is that it never rejects (failures degrade to redacted diagnostics), so nothing is
+      // silently lost by detaching.
+      void reKeyRenamedBreakpoints(deps, resolvedRoot.realRoot, result.previousPath, result.path);
     }
     return { status: 200, body: result };
   });
