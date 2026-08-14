@@ -40,6 +40,9 @@ function snapshotRefFor(workspaceRoot: string, relativePath: string): string {
   return `hot-exit:${sha256Hex(`${workspaceRoot}\0${relativePath}`)}`;
 }
 
+// serverReceivedAt is stamped here (as store.write() itself would) so the shape-pin test below
+// exercises the same persistence-internal field the real store persists, not a fixture that
+// happens to omit exactly the property under test.
 function storedSnapshot(snapshot: EditorHotExitSnapshotV1): EditorHotExitStoredSnapshot {
   return {
     schemaVersion: 1,
@@ -49,10 +52,28 @@ function storedSnapshot(snapshot: EditorHotExitSnapshotV1): EditorHotExitStoredS
     savedContentHash: snapshot.savedContentHash,
     contentSizeBytes: Buffer.byteLength(snapshot.content, "utf8"),
     updatedAt: snapshot.updatedAt,
+    serverReceivedAt: snapshot.updatedAt + 5,
     paneId: snapshot.paneId,
     windowId: snapshot.windowId,
   };
 }
+
+// Exactly the fields the declared wire contract promises for a hot-exit read response's
+// `snapshot` object (see keiko-ui's EditorHotExitReadResponse in packages/keiko-ui/src/lib/api.ts,
+// derived from EditorHotExitSnapshotV1 minus the identity fields plus contentSizeBytes). Anything
+// outside this set -- most notably the persistence-internal serverReceivedAt -- must never reach
+// the wire.
+const DECLARED_HOT_EXIT_SNAPSHOT_KEYS = [
+  "schemaVersion",
+  "content",
+  "baseVersion",
+  "contentHash",
+  "savedContentHash",
+  "contentSizeBytes",
+  "updatedAt",
+  "paneId",
+  "windowId",
+].sort();
 
 function createFakeHotExitStore(): FakeHotExitStore {
   const snapshots = new Map<string, EditorHotExitStoredSnapshot>();
@@ -252,5 +273,35 @@ describe("editor hot-exit routes", () => {
 
     expect(write.status).toBe(200);
     expect(read).toMatchObject({ status: 200, body: { found: true } });
+  });
+
+  // Shape pin: EditorHotExitStoredSnapshot (packages/keiko-server/src/editor/hotExitStore.ts) is
+  // the store's own persistence record and carries serverReceivedAt, a trust-boundary internal
+  // (r6/r8: the server-receipt TTL basis) that the declared wire contract
+  // (keiko-ui's EditorHotExitReadResponse) never lists. The read route must project the stored
+  // snapshot onto exactly the declared fields before it goes on the wire -- not return the stored
+  // record verbatim.
+  it("never leaks the persistence-internal serverReceivedAt onto the read response wire", async () => {
+    const fake = createFakeHotExitStore();
+    const write = await handleEditorHotExitWrite(
+      postContext("/api/editor/hot-exit/write", { snapshot: snapshot() }),
+      deps(fake.store),
+    );
+    const snapshotRef = (write.body as { readonly snapshotRef: string }).snapshotRef;
+
+    const read = await handleEditorHotExitRead(
+      postContext("/api/editor/hot-exit/read", {
+        workspaceRoot: root,
+        relativePath: "src/app.ts",
+        snapshotRef,
+      }),
+      deps(fake.store),
+    );
+
+    const body = read.body as { readonly found: boolean; readonly snapshot?: object };
+    expect(body.found).toBe(true);
+    const wireSnapshot = body.snapshot as Record<string, unknown>;
+    expect(wireSnapshot).not.toHaveProperty("serverReceivedAt");
+    expect(Object.keys(wireSnapshot).sort()).toEqual(DECLARED_HOT_EXIT_SNAPSHOT_KEYS);
   });
 });

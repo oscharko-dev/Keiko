@@ -2369,4 +2369,69 @@ describe("renameInstrumentation orchestration (KEIKO-0179 follow-up, Codex P1 on
       expect(perFile.filter((fileId) => fileId === "src/full.ts")).toHaveLength(64);
     }
   });
+
+  // Codex P2 (real, PR #3141): with an active session, a throw from
+  // reconcileRenamedInstrumentation (malformed adapter response, unexpected error) used to land in
+  // runRenameInstrumentation's catch, which only emitted the diagnostic -- the store had already
+  // committed the rename (renameBreakpointRecords runs before the try), but nothing ever told a
+  // subscribed panel, so it kept the OLD fileIds/revision indefinitely. On unfixed code the
+  // `received` array below stays empty because the catch is diagnostic-only.
+  it("still publishes the migrated snapshot to a subscribed channel when adapter reconciliation throws", async () => {
+    const eventBridge = createDapEventBridge();
+    const service = buildRenameService(eventBridge);
+    const initial = service.breakpoints.snapshot(workspaceRoot);
+    if (!initial.ok) throw new Error("expected an available breakpoint snapshot");
+    const armed = service.breakpoints.setBreakpointsForFile(
+      workspaceRoot,
+      initial.snapshot.revision,
+      initial.snapshot.etag,
+      "src/app.ts",
+      [{ line: 4, enabled: true }],
+    );
+    expect(armed.ok).toBe(true);
+    if (!armed.ok) throw new Error("expected the arm to commit");
+    const preRenameRevision = armed.snapshot.revision;
+
+    await bindLiveSession("malformed-reconcile-binding");
+    // Every setBreakpoints call (old-path clear and new-path arm alike) resolves with a body that
+    // fails adapter-shape validation, so verificationUpdates throws DAP_RESPONSE_INVALID out of the
+    // reconciliation loop instead of returning normally.
+    manager.malformedCommand = "setBreakpoints";
+
+    const received: unknown[] = [];
+    const subscription = eventBridge.subscribe({
+      channel: {
+        workspacePartitionKey: workspacePartition,
+        browserSessionBinding: "malformed-reconcile-binding",
+      },
+      onEvent: (envelope) => {
+        received.push(envelope.event);
+      },
+    });
+    expect(subscription.kind).toBe("ok");
+
+    await service.renameInstrumentation(workspaceRoot, [
+      { previousFileId: "src/app.ts", nextFileId: "src/renamed.ts" },
+    ]);
+
+    // The diagnostic still fires -- reconciliation genuinely failed.
+    const failures = diagnosticRecords.filter(
+      (record) => record.operation === "dap.debug-routes.rename-instrumentation",
+    );
+    expect(failures).toHaveLength(1);
+
+    // But the already-migrated (pre-verification) snapshot still reaches the subscribed channel.
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({ kind: "breakpoints-changed", workspaceId });
+    const event = received[0] as { readonly revision: number };
+    expect(event.revision).toBeGreaterThanOrEqual(preRenameRevision);
+
+    const migrated = service.breakpoints.snapshot(workspaceRoot);
+    expect(migrated.ok).toBe(true);
+    if (migrated.ok) {
+      expect(migrated.snapshot.breakpoints.map((entry) => entry.fileId)).toEqual([
+        "src/renamed.ts",
+      ]);
+    }
+  });
 });

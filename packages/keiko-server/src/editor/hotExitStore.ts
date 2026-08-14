@@ -62,6 +62,15 @@ export interface CreateEditorHotExitStoreOptions {
   // Test/DI seam: supply a pre-built vault (or an instrumented wrapper) instead of resolving the
   // on-disk vault key. Production callers omit this; the vault is memoized on first use as usual.
   readonly vault?: LocalSecretVault | undefined;
+  // Test/DI seam for the server's own receipt clock (mirrors how read() already takes an optional
+  // `nowMs`): write() samples this for EVERY receipt timestamp it records (the entry's own
+  // serverReceivedAt and the `nowMs` it hands to prune()), instead of calling Date.now() directly.
+  // Production callers omit this; the default preserves the pre-existing Date.now() behaviour.
+  // Tests can inject a fixed function to drive deterministic receipt timestamps instead of
+  // deriving fixtures from the real wall clock and separately hoping write()'s own Date.now()
+  // sample lands close enough to match -- two independent real-clock reads that are never
+  // actually synchronized (AGENTS.md hermetic-tests rule).
+  readonly receiptClock?: (() => number) | undefined;
 }
 
 interface StoredItem {
@@ -76,7 +85,9 @@ interface StoredItem {
 //
 // `updatedAt` here is the TTL-basis timestamp, and it is deliberately NOT the persisted snapshot's
 // contract `updatedAt` (which is client-supplied and untrusted for clock purposes). write() stamps
-// it with the server's own receipt clock (Date.now()) at the moment the entry is accepted, so a
+// it with the server's own receipt clock (Date.now() by default, or the injected receiptClock
+// test/DI seam -- see CreateEditorHotExitStoreOptions.receiptClock) at the moment the entry is
+// accepted, so a
 // client clock that is arbitrarily far behind (or ahead of) the server can never make write()'s own
 // prune, a later write's prune, or read()'s TTL check treat a just-persisted entry as expired. A
 // side effect is that prune's oldest-first eviction ordering becomes server-arrival order rather
@@ -231,6 +242,7 @@ export function createEditorHotExitStore(
   // Lazily built once on cold start (one decrypt pass), then maintained purely on write/delete so no
   // subsequent prune decrypts anything. Keyed by ref -> {contentSizeBytes, updatedAt}.
   let metaIndex: Map<string, HotExitMeta> | undefined;
+  const receiptClock = options.receiptClock ?? Date.now;
 
   const getVault = (): LocalSecretVault => {
     vault ??= options.vault ?? hotExitVault(options);
@@ -298,7 +310,10 @@ export function createEditorHotExitStore(
       // already expired to the very next read() or prune() (r6; see HotExitMeta.updatedAt).
       // Persisted into the stored payload itself (serverReceivedAt) so this same trusted basis
       // survives a process restart, not just this process's in-memory index (r8).
-      const receivedAt = Date.now();
+      // Sampled once via the injected/default receiptClock seam (never Date.now() directly) so
+      // every receipt timestamp this call produces -- the persisted serverReceivedAt AND the
+      // `nowMs` handed to prune() below -- comes from the exact same source a test can pin.
+      const receivedAt = receiptClock();
       const payload = payloadFor(snapshot, receivedAt);
       // Record the incoming entry's non-secret metadata BEFORE prune so the budget math sees it.
       index.set(ref, {

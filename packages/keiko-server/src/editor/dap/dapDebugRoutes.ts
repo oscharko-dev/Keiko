@@ -1169,7 +1169,19 @@ async function runRenameInstrumentation(
       publishSessionlessRenameInstrumentation(service, realRoot, partition, latest);
       return;
     }
-    await reconcileRenamedInstrumentation(service, workspace, applied, latest);
+    // Codex P2 (real, PR #3141): reconciliation (adapter re-arm + verification) is nested in its own
+    // try so a throw there -- a malformed adapter response or any other unexpected error -- cannot
+    // strand the browser on the pre-rename snapshot. The store already committed the migrated `latest`
+    // above; on a reconciliation failure this still publishes it (unverified) so the panel picks up
+    // the new fileIds/revision instead of nothing. The success path is untouched: on a clean run,
+    // reconcileRenamedInstrumentation publishes the verification-updated snapshot itself and this
+    // fallback is never reached, so there is no double publish.
+    try {
+      await reconcileRenamedInstrumentation(service, workspace, applied, latest);
+    } catch (error) {
+      emitRenameInstrumentationFailure(service, realRoot, error);
+      publishInstrumentationChange(service, workspace, latest);
+    }
   } catch (error) {
     emitRenameInstrumentationFailure(service, realRoot, error);
   }

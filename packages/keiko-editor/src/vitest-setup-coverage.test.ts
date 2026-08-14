@@ -21,7 +21,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 // sentence above quotes both `@vitest-environment jsdom` and `vitest.setup` verbatim), which
 // would silently fold this guard file into the guarded set and then pass it on comment text
 // alone -- exactly the false-positive class this guard exists to catch in every other file.
-const JSDOM_PRAGMA_LINE = /^\/\/\s*@vitest-environment\s+jsdom\s*$/m;
+// Trailing text is allowed after the environment name (vitest's own pragma scan tolerates it, so a
+// file carrying "// @vitest-environment jsdom // reason" WOULD run under jsdom and must therefore
+// still be guarded); a word boundary keeps "jsdomX" from matching.
+const JSDOM_PRAGMA_LINE = /^\/\/\s*@vitest-environment\s+jsdom\b/m;
 const SETUP_IMPORT_STATEMENT = /^import\s+["']\.\.?\/(\.\.\/)?vitest\.setup(\.js)?["'];?$/m;
 
 interface GuardedFile {
