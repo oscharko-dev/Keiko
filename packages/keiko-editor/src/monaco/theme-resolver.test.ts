@@ -70,6 +70,8 @@ describe("hexFromColorString", () => {
     expect(() => hexFromColorString("rebeccapurple")).toThrow(/cannot convert/);
     expect(() => hexFromColorString("#12")).toThrow(/unparseable hex/);
     expect(() => hexFromColorString("rgb(1 2)")).toThrow(/unparseable rgb/);
+    expect(() => hexFromColorString("rgb(1 2 x)")).toThrow(/unparseable rgb/);
+    expect(() => hexFromColorString("rgba(1 2 3 / x)")).toThrow(/unparseable rgb/);
     expect(() => hexFromColorString("oklch(0.16 0.004 160")).toThrow(/unparseable oklch/);
     expect(() => hexFromColorString("oklch(0.16 0.004 160 / 0.5 / 0.6)")).toThrow(
       /unparseable oklch/,
