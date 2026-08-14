@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   asEnhancedPromptId,
-  asPromptEnhancementRequestId,
   isPromptCandidateRejectionReason,
   isPromptCriticDimension,
   PROMPT_CANDIDATE_REJECTION_REASONS,
