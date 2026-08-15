@@ -631,7 +631,7 @@ async function expectUnavailablePreview(
   expect(JSON.stringify(pendingRecord), action).not.toContain("contentPreview");
 }
 
-describe("write-action route — unpresentable content preview after sanitization (KEIKO-0186 P1/P2/P3)", () => {
+describe("write-action route — unpresentable content preview after sanitization (KEIKO-0186 P1-P4)", () => {
   it("an all-zero-width-space payload is reported unavailable for every text-bearing action, never as an empty preview", async () => {
     const allZeroWidth = String.fromCharCode(0x200b).repeat(12);
     for (const action of TEXT_BEARING_WRITE_ACTIONS) {
@@ -734,6 +734,49 @@ describe("write-action route — unpresentable content preview after sanitizatio
     const commentText = fillerPrefix + "X";
     expect(commentText.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
     await expectUnavailablePreview("add-issue-comment", commentText);
+  });
+
+  // KEIKO-0186 P4 (Codex): U+2800 BRAILLE PATTERN BLANK is deliberately blank by design, yet
+  // Unicode general category So (a symbol) -- it defeated \s, \p{M}, and Default_Ignorable_Code_Point
+  // in turn. The predicate is now an allowlist (Letter, Number, Punctuation); a symbol is never in
+  // that set, whether or not anyone ever named it specifically.
+
+  it("an all-BRAILLE-PATTERN-BLANK payload is reported unavailable for every text-bearing action", async () => {
+    const braillePatternBlank = String.fromCodePoint(0x2800).repeat(5);
+    for (const action of TEXT_BEARING_WRITE_ACTIONS) {
+      await expectUnavailablePreview(action, braillePatternBlank);
+    }
+  });
+
+  it("truncation can produce an all-BRAILLE-PATTERN-BLANK tail through the real route, even when the untruncated text has a base character past the bound", async () => {
+    const braillePrefix = String.fromCodePoint(0x2800).repeat(
+      ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
+    );
+    const commentText = braillePrefix + "X";
+    expect(commentText.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+    await expectUnavailablePreview("add-issue-comment", commentText);
+  });
+
+  // P4's allowlist excludes \p{S} (Symbol, including emoji) entirely -- a deliberate, documented
+  // cost (see isAtlassianContentPreviewUnpresentable's definition), not an oversight. \p{L}
+  // already covers CJK ideographs, so this is pinned end-to-end through the real route too: an
+  // emoji-only comment is unavailable, but a CJK-only comment still carries its bounded preview.
+
+  it("an emoji-only payload is reported unavailable through the real route", async () => {
+    const grinningFace = String.fromCodePoint(0x1f600);
+    await expectUnavailablePreview("add-page-comment", grinningFace);
+  });
+
+  it("a CJK-only payload carries its bounded content preview through the real route, unaffected by the \\p{S} exclusion", async () => {
+    const done = "已完成"; // Chinese: "done"
+    const counter: FetchCounter = { count: 0, requests: [] };
+    const guard = guardWith(counter);
+    const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
+    const { body } = await postHostileAction("add-issue-comment", done, authority, guard);
+    const approval = body.approval as AtlassianConnectorPendingApproval;
+    expect(validateAtlassianConnectorPendingApproval(approval).ok).toBe(true);
+    expect(approval.contentPreviewUnavailable).toBeUndefined();
+    expect(approval.contentPreview).toBe(done);
   });
 });
 

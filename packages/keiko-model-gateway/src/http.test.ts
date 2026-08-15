@@ -1102,6 +1102,97 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
     }
   });
 
+  it("never pools two calls whose CA bundles differ, even when the old length+prefix summary would have collided (#3157)", async () => {
+    // Codex P1: the CA term of the tunnel key used to be `${cert.length}:${cert.slice(0, 32)}` per
+    // certificate. For PEM input the first 32 characters are almost entirely the near-universal
+    // "-----BEGIN CERTIFICATE-----\n" header -- TEST_TLS_CERT's own first 32 characters are that
+    // header plus just 3-4 base64 characters of real content, confirmed directly below. Two
+    // genuinely different CA bundles sharing a byte length would collide on that summary and share
+    // a pooled tunnel, so a call that deliberately tightened or changed its trusted roots could
+    // silently ride a connection its OWN bundle would have refused to establish.
+    //
+    // caBundleB is constructed to guarantee exactly that collision under the OLD scheme: identical
+    // .length and identical .slice(0, 32) to TEST_TLS_CERT (caBundleA), but different content past
+    // that point. It is deliberately not a parseable certificate -- this test does not need the
+    // second call's TLS handshake to the origin to succeed, only that a fresh CONNECT attempt is
+    // made for it (proven by proxyConnects, which increments the moment the proxy receives the
+    // CONNECT method, strictly before any TLS-to-origin handshake using either bundle even begins).
+    // Call #2 is therefore allowed to fail after that point; only proxyConnects is load-bearing.
+    expect(TEST_TLS_CERT.slice(0, 32)).toBe("-----BEGIN CERTIFICATE-----\nMIID");
+    const caBundleA = TEST_TLS_CERT;
+    const caBundleB = `${TEST_TLS_CERT.slice(0, 32)}${"Z".repeat(TEST_TLS_CERT.length - 32)}`;
+    expect(caBundleB).toHaveLength(caBundleA.length);
+    expect(caBundleB.slice(0, 32)).toBe(caBundleA.slice(0, 32));
+    expect(caBundleB).not.toBe(caBundleA);
+
+    const dir = mkdtempSync(join(tmpdir(), "keiko-ca-collision-"));
+    const caBundlePathA = join(dir, "ca-a.pem");
+    const caBundlePathB = join(dir, "ca-b.pem");
+    writeFileSync(caBundlePathA, caBundleA, "utf8");
+    writeFileSync(caBundlePathB, caBundleB, "utf8");
+    let proxyConnects = 0;
+    let originRequests = 0;
+    const originSockets = new Set<Socket>();
+    const proxySockets = new Set<Socket>();
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
+      originRequests += 1;
+      res.writeHead(200, { "content-type": "application/json", connection: "keep-alive" });
+      res.end(JSON.stringify({ path: req.url, count: originRequests }));
+    });
+    origin.on("connection", (socket) => {
+      originSockets.add(socket);
+      socket.once("close", () => originSockets.delete(socket));
+    });
+    const originPort = await listen(origin);
+    const proxy = createHttpServer();
+    proxy.on("connection", (socket) => {
+      proxySockets.add(socket);
+      socket.once("close", () => proxySockets.delete(socket));
+    });
+    proxy.on("connect", (req, clientSocket, head) => {
+      proxyConnects += 1;
+      const [host, portText] = (req.url ?? "").split(":");
+      const upstream = netConnect(Number(portText), host, () => {
+        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length > 0) upstream.write(head);
+        pipeBounded(upstream, clientSocket);
+        pipeBounded(clientSocket, upstream);
+      });
+      upstream.on("error", () => clientSocket.destroy());
+    });
+    const proxyPort = await listen(proxy);
+    const httpsProxy = `http://127.0.0.1:${String(proxyPort)}`;
+    try {
+      // First: a valid bundle (caBundleA === TEST_TLS_CERT, which validates the origin's own
+      // self-signed certificate). Establishes tunnel #1 and pools it (keep-alive).
+      const first = await gatewayFetch(`https://127.0.0.1:${String(originPort)}/first`, {
+        egress: { httpsProxy, caBundlePath: caBundlePathA },
+      });
+      expect(await first.json()).toEqual({ path: "/first", count: 1 });
+      expect(proxyConnects).toBe(1);
+
+      // Second: the colliding-summary, genuinely different bundle, same proxy/target, inside the
+      // idle window. Tolerate either outcome from the TLS handshake itself -- caBundleB is garbage
+      // past byte 32, so Node may accept or reject it, and this test does not care which; only
+      // whether a FRESH tunnel was attempted for it.
+      await gatewayFetch(`https://127.0.0.1:${String(originPort)}/second`, {
+        egress: { httpsProxy, caBundlePath: caBundlePathB },
+      }).catch(() => undefined);
+
+      // The load-bearing assertion: a genuinely NEW CONNECT tunnel was established for the
+      // differently-CA'd second call rather than reusing tunnel #1 from the pool. Before the fix
+      // this stayed at 1 -- the length+prefix summary collided, so the pool served caBundleB's
+      // call the tunnel that was only ever authenticated under caBundleA's trust set.
+      expect(proxyConnects).toBe(2);
+    } finally {
+      for (const socket of proxySockets) socket.destroy();
+      for (const socket of originSockets) socket.destroy();
+      await close(proxy);
+      await close(origin);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("still refuses a proxied request when the vetted address is blocked (e.g. metadata), before contacting the proxy", async () => {
     let proxyHits = 0;
     const proxy = createHttpServer(() => {
