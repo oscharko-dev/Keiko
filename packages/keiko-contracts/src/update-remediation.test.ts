@@ -61,9 +61,9 @@ describe("parseUpdateRemediationActionRequest", () => {
   });
 
   it("rejects a decision outside the closed set and accepts each member", () => {
-    expect(
-      parseUpdateRemediationActionRequest({ actionId: "act-1", decision: "maybe" }).ok,
-    ).toBe(false);
+    expect(parseUpdateRemediationActionRequest({ actionId: "act-1", decision: "maybe" }).ok).toBe(
+      false,
+    );
     for (const decision of UPDATE_REMEDIATION_DECISIONS) {
       expect(parseUpdateRemediationActionRequest({ actionId: "act-1", decision }).ok).toBe(true);
     }
