@@ -22,16 +22,16 @@ const SNAPSHOT_ENCODER = new TextEncoder();
 
 function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("IndexedDB request failed."));
+    request.onsuccess = (): void => resolve(request.result);
+    request.onerror = (): void => reject(request.error ?? new Error("IndexedDB request failed."));
   });
 }
 
 function txDone(tx: IDBTransaction): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error ?? new Error("IndexedDB transaction failed."));
-    tx.onabort = () => reject(tx.error ?? new Error("IndexedDB transaction aborted."));
+    tx.oncomplete = (): void => resolve();
+    tx.onerror = (): void => reject(tx.error ?? new Error("IndexedDB transaction failed."));
+    tx.onabort = (): void => reject(tx.error ?? new Error("IndexedDB transaction aborted."));
   });
 }
 
@@ -41,6 +41,11 @@ let cachedDbPromise: Promise<IDBDatabase | null> | null = null;
 let lastPruneAt = 0;
 let bytesSinceLastPrune = 0;
 let forceNextPrune = false;
+let localClock: () => number = (): number => Date.now();
+
+export function setEditorHotExitLocalClockForTests(clock: (() => number) | null): void {
+  localClock = clock ?? ((): number => Date.now());
+}
 
 function resetCachedDb(): void {
   const db = cachedDb;
@@ -70,21 +75,21 @@ async function openDb(): Promise<IDBDatabase | null> {
   if (cachedDbPromise !== null) return cachedDbPromise;
   const opening = new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (): void => {
       const db = request.result;
       if (db.objectStoreNames.contains(STORE_NAME)) db.deleteObjectStore(STORE_NAME);
       if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME);
     };
-    request.onsuccess = () => {
+    request.onsuccess = (): void => {
       const db = request.result;
-      db.onversionchange = () => {
+      db.onversionchange = (): void => {
         if (cachedDb === db) resetCachedDb();
       };
       cachedDb = db;
       resolve(db);
     };
-    request.onerror = () => reject(request.error ?? new Error("IndexedDB open failed."));
-  }).catch(() => null);
+    request.onerror = (): void => reject(request.error ?? new Error("IndexedDB open failed."));
+  }).catch((): null => null);
   cachedDbPromise = opening;
   const db = await opening;
   if (db === null && cachedDbPromise === opening) cachedDbPromise = null;
@@ -192,13 +197,12 @@ function shouldPrune(now: number, incomingBytes: number): boolean {
 
 async function pruneIfNeeded(db: IDBDatabase, record: EditorHotExitIndexRecordV2): Promise<void> {
   const incomingBytes = chargedBytes(record);
-  const ttlBasisNow = recordTtlBasis(record);
-  const pruneAttemptedAt = Date.now();
+  const pruneAttemptedAt = localClock();
   if (!shouldPrune(pruneAttemptedAt, incomingBytes)) {
     bytesSinceLastPrune += incomingBytes;
     return;
   }
-  await prune(db, ttlBasisNow, record);
+  await prune(db, pruneAttemptedAt, record);
   lastPruneAt = pruneAttemptedAt;
   bytesSinceLastPrune = 0;
   forceNextPrune = incomingBytes >= MAX_TOTAL_BYTES;
@@ -207,7 +211,7 @@ async function pruneIfNeeded(db: IDBDatabase, record: EditorHotExitIndexRecordV2
 export async function readEditorHotExitSnapshot(
   workspaceRoot: string,
   relativePath: string,
-  now = Date.now(),
+  now = localClock(),
 ): Promise<EditorHotExitSnapshotV1 | null> {
   const hash = await locatorHash(workspaceRoot, relativePath);
   if (hash === null) return null;

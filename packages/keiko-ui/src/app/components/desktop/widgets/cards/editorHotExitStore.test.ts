@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   deleteEditorHotExitSnapshot,
   readEditorHotExitSnapshot,
+  setEditorHotExitLocalClockForTests,
   writeEditorHotExitSnapshot,
 } from "./editorHotExitStore";
 import {
@@ -81,6 +82,7 @@ type FakeOpenRequest = FakeIdbRequest<FakeDatabase> & {
 };
 
 let fakeGetAllCount = 0;
+let localClockNow = 1_000;
 
 class FakeIdbRequest<T = unknown> {
   result!: T;
@@ -357,6 +359,8 @@ async function expectRejectedMessage(promise: Promise<unknown>, message: string)
 
 beforeEach(() => {
   fakeGetAllCount = 0;
+  localClockNow = 1_000;
+  setEditorHotExitLocalClockForTests(() => localClockNow);
   hotExitApi.reset();
   vi.mocked(writeEditorHotExitContent).mockClear();
   vi.mocked(readEditorHotExitContent).mockClear();
@@ -365,6 +369,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setEditorHotExitLocalClockForTests(null);
   removeIndexedDb();
 });
 
@@ -523,7 +528,9 @@ describe("editorHotExitStore", () => {
   });
 
   it("does not full-scan the snapshot store for every small debounced write", async () => {
+    localClockNow = 10_000;
     await writeEditorHotExitSnapshot(snapshot({ relativePath: "src/one.ts", updatedAt: 10_000 }));
+    localClockNow = 39_999;
     await writeEditorHotExitSnapshot(snapshot({ relativePath: "src/two.ts", updatedAt: 10_100 }));
 
     expect(fakeGetAllCount).toBe(1);
@@ -580,12 +587,39 @@ describe("editorHotExitStore", () => {
     });
 
     await writeEditorHotExitSnapshot(expired);
+    localClockNow = freshNow;
     await writeEditorHotExitSnapshot(fresh);
 
     await expect(readEditorHotExitSnapshot("/repo", "src/old.ts", freshNow)).resolves.toBeNull();
     await expect(readEditorHotExitSnapshot("/repo", "src/new.ts", freshNow)).resolves.toEqual(
       fresh,
     );
+  });
+
+  it("uses the local operation clock when pruning expired records", async () => {
+    const indexedDb = new FakeIndexedDb();
+    installIndexedDb(indexedDb);
+    const expired = snapshot({
+      relativePath: "src/old.ts",
+      contentHash: "d".repeat(64),
+      updatedAt: 1_000,
+    });
+    const fresh = snapshot({
+      relativePath: "src/new.ts",
+      contentHash: "e".repeat(64),
+      updatedAt: 2_000,
+    });
+
+    await writeEditorHotExitSnapshot(expired);
+    localClockNow = 1_000 + EDITOR_HOT_EXIT_TTL_MS + 10;
+    hotExitApi.setNextServerReceivedAt(2_000);
+    await writeEditorHotExitSnapshot(fresh);
+
+    const serialized = JSON.stringify([
+      ...indexedDb.records("keiko-editor-hot-exit", "snapshots").values(),
+    ]);
+    expect(serialized).not.toContain(expired.contentHash);
+    expect(serialized).toContain(fresh.contentHash);
   });
 
   it("evicts the oldest fresh snapshots when total hot-exit storage exceeds the quota", async () => {
