@@ -551,12 +551,24 @@ function readStringArray(value: unknown): readonly string[] {
     : [];
 }
 
+// True when `value` is an array containing at least one non-string entry. readStringArray above
+// silently drops such entries so the two set-comparison helpers below can operate on a clean
+// string list — but dropping an entry must never also mean treating it as absent: a payload that
+// pads the canonical set with foreign, non-string data (e.g. an injected object) would otherwise
+// compare equal to canonical once the extra entry becomes invisible, and must fail instead.
+function hasNonStringEntry(value: unknown): boolean {
+  return Array.isArray(value) && value.some((entry) => typeof entry !== "string");
+}
+
 // Compared against the canonical plan set-wise rather than by a capability heuristic: brainstorm's
 // facets went completely unvalidated because the only rule was "disagreement-capable modes mandate
 // all three", so a brainstorm plan could mandate anything at all — or nothing.
 function validateModePlanFacets(mode: DiscussionMode, value: unknown, reasons: string[]): void {
   const canonical = DISCUSSION_MODE_PLANS[mode].mandatedFacets;
   const mandated = readStringArray(value);
+  if (hasNonStringEntry(value)) {
+    reasons.push(`mandatedFacets: ${mode} must contain only strings`);
+  }
   for (const facet of canonical) {
     if (!mandated.includes(facet)) {
       reasons.push(`mandatedFacets: ${mode} must mandate ${facet}`);
@@ -570,6 +582,7 @@ function validateModePlanFacets(mode: DiscussionMode, value: unknown, reasons: s
 }
 
 function sameStringSet(actual: unknown, canonical: readonly string[]): boolean {
+  if (hasNonStringEntry(actual)) return false;
   const values = readStringArray(actual);
   return (
     values.length === canonical.length &&

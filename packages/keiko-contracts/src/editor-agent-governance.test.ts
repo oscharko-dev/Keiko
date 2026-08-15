@@ -552,6 +552,21 @@ describe("audit record structural guard enforces its declared vocabularies", () 
       ),
     ).toBe(false);
   });
+
+  // hasValidDispositionReasonPairing only checked the wrong-reason-on-the-wrong-disposition
+  // direction. It never required the REQUIRED reason to be present: a record could claim
+  // disposition: "denied" with no denyReason at all — a reviewer reading the audit trail would see
+  // WHY was never recorded for a denial that, per this module's own documented pairing rule, must
+  // always carry one.
+  it("rejects a denied disposition with no denyReason, and a review-required one with no reviewReason", () => {
+    const denied = record({ disposition: "denied", denyReason: undefined });
+    expect((denied as Record<string, unknown>).denyReason).toBeUndefined();
+    expect(isEditorAgentActionAuditRecord(denied)).toBe(false);
+
+    const reviewRequired = record({ disposition: "review-required", reviewReason: undefined });
+    expect((reviewRequired as Record<string, unknown>).reviewReason).toBeUndefined();
+    expect(isEditorAgentActionAuditRecord(reviewRequired)).toBe(false);
+  });
 });
 
 describe("audit record builder (Issue #1395 AC1, AC3)", () => {

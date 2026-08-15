@@ -509,6 +509,25 @@ function hasBlockingBlocker(blockers: readonly { readonly severity: string }[]):
   return blockers.some((blocker) => blocker.severity === "blocking");
 }
 
+// The only code collectMergeAdvisory ever constructs via advisory(...) — kept immediately beside
+// that function so the two cannot silently drift. Every other blocker code is only ever
+// constructed via blocking(...); hasBlockingBlocker above trusts the SUPPLIED severity, so a
+// payload could relabel a code that is always blocking in practice (e.g. "conflicts") as
+// "advisory", clear hasBlockingBlocker's check, and pass mergeable:true for a genuinely conflicted
+// PR. "checks-failing" is intentionally NOT "advisory-only": collectMergeBlocking also emits it as
+// blocking when the PR is not yet ready, so this set names what advisory CAN be, not a fixed
+// per-code severity.
+const CODES_COLLECT_MERGE_ADVISORY_CAN_EMIT: ReadonlySet<GitMergeReadinessBlockerCode> = new Set([
+  "checks-failing",
+]);
+
+function hasIllegitimateAdvisoryBlocker(blockers: readonly GitMergeReadinessBlocker[]): boolean {
+  return blockers.some(
+    (blocker) =>
+      blocker.severity === "advisory" && !CODES_COLLECT_MERGE_ADVISORY_CAN_EMIT.has(blocker.code),
+  );
+}
+
 // "Severity-ranked" means every blocking entry precedes every advisory one: once an advisory has
 // been seen, no blocking entry may follow.
 function isSeverityRanked(blockers: readonly { readonly severity: string }[]): boolean {
@@ -535,6 +554,7 @@ export function isGitMergeReadinessSummary(value: unknown): value is GitMergeRea
     isBoolean(value.mergeable) &&
     isBlockerArray(value.blockers) &&
     value.mergeable === !hasBlockingBlocker(value.blockers) &&
+    !hasIllegitimateAdvisoryBlocker(value.blockers) &&
     isSeverityRanked(value.blockers)
   );
 }

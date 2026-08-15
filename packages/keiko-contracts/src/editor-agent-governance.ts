@@ -754,11 +754,17 @@ function hasValidAuditReasonCodes(value: Record<string, unknown>): boolean {
   );
 }
 
-// The documented pairing: a denyReason belongs only to a denied disposition, a reviewReason only to
-// review-required. A record carrying the wrong one describes a decision that was never made.
+// The documented pairing is bidirectional: a denyReason belongs only to a denied disposition (and
+// a denied disposition always carries one — buildEditorAgentActionAuditRecord copies both straight
+// from the classifier's decision, which sets them together), a reviewReason only to
+// review-required (same). A record carrying the wrong reason for its disposition, OR the right
+// disposition with no reason at all, describes a decision that was never made — a reviewer reading
+// "denied" with no denyReason has no way to reconstruct why.
 function hasValidDispositionReasonPairing(value: Record<string, unknown>): boolean {
   if (value.denyReason !== undefined && value.disposition !== "denied") return false;
   if (value.reviewReason !== undefined && value.disposition !== "review-required") return false;
+  if (value.disposition === "denied" && value.denyReason === undefined) return false;
+  if (value.disposition === "review-required" && value.reviewReason === undefined) return false;
   return true;
 }
 

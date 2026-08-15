@@ -5,6 +5,7 @@ import {
   validateRuntimeCapabilitiesResponse,
   type RuntimeCapabilitiesResponse,
 } from "./runtime-capabilities.js";
+import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "./workspace-contract-primitives.js";
 
 describe("runtime capability contracts", () => {
   it("validates a serializable content-free response", () => {
@@ -58,6 +59,16 @@ describe("runtime capability contracts", () => {
     ["a UNC path", "\\\\host\\share\\package.json"],
     ["a backslash separator", "sub\\package.json"],
     ["a traversal segment", "../../etc/package.json"],
+    // KEIKO-0239-follow-on: this validator had drifted into a second, looser copy of
+    // isPortableWorkspaceRelativePath (workspace-contract-primitives.ts) — it checked "." and
+    // ".." segments but not an EMPTY segment (a bare double slash), did not reject a
+    // tilde-prefixed home-relative path, and had no length bound at all.
+    ["a double-slash producing an empty segment", "foo//bar/package.json"],
+    ["a tilde-prefixed home-relative path", "~/secrets/package.json"],
+    [
+      "a path over the portable byte bound",
+      `${"a".repeat(WORKSPACE_PORTABLE_PATH_MAX_BYTES)}/package.json`,
+    ],
     ["a NUL byte", "package.json\u0000"],
   ])("rejects a command source whose path is %s", (_label, path) => {
     const response: RuntimeCapabilitiesResponse = {

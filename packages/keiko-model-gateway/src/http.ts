@@ -15,6 +15,11 @@ import {
 import type { OutboundHttpEgressConfig } from "./types.js";
 
 export type { OutboundHttpEgressConfig } from "./types.js";
+// Re-exported so a caller can classify a target's address class (e.g. "loopback") by hostname
+// string alone, with no DNS resolution and no dependency on any `OutboundHttpEgressConfig` flag —
+// safe to use unconditionally, proxied or not (see keiko-server's Atlassian httpPort.ts for why
+// that distinction matters: `denyLoopback` cannot be pinned on a proxied request there).
+export { classifyOutboundHost } from "./egress-policy.js";
 
 // Captured once at module load, before any test can monkey-patch `globalThis.fetch`. Used to
 // detect a caller-substituted global fetch (the established test convention in this codebase,

@@ -103,9 +103,14 @@ function grantRefErrors(value: unknown, index: number): string[] {
   return errors;
 }
 
+// KEIKO-0302 follow-on: the "known" branch checked `value` but never the fact object's OWN keys,
+// so a well-formed known fact padded with an extra field (e.g. free text riding alongside a valid
+// handle) validated and was returned verbatim.
 function boundedStringFactErrors(value: unknown, path: string): string[] {
   if (!isRecord(value)) return [`${path} must be a tagged fact object`];
   if (value.outcome === "known") {
+    const extraKeys = unknownKeys(value, ["outcome", "value"], path);
+    if (extraKeys.length > 0) return extraKeys;
     // recoveryRef is documented as a content-free handle, so it takes the same lower-kebab shape
     // rather than a bare length bound that a filesystem path would pass.
     return isContentFreeReasonCode(value.value)
@@ -117,7 +122,7 @@ function boundedStringFactErrors(value: unknown, path: string): string[] {
     value.outcome === "unavailable" ||
     value.outcome === "unknown"
   ) {
-    return "value" in value ? [`${path} must not carry a value for outcome ${value.outcome}`] : [];
+    return unknownKeys(value, ["outcome"], path);
   }
   return [`${path}.outcome must be known, absent, unavailable, or unknown`];
 }
@@ -125,6 +130,8 @@ function boundedStringFactErrors(value: unknown, path: string): string[] {
 function questionFactErrors(value: unknown): string[] {
   if (!isRecord(value)) return ["pendingQuestion must be a tagged fact object"];
   if (value.outcome === "known") {
+    const extraKeys = unknownKeys(value, ["outcome", "value"], "pendingQuestion");
+    if (extraKeys.length > 0) return extraKeys;
     return isCodeTaskQuestionId(value.value) ? [] : ["pendingQuestion.value must be a question id"];
   }
   if (
@@ -132,9 +139,7 @@ function questionFactErrors(value: unknown): string[] {
     value.outcome === "unavailable" ||
     value.outcome === "unknown"
   ) {
-    return "value" in value
-      ? [`pendingQuestion must not carry a value for outcome ${value.outcome}`]
-      : [];
+    return unknownKeys(value, ["outcome"], "pendingQuestion");
   }
   return ["pendingQuestion.outcome must be known, absent, unavailable, or unknown"];
 }

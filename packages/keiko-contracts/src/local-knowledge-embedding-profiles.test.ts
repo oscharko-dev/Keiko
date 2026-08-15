@@ -55,6 +55,49 @@ describe("embedding profile compatibility", () => {
     expect(embeddingProfileKey(versioned)).not.toBe(embeddingProfileKey(unversioned));
   });
 
+  // embeddingProfileKey used `field ?? "sentinel"` for every optional component, so an absent
+  // field and a provider legitimately reporting the sentinel word itself (e.g. modelRevision:
+  // "unversioned") produced the IDENTICAL key — two genuinely different embedding spaces would
+  // then share a key even though compareEmbeddingProfiles (direct `===` on the raw field)
+  // correctly still calls them incompatible, making the key actively misleading.
+  it("distinguishes an absent modelRevision from a provider literally reporting 'unversioned'", () => {
+    const absent = hardenedProfile();
+    const literal = hardenedProfile({ modelRevision: "unversioned" });
+
+    expect(compareEmbeddingProfiles(absent, literal).compatible).toBe(false);
+    expect(embeddingProfileKey(absent)).not.toBe(embeddingProfileKey(literal));
+  });
+
+  it("distinguishes absence from a provider literal equal to each optional field's sentinel", () => {
+    // A minimal identity (only the required fields) so instructionVersion/embeddingSpaceFingerprint/
+    // tokenizer/dimensionsParam are genuinely absent, not merely overridden to undefined.
+    const minimal: EmbeddingModelIdentity = {
+      provider: "openai-compatible",
+      modelId: "text-embedding-3-small",
+      vectorDimensions: 1536,
+      vectorMetric: "cosine",
+    };
+    const absent = embeddingProfileFromModelIdentity(minimal);
+    const literalSentinels = embeddingProfileFromModelIdentity({
+      ...minimal,
+      instructionVersion: "legacy",
+      embeddingSpaceFingerprint: "unverified",
+    });
+
+    expect(embeddingProfileKey(absent)).not.toBe(embeddingProfileKey(literalSentinels));
+  });
+
+  it("distinguishes an absent tokenizer from a provider literally named 'unknown-tokenizer'", () => {
+    const withoutTokenizer = hardenedProfile();
+    const literalTokenizerName = embeddingProfileFromModelIdentity(HARDENED_IDENTITY, {
+      tokenizer: "unknown-tokenizer",
+    });
+
+    expect(embeddingProfileKey(withoutTokenizer)).not.toBe(
+      embeddingProfileKey(literalTokenizerName),
+    );
+  });
+
   it("treats identical hardened profiles as same and query-embedding eligible", () => {
     const profile = hardenedProfile();
     const decision = compareEmbeddingProfiles(profile, { ...profile });

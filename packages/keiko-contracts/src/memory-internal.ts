@@ -6,7 +6,7 @@
 // Bounded text caps. Chosen to keep audit summaries and rationales safe to ship to a
 // browser surface without truncation, and to keep the body cap aligned with a comfortable
 // MemoriaViva card without scrolling.
-import { stripUnsafeFormatChars } from "./text-safety.js";
+import { hasControlCharacter, stripUnsafeFormatChars } from "./text-safety.js";
 
 export const MEMORY_BODY_MAX_CHARS = 4096;
 export const MEMORY_RATIONALE_MAX_CHARS = 1024;
@@ -133,7 +133,10 @@ function memoryIdReason(value: unknown): string | null {
     return `exceeds max length ${String(MEMORY_ID_MAX_LENGTH)}`;
   }
   if (value.normalize("NFKC") !== value) return "must be NFKC-normalised";
-  if (stripUnsafeFormatChars(value) !== value) {
+  // hasControlCharacter catches TAB/LF/CR too (deliberately preserved by stripUnsafeFormatChars
+  // for text content, but an id is a single token and must never contain them); the
+  // stripUnsafeFormatChars comparison still carries the bidi/zero-width half of the check.
+  if (hasControlCharacter(value) || stripUnsafeFormatChars(value) !== value) {
     return "contains control or invisible characters";
   }
   if (MEMORY_ID_FORBIDDEN_FRAGMENTS.some((fragment) => value.includes(fragment))) {

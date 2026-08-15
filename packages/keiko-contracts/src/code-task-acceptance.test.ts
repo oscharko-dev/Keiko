@@ -107,6 +107,11 @@ describe("validateCodeTaskAcceptanceContribution", () => {
       { receiptDigest: { outcome: "known", value: "short" } },
       { receiptDigest: { outcome: "unknown", value: DIGEST } },
       { receiptDigest: { outcome: "guessed" } },
+      // KEIKO-0302 follow-on: factErrors closed the OUTER contribution keys but never the fact
+      // object's own keys, so a well-formed known fact padded with an extra field (e.g. free text
+      // riding alongside a valid digest) was accepted and returned verbatim.
+      { receiptDigest: { outcome: "known", value: DIGEST, promptText: "leak me" } },
+      { receiptDigest: { outcome: "unknown", promptText: "leak me" } },
     ]) {
       const result = validateCodeTaskAcceptanceContribution(
         mutated({ scenarios: [{ ...base, ...patch }] }),
@@ -127,6 +132,8 @@ describe("validateCodeTaskAcceptanceContribution", () => {
       { path: "C:\\repo\\file.ts" },
       { disposition: "copied" },
       { reshaping: { outcome: "known", value: "" } },
+      { reshaping: { outcome: "known", value: "rebound", promptText: "leak me" } },
+      { reshaping: { outcome: "absent", promptText: "leak me" } },
       { verifiedAtSha: "1234" },
     ]) {
       const result = validateCodeTaskAcceptanceContribution(

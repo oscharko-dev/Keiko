@@ -589,6 +589,26 @@ function hasBlockingBlocker(blockers: readonly GitPullRequestReadinessBlocker[])
   return blockers.some((blocker) => blocker.severity === "blocking");
 }
 
+// Every code collectAdvisoryBlockers ever constructs via advisory(...) — kept immediately beside
+// that function so the two cannot silently drift. Every other blocker code is only ever
+// constructed via blocking(...), and (unlike git-merge.ts's dual-purpose "checks-failing") the two
+// producers' code sets are fully disjoint here. hasBlockingBlocker above trusts the SUPPLIED
+// severity, so a payload could relabel a code that is always blocking in practice (e.g.
+// "merge-conflict") as "advisory", clear hasBlockingBlocker's check, and pass reviewReady:true for
+// a genuinely conflicted PR.
+const CODES_COLLECT_ADVISORY_BLOCKERS_CAN_EMIT: ReadonlySet<GitPullRequestReadinessBlockerCode> =
+  new Set(["draft-pr", "checks-pending", "approval-insufficient"]);
+
+function hasIllegitimateAdvisoryBlocker(
+  blockers: readonly GitPullRequestReadinessBlocker[],
+): boolean {
+  return blockers.some(
+    (blocker) =>
+      blocker.severity === "advisory" &&
+      !CODES_COLLECT_ADVISORY_BLOCKERS_CAN_EMIT.has(blocker.code),
+  );
+}
+
 // "Severity-ranked" means every blocking entry precedes every advisory one: once an advisory has
 // been seen, no blocking entry may follow.
 function isSeverityRanked(blockers: readonly GitPullRequestReadinessBlocker[]): boolean {
@@ -616,6 +636,7 @@ export function isGitPullRequestReadinessSummary(
     isBoolean(value.reviewReady) &&
     isBlockerArray(value.blockers) &&
     (!value.reviewReady || (value.objectExists && !hasBlockingBlocker(value.blockers))) &&
+    !hasIllegitimateAdvisoryBlocker(value.blockers) &&
     isSeverityRanked(value.blockers)
   );
 }

@@ -2,6 +2,8 @@
 // wire-stable vocabulary for host tool/runtime detection only. It is intentionally pure: no IO,
 // no process execution, no clock, no randomness, and no imports from sibling packages.
 
+import { isPortableWorkspaceRelativePath } from "./workspace-contract-primitives.js";
+
 export const RUNTIME_CAPABILITY_SCHEMA_VERSION = "1" as const;
 
 export type RuntimeCapabilityKind =
@@ -125,16 +127,6 @@ function validateStringField(
   }
 }
 
-// Same shape as verification.ts's isCanonicalRelativePath: no absolute POSIX root, no Windows drive
-// or UNC prefix, no backslash separator, no NUL, no traversal segment.
-function isWorkspaceRelativeCapabilityPath(value: string): boolean {
-  if (value.length === 0) return false;
-  if (value.startsWith("/") || value.startsWith("\\")) return false;
-  if (/^[A-Za-z]:/u.test(value)) return false;
-  if (value.includes("\0") || value.includes("\\")) return false;
-  return !value.split("/").some((segment) => segment === ".." || segment === ".");
-}
-
 function validateCommandSource(value: unknown, path: string, errors: string[]): void {
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
@@ -149,7 +141,7 @@ function validateCommandSource(value: unknown, path: string, errors: string[]): 
   // contract (verification.ts) already shape-checks its own path field; this one only required a
   // non-empty string, and the single test that claimed to prove "content-free" output asserted
   // against a hand-written literal rather than any validator behaviour.
-  if (typeof value.path === "string" && !isWorkspaceRelativeCapabilityPath(value.path)) {
+  if (typeof value.path === "string" && !isPortableWorkspaceRelativePath(value.path)) {
     errors.push(`${path}.path must be workspace-relative`);
   }
   validateCommandSourceOptionals(value, path, errors);

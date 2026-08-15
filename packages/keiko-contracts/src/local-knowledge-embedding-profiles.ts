@@ -209,19 +209,33 @@ function optionalProfileFields(
   };
 }
 
+// Frames an optional component so genuine ABSENCE and a provider literally reporting the word
+// this function used to fall back to (e.g. modelRevision: "unversioned") can never collide into
+// the same key: "-" (a fixed, single-character marker) can never equal "=" + anything, regardless
+// of what a legitimate value contains, because the two cases always differ in their first
+// character. Two distinct present values still compare correctly, since equality of "=" + a
+// reduces to equality of a. Applied uniformly to every optional field for consistency, even where
+// today's narrower value types make the specific collision unreachable (e.g. `normalization` is a
+// closed enum that can never literally equal "legacy").
+function keyComponent(value: string | undefined): string {
+  return value === undefined ? "-" : `=${value}`;
+}
+
 export function embeddingProfileKey(profile: EmbeddingProfileIdentity): string {
   return [
     profile.provider,
     profile.modelId,
-    profile.modelRevision ?? "unversioned",
+    keyComponent(profile.modelRevision),
     profile.modelFamily,
     String(profile.vectorDimensions),
     profile.vectorMetric,
-    profile.normalization ?? "legacy",
-    profile.instructionVersion ?? "legacy",
-    profile.embeddingSpaceFingerprint ?? "unverified",
-    String(profile.dimensionsParam ?? ""),
-    profile.tokenizer ?? "unknown-tokenizer",
+    keyComponent(profile.normalization),
+    keyComponent(profile.instructionVersion),
+    keyComponent(profile.embeddingSpaceFingerprint),
+    keyComponent(
+      profile.dimensionsParam === undefined ? undefined : String(profile.dimensionsParam),
+    ),
+    keyComponent(profile.tokenizer),
     profile.locality,
   ].join("|");
 }

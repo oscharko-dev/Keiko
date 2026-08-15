@@ -260,6 +260,24 @@ describe("parseLanguageServiceRequest", () => {
     }
   });
 
+  // KEIKO-0465-class bug: LANGUAGE_SERVICE_PATH_MAX_BYTES is a BYTE bound, but a check against
+  // `.length` counts UTF-16 code units. Each "あ" is 1 UTF-16 unit (String.length) but 3 UTF-8
+  // bytes, so 1400 of them is 1400 UTF-16 units (well under the bound) yet 4200 UTF-8 bytes (over
+  // it) — a root a UTF-16-length check wrongly accepts.
+  it("rejects a root within the UTF-16 length bound but over the UTF-8 byte bound", () => {
+    const root = "あ".repeat(1400);
+    expect(root.length).toBeLessThan(LANGUAGE_SERVICE_PATH_MAX_BYTES);
+    const result = parseLanguageServiceRequest({
+      operation: "diagnostics",
+      root,
+      document: overlay(),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors).toContain("root must be a non-empty string");
+    }
+  });
+
   it("rejects a missing root and a malformed document together", () => {
     const result = parseLanguageServiceRequest({
       operation: "diagnostics",
@@ -668,6 +686,16 @@ describe("language document overlay trust boundary", () => {
         path: `src/${"a".repeat(LANGUAGE_SERVICE_PATH_MAX_BYTES)}.ts`,
       }),
     ).toBe(false);
+  });
+
+  // KEIKO-0465-class bug: the bound is BYTES, but a check against `.length` counts UTF-16 code
+  // units. Each "あ" is 1 UTF-16 unit but 3 UTF-8 bytes, so 1400 of them is 1400 UTF-16 units
+  // (well under the bound) yet 4200 UTF-8 bytes (over it) — a path a UTF-16-length check wrongly
+  // accepts.
+  it("rejects a document path within the UTF-16 length bound but over the UTF-8 byte bound", () => {
+    const path = "あ".repeat(1400);
+    expect(path.length).toBeLessThan(LANGUAGE_SERVICE_PATH_MAX_BYTES);
+    expect(isLanguageDocumentOverlay({ ...overlay, path })).toBe(false);
   });
 
   // The BYTE bound is the ROUTE's business: runLanguageOperation measures the same UTF-8 length

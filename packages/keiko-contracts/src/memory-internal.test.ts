@@ -48,4 +48,18 @@ describe("validateMemoryIdString", () => {
   it.each(["../secrets", "mem/1", "mem\\1"])("rejects the path fragment in %j", (value) => {
     expect(reasonsFor(value)).not.toEqual([]);
   });
+
+  // stripUnsafeFormatChars (text-safety.ts) deliberately PRESERVES TAB/LF/CR for legitimate
+  // multi-line text content, so the control-character gate above must not rely on it alone for an
+  // identifier: an id is a single token, and an embedded newline or tab is itself the defect (it
+  // can smuggle a fake extra record into a line-oriented export, or make two ids that render
+  // differently compare equal). Distinct from the bidi/zero-width/control set above, which
+  // stripUnsafeFormatChars does catch.
+  it.each([
+    ["TAB", 0x09],
+    ["LF", 0x0a],
+    ["CR", 0x0d],
+  ])("rejects an id containing an embedded %s", (_label, codePoint) => {
+    expect(reasonsFor(`mem${String.fromCodePoint(codePoint)}forged`)).not.toEqual([]);
+  });
 });

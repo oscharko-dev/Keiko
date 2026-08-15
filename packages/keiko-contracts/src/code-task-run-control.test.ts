@@ -213,4 +213,37 @@ describe("run-control content-free references", () => {
       }).ok,
     ).toBe(true);
   });
+
+  // KEIKO-0302 follow-on: boundedStringFactErrors/questionFactErrors checked `value` but never
+  // the fact object's OWN keys, so a well-formed known fact padded with an extra field (e.g. free
+  // text riding alongside a valid handle) validated and was returned verbatim.
+  it("rejects a recoveryRef fact padded with an extra field", () => {
+    expect(
+      validateRunControlSnapshotV1({
+        ...snapshot(),
+        recoveryRef: { outcome: "known", value: "recovery-7f3a", promptText: "leak me" },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateRunControlSnapshotV1({
+        ...snapshot(),
+        recoveryRef: { outcome: "absent", promptText: "leak me" },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects a pendingQuestion fact padded with an extra field", () => {
+    expect(
+      validateRunControlSnapshotV1({
+        ...snapshot(),
+        pendingQuestion: { outcome: "known", value: "que_1", promptText: "leak me" },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateRunControlSnapshotV1({
+        ...snapshot(),
+        pendingQuestion: { outcome: "absent", promptText: "leak me" },
+      }).ok,
+    ).toBe(false);
+  });
 });

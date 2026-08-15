@@ -373,6 +373,38 @@ describe("guards and parse", () => {
     expect(parsed.ok).toBe(false);
   });
 
+  // hasBlockingBlocker trusts the SUPPLIED severity, so a payload could relabel a code that
+  // collectBlockingBlockers always constructs as "blocking" (e.g. "merge-conflict") as "advisory"
+  // instead, clear hasBlockingBlocker's check, and reviewReady:true would then pass for a
+  // genuinely conflicted PR. Every code collectBlockingBlockers emits is disjoint from every code
+  // collectAdvisoryBlockers emits (unlike git-merge.ts's dual-purpose "checks-failing"), so a
+  // blocking-only code must never legitimately appear as advisory.
+  it("rejects a summary claiming reviewReady with a real blocking code relabelled advisory", () => {
+    expect(
+      isGitPullRequestReadinessSummary({
+        schemaVersion: "1",
+        objectExists: true,
+        reviewReady: true,
+        blockers: [
+          { code: "merge-conflict", severity: "advisory", remediation: "user-actionable" },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("still accepts every code collectAdvisoryBlockers actually emits, as advisory", () => {
+    for (const code of ["draft-pr", "checks-pending", "approval-insufficient"] as const) {
+      expect(
+        isGitPullRequestReadinessSummary({
+          schemaVersion: "1",
+          objectExists: true,
+          reviewReady: false,
+          blockers: [{ code, severity: "advisory", remediation: "user-actionable" }],
+        }),
+      ).toBe(true);
+    }
+  });
+
   it("rejects a summary claiming reviewReady for a PR that does not exist", () => {
     expect(
       isGitPullRequestReadinessSummary({

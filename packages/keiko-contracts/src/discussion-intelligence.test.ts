@@ -546,6 +546,27 @@ describe("validateDiscussionModePlan", () => {
     }
   });
 
+  // readStringArray silently filters out non-string entries so the two set-comparison helpers
+  // (validateModePlanFacets, sameStringSet) can operate on a clean string list — but that must
+  // never make a payload padded with foreign, non-string data compare equal to canonical.
+  it("rejects mandatedFacets padded with a non-string entry that would otherwise match canonical", () => {
+    const canonicalFacets = DISCUSSION_MODE_PLANS.challenge.mandatedFacets;
+    const result = validateDiscussionModePlan({
+      ...DISCUSSION_MODE_PLANS.challenge,
+      mandatedFacets: [...canonicalFacets, { injected: "payload" }],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects groundingDirectives padded with a non-string entry that would otherwise match canonical", () => {
+    const plan = DISCUSSION_MODE_PLANS.challenge;
+    const result = validateDiscussionModePlan({
+      ...plan,
+      groundingDirectives: [...plan.groundingDirectives, { injected: "payload" }],
+    });
+    expect(result.ok).toBe(false);
+  });
+
   it("flags an empty directive list and unknown directives", () => {
     const empty = validateDiscussionModePlan({ ...DISCUSSION_MODE_PLANS.review, directives: [] });
     expect(empty.ok).toBe(false);

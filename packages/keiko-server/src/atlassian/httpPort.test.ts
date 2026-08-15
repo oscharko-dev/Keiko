@@ -494,16 +494,20 @@ const PERMISSIVE_GATEWAY_EGRESS: OutboundHttpEgressConfig = {
   allowLinkLocalAndMetadata: true,
 };
 
-// Loopback is NOT in this list: `denyLoopback` is overloaded in the gateway
-// (refuseUnpinnableResearchEgress throws for any proxied request that sets it), so pinning it here
-// broke every proxied Atlassian deployment. The private and cloud-metadata classes — the actual
-// escalation vectors the finding reports — are blocked by NOT inheriting the model gateway's
-// opt-ins, which is what these cases prove. The loopback half is tracked on KEIKO-0316.
+// Loopback IS in this list even though `denyLoopback` is never pinned on the egress config
+// handed to gatewayFetch (that flag is overloaded in the gateway: refuseUnpinnableResearchEgress
+// throws for any proxied request that sets it, which broke every proxied Atlassian deployment).
+// KEIKO-0316's loopback half is instead closed by a plain hostname-string classification in
+// httpPort.ts (classifyOutboundHost) applied unconditionally, so it blocks loopback the same way
+// under a permissive gateway egress as the private/metadata classes below — without touching the
+// proxy-incompatible flag at all.
 const INTERNAL_BASE_URLS = [
   "https://10.0.0.5",
   "https://172.16.4.9",
   "https://192.168.1.20",
   "https://169.254.169.254",
+  "https://127.0.0.1",
+  "https://localhost",
 ] as const;
 
 describe("Atlassian connector egress posture", () => {
@@ -556,5 +560,46 @@ describe("Atlassian connector egress posture", () => {
     })({ method: "GET", url: "https://acme.example/rest/api/3/myself", timeoutMs: 30_000 });
     expect(result).toEqual({ kind: "response", status: 200 });
     expect(calls).toHaveLength(1);
+  });
+
+  it("blocks a loopback base URL under plain default config, on both channels, without touching the network", async () => {
+    const { fetchImpl, calls } = fetchFake(200);
+    const result = await createGatewayAtlassianHttpPort({
+      baseUrl: "https://127.0.0.1",
+      authRef: AUTH_REF,
+      credentials: resolver(),
+      fetchImpl,
+    })({ method: "GET", url: "https://127.0.0.1/rest/api/3/myself", timeoutMs: 30_000 });
+    expect(result).toEqual({ kind: "network-error" });
+    expect(calls).toHaveLength(0);
+
+    const { fetchImpl: bodyFetchImpl, calls: bodyCalls } = writeFetchFake(200, "{}");
+    const bodyResult = await createGatewayAtlassianHttpBodyPort({
+      baseUrl: "https://127.0.0.1",
+      authRef: AUTH_REF,
+      credentials: resolver(),
+      fetchImpl: bodyFetchImpl,
+    })({
+      method: "POST",
+      url: "https://127.0.0.1/rest/api/3/issue",
+      timeoutMs: 30_000,
+      maxBodyBytes: 1_000,
+      bodyJson: "{}",
+    });
+    expect(bodyResult).toEqual({ kind: "network-error" });
+    expect(bodyCalls).toHaveLength(0);
+  });
+
+  it("never resolves the credential for a loopback target (rejected before materialisation)", async () => {
+    const { fetchImpl, calls } = fetchFake(200);
+    const credentials = resolver();
+    await createGatewayAtlassianHttpPort({
+      baseUrl: "https://localhost",
+      authRef: AUTH_REF,
+      credentials,
+      fetchImpl,
+    })({ method: "GET", url: "https://localhost/rest/api/3/myself", timeoutMs: 30_000 });
+    expect(credentials.resolvedRefs).toHaveLength(0);
+    expect(calls).toHaveLength(0);
   });
 });

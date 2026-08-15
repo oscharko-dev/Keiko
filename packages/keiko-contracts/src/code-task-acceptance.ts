@@ -173,6 +173,11 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
   return typeof value === "string" && (allowed as readonly string[]).includes(value);
 }
 
+// KEIKO-0302 follow-on: this closed the CONTRIBUTION's outer keys but never the fact object's own
+// keys, so a well-formed `{ outcome: "known", value: <valid digest> }` padded with an extra field
+// (e.g. free text riding alongside the digest) validated and was returned verbatim — the exact
+// boundary this contract documents itself as content-free. A known fact may carry only `outcome`
+// and `value`; every other outcome may carry only `outcome`.
 function factErrors(
   value: unknown,
   path: string,
@@ -180,6 +185,8 @@ function factErrors(
 ): readonly string[] {
   if (!isRecord(value)) return [`${path} must be a tagged fact object`];
   if (value.outcome === "known") {
+    const extraKeys = unknownKeys(value, ["outcome", "value"], path);
+    if (extraKeys.length > 0) return extraKeys;
     return isValue(value.value) ? [] : [`${path}.value is invalid for a known fact`];
   }
   if (
@@ -187,7 +194,7 @@ function factErrors(
     value.outcome === "unavailable" ||
     value.outcome === "absent"
   ) {
-    return "value" in value ? [`${path} must not carry a value for outcome ${value.outcome}`] : [];
+    return unknownKeys(value, ["outcome"], path);
   }
   return [`${path}.outcome must be known, unknown, unavailable, or absent`];
 }

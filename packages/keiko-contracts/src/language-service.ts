@@ -636,9 +636,18 @@ export function isLanguageDocumentOverlay(value: unknown): value is LanguageDocu
 // root, no drive or UNC prefix, no traversal or blank segment, no backslash, no NUL.
 export const LANGUAGE_SERVICE_PATH_MAX_BYTES = 4_096;
 
+// The bound above is BYTES; `String.length` counts UTF-16 code units, which undercounts every
+// non-ASCII character (a 3-byte-UTF-8 BMP character is still 1 UTF-16 unit), so a `.length` check
+// let a path well past the intended byte budget through (KEIKO-0465 class).
+const PATH_BYTE_ENCODER = new TextEncoder();
+
+function utf8ByteLength(value: string): number {
+  return PATH_BYTE_ENCODER.encode(value).length;
+}
+
 function isWorkspaceRelativeOverlayPath(value: unknown): value is string {
   if (!isNonEmptyString(value) || value.trim().length === 0) return false;
-  if (value.length > LANGUAGE_SERVICE_PATH_MAX_BYTES) return false;
+  if (utf8ByteLength(value) > LANGUAGE_SERVICE_PATH_MAX_BYTES) return false;
   // eslint-disable-next-line no-control-regex -- rejecting C0/DEL in a path is the point
   if (/[\u0000-\u001f\u007f]/u.test(value)) return false;
   return true;
@@ -737,7 +746,7 @@ function collectBaseErrors(value: Record<string, unknown>): string[] {
   // control-character-free rather than shape-checked as relative.
   if (
     !isNonEmptyString(value.root) ||
-    value.root.length > LANGUAGE_SERVICE_PATH_MAX_BYTES ||
+    utf8ByteLength(value.root) > LANGUAGE_SERVICE_PATH_MAX_BYTES ||
     // eslint-disable-next-line no-control-regex -- rejecting C0/DEL in a path is the point
     /[\u0000-\u001f\u007f]/u.test(value.root)
   ) {

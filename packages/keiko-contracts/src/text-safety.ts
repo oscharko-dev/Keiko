@@ -49,11 +49,31 @@ function isBidiOrZeroWidthCodePoint(cp: number): boolean {
   );
 }
 
+// The raw C0/DEL/C1 control range (0x00–0x1F, 0x7F–0x9F), no exception.
+function isControlCodePoint(cp: number): boolean {
+  return cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f);
+}
+
 // True for a C0 control (0x00–0x1F) or DEL/C1 control (0x7F–0x9F), EXCEPT TAB/LF/CR which
 // are legitimate whitespace and preserved.
 function isStrippableControlCodePoint(cp: number): boolean {
   if (cp === 0x09 || cp === 0x0a || cp === 0x0d) return false;
-  return cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f);
+  return isControlCodePoint(cp);
+}
+
+/**
+ * True if `value` contains any C0/DEL/C1 control code point, INCLUDING TAB/LF/CR. Unlike
+ * `stripUnsafeFormatChars` (which preserves TAB/LF/CR for legitimate multi-line text content),
+ * this is the check for values that must be a single token — branded identifiers, keys, short
+ * path-like segments — where an embedded newline or tab is itself the defect: it can smuggle a
+ * forged extra record into a line-oriented export, or make two ids that render differently
+ * compare equal once something downstream normalises whitespace.
+ */
+export function hasControlCharacter(value: string): boolean {
+  for (const ch of value) {
+    if (isControlCodePoint(ch.codePointAt(0) ?? 0)) return true;
+  }
+  return false;
 }
 
 /**
