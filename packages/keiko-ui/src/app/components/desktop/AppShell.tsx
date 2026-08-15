@@ -92,7 +92,7 @@ const APP_BOOT_RECOVERY_RELOAD_KEY = "keiko.app-boot-recovery-reload-count";
 const EMPTY_SHELL_SHORTCUT_STATE: ShellShortcutState = { labels: new Map(), bindings: [] };
 
 function validProjectPath(value: Cfg[string]): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function newChatProjectCfg(cfg: Cfg, activeProjectPath: string | undefined): Cfg {

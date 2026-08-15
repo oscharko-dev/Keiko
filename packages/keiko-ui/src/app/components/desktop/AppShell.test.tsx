@@ -66,6 +66,25 @@ describe("prepareNewWindowCfg", (): void => {
     ).toMatchObject({ projectPath: undefined });
   });
 
+  it("rejects whitespace-only configured and selected project scopes", (): void => {
+    expect(
+      prepareNewWindowCfg(
+        "chat",
+        { title: "Selected", projectPath: " \t" },
+        "request-selected",
+        "/repo-b",
+      ),
+    ).toMatchObject({ projectPath: "/repo-b" });
+    expect(
+      prepareNewWindowCfg(
+        "chat",
+        { title: "Unscoped", projectPath: " \t" },
+        "request-unscoped",
+        " \n",
+      ),
+    ).toMatchObject({ projectPath: undefined });
+  });
+
   it("removes a malformed project scope when no valid selected project is available", (): void => {
     expect(
       prepareNewWindowCfg(

@@ -170,7 +170,10 @@ describe("M1 — empty startup layout", () => {
   });
 
   it("keeps minimized windows mounted but hidden so background work can continue", () => {
-    const wins = [appWindow({ id: "agents-1", type: "agents", minimized: true })];
+    const wins = [
+      appWindow({ id: "agents-1", type: "agents", minimized: true }),
+      appWindow({ id: "agents-2", type: "agents", minimized: false }),
+    ];
     const { container } = render(
       <Workspace
         ws={workspace({ wins })}
@@ -182,6 +185,9 @@ describe("M1 — empty startup layout", () => {
     const minimizedWindow = container.querySelector('[data-window-id="agents-1"]');
     expect(minimizedWindow).toHaveAttribute("hidden");
     expect(minimizedWindow?.getAttribute("style")).toContain("display: none");
+    const activeWindow = container.querySelector('[data-window-id="agents-2"]');
+    expect(activeWindow).not.toHaveAttribute("hidden");
+    expect(activeWindow?.getAttribute("style")).not.toContain("display: none");
     expect(screen.queryByText("Empty workspace")).toBeNull();
   });
 });
