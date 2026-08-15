@@ -27,6 +27,10 @@ export function yarnLocatorParts(locator) {
   return { version: parts.version, sha512: parts.sha512.toLowerCase() };
 }
 
+export function yarnPackageManagerFromLocator(locator) {
+  return `${PINNED_YARN_NAME}@${yarnLocatorParts(locator).version}`;
+}
+
 export function pinnedYarnLocatorParts(locator) {
   const parts = yarnLocatorParts(locator);
   if (parts.version !== PINNED_YARN_VERSION) {

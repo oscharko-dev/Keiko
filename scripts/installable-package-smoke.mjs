@@ -29,7 +29,12 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import ts from "typescript";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
-import { PINNED_YARN, PINNED_YARN_NAME, yarnLocatorParts } from "./lib/pinned-yarn.mjs";
+import {
+  PINNED_YARN,
+  PINNED_YARN_NAME,
+  yarnLocatorParts,
+  yarnPackageManagerFromLocator,
+} from "./lib/pinned-yarn.mjs";
 import { createStagedPublishPackage } from "./stage-publish-package.mjs";
 
 export const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 600_000;
@@ -1720,7 +1725,7 @@ function writeYarnInstallManifest(tmp, locator) {
       {
         private: true,
         type: "module",
-        packageManager: locator,
+        packageManager: yarnPackageManagerFromLocator(locator),
         dependencies: { [rootPackageJson.name]: rootVersion },
       },
       null,

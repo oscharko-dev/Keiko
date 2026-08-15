@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL, URL } from "node:url";
 
-import { PINNED_YARN, pinnedYarnLocatorParts, yarnLocatorParts } from "./lib/pinned-yarn.mjs";
+import {
+  PINNED_YARN,
+  pinnedYarnLocatorParts,
+  yarnLocatorParts,
+  yarnPackageManagerFromLocator,
+} from "./lib/pinned-yarn.mjs";
 import {
   privateYarnHome,
   provisionPinnedYarnForSetup,
@@ -17,19 +22,18 @@ import rootManifest from "../package.json" with { type: "json" };
 const packageSpec =
   process.env.KEIKO_REGISTRY_INSTALL_PACKAGE ?? `${rootManifest.name}@${rootManifest.version}`;
 const registry = process.env.KEIKO_REGISTRY_URL ?? "https://registry.npmjs.org/";
-const TEST_YARN_LOCATOR_ENV = "KEIKO_REGISTRY_INSTALL_FIXTURE_YARN_LOCATOR";
 
 function registryYarnLocator() {
-  const fixtureLocator = process.env[TEST_YARN_LOCATOR_ENV];
-  if (fixtureLocator !== undefined) {
-    if (process.env.NODE_ENV !== "test") {
-      throw new TypeError(`${TEST_YARN_LOCATOR_ENV} is only accepted under NODE_ENV=test`);
-    }
-    yarnLocatorParts(fixtureLocator);
-    return fixtureLocator;
-  }
   pinnedYarnLocatorParts(PINNED_YARN);
   return PINNED_YARN;
+}
+
+function testRegistryYarnLocator(locator) {
+  if (process.env.NODE_ENV !== "test") {
+    throw new TypeError("fixture Yarn locators are only accepted under NODE_ENV=test");
+  }
+  yarnLocatorParts(locator);
+  return locator;
 }
 const timeoutMs = Number.parseInt(process.env.KEIKO_REGISTRY_INSTALL_TIMEOUT_MS ?? "300000", 10);
 
@@ -151,8 +155,7 @@ async function npmSmoke() {
   }
 }
 
-async function yarnSmoke() {
-  const yarnLocator = registryYarnLocator();
+async function yarnSmoke(yarnLocator) {
   const projectDir = mkdtempSync(join(tmpdir(), "keiko-registry-yarn-"));
   const yarnHome = privateYarnHome();
   try {
@@ -161,7 +164,7 @@ async function yarnSmoke() {
       JSON.stringify(
         {
           private: true,
-          packageManager: yarnLocator,
+          packageManager: yarnPackageManagerFromLocator(yarnLocator),
           devDependencies: {
             [rootManifest.name]: rootManifest.version,
           },
@@ -202,12 +205,20 @@ async function yarnSmoke() {
   }
 }
 
-export async function runRegistryInstallSmoke() {
+async function runRegistryInstallSmokeWithLocator(yarnLocator) {
   assertTlsVerificationEnabled();
   await npmSmoke();
-  await yarnSmoke();
+  await yarnSmoke(yarnLocator);
 
   console.log(`registry-install-smoke: PASS - ${packageSpec} installs from ${registry}.`);
+}
+
+export async function runRegistryInstallSmoke() {
+  await runRegistryInstallSmokeWithLocator(registryYarnLocator());
+}
+
+export async function runRegistryInstallSmokeForTest(yarnLocator) {
+  await runRegistryInstallSmokeWithLocator(testRegistryYarnLocator(yarnLocator));
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {

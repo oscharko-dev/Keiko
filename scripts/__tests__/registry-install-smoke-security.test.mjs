@@ -56,6 +56,7 @@ import {
   pinnedYarnLocatorParts,
   pinnedYarnVersionFromLocator,
   yarnLocatorParts,
+  yarnPackageManagerFromLocator,
 } from "../lib/pinned-yarn.mjs";
 
 const ROOT = join(import.meta.dirname, "..", "..");
@@ -260,8 +261,8 @@ describe("registry install smoke security posture", () => {
           "--input-type=module",
           "-e",
           [
-            'import { runRegistryInstallSmoke } from "./scripts/registry-install-smoke.mjs";',
-            "await runRegistryInstallSmoke();",
+            'import { runRegistryInstallSmokeForTest } from "./scripts/registry-install-smoke.mjs";',
+            `await runRegistryInstallSmokeForTest(${JSON.stringify(fixtureLocator)});`,
           ].join("\n"),
         ],
         {
@@ -273,7 +274,6 @@ describe("registry install smoke security posture", () => {
             BUNDLED_DEPS: JSON.stringify(ROOT_MANIFEST.bundleDependencies),
             KEIKO_COREPACK_MARKER: marker,
             KEIKO_REGISTRY_INSTALL_PACKAGE: `${ROOT_MANIFEST.name}@${ROOT_MANIFEST.version}`,
-            KEIKO_REGISTRY_INSTALL_FIXTURE_YARN_LOCATOR: fixtureLocator,
             KEIKO_REGISTRY_URL: "https://registry.npmjs.org/",
             NODE_ENV: "test",
             ROOT_VERSION: ROOT_MANIFEST.version,
@@ -1312,6 +1312,7 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(PINNED_YARN_SOURCE_URL).toBe(
       "https://repo.yarnpkg.com/4.9.1/packages/yarnpkg-cli/bin/yarn.js",
     );
+    expect(yarnPackageManagerFromLocator(PINNED_YARN)).toBe(`yarn@${PINNED_YARN_VERSION}`);
     expect(pinnedYarnVersionFromLocator(PINNED_YARN)).toBe(PINNED_YARN_VERSION);
     expect(
       yarnLocatorParts(`yarn@${PINNED_YARN_VERSION}-rc.1+sha512.${PINNED_YARN_SHA512}`).version,
@@ -1329,15 +1330,15 @@ describe("installable package smoke optional-dependency coverage", () => {
       pinnedYarnLocatorParts(`yarn@${PINNED_YARN_VERSION}+sha512.${"0".repeat(128)}`),
     ).toThrow(/sha512/u);
     expect(installableSource).toContain("locator = PINNED_YARN");
-    expect(installableSource).toContain("packageManager: locator");
+    expect(installableSource).toContain("packageManager: yarnPackageManagerFromLocator(locator)");
     expect(registrySource).toContain("pinnedYarnLocatorParts(PINNED_YARN)");
     expect(registrySource).toContain("registryYarnLocator()");
-    expect(registrySource).toContain("packageManager: yarnLocator");
+    expect(registrySource).toContain("packageManager: yarnPackageManagerFromLocator(yarnLocator)");
     expect(registrySource).toContain("withCorepackYarnCacheLock(");
     expect(registrySource).toContain("provisionPinnedYarnForSetup(yarnLocator, timeoutMs)");
     expect(registrySource).toContain("yarnChildEnv(registry, process.env, yarnHome, yarnLocator)");
     expect(installableSource).not.toContain('const PINNED_YARN = "yarn@4.9.1"');
-    expect(registrySource).not.toContain('packageManager: "yarn@4.9.1"');
+    expect(registrySource).not.toContain("KEIKO_REGISTRY_INSTALL_FIXTURE_YARN_LOCATOR");
   });
 
   it("keeps the Corepack cache private and per-user", () => {
@@ -1542,7 +1543,7 @@ describe("installable package smoke optional-dependency coverage", () => {
         join(binDir, "corepack"),
         [
           'import { writeSync } from "node:fs";',
-          "writeSync(2, 'Mismatch hashes. Expected secret, got tampered\\n');",
+          "writeSync(2, 'Mismatch hashes. Expected redaction-probe-expected, got redaction-probe-actual\\n');",
           "process.exit(44);",
         ].join("\n"),
       );
@@ -1550,8 +1551,8 @@ describe("installable package smoke optional-dependency coverage", () => {
 
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("the archive failed its integrity check");
-      expect(result.stderr).not.toContain("Expected secret");
-      expect(result.stderr).not.toContain("tampered");
+      expect(result.stderr).not.toContain("redaction-probe-expected");
+      expect(result.stderr).not.toContain("redaction-probe-actual");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
