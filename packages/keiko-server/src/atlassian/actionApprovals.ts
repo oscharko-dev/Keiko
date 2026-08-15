@@ -18,6 +18,7 @@
 
 import {
   ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
+  isAtlassianContentPreviewUnpresentable,
   stripUnsafeFormatChars,
   type AtlassianConnectorPendingApproval,
   type JiraLiveSearchRequest,
@@ -78,24 +79,50 @@ export type AtlassianWriteActionInput =
       readonly commentText: string;
     };
 
+// KEIKO-0186: whether a write action's derived content preview is available (and the bounded,
+// sanitized text itself), unavailable (the action had text, but nothing presentable survived
+// sanitization/bounding), or simply not applicable (the action has no text field at all).
+// `"unavailable"` is its own outcome rather than folded into `"none"` — see contentPreviewFor —
+// because the two mean different things to a reviewer: "none" is silent (an ordinary action with
+// nothing to preview, e.g. transition-issue), "unavailable" must say plainly that content existed
+// but could not be safely shown, or a reviewer approving in good faith over what looks like a
+// contentless action would actually be approving invisible content going out unseen.
+export type AtlassianContentPreviewOutcome =
+  | { readonly status: "none" }
+  | { readonly status: "available"; readonly text: string }
+  | { readonly status: "unavailable" };
+
 // KEIKO-0186: the bounded, sanitized text a human reviewer sees before approving a governed
 // write — never the raw, unbounded action input. Pure: no I/O, no clock, no randomness. Combines
 // only the write action's own text field(s) (never other action metadata like keys or ids),
 // strips Unicode bidi/zero-width/control-character display spoofing the same way every other
 // untrusted display surface in keiko-contracts does (stripUnsafeFormatChars), then truncates to
-// ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS — the exact bound
-// isSafeAtlassianContentPreview enforces on the wire, so the producer and the contract's own
-// validation agree on one bound rather than carrying two that could drift. `transition-issue`
-// carries no text field and always returns undefined; `update-issue-fields` also returns
-// undefined when neither `summary` nor `descriptionText` is present (only labels/priority
-// changing — nothing to preview).
-export function contentPreviewFor(action: AtlassianWriteActionInput): string | undefined {
+// ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS — the exact bound isSafeAtlassianContentPreview
+// enforces on the wire, so the producer and the contract's own validation agree on one bound
+// rather than carrying two that could drift. `transition-issue` carries no text field and always
+// returns "none"; `update-issue-fields` also returns "none" when neither `summary` nor
+// `descriptionText` is present (only labels/priority changing — nothing to preview).
+//
+// KEIKO-0186 P1 (Codex): a non-empty `raw` does not guarantee a presentable result. An
+// all-bidi/all-zero-width payload sanitizes to the empty string; a payload that is (or, after
+// bounding, becomes) nothing but floating Unicode combining marks carries no base character to
+// attach to and is exactly as uninformative as empty. The bounded candidate is checked with
+// isAtlassianContentPreviewUnpresentable AFTER both sanitization and truncation — the same
+// predicate isSafeAtlassianContentPreview checks on the wire side — so this function and the
+// contract's own validation can never disagree about what counts as presentable.
+export function contentPreviewFor(
+  action: AtlassianWriteActionInput,
+): AtlassianContentPreviewOutcome {
   const raw = rawContentFor(action);
-  if (raw === undefined || raw.length === 0) return undefined;
+  if (raw === undefined || raw.length === 0) return { status: "none" };
   const sanitized = stripUnsafeFormatChars(raw);
-  return sanitized.length <= ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS
-    ? sanitized
-    : sanitized.slice(0, ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+  const bounded =
+    sanitized.length <= ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS
+      ? sanitized
+      : sanitized.slice(0, ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+  return isAtlassianContentPreviewUnpresentable(bounded)
+    ? { status: "unavailable" }
+    : { status: "available", text: bounded };
 }
 
 function rawContentFor(action: AtlassianWriteActionInput): string | undefined {

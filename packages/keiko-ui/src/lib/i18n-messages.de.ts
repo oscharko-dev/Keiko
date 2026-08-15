@@ -1615,6 +1615,8 @@ export const DE_MESSAGES = {
   "atlassianConnectors.approvals.disposition": "Einstufung",
   "atlassianConnectors.approvals.reason": "Grund",
   "atlassianConnectors.approvals.contentPreview": "Inhalt",
+  "atlassianConnectors.approvals.contentPreviewUnavailable":
+    "Der Inhalt dieser Aktion konnte nicht sicher angezeigt werden.",
   "atlassianConnectors.approvals.approve": "Freigeben",
   "atlassianConnectors.approvals.approving": "Wird freigegeben…",
   "atlassianConnectors.approvals.reject": "Ablehnen",

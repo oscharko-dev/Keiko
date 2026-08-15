@@ -108,6 +108,15 @@
   color: var(--text-secondary);
 }
 
+/* KEIKO-0186 P1: the sanitized-to-nothing-presentable state must read as a warning, not as
+   ordinary preview text, so a reviewer notices content existed but could not be shown safely. */
+.scope :global(.acx-content-preview-unavailable) {
+  border-color: color-mix(in oklch, var(--feedback-warning) 45%, var(--border-strong));
+  background: color-mix(in oklch, var(--feedback-warning) 12%, var(--surface-primary));
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 .scope :global(.acx-actions) {
   display: flex;
   align-items: center;

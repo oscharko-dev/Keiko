@@ -83,6 +83,11 @@ export interface BuildPendingApprovalInput {
   // pending action and for a write action with nothing to preview. Passed through as-is — this
   // function stays payload-agnostic; the caller decides when there is content to derive one from.
   readonly contentPreview?: string | undefined;
+  // KEIKO-0186 P1: true when the action HAD text but nothing presentable survived
+  // sanitization/bounding (see contentPreviewFor's "unavailable" outcome and
+  // isAtlassianContentPreviewUnpresentable). Mutually exclusive with contentPreview — the caller
+  // must never pass both.
+  readonly contentPreviewUnavailable?: true | undefined;
 }
 
 // The wire projection for one pending approval: the D4 row is derived from the contract tables,
@@ -106,6 +111,9 @@ export function buildAtlassianPendingApproval(
     requestedAt: input.requestedAt,
     expiresAt: input.requestedAt + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
     ...(input.contentPreview === undefined ? {} : { contentPreview: input.contentPreview }),
+    ...(input.contentPreviewUnavailable === undefined
+      ? {}
+      : { contentPreviewUnavailable: input.contentPreviewUnavailable }),
   };
 }
 
@@ -186,8 +194,10 @@ function recordApprovalsExhausted(input: CreatePendingApprovalResultInput): Rout
 export function createAtlassianPendingApprovalResult(
   input: CreatePendingApprovalResultInput,
 ): RouteResult {
-  const contentPreview =
-    input.payload.kind === "write-action" ? contentPreviewFor(input.payload.action) : undefined;
+  const preview =
+    input.payload.kind === "write-action"
+      ? contentPreviewFor(input.payload.action)
+      : ({ status: "none" } as const);
   const approval = buildAtlassianPendingApproval({
     connectorId: input.connectorId,
     actionType: input.actionType,
@@ -195,7 +205,8 @@ export function createAtlassianPendingApprovalResult(
     ...(input.targetRef === undefined ? {} : { targetRef: input.targetRef }),
     correlationId: input.correlationId,
     requestedAt: Date.now(),
-    ...(contentPreview === undefined ? {} : { contentPreview }),
+    ...(preview.status === "available" ? { contentPreview: preview.text } : {}),
+    ...(preview.status === "unavailable" ? { contentPreviewUnavailable: true as const } : {}),
   });
   const created = atlassianActionApprovalRegistry.create({
     approval,

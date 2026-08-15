@@ -762,6 +762,7 @@ const PENDING_APPROVAL_KEYS: readonly (keyof AtlassianConnectorPendingApproval)[
   "requestedAt",
   "expiresAt",
   "contentPreview",
+  "contentPreviewUnavailable",
 ];
 
 // The action row is pinned by the D4 table exactly as the activity validator pins it: a tampered
@@ -786,9 +787,10 @@ function validateApprovalActionRow(input: Record<string, unknown>, errors: strin
   }
 }
 
-// The two independently-optional fields: an identifier token (targetRef) and a bounded,
-// sanitized content preview (contentPreview, KEIKO-0186). Split out so the caller's own
-// complexity stays under the repository's cyclomatic-complexity ceiling.
+// The independently-optional fields: an identifier token (targetRef) and the mutually-exclusive
+// content-preview pair (contentPreview / contentPreviewUnavailable, KEIKO-0186 — exactly one of
+// them, or neither, is ever set: never both). Split out so the caller's own complexity stays
+// under the repository's cyclomatic-complexity ceiling.
 function validateApprovalOptionalFields(input: Record<string, unknown>, errors: string[]): void {
   if (input.targetRef !== undefined && !isSafeAtlassianIdentifier(input.targetRef)) {
     errors.push("approval.targetRef must be a bounded identifier token when set");
@@ -797,6 +799,12 @@ function validateApprovalOptionalFields(input: Record<string, unknown>, errors: 
     errors.push(
       "approval.contentPreview must be a bounded, control-character-free preview when set",
     );
+  }
+  if (input.contentPreviewUnavailable !== undefined && input.contentPreviewUnavailable !== true) {
+    errors.push("approval.contentPreviewUnavailable must be true when set");
+  }
+  if (input.contentPreview !== undefined && input.contentPreviewUnavailable !== undefined) {
+    errors.push("approval.contentPreview and approval.contentPreviewUnavailable are exclusive");
   }
 }
 

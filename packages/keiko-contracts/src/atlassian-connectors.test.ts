@@ -30,6 +30,7 @@ import {
   isAtlassianConnectorAuthRef,
   isAtlassianConnectorAuthScheme,
   isAtlassianConnectorProvider,
+  isAtlassianContentPreviewUnpresentable,
   isAtlassianLiveSearchTemplateId,
   isAtlassianSyncFailureReason,
   isAtlassianSyncJobStatus,
@@ -807,6 +808,27 @@ describe("isSafeJiraLiveIssueSummary (Issue #2248)", () => {
   });
 });
 
+describe("isAtlassianContentPreviewUnpresentable (KEIKO-0186 P1)", () => {
+  it("is true for an empty string", () => {
+    expect(isAtlassianContentPreviewUnpresentable("")).toBe(true);
+  });
+
+  it("is true for a string made entirely of Unicode combining marks (no base character)", () => {
+    // COMBINING ACUTE ACCENT (U+0301), built at runtime for the same reason as the bidi/zero-width
+    // cases below: the source file never carries the code point directly.
+    expect(isAtlassianContentPreviewUnpresentable(String.fromCharCode(0x301).repeat(5))).toBe(true);
+  });
+
+  it("is false for a base character followed by a combining mark (a real, renderable character)", () => {
+    expect(isAtlassianContentPreviewUnpresentable("e" + String.fromCharCode(0x301))).toBe(false);
+  });
+
+  it("is false for ordinary text", () => {
+    expect(isAtlassianContentPreviewUnpresentable("Fix the flaky gate")).toBe(false);
+    expect(isAtlassianContentPreviewUnpresentable("x")).toBe(false);
+  });
+});
+
 describe("isSafeAtlassianContentPreview (KEIKO-0186)", () => {
   it("accepts bounded, multi-line real text up to the cap", () => {
     expect(isSafeAtlassianContentPreview("Fix the flaky gate")).toBe(true);
@@ -828,7 +850,7 @@ describe("isSafeAtlassianContentPreview (KEIKO-0186)", () => {
     ).toBe(true);
   });
 
-  it("rejects empty, overlong, control-character, bidi/zero-width, and non-string values", () => {
+  it("rejects empty, overlong, control-character, bidi/zero-width, combining-marks-only, and non-string values", () => {
     expect(isSafeAtlassianContentPreview("")).toBe(false);
     expect(
       isSafeAtlassianContentPreview("x".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS + 1)),
@@ -842,6 +864,9 @@ describe("isSafeAtlassianContentPreview (KEIKO-0186)", () => {
     expect(
       isSafeAtlassianContentPreview("visible" + String.fromCharCode(0x200b) + "zerowidth"),
     ).toBe(false);
+    // KEIKO-0186 P1: non-empty but entirely Unicode combining marks -- no base character, exactly
+    // as uninformative to a reviewer as empty (see isAtlassianContentPreviewUnpresentable above).
+    expect(isSafeAtlassianContentPreview(String.fromCharCode(0x301).repeat(5))).toBe(false);
     expect(isSafeAtlassianContentPreview(42)).toBe(false);
     expect(isSafeAtlassianContentPreview(null)).toBe(false);
     expect(isSafeAtlassianContentPreview(undefined)).toBe(false);
@@ -902,6 +927,43 @@ describe("validateAtlassianConnectorPendingApproval — contentPreview wiring (K
       errors: [
         "approval.contentPreview must be a bounded, control-character-free preview when set",
       ],
+    });
+  });
+
+  // KEIKO-0186 P1 (Codex): the action had text, but nothing presentable survived
+  // sanitization/bounding. contentPreviewUnavailable is the explicit signal for that case --
+  // never an empty or absent-without-explanation contentPreview.
+  it("accepts an approval with contentPreviewUnavailable: true instead of a contentPreview", () => {
+    expect(
+      validateAtlassianConnectorPendingApproval({
+        ...base,
+        contentPreviewUnavailable: true,
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
+  it("rejects an approval whose contentPreviewUnavailable is not literally true", () => {
+    expect(
+      validateAtlassianConnectorPendingApproval({
+        ...base,
+        contentPreviewUnavailable: false,
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: ["approval.contentPreviewUnavailable must be true when set"],
+    });
+  });
+
+  it("rejects an approval carrying both contentPreview and contentPreviewUnavailable (mutually exclusive)", () => {
+    expect(
+      validateAtlassianConnectorPendingApproval({
+        ...base,
+        contentPreview: "Fix the flaky gate",
+        contentPreviewUnavailable: true,
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: ["approval.contentPreview and approval.contentPreviewUnavailable are exclusive"],
     });
   });
 });

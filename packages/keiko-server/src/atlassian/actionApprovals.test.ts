@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
+  isSafeAtlassianContentPreview,
   type AtlassianConnectorPendingApproval,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -106,8 +107,9 @@ describe("AtlassianActionApprovalRegistry", () => {
 });
 
 // KEIKO-0186: the pure extraction the pending-approval wire projection derives its bounded
-// content preview from. Every write-action variant, plus the two hostile-input axes the finding
-// calls out explicitly: overlong input and control characters.
+// content preview from. Every write-action variant, the overlong-input and control-character
+// axes the original finding calls out, and (P1 follow-up, Codex) the "sanitizes/truncates to
+// nothing presentable" axis: zero-width-only, bidi-only, mixed, and combining-marks-only input.
 describe("contentPreviewFor", () => {
   it("combines summary and descriptionText for create-issue", () => {
     const action: AtlassianWriteActionInput = {
@@ -116,7 +118,10 @@ describe("contentPreviewFor", () => {
       summary: "Fix the flaky gate",
       descriptionText: "Fails on retries",
     };
-    expect(contentPreviewFor(action)).toBe("Fix the flaky gate\n\nFails on retries");
+    expect(contentPreviewFor(action)).toEqual({
+      status: "available",
+      text: "Fix the flaky gate\n\nFails on retries",
+    });
   });
 
   it("uses summary alone for create-issue when descriptionText is absent", () => {
@@ -125,7 +130,7 @@ describe("contentPreviewFor", () => {
       projectKey: "PROJ",
       summary: "Fix the flaky gate",
     };
-    expect(contentPreviewFor(action)).toBe("Fix the flaky gate");
+    expect(contentPreviewFor(action)).toEqual({ status: "available", text: "Fix the flaky gate" });
   });
 
   it("combines summary and descriptionText for update-issue-fields when both are present", () => {
@@ -135,26 +140,29 @@ describe("contentPreviewFor", () => {
       summary: "Sharper",
       descriptionText: "Clarified acceptance criteria",
     };
-    expect(contentPreviewFor(action)).toBe("Sharper\n\nClarified acceptance criteria");
+    expect(contentPreviewFor(action)).toEqual({
+      status: "available",
+      text: "Sharper\n\nClarified acceptance criteria",
+    });
   });
 
-  it("returns undefined for update-issue-fields when neither summary nor descriptionText is set", () => {
+  it("returns none for update-issue-fields when neither summary nor descriptionText is set", () => {
     const action: AtlassianWriteActionInput = {
       type: "update-issue-fields",
       issueKey: "PROJ-9",
       labels: ["urgent"],
       priorityName: "High",
     };
-    expect(contentPreviewFor(action)).toBeUndefined();
+    expect(contentPreviewFor(action)).toEqual({ status: "none" });
   });
 
-  it("always returns undefined for transition-issue (no text field exists)", () => {
+  it("always returns none for transition-issue (no text field exists)", () => {
     const action: AtlassianWriteActionInput = {
       type: "transition-issue",
       issueKey: "PROJ-9",
       transitionId: "31",
     };
-    expect(contentPreviewFor(action)).toBeUndefined();
+    expect(contentPreviewFor(action)).toEqual({ status: "none" });
   });
 
   it("uses commentText for add-issue-comment and add-page-comment", () => {
@@ -164,14 +172,14 @@ describe("contentPreviewFor", () => {
         issueKey: "PROJ-9",
         commentText: "Verified on staging",
       }),
-    ).toBe("Verified on staging");
+    ).toEqual({ status: "available", text: "Verified on staging" });
     expect(
       contentPreviewFor({
         type: "add-page-comment",
         pageId: "123",
         commentText: "Looks right",
       }),
-    ).toBe("Looks right");
+    ).toEqual({ status: "available", text: "Looks right" });
   });
 
   it("combines title and bodyText for create-page and update-page", () => {
@@ -182,7 +190,7 @@ describe("contentPreviewFor", () => {
         title: "Runbook",
         bodyText: "Steps here",
       }),
-    ).toBe("Runbook\n\nSteps here");
+    ).toEqual({ status: "available", text: "Runbook\n\nSteps here" });
     expect(
       contentPreviewFor({
         type: "update-page",
@@ -191,7 +199,7 @@ describe("contentPreviewFor", () => {
         bodyText: "New body",
         currentVersion: 4,
       }),
-    ).toBe("Runbook\n\nNew body");
+    ).toEqual({ status: "available", text: "Runbook\n\nNew body" });
   });
 
   it("truncates to exactly ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS when the combined text is longer", () => {
@@ -203,41 +211,32 @@ describe("contentPreviewFor", () => {
       summary,
       descriptionText,
     });
-    expect(preview).toBeDefined();
-    expect(preview).toHaveLength(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
-    // The combined, untruncated text is exactly the prefix this preview equals.
+    expect(preview.status).toBe("available");
+    if (preview.status !== "available") throw new Error("expected an available preview");
+    expect(preview.text).toHaveLength(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
     const combined = `${summary}\n\n${descriptionText}`;
-    expect(preview).toBe(combined.slice(0, ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS));
+    expect(preview.text).toBe(combined.slice(0, ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS));
   });
 
   it("strips a real control character (BELL, U+0007) before bounding, never surfacing it", () => {
-    const hostileSummary = `visible\u0007bell`;
-    const preview = contentPreviewFor({
-      type: "create-issue",
-      projectKey: "PROJ",
-      summary: hostileSummary,
-    });
-    expect(preview).toBe("visiblebell");
+    const hostileSummary = "visible" + String.fromCharCode(7) + "bell";
+    expect(
+      contentPreviewFor({ type: "create-issue", projectKey: "PROJ", summary: hostileSummary }),
+    ).toEqual({ status: "available", text: "visiblebell" });
   });
 
   it("strips a bidi override character (RIGHT-TO-LEFT OVERRIDE, U+202E) before bounding, never surfacing it", () => {
-    const hostileSummary = `visible\u202Eevil`;
-    const preview = contentPreviewFor({
-      type: "create-issue",
-      projectKey: "PROJ",
-      summary: hostileSummary,
-    });
-    expect(preview).toBe("visibleevil");
+    const hostileSummary = "visible" + String.fromCharCode(0x202e) + "evil";
+    expect(
+      contentPreviewFor({ type: "create-issue", projectKey: "PROJ", summary: hostileSummary }),
+    ).toEqual({ status: "available", text: "visibleevil" });
   });
 
   it("strips a zero-width space (U+200B) before bounding, never surfacing it", () => {
-    const hostileSummary = `visible\u200Bzerowidth`;
-    const preview = contentPreviewFor({
-      type: "create-issue",
-      projectKey: "PROJ",
-      summary: hostileSummary,
-    });
-    expect(preview).toBe("visiblezerowidth");
+    const hostileSummary = "visible" + String.fromCharCode(0x200b) + "zerowidth";
+    expect(
+      contentPreviewFor({ type: "create-issue", projectKey: "PROJ", summary: hostileSummary }),
+    ).toEqual({ status: "available", text: "visiblezerowidth" });
   });
 
   it("preserves TAB/LF/CR (legitimate multi-line formatting) while stripping other control characters", () => {
@@ -247,18 +246,117 @@ describe("contentPreviewFor", () => {
       title: "Runbook",
       bodyText: "Step 1\tdo this\nStep 2\r\ndo that",
     });
-    expect(preview).toBe("Runbook\n\nStep 1\tdo this\nStep 2\r\ndo that");
+    expect(preview).toEqual({
+      status: "available",
+      text: "Runbook\n\nStep 1\tdo this\nStep 2\r\ndo that",
+    });
   });
 
   it("an oversized AND hostile payload is both stripped and truncated to the bound", () => {
-    const hostile = `\u202EA${"x".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS + 500)}`;
+    const hostile =
+      String.fromCharCode(0x202e) +
+      "A" +
+      "x".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS + 500);
     const preview = contentPreviewFor({
       type: "add-issue-comment",
       issueKey: "PROJ-9",
       commentText: hostile,
     });
-    expect(preview).toBeDefined();
-    expect(preview).toHaveLength(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
-    expect(preview).toBe(`A${"x".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS - 1)}`);
+    expect(preview.status).toBe("available");
+    if (preview.status !== "available") throw new Error("expected an available preview");
+    expect(preview.text).toHaveLength(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+    expect(preview.text).toBe("A" + "x".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS - 1));
+  });
+
+  // KEIKO-0186 P1 (Codex): "raw is non-empty" does not mean the SANITIZED, BOUNDED result is
+  // presentable. Each case below must return "unavailable" -- never an empty (or otherwise
+  // unpresentable) "available" text, which would show a reviewer what looks like a contentless
+  // action while invisible content is actually written: exactly the failure this finding reports.
+
+  it("an all-zero-width-space payload sanitizes to empty and is reported unavailable, not an empty preview", () => {
+    const allZeroWidth = String.fromCharCode(0x200b).repeat(12);
+    expect(
+      contentPreviewFor({
+        type: "add-issue-comment",
+        issueKey: "PROJ-9",
+        commentText: allZeroWidth,
+      }),
+    ).toEqual({ status: "unavailable" });
+  });
+
+  it("an all-bidi-override payload sanitizes to empty and is reported unavailable, not an empty preview", () => {
+    const allBidi = String.fromCharCode(0x202e).repeat(12);
+    expect(
+      contentPreviewFor({ type: "create-issue", projectKey: "PROJ", summary: allBidi }),
+    ).toEqual({
+      status: "unavailable",
+    });
+  });
+
+  it("a mixed bidi+zero-width payload that sanitizes to empty is reported unavailable", () => {
+    const mixedInvisible =
+      String.fromCharCode(0x202e) +
+      String.fromCharCode(0x200b) +
+      String.fromCharCode(0x202e) +
+      String.fromCharCode(0x200b);
+    expect(
+      contentPreviewFor({ type: "add-page-comment", pageId: "123", commentText: mixedInvisible }),
+    ).toEqual({ status: "unavailable" });
+  });
+
+  it("a payload that is entirely Unicode combining marks is reported unavailable even though it survives sanitization non-empty", () => {
+    // Combining marks are neither C0/C1 controls nor in the bidi/zero-width block
+    // stripUnsafeFormatChars removes, so this string is NON-EMPTY after sanitization -- and still
+    // carries no base character for a reviewer to read: exactly as uninformative as empty.
+    const allCombining = String.fromCharCode(0x301).repeat(10);
+    expect(
+      contentPreviewFor({
+        type: "add-issue-comment",
+        issueKey: "PROJ-9",
+        commentText: allCombining,
+      }),
+    ).toEqual({ status: "unavailable" });
+  });
+
+  it("truncation can create an all-combining-marks result even when the untruncated text has a base character past the bound", () => {
+    // The base character sits at index MAX (just past the truncation window), so the FIRST MAX
+    // characters -- the ones that become the preview -- are combining marks only. Caught only
+    // because presentability is checked AFTER truncation, not before (see contentPreviewFor).
+    const combiningPrefix = String.fromCharCode(0x301).repeat(
+      ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
+    );
+    const summary = combiningPrefix + "X";
+    expect(summary.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+    expect(contentPreviewFor({ type: "create-issue", projectKey: "PROJ", summary })).toEqual({
+      status: "unavailable",
+    });
+  });
+
+  it("agrees with isSafeAtlassianContentPreview in every case: an emitted 'available' text always passes the contract predicate", () => {
+    const cases: readonly AtlassianWriteActionInput[] = [
+      { type: "create-issue", projectKey: "PROJ", summary: "Fix the flaky gate" },
+      {
+        type: "add-issue-comment",
+        issueKey: "PROJ-9",
+        commentText: "visible" + String.fromCharCode(0x200b) + "text",
+      },
+      {
+        type: "create-page",
+        spaceId: "777",
+        title: "Runbook",
+        bodyText: "S".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS + 50),
+      },
+    ];
+    for (const action of cases) {
+      const preview = contentPreviewFor(action);
+      expect(preview.status).toBe("available");
+      if (preview.status !== "available") continue;
+      expect(isSafeAtlassianContentPreview(preview.text)).toBe(true);
+    }
+  });
+
+  it("agrees with isSafeAtlassianContentPreview in every unavailable case: an empty string and an all-combining-mark string both fail the contract predicate too", () => {
+    expect(isSafeAtlassianContentPreview("")).toBe(false);
+    expect(isSafeAtlassianContentPreview(String.fromCharCode(0x301).repeat(5))).toBe(false);
   });
 });

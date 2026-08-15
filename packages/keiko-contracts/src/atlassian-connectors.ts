@@ -840,18 +840,32 @@ export type AtlassianConnectorActionExecutionResult =
 // hostile payload.
 export const ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS = 280;
 
+// KEIKO-0186 P1 (Codex): a string made ENTIRELY of Unicode combining marks (general category M*)
+// carries no base character to attach to — rendered alone it is as informative to a reviewer as
+// an empty string, even though `.length > 0`. A payload composed only of accepted characters that
+// still reduce to this (or to genuine emptiness) after stripUnsafeFormatChars must not reach the
+// wire as `contentPreview`; see `contentPreviewFor` in keiko-server's actionApprovals.ts, which
+// checks this same condition on the producing side so the two can never disagree.
+const COMBINING_MARKS_ONLY_PATTERN = /^\p{M}+$/u;
+
+export function isAtlassianContentPreviewUnpresentable(value: string): boolean {
+  return value.length === 0 || COMBINING_MARKS_ONLY_PATTERN.test(value);
+}
+
 // A content preview is provider CONTENT in the ADR-0128 D6 sense (like a synced title or a live
 // issue summary) — real text, but bounded and free of bidi/zero-width/control-character display
 // spoofing. Unlike a Jira summary it is not single-line by construction (it may combine a
 // title/summary with a description/body), so — like every other untrusted display surface in
 // this codebase — TAB/LF/CR survive stripUnsafeFormatChars while every other unsafe code point
-// does not; this predicate accepts exactly what that stripper already leaves untouched.
+// does not; this predicate accepts exactly what that stripper already leaves untouched. It also
+// rejects an all-combining-mark string for the same reason the producer never emits one (see
+// `isAtlassianContentPreviewUnpresentable` above) — the producer and this predicate must agree.
 export function isSafeAtlassianContentPreview(value: unknown): value is string {
   return (
     typeof value === "string" &&
-    value.length > 0 &&
     value.length <= ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS &&
-    stripUnsafeFormatChars(value) === value
+    stripUnsafeFormatChars(value) === value &&
+    !isAtlassianContentPreviewUnpresentable(value)
   );
 }
 
@@ -887,8 +901,20 @@ export interface AtlassianConnectorPendingApproval {
   // Bounded, sanitized preview of the content the action would write (summary/description,
   // comment text, or title/body — see contentPreviewFor in keiko-server's actionApprovals.ts).
   // Absent for actions with nothing to preview (transition-issue; update-issue-fields touching
-  // only non-text fields) and for every non-write action type (sync/live-search).
+  // only non-text fields) and for every non-write action type (sync/live-search) — see
+  // `contentPreviewUnavailable` below for the THIRD case, which this field must stay absent for
+  // too. Mutually exclusive with `contentPreviewUnavailable`: never both present.
   readonly contentPreview?: string | undefined;
+  // KEIKO-0186 P1 (Codex): true exactly when the action HAD a text field to preview but its
+  // entire visible content sanitized away (an all-bidi/all-zero-width payload, or one that
+  // reduces to nothing but floating Unicode combining marks) — see
+  // `isAtlassianContentPreviewUnpresentable`. Emitting an EMPTY `contentPreview` in this case
+  // would show a reviewer what looks like a contentless action approved in good faith while
+  // invisible content is actually written; this field lets the UI say plainly that the content
+  // could not be safely previewed instead of silently showing nothing (indistinguishable from an
+  // action with no text field at all) or silently showing an empty value. Never present alongside
+  // `contentPreview`, and never present when the action has no text field to begin with.
+  readonly contentPreviewUnavailable?: true | undefined;
 }
 
 // ─── Jira issue citation metadata (#2243; #2248 presents the same field list) ─
