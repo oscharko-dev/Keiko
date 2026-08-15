@@ -93,24 +93,32 @@ function connectorEgressConfig(
 // error, so callers see one consistent "this connector is pointed somewhere it should not be"
 // shape regardless of which blocked class tripped.
 //
-// KNOWN RESIDUAL GAP, not closed by this check (tracked on KEIKO-0316): a DNS NAME that resolves
-// to a blocked address (e.g. a connector host pointed at 169.254.169.254 or a loopback alias) is
+// RESIDUAL GAP (was KEIKO-0316, now closed at the layer that owns it): a DNS NAME that resolves to
+// a blocked address (e.g. a connector host pointed at 169.254.169.254 or a loopback alias) is
 // caught on the DIRECT transport path, where gatewayFetch resolves and pins the address before
 // connecting (`enforceOutboundTargetPolicy` with `resolveDns: true`) — but is NOT caught when a
-// proxy is configured for this connector's egress. `planGatewayDns` in the gateway's http.ts sets
-// `resolveDns: false` whenever a proxy is used, because Keiko does not own the connect on that
-// path: the proxy resolves the hostname independently, so any address Keiko resolved beforehand
-// is never bound to what the proxy actually connects to. Pre-resolving here anyway would not be a
-// real guarantee: `refuseUnpinnableResearchEgress` (same gateway file) rejects exactly that
-// approach for research egress, for the identical reason — a pre-proxy lookup can see a hostile
-// name resolve publicly during the check and rebind to loopback for the proxy's own connect. For
-// consistency this port does not pretend to close that gap with a weaker check either. Unlike
-// research egress, this lane cannot simply refuse every proxied request: pinning `denyLoopback`
-// already proved that breaks every real deployment whose proxy covers the Atlassian host (see
-// connectorEgressConfig above). Closing this properly needs a policy-bearing proxy contract — the
-// operator's configured proxy attesting it enforces equivalent address-class policy — which is a
-// keiko-model-gateway-level decision affecting every gatewayFetch consumer with proxy support, not
-// something to improvise per-connector. Tracked as a follow-up under KEIKO-0316.
+// proxy is configured for this connector's egress, UNLESS the egress config also sets
+// `pinProxiedConnectTarget` (ADR-0038 D6): without it, `planGatewayDns` sets `resolveDns: false`
+// whenever a proxy is used, because by default Keiko does not own the connect on that path — the
+// proxy resolves the hostname independently, so any address Keiko resolved beforehand is never
+// bound to what the proxy actually connects to. Pre-resolving unconditionally would not have been
+// a real guarantee (the exact TOCTOU `refuseUnpinnableResearchEgress` rejects for research egress),
+// and this lane cannot simply refuse every proxied request either (pinning `denyLoopback` already
+// proved that breaks every real deployment whose proxy covers the Atlassian host — see
+// connectorEgressConfig above). `pinProxiedConnectTarget` resolves both objections: it makes
+// gatewayFetch itself vet the target and hand the proxy a vetted address instead of a hostname, so
+// there is nothing left for the proxy to resolve.
+//
+// This connector lane does NOT set `pinProxiedConnectTarget` on `connectorEgressConfig`'s returned
+// config, deliberately, in the same change that added the flag: the base URL is fixed and
+// operator-configured at connector-creation time (D3's single-host allowlist), which makes this
+// lane a strong candidate for a future default-on flip, but flipping it changes what a proxied
+// request's wire-level CONNECT authority looks like — a corporate proxy that filters CONNECT by
+// hostname (not by resolved address) would see an IP literal instead and could reject it,
+// exactly the class of regression `denyLoopback` caused. That is a live-deployment compatibility
+// question this file cannot answer without evidence from real proxied Atlassian deployments, not
+// a capability gap; adding `pinProxiedConnectTarget: true` to connectorEgressConfig's return value
+// is the entire implementation once that evidence exists.
 function isBlockedLoopbackTarget(target: URL): boolean {
   return classifyOutboundHost(target.hostname) === "loopback";
 }

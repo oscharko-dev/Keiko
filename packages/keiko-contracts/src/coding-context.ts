@@ -10,7 +10,7 @@ import {
   CODING_CONTEXT_SOURCE_KINDS,
   CODING_CONTEXT_SOURCE_TIER_BY_KIND,
   RETRIEVAL_CONTEXT_SCHEMA_VERSION,
-  isRetrievalContextCitation,
+  isValidContextCitation,
   toRetrievalContextWirePack,
   type CodingContextPurpose,
   type CodingContextSourceKind,
@@ -215,10 +215,16 @@ export function tierForCodingContextSource(kind: CodingContextSourceKind): Codin
   return CODING_CONTEXT_SOURCE_TIER_BY_KIND[kind];
 }
 
+// Validates against the CODING profile's own sourceKind set and tier table
+// (CODING_CONTEXT_SOURCE_TIER_BY_KIND), not the neutral one — connected-context deliberately
+// carries a different tier in each (see the comment on isValidContextCitation in
+// retrieval-context.ts), so delegating to isRetrievalContextCitation would reject a citation this
+// module's own tierForCodingContextSource produces.
 export function isCodingContextCitation(value: unknown): value is CodingContextCitation {
-  return (
-    isRetrievalContextCitation(value) &&
-    CODING_CONTEXT_SOURCE_KINDS.includes(value.sourceKind as CodingContextSourceKind)
+  return isValidContextCitation(
+    value,
+    CODING_CONTEXT_SOURCE_KINDS,
+    CODING_CONTEXT_SOURCE_TIER_BY_KIND,
   );
 }
 

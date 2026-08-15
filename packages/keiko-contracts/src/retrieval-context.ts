@@ -236,20 +236,34 @@ function isOptionalString(value: unknown): boolean {
   return value === undefined || typeof value === "string";
 }
 
-function retrievalCitationShapeValid(value: Record<string, unknown>): boolean {
-  const sourceKindValid = RETRIEVAL_CONTEXT_SOURCE_KINDS.includes(
-    value.sourceKind as RetrievalContextSourceKind,
-  );
+// Shared citation-shape validator, parameterized by which PROFILE's sourceKind set and tier
+// authority apply — the neutral profile supplies RETRIEVAL_CONTEXT_SOURCE_KINDS /
+// RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND, the coding profile supplies its own narrower kind set and
+// CODING_CONTEXT_SOURCE_TIER_BY_KIND (coding-context.ts). This exists because the two profiles'
+// tier tables DELIBERATELY diverge for one shared source kind (connected-context: "external-
+// connected" for neutral purposes vs. "first-party-workspace" to keep the existing coding wire
+// byte-identical, ADR-0152 D6) — a single hard-coded tier table here would make one profile's
+// citations fail the other profile's validator for a tier they never claimed to have. Each caller
+// enforces its OWN tier mapping instead of inheriting the neutral one. Exported so a closed
+// profile over this contract (e.g. coding-context.ts) can validate its own citations against its
+// own sourceKind set and tier table, instead of inheriting the neutral profile's via
+// isRetrievalContextCitation.
+export function isValidContextCitation<Kind extends RetrievalContextSourceKind>(
+  value: unknown,
+  sourceKinds: readonly Kind[],
+  tierByKind: Readonly<Record<Kind, RetrievalContextSourceTier>>,
+): value is RetrievalContextCitation<Kind> {
+  if (!isRecord(value)) return false;
+  if ("text" in value || "excerpt" in value || "content" in value) return false;
+  const sourceKindValid = sourceKinds.includes(value.sourceKind as Kind);
   return [
     sourceKindValid,
     RETRIEVAL_CONTEXT_SOURCE_TIERS.includes(value.sourceTier as RetrievalContextSourceTier),
     // The two membership checks above are independent, so a citation could claim a sourceKind whose
     // canonical tier is `retained-memory` while carrying `first-party-workspace` — misrepresenting
     // its own trust tier to any consumer that reads sourceTier instead of re-deriving it. The tier
-    // is not an independent field: this table is its only authority.
-    !sourceKindValid ||
-      value.sourceTier ===
-        tierForRetrievalContextSource(value.sourceKind as RetrievalContextSourceKind),
+    // is not an independent field: the caller's own `tierByKind` is its only authority.
+    !sourceKindValid || value.sourceTier === tierByKind[value.sourceKind as Kind],
     typeof value.id === "string",
     typeof value.score === "number",
     typeof value.rank === "number",
@@ -276,9 +290,11 @@ export function embeddingProvidersAllowed(purpose: RetrievalPurpose): boolean {
 }
 
 export function isRetrievalContextCitation(value: unknown): value is RetrievalContextCitation {
-  if (!isRecord(value)) return false;
-  if ("text" in value || "excerpt" in value || "content" in value) return false;
-  return retrievalCitationShapeValid(value);
+  return isValidContextCitation(
+    value,
+    RETRIEVAL_CONTEXT_SOURCE_KINDS,
+    RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND,
+  );
 }
 
 export function toRetrievalContextWirePack<

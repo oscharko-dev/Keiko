@@ -5,6 +5,7 @@ import {
   type CodingWorkbenchValidationResult,
 } from "./coding-workbench.js";
 import { isCodingWorkbenchEvidenceSafeText } from "./coding-workbench-evidence.js";
+import { deepFreeze } from "./deep-freeze.js";
 
 export type CodingWorkbenchCodexAuthMethod =
   "chatgpt-browser-login" | "chatgpt-device-code" | "codex-access-token";
@@ -371,9 +372,15 @@ export interface CodingWorkbenchCodexAuthMethodRow {
   readonly credentialTransport?: CodingWorkbenchCodexCredentialTransport | undefined;
 }
 
+// deepFreeze, not Object.freeze: Object.freeze is shallow, and codingWorkbenchCodexAuthMethodRowFor
+// below hands each row object out to external callers by reference (keiko-server's setupPlanFor
+// among them) — a plain Object.freeze on the outer record would still leave every inner row
+// object writable, letting a caller rewrite requiresSecretInput or credentialTransport
+// process-wide and making validateSetupPlanMethodConsistency agree with the corrupted row it
+// reads from this same table (KEIKO-0139's exact bug class).
 const CODEX_AUTH_METHOD_ROWS: Readonly<
   Record<CodingWorkbenchCodexAuthMethod, CodingWorkbenchCodexAuthMethodRow>
-> = Object.freeze({
+> = deepFreeze({
   "chatgpt-browser-login": { commandLabel: "codex-login", requiresSecretInput: false },
   "chatgpt-device-code": {
     commandLabel: "codex-login-device-auth",

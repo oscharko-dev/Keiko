@@ -6,6 +6,7 @@
 
 import type { ToolDefinition } from "./gateway.js";
 import type { ContextToolObservation } from "./context-observations.js";
+import { deepFreeze } from "./deep-freeze.js";
 
 // ─── Sandbox policy (the 5 documented, inspectable dimensions) ───────────────────
 
@@ -273,7 +274,13 @@ export interface CommandRule {
 }
 
 // Minimal, justified default rules. Everything not listed is denied (deny-by-default).
-export const DEFAULT_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
+//
+// deepFreeze, not Object.freeze: several fields below already individually wrap their own nested
+// array in Object.freeze, but that only protects THOSE specific fields — the rule object itself
+// (and any field on it not individually wrapped, e.g. `executable`) was still writable, the same
+// bug class command-runner.ts's COMMAND_TASK_RULES already documents and was fixed for
+// (KEIKO-0139). The inner Object.freeze calls below are now redundant but harmless.
+export const DEFAULT_COMMAND_RULES: readonly CommandRule[] = deepFreeze([
   {
     executable: "npm",
     // Read-only npm only. Mutating/package-installing subcommands are excluded by omission.
