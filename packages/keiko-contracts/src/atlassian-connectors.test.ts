@@ -857,13 +857,56 @@ describe("isAtlassianContentPreviewUnpresentable (KEIKO-0186 P1/P2)", () => {
   });
 
   it("is true for whitespace next to a zero-width/format character, independent of stripUnsafeFormatChars having run first", () => {
-    // \p{Cf} (Format) covers ZERO WIDTH SPACE (U+200B) directly, so this predicate does not rely
-    // on stripUnsafeFormatChars already having removed it -- defense in depth, not a redundant
-    // check: the producer always sanitizes first, but this predicate must be correct on its own.
+    // Default_Ignorable_Code_Point covers ZERO WIDTH SPACE (U+200B) directly, so this predicate
+    // does not rely on stripUnsafeFormatChars already having removed it -- defense in depth, not
+    // a redundant check: the producer always sanitizes first, but this predicate must be correct
+    // on its own.
     const zeroWidthOnly = String.fromCharCode(0x200b).repeat(3);
     const spaceThenZeroWidth = " " + String.fromCharCode(0x200b);
     expect(isAtlassianContentPreviewUnpresentable(zeroWidthOnly)).toBe(true);
     expect(isAtlassianContentPreviewUnpresentable(spaceThenZeroWidth)).toBe(true);
+  });
+
+  // KEIKO-0186 P3 (Codex): U+3164 HANGUL FILLER (used historically to fill an empty Hangul input
+  // slot) renders as nothing, yet its Unicode general category is Lo -- a LETTER -- so it matches
+  // none of \s, \p{M}, or the P2 predicate's \p{Cf}. Same failure mode as P1/P2 (an apparently
+  // blank preview classified presentable), a third input class slipping past an enumeration of
+  // character classes. Default_Ignorable_Code_Point is the actual Unicode property for "renders
+  // as nothing, whatever its general category" -- it covers HANGUL FILLER and the
+  // variation-selector families directly, rather than needing a fourth enumerated class.
+  it("is true for HANGUL FILLER (U+3164) alone, repeated, and mixed with whitespace or a combining mark", () => {
+    const hangulFiller = String.fromCodePoint(0x3164);
+    expect(isAtlassianContentPreviewUnpresentable(hangulFiller)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(hangulFiller.repeat(3))).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(" " + hangulFiller)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(hangulFiller + String.fromCharCode(0x301))).toBe(
+      true,
+    );
+  });
+
+  it("is true for a variation selector alone (VARIATION SELECTOR-16, U+FE0F)", () => {
+    expect(isAtlassianContentPreviewUnpresentable(String.fromCodePoint(0xfe0f))).toBe(true);
+  });
+
+  it("is false for a real base character followed by a variation selector (an emoji-presentation pair, e.g. a heavy black heart forced to emoji style)", () => {
+    const heavyBlackHeart = String.fromCodePoint(0x2764);
+    const variationSelector16 = String.fromCodePoint(0xfe0f);
+    expect(isAtlassianContentPreviewUnpresentable(heavyBlackHeart + variationSelector16)).toBe(
+      false,
+    );
+  });
+
+  it("distinguishes a truncation window that is all HANGUL FILLER from the untruncated string that has a base character just past it", () => {
+    const fillerPrefix = String.fromCodePoint(0x3164).repeat(
+      ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
+    );
+    const withBaseCharPastTheBound = fillerPrefix + "X";
+    const truncationWindow = withBaseCharPastTheBound.slice(
+      0,
+      ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
+    );
+    expect(isAtlassianContentPreviewUnpresentable(withBaseCharPastTheBound)).toBe(false);
+    expect(isAtlassianContentPreviewUnpresentable(truncationWindow)).toBe(true);
   });
 
   it("distinguishes a truncation window that is all whitespace/combining marks from the untruncated string that has a base character just past it", () => {
@@ -905,7 +948,7 @@ describe("isSafeAtlassianContentPreview (KEIKO-0186)", () => {
     ).toBe(true);
   });
 
-  it("rejects empty, overlong, control-character, bidi/zero-width, combining-marks-only, whitespace-only, and non-string values", () => {
+  it("rejects empty, overlong, control-character, bidi/zero-width, combining-marks-only, whitespace-only, default-ignorable-only, and non-string values", () => {
     expect(isSafeAtlassianContentPreview("")).toBe(false);
     expect(
       isSafeAtlassianContentPreview("x".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS + 1)),
@@ -930,6 +973,11 @@ describe("isSafeAtlassianContentPreview (KEIKO-0186)", () => {
     );
     expect(isSafeAtlassianContentPreview(" " + String.fromCharCode(0x301))).toBe(false);
     expect(isSafeAtlassianContentPreview(String.fromCharCode(0x301) + " ")).toBe(false);
+    // KEIKO-0186 P3: HANGUL FILLER (U+3164) and a bare variation selector both render as nothing
+    // despite belonging to Unicode general category Lo (a letter) -- neither \p{M} nor \p{Cf}
+    // (the P2 predicate) touches them; Default_Ignorable_Code_Point does.
+    expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x3164))).toBe(false);
+    expect(isSafeAtlassianContentPreview(String.fromCodePoint(0xfe0f))).toBe(false);
     expect(isSafeAtlassianContentPreview(42)).toBe(false);
     expect(isSafeAtlassianContentPreview(null)).toBe(false);
     expect(isSafeAtlassianContentPreview(undefined)).toBe(false);
