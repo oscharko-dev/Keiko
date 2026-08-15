@@ -22,6 +22,14 @@ const response = {
   ],
 };
 
+// Bound to the observed revision and the exact question-request id (KEIKO-0411), matching the
+// approval-decision and research-revoke request contracts.
+const VALID_ANSWER_BASE = {
+  requestId: "req-1",
+  expectedRevision: 0,
+  questionRequestId: "que_1",
+};
+
 const RUNTIME_QUESTION_TEXT_SURFACES = [
   "question",
   "header",
@@ -38,9 +46,12 @@ const UNSAFE_UNICODE_FORMAT_CHARACTERS = [
 describe("coding workbench runtime questions", () => {
   it("accepts bounded exact transient projections and internal answers", () => {
     expect(validateCodingWorkbenchRuntimeQuestionsResponse(response).ok).toBe(true);
-    expect(parseCodingWorkbenchRuntimeQuestionAnswerRequest({ answers: [["Continue"]] }).ok).toBe(
-      true,
-    );
+    expect(
+      parseCodingWorkbenchRuntimeQuestionAnswerRequest({
+        ...VALID_ANSWER_BASE,
+        answers: [["Continue"]],
+      }).ok,
+    ).toBe(true);
   });
 
   it("rejects unknown fields, duplicate identities, and unbounded text", () => {
@@ -59,9 +70,12 @@ describe("coding workbench runtime questions", () => {
         ],
       }).ok,
     ).toBe(false);
-    expect(parseCodingWorkbenchRuntimeQuestionAnswerRequest({ answers: [["x", "x"]] }).ok).toBe(
-      false,
-    );
+    expect(
+      parseCodingWorkbenchRuntimeQuestionAnswerRequest({
+        ...VALID_ANSWER_BASE,
+        answers: [["x", "x"]],
+      }).ok,
+    ).toBe(false);
   });
 
   it.each(
@@ -71,9 +85,12 @@ describe("coding workbench runtime questions", () => {
   )("rejects %s text containing %s", (surface, _characterName, character) => {
     const unsafe = `visible${character}spoof`;
     if (surface === "answer") {
-      expect(parseCodingWorkbenchRuntimeQuestionAnswerRequest({ answers: [[unsafe]] }).ok).toBe(
-        false,
-      );
+      expect(
+        parseCodingWorkbenchRuntimeQuestionAnswerRequest({
+          ...VALID_ANSWER_BASE,
+          answers: [[unsafe]],
+        }).ok,
+      ).toBe(false);
       return;
     }
     const question = response.questions[0]?.questions[0];
@@ -199,19 +216,78 @@ describe("coding workbench runtime questions failure branches", () => {
   });
 
   it("rejects non-array and overflowing answers", () => {
-    expect(parseCodingWorkbenchRuntimeQuestionAnswerRequest({ answers: "yes" })).toMatchObject({
+    expect(
+      parseCodingWorkbenchRuntimeQuestionAnswerRequest({ ...VALID_ANSWER_BASE, answers: "yes" }),
+    ).toMatchObject({
       ok: false,
       errors: ["answers must be a bounded non-empty array"],
     });
-    expect(parseCodingWorkbenchRuntimeQuestionAnswerRequest({ answers: [] })).toMatchObject({
+    expect(
+      parseCodingWorkbenchRuntimeQuestionAnswerRequest({ ...VALID_ANSWER_BASE, answers: [] }),
+    ).toMatchObject({
       ok: false,
       errors: ["answers must be a bounded non-empty array"],
     });
     expect(
       parseCodingWorkbenchRuntimeQuestionAnswerRequest({
+        ...VALID_ANSWER_BASE,
         answers: Array.from({ length: 33 }, () => ["ok"]),
       }),
     ).toMatchObject({ ok: false, errors: ["answers must be a bounded non-empty array"] });
+  });
+
+  it("rejects a body lacking expectedRevision, a malformed requestId, or an invalid questionRequestId (KEIKO-0411)", () => {
+    expect(
+      parseCodingWorkbenchRuntimeQuestionAnswerRequest({
+        requestId: VALID_ANSWER_BASE.requestId,
+        questionRequestId: VALID_ANSWER_BASE.questionRequestId,
+        answers: [["Continue"]],
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      parseCodingWorkbenchRuntimeQuestionAnswerRequest({
+        ...VALID_ANSWER_BASE,
+        expectedRevision: -1,
+        answers: [["Continue"]],
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: ["expectedRevision must be a non-negative safe integer"],
+    });
+    expect(
+      parseCodingWorkbenchRuntimeQuestionAnswerRequest({
+        ...VALID_ANSWER_BASE,
+        requestId: "../forged",
+        answers: [["Continue"]],
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      parseCodingWorkbenchRuntimeQuestionAnswerRequest({
+        ...VALID_ANSWER_BASE,
+        questionRequestId: "not-a-question-id",
+        answers: [["Continue"]],
+      }),
+    ).toMatchObject({ ok: false, errors: ["questionRequestId is invalid"] });
+  });
+
+  it("rejects answers whose serialized size exceeds the aggregate UTF-8 byte budget even though every individual array is within its own per-item caps (KEIKO-0411)", () => {
+    // 32 answer arrays x 32 selections x 4096 chars each is within every per-item bound this
+    // module already enforced, and is still ~65x CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES
+    // (64 KiB) — exactly the asymmetry KEIKO-0411 reported against the outbound budget
+    // checkBoundedQuestionRequests already applies.
+    const oversized = Array.from({ length: 32 }, (_, arrayIndex) =>
+      Array.from(
+        { length: 32 },
+        (_, selectionIndex) =>
+          `${String(arrayIndex)}-${String(selectionIndex)}-${"a".repeat(4_090)}`,
+      ),
+    );
+    expect(
+      parseCodingWorkbenchRuntimeQuestionAnswerRequest({
+        ...VALID_ANSWER_BASE,
+        answers: oversized,
+      }),
+    ).toMatchObject({ ok: false, errors: ["answers exceed the aggregate UTF-8 byte budget"] });
   });
 });
 
