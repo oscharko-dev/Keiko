@@ -83,6 +83,15 @@ function smokeGateFailure(message) {
   return new SmokeGateFailure(message);
 }
 
+export function smokeGateFailureLogSummary(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  const messageSha256 = createHash("sha256").update(message, "utf8").digest("hex");
+  const messageBytes = Buffer.byteLength(message, "utf8");
+  return `redacted SmokeGateFailure (messageSha256=${messageSha256}, messageBytes=${String(
+    messageBytes,
+  )})`;
+}
+
 export function parsePositiveTimeoutEnv(name) {
   const value = process.env[name];
   if (value === undefined || value === "") {
@@ -222,7 +231,7 @@ const COREPACK_CACHE_LOCK_MISSING_CODES = new Set(["ENOENT", "ENOTDIR"]);
 const COREPACK_CACHE_STALE_CLAIM_RACE_CODES = new Set(["EEXIST", "ENOENT", "ENOTDIR"]);
 const heldCorepackCacheLocks = new Set();
 
-function corepackCacheLockDir(locator) {
+export function corepackCacheLockDir(locator) {
   return join(corepackCacheDir(locator), ".lock");
 }
 
@@ -1673,8 +1682,8 @@ export async function startLocalRegistry(artifact, vendored) {
  * Corepack caches package managers under `COREPACK_HOME`, which defaults to a path inside `HOME`.
  * Since the child gets a private, empty home for rc isolation, leaving the cache to follow it would
  * make every run download Yarn afresh — turning an occasional network dependency into a per-run
- * one. The cache therefore lives at a stable path of its own, keyed by the pinned version so a
- * bump does not reuse the previous tool (#3130).
+ * one. The cache therefore lives at a stable path of its own, keyed by the pinned version and
+ * reviewed digest so a bump or digest correction does not reuse the previous tool (#3130/#3134).
  */
 export function corepackCacheDir(locator = PINNED_YARN) {
   // This directory holds an EXECUTABLE that Corepack will run, so it gets the same fail-closed
@@ -1683,8 +1692,8 @@ export function corepackCacheDir(locator = PINNED_YARN) {
   // file it finds there and executes the binary it names, networking disabled or not. The uid is
   // part of the name so two accounts never contend for one path in the first place.
   const owner = process.getuid === undefined ? "win" : String(process.getuid());
-  const version = yarnLocatorParts(locator).version;
-  const dir = join(tmpdir(), `keiko-corepack-${PINNED_YARN_NAME}-${version}-${owner}`);
+  const { version, sha512 } = yarnLocatorParts(locator);
+  const dir = join(tmpdir(), `keiko-corepack-${PINNED_YARN_NAME}-${version}-${sha512}-${owner}`);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   assertPrivateDirectory(dir);
   return dir;

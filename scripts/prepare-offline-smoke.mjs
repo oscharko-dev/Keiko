@@ -11,13 +11,17 @@
 //
 // Idempotent: a cached tool and an existing seed are left alone.
 
-import { isSmokeGateFailure, prepareOfflineSmokeForSetup } from "./installable-package-smoke.mjs";
+import {
+  isSmokeGateFailure,
+  prepareOfflineSmokeForSetup,
+  smokeGateFailureLogSummary,
+} from "./installable-package-smoke.mjs";
 
 try {
   await prepareOfflineSmokeForSetup();
 } catch (error) {
   if (isSmokeGateFailure(error)) {
-    console.error(`installable-smoke failed: ${error.message}`);
+    console.error(`installable-smoke failed: ${smokeGateFailureLogSummary(error)}`);
     process.exit(1);
   }
   // Everything else — an unwritable temp directory, a cache path that fails its ownership check —

@@ -29,6 +29,7 @@ import {
   writeSeedIndex,
   hostBindingSuffixes,
   corepackCacheDir,
+  corepackCacheLockDir,
   privateYarnHome,
   assertStagedRootDescriptors,
   YARN_RC_FILENAME,
@@ -41,6 +42,7 @@ import {
   stubManifest,
   findInstalledCopies,
   runAsync,
+  smokeGateFailureLogSummary,
   startLocalRegistry,
   terminateProcessTree,
   vendoredDependencyNames,
@@ -1328,7 +1330,7 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(PINNED_YARN_SOURCE_URL).toBe(
       "https://repo.yarnpkg.com/4.9.1/packages/yarnpkg-cli/bin/yarn.js",
     );
-    expect(yarnPackageManagerFromLocator(PINNED_YARN)).toBe(`yarn@${PINNED_YARN_VERSION}`);
+    expect(yarnPackageManagerFromLocator(PINNED_YARN)).toBe(PINNED_YARN);
     expect(pinnedYarnVersionFromLocator(PINNED_YARN)).toBe(PINNED_YARN_VERSION);
     expect(
       yarnLocatorParts(`yarn@${PINNED_YARN_VERSION}-rc.1+sha512.${PINNED_YARN_SHA512}`).version,
@@ -1349,10 +1351,16 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(installableSource).toContain("packageManager: yarnPackageManagerFromLocator(locator)");
     expect(registrySource).toContain("pinnedYarnLocatorParts(PINNED_YARN)");
     expect(registrySource).toContain("registryYarnLocator()");
-    expect(registrySource).toContain("packageManager: yarnPackageManagerFromLocator(yarnLocator)");
-    expect(registrySource).toContain("smokeGateYarnLocatorParts(yarnLocator)");
+    expect(registrySource).toContain(
+      "const packageManager = smokeGateYarnPackageManager(yarnLocator)",
+    );
+    expect(registrySource).toContain("function smokeGateYarnLocatorParts(locator)");
     expect(registrySource).toContain("outputByteSummary(result)");
+    expect(registrySource).toContain("corepackInstallCommand(executable, installArgs)");
     expect(registrySource).not.toContain("stdout:\\n${result.stdout}");
+    expect(readFileSync(join(ROOT, "scripts", "prepare-offline-smoke.mjs"), "utf8")).toContain(
+      "smokeGateFailureLogSummary(error)",
+    );
     expect(registrySource).toContain("withCorepackYarnCacheLock(");
     expect(registrySource).toContain("await provisionPinnedYarnForSetup(yarnLocator, timeoutMs)");
     expect(registrySource).toContain("yarnChildEnv(registry, process.env, yarnHome, yarnLocator)");
@@ -1362,9 +1370,22 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(registrySource).not.toContain("KEIKO_REGISTRY_INSTALL_FIXTURE_YARN_LOCATOR");
   });
 
+  it("redacts SmokeGateFailure messages before logging setup failures", () => {
+    const rawMessage = `cached Yarn digest ${PINNED_YARN_SHA512} did not match provenance`;
+    const summary = smokeGateFailureLogSummary(new Error(rawMessage));
+
+    expect(summary).toContain("redacted SmokeGateFailure");
+    expect(summary).toMatch(/messageSha256=[a-f0-9]{64}/u);
+    expect(summary).toContain(`messageBytes=${String(Buffer.byteLength(rawMessage, "utf8"))}`);
+    expect(summary).not.toContain(rawMessage);
+    expect(summary).not.toContain(PINNED_YARN_SHA512);
+  });
+
   it("keeps the Corepack cache private and per-user", () => {
-    const dir = corepackCacheDir(corepackLockFixtureLocator("private"));
+    const locator = corepackLockFixtureLocator("private");
+    const dir = corepackCacheDir(locator);
     expect(existsSync(dir)).toBe(true);
+    expect(dir).toContain(yarnLocatorParts(locator).sha512);
     // Separate paths per account, so two users never contend for one directory.
     if (process.getuid !== undefined) {
       expect(dir.endsWith(`-${String(process.getuid())}`)).toBe(true);
@@ -1375,7 +1396,7 @@ describe("installable package smoke optional-dependency coverage", () => {
 
   it("holds the Corepack cache lock while cached Yarn may execute", async () => {
     const locator = corepackLockFixtureLocator("held");
-    const lockDir = join(corepackCacheDir(locator), ".lock");
+    const lockDir = corepackCacheLockDir(locator);
     rmSync(lockDir, { recursive: true, force: true });
     try {
       const result = await withCorepackYarnCacheLock(locator, async () => {
@@ -1394,7 +1415,7 @@ describe("installable package smoke optional-dependency coverage", () => {
 
   it("renews the Corepack cache lock lease while the action runs", async () => {
     const locator = corepackLockFixtureLocator("renew");
-    const lockDir = join(corepackCacheDir(locator), ".lock");
+    const lockDir = corepackCacheLockDir(locator);
     rmSync(lockDir, { recursive: true, force: true });
     try {
       await withCorepackYarnCacheLock(
@@ -1417,7 +1438,7 @@ describe("installable package smoke optional-dependency coverage", () => {
 
   it("does not release a Corepack cache lock it no longer owns", async () => {
     const locator = corepackLockFixtureLocator("release");
-    const lockDir = join(corepackCacheDir(locator), ".lock");
+    const lockDir = corepackCacheLockDir(locator);
     rmSync(lockDir, { recursive: true, force: true });
     try {
       await withCorepackYarnCacheLock(locator, () => {
@@ -1438,7 +1459,7 @@ describe("installable package smoke optional-dependency coverage", () => {
 
   it("recovers an abandoned stale Corepack cache lock claim", async () => {
     const locator = corepackLockFixtureLocator("claim");
-    const lockDir = join(corepackCacheDir(locator), ".lock");
+    const lockDir = corepackCacheLockDir(locator);
     const claimPath = join(lockDir, "stale-claimer.json");
     rmSync(lockDir, { recursive: true, force: true });
     try {
@@ -1463,7 +1484,7 @@ describe("installable package smoke optional-dependency coverage", () => {
 
   it("preserves another worker's live stale Corepack cache lock claim", async () => {
     const locator = corepackLockFixtureLocator("live-claim");
-    const lockDir = join(corepackCacheDir(locator), ".lock");
+    const lockDir = corepackCacheLockDir(locator);
     const claimPath = join(lockDir, "stale-claimer.json");
     rmSync(lockDir, { recursive: true, force: true });
     try {
@@ -1496,7 +1517,7 @@ describe("installable package smoke optional-dependency coverage", () => {
 
   it("preserves a fresh legacy Corepack cache lock claim until its mtime lease expires", async () => {
     const locator = corepackLockFixtureLocator("legacy-claim");
-    const lockDir = join(corepackCacheDir(locator), ".lock");
+    const lockDir = corepackCacheLockDir(locator);
     const claimPath = join(lockDir, "stale-claimer.json");
     rmSync(lockDir, { recursive: true, force: true });
     try {
@@ -1557,7 +1578,7 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
-  it("keeps the Corepack cache key and lookup stable across a hash change", () => {
+  it("scopes the Corepack cache key by version and hash", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-corepack-cache-key-test-"));
     const fixtureBytes = "fixture Yarn bytes\n";
     const fixtureLocator = yarnLocatorForBytes(PINNED_YARN_VERSION, fixtureBytes);
@@ -1603,7 +1624,7 @@ describe("installable package smoke optional-dependency coverage", () => {
       const outcome = JSON.parse(result.stdout);
 
       expect(outcome).toEqual({
-        sameDir: true,
+        sameDir: false,
         originalCached: true,
         alternateCached: false,
       });
@@ -2339,7 +2360,7 @@ describe("installable package smoke optional-dependency coverage", () => {
       const errorText = consoleError.mock.calls.flat().join("\n");
       expect(errorText).toContain("the failure matched no known class");
       expect(errorText).not.toContain("rejected");
-      expect(existsSync(join(corepackCacheDir(locator), ".lock"))).toBe(false);
+      expect(existsSync(corepackCacheLockDir(locator))).toBe(false);
     } finally {
       process.env.PATH = previousPath;
       rmSync(root, { recursive: true, force: true });
@@ -2367,7 +2388,7 @@ describe("installable package smoke optional-dependency coverage", () => {
           "}",
         ].join("\n"),
       ],
-      { cwd: ROOT, encoding: "utf8", env },
+      { cwd: ROOT, encoding: "utf8", env, timeout: 30_000 },
     );
 
     expect(result.status).toBe(0);
@@ -2400,6 +2421,7 @@ describe("installable package smoke optional-dependency coverage", () => {
           NODE_ENV: "test",
           VITEST_WORKER_ID: process.env.VITEST_WORKER_ID ?? "1",
         },
+        timeout: 30_000,
       },
     );
 

@@ -46,6 +46,19 @@ function smokeGateYarnLocatorParts(locator) {
   }
 }
 
+function smokeGateYarnPackageManager(locator) {
+  try {
+    return yarnPackageManagerFromLocator(locator);
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new SmokeGateFailure(
+        `registry install smoke Yarn locator is invalid: ${error.message}`,
+      );
+    }
+    throw error;
+  }
+}
+
 function testRegistryYarnLocator(locator) {
   if (process.env.NODE_ENV !== "test" || process.env[TEST_RUNNER_ENV] === undefined) {
     throw new SmokeGateFailure("fixture Yarn locators are only accepted inside Vitest");
@@ -190,13 +203,13 @@ async function npmSmoke() {
 }
 
 function writeYarnSmokeManifest(projectDir, yarnLocator) {
-  smokeGateYarnLocatorParts(yarnLocator);
+  const packageManager = smokeGateYarnPackageManager(yarnLocator);
   writeFileSync(
     join(projectDir, "package.json"),
     JSON.stringify(
       {
         private: true,
-        packageManager: yarnPackageManagerFromLocator(yarnLocator),
+        packageManager,
         devDependencies: {
           [rootManifest.name]: rootManifest.version,
         },
@@ -205,6 +218,15 @@ function writeYarnSmokeManifest(projectDir, yarnLocator) {
       2,
     ) + "\n",
   );
+}
+
+function corepackInstallCommand(executable, args) {
+  if (process.platform !== "win32") return { args, command: executable, shell: false };
+  return {
+    args: [],
+    command: [shellCommandForTrustedExecutable(executable), ...args].join(" "),
+    shell: true,
+  };
 }
 
 function writeYarnSmokeConfiguration(projectDir) {
@@ -231,10 +253,11 @@ async function runCorepackYarnInstall(projectDir, yarnHome, yarnLocator, install
       await provisionPinnedYarnForSetup(yarnLocator, timeoutMs);
       const env = yarnChildEnv(registry, process.env, yarnHome, yarnLocator);
       const executable = resolveHostExecutable("corepack", { env });
-      return spawnSync(shellCommandForTrustedExecutable(executable), installArgs, {
+      const command = corepackInstallCommand(executable, installArgs);
+      return spawnSync(command.command, command.args, {
         encoding: "utf8",
         // SECURITY-SHELL-OK: corepack-only Windows .cmd compatibility; argv is fixed by this smoke.
-        shell: process.platform === "win32",
+        shell: command.shell,
         timeout: timeoutMs,
         cwd: projectDir,
         env,

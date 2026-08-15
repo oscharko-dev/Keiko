@@ -28,7 +28,8 @@ export function yarnLocatorParts(locator) {
 }
 
 export function yarnPackageManagerFromLocator(locator) {
-  return `${PINNED_YARN_NAME}@${yarnLocatorParts(locator).version}`;
+  const { version, sha512 } = yarnLocatorParts(locator);
+  return `${PINNED_YARN_NAME}@${version}+sha512.${sha512}`;
 }
 
 export function pinnedYarnLocatorParts(locator) {
