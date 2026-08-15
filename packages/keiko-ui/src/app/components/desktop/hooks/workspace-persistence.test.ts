@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AppWindow, Connection } from "../windows/types";
 import {
+  MAX_PERSISTED_CONNECTION_SCAN,
   parsePersistedConnections,
   parsePersistedWindows,
   sanitizePersistedConnections,
@@ -865,6 +866,154 @@ describe("workspace-persistence", () => {
     expect(snapshot.conns).toEqual([
       {
         id: "connection-old",
+        a: "files-1",
+        b: "chat-front",
+        boundChatWindowId: "chat-front",
+      },
+    ]);
+  });
+
+  it("preserves distinct connection records when no endpoint was remapped", () => {
+    const snapshot = sanitizePersistedWorkspace(
+      [win({ id: "files-1", type: "files" }), win({ id: "chat-1", type: "chat" })],
+      [
+        { id: "scope-edge", a: "files-1", b: "chat-1", boundScopeElided: true },
+        {
+          id: "connector-edge",
+          a: "chat-1",
+          b: "files-1",
+          boundConnectorKind: "capsule",
+          boundConnectorId: "capsule-1",
+        },
+      ],
+    );
+
+    expect(snapshot.conns.map((connection) => connection.id)).toEqual([
+      "scope-edge",
+      "connector-edge",
+    ]);
+  });
+
+  it.each(["scope-first", "connector-first"] as const)(
+    "preserves distinct remapped semantic connections in %s order",
+    (order) => {
+      const scopeEdge: Connection = {
+        id: "scope-edge",
+        a: "files-1",
+        b: "chat-old",
+        boundChatWindowId: "chat-old",
+        boundScopeElided: true,
+      };
+      const connectorEdge: Connection = {
+        id: "connector-edge",
+        a: "files-1",
+        b: "chat-front",
+        boundChatWindowId: "chat-front",
+        boundConnectorKind: "capsule",
+        boundConnectorId: "capsule-1",
+      };
+      const connections =
+        order === "scope-first" ? [scopeEdge, connectorEdge] : [connectorEdge, scopeEdge];
+      const snapshot = sanitizePersistedWorkspace(
+        [
+          win({ id: "files-1", type: "files" }),
+          win({ id: "chat-old", type: "chat", z: 1, cfg: { chatId: "shared-chat" } }),
+          win({ id: "chat-front", type: "chat", z: 2, cfg: { chatId: "shared-chat" } }),
+        ],
+        connections,
+      );
+
+      expect(snapshot.conns.map((connection) => connection.id)).toEqual(
+        connections.map((connection) => connection.id),
+      );
+      expect(snapshot.conns.every((connection) => connection.b === "chat-front")).toBe(true);
+    },
+  );
+
+  it("bounds hostile duplicate window scans before later entries reach hydration", () => {
+    const duplicates = Array.from({ length: 4_096 }, (_, index) =>
+      win({
+        id: `duplicate-${String(index)}`,
+        type: "chat",
+        z: index + 1,
+        cfg: { chatId: "same-chat" },
+      }),
+    );
+    const persisted = sanitizePersistedWindows([
+      ...duplicates,
+      win({ id: "beyond-hostile-scan", type: "files" }),
+    ]);
+
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.id).not.toBe("beyond-hostile-scan");
+  });
+
+  it("keeps only the first valid connection for a duplicate connection id", () => {
+    const wins = [win({ id: "files-1", type: "files" }), win({ id: "chat-1", type: "chat" })];
+    expect(
+      sanitizePersistedConnections(
+        [
+          { id: "duplicate-id", a: "files-1", b: "chat-1" },
+          { id: "duplicate-id", a: "chat-1", b: "files-1" },
+        ],
+        wins,
+      ),
+    ).toEqual([{ id: "duplicate-id", a: "files-1", b: "chat-1" }]);
+  });
+
+  it("discards non-object persisted connection records without throwing", () => {
+    const wins = [win({ id: "files-1", type: "files" }), win({ id: "chat-1", type: "chat" })];
+
+    expect(sanitizePersistedConnections([null], wins)).toEqual([]);
+  });
+
+  it("bounds hostile invalid connection scans and reports the limit", () => {
+    const wins = [win({ id: "files-1", type: "files" }), win({ id: "chat-1", type: "chat" })];
+    let limitReports = 0;
+
+    expect(
+      sanitizePersistedConnections(
+        Array.from({ length: MAX_PERSISTED_CONNECTION_SCAN + 1 }, () => null),
+        wins,
+        (): void => {
+          limitReports += 1;
+        },
+      ),
+    ).toEqual([]);
+    expect(limitReports).toBe(1);
+  });
+
+  it("prevents rejected duplicate IDs from marking an endpoint pair as collapsed", () => {
+    const snapshot = sanitizePersistedWorkspace(
+      [
+        win({ id: "files-1", type: "files" }),
+        win({ id: "chat-old", type: "chat", z: 1, cfg: { chatId: "shared-chat" } }),
+        win({ id: "chat-front", type: "chat", z: 2, cfg: { chatId: "shared-chat" } }),
+      ],
+      [
+        { id: "kept-id", a: "files-1", b: "chat-front" },
+        { id: "kept-id", a: "files-1", b: "chat-old" },
+        { id: "distinct-id", a: "files-1", b: "chat-front" },
+      ],
+    );
+
+    expect(snapshot.conns.map((connection) => connection.id)).toEqual(["kept-id", "distinct-id"]);
+  });
+
+  it("flattens progressive duplicate-window aliases onto the final survivor", () => {
+    const snapshot = sanitizePersistedWorkspace(
+      [
+        win({ id: "files-1", type: "files" }),
+        win({ id: "chat-back", type: "chat", z: 1, cfg: { chatId: "shared-chat" } }),
+        win({ id: "chat-middle", type: "chat", z: 2, cfg: { chatId: "shared-chat" } }),
+        win({ id: "chat-front", type: "chat", z: 3, cfg: { chatId: "shared-chat" } }),
+      ],
+      [{ id: "edge", a: "files-1", b: "chat-back", boundChatWindowId: "chat-back" }],
+    );
+
+    expect(snapshot.conns).toEqual([
+      {
+        id: "edge",
         a: "files-1",
         b: "chat-front",
         boundChatWindowId: "chat-front",

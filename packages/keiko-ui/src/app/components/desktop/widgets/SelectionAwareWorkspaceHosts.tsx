@@ -6,6 +6,7 @@ import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
 import { updateChat } from "@/lib/api";
 import { newClientCorrelationId } from "@/lib/http";
 import { useTranslate } from "@/lib/i18n";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 
 import { ChatSessionProvider } from "../context/ChatSessionContext";
@@ -1538,21 +1539,31 @@ function routeEditorSelectionToChat(
   if (targetRoot === undefined) return false;
   const selectionHandoffId = registerEditorSelectionHandoff(targetRoot, handoff);
   if (selectionHandoffId === null) return false;
+  const openFallback = (): string | null => {
+    return ctx.openWindow("chat", {
+      projectPathPrivacy: "omit",
+      selectionHandoffId,
+    });
+  };
+  const abandonHandoff = (): void => {
+    discardEditorSelectionHandoff(selectionHandoffId);
+    reportClientDiagnostic(
+      "[keiko] queued editor selection handoff could not be restored after chat closure",
+    );
+  };
   if (
     routeSelectionHandoffToOpenChat(
       targetRoot,
       selectionHandoffId,
       ctx.currentWindowStack?.() ?? [],
+      openFallback,
+      abandonHandoff,
     ) !== null
   ) {
     return true;
   }
-  const chatWindowId = ctx.openWindow("chat", {
-    projectPathPrivacy: "omit",
-    selectionHandoffId,
-  });
-  if (chatWindowId !== null) return true;
-  discardEditorSelectionHandoff(selectionHandoffId);
+  if (openFallback() !== null) return true;
+  abandonHandoff();
   return false;
 }
 

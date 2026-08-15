@@ -18,6 +18,7 @@ import {
   resetWorkspaceSyncFailureSurface,
   useWorkspace,
 } from "./useWorkspace";
+import { MAX_PERSISTED_WINDOW_SCAN } from "./workspace-persistence";
 import type { AppWindow } from "../windows/types";
 
 const WS_LS = "keiko.workspace.v4";
@@ -153,5 +154,44 @@ describe("workspace server-sync failure surfacing", () => {
 
     expect(warnSpy).toHaveBeenCalledWith("[keiko] workspace connection unbind callback failed");
     expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("customer-specific"));
+  });
+
+  it("reports corrupt local persistence without exposing its stored value", () => {
+    setWebdriver(true);
+    window.localStorage.setItem(WS_LS, "customer-private-invalid-json");
+
+    render(<Harness />);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "workspace-state: local persistence parse failed (keiko.workspace.v4)",
+    );
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("customer-private"));
+  });
+
+  it("reports a non-array local persistence shape without exposing its stored value", () => {
+    setWebdriver(true);
+    window.localStorage.setItem(WS_LS, '{"customer-private":"invalid-shape"}');
+
+    render(<Harness />);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "workspace-state: local persistence shape invalid (keiko.workspace.v4)",
+    );
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("customer-private"));
+  });
+
+  it("reports a bounded persisted-window scan without exposing snapshot bodies", () => {
+    setWebdriver(true);
+    window.localStorage.setItem(
+      WS_LS,
+      JSON.stringify(Array.from({ length: MAX_PERSISTED_WINDOW_SCAN + 1 }, () => null)),
+    );
+
+    render(<Harness />);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "workspace-state: persisted window scan limit exceeded (keiko.workspace.v4)",
+    );
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("null,null"));
   });
 });

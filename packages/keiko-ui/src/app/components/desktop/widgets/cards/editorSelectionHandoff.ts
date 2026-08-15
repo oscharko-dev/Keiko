@@ -5,8 +5,9 @@ import {
 } from "@oscharko-dev/keiko-contracts/editor-agent";
 import type { EditorRange, EditorSelectionCapture } from "@oscharko-dev/keiko-editor";
 
+import { EDITOR_SELECTION_HANDOFF_TTL_MS } from "../../editorSelectionHandoffPolicy";
+
 export const EDITOR_SELECTION_MAX_BYTES = 16 * 1024;
-const EDITOR_SELECTION_HANDOFF_TTL_MS = 2 * 60 * 1000;
 const EDITOR_SELECTION_HANDOFF_CAPACITY = 8;
 const EDITOR_SELECTION_HANDOFF_ID_MAX_BYTES = 128;
 const EDITOR_SELECTION_HANDOFF_MAX_CAPACITY = 64;
@@ -76,9 +77,9 @@ function isUtf8WithinBound(value: string, maxBytes: number): boolean {
 
 function avoidsSplitSurrogate(text: string, end: number): number {
   if (end >= text.length || end === 0) return end;
-  const prior = text.charCodeAt(end - 1);
-  const next = text.charCodeAt(end);
-  const splitsPair = prior >= 0xd800 && prior <= 0xdbff && next >= 0xdc00 && next <= 0xdfff;
+  const prior = text.codePointAt(end - 1) ?? 0;
+  const next = text.codePointAt(end) ?? 0;
+  const splitsPair = prior > 0xffff && next >= 0xdc00 && next <= 0xdfff;
   return splitsPair ? end - 1 : end;
 }
 
@@ -304,7 +305,7 @@ function consumeHandoff(
   if (consumedAt === null) return null;
   purgeExpired(context.entries, consumedAt);
   const entry = context.entries.get(id);
-  if (entry === undefined || entry.workspaceRoot !== workspaceRoot) return null;
+  if (entry?.workspaceRoot !== workspaceRoot) return null;
   context.entries.delete(id);
   return entry.handoff;
 }
