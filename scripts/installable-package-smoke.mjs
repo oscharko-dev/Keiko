@@ -198,22 +198,88 @@ function sleep(ms) {
 
 const COREPACK_CACHE_LOCK_POLL_MS = 100;
 const COREPACK_CACHE_LOCK_STALE_MS = 30 * 60_000;
+const COREPACK_CACHE_LOCK_OWNER_FILE = "owner.json";
+const COREPACK_CACHE_STALE_CLAIM_FILE = "stale-claimer.json";
+const COREPACK_CACHE_LOCK_MISSING_CODES = new Set(["ENOENT", "ENOTDIR"]);
+const COREPACK_CACHE_STALE_CLAIM_RACE_CODES = new Set(["EEXIST", "ENOENT", "ENOTDIR"]);
 const heldCorepackCacheLocks = new Set();
 
 function corepackCacheLockDir(locator) {
   return `${corepackCacheDir(locator)}.lock`;
 }
 
-function removeStaleCorepackCacheLock(lockDir, timeoutMs) {
-  let stats;
+function sameDirectoryIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function lockOwnerPath(lockDir) {
+  return join(lockDir, COREPACK_CACHE_LOCK_OWNER_FILE);
+}
+
+function readCorepackCacheLockOwner(lockDir) {
   try {
-    stats = statSync(lockDir);
+    const owner = JSON.parse(readFileSync(lockOwnerPath(lockDir), "utf8"));
+    return typeof owner?.token === "string" ? owner.token : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeCorepackCacheLockOwner(lockDir, ownerToken) {
+  try {
+    writeFileSync(
+      lockOwnerPath(lockDir),
+      JSON.stringify({
+        acquiredAt: new Date().toISOString(),
+        pid: process.pid,
+        token: ownerToken,
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
   } catch (error) {
-    if (error?.code === "ENOENT") return;
+    rmSync(lockDir, { recursive: true, force: true });
     throw error;
   }
+}
+
+function releaseCorepackCacheLock(lockDir, ownerToken) {
+  if (readCorepackCacheLockOwner(lockDir) === ownerToken) {
+    rmSync(lockDir, { recursive: true, force: true });
+  }
+}
+
+function statCorepackCacheLock(lockDir) {
+  try {
+    return statSync(lockDir);
+  } catch (error) {
+    if (COREPACK_CACHE_LOCK_MISSING_CODES.has(error?.code)) return undefined;
+    throw error;
+  }
+}
+
+function corepackCacheLockIsStale(stats, timeoutMs) {
   const staleAfterMs = Math.max(timeoutMs * 2, COREPACK_CACHE_LOCK_STALE_MS);
-  if (Date.now() - stats.mtimeMs > staleAfterMs) {
+  return Date.now() - stats.mtimeMs > staleAfterMs;
+}
+
+function claimStaleCorepackCacheLock(lockDir) {
+  try {
+    writeFileSync(
+      join(lockDir, COREPACK_CACHE_STALE_CLAIM_FILE),
+      JSON.stringify({ claimedAt: new Date().toISOString(), pid: process.pid }),
+      { encoding: "utf8", flag: "wx", mode: 0o600 },
+    );
+    return true;
+  } catch (error) {
+    if (COREPACK_CACHE_STALE_CLAIM_RACE_CODES.has(error?.code)) return false;
+    throw error;
+  }
+}
+
+function removeStaleCorepackCacheLock(lockDir, timeoutMs) {
+  const stats = statCorepackCacheLock(lockDir);
+  if (stats === undefined || !corepackCacheLockIsStale(stats, timeoutMs)) return;
+  if (claimStaleCorepackCacheLock(lockDir) && sameDirectoryIdentity(stats, statSync(lockDir))) {
     rmSync(lockDir, { recursive: true, force: true });
   }
 }
@@ -222,10 +288,11 @@ async function acquireCorepackCacheLock(locator, timeoutMs) {
   const lockDir = corepackCacheLockDir(locator);
   const deadline = Date.now() + timeoutMs;
   while (true) {
+    const ownerToken = `${process.pid}-${randomBytes(9).toString("hex")}`;
     try {
       mkdirSync(lockDir, { mode: 0o700 });
-      writeFileSync(join(lockDir, "owner.json"), JSON.stringify({ pid: process.pid, locator }));
-      return () => rmSync(lockDir, { recursive: true, force: true });
+      writeCorepackCacheLockOwner(lockDir, ownerToken);
+      return () => releaseCorepackCacheLock(lockDir, ownerToken);
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
     }

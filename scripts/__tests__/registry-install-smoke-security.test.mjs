@@ -1373,6 +1373,26 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
+  it("does not release a Corepack cache lock it no longer owns", async () => {
+    const lockDir = `${corepackCacheDir()}.lock`;
+    rmSync(lockDir, { recursive: true, force: true });
+    try {
+      await withCorepackYarnCacheLock(PINNED_YARN, () => {
+        rmSync(lockDir, { recursive: true, force: true });
+        mkdirSync(lockDir, { mode: 0o700 });
+        writeFileSync(
+          join(lockDir, "owner.json"),
+          JSON.stringify({ pid: process.pid, token: "replacement" }),
+          "utf8",
+        );
+      });
+
+      expect(existsSync(lockDir)).toBe(true);
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the Corepack cache off the private home so it survives between runs", () => {
     const home = privateYarnHome();
     try {
