@@ -1516,9 +1516,10 @@ function cachedCorepackMetadataMatchesLocator(path, locator) {
   if (!isRecord(metadata) || !isRecord(metadata.locator) || !Array.isArray(metadata.bin)) {
     return false;
   }
+  const reference = metadata.locator.reference;
   return (
     metadata.locator.name === PINNED_YARN_NAME &&
-    metadata.locator.reference === version &&
+    (reference === version || reference === `${version}+sha512.${sha512}`) &&
     metadata.hash === `sha512.${sha512}` &&
     metadata.bin.includes("yarn") &&
     metadata.bin.includes("yarnpkg")
