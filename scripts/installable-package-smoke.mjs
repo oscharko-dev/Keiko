@@ -139,6 +139,7 @@ function commandForPlatform(cmd, args, options = {}) {
   }
   assertWindowsShellArguments(cmd, args);
   const executable = resolveHostExecutable(cmd, { env: options.env ?? process.env });
+  // SECURITY-SHELL-OK: npm/corepack Windows .cmd compatibility, with trusted absolute executable.
   return { command: shellCommandForTrustedExecutable(executable), shell: true };
 }
 
