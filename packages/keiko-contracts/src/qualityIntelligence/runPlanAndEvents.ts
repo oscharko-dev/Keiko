@@ -49,6 +49,28 @@ export type QualityIntelligenceStageName =
   | "reconcile"
   | "refine";
 
+/**
+ * Canonical runtime enumeration of {@link QualityIntelligenceStageName}, mirroring
+ * `QUALITY_INTELLIGENCE_PLANNER_KINDS` above. This contracts package cannot import
+ * `keiko-workflows/src/qualityIntelligence/descriptors.ts` (dependencies flow inward toward this
+ * leaf, never the reverse), so `descriptors.ts` imports and types its own `stageNames` field
+ * against this array's element type instead — a drifted or renamed stage there is then a compile
+ * error, not a silently-stale fixture on either side (KEIKO-0274).
+ */
+export const QUALITY_INTELLIGENCE_STAGE_NAMES: readonly QualityIntelligenceStageName[] = [
+  "plan",
+  "candidates",
+  "judge",
+  "coverage",
+  "validate",
+  "finalize",
+  "analyse",
+  "report",
+  "run-judges",
+  "reconcile",
+  "refine",
+] as const;
+
 export interface QualityIntelligenceRunStage {
   /** Stable stage name — see {@link QualityIntelligenceStageName}. */
   readonly name: QualityIntelligenceStageName;
