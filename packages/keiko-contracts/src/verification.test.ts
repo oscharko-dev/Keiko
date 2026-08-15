@@ -3,12 +3,15 @@ import {
   DEFAULT_VERIFICATION_LIMITS,
   VERIFICATION_FAILURE_MESSAGE_MAX_CHARS,
   VERIFICATION_MAX_FAILURE_LOCATIONS,
+  countMatchesStatus,
   isVerificationFailureLocation,
   isVerificationReport,
   isVerificationResult,
+  matchesOverallStatus,
   type VerificationFailureLocation,
   type VerificationReport,
   type VerificationResult,
+  type VerificationStatus,
 } from "./verification.js";
 
 // A result fixture in the pre-#2210 shape (no `locations` field) must still be a valid
@@ -204,5 +207,51 @@ describe("deep verification wire guards", () => {
     expect(isVerificationReport({ ...report, workspaceRoot: `/${"😀".repeat(2_048)}` })).toBe(
       false,
     );
+  });
+});
+
+// KEIKO-0159: matchesOverallStatus and countMatchesStatus used to be private to this module, each
+// re-implemented byte-for-byte in editor-agent-verification.ts (its own matchesOverallStatus, and the
+// counts-match loop inside parseCounts). Both are exported so editor-agent-verification.ts imports
+// them instead of carrying a second copy that can silently drift from this one. The shared parameter
+// shape is the minimal `{ status }` projection (not VerificationResult), so RedactedVerificationStep
+// -- the agent-facing surface's own, differently-shaped step -- satisfies it without coupling the two
+// report types together.
+describe("matchesOverallStatus (KEIKO-0159, shared with editor-agent-verification.ts)", () => {
+  it.each<[VerificationStatus, readonly VerificationStatus[], boolean]>([
+    ["cancelled", ["passed"], true],
+    ["cancelled", [], true],
+    ["cancelled", ["cancelled"], true],
+    ["passed", ["passed", "skipped"], true],
+    ["passed", [], true],
+    ["failed", ["passed", "failed"], true],
+    ["passed", ["passed", "failed"], false],
+    ["failed", ["cancelled"], false],
+  ])("matchesOverallStatus(%s, %j) === %s", (overallStatus, statuses, expected) => {
+    const items = statuses.map((status) => ({ status }));
+    expect(matchesOverallStatus(overallStatus, items)).toBe(expected);
+  });
+
+  it("accepts the minimal { status } projection RedactedVerificationStep also satisfies", () => {
+    // A bare { status } object -- not a full VerificationResult -- must be accepted: this is exactly
+    // the shape editor-agent-verification.ts's RedactedVerificationStep passes through.
+    expect(matchesOverallStatus("passed", [{ status: "passed" }, { status: "skipped" }])).toBe(
+      true,
+    );
+  });
+});
+
+describe("countMatchesStatus (KEIKO-0159, shared with editor-agent-verification.ts)", () => {
+  it("counts items by status against the minimal { status } projection", () => {
+    const items: readonly { readonly status: VerificationStatus }[] = [
+      { status: "passed" },
+      { status: "passed" },
+      { status: "failed" },
+    ];
+    expect(countMatchesStatus(2, "passed", items)).toBe(true);
+    expect(countMatchesStatus(1, "passed", items)).toBe(false);
+    expect(countMatchesStatus(1, "failed", items)).toBe(true);
+    expect(countMatchesStatus(0, "skipped", items)).toBe(true);
+    expect(countMatchesStatus(0, "cancelled", items)).toBe(true);
   });
 });
