@@ -489,6 +489,24 @@ describe("contentPreviewFor", () => {
     ).toEqual({ status: "available", text: done });
   });
 
+  // KEIKO-0186 P5 (Codex): U+13441 EGYPTIAN HIEROGLYPH FULL BLANK and U+13442 HALF BLANK are
+  // Unicode general category Lo (letters) that render blank -- a fifth input class defeating
+  // character-property classification. Closed here (KNOWN_BLANK_LETTER_PATTERN), but the
+  // predicate is now a heuristic backed by the character-count signal ConnectorApprovalsPanel
+  // renders alongside every available preview, not the sole defence -- see
+  // isAtlassianContentPreviewUnpresentable's definition.
+  it("an all-EGYPTIAN-HIEROGLYPH-BLANK payload is reported unavailable", () => {
+    const fullBlank = String.fromCodePoint(0x13441);
+    const halfBlank = String.fromCodePoint(0x13442);
+    expect(
+      contentPreviewFor({
+        type: "add-issue-comment",
+        issueKey: "PROJ-9",
+        commentText: fullBlank + halfBlank,
+      }),
+    ).toEqual({ status: "unavailable" });
+  });
+
   it("agrees with isSafeAtlassianContentPreview in every case: an emitted 'available' text always passes the contract predicate", () => {
     const cases: readonly AtlassianWriteActionInput[] = [
       { type: "create-issue", projectKey: "PROJ", summary: "Fix the flaky gate" },
@@ -512,7 +530,7 @@ describe("contentPreviewFor", () => {
     }
   });
 
-  it("agrees with isSafeAtlassianContentPreview in every unavailable case: empty, combining-marks-only, whitespace-only, whitespace-plus-combining, default-ignorable-only, and symbol/emoji-only strings all fail the contract predicate too", () => {
+  it("agrees with isSafeAtlassianContentPreview in every unavailable case: empty, combining-marks-only, whitespace-only, whitespace-plus-combining, default-ignorable-only, symbol/emoji-only, and blank-letter-only strings all fail the contract predicate too", () => {
     expect(isSafeAtlassianContentPreview("")).toBe(false);
     expect(isSafeAtlassianContentPreview(String.fromCharCode(0x301).repeat(5))).toBe(false);
     expect(isSafeAtlassianContentPreview(" ")).toBe(false);
@@ -521,5 +539,7 @@ describe("contentPreviewFor", () => {
     expect(isSafeAtlassianContentPreview(String.fromCodePoint(0xfe0f))).toBe(false);
     expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x2800))).toBe(false);
     expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x1f600))).toBe(false);
+    expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x13441))).toBe(false);
+    expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x13442))).toBe(false);
   });
 });
