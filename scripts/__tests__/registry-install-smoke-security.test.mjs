@@ -108,6 +108,10 @@ function processExists(pid) {
   }
 }
 
+function delay(ms) {
+  return new Promise((resolvePromise) => globalThis.setTimeout(resolvePromise, ms));
+}
+
 async function waitForProcessExit(pid) {
   const deadline = Date.now() + 2_000;
   while (processExists(pid) && Date.now() < deadline) {
@@ -185,6 +189,10 @@ function yarnSha512ForBytes(bytes) {
 
 function yarnLocatorForBytes(version, bytes) {
   return `yarn@${version}+sha512.${yarnSha512ForBytes(bytes)}`;
+}
+
+function corepackLockFixtureLocator(label) {
+  return yarnLocatorForBytes(`${PINNED_YARN_VERSION}-lock.${process.pid}.${label}`, label);
 }
 
 function corepackCacheFixtureLines(locator, yarnBytes) {
@@ -1355,7 +1363,7 @@ describe("installable package smoke optional-dependency coverage", () => {
   });
 
   it("keeps the Corepack cache private and per-user", () => {
-    const dir = corepackCacheDir();
+    const dir = corepackCacheDir(corepackLockFixtureLocator("private"));
     expect(existsSync(dir)).toBe(true);
     // Separate paths per account, so two users never contend for one directory.
     if (process.getuid !== undefined) {
@@ -1366,14 +1374,15 @@ describe("installable package smoke optional-dependency coverage", () => {
   });
 
   it("holds the Corepack cache lock while cached Yarn may execute", async () => {
-    const lockDir = join(corepackCacheDir(), ".lock");
+    const locator = corepackLockFixtureLocator("held");
+    const lockDir = join(corepackCacheDir(locator), ".lock");
     rmSync(lockDir, { recursive: true, force: true });
     try {
-      const result = await withCorepackYarnCacheLock(PINNED_YARN, async () => {
+      const result = await withCorepackYarnCacheLock(locator, async () => {
         expect(existsSync(lockDir)).toBe(true);
         const owner = JSON.parse(readFileSync(join(lockDir, "owner.json"), "utf8"));
         expect(owner.expiresAtMs).toBeGreaterThan(Date.now());
-        return await withCorepackYarnCacheLock(PINNED_YARN, () => "locked");
+        return await withCorepackYarnCacheLock(locator, () => "locked");
       });
 
       expect(result).toBe("locked");
@@ -1383,11 +1392,35 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
-  it("does not release a Corepack cache lock it no longer owns", async () => {
-    const lockDir = join(corepackCacheDir(), ".lock");
+  it("renews the Corepack cache lock lease while the action runs", async () => {
+    const locator = corepackLockFixtureLocator("renew");
+    const lockDir = join(corepackCacheDir(locator), ".lock");
     rmSync(lockDir, { recursive: true, force: true });
     try {
-      await withCorepackYarnCacheLock(PINNED_YARN, () => {
+      await withCorepackYarnCacheLock(
+        locator,
+        async () => {
+          const first = JSON.parse(readFileSync(join(lockDir, "owner.json"), "utf8")).expiresAtMs;
+          let renewed = first;
+          for (let attempt = 0; attempt < 10 && renewed <= first; attempt += 1) {
+            await delay(50);
+            renewed = JSON.parse(readFileSync(join(lockDir, "owner.json"), "utf8")).expiresAtMs;
+          }
+          expect(renewed).toBeGreaterThan(first);
+        },
+        50,
+      );
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not release a Corepack cache lock it no longer owns", async () => {
+    const locator = corepackLockFixtureLocator("release");
+    const lockDir = join(corepackCacheDir(locator), ".lock");
+    rmSync(lockDir, { recursive: true, force: true });
+    try {
+      await withCorepackYarnCacheLock(locator, () => {
         rmSync(lockDir, { recursive: true, force: true });
         mkdirSync(lockDir, { mode: 0o700 });
         writeFileSync(
@@ -1404,7 +1437,8 @@ describe("installable package smoke optional-dependency coverage", () => {
   });
 
   it("recovers an abandoned stale Corepack cache lock claim", async () => {
-    const lockDir = join(corepackCacheDir(), ".lock");
+    const locator = corepackLockFixtureLocator("claim");
+    const lockDir = join(corepackCacheDir(locator), ".lock");
     const claimPath = join(lockDir, "stale-claimer.json");
     rmSync(lockDir, { recursive: true, force: true });
     try {
@@ -1418,7 +1452,7 @@ describe("installable package smoke optional-dependency coverage", () => {
       const old = new Date(Date.now() - 120_000);
       utimesSync(claimPath, old, old);
 
-      const result = await withCorepackYarnCacheLock(PINNED_YARN, () => "reclaimed", 1_000);
+      const result = await withCorepackYarnCacheLock(locator, () => "reclaimed", 1_000);
 
       expect(result).toBe("reclaimed");
       expect(existsSync(lockDir)).toBe(false);
@@ -1428,7 +1462,8 @@ describe("installable package smoke optional-dependency coverage", () => {
   });
 
   it("preserves another worker's live stale Corepack cache lock claim", async () => {
-    const lockDir = join(corepackCacheDir(), ".lock");
+    const locator = corepackLockFixtureLocator("live-claim");
+    const lockDir = join(corepackCacheDir(locator), ".lock");
     const claimPath = join(lockDir, "stale-claimer.json");
     rmSync(lockDir, { recursive: true, force: true });
     try {
@@ -1449,7 +1484,7 @@ describe("installable package smoke optional-dependency coverage", () => {
         "utf8",
       );
 
-      await expect(withCorepackYarnCacheLock(PINNED_YARN, () => "blocked", 25)).rejects.toThrow(
+      await expect(withCorepackYarnCacheLock(locator, () => "blocked", 25)).rejects.toThrow(
         /timed out waiting for Corepack cache lock/u,
       );
 
@@ -1460,7 +1495,8 @@ describe("installable package smoke optional-dependency coverage", () => {
   });
 
   it("preserves a fresh legacy Corepack cache lock claim until its mtime lease expires", async () => {
-    const lockDir = join(corepackCacheDir(), ".lock");
+    const locator = corepackLockFixtureLocator("legacy-claim");
+    const lockDir = join(corepackCacheDir(locator), ".lock");
     const claimPath = join(lockDir, "stale-claimer.json");
     rmSync(lockDir, { recursive: true, force: true });
     try {
@@ -1472,7 +1508,7 @@ describe("installable package smoke optional-dependency coverage", () => {
       );
       writeFileSync(claimPath, "{}\n", "utf8");
 
-      await expect(withCorepackYarnCacheLock(PINNED_YARN, () => "blocked", 25)).rejects.toThrow(
+      await expect(withCorepackYarnCacheLock(locator, () => "blocked", 25)).rejects.toThrow(
         /timed out waiting for Corepack cache lock/u,
       );
 
@@ -1483,12 +1519,13 @@ describe("installable package smoke optional-dependency coverage", () => {
   });
 
   it("keeps the Corepack cache off the private home so it survives between runs", () => {
+    const locator = corepackLockFixtureLocator("child-env");
     const home = privateYarnHome();
     try {
-      const env = yarnChildEnv("http://127.0.0.1:12345", { PATH: "/usr/bin" }, home);
+      const env = yarnChildEnv("http://127.0.0.1:12345", { PATH: "/usr/bin" }, home, locator);
       // If the cache followed HOME it would be empty every run, and the gate would download the
       // package manager on each invocation instead of only when it is genuinely absent.
-      expect(env.COREPACK_HOME).toBe(corepackCacheDir());
+      expect(env.COREPACK_HOME).toBe(corepackCacheDir(locator));
       expect(env.COREPACK_HOME.startsWith(home)).toBe(false);
       expect(existsSync(env.COREPACK_HOME)).toBe(true);
     } finally {
@@ -2287,6 +2324,7 @@ describe("installable package smoke optional-dependency coverage", () => {
     mkdirSync(binDir, { recursive: true });
     mkdirSync(projectDir, { recursive: true });
     const artifact = localRegistryArtifact(root);
+    const locator = corepackLockFixtureLocator("failure");
     writeExecutable(
       join(binDir, "corepack"),
       "process.stderr.write('rejected\\n'); process.exit(7);",
@@ -2295,13 +2333,13 @@ describe("installable package smoke optional-dependency coverage", () => {
     process.env.PATH = `${binDir}${delimiter}${previousPath}`;
     try {
       const { consoleError } = rejectProcessExit();
-      await expect(installIntoWithYarn(projectDir, artifact)).rejects.toThrow(
+      await expect(installIntoWithYarn(projectDir, artifact, undefined, locator)).rejects.toThrow(
         /process\.exit\(1\)/u,
       );
       const errorText = consoleError.mock.calls.flat().join("\n");
-      expect(errorText).toContain("stderrBytes=");
+      expect(errorText).toContain("the failure matched no known class");
       expect(errorText).not.toContain("rejected");
-      expect(existsSync(join(corepackCacheDir(), ".lock"))).toBe(false);
+      expect(existsSync(join(corepackCacheDir(locator), ".lock"))).toBe(false);
     } finally {
       process.env.PATH = previousPath;
       rmSync(root, { recursive: true, force: true });

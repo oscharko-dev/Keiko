@@ -250,23 +250,59 @@ function readCorepackCacheLockOwner(lockDir) {
   }
 }
 
+function corepackCacheLockLeaseMs(timeoutMs) {
+  return Math.max(timeoutMs * 2, COREPACK_CACHE_LOCK_STALE_MS);
+}
+
+function corepackCacheLockRenewalMs(timeoutMs) {
+  return Math.max(COREPACK_CACHE_LOCK_POLL_MS, Math.floor(timeoutMs / 2));
+}
+
+function writeCorepackCacheLockOwnerFile(lockDir, ownerToken, timeoutMs) {
+  const leaseMs = corepackCacheLockLeaseMs(timeoutMs);
+  writeFileSync(
+    lockOwnerPath(lockDir),
+    JSON.stringify({
+      acquiredAt: new Date().toISOString(),
+      expiresAtMs: Date.now() + leaseMs,
+      pid: process.pid,
+      token: ownerToken,
+    }),
+    { encoding: "utf8", mode: 0o600 },
+  );
+}
+
 function writeCorepackCacheLockOwner(lockDir, ownerToken, timeoutMs) {
-  const leaseMs = Math.max(timeoutMs * 2, COREPACK_CACHE_LOCK_STALE_MS);
   try {
-    writeFileSync(
-      lockOwnerPath(lockDir),
-      JSON.stringify({
-        acquiredAt: new Date().toISOString(),
-        expiresAtMs: Date.now() + leaseMs,
-        pid: process.pid,
-        token: ownerToken,
-      }),
-      { encoding: "utf8", mode: 0o600 },
-    );
+    writeCorepackCacheLockOwnerFile(lockDir, ownerToken, timeoutMs);
   } catch (error) {
     rmSync(lockDir, { recursive: true, force: true });
     throw error;
   }
+}
+
+function renewCorepackCacheLockOwner(lockDir, ownerToken, timeoutMs) {
+  if (readCorepackCacheLockOwner(lockDir)?.token !== ownerToken) return;
+  writeCorepackCacheLockOwnerFile(lockDir, ownerToken, timeoutMs);
+}
+
+function startCorepackCacheLockRenewal(lockDir, ownerToken, timeoutMs) {
+  let renewalError;
+  const timer = globalThis.setInterval(() => {
+    try {
+      renewCorepackCacheLockOwner(lockDir, ownerToken, timeoutMs);
+    } catch (error) {
+      renewalError = error;
+      globalThis.clearInterval(timer);
+    }
+  }, corepackCacheLockRenewalMs(timeoutMs));
+  timer.unref?.();
+  return {
+    assertHealthy: () => {
+      if (renewalError !== undefined) throw renewalError;
+    },
+    stop: () => globalThis.clearInterval(timer),
+  };
 }
 
 function releaseCorepackCacheLock(lockDir, ownerToken) {
@@ -402,7 +438,12 @@ async function acquireCorepackCacheLock(locator, timeoutMs) {
     try {
       mkdirSync(lockDir, { mode: 0o700 });
       writeCorepackCacheLockOwner(lockDir, ownerToken, timeoutMs);
-      return () => releaseCorepackCacheLock(lockDir, ownerToken);
+      const renewal = startCorepackCacheLockRenewal(lockDir, ownerToken, timeoutMs);
+      return () => {
+        renewal.stop();
+        releaseCorepackCacheLock(lockDir, ownerToken);
+        renewal.assertHealthy();
+      };
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
     }
