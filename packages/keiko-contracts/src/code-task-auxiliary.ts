@@ -176,6 +176,13 @@ function isCodeTaskIsoInstantLike(value: unknown): value is string {
   return isCodeTaskIsoInstant(value);
 }
 
+// KEIKO-0302 follow-on: this validated `outcome`/`value` but never rejected an extra key riding
+// alongside a well-formed value, so a valid known fact (or an absent/unknown/unavailable fact with
+// no "value" key) padded with free text validated and was returned verbatim. This contract family
+// is documented as content-free (see the module header). The two pinned messages —
+// `${path}.value is invalid` and `${path} must not carry a value for outcome ${outcome}` — are
+// preserved exactly for their original cases; every other extra key is now rejected too, via the
+// shared unknownKeys helper.
 function factErrors(
   value: unknown,
   path: string,
@@ -183,6 +190,8 @@ function factErrors(
 ): string[] {
   if (!isRecord(value)) return [`${path} must be a tagged fact object`];
   if (value.outcome === "known") {
+    const wrapperExtraKeys = unknownKeys(value, ["outcome", "value"], path);
+    if (wrapperExtraKeys.length > 0) return wrapperExtraKeys;
     return isKnownValue(value.value) ? [] : [`${path}.value is invalid`];
   }
   if (
@@ -190,7 +199,8 @@ function factErrors(
     value.outcome === "unavailable" ||
     value.outcome === "absent"
   ) {
-    return "value" in value ? [`${path} must not carry a value for outcome ${value.outcome}`] : [];
+    if ("value" in value) return [`${path} must not carry a value for outcome ${value.outcome}`];
+    return unknownKeys(value, ["outcome"], path);
   }
   return [`${path}.outcome must be known, unknown, unavailable, or absent`];
 }
