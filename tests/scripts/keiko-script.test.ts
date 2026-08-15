@@ -79,6 +79,29 @@ describe("scripts/keiko.sh", () => {
     rmSync(stateDir, { recursive: true, force: true });
   });
 
+  // freeLoopbackPort()'s probe-then-release is not atomic with a spawned process's own bind (see
+  // that function's comment), so an unrelated process occasionally wins the race and the child
+  // exits with EADDRINUSE. Retrying with a freshly probed port is the hermetic fix: bounded,
+  // deterministic on success, and scoped to exactly the one signature that means "the port was
+  // stolen," so any other failure -- a real product defect -- still surfaces through whatever
+  // assertion the caller makes on the returned result. Shared by every test below that spawns a
+  // real child bound to `lifecyclePort` (KEIKO-3157: the health-poll deadline test had its own
+  // unguarded spawn and hit exactly this race).
+  const PORT_COLLISION_RETRY_LIMIT = 2;
+
+  async function retryOnPortCollision(
+    attempt: () => SpawnSyncReturns<string>,
+  ): Promise<SpawnSyncReturns<string>> {
+    for (let i = 0; ; i += 1) {
+      const result = attempt();
+      const isPortCollision = result.status !== 0 && result.stderr.includes("EADDRINUSE");
+      if (!isPortCollision || i >= PORT_COLLISION_RETRY_LIMIT) {
+        return result;
+      }
+      lifecyclePort = await freeLoopbackPort();
+    }
+  }
+
   describe("usage", () => {
     it("prints help and exits 0", () => {
       const r = run(["help"]);
@@ -220,25 +243,10 @@ describe("scripts/keiko.sh", () => {
       run(["stop"], lifecycleEnv());
     });
 
-    // freeLoopbackPort()'s probe-then-release is not atomic with this spawned process's own
-    // bind (see the comment on that function), so an unrelated process occasionally wins the
-    // race and the real `keiko ui` child exits with EADDRINUSE. scripts/keiko.sh's health poll
-    // now bounds every curl attempt, so that loses the race promptly and visibly instead of
-    // hanging — but the test itself must not fail on a collision it can trivially route around.
-    // Retrying with a freshly probed port is the hermetic fix: bounded, deterministic on
-    // success, and scoped to exactly the one signature (EADDRINUSE) that means "the port was
-    // stolen," so any other failure — a real product defect — still surfaces on the first try.
-    const PORT_COLLISION_RETRY_LIMIT = 2;
-
+    // scripts/keiko.sh's health poll bounds every curl attempt, so losing the port-collision
+    // race (see retryOnPortCollision above) fails promptly and visibly instead of hanging.
     async function startLifecycle(): Promise<SpawnSyncReturns<string>> {
-      for (let attempt = 0; ; attempt += 1) {
-        const start = run(["start"], lifecycleEnv());
-        const isPortCollision = start.status !== 0 && start.stderr.includes("EADDRINUSE");
-        if (!isPortCollision || attempt >= PORT_COLLISION_RETRY_LIMIT) {
-          return start;
-        }
-        lifecyclePort = await freeLoopbackPort();
-      }
+      return retryOnPortCollision(() => run(["start"], lifecycleEnv()));
     }
 
     it("starts healthy, reports running, and stops cleanly", async () => {
@@ -303,22 +311,32 @@ describe("scripts/keiko.sh", () => {
       return fakeRoot;
     }
 
-    it("fails within roughly the configured budget, not a multiple of it, when the health endpoint hangs", () => {
+    it("fails within roughly the configured budget, not a multiple of it, when the health endpoint hangs", async () => {
       const fakeRoot = writeFakeRoot();
       try {
         const startTimeoutSecs = 4;
-        const began = Date.now();
-        const start = spawnSync("bash", [join(fakeRoot, "scripts", "keiko.sh"), "start"], {
-          encoding: "utf8",
-          timeout: 45_000,
-          env: {
-            ...process.env,
-            KEIKO_STATE_DIR: stateDir,
-            KEIKO_UI_PORT: String(lifecyclePort),
-            KEIKO_START_TIMEOUT_SECS: String(startTimeoutSecs),
-          },
+        // Codex #3157: KEIKO_UI_PORT is decided before this spawn and polled by the fixed
+        // address keiko.sh derives from it, so the port must be chosen in advance -- there is no
+        // way to have the fake server bind port 0 and report back, the way a caller-discovers-
+        // the-port design would allow, without keiko.sh itself supporting that handshake. That
+        // makes this the exact same freeLoopbackPort() probe-then-release race startLifecycle
+        // above absorbs, not a new one, so it gets the identical treatment: retryOnPortCollision.
+        let elapsedMs = 0;
+        const start = await retryOnPortCollision(() => {
+          const began = Date.now();
+          const result = spawnSync("bash", [join(fakeRoot, "scripts", "keiko.sh"), "start"], {
+            encoding: "utf8",
+            timeout: 45_000,
+            env: {
+              ...process.env,
+              KEIKO_STATE_DIR: stateDir,
+              KEIKO_UI_PORT: String(lifecyclePort),
+              KEIKO_START_TIMEOUT_SECS: String(startTimeoutSecs),
+            },
+          });
+          elapsedMs = Date.now() - began;
+          return result;
         });
-        const elapsedMs = Date.now() - began;
 
         expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(1);
         expect(start.stderr).toContain("did not become healthy");
