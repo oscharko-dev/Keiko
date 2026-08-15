@@ -85,7 +85,9 @@ function registryInstallTimeoutMs() {
 
 function assertTlsVerificationEnabled() {
   if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
-    fail("NODE_TLS_REJECT_UNAUTHORIZED=0 is not allowed for registry install smoke.");
+    throw new SmokeGateFailure(
+      "NODE_TLS_REJECT_UNAUTHORIZED=0 is not allowed for registry install smoke.",
+    );
   }
   const url = new URL(registry);
   if (url.protocol === "https:") return;
@@ -97,7 +99,7 @@ function assertTlsVerificationEnabled() {
     );
     return;
   }
-  fail(
+  throw new SmokeGateFailure(
     "registry install smoke requires an HTTPS registry URL. " +
       "Only loopback HTTP is allowed with KEIKO_REGISTRY_INSTALL_ALLOW_INSECURE_LOOPBACK=1.",
   );
@@ -125,10 +127,12 @@ function outputByteSummary(result) {
 
 function assertRunSucceeded(cmd, args, result) {
   if (result.error !== undefined) {
-    fail(`${commandSummary(cmd, args)} could not spawn: ${result.error.message}`);
+    throw new SmokeGateFailure(
+      `${commandSummary(cmd, args)} could not spawn: ${result.error.message}`,
+    );
   }
   if (result.status !== 0) {
-    fail(
+    throw new SmokeGateFailure(
       `${commandSummary(cmd, args)} exited ${String(result.status)} ` +
         `(signal=${String(result.signal)}, ${outputByteSummary(result)})`,
     );
@@ -153,10 +157,14 @@ function assertVendoredPayload(projectDir) {
       .map((root) => join(root, "@oscharko-dev", shortName, "dist"))
       .find((candidate) => existsSync(candidate));
     if (dist === undefined) {
-      fail(`registry-installed package missing runtime dependency dist: ${name}`);
+      throw new SmokeGateFailure(
+        `registry-installed package missing runtime dependency dist: ${name}`,
+      );
     }
     if (readdirSync(dist).length === 0) {
-      fail(`registry-installed package has empty runtime dependency dist: ${name}`);
+      throw new SmokeGateFailure(
+        `registry-installed package has empty runtime dependency dist: ${name}`,
+      );
     }
   }
 }
@@ -165,7 +173,7 @@ async function assertRootImport(projectDir) {
   const moduleUrl = pathToFileURL(join(installedPackageRoot(projectDir), "dist", "index.js")).href;
   const mod = await import(moduleUrl);
   if (mod.SDK_VERSION !== rootManifest.version) {
-    fail(
+    throw new SmokeGateFailure(
       `registry-installed root import SDK_VERSION mismatch: ${String(mod.SDK_VERSION)} ` +
         `!= ${rootManifest.version}`,
     );
@@ -176,7 +184,7 @@ async function assertInstalledRuntime(projectDir, timeoutMs) {
   const bin = join(installedPackageRoot(projectDir), "dist", "cli", "index.js");
   const result = run(process.execPath, [bin, "--version"], timeoutMs, { cwd: projectDir });
   if (!result.stdout.includes(rootManifest.version)) {
-    fail(
+    throw new SmokeGateFailure(
       `installed CLI version output did not include ${rootManifest.version} ` +
         `(${outputByteSummary(result)})`,
     );
@@ -269,19 +277,14 @@ async function runCorepackYarnInstall(projectDir, yarnHome, yarnLocator, install
 
 async function checkedCorepackYarnInstall(projectDir, yarnHome, yarnLocator, timeoutMs) {
   const installArgs = ["yarn", "install", "--no-immutable", "--mode=skip-build"];
-  try {
-    const result = await runCorepackYarnInstall(
-      projectDir,
-      yarnHome,
-      yarnLocator,
-      installArgs,
-      timeoutMs,
-    );
-    assertRunSucceeded("corepack", installArgs, result);
-  } catch (error) {
-    if (isSmokeGateFailure(error)) fail(error.message);
-    throw error;
-  }
+  const result = await runCorepackYarnInstall(
+    projectDir,
+    yarnHome,
+    yarnLocator,
+    installArgs,
+    timeoutMs,
+  );
+  assertRunSucceeded("corepack", installArgs, result);
 }
 
 async function yarnSmoke(yarnLocator, timeoutMs) {

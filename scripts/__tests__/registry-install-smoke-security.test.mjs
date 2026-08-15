@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -95,8 +96,18 @@ function rejectProcessExit() {
 }
 
 function writeExecutable(path, body) {
+  if (process.platform === "win32") {
+    writeWindowsExecutable(path, body);
+    return;
+  }
   writeFileSync(path, `#!${process.execPath}\n${body}\n`, "utf8");
   chmodSync(path, 0o755);
+}
+
+function writeWindowsExecutable(path, body) {
+  const scriptPath = `${path}.mjs`;
+  writeFileSync(scriptPath, `${body}\n`, "utf8");
+  writeFileSync(`${path}.cmd`, `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`, "utf8");
 }
 
 function processExists(pid) {
@@ -153,12 +164,16 @@ function writeVendoredRuntimeFixture(root) {
 
 function isolatedChildEnv(root, extraEnv = {}) {
   const sandboxTmp = join(root, "tmp");
+  const sandboxHome = join(root, "home");
   mkdirSync(sandboxTmp, { recursive: true });
+  mkdirSync(sandboxHome, { recursive: true });
   return {
+    HOME: sandboxHome,
     PATH: join(root, "bin"),
     TMPDIR: sandboxTmp,
     TMP: sandboxTmp,
     TEMP: sandboxTmp,
+    USERPROFILE: sandboxHome,
     ...extraEnv,
   };
 }
@@ -2421,6 +2436,44 @@ describe("installable package smoke optional-dependency coverage", () => {
       "KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be a positive integer number of milliseconds.",
     );
     expect(result.stderr).toBe("");
+  });
+
+  it("cleans registry install temp dirs after npm spawn failures", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-registry-smoke-cleanup-test-"));
+    try {
+      const binDir = join(root, "bin");
+      mkdirSync(binDir, { recursive: true });
+      writeExecutable(
+        join(binDir, "npm"),
+        "process.stderr.write('install failed\\n'); process.exit(7);",
+      );
+
+      const result = runIsolatedSmokeModule(
+        root,
+        [
+          'import { isSmokeGateFailure } from "./scripts/installable-package-smoke.mjs";',
+          'import { PINNED_YARN } from "./scripts/lib/pinned-yarn.mjs";',
+          'import { runRegistryInstallSmokeForTest } from "./scripts/registry-install-smoke.mjs";',
+          "try {",
+          "  await runRegistryInstallSmokeForTest(PINNED_YARN);",
+          "  process.exit(64);",
+          "} catch (error) {",
+          "  if (!isSmokeGateFailure(error)) throw error;",
+          "  process.stdout.write(error.message);",
+          "}",
+        ].join("\n"),
+        { NODE_ENV: "test", VITEST_WORKER_ID: process.env.VITEST_WORKER_ID ?? "1" },
+      );
+      const leftovers = readdirSync(join(root, "tmp")).filter((entry) =>
+        entry.startsWith("keiko-registry-npm-"),
+      );
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("npm (6 args) exited 7");
+      expect(leftovers).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("rejects test-only Yarn locators outside Vitest as a smoke gate failure", () => {
