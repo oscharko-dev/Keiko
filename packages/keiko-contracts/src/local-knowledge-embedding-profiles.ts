@@ -209,26 +209,43 @@ function optionalProfileFields(
   };
 }
 
+// Length-prefixes a component so no character inside it — including the "|" this function's
+// caller uses as a (now purely decorative) reader-friendly separator — can shift where one
+// component ends and the next begins. For a FIXED number of components in a FIXED order, framing
+// every one this way makes the concatenation injective: reading a decimal length then consuming
+// exactly that many characters admits only one parse, so `frame(a) + frame(b)` can equal
+// `frame(a') + frame(b')` only when `a === a'` and `b === b'`, regardless of what "|" or ":"
+// characters `a`/`b` themselves contain. Without this, a provider-supplied modelRevision "r|fam"
+// paired with modelFamily "x" produced the identical joined key as modelRevision "r" paired with
+// modelFamily "fam|x" — two different, incompatible profiles sharing one key. Same technique as
+// keiko-server's framedDigest (workspace-manifest-identity.ts), minus the SHA-256 step this leaf
+// package cannot take (leaf-package rule: no crypto) — collision-freedom needs only the framing,
+// not a hash.
+function frame(value: string): string {
+  return `${String(value.length)}:${value}`;
+}
+
 // Frames an optional component so genuine ABSENCE and a provider literally reporting the word
 // this function used to fall back to (e.g. modelRevision: "unversioned") can never collide into
 // the same key: "-" (a fixed, single-character marker) can never equal "=" + anything, regardless
 // of what a legitimate value contains, because the two cases always differ in their first
 // character. Two distinct present values still compare correctly, since equality of "=" + a
-// reduces to equality of a. Applied uniformly to every optional field for consistency, even where
-// today's narrower value types make the specific collision unreachable (e.g. `normalization` is a
-// closed enum that can never literally equal "legacy").
+// reduces to equality of a. The result is then length-prefixed by `frame`, same as every other
+// component. Applied uniformly to every optional field for consistency, even where today's
+// narrower value types make the specific collision unreachable (e.g. `normalization` is a closed
+// enum that can never literally equal "legacy").
 function keyComponent(value: string | undefined): string {
-  return value === undefined ? "-" : `=${value}`;
+  return frame(value === undefined ? "-" : `=${value}`);
 }
 
 export function embeddingProfileKey(profile: EmbeddingProfileIdentity): string {
   return [
-    profile.provider,
-    profile.modelId,
+    frame(profile.provider),
+    frame(profile.modelId),
     keyComponent(profile.modelRevision),
-    profile.modelFamily,
-    String(profile.vectorDimensions),
-    profile.vectorMetric,
+    frame(profile.modelFamily),
+    frame(String(profile.vectorDimensions)),
+    frame(profile.vectorMetric),
     keyComponent(profile.normalization),
     keyComponent(profile.instructionVersion),
     keyComponent(profile.embeddingSpaceFingerprint),
@@ -236,7 +253,7 @@ export function embeddingProfileKey(profile: EmbeddingProfileIdentity): string {
       profile.dimensionsParam === undefined ? undefined : String(profile.dimensionsParam),
     ),
     keyComponent(profile.tokenizer),
-    profile.locality,
+    frame(profile.locality),
   ].join("|");
 }
 

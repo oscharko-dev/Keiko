@@ -4,6 +4,7 @@ import {
   CODING_CONTEXT_PURPOSES,
   CODING_CONTEXT_SCHEMA_VERSION,
   CODING_CONTEXT_SOURCE_KINDS,
+  CODING_CONTEXT_SOURCE_TIER_BY_KIND,
   embeddingProvidersAllowed,
   isCodingContextPurpose,
   toCodingContextWirePack,
@@ -132,6 +133,16 @@ describe("isRetrievalContextCitation", () => {
       expect(tierForRetrievalContextSource(kind)).toBe("first-party-workspace");
     }
     expect(RETRIEVAL_CONTEXT_SOURCE_TIERS).toContain("external-connected");
+  });
+
+  // ADR-0152 D6 follow-on: this neutral tier and the CODING tier for the same source kind now
+  // DELIBERATELY diverge (see the comment on CODING_CONTEXT_SOURCE_TIER_BY_KIND) — the neutral
+  // improvement must never be re-aliased back onto the existing coding wire without its own
+  // lockstep schema decision. Pinned here so the two tables' intentional disagreement on
+  // "connected-context" reads as a decision, not as coverage that just hasn't caught up yet.
+  it("keeps the neutral and coding tiers for connected-context deliberately different (ADR-0152 D6)", () => {
+    expect(tierForRetrievalContextSource("connected-context")).toBe("external-connected");
+    expect(CODING_CONTEXT_SOURCE_TIER_BY_KIND["connected-context"]).toBe("first-party-workspace");
   });
 
   // KEIKO-0400: sourceKind and sourceTier were two independent membership checks, so a citation

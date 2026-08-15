@@ -97,6 +97,15 @@ export const RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND: Readonly<
   "entailment-evidence": "derived-evidence",
 } as const;
 
+// ADR-0152 D6: coding-context.ts "re-bases its existing exports on aliases and CLOSED REFINEMENTS"
+// of the neutral base — a closed refinement pins its own values; it does not blindly re-derive
+// every entry from the neutral table, because that lets a neutral-table edit ripple into the
+// existing coding wire unreviewed. `connected-context` is the one entry that must diverge: the
+// neutral table below classifies it as "external-connected" for governance auditability (correct
+// for new retrieval purposes), but the CODING tier for the exact same source kind crosses the
+// EXISTING coding wire (RetrievalContextCitation.sourceTier via toCodingContextWirePack, and the
+// codingContextEvidence.ts persisted manifest) under a schemaVersion that has not changed, so D6
+// requires it to stay "first-party-workspace" until promoting it is made its own lockstep decision.
 export const CODING_CONTEXT_SOURCE_TIER_BY_KIND: Readonly<
   Record<CodingContextSourceKind, RetrievalContextSourceTier>
 > = {
@@ -104,7 +113,7 @@ export const CODING_CONTEXT_SOURCE_TIER_BY_KIND: Readonly<
   "files-focus": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["files-focus"],
   "editor-state": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["editor-state"],
   "git-context": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["git-context"],
-  "connected-context": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["connected-context"],
+  "connected-context": "first-party-workspace",
   "local-knowledge": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["local-knowledge"],
   memory: RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND.memory,
   "quality-intelligence": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["quality-intelligence"],

@@ -92,6 +92,25 @@ function connectorEgressConfig(
 // private/metadata classes already resolve to via gatewayFetch's own policy check, not a thrown
 // error, so callers see one consistent "this connector is pointed somewhere it should not be"
 // shape regardless of which blocked class tripped.
+//
+// KNOWN RESIDUAL GAP, not closed by this check (tracked on KEIKO-0316): a DNS NAME that resolves
+// to a blocked address (e.g. a connector host pointed at 169.254.169.254 or a loopback alias) is
+// caught on the DIRECT transport path, where gatewayFetch resolves and pins the address before
+// connecting (`enforceOutboundTargetPolicy` with `resolveDns: true`) — but is NOT caught when a
+// proxy is configured for this connector's egress. `planGatewayDns` in the gateway's http.ts sets
+// `resolveDns: false` whenever a proxy is used, because Keiko does not own the connect on that
+// path: the proxy resolves the hostname independently, so any address Keiko resolved beforehand
+// is never bound to what the proxy actually connects to. Pre-resolving here anyway would not be a
+// real guarantee: `refuseUnpinnableResearchEgress` (same gateway file) rejects exactly that
+// approach for research egress, for the identical reason — a pre-proxy lookup can see a hostile
+// name resolve publicly during the check and rebind to loopback for the proxy's own connect. For
+// consistency this port does not pretend to close that gap with a weaker check either. Unlike
+// research egress, this lane cannot simply refuse every proxied request: pinning `denyLoopback`
+// already proved that breaks every real deployment whose proxy covers the Atlassian host (see
+// connectorEgressConfig above). Closing this properly needs a policy-bearing proxy contract — the
+// operator's configured proxy attesting it enforces equivalent address-class policy — which is a
+// keiko-model-gateway-level decision affecting every gatewayFetch consumer with proxy support, not
+// something to improvise per-connector. Tracked as a follow-up under KEIKO-0316.
 function isBlockedLoopbackTarget(target: URL): boolean {
   return classifyOutboundHost(target.hostname) === "loopback";
 }

@@ -360,28 +360,41 @@ function validateSetupPlanPolicy(record: Record<string, unknown>, errors: string
 // secret travels. Those three fields were each validated in isolation, so a plan could name
 // `chatgpt-browser-login` while carrying the access-token command label and requiresSecretInput
 // true — a combination no producer emits and no operator could act on, describing a login flow that
-// does not exist. This table is the same rule the producer applies (commandLabelFor plus
-// `accessToken = method === "codex-access-token"` in keiko-server's coding-codex-subscription.ts),
-// stated once so a plan cannot disagree with its own method.
-interface CodexAuthMethodRow {
+// does not exist. This table is the ONE formula for the rule; keiko-server's
+// coding-codex-subscription.ts used to carry its own hand-written copy (a private commandLabelFor
+// plus `accessToken = method === "codex-access-token"`) that could drift from this table and make
+// the server build a plan its own validator (below) rejects. The server now calls
+// `codingWorkbenchCodexAuthMethodRowFor` instead of restating the mapping.
+export interface CodingWorkbenchCodexAuthMethodRow {
   readonly commandLabel: CodingWorkbenchCodexAuthCommandLabel;
   readonly requiresSecretInput: boolean;
   readonly credentialTransport?: CodingWorkbenchCodexCredentialTransport | undefined;
 }
 
-const CODEX_AUTH_METHOD_ROWS: Readonly<Record<CodingWorkbenchCodexAuthMethod, CodexAuthMethodRow>> =
-  Object.freeze({
-    "chatgpt-browser-login": { commandLabel: "codex-login", requiresSecretInput: false },
-    "chatgpt-device-code": {
-      commandLabel: "codex-login-device-auth",
-      requiresSecretInput: false,
-    },
-    "codex-access-token": {
-      commandLabel: "codex-login-with-access-token",
-      requiresSecretInput: true,
-      credentialTransport: "stdin",
-    },
-  });
+const CODEX_AUTH_METHOD_ROWS: Readonly<
+  Record<CodingWorkbenchCodexAuthMethod, CodingWorkbenchCodexAuthMethodRow>
+> = Object.freeze({
+  "chatgpt-browser-login": { commandLabel: "codex-login", requiresSecretInput: false },
+  "chatgpt-device-code": {
+    commandLabel: "codex-login-device-auth",
+    requiresSecretInput: false,
+  },
+  "codex-access-token": {
+    commandLabel: "codex-login-with-access-token",
+    requiresSecretInput: true,
+    credentialTransport: "stdin",
+  },
+});
+
+// The canonical producer for a Codex auth method's command label, secret-input requirement, and
+// credential transport. `validateSetupPlanMethodConsistency` below and keiko-server's
+// `setupPlanFor` (coding-codex-subscription.ts) both call this instead of each keeping their own
+// copy of the mapping, so a plan can never disagree with the one formula that builds it.
+export function codingWorkbenchCodexAuthMethodRowFor(
+  method: CodingWorkbenchCodexAuthMethod,
+): CodingWorkbenchCodexAuthMethodRow {
+  return CODEX_AUTH_METHOD_ROWS[method];
+}
 
 function validateSetupPlanMethodConsistency(
   record: Record<string, unknown>,
@@ -389,7 +402,7 @@ function validateSetupPlanMethodConsistency(
 ): void {
   const method = record.method;
   if (!isOneOf(method, CODING_WORKBENCH_CODEX_AUTH_METHODS)) return;
-  const row = CODEX_AUTH_METHOD_ROWS[method];
+  const row = codingWorkbenchCodexAuthMethodRowFor(method);
   if (record.commandLabel !== row.commandLabel) {
     errors.push("setup.commandLabel does not match setup.method");
   }

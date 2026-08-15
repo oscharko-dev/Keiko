@@ -12,6 +12,7 @@ import {
   CODING_WORKBENCH_RUNTIME_SOURCES,
   CODING_WORKBENCH_SCHEMA_VERSION,
   CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
+  codingWorkbenchCodexAuthMethodRowFor,
   decideCodingWorkbenchActionForMode,
   isCodingWorkbenchEvidenceSafeText,
   permissionKindForSupervisedCodingAction,
@@ -479,6 +480,42 @@ describe("coding workbench Codex subscription profile", () => {
         commandLabel: "codex-login-device-auth",
       }).ok,
     ).toBe(false);
+  });
+
+  // codingWorkbenchCodexAuthMethodRowFor is the ONE formula for this mapping: keiko-server's
+  // coding-codex-subscription.ts calls it directly instead of keeping its own copy (which had
+  // drifted-formula risk — a private commandLabelFor plus a separate accessToken boolean, either
+  // of which could disagree with this table and build a plan validateCodingWorkbenchCodexAuthSetupPlan
+  // then rejects). Pinned here so the exported function itself — not just the validator that
+  // happens to call it — is under direct test.
+  it("derives the canonical command label, secret requirement, and transport for every method", () => {
+    expect(codingWorkbenchCodexAuthMethodRowFor("chatgpt-browser-login")).toEqual({
+      commandLabel: "codex-login",
+      requiresSecretInput: false,
+    });
+    expect(codingWorkbenchCodexAuthMethodRowFor("chatgpt-device-code")).toEqual({
+      commandLabel: "codex-login-device-auth",
+      requiresSecretInput: false,
+    });
+    expect(codingWorkbenchCodexAuthMethodRowFor("codex-access-token")).toEqual({
+      commandLabel: "codex-login-with-access-token",
+      requiresSecretInput: true,
+      credentialTransport: "stdin",
+    });
+    for (const method of CODING_WORKBENCH_CODEX_AUTH_METHODS) {
+      const row = codingWorkbenchCodexAuthMethodRowFor(method);
+      // codexSetupPlan()'s base carries codex-access-token's credentialTransport ("stdin");
+      // set it explicitly from `row` (including back to undefined for the other methods) rather
+      // than leaving it stale under the spread, matching the "accepts the consistent plan for
+      // every auth method" pattern above.
+      const plan = {
+        ...codexSetupPlan(),
+        method,
+        ...row,
+        credentialTransport: row.credentialTransport,
+      };
+      expect(validateCodingWorkbenchCodexAuthSetupPlan(plan).ok).toBe(true);
+    }
   });
 
   it("keeps Codex subscription authority bounded by the same envelope policy", () => {

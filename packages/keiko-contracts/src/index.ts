@@ -1365,6 +1365,7 @@ export {
 export type {
   CodingWorkbenchCodexAuthCommandLabel,
   CodingWorkbenchCodexAuthMethod,
+  CodingWorkbenchCodexAuthMethodRow,
   CodingWorkbenchCodexAuthSetupPlan,
   CodingWorkbenchCodexAuthSetupRequest,
   CodingWorkbenchCodexAuthStateRoot,
@@ -1385,6 +1386,7 @@ export {
   CODING_WORKBENCH_CODEX_AUTH_STATUSES,
   CODING_WORKBENCH_CODEX_CREDENTIAL_STORES,
   CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES,
+  codingWorkbenchCodexAuthMethodRowFor,
   selectCodingWorkbenchRuntimeProfile,
   validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexAuthSetupRequest,

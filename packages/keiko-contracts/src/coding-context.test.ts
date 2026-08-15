@@ -86,6 +86,20 @@ describe("coding-context purpose + tiering", () => {
     expect(tierForCodingContextSource("memory")).toBe("retained-memory");
     expect(tierForCodingContextSource("quality-intelligence")).toBe("derived-evidence");
   });
+
+  // ADR-0152 D6: every existing coding enum literal and wire projection must stay byte-identical.
+  // RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND (the neutral, new-purpose-facing table in
+  // retrieval-context.ts) classifies connected-context as "external-connected" for governance
+  // auditability — correct for new retrieval purposes (e.g. chat-grounding), but
+  // CODING_CONTEXT_SOURCE_TIER_BY_KIND must NOT alias that value: this exact tier crosses the
+  // existing coding wire in RetrievalContextCitation.sourceTier (serialized by
+  // toCodingContextWirePack for every existing coding purpose) and is persisted verbatim by
+  // codingContextEvidence.ts, both still under schemaVersion "1". Promoting connected-context's
+  // CODING tier is D6's own "separate schema decision," not something a shared-table edit may do
+  // silently.
+  it("keeps connected-context's CODING tier byte-identical to the existing wire (ADR-0152 D6)", () => {
+    expect(tierForCodingContextSource("connected-context")).toBe("first-party-workspace");
+  });
 });
 
 describe("coding-context budgets (per-keystroke exclusion)", () => {

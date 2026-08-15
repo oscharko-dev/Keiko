@@ -98,6 +98,29 @@ describe("embedding profile compatibility", () => {
     );
   });
 
+  // embeddingProfileKey joins components with "|" without framing each one, so a provider-
+  // supplied field containing a literal "|" shifts the join's own field boundary: modelRevision
+  // "r|fam" + modelFamily "x" and modelRevision "r" + modelFamily "fam|x" both produce the
+  // substring "r|fam|x" once joined, even though they are two DIFFERENT, INCOMPATIBLE profiles.
+  it("distinguishes profiles whose fields collide across the '|' join boundary", () => {
+    const revisionCarriesPipe = embeddingProfileFromModelIdentity(
+      { ...HARDENED_IDENTITY, modelRevision: "r|fam" },
+      { modelFamily: "x" },
+    );
+    const familyCarriesPipe = embeddingProfileFromModelIdentity(
+      { ...HARDENED_IDENTITY, modelRevision: "r" },
+      { modelFamily: "fam|x" },
+    );
+
+    expect(revisionCarriesPipe.modelRevision).toBe("r|fam");
+    expect(revisionCarriesPipe.modelFamily).toBe("x");
+    expect(familyCarriesPipe.modelRevision).toBe("r");
+    expect(familyCarriesPipe.modelFamily).toBe("fam|x");
+    expect(embeddingProfileKey(revisionCarriesPipe)).not.toBe(
+      embeddingProfileKey(familyCarriesPipe),
+    );
+  });
+
   it("treats identical hardened profiles as same and query-embedding eligible", () => {
     const profile = hardenedProfile();
     const decision = compareEmbeddingProfiles(profile, { ...profile });
