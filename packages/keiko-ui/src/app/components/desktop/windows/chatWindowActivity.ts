@@ -24,7 +24,12 @@ interface ChatWindowRuntimeState {
   registration: symbol;
   registered: boolean;
   reserved: boolean;
-  readonly pendingSelectionHandoffs: string[];
+  readonly pendingSelectionHandoffs: PendingSelectionHandoff[];
+}
+
+interface PendingSelectionHandoff {
+  readonly id: string;
+  readonly onUnavailable?: (() => void) | undefined;
 }
 
 export type ChatWindowGroundingActivity =
@@ -166,7 +171,9 @@ export function registerChatWindowRuntime(
     if (state.registration !== registration) return;
     state.registered = false;
     queueMicrotask((): void => {
-      if (state.registration === registration && !state.registered) runtimes.delete(windowId);
+      if (state.registration !== registration || state.registered) return;
+      runtimes.delete(windowId);
+      reroutePendingSelectionHandoffs(state);
     });
   };
 }
@@ -185,30 +192,45 @@ function dispatchPendingSelectionHandoff(state: ChatWindowRuntimeState): void {
   if (!state.registered || state.reserved || state.runtime.acceptingSelectionHandoff === false) {
     return;
   }
-  const selectionHandoffId = state.pendingSelectionHandoffs.shift();
-  if (selectionHandoffId === undefined) return;
+  const pending = state.pendingSelectionHandoffs.shift();
+  if (pending === undefined) return;
   state.reserved = true;
-  state.runtime.acceptSelectionHandoff(selectionHandoffId);
+  state.runtime.acceptSelectionHandoff(pending.id);
 }
 
 function orderedRuntimeIds(preferredWindowIds: readonly string[]): string[] {
-  const ordered = preferredWindowIds.filter((windowId) => runtimes.has(windowId));
+  const available = (windowId: string): boolean => runtimes.get(windowId)?.registered === true;
+  const ordered = preferredWindowIds.filter(available);
   const preferred = new Set(ordered);
   for (const windowId of runtimes.keys()) {
-    if (!preferred.has(windowId)) ordered.push(windowId);
+    if (available(windowId) && !preferred.has(windowId)) ordered.push(windowId);
   }
   return ordered;
+}
+
+function reroutePendingSelectionHandoffs(state: ChatWindowRuntimeState): void {
+  const pending = state.pendingSelectionHandoffs.splice(0);
+  for (const handoff of pending) {
+    const routed = routeSelectionHandoffToOpenChat(
+      state.runtime.projectPath,
+      handoff.id,
+      [],
+      handoff.onUnavailable,
+    );
+    if (routed === null) handoff.onUnavailable?.();
+  }
 }
 
 export function routeSelectionHandoffToOpenChat(
   projectPath: string,
   selectionHandoffId: string,
   preferredWindowIds: readonly string[] = [],
+  onUnavailable?: (() => void) | undefined,
 ): string | null {
   for (const windowId of orderedRuntimeIds(preferredWindowIds)) {
     const state = runtimes.get(windowId);
     if (state?.runtime.projectPath !== projectPath) continue;
-    state.pendingSelectionHandoffs.push(selectionHandoffId);
+    state.pendingSelectionHandoffs.push({ id: selectionHandoffId, onUnavailable });
     dispatchPendingSelectionHandoff(state);
     return windowId;
   }

@@ -154,4 +154,28 @@ describe("workspace server-sync failure surfacing", () => {
     expect(warnSpy).toHaveBeenCalledWith("[keiko] workspace connection unbind callback failed");
     expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("customer-specific"));
   });
+
+  it("reports corrupt local persistence without exposing its stored value", () => {
+    setWebdriver(true);
+    window.localStorage.setItem(WS_LS, "customer-private-invalid-json");
+
+    render(<Harness />);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "workspace-state: local persistence parse failed (keiko.workspace.v4)",
+    );
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("customer-private"));
+  });
+
+  it("reports a non-array local persistence shape without exposing its stored value", () => {
+    setWebdriver(true);
+    window.localStorage.setItem(WS_LS, '{"customer-private":"invalid-shape"}');
+
+    render(<Harness />);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "workspace-state: local persistence shape invalid (keiko.workspace.v4)",
+    );
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("customer-private"));
+  });
 });

@@ -72,6 +72,20 @@ describe("prepareNewWindowCfg", (): void => {
     ).toMatchObject({ projectPath: "/explicit" });
   });
 
+  it("normalizes configured and selected project scopes before storing them", (): void => {
+    expect(
+      prepareNewWindowCfg(
+        "chat",
+        { title: "Explicit", projectPath: "  /explicit  " },
+        "request-explicit",
+        "/selected",
+      ),
+    ).toMatchObject({ projectPath: "/explicit" });
+    expect(
+      prepareNewWindowCfg("chat", { title: "Selected" }, "request-selected", "  /selected  "),
+    ).toMatchObject({ projectPath: "/selected" });
+  });
+
   it("replaces an empty project scope with the project selected by the initiating shell", (): void => {
     expect(
       prepareNewWindowCfg(
@@ -84,9 +98,12 @@ describe("prepareNewWindowCfg", (): void => {
   });
 
   it("removes an empty project scope when no selected project is available", (): void => {
-    expect(
-      prepareNewWindowCfg("chat", { title: "Unscoped", projectPath: "" }, "request-unscoped"),
-    ).toMatchObject({ projectPath: undefined });
+    const cfg = prepareNewWindowCfg(
+      "chat",
+      { title: "Unscoped", projectPath: "" },
+      "request-unscoped",
+    );
+    expect(cfg).not.toHaveProperty("projectPath");
   });
 
   it("rejects whitespace-only configured and selected project scopes", (): void => {
@@ -98,25 +115,23 @@ describe("prepareNewWindowCfg", (): void => {
         "/repo-b",
       ),
     ).toMatchObject({ projectPath: "/repo-b" });
-    expect(
-      prepareNewWindowCfg(
-        "chat",
-        { title: "Unscoped", projectPath: " \t" },
-        "request-unscoped",
-        " \n",
-      ),
-    ).toMatchObject({ projectPath: undefined });
+    const unscoped = prepareNewWindowCfg(
+      "chat",
+      { title: "Unscoped", projectPath: " \t" },
+      "request-unscoped",
+      " \n",
+    );
+    expect(unscoped).not.toHaveProperty("projectPath");
   });
 
   it("removes a malformed project scope when no valid selected project is available", (): void => {
-    expect(
-      prepareNewWindowCfg(
-        "chat",
-        { title: "Malformed", projectPath: ["hostile"] },
-        "request-malformed",
-        "",
-      ),
-    ).toMatchObject({ projectPath: undefined });
+    const cfg = prepareNewWindowCfg(
+      "chat",
+      { title: "Malformed", projectPath: ["hostile"] },
+      "request-malformed",
+      "",
+    );
+    expect(cfg).not.toHaveProperty("projectPath");
   });
 
   it("replaces a malformed project scope with the valid selected project", (): void => {

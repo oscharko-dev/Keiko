@@ -52,6 +52,7 @@ const MAX_EDITOR_LAYOUT_SPLIT_DEPTH = 32;
 // localStorage route otherwise accepts unbounded arrays the server would reject,
 // leaving local state permanently divergent from the server snapshot.
 export const MAX_WORKSPACE_WINDOWS = 128;
+const MAX_PERSISTED_WINDOW_SCAN = MAX_WORKSPACE_WINDOWS * 16;
 const MAX_PERSISTED_CONNECTIONS = 512;
 
 const CREDENTIAL_KEY_MARKERS = [
@@ -816,7 +817,10 @@ function recordWindowAlias(aliases: Map<string, string>, removedId: string, kept
 function collectPersistedWindows(wins: readonly AppWindow[]): SanitizedWorkspaceWindows {
   let retained: AppWindow[] = [];
   const aliases = new Map<string, string>();
+  let scanned = 0;
   for (const win of wins) {
+    if (scanned >= MAX_PERSISTED_WINDOW_SCAN) break;
+    scanned += 1;
     const next = sanitizeWindow(win);
     if (next === null) continue;
     const candidates = [...retained, migrateLegacyFigmaWindow(next)];
@@ -851,13 +855,7 @@ export function parsePersistedWindows(raw: string | null): AppWindow[] | null {
 }
 
 function remapWindowId(windowId: string, aliases: ReadonlyMap<string, string>): string {
-  let current = windowId;
-  for (let hop = 0; hop < MAX_WORKSPACE_WINDOWS; hop += 1) {
-    const next = aliases.get(current);
-    if (next === undefined || next === current) return current;
-    current = next;
-  }
-  return current;
+  return aliases.get(windowId) ?? windowId;
 }
 
 function connectionEndpointKey(a: string, b: string): string {
@@ -876,41 +874,70 @@ function remappedBoundChatWindowId(
   return windowIds.has(remapped) ? remapped : undefined;
 }
 
+interface SanitizedConnection {
+  readonly connection: Connection;
+  readonly endpointRemapped: boolean;
+}
+
+interface SanitizedConnectionEndpoints {
+  readonly a: string;
+  readonly b: string;
+  readonly remapped: boolean;
+}
+
+function sanitizedConnectionEndpoints(
+  conn: Connection,
+  aliases: ReadonlyMap<string, string>,
+  windowIds: ReadonlySet<string>,
+): SanitizedConnectionEndpoints | null {
+  if (typeof conn.a !== "string" || typeof conn.b !== "string") return null;
+  const a = remapWindowId(conn.a, aliases);
+  const b = remapWindowId(conn.b, aliases);
+  return windowIds.has(a) && windowIds.has(b)
+    ? { a, b, remapped: a !== conn.a || b !== conn.b }
+    : null;
+}
+
+function hasElidedScopeSnapshot(conn: Connection): boolean {
+  return (
+    conn.boundScopeElided === true ||
+    typeof conn.boundRoot === "string" ||
+    typeof conn.boundScopeKind === "string" ||
+    typeof conn.boundRelativePath === "string"
+  );
+}
+
+function sanitizedBoundConnector(
+  conn: Connection,
+): Pick<Connection, "boundConnectorKind" | "boundConnectorId"> | undefined {
+  const kind = conn.boundConnectorKind;
+  if (kind !== "capsule" && kind !== "capsule-set") return undefined;
+  if (typeof conn.boundConnectorId !== "string" || conn.boundConnectorId.length === 0) {
+    return undefined;
+  }
+  return { boundConnectorKind: kind, boundConnectorId: conn.boundConnectorId };
+}
+
 function sanitizeConnection(
   conn: Connection,
   aliases: ReadonlyMap<string, string>,
   windowIds: ReadonlySet<string>,
-): Connection | null {
-  const a = typeof conn.a === "string" ? remapWindowId(conn.a, aliases) : undefined;
-  const b = typeof conn.b === "string" ? remapWindowId(conn.b, aliases) : undefined;
-  if (
-    typeof conn.id !== "string" ||
-    a === undefined ||
-    b === undefined ||
-    !windowIds.has(a) ||
-    !windowIds.has(b)
-  ) {
-    return null;
-  }
-  const scopeSnapshotElided =
-    conn.boundScopeElided === true ||
-    typeof conn.boundRoot === "string" ||
-    typeof conn.boundScopeKind === "string" ||
-    typeof conn.boundRelativePath === "string";
+): SanitizedConnection | null {
+  if (typeof conn.id !== "string") return null;
+  const endpoints = sanitizedConnectionEndpoints(conn, aliases, windowIds);
+  if (endpoints === null) return null;
   const boundChatWindowId = remappedBoundChatWindowId(conn, aliases, windowIds);
-  const boundConnector =
-    (conn.boundConnectorKind === "capsule" || conn.boundConnectorKind === "capsule-set") &&
-    typeof conn.boundConnectorId === "string" &&
-    conn.boundConnectorId.length > 0;
+  const boundConnector = sanitizedBoundConnector(conn);
   return {
-    id: conn.id,
-    a,
-    b,
-    ...(boundChatWindowId === undefined ? {} : { boundChatWindowId }),
-    ...(scopeSnapshotElided ? { boundScopeElided: true } : {}),
-    ...(boundConnector
-      ? { boundConnectorKind: conn.boundConnectorKind, boundConnectorId: conn.boundConnectorId }
-      : {}),
+    endpointRemapped: endpoints.remapped,
+    connection: {
+      id: conn.id,
+      a: endpoints.a,
+      b: endpoints.b,
+      ...(boundChatWindowId === undefined ? {} : { boundChatWindowId }),
+      ...(hasElidedScopeSnapshot(conn) ? { boundScopeElided: true } : {}),
+      ...boundConnector,
+    },
   };
 }
 
@@ -918,24 +945,26 @@ function sanitizeConnections(
   conns: readonly Connection[],
   wins: readonly AppWindow[],
   aliases: ReadonlyMap<string, string>,
-  deduplicateEndpoints: boolean,
 ): Connection[] {
   const windowIds = new Set(wins.map((win) => win.id));
   const connectionIds = new Set<string>();
   const endpointKeys = new Set<string>();
+  const collapsedEndpointKeys = new Set<string>();
   const out: Connection[] = [];
   for (const conn of conns) {
     const sanitized = sanitizeConnection(conn, aliases, windowIds);
     if (sanitized === null) continue;
-    const endpointKey = connectionEndpointKey(sanitized.a, sanitized.b);
+    const connection = sanitized.connection;
+    const endpointKey = connectionEndpointKey(connection.a, connection.b);
+    if (sanitized.endpointRemapped) collapsedEndpointKeys.add(endpointKey);
     if (
-      connectionIds.has(sanitized.id) ||
-      (deduplicateEndpoints && endpointKeys.has(endpointKey))
+      connectionIds.has(connection.id) ||
+      (endpointKeys.has(endpointKey) && collapsedEndpointKeys.has(endpointKey))
     ) {
       continue;
     }
-    out.push(sanitized);
-    connectionIds.add(sanitized.id);
+    out.push(connection);
+    connectionIds.add(connection.id);
     endpointKeys.add(endpointKey);
     // Mirror the server's MAX_WORKSPACE_CONNECTIONS bound (see sanitizePersistedWindows).
     if (out.length >= MAX_PERSISTED_CONNECTIONS) break;
@@ -947,7 +976,7 @@ export function sanitizePersistedConnections(
   conns: readonly Connection[],
   wins: readonly AppWindow[],
 ): Connection[] {
-  return sanitizeConnections(conns, wins, new Map(), false);
+  return sanitizeConnections(conns, wins, new Map());
 }
 
 export function sanitizePersistedWorkspace(
@@ -957,7 +986,7 @@ export function sanitizePersistedWorkspace(
   const sanitized = collectPersistedWindows(wins);
   return {
     wins: sanitized.wins,
-    conns: sanitizeConnections(conns, sanitized.wins, sanitized.aliases, true),
+    conns: sanitizeConnections(conns, sanitized.wins, sanitized.aliases),
   };
 }
 

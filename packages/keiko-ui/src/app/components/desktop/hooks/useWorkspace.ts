@@ -724,10 +724,12 @@ function readPersistedArray(key: string): readonly unknown[] {
     const raw = window.localStorage.getItem(key);
     if (raw === null) return [];
     const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (Array.isArray(parsed)) return parsed;
+    reportClientDiagnostic(`workspace-state: local persistence shape invalid (${key})`);
   } catch {
-    return [];
+    reportClientDiagnostic(`workspace-state: local persistence parse failed (${key})`);
   }
+  return [];
 }
 
 function readPersistedWorkspaceSnapshot(): {
