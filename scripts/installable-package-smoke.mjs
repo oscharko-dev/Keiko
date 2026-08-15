@@ -164,6 +164,8 @@ function childOutputByteSummary(result) {
   return `stdoutBytes=${String(stdoutBytes)}, stderrBytes=${String(stderrBytes)}`;
 }
 
+const DEFAULT_ASYNC_OUTPUT_LIMIT_BYTES = 10 * 1024 * 1024;
+
 export function terminateProcessTree(child) {
   if (child.pid === undefined) return;
   if (process.platform === "win32") {
@@ -181,7 +183,7 @@ export function terminateProcessTree(child) {
   }
 }
 
-function settleTimedOutProcess(child, stdout, stderr, settle) {
+function settleTerminatedProcess(child, stdout, stderr, settle, details) {
   let terminationError;
   try {
     terminateProcessTree(child);
@@ -192,7 +194,7 @@ function settleTimedOutProcess(child, stdout, stderr, settle) {
   child.stderr?.destroy();
   child.unref();
   settle({
-    timedOut: true,
+    ...details,
     status: null,
     signal: process.platform === "win32" ? "TASKKILL" : "SIGKILL",
     stdout: stdout.join(""),
@@ -203,11 +205,39 @@ function settleTimedOutProcess(child, stdout, stderr, settle) {
   });
 }
 
+function settleTimedOutProcess(child, stdout, stderr, settle) {
+  settleTerminatedProcess(child, stdout, stderr, settle, { timedOut: true });
+}
+
+function settleOutputLimitedProcess(child, stdout, stderr, settle) {
+  settleTerminatedProcess(child, stdout, stderr, settle, { outputLimitExceeded: true });
+}
+
+function asyncOutputLimitBytes(outputLimitBytes) {
+  const limit = outputLimitBytes ?? DEFAULT_ASYNC_OUTPUT_LIMIT_BYTES;
+  if (typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0) {
+    throw new TypeError("runAsync requires a positive finite outputLimitBytes");
+  }
+  return Math.floor(limit);
+}
+
+function appendBoundedOutput(chunks, chunk, state) {
+  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+  const remaining = state.limitBytes - state.capturedBytes;
+  if (remaining > 0) {
+    const accepted = buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer;
+    chunks.push(accepted.toString("utf8"));
+    state.capturedBytes += accepted.byteLength;
+  }
+  return buffer.byteLength > remaining;
+}
+
 export function runAsync(cmd, args, options = {}) {
-  const { timeout, ...spawnOptions } = options;
+  const { timeout, outputLimitBytes, ...spawnOptions } = options;
   if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) {
     throw new TypeError("runAsync requires a positive finite timeout in milliseconds");
   }
+  const outputState = { capturedBytes: 0, limitBytes: asyncOutputLimitBytes(outputLimitBytes) };
   const { command, shell } = commandForPlatform(cmd, args, spawnOptions);
   return new Promise((resolvePromise) => {
     let settled = false;
@@ -220,17 +250,23 @@ export function runAsync(cmd, args, options = {}) {
       shell,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    child.stdout?.on("data", (chunk) => stdout.push(String(chunk)));
-    child.stderr?.on("data", (chunk) => stderr.push(String(chunk)));
     const settle = (result) => {
       if (settled) return;
       settled = true;
       globalThis.clearTimeout(timer);
       resolvePromise(result);
     };
+    const capture = (chunks) => (chunk) => {
+      if (settled) return;
+      if (appendBoundedOutput(chunks, chunk, outputState)) {
+        settleOutputLimitedProcess(child, stdout, stderr, settle);
+      }
+    };
     const timer = globalThis.setTimeout(() => {
       settleTimedOutProcess(child, stdout, stderr, settle);
     }, timeout);
+    child.stdout?.on("data", capture(stdout));
+    child.stderr?.on("data", capture(stderr));
     child.once("error", (error) => {
       settle({ error, status: null, signal: null, stdout: "", stderr: "" });
     });
@@ -403,6 +439,10 @@ function restoreLiveStaleClaim(claimPath, tombstonePath) {
 
 function removeExpiredStaleClaim(lockDir) {
   const claimPath = staleClaimPath(lockDir);
+  const claimStats = statCorepackCacheLock(claimPath);
+  if (claimStats === undefined) return true;
+  const claim = readCorepackCacheStaleClaim(claimPath);
+  if (!staleClaimIsExpired(claim, claimStats)) return false;
   const tombstonePath = staleClaimTombstonePath(lockDir);
   try {
     renameSync(claimPath, tombstonePath);
@@ -410,8 +450,12 @@ function removeExpiredStaleClaim(lockDir) {
     if (COREPACK_CACHE_LOCK_MISSING_CODES.has(error?.code)) return true;
     throw error;
   }
-  const claim = readCorepackCacheStaleClaim(tombstonePath);
-  if (!staleClaimIsExpired(claim, statSync(tombstonePath))) {
+  const tombstoneStats = statSync(tombstonePath);
+  const tombstoneClaim = readCorepackCacheStaleClaim(tombstonePath);
+  if (
+    !sameDirectoryIdentity(claimStats, tombstoneStats) ||
+    !staleClaimIsExpired(tombstoneClaim, tombstoneStats)
+  ) {
     return restoreLiveStaleClaim(claimPath, tombstonePath);
   }
   rmSync(tombstonePath, { force: true });
@@ -1753,6 +1797,18 @@ export function privateYarnHome() {
  */
 export const YARN_RC_FILENAME = `.yarnrc-keiko-${randomBytes(9).toString("hex")}.yml`;
 
+function yarnUnsafeHttpWhitelist(registryUrl) {
+  try {
+    const url = new URL(registryUrl);
+    if (url.protocol !== "http:") return "127.0.0.1";
+    if (url.hostname === "[::1]") return "::1";
+    if (url.hostname === "localhost" || url.hostname === "127.0.0.1") return url.hostname;
+  } catch {
+    return "127.0.0.1";
+  }
+  return "127.0.0.1";
+}
+
 export function yarnChildEnv(
   registryUrl,
   baseEnv = process.env,
@@ -1782,7 +1838,7 @@ export function yarnChildEnv(
     YARN_NPM_REGISTRY_SERVER: registryUrl,
     // Points Yarn at the private rc name above, so the ancestor walk finds only our own file.
     YARN_RC_FILENAME,
-    YARN_UNSAFE_HTTP_WHITELIST: "127.0.0.1",
+    YARN_UNSAFE_HTTP_WHITELIST: yarnUnsafeHttpWhitelist(registryUrl),
     // Corepack must not reach repo.yarnpkg.com during the install: the pinned tool is provisioned
     // beforehand, so an outage there cannot fail a gate that claims to resolve offline (#3130).
     COREPACK_ENABLE_NETWORK: "0",
@@ -1996,7 +2052,7 @@ function writeYarnConfiguration(tmp, registryUrl) {
     "supportedArchitectures:",
     ...architectureLines,
     "unsafeHttpWhitelist:",
-    "  - 127.0.0.1",
+    `  - ${JSON.stringify(yarnUnsafeHttpWhitelist(registryUrl))}`,
   ];
   writeFileSync(join(tmp, YARN_RC_FILENAME), `${lines.join("\n")}\n`);
 }
@@ -2037,9 +2093,15 @@ async function runLockedYarnInstall(tmp, registryUrl, yarnHome, locator) {
   );
 }
 
+function yarnInstallOutcome(result) {
+  if (result.outputLimitExceeded === true) return "exceeded output limit";
+  if (result.timedOut === true) return "timed out";
+  return `exited ${String(result.status)}`;
+}
+
 function assertYarnInstallResult(result, registry) {
   if (result.timedOut !== true && result.error === undefined && result.status === 0) return;
-  const outcome = result.timedOut === true ? "timed out" : `exited ${String(result.status)}`;
+  const outcome = yarnInstallOutcome(result);
   const detail =
     result.error === undefined
       ? childOutputByteSummary(result)

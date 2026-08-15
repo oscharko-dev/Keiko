@@ -630,6 +630,17 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(env.COREPACK_ENABLE_NETWORK).toBe("0");
   });
 
+  it.each([
+    ["http://127.0.0.1:12345", "127.0.0.1"],
+    ["http://localhost:12345", "localhost"],
+    ["http://[::1]:12345", "::1"],
+    ["https://registry.npmjs.org/", "127.0.0.1"],
+  ])("whitelists the validated loopback hostname for Yarn: %s", (registryUrl, expected) => {
+    const env = yarnChildEnv(registryUrl, { PATH: "/usr/bin" });
+
+    expect(env.YARN_UNSAFE_HTTP_WHITELIST).toBe(expected);
+  });
+
   // A stub's platform guards must reach the PACKUMENT, not just the tarball: Yarn decides
   // compatibility from packument metadata, so without them it would link the empty stub and a
   // missing native binding could pass unnoticed.
@@ -1586,11 +1597,15 @@ describe("installable package smoke optional-dependency coverage", () => {
         }),
         "utf8",
       );
+      const claimStats = statSync(claimPath);
 
       await expect(withCorepackYarnCacheLock(locator, () => "blocked", 25)).rejects.toThrow(
         /timed out waiting for Corepack cache lock/u,
       );
 
+      const preservedStats = statSync(claimPath);
+      expect(preservedStats.dev).toBe(claimStats.dev);
+      expect(preservedStats.ino).toBe(claimStats.ino);
       expect(JSON.parse(readFileSync(claimPath, "utf8")).token).toBe("other-worker");
     } finally {
       rmSync(lockDir, { recursive: true, force: true });
@@ -1610,11 +1625,15 @@ describe("installable package smoke optional-dependency coverage", () => {
         "utf8",
       );
       writeFileSync(claimPath, "{}\n", "utf8");
+      const claimStats = statSync(claimPath);
 
       await expect(withCorepackYarnCacheLock(locator, () => "blocked", 25)).rejects.toThrow(
         /timed out waiting for Corepack cache lock/u,
       );
 
+      const preservedStats = statSync(claimPath);
+      expect(preservedStats.dev).toBe(claimStats.dev);
+      expect(preservedStats.ino).toBe(claimStats.ino);
       expect(readFileSync(claimPath, "utf8")).toBe("{}\n");
     } finally {
       rmSync(lockDir, { recursive: true, force: true });
@@ -2506,6 +2525,46 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
+  it("accepts explicit insecure IPv6 loopback registry overrides before smoke work", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-registry-smoke-ipv6-test-"));
+    try {
+      const binDir = join(root, "bin");
+      mkdirSync(binDir, { recursive: true });
+      writeExecutable(
+        join(binDir, "npm"),
+        "process.stderr.write('install failed\\n'); process.exit(7);",
+      );
+
+      const result = runIsolatedSmokeModule(
+        root,
+        [
+          'import { isSmokeGateFailure } from "./scripts/installable-package-smoke.mjs";',
+          'import { PINNED_YARN } from "./scripts/lib/pinned-yarn.mjs";',
+          'import { runRegistryInstallSmokeForTest } from "./scripts/registry-install-smoke.mjs";',
+          "try {",
+          "  await runRegistryInstallSmokeForTest(PINNED_YARN);",
+          "  process.exit(64);",
+          "} catch (error) {",
+          "  if (!isSmokeGateFailure(error)) throw error;",
+          "  process.stdout.write(error.message);",
+          "}",
+        ].join("\n"),
+        {
+          KEIKO_REGISTRY_INSTALL_ALLOW_INSECURE_LOOPBACK: "1",
+          KEIKO_REGISTRY_URL: "http://[::1]:9",
+          NODE_ENV: "test",
+          VITEST_WORKER_ID: process.env.VITEST_WORKER_ID ?? "1",
+        },
+      );
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("npm (6 args) exited 7");
+      expect(result.stdout).not.toContain("requires an HTTPS registry URL");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects test-only Yarn locators outside Vitest as a smoke gate failure", () => {
     const env = { ...process.env, NODE_ENV: "production" };
     delete env.VITEST_WORKER_ID;
@@ -2576,6 +2635,29 @@ describe("installable package smoke optional-dependency coverage", () => {
       );
     },
   );
+
+  it.each([0, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects an invalid asynchronous command output limit: %s",
+    (outputLimitBytes) => {
+      expect(() =>
+        runAsync(process.execPath, ["--version"], { outputLimitBytes, timeout: 1_000 }),
+      ).toThrow(/requires a positive finite outputLimitBytes/u);
+    },
+  );
+
+  it("terminates asynchronous commands that exceed the captured-output limit", async () => {
+    const result = await runAsync(
+      process.execPath,
+      ["-e", "process.stdout.write('x'.repeat(2048)); setInterval(() => {}, 60_000);"],
+      { outputLimitBytes: 128, timeout: 5_000 },
+    );
+
+    expect(result.outputLimitExceeded).toBe(true);
+    expect(result.timedOut).toBeUndefined();
+    expect(result.status).toBeNull();
+    expect(result.signal).toBe(process.platform === "win32" ? "TASKKILL" : "SIGKILL");
+    expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(128);
+  });
 
   it("settles a timed-out process-tree run and terminates its ready descendant", async () => {
     const fixtureRoot = mkdtempSync(join(tmpdir(), "keiko-install-timeout-"));

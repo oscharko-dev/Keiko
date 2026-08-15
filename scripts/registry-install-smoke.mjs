@@ -84,6 +84,15 @@ function registryInstallTimeoutMs() {
   return parsed;
 }
 
+function registryHostnameIsLoopback(hostname) {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname === "[::1]"
+  );
+}
+
 function assertTlsVerificationEnabled() {
   if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
     throw new SmokeGateFailure(
@@ -92,9 +101,10 @@ function assertTlsVerificationEnabled() {
   }
   const url = new URL(registry);
   if (url.protocol === "https:") return;
-  const loopback =
-    url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
-  if (loopback && process.env.KEIKO_REGISTRY_INSTALL_ALLOW_INSECURE_LOOPBACK === "1") {
+  if (
+    registryHostnameIsLoopback(url.hostname) &&
+    process.env.KEIKO_REGISTRY_INSTALL_ALLOW_INSECURE_LOOPBACK === "1"
+  ) {
     console.log(
       "registry-install-smoke: using explicit insecure loopback registry override for local test.",
     );
@@ -130,6 +140,11 @@ function assertRunSucceeded(cmd, args, result) {
   if (result.error !== undefined) {
     throw new SmokeGateFailure(
       `${commandSummary(cmd, args)} could not spawn: ${result.error.message}`,
+    );
+  }
+  if (result.outputLimitExceeded === true) {
+    throw new SmokeGateFailure(
+      `${commandSummary(cmd, args)} exceeded output limit (${outputByteSummary(result)})`,
     );
   }
   if (result.status !== 0) {
