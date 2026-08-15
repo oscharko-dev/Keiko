@@ -72,6 +72,60 @@ describe("git repository agent operation contract", () => {
     }
   });
 
+  // KEIKO-0449: the screen looked keys up in a case-SENSITIVE Set, so `{Shell:"rm -rf /"}` and
+  // `{GHENDPOINT:…}` walked straight past a control whose whole job is to reject command-shaped
+  // payloads. Both the camelCase entries in the table (ghEndpoint, gitSubcommand) and the plain
+  // lowercase ones must deny every case variant, or normalising only one side re-opens the other.
+  it("rejects direct-shell keys regardless of the case they are written in", () => {
+    const variants = [
+      "Shell",
+      "SHELL",
+      "Command",
+      "ARGV",
+      "Token",
+      "Url",
+      "Env",
+      "GhEndpoint",
+      "ghendpoint",
+      "GITSUBCOMMAND",
+      "gitsubcommand",
+      "GitSubcommand",
+      "Credential",
+      "ProviderPayload",
+      "RepositoryRoot",
+    ];
+    for (const key of variants) {
+      expect(
+        parseGitRepositoryAgentOperationRequest({
+          schemaVersion: "1",
+          operation: "status",
+          mode: "read",
+          projectId: "/repos/alpha",
+          payload: { [key]: "rm -rf /" },
+        }),
+      ).toMatchObject({ ok: false, denialReason: "unsupported-direct-shell" });
+    }
+  });
+
+  // The screen recursed into every record and array element with no depth budget, so a deeply
+  // nested body got an uncapped walk and could surface a RangeError as an untyped 500 instead of a
+  // typed denial. Exceeding the budget must deny (fail closed), never accept.
+  it("denies a pathologically nested payload instead of throwing", () => {
+    let payload: Record<string, unknown> = { leaf: "value" };
+    for (let depth = 0; depth < 5_000; depth += 1) {
+      payload = { nested: payload };
+    }
+    expect(
+      parseGitRepositoryAgentOperationRequest({
+        schemaVersion: "1",
+        operation: "status",
+        mode: "read",
+        projectId: "/repos/alpha",
+        payload,
+      }),
+    ).toMatchObject({ ok: false, denialReason: "unsupported-direct-shell" });
+  });
+
   it("rejects invalid operation/mode pairings", () => {
     expect(
       parseGitRepositoryAgentOperationRequest({

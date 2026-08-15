@@ -9,6 +9,7 @@ import type {
   UpdateStateStore,
 } from "./update-local-state.js";
 import { UPDATE_STATE_STORES } from "./update-local-state.js";
+import { validTargetVersion } from "./update-session.js";
 
 export const UPDATE_REMEDIATION_SCHEMA_VERSION = 1 as const;
 
@@ -145,8 +146,6 @@ export interface UpdateRemediationActionRequestParseFail {
 export type UpdateRemediationActionRequestParse =
   UpdateRemediationActionRequestParseOk | UpdateRemediationActionRequestParseFail;
 
-const TARGET_VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
-const MAX_TARGET_VERSION_LENGTH = 64;
 const MAX_ACTION_ID_LENGTH = 160;
 const ACTION_ID_PATTERN = /^[A-Za-z0-9._:-]+$/u;
 
@@ -225,12 +224,8 @@ function parseImpact(input: unknown, errors: string[]): UpdateReleaseImpactInput
 
 function parseTargetVersion(input: unknown, errors: string[]): string | undefined {
   if (input === undefined) return undefined;
-  if (
-    typeof input === "string" &&
-    input.length > 0 &&
-    input.length <= MAX_TARGET_VERSION_LENGTH &&
-    TARGET_VERSION_PATTERN.test(input)
-  ) {
+  // Shared predicate, not a second copy of the pattern and the length bound.
+  if (validTargetVersion(input)) {
     return input;
   }
   errors.push("targetVersion must be a stable semver version");

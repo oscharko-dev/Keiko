@@ -219,14 +219,60 @@ function paneIdsFromTree(node: EditorLayoutNode, out: string[] = []): string[] {
   return out;
 }
 
+// Every pane record is built WITHOUT a prototype chain. Pane ids come from persisted, hand-editable
+// JSON, and a plain `{}` record made two things possible: a lookup for a prototype member
+// (`panes["constructor"] !== undefined` is true) resolved to an inherited value — so a pane node
+// naming it passed normalization and the Object constructor FUNCTION was stored where an
+// EditorPaneStateV2 is typed — and `panes["__proto__"] = pane` wrote the prototype instead of
+// creating an own key. Both break invariant 5 (every tree pane node resolves to an entry in panes)
+// and produce the "persisted white screen" class this repository has already paid for (#2802).
+// A null-prototype record closes both at the layer that owns the record, not per call site.
+function emptyPaneRecord(): Record<string, EditorPaneStateV2> {
+  return Object.create(null) as Record<string, EditorPaneStateV2>;
+}
+
+// A pane id that names a prototype member is REJECTED outright, not merely stored safely. A
+// null-prototype record can hold `__proto__` as an ordinary own key, but the id then escapes into
+// consumers that rebuild the record with a plain `{}` — keiko-ui's sanitizeLayoutFiles does exactly
+// that, and `panes["__proto__"] = pane` there sets the prototype instead of creating a key, leaving
+// zero enumerable panes and reproducing the persisted white screen (#2802). Refusing the id makes
+// the parser fall back to a fresh single-pane layout (invariant 6), which is the safe outcome, and
+// keeps that guarantee independent of how any downstream normalizer builds its own record.
+const UNSAFE_PANE_IDS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
+
+// Own key AND a defined value. Object.hasOwn alone is weaker than the `!== undefined` test it
+// replaced: an own key carrying `undefined` would satisfy it and become a pane id that resolves to
+// nothing, breaking invariant 5 downstream. Both properties are needed — hasOwn for the prototype
+// chain, the value check for the empty slot.
+function hasResolvablePane(
+  panes: Readonly<Record<string, EditorPaneStateV2>>,
+  paneId: string,
+): boolean {
+  return Object.hasOwn(panes, paneId) && panes[paneId] !== undefined;
+}
+
+function isSafePaneId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && !UNSAFE_PANE_IDS.has(value);
+}
+
+// Object spread into a `{}` literal produces a plain object, so every derived layout would silently
+// drop the null prototype the parser established. Every pane record — parsed or derived — is built
+// through these two helpers so `Object.hasOwn` stays meaningful for the whole life of the state.
+function paneRecordFrom(
+  base: Readonly<Record<string, EditorPaneStateV2>>,
+  additions: Readonly<Record<string, EditorPaneStateV2>> = {},
+): Record<string, EditorPaneStateV2> {
+  return Object.assign(emptyPaneRecord(), base, additions);
+}
+
 function normalizePaneNode(
   value: Record<string, unknown>,
   panes: Readonly<Record<string, EditorPaneStateV2>>,
 ): EditorLayoutPaneNode | null {
   if (
     value.type === "pane" &&
-    typeof value.paneId === "string" &&
-    panes[value.paneId] !== undefined
+    isSafePaneId(value.paneId) &&
+    hasResolvablePane(panes, value.paneId)
   ) {
     return { type: "pane", paneId: value.paneId };
   }
@@ -263,11 +309,12 @@ function normalizeTree(
 }
 
 function normalizePaneRecord(value: unknown): Record<string, EditorPaneStateV2> {
-  if (!isRecord(value)) return {};
-  const panes: Record<string, EditorPaneStateV2> = {};
+  if (!isRecord(value)) return emptyPaneRecord();
+  const panes: Record<string, EditorPaneStateV2> = emptyPaneRecord();
   for (const [id, rawPane] of Object.entries(value)) {
+    if (!isSafePaneId(id)) continue;
     const pane = normalizePane(rawPane, id);
-    if (pane !== null) panes[pane.id] = pane;
+    if (pane !== null && isSafePaneId(pane.id)) panes[pane.id] = pane;
   }
   return panes;
 }
@@ -294,8 +341,10 @@ function structurallyUsefulPanes(
 }
 
 function paneRecord(panes: readonly EditorPaneStateV2[]): Record<string, EditorPaneStateV2> {
-  const record: Record<string, EditorPaneStateV2> = {};
-  for (const pane of panes) record[pane.id] = pane;
+  const record: Record<string, EditorPaneStateV2> = emptyPaneRecord();
+  for (const pane of panes) {
+    if (isSafePaneId(pane.id)) record[pane.id] = pane;
+  }
   return record;
 }
 
@@ -312,8 +361,9 @@ function visiblePanesForTree(
   tree: EditorLayoutNode,
   panes: Readonly<Record<string, EditorPaneStateV2>>,
 ): Record<string, EditorPaneStateV2> {
-  const visiblePanes: Record<string, EditorPaneStateV2> = {};
+  const visiblePanes: Record<string, EditorPaneStateV2> = emptyPaneRecord();
   for (const paneId of new Set(paneIdsFromTree(tree))) {
+    if (!hasResolvablePane(panes, paneId)) continue;
     const pane = panes[paneId];
     if (pane !== undefined) visiblePanes[paneId] = pane;
   }
@@ -325,7 +375,7 @@ function activePaneIdFromRecord(
   panes: Readonly<Record<string, EditorPaneStateV2>>,
   fallbackPaneId: string,
 ): string {
-  return typeof record.activePaneId === "string" && panes[record.activePaneId] !== undefined
+  return typeof record.activePaneId === "string" && hasResolvablePane(panes, record.activePaneId)
     ? record.activePaneId
     : fallbackPaneId;
 }
@@ -430,7 +480,7 @@ export function createEditorLayoutStateV2(
     root: input.root,
     activePaneId: pane.id,
     tree: { type: "pane", paneId: pane.id },
-    panes: { [pane.id]: pane },
+    panes: paneRecordFrom({}, { [pane.id]: pane }),
     sidebarWidth: input.defaultSidebarWidth,
     sidebarCollapsed: false,
     outlinePanelVisible: true,
@@ -475,7 +525,7 @@ function updatePane(
 ): EditorLayoutStateV2 {
   const pane = layout.panes[paneId];
   if (pane === undefined) return layout;
-  return { ...layout, panes: { ...layout.panes, [paneId]: update(pane) } };
+  return { ...layout, panes: paneRecordFrom(layout.panes, { [paneId]: update(pane) }) };
 }
 
 function withoutFile(files: readonly string[], file: string): readonly string[] {
@@ -579,7 +629,7 @@ function insertSplitPane(
     ...layout,
     activePaneId: newPaneId,
     tree: replacePaneNode(layout.tree, targetPaneId, replacement),
-    panes: { ...layout.panes, [newPaneId]: newPane },
+    panes: paneRecordFrom(layout.panes, { [newPaneId]: newPane }),
   };
 }
 
@@ -608,7 +658,7 @@ function removePane(layout: EditorLayoutStateV2, paneId: string): EditorLayoutSt
   if (layout.panes[paneId] === undefined || editorLayoutPaneIds(layout).length <= 1) return layout;
   const nextTree = removePaneNode(layout.tree, paneId);
   if (nextTree === null) return layout;
-  const panes: Record<string, EditorPaneStateV2> = {};
+  const panes: Record<string, EditorPaneStateV2> = emptyPaneRecord();
   for (const [id, pane] of Object.entries(layout.panes)) {
     if (id !== paneId) panes[id] = pane;
   }
@@ -702,7 +752,7 @@ function renameFileEverywhere(
   to: string,
 ): EditorLayoutStateV2 {
   if (from.length === 0 || to.length === 0 || from === to) return layout;
-  const panes: Record<string, EditorPaneStateV2> = {};
+  const panes: Record<string, EditorPaneStateV2> = emptyPaneRecord();
   let changed = false;
   for (const [id, pane] of Object.entries(layout.panes)) {
     const next = renameFileInPane(pane, from, to);
@@ -843,7 +893,7 @@ function replaceRoot(
     root: action.root,
     activePaneId: pane.id,
     tree: { type: "pane", paneId: pane.id },
-    panes: { [pane.id]: pane },
+    panes: paneRecordFrom({}, { [pane.id]: pane }),
     sidebarWidth: action.sidebarWidth ?? layout.sidebarWidth,
     sidebarCollapsed: false,
     outlinePanelVisible: layout.outlinePanelVisible,

@@ -107,6 +107,11 @@ describe("validateCodeTaskAcceptanceContribution", () => {
       { receiptDigest: { outcome: "known", value: "short" } },
       { receiptDigest: { outcome: "unknown", value: DIGEST } },
       { receiptDigest: { outcome: "guessed" } },
+      // KEIKO-0302 follow-on: factErrors closed the OUTER contribution keys but never the fact
+      // object's own keys, so a well-formed known fact padded with an extra field (e.g. free text
+      // riding alongside a valid digest) was accepted and returned verbatim.
+      { receiptDigest: { outcome: "known", value: DIGEST, promptText: "leak me" } },
+      { receiptDigest: { outcome: "unknown", promptText: "leak me" } },
     ]) {
       const result = validateCodeTaskAcceptanceContribution(
         mutated({ scenarios: [{ ...base, ...patch }] }),
@@ -127,6 +132,8 @@ describe("validateCodeTaskAcceptanceContribution", () => {
       { path: "C:\\repo\\file.ts" },
       { disposition: "copied" },
       { reshaping: { outcome: "known", value: "" } },
+      { reshaping: { outcome: "known", value: "rebound", promptText: "leak me" } },
+      { reshaping: { outcome: "absent", promptText: "leak me" } },
       { verifiedAtSha: "1234" },
     ]) {
       const result = validateCodeTaskAcceptanceContribution(
@@ -237,5 +244,47 @@ describe("code task acceptance primitives", () => {
     expect(isCodeTaskContentFreeNote("bounded qualification note")).toBe(true);
     expect(isCodeTaskContentFreeNote("-----BEGIN PRIVATE KEY-----")).toBe(false);
     expect(isCodeTaskContentFreeNote("Bearer abcdef")).toBe(false);
+  });
+});
+
+describe("closed key sets (KEIKO-0302)", () => {
+  // Every peer validator in this territory enforces a closed key set precisely so an unexpected
+  // field on a documented content-free contract cannot ride through into evidence — the accepted
+  // object is handed on as `value`. These four validators did not.
+  it("rejects an unknown top-level key on the contribution", () => {
+    const result = validateCodeTaskAcceptanceContribution({
+      ...validContribution(),
+      promptText: "leak me",
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((error) => error.includes("promptText"))).toBe(true);
+  });
+
+  it("rejects an unknown key on a scenario, a salvage row, and cleanup", () => {
+    const base = validContribution();
+    const scenario = base.scenarios[0];
+    const salvage = base.salvage[0];
+    expect(scenario).toBeDefined();
+    expect(salvage).toBeDefined();
+    if (scenario === undefined || salvage === undefined) return;
+    expect(
+      validateCodeTaskAcceptanceContribution({
+        ...base,
+        scenarios: [{ ...scenario, promptText: "leak me" }],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskAcceptanceContribution({
+        ...base,
+        salvage: [{ ...salvage, promptText: "leak me" }],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskAcceptanceContribution({
+        ...base,
+        cleanup: { ...base.cleanup, promptText: "leak me" },
+      }).ok,
+    ).toBe(false);
   });
 });

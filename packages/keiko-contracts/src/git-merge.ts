@@ -505,12 +505,57 @@ function isBlockerArray(value: unknown): value is readonly GitMergeReadinessBloc
   return Array.isArray(value) && value.every(isGitMergeReadinessBlocker);
 }
 
+function hasBlockingBlocker(blockers: readonly { readonly severity: string }[]): boolean {
+  return blockers.some((blocker) => blocker.severity === "blocking");
+}
+
+// The only code collectMergeAdvisory ever constructs via advisory(...) — kept immediately beside
+// that function so the two cannot silently drift. Every other blocker code is only ever
+// constructed via blocking(...); hasBlockingBlocker above trusts the SUPPLIED severity, so a
+// payload could relabel a code that is always blocking in practice (e.g. "conflicts") as
+// "advisory", clear hasBlockingBlocker's check, and pass mergeable:true for a genuinely conflicted
+// PR. "checks-failing" is intentionally NOT "advisory-only": collectMergeBlocking also emits it as
+// blocking when the PR is not yet ready, so this set names what advisory CAN be, not a fixed
+// per-code severity.
+const CODES_COLLECT_MERGE_ADVISORY_CAN_EMIT: ReadonlySet<GitMergeReadinessBlockerCode> = new Set([
+  "checks-failing",
+]);
+
+function hasIllegitimateAdvisoryBlocker(blockers: readonly GitMergeReadinessBlocker[]): boolean {
+  return blockers.some(
+    (blocker) =>
+      blocker.severity === "advisory" && !CODES_COLLECT_MERGE_ADVISORY_CAN_EMIT.has(blocker.code),
+  );
+}
+
+// "Severity-ranked" means every blocking entry precedes every advisory one: once an advisory has
+// been seen, no blocking entry may follow.
+function isSeverityRanked(blockers: readonly { readonly severity: string }[]): boolean {
+  let sawAdvisory = false;
+  for (const blocker of blockers) {
+    if (blocker.severity === "advisory") {
+      sawAdvisory = true;
+    } else if (sawAdvisory) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// The two documented invariants of GitMergeReadinessSummary — `mergeable` is true iff there are no
+// BLOCKING blockers, and every blocking entry precedes every advisory one — were documented but not
+// checked, so a summary crossing a package or process boundary could assert `mergeable: true` while
+// carrying a blocking conflict. In-package derivations recompute from `blockers` and were safe, but
+// reading the boolean named `mergeable` is the natural thing to do, and it was free to lie.
 export function isGitMergeReadinessSummary(value: unknown): value is GitMergeReadinessSummary {
   return (
     isRecord(value) &&
     value.schemaVersion === GIT_MERGE_SCHEMA_VERSION &&
     isBoolean(value.mergeable) &&
-    isBlockerArray(value.blockers)
+    isBlockerArray(value.blockers) &&
+    value.mergeable === !hasBlockingBlocker(value.blockers) &&
+    !hasIllegitimateAdvisoryBlocker(value.blockers) &&
+    isSeverityRanked(value.blockers)
   );
 }
 

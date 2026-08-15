@@ -706,6 +706,7 @@ export type {
 } from "./debug/debug-lifecycle.js";
 export {
   DEBUG_LIFECYCLE_SCHEMA_VERSION,
+  isDebugLifecycleEvent,
   isDebugLifecycleEvidence,
 } from "./debug/debug-lifecycle.js";
 
@@ -1370,6 +1371,7 @@ export {
 export type {
   CodingWorkbenchCodexAuthCommandLabel,
   CodingWorkbenchCodexAuthMethod,
+  CodingWorkbenchCodexAuthMethodRow,
   CodingWorkbenchCodexAuthSetupPlan,
   CodingWorkbenchCodexAuthSetupRequest,
   CodingWorkbenchCodexAuthStateRoot,
@@ -1390,6 +1392,7 @@ export {
   CODING_WORKBENCH_CODEX_AUTH_STATUSES,
   CODING_WORKBENCH_CODEX_CREDENTIAL_STORES,
   CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES,
+  codingWorkbenchCodexAuthMethodRowFor,
   selectCodingWorkbenchRuntimeProfile,
   validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexAuthSetupRequest,
@@ -2318,6 +2321,7 @@ export {
 // ─── Shared text-safety primitive (Epic #177/#189 grounding hardening, GRD-001) ──
 export {
   containsAbsolutePath,
+  containsBidiOrZeroWidth,
   containsPseudoRoleMarker,
   redactAbsolutePaths,
   stripUnsafeFormatChars,
@@ -3344,6 +3348,7 @@ export {
   workspaceChordKeyForPlatform,
   workspaceChordsCollide,
   workspacePlatformModifiers,
+  isWorkspaceChordAcceptable,
   isWorkspaceDispatchableChord,
   isWorkspaceReservedChord,
   workspaceInverseAction,
@@ -4705,3 +4710,13 @@ export {
   editorM7SnippetDiagnostics,
   matchingEditorM7Snippets,
 } from "./editor-snippets.js";
+
+// ─── Shared candidate-ranking fixture (KEIKO-1026) ──────────────────────────────
+// Plain DATA, not a formula: the deterministic candidate total order is implemented in this package
+// (compareRankedScorecards) and in keiko-model-gateway (compareCandidates), and the leaf cannot
+// import the gateway. Both suites assert this one expected order, so a drift in either comparator
+// turns exactly one of them red.
+export {
+  PROMPT_CANDIDATE_RANKING_EXPECTED_ORDER,
+  PROMPT_CANDIDATE_RANKING_FIXTURE,
+} from "./prompt-enhancer-ranking-fixture.js";

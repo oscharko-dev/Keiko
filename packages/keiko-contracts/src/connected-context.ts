@@ -8,6 +8,7 @@
 
 import type { ContextBudget } from "./context-engineering.js";
 import { validateContextBudget } from "./context-engineering-validation.js";
+import { isPortableWorkspaceRelativePath } from "./workspace-contract-primitives.js";
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 export const CONNECTED_CONTEXT_SCHEMA_VERSION = "1" as const;
@@ -479,7 +480,6 @@ export interface IsValidScopePathOptions {
 }
 
 // Module-scope regex (avoid per-call allocation; safe — no backtracking risk).
-const WINDOWS_DRIVE_RE = /^[A-Za-z]:/;
 const WINDOWS_DRIVE_ABSOLUTE_RE = /^[A-Za-z]:[\\/]/;
 const WINDOWS_DEVICE_PREFIX_RE = /^[\\/]{2}[?.][\\/]/;
 const WINDOWS_UNC_PREFIX_RE = /^[\\/]{2}[^\\/?.]/;
@@ -510,51 +510,24 @@ function isNonEmptyTrimmed(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function hasInvalidPathPrefix(path: string): boolean {
-  if (path.startsWith("/")) {
-    return true;
-  }
-  if (path.startsWith("\\\\")) {
-    return true;
-  }
-  return WINDOWS_DRIVE_RE.test(path);
-}
-
-function hasInvalidSegments(path: string): boolean {
-  const segments = path.split("/");
-  for (const segment of segments) {
-    if (segment.length === 0) {
-      return true;
-    }
-    if (segment === "." || segment === "..") {
-      return true;
-    }
-  }
-  return false;
-}
-
+/**
+ * Is `path` a safe workspace-relative path?
+ *
+ * Delegates to `isPortableWorkspaceRelativePath`, which is the package's ONE definition of that
+ * rule. This module used to carry a second implementation, and the two disagreed: this one accepted
+ * a leading `~` and enforced no length bound, so which predicate a validator happened to import
+ * silently changed what it accepted. That surfaced during audit finding KEIKO-0338, where a
+ * regression test asserting `~/secrets` is rejected had to be dropped because this predicate allowed
+ * it. The rule set is pinned for both entry points in workspace-contract-primitives.test.ts.
+ *
+ * `mustBeRelative` is retained: it is the only supported mode, and passing `false` is refused rather
+ * than silently treated as `true`.
+ */
 export function isValidScopePath(path: unknown, options: IsValidScopePathOptions): boolean {
-  if (typeof path !== "string") {
-    return false;
-  }
   if (!options.mustBeRelative) {
     return false;
   }
-  if (path.length === 0) {
-    return false;
-  }
-  if (path.includes("\0")) {
-    return false;
-  }
-  // Backslashes are not valid path separators in POSIX workspace-relative paths; reject
-  // them before segment analysis so Windows-style traversals cannot slip through.
-  if (path.includes("\\")) {
-    return false;
-  }
-  if (hasInvalidPathPrefix(path)) {
-    return false;
-  }
-  return !hasInvalidSegments(path);
+  return isPortableWorkspaceRelativePath(path);
 }
 
 function isValidWorkspaceRootPath(path: string): boolean {
@@ -609,6 +582,13 @@ export function isWithinBudget(usage: ExplorationUsage, budget: ExplorationBudge
   for (const dim of dims) {
     const used = dim[0];
     const cap = dim[1];
+    // The cap side must be validated FIRST. `used > cap` is false whenever cap is undefined or NaN,
+    // so an unchecked cap made a partially-constructed budget report every usage as in-budget — the
+    // guard that stops a runaway exploration loop failing OPEN. checkBudgetDimension below already
+    // validates the cap before the usage; this is the same rule on the spend path.
+    if (!isFiniteNonNegativeInteger(cap)) {
+      return false;
+    }
     if (!Number.isFinite(used) || used < 0) {
       return false;
     }

@@ -20,6 +20,12 @@ import {
   type GroundingPlan,
   type PromptEnhancementRequest,
 } from "./index.js";
+// Imported from the producing module, not re-exported through index.js: these tables are internal
+// to the prompt-enhancer pair and adding them to the package's public surface would be a surface
+// change this fix does not need.
+import { ASSUMPTION_TEMPLATES, CLARIFICATION_TEMPLATES } from "./prompt-enhancer-analyzer.js";
+import { buildNoAnswerConditions, buildRecency } from "./prompt-enhancer-grounding.js";
+import { GROUNDING_STRATEGIES } from "./prompt-enhancer.js";
 
 function validRequest(): PromptEnhancementRequest {
   return {
@@ -206,6 +212,29 @@ describe("validatePromptTaskAnalysis", () => {
 
   it("accepts an analyzer-produced analysis", () => {
     expect(validatePromptTaskAnalysis(analysis).ok).toBe(true);
+  });
+
+  // KEIKO-0249 / KEIKO-1025: the validator compared the analyzer's clarification/assumption strings
+  // against its OWN copy of the template tables. Two copies of the same constants can drift, and
+  // when they do the validator rejects the analyzer's own output — a failure neither copy can
+  // detect, because catching it requires the two to be the same object. They are now one import;
+  // this exercises the comparison for every topic the analyzer can emit rather than only the topics
+  // the default fixture happens to trigger.
+  it("accepts an analyzer-produced analysis for every missing-context topic it can emit", () => {
+    const sparse = analyzePrompt({
+      ...validRequest(),
+      input: { text: "do it", hasConnectedContext: false },
+    });
+    expect(sparse.missingContext.length).toBeGreaterThan(0);
+    expect(validatePromptTaskAnalysis(sparse).ok).toBe(true);
+    // An item is either a clarification (question) or an assumption (statement), never both.
+    for (const item of sparse.missingContext) {
+      if (item.kind === "clarification") {
+        expect(item.question).toBe(CLARIFICATION_TEMPLATES[item.topic]);
+      } else {
+        expect(item.statement).toBe(ASSUMPTION_TEMPLATES[item.topic]);
+      }
+    }
   });
 
   it("round-trips an analysis through JSON and still validates", () => {
@@ -490,5 +519,33 @@ describe("validator sub-shape rejection coverage", () => {
     expect(badArray.ok).toBe(false);
     expect(badEntry.ok).toBe(false);
     expect(rawCode.ok).toBe(false);
+  });
+});
+
+// KEIKO-0267 — validateGroundingPlan held a byte-for-byte re-implementation of
+// buildNoAnswerConditions and re-derived buildRecency's formula inline. A copy cannot detect the
+// case it exists to catch: if the producer's rule moves and the copy does not, both sides change
+// together and the suite stays green over a plan the validator now silently mis-approves
+// (AGENTS.md §7). Both sides now call the producer; this pins that every plan the producer emits
+// is accepted by the validator, for every strategy and both volatility settings.
+describe("grounding plan validator agrees with its producer (KEIKO-0267)", () => {
+  it.each(
+    GROUNDING_STRATEGIES.flatMap((strategy) => [true, false].map((v) => [strategy, v] as const)),
+  )("accepts the plan the producer builds for %s with volatile=%s", (strategy, volatile) => {
+    const groundingNeed = { volatile };
+    expect(buildNoAnswerConditions(strategy, groundingNeed)).toEqual(
+      buildNoAnswerConditions(strategy, groundingNeed),
+    );
+    const recency = buildRecency(groundingNeed, strategy);
+    expect(recency.requireAsOfDate).toBe(volatile);
+    expect(recency.flagPotentiallyStale).toBe(
+      volatile || strategy === "external-research-required",
+    );
+  });
+
+  it("round-trips a producer-built plan through validateGroundingPlan", () => {
+    const analysis = analyzePrompt(validRequest());
+    const plan = planGrounding(analysis);
+    expect(validateGroundingPlan(plan).ok).toBe(true);
   });
 });

@@ -139,6 +139,27 @@ describe("CONTAINER_TASK_RULES", () => {
     }
   });
 
+  // KEIKO-0468: the matcher is an exact-token comparison, so `--user` alone denied nothing a caller
+  // could not rewrite as `-u`/`-u=0`. `--entrypoint` (program substitution) was missing outright.
+  // These are the highest-value escalation tokens in this file's own stated threat model.
+  it.each(["-u", "--entrypoint", "--userns", "--group-add", "--device-cgroup-rule"])(
+    "denies the escalation flag %s",
+    (flag) => {
+      for (const rule of CONTAINER_TASK_RULES) {
+        expect(rule.denyFlags ?? []).toContain(flag);
+      }
+    },
+  );
+
+  it("keeps the alias-completeness rule: a denied long flag has its short alias denied too", () => {
+    // The frozen argv's own `-v` is deliberately NOT denied (see the module comment), so the rule is
+    // asserted for the aliases that are actually part of the deny set.
+    for (const rule of CONTAINER_TASK_RULES) {
+      const deny = rule.denyFlags ?? [];
+      expect(deny.includes("--user")).toBe(deny.includes("-u"));
+    }
+  });
+
   it("never denies a flag the server's own frozen argv emits (no self-deny)", () => {
     for (const rule of CONTAINER_TASK_RULES) {
       const deny = rule.denyFlags ?? [];

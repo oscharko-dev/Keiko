@@ -240,14 +240,35 @@ describe("recommendation derivation", () => {
     expect(gitPullRequestRecommendationFor(clean, RISK_READY)).toBe("create-as-ready");
   });
 
-  it("recommends update-to-ready for a clean existing PR and keep-as-draft when advisory blockers remain", () => {
-    const ready = gitPullRequestReadinessFor(readinessInput({ pullRequest: prState() }));
-    expect(gitPullRequestRecommendationFor(ready, RISK_READY)).toBe("update-to-ready");
-
+  // KEIKO-0479. The derivation counted the PR's own `draft-pr` advisory as a reason to keep it a
+  // draft, so the two draft-lifecycle recommendations were exactly swapped: `update-to-ready` was
+  // unreachable for a draft (the only PR it can apply to) and was emitted for PRs already ready.
+  // The expectations below are the corrected behaviour, not the previously pinned inversion.
+  it("recommends update-to-ready for a clean DRAFT PR — the only PR the promotion can apply to", () => {
     const draft = gitPullRequestReadinessFor(
       readinessInput({ pullRequest: prState({ isDraft: true }) }),
     );
+    expect(draft.blockers.some((b) => b.code === "draft-pr")).toBe(true);
+    expect(gitPullRequestRecommendationFor(draft, RISK_DRAFT)).toBe("update-to-ready");
+  });
+
+  it("recommends keep-as-draft for a draft PR that still has a non-draft advisory blocker", () => {
+    const draft = gitPullRequestReadinessFor(
+      readinessInput({
+        pullRequest: prState({ isDraft: true }),
+        checks: { total: 3, passing: 2, failing: 0, pending: 1, overallStatus: "pending" },
+      }),
+    );
+    expect(draft.blockers.some((b) => b.code !== "draft-pr" && b.severity === "advisory")).toBe(
+      true,
+    );
     expect(gitPullRequestRecommendationFor(draft, RISK_DRAFT)).toBe("keep-as-draft");
+  });
+
+  it("recommends keep-as-is for an already-ready clean PR instead of a no-op promotion", () => {
+    const ready = gitPullRequestReadinessFor(readinessInput({ pullRequest: prState() }));
+    expect(ready.blockers).toHaveLength(0);
+    expect(gitPullRequestRecommendationFor(ready, RISK_READY)).toBe("keep-as-is");
   });
 });
 
@@ -267,6 +288,42 @@ describe("suggestion derivations", () => {
       "#1234",
     ]);
     expect(gitPullRequestLinkageSuggestionsFor("chore/no-number").basis).toBe("none");
+  });
+
+  // KEIKO-0475: the marker was optional and the scan global, so EVERY digit run in a branch name
+  // became an issue ref — version numbers, encoding names, dates. Worse, the 7-digit cap is greedy
+  // but bounded, so "12345678" produced a TRUNCATED ref plus a stray one ("#1234567" + "#8"). These
+  // refs reach the PR preview, and a consumer rendering them as closing keywords would close
+  // unrelated issues on merge.
+  it.each([
+    ["feat/v2-api"],
+    ["fix/utf8-bug"],
+    ["chore/bump-base64-dep"],
+    ["feat/oauth2-flow"],
+    ["fix/h264-decode"],
+  ])("does not invent an issue ref from a mid-token digit run in %s", (branch) => {
+    expect(gitPullRequestLinkageSuggestionsFor(branch)).toEqual({
+      suggestedIssueRefs: [],
+      basis: "none",
+    });
+  });
+
+  it("never truncates a digit run longer than the cap into a different issue plus a stray ref", () => {
+    const suggestion = gitPullRequestLinkageSuggestionsFor("fix/12345678-thing");
+    expect(suggestion.suggestedIssueRefs).not.toContain("#1234567");
+    expect(suggestion.suggestedIssueRefs).not.toContain("#8");
+  });
+
+  it("keeps both documented forms working", () => {
+    expect(
+      gitPullRequestLinkageSuggestionsFor("claude/issue-477-thing").suggestedIssueRefs,
+    ).toEqual(["#477"]);
+    expect(gitPullRequestLinkageSuggestionsFor("fix/1234-thing").suggestedIssueRefs).toEqual([
+      "#1234",
+    ]);
+    expect(gitPullRequestLinkageSuggestionsFor("issue/88-thing").suggestedIssueRefs).toEqual([
+      "#88",
+    ]);
   });
 
   it("returns no reviewer suggestion without an area→owners map and maps owners when provided", () => {
@@ -302,6 +359,75 @@ describe("guards and parse", () => {
     expect(isGitPullRequestReadinessSummary(summary)).toBe(true);
     const parsed = parseGitPullRequestReadinessSummary(summary);
     expect(parsed.ok).toBe(true);
+  });
+
+  // KEIKO-0329 (PR mirror): reviewReady implies the object exists and carries no blocking blocker,
+  // and blocking entries precede advisory ones. Neither was checked.
+  it("rejects a summary claiming reviewReady while carrying a blocking blocker", () => {
+    const parsed = parseGitPullRequestReadinessSummary({
+      schemaVersion: "1",
+      objectExists: true,
+      reviewReady: true,
+      blockers: [{ code: "merge-conflict", severity: "blocking", remediation: "user-actionable" }],
+    });
+    expect(parsed.ok).toBe(false);
+  });
+
+  // hasBlockingBlocker trusts the SUPPLIED severity, so a payload could relabel a code that
+  // collectBlockingBlockers always constructs as "blocking" (e.g. "merge-conflict") as "advisory"
+  // instead, clear hasBlockingBlocker's check, and reviewReady:true would then pass for a
+  // genuinely conflicted PR. Every code collectBlockingBlockers emits is disjoint from every code
+  // collectAdvisoryBlockers emits (unlike git-merge.ts's dual-purpose "checks-failing"), so a
+  // blocking-only code must never legitimately appear as advisory.
+  it("rejects a summary claiming reviewReady with a real blocking code relabelled advisory", () => {
+    expect(
+      isGitPullRequestReadinessSummary({
+        schemaVersion: "1",
+        objectExists: true,
+        reviewReady: true,
+        blockers: [
+          { code: "merge-conflict", severity: "advisory", remediation: "user-actionable" },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("still accepts every code collectAdvisoryBlockers actually emits, as advisory", () => {
+    for (const code of ["draft-pr", "checks-pending", "approval-insufficient"] as const) {
+      expect(
+        isGitPullRequestReadinessSummary({
+          schemaVersion: "1",
+          objectExists: true,
+          reviewReady: false,
+          blockers: [{ code, severity: "advisory", remediation: "user-actionable" }],
+        }),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects a summary claiming reviewReady for a PR that does not exist", () => {
+    expect(
+      isGitPullRequestReadinessSummary({
+        schemaVersion: "1",
+        objectExists: false,
+        reviewReady: true,
+        blockers: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects blockers that are not severity-ranked", () => {
+    expect(
+      isGitPullRequestReadinessSummary({
+        schemaVersion: "1",
+        objectExists: true,
+        reviewReady: false,
+        blockers: [
+          { code: "draft-pr", severity: "advisory", remediation: "user-actionable" },
+          { code: "merge-conflict", severity: "blocking", remediation: "user-actionable" },
+        ],
+      }),
+    ).toBe(false);
   });
 
   it("rejects a malformed readiness summary", () => {

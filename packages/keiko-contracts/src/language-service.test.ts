@@ -17,6 +17,7 @@ import {
   type LanguagePosition,
   type LanguageRenameChangeset,
   type LanguageRange,
+  LANGUAGE_SERVICE_PATH_MAX_BYTES,
 } from "./language-service.js";
 
 function overlay(): LanguageDocumentOverlay {
@@ -256,6 +257,24 @@ describe("parseLanguageServiceRequest", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errors[0]).toContain("operation must be one of");
+    }
+  });
+
+  // KEIKO-0465-class bug: LANGUAGE_SERVICE_PATH_MAX_BYTES is a BYTE bound, but a check against
+  // `.length` counts UTF-16 code units. Each "あ" is 1 UTF-16 unit (String.length) but 3 UTF-8
+  // bytes, so 1400 of them is 1400 UTF-16 units (well under the bound) yet 4200 UTF-8 bytes (over
+  // it) — a root a UTF-16-length check wrongly accepts.
+  it("rejects a root within the UTF-16 length bound but over the UTF-8 byte bound", () => {
+    const root = "あ".repeat(1400);
+    expect(root.length).toBeLessThan(LANGUAGE_SERVICE_PATH_MAX_BYTES);
+    const result = parseLanguageServiceRequest({
+      operation: "diagnostics",
+      root,
+      document: overlay(),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors).toContain("root must be a non-empty string");
     }
   });
 
@@ -623,5 +642,67 @@ describe("isLanguageFormattingOptions", () => {
       false,
     );
     expect(isLanguageFormattingOptions({ insertSpaces: "yes" })).toBe(false);
+  });
+});
+
+// KEIKO-0487 — this module's own section header calls this "the trust-boundary edge: the BFF
+// validates a client-supplied request", but `document.path` was only required to be a non-empty
+// string and `document.text` was bounded by nothing, even though the error vocabulary already
+// carries DOCUMENT_TOO_LARGE. The server route does re-resolve and contain the path
+// (resolveOverlayPath), so the path rule is defence in depth — the byte bound was enforced nowhere.
+describe("language document overlay trust boundary", () => {
+  const overlay = { path: "src/a.ts", languageId: "typescript", text: "const a = 1;" };
+
+  it("accepts a well-formed workspace-relative overlay", () => {
+    expect(isLanguageDocumentOverlay(overlay)).toBe(true);
+  });
+
+  it.each([
+    ["NUL byte", "src/a\u0000.ts"],
+    ["newline", "src/a\n.ts"],
+    ["escape", "src/a\u001b[31m.ts"],
+    ["whitespace only", "   "],
+    ["empty", ""],
+  ])("rejects a %s document path", (_label, path) => {
+    expect(isLanguageDocumentOverlay({ ...overlay, path })).toBe(false);
+  });
+
+  // Traversal, absolute, drive and UNC paths are the ROUTE's business: resolveOverlayPath rejects
+  // every one of them and answers 403 DENIED — an authority outcome, not a malformed-request one,
+  // and a pinned one. Rejecting them structurally here would collapse a workspace-escape attempt
+  // into a generic 400 and lose the governance signal, so this guard deliberately lets them pass
+  // and the route's own tests (languageRoutes.test.ts) hold that line.
+  it.each(["../../../../etc/passwd", "/etc/passwd", "C:\\secrets.txt"])(
+    "leaves the containment verdict for %j to the route, which answers 403 DENIED",
+    (path) => {
+      expect(isLanguageDocumentOverlay({ ...overlay, path })).toBe(true);
+    },
+  );
+
+  it("rejects a document path longer than the byte bound", () => {
+    expect(
+      isLanguageDocumentOverlay({
+        ...overlay,
+        path: `src/${"a".repeat(LANGUAGE_SERVICE_PATH_MAX_BYTES)}.ts`,
+      }),
+    ).toBe(false);
+  });
+
+  // KEIKO-0465-class bug: the bound is BYTES, but a check against `.length` counts UTF-16 code
+  // units. Each "あ" is 1 UTF-16 unit but 3 UTF-8 bytes, so 1400 of them is 1400 UTF-16 units
+  // (well under the bound) yet 4200 UTF-8 bytes (over it) — a path a UTF-16-length check wrongly
+  // accepts.
+  it("rejects a document path within the UTF-16 length bound but over the UTF-8 byte bound", () => {
+    const path = "あ".repeat(1400);
+    expect(path.length).toBeLessThan(LANGUAGE_SERVICE_PATH_MAX_BYTES);
+    expect(isLanguageDocumentOverlay({ ...overlay, path })).toBe(false);
+  });
+
+  // The BYTE bound is the ROUTE's business: runLanguageOperation measures the same UTF-8 length
+  // against the CONFIGURABLE limits and returns the typed DOCUMENT_TOO_LARGE (413). Enforcing it
+  // here downgraded that to a generic 400 and ignored the configured limit.
+  it("leaves the document-size verdict to the service, which answers DOCUMENT_TOO_LARGE", () => {
+    const oversized = "x".repeat(DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes + 1);
+    expect(isLanguageDocumentOverlay({ ...overlay, text: oversized })).toBe(true);
   });
 });

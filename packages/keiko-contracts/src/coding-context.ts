@@ -3,6 +3,7 @@
 // byte-identical. Neutral-only purposes and source kinds are deliberately rejected here.
 
 import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
+import { isPortableWorkspaceRelativePath } from "./workspace-contract-primitives.js";
 import {
   CODING_CONTEXT_PURPOSES,
   CODING_CONTEXT_SOURCE_KINDS,
@@ -78,12 +79,41 @@ export function isBoundedEditorSessionId(value: unknown): value is string {
   );
 }
 
-function isOptionalString(value: unknown): boolean {
-  return value === undefined || typeof value === "string";
+// Per-field bounds for the request boundary. Without them the only bounded field was
+// editorSessionId, so a traversal documentPath and multi-megabyte free text both returned ok:true
+// from a validator whose callers reasonably read that as "vetted". The changed-file cap is the same
+// number keiko-server's MAX_CONTEXT_CHANGED_FILES enforces on the route, so the two agree.
+export const CODING_CONTEXT_SYMBOL_MAX_CHARS = 512;
+export const CODING_CONTEXT_QUERY_TEXT_MAX_CHARS = 4_096;
+export const CODING_CONTEXT_CAPSULE_ID_MAX_CHARS = 128;
+export const CODING_CONTEXT_CHANGED_FILES_MAX_COUNT = 64;
+
+// A PRESENT optional string must carry something: `undefined` is the documented absent case, so a
+// blank or whitespace-only symbol/queryText/capsuleId is a malformed value rather than an omission —
+// and a whitespace-only capsuleId would otherwise reach the Local Knowledge scope selector as if it
+// named a capsule.
+function isBoundedOptionalString(value: unknown, maxChars: number): boolean {
+  if (value === undefined) return true;
+  return typeof value === "string" && value.trim().length > 0 && value.length <= maxChars;
 }
 
-function isOptionalStringArray(value: unknown): boolean {
-  return value === undefined || (Array.isArray(value) && value.every((v) => typeof v === "string"));
+// documentPath is BOUNDED and character-checked here, but its containment verdict is deliberately
+// left to the route: keiko-server answers 403 DENIED for a path that escapes the workspace root — an
+// authority outcome, not a malformed-request one — and that status is pinned. Rejecting traversal
+// structurally here would collapse a workspace-escape attempt into a generic 400 and lose the
+// governance signal.
+export const CODING_CONTEXT_PATH_MAX_CHARS = 4_096;
+
+function isBoundedDocumentPath(value: unknown): value is string {
+  if (!isNonEmptyString(value) || value.length > CODING_CONTEXT_PATH_MAX_CHARS) return false;
+  // eslint-disable-next-line no-control-regex -- rejecting C0/DEL in a path is the point
+  return !/[\u0000-\u001f\u007f]/u.test(value);
+}
+
+function isOptionalWorkspaceRelativePathList(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length > CODING_CONTEXT_CHANGED_FILES_MAX_COUNT) return false;
+  return value.every((entry) => isNonEmptyString(entry) && isPortableWorkspaceRelativePath(entry));
 }
 
 export function isCodingContextPurpose(value: unknown): value is CodingContextPurpose {
@@ -118,12 +148,24 @@ export function validateCodingContextRequest(value: unknown): CodingContextValid
       value.editorSessionId === undefined || isBoundedEditorSessionId(value.editorSessionId),
       "request.editorSessionId invalid",
     ],
-    [isNonEmptyString(value.documentPath), "request.documentPath empty"],
-    [isOptionalString(value.symbol), "request.symbol invalid"],
-    [isOptionalString(value.queryText), "request.queryText invalid"],
-    [isOptionalStringArray(value.changedFiles), "request.changedFiles invalid"],
-    [isOptionalString(value.capsuleId), "request.capsuleId invalid"],
-    [isOptionalString(value.capsuleSetId), "request.capsuleSetId invalid"],
+    [isBoundedDocumentPath(value.documentPath), "request.documentPath invalid"],
+    [
+      isBoundedOptionalString(value.symbol, CODING_CONTEXT_SYMBOL_MAX_CHARS),
+      "request.symbol invalid",
+    ],
+    [
+      isBoundedOptionalString(value.queryText, CODING_CONTEXT_QUERY_TEXT_MAX_CHARS),
+      "request.queryText invalid",
+    ],
+    [isOptionalWorkspaceRelativePathList(value.changedFiles), "request.changedFiles invalid"],
+    [
+      isBoundedOptionalString(value.capsuleId, CODING_CONTEXT_CAPSULE_ID_MAX_CHARS),
+      "request.capsuleId invalid",
+    ],
+    [
+      isBoundedOptionalString(value.capsuleSetId, CODING_CONTEXT_CAPSULE_ID_MAX_CHARS),
+      "request.capsuleSetId invalid",
+    ],
     [
       !(typeof value.capsuleId === "string" && typeof value.capsuleSetId === "string"),
       "request.localKnowledgeScope ambiguous",

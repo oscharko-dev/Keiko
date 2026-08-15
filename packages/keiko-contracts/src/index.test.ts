@@ -980,7 +980,8 @@ describe("keiko-contracts package surface", () => {
     // Count assertions are intentional surface pins; bump deliberately when the surface changes.
     expect(m.GIT_PR_CHANGE_TYPES).toHaveLength(7);
     expect(m.GIT_PR_READINESS_BLOCKER_CODES).toHaveLength(9);
-    expect(m.GIT_PR_RECOMMENDATIONS).toHaveLength(5);
+    // 6 since KEIKO-0479 added "keep-as-is" for an already-ready PR with nothing outstanding.
+    expect(m.GIT_PR_RECOMMENDATIONS).toHaveLength(6);
     expect(m.GIT_PR_REJECTION_REASONS).toHaveLength(9);
 
     expect(typeof m.synthesizePullRequestMetadata).toBe("function");

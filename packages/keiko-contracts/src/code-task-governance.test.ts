@@ -386,6 +386,57 @@ describe("governance validator mutation robustness (#2386)", () => {
     });
   });
 
+  // KEIKO-0302 follow-on: grantRefFactErrors/questionRefFactErrors validated the INNER
+  // grant.value/question.value object's own keys, but never the outer fact wrapper's — so a
+  // well-formed known fact padded with an extra field (e.g. free text riding alongside a valid
+  // grant) validated and was returned verbatim. Content-free is the entire point of this contract
+  // family (see the module header).
+  it("rejects a grant or question fact wrapper padded with an extra field", () => {
+    const base = allowedAction();
+    expect(
+      validateGovernedActionV1({
+        ...base,
+        grant: {
+          outcome: "known",
+          value: { grantId: "grt-1", grantScope: "task" },
+          promptText: "leak me",
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGovernedActionV1({
+        ...base,
+        decision: "denied",
+        grant: { outcome: "absent", promptText: "leak me" },
+        question: { outcome: "absent" },
+      }).ok,
+    ).toBe(false);
+
+    const approval = {
+      ...base,
+      decision: "approval-required" as const,
+      grant: { outcome: "absent" as const },
+    };
+    expect(
+      validateGovernedActionV1({
+        ...approval,
+        question: {
+          outcome: "known",
+          value: { questionId: "que_1", expectedRevision: 2 },
+          promptText: "leak me",
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGovernedActionV1({
+        ...base,
+        decision: "denied",
+        grant: { outcome: "absent" },
+        question: { outcome: "absent", promptText: "leak me" },
+      }).ok,
+    ).toBe(false);
+  });
+
   it("reports the exact execution projection vocabulary", () => {
     expect(validateCodeTaskExecutionV1(null)).toEqual({
       ok: false,
@@ -476,5 +527,19 @@ describe("governance validator mutation robustness (#2386)", () => {
       ok: false,
       errors: ["failure.outcome must be known, absent, unavailable, or unknown"],
     });
+  });
+
+  // KEIKO-0302 follow-on: same gap as the grant/question facts above, in this module's third
+  // tagged-fact validator.
+  it("rejects a failure fact wrapper padded with an extra field", () => {
+    const withFailure = (failure: unknown): unknown => ({ ...execution(), failure });
+    expect(
+      validateCodeTaskExecutionV1(
+        withFailure({ outcome: "known", value: "budget-exceeded", promptText: "leak me" }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskExecutionV1(withFailure({ outcome: "absent", promptText: "leak me" })).ok,
+    ).toBe(false);
   });
 });

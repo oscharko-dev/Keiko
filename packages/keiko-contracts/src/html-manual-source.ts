@@ -119,17 +119,19 @@ export function isSafeManualOrigin(origin: string): boolean {
 // A safe manual path prefix is `null` (origin root) or an absolute-style same-origin prefix
 // with no traversal, credential, query, or fragment markers. It stays internal, but is still
 // validated so a tampered scope cannot smuggle a query token or a `..` escape.
+// NUL, the query/fragment delimiters, an embedded credential separator, and the Windows separator.
+const MANUAL_PATH_PREFIX_FORBIDDEN: readonly string[] = ["\0", "?", "#", "@", "\\"];
+
 export function isSafeManualPathPrefix(prefix: string | null): boolean {
   if (prefix === null) return true;
   if (prefix.length === 0 || !prefix.startsWith("/")) return false;
-  if (
-    prefix.includes("\0") ||
-    prefix.includes("?") ||
-    prefix.includes("#") ||
-    prefix.includes("@")
-  ) {
-    return false;
-  }
+  // A prefix beginning `//` (or `/\`, which browsers normalise to `//`) is a protocol-relative
+  // reference, not a path: resolved against the approved origin it names a DIFFERENT authority
+  // (`new URL("//attacker.example/x", "https://intranet.local")` is `https://attacker.example/x`).
+  // Certifying that as a same-origin prefix would be an approval-scope escape, so it is rejected
+  // here rather than left to each consumer to re-check.
+  if (prefix.startsWith("//") || prefix.startsWith("/\\")) return false;
+  if (MANUAL_PATH_PREFIX_FORBIDDEN.some((character) => prefix.includes(character))) return false;
   return !prefix.split("/").includes("..");
 }
 

@@ -332,6 +332,27 @@ describe("isWithinBudget", () => {
     const usage: ExplorationUsage = { ...happyUsage(), elapsedMs: Number.NaN };
     expect(isWithinBudget(usage, DEFAULT_EXPLORATION_BUDGET)).toBe(false);
   });
+
+  // KEIKO-0447: only the USED side of each pair was validated. `used > cap` is false whenever cap is
+  // undefined or NaN, so a partially-constructed budget — a dropped field in a persisted plan, a
+  // cross-version manifest, a JSON round-trip — reported every usage as in-budget and the guard that
+  // stops a runaway exploration loop failed OPEN. checkBudgetDimension in the same file already
+  // validates the cap first; this brings the spend guard in line with it.
+  it("fails closed on a budget with a missing cap instead of reporting every usage in-budget", () => {
+    expect(isWithinBudget(happyUsage(), {} as ExplorationBudget)).toBe(false);
+  });
+
+  it.each([
+    ["NaN cap", { filesReadMax: Number.NaN }],
+    ["negative cap", { elapsedMsMax: -1 }],
+    ["Infinity cap", { excerptBytesMax: Number.POSITIVE_INFINITY }],
+    ["fractional cap", { searchCallsMax: 2.5 }],
+    ["undefined cap", { rerankCallsMax: undefined as unknown as number }],
+  ])("fails closed on a %s", (_label, override) => {
+    expect(isWithinBudget(happyUsage(), { ...DEFAULT_EXPLORATION_BUDGET, ...override })).toBe(
+      false,
+    );
+  });
 });
 
 // ─── validateSelectedScope ────────────────────────────────────────────────────

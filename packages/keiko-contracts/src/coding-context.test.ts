@@ -12,6 +12,11 @@ import {
   isCodingContextPurpose,
   tierForCodingContextSource,
   toCodingContextWirePack,
+  CODING_CONTEXT_CAPSULE_ID_MAX_CHARS,
+  CODING_CONTEXT_PATH_MAX_CHARS,
+  CODING_CONTEXT_CHANGED_FILES_MAX_COUNT,
+  CODING_CONTEXT_QUERY_TEXT_MAX_CHARS,
+  CODING_CONTEXT_SYMBOL_MAX_CHARS,
   validateCodingContextRequest,
   type CodingContextCitation,
   type CodingContextExcerpt,
@@ -80,6 +85,20 @@ describe("coding-context purpose + tiering", () => {
     expect(tierForCodingContextSource("local-knowledge")).toBe("indexed-knowledge");
     expect(tierForCodingContextSource("memory")).toBe("retained-memory");
     expect(tierForCodingContextSource("quality-intelligence")).toBe("derived-evidence");
+  });
+
+  // ADR-0152 D6: every existing coding enum literal and wire projection must stay byte-identical.
+  // RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND (the neutral, new-purpose-facing table in
+  // retrieval-context.ts) classifies connected-context as "external-connected" for governance
+  // auditability — correct for new retrieval purposes (e.g. chat-grounding), but
+  // CODING_CONTEXT_SOURCE_TIER_BY_KIND must NOT alias that value: this exact tier crosses the
+  // existing coding wire in RetrievalContextCitation.sourceTier (serialized by
+  // toCodingContextWirePack for every existing coding purpose) and is persisted verbatim by
+  // codingContextEvidence.ts, both still under schemaVersion "1". Promoting connected-context's
+  // CODING tier is D6's own "separate schema decision," not something a shared-table edit may do
+  // silently.
+  it("keeps connected-context's CODING tier byte-identical to the existing wire (ADR-0152 D6)", () => {
+    expect(tierForCodingContextSource("connected-context")).toBe("first-party-workspace");
   });
 });
 
@@ -244,5 +263,76 @@ describe("validateCodingContextRequest", () => {
     if (!result.ok) {
       expect(result.reasons).toContain("request.localKnowledgeScope ambiguous");
     }
+  });
+
+  // KEIKO-0420: the only bounded field was editorSessionId. documentPath was checked for
+  // non-emptiness alone, and symbol/queryText/capsuleId/capsuleSetId/changedFiles had no bound at
+  // all — so multi-megabyte free text returned ok:true from a function named
+  // validateCodingContextRequest. A caller reading ok:true reasonably treats the request as vetted,
+  // so the contract has to hold the bounds it claims. Containment stays the route's verdict (below).
+  it.each([
+    ["NUL byte", "src/a\u0000.ts"],
+    ["newline", "src/a\n.ts"],
+    ["escape", "src/a\u001b[31m.ts"],
+    ["whitespace only", "   "],
+    ["empty", ""],
+    ["over the length bound", `src/${"a".repeat(CODING_CONTEXT_PATH_MAX_CHARS)}.ts`],
+  ])("rejects a %s documentPath", (_label, documentPath) => {
+    expect(validateCodingContextRequest(validRequest({ documentPath })).ok).toBe(false);
+  });
+
+  // Containment is the ROUTE's verdict: keiko-server answers 403 DENIED for a documentPath that
+  // escapes the workspace root — an authority outcome, not a malformed-request one — and that
+  // status is pinned (contextRoutes.test.ts, editorSecurityBoundary.test.ts). Rejecting traversal
+  // structurally here would collapse a workspace-escape attempt into a generic 400 and lose the
+  // governance signal, so this validator bounds and character-checks the field and stops there.
+  it.each(["../../../../etc/shadow", "/etc/shadow", "C:\\secrets.txt"])(
+    "leaves the containment verdict for %j to the route, which answers 403 DENIED",
+    (documentPath) => {
+      expect(validateCodingContextRequest(validRequest({ documentPath })).ok).toBe(true);
+    },
+  );
+
+  it("rejects a changedFiles entry with the same path shapes it rejects for documentPath", () => {
+    expect(
+      validateCodingContextRequest(validRequest({ changedFiles: ["src/../src/a.ts"] })).ok,
+    ).toBe(false);
+    expect(validateCodingContextRequest(validRequest({ changedFiles: ["/etc/shadow"] })).ok).toBe(
+      false,
+    );
+  });
+
+  it("caps the changedFiles list at the same count the route enforces", () => {
+    const withinCap = Array.from(
+      { length: CODING_CONTEXT_CHANGED_FILES_MAX_COUNT },
+      (_unused, index) => `src/f${String(index)}.ts`,
+    );
+    expect(validateCodingContextRequest(validRequest({ changedFiles: withinCap })).ok).toBe(true);
+    expect(
+      validateCodingContextRequest(
+        validRequest({ changedFiles: [...withinCap, "src/overflow.ts"] }),
+      ).ok,
+    ).toBe(false);
+  });
+
+  it.each(["symbol", "queryText", "capsuleId", "capsuleSetId"])(
+    "rejects a blank or whitespace-only %s, which means malformed rather than absent",
+    (field) => {
+      expect(validateCodingContextRequest(validRequest({ [field]: "" })).ok).toBe(false);
+      expect(validateCodingContextRequest(validRequest({ [field]: "   " })).ok).toBe(false);
+      expect(validateCodingContextRequest(validRequest({ [field]: undefined })).ok).toBe(true);
+    },
+  );
+
+  it.each([
+    ["symbol", CODING_CONTEXT_SYMBOL_MAX_CHARS],
+    ["queryText", CODING_CONTEXT_QUERY_TEXT_MAX_CHARS],
+    ["capsuleId", CODING_CONTEXT_CAPSULE_ID_MAX_CHARS],
+    ["capsuleSetId", CODING_CONTEXT_CAPSULE_ID_MAX_CHARS],
+  ])("bounds the free-text field %s", (field, max) => {
+    expect(validateCodingContextRequest(validRequest({ [field]: "a".repeat(max) })).ok).toBe(true);
+    expect(validateCodingContextRequest(validRequest({ [field]: "a".repeat(max + 1) })).ok).toBe(
+      false,
+    );
   });
 });

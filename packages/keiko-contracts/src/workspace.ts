@@ -57,11 +57,11 @@ export interface DiscoveryOptions {
   readonly applyGitignore: boolean;
 }
 
-export const DEFAULT_DISCOVERY_OPTIONS: DiscoveryOptions = {
+export const DEFAULT_DISCOVERY_OPTIONS: DiscoveryOptions = Object.freeze({
   maxDepth: 40,
   maxFiles: 50_000,
   applyGitignore: true,
-} as const;
+});
 
 export interface DiscoveryStats {
   readonly discovered: number;
@@ -77,9 +77,9 @@ export interface ReadOptions {
   readonly maxBytes: number;
 }
 
-export const DEFAULT_READ_OPTIONS: ReadOptions = {
+export const DEFAULT_READ_OPTIONS: ReadOptions = Object.freeze({
   maxBytes: 262_144,
-} as const;
+});
 
 export interface FileContent {
   readonly relativePath: string;
@@ -117,12 +117,12 @@ export interface ContextRequest {
   readonly discovery: DiscoveryOptions;
 }
 
-export const DEFAULT_CONTEXT_REQUEST: ContextRequest = {
+export const DEFAULT_CONTEXT_REQUEST: ContextRequest = Object.freeze({
   task: undefined,
   budgetBytes: 65_536,
   maxBytesPerFile: 8_192,
   discovery: DEFAULT_DISCOVERY_OPTIONS,
-} as const;
+});
 
 export interface ContextEntry {
   readonly path: string;

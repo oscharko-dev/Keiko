@@ -7,6 +7,7 @@ import {
   asQualityIntelligenceValidationFindingId,
 } from "../ids.js";
 import {
+  QUALITY_INTELLIGENCE_EXPORT_ADAPTER_TARGETS,
   QUALITY_INTELLIGENCE_EXPORT_ADAPTERS,
   QUALITY_INTELLIGENCE_TMS_ADAPTERS,
   assertExportBundleInvariant,
@@ -104,5 +105,29 @@ describe("assertExportBundleInvariant", () => {
     expect(() => {
       assertExportBundleInvariant(bundle);
     }).toThrow(Error);
+  });
+});
+
+// KEIKO-0385: the TMS classification was a hand-listed Set, so it failed OPEN — an adapter nobody
+// remembered to add was silently treated as portable and escaped the redaction-attestation
+// requirement, the one control between a QI export and an external tracker. The total Record makes
+// a new adapter a compile error until it is classified; this pins that no adapter goes unclassified
+// at runtime either.
+describe("export adapter classification is total (KEIKO-0385)", () => {
+  it("classifies every declared adapter", () => {
+    for (const adapter of QUALITY_INTELLIGENCE_EXPORT_ADAPTERS) {
+      expect(QUALITY_INTELLIGENCE_EXPORT_ADAPTER_TARGETS[adapter]).toMatch(/^(tms|portable)$/u);
+    }
+    expect(Object.keys(QUALITY_INTELLIGENCE_EXPORT_ADAPTER_TARGETS).sort()).toEqual(
+      [...QUALITY_INTELLIGENCE_EXPORT_ADAPTERS].sort(),
+    );
+  });
+
+  it("derives the TMS set from the classification rather than a second list", () => {
+    for (const adapter of QUALITY_INTELLIGENCE_EXPORT_ADAPTERS) {
+      expect(QUALITY_INTELLIGENCE_TMS_ADAPTERS.has(adapter)).toBe(
+        QUALITY_INTELLIGENCE_EXPORT_ADAPTER_TARGETS[adapter] === "tms",
+      );
+    }
   });
 });

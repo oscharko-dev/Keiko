@@ -45,16 +45,41 @@ export const QUALITY_INTELLIGENCE_EXPORT_ADAPTERS: readonly QualityIntelligenceE
   "quality-center",
 ] as const;
 
+/**
+ * Every adapter classified by export target. This is a TOTAL Record, not a hand-listed Set: a Set
+ * failed OPEN — a new adapter that nobody remembered to add was silently treated as "portable" and
+ * escaped the redaction-attestation requirement, which is the one control standing between a
+ * quality-intelligence export and an external tracker. A Record keyed by the union makes a new
+ * adapter a COMPILE error until it is classified.
+ */
+export const QUALITY_INTELLIGENCE_EXPORT_ADAPTER_TARGETS: Readonly<
+  Record<QualityIntelligenceExportAdapter, "tms" | "portable">
+> = Object.freeze({
+  "jira-issues": "tms",
+  qtest: "tms",
+  xray: "tms",
+  polarion: "tms",
+  alm: "tms",
+  "quality-center": "tms",
+  csv: "portable",
+  json: "portable",
+  "spreadsheet-safe-csv": "portable",
+  markdown: "portable",
+  "plain-text": "portable",
+});
+
 /** Adapters whose target is an external TMS — they require a redaction attestation. */
 export const QUALITY_INTELLIGENCE_TMS_ADAPTERS: ReadonlySet<QualityIntelligenceExportAdapter> =
-  new Set<QualityIntelligenceExportAdapter>([
-    "jira-issues",
-    "qtest",
-    "xray",
-    "polarion",
-    "alm",
-    "quality-center",
-  ]);
+  new Set<QualityIntelligenceExportAdapter>(
+    (
+      Object.entries(QUALITY_INTELLIGENCE_EXPORT_ADAPTER_TARGETS) as readonly (readonly [
+        QualityIntelligenceExportAdapter,
+        "tms" | "portable",
+      ])[]
+    )
+      .filter(([, target]) => target === "tms")
+      .map(([adapter]) => adapter),
+  );
 
 export interface QualityIntelligenceExportBundleEntry {
   readonly candidateId: QualityIntelligenceTestCaseId;

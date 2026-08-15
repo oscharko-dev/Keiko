@@ -157,14 +157,23 @@ export interface GitPullRequestReadinessSummary {
 
 // ─── Draft-vs-ready recommendation ──────────────────────────────────────────────────────────────────
 
+// "keep-as-is" is the no-op outcome for a PR that already exists, is already ready for review, and
+// has nothing outstanding. Without it the derivation had to reuse "update-to-ready" for that case,
+// which is what made the recommendation meaningless for the PRs it was supposed to serve.
 export type GitPullRequestRecommendation =
-  "create-as-draft" | "create-as-ready" | "update-to-ready" | "keep-as-draft" | "blocked";
+  | "create-as-draft"
+  | "create-as-ready"
+  | "update-to-ready"
+  | "keep-as-draft"
+  | "keep-as-is"
+  | "blocked";
 
 export const GIT_PR_RECOMMENDATIONS: readonly GitPullRequestRecommendation[] = [
   "create-as-draft",
   "create-as-ready",
   "update-to-ready",
   "keep-as-draft",
+  "keep-as-is",
   "blocked",
 ] as const;
 
@@ -301,7 +310,7 @@ function primaryAreaOf(narrative: GitPullRequestChangeNarrative): string | undef
 
 function humaniseBranchSlug(headBranch: string): string {
   const segments = headBranch.split("/");
-  const tail = segments[segments.length - 1] ?? headBranch;
+  const tail = segments.at(-1) ?? headBranch;
   const tokens = tail.split("-").filter((t) => t.length > 0);
   // Drop a leading run of `issue` markers and pure-numeric issue numbers (e.g. "issue-477-…",
   // "1234-…"), keeping only the descriptive remainder of the slug.
@@ -473,9 +482,19 @@ export function gitPullRequestRecommendationFor(
   if (!readiness.objectExists) {
     return riskDigest.isDraft ? "create-as-draft" : "create-as-ready";
   }
-  // The PR exists and has no blocking blockers. Advisory blockers (pending checks, missing approvals)
-  // counsel keeping it as a draft; a clean PR is recommended for the move to ready-for-review.
-  return readiness.blockers.length > 0 ? "keep-as-draft" : "update-to-ready";
+  // The PR exists and has no blocking blockers. Its OWN draftness is recorded as the `draft-pr`
+  // advisory, so counting the raw blocker list inverted both draft-lifecycle recommendations:
+  // every clean draft was told to stay a draft, and every already-ready PR got a no-op
+  // `update-to-ready`. Draftness is read from `reviewReady` instead — on this branch (PR exists, no
+  // blocking blockers) it is exactly `!isDraft` by its own definition above, so no re-derivation
+  // from the blockers array and no wire-shape change is needed.
+  if (readiness.reviewReady) {
+    return "keep-as-is";
+  }
+  // Genuine advisories (pending checks, missing approvals) counsel keeping the draft; a draft with
+  // nothing else outstanding is the one PR the promotion to ready-for-review can apply to.
+  const otherAdvisories = readiness.blockers.filter((b) => b.code !== "draft-pr");
+  return otherAdvisories.length > 0 ? "keep-as-draft" : "update-to-ready";
 }
 
 // ─── Suggestion derivations (PURE, deterministic) ───────────────────────────────────────────────────
@@ -524,7 +543,15 @@ export function gitPullRequestLabelSuggestionsFor(
 
 // Extracts issue-ref tokens from the head branch name only (e.g. "claude/issue-477-..." → "#477",
 // "fix/1234-..." → "#1234"). Deterministic; never scans commit bodies in this leaf.
-const BRANCH_ISSUE_RE = /(?:issue[-/])?(\d{1,7})/gi;
+//
+// A digit run only counts when it is a token in its own right: either behind an explicit
+// `issue-`/`issue/` marker, or starting a segment (string start, `/`, `_`, `-`) and ending at one
+// (string end, `/`, `_`, `-`). Without those boundaries every digit run in a branch name became an
+// issue ref — "feat/v2-api" suggested #2, "fix/utf8-bug" suggested #8 — and a run longer than the
+// cap was truncated into a DIFFERENT issue plus a stray ref ("12345678" → #1234567 and #8). These
+// refs reach the PR preview, where a consumer rendering them as closing keywords would close
+// unrelated issues on merge. A run longer than the cap now matches nothing rather than truncating.
+const BRANCH_ISSUE_RE = /(?:^|[/_-])(?:issue[-/])?(\d{1,7})(?=$|[/_-])/gi;
 
 export function gitPullRequestLinkageSuggestionsFor(
   headBranch: string,
@@ -558,6 +585,47 @@ function isBlockerArray(value: unknown): value is readonly GitPullRequestReadine
   return Array.isArray(value) && value.every(isGitPullRequestReadinessBlocker);
 }
 
+function hasBlockingBlocker(blockers: readonly GitPullRequestReadinessBlocker[]): boolean {
+  return blockers.some((blocker) => blocker.severity === "blocking");
+}
+
+// Every code collectAdvisoryBlockers ever constructs via advisory(...) — kept immediately beside
+// that function so the two cannot silently drift. Every other blocker code is only ever
+// constructed via blocking(...), and (unlike git-merge.ts's dual-purpose "checks-failing") the two
+// producers' code sets are fully disjoint here. hasBlockingBlocker above trusts the SUPPLIED
+// severity, so a payload could relabel a code that is always blocking in practice (e.g.
+// "merge-conflict") as "advisory", clear hasBlockingBlocker's check, and pass reviewReady:true for
+// a genuinely conflicted PR.
+const CODES_COLLECT_ADVISORY_BLOCKERS_CAN_EMIT: ReadonlySet<GitPullRequestReadinessBlockerCode> =
+  new Set(["draft-pr", "checks-pending", "approval-insufficient"]);
+
+function hasIllegitimateAdvisoryBlocker(
+  blockers: readonly GitPullRequestReadinessBlocker[],
+): boolean {
+  return blockers.some(
+    (blocker) =>
+      blocker.severity === "advisory" &&
+      !CODES_COLLECT_ADVISORY_BLOCKERS_CAN_EMIT.has(blocker.code),
+  );
+}
+
+// "Severity-ranked" means every blocking entry precedes every advisory one: once an advisory has
+// been seen, no blocking entry may follow.
+function isSeverityRanked(blockers: readonly GitPullRequestReadinessBlocker[]): boolean {
+  let sawAdvisory = false;
+  for (const blocker of blockers) {
+    if (blocker.severity === "advisory") {
+      sawAdvisory = true;
+    } else if (sawAdvisory) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Same gap as isGitMergeReadinessSummary: the documented invariants (reviewReady implies the object
+// exists and carries no blocking blocker; blocking entries precede advisory ones) were unchecked, so
+// a summary could assert reviewReady while carrying a blocking blocker.
 export function isGitPullRequestReadinessSummary(
   value: unknown,
 ): value is GitPullRequestReadinessSummary {
@@ -566,7 +634,10 @@ export function isGitPullRequestReadinessSummary(
     value.schemaVersion === GIT_PULL_REQUEST_SCHEMA_VERSION &&
     isBoolean(value.objectExists) &&
     isBoolean(value.reviewReady) &&
-    isBlockerArray(value.blockers)
+    isBlockerArray(value.blockers) &&
+    (!value.reviewReady || (value.objectExists && !hasBlockingBlocker(value.blockers))) &&
+    !hasIllegitimateAdvisoryBlocker(value.blockers) &&
+    isSeverityRanked(value.blockers)
   );
 }
 

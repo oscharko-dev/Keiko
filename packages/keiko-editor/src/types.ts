@@ -20,6 +20,7 @@ import type {
   CompletionInteractionMode,
   EditorCompletionSource,
   FileContent,
+  RetrievalContextSourceTier,
 } from "@oscharko-dev/keiko-contracts";
 
 import type { EditorLanguageId } from "./languages.js";
@@ -798,8 +799,12 @@ export type EditorContextSourceKind =
   | "editor-state"
   | "git-context";
 
-export type EditorContextSourceTier =
-  "first-party-workspace" | "indexed-knowledge" | "retained-memory" | "derived-evidence";
+// Aliased, never re-declared: this used to be a hand-maintained copy of the contract union, and it
+// silently went stale the moment keiko-contracts gained the `external-connected` tier for
+// externally-authored GitHub/Jira content (KEIKO-0176) — the UI build broke on a wire value the
+// contract considers valid. A type-only alias keeps the browser tier's import posture (no
+// value-import) while making drift impossible.
+export type EditorContextSourceTier = RetrievalContextSourceTier;
 
 /** Content-free provider provenance: a citation pointer and accounting, never the excerpt itself. */
 export interface EditorContextEntry {

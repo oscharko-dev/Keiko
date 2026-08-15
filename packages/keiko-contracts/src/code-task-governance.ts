@@ -84,7 +84,11 @@ function unknownKeys(
 // free text across the acceptance boundary (mirrors the code-task-acceptance content-free rule).
 const REASON_CODE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/u;
 
-function isContentFreeReasonCode(value: unknown): value is string {
+// Exported: this is the ONE definition of the content-free reason-code rule. It was previously
+// re-declared verbatim in code-task-auxiliary.ts and enforced as a length-only check in
+// code-task-run-control.ts, so the "cannot smuggle secrets or free text" guarantee held in one of
+// the three places that claimed it — "Denied: /Users/alice/secret" is 64 characters or fewer.
+export function isContentFreeReasonCode(value: unknown): value is string {
   return typeof value === "string" && REASON_CODE_PATTERN.test(value);
 }
 
@@ -216,14 +220,29 @@ function envelopeErrors(value: Record<string, unknown>): string[] {
   return errors;
 }
 
+// KEIKO-0302 follow-on: this only excluded a literal "value" key, so { outcome: "absent",
+// promptText: "leak me" } passed as absent on the denied/non-carrying decision path (and on the
+// "allowed" question / "approval-required" grant paths, both of which route through
+// absentErrors). GovernedActionAbsent's only field is "outcome" (see its definition above), so
+// requiring exactly one key rejects every extra key, not just "value".
 function isAbsent(value: unknown): value is GovernedActionAbsent {
-  return isRecord(value) && value.outcome === "absent" && !("value" in value);
+  return isRecord(value) && value.outcome === "absent" && Object.keys(value).length === 1;
 }
 
+// KEIKO-0302 follow-on: this checked the INNER grant.value object's own keys but never the outer
+// fact wrapper's, so a well-formed known fact padded with an extra field (e.g. free text riding
+// alongside a valid grant) validated and was returned verbatim. The "grant must not carry a
+// value" message for the absent+value case is preserved exactly (pinned test); any OTHER extra
+// key on either branch is now also rejected via the shared unknownKeys helper.
 function grantRefFactErrors(value: unknown): string[] {
   if (!isRecord(value)) return ["grant must be a tagged fact object"];
-  if (value.outcome === "absent") return "value" in value ? ["grant must not carry a value"] : [];
+  if (value.outcome === "absent") {
+    if ("value" in value) return ["grant must not carry a value"];
+    return unknownKeys(value, ["outcome"], "grant");
+  }
   if (value.outcome !== "known") return ["grant.outcome must be known or absent"];
+  const wrapperExtraKeys = unknownKeys(value, ["outcome", "value"], "grant");
+  if (wrapperExtraKeys.length > 0) return wrapperExtraKeys;
   const grant = value.value;
   if (!isRecord(grant)) return ["grant.value must be an object"];
   const errors = unknownKeys(grant, ["grantId", "grantScope"], "grant.value");
@@ -232,12 +251,16 @@ function grantRefFactErrors(value: unknown): string[] {
   return errors;
 }
 
+// Same fix as grantRefFactErrors above, for the question fact.
 function questionRefFactErrors(value: unknown): string[] {
   if (!isRecord(value)) return ["question must be a tagged fact object"];
   if (value.outcome === "absent") {
-    return "value" in value ? ["question must not carry a value"] : [];
+    if ("value" in value) return ["question must not carry a value"];
+    return unknownKeys(value, ["outcome"], "question");
   }
   if (value.outcome !== "known") return ["question.outcome must be known or absent"];
+  const wrapperExtraKeys = unknownKeys(value, ["outcome", "value"], "question");
+  if (wrapperExtraKeys.length > 0) return wrapperExtraKeys;
   const question = value.value;
   if (!isRecord(question)) return ["question.value must be an object"];
   const errors = unknownKeys(question, ["questionId", "expectedRevision"], "question.value");
@@ -388,9 +411,16 @@ function executionFactErrors(value: Record<string, unknown>): string[] {
   return errors;
 }
 
+// KEIKO-0302 follow-on: same gap as grantRefFactErrors/questionRefFactErrors above — the "known"
+// branch validated value.value but never rejected an extra key riding alongside it, and the other
+// three outcomes only checked for a stray "value" key, not any other extra key. The
+// `failure must not carry a value for outcome ${outcome}` message is preserved exactly for that
+// one pinned case; every other extra key is now also rejected via unknownKeys.
 function executionFailureFactErrors(value: unknown): string[] {
   if (!isRecord(value)) return ["failure must be a tagged fact object"];
   if (value.outcome === "known") {
+    const wrapperExtraKeys = unknownKeys(value, ["outcome", "value"], "failure");
+    if (wrapperExtraKeys.length > 0) return wrapperExtraKeys;
     return isContentFreeReasonCode(value.value)
       ? []
       : ["failure.value must be a bounded content-free reason code"];
@@ -400,7 +430,8 @@ function executionFailureFactErrors(value: unknown): string[] {
     value.outcome === "unavailable" ||
     value.outcome === "unknown"
   ) {
-    return "value" in value ? [`failure must not carry a value for outcome ${value.outcome}`] : [];
+    if ("value" in value) return [`failure must not carry a value for outcome ${value.outcome}`];
+    return unknownKeys(value, ["outcome"], "failure");
   }
   return ["failure.outcome must be known, absent, unavailable, or unknown"];
 }

@@ -155,6 +155,16 @@ describe("parseCommandTaskRunRequest rejections", () => {
     }
   });
 
+  // KEIKO-0302: every peer validator in this territory enforces a closed key set precisely so an
+  // unexpected field on a documented content-free contract cannot ride through into evidence. These
+  // did not, and the accepted object is passed on as `value`.
+  it("rejects an unknown top-level key on a run request", () => {
+    const parsed = parseCommandTaskRunRequest({ ...baseRequest(), promptText: "leak me" });
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.errors.some((error) => error.includes("promptText"))).toBe(true);
+  });
+
   it("rejects a requestId with illegal characters or excessive length", () => {
     for (const bad of ["has space", "semi;colon", "x".repeat(129)]) {
       const parsed = parseCommandTaskRunRequest({ ...baseRequest(), requestId: bad });
@@ -164,12 +174,77 @@ describe("parseCommandTaskRunRequest rejections", () => {
       }
     }
   });
+
+  // KEIKO-0456. This boundary's own comment promises that "an oversized or non-token value cannot
+  // reach the manager, the audit ledger, or the SSE fan-out", but only requestId was both bounded
+  // and patterned: projectId had no bound at all and taskId no pattern. A newline or control
+  // character in an identifier that is later interpolated into a log line or an SSE `data:` field is
+  // a log-injection / frame-splitting primitive, which is exactly what this boundary exists to stop.
+  it("bounds projectId, which is a filesystem path and so cannot take a token pattern", () => {
+    expect(parseCommandTaskRunRequest({ ...baseRequest(), projectId: "x".repeat(4_097) }).ok).toBe(
+      false,
+    );
+    expect(parseCommandTaskRunRequest({ ...baseRequest(), projectId: "/work/a b/proj" }).ok).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    ["newline", "/work/proj\ninjected"],
+    ["carriage return", "/work/proj\rinjected"],
+    ["NUL", "/work/proj\u0000"],
+    ["escape", "/work/proj\u001b[31m"],
+  ])("rejects a projectId containing a %s control character", (_label, projectId) => {
+    expect(parseCommandTaskRunRequest({ ...baseRequest(), projectId }).ok).toBe(false);
+  });
+
+  it.each([
+    ["space", "npm-script:my test"],
+    ["newline", "npm-script:test\ndata: injected"],
+    ["traversal", "../../etc/passwd"],
+    ["quote", 'npm-script:"test"'],
+    ["leading punctuation", "-npm-script:test"],
+  ])("rejects a taskId that is not the discovered-script token shape (%s)", (_label, taskId) => {
+    expect(parseCommandTaskRunRequest({ ...baseRequest(), taskId }).ok).toBe(false);
+  });
+
+  it("keeps accepting the real discovered-script token shape", () => {
+    for (const taskId of ["npm-script:test", "a", "A1._:-", "npm-script:build.prod"]) {
+      expect(parseCommandTaskRunRequest({ ...baseRequest(), taskId }).ok).toBe(true);
+    }
+  });
+
+  it.each([
+    ["fractional", 1.5],
+    ["beyond the safe integer range", 1e300],
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+  ])("rejects a timeoutMs that is %s", (_label, timeoutMs) => {
+    expect(parseCommandTaskRunRequest({ ...baseRequest(), timeoutMs }).ok).toBe(false);
+  });
 });
 
 describe("validateCommandTaskCatalog", () => {
   it("accepts a well-formed catalog", () => {
     const parsed = validateCommandTaskCatalog(baseCatalog());
     expect(parsed.ok).toBe(true);
+  });
+
+  // KEIKO-0302: every peer validator in this territory enforces a closed key set precisely so an
+  // unexpected field on a documented content-free contract cannot ride through into evidence — the
+  // accepted object is handed on as `value`.
+  it("rejects an unknown key on the catalog and on a task", () => {
+    expect(validateCommandTaskCatalog({ ...baseCatalog(), promptText: "leak me" }).ok).toBe(false);
+    const catalog = baseCatalog();
+    const firstTask = catalog.tasks[0];
+    expect(firstTask).toBeDefined();
+    if (firstTask === undefined) return;
+    expect(
+      validateCommandTaskCatalog({
+        ...catalog,
+        tasks: [{ ...firstTask, promptText: "leak me" }],
+      }).ok,
+    ).toBe(false);
   });
 
   it("rejects a non-object", () => {
@@ -254,6 +329,10 @@ describe("validateCommandTaskCatalog", () => {
 describe("validateCommandTaskRunResult", () => {
   it("accepts a well-formed result", () => {
     expect(validateCommandTaskRunResult(baseResult()).ok).toBe(true);
+  });
+
+  it("rejects an unknown key on a run result (KEIKO-0302)", () => {
+    expect(validateCommandTaskRunResult({ ...baseResult(), promptText: "leak me" }).ok).toBe(false);
   });
 
   it("accepts a null exit code (timed-out / cancelled run)", () => {

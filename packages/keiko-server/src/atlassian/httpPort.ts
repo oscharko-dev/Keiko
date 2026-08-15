@@ -31,6 +31,7 @@ import {
 } from "@oscharko-dev/keiko-connectors";
 import { isSafeAtlassianConnectorBaseUrl } from "@oscharko-dev/keiko-contracts";
 import {
+  classifyOutboundHost,
   gatewayFetch,
   type OutboundHttpEgressConfig,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
@@ -51,6 +52,67 @@ export interface CreateAtlassianHttpPortOptions {
 function boundedTimeoutMs(requested: number): number {
   if (!Number.isFinite(requested) || requested < 1) return 1;
   return Math.min(Math.trunc(requested), MAX_TIMEOUT_MS);
+}
+
+// Connector-lane egress posture (KEIKO-0316). The caller hands us the LIVE model-gateway egress
+// config, whose `allowPrivateNetwork` / `allowLinkLocalAndMetadata` opt-ins exist for an operator's
+// own approved, customer-hosted MODEL provider. An Atlassian base URL is client-supplied through the
+// connector-management routes, so inheriting those opt-ins let a connector be pointed at an RFC1918
+// service or at 169.254.169.254 and turned the `/verify` probe into an internal-reconnaissance
+// oracle. Only the transport settings (proxy, CA bundle) carry over; neither opt-in is inherited, so
+// private and cloud-metadata targets are blocked for this lane whatever the model gateway allows.
+//
+// `denyLoopback` is deliberately NOT pinned on the egress config handed to gatewayFetch, unlike
+// researchEgressConfig() in coding-runtime/researchEgressPort.ts. That flag is overloaded in the
+// gateway: refuseUnpinnableResearchEgress() throws for ANY request that has a proxy configured
+// while denyLoopback is set, because the research lane needs DNS pinning that a proxy defeats.
+// Setting it here made every Atlassian request fail before transport in any deployment whose
+// proxy covers the Atlassian host — verification and sync would stop working entirely.
+//
+// Loopback is instead rejected by isBlockedLoopbackTarget below, via classifyOutboundHost — a
+// plain hostname-string classification that makes no DNS-pinning claim, so unlike `denyLoopback`
+// it is correct and safe to apply unconditionally, proxied or not. That closes the other half of
+// KEIKO-0316 without reintroducing the proxy incompatibility.
+function connectorEgressConfig(
+  base: OutboundHttpEgressConfig | undefined,
+): OutboundHttpEgressConfig {
+  return {
+    ...(base?.httpProxy !== undefined ? { httpProxy: base.httpProxy } : {}),
+    ...(base?.httpsProxy !== undefined ? { httpsProxy: base.httpsProxy } : {}),
+    ...(base?.noProxy !== undefined ? { noProxy: base.noProxy } : {}),
+    ...(base?.caBundlePath !== undefined ? { caBundlePath: base.caBundlePath } : {}),
+  };
+}
+
+// KEIKO-0316: an Atlassian base URL is client-supplied through the connector-management routes
+// and is not itself checked for address class (isSafeAtlassianConnectorBaseUrl only enforces
+// https/no-credentials/no-query/no-fragment). Classified by hostname string only — no DNS
+// resolution — so this is safe to apply whatever the egress transport (direct or proxied), unlike
+// the gateway's own `denyLoopback` flag. Surfaces as the same closed `network-error` result the
+// private/metadata classes already resolve to via gatewayFetch's own policy check, not a thrown
+// error, so callers see one consistent "this connector is pointed somewhere it should not be"
+// shape regardless of which blocked class tripped.
+//
+// KNOWN RESIDUAL GAP, not closed by this check (tracked on KEIKO-0316): a DNS NAME that resolves
+// to a blocked address (e.g. a connector host pointed at 169.254.169.254 or a loopback alias) is
+// caught on the DIRECT transport path, where gatewayFetch resolves and pins the address before
+// connecting (`enforceOutboundTargetPolicy` with `resolveDns: true`) — but is NOT caught when a
+// proxy is configured for this connector's egress. `planGatewayDns` in the gateway's http.ts sets
+// `resolveDns: false` whenever a proxy is used, because Keiko does not own the connect on that
+// path: the proxy resolves the hostname independently, so any address Keiko resolved beforehand
+// is never bound to what the proxy actually connects to. Pre-resolving here anyway would not be a
+// real guarantee: `refuseUnpinnableResearchEgress` (same gateway file) rejects exactly that
+// approach for research egress, for the identical reason — a pre-proxy lookup can see a hostile
+// name resolve publicly during the check and rebind to loopback for the proxy's own connect. For
+// consistency this port does not pretend to close that gap with a weaker check either. Unlike
+// research egress, this lane cannot simply refuse every proxied request: pinning `denyLoopback`
+// already proved that breaks every real deployment whose proxy covers the Atlassian host (see
+// connectorEgressConfig above). Closing this properly needs a policy-bearing proxy contract — the
+// operator's configured proxy attesting it enforces equivalent address-class policy — which is a
+// keiko-model-gateway-level decision affecting every gatewayFetch consumer with proxy support, not
+// something to improvise per-connector. Tracked as a follow-up under KEIKO-0316.
+function isBlockedLoopbackTarget(target: URL): boolean {
+  return classifyOutboundHost(target.hostname) === "loopback";
 }
 
 // The single-host allowlist re-check (ADR-0128 D3, "enforced twice"): the request URL must be an
@@ -112,9 +174,10 @@ export function createGatewayAtlassianHttpPort(
   const base = new URL(options.baseUrl);
   return async (request: AtlassianHttpRequest): Promise<AtlassianHttpResult> => {
     const target = assertAllowlistedTarget(base, request.url);
+    if (isBlockedLoopbackTarget(target)) return { kind: "network-error" };
     // Resolved immediately before the outbound call; never stored on the port instance.
     const credential = options.credentials.resolveForExecution(options.authRef);
-    const egress = options.egress?.();
+    const egress = connectorEgressConfig(options.egress?.());
     try {
       const response = await gatewayFetch(target.toString(), {
         method: request.method,
@@ -123,7 +186,7 @@ export function createGatewayAtlassianHttpPort(
           accept: "application/json",
         },
         signal: AbortSignal.timeout(boundedTimeoutMs(request.timeoutMs)),
-        ...(egress === undefined ? {} : { egress }),
+        egress,
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       });
       await discardBody(response);
@@ -220,10 +283,11 @@ export function createGatewayAtlassianHttpBodyPort(
   const base = new URL(options.baseUrl);
   return async (request: AtlassianHttpBodyRequest): Promise<AtlassianHttpBodyResult> => {
     const target = assertAllowlistedTarget(base, request.url);
+    if (isBlockedLoopbackTarget(target)) return { kind: "network-error" };
     assertValidRequestBody(request);
     // Resolved immediately before the outbound call; never stored on the port instance.
     const credential = options.credentials.resolveForExecution(options.authRef);
-    const egress = options.egress?.();
+    const egress = connectorEgressConfig(options.egress?.());
     try {
       const response = await gatewayFetch(target.toString(), {
         method: request.method,
@@ -234,7 +298,7 @@ export function createGatewayAtlassianHttpBodyPort(
         },
         ...(request.bodyJson === undefined ? {} : { body: request.bodyJson }),
         signal: composeBodyRequestSignal(request),
-        ...(egress === undefined ? {} : { egress }),
+        egress,
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       });
       const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"), Date.now());

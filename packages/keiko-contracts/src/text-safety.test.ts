@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   containsAbsolutePath,
   containsPseudoRoleMarker,
+  hasControlCharacter,
   redactAbsolutePaths,
   stripUnsafeFormatChars,
 } from "./text-safety.js";
@@ -72,6 +73,34 @@ describe("stripUnsafeFormatChars (GRD-001)", () => {
     // downstream secret-shape redactor can then catch it.
     const split = `sk-${ZWSP}abcdef0123456789ghijkl`;
     expect(stripUnsafeFormatChars(split)).toBe("sk-abcdef0123456789ghijkl");
+  });
+});
+
+describe("hasControlCharacter", () => {
+  it("is false for clean ASCII and non-ASCII text", () => {
+    expect(hasControlCharacter("mem-1")).toBe(false);
+    expect(hasControlCharacter("für Geschäftskunden — 日本語のテキスト")).toBe(false);
+    expect(hasControlCharacter("")).toBe(false);
+  });
+
+  // The identifier-safety gate this backs (memory-internal.ts's memoryIdReason) must reject
+  // TAB/LF/CR too, unlike stripUnsafeFormatChars which preserves them for text content — an
+  // embedded newline in a single-token id can smuggle a forged extra record into a
+  // line-oriented export.
+  it.each([
+    ["TAB", "\t"],
+    ["LF", "\n"],
+    ["CR", "\r"],
+    ["BEL (C0)", BEL],
+    ["DEL", String.fromCodePoint(0x7f)],
+    ["a C1 control", String.fromCodePoint(0x9f)],
+  ])("is true for an embedded %s", (_label, ch) => {
+    expect(hasControlCharacter(`mem${ch}forged`)).toBe(true);
+  });
+
+  it("is false for bidi/zero-width code points (a different check's job)", () => {
+    expect(hasControlCharacter(`mem${RLO}forged`)).toBe(false);
+    expect(hasControlCharacter(`mem${ZWSP}forged`)).toBe(false);
   });
 });
 

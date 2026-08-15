@@ -176,12 +176,32 @@ function isMode(value: unknown): value is GitRepositoryAgentOperationMode {
   );
 }
 
-function containsDirectShellShape(value: unknown): boolean {
-  if (Array.isArray(value)) return value.some(containsDirectShellShape);
+// Case-folded once, from the readable table above, so the lookup and the table can never disagree.
+// A hand-written second lowercase list would silently drop `ghEndpoint`/`gitSubcommand` the moment
+// either side was edited.
+const DIRECT_SHELL_KEYS_LOWERCASE: ReadonlySet<string> = new Set(
+  [...DIRECT_SHELL_KEYS].map((key) => key.toLowerCase()),
+);
+
+// The screen walks attacker-shaped bodies, so it needs a depth budget: unbounded recursion over a
+// deeply nested payload risks a RangeError surfacing as an untyped 500 instead of a typed denial.
+// Exceeding the budget denies — a body too nested to screen is never admitted.
+const DIRECT_SHELL_SHAPE_MAX_DEPTH = 64;
+
+function containsDirectShellShape(value: unknown, depth = 0): boolean {
+  if (depth > DIRECT_SHELL_SHAPE_MAX_DEPTH) return true;
+  if (Array.isArray(value)) {
+    return value.some((element) => containsDirectShellShape(element, depth + 1));
+  }
   if (!isRecord(value)) return false;
   for (const [key, child] of Object.entries(value)) {
-    if (DIRECT_SHELL_KEYS.has(key) || key.toLowerCase().includes("credential")) return true;
-    if (containsDirectShellShape(child)) return true;
+    // Case-INSENSITIVE: the lookup used to be an exact Set hit, so `{Shell:"rm -rf /"}` walked
+    // past a control whose whole purpose is rejecting command-shaped payloads.
+    const lowercaseKey = key.toLowerCase();
+    if (DIRECT_SHELL_KEYS_LOWERCASE.has(lowercaseKey) || lowercaseKey.includes("credential")) {
+      return true;
+    }
+    if (containsDirectShellShape(child, depth + 1)) return true;
   }
   return false;
 }

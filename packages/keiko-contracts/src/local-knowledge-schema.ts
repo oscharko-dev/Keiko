@@ -29,6 +29,16 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
+// NOTE (KEIKO-0371, still open): capsule_sources carries `FOREIGN KEY (id) REFERENCES
+// knowledge_sources(id) ON DELETE RESTRICT` on a FRESH install, but no migration adds it to a store
+// created at v1, and SQLite cannot ALTER a foreign key onto an existing table. The obvious repair —
+// the create/copy/DROP/rename rebuild used elsewhere in this file — is NOT safe here: ten tables
+// (documents, chunks, vectors, …) reference capsule_sources with ON DELETE CASCADE, the store opens
+// with `PRAGMA foreign_keys = ON` (store.ts), and migrations run inside BEGIN/COMMIT where that
+// pragma is a no-op. The DROP would therefore cascade and silently delete every upgraded store's
+// indexed content. Closing this needs migration-engine support for running a rebuild with foreign
+// keys disabled outside the transaction, plus a populated pre-upgrade fixture proving no dependent
+// row is lost.
 export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 32 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────

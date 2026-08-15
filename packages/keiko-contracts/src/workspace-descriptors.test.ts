@@ -174,6 +174,23 @@ describe("validateWorkspaceDescriptorMeta — ADR-0029 rules", () => {
     expect(errors).toEqual([]);
   });
 
+  // KEIKO-0482: both enum checks are `.filter().map()` over the input array, and an empty array
+  // filters to nothing — so a registration that omitted its lifecycle states or its trust boundary
+  // entirely passed silently. Worse, R2 (`ui-only` requires trustBoundary be ["ui"] only) is
+  // satisfied by [] exactly as it is by ["ui"], so the omission looked consistent too. Catching that
+  // authoring mistake before an object type ships without a declared trust boundary is the whole
+  // point of this validator.
+  it("rejects an empty lifecycle and an empty trustBoundary", () => {
+    const errors = validateWorkspaceDescriptorMeta("x", {
+      lifecycle: [],
+      trustBoundary: [],
+      authority: "ui-only",
+      persistence: "transient",
+    });
+    expect(errors.some((e) => e.field === "lifecycle")).toBe(true);
+    expect(errors.some((e) => e.field === "trustBoundary")).toBe(true);
+  });
+
   it("reports the objectType in every error so the registration site is identifiable", () => {
     const errors = validateWorkspaceDescriptorMeta("review", {
       lifecycle: ["proposed"],
