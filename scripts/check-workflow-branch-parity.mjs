@@ -39,7 +39,7 @@ const FOLLOWERS = [
  */
 function readBranchList(source, trigger) {
   const lines = source.split("\n");
-  const triggerAt = lines.findIndex((line) => line === `  ${trigger}:`);
+  const triggerAt = lines.indexOf(`  ${trigger}:`);
   if (triggerAt === -1) return null;
 
   const branches = [];
