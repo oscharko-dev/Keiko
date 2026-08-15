@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { lookup as dnsLookup } from "node:dns/promises";
 import type { LookupAddress } from "node:dns";
@@ -826,11 +827,12 @@ async function createTlsTunnel(
 // (proxy, target, ca) triple produced the SAME key, so a pinned request could silently be served
 // the unpinned call's pooled tunnel: resolveGatewayDns's vetting for the pinned call would have no
 // bearing on the peer the request actually rode, because that peer was chosen entirely by the
-// earlier, unpinned call, before the pinned call ever ran. Folding in "unpinned" or the exact
-// vetted address literal makes a pinned and an unpinned call to the same (proxy, target, ca)
-// triple compute DIFFERENT keys, so neither can be served from the other's pool entry, in either
-// direction, and two pinned calls that happened to resolve to different addresses can't collide
-// either. (The plain-HTTP absolute-URI proxy path, fetchHttpViaProxy, DOES reuse its connection to
+// earlier, unpinned call, before the pinned call ever ran. Folding in "unpinned" or a digest of
+// the vetted address (see below for why a digest, not the address itself) makes a pinned and an
+// unpinned call to the same (proxy, target, ca) triple compute DIFFERENT keys, so neither can be
+// served from the other's pool entry, in either direction, and two pinned calls that happened to
+// resolve to different addresses can't collide either. (The plain-HTTP absolute-URI proxy path,
+// fetchHttpViaProxy, DOES reuse its connection to
 // the proxy -- it passes no explicit `agent`, and on this repo's pinned Node, http.globalAgent's
 // keepAlive defaults to true, unlike a freshly constructed `new Agent()`. That reuse is not the
 // same defect, though: Agent.getName() keys purely on host/port, so what gets pooled is the hop to
@@ -838,15 +840,41 @@ async function createTlsTunnel(
 // own absolute-URI, computed fresh per call by proxyRequestTarget below, never cached or inherited
 // from an earlier call on the same socket. See ADR-0038 D6's #3156 plain-HTTP correction for the
 // full reasoning, including how this was verified rather than assumed.)
+//
+// Both variable terms below are collision-resistant digests, not raw/summarized values (#3157,
+// Codex P1 + Keiko for Quality): the CA term used to be `${cert.length}:${cert.slice(0, 32)}` per
+// certificate -- for PEM input that summary is almost entirely the near-universal
+// "-----BEGIN CERTIFICATE-----" header, so two DIFFERENT certificate sets sharing a byte length
+// routinely produced the IDENTICAL summary. A call configured with a tightened or entirely
+// different trust bundle could then be served an idle tunnel authenticated under an earlier call's
+// (looser or unrelated) trust set, with its own bundle never actually applied -- the same class of
+// bug as the pinning-posture gap above, one field over. Hashing the full certificate bytes (sorted
+// first, with an explicit comparator so the sort is well-defined rather than relying on the
+// default coercion-based ordering -- this only has to be a STABLE total order within one running
+// process, not a human-meaningful one, so locale-awareness is incidental, not a requirement) makes
+// the SAME set in a different array order hash identically -- order carries no trust meaning --
+// while two distinct bundles produce different keys with overwhelming probability,
+// and a byte-identical set collapses to the same key exactly when it should. The pin term's address
+// literal is hashed for a different reason: it is an internal-network IP with no legitimate reason
+// to be human-legible in a key whose only job is to differ from other keys, never to be read back
+// (this key is a private, in-memory Map key -- grepped and confirmed never logged, thrown, or
+// otherwise surfaced -- but a digest costs nothing and permanently forecloses that ever mattering
+// if some future change adds diagnostics here).
+function keyMaterialDigest(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
 function httpsProxyTunnelKey(
   target: URL,
   proxy: URL,
   ca: readonly string[],
   pinnedAddress: LookupAddress | undefined,
 ): string {
-  const caKey = ca.map((cert) => `${String(cert.length)}:${cert.slice(0, 32)}`).join("|");
+  const caKey = keyMaterialDigest(JSON.stringify([...ca].sort((a, b) => a.localeCompare(b))));
   const pinKey =
-    pinnedAddress === undefined ? "unpinned" : `pinned:${addressAuthorityHost(pinnedAddress)}`;
+    pinnedAddress === undefined
+      ? "unpinned"
+      : `pinned:${keyMaterialDigest(addressAuthorityHost(pinnedAddress))}`;
   return `${proxy.protocol}//${proxy.host}|${target.protocol}//${target.host}|${caKey}|${pinKey}`;
 }
 
