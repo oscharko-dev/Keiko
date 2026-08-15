@@ -397,19 +397,7 @@ describe("hasInheritedEnumerableProperty (Codex P1 3789635890)", () => {
   });
 });
 
-// KfQ 3789542344 asked that a pipeline-level test assert the rejection REASON names this guard
-// specifically. Verified, and it cannot be done: isRecord's prototype-identity check runs before
-// factErrors ever reaches hasInheritedEnumerableProperty, for every fixture whose direct prototype
-// is not exactly Object.prototype -- which is every fixture buildable from outside this process
-// (see hasInheritedEnumerableProperty's own comment). Proved this empirically rather than assuming
-// it: a version of this test asserting the guard's exact message text against
-// Object.create({ outcome: "absent" }) fails with the actual reason being isRecord's
-// "... must be a tagged fact object", never the guard's message -- the same architectural
-// constraint the extracted-helper approach exists to route around, not a gap the pipeline can
-// close. The direct hasInheritedEnumerableProperty tests above are the reachable, correct home for
-// pinning this guard's behaviour; asserting its literal message string would only be reachable
-// through the same unreachable path.
-describe("factErrors: what the pipeline can and cannot pin here (Codex P1 3789635890)", () => {
+describe("factErrors: the null-prototype case (KfQ 3789542391, refuted again at 3789776138)", () => {
   function withReceiptDigest(receiptDigest: unknown): unknown {
     const base = validContribution();
     const scenario = base.scenarios[0];
@@ -417,12 +405,11 @@ describe("factErrors: what the pipeline can and cannot pin here (Codex P1 378963
     return { ...base, scenarios: [{ ...scenario, receiptDigest }] };
   }
 
-  // KfQ 3789542391: isRecord's Object.getPrototypeOf(value) === Object.prototype check rejects a
-  // null-prototype object today (Object.getPrototypeOf(Object.create(null)) is null, never
-  // Object.prototype), and JSON.parse never produces one, so rejecting is correct -- but nothing
-  // pinned that decision before this test. A future loosening of isRecord would go unnoticed
-  // without it. Unlike the outcome/promptText shapes above, this one IS reachable through the
-  // pipeline: it is isRecord's own check being exercised, not hasInheritedEnumerableProperty's.
+  // KfQ 3789542391 / 3789776138 (new thread, same claim): isRecord's
+  // Object.getPrototypeOf(value) === Object.prototype check rejects a null-prototype object today
+  // (Object.getPrototypeOf(Object.create(null)) is null, never Object.prototype), and JSON.parse
+  // never produces one, so rejecting can never affect a legitimate wire-shaped payload -- deliberate,
+  // already pinned here, reused for the new thread id.
   it("rejects a null-prototype receiptDigest", () => {
     const fact: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
     fact.outcome = "absent";
@@ -433,6 +420,114 @@ describe("factErrors: what the pipeline can and cannot pin here (Codex P1 378963
 
   it("still accepts a legitimate receiptDigest with no inherited or null-prototype shape", () => {
     expect(validateCodeTaskAcceptanceContribution(validContribution()).ok).toBe(true);
+  });
+});
+
+// Codex P1 3789773829, the terminating fix (see ownField's definition in code-task-acceptance.ts
+// for the full reasoning): detecting a specific inherited-property shape is always one step behind
+// an attacker who can vary the property descriptor -- enumerable value, then enumerable outcome,
+// then this thread's non-enumerable outcome. ownField makes the question moot by never reading
+// through the prototype chain at all, for ANY descriptor shape. These tests pin that directly
+// against the real global Object.prototype (not a safe stand-in): calling vitest's expect() WHILE
+// Object.prototype is polluted throws inside expect's own internals for at least the "value" key
+// (confirmed empirically -- its fluent chain apparently builds objects via defineProperty, which
+// collides with an inherited plain "value" the same way node:internal/streams/readable did in an
+// earlier, non-isolated finding), so withPollutedPrototype captures only a plain result during the
+// polluted window and restores deterministically in a finally BEFORE any assertion runs.
+function withPollutedPrototype<T>(
+  key: string,
+  descriptor: Pick<PropertyDescriptor, "value" | "enumerable" | "writable">,
+  run: () => T,
+): T {
+  try {
+    Object.defineProperty(Object.prototype, key, { configurable: true, ...descriptor });
+    return run();
+  } finally {
+    Reflect.deleteProperty(Object.prototype, key);
+  }
+}
+
+function withReceiptDigest(receiptDigest: unknown): unknown {
+  const base = validContribution();
+  const scenario = base.scenarios[0];
+  if (scenario === undefined) throw new Error("fixture must declare at least one scenario");
+  return { ...base, scenarios: [{ ...scenario, receiptDigest }] };
+}
+
+// Non-enumerable pollution isolates ownField's OWN contribution cleanly: hasInheritedEnumerableProperty's
+// for...in is blind to it everywhere in the object graph, not only at the field under test (unlike
+// enumerable pollution below, which trips that guard on every OTHER nested fact in the same payload
+// too, since for...in walks the full chain on every object once anything is enumerable on
+// Object.prototype -- confirmed empirically: an enumerable-"kind" pollution test rejected the
+// payload via the UNRELATED receiptDigest/reshaping guard messages, not via anything reading
+// "kind" at all, before this file's tests were corrected to use non-enumerable pollution here
+// specifically to avoid that confound). Proved red-then-green against a temporary ownField
+// sabotage (reverted to plain `record[key]`, matching the coordinator's literal acceptance
+// criterion) -- confirmed empirically that with ownField sabotaged this way, the non-enumerable
+// "kind" case is wrongly ACCEPTED (ok: true), not merely differently rejected.
+describe("ownField makes an inherited field unreadable regardless of descriptor shape (Codex P1 3789773829)", () => {
+  it("rejects a fact's inherited non-enumerable value on the known branch", () => {
+    const payload = withReceiptDigest({ outcome: "known" }); // no own "value"
+    const result = withPollutedPrototype("value", { value: DIGEST, enumerable: false }, () =>
+      validateCodeTaskAcceptanceContribution(payload),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a fact's inherited non-enumerable outcome discriminator on an empty object", () => {
+    const payload = withReceiptDigest({}); // wholly empty; outcome resolves only through the chain
+    const result = withPollutedPrototype("outcome", { value: "absent", enumerable: false }, () =>
+      validateCodeTaskAcceptanceContribution(payload),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects an inherited non-enumerable top-level header field", () => {
+    const legitimate = validContribution();
+    const { kind: _kind, ...withoutKind } = legitimate as unknown as Record<string, unknown>;
+    void _kind;
+    const result = withPollutedPrototype(
+      "kind",
+      { value: CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND, enumerable: false },
+      () => validateCodeTaskAcceptanceContribution(withoutKind),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("still accepts a legitimate contribution once Object.prototype is restored", () => {
+    // Sanity: withPollutedPrototype's finally actually cleans up -- this runs after every polluted
+    // test above and would fail if any of them leaked.
+    expect(validateCodeTaskAcceptanceContribution(validContribution()).ok).toBe(true);
+  });
+});
+
+// Enumerable pollution -- Codex's original, simpler shapes -- is kept as belt-and-braces per the
+// coordinator's explicit direction, so these still pass and are worth pinning as end-to-end
+// evidence that the pipeline rejects them. They do NOT isolate ownField's marginal contribution
+// the way the non-enumerable tests above do: because for...in walks the full prototype chain,
+// enumerable pollution of ANY key trips hasInheritedEnumerableProperty on every OTHER nested fact
+// in the same payload too, so these tests would still pass even with ownField reverted to plain
+// property access (confirmed empirically) -- the rejection comes from the guard, which is exactly
+// what "belt and braces" means.
+describe("hasInheritedEnumerableProperty still independently rejects the enumerable shapes Codex originally found", () => {
+  it("rejects an inherited enumerable value on an otherwise-complete receiptDigest", () => {
+    const payload = withReceiptDigest({ outcome: "absent" });
+    const result = withPollutedPrototype(
+      "value",
+      { value: DIGEST, enumerable: true, writable: true },
+      () => validateCodeTaskAcceptanceContribution(payload),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects an inherited enumerable outcome on an entirely empty receiptDigest", () => {
+    const payload = withReceiptDigest({});
+    const result = withPollutedPrototype(
+      "outcome",
+      { value: "absent", enumerable: true, writable: true },
+      () => validateCodeTaskAcceptanceContribution(payload),
+    );
+    expect(result.ok).toBe(false);
   });
 });
 

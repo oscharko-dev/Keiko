@@ -505,3 +505,134 @@ describe("auxiliary request rejection paths", () => {
     );
   });
 });
+
+// Round 3 (#2899): isRecord here was still `typeof value === "object" && value !== null &&
+// !Array.isArray(value)` -- unlike code-task-acceptance.ts/code-task-run-control.ts/
+// code-task-governance.ts, this file never received the prototype-identity hardening from the
+// KfQ Critical audit round, so it was vulnerable to the basic Object.create(secretHolder) attack
+// TODAY, not just to a genuinely polluted global Object.prototype. This test targets the
+// TOP-LEVEL request object specifically (not a nested tagged-fact field) so it isolates isRecord's
+// contribution from factErrors's own "value" in value / hasInheritedEnumerableProperty guard,
+// which only applies to fact objects and would otherwise also catch a "value"-shaped attack,
+// making it impossible to tell which layer actually did the rejecting. Proved red-then-green
+// against a temporary revert of isRecord to its pre-hardening form (see the commit this test
+// shipped in for the measurement): with the old isRecord, `hostile` has no extra OWN property
+// anywhere (Object.assign only copies enumerable own properties, and secretApiKey lives on the
+// prototype), so unknownKeys finds nothing, every own field validates, and the request would have
+// been wrongly accepted.
+describe("isRecord prototype-identity hardening (round 3, #2899)", () => {
+  it("rejects a request with an extra field reachable only through the prototype", () => {
+    const legitimate = researchRequest();
+    const hostile = Object.create({ secretApiKey: "sk-leak-me" }) as Record<string, unknown>;
+    Object.assign(hostile, legitimate);
+    expect(Object.keys(hostile)).toEqual(Object.keys(legitimate));
+    expect(hostile.secretApiKey).toBe("sk-leak-me");
+    expect(validateAuxiliaryCapabilityRequestV1(hostile).ok).toBe(false);
+  });
+
+  it("rejects an outcome with an extra field reachable only through the prototype", () => {
+    const legitimate = {
+      schemaVersion: CODE_TASK_AUXILIARY_SCHEMA_VERSION,
+      status: "accepted" as const,
+      capability: "child-agent" as const,
+      resultDigest: { outcome: "known" as const, value: DIGEST },
+      childResultCount: { outcome: "known" as const, value: 0 },
+    };
+    const hostile = Object.create({ secretApiKey: "sk-leak-me" }) as Record<string, unknown>;
+    Object.assign(hostile, legitimate);
+    expect(Object.keys(hostile)).toEqual(Object.keys(legitimate));
+    expect(validateAuxiliaryCapabilityOutcomeV1(hostile).ok).toBe(false);
+  });
+
+  it("rejects the degenerate Object.create(valid) case with nothing own at all", () => {
+    expect(validateAuxiliaryCapabilityRequestV1(Object.create(researchRequest())).ok).toBe(false);
+  });
+});
+
+// Round 3 (#2899), mirrors code-task-acceptance.ts/code-task-run-control.ts's identical fix for
+// KfQ 3789542365: factErrors's known and non-known branches each returned as soon as they saw one
+// problem, so a second, independent problem on the same fact went unreported. A test asserting
+// only ok === false cannot tell early-return from collect-both apart -- both fail for a fixture
+// with just one problem. Only a fixture with TWO independent problems, and an assertion that BOTH
+// specific messages appear, actually pins collect over early-return. Proved red-then-green against
+// a temporary early-return sabotage of each branch (see the commit this test shipped in).
+describe("factErrors collects every violation instead of stopping at the first (round 3, #2899)", () => {
+  function errorsFor(request: unknown): readonly string[] {
+    const result = validateAuxiliaryCapabilityRequestV1(request);
+    return result.ok ? [] : result.errors;
+  }
+
+  it("reports both the invalid value and the unrelated extra key on a known outcome", () => {
+    const errors = errorsFor({
+      ...researchRequest(),
+      research: {
+        ...researchRequest().research,
+        queryTextDigest: { outcome: "known", value: "short", promptText: "leak me" },
+      },
+    });
+    expect(errors.some((error) => error.includes("value is invalid"))).toBe(true);
+    expect(errors.some((error) => error.includes("promptText"))).toBe(true);
+  });
+
+  it("reports both the disallowed value and the unrelated extra key on a non-known outcome", () => {
+    const errors = errorsFor({
+      ...researchRequest(),
+      research: {
+        ...researchRequest().research,
+        queryTextDigest: { outcome: "absent", value: DIGEST, promptText: "leak me" },
+      },
+    });
+    expect(errors.some((error) => error.includes("must not carry a value"))).toBe(true);
+    expect(errors.some((error) => error.includes("promptText"))).toBe(true);
+  });
+});
+
+// Codex P1 3789773829, the terminating fix -- ownField (imported from code-task-acceptance.ts) is
+// the reading discipline this file received "instead of the guard-only shape we are now retiring"
+// (coordinator's framing). withPollutedPrototype mirrors code-task-acceptance.test.ts's identical
+// helper; see that file's describe block of the same name for why non-enumerable pollution is the
+// clean, unconfounded proof of ownField's own contribution (enumerable pollution trips
+// hasInheritedEnumerableProperty on every OTHER nested fact in the same payload too, since for...in
+// walks the whole chain). Proved red-then-green against a temporary ownField sabotage in the commit
+// this test shipped in.
+function withPollutedPrototype<T>(
+  key: string,
+  descriptor: Pick<PropertyDescriptor, "value" | "enumerable" | "writable">,
+  run: () => T,
+): T {
+  try {
+    Object.defineProperty(Object.prototype, key, { configurable: true, ...descriptor });
+    return run();
+  } finally {
+    Reflect.deleteProperty(Object.prototype, key);
+  }
+}
+
+describe("ownField makes an inherited field unreadable regardless of descriptor shape (Codex P1 3789773829)", () => {
+  it("rejects a queryTextDigest's inherited non-enumerable value on the known branch", () => {
+    const payload = {
+      ...researchRequest(),
+      research: { ...researchRequest().research, queryTextDigest: { outcome: "known" } },
+    };
+    const result = withPollutedPrototype("value", { value: DIGEST, enumerable: false }, () =>
+      validateAuxiliaryCapabilityRequestV1(payload),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects an outcome's inherited non-enumerable status discriminator", () => {
+    const legitimate = {
+      schemaVersion: CODE_TASK_AUXILIARY_SCHEMA_VERSION,
+      capability: "research" as const,
+      reasonCode: "policy-denied",
+    };
+    const result = withPollutedPrototype("status", { value: "denied", enumerable: false }, () =>
+      validateAuxiliaryCapabilityOutcomeV1(legitimate),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("still accepts a legitimate request once Object.prototype is restored", () => {
+    expect(validateAuxiliaryCapabilityRequestV1(researchRequest())).toMatchObject({ ok: true });
+  });
+});

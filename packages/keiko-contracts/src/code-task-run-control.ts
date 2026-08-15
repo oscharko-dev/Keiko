@@ -7,6 +7,7 @@
 // plus pause/stop/revoke). A missing runtime capability resolves to unsupported or denied — never
 // allowed.
 import type { CodeTaskFact } from "./code-task-acceptance.js";
+import { hasInheritedEnumerableProperty, ownField } from "./code-task-acceptance.js";
 import type {
   CodeTaskGrantId,
   CodeTaskGrantScope,
@@ -39,8 +40,9 @@ import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
 // non-default prototype closes this at the single choke point every validator in this file already
 // passes through. This alone does not defend against a genuinely polluted GLOBAL Object.prototype
 // (Object.getPrototypeOf(value) === Object.prototype stays true even after Object.prototype itself
-// gains a property, since mutating an object in place never changes its identity) -- that case is
-// what the "value" in value / "in" checks below independently exist for.
+// gains a property, since mutating an object in place never changes its identity) -- that residual
+// case is what every ownField(value, key) read below (imported from code-task-acceptance.ts) closes
+// completely, rather than the field-specific/enumerable-only checks this file used to have here.
 function isRecord(value: unknown): value is Record<string, unknown> {
   return (
     typeof value === "object" &&
@@ -115,68 +117,46 @@ const RUN_CONTROL_SNAPSHOT_KEYS = [
 function grantRefErrors(value: unknown, index: number): string[] {
   if (!isRecord(value)) return [`grantRefs[${String(index)}] must be an object`];
   const errors = unknownKeys(value, ["grantId", "grantScope"], `grantRefs[${String(index)}]`);
-  if (!isCodeTaskGrantId(value.grantId))
+  if (!isCodeTaskGrantId(ownField(value, "grantId"))) {
     errors.push(`grantRefs[${String(index)}].grantId is invalid`);
-  if (!isCodeTaskGrantScope(value.grantScope)) {
+  }
+  if (!isCodeTaskGrantScope(ownField(value, "grantScope"))) {
     errors.push(`grantRefs[${String(index)}].grantScope is invalid`);
   }
   return errors;
 }
 
-// Codex P1 (threads 3789537202, 3789635890; mirrors code-task-acceptance.ts's identical helper):
-// checking one inherited key at a time is an unbounded game of whack-a-mole. A restored check for
-// an inherited `value` still misses an inherited discriminator (Object.prototype polluted with
-// outcome: "absent" lets an otherwise-EMPTY object resolve a branch below via ordinary property
-// access, with zero own properties for unknownKeys' Object.getOwnPropertyNames scan to ever see)
-// and any undeclared field (an inherited, wholly unlisted property rides along on the object these
-// validators hand onward by reference). A legitimate JSON-sourced fact never has ANY inherited
-// enumerable property at all, so rejecting the general case closes every specific one at once.
-// Exported so a test can call the actual guard directly with a crafted object, bypassing isRecord
-// on purpose: isRecord answers a different question ("is this a plain object"), and rejecting a
-// non-default prototype there is exactly why this guard is otherwise unreachable from outside --
-// every real caller already goes through isRecord first, but a test targeting this function does
-// not have to. for...in is the right tool for "does anything resolve here that this object does
-// not itself own", unlike debug-lifecycle.ts's plain `in` for closed-set MEMBERSHIP, where
-// prototype traversal is exactly the bug (it would accept "constructor" as a member).
-// Also checked empirically (mirrors code-task-acceptance.ts's identical note): a Proxy whose
-// getPrototypeOf trap reports the real Object.prototype (to clear isRecord) cannot desynchronize
-// this loop from Object.hasOwn either -- both resolve through the same [[GetOwnProperty]] trap call
-// on the same object, so no trap shape clears isRecord and still makes this function return a false
-// negative without mutating the real global Object.prototype.
-export function hasInheritedEnumerableProperty(record: Record<string, unknown>): boolean {
-  for (const key in record) {
-    if (!Object.hasOwn(record, key)) return true;
-  }
-  return false;
-}
-
 // KEIKO-0302 follow-on: the "known" branch checked `value` but never the fact object's OWN keys,
 // so a well-formed known fact padded with an extra field (e.g. free text riding alongside a valid
 // handle) validated and was returned verbatim.
+// hasInheritedEnumerableProperty and ownField are imported from code-task-acceptance.ts, not
+// reimplemented here: see their definitions there for the full history (Codex P1 3789537202,
+// 3789635890, 3789773829) and why gating every read through ownField -- not detecting a specific
+// inherited-property shape -- is the fix that terminates the whack-a-mole rather than adding
+// another round to it. This file used to keep its own duplicate hasInheritedEnumerableProperty;
+// consolidated on the ownField rewrite since arch:check already proved the cross-file import is
+// clean for the sibling files touched in the same change.
 function boundedStringFactErrors(value: unknown, path: string): string[] {
   if (!isRecord(value)) return [`${path} must be a tagged fact object`];
   if (hasInheritedEnumerableProperty(value)) {
     return [`${path} must not resolve any field through its prototype chain`];
   }
-  if (value.outcome === "known") {
+  const outcome = ownField(value, "outcome");
+  if (outcome === "known") {
     // Collected, not early-returned (KfQ 3789542365's shape, fixed consistently here too): an
     // object can carry both an extra own key and an invalid value, and both are worth reporting.
     const errors = unknownKeys(value, ["outcome", "value"], path);
     // recoveryRef is documented as a content-free handle, so it takes the same lower-kebab shape
     // rather than a bare length bound that a filesystem path would pass.
-    if (!isContentFreeReasonCode(value.value)) {
+    if (!isContentFreeReasonCode(ownField(value, "value"))) {
       errors.push(`${path}.value must be a bounded content-free reference`);
     }
     return errors;
   }
-  if (
-    value.outcome === "absent" ||
-    value.outcome === "unavailable" ||
-    value.outcome === "unknown"
-  ) {
+  if (outcome === "absent" || outcome === "unavailable" || outcome === "unknown") {
     const errors = unknownKeys(value, ["outcome"], path);
     if (Object.hasOwn(value, "value")) {
-      errors.push(`${path} must not carry a value for outcome ${value.outcome}`);
+      errors.push(`${path} must not carry a value for outcome ${outcome}`);
     }
     return errors;
   }
@@ -188,21 +168,18 @@ function questionFactErrors(value: unknown): string[] {
   if (hasInheritedEnumerableProperty(value)) {
     return ["pendingQuestion must not resolve any field through its prototype chain"];
   }
-  if (value.outcome === "known") {
+  const outcome = ownField(value, "outcome");
+  if (outcome === "known") {
     const errors = unknownKeys(value, ["outcome", "value"], "pendingQuestion");
-    if (!isCodeTaskQuestionId(value.value)) {
+    if (!isCodeTaskQuestionId(ownField(value, "value"))) {
       errors.push("pendingQuestion.value must be a question id");
     }
     return errors;
   }
-  if (
-    value.outcome === "absent" ||
-    value.outcome === "unavailable" ||
-    value.outcome === "unknown"
-  ) {
+  if (outcome === "absent" || outcome === "unavailable" || outcome === "unknown") {
     const errors = unknownKeys(value, ["outcome"], "pendingQuestion");
     if (Object.hasOwn(value, "value")) {
-      errors.push(`pendingQuestion must not carry a value for outcome ${value.outcome}`);
+      errors.push(`pendingQuestion must not carry a value for outcome ${outcome}`);
     }
     return errors;
   }
@@ -211,17 +188,21 @@ function questionFactErrors(value: unknown): string[] {
 
 function runControlHeaderErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
-  if (value.kind !== RUN_CONTROL_SNAPSHOT_KIND) {
+  if (ownField(value, "kind") !== RUN_CONTROL_SNAPSHOT_KIND) {
     errors.push(`kind must be ${RUN_CONTROL_SNAPSHOT_KIND}`);
   }
-  if (value.schemaVersion !== CODE_TASK_GOVERNANCE_SCHEMA_VERSION) {
+  if (ownField(value, "schemaVersion") !== CODE_TASK_GOVERNANCE_SCHEMA_VERSION) {
     errors.push("schemaVersion must be the literal 1");
   }
-  if (!isCodeTaskTaskId(value.taskId)) errors.push("taskId is invalid");
-  if (!isCodeTaskRunId(value.runId)) errors.push("runId is invalid");
-  if (!isCodeTaskIdempotencyKey(value.idempotencyKey)) errors.push("idempotencyKey is invalid");
+  if (!isCodeTaskTaskId(ownField(value, "taskId"))) errors.push("taskId is invalid");
+  if (!isCodeTaskRunId(ownField(value, "runId"))) errors.push("runId is invalid");
+  if (!isCodeTaskIdempotencyKey(ownField(value, "idempotencyKey"))) {
+    errors.push("idempotencyKey is invalid");
+  }
   for (const key of ["runEpoch", "stateRevision"] as const) {
-    if (!isNonNegativeInteger(value[key])) errors.push(`${key} must be a non-negative integer`);
+    if (!isNonNegativeInteger(ownField(value, key))) {
+      errors.push(`${key} must be a non-negative integer`);
+    }
   }
   return errors;
 }
@@ -232,14 +213,15 @@ export function validateRunControlSnapshotV1(
   if (!isRecord(value)) return { ok: false, errors: ["run-control snapshot must be an object"] };
   const errors = unknownKeys(value, RUN_CONTROL_SNAPSHOT_KEYS, "runControlSnapshot");
   errors.push(...runControlHeaderErrors(value));
-  if (Array.isArray(value.grantRefs)) {
-    value.grantRefs.forEach((ref, index) => errors.push(...grantRefErrors(ref, index)));
+  const grantRefs = ownField(value, "grantRefs");
+  if (Array.isArray(grantRefs)) {
+    grantRefs.forEach((ref, index) => errors.push(...grantRefErrors(ref, index)));
   } else {
     errors.push("grantRefs must be an array");
   }
   errors.push(
-    ...boundedStringFactErrors(value.recoveryRef, "recoveryRef"),
-    ...questionFactErrors(value.pendingQuestion),
+    ...boundedStringFactErrors(ownField(value, "recoveryRef"), "recoveryRef"),
+    ...questionFactErrors(ownField(value, "pendingQuestion")),
   );
   return errors.length === 0
     ? { ok: true, value: value as unknown as RunControlSnapshotV1 }
@@ -333,13 +315,15 @@ export interface RuntimeGovernancePortV1 {
 
 function targetErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
-  if (!isCodeTaskTaskId(value.taskId)) errors.push("taskId is invalid");
-  if (!isCodeTaskRunId(value.runId)) errors.push("runId is invalid");
-  if (!isCodeTaskWorkspaceId(value.workspaceId)) errors.push("workspaceId is invalid");
-  if (!isNonNegativeInteger(value.stateRevision)) {
+  if (!isCodeTaskTaskId(ownField(value, "taskId"))) errors.push("taskId is invalid");
+  if (!isCodeTaskRunId(ownField(value, "runId"))) errors.push("runId is invalid");
+  if (!isCodeTaskWorkspaceId(ownField(value, "workspaceId"))) errors.push("workspaceId is invalid");
+  if (!isNonNegativeInteger(ownField(value, "stateRevision"))) {
     errors.push("stateRevision must be a non-negative integer");
   }
-  if (!isCodeTaskIdempotencyKey(value.idempotencyKey)) errors.push("idempotencyKey is invalid");
+  if (!isCodeTaskIdempotencyKey(ownField(value, "idempotencyKey"))) {
+    errors.push("idempotencyKey is invalid");
+  }
   return errors;
 }
 
@@ -353,15 +337,16 @@ const RUNTIME_GOVERNANCE_TARGET_KEYS = [
 ];
 
 function requestOperationErrors(value: Record<string, unknown>): string[] {
-  if (value.operation === "decide") {
+  if (ownField(value, "operation") === "decide") {
     const errors = unknownKeys(
       value,
       [...RUNTIME_GOVERNANCE_TARGET_KEYS, "actionKind", "requestedGrantScope"],
       "runtimeGovernanceRequest",
     );
-    if (!isOneOf(value.actionKind, GOVERNED_ACTION_ACTION_KINDS))
+    if (!isOneOf(ownField(value, "actionKind"), GOVERNED_ACTION_ACTION_KINDS)) {
       errors.push("actionKind is invalid");
-    if (!isCodeTaskGrantScope(value.requestedGrantScope)) {
+    }
+    if (!isCodeTaskGrantScope(ownField(value, "requestedGrantScope"))) {
       errors.push("requestedGrantScope is invalid");
     }
     return errors;
@@ -375,8 +360,11 @@ export function validateRuntimeGovernanceRequestV1(
   if (!isRecord(value))
     return { ok: false, errors: ["runtime governance request must be an object"] };
   const errors: string[] = [];
-  if (!isOneOf(value.operation, RUNTIME_GOVERNANCE_OPERATIONS)) errors.push("operation is invalid");
-  else errors.push(...requestOperationErrors(value));
+  if (!isOneOf(ownField(value, "operation"), RUNTIME_GOVERNANCE_OPERATIONS)) {
+    errors.push("operation is invalid");
+  } else {
+    errors.push(...requestOperationErrors(value));
+  }
   errors.push(...targetErrors(value));
   return errors.length === 0
     ? { ok: true, value: value as unknown as RuntimeGovernanceRequestV1 }
@@ -391,26 +379,30 @@ function lifecycleEventErrors(value: unknown, index: number): string[] {
     `events[${String(index)}]`,
   );
   for (const key of ["sequence", "stateRevision"] as const) {
-    if (!isNonNegativeInteger(value[key])) {
+    if (!isNonNegativeInteger(ownField(value, key))) {
       errors.push(`events[${String(index)}].${key} must be a non-negative integer`);
     }
   }
-  if (!isOneOf(value.kind, RUNTIME_GOVERNANCE_LIFECYCLE_KINDS)) {
+  if (!isOneOf(ownField(value, "kind"), RUNTIME_GOVERNANCE_LIFECYCLE_KINDS)) {
     errors.push(`events[${String(index)}].kind is invalid`);
   }
   return errors;
 }
 
 function outcomeBodyErrors(value: Record<string, unknown>): string[] {
-  if (value.status === "decided") {
+  const status = ownField(value, "status");
+  if (status === "decided") {
     const errors = unknownKeys(value, ["kind", "schemaVersion", "status", "decision"], "outcome");
-    if (!isOneOf(value.decision, GOVERNED_ACTION_DECISIONS)) errors.push("decision is invalid");
+    if (!isOneOf(ownField(value, "decision"), GOVERNED_ACTION_DECISIONS)) {
+      errors.push("decision is invalid");
+    }
     return errors;
   }
-  if (value.status === "settled") {
+  if (status === "settled") {
     const errors = unknownKeys(value, ["kind", "schemaVersion", "status", "events"], "outcome");
-    if (Array.isArray(value.events)) {
-      value.events.forEach((event, index) => errors.push(...lifecycleEventErrors(event, index)));
+    const events = ownField(value, "events");
+    if (Array.isArray(events)) {
+      events.forEach((event, index) => errors.push(...lifecycleEventErrors(event, index)));
     } else {
       errors.push("events must be an array");
     }
@@ -419,7 +411,7 @@ function outcomeBodyErrors(value: Record<string, unknown>): string[] {
   const errors = unknownKeys(value, ["kind", "schemaVersion", "status", "reasonCode"], "outcome");
   // Length alone is not content-freeness: "Denied: /Users/alice/secret" is well under 64 characters.
   // The shared lower-kebab predicate is the rule this message already claims to enforce.
-  if (!isContentFreeReasonCode(value.reasonCode)) {
+  if (!isContentFreeReasonCode(ownField(value, "reasonCode"))) {
     errors.push("reasonCode must be a bounded content-free reason code");
   }
   return errors;
@@ -431,12 +423,15 @@ export function validateRuntimeGovernanceOutcomeV1(
   if (!isRecord(value))
     return { ok: false, errors: ["runtime governance outcome must be an object"] };
   const errors: string[] = [];
-  if (value.kind !== "runtime-governance-outcome") errors.push("kind is invalid");
-  if (value.schemaVersion !== CODE_TASK_GOVERNANCE_SCHEMA_VERSION) {
+  if (ownField(value, "kind") !== "runtime-governance-outcome") errors.push("kind is invalid");
+  if (ownField(value, "schemaVersion") !== CODE_TASK_GOVERNANCE_SCHEMA_VERSION) {
     errors.push("schemaVersion must be the literal 1");
   }
-  if (!isOneOf(value.status, RUNTIME_GOVERNANCE_OUTCOME_STATUSES)) errors.push("status is invalid");
-  else errors.push(...outcomeBodyErrors(value));
+  if (!isOneOf(ownField(value, "status"), RUNTIME_GOVERNANCE_OUTCOME_STATUSES)) {
+    errors.push("status is invalid");
+  } else {
+    errors.push(...outcomeBodyErrors(value));
+  }
   return errors.length === 0
     ? { ok: true, value: value as unknown as RuntimeGovernanceOutcomeV1 }
     : { ok: false, errors };

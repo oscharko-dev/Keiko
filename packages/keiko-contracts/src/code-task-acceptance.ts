@@ -216,11 +216,42 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
 // as enumerable-and-own-at-this-level makes Object.hasOwn report it as own too. No crafted value,
 // proxy or otherwise, clears isRecord and still makes this function return a false negative without
 // mutating the real global Object.prototype.
+// Retired as the load-bearing check by Codex P1 3789773829: for...in only visits ENUMERABLE
+// properties, own or inherited, so Object.defineProperty(Object.prototype, "outcome", { value:
+// "absent", enumerable: false }) is invisible to this loop while `record.outcome` still resolves
+// to "absent" through ordinary property access -- the same "empty object smuggles a discriminator"
+// attack this function exists to catch, just via a descriptor shape it does not look at. A
+// detector that walks descriptor space (enumerable, then non-enumerable, then whatever comes
+// next) is always one step behind an attacker who can vary the descriptor, so every validator in
+// this file now reads contract fields through ownField below instead of trusting `value.outcome`
+// directly -- that is the complete, terminating fix; this function stays only as an early,
+// cheaper rejection for the common (enumerable) case, kept for defense in depth, not because it is
+// still sufficient on its own.
+// KfQ 3789776158: this is exported for the direct-call tests below, so a caller reaching for it in
+// isolation could mistake it for a complete validator. It is not: it does not check that `record`'s
+// own prototype is Object.prototype (pair it with isRecord for that) and, per the paragraph above,
+// it only catches an ENUMERABLE inherited property -- ownField is what actually closes the general
+// case; this function alone closes neither.
 export function hasInheritedEnumerableProperty(record: Record<string, unknown>): boolean {
   for (const key in record) {
     if (!Object.hasOwn(record, key)) return true;
   }
   return false;
+}
+
+// Codex P1 3789773829, the terminating fix: a detector inspects a property's descriptor to decide
+// whether it is "suspicious" (enumerable? inherited? both?), and an attacker who controls
+// Object.prototype controls the descriptor, so there is always a shape the detector has not been
+// taught yet (enumerable value, then enumerable outcome, then non-enumerable outcome -- and
+// nothing rules out a getter, a Symbol.toPrimitive trick, or the next thing not yet named). Object
+// .hasOwn is invariant to every one of those: it answers ownership, never resolution, regardless
+// of enumerable/configurable/writable/accessor-vs-data. Gating every contract-field read through
+// this function means nothing here ever asks the prototype chain a question in the first place, so
+// there is no descriptor shape left to exploit. Returns unknown, matching how a fresh property read
+// off Record<string, unknown> already behaved before this change -- callers narrow it exactly as
+// they narrowed `value.someField` before.
+export function ownField(record: Record<string, unknown>, key: string): unknown {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
 function factErrors(
@@ -232,25 +263,24 @@ function factErrors(
   if (hasInheritedEnumerableProperty(value)) {
     return [`${path} must not resolve any field through its prototype chain`];
   }
-  if (value.outcome === "known") {
+  const outcome = ownField(value, "outcome");
+  if (outcome === "known") {
     // Collected, not early-returned: an object can carry both an extra own key and an invalid
     // value, and both are worth reporting (KfQ 3789542365 raised this for the branch below; the
     // same shape applied here).
     const errors = unknownKeys(value, ["outcome", "value"], path);
-    if (!isValue(value.value)) errors.push(`${path}.value is invalid for a known fact`);
+    if (!isValue(ownField(value, "value"))) {
+      errors.push(`${path}.value is invalid for a known fact`);
+    }
     return errors;
   }
-  if (
-    value.outcome === "unknown" ||
-    value.outcome === "unavailable" ||
-    value.outcome === "absent"
-  ) {
+  if (outcome === "unknown" || outcome === "unavailable" || outcome === "absent") {
     // KfQ 3789542365: this used to return early on an own "value" field, so unknownKeys never ran
     // and any OTHER extra own key went unreported. Collected instead, matching the "report every
     // violation" position already taken for onlyKnownKeys elsewhere in this PR.
     const errors = unknownKeys(value, ["outcome"], path);
     if (Object.hasOwn(value, "value")) {
-      errors.push(`${path} must not carry a value for outcome ${value.outcome}`);
+      errors.push(`${path} must not carry a value for outcome ${outcome}`);
     }
     return errors;
   }
@@ -317,101 +347,130 @@ const CLEANUP_KEYS = ["state", "residueCount"] as const;
 function scenarioErrors(value: unknown, path: string): readonly string[] {
   if (!isRecord(value)) return [`${path} must be an object`];
   const errors: string[] = [...unknownKeys(value, SCENARIO_KEYS, path)];
-  if (!isCodeTaskScenarioId(value.scenarioId)) errors.push(`${path}.scenarioId is invalid`);
-  if (!isOneOf(value.evidenceClass, CODE_TASK_EVIDENCE_CLASSES)) {
+  if (!isCodeTaskScenarioId(ownField(value, "scenarioId"))) {
+    errors.push(`${path}.scenarioId is invalid`);
+  }
+  if (!isOneOf(ownField(value, "evidenceClass"), CODE_TASK_EVIDENCE_CLASSES)) {
     errors.push(`${path}.evidenceClass is not a registered evidence class`);
   }
-  if (!isOneOf(value.platform, CODE_TASK_EVIDENCE_PLATFORMS)) {
+  if (!isOneOf(ownField(value, "platform"), CODE_TASK_EVIDENCE_PLATFORMS)) {
     errors.push(`${path}.platform is not a supported evidence platform`);
   }
-  if (!isOneOf(value.outcome, CODE_TASK_SCENARIO_OUTCOMES)) {
+  if (!isOneOf(ownField(value, "outcome"), CODE_TASK_SCENARIO_OUTCOMES)) {
     errors.push(`${path}.outcome must be passed, failed, or blocked`);
   }
-  if (!isCodeTaskIsoInstant(value.recordedAt)) {
+  if (!isCodeTaskIsoInstant(ownField(value, "recordedAt"))) {
     errors.push(`${path}.recordedAt must be an ISO-8601 UTC instant`);
   }
+  const artifactDigests = ownField(value, "artifactDigests");
   if (
-    !Array.isArray(value.artifactDigests) ||
-    !value.artifactDigests.every((digest) => isCodeTaskSha256Digest(digest))
+    !Array.isArray(artifactDigests) ||
+    !artifactDigests.every((digest) => isCodeTaskSha256Digest(digest))
   ) {
     errors.push(`${path}.artifactDigests must be an array of sha256 digests`);
   }
-  errors.push(...factErrors(value.receiptDigest, `${path}.receiptDigest`, isCodeTaskSha256Digest));
+  errors.push(
+    ...factErrors(
+      ownField(value, "receiptDigest"),
+      `${path}.receiptDigest`,
+      isCodeTaskSha256Digest,
+    ),
+  );
   return errors;
 }
 
 function salvageErrors(value: unknown, path: string): readonly string[] {
   if (!isRecord(value)) return [`${path} must be an object`];
   const errors: string[] = [...unknownKeys(value, SALVAGE_KEYS, path)];
-  if (!isCodeTaskContentFreeNote(value.sourceBranch)) {
+  if (!isCodeTaskContentFreeNote(ownField(value, "sourceBranch"))) {
     errors.push(`${path}.sourceBranch must be a bounded content-free reference`);
   }
-  if (!isCodeTaskGitCommitSha(value.sourceSha)) errors.push(`${path}.sourceSha is invalid`);
-  if (!isCodeTaskRepoRelativePath(value.path)) {
+  if (!isCodeTaskGitCommitSha(ownField(value, "sourceSha"))) {
+    errors.push(`${path}.sourceSha is invalid`);
+  }
+  if (!isCodeTaskRepoRelativePath(ownField(value, "path"))) {
     errors.push(`${path}.path must be a repo-relative path`);
   }
-  if (!isOneOf(value.disposition, CODE_TASK_SALVAGE_DISPOSITIONS)) {
+  if (!isOneOf(ownField(value, "disposition"), CODE_TASK_SALVAGE_DISPOSITIONS)) {
     errors.push(`${path}.disposition must be taken-verbatim, reshaped, or rejected`);
   }
-  errors.push(...factErrors(value.reshaping, `${path}.reshaping`, isCodeTaskContentFreeNote));
-  if (!isCodeTaskGitCommitSha(value.verifiedAtSha)) errors.push(`${path}.verifiedAtSha is invalid`);
+  errors.push(
+    ...factErrors(ownField(value, "reshaping"), `${path}.reshaping`, isCodeTaskContentFreeNote),
+  );
+  if (!isCodeTaskGitCommitSha(ownField(value, "verifiedAtSha"))) {
+    errors.push(`${path}.verifiedAtSha is invalid`);
+  }
   return errors;
 }
 
 function cleanupErrors(value: unknown): readonly string[] {
   if (!isRecord(value)) return ["cleanup must be an object"];
-  const unknown = unknownKeys(value, CLEANUP_KEYS, "cleanup");
-  if (value.state === "complete") {
-    return "residueCount" in value
-      ? [...unknown, "cleanup.residueCount is only valid when incomplete"]
-      : unknown;
+  const unknownFieldErrors = unknownKeys(value, CLEANUP_KEYS, "cleanup");
+  const state = ownField(value, "state");
+  if (state === "complete") {
+    // Was `"residueCount" in value` -- the `in` operator walks the prototype chain exactly like
+    // plain property access does, so it has the identical inherited-field exposure ownField closes
+    // elsewhere in this file. Object.hasOwn is the own-only equivalent.
+    return Object.hasOwn(value, "residueCount")
+      ? [...unknownFieldErrors, "cleanup.residueCount is only valid when incomplete"]
+      : unknownFieldErrors;
   }
-  if (value.state === "incomplete") {
-    return isPositiveInteger(value.residueCount)
-      ? unknown
-      : [...unknown, "cleanup.residueCount must be a positive integer when incomplete"];
+  if (state === "incomplete") {
+    return isPositiveInteger(ownField(value, "residueCount"))
+      ? unknownFieldErrors
+      : [...unknownFieldErrors, "cleanup.residueCount must be a positive integer when incomplete"];
   }
-  return [...unknown, "cleanup.state must be complete or incomplete"];
+  return [...unknownFieldErrors, "cleanup.state must be complete or incomplete"];
 }
 
 function contributionHeaderErrors(value: Record<string, unknown>): readonly string[] {
   const errors: string[] = [];
-  if (value.kind !== CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND) {
+  if (ownField(value, "kind") !== CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND) {
     errors.push(`kind must be ${CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND}`);
   }
-  if (value.schemaVersion !== CODE_TASK_ACCEPTANCE_SCHEMA_VERSION) {
+  if (ownField(value, "schemaVersion") !== CODE_TASK_ACCEPTANCE_SCHEMA_VERSION) {
     errors.push("schemaVersion must be the literal 1");
   }
-  if (!isPositiveInteger(value.epicIssue)) errors.push("epicIssue must be a positive integer");
-  if (!isPositiveInteger(value.childIssue)) errors.push("childIssue must be a positive integer");
-  if (!isCodeTaskGitCommitSha(value.sourceCommitSha)) errors.push("sourceCommitSha is invalid");
-  if (!isCodeTaskGitTreeSha(value.sourceTreeSha)) errors.push("sourceTreeSha is invalid");
+  if (!isPositiveInteger(ownField(value, "epicIssue"))) {
+    errors.push("epicIssue must be a positive integer");
+  }
+  if (!isPositiveInteger(ownField(value, "childIssue"))) {
+    errors.push("childIssue must be a positive integer");
+  }
+  if (!isCodeTaskGitCommitSha(ownField(value, "sourceCommitSha"))) {
+    errors.push("sourceCommitSha is invalid");
+  }
+  if (!isCodeTaskGitTreeSha(ownField(value, "sourceTreeSha")))
+    errors.push("sourceTreeSha is invalid");
   return errors;
 }
 
 function contributionBodyErrors(value: Record<string, unknown>): readonly string[] {
   const errors: string[] = [];
-  if (Array.isArray(value.scenarios)) {
-    value.scenarios.forEach((scenario, index) => {
+  const scenarios = ownField(value, "scenarios");
+  if (Array.isArray(scenarios)) {
+    scenarios.forEach((scenario, index) => {
       errors.push(...scenarioErrors(scenario, `scenarios[${String(index)}]`));
     });
   } else {
     errors.push("scenarios must be an array");
   }
-  if (Array.isArray(value.salvage)) {
-    value.salvage.forEach((row, index) => {
+  const salvage = ownField(value, "salvage");
+  if (Array.isArray(salvage)) {
+    salvage.forEach((row, index) => {
       errors.push(...salvageErrors(row, `salvage[${String(index)}]`));
     });
   } else {
     errors.push("salvage must be an array");
   }
+  const knownLimitations = ownField(value, "knownLimitations");
   if (
-    !Array.isArray(value.knownLimitations) ||
-    !value.knownLimitations.every((note) => isCodeTaskContentFreeNote(note))
+    !Array.isArray(knownLimitations) ||
+    !knownLimitations.every((note) => isCodeTaskContentFreeNote(note))
   ) {
     errors.push("knownLimitations must be an array of bounded content-free notes");
   }
-  errors.push(...cleanupErrors(value.cleanup));
+  errors.push(...cleanupErrors(ownField(value, "cleanup")));
   return errors;
 }
 

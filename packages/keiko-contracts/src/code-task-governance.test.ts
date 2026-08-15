@@ -297,9 +297,13 @@ describe("governance validator mutation robustness (#2386)", () => {
       ok: false,
       errors: ["grant must be a tagged fact object"],
     });
+    // Round 3 (#2899): the absent branch now collects instead of early-returning, so an own
+    // "value" key (itself outside this branch's allowed-key set) is reported both generically, via
+    // unknownKeys, and specifically, via the dedicated message -- consistent with the "report every
+    // violation" position this whole audit series has taken (see the KEIKO-0302 comments above).
     expect(validateGovernedActionV1({ ...base, grant: { outcome: "absent", value: 1 } })).toEqual({
       ok: false,
-      errors: ["grant must not carry a value"],
+      errors: ["grant.value is not allowed", "grant must not carry a value"],
     });
     expect(validateGovernedActionV1({ ...base, grant: { outcome: "maybe" } })).toEqual({
       ok: false,
@@ -340,9 +344,13 @@ describe("governance validator mutation robustness (#2386)", () => {
       ok: false,
       errors: ["question must be a tagged fact object"],
     });
+    // Round 3 (#2899): same collect-not-early-return shape as the grant case above.
     expect(
       validateGovernedActionV1({ ...approval, question: { outcome: "absent", value: 1 } }),
-    ).toEqual({ ok: false, errors: ["question must not carry a value"] });
+    ).toEqual({
+      ok: false,
+      errors: ["question.value is not allowed", "question must not carry a value"],
+    });
     expect(validateGovernedActionV1({ ...approval, question: { outcome: "maybe" } })).toEqual({
       ok: false,
       errors: ["question.outcome must be known or absent"],
@@ -518,9 +526,15 @@ describe("governance validator mutation robustness (#2386)", () => {
     });
     for (const outcome of ["absent", "unavailable", "unknown"] as const) {
       expect(validateCodeTaskExecutionV1(withFailure({ outcome }))).toMatchObject({ ok: true });
+      // Round 3 (#2899): collects instead of early-returning, same shape as the grant/question
+      // cases above -- an own "value" key is reported both generically (unknownKeys) and
+      // specifically (the dedicated message).
       expect(validateCodeTaskExecutionV1(withFailure({ outcome, value: "x" }))).toEqual({
         ok: false,
-        errors: [`failure must not carry a value for outcome ${outcome}`],
+        errors: [
+          "failure.value is not allowed",
+          `failure must not carry a value for outcome ${outcome}`,
+        ],
       });
     }
     expect(validateCodeTaskExecutionV1(withFailure({ outcome: "exploded" }))).toEqual({
@@ -541,6 +555,113 @@ describe("governance validator mutation robustness (#2386)", () => {
     expect(
       validateCodeTaskExecutionV1(withFailure({ outcome: "absent", promptText: "leak me" })).ok,
     ).toBe(false);
+  });
+});
+
+// Round 3 (#2899): grantRefFactErrors, questionRefFactErrors, and executionFailureFactErrors each
+// had an early-return that a test asserting only ok === false cannot distinguish from collect-both
+// -- both fail for a fixture with just one problem. Only a fixture with TWO independent problems,
+// and an assertion that BOTH specific messages appear, actually pins collect over early-return.
+// Proved red-then-green against a temporary early-return sabotage of each branch (see the commit
+// this test shipped in for the measurement).
+describe("grant/question/failure facts collect every violation instead of stopping at the first (round 3, #2899)", () => {
+  it("reports both the disallowed value and the unrelated extra key on an absent grant and question", () => {
+    // grantRefFactErrors only runs on the "allowed" decision's grant field (a "denied" decision's
+    // grant routes through the stricter isAbsent/absentErrors instead, which requires an exact
+    // one-key { outcome: "absent" } and has no "known"/"absent"-with-value branch of its own).
+    const grantResult = validateGovernedActionV1({
+      ...allowedAction(),
+      grant: { outcome: "absent", value: 1, promptText: "leak me" },
+    });
+    expect(grantResult.ok).toBe(false);
+    if (!grantResult.ok) {
+      expect(grantResult.errors.some((error) => error.includes("must not carry a value"))).toBe(
+        true,
+      );
+      expect(grantResult.errors.some((error) => error.includes("promptText"))).toBe(true);
+    }
+
+    const questionResult = validateGovernedActionV1({
+      ...allowedAction(),
+      decision: "approval-required",
+      grant: { outcome: "absent" },
+      question: { outcome: "absent", value: 1, promptText: "leak me" },
+    });
+    expect(questionResult.ok).toBe(false);
+    if (!questionResult.ok) {
+      expect(questionResult.errors.some((error) => error.includes("must not carry a value"))).toBe(
+        true,
+      );
+      expect(questionResult.errors.some((error) => error.includes("promptText"))).toBe(true);
+    }
+  });
+
+  it("reports both the wrapper's extra key and the inner object's invalid fields together", () => {
+    const grantResult = validateGovernedActionV1({
+      ...allowedAction(),
+      grant: {
+        outcome: "known",
+        value: { grantId: "", grantScope: "forever" },
+        promptText: "leak me",
+      },
+    });
+    expect(grantResult.ok).toBe(false);
+    if (!grantResult.ok) {
+      expect(grantResult.errors.some((error) => error.includes("grant.promptText"))).toBe(true);
+      expect(grantResult.errors.some((error) => error.includes("grant.value.grantId"))).toBe(true);
+      expect(grantResult.errors.some((error) => error.includes("grant.value.grantScope"))).toBe(
+        true,
+      );
+    }
+
+    const questionResult = validateGovernedActionV1({
+      ...allowedAction(),
+      decision: "approval-required",
+      grant: { outcome: "absent" },
+      question: {
+        outcome: "known",
+        value: { questionId: "bad id", expectedRevision: -1 },
+        promptText: "leak me",
+      },
+    });
+    expect(questionResult.ok).toBe(false);
+    if (!questionResult.ok) {
+      expect(questionResult.errors.some((error) => error.includes("question.promptText"))).toBe(
+        true,
+      );
+      expect(
+        questionResult.errors.some((error) => error.includes("question.value.questionId")),
+      ).toBe(true);
+      expect(
+        questionResult.errors.some((error) => error.includes("question.value.expectedRevision")),
+      ).toBe(true);
+    }
+  });
+
+  it("reports both the invalid value and the unrelated extra key on a known failure outcome", () => {
+    const withFailure = (failure: unknown): unknown => ({ ...execution(), failure });
+    const result = validateCodeTaskExecutionV1(
+      withFailure({ outcome: "known", value: "Not Kebab!", promptText: "leak me" }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(
+        result.errors.some((error) => error.includes("bounded content-free reason code")),
+      ).toBe(true);
+      expect(result.errors.some((error) => error.includes("promptText"))).toBe(true);
+    }
+  });
+
+  it("reports both the disallowed value and the unrelated extra key on a non-known failure outcome", () => {
+    const withFailure = (failure: unknown): unknown => ({ ...execution(), failure });
+    const result = validateCodeTaskExecutionV1(
+      withFailure({ outcome: "absent", value: "x", promptText: "leak me" }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((error) => error.includes("must not carry a value"))).toBe(true);
+      expect(result.errors.some((error) => error.includes("promptText"))).toBe(true);
+    }
   });
 });
 
@@ -611,6 +732,76 @@ describe("prototype-based extra-field smuggling (KfQ Critical)", () => {
   });
 
   it("still accepts ordinary plain-object input", () => {
+    expect(validateGovernedActionV1(allowedAction())).toMatchObject({ ok: true });
+    expect(validateCodeTaskExecutionV1(execution())).toMatchObject({ ok: true });
+  });
+});
+
+// KfQ 3789776127: for...in enumerates string keys only, so a symbol-keyed property planted on
+// Object.prototype is invisible to hasInheritedEnumerableProperty too. Mechanically true, and moot
+// under the reading discipline this file now uses: ownField answers ownership via Object.hasOwn,
+// which is defined for symbol keys exactly as it is for string keys, so a symbol-keyed inherited
+// property is exactly as unreadable through ownField as a string-keyed one -- nothing here ever
+// reads a symbol-named contract field in the first place, since every declared field name is a
+// string. Not extending hasInheritedEnumerableProperty with a parallel
+// Object.getOwnPropertySymbols-up-the-chain sweep: it is belt-and-braces, not the load-bearing
+// layer, and a symbol sweep there would harden a check whose own remaining purpose is only to
+// reject the common (enumerable, string-keyed) case early and cheaply.
+
+// Codex P1 3789773829, the terminating fix -- ownField (imported from code-task-acceptance.ts) is
+// the reading discipline every validator in this file now uses. withPollutedPrototype mirrors
+// code-task-acceptance.test.ts's identical helper; see that file's describe block of the same name
+// for why non-enumerable pollution is the clean, unconfounded proof of ownField's own contribution.
+// Proved red-then-green against a temporary ownField sabotage in the commit this test shipped in.
+function withPollutedPrototype<T>(
+  key: string,
+  descriptor: Pick<PropertyDescriptor, "value" | "enumerable" | "writable">,
+  run: () => T,
+): T {
+  try {
+    Object.defineProperty(Object.prototype, key, { configurable: true, ...descriptor });
+    return run();
+  } finally {
+    Reflect.deleteProperty(Object.prototype, key);
+  }
+}
+
+describe("ownField makes an inherited field unreadable regardless of descriptor shape (Codex P1 3789773829)", () => {
+  it("rejects a grant's inherited non-enumerable value on the known branch", () => {
+    const payload = { ...allowedAction(), grant: { outcome: "known" } }; // no own "value"
+    const result = withPollutedPrototype(
+      "value",
+      { value: { grantId: "grt-1", grantScope: "task" }, enumerable: false },
+      () => validateGovernedActionV1(payload),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a governed action's inherited non-enumerable decision discriminator", () => {
+    // Polluted to "allowed" specifically, matching allowedAction()'s already-legitimate grant
+    // (known) and question (absent) shape: a weaker fixture (e.g. polluting to "denied") would
+    // reject via the grant/question shape mismatch regardless of whether the decision read is
+    // correct, proving nothing about ownField specifically (caught empirically before this test
+    // shipped -- both a correct and a sabotaged ownField rejected it via that path, uninformative).
+    const { decision: _decision, ...withoutDecision } = allowedAction();
+    void _decision;
+    const result = withPollutedPrototype("decision", { value: "allowed", enumerable: false }, () =>
+      validateGovernedActionV1(withoutDecision),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a code-task execution failure's inherited non-enumerable value on the known branch", () => {
+    const payload = { ...execution(), failure: { outcome: "known" } }; // no own "value"
+    const result = withPollutedPrototype(
+      "value",
+      { value: "budget-exceeded", enumerable: false },
+      () => validateCodeTaskExecutionV1(payload),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("still accepts legitimate input once Object.prototype is restored", () => {
     expect(validateGovernedActionV1(allowedAction())).toMatchObject({ ok: true });
     expect(validateCodeTaskExecutionV1(execution())).toMatchObject({ ok: true });
   });
