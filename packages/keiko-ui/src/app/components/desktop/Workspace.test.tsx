@@ -179,7 +179,9 @@ describe("M1 — empty startup layout", () => {
       />,
     );
 
-    expect(container.querySelector('[data-window-id="agents-1"]')).toHaveAttribute("hidden");
+    const minimizedWindow = container.querySelector('[data-window-id="agents-1"]');
+    expect(minimizedWindow).toHaveAttribute("hidden");
+    expect(minimizedWindow?.getAttribute("style")).toContain("display: none");
     expect(screen.queryByText("Empty workspace")).toBeNull();
   });
 });

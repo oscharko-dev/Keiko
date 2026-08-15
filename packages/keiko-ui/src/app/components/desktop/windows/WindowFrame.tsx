@@ -1196,9 +1196,10 @@ function WindowFrameImpl({
       width: win.w,
       height: win.h,
       zIndex: win.z,
+      display: win.minimized === true ? "none" : undefined,
       transform: `translate3d(${String(win.x)}px, ${String(win.y)}px, 0)`,
     }),
-    [win.x, win.y, win.w, win.h, win.z],
+    [win.x, win.y, win.w, win.h, win.z, win.minimized],
   );
   const contentZoomStyle = useMemo<CSSProperties>(
     () => ({
