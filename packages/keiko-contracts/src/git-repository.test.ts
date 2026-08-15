@@ -1,10 +1,23 @@
 import { describe, expect, it } from "vitest";
 import {
+  GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES,
   GIT_REPOSITORY_SCHEMA_VERSION,
   GIT_STATUS_CODES,
   validateGitRepositoryDiffResponse,
   validateGitRepositoryStatusResponse,
 } from "./git-repository.js";
+
+const TEXT_ENCODER = new TextEncoder();
+
+// The exact operation the producer performs to clamp `diff` to `maxBytes`
+// (keiko-server gitRoutes.ts): cut the encoded byte buffer at an arbitrary offset, which can land
+// inside a multi-byte UTF-8 sequence, then decode back to a string. Exercising this real mechanism
+// (rather than asserting a fixed fixture number) is what proves
+// GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES bounds every case, not just the one this test happened to
+// pick.
+function truncateUtf8Bytes(text: string, maxBytes: number): string {
+  return Buffer.from(text, "utf8").subarray(0, maxBytes).toString("utf8");
+}
 
 function makeChange(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -287,12 +300,58 @@ describe("diff response: reason, repositoryRoot, truncated/maxBytes consistency 
     }
   });
 
-  it("accepts a diff exceeding maxBytes when truncated is true", () => {
+  // KfQ Major (thread 3788736976): `truncated: true` used to waive the maxBytes bound entirely --
+  // this exact case ("0123456789" at maxBytes 5, an overage of 5 bytes) passed pre-fix even though
+  // no real truncation could ever produce that much overage. `truncated: true` describes that the
+  // SOURCE was cut, not a waiver on the OUTPUT bound, so only the producer's own legitimate
+  // partial-UTF-8 overage (GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES) may still pass.
+  it("accepts a diff exceeding maxBytes by exactly the legitimate truncation overage", () => {
+    const maxBytes = 5;
+    const diff = "0".repeat(maxBytes + GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES);
     expect(
-      validateGitRepositoryDiffResponse(
-        makeValidDiffResponse({ diff: "0123456789", maxBytes: 5, truncated: true }),
-      ),
+      validateGitRepositoryDiffResponse(makeValidDiffResponse({ diff, maxBytes, truncated: true })),
     ).toEqual({ ok: true });
+  });
+
+  it("rejects a diff exceeding maxBytes by more than the legitimate truncation overage, even when truncated is true", () => {
+    const maxBytes = 5;
+    const diff = "0".repeat(maxBytes + GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES + 1);
+    const result = validateGitRepositoryDiffResponse(
+      makeValidDiffResponse({ diff, maxBytes, truncated: true }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reasons).toContain(
+        `diff must not exceed maxBytes by more than ${String(GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES)} bytes`,
+      );
+    }
+  });
+
+  // Does not assert a fixed fixture number: it performs the producer's actual truncation mechanism
+  // (see truncateUtf8Bytes above) across every possible cut point of representative 2/3/4-byte UTF-8
+  // characters and every maxBytes in range, then proves GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES bounds
+  // the real re-encoded overage in every case -- so this test would fail if either the decoder's
+  // replacement behaviour or the derived bound stopped matching reality, rather than staying green
+  // by construction.
+  it("bounds the real re-encoded overage from truncating inside a multi-byte UTF-8 character", () => {
+    const samples = ["é", "中", "😀"]; // 2-byte, 3-byte, 4-byte (surrogate pair) UTF-8 sequences
+    let sawOverage = false;
+    for (const character of samples) {
+      const text = `a${character}`;
+      const fullBytes = TEXT_ENCODER.encode(text).length;
+      for (let maxBytes = 1; maxBytes < fullBytes; maxBytes += 1) {
+        const truncated = truncateUtf8Bytes(text, maxBytes);
+        const actualBytes = TEXT_ENCODER.encode(truncated).length;
+        if (actualBytes > maxBytes) sawOverage = true;
+        expect(
+          actualBytes,
+          `truncating ${JSON.stringify(text)} to ${String(maxBytes)} bytes re-encoded to ${String(actualBytes)}`,
+        ).toBeLessThanOrEqual(maxBytes + GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES);
+      }
+    }
+    // The loop above is only a meaningful proof if at least one cut point actually produced an
+    // overage -- otherwise every assertion would pass vacuously against a bound that does nothing.
+    expect(sawOverage).toBe(true);
   });
 
   it("measures maxBytes in UTF-8 bytes, not UTF-16 code units", () => {

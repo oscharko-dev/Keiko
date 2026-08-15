@@ -74,13 +74,27 @@ function validateRefs(input: unknown, reasons: string[], index: number): void {
 // back against a non-UTC-offset input would reject every legitimately-offset date, not just invalid
 // calendar dates like 2023-02-30 (which Date.parse silently rolls over to March 2 instead of
 // rejecting).
+// The offset group captures its sign, hour, and minute separately (rather than matching
+// `[+-]\d{2}:\d{2}` as one opaque unit) so a numeric offset's own range can be checked below --
+// `\d{2}` alone accepts "99", but no real UTC offset reaches even 24 hours.
 const STRICT_ISO_AUTHOR_DATE_PATTERN =
-  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:Z|[+-]\d{2}:\d{2})$/u;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:Z|([+-])(\d{2}):(\d{2}))$/u;
+
+// A numeric offset (offsetSign defined) must itself be a plausible HH:MM duration -- matching what
+// native Date parsing accepts (confirmed empirically: +23:59 parses, +24:00 and +13:60 do not) --
+// so a value like "+99:99" fails here instead of passing with its offset silently ignored by the
+// calendar-component check in isStrictIsoAuthorDate.
+function isPlausibleUtcOffset(match: RegExpExecArray): boolean {
+  const [, , , , , , , offsetSign, offsetHour, offsetMinute] = match;
+  if (offsetSign === undefined) return true; // the "Z" branch matched; no numeric offset to check
+  return Number(offsetHour ?? "") <= 23 && Number(offsetMinute ?? "") <= 59;
+}
 
 function isStrictIsoAuthorDate(value: unknown): value is string {
   if (typeof value !== "string") return false;
   const match = STRICT_ISO_AUTHOR_DATE_PATTERN.exec(value);
   if (match === null) return false;
+  if (!isPlausibleUtcOffset(match)) return false;
   const [, y, mo, d, h, mi, s] = match;
   const year = Number(y);
   const month = Number(mo);

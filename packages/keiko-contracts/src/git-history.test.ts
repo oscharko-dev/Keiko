@@ -160,6 +160,15 @@ describe("entry.date strict ISO 8601 (KEIKO-0310)", () => {
     "2026-06-27T25:00:00Z",
     "not-a-date",
     "",
+    // Codex P2 (thread 3788736978): the offset group matched any two digits, so this passed
+    // validation even though `new Date("2023-01-15T10:30:00+99:99")` itself is Invalid Date --
+    // the component check below the regex never inspected the offset, only the local wall-clock
+    // fields.
+    "2023-01-15T10:30:00+99:99",
+    // Boundary just past what a numeric UTC offset can legitimately be (empirically confirmed:
+    // `new Date(...)` parses +23:59 but not +24:00 or +13:60).
+    "2023-01-15T10:30:00+24:00",
+    "2023-01-15T10:30:00+13:60",
   ])("rejects %j as not strict ISO 8601", (date) => {
     const input = validResponse();
     input.entries = [{ ...validEntry(), date }];
@@ -168,6 +177,18 @@ describe("entry.date strict ISO 8601 (KEIKO-0310)", () => {
     if (!result.ok) {
       expect(result.reasons).toContain("entries[0].date must be a strict ISO 8601 date");
     }
+  });
+
+  it("accepts the largest offset a numeric UTC offset can legitimately carry", () => {
+    // +23:59 is the boundary this fix must not overcorrect past -- confirmed empirically that
+    // native Date parsing accepts it.
+    expect(new Date("2023-01-15T10:30:00+23:59").toString()).not.toBe("Invalid Date");
+    expect(
+      validateGitHistoryResponse({
+        ...validResponse(),
+        entries: [{ ...validEntry(), date: "2023-01-15T10:30:00+23:59" }],
+      }),
+    ).toEqual({ ok: true });
   });
 
   it("rejects a calendar-invalid date instead of silently rolling it over (Date.parse quirk)", () => {
