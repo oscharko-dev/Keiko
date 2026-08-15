@@ -18,6 +18,7 @@ import {
   connectResponseHeaderExceedsLimit,
   gatewayTrustedCaCertificates,
   gatewayFetch,
+  httpsProxyTunnelKey,
   isMissingIssuerError,
   isRecoverableTlsTrustError,
   MAX_RESPONSE_BYTES,
@@ -881,6 +882,73 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
     }
   });
 
+  it("reuses the client-to-proxy connection across an unpinned then a pinned request without leaking either one's target (#3156 ADR-0038 D6 correction)", async () => {
+    // Codex P2: ADR-0038 D6 originally said this plain-HTTP absolute-URI path has no pooling
+    // because Node's global agent defaults keepAlive:false. False on this repo's pinned Node 24 --
+    // http.globalAgent.keepAlive is true (Node made the GLOBAL singleton agents, specifically,
+    // default to keep-alive; a freshly constructed `new http.Agent()` still defaults false, which
+    // is the easy way to misremember this). fetchHttpViaProxy passes no explicit `agent`, so it
+    // goes through that global, keep-alive-by-default agent -- connection reuse to the proxy DOES
+    // happen here, contrary to what the ADR claimed.
+    //
+    // The conclusion survives anyway, for a different reason than the ADR gave: Node's Agent pools
+    // by `getName()`, which keys purely on host/port (verified directly: identical for two
+    // requests differing only in `path`) -- it has no notion of "target" or "pinned", so it can
+    // and does hand the SAME socket to an unpinned call and a later pinned call to the same proxy.
+    // But unlike the CONNECT-tunnel pool (the actual #3156 bug, fixed above), that shared socket's
+    // FAR end never moves -- it is always the proxy. The real destination lives entirely in each
+    // request's OWN absolute-URI (`proxyRequestTarget(target, pinnedAddress)`, computed fresh
+    // inside fetchHttpViaProxy from THAT call's own pinnedAddress, never cached or inherited), sent
+    // fresh on every request the proxy reads and re-routes independently. Reusing the transport to
+    // an already-trusted intermediary is not the same as reusing a resource that fixes the ultimate
+    // peer, so there is nothing here for resolveGatewayDns's per-call vetting to lose track of.
+    //
+    // Both halves are asserted directly: proxyConnections stays at 1 (the connection really was
+    // reused, not just theoretically reusable) while requestUrls[1] is the pinned call's OWN vetted
+    // address, never contaminated by requestUrls[0]'s unpinned literal hostname.
+    let proxyConnections = 0;
+    const requestUrls: string[] = [];
+    const proxy = createHttpServer((req, res) => {
+      requestUrls.push(req.url ?? "");
+      res.writeHead(200, { "content-type": "application/json", connection: "keep-alive" });
+      res.end(JSON.stringify({ seen: req.url }));
+    });
+    proxy.on("connection", () => {
+      proxyConnections += 1;
+    });
+    const proxyPort = await listen(proxy);
+    const egress = { httpProxy: `http://127.0.0.1:${String(proxyPort)}` };
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "203.0.113.5", family: 4 }])),
+      }));
+      const { gatewayFetch: freshGatewayFetch } = await import("./http.js");
+
+      // First: unpinned. The literal hostname travels unchanged in the request line.
+      const first = await freshGatewayFetch("http://pool-identity-plain.invalid/first", {
+        egress,
+      });
+      expect(first.status).toBe(200);
+      expect(requestUrls[0]).toBe("http://pool-identity-plain.invalid/first");
+
+      // Second: pinned, same proxy, immediately after (well inside any keep-alive idle window).
+      const second = await freshGatewayFetch("http://pool-identity-plain.invalid/second", {
+        egress: { ...egress, pinProxiedConnectTarget: true },
+      });
+      expect(second.status).toBe(200);
+      // The load-bearing pair: one physical connection served both calls, yet the second request
+      // line correctly carries ITS OWN vetted address -- not the first call's literal hostname,
+      // and not left unpinned by some inherited connection-level state.
+      expect(proxyConnections).toBe(1);
+      expect(requestUrls[1]).toBe("http://203.0.113.5/second");
+    } finally {
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+      await close(proxy);
+    }
+  });
+
   it("pins an HTTPS proxied CONNECT tunnel's authority to the vetted address instead of the hostname", async () => {
     // "localhost" is used as the target (rather than an *.invalid host, as above) because this
     // path goes through startTargetTls, which validates the origin's certificate against the SNI
@@ -943,6 +1011,185 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
       await close(origin);
       vi.doUnmock("node:dns/promises");
       vi.resetModules();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("never serves a pinned request the pooled tunnel an earlier unpinned call left idle (#3156 pool identity)", async () => {
+    // Codex P1, follow-up to the DNS-rebinding fix above: httpsProxyTunnelKey used to be
+    // (proxy, target, ca) only, blind to whether the pooled tunnel's peer was ever vetted. An
+    // unpinned caller (e.g. the manual research crawler, which never sets
+    // pinProxiedConnectTarget) and a pinned caller fetching the identical (proxy, target, ca)
+    // triple within the 30s idle window would compute the SAME key, so the pinned call could be
+    // served the unpinned call's already-pooled tunnel verbatim -- a peer the PROXY chose on its
+    // own, never touched by resolveGatewayDns's vetting for the pinned call. Both calls target the
+    // same literal "127.0.0.1" (no real DNS needed for the unpinned leg, and the mock below covers
+    // the pinned leg) so the only thing that can legitimately differ between them is pinning
+    // posture -- isolating the pool-identity question from address vetting itself, which the
+    // dedicated CONNECT-authority test above already covers. Both calls share ONE dynamically
+    // re-imported module instance (a single vi.doMock + import, no resetModules between them) so
+    // they see the SAME idleHttpsProxyTunnels pool -- using two separate module instances would
+    // give each an empty pool of its own and prove nothing.
+    const dir = mkdtempSync(join(tmpdir(), "keiko-pool-identity-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    let proxyConnects = 0;
+    let originRequests = 0;
+    const originSockets = new Set<Socket>();
+    const proxySockets = new Set<Socket>();
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
+      originRequests += 1;
+      res.writeHead(200, { "content-type": "application/json", connection: "keep-alive" });
+      res.end(JSON.stringify({ path: req.url, count: originRequests }));
+    });
+    origin.on("connection", (socket) => {
+      originSockets.add(socket);
+      socket.once("close", () => originSockets.delete(socket));
+    });
+    const originPort = await listen(origin);
+    const proxy = createHttpServer();
+    proxy.on("connection", (socket) => {
+      proxySockets.add(socket);
+      socket.once("close", () => proxySockets.delete(socket));
+    });
+    proxy.on("connect", (req, clientSocket, head) => {
+      proxyConnects += 1;
+      const [host, portText] = (req.url ?? "").split(":");
+      const upstream = netConnect(Number(portText), host, () => {
+        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length > 0) upstream.write(head);
+        pipeBounded(upstream, clientSocket);
+        pipeBounded(clientSocket, upstream);
+      });
+      upstream.on("error", () => clientSocket.destroy());
+    });
+    const proxyPort = await listen(proxy);
+    const egress = { httpsProxy: `http://127.0.0.1:${String(proxyPort)}`, caBundlePath };
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "127.0.0.1", family: 4 }])),
+      }));
+      const { gatewayFetch: freshGatewayFetch } = await import("./http.js");
+
+      // First: an UNPINNED fetch -- no pinProxiedConnectTarget -- exactly the shape a non-Atlassian
+      // caller like the manual crawler makes. Establishes tunnel #1 and pools it (the origin
+      // answers keep-alive).
+      const first = await freshGatewayFetch(`https://127.0.0.1:${String(originPort)}/first`, {
+        egress,
+      });
+      expect(await first.json()).toEqual({ path: "/first", count: 1 });
+      expect(proxyConnects).toBe(1);
+
+      // Second: a PINNED fetch to the IDENTICAL (proxy, target, ca) triple, inside the idle
+      // window (immediately after, no sleep needed -- HTTPS_PROXY_TUNNEL_IDLE_TTL_MS is 30s).
+      const second = await freshGatewayFetch(`https://127.0.0.1:${String(originPort)}/second`, {
+        egress: { ...egress, pinProxiedConnectTarget: true },
+      });
+      expect(await second.json()).toEqual({ path: "/second", count: 2 });
+      // The load-bearing assertion: a genuinely NEW CONNECT tunnel was established for the pinned
+      // request rather than reusing tunnel #1 from the pool. Before the fix this stayed at 1 --
+      // the pooled, unpinned tunnel silently served the pinned request, and resolveGatewayDns's
+      // vetting for that request never touched the peer it actually rode.
+      expect(proxyConnects).toBe(2);
+    } finally {
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+      for (const socket of proxySockets) socket.destroy();
+      for (const socket of originSockets) socket.destroy();
+      await close(proxy);
+      await close(origin);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("never pools two calls whose CA bundles differ, even when the old length+prefix summary would have collided (#3157)", async () => {
+    // Codex P1: the CA term of the tunnel key used to be `${cert.length}:${cert.slice(0, 32)}` per
+    // certificate. For PEM input the first 32 characters are almost entirely the near-universal
+    // "-----BEGIN CERTIFICATE-----\n" header -- TEST_TLS_CERT's own first 32 characters are that
+    // header plus just 3-4 base64 characters of real content, confirmed directly below. Two
+    // genuinely different CA bundles sharing a byte length would collide on that summary and share
+    // a pooled tunnel, so a call that deliberately tightened or changed its trusted roots could
+    // silently ride a connection its OWN bundle would have refused to establish.
+    //
+    // caBundleB is constructed to guarantee exactly that collision under the OLD scheme: identical
+    // .length and identical .slice(0, 32) to TEST_TLS_CERT (caBundleA), but different content past
+    // that point. It is deliberately not a parseable certificate -- this test does not need the
+    // second call's TLS handshake to the origin to succeed, only that a fresh CONNECT attempt is
+    // made for it (proven by proxyConnects, which increments the moment the proxy receives the
+    // CONNECT method, strictly before any TLS-to-origin handshake using either bundle even begins).
+    // Call #2 is therefore allowed to fail after that point; only proxyConnects is load-bearing.
+    expect(TEST_TLS_CERT.slice(0, 32)).toBe("-----BEGIN CERTIFICATE-----\nMIID");
+    const caBundleA = TEST_TLS_CERT;
+    const caBundleB = `${TEST_TLS_CERT.slice(0, 32)}${"Z".repeat(TEST_TLS_CERT.length - 32)}`;
+    expect(caBundleB).toHaveLength(caBundleA.length);
+    expect(caBundleB.slice(0, 32)).toBe(caBundleA.slice(0, 32));
+    expect(caBundleB).not.toBe(caBundleA);
+
+    const dir = mkdtempSync(join(tmpdir(), "keiko-ca-collision-"));
+    const caBundlePathA = join(dir, "ca-a.pem");
+    const caBundlePathB = join(dir, "ca-b.pem");
+    writeFileSync(caBundlePathA, caBundleA, "utf8");
+    writeFileSync(caBundlePathB, caBundleB, "utf8");
+    let proxyConnects = 0;
+    let originRequests = 0;
+    const originSockets = new Set<Socket>();
+    const proxySockets = new Set<Socket>();
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
+      originRequests += 1;
+      res.writeHead(200, { "content-type": "application/json", connection: "keep-alive" });
+      res.end(JSON.stringify({ path: req.url, count: originRequests }));
+    });
+    origin.on("connection", (socket) => {
+      originSockets.add(socket);
+      socket.once("close", () => originSockets.delete(socket));
+    });
+    const originPort = await listen(origin);
+    const proxy = createHttpServer();
+    proxy.on("connection", (socket) => {
+      proxySockets.add(socket);
+      socket.once("close", () => proxySockets.delete(socket));
+    });
+    proxy.on("connect", (req, clientSocket, head) => {
+      proxyConnects += 1;
+      const [host, portText] = (req.url ?? "").split(":");
+      const upstream = netConnect(Number(portText), host, () => {
+        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length > 0) upstream.write(head);
+        pipeBounded(upstream, clientSocket);
+        pipeBounded(clientSocket, upstream);
+      });
+      upstream.on("error", () => clientSocket.destroy());
+    });
+    const proxyPort = await listen(proxy);
+    const httpsProxy = `http://127.0.0.1:${String(proxyPort)}`;
+    try {
+      // First: a valid bundle (caBundleA === TEST_TLS_CERT, which validates the origin's own
+      // self-signed certificate). Establishes tunnel #1 and pools it (keep-alive).
+      const first = await gatewayFetch(`https://127.0.0.1:${String(originPort)}/first`, {
+        egress: { httpsProxy, caBundlePath: caBundlePathA },
+      });
+      expect(await first.json()).toEqual({ path: "/first", count: 1 });
+      expect(proxyConnects).toBe(1);
+
+      // Second: the colliding-summary, genuinely different bundle, same proxy/target, inside the
+      // idle window. Tolerate either outcome from the TLS handshake itself -- caBundleB is garbage
+      // past byte 32, so Node may accept or reject it, and this test does not care which; only
+      // whether a FRESH tunnel was attempted for it.
+      await gatewayFetch(`https://127.0.0.1:${String(originPort)}/second`, {
+        egress: { httpsProxy, caBundlePath: caBundlePathB },
+      }).catch(() => undefined);
+
+      // The load-bearing assertion: a genuinely NEW CONNECT tunnel was established for the
+      // differently-CA'd second call rather than reusing tunnel #1 from the pool. Before the fix
+      // this stayed at 1 -- the length+prefix summary collided, so the pool served caBundleB's
+      // call the tunnel that was only ever authenticated under caBundleA's trust set.
+      expect(proxyConnects).toBe(2);
+    } finally {
+      for (const socket of proxySockets) socket.destroy();
+      for (const socket of originSockets) socket.destroy();
+      await close(proxy);
+      await close(origin);
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -1071,6 +1318,42 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
       vi.doUnmock("node:dns/promises");
       vi.resetModules();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// httpsProxyTunnelKey — order-insensitivity of the CA-set digest (#3157)
+// ---------------------------------------------------------------------------
+// Tested directly rather than through the full gatewayFetch/proxy pipeline: the real caller,
+// gatewayTrustedCaCertificates, always assembles the ca array in the same fixed sequence
+// (default -> root -> system -> extra) for a given configuration, so it never naturally produces
+// the same SET in a different ORDER -- there is no way to exercise this invariant end-to-end
+// without contriving an artificial caller. httpsProxyTunnelKey's own contract (its comment above
+// says the sort makes "the SAME set in a different array order hash identically") is the thing
+// worth pinning, independent of whether today's one caller happens to vary it.
+
+describe("httpsProxyTunnelKey", () => {
+  const target = new URL("https://example.com/path");
+  const proxy = new URL("http://proxy.example.com:8080");
+
+  it("is insensitive to the CA array's input order", () => {
+    const certA = "-----BEGIN CERTIFICATE-----\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n-----END-----";
+    const certB = "-----BEGIN CERTIFICATE-----\nBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n-----END-----";
+    const certC = "-----BEGIN CERTIFICATE-----\nCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC\n-----END-----";
+    const forward = httpsProxyTunnelKey(target, proxy, [certA, certB, certC], undefined);
+    const reversed = httpsProxyTunnelKey(target, proxy, [certC, certB, certA], undefined);
+    const shuffled = httpsProxyTunnelKey(target, proxy, [certB, certC, certA], undefined);
+    expect(reversed).toBe(forward);
+    expect(shuffled).toBe(forward);
+  });
+
+  it("still distinguishes two genuinely different CA sets", () => {
+    const certA = "-----BEGIN CERTIFICATE-----\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n-----END-----";
+    const certB = "-----BEGIN CERTIFICATE-----\nBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n-----END-----";
+    const certC = "-----BEGIN CERTIFICATE-----\nCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC\n-----END-----";
+    const withA = httpsProxyTunnelKey(target, proxy, [certA, certB], undefined);
+    const withC = httpsProxyTunnelKey(target, proxy, [certC, certB], undefined);
+    expect(withC).not.toBe(withA);
   });
 });
 
