@@ -19,6 +19,10 @@
 
 #define KEIKO_MAX_SESSIONS 16u
 #define KEIKO_MAX_PROCESSES 4096u
+// KEIKO-0283: deadline for a newly accepted peer to deliver its handshake frame, after which the
+// connection is dropped and its slot released. Generous next to the client's own 1s connect
+// timeout, so only a peer that never writes at all is caught.
+#define KEIKO_HANDSHAKE_TIMEOUT_SECONDS 5
 #define KEIKO_MAX_CONNECTIONS 32u
 
 struct monitor_session {
@@ -398,6 +402,14 @@ static void *serve_client(void *opaque) {
                  (int)peer);
     goto complete;
   }
+  // KEIKO-0283: the handshake arrived, so this peer is real. Restore blocking reads before the
+  // long-lived loop below — that read is the dead-man's switch for supervisor liveness and a
+  // timeout on it would tear down healthy sessions every few seconds.
+  {
+    struct timeval blocking = {.tv_sec = 0, .tv_usec = 0};
+    (void)setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &blocking, sizeof(blocking));
+    (void)setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &blocking, sizeof(blocking));
+  }
   if (request.command == KEIKO_MONITOR_PING) {
     (void)reply_to(&transient, endpoint_status_reply());
     goto complete;
@@ -538,6 +550,21 @@ int main(void) {
       continue;
     }
     (void)setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &(int){1}, sizeof(int));
+    // KEIKO-0283: an accepted connection that never wrote its handshake blocked serve_client's
+    // first read forever while holding one of the 32 connection slots. A same-team peer that
+    // stalls — a crashed supervisor, a debugger-suspended process — therefore exhausted the
+    // budget and locked out every legitimate ARM/RECONCILE, with the kill-switch among the
+    // casualties. Bound the PRE-handshake read only; serve_client lifts it once the handshake is
+    // valid, because the long-lived read after that is the deliberate dead-man's switch watching
+    // supervisor liveness and must stay blocking. Five seconds catches a peer that never writes at
+    // all, not one that is merely slow under load (the client's own timeout is 1s).
+    {
+      struct timeval handshake_timeout = {.tv_sec = KEIKO_HANDSHAKE_TIMEOUT_SECONDS, .tv_usec = 0};
+      (void)setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &handshake_timeout,
+                       sizeof(handshake_timeout));
+      (void)setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &handshake_timeout,
+                       sizeof(handshake_timeout));
+    }
     if (!reserve_connection()) {
       close(descriptor);
       continue;

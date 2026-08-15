@@ -168,6 +168,30 @@ describe("macOS system-extension activation manager", () => {
     });
   });
 
+  // KEIKO-0283: an accepted connection that never wrote its handshake blocked serve_client's first
+  // read forever while holding one of the 32 slots, so a stalled same-team peer could exhaust the
+  // budget and lock out every ARM/RECONCILE — the kill-switch among them.
+  describe("accepted connection handshake deadline (KEIKO-0283)", () => {
+    it("bounds the pre-handshake read on every accepted descriptor", () => {
+      const main = functionBody(monitorSource, "int main(");
+      expect(main).toContain("SO_RCVTIMEO");
+      expect(main).toContain("SO_SNDTIMEO");
+      expect(main).toContain("KEIKO_HANDSHAKE_TIMEOUT_SECONDS");
+      // Alongside SO_NOSIGPIPE, not instead of it.
+      expect(main).toContain("SO_NOSIGPIPE");
+    });
+
+    it("restores blocking reads once the handshake is valid", () => {
+      // The long-lived read after the handshake is the deliberate dead-man's switch for supervisor
+      // liveness. Leaving a timeout on it would tear down healthy sessions every few seconds.
+      const connection = functionBody(monitorSource, "static void *serve_client(");
+      expect(connection).toMatch(
+        /request_valid\(&request, peer\)[\s\S]*?struct timeval blocking = \{\.tv_sec = 0, \.tv_usec = 0\}/u,
+      );
+      expect(connection).toMatch(/blocking[\s\S]*?while \(read_exact\(descriptor/u);
+    });
+  });
+
   // KEIKO-0433: RECONCILE answered ZERO_LIVE both for "no such session" and for "already owned by
   // a live connection" — opposite situations demanding opposite caller responses.
   describe("reconcile outcome distinguishability (KEIKO-0433)", () => {
