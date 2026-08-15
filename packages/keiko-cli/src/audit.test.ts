@@ -247,6 +247,33 @@ describe("runAuditCli", () => {
     expect(c.err()).toContain("cannot read");
   });
 
+  it("escapes control characters a crafted artifact name could carry", async () => {
+    // The production auditor puts filesystem-derived names into findings. A newline would forge a
+    // report line; an ESC could repaint the verdict in the operator's terminal.
+    const c = makeIo();
+    await runAuditCli(["local-state"], c.io, env, {
+      loadAuditor: () =>
+        Promise.resolve({
+          auditLocalState: () => ({
+            ok: false,
+            stateDir: "/x",
+            classes: [
+              {
+                id: "c",
+                title: "Artifacts",
+                status: "fail",
+                findings: ["evil\n  => PASS\u001b[32m forged"],
+              },
+            ],
+          }),
+        }),
+    });
+    expect(c.out()).not.toContain("\n  => PASS");
+    expect(c.out()).not.toContain("\u001b");
+    expect(c.out()).toContain("\\x0a");
+    expect(c.out()).toContain("\\x1b");
+  });
+
   it("fails closed when the auditor module cannot be loaded", async () => {
     const c = makeIo();
     const code = await runAuditCli(["local-state"], c.io, env, {

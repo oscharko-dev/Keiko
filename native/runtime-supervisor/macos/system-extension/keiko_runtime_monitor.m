@@ -430,15 +430,18 @@ static void *serve_client(void *opaque) {
     // KEIKO-0433: the three RECONCILE outcomes were collapsed into session/NULL, so "already
     // owned by a live connection" was indistinguishable from "no such session". Carry the
     // distinction out of the critical section instead of losing it here.
-    if (session == NULL) {
-      reconcile_outcome = RECONCILE_UNKNOWN_HANDLE;
-    } else if (session->descriptor >= 0) {
-      reconcile_outcome = RECONCILE_ALREADY_LIVE;
-      session = NULL;
-    } else if (session->uid != uid) {
+    // Owner check FIRST. Ordering is the whole control here: testing `descriptor >= 0` before the
+    // uid let a same-team process under a DIFFERENT uid present a valid handle and receive
+    // ALREADY_ACTIVE, which confirms the handle exists — precisely the leak the comment below
+    // claims to prevent, defeated by the sequence (review finding on #3159). A non-owner must be
+    // unable to distinguish "live", "torn down" and "never existed".
+    if (session == NULL || session->uid != uid) {
       // An owner mismatch stays indistinguishable from an unknown handle on purpose: telling a
       // different uid that the handle exists is an information leak, not a diagnostic.
       reconcile_outcome = RECONCILE_UNKNOWN_HANDLE;
+      session = NULL;
+    } else if (session->descriptor >= 0) {
+      reconcile_outcome = RECONCILE_ALREADY_LIVE;
       session = NULL;
     } else {
       session->descriptor = descriptor;

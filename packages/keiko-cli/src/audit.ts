@@ -82,11 +82,28 @@ export function parseAuditArgs(argv: readonly string[]): ParsedArgs {
   return parseLocalStateFlags(argv.slice(1));
 }
 
+/** Findings carry filesystem-derived names. A crafted artifact name containing a newline or an
+ * ANSI escape could otherwise forge report lines or repaint the verdict in the operator's terminal
+ * (review finding on #3159). Control characters are escaped, never passed through. */
+function safeForTerminal(text: string): string {
+  let out = "";
+  for (const ch of text) {
+    const code = ch.codePointAt(0) ?? 0;
+    // C0, DEL and C1: newline and carriage return would forge report lines, ESC would let a
+    // crafted artifact name repaint the verdict in the operator's terminal.
+    const isControl = code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f);
+    out += isControl ? `\\x${code.toString(16).padStart(2, "0")}` : ch;
+  }
+  return out;
+}
+
 function renderReport(result: AuditResult, io: CliIo): void {
-  io.out(`\nlocal-state audit — ${result.stateDir}\n`);
+  io.out(`\nlocal-state audit — ${safeForTerminal(result.stateDir)}\n`);
   for (const auditClass of result.classes) {
-    io.out(`  [${TAG[auditClass.status] ?? auditClass.status}] ${auditClass.title}\n`);
-    for (const finding of auditClass.findings) io.out(`        - ${finding}\n`);
+    io.out(
+      `  [${TAG[auditClass.status] ?? auditClass.status}] ${safeForTerminal(auditClass.title)}\n`,
+    );
+    for (const finding of auditClass.findings) io.out(`        - ${safeForTerminal(finding)}\n`);
   }
   io.out(`  => ${result.ok ? "PASS" : "FAIL"}\n`);
 }
