@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 
+import { EDITOR_SELECTION_HANDOFF_TTL_MS } from "../editorSelectionHandoffPolicy";
+
 export type ChatWindowFlowIntensity = "light" | "heavy";
 
 export interface ChatWindowFlow {
@@ -64,7 +66,6 @@ const HEAVY_FILES_READ = 4;
 const HEAVY_EXCERPT_BYTES = 8_192;
 const HEAVY_REFERENCES = 4;
 const FLOW_AFTERGLOW_MS = 2_500;
-const STAGED_RUNTIME_HANDOFF_TTL_MS = 30_000;
 const MAX_STAGED_RUNTIME_TARGETS = 64;
 const MAX_STAGED_RUNTIME_HANDOFFS = 64;
 
@@ -263,7 +264,7 @@ function stageRuntimeHandoffs(windowId: string, pending: readonly PendingSelecti
     pending: retained,
     timeoutId: setTimeout(
       (): void => abandonStagedRuntimeHandoffs(windowId),
-      STAGED_RUNTIME_HANDOFF_TTL_MS,
+      EDITOR_SELECTION_HANDOFF_TTL_MS,
     ),
   });
 }
@@ -288,6 +289,7 @@ function reroutePendingSelectionHandoffs(state: ChatWindowRuntimeState): void {
       handoff.id,
       handoff.preferredWindowIds,
       handoff.onUnavailable,
+      handoff.onAbandoned,
     );
     if (routed === null) {
       openFallbackForPending(pending.slice(index));

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { EDITOR_SELECTION_HANDOFF_TTL_MS } from "../editorSelectionHandoffPolicy";
 import { registerChatWindowRuntime, routeSelectionHandoffToOpenChat } from "./chatWindowActivity";
 
 function runtime(
@@ -105,6 +106,35 @@ describe("chat window runtime routing", () => {
     expect(unavailable).toHaveBeenCalledExactlyOnceWith();
   });
 
+  it("preserves abandonment cleanup across successive runtime closures", async () => {
+    const firstConsumer = vi.fn<(selectionHandoffId: string) => void>();
+    const backupConsumer = vi.fn<(selectionHandoffId: string) => void>();
+    const unavailable = vi.fn<() => null>(() => null);
+    const abandoned = vi.fn<() => void>();
+    const unregisterFirst = registerChatWindowRuntime("chat-first", runtime(firstConsumer));
+    const unregisterBackup = registerChatWindowRuntime(
+      "chat-backup",
+      runtime(backupConsumer, false),
+    );
+
+    routeSelectionHandoffToOpenChat("/repo", "selection-active", ["chat-first"]);
+    routeSelectionHandoffToOpenChat(
+      "/repo",
+      "selection-queued",
+      ["chat-first", "chat-backup"],
+      unavailable,
+      abandoned,
+    );
+    unregisterFirst();
+    await Promise.resolve();
+    expect(backupConsumer).not.toHaveBeenCalled();
+
+    unregisterBackup();
+    await Promise.resolve();
+    expect(unavailable).toHaveBeenCalledExactlyOnceWith();
+    expect(abandoned).toHaveBeenCalledExactlyOnceWith();
+  });
+
   it("stages multiple queued handoffs behind one replacement runtime", async () => {
     const firstConsumer = vi.fn<(selectionHandoffId: string) => void>();
     const openFallback = vi.fn<() => string | null>(() => "chat-fallback");
@@ -172,9 +202,11 @@ describe("chat window runtime routing", () => {
       );
       unregisterFirst();
       await Promise.resolve();
-      await vi.runOnlyPendingTimersAsync();
 
       expect(openFallback).toHaveBeenCalledExactlyOnceWith();
+      await vi.advanceTimersByTimeAsync(EDITOR_SELECTION_HANDOFF_TTL_MS - 1);
+      expect(abandoned).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
       expect(abandoned).toHaveBeenCalledExactlyOnceWith();
       const lateConsumer = vi.fn<(selectionHandoffId: string) => void>();
       const unregisterLate = registerChatWindowRuntime(
