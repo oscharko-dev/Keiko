@@ -27,9 +27,16 @@ export function yarnLocatorParts(locator) {
   return { version: parts.version, sha512: parts.sha512.toLowerCase() };
 }
 
+function yarnPackageManagerFromParts(parts) {
+  return `${PINNED_YARN_NAME}@${parts.version}+sha512.${parts.sha512}`;
+}
+
+export function yarnPackageManagerFromIntegrityLocator(locator) {
+  return yarnPackageManagerFromParts(yarnLocatorParts(locator));
+}
+
 export function yarnPackageManagerFromLocator(locator) {
-  const { version, sha512 } = pinnedYarnLocatorParts(locator);
-  return `${PINNED_YARN_NAME}@${version}+sha512.${sha512}`;
+  return yarnPackageManagerFromParts(pinnedYarnLocatorParts(locator));
 }
 
 export function pinnedYarnLocatorParts(locator) {

@@ -8,6 +8,7 @@ import { pathToFileURL, URL } from "node:url";
 import {
   PINNED_YARN,
   pinnedYarnLocatorParts,
+  yarnPackageManagerFromIntegrityLocator,
   yarnLocatorParts,
   yarnPackageManagerFromLocator,
 } from "./lib/pinned-yarn.mjs";
@@ -49,8 +50,8 @@ function smokeGateYarnLocatorParts(locator) {
 
 function smokeGateYarnPackageManager(locator) {
   if (locator === PINNED_YARN) return yarnPackageManagerFromLocator(locator);
-  const { version, sha512 } = smokeGateYarnLocatorParts(locator);
-  return `yarn@${version}+sha512.${sha512}`;
+  smokeGateYarnLocatorParts(locator);
+  return yarnPackageManagerFromIntegrityLocator(locator);
 }
 
 function testRegistryYarnLocator(locator) {

@@ -34,6 +34,7 @@ import {
   PINNED_YARN,
   PINNED_YARN_NAME,
   yarnLocatorParts,
+  yarnPackageManagerFromIntegrityLocator,
   yarnPackageManagerFromLocator,
 } from "./lib/pinned-yarn.mjs";
 import { createStagedPublishPackage } from "./stage-publish-package.mjs";
@@ -109,8 +110,7 @@ function yarnPackageManagerFromSmokeLocator(locator) {
   if (process.env.NODE_ENV !== "test" || process.env[TEST_RUNNER_ENV] === undefined) {
     throw smokeGateFailure("fixture Yarn locators are only accepted inside Vitest");
   }
-  const { version, sha512 } = yarnLocatorParts(locator);
-  return `${PINNED_YARN_NAME}@${version}+sha512.${sha512}`;
+  return yarnPackageManagerFromIntegrityLocator(locator);
 }
 
 export function parsePositiveTimeoutEnv(name) {
@@ -496,12 +496,21 @@ export async function withCorepackYarnCacheLock(
   if (heldCorepackCacheLocks.has(lockDir)) return await action();
   const release = await acquireCorepackCacheLock(locator, timeoutMs);
   heldCorepackCacheLocks.add(lockDir);
+  let actionResult;
+  let actionError;
   try {
-    return await action();
-  } finally {
-    heldCorepackCacheLocks.delete(lockDir);
-    release();
+    actionResult = await action();
+  } catch (error) {
+    actionError = error;
   }
+  heldCorepackCacheLocks.delete(lockDir);
+  try {
+    release();
+  } catch (error) {
+    if (actionError === undefined) throw error;
+  }
+  if (actionError !== undefined) throw actionError;
+  return actionResult;
 }
 
 function formatTsDiagnostics(diagnostics) {
