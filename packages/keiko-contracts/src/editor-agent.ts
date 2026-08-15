@@ -24,6 +24,7 @@ import {
   type GitEditorDiffLayer,
   type GitEditorDiffScope,
 } from "./git-editor.js";
+import { GIT_STATUS_CODES } from "./git-repository.js";
 import type { GitRepositoryState, GitStatusCode } from "./git-repository.js";
 import {
   isWorkspaceRootIdentityDigest,
@@ -1268,20 +1269,11 @@ function isQueryGitCaps(value: unknown): value is EditorAgentQueryGitCaps {
   );
 }
 
-const QUERY_GIT_STATUS_CODES: readonly GitStatusCode[] = [
-  " ",
-  "M",
-  "A",
-  "D",
-  "R",
-  "C",
-  "U",
-  "?",
-  "!",
-] as const;
-
+// KEIKO-0310: this used to be a private copy of the same 9-member table git-repository.ts's
+// GitStatusCode union already needed a shared runtime source of truth for; imported from there now
+// instead, so the two cannot silently drift.
 function isQueryGitStatusCode(value: unknown): value is GitStatusCode {
-  return typeof value === "string" && QUERY_GIT_STATUS_CODES.includes(value as GitStatusCode);
+  return typeof value === "string" && (GIT_STATUS_CODES as readonly string[]).includes(value);
 }
 
 function isQueryGitStatusChange(value: unknown): value is EditorAgentQueryGitStatusChange {

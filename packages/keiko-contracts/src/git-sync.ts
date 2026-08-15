@@ -8,7 +8,8 @@ import type {
   GitUnavailableReason,
   GitRepositoryValidation,
 } from "./git-repository.js";
-import { GIT_REPOSITORY_STATES } from "./git-repository.js";
+import { GIT_REPOSITORY_STATES, isGitWireUnavailableReason } from "./git-repository.js";
+import { isGitUpstreamSummary } from "./git-repository-summary.js";
 import type { GitUpstreamSummary } from "./git-repository-summary.js";
 
 export const GIT_SYNC_SCHEMA_VERSION = "1" as const;
@@ -130,17 +131,38 @@ export function isGitSyncOutcome(v: unknown): v is GitSyncOutcome {
   return typeof v === "string" && GIT_SYNC_OUTCOMES.includes(v as GitSyncOutcome);
 }
 
-// The preview is a read-only readiness envelope (branch/upstream/ahead/behind + executable gate);
-// centralizing the validator keeps per-field failure messages predictable for callers.
-// eslint-disable-next-line complexity
-export function validateGitSyncPreview(input: unknown): GitRepositoryValidation {
-  const reasons: string[] = [];
-  if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
+function validateSyncPreviewIdentity(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): void {
   if (input.schemaVersion !== GIT_SYNC_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
   if (!isGitSyncOperation(input.operation)) reasons.push("operation invalid");
   if (!GIT_REPOSITORY_STATES.includes(input.state as GitRepositoryState)) {
     reasons.push("state invalid");
   }
+  if (input.reason !== undefined && !isGitWireUnavailableReason(input.reason)) {
+    reasons.push("reason invalid");
+  }
+}
+
+function validateSyncPreviewBranchFields(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): void {
+  for (const key of ["branch", "remote"] as const) {
+    if (input[key] !== undefined && !isString(input[key])) {
+      reasons.push(`${key} must be a string when present`);
+    }
+  }
+  if (input.upstream !== undefined && !isGitUpstreamSummary(input.upstream)) {
+    reasons.push("upstream must be { ref, remote?, branch? } when present");
+  }
+}
+
+function validateSyncPreviewFlags(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): void {
   for (const key of [
     "available",
     "detached",
@@ -154,12 +176,38 @@ export function validateGitSyncPreview(input: unknown): GitRepositoryValidation 
   for (const key of ["ahead", "behind"] as const) {
     if (!isNonNegativeInteger(input[key])) reasons.push(`${key} must be a non-negative integer`);
   }
+}
+
+// The producer (keiko-server syncExecution.ts buildSyncPreview) sets
+// `executable: blockReason === undefined` directly, so the two fields are exact complements: an
+// executable preview never carries a block reason, and a blocked one always does.
+function validateSyncPreviewExecutableGate(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): void {
   if (
     input.blockReason !== undefined &&
     !GIT_SYNC_BLOCK_REASONS.includes(input.blockReason as GitSyncBlockReason)
   ) {
     reasons.push("blockReason invalid");
   }
+  if (input.executable === true && input.blockReason !== undefined) {
+    reasons.push("blockReason must be absent when executable is true");
+  }
+  if (input.executable === false && input.blockReason === undefined) {
+    reasons.push("blockReason must be present when executable is false");
+  }
+}
+
+// The preview is a read-only readiness envelope (branch/upstream/ahead/behind + executable gate);
+// centralizing the validator keeps per-field failure messages predictable for callers.
+export function validateGitSyncPreview(input: unknown): GitRepositoryValidation {
+  const reasons: string[] = [];
+  if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
+  validateSyncPreviewIdentity(input, reasons);
+  validateSyncPreviewBranchFields(input, reasons);
+  validateSyncPreviewFlags(input, reasons);
+  validateSyncPreviewExecutableGate(input, reasons);
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
 
