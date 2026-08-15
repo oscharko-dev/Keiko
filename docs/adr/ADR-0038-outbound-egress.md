@@ -106,9 +106,27 @@ single-credential posture: the proxy layer may not introduce additional secrets.
    *call that created* a tunnel but not necessarily for the call that *reused* it. The key now also
    carries the calling request's pinning posture (`"unpinned"`, or the exact vetted address when
    pinned), so a pinned and an unpinned call — or two pinned calls that resolved to different
-   addresses — can never be served from each other's pool entry. The plain-HTTP absolute-URI proxy
-   path (`fetchHttpViaProxy`) has no equivalent pool (no custom keep-alive agent is configured;
-   Node's default global agent opens an unshared connection per call), so it has no matching gap.
+   addresses — can never be served from each other's pool entry.
+   **Correction (#3156, 2026-08-15), plain-HTTP path fact-check.** This paragraph previously claimed
+   the plain-HTTP absolute-URI proxy path (`fetchHttpViaProxy`) has no equivalent pool because
+   Node's default global agent opens an unshared connection per call. Codex P2 caught that this is
+   false on this repository's pinned Node (verified directly, not from memory: on the pinned
+   24.18.0, `http.globalAgent.keepAlive` and `https.globalAgent.keepAlive` are both `true` — Node
+   made the global singleton agents specifically default to keep-alive; a `new Agent()` a caller
+   constructs explicitly still defaults to `false`, which is the easy way to misremember this).
+   `fetchHttpViaProxy` passes no explicit `agent`, so it runs on that keep-alive-by-default global
+   agent, and connection reuse to the proxy does happen. The conclusion — no matching gap — survives
+   anyway, for a different reason: Node's `Agent.getName()` pooling key is `host:port:localAddress`
+   only (verified directly: identical for two requests to the same proxy that differ solely in
+   `path`), so what gets reused is the transport hop to the proxy, never the ultimate destination.
+   Each request's real target lives entirely in that request's own absolute-URI
+   (`proxyRequestTarget(target, pinnedAddress)`, computed fresh inside `fetchHttpViaProxy` from that
+   call's own `pinnedAddress`, never cached or carried over from an earlier call), which the proxy
+   reads and routes independently on every request it receives — unlike a CONNECT tunnel, reusing
+   the hop to an already-trusted intermediary does not fix the ultimate peer, so there is nothing
+   here for `resolveGatewayDns`'s per-call vetting to lose track of. A dedicated test now asserts
+   this directly: one physical connection serves both an unpinned and a pinned call to the same
+   proxy, and the second request line still carries only its own call's target.
 
 ## Consequences
 
