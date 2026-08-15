@@ -92,7 +92,7 @@ function safeForTerminal(text: string): string {
     // C0, DEL and C1: newline and carriage return would forge report lines, ESC would let a
     // crafted artifact name repaint the verdict in the operator's terminal.
     const isControl = code < 0x20 || code === 0x7f || (code >= 0x80 && code <= 0x9f);
-    out += isControl ? `\\x${code.toString(16).padStart(2, "0")}` : ch;
+    out += isControl ? String.raw`\x` + code.toString(16).padStart(2, "0") : ch;
   }
   return out;
 }
