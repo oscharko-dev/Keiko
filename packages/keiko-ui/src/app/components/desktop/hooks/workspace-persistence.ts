@@ -869,6 +869,16 @@ function connectionEndpointKey(a: string, b: string): string {
   return a < b ? `${a}\u0000${b}` : `${b}\u0000${a}`;
 }
 
+function collapsedConnectionKey(connection: Connection): string {
+  return JSON.stringify([
+    connectionEndpointKey(connection.a, connection.b),
+    connection.boundChatWindowId ?? null,
+    connection.boundScopeElided === true,
+    connection.boundConnectorKind ?? null,
+    connection.boundConnectorId ?? null,
+  ]);
+}
+
 function remappedBoundChatWindowId(
   conn: Readonly<Record<string, unknown>>,
   aliases: ReadonlyMap<string, string>,
@@ -956,8 +966,8 @@ function sanitizeConnections(
 ): Connection[] {
   const windowIds = new Set(wins.map((win) => win.id));
   const connectionIds = new Set<string>();
-  const endpointKeys = new Set<string>();
-  const collapsedEndpointKeys = new Set<string>();
+  const connectionKeys = new Set<string>();
+  const collapsedConnectionKeys = new Set<string>();
   const out: Connection[] = [];
   let scanned = 0;
   for (const conn of conns) {
@@ -970,14 +980,14 @@ function sanitizeConnections(
     if (sanitized === null) continue;
     const connection = sanitized.connection;
     if (connectionIds.has(connection.id)) continue;
-    const endpointKey = connectionEndpointKey(connection.a, connection.b);
-    if (sanitized.endpointRemapped) collapsedEndpointKeys.add(endpointKey);
-    if (endpointKeys.has(endpointKey) && collapsedEndpointKeys.has(endpointKey)) {
+    const connectionKey = collapsedConnectionKey(connection);
+    if (sanitized.endpointRemapped) collapsedConnectionKeys.add(connectionKey);
+    if (connectionKeys.has(connectionKey) && collapsedConnectionKeys.has(connectionKey)) {
       continue;
     }
     out.push(connection);
     connectionIds.add(connection.id);
-    endpointKeys.add(endpointKey);
+    connectionKeys.add(connectionKey);
     // Mirror the server's MAX_WORKSPACE_CONNECTIONS bound (see sanitizePersistedWindows).
     if (out.length >= MAX_PERSISTED_CONNECTIONS) break;
   }

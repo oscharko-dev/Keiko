@@ -894,6 +894,42 @@ describe("workspace-persistence", () => {
     ]);
   });
 
+  it.each(["scope-first", "connector-first"] as const)(
+    "preserves distinct remapped semantic connections in %s order",
+    (order) => {
+      const scopeEdge: Connection = {
+        id: "scope-edge",
+        a: "files-1",
+        b: "chat-old",
+        boundChatWindowId: "chat-old",
+        boundScopeElided: true,
+      };
+      const connectorEdge: Connection = {
+        id: "connector-edge",
+        a: "files-1",
+        b: "chat-front",
+        boundChatWindowId: "chat-front",
+        boundConnectorKind: "capsule",
+        boundConnectorId: "capsule-1",
+      };
+      const connections =
+        order === "scope-first" ? [scopeEdge, connectorEdge] : [connectorEdge, scopeEdge];
+      const snapshot = sanitizePersistedWorkspace(
+        [
+          win({ id: "files-1", type: "files" }),
+          win({ id: "chat-old", type: "chat", z: 1, cfg: { chatId: "shared-chat" } }),
+          win({ id: "chat-front", type: "chat", z: 2, cfg: { chatId: "shared-chat" } }),
+        ],
+        connections,
+      );
+
+      expect(snapshot.conns.map((connection) => connection.id)).toEqual(
+        connections.map((connection) => connection.id),
+      );
+      expect(snapshot.conns.every((connection) => connection.b === "chat-front")).toBe(true);
+    },
+  );
+
   it("bounds hostile duplicate window scans before later entries reach hydration", () => {
     const duplicates = Array.from({ length: 4_096 }, (_, index) =>
       win({
