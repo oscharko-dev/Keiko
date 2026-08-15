@@ -1076,6 +1076,24 @@ describe("KEIKO-0392 — per-kind payload validation for the 16 kinds beyond ses
       }
     }
   });
+
+  it("rejects every kind when an unknown field is added to its well-formed payload", () => {
+    // KfQ thread 3788570882: the per-kind validators above checked field TYPES but not field
+    // CLOSURE, so a control message with an extra, undeclared property passed validation for every
+    // kind except session.create. Each validator now also calls hasOnlyFields against a per-kind
+    // allowlist (envelope + that kind's own payload). Iterates VOICE_CONTROL_MESSAGE_KINDS directly,
+    // like the corrupted-to-null pin above, so a kind silently regressing to an open check still
+    // fails this test rather than depending on a hand-copied list staying in sync.
+    for (const kind of VOICE_CONTROL_MESSAGE_KINDS) {
+      if (kind === "session.create") {
+        continue; // already covered by "rejects unknown session.create fields..." above.
+      }
+      const withExtra = { ...wellFormedMessage(kind), unexpectedField: "should not be accepted" };
+      const result = validateVoiceControlMessage(withExtra);
+      expect(result.ok, `${kind} must reject an unknown field`).toBe(false);
+      expect(isVoiceControlMessage(withExtra)).toBe(false);
+    }
+  });
 });
 
 describe("timeout / reconnect defaults", () => {
