@@ -256,8 +256,8 @@ function listSqliteMaster(
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 32 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(32);
+  it("is the integer 33 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(33);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -757,6 +757,54 @@ describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
       );
     } finally {
       db.close();
+    }
+  });
+
+  it("applies v33 on top of a v32 database and adds the capsule_sources->knowledge_sources foreign key, matching a fresh install's shape (KEIKO-0371)", () => {
+    // KEIKO-0371: a fresh install's capsule_sources has always carried `FOREIGN KEY (id)
+    // REFERENCES knowledge_sources(id) ON DELETE RESTRICT`, but no migration ever added it to a
+    // store created at v1 (SQLite cannot ALTER a foreign key onto an existing table). This is the
+    // audit's own prescribed acceptance shape: applying the migration chain from an empty database
+    // produces a capsule_sources table whose foreign_key_list matches a fresh KNOWLEDGE_CAPSULE_DDL
+    // apply. Seeding a full lineage first (rather than migrating an empty database) additionally
+    // exercises the v33 COPY statement's column list against real rows, not just an empty table.
+    //
+    // This test does NOT assert row survival: unlike the real runtime (openKnowledgeStore in
+    // packages/keiko-local-knowledge/src/store.ts), this file applies `up` statements with a plain
+    // per-statement loop with no shared transaction — it has no notion of
+    // `requiresForeignKeysSuspended` and never suspends foreign-key enforcement, so v33's `DROP
+    // TABLE capsule_sources` genuinely cascades here exactly like the reverted first attempt did.
+    // Reproducing the suspension recipe again in this test would restate the very mechanism under
+    // test (AGENTS.md #2285) instead of exercising it. The zero-row-loss + ON DELETE RESTRICT
+    // enforcement proof runs against the real migration engine instead: see
+    // "openKnowledgeStore — capsule_sources foreign key backfill (KEIKO-0371)" in
+    // packages/keiko-local-knowledge/src/store.test.ts.
+    const migrated = new DatabaseSync(":memory:");
+    const fresh = new DatabaseSync(":memory:");
+    try {
+      const v33 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((m) => m.version === 33);
+      if (v33 === undefined) throw new Error("expected v33 migration");
+      for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        if (entry.version >= 33) break;
+        for (const stmt of entry.up) migrated.exec(stmt);
+      }
+      seedFullLineage(migrated);
+      expect(countRows(migrated, "capsule_sources")).toBe(1);
+
+      for (const stmt of v33.up) migrated.exec(stmt);
+
+      for (const stmt of KNOWLEDGE_CAPSULE_DDL) fresh.exec(stmt);
+      const fkList = (db: DatabaseSync): unknown[] =>
+        db.prepare("PRAGMA foreign_key_list('capsule_sources')").all();
+      expect(fkList(migrated)).toEqual(fkList(fresh));
+      expect(fkList(migrated)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ table: "knowledge_sources", on_delete: "RESTRICT" }),
+        ]),
+      );
+    } finally {
+      migrated.close();
+      fresh.close();
     }
   });
 

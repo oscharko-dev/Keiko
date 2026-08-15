@@ -8,7 +8,7 @@
 // --------------------
 //   * `LOCAL_KNOWLEDGE_SCHEMA_VERSION` (string `"1"`, from `local-knowledge.ts`) pins the
 //     *in-memory* type-contract surface. A breaking type change adds a new literal member.
-//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `32`, here) pins the *on-disk* DDL and is
+//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `33`, here) pins the *on-disk* DDL and is
 //     stored via `PRAGMA user_version`. The two evolve independently — a new column with a
 //     non-breaking JS-side mapping bumps only the DB version; a contract-breaking type
 //     addition bumps only the string version.
@@ -28,18 +28,25 @@
 // Vector identity is denormalised onto every vector row (provider/modelId/dimensions/
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
+//
+// Suspended-enforcement migrations (KEIKO-0371)
+// ----------------------------------------------
+//   `capsule_sources` is the FK TARGET of eight dependent tables (documents, chunks,
+//   chunk_lexical_index, vectors, html_manual_sources, html_manual_page_fingerprints,
+//   repository_pod_runs, repository_file_fingerprints), every one of them `ON DELETE CASCADE`.
+//   SQLite fires FK actions for `DROP TABLE` exactly as it would for a real `DELETE`, so the
+//   create/copy/DROP/rename rebuild used elsewhere in this file to converge an upgraded store
+//   onto a new shape is NOT safe for this table: it would cascade-delete every dependent row.
+//   A migration entry that sets `requiresForeignKeysSuspended: true` (see
+//   `KnowledgeCapsuleMigration`) tells the runner in packages/keiko-local-knowledge/src/store.ts
+//   to apply it in its own transaction with `PRAGMA foreign_keys = OFF` set beforehand (outside
+//   any transaction — the pragma is a documented no-op once one is open) and restored to `ON`
+//   immediately after, checking `PRAGMA foreign_key_check` before COMMIT so a row the rebuild
+//   would orphan aborts the migration instead of corrupting the store. Omitted or `false` (every
+//   migration below v33) keeps running exactly as before: batched with its neighbors in the
+//   shared migration transaction, foreign keys enforced throughout.
 
-// NOTE (KEIKO-0371, still open): capsule_sources carries `FOREIGN KEY (id) REFERENCES
-// knowledge_sources(id) ON DELETE RESTRICT` on a FRESH install, but no migration adds it to a store
-// created at v1, and SQLite cannot ALTER a foreign key onto an existing table. The obvious repair —
-// the create/copy/DROP/rename rebuild used elsewhere in this file — is NOT safe here: ten tables
-// (documents, chunks, vectors, …) reference capsule_sources with ON DELETE CASCADE, the store opens
-// with `PRAGMA foreign_keys = ON` (store.ts), and migrations run inside BEGIN/COMMIT where that
-// pragma is a no-op. The DROP would therefore cascade and silently delete every upgraded store's
-// indexed content. Closing this needs migration-engine support for running a rebuild with foreign
-// keys disabled outside the transaction, plus a populated pre-upgrade fixture proving no dependent
-// row is lost.
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 32 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 33 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -1124,6 +1131,14 @@ export interface KnowledgeCapsuleMigration {
   readonly version: number;
   readonly reason: string;
   readonly up: readonly string[];
+  // Opt-in escape hatch (KEIKO-0371) for a migration whose `up` DROPs and recreates a table that
+  // is the FK TARGET of other tables' `ON DELETE CASCADE` clauses — e.g. adding a foreign key
+  // SQLite cannot ALTER onto an existing table. See "Suspended-enforcement migrations" above for
+  // why the ordinary rebuild dance is unsafe for such a table and what setting this to `true`
+  // makes the runner do instead. Omitted or `false` (the default) keeps a migration running
+  // exactly as every migration before v33 did: batched with its neighbors inside the shared
+  // migration transaction, foreign keys enforced throughout.
+  readonly requiresForeignKeysSuspended?: boolean;
 }
 
 // Version 1 originally applied the entire DDL+indexes set as a single migration. To preserve
@@ -1274,6 +1289,41 @@ const REBUILD_AUDIT_TABLES_FOR_DELETE_DURABILITY: readonly string[] = [
   "DROP TABLE capsule_audit_events;",
   "ALTER TABLE capsule_audit_events_v5 RENAME TO capsule_audit_events;",
   CREATE_CAPSULE_AUDIT_EVENTS_INDEX,
+] as const;
+
+// v33 (KEIKO-0371). capsule_sources carries a `FOREIGN KEY (id) REFERENCES knowledge_sources(id)
+// ON DELETE RESTRICT` clause on a FRESH install, but no migration ever added it to a store created
+// at v1 — SQLite cannot ALTER a foreign key onto an existing table, so the constraint was silently
+// absent for every upgraded store. Rebuilt with the same create-copy-drop-rename shape used for the
+// audit tables above, but unlike those (leaf, nothing references them) capsule_sources is the FK
+// TARGET of eight dependent tables — see "Suspended-enforcement migrations" at the top of this
+// file. `requiresForeignKeysSuspended: true` on the migration entry below is what keeps this DROP
+// from cascading. The copy carries over EVERY existing row unconditionally: a rebuild must never
+// filter rows being copied forward (e.g. to paper over a row that would fail the new FK), because
+// dropping a capsule_sources row here — even one with no matching knowledge_sources row — would
+// orphan ITS OWN dependents (documents, chunks, vectors, …) under suspended enforcement, silently
+// reproducing the exact failure class this migration exists to close. `PRAGMA foreign_key_check`
+// after the rebuild is the backstop: it catches a genuinely dangling capsule_sources.id (the v10
+// backfill's `GROUP BY id` should make this impossible, but this migration does not assume it) and
+// aborts the whole migration rather than committing an orphaned row either direction.
+const CREATE_CAPSULE_SOURCES_V33 = CREATE_CAPSULE_SOURCES.replace(
+  "CREATE TABLE capsule_sources",
+  "CREATE TABLE capsule_sources_v33",
+);
+
+const COPY_CAPSULE_SOURCES_TO_V33 = `
+INSERT INTO capsule_sources_v33 (
+  id, capsule_id, display_name, description, tags_json, scope_kind, scope_json, created_at, updated_at
+)
+SELECT id, capsule_id, display_name, description, tags_json, scope_kind, scope_json, created_at, updated_at
+FROM capsule_sources;
+`.trim();
+
+const REBUILD_CAPSULE_SOURCES_FOR_SOURCE_FK: readonly string[] = [
+  CREATE_CAPSULE_SOURCES_V33,
+  COPY_CAPSULE_SOURCES_TO_V33,
+  "DROP TABLE capsule_sources;",
+  "ALTER TABLE capsule_sources_v33 RENAME TO capsule_sources;",
 ] as const;
 
 export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] = [
@@ -1579,6 +1629,20 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       CREATE_VECTORS_INDEX_STATE_UPDATE_TRIGGER,
       CREATE_VECTORS_INDEX_STATE_DELETE_TRIGGER,
     ],
+  },
+  {
+    version: 33,
+    reason:
+      "Add the knowledge_sources foreign key to capsule_sources for stores upgraded from v1. A " +
+      "fresh install has carried FOREIGN KEY (id) REFERENCES knowledge_sources(id) ON DELETE " +
+      "RESTRICT since the table was introduced, but SQLite cannot ALTER a foreign key onto an " +
+      "existing table, so no migration ever added it and every upgraded store ran without the " +
+      "constraint that stops a knowledge_sources row being deleted while a capsule still " +
+      "references it (KEIKO-0371). Runs with foreign keys suspended around its own transaction " +
+      "instead of the shared migration transaction — see requiresForeignKeysSuspended and the " +
+      '"Suspended-enforcement migrations" note at the top of this file.',
+    up: REBUILD_CAPSULE_SOURCES_FOR_SOURCE_FK,
+    requiresForeignKeysSuspended: true,
   },
 ] as const;
 
