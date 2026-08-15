@@ -10,7 +10,9 @@ import {
   yarnLocatorParts,
   yarnPackageManagerFromLocator,
 } from "./lib/pinned-yarn.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import {
+  isSmokeGateFailure,
   privateYarnHome,
   provisionPinnedYarnForSetup,
   withCorepackYarnCacheLock,
@@ -79,6 +81,19 @@ function run(cmd, args, options = {}) {
     );
   }
   return result;
+}
+
+function assertRunSucceeded(cmd, args, result) {
+  if (result.error !== undefined) {
+    fail(`${cmd} ${args.join(" ")} could not spawn: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    fail(
+      `${cmd} ${args.join(" ")} exited ${String(result.status)}\n` +
+        `stdout:\n${result.stdout}\n` +
+        `stderr:\n${result.stderr}`,
+    );
+  }
 }
 
 function installedPackageRoot(projectDir) {
@@ -155,49 +170,77 @@ async function npmSmoke() {
   }
 }
 
+function writeYarnSmokeManifest(projectDir, yarnLocator) {
+  writeFileSync(
+    join(projectDir, "package.json"),
+    JSON.stringify(
+      {
+        private: true,
+        packageManager: yarnPackageManagerFromLocator(yarnLocator),
+        devDependencies: {
+          [rootManifest.name]: rootManifest.version,
+        },
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+}
+
+function writeYarnSmokeConfiguration(projectDir) {
+  writeFileSync(
+    join(projectDir, YARN_RC_FILENAME),
+    [
+      "nodeLinker: node-modules",
+      "enableGlobalCache: false",
+      "enableStrictSsl: true",
+      `cacheFolder: "${join(projectDir, ".yarn-cache").replaceAll("\\", "/")}"`,
+      `npmRegistryServer: "${registry}"`,
+      "npmScopes:",
+      "  oscharko-dev:",
+      `    npmRegistryServer: "${registry}"`,
+      "",
+    ].join("\n"),
+  );
+}
+
+async function runCorepackYarnInstall(projectDir, yarnHome, yarnLocator, installArgs) {
+  return await withCorepackYarnCacheLock(
+    yarnLocator,
+    async () => {
+      await provisionPinnedYarnForSetup(yarnLocator, timeoutMs);
+      const env = yarnChildEnv(registry, process.env, yarnHome, yarnLocator);
+      return spawnSync(resolveHostExecutable("corepack", { env }), installArgs, {
+        encoding: "utf8",
+        // SECURITY-SHELL-OK: corepack-only Windows .cmd compatibility; argv is fixed by this smoke.
+        shell: process.platform === "win32",
+        timeout: timeoutMs,
+        cwd: projectDir,
+        env,
+      });
+    },
+    timeoutMs,
+  );
+}
+
+async function checkedCorepackYarnInstall(projectDir, yarnHome, yarnLocator) {
+  const installArgs = ["yarn", "install", "--no-immutable", "--mode=skip-build"];
+  try {
+    const result = await runCorepackYarnInstall(projectDir, yarnHome, yarnLocator, installArgs);
+    assertRunSucceeded("corepack", installArgs, result);
+  } catch (error) {
+    if (isSmokeGateFailure(error)) fail(error.message);
+    throw error;
+  }
+}
+
 async function yarnSmoke(yarnLocator) {
   const projectDir = mkdtempSync(join(tmpdir(), "keiko-registry-yarn-"));
   const yarnHome = privateYarnHome();
   try {
-    writeFileSync(
-      join(projectDir, "package.json"),
-      JSON.stringify(
-        {
-          private: true,
-          packageManager: yarnPackageManagerFromLocator(yarnLocator),
-          devDependencies: {
-            [rootManifest.name]: rootManifest.version,
-          },
-        },
-        null,
-        2,
-      ) + "\n",
-    );
-    writeFileSync(
-      join(projectDir, YARN_RC_FILENAME),
-      [
-        "nodeLinker: node-modules",
-        "enableGlobalCache: false",
-        "enableStrictSsl: true",
-        `cacheFolder: "${join(projectDir, ".yarn-cache").replaceAll("\\", "/")}"`,
-        `npmRegistryServer: "${registry}"`,
-        "npmScopes:",
-        "  oscharko-dev:",
-        `    npmRegistryServer: "${registry}"`,
-        "",
-      ].join("\n"),
-    );
-    withCorepackYarnCacheLock(
-      yarnLocator,
-      () => {
-        provisionPinnedYarnForSetup(yarnLocator, timeoutMs);
-        run("corepack", ["yarn", "install", "--no-immutable", "--mode=skip-build"], {
-          cwd: projectDir,
-          env: yarnChildEnv(registry, process.env, yarnHome, yarnLocator),
-        });
-      },
-      timeoutMs,
-    );
+    writeYarnSmokeManifest(projectDir, yarnLocator);
+    writeYarnSmokeConfiguration(projectDir);
+    await checkedCorepackYarnInstall(projectDir, yarnHome, yarnLocator);
     await assertInstalledRuntime(projectDir);
   } finally {
     rmSync(yarnHome, { recursive: true, force: true });

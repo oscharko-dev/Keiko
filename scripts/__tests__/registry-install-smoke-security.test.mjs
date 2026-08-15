@@ -166,7 +166,12 @@ function runProvisionPinnedYarnChild(root, extraEnv = {}, locator = PINNED_YARN)
     root,
     [
       'import { provisionPinnedYarnForSetup } from "./scripts/installable-package-smoke.mjs";',
-      `provisionPinnedYarnForSetup(${JSON.stringify(locator)});`,
+      "try {",
+      `  await provisionPinnedYarnForSetup(${JSON.stringify(locator)});`,
+      "} catch (error) {",
+      "  console.error(error instanceof Error ? error.message : String(error));",
+      "  process.exit(1);",
+      "}",
     ].join("\n"),
     extraEnv,
   );
@@ -1335,7 +1340,7 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(registrySource).toContain("registryYarnLocator()");
     expect(registrySource).toContain("packageManager: yarnPackageManagerFromLocator(yarnLocator)");
     expect(registrySource).toContain("withCorepackYarnCacheLock(");
-    expect(registrySource).toContain("provisionPinnedYarnForSetup(yarnLocator, timeoutMs)");
+    expect(registrySource).toContain("await provisionPinnedYarnForSetup(yarnLocator, timeoutMs)");
     expect(registrySource).toContain("yarnChildEnv(registry, process.env, yarnHome, yarnLocator)");
     expect(installableSource).not.toContain('const PINNED_YARN = "yarn@4.9.1"');
     expect(registrySource).not.toContain("KEIKO_REGISTRY_INSTALL_FIXTURE_YARN_LOCATOR");
@@ -1352,13 +1357,13 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
-  it("holds the Corepack cache lock while cached Yarn may execute", () => {
+  it("holds the Corepack cache lock while cached Yarn may execute", async () => {
     const lockDir = `${corepackCacheDir()}.lock`;
     rmSync(lockDir, { recursive: true, force: true });
     try {
-      const result = withCorepackYarnCacheLock(PINNED_YARN, () => {
+      const result = await withCorepackYarnCacheLock(PINNED_YARN, async () => {
         expect(existsSync(lockDir)).toBe(true);
-        return withCorepackYarnCacheLock(PINNED_YARN, () => "locked");
+        return await withCorepackYarnCacheLock(PINNED_YARN, () => "locked");
       });
 
       expect(result).toBe("locked");
@@ -2154,6 +2159,7 @@ describe("installable package smoke optional-dependency coverage", () => {
       await expect(installIntoWithYarn(projectDir, artifact)).rejects.toThrow(
         /process\.exit\(1\)/u,
       );
+      expect(existsSync(`${corepackCacheDir()}.lock`)).toBe(false);
     } finally {
       process.env.PATH = previousPath;
       rmSync(root, { recursive: true, force: true });

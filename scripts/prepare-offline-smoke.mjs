@@ -14,7 +14,7 @@
 import { prepareOfflineSmokeForSetup } from "./installable-package-smoke.mjs";
 
 try {
-  prepareOfflineSmokeForSetup();
+  await prepareOfflineSmokeForSetup();
 } catch (error) {
   // A Corepack failure already exits through the smoke's own diagnostic. This catch is for
   // everything else — an unwritable temp directory, a cache path that fails its ownership check —
