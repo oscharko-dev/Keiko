@@ -66,7 +66,7 @@ const HEAVY_FILES_READ = 4;
 const HEAVY_EXCERPT_BYTES = 8_192;
 const HEAVY_REFERENCES = 4;
 const FLOW_AFTERGLOW_MS = 2_500;
-const MAX_STAGED_RUNTIME_HANDOFFS = 64;
+const MAX_RETAINED_SELECTION_HANDOFFS = 64;
 
 let snapshot: ReadonlyMap<string, ChatWindowFlow> = new Map();
 const listeners = new Set<() => void>();
@@ -176,7 +176,7 @@ export function registerChatWindowRuntime(
   state.registration = registration;
   state.registered = true;
   if (state.reserved && runtime.acceptingSelectionHandoff !== false) state.reserved = false;
-  state.pendingSelectionHandoffs.push(...takeStagedRuntimeHandoffs(windowId));
+  enqueuePendingSelectionHandoffs(state, takeStagedRuntimeHandoffs(windowId));
   runtimes.set(windowId, state);
   dispatchPendingSelectionHandoff(state);
   return (): void => {
@@ -224,6 +224,18 @@ function abandonPendingSelectionHandoffs(pending: readonly PendingSelectionHando
   for (const handoff of pending) handoff.onAbandoned?.();
 }
 
+function enqueuePendingSelectionHandoffs(
+  state: ChatWindowRuntimeState,
+  pending: readonly PendingSelectionHandoff[],
+): void {
+  const available = Math.max(
+    0,
+    MAX_RETAINED_SELECTION_HANDOFFS - state.pendingSelectionHandoffs.length,
+  );
+  state.pendingSelectionHandoffs.push(...pending.slice(0, available));
+  abandonPendingSelectionHandoffs(pending.slice(available));
+}
+
 function takeStagedRuntimeHandoffs(windowId: string): PendingSelectionHandoff[] {
   const staged = stagedRuntimeHandoffs.get(windowId);
   if (staged === undefined) return [];
@@ -247,7 +259,7 @@ function stagedRuntimeHandoffCount(): number {
 }
 
 function evictStagedRuntimeTargetsForCapacity(incomingCount: number): void {
-  while (stagedRuntimeHandoffCount() + incomingCount > MAX_STAGED_RUNTIME_HANDOFFS) {
+  while (stagedRuntimeHandoffCount() + incomingCount > MAX_RETAINED_SELECTION_HANDOFFS) {
     const oldestWindowId = stagedRuntimeHandoffs.keys().next().value;
     if (typeof oldestWindowId !== "string") return;
     abandonStagedRuntimeHandoffs(oldestWindowId);
@@ -258,14 +270,14 @@ function stageRuntimeHandoffs(windowId: string, pending: readonly PendingSelecti
   if (pending.length === 0) return;
   const state = runtimes.get(windowId);
   if (state?.registered === true) {
-    state.pendingSelectionHandoffs.push(...pending);
+    enqueuePendingSelectionHandoffs(state, pending);
     dispatchPendingSelectionHandoff(state);
     return;
   }
   const existing = takeStagedRuntimeHandoffs(windowId);
   const combined = [...existing, ...pending];
-  const retained = combined.slice(0, MAX_STAGED_RUNTIME_HANDOFFS);
-  abandonPendingSelectionHandoffs(combined.slice(MAX_STAGED_RUNTIME_HANDOFFS));
+  const retained = combined.slice(0, MAX_RETAINED_SELECTION_HANDOFFS);
+  abandonPendingSelectionHandoffs(combined.slice(MAX_RETAINED_SELECTION_HANDOFFS));
   evictStagedRuntimeTargetsForCapacity(retained.length);
   stagedRuntimeHandoffs.set(windowId, {
     pending: retained,
@@ -315,6 +327,7 @@ export function routeSelectionHandoffToOpenChat(
   for (const windowId of orderedRuntimeIds(preferredWindowIds)) {
     const state = runtimes.get(windowId);
     if (state?.runtime.projectPath !== projectPath) continue;
+    if (state.pendingSelectionHandoffs.length >= MAX_RETAINED_SELECTION_HANDOFFS) continue;
     state.pendingSelectionHandoffs.push({
       id: selectionHandoffId,
       preferredWindowIds: [...preferredWindowIds],

@@ -201,6 +201,74 @@ describe("chat window runtime routing", () => {
     }
   });
 
+  it("bounds queued handoffs on a registered runtime", async () => {
+    const consumer = vi.fn<(selectionHandoffId: string) => void>();
+    const unregister = registerChatWindowRuntime("chat-bounded", runtime(consumer));
+    try {
+      expect(routeSelectionHandoffToOpenChat("/repo", "selection-active")).toBe("chat-bounded");
+      for (let index = 0; index < 64; index += 1) {
+        expect(routeSelectionHandoffToOpenChat("/repo", `selection-${String(index)}`)).toBe(
+          "chat-bounded",
+        );
+      }
+      expect(routeSelectionHandoffToOpenChat("/repo", "selection-overflow")).toBeNull();
+      expect(consumer).toHaveBeenCalledExactlyOnceWith("selection-active");
+    } finally {
+      unregister();
+      await Promise.resolve();
+    }
+  });
+
+  it("bounds a staged batch when its fallback runtime is already full", async () => {
+    const fallbackConsumer = vi.fn<(selectionHandoffId: string) => void>();
+    const sourceConsumer = vi.fn<(selectionHandoffId: string) => void>();
+    const abandoned = vi.fn<() => void>();
+    const unregisterFallback = registerChatWindowRuntime(
+      "chat-fallback",
+      runtime(fallbackConsumer),
+    );
+    routeSelectionHandoffToOpenChat("/repo", "fallback-active", ["chat-fallback"]);
+    for (let index = 0; index < 64; index += 1) {
+      routeSelectionHandoffToOpenChat("/repo", `fallback-queued-${String(index)}`, [
+        "chat-fallback",
+      ]);
+    }
+    const unregisterSource = registerChatWindowRuntime("chat-source", runtime(sourceConsumer));
+    let unregisterReplacement: (() => void) | undefined;
+    try {
+      routeSelectionHandoffToOpenChat("/repo", "source-active", ["chat-source"]);
+      routeSelectionHandoffToOpenChat(
+        "/repo",
+        "source-opens-fallback",
+        ["chat-source"],
+        (): string => {
+          unregisterReplacement = registerChatWindowRuntime(
+            "chat-fallback",
+            runtime(fallbackConsumer),
+          );
+          return "chat-fallback";
+        },
+      );
+      routeSelectionHandoffToOpenChat("/repo", "source-staged-last-slot", ["chat-source"]);
+      routeSelectionHandoffToOpenChat(
+        "/repo",
+        "source-staged-overflow",
+        ["chat-source"],
+        undefined,
+        abandoned,
+      );
+      unregisterSource();
+      await Promise.resolve();
+
+      expect(abandoned).toHaveBeenCalledExactlyOnceWith();
+    } finally {
+      unregisterSource();
+      unregisterReplacement?.();
+      unregisterFallback();
+      await Promise.resolve();
+    }
+  });
+
   it("rejects an empty replacement runtime id without staging the handoff", async () => {
     const firstConsumer = vi.fn<(selectionHandoffId: string) => void>();
     const invalidFallback = vi.fn<() => string>(() => "");
