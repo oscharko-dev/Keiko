@@ -288,3 +288,45 @@ describe("closed key sets (KEIKO-0302)", () => {
     ).toBe(false);
   });
 });
+
+// KfQ Critical (unknownKeys, :214/:359): Object.keys sees only OWN enumerable properties. A value
+// shaped via Object.create(secretHolder) can carry every required field as an OWN property -- so
+// its own-key shape is indistinguishable from a legitimate contribution -- while one extra field
+// rides the prototype chain, invisible to Object.keys, Object.getOwnPropertyNames, and even an
+// exact-own-property-count check. isRecord now rejects any non-default prototype outright, and
+// unknownKeys additionally scans own non-enumerable and symbol-keyed properties.
+describe("prototype-based extra-field smuggling (KfQ Critical)", () => {
+  it("rejects a contribution with an extra field reachable only through the prototype", () => {
+    const legitimate = validContribution();
+    const hostile = Object.create({ secretApiKey: "sk-leak-me" }) as Record<string, unknown>;
+    Object.assign(hostile, legitimate);
+    // Sanity: the own-key shape is indistinguishable from a legitimate contribution, yet the
+    // secret still resolves through ordinary property access.
+    expect(Object.keys(hostile)).toEqual(Object.keys(legitimate));
+    expect(hostile.secretApiKey).toBe("sk-leak-me");
+    expect(validateCodeTaskAcceptanceContribution(hostile).ok).toBe(false);
+  });
+
+  it("rejects the degenerate Object.create(valid) case with nothing own at all", () => {
+    const hostile: unknown = Object.create(validContribution());
+    expect(validateCodeTaskAcceptanceContribution(hostile).ok).toBe(false);
+  });
+
+  it("rejects a non-enumerable own extra field and a symbol-keyed own extra field", () => {
+    const withHidden: Record<string, unknown> = { ...validContribution() };
+    Object.defineProperty(withHidden, "hiddenSecret", { value: "leak", enumerable: false });
+    expect(validateCodeTaskAcceptanceContribution(withHidden).ok).toBe(false);
+
+    const withSymbol: Record<string, unknown> = {
+      ...validContribution(),
+      [Symbol("secret")]: "leak",
+    };
+    expect(validateCodeTaskAcceptanceContribution(withSymbol).ok).toBe(false);
+  });
+
+  it("still accepts an ordinary JSON.parse-shaped contribution", () => {
+    // Confirms the hardening does not reject legitimate wire-shaped input: JSON.parse always
+    // produces a plain object with the default Object.prototype and only enumerable own properties.
+    expect(validateCodeTaskAcceptanceContribution(validContribution()).ok).toBe(true);
+  });
+});

@@ -58,8 +58,21 @@ export function isCodeTaskPolicyVersion(value: unknown): value is CodeTaskPolicy
   return typeof value === "string" && POLICY_VERSION_PATTERN.test(value);
 }
 
+// KfQ Critical on code-task-acceptance.ts's identical unknownKeys (this file mirrors it): a value
+// shaped via Object.create(secretHolder) can carry every required field as an OWN property (so it
+// looks complete) plus one extra field reachable ONLY through the prototype -- verified empirically
+// that such a value's own-property count and names match an honest input exactly, so no
+// own-property-only scan (Object.keys, Object.getOwnPropertyNames, or an exact-own-count check)
+// ever sees the extra field, while ordinary property access on it still resolves through the
+// prototype chain. Rejecting any non-default prototype closes this at the single choke point every
+// validator in this file already passes through.
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
+  );
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -70,14 +83,22 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
   return typeof value === "string" && (allowed as readonly string[]).includes(value);
 }
 
+// Object.getOwnPropertyNames (not Object.keys) plus an own-symbol check, matching
+// debug/debug-lifecycle.ts's idiom: Object.keys alone misses a non-enumerable own property. Every
+// caller here already passes through the hardened isRecord above, which is what actually closes
+// the prototype case (see its own comment).
 function unknownKeys(
   value: Record<string, unknown>,
   allowed: readonly string[],
   path: string,
 ): string[] {
-  return Object.keys(value)
+  const errors = Object.getOwnPropertyNames(value)
     .filter((key) => !allowed.includes(key))
     .map((key) => `${path}.${key} is not allowed`);
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    errors.push(`${path} must not carry symbol-keyed properties`);
+  }
+  return errors;
 }
 
 // A content-free failure reason: a bounded lower-kebab reason code that cannot smuggle secrets or
@@ -226,7 +247,14 @@ function envelopeErrors(value: Record<string, unknown>): string[] {
 // absentErrors). GovernedActionAbsent's only field is "outcome" (see its definition above), so
 // requiring exactly one key rejects every extra key, not just "value".
 function isAbsent(value: unknown): value is GovernedActionAbsent {
-  return isRecord(value) && value.outcome === "absent" && Object.keys(value).length === 1;
+  // getOwnPropertyNames + no-symbols, matching unknownKeys above: Object.keys alone misses a
+  // non-enumerable own property. isRecord already rejects a non-default prototype.
+  return (
+    isRecord(value) &&
+    value.outcome === "absent" &&
+    Object.getOwnPropertyNames(value).length === 1 &&
+    Object.getOwnPropertySymbols(value).length === 0
+  );
 }
 
 // KEIKO-0302 follow-on: this checked the INNER grant.value object's own keys but never the outer
@@ -322,9 +350,14 @@ export function validateGovernedActionV1(
   value: unknown,
 ): CodingWorkbenchValidationResult<GovernedActionV1> {
   if (!isRecord(value)) return { ok: false, errors: ["governed action must be an object"] };
-  const errors = Object.keys(value)
+  // getOwnPropertyNames + no-symbols, matching unknownKeys above: Object.keys alone misses a
+  // non-enumerable own property. isRecord already rejects a non-default prototype.
+  const errors = Object.getOwnPropertyNames(value)
     .filter((key) => !GOVERNED_ACTION_KEYS.has(key))
     .map((key) => `governedAction.${key} is not allowed`);
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    errors.push("governedAction must not carry symbol-keyed properties");
+  }
   errors.push(...envelopeErrors(value));
   if (!isOneOf(value.decision, GOVERNED_ACTION_DECISIONS)) errors.push("decision is invalid");
   else errors.push(...governedActionRefErrors(value));
@@ -440,9 +473,14 @@ export function validateCodeTaskExecutionV1(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodeTaskExecutionV1> {
   if (!isRecord(value)) return { ok: false, errors: ["code-task execution must be an object"] };
-  const errors = Object.keys(value)
+  // getOwnPropertyNames + no-symbols, matching unknownKeys above: Object.keys alone misses a
+  // non-enumerable own property. isRecord already rejects a non-default prototype.
+  const errors = Object.getOwnPropertyNames(value)
     .filter((key) => !CODE_TASK_EXECUTION_KEYS.has(key))
     .map((key) => `codeTaskExecution.${key} is not allowed`);
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    errors.push("codeTaskExecution must not carry symbol-keyed properties");
+  }
   errors.push(
     ...executionHeaderErrors(value),
     ...executionModeErrors(value),
