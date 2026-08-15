@@ -150,6 +150,53 @@ describe("isCodingContextCitation (content-free guard)", () => {
     expect(isCodingContextCitation({ ...citation(), sourceTier: "nope" })).toBe(false);
     expect(isCodingContextCitation({ ...citation(), score: "high" })).toBe(false);
   });
+
+  // Codex finding (ADR-0152 D6 follow-on): isCodingContextCitation delegated to
+  // isRetrievalContextCitation, whose tier-equality check is hard-wired to the NEUTRAL table
+  // (RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND). connected-context deliberately diverges between the
+  // two tables (neutral: "external-connected", coding: "first-party-workspace" — see the
+  // "keeps connected-context's CODING tier byte-identical" test above), so a citation carrying
+  // EXACTLY the tier tierForCodingContextSource("connected-context") produces was rejected by its
+  // own validator. Pinned in both directions so this can never silently regress again: the coding
+  // tier is accepted, and the neutral profile's tier for the same kind is rejected as a
+  // misrepresentation (the whole point of the tier-equality check this contract enforces).
+  it("validates connected-context citations against the CODING tier, not the neutral table's (regression)", () => {
+    expect(
+      isCodingContextCitation(
+        citation({ sourceKind: "connected-context", sourceTier: "first-party-workspace" }),
+      ),
+    ).toBe(true);
+    expect(
+      isCodingContextCitation(
+        citation({ sourceKind: "connected-context", sourceTier: "external-connected" }),
+      ),
+    ).toBe(false);
+  });
+
+  // Proves the producer (tierForCodingContextSource, and by extension toCodingContextWirePack)
+  // and the validator actually agree, rather than asserting it from two separately hand-written
+  // expectations that could themselves drift apart the same way the two tier tables just did.
+  it("round-trips a connected-context excerpt through toCodingContextWirePack and re-validates every entry", () => {
+    const pack: CodingContextPack = {
+      schemaVersion: CODING_CONTEXT_SCHEMA_VERSION,
+      purpose: "completion",
+      excerpts: [
+        excerpt("connected content", {
+          sourceKind: "connected-context",
+          sourceTier: tierForCodingContextSource("connected-context"),
+        }),
+      ],
+      usedBytes: 10,
+      budgetBytes: CODING_CONTEXT_BUDGETS.completion.budgetBytes,
+      droppedForBudget: 0,
+      omissions: [],
+    };
+    const wirePack = toCodingContextWirePack(pack);
+    expect(wirePack.entries).toHaveLength(1);
+    for (const entry of wirePack.entries) {
+      expect(isCodingContextCitation(entry)).toBe(true);
+    }
+  });
 });
 
 describe("toCodingContextWirePack (content-free projection)", () => {
