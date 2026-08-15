@@ -1540,32 +1540,31 @@ function routeEditorSelectionToChat(
   const selectionHandoffId = registerEditorSelectionHandoff(targetRoot, handoff);
   if (selectionHandoffId === null) return false;
   const openFallback = (): string | null => {
-    const chatWindowId = ctx.openWindow("chat", {
+    return ctx.openWindow("chat", {
       projectPathPrivacy: "omit",
       selectionHandoffId,
     });
-    if (chatWindowId !== null) return chatWindowId;
+  };
+  const abandonHandoff = (): void => {
     discardEditorSelectionHandoff(selectionHandoffId);
-    return null;
+    reportClientDiagnostic(
+      "[keiko] queued editor selection handoff could not be restored after chat closure",
+    );
   };
   if (
     routeSelectionHandoffToOpenChat(
       targetRoot,
       selectionHandoffId,
       ctx.currentWindowStack?.() ?? [],
-      (): string | null => {
-        const chatWindowId = openFallback();
-        if (chatWindowId !== null) return chatWindowId;
-        reportClientDiagnostic(
-          "[keiko] queued editor selection handoff could not be restored after chat closure",
-        );
-        return null;
-      },
+      openFallback,
+      abandonHandoff,
     ) !== null
   ) {
     return true;
   }
-  return openFallback() !== null;
+  if (openFallback() !== null) return true;
+  abandonHandoff();
+  return false;
 }
 
 function editorSessionBaseProps(

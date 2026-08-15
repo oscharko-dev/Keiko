@@ -128,6 +128,66 @@ describe("chat window runtime routing", () => {
     unregisterReady();
   });
 
+  it("rejects an empty replacement runtime id without staging the handoff", async () => {
+    const firstConsumer = vi.fn<(selectionHandoffId: string) => void>();
+    const invalidFallback = vi.fn<() => string>(() => "");
+    const abandoned = vi.fn<() => void>();
+    const unregisterFirst = registerChatWindowRuntime("chat-first", runtime(firstConsumer));
+
+    routeSelectionHandoffToOpenChat("/repo", "selection-active", ["chat-first"]);
+    routeSelectionHandoffToOpenChat(
+      "/repo",
+      "selection-queued",
+      ["chat-first"],
+      invalidFallback,
+      abandoned,
+    );
+    unregisterFirst();
+    await Promise.resolve();
+
+    expect(invalidFallback).toHaveBeenCalledExactlyOnceWith();
+    expect(abandoned).toHaveBeenCalledExactlyOnceWith();
+    const emptyIdConsumer = vi.fn<(selectionHandoffId: string) => void>();
+    const unregisterEmptyId = registerChatWindowRuntime("", runtime(emptyIdConsumer));
+    expect(emptyIdConsumer).not.toHaveBeenCalled();
+    unregisterEmptyId();
+  });
+
+  it("abandons staged handoffs when a replacement runtime never registers", async () => {
+    vi.useFakeTimers();
+    try {
+      const firstConsumer = vi.fn<(selectionHandoffId: string) => void>();
+      const openFallback = vi.fn<() => string>(() => "chat-never-registers");
+      const abandoned = vi.fn<() => void>();
+      const unregisterFirst = registerChatWindowRuntime("chat-first", runtime(firstConsumer));
+
+      routeSelectionHandoffToOpenChat("/repo", "selection-active", ["chat-first"]);
+      routeSelectionHandoffToOpenChat("/repo", "selection-fallback", ["chat-first"], openFallback);
+      routeSelectionHandoffToOpenChat(
+        "/repo",
+        "selection-staged",
+        ["chat-first"],
+        openFallback,
+        abandoned,
+      );
+      unregisterFirst();
+      await Promise.resolve();
+      await vi.runOnlyPendingTimersAsync();
+
+      expect(openFallback).toHaveBeenCalledExactlyOnceWith();
+      expect(abandoned).toHaveBeenCalledExactlyOnceWith();
+      const lateConsumer = vi.fn<(selectionHandoffId: string) => void>();
+      const unregisterLate = registerChatWindowRuntime(
+        "chat-never-registers",
+        runtime(lateConsumer),
+      );
+      expect(lateConsumer).not.toHaveBeenCalled();
+      unregisterLate();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves front-to-back preference when rerouting a queued handoff", async () => {
     const backgroundConsumer = vi.fn<(selectionHandoffId: string) => void>();
     const frontConsumer = vi.fn<(selectionHandoffId: string) => void>();
