@@ -66,7 +66,6 @@ const HEAVY_FILES_READ = 4;
 const HEAVY_EXCERPT_BYTES = 8_192;
 const HEAVY_REFERENCES = 4;
 const FLOW_AFTERGLOW_MS = 2_500;
-const MAX_STAGED_RUNTIME_TARGETS = 64;
 const MAX_STAGED_RUNTIME_HANDOFFS = 64;
 
 let snapshot: ReadonlyMap<string, ChatWindowFlow> = new Map();
@@ -241,10 +240,18 @@ function abandonStagedRuntimeHandoffs(windowId: string): void {
   abandonPendingSelectionHandoffs(staged.pending);
 }
 
-function evictStagedRuntimeTarget(): void {
-  if (stagedRuntimeHandoffs.size < MAX_STAGED_RUNTIME_TARGETS) return;
-  const oldestWindowId = stagedRuntimeHandoffs.keys().next().value as string | undefined;
-  if (oldestWindowId !== undefined) abandonStagedRuntimeHandoffs(oldestWindowId);
+function stagedRuntimeHandoffCount(): number {
+  let count = 0;
+  for (const staged of stagedRuntimeHandoffs.values()) count += staged.pending.length;
+  return count;
+}
+
+function evictStagedRuntimeTargetsForCapacity(incomingCount: number): void {
+  while (stagedRuntimeHandoffCount() + incomingCount > MAX_STAGED_RUNTIME_HANDOFFS) {
+    const oldestWindowId = stagedRuntimeHandoffs.keys().next().value;
+    if (typeof oldestWindowId !== "string") return;
+    abandonStagedRuntimeHandoffs(oldestWindowId);
+  }
 }
 
 function stageRuntimeHandoffs(windowId: string, pending: readonly PendingSelectionHandoff[]): void {
@@ -256,10 +263,10 @@ function stageRuntimeHandoffs(windowId: string, pending: readonly PendingSelecti
     return;
   }
   const existing = takeStagedRuntimeHandoffs(windowId);
-  if (existing.length === 0) evictStagedRuntimeTarget();
   const combined = [...existing, ...pending];
   const retained = combined.slice(0, MAX_STAGED_RUNTIME_HANDOFFS);
   abandonPendingSelectionHandoffs(combined.slice(MAX_STAGED_RUNTIME_HANDOFFS));
+  evictStagedRuntimeTargetsForCapacity(retained.length);
   stagedRuntimeHandoffs.set(windowId, {
     pending: retained,
     timeoutId: setTimeout(

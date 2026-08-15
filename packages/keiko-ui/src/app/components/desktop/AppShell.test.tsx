@@ -26,6 +26,16 @@ describe("persistedChatProjectPath", (): void => {
 });
 
 describe("prepareNewWindowCfg", (): void => {
+  it("isolates mutable array configuration between chat window requests", (): void => {
+    const sourceIds = ["source-a"];
+    const cfg = prepareNewWindowCfg("chat", { title: "Isolated", sourceIds }, "request-isolated");
+
+    sourceIds.push("source-b");
+
+    expect(cfg["sourceIds"]).toEqual(["source-a"]);
+    expect(cfg["sourceIds"]).not.toBe(sourceIds);
+  });
+
   it("gives every confirmed Chat creation a fresh observable request identity", (): void => {
     const cfg = prepareNewWindowCfg(
       "chat",

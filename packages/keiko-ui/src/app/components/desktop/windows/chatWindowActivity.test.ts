@@ -158,6 +158,49 @@ describe("chat window runtime routing", () => {
     unregisterReady();
   });
 
+  it("bounds staged handoffs globally across replacement runtime targets", async () => {
+    vi.useFakeTimers();
+    try {
+      const abandonedFirst = vi.fn<() => void>();
+      const abandonedSecond = vi.fn<() => void>();
+      const batches = [
+        { source: "source-first", fallback: "fallback-first", abandoned: abandonedFirst },
+        { source: "source-second", fallback: "fallback-second", abandoned: abandonedSecond },
+      ];
+
+      for (const [batchIndex, batch] of batches.entries()) {
+        const consumer = vi.fn<(selectionHandoffId: string) => void>();
+        const openFallback = vi.fn<() => string>(() => batch.fallback);
+        const unregister = registerChatWindowRuntime(batch.source, runtime(consumer));
+        routeSelectionHandoffToOpenChat("/repo", `active-${String(batchIndex)}`, [batch.source]);
+        routeSelectionHandoffToOpenChat(
+          "/repo",
+          `fallback-${String(batchIndex)}`,
+          [batch.source],
+          openFallback,
+        );
+        for (let handoffIndex = 0; handoffIndex < 33; handoffIndex += 1) {
+          routeSelectionHandoffToOpenChat(
+            "/repo",
+            `staged-${String(batchIndex)}-${String(handoffIndex)}`,
+            [batch.source],
+            openFallback,
+            batch.abandoned,
+          );
+        }
+        unregister();
+        await Promise.resolve();
+        expect(openFallback).toHaveBeenCalledExactlyOnceWith();
+      }
+
+      expect(abandonedFirst).toHaveBeenCalledTimes(33);
+      expect(abandonedSecond).not.toHaveBeenCalled();
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects an empty replacement runtime id without staging the handoff", async () => {
     const firstConsumer = vi.fn<(selectionHandoffId: string) => void>();
     const invalidFallback = vi.fn<() => string>(() => "");

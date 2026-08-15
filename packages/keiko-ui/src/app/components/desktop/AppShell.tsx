@@ -96,8 +96,16 @@ function validProjectPath(value: Cfg[string]): string | undefined {
   return value.trim().length > 0 ? value : undefined;
 }
 
+function cloneCfg(cfg: Cfg): Cfg {
+  const cloned: Cfg = {};
+  for (const [key, value] of Object.entries(cfg)) {
+    cloned[key] = Array.isArray(value) ? [...value] : value;
+  }
+  return cloned;
+}
+
 function normalizedNewChatCfg(cfg: Cfg, activeProjectPath: string | undefined): Cfg {
-  const next = { ...cfg };
+  const next = cloneCfg(cfg);
   delete next["projectPath"];
   const configuredProjectPath = validProjectPath(cfg["projectPath"]);
   const selectedProjectPath = validProjectPath(activeProjectPath);
