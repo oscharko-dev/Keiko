@@ -30,7 +30,7 @@ interface ChatWindowRuntimeState {
 interface PendingSelectionHandoff {
   readonly id: string;
   readonly preferredWindowIds: readonly string[];
-  readonly onUnavailable?: (() => void) | undefined;
+  readonly onUnavailable?: (() => string | null | void) | undefined;
 }
 
 export type ChatWindowGroundingActivity =
@@ -62,6 +62,7 @@ const FLOW_AFTERGLOW_MS = 2_500;
 let snapshot: ReadonlyMap<string, ChatWindowFlow> = new Map();
 const listeners = new Set<() => void>();
 const runtimes = new Map<string, ChatWindowRuntimeState>();
+const stagedRuntimeHandoffs = new Map<string, PendingSelectionHandoff[]>();
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
@@ -166,6 +167,11 @@ export function registerChatWindowRuntime(
   state.registration = registration;
   state.registered = true;
   if (state.reserved && runtime.acceptingSelectionHandoff !== false) state.reserved = false;
+  const staged = stagedRuntimeHandoffs.get(windowId);
+  if (staged !== undefined) {
+    state.pendingSelectionHandoffs.push(...staged);
+    stagedRuntimeHandoffs.delete(windowId);
+  }
   runtimes.set(windowId, state);
   dispatchPendingSelectionHandoff(state);
   return (): void => {
@@ -209,16 +215,41 @@ function orderedRuntimeIds(preferredWindowIds: readonly string[]): string[] {
   return ordered;
 }
 
+function stageRuntimeHandoffs(windowId: string, pending: readonly PendingSelectionHandoff[]): void {
+  if (pending.length === 0) return;
+  const state = runtimes.get(windowId);
+  if (state?.registered === true) {
+    state.pendingSelectionHandoffs.push(...pending);
+    dispatchPendingSelectionHandoff(state);
+    return;
+  }
+  const staged = stagedRuntimeHandoffs.get(windowId) ?? [];
+  staged.push(...pending);
+  stagedRuntimeHandoffs.set(windowId, staged);
+}
+
+function openFallbackForPending(pending: readonly PendingSelectionHandoff[]): void {
+  for (const [index, handoff] of pending.entries()) {
+    const fallbackWindowId = handoff.onUnavailable?.();
+    if (typeof fallbackWindowId !== "string" || fallbackWindowId.length === 0) continue;
+    stageRuntimeHandoffs(fallbackWindowId, pending.slice(index + 1));
+    return;
+  }
+}
+
 function reroutePendingSelectionHandoffs(state: ChatWindowRuntimeState): void {
   const pending = state.pendingSelectionHandoffs.splice(0);
-  for (const handoff of pending) {
+  for (const [index, handoff] of pending.entries()) {
     const routed = routeSelectionHandoffToOpenChat(
       state.runtime.projectPath,
       handoff.id,
       handoff.preferredWindowIds,
       handoff.onUnavailable,
     );
-    if (routed === null) handoff.onUnavailable?.();
+    if (routed === null) {
+      openFallbackForPending(pending.slice(index));
+      return;
+    }
   }
 }
 
@@ -226,7 +257,7 @@ export function routeSelectionHandoffToOpenChat(
   projectPath: string,
   selectionHandoffId: string,
   preferredWindowIds: readonly string[] = [],
-  onUnavailable?: (() => void) | undefined,
+  onUnavailable?: (() => string | null | void) | undefined,
 ): string | null {
   for (const windowId of orderedRuntimeIds(preferredWindowIds)) {
     const state = runtimes.get(windowId);

@@ -105,6 +105,29 @@ describe("chat window runtime routing", () => {
     expect(unavailable).toHaveBeenCalledExactlyOnceWith();
   });
 
+  it("stages multiple queued handoffs behind one replacement runtime", async () => {
+    const firstConsumer = vi.fn<(selectionHandoffId: string) => void>();
+    const openFallback = vi.fn<() => string | null>(() => "chat-fallback");
+    const unregisterFirst = registerChatWindowRuntime("chat-first", runtime(firstConsumer));
+
+    routeSelectionHandoffToOpenChat("/repo", "selection-active", ["chat-first"], openFallback);
+    routeSelectionHandoffToOpenChat("/repo", "selection-queued-1", ["chat-first"], openFallback);
+    routeSelectionHandoffToOpenChat("/repo", "selection-queued-2", ["chat-first"], openFallback);
+    unregisterFirst();
+    await Promise.resolve();
+
+    expect(openFallback).toHaveBeenCalledExactlyOnceWith();
+    const busyConsumer = vi.fn<(selectionHandoffId: string) => void>();
+    const unregisterBusy = registerChatWindowRuntime("chat-fallback", runtime(busyConsumer, false));
+    expect(busyConsumer).not.toHaveBeenCalled();
+
+    unregisterBusy();
+    const readyConsumer = vi.fn<(selectionHandoffId: string) => void>();
+    const unregisterReady = registerChatWindowRuntime("chat-fallback", runtime(readyConsumer));
+    expect(readyConsumer).toHaveBeenCalledExactlyOnceWith("selection-queued-2");
+    unregisterReady();
+  });
+
   it("preserves front-to-back preference when rerouting a queued handoff", async () => {
     const backgroundConsumer = vi.fn<(selectionHandoffId: string) => void>();
     const frontConsumer = vi.fn<(selectionHandoffId: string) => void>();
