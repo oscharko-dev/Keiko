@@ -70,7 +70,22 @@ const REDACTED_COMMAND_LOG_TOKEN = "redacted-command-log";
 const REDACTED_CONTENT_TOKEN = "redacted-content";
 const REDACTED_BEARER_TOKEN = "redacted-auth";
 const REDACTED_SECRET_TOKEN = "redacted-credential";
-const APPROVED_EVIDENCE_TOKENS = new Set<string>([
+// KEIKO-0376: this used to be one Set (APPROVED_EVIDENCE_TOKENS) consulted only by
+// isApprovedEvidenceToken, which is called per SEGMENT after isApprovedEvidenceLabel splits the
+// candidate on `/[/._-]/u`. A segment can therefore never itself contain '/', '.', '_' or '-', so
+// every hyphenated/dotted whole-string entry that used to live in that one Set was unreachable
+// dead code -- and any legitimate composite literal missing even one constituent segment word
+// (e.g. "governed-assist": "assist" was never an approved segment) was wrongly rejected despite
+// appearing to be allow-listed. Split into two vocabularies with two different lookup shapes:
+//   - APPROVED_EVIDENCE_SEGMENTS: separator-free words, consulted by isApprovedEvidenceToken
+//     against each split segment, exactly as before.
+//   - APPROVED_EVIDENCE_LITERALS: whole hyphenated/dotted strings, checked as a direct membership
+//     test in isApprovedEvidenceLabel BEFORE the segment split runs.
+// Neither Set bypasses hasDisallowedEvidenceContent: isCodingWorkbenchEvidenceSafeText still ANDs
+// it in unconditionally, so approving a label's *shape* here can never approve its *content* --
+// see the exclusion note on APPROVED_EVIDENCE_LITERALS below for the three composites this keeps
+// out on purpose.
+export const APPROVED_EVIDENCE_SEGMENTS = new Set<string>([
   "approval",
   "accepted",
   "artifact",
@@ -172,7 +187,6 @@ const APPROVED_EVIDENCE_TOKENS = new Set<string>([
   "run",
   "runner",
   "runtime",
-  "runtime-state",
   "evt",
   "sidecar",
   "sdk",
@@ -198,11 +212,67 @@ const APPROVED_EVIDENCE_TOKENS = new Set<string>([
   "workspace",
   "write",
   "workflow",
+  "file",
+  "edit",
+  "commit",
+  "push",
+  "pull",
+  "merge",
+  // "request", "system", "mutation": NOT part of the original 184-entry table, added because a
+  // real, currently-reachable producer needs them as standalone segments, not just as part of a
+  // pre-registered literal. codingRuntimeManager.ts's supervisedEvidenceContext (called from
+  // supervisedMutationEvent for every CodingWorkbenchSupervisedActionKind except
+  // file-edit/verification-command) builds
+  // `recordId: \`coding-runtime-${active.context.runId}-${label}\`` -- a dynamic string that can
+  // never equal a fixed APPROVED_EVIDENCE_LITERALS entry because it embeds the run id. That
+  // recordId is validated by isCodingWorkbenchEvidenceSafeText via
+  // validateCodingWorkbenchEvidenceRecord (supervisedCodingPolicy.ts), which throws on failure, so
+  // it can only ever pass through the segment-split path. Before this addition, any supervised
+  // action with actionKind "pull-request" or "system-mutation" threw at evidence-validation time
+  // in production (pull-request needs "request"; system-mutation needs both "system" and
+  // "mutation") -- a pre-existing, currently-reachable bug this fix also closes. The other 11
+  // words the audit record flagged as possibly missing ("assist", "state", "substrate",
+  // "deployment", "managed", "unsupported", "code", "os", "owned", "by", "with") were traced
+  // exhaustively across every dynamic-template call site in keiko-server and keiko-contracts and
+  // found to be unnecessary: every real caller assigns either a fixed pre-registered literal or a
+  // value validated by its own dedicated closed-enum check, never a runtime concatenation
+  // involving one of those 11 words, so they are deliberately NOT added here.
+  "request",
+  "system",
+  "mutation",
+]);
+
+// The 57 hyphenated/dotted whole-string entries the old Set carried, minus exactly 3 (see below).
+// Every one of these is a real, declared literal from a canonical enum source in this package
+// (coding-workbench.ts / coding-workbench-codex-auth.ts) or an existing evidence-kind label, not
+// an invented value -- verified against those declarations, not re-derived from them, so this
+// list cannot silently drift into approving a shape the product never actually emits.
+//
+// EXCLUDED ON PURPOSE, with evidence, not by oversight: "codex-access-token",
+// "codex-login-with-access-token", and "openai-api-key-through-gateway" are real enum literals
+// (CodingWorkbenchCodexAuthMethod, the commandLabelFor() derivation of the same, and
+// CodingWorkbenchModelSource respectively) but each contains a bare `token` or `api-key` word
+// that SECRET_PATTERN legitimately matches (`\btoken\b`, `\bapi[-_]?key\b`) -- confirmed by
+// running the actual pattern against all 57 candidates, not assumed. Two independent reasons this
+// stays excluded rather than added-and-bypassed:
+//   1. hasDisallowedEvidenceContent must never be short-circuited by allowlist membership --
+//      an allowlist hit answers "is this an approved shape", never "skip the content check". Real
+//      credentials can and do look like enum-shaped strings; a per-value carve-out around a secret
+//      heuristic is exactly the kind of hole that erodes a trust boundary over time.
+//   2. It is also unnecessary: traced every real production caller of the three literals above --
+//      `authMethod`/`method` (coding-workbench-codex-auth.ts:208,299,329), `commandLabel`
+//      (coding-workbench-codex-auth.ts:351), and `modelSource`
+//      (coding-workbench-evidence.ts, validateEvidenceMetadataFields) -- and all three fields are
+//      validated by their own dedicated closed-enum `isOneOf` check, never by
+//      isCodingWorkbenchEvidenceSafeText. None of the three ever needs to pass this guard in
+//      practice. Adding them here anyway, knowing the content check would always veto them, would
+//      recreate the exact "looks approved, can never actually pass" trap this finding exists to
+//      remove — just relocated instead of eliminated.
+export const APPROVED_EVIDENCE_LITERALS = new Set<string>([
+  "runtime-state",
   "codex-cli-adapter",
-  "codex-access-token",
   "codex-login",
   "codex-login-device-auth",
-  "codex-login-with-access-token",
   "delivery-runner",
   "disabled-by-deployment",
   "failed-login",
@@ -214,7 +284,6 @@ const APPROVED_EVIDENCE_TOKENS = new Set<string>([
   "managed-sidecar-runtime",
   "os-credential-store",
   "unsupported-headless",
-  "openai-api-key-through-gateway",
   "chatgpt-codex-subscription-profile",
   "governed-assist",
   "supervised-coding",
@@ -228,15 +297,9 @@ const APPROVED_EVIDENCE_TOKENS = new Set<string>([
   "verification-green",
   "workspace-read",
   "workspace-write",
-  "file",
-  "edit",
   "file-edit",
   "verification-command",
-  "commit",
-  "push",
-  "pull",
   "pull-request",
-  "merge",
   "connector-write",
   "external-write",
   "system-mutation",
@@ -260,6 +323,13 @@ const APPROVED_EVIDENCE_TOKENS = new Set<string>([
   "issue-tracker",
   "issue-tracker.read",
   "issue-tracker.write",
+  // Not one of the original 57 -- found while deriving the KEIKO-0376 acceptance test straight
+  // from CODING_WORKBENCH_ACTION_CLASSES (coding-workbench.ts): "network-egress" was never in the
+  // old allowlist under either vocabulary, and unlike "connector-access" (which happens to
+  // decompose into two pre-approved segments) its second segment "egress" was never approved on
+  // its own either, so this evidence label has been silently rejected since the action class was
+  // introduced. Added as a literal, verified clean against hasDisallowedEvidenceContent.
+  "network-egress",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -412,10 +482,18 @@ function isKnownRedactionSummary(value: string): boolean {
 }
 
 function isApprovedEvidenceToken(token: string): boolean {
-  return APPROVED_EVIDENCE_TOKENS.has(token) || /^\d+$/u.test(token) || /^[A-Z]{2,8}$/u.test(token);
+  return (
+    APPROVED_EVIDENCE_SEGMENTS.has(token) || /^\d+$/u.test(token) || /^[A-Z]{2,8}$/u.test(token)
+  );
 }
 
+// Checks only the label's SHAPE (is it one of the pre-registered composite literals, or does it
+// decompose into approved segments). Content safety is a separate, unconditional concern: every
+// caller of this function reaches it through isCodingWorkbenchEvidenceSafeText, which ANDs in
+// !hasDisallowedEvidenceContent(value) regardless of what this function returns (KEIKO-0376) --
+// an approved shape can never bypass that check.
 function isApprovedEvidenceLabel(value: string): boolean {
+  if (APPROVED_EVIDENCE_LITERALS.has(value)) return true;
   if (!isSafeEvidenceLabel(value)) return false;
   if (value.endsWith("/")) {
     const prefix = value.slice(0, -1);
