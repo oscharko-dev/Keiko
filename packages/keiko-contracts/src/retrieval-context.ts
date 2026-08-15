@@ -157,11 +157,22 @@ export interface RetrievalContextOmission<
   readonly reason: RetrievalContextOmissionReason;
 }
 
+// Codex follow-on (ADR-0152 D6): SourceTier is a second, independent type parameter — not derived
+// from SourceKind — because a profile's tier authority is its own table
+// (RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND vs. CODING_CONTEXT_SOURCE_TIER_BY_KIND), and the two are
+// deliberately allowed to map the SAME sourceKind to DIFFERENT tiers (connected-context). Before
+// this, sourceTier was hard-coded to the wide RetrievalContextSourceTier regardless of which
+// profile instantiated these generics, so CodingContextCitation (etc., in coding-context.ts) typed
+// as though it could carry the neutral-only "external-connected" even though no coding kind is ever
+// mapped to it and the runtime guard (isValidContextCitation) already rejected it. Threading a real
+// SourceTier parameter here — and through packCandidates / assembleRetrievalContext in
+// keiko-server/src/retrieval/contextAssembly.ts — makes the type agree with the guard.
 export interface RetrievalContextCitation<
   SourceKind extends RetrievalContextSourceKind = RetrievalContextSourceKind,
+  SourceTier extends RetrievalContextSourceTier = RetrievalContextSourceTier,
 > {
   readonly sourceKind: SourceKind;
-  readonly sourceTier: RetrievalContextSourceTier;
+  readonly sourceTier: SourceTier;
   readonly id: string;
   readonly score: number;
   readonly rank: number;
@@ -172,18 +183,20 @@ export interface RetrievalContextCitation<
 
 export interface RetrievalContextExcerpt<
   SourceKind extends RetrievalContextSourceKind = RetrievalContextSourceKind,
+  SourceTier extends RetrievalContextSourceTier = RetrievalContextSourceTier,
 > {
-  readonly citation: RetrievalContextCitation<SourceKind>;
+  readonly citation: RetrievalContextCitation<SourceKind, SourceTier>;
   readonly text: string;
 }
 
 export interface RetrievalContextPack<
   SourceKind extends RetrievalContextSourceKind = RetrievalContextSourceKind,
   Purpose extends RetrievalPurpose = RetrievalPurpose,
+  SourceTier extends RetrievalContextSourceTier = RetrievalContextSourceTier,
 > {
   readonly schemaVersion: typeof RETRIEVAL_CONTEXT_SCHEMA_VERSION;
   readonly purpose: Purpose;
-  readonly excerpts: readonly RetrievalContextExcerpt<SourceKind>[];
+  readonly excerpts: readonly RetrievalContextExcerpt<SourceKind, SourceTier>[];
   readonly usedBytes: number;
   readonly budgetBytes: number;
   readonly droppedForBudget: number;
@@ -193,10 +206,11 @@ export interface RetrievalContextPack<
 export interface RetrievalContextWirePack<
   SourceKind extends RetrievalContextSourceKind = RetrievalContextSourceKind,
   Purpose extends RetrievalPurpose = RetrievalPurpose,
+  SourceTier extends RetrievalContextSourceTier = RetrievalContextSourceTier,
 > {
   readonly schemaVersion: typeof RETRIEVAL_CONTEXT_SCHEMA_VERSION;
   readonly purpose: Purpose;
-  readonly entries: readonly RetrievalContextCitation<SourceKind>[];
+  readonly entries: readonly RetrievalContextCitation<SourceKind, SourceTier>[];
   readonly usedBytes: number;
   readonly budgetBytes: number;
   readonly droppedForBudget: number;
@@ -267,11 +281,14 @@ function isOptionalString(value: unknown): boolean {
 // profile over this contract (e.g. coding-context.ts) can validate its own citations against its
 // own sourceKind set and tier table, instead of inheriting the neutral profile's via
 // isRetrievalContextCitation.
-export function isValidContextCitation<Kind extends RetrievalContextSourceKind>(
+export function isValidContextCitation<
+  Kind extends RetrievalContextSourceKind,
+  Tier extends RetrievalContextSourceTier,
+>(
   value: unknown,
   sourceKinds: readonly Kind[],
-  tierByKind: Readonly<Record<Kind, RetrievalContextSourceTier>>,
-): value is RetrievalContextCitation<Kind> {
+  tierByKind: Readonly<Record<Kind, Tier>>,
+): value is RetrievalContextCitation<Kind, Tier> {
   if (!isRecord(value)) return false;
   if ("text" in value || "excerpt" in value || "content" in value) return false;
   const sourceKindValid = sourceKinds.includes(value.sourceKind as Kind);
@@ -319,7 +336,10 @@ export function isRetrievalContextCitation(value: unknown): value is RetrievalCo
 export function toRetrievalContextWirePack<
   SourceKind extends RetrievalContextSourceKind,
   Purpose extends RetrievalPurpose,
->(pack: RetrievalContextPack<SourceKind, Purpose>): RetrievalContextWirePack<SourceKind, Purpose> {
+  SourceTier extends RetrievalContextSourceTier,
+>(
+  pack: RetrievalContextPack<SourceKind, Purpose, SourceTier>,
+): RetrievalContextWirePack<SourceKind, Purpose, SourceTier> {
   return {
     schemaVersion: pack.schemaVersion,
     purpose: pack.purpose,

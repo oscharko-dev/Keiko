@@ -186,6 +186,15 @@ describe("isCodingContextCitation (content-free guard)", () => {
   // own validator. Pinned in both directions so this can never silently regress again: the coding
   // tier is accepted, and the neutral profile's tier for the same kind is rejected as a
   // misrepresentation (the whole point of the tier-equality check this contract enforces).
+  //
+  // Relocated construction (second Codex follow-on, #2899): `sourceTier` now types as the closed
+  // CodingContextSourceTier (see the isCodingContextCitation.sourceTier compile-time-rejection test
+  // below), so `citation({ sourceTier: "external-connected" })` no longer compiles through the
+  // citation() helper's `Partial<CodingContextCitation>` parameter — proving that IS the fix working.
+  // The invariant below still needs a genuinely hostile value, so it is built by spreading OUTSIDE
+  // that typed parameter position, exactly the shape real malformed wire input reaches
+  // isCodingContextCitation(value: unknown) in: never type-checked against CodingContextCitation,
+  // same runtime object either way. The assertion is untouched.
   it("validates connected-context citations against the CODING tier, not the neutral table's (regression)", () => {
     expect(
       isCodingContextCitation(
@@ -193,10 +202,24 @@ describe("isCodingContextCitation (content-free guard)", () => {
       ),
     ).toBe(true);
     expect(
-      isCodingContextCitation(
-        citation({ sourceKind: "connected-context", sourceTier: "external-connected" }),
-      ),
+      isCodingContextCitation({
+        ...citation({ sourceKind: "connected-context" }),
+        sourceTier: "external-connected",
+      }),
     ).toBe(false);
+  });
+
+  // New (#2899): the compile-time half of the invariant above — a CodingContextCitation literal
+  // cannot claim the neutral-only tier at all now, which is what makes the runtime-only proof above
+  // still necessary (a value that never passes through the type). Fails today: "external-connected"
+  // is not assignable to CodingContextSourceTier, so `@ts-expect-error` becomes "used" and correct.
+  it("rejects external-connected on a CodingContextCitation at compile time", () => {
+    const hostile = citation({
+      sourceKind: "connected-context",
+      // @ts-expect-error — "external-connected" is not a member of CodingContextSourceTier
+      sourceTier: "external-connected",
+    });
+    expect(hostile.sourceTier).toBe("external-connected");
   });
 
   // Proves the producer (tierForCodingContextSource, and by extension toCodingContextWirePack)

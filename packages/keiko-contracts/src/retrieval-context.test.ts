@@ -26,13 +26,15 @@ import {
   type RetrievalContextRequest,
 } from "./retrieval-context.js";
 
+// The neutral-tier view of a coding pack (SourceTier omitted -> defaults to the wide
+// RetrievalContextSourceTier). Narrow-to-wide (coding -> neutral) is always safe: every coding tier
+// is one of the four values RetrievalContextSourceTier is a superset of. Wide-to-narrow is NOT safe
+// post-parameterization (Codex follow-on, #2899) — a neutral pack could carry external-connected,
+// which a coding pack must never claim — so there is deliberately no `asCoding` counterpart here
+// anymore; see "rejects a wide-tier pack..." below for the compile-time proof of that asymmetry.
 type CodingRetrievalPack = RetrievalContextPack<CodingContextSourceKind, CodingContextPurpose>;
 
 function asNeutral(pack: CodingContextPack): CodingRetrievalPack {
-  return pack;
-}
-
-function asCoding(pack: CodingRetrievalPack): CodingContextPack {
   return pack;
 }
 
@@ -63,15 +65,34 @@ function codingPack(): CodingContextPack {
 }
 
 describe("retrieval-context coding profile", () => {
-  it("keeps the coding aliases assignable both ways and wire bytes unchanged", () => {
-    const pack = asCoding(asNeutral(codingPack()));
+  // Relocated (Codex follow-on, #2899): this used to round-trip `asCoding(asNeutral(codingPack()))`
+  // to prove "assignable both ways." The wide-to-narrow half of that was never a safe invariant —
+  // once SourceTier is genuinely parameterized, a RetrievalContextPack with the default (wide) tier
+  // must NOT be treated as interchangeable with a CodingContextPack, because it could carry
+  // external-connected. The invariant actually worth protecting — the coding and neutral wire
+  // projections serialize a coding pack identically — is proven directly, through the one safe
+  // direction (asNeutral), without the unsafe downcast.
+  it("serializes identically through the coding and neutral wire projections", () => {
+    const pack = codingPack();
     const wire = toCodingContextWirePack(pack);
 
     expect(JSON.stringify(wire)).toBe(
       '{"schemaVersion":"1","purpose":"completion","entries":[{"sourceKind":"repo-search","sourceTier":"first-party-workspace","id":"fixture-1","score":0.75,"rank":0,"citationRef":"fixture.ts","byteCount":7,"truncated":false}],"usedBytes":7,"budgetBytes":32768,"droppedForBudget":0,"omissions":[{"sourceKind":"memory","reason":"unavailable"}]}',
     );
-    expect(toRetrievalContextWirePack(pack)).toEqual(wire);
+    expect(toRetrievalContextWirePack(asNeutral(pack))).toEqual(wire);
     expect(RETRIEVAL_CONTEXT_SCHEMA_VERSION).toBe(CODING_CONTEXT_SCHEMA_VERSION);
+  });
+
+  // New (#2899): the compile-time counterpart to the relocation above. A wide-tier neutral pack is
+  // no longer blindly assignable back to CodingContextPack — this is what makes the missing
+  // `asCoding` helper correct rather than an oversight. Fails today (the assignment would compile,
+  // so `@ts-expect-error` is reported "unused") and passes once SourceTier is a real parameter.
+  it("rejects a wide-tier neutral pack standing in for a CodingContextPack at compile time", () => {
+    const neutralView: CodingRetrievalPack = asNeutral(codingPack());
+    // @ts-expect-error — CodingRetrievalPack's SourceTier (RetrievalContextSourceTier) is wider than
+    // CodingContextPack's (CodingContextSourceTier); the assignment is not safe without re-validation.
+    const backAsCoding: CodingContextPack = neutralView;
+    expect(backAsCoding.purpose).toBe("completion");
   });
 
   it("spreads every coding budget unchanged into the total neutral budget map", () => {
