@@ -18,6 +18,7 @@ import {
   connectResponseHeaderExceedsLimit,
   gatewayTrustedCaCertificates,
   gatewayFetch,
+  httpsProxyTunnelKey,
   isMissingIssuerError,
   isRecoverableTlsTrustError,
   MAX_RESPONSE_BYTES,
@@ -1317,6 +1318,42 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
       vi.doUnmock("node:dns/promises");
       vi.resetModules();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// httpsProxyTunnelKey — order-insensitivity of the CA-set digest (#3157)
+// ---------------------------------------------------------------------------
+// Tested directly rather than through the full gatewayFetch/proxy pipeline: the real caller,
+// gatewayTrustedCaCertificates, always assembles the ca array in the same fixed sequence
+// (default -> root -> system -> extra) for a given configuration, so it never naturally produces
+// the same SET in a different ORDER -- there is no way to exercise this invariant end-to-end
+// without contriving an artificial caller. httpsProxyTunnelKey's own contract (its comment above
+// says the sort makes "the SAME set in a different array order hash identically") is the thing
+// worth pinning, independent of whether today's one caller happens to vary it.
+
+describe("httpsProxyTunnelKey", () => {
+  const target = new URL("https://example.com/path");
+  const proxy = new URL("http://proxy.example.com:8080");
+
+  it("is insensitive to the CA array's input order", () => {
+    const certA = "-----BEGIN CERTIFICATE-----\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n-----END-----";
+    const certB = "-----BEGIN CERTIFICATE-----\nBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n-----END-----";
+    const certC = "-----BEGIN CERTIFICATE-----\nCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC\n-----END-----";
+    const forward = httpsProxyTunnelKey(target, proxy, [certA, certB, certC], undefined);
+    const reversed = httpsProxyTunnelKey(target, proxy, [certC, certB, certA], undefined);
+    const shuffled = httpsProxyTunnelKey(target, proxy, [certB, certC, certA], undefined);
+    expect(reversed).toBe(forward);
+    expect(shuffled).toBe(forward);
+  });
+
+  it("still distinguishes two genuinely different CA sets", () => {
+    const certA = "-----BEGIN CERTIFICATE-----\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n-----END-----";
+    const certB = "-----BEGIN CERTIFICATE-----\nBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n-----END-----";
+    const certC = "-----BEGIN CERTIFICATE-----\nCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC\n-----END-----";
+    const withA = httpsProxyTunnelKey(target, proxy, [certA, certB], undefined);
+    const withC = httpsProxyTunnelKey(target, proxy, [certC, certB], undefined);
+    expect(withC).not.toBe(withA);
   });
 });
 

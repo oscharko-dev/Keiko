@@ -860,17 +860,41 @@ async function createTlsTunnel(
 // (this key is a private, in-memory Map key -- grepped and confirmed never logged, thrown, or
 // otherwise surfaced -- but a digest costs nothing and permanently forecloses that ever mattering
 // if some future change adds diagnostics here).
+//
+// The sort's comparator is a plain UTF-16 code-unit comparison, not `localeCompare` (#3157,
+// Keiko for Quality x2): an earlier version of this line used `(a, b) => a.localeCompare(b)` to
+// satisfy SonarJS S2871, which requires an explicit comparator rather than default sort's
+// coercion-based one. That satisfied the rule's letter while breaking the one property the sort
+// exists for: `localeCompare`'s result depends on the runtime's collation (locale, ICU data
+// version), which is exactly the kind of environment-dependence the previous paragraph already
+// said this sort must NOT have. Two hosts -- or the same host across an ICU upgrade -- could
+// order the identical CA set differently and so hash it to different keys, silently dropping the
+// pool's hit rate to zero for that CA configuration (wasted reconnects under load, not a
+// correctness/security break, since a MISSED pool hit only means a fresh, still-correctly-vetted
+// tunnel; but a real defect, and introduced by this file's own #3157 fix). codeUnitCompare below
+// is total, stable, and depends on nothing but the two strings' own UTF-16 code units -- no ICU,
+// no locale, no Intl -- while still an explicit comparator function, satisfying S2871 for the
+// reason it actually asks for (a well-defined order) rather than the one that happened to also
+// compile (a human-friendly one). Written with if-statements rather than a nested ternary
+// (`a < b ? -1 : a > b ? 1 : 0`) because SonarJS S3358 flags nested ternaries separately --
+// satisfying one rule should not trip another.
 function keyMaterialDigest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function httpsProxyTunnelKey(
+function codeUnitCompare(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
+export function httpsProxyTunnelKey(
   target: URL,
   proxy: URL,
   ca: readonly string[],
   pinnedAddress: LookupAddress | undefined,
 ): string {
-  const caKey = keyMaterialDigest(JSON.stringify([...ca].sort((a, b) => a.localeCompare(b))));
+  const caKey = keyMaterialDigest(JSON.stringify([...ca].sort(codeUnitCompare)));
   const pinKey =
     pinnedAddress === undefined
       ? "unpinned"

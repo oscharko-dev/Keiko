@@ -85,6 +85,7 @@ describe("ConnectorApprovalsPanel — content preview (KEIKO-0186)", () => {
     render(<ConnectorApprovalsPanel client={makeClient()} />);
     await screen.findByTestId("acx-approval");
     expect(screen.queryByTestId("acx-content-preview")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("acx-content-preview-count")).not.toBeInTheDocument();
   });
 
   it("has no axe violations with a content preview present (light and dark)", async () => {
@@ -97,6 +98,79 @@ describe("ConnectorApprovalsPanel — content preview (KEIKO-0186)", () => {
       document.documentElement.setAttribute("data-theme", theme);
       const { container, unmount } = render(<ConnectorApprovalsPanel client={client} />);
       await screen.findByTestId("acx-content-preview");
+      expect(await axe(container)).toHaveNoViolations();
+      unmount();
+    }
+    document.documentElement.removeAttribute("data-theme");
+  });
+});
+
+// KEIKO-0186 P5 (Codex): the server's presentability predicate is a heuristic, not a complete
+// classifier -- Unicode has no property meaning "renders blank", so a Letter that happens to
+// render blank on the reviewer's own fonts (the fifth report in this series: U+13441/U+13442
+// EGYPTIAN HIEROGLYPH FULL/HALF BLANK) can still slip through as an "available" preview that
+// LOOKS empty. The character count is the structural signal that holds regardless of which blank
+// code point it is: a preview that looks empty next to "N characters" is self-evidently
+// suspicious to a human, without the UI (or the predicate) having to recognize the character.
+describe("ConnectorApprovalsPanel — content preview character count (KEIKO-0186 P5)", () => {
+  it("renders the character count next to the preview, derived from the preview text itself", async () => {
+    const previewText = "Fix the flaky gate\n\nFails on retries";
+    const client = makeClient({
+      listApprovals: vi.fn(async () => [{ ...APPROVAL, contentPreview: previewText }]),
+    });
+    render(<ConnectorApprovalsPanel client={client} />);
+    const row = await screen.findByTestId("acx-approval");
+    const preview = await screen.findByTestId("acx-content-preview");
+    const count = await screen.findByTestId("acx-content-preview-count");
+    expect(count).toHaveTextContent(`${String(Array.from(previewText).length)} characters`);
+    // "Next to the preview": adjacent in the row's reading order, between the preview text and
+    // the Approve/Reject buttons -- not merged into the preview paragraph itself.
+    const rowText = row.textContent ?? "";
+    const previewIndex = rowText.indexOf("Fix the flaky gate");
+    const countIndex = rowText.indexOf(`${String(Array.from(previewText).length)} characters`);
+    const approveIndex = rowText.indexOf("Approve");
+    expect(previewIndex).toBeGreaterThanOrEqual(0);
+    expect(countIndex).toBeGreaterThan(previewIndex);
+    expect(approveIndex).toBeGreaterThan(countIndex);
+    expect(preview).not.toHaveTextContent("characters");
+  });
+
+  it("counts Unicode code points, not UTF-16 code units: an astral character (a surrogate pair) counts as one character", async () => {
+    // U+13441 EGYPTIAN HIEROGLYPH FULL BLANK -- the P5 report's own example -- is astral (outside
+    // the BMP) and requires a UTF-16 surrogate pair. Mixed with real text the overall preview is
+    // still "available" (the hieroglyph alone is unpresentable, but "Done" supplies a presentable
+    // character), so this also exercises the P5 predicate fix end-to-end at the UI layer.
+    const hieroglyphFullBlank = String.fromCodePoint(0x13441);
+    const previewText = "Done" + hieroglyphFullBlank;
+    expect(previewText).toHaveLength(6); // UTF-16 code units: "Done" (4) + surrogate pair (2)
+    expect(Array.from(previewText)).toHaveLength(5); // code points: "D","o","n","e",hieroglyph
+    const client = makeClient({
+      listApprovals: vi.fn(async () => [{ ...APPROVAL, contentPreview: previewText }]),
+    });
+    render(<ConnectorApprovalsPanel client={client} />);
+    const count = await screen.findByTestId("acx-content-preview-count");
+    expect(count).toHaveTextContent("5 characters");
+  });
+
+  it("renders no count for the unavailable branch: the server has already said plainly that nothing could be previewed", async () => {
+    const client = makeClient({
+      listApprovals: vi.fn(async () => [{ ...APPROVAL, contentPreviewUnavailable: true as const }]),
+    });
+    render(<ConnectorApprovalsPanel client={client} />);
+    await screen.findByTestId("acx-content-preview-unavailable");
+    expect(screen.queryByTestId("acx-content-preview-count")).not.toBeInTheDocument();
+  });
+
+  it("has no axe violations with the character count present (light and dark)", async () => {
+    const client = makeClient({
+      listApprovals: vi.fn(async () => [
+        { ...APPROVAL, contentPreview: "Fix the flaky gate\n\nFails on retries" },
+      ]),
+    });
+    for (const theme of ["light", "dark"] as const) {
+      document.documentElement.setAttribute("data-theme", theme);
+      const { container, unmount } = render(<ConnectorApprovalsPanel client={client} />);
+      await screen.findByTestId("acx-content-preview-count");
       expect(await axe(container)).toHaveNoViolations();
       unmount();
     }
