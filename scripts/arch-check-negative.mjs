@@ -52,7 +52,17 @@ const REQUIRED_DIST_ENTRYPOINTS = [PROBE_EXPECTED_RESOLVED];
 // widening (audit KEIKO-0255) so trust rules 1, 4 and 5 are proven live by name here instead of
 // being silently pruned before evaluation. This override must stay a superset of the production
 // `includeOnly`; assertProductionIncludeOnlyIsCovered() below fails the gate if it drifts below it.
-const INCLUDE_ONLY_OVERRIDE = String.raw`^(tests/architecture/fixtures|\.\./|src|packages/[^/]+/(src|dist)|(node_modules/)?(openai($|/)|@anthropic-ai/|[^/]+-ai-sdk($|/))|(node:)?fs(/promises)?$)`;
+// DERIVED from the production filter, not restated beside it. A hand-copied twin drifts silently:
+// production could admit a new destination alternative that this copy lacks, and the fixture scan
+// would prune that destination while every assertion stayed green — the rule it proves would be
+// dead exactly the way KEIKO-0255 found trust-1/4/5 dead (review finding on #3159).
+const PRODUCTION_INCLUDE_ONLY = createRequire(import.meta.url)(join(process.cwd(), RULES_FILE))
+  .options.includeOnly;
+const INCLUDE_ONLY_OVERRIDE =
+  String.raw`^(tests/architecture/fixtures|\.\./|` +
+  // Strip the production regex's own `^(` … `)` wrapper and fold its alternatives in.
+  PRODUCTION_INCLUDE_ONLY.replace(/^\^\(/u, "").replace(/\)$/u, "") +
+  ")";
 
 // One expected rule per physically-extracted package boundary. Most rules should fire exactly once
 // against their dedicated fixture subdir; workflows intentionally fires twice because it pins both
@@ -128,10 +138,7 @@ const INCLUDE_ONLY_COVERAGE_SAMPLES = [
 ];
 
 function assertProductionIncludeOnlyIsCovered() {
-  const requireFromHere = createRequire(import.meta.url);
-  const productionIncludeOnly = requireFromHere(join(process.cwd(), RULES_FILE)).options
-    .includeOnly;
-  const productionRe = new RegExp(productionIncludeOnly);
+  const productionRe = new RegExp(PRODUCTION_INCLUDE_ONLY);
   const overrideRe = new RegExp(INCLUDE_ONLY_OVERRIDE);
   const uncovered = INCLUDE_ONLY_COVERAGE_SAMPLES.filter(
     (sample) => productionRe.test(sample) && !overrideRe.test(sample),

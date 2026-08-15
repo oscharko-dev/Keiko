@@ -11,8 +11,9 @@
 //
 // SCOPE — read this before citing the gate (KEIKO-0234). Despite the name "retrieval-latency", this
 // measures ONLY the LEXICAL keiko-workspace `searchText` engine. It does NOT cover Local Knowledge's
-// USearch/HNSW ANN semantic retrieval path (ADR-0164), which has no dedicated latency regression
-// gate today. A green run here is not evidence that semantic retrieval latency is protected. Same
+// USearch/HNSW ANN semantic retrieval path (ADR-0164). That path is gated separately by
+// `check:knowledge-m2-closeout`, whose ann-active proof carries absolute build/query ceilings
+// against the production timeouts (KEIKO-0362). A green run here is not evidence about it. Same
 // caveat, same reason, as the one check-grounded-retrieval-quality.mjs carries on the quality side.
 
 import { Buffer } from "node:buffer";

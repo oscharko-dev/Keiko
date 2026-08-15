@@ -8,13 +8,13 @@
     "keiko-cli": {
       "files": 41,
       "uncoveredFiles": 0,
-      "uncoveredLines": 381,
-      "totalLines": 4401,
+      "uncoveredLines": 378,
+      "totalLines": 4422,
       "coverage": {
-        "lines": 91.34,
-        "statements": 89.52,
-        "branches": 83.81,
-        "functions": 92.42
+        "lines": 91.45,
+        "statements": 89.64,
+        "branches": 84.01,
+        "functions": 92.56
       }
     },
     "keiko-connectors": {

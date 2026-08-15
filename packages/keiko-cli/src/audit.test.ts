@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { parseAuditArgs, runAuditCli } from "./audit.js";
@@ -188,6 +191,47 @@ describe("runAuditCli", () => {
       { cwd: "/home/operator", loadAuditor },
     );
     expect(audited).toBe("/tmp/explicit");
+  });
+
+  // Every case above injects loadAuditor, so the REAL default loader — the one production uses —
+  // was never executed. This drives it end to end against a module written to disk, which is also
+  // the only thing that proves pathToFileURL handling works for a real path.
+  it("loads the auditor through the default importer, not just the injected one", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-audit-loader-"));
+    const modulePath = join(dir, "auditor.mjs");
+    writeFileSync(
+      modulePath,
+      "export function auditLocalState(stateDir) {\n" +
+        "  return { ok: true, stateDir, classes: [" +
+        '{ id: "c", title: "Loaded through the real importer", status: "pass", findings: [] }' +
+        "] };\n}\n",
+    );
+    const c = makeIo();
+    const code = await runAuditCli(["local-state", "--state-dir", "/tmp/example/.keiko"], c.io, {
+      KEIKO_LOCAL_STATE_AUDITOR: modulePath,
+    });
+    expect(code).toBe(0);
+    expect(c.out()).toContain("Loaded through the real importer");
+  });
+
+  it("prints usage and exits 0 for --help", async () => {
+    const c = makeIo();
+    expect(await runAuditCli(["--help"], c.io, env)).toBe(0);
+    expect(c.out()).toContain("keiko audit local-state");
+    expect(c.out()).toContain("KEIKO_STATE_DIR");
+    expect(c.err()).toBe("");
+  });
+
+  it.each([
+    ["a non-object class entry", { ok: true, stateDir: "/x", classes: [null] }],
+    ["a missing stateDir", { ok: true, classes: [] }],
+  ])("refuses %s", async (_label, malformed) => {
+    const c = makeIo();
+    const code = await runAuditCli(["local-state"], c.io, env, {
+      loadAuditor: () => Promise.resolve({ auditLocalState: () => malformed } as never),
+    });
+    expect(code).toBe(1);
+    expect(c.err()).toContain("cannot read");
   });
 
   it("fails closed when the auditor module cannot be loaded", async () => {

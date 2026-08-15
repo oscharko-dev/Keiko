@@ -221,8 +221,10 @@ int main(int argc, const char *argv[]) {
       return 1;
     }
     if (strcmp(argv[1], "--activate") == 0) return activate_extension();
-    fprintf(stderr, "keiko-system-extension-manager: unknown option '%s'; expected --status or --activate\n",
-            argv[1]);
+    /* The argument is not echoed: a wrapper can pass a path or token by mistake, and this stderr
+     * is captured into activation logs. The usage line is the whole actionable content. */
+    fprintf(stderr,
+            "keiko-system-extension-manager: unknown option; expected --status or --activate\n");
     return 1;
   }
 }
