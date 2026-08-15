@@ -30,10 +30,18 @@ const CAP_ID = "cap-corpus-1" as KnowledgeCapsuleId;
 
 function seedDocumentText(capsuleId: string, documentId: string, text: string): void {
   // document_texts requires a parent documents row due to the FK.
-  // Seed documents first (requires capsule_sources row first for FK constraint).
+  // Seed documents first (requires capsule_sources row first for FK constraint), which in turn
+  // requires a knowledge_sources row (KEIKO-0371: capsule_sources.id now carries `FOREIGN KEY (id)
+  // REFERENCES knowledge_sources(id) ON DELETE RESTRICT`, matching what a real source-create call
+  // through source-lifecycle.ts always writes first).
   const db = store._internal.db;
   const now = store._internal.now();
   const sourceId = `src-${capsuleId}`;
+
+  // Insert a minimal knowledge_sources row (one per capsule, shared id with capsule_sources).
+  db.prepare(
+    "INSERT OR IGNORE INTO knowledge_sources (id, display_name, tags_json, scope_kind, scope_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  ).run(sourceId, "Source 1", "[]", "folder", "{}", now, now);
 
   // Insert a minimal capsule_sources row (one source per capsule).
   db.prepare(

@@ -401,6 +401,143 @@ describe("openKnowledgeStore — upgrade path from v1", () => {
   });
 });
 
+// KEIKO-0371: capsule_sources carries `FOREIGN KEY (id) REFERENCES knowledge_sources(id) ON
+// DELETE RESTRICT` on a fresh install, but no migration ever added it to a store created at v1.
+// The obvious fix (the create/copy/DROP/rename rebuild used elsewhere in the schema) was tried and
+// reverted: capsule_sources is the FK TARGET of eight dependent tables under `ON DELETE CASCADE`,
+// this store opens with `PRAGMA foreign_keys = ON`, runMigrations wraps pending migrations in one
+// BEGIN/COMMIT, and `PRAGMA foreign_keys = OFF` is a documented no-op once that transaction is
+// open — so the DROP would have cascaded and silently deleted every upgraded store's documents,
+// chunks, and vectors. This suite proves the fix through the REAL runMigrations engine (not a
+// simplified statement-loop fixture — see AGENTS.md #2285 on fixtures restating the producer),
+// against a store populated exactly like a real installed capsule would be.
+const SEED_CAPSULE_SQL =
+  "INSERT INTO capsules (id, display_name, tags_json, retrieval_effort, output_mode, " +
+  "answer_grounding_policy, embedding_model_provider, embedding_model_id, vector_dimensions, " +
+  "vector_metric, lifecycle_state, storage_reference, created_at, updated_at) VALUES " +
+  "('cap-1', 'Demo capsule', '[]', 'default', 'answers', 'require-citations', 'openai', " +
+  "'text-embedding-3-small', 4, 'cosine', 'ready', 'capsules/cap-1', 1000, 1000)";
+
+const SEED_KNOWLEDGE_SOURCE_SQL =
+  "INSERT INTO knowledge_sources (id, display_name, tags_json, scope_kind, scope_json, " +
+  "created_at, updated_at) VALUES ('src-1', 'Demo source', '[]', 'folder', '{}', 1000, 1000)";
+
+const SEED_CAPSULE_SOURCE_SQL =
+  "INSERT INTO capsule_sources (id, capsule_id, display_name, tags_json, scope_kind, " +
+  "scope_json, created_at, updated_at) VALUES ('src-1', 'cap-1', 'Demo source', '[]', " +
+  "'folder', '{}', 1000, 1000)";
+
+const SEED_DOCUMENT_SQL =
+  "INSERT INTO documents (id, capsule_id, source_id, document_path, size_bytes, media_type, " +
+  "content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name) " +
+  "VALUES ('doc-1', 'cap-1', 'src-1', 'docs/intro.md', 10, 'text/markdown', 'deadbeef', " +
+  "'markdown', '1.0.0', 1000, 'extracted', 'intro.md')";
+
+const SEED_PARSED_UNIT_SQL =
+  "INSERT INTO parsed_units (id, capsule_id, document_id, kind) VALUES " +
+  "('unit-1', 'cap-1', 'doc-1', 'section')";
+
+const SEED_CHUNK_SQL =
+  "INSERT INTO chunks (id, capsule_id, source_id, document_id, parsed_unit_id, order_index, " +
+  "token_count, safe_excerpt_hash) VALUES ('chunk-1', 'cap-1', 'src-1', 'doc-1', 'unit-1', 0, " +
+  "4, 'abc')";
+
+const SEED_VECTOR_SQL =
+  "INSERT INTO vectors (id, capsule_id, source_id, document_id, chunk_id, embedding, " +
+  "embedding_model_provider, embedding_model_id, vector_dimensions, vector_metric, " +
+  "storage_reference, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+// Manually builds a v32-state store on disk (every migration through v32 applied — capsule_sources
+// still in its v1, FK-less shape) and populates one row in every table that cascades from
+// capsule_sources, so the real migration runner is the only thing standing between this fixture and
+// a passing test — exactly what an upgraded, populated, real-world store looks like today.
+function seedPopulatedV32Store(dbPath: string): void {
+  const seed = new DatabaseSync(dbPath);
+  try {
+    for (const migration of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+      if (migration.version > 32) break;
+      for (const stmt of migration.up) seed.exec(stmt);
+    }
+    seed.exec(SEED_CAPSULE_SQL);
+    seed.exec(SEED_KNOWLEDGE_SOURCE_SQL);
+    seed.exec(SEED_CAPSULE_SOURCE_SQL);
+    seed.exec(SEED_DOCUMENT_SQL);
+    seed.exec(SEED_PARSED_UNIT_SQL);
+    seed.exec(SEED_CHUNK_SQL);
+    seed
+      .prepare(SEED_VECTOR_SQL)
+      .run(
+        "vec-1",
+        "cap-1",
+        "src-1",
+        "doc-1",
+        "chunk-1",
+        new Uint8Array(16),
+        "openai",
+        "text-embedding-3-small",
+        4,
+        "cosine",
+        "store-ref-1",
+        1000,
+      );
+    seed.exec("PRAGMA user_version = 32");
+  } finally {
+    seed.close();
+  }
+}
+
+describe("openKnowledgeStore — capsule_sources foreign key backfill (KEIKO-0371)", () => {
+  it("migrates a populated v32 store to v33 with zero dependent rows lost, and the new foreign key enforces ON DELETE RESTRICT", () => {
+    const dbPath = join(tmp, "capsules.db");
+    seedPopulatedV32Store(dbPath);
+
+    const store = openKnowledgeStore({ dbPath });
+    try {
+      const db = store._internal.db;
+      const version = db.prepare("PRAGMA user_version").get() as unknown as VersionRow;
+      expect(version.user_version).toBe(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION);
+
+      const dependentTables = [
+        "capsule_sources",
+        "knowledge_sources",
+        "documents",
+        "parsed_units",
+        "chunks",
+        "vectors",
+      ];
+      for (const table of dependentTables) {
+        const row = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as unknown as CountRow;
+        expect(row.n, `expected the seeded ${table} row to survive the v33 migration`).toBe(1);
+      }
+
+      const fkListRows = db.prepare("PRAGMA foreign_key_list('capsule_sources')").all();
+      const fkList = fkListRows as unknown as readonly {
+        readonly table: string;
+        readonly on_delete: string;
+      }[];
+      expect(
+        fkList.some((fk) => fk.table === "knowledge_sources" && fk.on_delete === "RESTRICT"),
+      ).toBe(true);
+
+      // Presence in the FK list is not enforcement; prove the constraint actually fires. src-1 is
+      // still referenced by capsule_sources (and, transitively, documents/chunks/vectors), so
+      // deleting it must be rejected rather than silently cascading away the whole lineage.
+      expect(() => db.prepare("DELETE FROM knowledge_sources WHERE id = ?").run("src-1")).toThrow(
+        /FOREIGN KEY constraint failed/,
+      );
+      const stillPresent = db
+        .prepare("SELECT COUNT(*) AS n FROM knowledge_sources")
+        .get() as unknown as CountRow;
+      expect(stillPresent.n).toBe(1);
+    } finally {
+      store.close();
+    }
+
+    const entries = readdirSync(tmp);
+    expect(entries.some((name) => name.includes(".corrupt."))).toBe(false);
+  });
+});
+
 describe("openKnowledgeStore — sequential transactions", () => {
   it("two prepared transactions in sequence both succeed under WAL", () => {
     const store = openKnowledgeStore({ dbPath: join(tmp, "capsules.db") });
