@@ -19,12 +19,27 @@ export const QUALITY_INTELLIGENCE_COVERAGE_KINDS: readonly QualityIntelligenceCo
   "manual",
 ] as const;
 
+/**
+ * Confidence in `[0, 1]`. NaN, ±Infinity, and out-of-range values are invalid — see
+ * {@link isQualityIntelligenceConfidence}. Shared by every `confidence` field on the QI contract
+ * surface (coverage mapping, requirement-quality finding, UI finding summary, UI atom coverage) so
+ * the unit is documented and enforced in exactly one place (KEIKO-0185). Not "just `number`": this
+ * is the one name those four fields import and retype against, and the return-type target of the
+ * exported guard below — not a single-site local alias, so it earns its keep despite S6564.
+ */
+export type QualityIntelligenceConfidence = number; // NOSONAR typescript:S6564 — see TSDoc above
+
+/** Runtime guard for {@link QualityIntelligenceConfidence}: finite and within `[0, 1]`. */
+export const isQualityIntelligenceConfidence = (
+  value: number,
+): value is QualityIntelligenceConfidence => Number.isFinite(value) && value >= 0 && value <= 1;
+
 export interface QualityIntelligenceCoverageMapping {
   readonly atomId: QualityIntelligenceEvidenceAtomId;
   readonly candidateIds: readonly QualityIntelligenceTestCaseId[];
   readonly coverageKind: QualityIntelligenceCoverageKind;
   /** Confidence in `[0, 1]`. NaN, ±Infinity, and out-of-range values are rejected. */
-  readonly confidence: number;
+  readonly confidence: QualityIntelligenceConfidence;
 }
 
 export interface QualityIntelligenceCoverageMap {
@@ -32,9 +47,6 @@ export interface QualityIntelligenceCoverageMap {
   readonly runId: QualityIntelligenceRunId;
   readonly mappings: readonly QualityIntelligenceCoverageMapping[];
 }
-
-const isValidConfidence = (value: number): boolean =>
-  Number.isFinite(value) && value >= 0 && value <= 1;
 
 /**
  * Throws `RangeError` on any out-of-range confidence (NaN, ±Infinity, < 0, > 1) and
@@ -46,7 +58,7 @@ export const assertCoverageMapInvariant = (map: QualityIntelligenceCoverageMap):
     if (mapping === undefined) {
       throw new RangeError(`Coverage map mapping[${String(index)}] is missing`);
     }
-    if (!isValidConfidence(mapping.confidence)) {
+    if (!isQualityIntelligenceConfidence(mapping.confidence)) {
       throw new RangeError(
         `Coverage map mapping[${String(index)}] has out-of-range confidence ${String(
           mapping.confidence,
