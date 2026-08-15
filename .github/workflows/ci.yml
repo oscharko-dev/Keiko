@@ -267,9 +267,12 @@ jobs:
       - run: npm run arch:check:negative
       - name: Quality Intelligence supply-chain gate
         run: npm run check:qi-supply-chain
-      - name: Retrieval latency gate (enterprise retrieval M3)
+      - name: Lexical workspace-search latency gate (enterprise retrieval M3)
         # Runs after `npm run typecheck` (which builds packages), so the compiled keiko-workspace
         # dist the gate imports is present. Deterministic fixture + generous p95 ceiling.
+        # KEIKO-0234: this covers the LEXICAL keiko-workspace searchText engine only. Local
+        # Knowledge's USearch/HNSW ANN semantic retrieval (ADR-0164) has no latency gate; a green
+        # run here is not evidence that semantic retrieval latency is protected.
         run: npm run check:retrieval-latency
       - name: Retrieval quality gate (enterprise retrieval M4)
         # Same compiled workspace surface as the latency gate; evaluates top-k quality, line-level

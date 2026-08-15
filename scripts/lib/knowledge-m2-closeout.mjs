@@ -16,6 +16,8 @@ import {
   runRegressionProbes,
 } from "@oscharko-dev/keiko-evaluations";
 import {
+  ANN_INDEX_BUILD_TIMEOUT_MS,
+  ANN_INDEX_QUERY_TIMEOUT_MS,
   getCapsule,
   openKnowledgeStore,
   resolveVectorIndexOptions,
@@ -177,8 +179,40 @@ function annLatencyBeatsExact(input) {
   );
 }
 
+// KEIKO-0362: the checks above are all RELATIVE — "ANN beat exact", "the build took some positive
+// time". A build that consumed 100s of its own 120s production timeout satisfies both while having
+// no headroom left for a real corpus, a slower machine, or growth; the proof would have called that
+// closed. These ceilings add the absolute half.
+//
+// Calibration, stated openly because this gate runs on required CI (ci.yml) and a false RED costs
+// a full cycle. Measured on an Apple-silicon dev machine at 50k x 384: build 38.8s, ANN query
+// median 14ms. The build fraction is 0.75 (90s) rather than something tighter: at 0.5 the ceiling
+// would sit at 60s, only 1.5x the local measurement, and a hosted runner roughly 2x slower would
+// false-RED. 90s still means what it says — a build past three quarters of its own production
+// timeout has drifted into that timeout's territory and should stop the proof. The query fraction
+// is 0.5 (15s) because the observed median is three orders of magnitude below it; there is no
+// tension to trade there. Neither number is a performance target, and tightening them with real
+// CI-runner data is a calibration decision for the ADR-0164 D6 owner. The timeouts themselves are
+// imported, never re-declared, so the gate and production can never disagree.
+const ANN_BUILD_LATENCY_HEADROOM = 0.75;
+const ANN_QUERY_LATENCY_HEADROOM = 0.5;
+const MAX_QUALIFIED_BUILD_MS = ANN_INDEX_BUILD_TIMEOUT_MS * ANN_BUILD_LATENCY_HEADROOM;
+const MAX_QUALIFIED_ANN_QUERY_MS = ANN_INDEX_QUERY_TIMEOUT_MS * ANN_QUERY_LATENCY_HEADROOM;
+
 function qualifiedBuildLatency(latencyLargeBuildMs) {
-  return Number.isFinite(latencyLargeBuildMs) && latencyLargeBuildMs > 0;
+  return (
+    Number.isFinite(latencyLargeBuildMs) &&
+    latencyLargeBuildMs > 0 &&
+    latencyLargeBuildMs <= MAX_QUALIFIED_BUILD_MS
+  );
+}
+
+function qualifiedAnnQueryLatency(latencyLargeAnnMedianMs) {
+  return (
+    Number.isFinite(latencyLargeAnnMedianMs) &&
+    latencyLargeAnnMedianMs > 0 &&
+    latencyLargeAnnMedianMs <= MAX_QUALIFIED_ANN_QUERY_MS
+  );
 }
 
 function qualifiedRssDelta(latencyLargeRssDeltaBytes) {
@@ -221,8 +255,13 @@ function annLatencyFailures(input) {
   appendFailure(failures, !annLatencyBeatsExact(input), "latency-large-ann-not-faster");
   appendFailure(
     failures,
+    !qualifiedAnnQueryLatency(input.latencyLargeAnnMedianMs),
+    `latency-large-query-near-timeout:${String(input.latencyLargeAnnMedianMs)}>${String(MAX_QUALIFIED_ANN_QUERY_MS)}`,
+  );
+  appendFailure(
+    failures,
     !qualifiedBuildLatency(input.latencyLargeBuildMs),
-    "latency-large-build-not-measured",
+    `latency-large-build-not-measured-or-near-timeout:${String(input.latencyLargeBuildMs)}>${String(MAX_QUALIFIED_BUILD_MS)}`,
   );
   appendFailure(
     failures,

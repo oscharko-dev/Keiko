@@ -8,6 +8,12 @@
 // and a generous percentile ceiling catches algorithmic (e.g. O(n^2)) regressions with low flake.
 // It is deterministic in WORKLOAD (byte-identical fixture, no RNG, no clock in the fixture build);
 // only the measured durations vary, and the budget is a ceiling, not an exact match.
+//
+// SCOPE — read this before citing the gate (KEIKO-0234). Despite the name "retrieval-latency", this
+// measures ONLY the LEXICAL keiko-workspace `searchText` engine. It does NOT cover Local Knowledge's
+// USearch/HNSW ANN semantic retrieval path (ADR-0164), which has no dedicated latency regression
+// gate today. A green run here is not evidence that semantic retrieval latency is protected. Same
+// caveat, same reason, as the one check-grounded-retrieval-quality.mjs carries on the quality side.
 
 import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";

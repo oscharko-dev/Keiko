@@ -148,8 +148,12 @@ const MAX_CACHED_ESTIMATED_INDEX_BYTES = 256 * 1024 * 1024;
 const HNSW_NODE_OVERHEAD_BYTES = 256;
 const HNSW_EDGE_BYTES = 8;
 const WORKER_FIXED_BYTES = 8 * 1024 * 1024;
-const BUILD_TIMEOUT_MS = 120_000;
-const QUERY_TIMEOUT_MS = 30_000;
+// Exported (KEIKO-0362) so the Knowledge-M2 ANN closeout proof can measure its latency evidence
+// against the SAME production budgets these enforce, instead of proving only the relative claim
+// "ANN beat exact on this machine" — which a measurement 83% of the way to the build timeout also
+// satisfies. One definition, two consumers; a change here moves the gate with it.
+export const BUILD_TIMEOUT_MS = 120_000;
+export const QUERY_TIMEOUT_MS = 30_000;
 
 const INDEX_CACHE = new Map<string, CachedIndex>();
 let cachedIndexBytes = 0;
