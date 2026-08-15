@@ -54,6 +54,36 @@ const ALL_PROFILES: readonly VoiceProfile[] = [
   "full-realtime",
 ];
 
+// Required payload fields for the 16 kinds that are not session.create/error (whose fixtures are
+// built inline below, matching their pre-existing branches). Optional fields are deliberately omitted
+// here — the "accepts a well-formed envelope for every kind" test proves absence is valid, and each
+// optional field gets its own dedicated present-and-valid test in the payload-validation block.
+const KIND_SPECIFIC_FIXTURE_FIELDS: Partial<
+  Record<VoiceControlMessageKind, Record<string, unknown>>
+> = {
+  "session.created": {
+    profile: "full-realtime",
+    controlTransport: VOICE_REALTIME_CONTROL_TRANSPORT,
+    mediaTransport: VOICE_PROFILE_MEDIA_TRANSPORT["full-realtime"],
+    negotiationMode: VOICE_PROFILE_NEGOTIATION_MODE["full-realtime"],
+  },
+  "session.close": { reason: "client-request" },
+  "session.closed": { reason: "client-request" },
+  "capability.offer": {
+    profile: "full-realtime",
+    capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
+  },
+  "capability.select": { profile: "full-realtime" },
+  "signal.sdp.offer": { sdp: "v=0\r\noffer-sdp" },
+  "signal.sdp.answer": { sdp: "v=0\r\nanswer-sdp" },
+  "signal.ice.candidate": { candidate: "candidate:1 1 udp 1 127.0.0.1 5000 typ host" },
+  "media.track.state": { track: "audio-in", state: "live" },
+  "transcript.partial": { text: "hello" },
+  "transcript.committed": { text: "hello" },
+  "playback.state": { state: "playing" },
+  "policy.decision": { decision: "allow" },
+};
+
 function wellFormedMessage(kind: VoiceControlMessageKind): Record<string, unknown> {
   return {
     protocolVersion: VOICE_PROTOCOL_VERSION,
@@ -70,6 +100,7 @@ function wellFormedMessage(kind: VoiceControlMessageKind): Record<string, unknow
         }
       : {}),
     ...(kind === "error" ? { code: VOICE_PROTOCOL_ERROR_CODES.at(-1) } : {}),
+    ...(KIND_SPECIFIC_FIXTURE_FIELDS[kind] ?? {}),
   };
 }
 
@@ -757,6 +788,293 @@ describe("envelope validation & guards", () => {
       message.kind === "session.created" ? message.mediaTransport : undefined;
     expect(created.kind).toBe("session.created");
     expect(narrow(created)).toBe("webrtc");
+  });
+});
+
+describe("KEIKO-0392 — per-kind payload validation for the 16 kinds beyond session.create/error", () => {
+  // Before this fix, validateVoiceControlMessage dispatched a kind-specific payload check only for
+  // session.create and error; every other catalog kind's wrong-typed or missing required field
+  // passed silently (`.ok` stayed true). Each block below proves the remaining 16 kinds now reject
+  // at least one malformed required field, exercises the free-text/nullable-field boundaries the new
+  // validators bound, and confirms every still-optional field remains optional.
+
+  function malformed(
+    kind: VoiceControlMessageKind,
+    overrides: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return { ...wellFormedMessage(kind), ...overrides };
+  }
+
+  it.each([
+    ["missing profile", withoutField(wellFormedMessage("session.created"), "profile")],
+    ["non-string profile", malformed("session.created", { profile: 42 })],
+    ["unknown profile", malformed("session.created", { profile: "turbo" })],
+    [
+      "missing controlTransport",
+      withoutField(wellFormedMessage("session.created"), "controlTransport"),
+    ],
+    [
+      "unknown controlTransport",
+      malformed("session.created", { controlTransport: "webrtc-direct" }),
+    ],
+    [
+      "missing mediaTransport",
+      withoutField(wellFormedMessage("session.created"), "mediaTransport"),
+    ],
+    ["unknown mediaTransport", malformed("session.created", { mediaTransport: "peer-to-peer" })],
+    [
+      "missing negotiationMode",
+      withoutField(wellFormedMessage("session.created"), "negotiationMode"),
+    ],
+    ["unknown negotiationMode", malformed("session.created", { negotiationMode: "automatic" })],
+    [
+      "invalid providerLocality",
+      malformed("session.created", { providerLocality: "provider-detail" }),
+    ],
+  ])("rejects session.created with %s", (_label, message) => {
+    const result = validateVoiceControlMessage(message);
+    expect(result.ok).toBe(false);
+    expect(isVoiceControlMessage(message)).toBe(false);
+  });
+
+  it("accepts session.created without the optional providerLocality", () => {
+    const message = withoutField(wellFormedMessage("session.created"), "providerLocality");
+    expect(validateVoiceControlMessage(message)).toEqual({ ok: true });
+  });
+
+  it.each(["session.close", "session.closed"] satisfies VoiceControlMessageKind[])(
+    "rejects %s with a missing or unknown reason",
+    (kind) => {
+      for (const bad of [
+        withoutField(wellFormedMessage(kind), "reason"),
+        malformed(kind, { reason: "user-hangup" }),
+      ]) {
+        const result = validateVoiceControlMessage(bad);
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.reasons).toContain(`${kind} reason invalid`);
+        }
+      }
+    },
+  );
+
+  it.each([
+    ["missing profile", withoutField(wellFormedMessage("capability.offer"), "profile")],
+    ["missing capabilities", withoutField(wellFormedMessage("capability.offer"), "capabilities")],
+    [
+      "non-boolean capability flag",
+      malformed("capability.offer", {
+        capabilities: { speechToText: "yes", speechOutput: false, realtimeVoice: true },
+      }),
+    ],
+    [
+      "unknown capability field",
+      malformed("capability.offer", {
+        capabilities: {
+          speechToText: true,
+          speechOutput: false,
+          realtimeVoice: true,
+          transcription: true,
+        },
+      }),
+    ],
+  ])("rejects capability.offer with %s", (_label, message) => {
+    expect(validateVoiceControlMessage(message).ok).toBe(false);
+  });
+
+  it("accepts capability.offer with the optional realtimeToolCalling flag", () => {
+    const message = malformed("capability.offer", {
+      capabilities: {
+        speechToText: true,
+        speechOutput: false,
+        realtimeVoice: true,
+        realtimeToolCalling: true,
+      },
+    });
+    expect(validateVoiceControlMessage(message)).toEqual({ ok: true });
+  });
+
+  it("rejects capability.select with a missing or unknown profile", () => {
+    for (const bad of [
+      withoutField(wellFormedMessage("capability.select"), "profile"),
+      malformed("capability.select", { profile: "turbo" }),
+    ]) {
+      expect(validateVoiceControlMessage(bad).ok).toBe(false);
+    }
+  });
+
+  it.each(["signal.sdp.offer", "signal.sdp.answer"] satisfies VoiceControlMessageKind[])(
+    "rejects %s with a missing, empty, blank, non-string, or oversized sdp",
+    (kind) => {
+      const cases = [
+        withoutField(wellFormedMessage(kind), "sdp"),
+        malformed(kind, { sdp: "" }),
+        malformed(kind, { sdp: " \r\n " }),
+        malformed(kind, { sdp: 42 }),
+        // One character past the 256_000-char bound (matches keiko-server's MAX_SDP_BYTES /
+        // MAX_OFFER_SDP_BYTES scale; see the layering note in voice-protocol.ts).
+        malformed(kind, { sdp: "a".repeat(256_001) }),
+      ];
+      for (const bad of cases) {
+        const result = validateVoiceControlMessage(bad);
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.reasons).toContain(`${kind} sdp invalid`);
+        }
+      }
+    },
+  );
+
+  it.each(["signal.sdp.offer", "signal.sdp.answer"] satisfies VoiceControlMessageKind[])(
+    "accepts %s with an sdp exactly at the length bound",
+    (kind) => {
+      const message = malformed(kind, { sdp: "a".repeat(256_000) });
+      expect(validateVoiceControlMessage(message)).toEqual({ ok: true });
+    },
+  );
+
+  it.each([
+    ["missing candidate", withoutField(wellFormedMessage("signal.ice.candidate"), "candidate")],
+    ["non-string candidate", malformed("signal.ice.candidate", { candidate: 42 })],
+    ["oversized candidate", malformed("signal.ice.candidate", { candidate: "a".repeat(4097) })],
+    ["non-string, non-null sdpMid", malformed("signal.ice.candidate", { sdpMid: 0 })],
+    ["empty sdpMid", malformed("signal.ice.candidate", { sdpMid: "" })],
+    ["oversized sdpMid", malformed("signal.ice.candidate", { sdpMid: "a".repeat(129) })],
+    ["negative sdpMLineIndex", malformed("signal.ice.candidate", { sdpMLineIndex: -1 })],
+    ["fractional sdpMLineIndex", malformed("signal.ice.candidate", { sdpMLineIndex: 1.5 })],
+    [
+      "non-numeric, non-null sdpMLineIndex",
+      malformed("signal.ice.candidate", { sdpMLineIndex: "0" }),
+    ],
+  ])("rejects signal.ice.candidate with %s", (_label, message) => {
+    expect(validateVoiceControlMessage(message).ok).toBe(false);
+  });
+
+  it("accepts signal.ice.candidate with an empty candidate (end-of-candidates) and null mid/index", () => {
+    const message = malformed("signal.ice.candidate", {
+      candidate: "",
+      sdpMid: null,
+      sdpMLineIndex: null,
+    });
+    expect(validateVoiceControlMessage(message)).toEqual({ ok: true });
+  });
+
+  it("accepts signal.ice.candidate with mid/index present and valid", () => {
+    const message = malformed("signal.ice.candidate", { sdpMid: "0", sdpMLineIndex: 0 });
+    expect(validateVoiceControlMessage(message)).toEqual({ ok: true });
+  });
+
+  it.each([
+    ["missing track", withoutField(wellFormedMessage("media.track.state"), "track")],
+    ["unknown track", malformed("media.track.state", { track: "audio-both" })],
+    ["missing state", withoutField(wellFormedMessage("media.track.state"), "state")],
+    ["unknown state", malformed("media.track.state", { state: "buffering" })],
+  ])("rejects media.track.state with %s", (_label, message) => {
+    expect(validateVoiceControlMessage(message).ok).toBe(false);
+  });
+
+  it.each([
+    ["negative atMs", malformed("control.interrupt", { atMs: -1 })],
+    ["non-finite atMs", malformed("control.interrupt", { atMs: Number.POSITIVE_INFINITY })],
+    ["NaN atMs", malformed("control.interrupt", { atMs: Number.NaN })],
+    ["non-numeric atMs", malformed("control.interrupt", { atMs: "150" })],
+  ])("rejects control.interrupt with %s", (_label, message) => {
+    const result = validateVoiceControlMessage(message);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reasons).toContain("control.interrupt atMs invalid");
+    }
+  });
+
+  it("accepts control.interrupt with atMs absent or zero", () => {
+    expect(validateVoiceControlMessage(wellFormedMessage("control.interrupt"))).toEqual({
+      ok: true,
+    });
+    expect(validateVoiceControlMessage(malformed("control.interrupt", { atMs: 0 }))).toEqual({
+      ok: true,
+    });
+  });
+
+  it.each(["transcript.partial", "transcript.committed"] satisfies VoiceControlMessageKind[])(
+    "rejects %s with a missing, non-string, or oversized text",
+    (kind) => {
+      const cases = [
+        withoutField(wellFormedMessage(kind), "text"),
+        malformed(kind, { text: 42 }),
+        malformed(kind, { text: "a".repeat(8193) }),
+      ];
+      for (const bad of cases) {
+        const result = validateVoiceControlMessage(bad);
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.reasons).toContain(`${kind} text invalid`);
+        }
+      }
+    },
+  );
+
+  it.each(["transcript.partial", "transcript.committed"] satisfies VoiceControlMessageKind[])(
+    "accepts %s with text exactly at the length bound",
+    (kind) => {
+      const message = malformed(kind, { text: "a".repeat(8192) });
+      expect(validateVoiceControlMessage(message)).toEqual({ ok: true });
+    },
+  );
+
+  it("accepts transcript.partial with an empty interim text", () => {
+    const message = malformed("transcript.partial", { text: "" });
+    expect(validateVoiceControlMessage(message)).toEqual({ ok: true });
+  });
+
+  it("rejects playback.state with a missing or unknown state", () => {
+    for (const bad of [
+      withoutField(wellFormedMessage("playback.state"), "state"),
+      malformed("playback.state", { state: "buffering" }),
+    ]) {
+      expect(validateVoiceControlMessage(bad).ok).toBe(false);
+    }
+  });
+
+  it.each([
+    ["missing decision", withoutField(wellFormedMessage("policy.decision"), "decision")],
+    ["unknown decision", malformed("policy.decision", { decision: "maybe" })],
+    ["unknown reason", malformed("policy.decision", { reason: "operator-preference" })],
+  ])("rejects policy.decision with %s", (_label, message) => {
+    expect(validateVoiceControlMessage(message).ok).toBe(false);
+  });
+
+  it("accepts policy.decision with a valid optional reason", () => {
+    const message = malformed("policy.decision", { reason: "policy-disabled" });
+    expect(validateVoiceControlMessage(message)).toEqual({ ok: true });
+  });
+
+  it("keeps every kind with a payload field rejecting that field corrupted to null", () => {
+    // Generic regression pin over the whole dispatch table (VOICE_CONTROL_MESSAGE_PAYLOAD_VALIDATORS
+    // is internal to voice-protocol.ts; this proves its externally observable effect): for every
+    // catalog kind that has at least one payload field in its well-formed fixture, corrupting any one
+    // of those fields to `null` must make the message invalid. This doesn't restate any validator's
+    // internal logic — it only asserts the outcome — so it stays meaningful if a kind's field set
+    // changes later, and it catches a kind silently regressing to a no-op validator.
+    const envelopeFieldNames = new Set([
+      "protocolVersion",
+      "sessionId",
+      "seq",
+      "direction",
+      "kind",
+    ]);
+    for (const kind of VOICE_CONTROL_MESSAGE_KINDS) {
+      if (kind === "session.create" || kind === "error") {
+        continue; // already covered by the dedicated pre-existing test blocks above.
+      }
+      const wellFormed = wellFormedMessage(kind);
+      const payloadFieldNames = Object.keys(wellFormed).filter(
+        (key) => !envelopeFieldNames.has(key),
+      );
+      for (const field of payloadFieldNames) {
+        const corrupted = { ...wellFormed, [field]: null };
+        expect(validateVoiceControlMessage(corrupted).ok).toBe(false);
+      }
+    }
   });
 });
 
