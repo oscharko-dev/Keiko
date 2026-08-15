@@ -441,6 +441,54 @@ describe("contentPreviewFor", () => {
     });
   });
 
+  // KEIKO-0186 P4 (Codex): U+2800 BRAILLE PATTERN BLANK is deliberately blank by design, yet
+  // Unicode general category So (a symbol) -- it matched none of \s, \p{M}, or
+  // Default_Ignorable_Code_Point, defeating every prior layer. The predicate is now an allowlist
+  // (Letter, Number, Punctuation); a symbol is never in that set regardless of whether anyone
+  // ever named it specifically, and it survives sanitization exactly like whitespace/combining
+  // marks/HANGUL FILLER do, so it can also populate a truncation-surviving tail.
+
+  it("an all-BRAILLE-PATTERN-BLANK payload survives sanitization non-empty and is reported unavailable", () => {
+    const braillePatternBlank = String.fromCodePoint(0x2800).repeat(5);
+    expect(
+      contentPreviewFor({
+        type: "add-issue-comment",
+        issueKey: "PROJ-9",
+        commentText: braillePatternBlank,
+      }),
+    ).toEqual({ status: "unavailable" });
+  });
+
+  it("truncation can create an all-BRAILLE-PATTERN-BLANK tail even when the untruncated text has a base character past the bound", () => {
+    const braillePrefix = String.fromCodePoint(0x2800).repeat(
+      ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
+    );
+    const summary = braillePrefix + "X";
+    expect(summary.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+    expect(contentPreviewFor({ type: "create-issue", projectKey: "PROJ", summary })).toEqual({
+      status: "unavailable",
+    });
+  });
+
+  // P4's allowlist excludes \p{S} (Symbol, including emoji) entirely -- a deliberate, documented
+  // cost (see isAtlassianContentPreviewUnpresentable's definition), not an oversight. \p{L}
+  // already covers CJK ideographs and other non-Latin scripts, so the exclusion is narrower than
+  // "non-Latin text": it targets symbols and emoji specifically.
+
+  it("an emoji-only payload is reported unavailable", () => {
+    const grinningFace = String.fromCodePoint(0x1f600);
+    expect(
+      contentPreviewFor({ type: "add-page-comment", pageId: "123", commentText: grinningFace }),
+    ).toEqual({ status: "unavailable" });
+  });
+
+  it("a CJK-only payload is reported available: \\p{L} covers CJK ideographs, so this is unaffected by the \\p{S} exclusion", () => {
+    const done = "已完成"; // Chinese: "done"
+    expect(
+      contentPreviewFor({ type: "add-issue-comment", issueKey: "PROJ-9", commentText: done }),
+    ).toEqual({ status: "available", text: done });
+  });
+
   it("agrees with isSafeAtlassianContentPreview in every case: an emitted 'available' text always passes the contract predicate", () => {
     const cases: readonly AtlassianWriteActionInput[] = [
       { type: "create-issue", projectKey: "PROJ", summary: "Fix the flaky gate" },
@@ -464,12 +512,14 @@ describe("contentPreviewFor", () => {
     }
   });
 
-  it("agrees with isSafeAtlassianContentPreview in every unavailable case: empty, combining-marks-only, whitespace-only, whitespace-plus-combining, and default-ignorable-only strings all fail the contract predicate too", () => {
+  it("agrees with isSafeAtlassianContentPreview in every unavailable case: empty, combining-marks-only, whitespace-only, whitespace-plus-combining, default-ignorable-only, and symbol/emoji-only strings all fail the contract predicate too", () => {
     expect(isSafeAtlassianContentPreview("")).toBe(false);
     expect(isSafeAtlassianContentPreview(String.fromCharCode(0x301).repeat(5))).toBe(false);
     expect(isSafeAtlassianContentPreview(" ")).toBe(false);
     expect(isSafeAtlassianContentPreview(" " + String.fromCharCode(0x301))).toBe(false);
     expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x3164))).toBe(false);
     expect(isSafeAtlassianContentPreview(String.fromCodePoint(0xfe0f))).toBe(false);
+    expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x2800))).toBe(false);
+    expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x1f600))).toBe(false);
   });
 });

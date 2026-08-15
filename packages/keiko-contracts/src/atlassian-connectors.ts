@@ -840,29 +840,60 @@ export type AtlassianConnectorActionExecutionResult =
 // hostile payload.
 export const ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS = 280;
 
-// KEIKO-0186 P1/P2/P3 (Codex): ask the real question — is there any VISIBLE BASE CHARACTER left
-// for a reviewer to read — instead of enumerating unpresentable shapes one at a time. P1 covered
-// "empty" and "entirely Unicode combining marks" via `^\p{M}+$`, but that anchored pattern stops
-// matching the moment ANY other character is present, including whitespace: a lone space, a run
-// of TAB/LF, or whitespace around a floating combining mark (e.g. a space then a combining acute
-// accent) all satisfied it and were classified presentable (P2). P2 in turn stripped whitespace,
-// combining marks, and `\p{Cf}` format characters — but U+3164 HANGUL FILLER (used historically to
-// fill empty Hangul input slots) and the variation-selector families render as nothing while
-// belonging to Unicode general category `Lo` (a LETTER), so neither `\p{M}` nor `\p{Cf}` (nor
-// `\s`) touches them (P3). Each round enumerated one more invisible shape; the actual Unicode
-// property for "renders as nothing, whatever its general category" is
-// `Default_Ignorable_Code_Point` — it is what HANGUL FILLER, the zero-width family, variation
-// selectors, and the Mongolian vowel separator all have in common, in one property instead of a
-// growing enumeration. (Supported by every `u`-flag RegExp on this repository's pinned Node
-// >=24.18.0 <25 — see the `isSafeAtlassianContentPreview` doc comment below for the evidence this
-// needs no runtime capability guard.) A payload composed only of whitespace, combining marks, and
-// default-ignorable code points must not reach the wire as `contentPreview`; see
-// `contentPreviewFor` in keiko-server's actionApprovals.ts, which checks this same condition on
-// the producing side so the two can never disagree.
-const NON_BASE_CHARACTER_PATTERN = /[\s\p{M}\p{Default_Ignorable_Code_Point}]/gu;
+// KEIKO-0186 P1-P4 (Codex): STOP DENYLISTING INVISIBILITY. ALLOWLIST PRESENTABILITY.
+//
+// Three rounds asked "after removing the things I know are invisible, is anything left?" — a
+// denylist, which fails OPEN: a code point nobody enumerated counts as visible by default. P1
+// covered "empty" and "entirely Unicode combining marks" via `^\p{M}+$`. P2 added whitespace
+// (a lone space, a run of TAB/LF, satisfied that anchored pattern too). P3 added
+// `Default_Ignorable_Code_Point` for U+3164 HANGUL FILLER and the variation-selector families,
+// which render as nothing yet match none of `\s`/`\p{M}`/`\p{Cf}`. P4: U+2800 BRAILLE PATTERN
+// BLANK — deliberately blank by design — is `\p{So}` (a SYMBOL), so it defeated every prior
+// layer too. Unicode has no "renders blank" general property; that enumeration can never be
+// complete, and a fifth round would only add a fifth code point.
+//
+// The fix is structural, not another exception: require at least one character from a
+// CONSERVATIVE ALLOWLIST known to render — Letter, Number, Punctuation, "the honest core" — and
+// classify everything else (marks, whitespace, symbols, and any code point nobody has thought of
+// yet) `unavailable`. An unanticipated code point now defaults to "cannot be previewed" instead
+// of "looks fine": fail closed, the direction this repository requires on a trust boundary.
+//
+// Subtlety: general category alone is not sufficient even for the allowlist side. U+3164 HANGUL
+// FILLER is category `Lo` (a LETTER) despite rendering as nothing — Unicode's category system
+// does not track rendering behavior, only classification. A candidate must be in {L, N, P} AND
+// NOT `Default_Ignorable_Code_Point`; the latter can co-occur with any general category, so it is
+// checked independently rather than assumed absent from an "allowed" category.
+//
+// Decision on `\p{S}` (Symbol, which includes emoji): deliberately EXCLUDED from the allowlist,
+// not folded in as "L/N/P plus the safe parts of S". This is a real cost — a preview consisting
+// only of emoji or other symbols (e.g. a Jira comment that is just "🎉" or "✅") is now classified
+// `unavailable` even though a human could plainly read it. Carving a "known-safe subset of `\p{S}`
+// minus the blank ranges" back out would recreate the exact enumeration this fix exists to end,
+// just on the allow side instead of the deny side — Unicode symbols include other
+// deliberately-blank-or-near-blank code points beyond U+2800 (e.g. other pattern-fill glyphs,
+// private-use-adjacent oddities), and there is no closed, machine-checkable "safe symbol" property
+// the way `Default_Ignorable_Code_Point` closes the invisibility question. On a governed-write
+// approval surface, a symbol-only preview genuinely cannot be summarized for a reviewer any more
+// honestly than the explicit "could not be previewed" signal already provides — that outcome is
+// correct here, not a bug to route around. `\p{L}` already covers CJK ideographs and other
+// non-Latin scripts, so this decision is narrower than it first appears: it excludes symbols and
+// emoji specifically, not non-Latin text.
+const PRESENTABLE_GENERAL_CATEGORY_PATTERN = /[\p{L}\p{N}\p{P}]/u;
+const DEFAULT_IGNORABLE_PATTERN = /\p{Default_Ignorable_Code_Point}/u;
+
+function isPresentableCharacter(character: string): boolean {
+  return (
+    PRESENTABLE_GENERAL_CATEGORY_PATTERN.test(character) &&
+    !DEFAULT_IGNORABLE_PATTERN.test(character)
+  );
+}
 
 export function isAtlassianContentPreviewUnpresentable(value: string): boolean {
-  return value.replace(NON_BASE_CHARACTER_PATTERN, "").length === 0;
+  // Array.from (not a naive index loop) iterates by CODE POINT, matching how \p{L}/\p{N}/\p{P}
+  // classify astral characters under the `u` flag — the same reason this pattern is used to
+  // iterate Unicode-classified text elsewhere in this codebase (see
+  // packages/keiko-workspace/src/repoSearchMatchers.ts).
+  return !Array.from(value).some(isPresentableCharacter);
 }
 
 // A content preview is provider CONTENT in the ADR-0128 D6 sense (like a synced title or a live
@@ -871,13 +902,15 @@ export function isAtlassianContentPreviewUnpresentable(value: string): boolean {
 // title/summary with a description/body), so — like every other untrusted display surface in
 // this codebase — TAB/LF/CR survive stripUnsafeFormatChars while every other unsafe code point
 // does not; this predicate accepts exactly what that stripper already leaves untouched. It also
-// rejects a preview with no visible base character — whitespace-only, combining-marks-only,
-// default-ignorable-only (HANGUL FILLER, variation selectors, …), or any mix of the three — for
-// the same reason the producer never emits one (see `isAtlassianContentPreviewUnpresentable`
-// above) — the producer and this predicate must agree.
+// rejects a preview with no character from the {Letter, Number, Punctuation} allowlist —
+// whitespace-only, combining-marks-only, default-ignorable-only (HANGUL FILLER, variation
+// selectors, …), symbol/emoji-only (including U+2800 BRAILLE PATTERN BLANK), or any mix — for the
+// same reason the producer never emits one (see `isAtlassianContentPreviewUnpresentable` above,
+// including the deliberate, documented decision to exclude `\p{S}`/emoji from the allowlist) —
+// the producer and this predicate must agree.
 //
-// No runtime capability guard for the `\p{Default_Ignorable_Code_Point}` / `\p{M}` Unicode
-// property escapes above: this repository's `package.json` pins `engines.node` to
+// No runtime capability guard for the `\p{Default_Ignorable_Code_Point}` / `\p{L}` / `\p{N}` /
+// `\p{P}` Unicode property escapes above: this repository's `package.json` pins `engines.node` to
 // `>=24.18.0 <25`, and CI (`.github/workflows/ci.yml`) runs every job on exactly `24.18.0` — the
 // V8 build in that Node version has supported `u`-flag Unicode property escapes, including binary
 // properties like `Default_Ignorable_Code_Point` and `ID_Start`/`ID_Continue`, since long before
