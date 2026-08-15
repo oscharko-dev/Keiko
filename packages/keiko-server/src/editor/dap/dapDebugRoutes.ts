@@ -936,6 +936,69 @@ function validateExceptionBreakpointResponse(response: unknown): void {
 
 type BreakpointActivation = "inactive" | "armed" | "unavailable";
 
+function snapshotMutationResult(
+  snapshot: InstrumentationSnapshot,
+  fileId: string,
+): Extract<BreakpointStoreMutationResult, { readonly ok: true }> {
+  return {
+    ok: true,
+    snapshot,
+    retainedCount: snapshot.breakpoints.filter((breakpoint) => breakpoint.fileId === fileId).length,
+    rejectedCount: 0,
+  };
+}
+
+async function setBreakpointVerificationsFromAdapter(
+  service: DapDebugRouteService,
+  workspace: AuthorizedWorkspace,
+  sessionId: string,
+  fileId: string,
+  snapshot: InstrumentationSnapshot,
+  response: unknown,
+): Promise<BreakpointStoreMutationResult> {
+  const updates = await projectAdapterResponse(service, sessionId, () =>
+    verificationUpdates(fileId, snapshot, response),
+  );
+  return service.breakpoints.setBreakpointVerifications(
+    workspace.realRoot,
+    snapshot.revision,
+    snapshot.etag,
+    fileId,
+    updates,
+  );
+}
+
+async function retryActiveBreakpointsAfterVerificationDrift(
+  service: DapDebugRouteService,
+  workspace: AuthorizedWorkspace,
+  fileId: string,
+): Promise<{
+  readonly result: BreakpointStoreMutationResult;
+  readonly activation: BreakpointActivation;
+} | null> {
+  const current = service.breakpoints.snapshot(workspace.realRoot);
+  if (!current.ok) return null;
+  const currentResult = snapshotMutationResult(current.snapshot, fileId);
+  const update = await updateActiveBreakpoints(service, workspace, fileId, current.snapshot);
+  if (update.kind !== "response") return { result: currentResult, activation: update.kind };
+  const sessionId = service.manager.boundSessionId(
+    workspace.partition,
+    workspace.browserSessionBinding,
+  );
+  if (sessionId === undefined) return { result: currentResult, activation: "unavailable" };
+  return {
+    result: await setBreakpointVerificationsFromAdapter(
+      service,
+      workspace,
+      sessionId,
+      fileId,
+      current.snapshot,
+      update.response,
+    ),
+    activation: "armed",
+  };
+}
+
 async function reconcileActiveBreakpoints(
   service: DapDebugRouteService,
   workspace: AuthorizedWorkspace,
@@ -952,17 +1015,24 @@ async function reconcileActiveBreakpoints(
     workspace.browserSessionBinding,
   );
   if (sessionId === undefined) return { result, activation: "unavailable" };
-  const updates = await projectAdapterResponse(service, sessionId, () =>
-    verificationUpdates(fileId, result.snapshot, update.response),
+  const verified = await setBreakpointVerificationsFromAdapter(
+    service,
+    workspace,
+    sessionId,
+    fileId,
+    result.snapshot,
+    update.response,
   );
+  if (!verified.ok && verified.reason === "conflict") {
+    return (
+      (await retryActiveBreakpointsAfterVerificationDrift(service, workspace, fileId)) ?? {
+        result: verified,
+        activation: "armed",
+      }
+    );
+  }
   return {
-    result: service.breakpoints.setBreakpointVerifications(
-      workspace.realRoot,
-      result.snapshot.revision,
-      result.snapshot.etag,
-      fileId,
-      updates,
-    ),
+    result: verified,
     activation: "armed",
   };
 }
