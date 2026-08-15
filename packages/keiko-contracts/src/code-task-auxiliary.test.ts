@@ -12,6 +12,7 @@ import {
   type AuxiliaryCapabilityRequestV1,
   type AuxiliaryResearchScopeV1,
 } from "./code-task-auxiliary.js";
+import { withPollutedPrototype } from "./code-task-pollution-test-support.js";
 
 const DIGEST = "a".repeat(64);
 
@@ -589,25 +590,13 @@ describe("factErrors collects every violation instead of stopping at the first (
 
 // Codex P1 3789773829, the terminating fix -- ownField (imported from code-task-acceptance.ts) is
 // the reading discipline this file received "instead of the guard-only shape we are now retiring"
-// (coordinator's framing). withPollutedPrototype mirrors code-task-acceptance.test.ts's identical
-// helper; see that file's describe block of the same name for why non-enumerable pollution is the
-// clean, unconfounded proof of ownField's own contribution (enumerable pollution trips
-// hasInheritedEnumerableProperty on every OTHER nested fact in the same payload too, since for...in
-// walks the whole chain). Proved red-then-green against a temporary ownField sabotage in the commit
-// this test shipped in.
-function withPollutedPrototype<T>(
-  key: string,
-  descriptor: Pick<PropertyDescriptor, "value" | "enumerable" | "writable">,
-  run: () => T,
-): T {
-  try {
-    Object.defineProperty(Object.prototype, key, { configurable: true, ...descriptor });
-    return run();
-  } finally {
-    Reflect.deleteProperty(Object.prototype, key);
-  }
-}
-
+// (coordinator's framing). withPollutedPrototype (imported from code-task-pollution-test-support.ts,
+// not reimplemented here: KfQ 3789982967 found a real bug in this helper when it was still
+// copy-pasted per file) mirrors code-task-acceptance.test.ts's identical helper; see that file's
+// describe block of the same name for why non-enumerable pollution is the clean, unconfounded proof
+// of ownField's own contribution (enumerable pollution trips hasInheritedEnumerableProperty on
+// every OTHER nested fact in the same payload too, since for...in walks the whole chain). Proved
+// red-then-green against a temporary ownField sabotage in the commit this test shipped in.
 describe("ownField makes an inherited field unreadable regardless of descriptor shape (Codex P1 3789773829)", () => {
   it("rejects a queryTextDigest's inherited non-enumerable value on the known branch", () => {
     const payload = {

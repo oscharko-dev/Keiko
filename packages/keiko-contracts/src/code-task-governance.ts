@@ -350,9 +350,26 @@ function questionRefFactErrors(value: unknown): string[] {
 // A "known" grant on an ungrantable action kind (delivery, authority-widening, dependency-operation,
 // external-file-apply-back) is rejected: those actions can never be covered by a stored grant and
 // require separate explicit approval every time (the structural exclusion invariant).
+// KfQ 3789983129: ownField(grant, "outcome") !== "known" used to be the WHOLE test for "nothing to
+// exclude-check here, skip" -- but that is exactly the mirror risk of ownField itself: undefined
+// (grant.outcome unreadable because it is only inherited) satisfies `!== "known"` identically to a
+// genuinely non-known grant, so this function silently returned [] for BOTH. ownField is correct
+// for a REJECTING read (undefined never equals a required literal, so it falls through to an
+// error); it is wrong for a PRESENCE-gated read whose false branch is "skip, nothing to check" --
+// there, invisible must not collapse onto "legitimately not applicable". Verified by construction
+// before this fix: grantRefFactErrors (run separately on the same grant) already rejects this exact
+// shape via its own "grant.outcome must be known or absent" message, so validateGovernedActionV1's
+// overall ok:false was never actually wrong -- but this function's OWN return value was, and a
+// future caller of this exclusion rule in isolation (or a change to grantRefFactErrors) must not be
+// able to inherit that latent gap. Object.hasOwn(grant, "outcome") makes "outcome is not this
+// grant's own property" its own explicit, rejecting branch instead of folding it into "not known".
 function allowedGrantExclusionErrors(value: Record<string, unknown>): string[] {
   const grant = ownField(value, "grant");
-  if (!isRecord(grant) || ownField(grant, "outcome") !== "known") return [];
+  if (!isRecord(grant)) return [];
+  if (!Object.hasOwn(grant, "outcome")) {
+    return ["grant.outcome must be its own property to evaluate the exclusion rule"];
+  }
+  if (ownField(grant, "outcome") !== "known") return [];
   const actionKind = ownField(value, "actionKind");
   if (isOneOf(actionKind, GOVERNED_ACTION_ACTION_KINDS) && isGovernedActionGrantable(actionKind)) {
     return [];

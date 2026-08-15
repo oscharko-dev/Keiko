@@ -19,6 +19,7 @@ import {
   type GovernedActionActionKind,
   type GovernedActionV1,
 } from "./code-task-governance.js";
+import { withPollutedPrototype } from "./code-task-pollution-test-support.js";
 
 const DIGEST = "a".repeat(64);
 const INSTANT = "2026-07-16T00:00:00.000Z";
@@ -749,23 +750,12 @@ describe("prototype-based extra-field smuggling (KfQ Critical)", () => {
 // reject the common (enumerable, string-keyed) case early and cheaply.
 
 // Codex P1 3789773829, the terminating fix -- ownField (imported from code-task-acceptance.ts) is
-// the reading discipline every validator in this file now uses. withPollutedPrototype mirrors
-// code-task-acceptance.test.ts's identical helper; see that file's describe block of the same name
-// for why non-enumerable pollution is the clean, unconfounded proof of ownField's own contribution.
-// Proved red-then-green against a temporary ownField sabotage in the commit this test shipped in.
-function withPollutedPrototype<T>(
-  key: string,
-  descriptor: Pick<PropertyDescriptor, "value" | "enumerable" | "writable">,
-  run: () => T,
-): T {
-  try {
-    Object.defineProperty(Object.prototype, key, { configurable: true, ...descriptor });
-    return run();
-  } finally {
-    Reflect.deleteProperty(Object.prototype, key);
-  }
-}
-
+// the reading discipline every validator in this file now uses. withPollutedPrototype (imported
+// from code-task-pollution-test-support.ts, not reimplemented here: KfQ 3789982967 found a real bug
+// in this helper when it was still copy-pasted per file) mirrors code-task-acceptance.test.ts's
+// identical helper; see that file's describe block of the same name for why non-enumerable
+// pollution is the clean, unconfounded proof of ownField's own contribution. Proved red-then-green
+// against a temporary ownField sabotage in the commit this test shipped in.
 describe("ownField makes an inherited field unreadable regardless of descriptor shape (Codex P1 3789773829)", () => {
   it("rejects a grant's inherited non-enumerable value on the known branch", () => {
     const payload = { ...allowedAction(), grant: { outcome: "known" } }; // no own "value"
@@ -804,5 +794,64 @@ describe("ownField makes an inherited field unreadable regardless of descriptor 
   it("still accepts legitimate input once Object.prototype is restored", () => {
     expect(validateGovernedActionV1(allowedAction())).toMatchObject({ ok: true });
     expect(validateCodeTaskExecutionV1(execution())).toMatchObject({ ok: true });
+  });
+});
+
+// KfQ 3789983129 (the mirror risk of ownField itself, on the same PR as the ownField rewrite): a
+// check whose FALSE branch is "reject" is safe under ownField -- undefined never matches a required
+// literal, so it correctly falls through to an error. A check whose FALSE branch is "nothing to
+// verify here, skip" is not: undefined-via-inheritance and undefined-via-legitimate-non-applicability
+// are indistinguishable to a naive equality check. allowedGrantExclusionErrors had exactly this
+// shape: `ownField(grant, "outcome") !== "known"` returning [] treated "outcome cannot be read as
+// this grant's own property" identically to "this grant is genuinely not known, nothing to
+// exclude-check". Verified by construction before fixing (not by reading): grantRefFactErrors, run
+// separately on the same grant object, already rejects this exact shape with its own "grant.outcome
+// must be known or absent" message, so validateGovernedActionV1's overall ok:false was never
+// actually wrong for this payload -- but allowedGrantExclusionErrors's OWN contribution to that
+// result was [], which is what this test pins directly (its specific message), not the overall
+// ok:false a sibling check would produce regardless of whether this function does its job.
+describe("allowedGrantExclusionErrors rejects an unverifiable outcome instead of skipping (KfQ 3789983129)", () => {
+  it("reports the exclusion-specific message even though grantRefFactErrors also rejects the same input", () => {
+    const legit = allowedAction();
+    const grant = { value: { grantId: "grt-1", grantScope: "task" } }; // no own "outcome"
+    const payload = { ...legit, actionKind: "workspace-edit", grant };
+    const result = withPollutedPrototype("outcome", { value: "known", enumerable: false }, () =>
+      validateGovernedActionV1(payload),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(
+        result.errors.some((error) =>
+          error.includes("its own property to evaluate the exclusion rule"),
+        ),
+      ).toBe(true);
+    }
+  });
+});
+
+// KfQ 3789983164 -- refuted, verified by construction (not by reading). The claim: an inherited
+// `decision` is "treated as missing" inside governedActionRefErrors, so the generic fallback runs
+// and specific validation is bypassed. governedActionRefErrors is called from EXACTLY one place,
+// unconditionally gated: `if (!isOneOf(ownField(value, "decision"), GOVERNED_ACTION_DECISIONS))
+// errors.push(...) else errors.push(...governedActionRefErrors(value))`. ownField is a pure
+// function of (record, key) with no mutation of `value` between the caller's check and this
+// function's own internal `ownField(value, "decision")` read, so by the time
+// governedActionRefErrors runs, decision is ALREADY guaranteed to be an own, valid
+// GOVERNED_ACTION_DECISIONS member -- the same guarantee validateRuntimeGovernanceRequestV1's
+// "operation" and validateRuntimeGovernanceOutcomeV1's "status" have in code-task-run-control.ts,
+// which use the identical gate-then-call shape. Built the exact fixture the finding describes
+// (decision present ONLY via non-enumerable prototype pollution, allowedAction() otherwise intact)
+// and confirmed the result: `{"ok":false,"errors":["decision is invalid"]}` -- the top-level gate
+// rejects before governedActionRefErrors is ever invoked; "the generic fallback runs" never
+// happens. This is different from 3789983129 above: that function DOES get called with the
+// unverifiable value and DOES silently return []; this one is never called with it at all.
+describe("governedActionRefErrors's decision read is unreachable-with-undefined (KfQ 3789983164, refuted)", () => {
+  it("rejects via the top-level gate, never reaching governedActionRefErrors's fallback", () => {
+    const { decision: _decision, ...withoutDecision } = allowedAction();
+    void _decision;
+    const result = withPollutedPrototype("decision", { value: "allowed", enumerable: false }, () =>
+      validateGovernedActionV1(withoutDecision),
+    );
+    expect(result).toEqual({ ok: false, errors: ["decision is invalid"] });
   });
 });

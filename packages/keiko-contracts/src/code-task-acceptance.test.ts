@@ -14,6 +14,7 @@ import {
   type CodeTaskAcceptanceBinding,
   type CodeTaskAcceptanceContributionV1,
 } from "./code-task-acceptance.js";
+import { withPollutedPrototype } from "./code-task-pollution-test-support.js";
 
 const COMMIT_SHA = "a".repeat(40);
 const TREE_SHA = "b".repeat(40);
@@ -432,20 +433,10 @@ describe("factErrors: the null-prototype case (KfQ 3789542391, refuted again at 
 // Object.prototype is polluted throws inside expect's own internals for at least the "value" key
 // (confirmed empirically -- its fluent chain apparently builds objects via defineProperty, which
 // collides with an inherited plain "value" the same way node:internal/streams/readable did in an
-// earlier, non-isolated finding), so withPollutedPrototype captures only a plain result during the
+// earlier, non-isolated finding), so withPollutedPrototype (imported, not reimplemented here: KfQ
+// 3789982967 found a real bug in this helper when it was still copy-pasted per file -- see its
+// shared definition in code-task-pollution-test-support.ts) captures only a plain result during the
 // polluted window and restores deterministically in a finally BEFORE any assertion runs.
-function withPollutedPrototype<T>(
-  key: string,
-  descriptor: Pick<PropertyDescriptor, "value" | "enumerable" | "writable">,
-  run: () => T,
-): T {
-  try {
-    Object.defineProperty(Object.prototype, key, { configurable: true, ...descriptor });
-    return run();
-  } finally {
-    Reflect.deleteProperty(Object.prototype, key);
-  }
-}
 
 function withReceiptDigest(receiptDigest: unknown): unknown {
   const base = validContribution();

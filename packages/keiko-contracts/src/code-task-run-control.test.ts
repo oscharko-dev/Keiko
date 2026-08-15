@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { hasInheritedEnumerableProperty } from "./code-task-acceptance.js";
 import { CODE_TASK_GOVERNANCE_SCHEMA_VERSION } from "./code-task-governance.js";
+import { withPollutedPrototype } from "./code-task-pollution-test-support.js";
 import {
   validateRunControlSnapshotV1,
   validateRuntimeGovernanceOutcomeV1,
@@ -351,23 +352,12 @@ describe("recoveryRef/pendingQuestion: the null-prototype case (KfQ 3789542391, 
 
 // Codex P1 3789773829, the terminating fix (full reasoning at ownField's definition in
 // code-task-acceptance.ts, imported here alongside hasInheritedEnumerableProperty rather than
-// reimplemented). withPollutedPrototype mirrors code-task-acceptance.test.ts's identical helper:
-// calling vitest's expect() WHILE Object.prototype is polluted throws inside expect's own
-// internals for at least the "value" key (confirmed empirically), so it captures only a plain
-// result during the polluted window and restores deterministically in a finally BEFORE any
-// assertion runs.
-function withPollutedPrototype<T>(
-  key: string,
-  descriptor: Pick<PropertyDescriptor, "value" | "enumerable" | "writable">,
-  run: () => T,
-): T {
-  try {
-    Object.defineProperty(Object.prototype, key, { configurable: true, ...descriptor });
-    return run();
-  } finally {
-    Reflect.deleteProperty(Object.prototype, key);
-  }
-}
+// reimplemented). withPollutedPrototype (imported from code-task-pollution-test-support.ts, not
+// reimplemented here: KfQ 3789982967 found a real bug in this helper when it was still copy-pasted
+// per file) mirrors code-task-acceptance.test.ts's identical helper: calling vitest's expect()
+// WHILE Object.prototype is polluted throws inside expect's own internals for at least the "value"
+// key (confirmed empirically), so it captures only a plain result during the polluted window and
+// restores deterministically in a finally BEFORE any assertion runs.
 
 // Non-enumerable pollution isolates ownField's OWN contribution cleanly (see
 // code-task-acceptance.test.ts's identical describe block for why enumerable pollution cannot: it
