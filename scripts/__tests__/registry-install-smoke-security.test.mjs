@@ -52,6 +52,11 @@ import {
   withCorepackYarnCacheLock,
   yarnChildEnv,
 } from "../installable-package-smoke.mjs";
+import {
+  registryInstallSmokeInternalsForTest as registrySmoke,
+  runRegistryInstallSmoke,
+  runRegistryInstallSmokeForTest,
+} from "../registry-install-smoke.mjs";
 import { provenancePublishArgs } from "../lib/npm-publish-preflight.mjs";
 import {
   PINNED_YARN,
@@ -129,6 +134,24 @@ function delay(ms) {
   return new Promise((resolvePromise) => globalThis.setTimeout(resolvePromise, ms));
 }
 
+async function withTemporaryProcessEnv(name, value, action) {
+  const previous = process.env[name];
+  try {
+    if (value === undefined) {
+      Reflect.deleteProperty(process.env, name);
+    } else {
+      process.env[name] = value;
+    }
+    return await action();
+  } finally {
+    if (previous === undefined) {
+      Reflect.deleteProperty(process.env, name);
+    } else {
+      process.env[name] = previous;
+    }
+  }
+}
+
 async function waitForProcessExit(pid) {
   const deadline = Date.now() + 2_000;
   while (processExists(pid) && Date.now() < deadline) {
@@ -161,6 +184,28 @@ function writeVendoredRuntimeFixture(root) {
   const typescriptRoot = join(root, "node_modules", "typescript");
   mkdirSync(typescriptRoot, { recursive: true });
   writeFileSync(join(typescriptRoot, "package.json"), '{"name":"typescript"}\n', "utf8");
+}
+
+function writeRegistryInstalledRuntimeFixture(root) {
+  const packageRoot = join(root, "node_modules", "@oscharko-dev", "keiko");
+  writeVendoredRuntimeFixture(root);
+  mkdirSync(join(packageRoot, "dist", "cli"), { recursive: true });
+  writeFileSync(
+    join(packageRoot, "dist", "cli", "index.js"),
+    [
+      "if (process.argv.includes('--version')) {",
+      `  process.stdout.write(${JSON.stringify(`${ROOT_MANIFEST.version}\n`)});`,
+      "} else {",
+      "  process.stdout.write('help\\n');",
+      "}",
+    ].join("\n"),
+    "utf8",
+  );
+  writeFileSync(
+    join(packageRoot, "dist", "index.js"),
+    `export const SDK_VERSION = ${JSON.stringify(ROOT_MANIFEST.version)};\n`,
+    "utf8",
+  );
 }
 
 function isolatedChildEnv(root, extraEnv = {}) {
@@ -1458,6 +1503,193 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(setupSummary).toContain(`messageBytes=${String(Buffer.byteLength(rawMessage, "utf8"))}`);
     expect(setupSummary).not.toContain(rawMessage);
     expect(setupSummary).not.toContain(PINNED_YARN_SHA512);
+  });
+
+  it("validates registry smoke Yarn locators in process", () => {
+    const fixtureLocator = `yarn@${PINNED_YARN_VERSION}+sha512.${"a".repeat(128)}`;
+
+    expect(registrySmoke.registryYarnLocator()).toBe(PINNED_YARN);
+    expect(registrySmoke.smokeGateYarnPackageManager(PINNED_YARN)).toBe(PINNED_YARN);
+    expect(registrySmoke.smokeGateYarnPackageManager(fixtureLocator)).toBe(fixtureLocator);
+    expect(registrySmoke.testRegistryYarnLocator(fixtureLocator)).toBe(fixtureLocator);
+    expect(() => registrySmoke.testRegistryYarnLocator(`yarn@${PINNED_YARN_VERSION}`)).toThrow(
+      /Yarn locator is invalid/u,
+    );
+  });
+
+  it("keeps registry fixture Yarn locators test-only", () => {
+    const fixtureLocator = `yarn@${PINNED_YARN_VERSION}+sha512.${"b".repeat(128)}`;
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousVitestWorkerId = process.env.VITEST_WORKER_ID;
+
+    try {
+      process.env.NODE_ENV = "production";
+      delete process.env.VITEST_WORKER_ID;
+
+      expect(() => registrySmoke.testRegistryYarnLocator(fixtureLocator)).toThrow(
+        /fixture Yarn locators are only accepted inside Vitest/u,
+      );
+    } finally {
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = previousNodeEnv;
+      }
+      if (previousVitestWorkerId === undefined) {
+        delete process.env.VITEST_WORKER_ID;
+      } else {
+        process.env.VITEST_WORKER_ID = previousVitestWorkerId;
+      }
+    }
+  });
+
+  it("validates registry smoke timeout values in process", () => {
+    expect(registrySmoke.registryInstallTimeoutMs({})).toBe(300_000);
+    expect(registrySmoke.registryInstallTimeoutMs({ KEIKO_REGISTRY_INSTALL_TIMEOUT_MS: "" })).toBe(
+      300_000,
+    );
+    expect(
+      registrySmoke.registryInstallTimeoutMs({ KEIKO_REGISTRY_INSTALL_TIMEOUT_MS: "120000" }),
+    ).toBe(120_000);
+    expect(() =>
+      registrySmoke.registryInstallTimeoutMs({ KEIKO_REGISTRY_INSTALL_TIMEOUT_MS: "01" }),
+    ).toThrow(/positive integer/u);
+    expect(() =>
+      registrySmoke.registryInstallTimeoutMs({
+        KEIKO_REGISTRY_INSTALL_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER + 1),
+      }),
+    ).toThrow(/safe integer/u);
+    expect(() =>
+      registrySmoke.registryInstallTimeoutMs({ KEIKO_REGISTRY_INSTALL_TIMEOUT_MS: "600001" }),
+    ).toThrow(/no more than 600000/u);
+  });
+
+  it("validates registry TLS and loopback overrides in process", () => {
+    const consoleLog = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    expect(registrySmoke.registryHostnameIsLoopback("localhost")).toBe(true);
+    expect(registrySmoke.registryHostnameIsLoopback("127.0.0.1")).toBe(true);
+    expect(registrySmoke.registryHostnameIsLoopback("::1")).toBe(true);
+    expect(registrySmoke.registryHostnameIsLoopback("[::1]")).toBe(true);
+    expect(registrySmoke.registryHostnameIsLoopback("registry.npmjs.org")).toBe(false);
+    expect(() =>
+      registrySmoke.assertRegistryTlsVerificationEnabled("https://registry.npmjs.org/"),
+    ).not.toThrow();
+    expect(() =>
+      registrySmoke.assertRegistryTlsVerificationEnabled("https://registry.npmjs.org/", {
+        NODE_TLS_REJECT_UNAUTHORIZED: "0",
+      }),
+    ).toThrow(/NODE_TLS_REJECT_UNAUTHORIZED=0/u);
+    expect(() =>
+      registrySmoke.assertRegistryTlsVerificationEnabled("http://[::1]:4873/", {
+        KEIKO_REGISTRY_INSTALL_ALLOW_INSECURE_LOOPBACK: "1",
+      }),
+    ).not.toThrow();
+    expect(consoleLog).toHaveBeenCalledWith(expect.stringContaining("insecure loopback"));
+    expect(() =>
+      registrySmoke.assertRegistryTlsVerificationEnabled("http://registry.npmjs.org/", {}),
+    ).toThrow(/requires an HTTPS registry URL/u);
+  });
+
+  it("fails the default registry smoke entrypoint before work when TLS is disabled", async () => {
+    await withTemporaryProcessEnv("NODE_TLS_REJECT_UNAUTHORIZED", "0", async () => {
+      await expect(runRegistryInstallSmoke()).rejects.toThrow(/NODE_TLS_REJECT_UNAUTHORIZED=0/u);
+    });
+  });
+
+  it("fails the test registry smoke entrypoint before work when TLS is disabled", async () => {
+    await withTemporaryProcessEnv("NODE_TLS_REJECT_UNAUTHORIZED", "0", async () => {
+      await expect(runRegistryInstallSmokeForTest(PINNED_YARN)).rejects.toThrow(
+        /NODE_TLS_REJECT_UNAUTHORIZED=0/u,
+      );
+    });
+  });
+
+  it("bounds registry smoke command diagnostics in process", () => {
+    expect(registrySmoke.commandSummary("npm", ["install"])).toBe("npm (1 arg)");
+    expect(registrySmoke.commandSummary("corepack", ["yarn", "install"])).toBe("corepack (2 args)");
+    expect(registrySmoke.outputByteSummary({ stdout: "abc", stderr: "de" })).toBe(
+      "stdoutBytes=3, stderrBytes=2",
+    );
+    expect(() =>
+      registrySmoke.assertRunSucceeded("npm", ["install"], { error: new Error("missing") }),
+    ).toThrow(/npm \(1 arg\) could not spawn: missing/u);
+    expect(() =>
+      registrySmoke.assertRunSucceeded("corepack", ["yarn"], {
+        outputLimitExceeded: true,
+        stderr: "err",
+        stdout: "out",
+      }),
+    ).toThrow(/corepack \(1 arg\) exceeded output limit/u);
+    expect(() =>
+      registrySmoke.assertRunSucceeded("node", ["script"], {
+        signal: null,
+        status: 7,
+        stderr: "err",
+        stdout: "out",
+      }),
+    ).toThrow(/node \(1 arg\) exited 7/u);
+    expect(() =>
+      registrySmoke.assertRunSucceeded("node", ["--version"], { status: 0 }),
+    ).not.toThrow();
+  });
+
+  it("uses the explicit registry smoke command timeout", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-registry-run-timeout-test-"));
+    try {
+      const fixture = join(root, "delayed.mjs");
+      writeFileSync(fixture, "setTimeout(() => process.stdout.write('ready'), 50);\n", "utf8");
+
+      const result = registrySmoke.run(process.execPath, [fixture], 1_000, { timeout: 1 });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("ready");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("writes Yarn registry smoke project files in process", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-registry-yarn-files-test-"));
+    try {
+      registrySmoke.writeYarnSmokeManifest(root, PINNED_YARN);
+      registrySmoke.writeYarnSmokeConfiguration(root);
+
+      const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+      const yarnConfig = readFileSync(join(root, YARN_RC_FILENAME), "utf8");
+
+      expect(manifest.packageManager).toBe(PINNED_YARN);
+      expect(manifest.devDependencies[ROOT_MANIFEST.name]).toBe(ROOT_MANIFEST.version);
+      expect(yarnConfig).toContain("enableStrictSsl: true");
+      expect(yarnConfig).toContain('npmRegistryServer: "https://registry.npmjs.org/"');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("checks a registry-installed runtime fixture in process", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-registry-runtime-test-"));
+    try {
+      writeRegistryInstalledRuntimeFixture(root);
+
+      expect(() => registrySmoke.assertVendoredPayload(root)).not.toThrow();
+      await expect(registrySmoke.assertInstalledRuntime(root, 1_000)).resolves.toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects registry-installed fixtures without vendored runtime dist", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-registry-runtime-missing-test-"));
+    try {
+      mkdirSync(join(root, "node_modules", "@oscharko-dev", "keiko"), { recursive: true });
+
+      expect(() => registrySmoke.assertVendoredPayload(root)).toThrow(
+        /missing runtime dependency/u,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("keeps the Corepack cache private and per-user", () => {

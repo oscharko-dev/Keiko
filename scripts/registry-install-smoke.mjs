@@ -68,8 +68,8 @@ function fail(message) {
   process.exit(1);
 }
 
-function registryInstallTimeoutMs() {
-  const value = process.env.KEIKO_REGISTRY_INSTALL_TIMEOUT_MS;
+function registryInstallTimeoutMs(env = process.env) {
+  const value = env.KEIKO_REGISTRY_INSTALL_TIMEOUT_MS;
   if (value === undefined || value === "") return 300_000;
   if (!/^[1-9]\d*$/u.test(value)) {
     throw new SmokeGateFailure(
@@ -101,17 +101,17 @@ function registryHostnameIsLoopback(hostname) {
   );
 }
 
-function assertTlsVerificationEnabled() {
-  if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
+function assertRegistryTlsVerificationEnabled(registryUrl, env = process.env) {
+  if (env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
     throw new SmokeGateFailure(
       "NODE_TLS_REJECT_UNAUTHORIZED=0 is not allowed for registry install smoke.",
     );
   }
-  const url = new URL(registry);
+  const url = new URL(registryUrl);
   if (url.protocol === "https:") return;
   if (
     registryHostnameIsLoopback(url.hostname) &&
-    process.env.KEIKO_REGISTRY_INSTALL_ALLOW_INSECURE_LOOPBACK === "1"
+    env.KEIKO_REGISTRY_INSTALL_ALLOW_INSECURE_LOOPBACK === "1"
   ) {
     console.log(
       "registry-install-smoke: using explicit insecure loopback registry override for local test.",
@@ -122,6 +122,10 @@ function assertTlsVerificationEnabled() {
     "registry install smoke requires an HTTPS registry URL. " +
       "Only loopback HTTP is allowed with KEIKO_REGISTRY_INSTALL_ALLOW_INSECURE_LOOPBACK=1.",
   );
+}
+
+function assertTlsVerificationEnabled() {
+  assertRegistryTlsVerificationEnabled(registry);
 }
 
 function run(cmd, args, timeoutMs, options = {}) {
@@ -343,6 +347,23 @@ export async function runRegistryInstallSmoke() {
 export async function runRegistryInstallSmokeForTest(yarnLocator) {
   await runRegistryInstallSmokeWithLocator(testRegistryYarnLocator(yarnLocator));
 }
+
+export const registryInstallSmokeInternalsForTest = {
+  assertInstalledRuntime,
+  assertRegistryTlsVerificationEnabled,
+  assertRunSucceeded,
+  assertVendoredPayload,
+  commandSummary,
+  outputByteSummary,
+  registryHostnameIsLoopback,
+  registryInstallTimeoutMs,
+  registryYarnLocator,
+  run,
+  smokeGateYarnPackageManager,
+  testRegistryYarnLocator,
+  writeYarnSmokeConfiguration,
+  writeYarnSmokeManifest,
+};
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
