@@ -157,8 +157,22 @@ export interface CodeTaskAcceptanceContributionV1 {
   readonly cleanup: CodeTaskCleanupResultV1;
 }
 
+// KfQ Critical (threads on unknownKeys, :214/:359): a value shaped via Object.create(secretHolder)
+// can carry every required field as an OWN property (so it looks complete) plus one extra field
+// reachable ONLY through the prototype -- verified empirically that such a value's own-property
+// count and own-property names match an honest input exactly, so neither Object.keys nor
+// Object.getOwnPropertyNames nor an exact-own-count check (the closed-key mechanisms this file
+// otherwise uses) ever see the extra field, while ordinary property access on it still resolves
+// through the prototype chain. Rejecting any non-default prototype closes this at the single choke
+// point every validator in this file already passes through, rather than only at the specific
+// unknownKeys call sites the finding named.
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
+  );
 }
 
 function isPositiveInteger(value: unknown): value is number {
@@ -203,14 +217,23 @@ function factErrors(
 // field on a documented content-free contract must never ride through into evidence. These four did
 // not, so a payload could carry `promptText` (or any other free-text field) alongside the validated
 // ones and be accepted, then be handed on as `value`. Mirrors code-task-governance.ts's unknownKeys.
+// Object.getOwnPropertyNames (not Object.keys) plus an own-symbol check, matching
+// debug/debug-lifecycle.ts's idiom for the same class of threat: Object.keys alone misses a
+// non-enumerable own property; every caller here already passes through the hardened isRecord
+// above, which is what actually closes the prototype case (see its own comment) that neither this
+// nor debug-lifecycle.ts's own-property scan can see on its own.
 function unknownKeys(
   value: Record<string, unknown>,
   allowed: readonly string[],
   path: string,
 ): readonly string[] {
-  return Object.keys(value)
+  const errors = Object.getOwnPropertyNames(value)
     .filter((key) => !allowed.includes(key))
     .map((key) => `${path}.${key} is not allowed`);
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    errors.push(`${path} must not carry symbol-keyed properties`);
+  }
+  return errors;
 }
 
 const CONTRIBUTION_KEYS = [
