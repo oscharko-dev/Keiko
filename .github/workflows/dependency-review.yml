@@ -1,10 +1,10 @@
 name: Dependency Review
 
+# KEIKO-0955: the branch lists below must stay identical to ci.yml's. Long-lived integration
+# branches were missing, so pushes to them and pull requests targeting them were never covered.
+# scripts/check-workflow-branch-parity.mjs fails the gate if the three lists drift apart again.
 on:
   pull_request:
-    # KEIKO-0955: this list must stay identical to ci.yml's. Ten long-lived integration branches
-    # were missing, so pull requests targeting them never had their dependency diff reviewed.
-    # scripts/check-workflow-branch-parity.mjs fails the gate if the three lists drift apart again.
     branches:
       - dev
       - feat/dev

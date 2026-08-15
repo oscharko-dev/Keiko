@@ -26,7 +26,12 @@ const failures = [];
 const APPROVED_ROOT_SRC_FILES = ["src/cli/index.ts", "src/index.ts"];
 const APPROVED_ROOT_SRC_SHA256 = new Map([
   ["src/index.ts", "751c1c0fae45a8bf68ba099ecd0706a74d64661f8fc1b9bd7f05d4abd1beb20b"],
-  ["src/cli/index.ts", "6e9df226e26117da62b3e3324216dacf4a56fd13e0a87ed52f8262a969c86402"],
+  // KEIKO-0230: the bin facade gained a third installation-dependent path
+  // (KEIKO_LOCAL_STATE_AUDITOR, beside KEIKO_CLI_BIN_PATH and KEIKO_UI_STATIC_ROOT) so
+  // `keiko audit local-state` can reach the packaged auditor without the cli package having to
+  // know its own installation layout — which is the facade's stated job. The hash is re-pinned
+  // to the reviewed content, not relaxed: this gate still fails on the next unreviewed edit.
+  ["src/cli/index.ts", "2918be552be1ca414f2e021a6f521f82c64863d6cec1099e6ff07c37626764de"],
 ]);
 
 function listFilesRecursively(rootDir, prefix = "") {
