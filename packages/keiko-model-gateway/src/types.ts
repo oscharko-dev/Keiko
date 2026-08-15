@@ -136,6 +136,20 @@ export interface OutboundHttpEgressConfig {
   // posture where a loopback target is blocked, so a public research fetch can never be steered
   // at a local service. It only tightens (never widens) the SSRF surface.
   readonly denyLoopback?: boolean | undefined;
+  // Opt-in, off by default (ADR-0038 D6). When a forward proxy is configured for this request,
+  // gatewayFetch normally cannot apply its DNS-based address policy (enforceOutboundTargetPolicy's
+  // dnsLookup step): the proxy resolves the target hostname independently at its own connect time,
+  // so a pre-proxy lookup cannot be trusted as rebinding protection (see
+  // refuseUnpinnableResearchEgress's doc comment in http.ts) and is skipped rather than pretending
+  // to guard something it cannot. Setting this flag makes gatewayFetch resolve and vet the target's
+  // DNS itself, the same way it already does for the unproxied path (AUDIT-SEC-001), and then pin
+  // the proxy's own CONNECT tunnel (or, for a plain-HTTP target, the forwarded absolute-URI) to
+  // that exact vetted address — closing the gap instead of masking it. Like `denyLoopback`, this
+  // only tightens the SSRF surface and is never config-file/env-mapped; a caller must construct it
+  // explicitly, because a proxy that filters CONNECT/forwarded requests by hostname (a legitimate,
+  // common corporate-proxy pattern) would see an IP-literal target instead and could reject it —
+  // an operator must confirm their proxy tolerates that before opting in.
+  readonly pinProxiedConnectTarget?: boolean | undefined;
 }
 
 export interface CircuitBreakerConfig {

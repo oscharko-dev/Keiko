@@ -464,6 +464,49 @@ describe("validateDiscussionModePlan", () => {
     }
   });
 
+  // KEIKO-0474: only producesDecisionRecommendation was compared against the canonical table, so a
+  // plan could claim a different citationDiscipline, contradictionPolicy, grounding directives or
+  // assumption/uncertainty posture than the mode it names — a discussion posture the product never
+  // sanctioned. And brainstorm's facets were unvalidated entirely, since the only facet rule was
+  // "disagreement-capable modes mandate all three".
+  it.each([
+    ["citationDiscipline", "no-citations-needed"],
+    ["contradictionPolicy", "ignore"],
+    ["challengesAssumptions", false],
+    ["requiresExplicitAssumptions", false],
+    ["requiresUncertaintyDisclosure", false],
+  ])("rejects a challenge plan whose %s diverges from the canonical table", (field, value) => {
+    const result = validateDiscussionModePlan({
+      ...DISCUSSION_MODE_PLANS.challenge,
+      [field]: value,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a plan whose groundingDirectives or directives diverge", () => {
+    expect(
+      validateDiscussionModePlan({
+        ...DISCUSSION_MODE_PLANS.challenge,
+        groundingDirectives: ["stay-within-evidence"],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateDiscussionModePlan({
+        ...DISCUSSION_MODE_PLANS.challenge,
+        directives: [...DISCUSSION_MODE_PLANS.decide.directives],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("validates brainstorm's mandated facets instead of skipping them", () => {
+    expect(
+      validateDiscussionModePlan({
+        ...DISCUSSION_MODE_PLANS.brainstorm,
+        mandatedFacets: ["evidence", "assumptions", "uncertainty"],
+      }).ok,
+    ).toBe(false);
+  });
+
   it("rejects a non-object", () => {
     expect(validateDiscussionModePlan(42)).toEqual({
       ok: false,
@@ -501,6 +544,27 @@ describe("validateDiscussionModePlan", () => {
         expect(result.reasons).toContain(`mandatedFacets: challenge must mandate ${facet}`);
       }
     }
+  });
+
+  // readStringArray silently filters out non-string entries so the two set-comparison helpers
+  // (validateModePlanFacets, sameStringSet) can operate on a clean string list — but that must
+  // never make a payload padded with foreign, non-string data compare equal to canonical.
+  it("rejects mandatedFacets padded with a non-string entry that would otherwise match canonical", () => {
+    const canonicalFacets = DISCUSSION_MODE_PLANS.challenge.mandatedFacets;
+    const result = validateDiscussionModePlan({
+      ...DISCUSSION_MODE_PLANS.challenge,
+      mandatedFacets: [...canonicalFacets, { injected: "payload" }],
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects groundingDirectives padded with a non-string entry that would otherwise match canonical", () => {
+    const plan = DISCUSSION_MODE_PLANS.challenge;
+    const result = validateDiscussionModePlan({
+      ...plan,
+      groundingDirectives: [...plan.groundingDirectives, { injected: "payload" }],
+    });
+    expect(result.ok).toBe(false);
   });
 
   it("flags an empty directive list and unknown directives", () => {

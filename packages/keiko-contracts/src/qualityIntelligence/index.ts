@@ -103,8 +103,13 @@ export type {
   QualityIntelligenceCoverageKind,
   QualityIntelligenceCoverageMapping,
   QualityIntelligenceCoverageMap,
+  QualityIntelligenceConfidence,
 } from "./coverageMap.js";
-export { QUALITY_INTELLIGENCE_COVERAGE_KINDS, assertCoverageMapInvariant } from "./coverageMap.js";
+export {
+  QUALITY_INTELLIGENCE_COVERAGE_KINDS,
+  assertCoverageMapInvariant,
+  isQualityIntelligenceConfidence,
+} from "./coverageMap.js";
 
 // ─── Validation finding ────────────────────────────────────────────────────────
 export type {
@@ -132,6 +137,7 @@ export {
 // ─── Run plan + events ─────────────────────────────────────────────────────────
 export type {
   QualityIntelligencePlannerKind,
+  QualityIntelligenceStageName,
   QualityIntelligenceRunStage,
   QualityIntelligenceRunPlan,
   QualityIntelligenceRunQueuedPayload,
@@ -153,6 +159,7 @@ export type {
 export {
   QUALITY_INTELLIGENCE_EVENT_SCHEMA_VERSION,
   QUALITY_INTELLIGENCE_PLANNER_KINDS,
+  QUALITY_INTELLIGENCE_STAGE_NAMES,
   QUALITY_INTELLIGENCE_RUN_EVENT_KINDS,
   assertRunEventSequenceMonotonic,
 } from "./runPlanAndEvents.js";
@@ -258,6 +265,7 @@ export type {
   QualityIntelligenceModelPolicyPreflightRequest,
   QualityIntelligenceModelPolicyPreflightResponse,
   QualityIntelligenceStartRunRequest,
+  QualityIntelligenceErrorCode,
   QualityIntelligenceSkippedSource,
   QualityIntelligenceSourceSummary,
   QualityIntelligenceRunStreamAccepted,
@@ -266,4 +274,4 @@ export type {
   QualityIntelligenceRunStreamError,
   QualityIntelligenceRunStreamMessage,
 } from "./bffWire.js";
-export { QUALITY_INTELLIGENCE_RUN_STATUSES } from "./bffWire.js";
+export { QUALITY_INTELLIGENCE_RUN_STATUSES, QUALITY_INTELLIGENCE_ERROR_CODES } from "./bffWire.js";

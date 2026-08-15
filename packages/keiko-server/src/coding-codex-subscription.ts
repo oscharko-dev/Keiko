@@ -2,10 +2,10 @@ import {
   CODING_WORKBENCH_CODEX_AUTH_STATUSES,
   CODING_WORKBENCH_CODEX_CREDENTIAL_STORES,
   CODING_WORKBENCH_SCHEMA_VERSION,
+  codingWorkbenchCodexAuthMethodRowFor,
   validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexAuthSetupRequest,
   validateCodingWorkbenchCodexSubscriptionProfile,
-  type CodingWorkbenchCodexAuthCommandLabel,
   type CodingWorkbenchCodexAuthMethod,
   type CodingWorkbenchCodexAuthSetupPlan,
   type CodingWorkbenchCodexAuthStateRoot,
@@ -506,20 +506,17 @@ export function codexSubscriptionProfileForEnv(
   };
 }
 
-function commandLabelFor(
-  method: CodingWorkbenchCodexAuthMethod,
-): CodingWorkbenchCodexAuthCommandLabel {
-  if (method === "chatgpt-browser-login") return "codex-login";
-  if (method === "chatgpt-device-code") return "codex-login-device-auth";
-  return "codex-login-with-access-token";
-}
-
+// The command label, requiresSecretInput, and credentialTransport for a given method are the ONE
+// formula in codingWorkbenchCodexAuthMethodRowFor (keiko-contracts) — this used to carry its own
+// copy (a private commandLabelFor plus `accessToken = method === "codex-access-token"`), which
+// could drift from the contracts' table and build a plan that validateCodingWorkbenchCodexAuthSetupPlan
+// would then reject.
 function setupPlanFor(
   method: CodingWorkbenchCodexAuthMethod,
   env: EnvSource,
 ): CodingWorkbenchCodexAuthSetupPlan {
   const credentialStore = credentialStoreForEnv(env);
-  const accessToken = method === "codex-access-token";
+  const row = codingWorkbenchCodexAuthMethodRowFor(method);
   return {
     schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
     profileId: PROFILE_ID,
@@ -530,9 +527,11 @@ function setupPlanFor(
     stateScope: stateScopeForStore(credentialStore),
     stateRoot: stateRootForStore(credentialStore),
     usesGlobalCodexHome: false,
-    commandLabel: commandLabelFor(method),
-    requiresSecretInput: accessToken,
-    ...(accessToken ? { credentialTransport: "stdin" as const } : {}),
+    commandLabel: row.commandLabel,
+    requiresSecretInput: row.requiresSecretInput,
+    ...(row.credentialTransport === undefined
+      ? {}
+      : { credentialTransport: row.credentialTransport }),
   };
 }
 

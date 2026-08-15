@@ -40,6 +40,7 @@ export type EmbeddingProfileCompatibilityReason =
   | "missing-right-profile"
   | "provider-mismatch"
   | "model-mismatch"
+  | "model-revision-mismatch"
   | "model-family-mismatch"
   | "dimension-mismatch"
   | "metric-mismatch"
@@ -63,6 +64,7 @@ export const EMBEDDING_PROFILE_COMPATIBILITY_REASONS: readonly EmbeddingProfileC
     "missing-right-profile",
     "provider-mismatch",
     "model-mismatch",
+    "model-revision-mismatch",
     "model-family-mismatch",
     "dimension-mismatch",
     "metric-mismatch",
@@ -118,6 +120,14 @@ interface ProfileComparison {
 const PROFILE_COMPARISONS: readonly ProfileComparison[] = [
   { reason: "provider-mismatch", matches: (left, right) => left.provider === right.provider },
   { reason: "model-mismatch", matches: (left, right) => left.modelId === right.modelId },
+  // A model revision is a different embedding space: re-embedding the same text under a new revision
+  // of the same modelId yields vectors that are not comparable with the old ones. Leaving it out of
+  // both the comparison and the key made two revisions of one model compare as the SAME space, so a
+  // reindex was never recommended and stale vectors were silently searched against fresh queries.
+  {
+    reason: "model-revision-mismatch",
+    matches: (left, right) => left.modelRevision === right.modelRevision,
+  },
   {
     reason: "model-family-mismatch",
     matches: (left, right) => left.modelFamily === right.modelFamily,
@@ -199,19 +209,51 @@ function optionalProfileFields(
   };
 }
 
+// Length-prefixes a component so no character inside it — including the "|" this function's
+// caller uses as a (now purely decorative) reader-friendly separator — can shift where one
+// component ends and the next begins. For a FIXED number of components in a FIXED order, framing
+// every one this way makes the concatenation injective: reading a decimal length then consuming
+// exactly that many characters admits only one parse, so `frame(a) + frame(b)` can equal
+// `frame(a') + frame(b')` only when `a === a'` and `b === b'`, regardless of what "|" or ":"
+// characters `a`/`b` themselves contain. Without this, a provider-supplied modelRevision "r|fam"
+// paired with modelFamily "x" produced the identical joined key as modelRevision "r" paired with
+// modelFamily "fam|x" — two different, incompatible profiles sharing one key. Same technique as
+// keiko-server's framedDigest (workspace-manifest-identity.ts), minus the SHA-256 step this leaf
+// package cannot take (leaf-package rule: no crypto) — collision-freedom needs only the framing,
+// not a hash.
+function frame(value: string): string {
+  return `${String(value.length)}:${value}`;
+}
+
+// Frames an optional component so genuine ABSENCE and a provider literally reporting the word
+// this function used to fall back to (e.g. modelRevision: "unversioned") can never collide into
+// the same key: "-" (a fixed, single-character marker) can never equal "=" + anything, regardless
+// of what a legitimate value contains, because the two cases always differ in their first
+// character. Two distinct present values still compare correctly, since equality of "=" + a
+// reduces to equality of a. The result is then length-prefixed by `frame`, same as every other
+// component. Applied uniformly to every optional field for consistency, even where today's
+// narrower value types make the specific collision unreachable (e.g. `normalization` is a closed
+// enum that can never literally equal "legacy").
+function keyComponent(value: string | undefined): string {
+  return frame(value === undefined ? "-" : `=${value}`);
+}
+
 export function embeddingProfileKey(profile: EmbeddingProfileIdentity): string {
   return [
-    profile.provider,
-    profile.modelId,
-    profile.modelFamily,
-    String(profile.vectorDimensions),
-    profile.vectorMetric,
-    profile.normalization ?? "legacy",
-    profile.instructionVersion ?? "legacy",
-    profile.embeddingSpaceFingerprint ?? "unverified",
-    String(profile.dimensionsParam ?? ""),
-    profile.tokenizer ?? "unknown-tokenizer",
-    profile.locality,
+    frame(profile.provider),
+    frame(profile.modelId),
+    keyComponent(profile.modelRevision),
+    frame(profile.modelFamily),
+    frame(String(profile.vectorDimensions)),
+    frame(profile.vectorMetric),
+    keyComponent(profile.normalization),
+    keyComponent(profile.instructionVersion),
+    keyComponent(profile.embeddingSpaceFingerprint),
+    keyComponent(
+      profile.dimensionsParam === undefined ? undefined : String(profile.dimensionsParam),
+    ),
+    keyComponent(profile.tokenizer),
+    frame(profile.locality),
   ].join("|");
 }
 

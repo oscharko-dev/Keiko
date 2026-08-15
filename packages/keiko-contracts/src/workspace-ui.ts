@@ -331,6 +331,14 @@ export function isWorkspaceReservedChord(chord: WorkspaceKeyChord): boolean {
   return false;
 }
 
+// The two predicates above are a must-call-BOTH pair: dispatchable alone still admits a chord the
+// host OS or browser has reserved. Every caller had to remember the composition, and nothing tested
+// it, so this is the single predicate a caller should reach for. The individual predicates stay
+// exported — they are how a caller reports WHICH rule a chord failed.
+export function isWorkspaceChordAcceptable(chord: WorkspaceKeyChord): boolean {
+  return isWorkspaceDispatchableChord(chord) && !isWorkspaceReservedChord(chord);
+}
+
 // ─── Inverse-action helper for the undo stack ─────────────────────────────
 //
 // Pure function that computes the inverse of any ui.* action by swapping

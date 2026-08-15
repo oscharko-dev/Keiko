@@ -58,8 +58,21 @@ export function isCodeTaskPolicyVersion(value: unknown): value is CodeTaskPolicy
   return typeof value === "string" && POLICY_VERSION_PATTERN.test(value);
 }
 
+// KfQ Critical on code-task-acceptance.ts's identical unknownKeys (this file mirrors it): a value
+// shaped via Object.create(secretHolder) can carry every required field as an OWN property (so it
+// looks complete) plus one extra field reachable ONLY through the prototype -- verified empirically
+// that such a value's own-property count and names match an honest input exactly, so no
+// own-property-only scan (Object.keys, Object.getOwnPropertyNames, or an exact-own-count check)
+// ever sees the extra field, while ordinary property access on it still resolves through the
+// prototype chain. Rejecting any non-default prototype closes this at the single choke point every
+// validator in this file already passes through.
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
+  );
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -70,21 +83,33 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
   return typeof value === "string" && (allowed as readonly string[]).includes(value);
 }
 
+// Object.getOwnPropertyNames (not Object.keys) plus an own-symbol check, matching
+// debug/debug-lifecycle.ts's idiom: Object.keys alone misses a non-enumerable own property. Every
+// caller here already passes through the hardened isRecord above, which is what actually closes
+// the prototype case (see its own comment).
 function unknownKeys(
   value: Record<string, unknown>,
   allowed: readonly string[],
   path: string,
 ): string[] {
-  return Object.keys(value)
+  const errors = Object.getOwnPropertyNames(value)
     .filter((key) => !allowed.includes(key))
     .map((key) => `${path}.${key} is not allowed`);
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    errors.push(`${path} must not carry symbol-keyed properties`);
+  }
+  return errors;
 }
 
 // A content-free failure reason: a bounded lower-kebab reason code that cannot smuggle secrets or
 // free text across the acceptance boundary (mirrors the code-task-acceptance content-free rule).
 const REASON_CODE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/u;
 
-function isContentFreeReasonCode(value: unknown): value is string {
+// Exported: this is the ONE definition of the content-free reason-code rule. It was previously
+// re-declared verbatim in code-task-auxiliary.ts and enforced as a length-only check in
+// code-task-run-control.ts, so the "cannot smuggle secrets or free text" guarantee held in one of
+// the three places that claimed it — "Denied: /Users/alice/secret" is 64 characters or fewer.
+export function isContentFreeReasonCode(value: unknown): value is string {
   return typeof value === "string" && REASON_CODE_PATTERN.test(value);
 }
 
@@ -216,14 +241,36 @@ function envelopeErrors(value: Record<string, unknown>): string[] {
   return errors;
 }
 
+// KEIKO-0302 follow-on: this only excluded a literal "value" key, so { outcome: "absent",
+// promptText: "leak me" } passed as absent on the denied/non-carrying decision path (and on the
+// "allowed" question / "approval-required" grant paths, both of which route through
+// absentErrors). GovernedActionAbsent's only field is "outcome" (see its definition above), so
+// requiring exactly one key rejects every extra key, not just "value".
 function isAbsent(value: unknown): value is GovernedActionAbsent {
-  return isRecord(value) && value.outcome === "absent" && !("value" in value);
+  // getOwnPropertyNames + no-symbols, matching unknownKeys above: Object.keys alone misses a
+  // non-enumerable own property. isRecord already rejects a non-default prototype.
+  return (
+    isRecord(value) &&
+    value.outcome === "absent" &&
+    Object.getOwnPropertyNames(value).length === 1 &&
+    Object.getOwnPropertySymbols(value).length === 0
+  );
 }
 
+// KEIKO-0302 follow-on: this checked the INNER grant.value object's own keys but never the outer
+// fact wrapper's, so a well-formed known fact padded with an extra field (e.g. free text riding
+// alongside a valid grant) validated and was returned verbatim. The "grant must not carry a
+// value" message for the absent+value case is preserved exactly (pinned test); any OTHER extra
+// key on either branch is now also rejected via the shared unknownKeys helper.
 function grantRefFactErrors(value: unknown): string[] {
   if (!isRecord(value)) return ["grant must be a tagged fact object"];
-  if (value.outcome === "absent") return "value" in value ? ["grant must not carry a value"] : [];
+  if (value.outcome === "absent") {
+    if ("value" in value) return ["grant must not carry a value"];
+    return unknownKeys(value, ["outcome"], "grant");
+  }
   if (value.outcome !== "known") return ["grant.outcome must be known or absent"];
+  const wrapperExtraKeys = unknownKeys(value, ["outcome", "value"], "grant");
+  if (wrapperExtraKeys.length > 0) return wrapperExtraKeys;
   const grant = value.value;
   if (!isRecord(grant)) return ["grant.value must be an object"];
   const errors = unknownKeys(grant, ["grantId", "grantScope"], "grant.value");
@@ -232,12 +279,16 @@ function grantRefFactErrors(value: unknown): string[] {
   return errors;
 }
 
+// Same fix as grantRefFactErrors above, for the question fact.
 function questionRefFactErrors(value: unknown): string[] {
   if (!isRecord(value)) return ["question must be a tagged fact object"];
   if (value.outcome === "absent") {
-    return "value" in value ? ["question must not carry a value"] : [];
+    if ("value" in value) return ["question must not carry a value"];
+    return unknownKeys(value, ["outcome"], "question");
   }
   if (value.outcome !== "known") return ["question.outcome must be known or absent"];
+  const wrapperExtraKeys = unknownKeys(value, ["outcome", "value"], "question");
+  if (wrapperExtraKeys.length > 0) return wrapperExtraKeys;
   const question = value.value;
   if (!isRecord(question)) return ["question.value must be an object"];
   const errors = unknownKeys(question, ["questionId", "expectedRevision"], "question.value");
@@ -299,9 +350,14 @@ export function validateGovernedActionV1(
   value: unknown,
 ): CodingWorkbenchValidationResult<GovernedActionV1> {
   if (!isRecord(value)) return { ok: false, errors: ["governed action must be an object"] };
-  const errors = Object.keys(value)
+  // getOwnPropertyNames + no-symbols, matching unknownKeys above: Object.keys alone misses a
+  // non-enumerable own property. isRecord already rejects a non-default prototype.
+  const errors = Object.getOwnPropertyNames(value)
     .filter((key) => !GOVERNED_ACTION_KEYS.has(key))
     .map((key) => `governedAction.${key} is not allowed`);
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    errors.push("governedAction must not carry symbol-keyed properties");
+  }
   errors.push(...envelopeErrors(value));
   if (!isOneOf(value.decision, GOVERNED_ACTION_DECISIONS)) errors.push("decision is invalid");
   else errors.push(...governedActionRefErrors(value));
@@ -388,9 +444,16 @@ function executionFactErrors(value: Record<string, unknown>): string[] {
   return errors;
 }
 
+// KEIKO-0302 follow-on: same gap as grantRefFactErrors/questionRefFactErrors above — the "known"
+// branch validated value.value but never rejected an extra key riding alongside it, and the other
+// three outcomes only checked for a stray "value" key, not any other extra key. The
+// `failure must not carry a value for outcome ${outcome}` message is preserved exactly for that
+// one pinned case; every other extra key is now also rejected via unknownKeys.
 function executionFailureFactErrors(value: unknown): string[] {
   if (!isRecord(value)) return ["failure must be a tagged fact object"];
   if (value.outcome === "known") {
+    const wrapperExtraKeys = unknownKeys(value, ["outcome", "value"], "failure");
+    if (wrapperExtraKeys.length > 0) return wrapperExtraKeys;
     return isContentFreeReasonCode(value.value)
       ? []
       : ["failure.value must be a bounded content-free reason code"];
@@ -400,7 +463,8 @@ function executionFailureFactErrors(value: unknown): string[] {
     value.outcome === "unavailable" ||
     value.outcome === "unknown"
   ) {
-    return "value" in value ? [`failure must not carry a value for outcome ${value.outcome}`] : [];
+    if ("value" in value) return [`failure must not carry a value for outcome ${value.outcome}`];
+    return unknownKeys(value, ["outcome"], "failure");
   }
   return ["failure.outcome must be known, absent, unavailable, or unknown"];
 }
@@ -409,9 +473,14 @@ export function validateCodeTaskExecutionV1(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodeTaskExecutionV1> {
   if (!isRecord(value)) return { ok: false, errors: ["code-task execution must be an object"] };
-  const errors = Object.keys(value)
+  // getOwnPropertyNames + no-symbols, matching unknownKeys above: Object.keys alone misses a
+  // non-enumerable own property. isRecord already rejects a non-default prototype.
+  const errors = Object.getOwnPropertyNames(value)
     .filter((key) => !CODE_TASK_EXECUTION_KEYS.has(key))
     .map((key) => `codeTaskExecution.${key} is not allowed`);
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    errors.push("codeTaskExecution must not carry symbol-keyed properties");
+  }
   errors.push(
     ...executionHeaderErrors(value),
     ...executionModeErrors(value),

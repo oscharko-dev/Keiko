@@ -66,11 +66,24 @@ Every control message shares one envelope:
 | `kind`            | `VoiceControlMessageKind`          | Discriminates the payload.                                            |
 
 `validateVoiceControlMessage` validates this envelope and returns every reason it is malformed;
-`isVoiceControlMessage` is the structural guard. The authority-bearing `session.create` payload is
-also exact-key validated by the shared contract: its sequence is `0`, direction is `client-to-host`,
-profile and negotiation mode agree, and `chatContext` may contain only `chatId`. Removed persona,
-memory, grounding, or arbitrary fields fail closed before session allocation. Other per-kind payloads
-remain owned by their transport implementation (#497).
+`isVoiceControlMessage` is the structural guard. Every payload for every catalog kind (KEIKO-0392) is
+then centrally, exact-key validated by the shared contract — not only the envelope and
+`session.create`: each kind accepts only its declared fields plus the envelope (an unrecognized
+property fails closed the same way a wrong-typed one does), and every required field is checked
+against its declared type or enum. The authority-bearing `session.create` payload keeps its stricter,
+additional rules on top of that: its sequence is `0`, direction is `client-to-host`, profile and
+negotiation mode agree, and `chatContext` may contain only `chatId` — removed persona, memory,
+grounding, or arbitrary fields fail closed before session allocation.
+
+The free-text signaling and transcript fields are additionally length-bounded (this contract assumes
+hostile input at the wire boundary): `sdp` <= 256,000 UTF-16 code units (`signal.sdp.offer` /
+`signal.sdp.answer`), `candidate` <= 4096 (`signal.ice.candidate`), its optional `sdpMid` <= 128, and
+`text` <= 8192 (`transcript.partial` / `transcript.committed`). None of these bounds narrows anything
+a downstream route already enforces — `.length` (UTF-16 code units) is always <= the UTF-8 byte length
+a transport route's own byte-based cap checks, and `keiko-server` independently re-validates `sdp`
+more strictly still (SDP prefix and exact audio direction) after this decoder accepts it. A peer
+implemented strictly against this document's declared shapes and bounds is therefore always accepted;
+only a shape or length this document does not declare is newly rejected.
 
 ## 4. Control / signaling message catalog (Deliverable: WS control & signaling event schemas)
 

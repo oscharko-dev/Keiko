@@ -158,4 +158,92 @@ describe("validateRuntimeGovernanceOutcomeV1", () => {
       }).ok,
     ).toBe(false);
   });
+
+  // KEIKO-0211: the check was a length bound only, so the "content-free reason code" rule this
+  // message names was not the rule being enforced — "Denied: /Users/alice/secret" is 26 characters.
+  // The package already owned the lower-kebab predicate; it just was not applied here.
+  it.each([
+    "Failed for user a@b.com",
+    "Denied: /Users/alice/secret",
+    "reason with spaces",
+    "UPPERCASE",
+    "-leading-hyphen",
+    "trailing_underscore",
+  ])("rejects a reasonCode carrying free text or a path (%s)", (reasonCode) => {
+    expect(
+      validateRuntimeGovernanceOutcomeV1({
+        kind: "runtime-governance-outcome",
+        schemaVersion: CODE_TASK_GOVERNANCE_SCHEMA_VERSION,
+        status: "denied",
+        reasonCode,
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("still accepts a genuine lower-kebab reason code", () => {
+    expect(
+      validateRuntimeGovernanceOutcomeV1({
+        kind: "runtime-governance-outcome",
+        schemaVersion: CODE_TASK_GOVERNANCE_SCHEMA_VERSION,
+        status: "denied",
+        reasonCode: "grant-expired",
+      }).ok,
+    ).toBe(true);
+  });
+});
+
+describe("run-control content-free references", () => {
+  // recoveryRef is documented as a content-free handle but was bounded by length alone, so a
+  // filesystem path rode straight through the same boundary.
+  it.each(["/Users/alice/scratch", "C:\\temp\\run", "recovery ref with spaces"])(
+    "rejects a recoveryRef known value of %s",
+    (value) => {
+      expect(
+        validateRunControlSnapshotV1({ ...snapshot(), recoveryRef: { outcome: "known", value } })
+          .ok,
+      ).toBe(false);
+    },
+  );
+
+  it("still accepts a content-free recovery handle", () => {
+    expect(
+      validateRunControlSnapshotV1({
+        ...snapshot(),
+        recoveryRef: { outcome: "known", value: "recovery-7f3a" },
+      }).ok,
+    ).toBe(true);
+  });
+
+  // KEIKO-0302 follow-on: boundedStringFactErrors/questionFactErrors checked `value` but never
+  // the fact object's OWN keys, so a well-formed known fact padded with an extra field (e.g. free
+  // text riding alongside a valid handle) validated and was returned verbatim.
+  it("rejects a recoveryRef fact padded with an extra field", () => {
+    expect(
+      validateRunControlSnapshotV1({
+        ...snapshot(),
+        recoveryRef: { outcome: "known", value: "recovery-7f3a", promptText: "leak me" },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateRunControlSnapshotV1({
+        ...snapshot(),
+        recoveryRef: { outcome: "absent", promptText: "leak me" },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects a pendingQuestion fact padded with an extra field", () => {
+    expect(
+      validateRunControlSnapshotV1({
+        ...snapshot(),
+        pendingQuestion: { outcome: "known", value: "que_1", promptText: "leak me" },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateRunControlSnapshotV1({
+        ...snapshot(),
+        pendingQuestion: { outcome: "absent", promptText: "leak me" },
+      }).ok,
+    ).toBe(false);
+  });
 });

@@ -64,6 +64,20 @@ describe("M7 editor setting registry", () => {
     expect(EDITOR_M7_SETTING_REGISTRY.every((entry) => entry.scopes.length > 0)).toBe(true);
   });
 
+  // Codex-sweep finding (same bug class as command-runner.ts's COMMAND_TASK_RULES, KEIKO-0139):
+  // each entry's `scopes` array was individually frozen at declaration time, but the entry
+  // OBJECT itself was not — only the outer array was, via Object.freeze — so
+  // `EDITOR_M7_SETTING_REGISTRY[0].minimum = -1` (widening a bound parseEditorM7SettingPatch
+  // enforces) succeeded. Modules run in strict mode, so a write to a genuinely frozen object
+  // throws.
+  it("freezes each setting entry itself, not just the registry array holding them", () => {
+    const [first] = EDITOR_M7_SETTING_REGISTRY;
+    expect(first).toBeDefined();
+    expect(() => {
+      (first as { defaultValue: unknown }).defaultValue = "tampered";
+    }).toThrow(TypeError);
+  });
+
   it("accepts only the two governed commit-message policy modes", () => {
     expect(
       parseEditorM7SettingPatch("user", { gitCommitMessagePolicy: "repository-native" }),
@@ -246,6 +260,18 @@ describe("M7 watcher and model-retention contracts", () => {
 });
 
 describe("M7 keybinding, snippet, and AI activation contracts", () => {
+  // Codex-sweep finding: the editorCommand() factory returns a plain, unfrozen object per call
+  // (its own contexts/defaultBindings sub-arrays are individually frozen, but the command object
+  // itself is not) and EDITOR_M7_COMMAND_REGISTRY only froze the outer array — so a command's
+  // own field, e.g. dispatchOwner, was writable after construction.
+  it("freezes each command entry itself, not just the registry array holding them", () => {
+    const [first] = EDITOR_M7_COMMAND_REGISTRY;
+    expect(first).toBeDefined();
+    expect(() => {
+      (first as { rebindable: boolean }).rebindable = !first?.rebindable;
+    }).toThrow(TypeError);
+  });
+
   it("keeps a closed command registry and rejects reserved, malformed, unknown, and colliding bindings", () => {
     expect(EDITOR_M7_COMMAND_REGISTRY.map((entry) => entry.id)).toContain("editor.save");
     expect(

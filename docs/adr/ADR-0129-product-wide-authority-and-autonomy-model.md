@@ -69,10 +69,23 @@ note; they are never declared surface-locally.
 ### D2a — The agent repository facade is an admission layer, not new Git authority
 
 The typed agent repository facade applies this product-wide ceiling before it delegates an
-operation: reads and previews remain available in every mode, workspace-contained executes require
-at least `supervised-coding`, and remote delivery executes require `autonomous-delivery`. A missing
-or invalid ceiling fails closed to `governed-assist`. Admission runs before idempotency reservation
-or delegation, so a denied request cannot mutate the repository or occupy a replay slot.
+operation: reads and previews remain available in every mode; workspace-contained executes require
+at least `supervised-coding`; remote delivery executes (fetch, pull, push, pull request, merge) are
+approval-required at every risk tier in every mode under ADR-0138 D2's total matrix, including
+`autonomous-delivery` — reaching that mode alone never admits a delivery execute through this
+facade, which has no approval channel of its own, so `approval-required` reads as inadmissible here
+regardless of mode. A missing or invalid ceiling fails closed to `governed-assist`. Admission runs
+before idempotency reservation or delegation, so a denied request cannot mutate the repository or
+occupy a replay slot.
+
+**Correction (KEIKO-0227, 2026-08-15).** This paragraph previously read "remote delivery executes
+require `autonomous-delivery`," describing an independently-maintained threshold that admitted
+delivery outright once that mode was reached, with no approval channel — consistent with neither
+ADR-0138 D2's matrix (delivery is approval-required at every mode, including autonomous-delivery)
+nor D4 below (delivery remains a separately governed action; ADR-0087 requires an explicit,
+approval-gated merge). The facade's admission now derives from the same shared
+`CODING_WORKBENCH_MODE_POLICIES` table D4 and ADR-0087 already govern, rather than an independently
+maintained one; the text above reflects that convergence rather than the threshold it replaced.
 
 The facade grants no shell, provider, credential, or Git execution authority of its own. An
 admitted request still traverses the existing Git read or governed-delivery route and remains

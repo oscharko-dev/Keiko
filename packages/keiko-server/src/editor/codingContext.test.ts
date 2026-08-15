@@ -291,6 +291,17 @@ describe("assembleCodingContext", () => {
     const connected = pack.excerpts.find((e) => e.citation.sourceKind === "connected-context");
 
     expect(connected).toBeDefined();
+    // ADR-0152 D6 correction (post-KEIKO-0176): connected-context's CODING tier must stay
+    // byte-identical to what shipped in v0.3.7 (`git merge-base --is-ancestor` against the
+    // introducing commit confirms `first-party-workspace` is the released value; the
+    // `external-connected` reclassification is unreleased, not yet on dev, and lives only on this
+    // PR). KEIKO-0176's underlying concern — an evidence manifest hiding externally-authored
+    // content behind the first-party tier — is real and stays fixed for the NEUTRAL retrieval
+    // surface (retrieval-context.test.ts pins `tierForRetrievalContextSource("connected-context")
+    // === "external-connected"`), which has no released wire to break. Promoting the improved
+    // classification into the CODING wire is D6's own "separate schema decision" (a version bump),
+    // not something a shared-table alias may do silently — see the comment on
+    // CODING_CONTEXT_SOURCE_TIER_BY_KIND in retrieval-context.ts.
     expect(connected?.citation.sourceTier).toBe("first-party-workspace");
     expect(connected?.citation.citationRef).toBe("untrusted-source-control-issue-42");
     expect(connected?.text).toContain(CONNECTED_ISSUE_TITLE);

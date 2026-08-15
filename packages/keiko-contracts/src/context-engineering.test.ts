@@ -383,6 +383,27 @@ describe("countContextTokens", () => {
     expect(countContextTokens(text, CALIBRATED_ACCOUNTING)).toBeGreaterThan(fallback);
   });
 
+  // KEIKO-0305: `??` does not substitute for 0, so `scaleMilli: 0` survived and the whole expression
+  // collapsed through Math.max(0, …) to zero — every text reported as free under the contract that
+  // calls itself "the single canonical token currency". A bad calibration must degrade to the
+  // conservative uncalibrated estimate, never to an under-count.
+  it.each([
+    ["zero scale", { scaleMilli: 0 }],
+    ["negative scale", { scaleMilli: -5 }],
+    ["fractional scale", { scaleMilli: 1.5 }],
+    ["large negative offset", { offsetTokens: -1_000_000 }],
+    ["negative offset", { offsetTokens: -1 }],
+    ["fractional offset", { offsetTokens: 0.5 }],
+  ])("falls back to the uncalibrated estimate on a %s", (_label, override) => {
+    const text = "some non-empty text";
+    const counted = countContextTokens(text, {
+      source: "calibrated",
+      counterId: "x",
+      ...override,
+    });
+    expect(counted).toBeGreaterThanOrEqual(estimateTokens(text));
+  });
+
   it("sums calibrated segment counts", () => {
     const segments = ["chat segment", "memory segment", "document segment"];
     const expected = segments.reduce(

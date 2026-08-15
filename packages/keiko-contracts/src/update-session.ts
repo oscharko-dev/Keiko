@@ -385,7 +385,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function validTargetVersion(value: unknown): value is string {
+// Exported: update-remediation.ts carried a byte-identical copy of this predicate and both
+// constants. Two copies of a version-shape rule drift silently — each side keeps validating, just
+// against a different definition of "a valid target version". update-session.ts is the leaf of the
+// two, so it owns the rule.
+export function validTargetVersion(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.length > 0 &&

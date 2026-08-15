@@ -93,6 +93,21 @@ describe("isSafeManualPathPrefix", () => {
     expect(isSafeManualPathPrefix("/docs@evil")).toBe(false);
     expect(isSafeManualPathPrefix("/docs\0")).toBe(false);
   });
+
+  // KEIKO-0316-class authority escape: `//host` and `/\host` are protocol-relative references.
+  // `new URL("//attacker.example/x", "https://intranet.local").href` resolves to
+  // `https://attacker.example/x`, so a prefix the contract certifies as same-origin would name a
+  // different authority. A backslash anywhere is rejected too — Windows-style separators are not
+  // part of a URL path and browsers normalise `\` to `/`.
+  it("rejects protocol-relative and backslash prefixes that can name another authority", () => {
+    expect(isSafeManualPathPrefix("//attacker.example/x")).toBe(false);
+    expect(isSafeManualPathPrefix("//attacker.example")).toBe(false);
+    expect(isSafeManualPathPrefix("/\\attacker.example")).toBe(false);
+    expect(isSafeManualPathPrefix("/a\\b")).toBe(false);
+    expect(isSafeManualPathPrefix("/")).toBe(true);
+    expect(isSafeManualPathPrefix("/manual")).toBe(true);
+    expect(isSafeManualPathPrefix("/manual/en/")).toBe(true);
+  });
 });
 
 describe("validateHtmlManualCrawlScope", () => {

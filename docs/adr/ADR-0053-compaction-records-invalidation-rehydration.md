@@ -96,10 +96,14 @@ monster), all in `context-engineering.ts` or its validation companion, with a si
 // ─── Provenance reference (the atomic source pointer) ─────── [PR2, additive]
 // A stable, content-addressable pointer to a single authoritative source. No raw text,
 // no absolute paths — only stable IDs plus an optional relative workspace path and line
-// range for repo-file items. The contentHash field is the output of fileContentHash
-// (keiko-workspace/src/stableId.ts) at the time compaction ran; a hash mismatch
-// between compaction time and rehydration time means the source has changed and the
-// compacted summary MAY be stale.
+// range for repo-file items. The contentHash field is the output of hashExcerptContent
+// (keiko-workspace/src/stableId.ts), hashing the EXCERPT the ref points at — not the whole
+// file — at the time compaction ran; a hash mismatch between compaction time and
+// rehydration time means that excerpt has changed and the compacted summary MAY be stale.
+// CORRECTED (post-PR2-W1): the live producer (compaction-helpers.ts's enrichRef) uses
+// hashExcerptContent so invalidation fires on a change to the referenced range rather than
+// anywhere in the file; this section originally named fileContentHash (the coarser,
+// whole-file hash that ContextInvalidationKey.contentHash below still correctly uses).
 export type ContextProvenanceRefKind =
   | "repo-file"       // rehydrate via readExcerpt; scopePath + lineRange required
   | "tool-result"     // raw tool call output; rehydrate from tool-result id only
@@ -115,8 +119,8 @@ export interface ContextProvenanceRef {
   // Closed line range [startLine, endLine] (1-indexed, inclusive). Present only when kind ===
   // "repo-file" AND a line range was recorded. Prefer line ranges over whole-file rehydration.
   readonly lineRange?: { readonly startLine: number; readonly endLine: number } | undefined;
-  // SHA-256 hex of the file content at compaction time. Present only when kind === "repo-file"
-  // and fileContentHash ran successfully. A mismatch at rehydration time signals invalidation.
+  // SHA-256 hex of the EXCERPT content at compaction time. Present only when kind === "repo-file"
+  // and hashExcerptContent ran successfully. A mismatch at rehydration time signals invalidation.
   readonly contentHash?: string | undefined;
   // Stable evidence atom id (evidenceAtomStableId output). Present when kind === "evidence-atom".
   readonly evidenceAtomId?: string | undefined;
@@ -262,7 +266,8 @@ export interface ContextRehydrationHandle {
   // Deny-checked by the rehydration caller before passing to readExcerpt.
   readonly scopePath?: string | undefined;
   readonly lineRange?: { readonly startLine: number; readonly endLine: number } | undefined;
-  // Content hash recorded at compaction time (output of fileContentHash).
+  // Content hash recorded at compaction time (output of hashExcerptContent — the EXCERPT, not
+  // the whole file; see the PR2-W1 implementation note above D2, which this now matches).
   readonly contentHash?: string | undefined;
   // For kind === "evidence-atom": the stable atom id.
   readonly evidenceAtomId?: string | undefined;

@@ -4,6 +4,7 @@
 // instead of throwing or preserving untrusted fields.
 
 import type { DebugActivationSummary } from "./debug-activation.js";
+import { deepFreeze } from "./deep-freeze.js";
 import { GIT_COMMIT_MESSAGE_POLICY_MODES } from "./git-commit-policy.js";
 import type { GitCommitMessagePolicyMode } from "./git-commit-policy.js";
 
@@ -207,7 +208,11 @@ const ENUM_VALUES: Readonly<
   gitCommitMessagePolicy: GIT_COMMIT_MESSAGE_POLICY_MODES,
 });
 
-export const EDITOR_M7_SETTING_REGISTRY: readonly EditorM7SettingDefinition[] = Object.freeze([
+// deepFreeze, not Object.freeze: each entry's own `scopes` array was individually frozen at
+// declaration time, but the entry OBJECT itself was not, so a bound (e.g. `minimum`/`maximum`)
+// was still writable after construction — the same bug class command-runner.ts's
+// COMMAND_TASK_RULES already documents and was fixed for (KEIKO-0139).
+export const EDITOR_M7_SETTING_REGISTRY: readonly EditorM7SettingDefinition[] = deepFreeze([
   {
     id: "fontSize",
     type: "integer",
@@ -1049,7 +1054,11 @@ function editorCommand(
   };
 }
 
-export const EDITOR_M7_COMMAND_REGISTRY: readonly EditorM7CommandDefinition[] = Object.freeze([
+// deepFreeze, not Object.freeze: editorCommand() returns a plain, unfrozen object per call (its
+// own contexts/defaultBindings sub-arrays are individually frozen, the returned object itself is
+// not), and the outer Object.freeze only protected the array — so a command's own field (e.g.
+// `rebindable`, `dispatchOwner`) was still writable after construction.
+export const EDITOR_M7_COMMAND_REGISTRY: readonly EditorM7CommandDefinition[] = deepFreeze([
   editorCommand("undo", "command.undo", "global", ["global"], ["CtrlOrMeta+Z"], true),
   editorCommand("redo", "command.redo", "global", ["global"], ["CtrlOrMeta+Shift+Z"], true),
   editorCommand("focus-status", "command.focusStatus", "global", ["global"], ["Alt+S"], true),

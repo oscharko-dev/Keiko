@@ -8,6 +8,7 @@
 // Discovery and execution live in keiko-server (composing keiko-tools `runCommand`), so the browser
 // never gains process, shell, or filesystem authority.
 
+import { deepFreeze } from "./deep-freeze.js";
 import type { CommandRule } from "./tools.js";
 
 export const COMMAND_RUNNER_SCHEMA_VERSION = "1" as const;
@@ -126,7 +127,10 @@ export interface CommandRunnerEvent {
 // the test/build/run surface cannot widen either: only the package-manager `run`/`test` subcommands
 // back a task, and shell-spawning / scope-shifting flags are denied even though discovery only ever
 // emits a frozen `["run", <script>]` argv (defense in depth).
-export const COMMAND_TASK_RULES: readonly CommandRule[] = Object.freeze([
+// deepFreeze: the array and the inner allowedSubcommands/denyFlags arrays were frozen individually,
+// but the RULE OBJECTS were not — `COMMAND_TASK_RULES[0].executable = "bash"` and
+// `COMMAND_TASK_RULES[0].denyFlags = []` both succeeded against the deny-by-default allowlist.
+export const COMMAND_TASK_RULES: readonly CommandRule[] = deepFreeze([
   {
     executable: "npm",
     allowedSubcommands: Object.freeze(["run", "test"]),
@@ -196,18 +200,78 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
 // are the precise per-field limits.
 export const MAX_TASK_ID_LENGTH = 256;
 export const MAX_REQUEST_ID_LENGTH = 128;
-const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
+// projectId is a real filesystem path (keiko-server's projectFor() matches it against
+// project.path), so it takes a length bound and a control-character rejection rather than a token
+// pattern — a `/` and spaces are legitimate in it.
+export const MAX_PROJECT_ID_LENGTH = 4_096;
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]+$/u;
+// Mirrors keiko-server's SAFE_SCRIPT_NAME: a taskId is always compared against a discovered script
+// id of exactly this shape, so anything else can only be a malformed or hostile value.
+const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u;
+// C0 controls plus DEL. A newline or ESC in an identifier that is later interpolated into a log
+// line or an SSE `data:` field is a log-injection / frame-splitting primitive.
+// eslint-disable-next-line no-control-regex -- rejecting C0/DEL in an identifier is the point
+const CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/u;
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+// Closed key sets. Every peer validator in this territory enforces one — an unexpected field on a
+// documented content-free contract must never ride through — and these four did not, so a payload
+// carrying free text alongside the validated fields was accepted and passed on as `value`.
+function unknownKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  path: string,
+): readonly string[] {
+  return Object.keys(value)
+    .filter((key) => !allowed.includes(key))
+    .map((key) => `${path}.${key} is not allowed`);
+}
+
+const RUN_REQUEST_KEYS = ["projectId", "taskId", "timeoutMs", "requestId"] as const;
+const TASK_KEYS = [
+  "id",
+  "kind",
+  "label",
+  "executable",
+  "args",
+  "source",
+  "trustState",
+  "trustReason",
+] as const;
+const CATALOG_KEYS = ["schemaVersion", "projectId", "tasks"] as const;
+const RUN_RESULT_KEYS = [
+  "schemaVersion",
+  "runId",
+  "taskId",
+  "kind",
+  "exitCode",
+  "durationMs",
+  "truncated",
+  "timedOut",
+  "failureReason",
+  "stdout",
+  "stderr",
+] as const;
+
 function isBoundedNonEmptyString(value: unknown, maxLength: number): value is string {
   return isNonEmptyString(value) && value.length <= maxLength;
 }
 
-function isPositiveFinite(value: unknown): boolean {
-  return typeof value === "number" && Number.isFinite(value) && value > 0;
+function isBoundedControlFreeString(value: unknown, maxLength: number): value is string {
+  return isBoundedNonEmptyString(value, maxLength) && !CONTROL_CHAR_PATTERN.test(value);
+}
+
+function isValidTaskId(value: unknown): value is string {
+  return isBoundedNonEmptyString(value, MAX_TASK_ID_LENGTH) && TASK_ID_PATTERN.test(value);
+}
+
+// timeoutMs feeds a real timer budget; a fractional or 1e300 value is malformed, not a large
+// timeout, so the parse boundary requires a safe integer rather than any positive finite number.
+function isPositiveSafeInteger(value: unknown): boolean {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
 function isValidRequestId(value: unknown): value is string {
@@ -220,7 +284,7 @@ function isValidRequestId(value: unknown): value is string {
 }
 
 function collectOptionalRequestErrors(input: Record<string, unknown>, errors: string[]): void {
-  if (input.timeoutMs !== undefined && !isPositiveFinite(input.timeoutMs)) {
+  if (input.timeoutMs !== undefined && !isPositiveSafeInteger(input.timeoutMs)) {
     errors.push("timeoutMs must be a positive finite number");
   }
   if (input.requestId !== undefined && !isValidRequestId(input.requestId)) {
@@ -235,10 +299,11 @@ export function parseCommandTaskRunRequest(input: unknown): CommandTaskRunReques
   if (!isRecord(input)) {
     return { ok: false, errors: ["request must be an object"] };
   }
-  if (!isNonEmptyString(input.projectId)) {
+  errors.push(...unknownKeys(input, RUN_REQUEST_KEYS, "request"));
+  if (!isBoundedControlFreeString(input.projectId, MAX_PROJECT_ID_LENGTH)) {
     errors.push("projectId must be a non-empty string");
   }
-  if (!isBoundedNonEmptyString(input.taskId, MAX_TASK_ID_LENGTH)) {
+  if (!isValidTaskId(input.taskId)) {
     errors.push(
       `taskId must be a non-empty string of up to ${String(MAX_TASK_ID_LENGTH)} characters`,
     );
@@ -267,6 +332,7 @@ function validateTask(value: unknown, index: number, errors: string[]): void {
     errors.push(`${path} must be an object`);
     return;
   }
+  errors.push(...unknownKeys(value, TASK_KEYS, path));
   if (!isNonEmptyString(value.id)) errors.push(`${path}.id must be a non-empty string`);
   if (!isNonEmptyString(value.label)) errors.push(`${path}.label must be a non-empty string`);
   if (!isNonEmptyString(value.executable)) {
@@ -288,6 +354,7 @@ export function validateCommandTaskCatalog(value: unknown): CommandTaskCatalogPa
   if (!isRecord(value)) {
     return { ok: false, errors: ["catalog must be an object"] };
   }
+  errors.push(...unknownKeys(value, CATALOG_KEYS, "catalog"));
   if (value.schemaVersion !== COMMAND_RUNNER_SCHEMA_VERSION) {
     errors.push("schemaVersion is invalid");
   }
@@ -345,6 +412,7 @@ export function validateCommandTaskRunResult(value: unknown): CommandTaskRunResu
   if (!isRecord(value)) {
     return { ok: false, errors: ["result must be an object"] };
   }
+  errors.push(...unknownKeys(value, RUN_RESULT_KEYS, "result"));
   validateResultScalars(value, errors);
   validateResultRuntime(value, errors);
   if (errors.length > 0) {

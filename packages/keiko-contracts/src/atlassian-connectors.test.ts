@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
   ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK,
   ATLASSIAN_CONNECTOR_ACTION_CLASS,
   ATLASSIAN_CONNECTOR_ACTION_PROVIDER,
@@ -29,12 +30,14 @@ import {
   isAtlassianConnectorAuthRef,
   isAtlassianConnectorAuthScheme,
   isAtlassianConnectorProvider,
+  isAtlassianContentPreviewUnpresentable,
   isAtlassianLiveSearchTemplateId,
   isAtlassianSyncFailureReason,
   isAtlassianSyncJobStatus,
   isAtlassianSyncTerminalStatus,
   isJiraIssueCitationMetadata,
   isSafeAtlassianConnectorBaseUrl,
+  isSafeAtlassianContentPreview,
   isSafeAtlassianDisplayName,
   isSafeAtlassianIdentifier,
   isSafeConfluenceSpaceKey,
@@ -52,8 +55,10 @@ import {
   type AtlassianConnectorActionType,
   type AtlassianConnectorActionDisposition,
   type AtlassianConnectorActivityReasonCode,
+  type AtlassianConnectorPendingApproval,
   type AtlassianConnectorProvider,
 } from "./atlassian-connectors.js";
+import { validateAtlassianConnectorPendingApproval } from "./atlassian-connectors-validation.js";
 import {
   CODING_WORKBENCH_CONNECTOR_SCOPES,
   CODING_WORKBENCH_MODES,
@@ -800,5 +805,165 @@ describe("isSafeJiraLiveIssueSummary (Issue #2248)", () => {
     expect(isSafeJiraLiveIssueSummary("bell" + "\u0007" + "ring")).toBe(false);
     expect(isSafeJiraLiveIssueSummary(42)).toBe(false);
     expect(isSafeJiraLiveIssueSummary(null)).toBe(false);
+  });
+});
+
+describe("isAtlassianContentPreviewUnpresentable (KEIKO-0186 P1)", () => {
+  it("is true for an empty string", () => {
+    expect(isAtlassianContentPreviewUnpresentable("")).toBe(true);
+  });
+
+  it("is true for a string made entirely of Unicode combining marks (no base character)", () => {
+    // COMBINING ACUTE ACCENT (U+0301), built at runtime for the same reason as the bidi/zero-width
+    // cases below: the source file never carries the code point directly.
+    expect(isAtlassianContentPreviewUnpresentable(String.fromCharCode(0x301).repeat(5))).toBe(true);
+  });
+
+  it("is false for a base character followed by a combining mark (a real, renderable character)", () => {
+    expect(isAtlassianContentPreviewUnpresentable("e" + String.fromCharCode(0x301))).toBe(false);
+  });
+
+  it("is false for ordinary text", () => {
+    expect(isAtlassianContentPreviewUnpresentable("Fix the flaky gate")).toBe(false);
+    expect(isAtlassianContentPreviewUnpresentable("x")).toBe(false);
+  });
+});
+
+describe("isSafeAtlassianContentPreview (KEIKO-0186)", () => {
+  it("accepts bounded, multi-line real text up to the cap", () => {
+    expect(isSafeAtlassianContentPreview("Fix the flaky gate")).toBe(true);
+    expect(isSafeAtlassianContentPreview("Fix the flaky gate\n\nFails on retries")).toBe(true);
+    expect(
+      isSafeAtlassianContentPreview("x".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS)),
+    ).toBe(true);
+    // TAB/LF/CR are legitimate formatting, not spoofing (a page body is not single-line).
+    expect(
+      isSafeAtlassianContentPreview(
+        "line one" +
+          String.fromCharCode(10) +
+          "line two" +
+          String.fromCharCode(9) +
+          "tabbed" +
+          String.fromCharCode(13, 10) +
+          "line three",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects empty, overlong, control-character, bidi/zero-width, combining-marks-only, and non-string values", () => {
+    expect(isSafeAtlassianContentPreview("")).toBe(false);
+    expect(
+      isSafeAtlassianContentPreview("x".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS + 1)),
+    ).toBe(false);
+    expect(isSafeAtlassianContentPreview("bell" + "\u0007" + "ring")).toBe(false);
+    // RIGHT-TO-LEFT OVERRIDE (U+202E) and ZERO WIDTH SPACE (U+200B), built at runtime so the
+    // source file never carries an invisible/spoofing byte directly (only this ASCII call).
+    expect(isSafeAtlassianContentPreview("visible" + String.fromCharCode(0x202e) + "evil")).toBe(
+      false,
+    );
+    expect(
+      isSafeAtlassianContentPreview("visible" + String.fromCharCode(0x200b) + "zerowidth"),
+    ).toBe(false);
+    // KEIKO-0186 P1: non-empty but entirely Unicode combining marks -- no base character, exactly
+    // as uninformative to a reviewer as empty (see isAtlassianContentPreviewUnpresentable above).
+    expect(isSafeAtlassianContentPreview(String.fromCharCode(0x301).repeat(5))).toBe(false);
+    expect(isSafeAtlassianContentPreview(42)).toBe(false);
+    expect(isSafeAtlassianContentPreview(null)).toBe(false);
+    expect(isSafeAtlassianContentPreview(undefined)).toBe(false);
+  });
+});
+
+describe("validateAtlassianConnectorPendingApproval — contentPreview wiring (KEIKO-0186)", () => {
+  const base: AtlassianConnectorPendingApproval = {
+    schemaVersion: "1",
+    approvalId: "ap1",
+    connectorId: "cred-abc",
+    provider: "jira",
+    actionType: "create-issue",
+    actionClass: "connector-write",
+    requiredScope: "issue-tracker.write",
+    risk: "high",
+    reviewReason: "deterministic-risk-approval-required",
+    correlationId: "corr1",
+    requestedAt: 0,
+    expiresAt: 1000,
+  };
+
+  it("accepts an approval with no contentPreview (transition-issue and friends)", () => {
+    expect(validateAtlassianConnectorPendingApproval(base)).toMatchObject({ ok: true });
+  });
+
+  it("accepts an approval whose contentPreview is a bounded, sanitized string", () => {
+    expect(
+      validateAtlassianConnectorPendingApproval({
+        ...base,
+        contentPreview: "Fix the flaky gate\n\nFails on retries",
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
+  it("rejects an approval whose contentPreview exceeds the bound", () => {
+    expect(
+      validateAtlassianConnectorPendingApproval({
+        ...base,
+        contentPreview: "x".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS + 1),
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: [
+        "approval.contentPreview must be a bounded, control-character-free preview when set",
+      ],
+    });
+  });
+
+  it("rejects an approval whose contentPreview carries a raw control character", () => {
+    expect(
+      validateAtlassianConnectorPendingApproval({
+        ...base,
+        contentPreview: "bell" + String.fromCharCode(7) + "ring",
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: [
+        "approval.contentPreview must be a bounded, control-character-free preview when set",
+      ],
+    });
+  });
+
+  // KEIKO-0186 P1 (Codex): the action had text, but nothing presentable survived
+  // sanitization/bounding. contentPreviewUnavailable is the explicit signal for that case --
+  // never an empty or absent-without-explanation contentPreview.
+  it("accepts an approval with contentPreviewUnavailable: true instead of a contentPreview", () => {
+    expect(
+      validateAtlassianConnectorPendingApproval({
+        ...base,
+        contentPreviewUnavailable: true,
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
+  it("rejects an approval whose contentPreviewUnavailable is not literally true", () => {
+    expect(
+      validateAtlassianConnectorPendingApproval({
+        ...base,
+        contentPreviewUnavailable: false,
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: ["approval.contentPreviewUnavailable must be true when set"],
+    });
+  });
+
+  it("rejects an approval carrying both contentPreview and contentPreviewUnavailable (mutually exclusive)", () => {
+    expect(
+      validateAtlassianConnectorPendingApproval({
+        ...base,
+        contentPreview: "Fix the flaky gate",
+        contentPreviewUnavailable: true,
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: ["approval.contentPreview and approval.contentPreviewUnavailable are exclusive"],
+    });
   });
 });

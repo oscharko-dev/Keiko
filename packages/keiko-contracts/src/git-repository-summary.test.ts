@@ -154,6 +154,86 @@ describe("validateGitRepositorySummary", () => {
   });
 });
 
+// KEIKO-0310: reason, message, repositoryRoot, branch, upstream, and lastSync are all declared on
+// GitRepositorySummary but none were validated when present.
+describe("validateGitRepositorySummary optional fields (KEIKO-0310)", () => {
+  it("accepts every declared unavailable reason with a bounded message", () => {
+    for (const reason of ["not-a-repository", "unsafe-repository", "git-error"] as const) {
+      const input = validSummary();
+      delete input.upstream;
+      delete input.lastSync;
+      expect(
+        validateGitRepositorySummary({
+          ...input,
+          available: false,
+          reason,
+          message: "Git summary is unavailable for this folder.",
+        }),
+      ).toEqual({ ok: true });
+    }
+  });
+
+  it("rejects a reason outside the closed union", () => {
+    const result = validateGitRepositorySummary({
+      ...validSummary(),
+      reason: "not-a-known-reason",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reasons).toContain("reason invalid");
+  });
+
+  it("rejects a non-string / over-cap message", () => {
+    expect(validateGitRepositorySummary({ ...validSummary(), message: 7 }).ok).toBe(false);
+    expect(validateGitRepositorySummary({ ...validSummary(), message: "x".repeat(1_025) }).ok).toBe(
+      false,
+    );
+  });
+
+  it("rejects a non-string repositoryRoot and a non-string branch", () => {
+    expect(validateGitRepositorySummary({ ...validSummary(), repositoryRoot: 7 }).ok).toBe(false);
+    expect(validateGitRepositorySummary({ ...validSummary(), branch: 7 }).ok).toBe(false);
+  });
+
+  it("rejects a malformed upstream", () => {
+    expect(validateGitRepositorySummary({ ...validSummary(), upstream: { ref: 7 } }).ok).toBe(
+      false,
+    );
+    expect(
+      validateGitRepositorySummary({
+        ...validSummary(),
+        // remote without branch: the producer's parseUpstreamRef always sets both together.
+        upstream: { ref: "origin/main", remote: "origin" },
+      }).ok,
+    ).toBe(false);
+    expect(validateGitRepositorySummary({ ...validSummary(), upstream: "origin/main" }).ok).toBe(
+      false,
+    );
+  });
+
+  it("accepts an upstream with only ref (no remote/branch split available)", () => {
+    expect(
+      validateGitRepositorySummary({
+        ...validSummary(),
+        upstream: { ref: "origin/main" },
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  it("rejects a malformed lastSync", () => {
+    expect(
+      validateGitRepositorySummary({ ...validSummary(), lastSync: { lastFetchAtMs: -1 } }).ok,
+    ).toBe(false);
+    expect(
+      validateGitRepositorySummary({ ...validSummary(), lastSync: { lastFetchAtMs: "x" } }).ok,
+    ).toBe(false);
+    expect(validateGitRepositorySummary({ ...validSummary(), lastSync: "never" }).ok).toBe(false);
+  });
+
+  it("accepts a lastSync with no lastFetchAtMs", () => {
+    expect(validateGitRepositorySummary({ ...validSummary(), lastSync: {} })).toEqual({ ok: true });
+  });
+});
+
 describe("validateGitRemotesResponse", () => {
   it("accepts a valid remotes response", () => {
     expect(validateGitRemotesResponse(validRemotes())).toEqual({ ok: true });
@@ -215,5 +295,30 @@ describe("validateGitRemotesResponse", () => {
     const result = validateGitRemotesResponse({ ...validRemotes(), remotes: ["origin"] });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reasons).toContain("remotes[0] must be an object");
+  });
+
+  it("accepts every declared unavailable reason (KEIKO-0310)", () => {
+    for (const reason of ["not-a-repository", "unsafe-repository", "git-error"] as const) {
+      expect(
+        validateGitRemotesResponse({ ...validRemotes(), available: false, remotes: [], reason }),
+      ).toEqual({ ok: true });
+    }
+  });
+
+  it("rejects a reason outside the closed union (KEIKO-0310)", () => {
+    const result = validateGitRemotesResponse({
+      ...validRemotes(),
+      reason: "not-a-known-reason",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reasons).toContain("reason invalid");
+  });
+
+  it("rejects a non-string repositoryRoot (KEIKO-0310)", () => {
+    const result = validateGitRemotesResponse({ ...validRemotes(), repositoryRoot: 7 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reasons).toContain("repositoryRoot must be a string when present");
+    }
   });
 });

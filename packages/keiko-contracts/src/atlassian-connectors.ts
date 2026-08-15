@@ -833,11 +833,56 @@ export type AtlassianConnectorActionExecutionResult =
   AtlassianConnectorActionExecutionSucceeded | AtlassianConnectorActionExecutionFailed;
 
 // ─── Pending-approval projection (Issue #2244 → rendered by the #2245 UI) ─────
+
+// Bound for the human-reviewable content preview a pending write-action approval carries
+// (KEIKO-0186): long enough that a reviewer can tell what will actually be written, short enough
+// that the approval UI itself cannot become a display/exfiltration channel for an oversized or
+// hostile payload.
+export const ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS = 280;
+
+// KEIKO-0186 P1 (Codex): a string made ENTIRELY of Unicode combining marks (general category M*)
+// carries no base character to attach to — rendered alone it is as informative to a reviewer as
+// an empty string, even though `.length > 0`. A payload composed only of accepted characters that
+// still reduce to this (or to genuine emptiness) after stripUnsafeFormatChars must not reach the
+// wire as `contentPreview`; see `contentPreviewFor` in keiko-server's actionApprovals.ts, which
+// checks this same condition on the producing side so the two can never disagree.
+const COMBINING_MARKS_ONLY_PATTERN = /^\p{M}+$/u;
+
+export function isAtlassianContentPreviewUnpresentable(value: string): boolean {
+  return value.length === 0 || COMBINING_MARKS_ONLY_PATTERN.test(value);
+}
+
+// A content preview is provider CONTENT in the ADR-0128 D6 sense (like a synced title or a live
+// issue summary) — real text, but bounded and free of bidi/zero-width/control-character display
+// spoofing. Unlike a Jira summary it is not single-line by construction (it may combine a
+// title/summary with a description/body), so — like every other untrusted display surface in
+// this codebase — TAB/LF/CR survive stripUnsafeFormatChars while every other unsafe code point
+// does not; this predicate accepts exactly what that stripper already leaves untouched. It also
+// rejects an all-combining-mark string for the same reason the producer never emits one (see
+// `isAtlassianContentPreviewUnpresentable` above) — the producer and this predicate must agree.
+export function isSafeAtlassianContentPreview(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS &&
+    stripUnsafeFormatChars(value) === value &&
+    !isAtlassianContentPreviewUnpresentable(value)
+  );
+}
+
 // The redacted pending-approval state a `review-required` disposition surfaces: identifiers, the
-// D4 action row (class, required scope, risk), the single review reason, and the TTL window. The
-// submitted action input (summaries, descriptions, comment text, page bodies) NEVER appears
-// here — it is held only inside the server-side registry entry that the approve endpoint
-// consumes, and credentials are never part of that entry either (ADR-0128 D2/D6).
+// D4 action row (class, required scope, risk), the single review reason, and the TTL window.
+//
+// KEIKO-0186: `contentPreview` is the one deliberate, narrow exception to "no submitted content
+// crosses the wire" — and it is a SHORT-LIVED, single-use interactive review surface, not the
+// permanent audit trail. ADR-0128 D6's content-free rule was written for records that are
+// retained and exported; a pending approval exists so a human can inspect what will be written
+// BEFORE approving it, which is impossible if the content is redacted here too. The full,
+// untruncated action input (summaries, descriptions, comment text, page bodies) still never
+// appears here — only a bounded preview, capped by `ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS`
+// — and it is held in full only inside the server-side registry entry that the approve endpoint
+// consumes. `AtlassianConnectorActivityRecord` (the permanent record) stays exactly as
+// content-free as before; this field must never be added there. Credentials are never part of
+// either projection (ADR-0128 D2).
 export interface AtlassianConnectorPendingApproval {
   readonly schemaVersion: typeof ATLASSIAN_CONNECTOR_SCHEMA_VERSION;
   readonly approvalId: string;
@@ -853,6 +898,23 @@ export interface AtlassianConnectorPendingApproval {
   readonly correlationId: string;
   readonly requestedAt: number;
   readonly expiresAt: number;
+  // Bounded, sanitized preview of the content the action would write (summary/description,
+  // comment text, or title/body — see contentPreviewFor in keiko-server's actionApprovals.ts).
+  // Absent for actions with nothing to preview (transition-issue; update-issue-fields touching
+  // only non-text fields) and for every non-write action type (sync/live-search) — see
+  // `contentPreviewUnavailable` below for the THIRD case, which this field must stay absent for
+  // too. Mutually exclusive with `contentPreviewUnavailable`: never both present.
+  readonly contentPreview?: string | undefined;
+  // KEIKO-0186 P1 (Codex): true exactly when the action HAD a text field to preview but its
+  // entire visible content sanitized away (an all-bidi/all-zero-width payload, or one that
+  // reduces to nothing but floating Unicode combining marks) — see
+  // `isAtlassianContentPreviewUnpresentable`. Emitting an EMPTY `contentPreview` in this case
+  // would show a reviewer what looks like a contentless action approved in good faith while
+  // invisible content is actually written; this field lets the UI say plainly that the content
+  // could not be safely previewed instead of silently showing nothing (indistinguishable from an
+  // action with no text field at all) or silently showing an empty value. Never present alongside
+  // `contentPreview`, and never present when the action has no text field to begin with.
+  readonly contentPreviewUnavailable?: true | undefined;
 }
 
 // ─── Jira issue citation metadata (#2243; #2248 presents the same field list) ─

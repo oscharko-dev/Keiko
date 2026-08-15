@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +10,10 @@ import type {
   GitRepositoryAgentOperationRequest,
   GitRepositoryAgentOperationResponse,
 } from "@oscharko-dev/keiko-contracts";
-import { gitRepositoryAgentMinimumMode } from "@oscharko-dev/keiko-contracts";
+import {
+  CODING_WORKBENCH_MODES,
+  gitRepositoryAgentMinimumMode,
+} from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import type { GitProcessRunner } from "../gitRoutes.js";
 import { matchRoute, type RouteContext } from "../routes.js";
@@ -416,9 +418,15 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
   );
 
   // The expectation is DERIVED from the production rule table: whichever operations that table puts
-  // above supervised-coding must be denied there, and whichever it puts at or below must be admitted.
+  // above supervised-coding (or, since KEIKO-0227, never admit through this boolean facade at all —
+  // gitRepositoryAgentMinimumMode returns undefined for repository-delivery operations) must be
+  // denied there, and whichever it puts at or below must be admitted.
   it.each(WRITE_OPERATIONS)("honours the ladder for %s at supervised-coding", async (operation) => {
-    const admitted = gitRepositoryAgentMinimumMode(operation) !== "autonomous-delivery";
+    const minimum = gitRepositoryAgentMinimumMode(operation);
+    const admitted =
+      minimum !== undefined &&
+      CODING_WORKBENCH_MODES.indexOf(minimum) <=
+        CODING_WORKBENCH_MODES.indexOf("supervised-coding");
     const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
     const result = await handleGitAgentOperation(
       ctx(executeRequest(operation, `${operation}-supervised`)),
@@ -432,48 +440,60 @@ describe("agent facade — autonomy admission (fail-closed)", () => {
     }
   });
 
-  it("admits a delivery execute once the ceiling is autonomous-delivery", async () => {
+  // KEIKO-0227: converged the facade's admission onto coding-workbench.ts's shared
+  // CODING_WORKBENCH_MODE_POLICIES (ADR-0138 D2), which declares "delivery" approval-required at
+  // every risk tier in every mode. This facade has no approval channel of its own, so a delivery
+  // execute is now denied at the gate rather than delegated — it previously reached "delegated"
+  // here with no approval channel at all once the ceiling hit autonomous-delivery, a materially
+  // more permissive, independently-maintained contract for the same operation than the shared
+  // table already enforced (ADR-0087 D6: merge is an explicit, approval-gated action; ADR-0129 D4).
+  it("keeps a delivery execute approval-required even at the autonomous-delivery ceiling (ADR-0087)", async () => {
+    const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
     const result = await handleGitAgentOperation(
       ctx(executeRequest("push", "push-autonomous")),
-      deps(undefined, "autonomous-delivery"),
+      deps(runner, "autonomous-delivery"),
     );
 
-    expect(result.body).toMatchObject({ status: "delegated", operation: "push" });
+    expect(result.status).toBe(403);
+    expect(result.body).toMatchObject({
+      status: "denied",
+      denialReason: "autonomy-mode-denied",
+      operation: "push",
+    });
+    expect(runner).not.toHaveBeenCalled();
   });
 
-  // KEIKO-0322: the facade's autonomy admission (repository-delivery ≥ autonomous-delivery) and the
-  // merge route's own approval gate (KEIKO_DEFAULT_MERGE_POLICY_PACK ⇒ approval-required with no
-  // token) currently compose safely BY COINCIDENCE of two separate design decisions. Pin the
-  // intersection so a future edit to either side in isolation cannot silently reopen the
-  // autonomous-merge path ADR-0087/AGENTS.md forbid. The facade must admit at the
-  // autonomous-delivery ceiling, delegate through to the real merge route, and receive back the
-  // approval-required nested response — never a completed merge.
-  it("admitted merge execute at autonomous-delivery still resolves to approval-required (ADR-0087)", async () => {
-    // readWorktreeSnapshotFor spawns real git before the approval gate runs; init a minimal repo
-    // in the SAME tmp root beforeEach registered so the merge route reaches the approval gate
-    // rather than 409 on GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE.
-    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-    execFileSync("git", ["config", "user.email", "test@keiko.example"], { cwd: root });
-    execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: root });
-    execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: root });
-    execFileSync("git", ["commit", "--allow-empty", "-m", "base"], { cwd: root });
-
+  // KEIKO-0322, STRENGTHENED by KEIKO-0227. ORIGINAL finding: the facade's autonomy admission
+  // (repository-delivery ≥ autonomous-delivery, no approval channel) and the merge route's own
+  // approval gate (KEIKO_DEFAULT_MERGE_POLICY_PACK ⇒ approval-required with no token) composed
+  // safely only BY COINCIDENCE of two separate, independently-maintained design decisions: the
+  // facade ADMITTED a merge at autonomous-delivery and relied entirely on the downstream route to
+  // still refuse it. The pin existed so a future edit to either side in isolation could not
+  // silently reopen the autonomous-merge path ADR-0087 forbids.
+  //
+  // KEIKO-0227 removed the coincidence this pin worried about: the facade's admission now derives
+  // from the SAME shared CODING_WORKBENCH_MODE_POLICIES table (ADR-0138 D2) the merge route's
+  // approval posture answers to, so "delivery" reads approval-required here too, at every mode —
+  // the facade denies a merge outright, before ever reaching the merge route. The invariant this
+  // pin protects — a merge never completes autonomously without approval — is unchanged and now
+  // enforced at an earlier, single-sourced layer instead of relying on two independent gates
+  // agreeing by chance. Updated to assert the new, earlier denial rather than the old
+  // delegate-then-approval-required round trip, which is no longer reachable.
+  it("never admits a merge execute through the facade, at any ceiling — approval is required separately (ADR-0087)", async () => {
+    const runner = vi.fn<GitProcessRunner>(() => Promise.resolve(ok("")));
     const result = await handleGitAgentOperation(
       ctx(executeRequest("merge", "merge-facade-approval-required")),
-      deps(undefined, "autonomous-delivery"),
+      deps(runner, "autonomous-delivery"),
     );
 
-    // The delegated response wrapper carries the nested route status and body.
+    expect(result.status).toBe(403);
     expect(result.body).toMatchObject({
-      status: "delegated",
+      status: "denied",
+      denialReason: "autonomy-mode-denied",
       operation: "merge",
-      mode: "execute",
-      routeStatus: 200,
-      response: { status: "approval-required" },
     });
-    // The merge must never have completed via the agent facade at this ceiling.
-    const response = (result.body as { response: Record<string, unknown> }).response;
-    expect(response.status).not.toBe("merged");
+    // The merge route (and its own approval gate) is never reached from the facade at this ceiling.
+    expect(runner).not.toHaveBeenCalled();
   });
 
   it.each(["read", "preview"] as const)(

@@ -4,6 +4,7 @@ import {
   CODING_CONTEXT_PURPOSES,
   CODING_CONTEXT_SCHEMA_VERSION,
   CODING_CONTEXT_SOURCE_KINDS,
+  CODING_CONTEXT_SOURCE_TIER_BY_KIND,
   embeddingProvidersAllowed,
   isCodingContextPurpose,
   toCodingContextWirePack,
@@ -16,8 +17,10 @@ import {
   RETRIEVAL_CONTEXT_PURPOSES,
   RETRIEVAL_CONTEXT_SCHEMA_VERSION,
   RETRIEVAL_CONTEXT_SOURCE_KINDS,
+  RETRIEVAL_CONTEXT_SOURCE_TIERS,
   isRetrievalContextCitation,
   isRetrievalContextPurpose,
+  tierForRetrievalContextSource,
   toRetrievalContextWirePack,
   type RetrievalContextPack,
   type RetrievalContextRequest,
@@ -120,5 +123,42 @@ describe("isRetrievalContextCitation", () => {
     expect(isRetrievalContextCitation({ ...citation, text: "secret" })).toBe(false);
     expect(isRetrievalContextCitation({ ...citation, excerpt: "secret" })).toBe(false);
     expect(isRetrievalContextCitation({ ...citation, content: "secret" })).toBe(false);
+  });
+
+  // KEIKO-0176: externally-authored connected content must not share the tier that means "the
+  // user's own workspace files", or an evidence manifest's tierCounts cannot separate the two.
+  it("gives externally-authored connected context its own trust tier", () => {
+    expect(tierForRetrievalContextSource("connected-context")).toBe("external-connected");
+    for (const kind of ["repo-search", "files-focus", "editor-state", "git-context"] as const) {
+      expect(tierForRetrievalContextSource(kind)).toBe("first-party-workspace");
+    }
+    expect(RETRIEVAL_CONTEXT_SOURCE_TIERS).toContain("external-connected");
+  });
+
+  // ADR-0152 D6 follow-on: this neutral tier and the CODING tier for the same source kind now
+  // DELIBERATELY diverge (see the comment on CODING_CONTEXT_SOURCE_TIER_BY_KIND) — the neutral
+  // improvement must never be re-aliased back onto the existing coding wire without its own
+  // lockstep schema decision. Pinned here so the two tables' intentional disagreement on
+  // "connected-context" reads as a decision, not as coverage that just hasn't caught up yet.
+  it("keeps the neutral and coding tiers for connected-context deliberately different (ADR-0152 D6)", () => {
+    expect(tierForRetrievalContextSource("connected-context")).toBe("external-connected");
+    expect(CODING_CONTEXT_SOURCE_TIER_BY_KIND["connected-context"]).toBe("first-party-workspace");
+  });
+
+  // KEIKO-0400: sourceKind and sourceTier were two independent membership checks, so a citation
+  // could declare a tier that is not the one this package assigns to its own kind — letting it
+  // misrepresent its trust tier to any consumer that reads sourceTier rather than re-deriving it.
+  it("rejects a citation whose sourceTier is not the canonical tier for its sourceKind", () => {
+    for (const sourceKind of RETRIEVAL_CONTEXT_SOURCE_KINDS) {
+      const canonical = tierForRetrievalContextSource(sourceKind);
+      const wrong = RETRIEVAL_CONTEXT_SOURCE_TIERS.find((tier) => tier !== canonical);
+      expect(wrong).toBeDefined();
+      expect(isRetrievalContextCitation({ ...citation, sourceKind, sourceTier: canonical })).toBe(
+        true,
+      );
+      expect(isRetrievalContextCitation({ ...citation, sourceKind, sourceTier: wrong })).toBe(
+        false,
+      );
+    }
   });
 });

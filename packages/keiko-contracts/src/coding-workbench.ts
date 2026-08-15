@@ -1,3 +1,4 @@
+import { deepFreeze } from "./deep-freeze.js";
 import type { GatewayVerificationState } from "./gateway-verification.js";
 
 export const CODING_WORKBENCH_SCHEMA_VERSION = "1" as const;
@@ -323,9 +324,12 @@ export type CodingWorkbenchActionPolicyDecision =
       readonly reasonCode: CodingWorkbenchPolicyDenialReason;
     };
 
+// deepFreeze, not Object.freeze: this is the authority matrix every tri-state effect in the product
+// is read from, and a shallow freeze left each per-mode policy and its nested `effects` matrix
+// writable at runtime.
 export const CODING_WORKBENCH_MODE_POLICIES: Readonly<
   Record<CodingWorkbenchMode, CodingWorkbenchModePolicy>
-> = Object.freeze({
+> = deepFreeze({
   "governed-assist": {
     allowedActionClasses: CODING_WORKBENCH_ACTION_CLASSES,
     allowsWorkspaceWrites: true,
