@@ -139,6 +139,21 @@ describe("CONTAINER_TASK_RULES", () => {
     }
   });
 
+  // Codex-sweep finding (same class as command-runner.ts's COMMAND_TASK_RULES, KEIKO-0139):
+  // Object.freeze on the array only freezes the array's own indices, not the row objects it
+  // holds — Object.isFrozen(CONTAINER_TASK_RULES) above was already true even before this fix,
+  // since that only checks the OUTER container. A rule's own top-level field (e.g. `executable`)
+  // was still writable, which could redirect an allowlisted rule's identity. Modules run in
+  // strict mode, so a write to a genuinely frozen object throws.
+  it("freezes each rule object itself, not just the array holding them", () => {
+    const [docker] = CONTAINER_TASK_RULES;
+    expect(docker).toBeDefined();
+    expect(() => {
+      (docker as { executable: string }).executable = "rm";
+    }).toThrow(TypeError);
+    expect(CONTAINER_TASK_RULES[0]?.executable).toBe("docker");
+  });
+
   // KEIKO-0468: the matcher is an exact-token comparison, so `--user` alone denied nothing a caller
   // could not rewrite as `-u`/`-u=0`. `--entrypoint` (program substitution) was missing outright.
   // These are the highest-value escalation tokens in this file's own stated threat model.

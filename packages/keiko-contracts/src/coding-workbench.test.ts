@@ -518,6 +518,24 @@ describe("coding workbench Codex subscription profile", () => {
     }
   });
 
+  // Codex finding: Object.freeze is shallow, so codingWorkbenchCodexAuthMethodRowFor handed out a
+  // MUTABLE reference to the table's inner row objects (KEIKO-0139's exact bug class, just in a
+  // table added after that sweep) — a caller could rewrite requiresSecretInput or
+  // credentialTransport process-wide, and this file's own validateSetupPlanMethodConsistency
+  // (which calls the same accessor) would then agree with the corrupted row. Modules run in strict
+  // mode, so a write to a frozen object throws rather than silently no-opping.
+  it("returns a deeply frozen row that cannot be mutated by a caller", () => {
+    const row = codingWorkbenchCodexAuthMethodRowFor("codex-access-token");
+    expect(() => {
+      (row as { requiresSecretInput: boolean }).requiresSecretInput = false;
+    }).toThrow(TypeError);
+    // The corruption must not have taken effect even if the assignment failed silently under some
+    // future non-strict caller: re-fetching the row must still show the true, untampered value.
+    expect(codingWorkbenchCodexAuthMethodRowFor("codex-access-token").requiresSecretInput).toBe(
+      true,
+    );
+  });
+
   it("keeps Codex subscription authority bounded by the same envelope policy", () => {
     const envelope = {
       ...baseAuthorityEnvelope(),

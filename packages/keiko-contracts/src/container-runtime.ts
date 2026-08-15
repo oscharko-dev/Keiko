@@ -11,6 +11,7 @@
 // process, shell, or filesystem authority.
 
 import type { CommandRule } from "./tools.js";
+import { deepFreeze } from "./deep-freeze.js";
 import type {
   RuntimeCapabilityState,
   RuntimeCapabilityUnavailableReason,
@@ -214,7 +215,10 @@ const CONTAINER_DENY_FLAGS = Object.freeze([
   "-c",
 ] as const);
 
-export const CONTAINER_TASK_RULES: readonly CommandRule[] = Object.freeze([
+// deepFreeze, not Object.freeze: freezing only the outer array leaves each rule object's own
+// top-level fields (executable, allowedSubcommands, denyFlags) writable — the identical bug class
+// command-runner.ts's COMMAND_TASK_RULES already documents and was fixed for (KEIKO-0139).
+export const CONTAINER_TASK_RULES: readonly CommandRule[] = deepFreeze([
   {
     executable: "docker",
     allowedSubcommands: Object.freeze(["version", "info", "run"]),

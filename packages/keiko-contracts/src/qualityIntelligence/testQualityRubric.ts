@@ -4,6 +4,8 @@
 // candidate, the per-dimension score shape, the aggregated judge verdict, and the JSON schema
 // that constrains gateway structured output. Pure data contracts — no logic, no IO, no model calls.
 
+import { deepFreeze } from "../deep-freeze.js";
+
 export const TEST_QUALITY_RUBRIC_DIMENSIONS = [
   "verifiability",
   "atomicity",
@@ -22,7 +24,13 @@ export type TestQualityDimensionName = (typeof TEST_QUALITY_RUBRIC_DIMENSIONS)[n
 // with no duplicates, and scrubJudgeRationale caps each rationale (500 chars per dimension, 1000
 // overall). Audit finding KEIKO-0405 asked for the bounds to be added here; they are already
 // enforced at the layer that can enforce them.
-export const TEST_QUALITY_JUDGE_RESPONSE_SCHEMA: Readonly<Record<string, unknown>> = Object.freeze({
+// deepFreeze, not Object.freeze: this schema constrains what a model provider's Structured
+// Outputs mode may emit (see above); Object.freeze only protects the OUTER object, leaving every
+// nested object (properties, dimensions.items, dimensions.items.properties, ...) writable — the
+// same bug class command-runner.ts's COMMAND_TASK_RULES already documents and was fixed for
+// (KEIKO-0139). A caller mutating a nested field in place (e.g. flipping `additionalProperties:
+// false` to `true`) would silently weaken the constraint for every subsequent judge call.
+export const TEST_QUALITY_JUDGE_RESPONSE_SCHEMA: Readonly<Record<string, unknown>> = deepFreeze({
   type: "object",
   additionalProperties: false,
   required: ["dimensions", "overallRationale"],
