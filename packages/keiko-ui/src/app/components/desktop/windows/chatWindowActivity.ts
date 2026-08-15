@@ -29,6 +29,7 @@ interface ChatWindowRuntimeState {
 
 interface PendingSelectionHandoff {
   readonly id: string;
+  readonly preferredWindowIds: readonly string[];
   readonly onUnavailable?: (() => void) | undefined;
 }
 
@@ -214,7 +215,7 @@ function reroutePendingSelectionHandoffs(state: ChatWindowRuntimeState): void {
     const routed = routeSelectionHandoffToOpenChat(
       state.runtime.projectPath,
       handoff.id,
-      [],
+      handoff.preferredWindowIds,
       handoff.onUnavailable,
     );
     if (routed === null) handoff.onUnavailable?.();
@@ -230,7 +231,11 @@ export function routeSelectionHandoffToOpenChat(
   for (const windowId of orderedRuntimeIds(preferredWindowIds)) {
     const state = runtimes.get(windowId);
     if (state?.runtime.projectPath !== projectPath) continue;
-    state.pendingSelectionHandoffs.push({ id: selectionHandoffId, onUnavailable });
+    state.pendingSelectionHandoffs.push({
+      id: selectionHandoffId,
+      preferredWindowIds: [...preferredWindowIds],
+      onUnavailable,
+    });
     dispatchPendingSelectionHandoff(state);
     return windowId;
   }

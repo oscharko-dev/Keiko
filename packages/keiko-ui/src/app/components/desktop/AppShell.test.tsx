@@ -18,8 +18,9 @@ function chatWindow(projectPath: string): AppWindow {
 }
 
 describe("persistedChatProjectPath", (): void => {
-  it("normalizes configured paths and rejects whitespace-only values", (): void => {
-    expect(persistedChatProjectPath(chatWindow("  /repo/private  "))).toBe("/repo/private");
+  it("preserves valid path identity and rejects whitespace-only values", (): void => {
+    expect(persistedChatProjectPath(chatWindow("/repo/private "))).toBe("/repo/private ");
+    expect(persistedChatProjectPath(chatWindow("/repo/ private"))).toBe("/repo/ private");
     expect(persistedChatProjectPath(chatWindow(" \t\n "))).toBeUndefined();
   });
 });
@@ -72,18 +73,18 @@ describe("prepareNewWindowCfg", (): void => {
     ).toMatchObject({ projectPath: "/explicit" });
   });
 
-  it("normalizes configured and selected project scopes before storing them", (): void => {
+  it("preserves configured and selected project path identity when storing them", (): void => {
     expect(
       prepareNewWindowCfg(
         "chat",
-        { title: "Explicit", projectPath: "  /explicit  " },
+        { title: "Explicit", projectPath: "/explicit " },
         "request-explicit",
         "/selected",
       ),
-    ).toMatchObject({ projectPath: "/explicit" });
+    ).toMatchObject({ projectPath: "/explicit " });
     expect(
-      prepareNewWindowCfg("chat", { title: "Selected" }, "request-selected", "  /selected  "),
-    ).toMatchObject({ projectPath: "/selected" });
+      prepareNewWindowCfg("chat", { title: "Selected" }, "request-selected", "/selected "),
+    ).toMatchObject({ projectPath: "/selected " });
   });
 
   it("replaces an empty project scope with the project selected by the initiating shell", (): void => {

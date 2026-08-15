@@ -52,8 +52,9 @@ const MAX_EDITOR_LAYOUT_SPLIT_DEPTH = 32;
 // localStorage route otherwise accepts unbounded arrays the server would reject,
 // leaving local state permanently divergent from the server snapshot.
 export const MAX_WORKSPACE_WINDOWS = 128;
-const MAX_PERSISTED_WINDOW_SCAN = MAX_WORKSPACE_WINDOWS * 16;
+export const MAX_PERSISTED_WINDOW_SCAN = MAX_WORKSPACE_WINDOWS * 16;
 const MAX_PERSISTED_CONNECTIONS = 512;
+export const MAX_PERSISTED_CONNECTION_SCAN = MAX_PERSISTED_CONNECTIONS * 16;
 
 const CREDENTIAL_KEY_MARKERS = [
   "apikey",
@@ -814,12 +815,18 @@ function recordWindowAlias(aliases: Map<string, string>, removedId: string, kept
   aliases.set(removedId, keptId);
 }
 
-function collectPersistedWindows(wins: readonly AppWindow[]): SanitizedWorkspaceWindows {
+function collectPersistedWindows(
+  wins: readonly unknown[],
+  onScanLimitReached?: (() => void) | undefined,
+): SanitizedWorkspaceWindows {
   let retained: AppWindow[] = [];
   const aliases = new Map<string, string>();
   let scanned = 0;
   for (const win of wins) {
-    if (scanned >= MAX_PERSISTED_WINDOW_SCAN) break;
+    if (scanned >= MAX_PERSISTED_WINDOW_SCAN) {
+      onScanLimitReached?.();
+      break;
+    }
     scanned += 1;
     const next = sanitizeWindow(win);
     if (next === null) continue;
@@ -838,7 +845,7 @@ function collectPersistedWindows(wins: readonly AppWindow[]): SanitizedWorkspace
   return { wins: retained, aliases };
 }
 
-export function sanitizePersistedWindows(wins: readonly AppWindow[]): AppWindow[] {
+export function sanitizePersistedWindows(wins: readonly unknown[]): AppWindow[] {
   return collectPersistedWindows(wins).wins;
 }
 
@@ -847,7 +854,7 @@ export function parsePersistedWindows(raw: string | null): AppWindow[] | null {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length === 0) return null;
-    const wins = sanitizePersistedWindows(parsed as AppWindow[]);
+    const wins = sanitizePersistedWindows(parsed);
     return wins.length > 0 ? wins : null;
   } catch {
     return null;
@@ -863,7 +870,7 @@ function connectionEndpointKey(a: string, b: string): string {
 }
 
 function remappedBoundChatWindowId(
-  conn: Connection,
+  conn: Readonly<Record<string, unknown>>,
   aliases: ReadonlyMap<string, string>,
   windowIds: ReadonlySet<string>,
 ): string | undefined {
@@ -886,7 +893,7 @@ interface SanitizedConnectionEndpoints {
 }
 
 function sanitizedConnectionEndpoints(
-  conn: Connection,
+  conn: Readonly<Record<string, unknown>>,
   aliases: ReadonlyMap<string, string>,
   windowIds: ReadonlySet<string>,
 ): SanitizedConnectionEndpoints | null {
@@ -898,7 +905,7 @@ function sanitizedConnectionEndpoints(
     : null;
 }
 
-function hasElidedScopeSnapshot(conn: Connection): boolean {
+function hasElidedScopeSnapshot(conn: Readonly<Record<string, unknown>>): boolean {
   return (
     conn.boundScopeElided === true ||
     typeof conn.boundRoot === "string" ||
@@ -908,7 +915,7 @@ function hasElidedScopeSnapshot(conn: Connection): boolean {
 }
 
 function sanitizedBoundConnector(
-  conn: Connection,
+  conn: Readonly<Record<string, unknown>>,
 ): Pick<Connection, "boundConnectorKind" | "boundConnectorId"> | undefined {
   const kind = conn.boundConnectorKind;
   if (kind !== "capsule" && kind !== "capsule-set") return undefined;
@@ -919,11 +926,11 @@ function sanitizedBoundConnector(
 }
 
 function sanitizeConnection(
-  conn: Connection,
+  conn: unknown,
   aliases: ReadonlyMap<string, string>,
   windowIds: ReadonlySet<string>,
 ): SanitizedConnection | null {
-  if (typeof conn.id !== "string") return null;
+  if (!isRecord(conn) || typeof conn.id !== "string") return null;
   const endpoints = sanitizedConnectionEndpoints(conn, aliases, windowIds);
   if (endpoints === null) return null;
   const boundChatWindowId = remappedBoundChatWindowId(conn, aliases, windowIds);
@@ -942,25 +949,30 @@ function sanitizeConnection(
 }
 
 function sanitizeConnections(
-  conns: readonly Connection[],
+  conns: readonly unknown[],
   wins: readonly AppWindow[],
   aliases: ReadonlyMap<string, string>,
+  onScanLimitReached?: (() => void) | undefined,
 ): Connection[] {
   const windowIds = new Set(wins.map((win) => win.id));
   const connectionIds = new Set<string>();
   const endpointKeys = new Set<string>();
   const collapsedEndpointKeys = new Set<string>();
   const out: Connection[] = [];
+  let scanned = 0;
   for (const conn of conns) {
+    if (scanned >= MAX_PERSISTED_CONNECTION_SCAN) {
+      onScanLimitReached?.();
+      break;
+    }
+    scanned += 1;
     const sanitized = sanitizeConnection(conn, aliases, windowIds);
     if (sanitized === null) continue;
     const connection = sanitized.connection;
+    if (connectionIds.has(connection.id)) continue;
     const endpointKey = connectionEndpointKey(connection.a, connection.b);
     if (sanitized.endpointRemapped) collapsedEndpointKeys.add(endpointKey);
-    if (
-      connectionIds.has(connection.id) ||
-      (endpointKeys.has(endpointKey) && collapsedEndpointKeys.has(endpointKey))
-    ) {
+    if (endpointKeys.has(endpointKey) && collapsedEndpointKeys.has(endpointKey)) {
       continue;
     }
     out.push(connection);
@@ -973,20 +985,32 @@ function sanitizeConnections(
 }
 
 export function sanitizePersistedConnections(
-  conns: readonly Connection[],
+  conns: readonly unknown[],
   wins: readonly AppWindow[],
+  onScanLimitReached?: (() => void) | undefined,
 ): Connection[] {
-  return sanitizeConnections(conns, wins, new Map());
+  return sanitizeConnections(conns, wins, new Map(), onScanLimitReached);
+}
+
+export interface PersistedWorkspaceSanitizerOptions {
+  readonly onWindowScanLimitReached?: (() => void) | undefined;
+  readonly onConnectionScanLimitReached?: (() => void) | undefined;
 }
 
 export function sanitizePersistedWorkspace(
-  wins: readonly AppWindow[],
-  conns: readonly Connection[],
+  wins: readonly unknown[],
+  conns: readonly unknown[],
+  options: PersistedWorkspaceSanitizerOptions = {},
 ): { readonly wins: AppWindow[]; readonly conns: Connection[] } {
-  const sanitized = collectPersistedWindows(wins);
+  const sanitized = collectPersistedWindows(wins, options.onWindowScanLimitReached);
   return {
     wins: sanitized.wins,
-    conns: sanitizeConnections(conns, sanitized.wins, sanitized.aliases),
+    conns: sanitizeConnections(
+      conns,
+      sanitized.wins,
+      sanitized.aliases,
+      options.onConnectionScanLimitReached,
+    ),
   };
 }
 
@@ -998,7 +1022,7 @@ export function parsePersistedConnections(
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return sanitizePersistedConnections(parsed as Connection[], wins);
+    return sanitizePersistedConnections(parsed, wins);
   } catch {
     return [];
   }

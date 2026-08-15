@@ -713,10 +713,16 @@ function snapshotFromRaw(
   windows: readonly unknown[],
   connections: readonly unknown[],
 ): WorkspaceSnapshot {
-  return sanitizePersistedWorkspace(
-    windows as readonly AppWindow[],
-    connections as readonly Connection[],
-  );
+  return sanitizePersistedWorkspace(windows, connections, {
+    onWindowScanLimitReached: (): void => {
+      reportClientDiagnostic(`workspace-state: persisted window scan limit exceeded (${WS_LS})`);
+    },
+    onConnectionScanLimitReached: (): void => {
+      reportClientDiagnostic(
+        `workspace-state: persisted connection scan limit exceeded (${CONN_LS})`,
+      );
+    },
+  });
 }
 
 function readPersistedArray(key: string): readonly unknown[] {

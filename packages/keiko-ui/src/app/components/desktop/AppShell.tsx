@@ -93,8 +93,7 @@ const EMPTY_SHELL_SHORTCUT_STATE: ShellShortcutState = { labels: new Map(), bind
 
 function validProjectPath(value: Cfg[string]): string | undefined {
   if (typeof value !== "string") return undefined;
-  const normalized = value.trim();
-  return normalized.length > 0 ? normalized : undefined;
+  return value.trim().length > 0 ? value : undefined;
 }
 
 function normalizedNewChatCfg(cfg: Cfg, activeProjectPath: string | undefined): Cfg {
@@ -450,8 +449,7 @@ export function persistedChatProjectPath(win: AppWindow | undefined): string | u
   if (win?.type !== "chat") return undefined;
   const value = win.cfg["projectPath"];
   if (typeof value !== "string") return undefined;
-  const normalized = value.trim();
-  return normalized.length > 0 ? normalized : undefined;
+  return value.trim().length > 0 ? value : undefined;
 }
 
 class ChatBindingCompensationFailure extends Error {}

@@ -91,4 +91,40 @@ describe("chat window runtime routing", () => {
     expect(unavailable).not.toHaveBeenCalled();
     unregisterBackup();
   });
+
+  it("notifies the caller when a queued handoff has no reroute destination", async () => {
+    const firstConsumer = vi.fn<(selectionHandoffId: string) => void>();
+    const unavailable = vi.fn<() => void>();
+    const unregisterFirst = registerChatWindowRuntime("chat-first", runtime(firstConsumer));
+
+    routeSelectionHandoffToOpenChat("/repo", "selection-active", ["chat-first"], unavailable);
+    routeSelectionHandoffToOpenChat("/repo", "selection-queued", ["chat-first"], unavailable);
+    unregisterFirst();
+    await Promise.resolve();
+
+    expect(unavailable).toHaveBeenCalledExactlyOnceWith();
+  });
+
+  it("preserves front-to-back preference when rerouting a queued handoff", async () => {
+    const backgroundConsumer = vi.fn<(selectionHandoffId: string) => void>();
+    const frontConsumer = vi.fn<(selectionHandoffId: string) => void>();
+    const firstConsumer = vi.fn<(selectionHandoffId: string) => void>();
+    const unregisterBackground = registerChatWindowRuntime(
+      "chat-background",
+      runtime(backgroundConsumer),
+    );
+    const unregisterFront = registerChatWindowRuntime("chat-front", runtime(frontConsumer));
+    const unregisterFirst = registerChatWindowRuntime("chat-first", runtime(firstConsumer));
+    const preferred = ["chat-first", "chat-front", "chat-background"];
+
+    routeSelectionHandoffToOpenChat("/repo", "selection-active", preferred);
+    routeSelectionHandoffToOpenChat("/repo", "selection-queued", preferred);
+    unregisterFirst();
+    await Promise.resolve();
+
+    expect(frontConsumer).toHaveBeenCalledExactlyOnceWith("selection-queued");
+    expect(backgroundConsumer).not.toHaveBeenCalled();
+    unregisterFront();
+    unregisterBackground();
+  });
 });

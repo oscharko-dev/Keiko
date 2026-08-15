@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AppWindow, Connection } from "../windows/types";
 import {
+  MAX_PERSISTED_CONNECTION_SCAN,
   parsePersistedConnections,
   parsePersistedWindows,
   sanitizePersistedConnections,
@@ -922,6 +923,66 @@ describe("workspace-persistence", () => {
         wins,
       ),
     ).toEqual([{ id: "duplicate-id", a: "files-1", b: "chat-1" }]);
+  });
+
+  it("discards non-object persisted connection records without throwing", () => {
+    const wins = [win({ id: "files-1", type: "files" }), win({ id: "chat-1", type: "chat" })];
+
+    expect(sanitizePersistedConnections([null], wins)).toEqual([]);
+  });
+
+  it("bounds hostile invalid connection scans and reports the limit", () => {
+    const wins = [win({ id: "files-1", type: "files" }), win({ id: "chat-1", type: "chat" })];
+    let limitReports = 0;
+
+    expect(
+      sanitizePersistedConnections(
+        Array.from({ length: MAX_PERSISTED_CONNECTION_SCAN + 1 }, () => null),
+        wins,
+        (): void => {
+          limitReports += 1;
+        },
+      ),
+    ).toEqual([]);
+    expect(limitReports).toBe(1);
+  });
+
+  it("prevents rejected duplicate IDs from marking an endpoint pair as collapsed", () => {
+    const snapshot = sanitizePersistedWorkspace(
+      [
+        win({ id: "files-1", type: "files" }),
+        win({ id: "chat-old", type: "chat", z: 1, cfg: { chatId: "shared-chat" } }),
+        win({ id: "chat-front", type: "chat", z: 2, cfg: { chatId: "shared-chat" } }),
+      ],
+      [
+        { id: "kept-id", a: "files-1", b: "chat-front" },
+        { id: "kept-id", a: "files-1", b: "chat-old" },
+        { id: "distinct-id", a: "files-1", b: "chat-front" },
+      ],
+    );
+
+    expect(snapshot.conns.map((connection) => connection.id)).toEqual(["kept-id", "distinct-id"]);
+  });
+
+  it("flattens progressive duplicate-window aliases onto the final survivor", () => {
+    const snapshot = sanitizePersistedWorkspace(
+      [
+        win({ id: "files-1", type: "files" }),
+        win({ id: "chat-back", type: "chat", z: 1, cfg: { chatId: "shared-chat" } }),
+        win({ id: "chat-middle", type: "chat", z: 2, cfg: { chatId: "shared-chat" } }),
+        win({ id: "chat-front", type: "chat", z: 3, cfg: { chatId: "shared-chat" } }),
+      ],
+      [{ id: "edge", a: "files-1", b: "chat-back", boundChatWindowId: "chat-back" }],
+    );
+
+    expect(snapshot.conns).toEqual([
+      {
+        id: "edge",
+        a: "files-1",
+        b: "chat-front",
+        boundChatWindowId: "chat-front",
+      },
+    ]);
   });
 
   it("rejects over-length generic text cfg values (reject, not truncate)", () => {
