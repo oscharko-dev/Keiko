@@ -434,20 +434,48 @@ function collectHtmlDocuments(dir: string): readonly string[] {
   return documents;
 }
 
+// A lingering SSE connection keeps `server.close()`'s callback from ever firing. Bounding the wait
+// turns "the harness eventually kills us" into a deterministic exit we control.
+const SERVER_CLOSE_TIMEOUT_MS = 5_000;
+
 function registerShutdown(server: Server, composition: JourneyComposition): void {
   let closing = false;
   const close = (): void => {
     if (closing) return;
     closing = true;
     void (async (): Promise<void> => {
-      await composition.deps.codingRuntimeOrchestrator?.shutdown();
-      await composition.scripted?.closeAll();
-      await composition.deps.dispose?.();
-      await new Promise<void>((resolve) => {
-        server.close(() => {
-          resolve();
-        });
-      });
+      // KEIKO-0429: this is the shared shutdown path for every Code-task journey server
+      // (#2385, #2386, #2387, #2483). Unhandled, a rejecting stage surfaced as a bare
+      // unhandled-rejection trace with nothing naming WHICH resource failed to dispose, and a
+      // never-resolving server.close() surfaced as a hang — both read as flake, and each costs a
+      // full CI cycle to re-diagnose. Naming the stage is the whole point: the exit code alone
+      // cannot distinguish an orchestrator that refused to stop from a socket that stayed open.
+      let stage = "codingRuntimeOrchestrator.shutdown";
+      try {
+        await composition.deps.codingRuntimeOrchestrator?.shutdown();
+        stage = "scripted.closeAll";
+        await composition.scripted?.closeAll();
+        stage = "deps.dispose";
+        await composition.deps.dispose?.();
+        stage = "server.close";
+        await Promise.race([
+          new Promise<void>((resolve) => {
+            server.close(() => {
+              resolve();
+            });
+          }),
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, SERVER_CLOSE_TIMEOUT_MS).unref();
+          }),
+        ]);
+      } catch (error) {
+        process.stderr.write(
+          `[coding-runtime-server] shutdown failed during ${stage}: ${
+            error instanceof Error ? error.message : String(error)
+          }\n`,
+        );
+        process.exit(1);
+      }
       process.exit(0);
     })();
   };

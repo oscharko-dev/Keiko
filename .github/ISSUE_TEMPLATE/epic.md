@@ -120,7 +120,7 @@ This epic is a planning and coordination container. Do not implement the full ep
 ## Expected Verification
 
 - [ ] Each child issue defines its own relevant verification gates.
-- [ ] Required GitHub check: `ci` on every implementation PR.
+- [ ] Every required GitHub check is green on the current head of every implementation PR. `ci` is one of them, not the whole set — CONTRIBUTING.md's "Pull requests" section is the authoritative list.
 - [ ] Each implementation PR records whether existing functionality was reused, extended, generalized, or why a new implementation was required.
 - [ ] Security review when trust boundaries, model access, execution, patch application, generated artifacts, or validation guardrails change.
 - [ ] Final regression evidence captured in the final child issue.

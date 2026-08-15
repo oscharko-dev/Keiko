@@ -93,7 +93,19 @@ async function handleRequest(req, res) {
       return;
     }
     jsonResponse(res, 404, { error: "not found" });
-  } catch {
+  } catch (error) {
+    // KEIKO-0406: a malformed body, an over-size rejection from readJsonBody and an internal bug in
+    // handleEmbeddings/handleChat/vectorFor all collapse to the same cause-less 400. Without this
+    // line a failing local-knowledge E2E run gives the operator no way to tell "the client sent
+    // something bad" from "this fixture has a bug". Log the Error only, never the request body —
+    // body-free diagnostics, per AGENTS.md §7. process.stderr.write rather than console.error:
+    // `console` is not a declared global for tests/e2e/fixtures/*.js and no-console is a warning
+    // under --max-warnings=0, and widening either for one diagnostic line is the wrong trade.
+    process.stderr.write(
+      `[local-knowledge-e2e-server] request failed: ${
+        error instanceof Error ? error.message : String(error)
+      }\n`,
+    );
     if (!res.headersSent) jsonResponse(res, 400, { error: "invalid request" });
   }
 }
