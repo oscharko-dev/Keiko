@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { hasInheritedEnumerableProperty } from "./code-task-acceptance.js";
 import { CODE_TASK_GOVERNANCE_SCHEMA_VERSION } from "./code-task-governance.js";
 import {
-  hasInheritedEnumerableProperty,
   validateRunControlSnapshotV1,
   validateRuntimeGovernanceOutcomeV1,
   validateRuntimeGovernanceRequestV1,
@@ -329,19 +329,11 @@ describe("hasInheritedEnumerableProperty (Codex P1 3789635890)", () => {
   });
 });
 
-// KfQ 3789542344 asked that a pipeline-level test assert the rejection REASON names this guard
-// specifically. Verified, and it cannot be done here for the same reason established in
-// code-task-acceptance.test.ts: isRecord's prototype-identity check runs before
-// boundedStringFactErrors/questionFactErrors ever reach hasInheritedEnumerableProperty, for every
-// fixture whose direct prototype is not exactly Object.prototype -- which is every fixture
-// buildable from outside this process. The direct hasInheritedEnumerableProperty tests above are
-// the reachable, correct home for pinning this guard's behaviour.
-describe("recoveryRef/pendingQuestion: what the pipeline can and cannot pin here (Codex P1 3789635890)", () => {
-  // KfQ 3789542391: isRecord's Object.getPrototypeOf(value) === Object.prototype check rejects a
-  // null-prototype object today, and JSON.parse never produces one, so rejecting is correct -- but
-  // nothing pinned that decision before this test. Unlike the outcome/promptText shapes above,
-  // this one IS reachable through the pipeline: it exercises isRecord's own check, not
-  // hasInheritedEnumerableProperty's.
+describe("recoveryRef/pendingQuestion: the null-prototype case (KfQ 3789542391, refuted again at 3789776138)", () => {
+  // KfQ 3789542391 / 3789776138 (new thread, same claim): isRecord's
+  // Object.getPrototypeOf(value) === Object.prototype check rejects a null-prototype object today,
+  // and JSON.parse never produces one, so rejecting can never affect a legitimate wire-shaped
+  // payload -- deliberate, already pinned here, reused for the new thread id.
   it("rejects a null-prototype recoveryRef and pendingQuestion", () => {
     const makeNullProto = (): Record<string, unknown> => {
       const fact: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
@@ -354,6 +346,119 @@ describe("recoveryRef/pendingQuestion: what the pipeline can and cannot pin here
     expect(
       validateRunControlSnapshotV1({ ...snapshot(), pendingQuestion: makeNullProto() }).ok,
     ).toBe(false);
+  });
+});
+
+// Codex P1 3789773829, the terminating fix (full reasoning at ownField's definition in
+// code-task-acceptance.ts, imported here alongside hasInheritedEnumerableProperty rather than
+// reimplemented). withPollutedPrototype mirrors code-task-acceptance.test.ts's identical helper:
+// calling vitest's expect() WHILE Object.prototype is polluted throws inside expect's own
+// internals for at least the "value" key (confirmed empirically), so it captures only a plain
+// result during the polluted window and restores deterministically in a finally BEFORE any
+// assertion runs.
+function withPollutedPrototype<T>(
+  key: string,
+  descriptor: Pick<PropertyDescriptor, "value" | "enumerable" | "writable">,
+  run: () => T,
+): T {
+  try {
+    Object.defineProperty(Object.prototype, key, { configurable: true, ...descriptor });
+    return run();
+  } finally {
+    Reflect.deleteProperty(Object.prototype, key);
+  }
+}
+
+// Non-enumerable pollution isolates ownField's OWN contribution cleanly (see
+// code-task-acceptance.test.ts's identical describe block for why enumerable pollution cannot: it
+// trips hasInheritedEnumerableProperty on every OTHER nested object in the same payload too, via
+// for...in walking the full chain, not only the field under test). Proved red-then-green against a
+// temporary ownField sabotage (reverted to plain `record[key]`, matching the coordinator's literal
+// acceptance criterion) in the commit this test shipped in.
+describe("ownField makes an inherited field unreadable regardless of descriptor shape (Codex P1 3789773829)", () => {
+  it("rejects a recoveryRef's inherited non-enumerable value on the known branch", () => {
+    const payload = { ...snapshot(), recoveryRef: { outcome: "known" } }; // no own "value"
+    const result = withPollutedPrototype(
+      "value",
+      { value: "recovery-7f3a", enumerable: false },
+      () => validateRunControlSnapshotV1(payload),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a pendingQuestion's inherited non-enumerable outcome discriminator", () => {
+    const payload = { ...snapshot(), pendingQuestion: {} }; // wholly empty
+    const result = withPollutedPrototype("outcome", { value: "absent", enumerable: false }, () =>
+      validateRunControlSnapshotV1(payload),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a runtime governance request's inherited non-enumerable operation discriminator", () => {
+    // Strip actionKind/requestedGrantScope too, not just operation: left in, they are own keys
+    // outside RUNTIME_GOVERNANCE_TARGET_KEYS on a non-decide request and get rejected by
+    // unknownKeys regardless of the operation discriminator, confounding what this test measures
+    // (caught empirically: this test passed even with ownField sabotaged, for the wrong reason).
+    const {
+      operation: _operation,
+      actionKind: _actionKind,
+      requestedGrantScope: _grantScope,
+      ...target
+    } = decideRequest();
+    void _operation;
+    void _actionKind;
+    void _grantScope;
+    const result = withPollutedPrototype("operation", { value: "pause", enumerable: false }, () =>
+      validateRuntimeGovernanceRequestV1(target),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a runtime governance outcome's inherited non-enumerable status discriminator", () => {
+    const legitimate = {
+      kind: "runtime-governance-outcome" as const,
+      schemaVersion: CODE_TASK_GOVERNANCE_SCHEMA_VERSION,
+      status: "unsupported" as const,
+      reasonCode: "no-pause-capability",
+    };
+    const { status: _status, ...withoutStatus } = legitimate;
+    void _status;
+    const result = withPollutedPrototype(
+      "status",
+      { value: "unsupported", enumerable: false },
+      () => validateRuntimeGovernanceOutcomeV1(withoutStatus),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("still accepts a legitimate snapshot once Object.prototype is restored", () => {
+    // Sanity: withPollutedPrototype's finally actually cleans up.
+    expect(validateRunControlSnapshotV1(snapshot())).toMatchObject({ ok: true });
+  });
+});
+
+// Enumerable pollution -- Codex's original, simpler shapes -- is kept as belt-and-braces per the
+// coordinator's explicit direction. These do NOT isolate ownField's marginal contribution (see the
+// comment on the describe block above); they pin that the pipeline still rejects them end to end.
+describe("hasInheritedEnumerableProperty still independently rejects the enumerable shapes Codex originally found", () => {
+  it("rejects an inherited enumerable value on an otherwise-complete recoveryRef", () => {
+    const payload = { ...snapshot(), recoveryRef: { outcome: "absent" } };
+    const result = withPollutedPrototype(
+      "value",
+      { value: "recovery-7f3a", enumerable: true, writable: true },
+      () => validateRunControlSnapshotV1(payload),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects an inherited enumerable outcome on an entirely empty pendingQuestion", () => {
+    const payload = { ...snapshot(), pendingQuestion: {} };
+    const result = withPollutedPrototype(
+      "outcome",
+      { value: "absent", enumerable: true, writable: true },
+      () => validateRunControlSnapshotV1(payload),
+    );
+    expect(result.ok).toBe(false);
   });
 });
 
