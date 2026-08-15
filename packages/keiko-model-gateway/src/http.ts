@@ -830,9 +830,14 @@ async function createTlsTunnel(
 // vetted address literal makes a pinned and an unpinned call to the same (proxy, target, ca)
 // triple compute DIFFERENT keys, so neither can be served from the other's pool entry, in either
 // direction, and two pinned calls that happened to resolve to different addresses can't collide
-// either. (The plain-HTTP absolute-URI proxy path, fetchHttpViaProxy, has no analogous pool at
-// all -- it never configures a custom keep-alive agent, so Node's default global agent opens a
-// fresh, unshared connection per call -- so there is no matching gap to close there.)
+// either. (The plain-HTTP absolute-URI proxy path, fetchHttpViaProxy, DOES reuse its connection to
+// the proxy -- it passes no explicit `agent`, and on this repo's pinned Node, http.globalAgent's
+// keepAlive defaults to true, unlike a freshly constructed `new Agent()`. That reuse is not the
+// same defect, though: Agent.getName() keys purely on host/port, so what gets pooled is the hop to
+// the proxy, never the ultimate destination -- each request's real target lives in that request's
+// own absolute-URI, computed fresh per call by proxyRequestTarget below, never cached or inherited
+// from an earlier call on the same socket. See ADR-0038 D6's #3156 plain-HTTP correction for the
+// full reasoning, including how this was verified rather than assumed.)
 function httpsProxyTunnelKey(
   target: URL,
   proxy: URL,

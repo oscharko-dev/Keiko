@@ -881,6 +881,73 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
     }
   });
 
+  it("reuses the client-to-proxy connection across an unpinned then a pinned request without leaking either one's target (#3156 ADR-0038 D6 correction)", async () => {
+    // Codex P2: ADR-0038 D6 originally said this plain-HTTP absolute-URI path has no pooling
+    // because Node's global agent defaults keepAlive:false. False on this repo's pinned Node 24 --
+    // http.globalAgent.keepAlive is true (Node made the GLOBAL singleton agents, specifically,
+    // default to keep-alive; a freshly constructed `new http.Agent()` still defaults false, which
+    // is the easy way to misremember this). fetchHttpViaProxy passes no explicit `agent`, so it
+    // goes through that global, keep-alive-by-default agent -- connection reuse to the proxy DOES
+    // happen here, contrary to what the ADR claimed.
+    //
+    // The conclusion survives anyway, for a different reason than the ADR gave: Node's Agent pools
+    // by `getName()`, which keys purely on host/port (verified directly: identical for two
+    // requests differing only in `path`) -- it has no notion of "target" or "pinned", so it can
+    // and does hand the SAME socket to an unpinned call and a later pinned call to the same proxy.
+    // But unlike the CONNECT-tunnel pool (the actual #3156 bug, fixed above), that shared socket's
+    // FAR end never moves -- it is always the proxy. The real destination lives entirely in each
+    // request's OWN absolute-URI (`proxyRequestTarget(target, pinnedAddress)`, computed fresh
+    // inside fetchHttpViaProxy from THAT call's own pinnedAddress, never cached or inherited), sent
+    // fresh on every request the proxy reads and re-routes independently. Reusing the transport to
+    // an already-trusted intermediary is not the same as reusing a resource that fixes the ultimate
+    // peer, so there is nothing here for resolveGatewayDns's per-call vetting to lose track of.
+    //
+    // Both halves are asserted directly: proxyConnections stays at 1 (the connection really was
+    // reused, not just theoretically reusable) while requestUrls[1] is the pinned call's OWN vetted
+    // address, never contaminated by requestUrls[0]'s unpinned literal hostname.
+    let proxyConnections = 0;
+    const requestUrls: string[] = [];
+    const proxy = createHttpServer((req, res) => {
+      requestUrls.push(req.url ?? "");
+      res.writeHead(200, { "content-type": "application/json", connection: "keep-alive" });
+      res.end(JSON.stringify({ seen: req.url }));
+    });
+    proxy.on("connection", () => {
+      proxyConnections += 1;
+    });
+    const proxyPort = await listen(proxy);
+    const egress = { httpProxy: `http://127.0.0.1:${String(proxyPort)}` };
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "203.0.113.5", family: 4 }])),
+      }));
+      const { gatewayFetch: freshGatewayFetch } = await import("./http.js");
+
+      // First: unpinned. The literal hostname travels unchanged in the request line.
+      const first = await freshGatewayFetch("http://pool-identity-plain.invalid/first", {
+        egress,
+      });
+      expect(first.status).toBe(200);
+      expect(requestUrls[0]).toBe("http://pool-identity-plain.invalid/first");
+
+      // Second: pinned, same proxy, immediately after (well inside any keep-alive idle window).
+      const second = await freshGatewayFetch("http://pool-identity-plain.invalid/second", {
+        egress: { ...egress, pinProxiedConnectTarget: true },
+      });
+      expect(second.status).toBe(200);
+      // The load-bearing pair: one physical connection served both calls, yet the second request
+      // line correctly carries ITS OWN vetted address -- not the first call's literal hostname,
+      // and not left unpinned by some inherited connection-level state.
+      expect(proxyConnections).toBe(1);
+      expect(requestUrls[1]).toBe("http://203.0.113.5/second");
+    } finally {
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+      await close(proxy);
+    }
+  });
+
   it("pins an HTTPS proxied CONNECT tunnel's authority to the vetted address instead of the hostname", async () => {
     // "localhost" is used as the target (rather than an *.invalid host, as above) because this
     // path goes through startTargetTls, which validates the origin's certificate against the SNI
