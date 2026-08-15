@@ -46,6 +46,7 @@ import {
   isSmokeGateFailure,
   runAsync,
   SmokeGateFailure,
+  parsePositiveTimeoutEnv,
   smokeGateFailureLogSummary,
   smokeGateFailureSetupSummary,
   startLocalRegistry,
@@ -1617,6 +1618,25 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(summary).not.toContain(rawMessage);
     expect(summary).not.toContain(PINNED_YARN_SHA512);
     expect(smokeGateFailureLogSummary(stacklessError)).toContain("stackBytes=0");
+    expect(smokeGateFailureSetupSummary("opaque setup failure")).toBe(
+      smokeGateFailureLogSummary("opaque setup failure"),
+    );
+  });
+
+  it("rejects unsafe install smoke timeout values in process", async () => {
+    await withTemporaryProcessEnvValues(
+      { KEIKO_SMOKE_INSTALL_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER + 1) },
+      async () => {
+        const { consoleError } = rejectProcessExit();
+
+        expect(() => parsePositiveTimeoutEnv("KEIKO_SMOKE_INSTALL_TIMEOUT_MS")).toThrow(
+          /process\.exit\(1\)/u,
+        );
+        expect(consoleError.mock.calls.flat().join("\n")).toContain(
+          "KEIKO_SMOKE_INSTALL_TIMEOUT_MS must be a safe integer",
+        );
+      },
+    );
   });
 
   it("validates registry smoke Yarn locators in process", () => {
@@ -1676,6 +1696,11 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(() =>
       registrySmoke.registryInstallTimeoutMs({ KEIKO_REGISTRY_INSTALL_TIMEOUT_MS: "600001" }),
     ).toThrow(/no more than 600000/u);
+    expect(registrySmoke.commandSummary("npm", ["install"])).toBe("npm (1 arg)");
+    expect(registrySmoke.outputByteSummary({})).toBe("stdoutBytes=0, stderrBytes=0");
+    expect(() => registrySmoke.smokeGateYarnPackageManager("not-a-yarn-locator")).toThrow(
+      /registry install smoke Yarn locator is invalid/u,
+    );
   });
 
   it("validates registry TLS and loopback overrides in process", () => {
@@ -2342,34 +2367,65 @@ describe("installable package smoke optional-dependency coverage", () => {
   it("reports unexpected prepare-offline-smoke setup failures with context", async () => {
     const exit = vi.fn();
     const writeError = vi.fn();
+    const failure = new TypeError("temp directory is not writable");
 
     await runPrepareOfflineSmoke({
       exit,
       prepare: async () => {
-        throw new TypeError("temp directory is not writable");
+        throw failure;
       },
       writeError,
     });
 
     expect(writeError).toHaveBeenCalledWith(
-      "prepare-offline-smoke: could not prepare the offline smoke: temp directory is not writable",
+      `prepare-offline-smoke: could not prepare the offline smoke: ${smokeGateFailureLogSummary(
+        failure,
+      )}`,
     );
+    expect(writeError.mock.calls.flat().join("\n")).not.toContain("temp directory is not writable");
     expect(exit).toHaveBeenCalledWith(1);
   });
 
   it("reports string prepare-offline-smoke setup failures with context", async () => {
     const exit = vi.fn();
     const writeError = vi.fn();
+    const failure = "tmp denied";
 
     await runPrepareOfflineSmoke({
       exit,
-      prepare: () => Promise.reject("tmp denied"),
+      prepare: () => Promise.reject(failure),
       writeError,
     });
 
     expect(writeError).toHaveBeenCalledWith(
-      "prepare-offline-smoke: could not prepare the offline smoke: tmp denied",
+      `prepare-offline-smoke: could not prepare the offline smoke: ${smokeGateFailureLogSummary(
+        failure,
+      )}`,
     );
+    expect(writeError.mock.calls.flat().join("\n")).not.toContain(failure);
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it("reports redacted prepare-offline-smoke failures through default reporters", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const exit = vi.spyOn(process, "exit").mockImplementation((code) => {
+      throw new Error(`process.exit(${String(code)})`);
+    });
+    const failure = "default reporter secret";
+
+    await expect(
+      runPrepareOfflineSmoke({
+        prepare: () => Promise.reject(failure),
+      }),
+    ).rejects.toThrow(/process\.exit\(1\)/u);
+
+    const errorText = consoleError.mock.calls.flat().join("\n");
+    expect(errorText).toContain(
+      `prepare-offline-smoke: could not prepare the offline smoke: ${smokeGateFailureLogSummary(
+        failure,
+      )}`,
+    );
+    expect(errorText).not.toContain(failure);
     expect(exit).toHaveBeenCalledWith(1);
   });
 
@@ -3022,12 +3078,13 @@ describe("installable package smoke optional-dependency coverage", () => {
     mkdirSync(projectDir, { recursive: true });
     const artifact = localRegistryArtifact(root);
     const locator = corepackLockFixtureLocator("setup-failure");
+    const redactionProbe = "corepack-redaction-probe-token";
     writeExecutable(
       join(binDir, "corepack"),
       [
         'import { writeSync } from "node:fs";',
         "if (process.argv[2] === 'install') {",
-        "  writeSync(2, '404 Not Found https://token:secret@registry.example.invalid/yarn.js\\n');",
+        `  writeSync(2, '404 Not Found ${redactionProbe}\\n');`,
         "  process.exit(44);",
         "}",
         "process.stderr.write('unexpected yarn install\\n'); process.exit(9);",
@@ -3045,8 +3102,110 @@ describe("installable package smoke optional-dependency coverage", () => {
       expect(errorText).toContain("corepack could not provision yarn@");
       expect(errorText).toContain("the requested version was not found");
       expect(errorText).toContain("npm run provision:smoke");
-      expect(errorText).not.toContain("token:secret");
-      expect(errorText).not.toContain("registry.example.invalid");
+      expect(errorText).not.toContain(redactionProbe);
+      expect(existsSync(corepackCacheLockDir(locator))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves redacted Corepack setup timeout diagnostics", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-yarn-setup-timeout-test-"));
+    const binDir = join(root, "bin");
+    const projectDir = join(root, "project");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(projectDir, { recursive: true });
+    const artifact = localRegistryArtifact(root);
+    const locator = corepackLockFixtureLocator("setup-timeout");
+    writeExecutable(
+      join(binDir, "corepack"),
+      [
+        "if (process.argv[2] === 'install') {",
+        "  await new Promise(() => { setInterval(() => undefined, 1000); });",
+        "}",
+        "process.stderr.write('unexpected yarn install\\n'); process.exit(9);",
+      ].join("\n"),
+    );
+
+    try {
+      const { consoleError } = rejectProcessExit();
+      await withTemporaryProcessEnvValues(
+        yarnSmokeEnv(binDir, { KEIKO_SMOKE_INSTALL_TIMEOUT_MS: "1000" }),
+        async () => {
+          await expect(
+            installIntoWithYarn(projectDir, artifact, undefined, locator),
+          ).rejects.toThrow(/process\.exit\(1\)/u);
+        },
+      );
+      const errorText = consoleError.mock.calls.flat().join("\n");
+      expect(errorText).toContain("corepack could not provision yarn@");
+      expect(errorText).toContain("corepack did not finish before the 1000ms setup timeout");
+      expect(errorText).toContain("npm run provision:smoke");
+      expect(errorText).not.toContain(root);
+      expect(existsSync(corepackCacheLockDir(locator))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves redacted Corepack missing-executable diagnostics", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-yarn-setup-enoent-test-"));
+    const binDir = join(root, "bin");
+    const projectDir = join(root, "project");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(projectDir, { recursive: true });
+    const artifact = localRegistryArtifact(root);
+    const locator = corepackLockFixtureLocator("setup-enoent");
+
+    try {
+      const { consoleError } = rejectProcessExit();
+      await withTemporaryProcessEnvValues(
+        yarnSmokeEnv(binDir, { PATH: binDir, KEIKO_SMOKE_INSTALL_TIMEOUT_MS: "1000" }),
+        async () => {
+          await expect(
+            installIntoWithYarn(projectDir, artifact, undefined, locator),
+          ).rejects.toThrow(/process\.exit\(1\)/u);
+        },
+      );
+      const errorText = consoleError.mock.calls.flat().join("\n");
+      expect(errorText).toContain("corepack could not provision yarn@");
+      expect(errorText).toContain("corepack executable was not found");
+      expect(errorText).toContain("npm run provision:smoke");
+      expect(errorText).not.toContain(root);
+      expect(existsSync(corepackCacheLockDir(locator))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves redacted Corepack permission diagnostics", async () => {
+    if (process.platform === "win32") return;
+    const root = mkdtempSync(join(tmpdir(), "keiko-yarn-setup-eacces-test-"));
+    const binDir = join(root, "bin");
+    const projectDir = join(root, "project");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(projectDir, { recursive: true });
+    const corepackPath = join(binDir, "corepack");
+    const artifact = localRegistryArtifact(root);
+    const locator = corepackLockFixtureLocator("setup-eacces");
+    writeFileSync(corepackPath, "#!/bin/sh\nexit 9\n", "utf8");
+    chmodSync(corepackPath, 0o644);
+
+    try {
+      const { consoleError } = rejectProcessExit();
+      await withTemporaryProcessEnvValues(
+        yarnSmokeEnv(binDir, { PATH: binDir, KEIKO_SMOKE_INSTALL_TIMEOUT_MS: "1000" }),
+        async () => {
+          await expect(
+            installIntoWithYarn(projectDir, artifact, undefined, locator),
+          ).rejects.toThrow(/process\.exit\(1\)/u);
+        },
+      );
+      const errorText = consoleError.mock.calls.flat().join("\n");
+      expect(errorText).toContain("corepack could not provision yarn@");
+      expect(errorText).toContain("corepack spawn failed with code EACCES");
+      expect(errorText).toContain("npm run provision:smoke");
+      expect(errorText).not.toContain(root);
       expect(existsSync(corepackCacheLockDir(locator))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });

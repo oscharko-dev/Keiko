@@ -43,7 +43,7 @@ export const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 600_000;
 export const WINDOWS_NPM_INSTALL_TIMEOUT_MS = 600_000;
 export const DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS =
   process.platform === "win32" ? WINDOWS_NPM_INSTALL_TIMEOUT_MS : DEFAULT_NPM_INSTALL_TIMEOUT_MS;
-export const NPM_INSTALL_TIMEOUT_MS = DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS;
+export const NPM_INSTALL_TIMEOUT_MS = initialNpmInstallTimeoutMs();
 const WINDOWS_SHELL_UNSAFE_ARG = /[\0\r\n&|<>^%!"]/u;
 const UI_HEALTH_TIMEOUT_MS = 30_000;
 const UI_HEALTH_POLL_INTERVAL_MS = 250;
@@ -81,6 +81,14 @@ export function isSmokeGateFailure(error) {
 
 function smokeGateFailure(message) {
   return new SmokeGateFailure(message);
+}
+
+function initialNpmInstallTimeoutMs() {
+  const value = process.env.KEIKO_SMOKE_INSTALL_TIMEOUT_MS;
+  if (value === undefined || value === "") return DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS;
+  if (!/^[1-9]\d*$/u.test(value)) return DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) ? parsed : DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS;
 }
 
 export function smokeGateFailureLogSummary(error) {
@@ -178,6 +186,22 @@ function childOutputByteSummary(result) {
   const stdoutBytes = Buffer.byteLength(String(result.stdout ?? ""), "utf8");
   const stderrBytes = Buffer.byteLength(String(result.stderr ?? ""), "utf8");
   return `stdoutBytes=${String(stdoutBytes)}, stderrBytes=${String(stderrBytes)}`;
+}
+
+function safeErrorCode(error) {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  const { code } = error;
+  return typeof code === "string" && /^[A-Z0-9_]+$/u.test(code) ? code : undefined;
+}
+
+function corepackSpawnFailureSetupSummary(error, timeoutMs) {
+  const code = safeErrorCode(error);
+  if (code === "ETIMEDOUT") {
+    return `corepack did not finish before the ${String(timeoutMs)}ms setup timeout`;
+  }
+  if (code === "ENOENT") return "corepack executable was not found";
+  if (code !== undefined) return `corepack spawn failed with code ${code}`;
+  return "corepack spawn failed before producing output";
 }
 
 const DEFAULT_ASYNC_OUTPUT_LIMIT_BYTES = 10 * 1024 * 1024;
@@ -2030,7 +2054,9 @@ function provisionPinnedYarnUnlocked(
   });
   if (result.error !== undefined) {
     throw smokeGateFailure(
-      `corepack ${provisionArgs.join(" ")} could not spawn: ${result.error.message}`,
+      `corepack could not provision ${yarnLocatorLogSummary(locator)} before the offline install ` +
+        `(${corepackSpawnFailureSetupSummary(result.error, timeoutMs)}) - re-run ` +
+        "`npm run provision:smoke` on a host with Corepack available",
     );
   }
   if (result.status !== 0) {

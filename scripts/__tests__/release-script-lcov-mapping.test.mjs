@@ -79,7 +79,7 @@ describe("release script LCOV mapping seams", () => {
     );
   }, 60_000);
 
-  it("covers the installable-smoke timeout contract without running the install smoke", () => {
+  it("covers the installable-smoke timeout contract without running the install smoke", async () => {
     expect(DEFAULT_NPM_INSTALL_TIMEOUT_MS).toBe(600_000);
     expect(WINDOWS_NPM_INSTALL_TIMEOUT_MS).toBe(600_000);
     expect(NPM_INSTALL_TIMEOUT_MS).toBe(600_000);
@@ -89,5 +89,19 @@ describe("release script LCOV mapping seams", () => {
 
     expect(parsePositiveTimeoutEnv("KEIKO_SMOKE_INSTALL_TIMEOUT_MS")).toBe(120_000);
     expect(npmInstallTimeoutMs()).toBe(120_000);
+    const moduleWithEnv = await import("../installable-package-smoke.mjs?timeout-env-support");
+
+    expect(moduleWithEnv.NPM_INSTALL_TIMEOUT_MS).toBe(120_000);
+
+    process.env.KEIKO_SMOKE_INSTALL_TIMEOUT_MS = "not-a-number";
+    const moduleWithInvalidEnv =
+      await import("../installable-package-smoke.mjs?timeout-env-invalid");
+
+    expect(moduleWithInvalidEnv.NPM_INSTALL_TIMEOUT_MS).toBe(600_000);
+
+    process.env.KEIKO_SMOKE_INSTALL_TIMEOUT_MS = String(Number.MAX_SAFE_INTEGER + 1);
+    const moduleWithUnsafeEnv = await import("../installable-package-smoke.mjs?timeout-env-unsafe");
+
+    expect(moduleWithUnsafeEnv.NPM_INSTALL_TIMEOUT_MS).toBe(600_000);
   });
 });

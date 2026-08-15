@@ -16,6 +16,7 @@ import { pathToFileURL } from "node:url";
 import {
   isSmokeGateFailure,
   prepareOfflineSmokeForSetup,
+  smokeGateFailureLogSummary,
   smokeGateFailureSetupSummary,
 } from "./installable-package-smoke.mjs";
 
@@ -35,11 +36,13 @@ export async function runPrepareOfflineSmoke(options = {}) {
       exit(1);
       return;
     }
-    // Everything else — an unwritable temp directory, a cache path that fails its ownership check —
-    // would otherwise surface as a raw Node stack trace in a CI setup step and name neither the step
-    // nor the cause.
-    const reason = error instanceof Error ? error.message : String(error);
-    writeError(`prepare-offline-smoke: could not prepare the offline smoke: ${reason}`);
+    // Everything else may carry local paths or endpoint-shaped text, so keep only the stable
+    // fingerprint and byte counts while naming the failing setup step.
+    writeError(
+      `prepare-offline-smoke: could not prepare the offline smoke: ${smokeGateFailureLogSummary(
+        error,
+      )}`,
+    );
     exit(1);
   }
 }
