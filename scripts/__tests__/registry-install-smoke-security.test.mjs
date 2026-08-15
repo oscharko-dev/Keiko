@@ -1341,6 +1341,7 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(registrySource).toContain("pinnedYarnLocatorParts(PINNED_YARN)");
     expect(registrySource).toContain("registryYarnLocator()");
     expect(registrySource).toContain("packageManager: yarnPackageManagerFromLocator(yarnLocator)");
+    expect(registrySource).toContain("smokeGateYarnLocatorParts(yarnLocator)");
     expect(registrySource).toContain("withCorepackYarnCacheLock(");
     expect(registrySource).toContain("await provisionPinnedYarnForSetup(yarnLocator, timeoutMs)");
     expect(registrySource).toContain("yarnChildEnv(registry, process.env, yarnHome, yarnLocator)");
@@ -1416,6 +1417,61 @@ describe("installable package smoke optional-dependency coverage", () => {
 
       expect(result).toBe("reclaimed");
       expect(existsSync(lockDir)).toBe(false);
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves another worker's live stale Corepack cache lock claim", async () => {
+    const lockDir = join(corepackCacheDir(), ".lock");
+    const claimPath = join(lockDir, "stale-claimer.json");
+    rmSync(lockDir, { recursive: true, force: true });
+    try {
+      mkdirSync(lockDir, { mode: 0o700 });
+      writeFileSync(
+        join(lockDir, "owner.json"),
+        JSON.stringify({ expiresAtMs: Date.now() - 1, pid: 1, token: "dead" }),
+        "utf8",
+      );
+      writeFileSync(
+        claimPath,
+        JSON.stringify({
+          claimedAt: new Date().toISOString(),
+          expiresAtMs: Date.now() + 60_000,
+          pid: 2,
+          token: "other-worker",
+        }),
+        "utf8",
+      );
+
+      await expect(withCorepackYarnCacheLock(PINNED_YARN, () => "blocked", 25)).rejects.toThrow(
+        /timed out waiting for Corepack cache lock/u,
+      );
+
+      expect(JSON.parse(readFileSync(claimPath, "utf8")).token).toBe("other-worker");
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a fresh legacy Corepack cache lock claim until its mtime lease expires", async () => {
+    const lockDir = join(corepackCacheDir(), ".lock");
+    const claimPath = join(lockDir, "stale-claimer.json");
+    rmSync(lockDir, { recursive: true, force: true });
+    try {
+      mkdirSync(lockDir, { mode: 0o700 });
+      writeFileSync(
+        join(lockDir, "owner.json"),
+        JSON.stringify({ expiresAtMs: Date.now() - 1, pid: 1, token: "dead" }),
+        "utf8",
+      );
+      writeFileSync(claimPath, "{}\n", "utf8");
+
+      await expect(withCorepackYarnCacheLock(PINNED_YARN, () => "blocked", 25)).rejects.toThrow(
+        /timed out waiting for Corepack cache lock/u,
+      );
+
+      expect(readFileSync(claimPath, "utf8")).toBe("{}\n");
     } finally {
       rmSync(lockDir, { recursive: true, force: true });
     }
@@ -2242,6 +2298,67 @@ describe("installable package smoke optional-dependency coverage", () => {
       process.env.PATH = previousPath;
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("rejects test-only Yarn locators outside Vitest as a smoke gate failure", () => {
+    const env = { ...process.env, NODE_ENV: "production" };
+    delete env.VITEST_WORKER_ID;
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        [
+          'import { isSmokeGateFailure } from "./scripts/installable-package-smoke.mjs";',
+          'import { runRegistryInstallSmokeForTest } from "./scripts/registry-install-smoke.mjs";',
+          "try {",
+          `  await runRegistryInstallSmokeForTest(${JSON.stringify(PINNED_YARN)});`,
+          "  process.exit(64);",
+          "} catch (error) {",
+          "  if (!isSmokeGateFailure(error)) throw error;",
+          "  process.stdout.write(error.message);",
+          "}",
+        ].join("\n"),
+      ],
+      { cwd: ROOT, encoding: "utf8", env },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/fixture Yarn locators are only accepted inside Vitest/u);
+  });
+
+  it("rejects test Yarn locators without integrity as a smoke gate failure", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        [
+          'import { isSmokeGateFailure } from "./scripts/installable-package-smoke.mjs";',
+          'import { runRegistryInstallSmokeForTest } from "./scripts/registry-install-smoke.mjs";',
+          "try {",
+          `  await runRegistryInstallSmokeForTest("yarn@${PINNED_YARN_VERSION}");`,
+          "  process.exit(64);",
+          "} catch (error) {",
+          "  if (!isSmokeGateFailure(error)) throw error;",
+          "  process.stdout.write(error.message);",
+          "}",
+        ].join("\n"),
+      ],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_ENV: "test",
+          VITEST_WORKER_ID: process.env.VITEST_WORKER_ID ?? "1",
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/Yarn locator is invalid/u);
   });
 
   it.each([undefined, 0, Number.NaN, Number.POSITIVE_INFINITY])(

@@ -28,7 +28,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import ts from "typescript";
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { resolveHostExecutable, shellCommandForTrustedExecutable } from "./lib/host-executable.mjs";
 import {
   PINNED_YARN,
   PINNED_YARN_NAME,
@@ -96,16 +96,19 @@ export function parsePositiveTimeoutEnv(name) {
   return parsed;
 }
 
+function commandForPlatform(cmd, options = {}) {
+  if (process.platform !== "win32" || (cmd !== "npm" && cmd !== "corepack")) {
+    return { command: cmd, shell: false };
+  }
+  const executable = resolveHostExecutable(cmd, { env: options.env ?? process.env });
+  return { command: shellCommandForTrustedExecutable(executable), shell: true };
+}
+
 function runResult(cmd, args, options = {}) {
-  // SECURITY-SHELL-OK: npm-only Windows .cmd compatibility; node/bin paths stay shell:false.
-  // `npm` resolves to `npm.cmd` on Windows, which modern Node refuses to spawn without a shell
-  // (CVE-2024-27980 hardening); route npm — and only npm — through the shell so the packaged-artifact
-  // smoke is cross-platform (the #284 OS matrix surfaced this). `node` is a real executable and is
-  // spawned directly (no shell) so absolute bin paths never pass through shell word-splitting. The
-  // npm arguments are tool-internal literals plus a tarball path under a controlled directory — no
-  // untrusted shell input. POSIX is unaffected: the shell runs the same `npm …` invocation.
-  const needsShell = process.platform === "win32" && (cmd === "npm" || cmd === "corepack");
-  return spawnSync(cmd, args, { encoding: "utf8", shell: needsShell, ...options });
+  // SECURITY-SHELL-OK: npm/corepack Windows .cmd compatibility, with the executable resolved to a
+  // trusted absolute path before the shell is enabled. POSIX and node/bin paths stay shell:false.
+  const { command, shell } = commandForPlatform(cmd, options);
+  return spawnSync(command, args, { encoding: "utf8", ...options, shell });
 }
 
 function run(cmd, args, options = {}) {
@@ -156,20 +159,20 @@ function settleTimedOutProcess(child, stdout, stderr, settle) {
 }
 
 export function runAsync(cmd, args, options = {}) {
-  const needsShell = process.platform === "win32" && (cmd === "npm" || cmd === "corepack");
   const { timeout, ...spawnOptions } = options;
   if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) {
     throw new TypeError("runAsync requires a positive finite timeout in milliseconds");
   }
+  const { command, shell } = commandForPlatform(cmd, spawnOptions);
   return new Promise((resolvePromise) => {
     let settled = false;
     const stdout = [];
     const stderr = [];
-    // SECURITY-SHELL-OK: corepack-only Windows .cmd compatibility; argv is fixed by this smoke.
-    const child = spawn(cmd, args, {
+    // SECURITY-SHELL-OK: npm/corepack Windows .cmd compatibility, with trusted absolute executable.
+    const child = spawn(command, args, {
       ...spawnOptions,
       detached: process.platform !== "win32",
-      shell: needsShell,
+      shell,
       stdio: ["ignore", "pipe", "pipe"],
     });
     child.stdout?.on("data", (chunk) => stdout.push(String(chunk)));
@@ -278,41 +281,101 @@ function staleClaimPath(lockDir) {
   return join(lockDir, COREPACK_CACHE_STALE_CLAIM_FILE);
 }
 
-function removeExpiredStaleClaim(lockDir) {
+function staleClaimTombstonePath(lockDir) {
+  return join(
+    lockDir,
+    `${COREPACK_CACHE_STALE_CLAIM_FILE}.${process.pid}.${randomBytes(9).toString("hex")}`,
+  );
+}
+
+function readCorepackCacheStaleClaim(path) {
   try {
-    const path = staleClaimPath(lockDir);
-    if (Date.now() - statSync(path).mtimeMs <= COREPACK_CACHE_STALE_CLAIM_STALE_MS) return false;
-    rmSync(path, { force: true });
-    return true;
+    const claim = JSON.parse(readFileSync(path, "utf8"));
+    return {
+      expiresAtMs:
+        typeof claim?.expiresAtMs === "number" && Number.isFinite(claim.expiresAtMs)
+          ? claim.expiresAtMs
+          : undefined,
+      token: typeof claim?.token === "string" ? claim.token : undefined,
+    };
+  } catch {
+    return { expiresAtMs: undefined, token: undefined };
+  }
+}
+
+function staleClaimIsExpired(claim, stats) {
+  const expiresAtMs = claim.expiresAtMs ?? stats.mtimeMs + COREPACK_CACHE_STALE_CLAIM_STALE_MS;
+  return Date.now() > expiresAtMs;
+}
+
+function restoreLiveStaleClaim(claimPath, tombstonePath) {
+  try {
+    writeFileSync(claimPath, readFileSync(tombstonePath), { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    rmSync(tombstonePath, { force: true });
+    if (COREPACK_CACHE_STALE_CLAIM_RACE_CODES.has(error?.code)) return false;
+    throw error;
+  }
+  rmSync(tombstonePath, { force: true });
+  return false;
+}
+
+function removeExpiredStaleClaim(lockDir) {
+  const claimPath = staleClaimPath(lockDir);
+  const tombstonePath = staleClaimTombstonePath(lockDir);
+  try {
+    renameSync(claimPath, tombstonePath);
   } catch (error) {
     if (COREPACK_CACHE_LOCK_MISSING_CODES.has(error?.code)) return true;
     throw error;
   }
+  const claim = readCorepackCacheStaleClaim(tombstonePath);
+  if (!staleClaimIsExpired(claim, statSync(tombstonePath))) {
+    return restoreLiveStaleClaim(claimPath, tombstonePath);
+  }
+  rmSync(tombstonePath, { force: true });
+  return true;
 }
 
 function writeStaleCorepackCacheClaim(lockDir) {
+  const token = `${process.pid}-${randomBytes(9).toString("hex")}`;
+  const claimedAtMs = Date.now();
   try {
     writeFileSync(
       staleClaimPath(lockDir),
-      JSON.stringify({ claimedAt: new Date().toISOString(), pid: process.pid }),
+      JSON.stringify({
+        claimedAt: new Date(claimedAtMs).toISOString(),
+        expiresAtMs: claimedAtMs + COREPACK_CACHE_STALE_CLAIM_STALE_MS,
+        pid: process.pid,
+        token,
+      }),
       { encoding: "utf8", flag: "wx", mode: 0o600 },
     );
-    return true;
+    return token;
   } catch (error) {
-    if (COREPACK_CACHE_STALE_CLAIM_RACE_CODES.has(error?.code)) return false;
+    if (COREPACK_CACHE_STALE_CLAIM_RACE_CODES.has(error?.code)) return undefined;
     throw error;
   }
 }
 
 function claimStaleCorepackCacheLock(lockDir) {
-  if (writeStaleCorepackCacheClaim(lockDir)) return true;
-  return removeExpiredStaleClaim(lockDir) && writeStaleCorepackCacheClaim(lockDir);
+  const token = writeStaleCorepackCacheClaim(lockDir);
+  if (token !== undefined) return token;
+  if (!removeExpiredStaleClaim(lockDir)) return undefined;
+  return writeStaleCorepackCacheClaim(lockDir);
 }
 
 function removeStaleCorepackCacheLock(lockDir, timeoutMs) {
   const stats = statCorepackCacheLock(lockDir);
   if (stats === undefined || !corepackCacheLockIsStale(lockDir, stats, timeoutMs)) return;
-  if (claimStaleCorepackCacheLock(lockDir) && sameDirectoryIdentity(stats, statSync(lockDir))) {
+  const claimToken = claimStaleCorepackCacheLock(lockDir);
+  const currentStats = statCorepackCacheLock(lockDir);
+  if (
+    claimToken !== undefined &&
+    currentStats !== undefined &&
+    readCorepackCacheStaleClaim(staleClaimPath(lockDir)).token === claimToken &&
+    sameDirectoryIdentity(stats, currentStats)
+  ) {
     rmSync(lockDir, { recursive: true, force: true });
   }
 }

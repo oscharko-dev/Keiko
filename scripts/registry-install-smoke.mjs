@@ -15,6 +15,7 @@ import {
   isSmokeGateFailure,
   privateYarnHome,
   provisionPinnedYarnForSetup,
+  SmokeGateFailure,
   withCorepackYarnCacheLock,
   yarnChildEnv,
   YARN_RC_FILENAME,
@@ -31,11 +32,24 @@ function registryYarnLocator() {
   return PINNED_YARN;
 }
 
+function smokeGateYarnLocatorParts(locator) {
+  try {
+    return yarnLocatorParts(locator);
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new SmokeGateFailure(
+        `registry install smoke Yarn locator is invalid: ${error.message}`,
+      );
+    }
+    throw error;
+  }
+}
+
 function testRegistryYarnLocator(locator) {
   if (process.env.NODE_ENV !== "test" || process.env[TEST_RUNNER_ENV] === undefined) {
-    throw new TypeError("fixture Yarn locators are only accepted inside Vitest");
+    throw new SmokeGateFailure("fixture Yarn locators are only accepted inside Vitest");
   }
-  yarnLocatorParts(locator);
+  smokeGateYarnLocatorParts(locator);
   return locator;
 }
 const timeoutMs = Number.parseInt(process.env.KEIKO_REGISTRY_INSTALL_TIMEOUT_MS ?? "300000", 10);
@@ -163,6 +177,7 @@ async function npmSmoke() {
 }
 
 function writeYarnSmokeManifest(projectDir, yarnLocator) {
+  smokeGateYarnLocatorParts(yarnLocator);
   writeFileSync(
     join(projectDir, "package.json"),
     JSON.stringify(
