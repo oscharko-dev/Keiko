@@ -52,7 +52,7 @@ const REQUIRED_DIST_ENTRYPOINTS = [PROBE_EXPECTED_RESOLVED];
 // widening (audit KEIKO-0255) so trust rules 1, 4 and 5 are proven live by name here instead of
 // being silently pruned before evaluation. This override must stay a superset of the production
 // `includeOnly`; assertProductionIncludeOnlyIsCovered() below fails the gate if it drifts below it.
-const INCLUDE_ONLY_OVERRIDE = String.raw`^(tests/architecture/fixtures|\.\./|src|packages/[^/]+/(src|dist)|(node_modules/)?(openai|@anthropic-ai/|[^/]+-ai-sdk)($|/)|(node:)?fs(/promises)?$)`;
+const INCLUDE_ONLY_OVERRIDE = String.raw`^(tests/architecture/fixtures|\.\./|src|packages/[^/]+/(src|dist)|(node_modules/)?(openai($|/)|@anthropic-ai/|[^/]+-ai-sdk($|/))|(node:)?fs(/promises)?$)`;
 
 // One expected rule per physically-extracted package boundary. Most rules should fire exactly once
 // against their dedicated fixture subdir; workflows intentionally fires twice because it pins both

@@ -877,7 +877,10 @@ module.exports = {
         path: "^(packages/keiko-|src/|tests/architecture/fixtures/provider-sdk-isolation/)",
         pathNot: "^(packages/keiko-model-gateway/|src/gateway/)",
       },
-      to: { path: "^(node_modules/)?(openai|@anthropic-ai/|[^/]+-ai-sdk)($|/)" },
+      // The `($|/)` boundary keeps `openai` from matching `openai-adjacent`, but it must NOT be
+      // applied to `@anthropic-ai/`, which already ends in the separator — requiring another one
+      // made the scoped SDK unmatchable. Each alternative carries its own boundary.
+      to: { path: "^(node_modules/)?(openai($|/)|@anthropic-ai/|[^/]+-ai-sdk($|/))" },
     },
     {
       name: "adr-0019-trust-2-ui-no-provider-config",
@@ -1032,7 +1035,7 @@ module.exports = {
     // boundaries — this restores the dependency-cruiser layer alongside it, it does not replace it.
     includeOnly:
       "^(src|packages/[^/]+/(src|dist)|" +
-      "(node_modules/)?(openai|@anthropic-ai/|[^/]+-ai-sdk)($|/)|" +
+      "(node_modules/)?(openai($|/)|@anthropic-ai/|[^/]+-ai-sdk($|/))|" +
       "(node:)?fs(/promises)?$)",
   },
 };
