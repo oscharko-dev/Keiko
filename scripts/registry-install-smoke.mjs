@@ -60,22 +60,25 @@ function testRegistryYarnLocator(locator) {
   smokeGateYarnLocatorParts(locator);
   return locator;
 }
-const timeoutMs = parseRegistryInstallTimeoutEnv();
 
 function fail(message) {
   console.error(`registry-install-smoke failed: ${message}`);
   process.exit(1);
 }
 
-function parseRegistryInstallTimeoutEnv() {
+function registryInstallTimeoutMs() {
   const value = process.env.KEIKO_REGISTRY_INSTALL_TIMEOUT_MS;
   if (value === undefined || value === "") return 300_000;
   if (!/^[1-9]\d*$/u.test(value)) {
-    fail("KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be a positive integer number of milliseconds.");
+    throw new SmokeGateFailure(
+      "KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be a positive integer number of milliseconds.",
+    );
   }
   const parsed = Number.parseInt(value, 10);
   if (!Number.isSafeInteger(parsed)) {
-    fail("KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be a safe integer number of milliseconds.");
+    throw new SmokeGateFailure(
+      "KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be a safe integer number of milliseconds.",
+    );
   }
   return parsed;
 }
@@ -100,7 +103,7 @@ function assertTlsVerificationEnabled() {
   );
 }
 
-function run(cmd, args, options = {}) {
+function run(cmd, args, timeoutMs, options = {}) {
   const result = spawnSync(cmd, args, {
     encoding: "utf8",
     timeout: timeoutMs,
@@ -169,21 +172,21 @@ async function assertRootImport(projectDir) {
   }
 }
 
-async function assertInstalledRuntime(projectDir) {
+async function assertInstalledRuntime(projectDir, timeoutMs) {
   const bin = join(installedPackageRoot(projectDir), "dist", "cli", "index.js");
-  const result = run(process.execPath, [bin, "--version"], { cwd: projectDir });
+  const result = run(process.execPath, [bin, "--version"], timeoutMs, { cwd: projectDir });
   if (!result.stdout.includes(rootManifest.version)) {
     fail(
       `installed CLI version output did not include ${rootManifest.version} ` +
         `(${outputByteSummary(result)})`,
     );
   }
-  run(process.execPath, [bin, "--help"], { cwd: projectDir });
+  run(process.execPath, [bin, "--help"], timeoutMs, { cwd: projectDir });
   assertVendoredPayload(projectDir);
   await assertRootImport(projectDir);
 }
 
-async function npmSmoke() {
+async function npmSmoke(timeoutMs) {
   const projectDir = mkdtempSync(join(tmpdir(), "keiko-registry-npm-"));
   try {
     writeFileSync(
@@ -200,10 +203,14 @@ async function npmSmoke() {
     run(
       "npm",
       ["install", packageSpec, "--ignore-scripts", "--no-audit", "--no-fund", "--omit=optional"],
-      // SECURITY-SHELL-OK: npm-only Windows .cmd compatibility for install smoke; argv is fixed.
-      { cwd: projectDir, shell: process.platform === "win32" },
+      timeoutMs,
+      {
+        cwd: projectDir,
+        // SECURITY-SHELL-OK: npm-only Windows .cmd compatibility for install smoke; argv is fixed.
+        shell: process.platform === "win32",
+      },
     );
-    await assertInstalledRuntime(projectDir);
+    await assertInstalledRuntime(projectDir, timeoutMs);
   } finally {
     rmSync(projectDir, { recursive: true, force: true });
   }
@@ -244,7 +251,7 @@ function writeYarnSmokeConfiguration(projectDir) {
   );
 }
 
-async function runCorepackYarnInstall(projectDir, yarnHome, yarnLocator, installArgs) {
+async function runCorepackYarnInstall(projectDir, yarnHome, yarnLocator, installArgs, timeoutMs) {
   return await withCorepackYarnCacheLock(
     yarnLocator,
     async () => {
@@ -260,10 +267,16 @@ async function runCorepackYarnInstall(projectDir, yarnHome, yarnLocator, install
   );
 }
 
-async function checkedCorepackYarnInstall(projectDir, yarnHome, yarnLocator) {
+async function checkedCorepackYarnInstall(projectDir, yarnHome, yarnLocator, timeoutMs) {
   const installArgs = ["yarn", "install", "--no-immutable", "--mode=skip-build"];
   try {
-    const result = await runCorepackYarnInstall(projectDir, yarnHome, yarnLocator, installArgs);
+    const result = await runCorepackYarnInstall(
+      projectDir,
+      yarnHome,
+      yarnLocator,
+      installArgs,
+      timeoutMs,
+    );
     assertRunSucceeded("corepack", installArgs, result);
   } catch (error) {
     if (isSmokeGateFailure(error)) fail(error.message);
@@ -271,14 +284,14 @@ async function checkedCorepackYarnInstall(projectDir, yarnHome, yarnLocator) {
   }
 }
 
-async function yarnSmoke(yarnLocator) {
+async function yarnSmoke(yarnLocator, timeoutMs) {
   const projectDir = mkdtempSync(join(tmpdir(), "keiko-registry-yarn-"));
   const yarnHome = privateYarnHome();
   try {
     writeYarnSmokeManifest(projectDir, yarnLocator);
     writeYarnSmokeConfiguration(projectDir);
-    await checkedCorepackYarnInstall(projectDir, yarnHome, yarnLocator);
-    await assertInstalledRuntime(projectDir);
+    await checkedCorepackYarnInstall(projectDir, yarnHome, yarnLocator, timeoutMs);
+    await assertInstalledRuntime(projectDir, timeoutMs);
   } finally {
     rmSync(yarnHome, { recursive: true, force: true });
     rmSync(projectDir, { recursive: true, force: true });
@@ -286,9 +299,10 @@ async function yarnSmoke(yarnLocator) {
 }
 
 async function runRegistryInstallSmokeWithLocator(yarnLocator) {
+  const timeoutMs = registryInstallTimeoutMs();
   assertTlsVerificationEnabled();
-  await npmSmoke();
-  await yarnSmoke(yarnLocator);
+  await npmSmoke(timeoutMs);
+  await yarnSmoke(yarnLocator, timeoutMs);
 
   console.log(`registry-install-smoke: PASS - ${packageSpec} installs from ${registry}.`);
 }
@@ -302,5 +316,10 @@ export async function runRegistryInstallSmokeForTest(yarnLocator) {
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await runRegistryInstallSmoke();
+  try {
+    await runRegistryInstallSmoke();
+  } catch (error) {
+    if (isSmokeGateFailure(error)) fail(error.message);
+    throw error;
+  }
 }

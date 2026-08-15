@@ -2388,20 +2388,39 @@ describe("installable package smoke optional-dependency coverage", () => {
   it("rejects malformed registry install timeouts before smoke work starts", () => {
     const result = spawnSync(
       process.execPath,
-      ["--input-type=module", "-e", 'import "./scripts/registry-install-smoke.mjs";'],
+      [
+        "--input-type=module",
+        "-e",
+        [
+          'import { isSmokeGateFailure } from "./scripts/installable-package-smoke.mjs";',
+          'import { runRegistryInstallSmokeForTest } from "./scripts/registry-install-smoke.mjs";',
+          "try {",
+          `  await runRegistryInstallSmokeForTest(${JSON.stringify(PINNED_YARN)});`,
+          "  process.exit(64);",
+          "} catch (error) {",
+          "  if (!isSmokeGateFailure(error)) throw error;",
+          "  process.stdout.write(error.message);",
+          "}",
+        ].join("\n"),
+      ],
       {
         cwd: ROOT,
         encoding: "utf8",
-        env: { ...process.env, KEIKO_REGISTRY_INSTALL_TIMEOUT_MS: "not-a-number" },
+        env: {
+          ...process.env,
+          KEIKO_REGISTRY_INSTALL_TIMEOUT_MS: "not-a-number",
+          NODE_ENV: "test",
+          VITEST_WORKER_ID: process.env.VITEST_WORKER_ID ?? "1",
+        },
         timeout: 30_000,
       },
     );
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain(
       "KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be a positive integer number of milliseconds.",
     );
-    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
   });
 
   it("rejects test-only Yarn locators outside Vitest as a smoke gate failure", () => {
