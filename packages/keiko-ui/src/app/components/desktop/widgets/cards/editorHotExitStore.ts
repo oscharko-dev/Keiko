@@ -192,13 +192,14 @@ function shouldPrune(now: number, incomingBytes: number): boolean {
 
 async function pruneIfNeeded(db: IDBDatabase, record: EditorHotExitIndexRecordV2): Promise<void> {
   const incomingBytes = chargedBytes(record);
-  const now = recordTtlBasis(record);
-  if (!shouldPrune(now, incomingBytes)) {
+  const ttlBasisNow = recordTtlBasis(record);
+  const pruneAttemptedAt = Date.now();
+  if (!shouldPrune(pruneAttemptedAt, incomingBytes)) {
     bytesSinceLastPrune += incomingBytes;
     return;
   }
-  await prune(db, now, record);
-  lastPruneAt = now;
+  await prune(db, ttlBasisNow, record);
+  lastPruneAt = pruneAttemptedAt;
   bytesSinceLastPrune = 0;
   forceNextPrune = incomingBytes >= MAX_TOTAL_BYTES;
 }

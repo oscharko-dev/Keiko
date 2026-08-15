@@ -11,6 +11,7 @@ import {
   EDITOR_HOT_EXIT_TTL_MS,
   type EditorDocumentVersion,
   type EditorHotExitSnapshotV1,
+  type EditorHotExitWriteStoredResponse,
 } from "@oscharko-dev/keiko-contracts";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
@@ -40,11 +41,7 @@ export interface EditorHotExitStoredSnapshot {
   readonly windowId: string;
 }
 
-export interface EditorHotExitWriteResult {
-  readonly snapshotRef: string;
-  readonly contentSizeBytes: number;
-  readonly serverReceivedAt: number;
-}
+export type EditorHotExitWriteResult = EditorHotExitWriteStoredResponse;
 
 export interface EditorHotExitStore {
   readonly snapshotRefFor: (workspaceRoot: string, relativePath: string) => string;

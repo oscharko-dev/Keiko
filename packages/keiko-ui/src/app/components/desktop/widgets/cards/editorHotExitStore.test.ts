@@ -45,6 +45,7 @@ const hotExitApi = vi.hoisted(() => {
         savedContentHash: snapshot.savedContentHash,
         contentSizeBytes: contentSizeBytes(snapshot.content),
         updatedAt: snapshot.updatedAt,
+        serverReceivedAt: receivedAt,
         paneId: snapshot.paneId,
         windowId: snapshot.windowId,
       });
