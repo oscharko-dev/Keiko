@@ -11,23 +11,39 @@
 //
 // Idempotent: a cached tool and an existing seed are left alone.
 
+import { pathToFileURL } from "node:url";
+
 import {
   isSmokeGateFailure,
   prepareOfflineSmokeForSetup,
   smokeGateFailureSetupSummary,
 } from "./installable-package-smoke.mjs";
 
-try {
-  await prepareOfflineSmokeForSetup();
-} catch (error) {
-  if (isSmokeGateFailure(error)) {
-    console.error(`installable-smoke failed: ${smokeGateFailureSetupSummary(error)}`);
-    process.exit(1);
+export async function runPrepareOfflineSmoke(options = {}) {
+  const {
+    exit = (code) => process.exit(code),
+    isFailure = isSmokeGateFailure,
+    prepare = prepareOfflineSmokeForSetup,
+    setupSummary = smokeGateFailureSetupSummary,
+    writeError = (message) => console.error(message),
+  } = options;
+  try {
+    await prepare();
+  } catch (error) {
+    if (isFailure(error)) {
+      writeError(`installable-smoke failed: ${setupSummary(error)}`);
+      exit(1);
+      return;
+    }
+    // Everything else — an unwritable temp directory, a cache path that fails its ownership check —
+    // would otherwise surface as a raw Node stack trace in a CI setup step and name neither the step
+    // nor the cause.
+    const reason = error instanceof Error ? error.message : String(error);
+    writeError(`prepare-offline-smoke: could not prepare the offline smoke: ${reason}`);
+    exit(1);
   }
-  // Everything else — an unwritable temp directory, a cache path that fails its ownership check —
-  // would otherwise surface as a raw Node stack trace in a CI setup step and name neither the step
-  // nor the cause.
-  const reason = error instanceof Error ? error.message : String(error);
-  console.error(`prepare-offline-smoke: could not prepare the offline smoke: ${reason}`);
-  process.exit(1);
+}
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await runPrepareOfflineSmoke();
 }
