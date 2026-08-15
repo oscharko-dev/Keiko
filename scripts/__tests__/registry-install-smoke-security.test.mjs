@@ -87,7 +87,7 @@ function rejectProcessExit() {
 }
 
 function writeExecutable(path, body) {
-  writeFileSync(path, `#!/usr/bin/env node\n${body}\n`, "utf8");
+  writeFileSync(path, `#!${process.execPath}\n${body}\n`, "utf8");
   chmodSync(path, 0o755);
 }
 
@@ -140,8 +140,7 @@ function isolatedChildEnv(root, extraEnv = {}) {
   const sandboxTmp = join(root, "tmp");
   mkdirSync(sandboxTmp, { recursive: true });
   return {
-    ...process.env,
-    PATH: `${join(root, "bin")}${delimiter}${process.env.PATH ?? ""}`,
+    PATH: join(root, "bin"),
     TMPDIR: sandboxTmp,
     TMP: sandboxTmp,
     TEMP: sandboxTmp,
@@ -158,15 +157,23 @@ function runIsolatedSmokeModule(root, source, extraEnv = {}) {
   });
 }
 
-function runProvisionPinnedYarnChild(root, extraEnv = {}) {
+function runProvisionPinnedYarnChild(root, extraEnv = {}, locator = PINNED_YARN) {
   return runIsolatedSmokeModule(
     root,
     [
       'import { provisionPinnedYarnForSetup } from "./scripts/installable-package-smoke.mjs";',
-      "provisionPinnedYarnForSetup();",
+      `provisionPinnedYarnForSetup(${JSON.stringify(locator)});`,
     ].join("\n"),
     extraEnv,
   );
+}
+
+function yarnSha512ForBytes(bytes) {
+  return createHash("sha512").update(bytes).digest("hex");
+}
+
+function yarnLocatorForBytes(version, bytes) {
+  return `yarn@${version}+sha512.${yarnSha512ForBytes(bytes)}`;
 }
 
 describe("registry install smoke security posture", () => {
@@ -1248,6 +1255,7 @@ describe("installable package smoke optional-dependency coverage", () => {
       "https://repo.yarnpkg.com/4.9.1/packages/yarnpkg-cli/bin/yarn.js",
     );
     expect(pinnedYarnVersionFromLocator(PINNED_YARN)).toBe(PINNED_YARN_VERSION);
+    expect(() => pinnedYarnVersionFromLocator(`yarn@${PINNED_YARN_VERSION}`)).toThrow(TypeError);
     expect(installableSource).toContain("packageManager: PINNED_YARN");
     expect(registrySource).toContain("packageManager: PINNED_YARN");
     expect(installableSource).not.toContain('const PINNED_YARN = "yarn@4.9.1"');
@@ -1305,22 +1313,39 @@ describe("installable package smoke optional-dependency coverage", () => {
 
   it("keeps the Corepack cache key and lookup stable across a hash change", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-corepack-cache-key-test-"));
+    const fixtureBytes = "fixture Yarn bytes\n";
+    const fixtureLocator = yarnLocatorForBytes(PINNED_YARN_VERSION, fixtureBytes);
+    const fixtureHash = yarnSha512ForBytes(fixtureBytes);
     const alternateHashLocator = `yarn@${PINNED_YARN_VERSION}+sha512.${"0".repeat(128)}`;
     try {
       const result = runIsolatedSmokeModule(
         root,
         [
-          'import { mkdirSync } from "node:fs";',
+          'import { mkdirSync, writeFileSync } from "node:fs";',
           'import { join } from "node:path";',
           "import { corepackCacheDir, isPinnedYarnCached } from './scripts/installable-package-smoke.mjs';",
-          "import { PINNED_YARN, PINNED_YARN_VERSION } from './scripts/lib/pinned-yarn.mjs';",
+          "import { PINNED_YARN_NAME, PINNED_YARN_VERSION } from './scripts/lib/pinned-yarn.mjs';",
+          `const locator = ${JSON.stringify(fixtureLocator)};`,
           `const alternate = ${JSON.stringify(alternateHashLocator)};`,
-          "const originalDir = corepackCacheDir(PINNED_YARN);",
+          `const fixtureBytes = ${JSON.stringify(fixtureBytes)};`,
+          `const fixtureHash = ${JSON.stringify(fixtureHash)};`,
+          "const originalDir = corepackCacheDir(locator);",
           "const alternateDir = corepackCacheDir(alternate);",
-          "mkdirSync(join(originalDir, 'v1', 'yarn', PINNED_YARN_VERSION), { recursive: true });",
+          "const entry = join(originalDir, 'v1', PINNED_YARN_NAME, PINNED_YARN_VERSION);",
+          "mkdirSync(entry, { recursive: true });",
+          "writeFileSync(",
+          "  join(entry, '.corepack'),",
+          "  JSON.stringify({",
+          "    locator: { name: PINNED_YARN_NAME, reference: PINNED_YARN_VERSION },",
+          "    bin: ['yarn', 'yarnpkg'],",
+          "    hash: `sha512.${fixtureHash}`,",
+          "  }),",
+          "  'utf8',",
+          ");",
+          "writeFileSync(join(entry, 'yarn.js'), fixtureBytes, 'utf8');",
           "console.log(JSON.stringify({",
           "  sameDir: originalDir === alternateDir,",
-          "  originalCached: isPinnedYarnCached(PINNED_YARN),",
+          "  originalCached: isPinnedYarnCached(locator),",
           "  alternateCached: isPinnedYarnCached(alternate),",
           "}));",
         ].join("\n"),
@@ -1331,7 +1356,7 @@ describe("installable package smoke optional-dependency coverage", () => {
       expect(outcome).toEqual({
         sameDir: true,
         originalCached: true,
-        alternateCached: true,
+        alternateCached: false,
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1342,6 +1367,9 @@ describe("installable package smoke optional-dependency coverage", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-corepack-cold-cache-test-"));
     const binDir = join(root, "bin");
     const marker = join(root, "corepack-call.json");
+    const fixtureBytes = "freshly downloaded Yarn bytes\n";
+    const fixtureLocator = yarnLocatorForBytes(PINNED_YARN_VERSION, fixtureBytes);
+    const fixtureHash = yarnSha512ForBytes(fixtureBytes);
     mkdirSync(binDir, { recursive: true });
     try {
       writeExecutable(
@@ -1358,23 +1386,45 @@ describe("installable package smoke optional-dependency coverage", () => {
           "  }),",
           "  'utf8',",
           ");",
+          "const entry = join(",
+          "  process.env.COREPACK_HOME,",
+          "  'v1',",
+          "  'yarn',",
+          "  process.env.PINNED_YARN_VERSION,",
+          ");",
           "mkdirSync(",
-          "  join(process.env.COREPACK_HOME, 'v1', 'yarn', process.env.PINNED_YARN_VERSION),",
+          "  entry,",
           "  { recursive: true },",
           ");",
+          "writeFileSync(",
+          "  join(entry, '.corepack'),",
+          "  JSON.stringify({",
+          "    locator: { name: 'yarn', reference: process.env.PINNED_YARN_VERSION },",
+          "    bin: ['yarn', 'yarnpkg'],",
+          "    hash: `sha512.${process.env.PINNED_YARN_SHA512}`,",
+          "  }),",
+          "  'utf8',",
+          ");",
+          "writeFileSync(join(entry, 'yarn.js'), process.env.FIXTURE_YARN_BYTES, 'utf8');",
         ].join("\n"),
       );
-      const result = runProvisionPinnedYarnChild(root, {
-        KEIKO_COREPACK_MARKER: marker,
-        PINNED_YARN_VERSION,
-      });
+      const result = runProvisionPinnedYarnChild(
+        root,
+        {
+          FIXTURE_YARN_BYTES: fixtureBytes,
+          KEIKO_COREPACK_MARKER: marker,
+          PINNED_YARN_SHA512: fixtureHash,
+          PINNED_YARN_VERSION,
+        },
+        fixtureLocator,
+      );
       const record = JSON.parse(readFileSync(marker, "utf8"));
 
       expect(result.status).toBe(0);
-      expect(record.argv).toEqual(["install", "--global", "--cache-only", PINNED_YARN]);
+      expect(record.argv).toEqual(["install", "--global", "--cache-only", fixtureLocator]);
       expect(record.corepackHome).toContain(`keiko-corepack-yarn-${PINNED_YARN_VERSION}-`);
       expect(record.network).toBe("1");
-      expect(result.stdout).toContain(`provision-pinned-yarn: ${PINNED_YARN} cached`);
+      expect(result.stdout).toContain(`provision-pinned-yarn: ${fixtureLocator} cached`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -12,13 +12,22 @@ export const PINNED_YARN_SOURCE_URL =
 // npm tarball integrity; Corepack validates the downloaded JS bytes.
 export const PINNED_YARN = `${PINNED_YARN_NAME}@${PINNED_YARN_VERSION}+sha512.${PINNED_YARN_SHA512}`;
 
-const PINNED_YARN_LOCATOR_PATTERN = /^yarn@(?<version>\d+\.\d+\.\d+)(?:\+sha512\.[a-f0-9]{128})?$/u;
+const PINNED_YARN_LOCATOR_PATTERN =
+  /^yarn@(?<version>\d+\.\d+\.\d+)\+sha512\.(?<sha512>[a-f0-9]{128})$/u;
+
+export function pinnedYarnLocatorParts(locator) {
+  const match = PINNED_YARN_LOCATOR_PATTERN.exec(locator);
+  const parts = match?.groups;
+  if (parts?.version === undefined || parts.sha512 === undefined) {
+    throw new TypeError("pinned Yarn locator must be yarn@<version>+sha512.<128-hex>");
+  }
+  return { version: parts.version, sha512: parts.sha512 };
+}
 
 export function pinnedYarnVersionFromLocator(locator) {
-  const match = PINNED_YARN_LOCATOR_PATTERN.exec(locator);
-  const version = match?.groups?.version;
-  if (version === undefined) {
-    throw new TypeError("pinned Yarn locator must be yarn@<version>[+sha512.<128-hex>]");
-  }
-  return version;
+  return pinnedYarnLocatorParts(locator).version;
+}
+
+export function pinnedYarnSha512FromLocator(locator) {
+  return pinnedYarnLocatorParts(locator).sha512;
 }

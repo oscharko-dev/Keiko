@@ -29,7 +29,13 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import ts from "typescript";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
-import { PINNED_YARN, PINNED_YARN_NAME, pinnedYarnVersionFromLocator } from "./lib/pinned-yarn.mjs";
+import {
+  PINNED_YARN,
+  PINNED_YARN_NAME,
+  pinnedYarnLocatorParts,
+  pinnedYarnSha512FromLocator,
+  pinnedYarnVersionFromLocator,
+} from "./lib/pinned-yarn.mjs";
 import { createStagedPublishPackage } from "./stage-publish-package.mjs";
 
 export const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 600_000;
@@ -1471,9 +1477,9 @@ export function prepareOfflineSmokeForSetup() {
 }
 
 /** Caches the pinned Yarn, so no gate has to reach the package-manager host mid-run. */
-export function provisionPinnedYarnForSetup() {
-  if (isPinnedYarnCached()) {
-    console.log(`provision-pinned-yarn: ${PINNED_YARN} already cached; no request made.`);
+export function provisionPinnedYarnForSetup(locator = PINNED_YARN) {
+  if (isPinnedYarnCached(locator)) {
+    console.log(`provision-pinned-yarn: ${locator} already cached; no request made.`);
     return;
   }
   // No registry and no private home, and both are correct here rather than omissions. This step
@@ -1483,25 +1489,79 @@ export function provisionPinnedYarnForSetup() {
   // the child sees no `YARN_NPM_REGISTRY_SERVER` at all rather than a broken one. The hermeticity
   // guarantee belongs to the INSTALL, which runs with `COREPACK_ENABLE_NETWORK: "0"` and the
   // loopback registry asserted — and which this step is what makes possible offline (#3130).
-  provisionPinnedYarn(undefined, undefined);
-  console.log(`provision-pinned-yarn: ${PINNED_YARN} cached in ${corepackCacheDir()}.`);
+  provisionPinnedYarn(undefined, undefined, locator);
+  console.log(`provision-pinned-yarn: ${locator} cached in ${corepackCacheDir(locator)}.`);
 }
 
 export function isPinnedYarnCached(locator = PINNED_YARN) {
-  const cache = join(corepackCacheDir(locator), "v1", PINNED_YARN_NAME);
-  if (!existsSync(cache)) return false;
-  return readdirSync(cache).includes(pinnedYarnVersionFromLocator(locator));
+  const entry = pinnedYarnCacheEntryDir(locator);
+  return (
+    cachedCorepackMetadataMatchesLocator(join(entry, ".corepack"), locator) &&
+    fileSha512Matches(join(entry, "yarn.js"), pinnedYarnSha512FromLocator(locator))
+  );
 }
 
-function provisionPinnedYarn(registryUrl, home) {
+function pinnedYarnCacheEntryDir(locator) {
+  return join(
+    corepackCacheDir(locator),
+    "v1",
+    PINNED_YARN_NAME,
+    pinnedYarnVersionFromLocator(locator),
+  );
+}
+
+function cachedCorepackMetadataMatchesLocator(path, locator) {
+  const { version, sha512 } = pinnedYarnLocatorParts(locator);
+  const metadata = readJsonFileIfPresent(path);
+  if (!isRecord(metadata) || !isRecord(metadata.locator) || !Array.isArray(metadata.bin)) {
+    return false;
+  }
+  return (
+    metadata.locator.name === PINNED_YARN_NAME &&
+    metadata.locator.reference === version &&
+    metadata.hash === `sha512.${sha512}` &&
+    metadata.bin.includes("yarn") &&
+    metadata.bin.includes("yarnpkg")
+  );
+}
+
+function readJsonFileIfPresent(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    if (error instanceof SyntaxError || error?.code === "ENOENT" || error?.code === "ENOTDIR") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function fileSha512Matches(path, expectedSha512) {
+  try {
+    return (
+      statSync(path).isFile() &&
+      createHash("sha512").update(readFileSync(path)).digest("hex") === expectedSha512
+    );
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return false;
+    throw error;
+  }
+}
+
+function provisionPinnedYarn(registryUrl, home, locator = PINNED_YARN) {
   // Already cached from an earlier run or a CI setup step: no network call at all. That keeps an
   // outage at the package-manager host from failing a gate whose dependency install is offline.
-  if (isPinnedYarnCached()) return;
+  if (isPinnedYarnCached(locator)) return;
+  rmSync(pinnedYarnCacheEntryDir(locator), { recursive: true, force: true });
   // Provisioning must see the SAME sanitized environment as the install, or `COREPACK_HOME` is
   // honoured here and stripped there — Corepack would then cache the tool in one place and search
   // another with networking already disabled. Only the network flag differs.
   const env = { ...yarnChildEnv(registryUrl, process.env, home), COREPACK_ENABLE_NETWORK: "1" };
-  const result = run("corepack", ["install", "--global", "--cache-only", PINNED_YARN], {
+  const result = run("corepack", ["install", "--global", "--cache-only", locator], {
     timeout: NPM_INSTALL_TIMEOUT_MS,
     env,
   });
@@ -1512,10 +1572,13 @@ function provisionPinnedYarn(registryUrl, home) {
     // output can carry an endpoint, a proxy URL, or the credentials embedded in one. It is
     // therefore classified rather than quoted (KfQ thread 3780151718).
     fail(
-      `corepack could not provision ${PINNED_YARN} before the offline install ` +
+      `corepack could not provision ${locator} before the offline install ` +
         `(exit ${String(result.status)}, ${classifyProvisionFailure(result)}) — re-run ` +
         `\`npm run provision:smoke\` on a host with network access to populate the cache`,
     );
+  }
+  if (!isPinnedYarnCached(locator)) {
+    fail(`corepack cached ${locator}, but the cached Yarn bytes did not match pinned integrity.`);
   }
 }
 
