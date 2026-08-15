@@ -840,16 +840,86 @@ export type AtlassianConnectorActionExecutionResult =
 // hostile payload.
 export const ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS = 280;
 
-// KEIKO-0186 P1 (Codex): a string made ENTIRELY of Unicode combining marks (general category M*)
-// carries no base character to attach to — rendered alone it is as informative to a reviewer as
-// an empty string, even though `.length > 0`. A payload composed only of accepted characters that
-// still reduce to this (or to genuine emptiness) after stripUnsafeFormatChars must not reach the
-// wire as `contentPreview`; see `contentPreviewFor` in keiko-server's actionApprovals.ts, which
-// checks this same condition on the producing side so the two can never disagree.
-const COMBINING_MARKS_ONLY_PATTERN = /^\p{M}+$/u;
+// KEIKO-0186 P1-P4 (Codex): STOP DENYLISTING INVISIBILITY. ALLOWLIST PRESENTABILITY.
+//
+// Three rounds asked "after removing the things I know are invisible, is anything left?" — a
+// denylist, which fails OPEN: a code point nobody enumerated counts as visible by default. P1
+// covered "empty" and "entirely Unicode combining marks" via `^\p{M}+$`. P2 added whitespace
+// (a lone space, a run of TAB/LF, satisfied that anchored pattern too). P3 added
+// `Default_Ignorable_Code_Point` for U+3164 HANGUL FILLER and the variation-selector families,
+// which render as nothing yet match none of `\s`/`\p{M}`/`\p{Cf}`. P4: U+2800 BRAILLE PATTERN
+// BLANK — deliberately blank by design — is `\p{So}` (a SYMBOL), so it defeated every prior
+// layer too. Unicode has no "renders blank" general property; that enumeration can never be
+// complete, and a fifth round would only add a fifth code point.
+//
+// The fix is structural, not another exception: require at least one character from a
+// CONSERVATIVE ALLOWLIST known to render — Letter, Number, Punctuation, "the honest core" — and
+// classify everything else (marks, whitespace, symbols, and any code point nobody has thought of
+// yet) `unavailable`. An unanticipated code point now defaults to "cannot be previewed" instead
+// of "looks fine": fail closed, the direction this repository requires on a trust boundary.
+//
+// Subtlety: general category alone is not sufficient even for the allowlist side. U+3164 HANGUL
+// FILLER is category `Lo` (a LETTER) despite rendering as nothing — Unicode's category system
+// does not track rendering behavior, only classification. A candidate must be in {L, N, P} AND
+// NOT `Default_Ignorable_Code_Point`; the latter can co-occur with any general category, so it is
+// checked independently rather than assumed absent from an "allowed" category.
+//
+// Decision on `\p{S}` (Symbol, which includes emoji): deliberately EXCLUDED from the allowlist,
+// not folded in as "L/N/P plus the safe parts of S". This is a real cost — a preview consisting
+// only of emoji or other symbols (e.g. a Jira comment that is just "🎉" or "✅") is now classified
+// `unavailable` even though a human could plainly read it. Carving a "known-safe subset of `\p{S}`
+// minus the blank ranges" back out would recreate the exact enumeration this fix exists to end,
+// just on the allow side instead of the deny side — Unicode symbols include other
+// deliberately-blank-or-near-blank code points beyond U+2800 (e.g. other pattern-fill glyphs,
+// private-use-adjacent oddities), and there is no closed, machine-checkable "safe symbol" property
+// the way `Default_Ignorable_Code_Point` closes the invisibility question. On a governed-write
+// approval surface, a symbol-only preview genuinely cannot be summarized for a reviewer any more
+// honestly than the explicit "could not be previewed" signal already provides — that outcome is
+// correct here, not a bug to route around. `\p{L}` already covers CJK ideographs and other
+// non-Latin scripts, so this decision is narrower than it first appears: it excludes symbols and
+// emoji specifically, not non-Latin text.
+//
+// KEIKO-0186 P5 (Codex): U+13441 EGYPTIAN HIEROGLYPH FULL BLANK and U+13442 HALF BLANK are `\p{Lo}`
+// (LETTERS) — not Default_Ignorable_Code_Point — and survive stripUnsafeFormatChars, yet render
+// blank on a client with the font. A fifth input class defeated the allowlist for the same reason
+// HANGUL FILLER defeated it under P3: Unicode general categories classify code points, not
+// rendering behaviour, and there is no property meaning "renders blank" to test for. Whether a
+// glyph renders at all further depends on the READER'S fonts, which this contract cannot see —
+// that is not a gap in this enumeration, it is a gap no enumeration can close. So P5 stops treating
+// the predicate as the sole defence:
+//
+//   1. KNOWN_BLANK_LETTER_PATTERN below closes today's specific case (cheap, and it does close
+//      this exact report) — but it is NOT presented as "the fix", because the next blank-glyph
+//      Letter is exactly as unenumerable as this one was before a report named it.
+//   2. The actual fix lives in the UI: ConnectorApprovalsPanel now derives and renders a
+//      content-free CHARACTER COUNT alongside every available preview (see
+//      packages/keiko-ui/.../ConnectorApprovalsPanel.tsx). A preview that looks empty next to "12
+//      characters" is self-evidently suspicious to a human reviewer, and that signal holds for
+//      every future blank code point without this predicate having to predict it. The requirement
+//      was never "classify visibility perfectly" (provably impossible — see above); it is "a human
+//      must never approve content they cannot see without knowing it", which a structural,
+//      content-free signal satisfies even when classification fails. This predicate is now a
+//      heuristic backed by that structural signal, not a complete classifier: a future blank code
+//      point becomes a cosmetic gap (the preview looks like text but is actually invisible glyphs),
+//      not a governed-approval bypass (the reviewer sees the count and can tell either way).
+const KNOWN_BLANK_LETTER_PATTERN = /[\u{13441}\u{13442}]/u;
+const PRESENTABLE_GENERAL_CATEGORY_PATTERN = /[\p{L}\p{N}\p{P}]/u;
+const DEFAULT_IGNORABLE_PATTERN = /\p{Default_Ignorable_Code_Point}/u;
+
+function isPresentableCharacter(character: string): boolean {
+  return (
+    PRESENTABLE_GENERAL_CATEGORY_PATTERN.test(character) &&
+    !DEFAULT_IGNORABLE_PATTERN.test(character) &&
+    !KNOWN_BLANK_LETTER_PATTERN.test(character)
+  );
+}
 
 export function isAtlassianContentPreviewUnpresentable(value: string): boolean {
-  return value.length === 0 || COMBINING_MARKS_ONLY_PATTERN.test(value);
+  // Array.from (not a naive index loop) iterates by CODE POINT, matching how \p{L}/\p{N}/\p{P}
+  // classify astral characters under the `u` flag — the same reason this pattern is used to
+  // iterate Unicode-classified text elsewhere in this codebase (see
+  // packages/keiko-workspace/src/repoSearchMatchers.ts).
+  return !Array.from(value).some(isPresentableCharacter);
 }
 
 // A content preview is provider CONTENT in the ADR-0128 D6 sense (like a synced title or a live
@@ -858,8 +928,26 @@ export function isAtlassianContentPreviewUnpresentable(value: string): boolean {
 // title/summary with a description/body), so — like every other untrusted display surface in
 // this codebase — TAB/LF/CR survive stripUnsafeFormatChars while every other unsafe code point
 // does not; this predicate accepts exactly what that stripper already leaves untouched. It also
-// rejects an all-combining-mark string for the same reason the producer never emits one (see
-// `isAtlassianContentPreviewUnpresentable` above) — the producer and this predicate must agree.
+// rejects a preview with no character from the {Letter, Number, Punctuation} allowlist —
+// whitespace-only, combining-marks-only, default-ignorable-only (HANGUL FILLER, variation
+// selectors, …), symbol/emoji-only (including U+2800 BRAILLE PATTERN BLANK), known-blank-letter-only
+// (U+13441/U+13442 EGYPTIAN HIEROGLYPH FULL/HALF BLANK), or any mix — for the same reason the
+// producer never emits one (see `isAtlassianContentPreviewUnpresentable` above, including the
+// deliberate, documented decision to exclude `\p{S}`/emoji from the allowlist, and the P5 note
+// that this predicate is a heuristic backed by the UI's character-count signal, not a complete
+// classifier) — the producer and this predicate must agree.
+//
+// No runtime capability guard for the `\p{Default_Ignorable_Code_Point}` / `\p{L}` / `\p{N}` /
+// `\p{P}` Unicode property escapes above: this repository's `package.json` pins `engines.node` to
+// `>=24.18.0 <25`, and CI (`.github/workflows/ci.yml`) runs every job on exactly `24.18.0` — the
+// V8 build in that Node version has supported `u`-flag Unicode property escapes, including binary
+// properties like `Default_Ignorable_Code_Point` and `ID_Start`/`ID_Continue`, since long before
+// this engines floor (V8 shipped the feature by Node 10). `\p{M}`/`\p{Cf}`/`\p{L}`/`\p{N}` and
+// binary properties are already used unguarded throughout this codebase (e.g.
+// `packages/keiko-server/src/coding-runtime/researchContentQuarantine.ts`,
+// `packages/keiko-workspace/src/repoSearchSourceClassification.ts`) — a guard here would be dead
+// code checking a capability the pinned runtime has always had, which is worse than no guard: it
+// invites a reader to wonder what failure mode it exists to catch when none does.
 export function isSafeAtlassianContentPreview(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -906,9 +994,15 @@ export interface AtlassianConnectorPendingApproval {
   // too. Mutually exclusive with `contentPreviewUnavailable`: never both present.
   readonly contentPreview?: string | undefined;
   // KEIKO-0186 P1 (Codex): true exactly when the action HAD a text field to preview but its
-  // entire visible content sanitized away (an all-bidi/all-zero-width payload, or one that
-  // reduces to nothing but floating Unicode combining marks) — see
-  // `isAtlassianContentPreviewUnpresentable`. Emitting an EMPTY `contentPreview` in this case
+  // bounded, sanitized preview carries no PRESENTABLE character — see
+  // `isAtlassianContentPreviewUnpresentable`. That is deliberately wider than "sanitized away to
+  // nothing": four review rounds each found a payload that survives sanitization intact and still
+  // renders blank — whitespace-only, HANGUL FILLER (a Letter), BRAILLE PATTERN BLANK (a Symbol),
+  // and the blank Egyptian hieroglyphs (Letters again). The predicate therefore asks whether any
+  // character is presentable rather than enumerating which ones are invisible, and the approval
+  // panel shows a character count beside every preview so that the next unenumerated blank code
+  // point is a cosmetic gap rather than a governed-approval bypass. Emitting an EMPTY
+  // `contentPreview` in this case
   // would show a reviewer what looks like a contentless action approved in good faith while
   // invisible content is actually written; this field lets the UI say plainly that the content
   // could not be safely previewed instead of silently showing nothing (indistinguishable from an

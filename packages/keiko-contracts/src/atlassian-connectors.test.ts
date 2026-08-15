@@ -808,7 +808,7 @@ describe("isSafeJiraLiveIssueSummary (Issue #2248)", () => {
   });
 });
 
-describe("isAtlassianContentPreviewUnpresentable (KEIKO-0186 P1)", () => {
+describe("isAtlassianContentPreviewUnpresentable (KEIKO-0186 P1-P4)", () => {
   it("is true for an empty string", () => {
     expect(isAtlassianContentPreviewUnpresentable("")).toBe(true);
   });
@@ -826,6 +826,179 @@ describe("isAtlassianContentPreviewUnpresentable (KEIKO-0186 P1)", () => {
   it("is false for ordinary text", () => {
     expect(isAtlassianContentPreviewUnpresentable("Fix the flaky gate")).toBe(false);
     expect(isAtlassianContentPreviewUnpresentable("x")).toBe(false);
+  });
+
+  // KEIKO-0186 P2 (Codex): the P1 pattern (^\p{M}+$) is anchored end-to-end, so it stops matching
+  // the moment ANY other character is present -- including whitespace. A lone space, a run of
+  // TAB/LF, or whitespace next to a floating combining mark all satisfied it and were classified
+  // presentable. Whitespace, like a combining mark, is outside the {Letter, Number, Punctuation}
+  // allowlist P4 settled on, so these cases hold under every version of the predicate.
+  it("is true for whitespace only: space, TAB, LF, and a mix of all three", () => {
+    const space = " ";
+    const tab = String.fromCharCode(9);
+    const lf = String.fromCharCode(10);
+    expect(isAtlassianContentPreviewUnpresentable(space)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(tab)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(lf)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(space + tab + lf + space)).toBe(true);
+  });
+
+  it("is true for whitespace next to a combining mark, in either order", () => {
+    const spaceThenMark = " " + String.fromCharCode(0x301);
+    const markThenSpace = String.fromCharCode(0x301) + " ";
+    expect(isAtlassianContentPreviewUnpresentable(spaceThenMark)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(markThenSpace)).toBe(true);
+    // A run mixing TAB and multiple combining marks in both orders is still nothing but the two
+    // ignorable categories -- no base character anywhere in it.
+    const mixed =
+      " " + String.fromCharCode(0x301) + String.fromCharCode(9) + String.fromCharCode(0x301);
+    expect(isAtlassianContentPreviewUnpresentable(mixed)).toBe(true);
+  });
+
+  it("is true for whitespace next to a zero-width/format character, independent of stripUnsafeFormatChars having run first", () => {
+    // ZERO WIDTH SPACE (U+200B) is Unicode general category Cf (Format) -- outside the {L, N, P}
+    // allowlist on its own terms, so this predicate does not rely on stripUnsafeFormatChars
+    // already having removed it -- defense in depth, not a redundant check: the producer always
+    // sanitizes first, but this predicate must be correct on its own.
+    const zeroWidthOnly = String.fromCharCode(0x200b).repeat(3);
+    const spaceThenZeroWidth = " " + String.fromCharCode(0x200b);
+    expect(isAtlassianContentPreviewUnpresentable(zeroWidthOnly)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(spaceThenZeroWidth)).toBe(true);
+  });
+
+  // KEIKO-0186 P3 (Codex): U+3164 HANGUL FILLER (used historically to fill an empty Hangul input
+  // slot) renders as nothing, yet its Unicode general category is Lo -- a LETTER. This is the
+  // reason the P4 allowlist cannot be "characters in {L, N, P}" alone: general category does not
+  // track rendering behaviour, so a naive allowlist membership test would wrongly accept HANGUL
+  // FILLER as presentable. It is also Default_Ignorable_Code_Point, which the predicate checks
+  // and excludes independently of general category -- these cases are the reason that second,
+  // independent check exists.
+  it("is true for HANGUL FILLER (U+3164) alone, repeated, and mixed with whitespace or a combining mark", () => {
+    const hangulFiller = String.fromCodePoint(0x3164);
+    expect(isAtlassianContentPreviewUnpresentable(hangulFiller)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(hangulFiller.repeat(3))).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(" " + hangulFiller)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(hangulFiller + String.fromCharCode(0x301))).toBe(
+      true,
+    );
+  });
+
+  it("is true for a variation selector alone (VARIATION SELECTOR-16, U+FE0F -- itself Unicode general category Mn, outside the allowlist on that basis alone)", () => {
+    expect(isAtlassianContentPreviewUnpresentable(String.fromCodePoint(0xfe0f))).toBe(true);
+  });
+
+  // KEIKO-0186 P4 (Codex): U+2800 BRAILLE PATTERN BLANK is deliberately blank by design, yet its
+  // Unicode general category is So (a SYMBOL) -- it matched none of \s, \p{M}, or
+  // Default_Ignorable_Code_Point, defeating every prior layer. Unicode has no "renders blank"
+  // property, so a fourth enumerated exception would only invite a fifth. The predicate is now an
+  // ALLOWLIST: presentable requires at least one character in {Letter, Number, Punctuation}; a
+  // symbol -- BRAILLE PATTERN BLANK included -- is never in that set, so it is unpresentable
+  // regardless of whether anyone ever named it specifically.
+  it("is true for BRAILLE PATTERN BLANK (U+2800) alone, repeated, and mixed with whitespace", () => {
+    const braillePatternBlank = String.fromCodePoint(0x2800);
+    expect(isAtlassianContentPreviewUnpresentable(braillePatternBlank)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(braillePatternBlank.repeat(5))).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(" " + braillePatternBlank)).toBe(true);
+  });
+
+  // P4's allowlist inversion has a real cost, made deliberately and documented at the predicate's
+  // definition: \p{S} (Symbol, which includes emoji) is excluded from the allowlist entirely, not
+  // folded in minus the known-blank ranges -- carving out "safe symbols" would recreate the exact
+  // enumeration problem this fix exists to end, just on the allow side. This test asserts that
+  // decision is machine-checked, not merely described: a real, renderable emoji-presentation pair
+  // (a heavy black heart forced to emoji style) is STILL classified unpresentable on its own,
+  // because its base character (U+2764 HEAVY BLACK HEART) is itself \p{S} -- unlike the P3 test
+  // above this replaces, the base character here is a symbol, not a letter.
+  it("is true for an emoji-presentation pair alone (P4: \\p{S} is excluded from the allowlist, including when the base character would otherwise be visible)", () => {
+    const heavyBlackHeart = String.fromCodePoint(0x2764);
+    const variationSelector16 = String.fromCodePoint(0xfe0f);
+    expect(isAtlassianContentPreviewUnpresentable(heavyBlackHeart + variationSelector16)).toBe(
+      true,
+    );
+  });
+
+  it("is true for emoji-only content with no variation selector involved (a grinning face, and a thumbs-up)", () => {
+    expect(isAtlassianContentPreviewUnpresentable(String.fromCodePoint(0x1f600))).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(String.fromCodePoint(0x1f44d))).toBe(true);
+  });
+
+  it("is false for CJK-only content: \\p{L} already covers CJK ideographs and other non-Latin scripts, so the P4 allowlist decision is narrower than 'excludes non-Latin text'", () => {
+    expect(isAtlassianContentPreviewUnpresentable("已完成")).toBe(false); // Chinese: "done"
+    expect(isAtlassianContentPreviewUnpresentable("ありがとう")).toBe(false); // Japanese hiragana
+    expect(isAtlassianContentPreviewUnpresentable("완료")).toBe(false); // Korean hangul syllables
+  });
+
+  it("is false when real text and emoji are mixed: only one presentable character is required, anywhere in the value", () => {
+    expect(isAtlassianContentPreviewUnpresentable(String.fromCodePoint(0x1f389) + " Success")).toBe(
+      false,
+    );
+  });
+
+  it("distinguishes a truncation window that is all HANGUL FILLER from the untruncated string that has a base character just past it", () => {
+    const fillerPrefix = String.fromCodePoint(0x3164).repeat(
+      ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
+    );
+    const withBaseCharPastTheBound = fillerPrefix + "X";
+    const truncationWindow = withBaseCharPastTheBound.slice(
+      0,
+      ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
+    );
+    expect(isAtlassianContentPreviewUnpresentable(withBaseCharPastTheBound)).toBe(false);
+    expect(isAtlassianContentPreviewUnpresentable(truncationWindow)).toBe(true);
+  });
+
+  it("distinguishes a truncation window that is all whitespace/combining marks from the untruncated string that has a base character just past it", () => {
+    // Builds a candidate whose first MAX characters (what contentPreviewFor's bound would keep)
+    // are alternating space + combining-mark pairs, with a real base character appended right
+    // after that window -- exactly the shape truncation can produce in practice.
+    const pairs = (" " + String.fromCharCode(0x301)).repeat(
+      Math.ceil(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS / 2),
+    );
+    const withBaseCharPastTheBound =
+      pairs.slice(0, ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS) + "X";
+    const truncationWindow = withBaseCharPastTheBound.slice(
+      0,
+      ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
+    );
+    expect(isAtlassianContentPreviewUnpresentable(withBaseCharPastTheBound)).toBe(false);
+    expect(isAtlassianContentPreviewUnpresentable(truncationWindow)).toBe(true);
+  });
+
+  it("distinguishes a truncation window that is all BRAILLE PATTERN BLANK from the untruncated string that has a base character just past it", () => {
+    const braillePrefix = String.fromCodePoint(0x2800).repeat(
+      ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
+    );
+    const withBaseCharPastTheBound = braillePrefix + "X";
+    const truncationWindow = withBaseCharPastTheBound.slice(
+      0,
+      ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
+    );
+    expect(isAtlassianContentPreviewUnpresentable(withBaseCharPastTheBound)).toBe(false);
+    expect(isAtlassianContentPreviewUnpresentable(truncationWindow)).toBe(true);
+  });
+
+  // KEIKO-0186 P5 (Codex): U+13441 EGYPTIAN HIEROGLYPH FULL BLANK and U+13442 HALF BLANK are
+  // Unicode general category Lo (LETTERS) -- not Default_Ignorable_Code_Point -- yet render blank
+  // on a client with the font. A fifth input class defeats character-property classification for
+  // the same structural reason HANGUL FILLER did under P3: general category tracks
+  // classification, not rendering, and whether a glyph renders at all depends on the reader's own
+  // fonts besides. This predicate closes today's specific report (KNOWN_BLANK_LETTER_PATTERN,
+  // cheap and narrow) but is no longer the only defence -- see ConnectorApprovalsPanel's
+  // character-count signal, which holds for a blank Letter nobody has reported yet.
+  it("is true for EGYPTIAN HIEROGLYPH FULL BLANK (U+13441) and HALF BLANK (U+13442), alone, repeated, and mixed with each other or whitespace", () => {
+    const fullBlank = String.fromCodePoint(0x13441);
+    const halfBlank = String.fromCodePoint(0x13442);
+    expect(isAtlassianContentPreviewUnpresentable(fullBlank)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(halfBlank)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(fullBlank.repeat(3))).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(fullBlank + halfBlank)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(" " + fullBlank)).toBe(true);
+  });
+
+  it("is false for a real base character alongside an EGYPTIAN HIEROGLYPH BLANK: only one presentable character is required", () => {
+    expect(isAtlassianContentPreviewUnpresentable("Done" + String.fromCodePoint(0x13441))).toBe(
+      false,
+    );
   });
 });
 
@@ -850,7 +1023,7 @@ describe("isSafeAtlassianContentPreview (KEIKO-0186)", () => {
     ).toBe(true);
   });
 
-  it("rejects empty, overlong, control-character, bidi/zero-width, combining-marks-only, and non-string values", () => {
+  it("rejects empty, overlong, control-character, bidi/zero-width, combining-marks-only, whitespace-only, default-ignorable-only, symbol/emoji-only, blank-letter-only, and non-string values", () => {
     expect(isSafeAtlassianContentPreview("")).toBe(false);
     expect(
       isSafeAtlassianContentPreview("x".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS + 1)),
@@ -867,6 +1040,33 @@ describe("isSafeAtlassianContentPreview (KEIKO-0186)", () => {
     // KEIKO-0186 P1: non-empty but entirely Unicode combining marks -- no base character, exactly
     // as uninformative to a reviewer as empty (see isAtlassianContentPreviewUnpresentable above).
     expect(isSafeAtlassianContentPreview(String.fromCharCode(0x301).repeat(5))).toBe(false);
+    // KEIKO-0186 P2: whitespace-only, and whitespace next to a combining mark, are exactly as
+    // uninformative -- neither is a shape the P1 anchored pattern (^\p{M}+$) caught.
+    expect(isSafeAtlassianContentPreview(" ")).toBe(false);
+    expect(isSafeAtlassianContentPreview(String.fromCharCode(9) + String.fromCharCode(10))).toBe(
+      false,
+    );
+    expect(isSafeAtlassianContentPreview(" " + String.fromCharCode(0x301))).toBe(false);
+    expect(isSafeAtlassianContentPreview(String.fromCharCode(0x301) + " ")).toBe(false);
+    // KEIKO-0186 P3: HANGUL FILLER (U+3164) renders as nothing despite belonging to Unicode
+    // general category Lo (a letter) -- the allowlist alone would wrongly accept it; the
+    // independent Default_Ignorable_Code_Point exclusion is why it is still rejected. A bare
+    // variation selector is excluded on category grounds alone (it is \p{M}, not in {L, N, P}).
+    expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x3164))).toBe(false);
+    expect(isSafeAtlassianContentPreview(String.fromCodePoint(0xfe0f))).toBe(false);
+    // KEIKO-0186 P4: BRAILLE PATTERN BLANK (U+2800) is deliberately blank by design, yet is
+    // Unicode general category So (a symbol) -- outside {L, N, P} the same as any other symbol.
+    // Symbol/emoji-only content is also rejected: a deliberate P4 allowlist decision, not an
+    // oversight (see isAtlassianContentPreviewUnpresentable's definition for the reasoning).
+    expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x2800))).toBe(false);
+    expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x1f600))).toBe(false);
+    // KEIKO-0186 P5: EGYPTIAN HIEROGLYPH FULL BLANK (U+13441) and HALF BLANK (U+13442) are
+    // Unicode general category Lo (letters) that render blank -- like HANGUL FILLER, the
+    // allowlist alone would wrongly accept them; KNOWN_BLANK_LETTER_PATTERN is why they are still
+    // rejected. See isAtlassianContentPreviewUnpresentable for why this predicate is now a
+    // heuristic backed by the UI's character-count signal, not the sole defence.
+    expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x13441))).toBe(false);
+    expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x13442))).toBe(false);
     expect(isSafeAtlassianContentPreview(42)).toBe(false);
     expect(isSafeAtlassianContentPreview(null)).toBe(false);
     expect(isSafeAtlassianContentPreview(undefined)).toBe(false);

@@ -6,6 +6,7 @@ import {
   CODE_TASK_EVIDENCE_CLASSES,
   CODE_TASK_EVIDENCE_PLATFORMS,
   codeTaskAcceptanceQualificationFailures,
+  hasInheritedEnumerableProperty,
   isCodeTaskContentFreeNote,
   isCodeTaskIsoInstant,
   isCodeTaskRepoRelativePath,
@@ -13,6 +14,7 @@ import {
   type CodeTaskAcceptanceBinding,
   type CodeTaskAcceptanceContributionV1,
 } from "./code-task-acceptance.js";
+import { withPollutedPrototype } from "./code-task-pollution-test-support.js";
 
 const COMMIT_SHA = "a".repeat(40);
 const TREE_SHA = "b".repeat(40);
@@ -328,5 +330,240 @@ describe("prototype-based extra-field smuggling (KfQ Critical)", () => {
     // Confirms the hardening does not reject legitimate wire-shaped input: JSON.parse always
     // produces a plain object with the default Object.prototype and only enumerable own properties.
     expect(validateCodeTaskAcceptanceContribution(validContribution()).ok).toBe(true);
+  });
+
+  // Codex P1 (thread 3789461971): this fixture does NOT exercise the restored "in" check.
+  // Object.create({ value: "secret" }) has a non-default prototype, so isRecord's own,
+  // already-hardened prototype-identity check rejects it before factErrors ever reaches the
+  // guard below -- confirmed by deleting that guard's call site and re-running: this test still
+  // passes. It remains a valid pin of the OVERALL contract ("this attack shape is rejected"), just
+  // not of the specific guard its comment used to claim. Kept, relabeled honestly; the direct
+  // helper tests below are what actually pin the guard itself.
+  it("rejects a receiptDigest fact shaped via Object.create (caught by isRecord's prototype check)", () => {
+    const hostileFact = Object.create({ value: "secret" }) as Record<string, unknown>;
+    hostileFact.outcome = "absent";
+    expect(Object.keys(hostileFact)).toEqual(["outcome"]); // own-key view looks complete
+    expect("value" in hostileFact).toBe(true); // yet the secret still resolves
+    const base = validContribution();
+    const scenario = base.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const result = validateCodeTaskAcceptanceContribution({
+      ...base,
+      scenarios: [{ ...scenario, receiptDigest: hostileFact }],
+    });
+    expect(result.ok).toBe(false);
+  });
+});
+
+// Codex P1 (thread 3789635890): checking one inherited key at a time never pins the guard either
+// -- round one (above) was rejected by isRecord before reaching it; a prior "mechanism" test only
+// demonstrated the `in`/for...in language feature in isolation, never calling this file's own
+// code. hasInheritedEnumerableProperty is exported specifically so it can be exercised directly:
+// these tests call the real production guard with a crafted object, bypassing isRecord on purpose
+// (a test targeting this function does not have to satisfy isRecord's separate "is this a plain
+// object" question first, unlike every real caller). The prove-red-then-green discipline for the
+// two pipeline-level tests is documented alongside them below.
+describe("hasInheritedEnumerableProperty (Codex P1 3789635890)", () => {
+  it("detects an inherited value with only outcome as an own property", () => {
+    const fact = Object.create({ value: "secret" }) as Record<string, unknown>;
+    fact.outcome = "absent";
+    expect(hasInheritedEnumerableProperty(fact)).toBe(true);
+  });
+
+  it("detects an inherited discriminator on an otherwise-empty object", () => {
+    // The gap Codex actually found: pollute "outcome" itself rather than "value". An object with
+    // ZERO own properties still answers fact.outcome === "absent" via inheritance, and
+    // unknownKeys' Object.getOwnPropertyNames scan sees nothing at all to report.
+    const fact = Object.create({ outcome: "absent" }) as Record<string, unknown>;
+    expect(Object.keys(fact)).toEqual([]);
+    expect(fact.outcome).toBe("absent");
+    expect(hasInheritedEnumerableProperty(fact)).toBe(true);
+  });
+
+  it("detects an inherited, wholly undeclared field", () => {
+    // Every validator here returns its input by reference (never a reconstructed copy), so an
+    // inherited field that is not even part of the contract -- promptText is this audit's
+    // recurring example of a smuggled free-text field -- still rides along on the object handed
+    // onward, invisible to unknownKeys because it is not own.
+    const fact = Object.create({ promptText: "leak me" }) as Record<string, unknown>;
+    fact.outcome = "absent";
+    expect(Object.keys(fact)).toEqual(["outcome"]);
+    expect(hasInheritedEnumerableProperty(fact)).toBe(true);
+  });
+
+  it("does not flag an ordinary, fully-own object", () => {
+    expect(hasInheritedEnumerableProperty({ outcome: "absent" })).toBe(false);
+    expect(hasInheritedEnumerableProperty({ outcome: "known", value: DIGEST })).toBe(false);
+  });
+});
+
+describe("factErrors: the null-prototype case (KfQ 3789542391, refuted again at 3789776138)", () => {
+  function withReceiptDigest(receiptDigest: unknown): unknown {
+    const base = validContribution();
+    const scenario = base.scenarios[0];
+    if (scenario === undefined) throw new Error("fixture must declare at least one scenario");
+    return { ...base, scenarios: [{ ...scenario, receiptDigest }] };
+  }
+
+  // KfQ 3789542391 / 3789776138 (new thread, same claim): isRecord's
+  // Object.getPrototypeOf(value) === Object.prototype check rejects a null-prototype object today
+  // (Object.getPrototypeOf(Object.create(null)) is null, never Object.prototype), and JSON.parse
+  // never produces one, so rejecting can never affect a legitimate wire-shaped payload -- deliberate,
+  // already pinned here, reused for the new thread id.
+  it("rejects a null-prototype receiptDigest", () => {
+    const fact: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    fact.outcome = "absent";
+    expect(Object.getPrototypeOf(fact)).toBeNull();
+    const result = validateCodeTaskAcceptanceContribution(withReceiptDigest(fact));
+    expect(result.ok).toBe(false);
+  });
+
+  it("still accepts a legitimate receiptDigest with no inherited or null-prototype shape", () => {
+    expect(validateCodeTaskAcceptanceContribution(validContribution()).ok).toBe(true);
+  });
+});
+
+// Codex P1 3789773829, the terminating fix (see ownField's definition in code-task-acceptance.ts
+// for the full reasoning): detecting a specific inherited-property shape is always one step behind
+// an attacker who can vary the property descriptor -- enumerable value, then enumerable outcome,
+// then this thread's non-enumerable outcome. ownField makes the question moot by never reading
+// through the prototype chain at all, for ANY descriptor shape. These tests pin that directly
+// against the real global Object.prototype (not a safe stand-in): calling vitest's expect() WHILE
+// Object.prototype is polluted throws inside expect's own internals for at least the "value" key
+// (confirmed empirically -- its fluent chain apparently builds objects via defineProperty, which
+// collides with an inherited plain "value" the same way node:internal/streams/readable did in an
+// earlier, non-isolated finding), so withPollutedPrototype (imported, not reimplemented here: KfQ
+// 3789982967 found a real bug in this helper when it was still copy-pasted per file -- see its
+// shared definition in code-task-pollution-test-support.ts) captures only a plain result during the
+// polluted window and restores deterministically in a finally BEFORE any assertion runs.
+
+function withReceiptDigest(receiptDigest: unknown): unknown {
+  const base = validContribution();
+  const scenario = base.scenarios[0];
+  if (scenario === undefined) throw new Error("fixture must declare at least one scenario");
+  return { ...base, scenarios: [{ ...scenario, receiptDigest }] };
+}
+
+// Non-enumerable pollution isolates ownField's OWN contribution cleanly: hasInheritedEnumerableProperty's
+// for...in is blind to it everywhere in the object graph, not only at the field under test (unlike
+// enumerable pollution below, which trips that guard on every OTHER nested fact in the same payload
+// too, since for...in walks the full chain on every object once anything is enumerable on
+// Object.prototype -- confirmed empirically: an enumerable-"kind" pollution test rejected the
+// payload via the UNRELATED receiptDigest/reshaping guard messages, not via anything reading
+// "kind" at all, before this file's tests were corrected to use non-enumerable pollution here
+// specifically to avoid that confound). Proved red-then-green against a temporary ownField
+// sabotage (reverted to plain `record[key]`, matching the coordinator's literal acceptance
+// criterion) -- confirmed empirically that with ownField sabotaged this way, the non-enumerable
+// "kind" case is wrongly ACCEPTED (ok: true), not merely differently rejected.
+describe("ownField makes an inherited field unreadable regardless of descriptor shape (Codex P1 3789773829)", () => {
+  it("rejects a fact's inherited non-enumerable value on the known branch", () => {
+    const payload = withReceiptDigest({ outcome: "known" }); // no own "value"
+    const result = withPollutedPrototype("value", { value: DIGEST, enumerable: false }, () =>
+      validateCodeTaskAcceptanceContribution(payload),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a fact's inherited non-enumerable outcome discriminator on an empty object", () => {
+    const payload = withReceiptDigest({}); // wholly empty; outcome resolves only through the chain
+    const result = withPollutedPrototype("outcome", { value: "absent", enumerable: false }, () =>
+      validateCodeTaskAcceptanceContribution(payload),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects an inherited non-enumerable top-level header field", () => {
+    const legitimate = validContribution();
+    const { kind: _kind, ...withoutKind } = legitimate as unknown as Record<string, unknown>;
+    void _kind;
+    const result = withPollutedPrototype(
+      "kind",
+      { value: CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND, enumerable: false },
+      () => validateCodeTaskAcceptanceContribution(withoutKind),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("still accepts a legitimate contribution once Object.prototype is restored", () => {
+    // Sanity: withPollutedPrototype's finally actually cleans up -- this runs after every polluted
+    // test above and would fail if any of them leaked.
+    expect(validateCodeTaskAcceptanceContribution(validContribution()).ok).toBe(true);
+  });
+});
+
+// Enumerable pollution -- Codex's original, simpler shapes -- is kept as belt-and-braces per the
+// coordinator's explicit direction, so these still pass and are worth pinning as end-to-end
+// evidence that the pipeline rejects them. They do NOT isolate ownField's marginal contribution
+// the way the non-enumerable tests above do: because for...in walks the full prototype chain,
+// enumerable pollution of ANY key trips hasInheritedEnumerableProperty on every OTHER nested fact
+// in the same payload too, so these tests would still pass even with ownField reverted to plain
+// property access (confirmed empirically) -- the rejection comes from the guard, which is exactly
+// what "belt and braces" means.
+describe("hasInheritedEnumerableProperty still independently rejects the enumerable shapes Codex originally found", () => {
+  it("rejects an inherited enumerable value on an otherwise-complete receiptDigest", () => {
+    const payload = withReceiptDigest({ outcome: "absent" });
+    const result = withPollutedPrototype(
+      "value",
+      { value: DIGEST, enumerable: true, writable: true },
+      () => validateCodeTaskAcceptanceContribution(payload),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects an inherited enumerable outcome on an entirely empty receiptDigest", () => {
+    const payload = withReceiptDigest({});
+    const result = withPollutedPrototype(
+      "outcome",
+      { value: "absent", enumerable: true, writable: true },
+      () => validateCodeTaskAcceptanceContribution(payload),
+    );
+    expect(result.ok).toBe(false);
+  });
+});
+
+// KfQ 3789542365 (code-task-acceptance.ts:218): the non-known branch used to return as soon as it
+// saw an own "value" field, so unknownKeys never ran and any OTHER extra own key went unreported.
+// A test asserting only ok === false cannot tell early-return from collect-both apart -- both
+// produce a failing result for a fixture that has just one problem. Only a fixture with TWO
+// independent problems, and an assertion that BOTH specific messages appear, actually pins collect
+// over early-return. Proved red-then-green against a temporary early-return sabotage (see the
+// commit this test shipped in for the measurement) before trusting it.
+describe("factErrors collects every violation instead of stopping at the first (KfQ 3789542365)", () => {
+  it("reports both the disallowed value and the unrelated extra key on a non-known outcome", () => {
+    const base = validContribution();
+    const scenario = base.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const result = validateCodeTaskAcceptanceContribution({
+      ...base,
+      scenarios: [
+        { ...scenario, receiptDigest: { outcome: "absent", value: DIGEST, promptText: "leak me" } },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((error) => error.includes("must not carry a value"))).toBe(true);
+    expect(result.errors.some((error) => error.includes("promptText"))).toBe(true);
+  });
+
+  // Not KfQ-filed (the finding named only the non-known branch above), but the same early-return
+  // shape existed in the "known" branch too and was fixed the same way for consistency -- an
+  // untested decision either way, so pinned here rather than left implicit.
+  it("reports both the invalid value and the unrelated extra key on a known outcome", () => {
+    const base = validContribution();
+    const scenario = base.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const result = validateCodeTaskAcceptanceContribution({
+      ...base,
+      scenarios: [
+        { ...scenario, receiptDigest: { outcome: "known", value: "short", promptText: "leak me" } },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((error) => error.includes("value is invalid"))).toBe(true);
+    expect(result.errors.some((error) => error.includes("promptText"))).toBe(true);
   });
 });

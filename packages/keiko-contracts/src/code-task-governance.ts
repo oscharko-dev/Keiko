@@ -9,7 +9,12 @@
 // `CodeTaskExecutionV1` (the named projection consumed from #2385). `RunControlSnapshotV1` and
 // `RuntimeGovernancePortV1` live in `./code-task-run-control.ts` and reuse the branded ids here.
 import type { CodeTaskFact } from "./code-task-acceptance.js";
-import { isCodeTaskIsoInstant, isCodeTaskSha256Digest } from "./code-task-acceptance.js";
+import {
+  hasInheritedEnumerableProperty,
+  isCodeTaskIsoInstant,
+  isCodeTaskSha256Digest,
+  ownField,
+} from "./code-task-acceptance.js";
 import type { CodingWorkbenchMode, CodingWorkbenchValidationResult } from "./coding-workbench.js";
 import { CODING_WORKBENCH_MODES } from "./coding-workbench.js";
 import type { CodingWorkbenchRuntimeStateName } from "./coding-workbench-runtime.js";
@@ -226,18 +231,21 @@ export type GovernedActionV1 =
 
 function envelopeErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
-  if (value.kind !== GOVERNED_ACTION_KIND) errors.push(`kind must be ${GOVERNED_ACTION_KIND}`);
-  if (value.schemaVersion !== CODE_TASK_GOVERNANCE_SCHEMA_VERSION) {
+  if (ownField(value, "kind") !== GOVERNED_ACTION_KIND) {
+    errors.push(`kind must be ${GOVERNED_ACTION_KIND}`);
+  }
+  if (ownField(value, "schemaVersion") !== CODE_TASK_GOVERNANCE_SCHEMA_VERSION) {
     errors.push("schemaVersion must be the literal 1");
   }
-  if (!isCodeTaskTaskId(value.taskId)) errors.push("taskId is invalid");
-  if (!isCodeTaskRunId(value.runId)) errors.push("runId is invalid");
-  if (!isCodeTaskWorkspaceId(value.workspaceId)) errors.push("workspaceId is invalid");
-  if (!isNonNegativeInteger(value.stateRevision)) {
+  if (!isCodeTaskTaskId(ownField(value, "taskId"))) errors.push("taskId is invalid");
+  if (!isCodeTaskRunId(ownField(value, "runId"))) errors.push("runId is invalid");
+  if (!isCodeTaskWorkspaceId(ownField(value, "workspaceId"))) errors.push("workspaceId is invalid");
+  if (!isNonNegativeInteger(ownField(value, "stateRevision"))) {
     errors.push("stateRevision must be a non-negative integer");
   }
-  if (!isOneOf(value.actionKind, GOVERNED_ACTION_ACTION_KINDS))
+  if (!isOneOf(ownField(value, "actionKind"), GOVERNED_ACTION_ACTION_KINDS)) {
     errors.push("actionKind is invalid");
+  }
   return errors;
 }
 
@@ -246,12 +254,27 @@ function envelopeErrors(value: Record<string, unknown>): string[] {
 // "allowed" question / "approval-required" grant paths, both of which route through
 // absentErrors). GovernedActionAbsent's only field is "outcome" (see its definition above), so
 // requiring exactly one key rejects every extra key, not just "value".
+// Round 3 (#2899), proactive (not named by Codex/KfQ, but the same class of gap they found
+// elsewhere in this file): the own-property-COUNT check alone does not verify WHICH key is
+// present. Object.prototype polluted with outcome: "absent" lets `{ foo: "bar" }` -- one own key,
+// but not "outcome" -- pass every condition here: isRecord (default prototype, untouched by this
+// polluted-in-place mutation), value.outcome === "absent" (resolved via inheritance), and an own
+// count of exactly 1 (satisfied by the unrelated "foo").
+// Codex P1 3789773829: hasInheritedEnumerableProperty alone is not enough either -- it only sees
+// an ENUMERABLE inherited property, and Object.defineProperty(Object.prototype, "outcome", {
+// value: "absent", enumerable: false }) is invisible to it while value.outcome still resolves to
+// "absent". Reading through ownField (imported from code-task-acceptance.ts) instead of plain
+// property access is what actually closes this: ownField answers ownership, never resolution, so
+// no property-descriptor shape (enumerable, non-enumerable, or whatever comes next) matters here.
+// hasInheritedEnumerableProperty is kept as an extra, cheaper rejection for the common case, not as
+// the check this predicate depends on for correctness.
 function isAbsent(value: unknown): value is GovernedActionAbsent {
   // getOwnPropertyNames + no-symbols, matching unknownKeys above: Object.keys alone misses a
   // non-enumerable own property. isRecord already rejects a non-default prototype.
   return (
     isRecord(value) &&
-    value.outcome === "absent" &&
+    !hasInheritedEnumerableProperty(value) &&
+    ownField(value, "outcome") === "absent" &&
     Object.getOwnPropertyNames(value).length === 1 &&
     Object.getOwnPropertySymbols(value).length === 0
   );
@@ -262,39 +285,63 @@ function isAbsent(value: unknown): value is GovernedActionAbsent {
 // alongside a valid grant) validated and was returned verbatim. The "grant must not carry a
 // value" message for the absent+value case is preserved exactly (pinned test); any OTHER extra
 // key on either branch is now also rejected via the shared unknownKeys helper.
+// Round 3 (#2899): the absent branch's "value" in value check and the known branch's
+// wrapperExtraKeys check were both early-returns -- an object with two independent problems (an
+// inherited/extra field AND an invalid inner grant, or a wrapper extra key AND an invalid inner
+// grant) only ever reported one. Replaced the absent branch's field-specific check with the shared
+// hasInheritedEnumerableProperty guard (imported from code-task-acceptance.ts: see its definition
+// there for why this is a strict superset of "value" in value, and why reuse over a fourth copy),
+// called upfront so it also covers the known branch's wrapper. Both branches now collect.
 function grantRefFactErrors(value: unknown): string[] {
   if (!isRecord(value)) return ["grant must be a tagged fact object"];
-  if (value.outcome === "absent") {
-    if ("value" in value) return ["grant must not carry a value"];
-    return unknownKeys(value, ["outcome"], "grant");
+  if (hasInheritedEnumerableProperty(value)) {
+    return ["grant must not resolve any field through its prototype chain"];
   }
-  if (value.outcome !== "known") return ["grant.outcome must be known or absent"];
-  const wrapperExtraKeys = unknownKeys(value, ["outcome", "value"], "grant");
-  if (wrapperExtraKeys.length > 0) return wrapperExtraKeys;
-  const grant = value.value;
-  if (!isRecord(grant)) return ["grant.value must be an object"];
-  const errors = unknownKeys(grant, ["grantId", "grantScope"], "grant.value");
-  if (!isCodeTaskGrantId(grant.grantId)) errors.push("grant.value.grantId is invalid");
-  if (!isCodeTaskGrantScope(grant.grantScope)) errors.push("grant.value.grantScope is invalid");
+  const outcome = ownField(value, "outcome");
+  if (outcome === "absent") {
+    const errors = unknownKeys(value, ["outcome"], "grant");
+    if (Object.hasOwn(value, "value")) errors.push("grant must not carry a value");
+    return errors;
+  }
+  if (outcome !== "known") return ["grant.outcome must be known or absent"];
+  const errors = unknownKeys(value, ["outcome", "value"], "grant");
+  const grant = ownField(value, "value");
+  if (!isRecord(grant)) {
+    errors.push("grant.value must be an object");
+    return errors;
+  }
+  errors.push(...unknownKeys(grant, ["grantId", "grantScope"], "grant.value"));
+  if (!isCodeTaskGrantId(ownField(grant, "grantId"))) errors.push("grant.value.grantId is invalid");
+  if (!isCodeTaskGrantScope(ownField(grant, "grantScope"))) {
+    errors.push("grant.value.grantScope is invalid");
+  }
   return errors;
 }
 
 // Same fix as grantRefFactErrors above, for the question fact.
 function questionRefFactErrors(value: unknown): string[] {
   if (!isRecord(value)) return ["question must be a tagged fact object"];
-  if (value.outcome === "absent") {
-    if ("value" in value) return ["question must not carry a value"];
-    return unknownKeys(value, ["outcome"], "question");
+  if (hasInheritedEnumerableProperty(value)) {
+    return ["question must not resolve any field through its prototype chain"];
   }
-  if (value.outcome !== "known") return ["question.outcome must be known or absent"];
-  const wrapperExtraKeys = unknownKeys(value, ["outcome", "value"], "question");
-  if (wrapperExtraKeys.length > 0) return wrapperExtraKeys;
-  const question = value.value;
-  if (!isRecord(question)) return ["question.value must be an object"];
-  const errors = unknownKeys(question, ["questionId", "expectedRevision"], "question.value");
-  if (!isCodeTaskQuestionId(question.questionId))
+  const outcome = ownField(value, "outcome");
+  if (outcome === "absent") {
+    const errors = unknownKeys(value, ["outcome"], "question");
+    if (Object.hasOwn(value, "value")) errors.push("question must not carry a value");
+    return errors;
+  }
+  if (outcome !== "known") return ["question.outcome must be known or absent"];
+  const errors = unknownKeys(value, ["outcome", "value"], "question");
+  const question = ownField(value, "value");
+  if (!isRecord(question)) {
+    errors.push("question.value must be an object");
+    return errors;
+  }
+  errors.push(...unknownKeys(question, ["questionId", "expectedRevision"], "question.value"));
+  if (!isCodeTaskQuestionId(ownField(question, "questionId"))) {
     errors.push("question.value.questionId is invalid");
-  if (!isNonNegativeInteger(question.expectedRevision)) {
+  }
+  if (!isNonNegativeInteger(ownField(question, "expectedRevision"))) {
     errors.push("question.value.expectedRevision must be a non-negative integer");
   }
   return errors;
@@ -303,30 +350,52 @@ function questionRefFactErrors(value: unknown): string[] {
 // A "known" grant on an ungrantable action kind (delivery, authority-widening, dependency-operation,
 // external-file-apply-back) is rejected: those actions can never be covered by a stored grant and
 // require separate explicit approval every time (the structural exclusion invariant).
+// KfQ 3789983129: ownField(grant, "outcome") !== "known" used to be the WHOLE test for "nothing to
+// exclude-check here, skip" -- but that is exactly the mirror risk of ownField itself: undefined
+// (grant.outcome unreadable because it is only inherited) satisfies `!== "known"` identically to a
+// genuinely non-known grant, so this function silently returned [] for BOTH. ownField is correct
+// for a REJECTING read (undefined never equals a required literal, so it falls through to an
+// error); it is wrong for a PRESENCE-gated read whose false branch is "skip, nothing to check" --
+// there, invisible must not collapse onto "legitimately not applicable". Verified by construction
+// before this fix: grantRefFactErrors (run separately on the same grant) already rejects this exact
+// shape via its own "grant.outcome must be known or absent" message, so validateGovernedActionV1's
+// overall ok:false was never actually wrong -- but this function's OWN return value was, and a
+// future caller of this exclusion rule in isolation (or a change to grantRefFactErrors) must not be
+// able to inherit that latent gap. Object.hasOwn(grant, "outcome") makes "outcome is not this
+// grant's own property" its own explicit, rejecting branch instead of folding it into "not known".
 function allowedGrantExclusionErrors(value: Record<string, unknown>): string[] {
-  const grant = value.grant;
-  if (!isRecord(grant) || grant.outcome !== "known") return [];
-  if (
-    isOneOf(value.actionKind, GOVERNED_ACTION_ACTION_KINDS) &&
-    isGovernedActionGrantable(value.actionKind)
-  ) {
+  const grant = ownField(value, "grant");
+  if (!isRecord(grant)) return [];
+  if (!Object.hasOwn(grant, "outcome")) {
+    return ["grant.outcome must be its own property to evaluate the exclusion rule"];
+  }
+  if (ownField(grant, "outcome") !== "known") return [];
+  const actionKind = ownField(value, "actionKind");
+  if (isOneOf(actionKind, GOVERNED_ACTION_ACTION_KINDS) && isGovernedActionGrantable(actionKind)) {
     return [];
   }
   return ["grant is not permitted on a structurally ungrantable action kind"];
 }
 
 function governedActionRefErrors(value: Record<string, unknown>): string[] {
-  if (value.decision === "allowed") {
+  const decision = ownField(value, "decision");
+  if (decision === "allowed") {
     return [
-      ...grantRefFactErrors(value.grant),
+      ...grantRefFactErrors(ownField(value, "grant")),
       ...allowedGrantExclusionErrors(value),
-      ...absentErrors(value.question, "question"),
+      ...absentErrors(ownField(value, "question"), "question"),
     ];
   }
-  if (value.decision === "approval-required") {
-    return [...absentErrors(value.grant, "grant"), ...questionRefFactErrors(value.question)];
+  if (decision === "approval-required") {
+    return [
+      ...absentErrors(ownField(value, "grant"), "grant"),
+      ...questionRefFactErrors(ownField(value, "question")),
+    ];
   }
-  return [...absentErrors(value.grant, "grant"), ...absentErrors(value.question, "question")];
+  return [
+    ...absentErrors(ownField(value, "grant"), "grant"),
+    ...absentErrors(ownField(value, "question"), "question"),
+  ];
 }
 
 function absentErrors(value: unknown, path: string): string[] {
@@ -359,8 +428,11 @@ export function validateGovernedActionV1(
     errors.push("governedAction must not carry symbol-keyed properties");
   }
   errors.push(...envelopeErrors(value));
-  if (!isOneOf(value.decision, GOVERNED_ACTION_DECISIONS)) errors.push("decision is invalid");
-  else errors.push(...governedActionRefErrors(value));
+  if (!isOneOf(ownField(value, "decision"), GOVERNED_ACTION_DECISIONS)) {
+    errors.push("decision is invalid");
+  } else {
+    errors.push(...governedActionRefErrors(value));
+  }
   return errors.length === 0
     ? { ok: true, value: value as unknown as GovernedActionV1 }
     : { ok: false, errors };
@@ -410,37 +482,44 @@ const CODE_TASK_EXECUTION_KEYS = new Set([
 
 function executionHeaderErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
-  if (value.kind !== CODE_TASK_EXECUTION_KIND)
+  if (ownField(value, "kind") !== CODE_TASK_EXECUTION_KIND) {
     errors.push(`kind must be ${CODE_TASK_EXECUTION_KIND}`);
-  if (value.schemaVersion !== CODE_TASK_GOVERNANCE_SCHEMA_VERSION) {
+  }
+  if (ownField(value, "schemaVersion") !== CODE_TASK_GOVERNANCE_SCHEMA_VERSION) {
     errors.push("schemaVersion must be the literal 1");
   }
-  if (!isCodeTaskTaskId(value.taskId)) errors.push("taskId is invalid");
-  if (!isCodeTaskRunId(value.runId)) errors.push("runId is invalid");
-  if (!isCodeTaskWorkspaceId(value.workspaceId)) errors.push("workspaceId is invalid");
+  if (!isCodeTaskTaskId(ownField(value, "taskId"))) errors.push("taskId is invalid");
+  if (!isCodeTaskRunId(ownField(value, "runId"))) errors.push("runId is invalid");
+  if (!isCodeTaskWorkspaceId(ownField(value, "workspaceId"))) errors.push("workspaceId is invalid");
   return errors;
 }
 
 function executionModeErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
   for (const key of ["requestedMode", "effectiveMode", "deploymentCeiling"] as const) {
-    if (!isOneOf(value[key], CODING_WORKBENCH_MODES)) errors.push(`${key} is invalid`);
+    if (!isOneOf(ownField(value, key), CODING_WORKBENCH_MODES)) errors.push(`${key} is invalid`);
   }
-  if (!isOneOf(value.state, CODING_WORKBENCH_RUNTIME_STATE_NAMES)) errors.push("state is invalid");
+  if (!isOneOf(ownField(value, "state"), CODING_WORKBENCH_RUNTIME_STATE_NAMES)) {
+    errors.push("state is invalid");
+  }
   return errors;
 }
 
 function executionFactErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
   for (const key of ["stateRevision", "runEpoch"] as const) {
-    if (!isNonNegativeInteger(value[key])) errors.push(`${key} must be a non-negative integer`);
+    if (!isNonNegativeInteger(ownField(value, key))) {
+      errors.push(`${key} must be a non-negative integer`);
+    }
   }
   for (const key of ["objectiveDigest", "authorityEnvelopeDigest"] as const) {
-    if (!isCodeTaskSha256Digest(value[key])) errors.push(`${key} must be a sha256 digest`);
+    if (!isCodeTaskSha256Digest(ownField(value, key)))
+      errors.push(`${key} must be a sha256 digest`);
   }
-  if (!isCodeTaskIsoInstant(value.updatedAt))
+  if (!isCodeTaskIsoInstant(ownField(value, "updatedAt"))) {
     errors.push("updatedAt must be an ISO-8601 UTC instant");
-  errors.push(...executionFailureFactErrors(value.failure));
+  }
+  errors.push(...executionFailureFactErrors(ownField(value, "failure")));
   return errors;
 }
 
@@ -449,22 +528,27 @@ function executionFactErrors(value: Record<string, unknown>): string[] {
 // three outcomes only checked for a stray "value" key, not any other extra key. The
 // `failure must not carry a value for outcome ${outcome}` message is preserved exactly for that
 // one pinned case; every other extra key is now also rejected via unknownKeys.
+// Round 3 (#2899): same early-return-vs-collect and per-key-vs-general-guard gaps as
+// grantRefFactErrors/questionRefFactErrors above, fixed the same way.
 function executionFailureFactErrors(value: unknown): string[] {
   if (!isRecord(value)) return ["failure must be a tagged fact object"];
-  if (value.outcome === "known") {
-    const wrapperExtraKeys = unknownKeys(value, ["outcome", "value"], "failure");
-    if (wrapperExtraKeys.length > 0) return wrapperExtraKeys;
-    return isContentFreeReasonCode(value.value)
-      ? []
-      : ["failure.value must be a bounded content-free reason code"];
+  if (hasInheritedEnumerableProperty(value)) {
+    return ["failure must not resolve any field through its prototype chain"];
   }
-  if (
-    value.outcome === "absent" ||
-    value.outcome === "unavailable" ||
-    value.outcome === "unknown"
-  ) {
-    if ("value" in value) return [`failure must not carry a value for outcome ${value.outcome}`];
-    return unknownKeys(value, ["outcome"], "failure");
+  const outcome = ownField(value, "outcome");
+  if (outcome === "known") {
+    const errors = unknownKeys(value, ["outcome", "value"], "failure");
+    if (!isContentFreeReasonCode(ownField(value, "value"))) {
+      errors.push("failure.value must be a bounded content-free reason code");
+    }
+    return errors;
+  }
+  if (outcome === "absent" || outcome === "unavailable" || outcome === "unknown") {
+    const errors = unknownKeys(value, ["outcome"], "failure");
+    if (Object.hasOwn(value, "value")) {
+      errors.push(`failure must not carry a value for outcome ${outcome}`);
+    }
+    return errors;
   }
   return ["failure.outcome must be known, absent, unavailable, or unknown"];
 }

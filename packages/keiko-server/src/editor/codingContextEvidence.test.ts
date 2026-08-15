@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createInMemoryEvidenceStore, listEvidence } from "@oscharko-dev/keiko-evidence";
 import type { CodingContextWirePack, EvidenceStore } from "@oscharko-dev/keiko-contracts";
+import { CODING_CONTEXT_SOURCE_TIERS } from "@oscharko-dev/keiko-contracts";
 import {
   codingContextEvidenceRunId,
   recordCodingContextEvidence,
@@ -67,6 +68,24 @@ describe("recordCodingContextEvidence", () => {
     expect(manifest.evidenceSchemaVersion).toBeUndefined();
     expect((manifest.tierCounts as Record<string, number>)["first-party-workspace"]).toBe(1);
     expect((manifest.tierCounts as Record<string, number>)["indexed-knowledge"]).toBe(1);
+  });
+
+  // ADR-0152 D6 / Codex follow-on: countByTier used to seed its counts object from
+  // CODING_CONTEXT_SOURCE_TIERS while that catalog was a bare re-export of the neutral one, so a
+  // neutral-only tier (external-connected) silently gained a `: 0` entry in every schema-version-1
+  // coding evidence manifest — a wire change the existing-wire byte-identity guarantee (ADR-0152 D6)
+  // and this schema version explicitly forbid. Asserts the exact emitted key SET (not just the two
+  // populated tiers above) so a future neutral-only tier cannot leak into the coding manifest again
+  // without this test naming it.
+  it("emits exactly the coding catalog's tier keys in tierCounts, never a neutral-only tier", () => {
+    const store = createInMemoryEvidenceStore();
+    const runId = recordCodingContextEvidence(store, identity, wirePack(), 1_700_000_000_000);
+    const json = store.get(runId);
+    const manifest = JSON.parse(json ?? "{}") as Record<string, unknown>;
+    expect(manifest.codingContextSchemaVersion).toBe("1");
+    const tierCounts = manifest.tierCounts as Record<string, number>;
+    expect(Object.keys(tierCounts).sort()).toEqual([...CODING_CONTEXT_SOURCE_TIERS].sort());
+    expect(Object.keys(tierCounts)).not.toContain("external-connected");
   });
 
   it("does not pollute the grounded/QI evidence index", () => {

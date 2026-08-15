@@ -14,6 +14,7 @@ import {
   toRetrievalContextWirePack,
   type CodingContextPurpose,
   type CodingContextSourceKind,
+  type CodingContextSourceTier,
   type RetrievalContextBudget,
   type RetrievalContextCitation,
   type RetrievalContextExcerpt,
@@ -22,24 +23,25 @@ import {
   type RetrievalContextPack,
   type RetrievalContextRequest,
   type RetrievalContextScopeKind,
-  type RetrievalContextSourceTier,
   type RetrievalContextWirePack,
 } from "./retrieval-context.js";
 
 // The schema version is re-declared rather than re-exported because this module also compares
 // against it (validateCodingContextRequest below); the rest are pure pass-throughs, and the
-// coding-profile names for the neutral tier and omission catalogs are aliases, not new values.
+// coding-profile names for the tier and omission catalogs are aliases / derivations, not new values
+// (CODING_CONTEXT_SOURCE_TIER_BY_KIND / CODING_CONTEXT_SOURCE_TIERS / CodingContextSourceTier are
+// each derived FROM the coding profile's own pinned mapping in retrieval-context.ts, not aliased to
+// the neutral RETRIEVAL_CONTEXT_SOURCE_TIERS / RetrievalContextSourceTier — see the comment there).
 export const CODING_CONTEXT_SCHEMA_VERSION = RETRIEVAL_CONTEXT_SCHEMA_VERSION;
 export { CODING_CONTEXT_PURPOSES, CODING_CONTEXT_SOURCE_KINDS, CODING_CONTEXT_SOURCE_TIER_BY_KIND };
 export {
   CODING_CONTEXT_BUDGETS,
+  CODING_CONTEXT_SOURCE_TIERS,
   embeddingProvidersAllowed,
   RETRIEVAL_CONTEXT_OMISSION_REASONS as CODING_CONTEXT_OMISSION_REASONS,
-  RETRIEVAL_CONTEXT_SOURCE_TIERS as CODING_CONTEXT_SOURCE_TIERS,
 } from "./retrieval-context.js";
 
-export type { CodingContextPurpose, CodingContextSourceKind };
-export type CodingContextSourceTier = RetrievalContextSourceTier;
+export type { CodingContextPurpose, CodingContextSourceKind, CodingContextSourceTier };
 export type CodingContextOmissionReason = RetrievalContextOmissionReason;
 export type CodingContextOmission = RetrievalContextOmission<CodingContextSourceKind>;
 export type CodingContextCitation = RetrievalContextCitation<CodingContextSourceKind>;
