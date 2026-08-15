@@ -81,7 +81,11 @@ describe("macOS system-extension activation manager", () => {
 
     expect(reply).toContain("sent == (ssize_t)sizeof(reply)");
     expect(reply).toContain("shutdown(session->descriptor, SHUT_RDWR)");
-    expect(connection).toContain("session->descriptor < 0 && session->uid == uid");
+    // KEIKO-0433 split the old single `session->descriptor < 0 && session->uid == uid` guard into
+    // three outcomes. Both halves of that guard must survive the split: a session already owned by
+    // a live connection is adopted by nobody, and an owner mismatch still fails.
+    expect(connection).toContain("session->descriptor >= 0");
+    expect(connection).toContain("session->uid != uid");
     expect(reserve).toContain("KEIKO_MAX_CONNECTIONS");
     expect(main).toContain("reserve_connection()");
     expect(main).toContain("errno != EINTR && errno != ECONNABORTED");
@@ -97,5 +101,117 @@ describe("macOS system-extension activation manager", () => {
     expect(qualify).toContain("finally {");
     expect(qualify).toContain('child.kill("SIGKILL")');
     expect(qualify).toContain("await exited.catch");
+  });
+
+  // KEIKO-0419: the daemon emitted no diagnostic output at all, so an Endpoint Security failure,
+  // a Full-Disk-Access refusal and a kill-switch fan-out were equally invisible to an operator.
+  describe("runtime monitor diagnostics (KEIKO-0419)", () => {
+    it("logs through os_log under the documented subsystem", () => {
+      expect(monitorSource).toContain("#include <os/log.h>");
+      expect(monitorSource).toContain('os_log_create("com.oscharko.keiko.runtime-monitor"');
+    });
+
+    it("logs every endpoint state transition, including the one that bypasses the setter", () => {
+      expect(functionBody(monitorSource, "static void set_endpoint_state(")).toContain("os_log(");
+      // start_endpoint_security assigns ENDPOINT_STATE_ACTIVE directly under the lock rather than
+      // through set_endpoint_state, so it needs its own line or the transition that matters most
+      // would be the only silent one.
+      expect(functionBody(monitorSource, "static void *start_endpoint_security(")).toContain(
+        "os_log(",
+      );
+    });
+
+    it("logs the kill-switch fan-out and the Endpoint Security failure branches", () => {
+      expect(functionBody(monitorSource, "static void stop_session(")).toContain("os_log(");
+      const endpoint = functionBody(monitorSource, "static void *start_endpoint_security(");
+      expect(endpoint).toContain("es_new_client denied");
+      expect(endpoint).toContain("es_subscribe failed");
+      expect(functionBody(monitorSource, "static void *serve_client(")).toContain("os_log_error(");
+    });
+
+    it("keeps the per-event hot path free of logging", () => {
+      // Logging every fork/exec/exit machine-wide would recreate the hot-path cost the O(n)-scan
+      // finding warns about. Decision points only.
+      expect(functionBody(monitorSource, "static void endpoint_event(")).not.toContain("os_log");
+    });
+
+    it("logs no process command lines, argv or environment", () => {
+      for (const line of monitorSource.split("\n").filter((l) => l.includes("os_log"))) {
+        expect(line).not.toMatch(/argv|environ|cmdline|executable->path/u);
+      }
+    });
+  });
+
+  // KEIKO-0450: every non-zero exit discarded its reason, including the NSError the OS supplied,
+  // so three different operator actions all surfaced as one generic failure.
+  describe("system extension manager diagnostics (KEIKO-0450)", () => {
+    it("reports the OS-supplied reason instead of discarding the NSError", () => {
+      expect(source).not.toContain("(void)error;");
+      expect(source).toContain("error.localizedDescription.UTF8String");
+    });
+
+    it("distinguishes the three activation failure causes", () => {
+      const activate = functionBody(source, "static int activate_extension(");
+      const messages = [...activate.matchAll(/fprintf\(stderr,\s*\n?\s*"([^"]+)/gu)].map(
+        (match) => match[1],
+      );
+      expect(messages.length).toBeGreaterThanOrEqual(3);
+      expect(new Set(messages).size).toBe(messages.length);
+    });
+
+    it("writes nothing to stderr on the success paths", () => {
+      // portable-macos-activation.ts requires result.stderr === "" on success; a diagnostic on a
+      // success path would break that caller.
+      const activate = functionBody(source, "static int activate_extension(");
+      const successReturn = activate.slice(activate.lastIndexOf('puts("active")'));
+      expect(successReturn).not.toContain("fprintf(stderr");
+    });
+  });
+
+  // KEIKO-0433: RECONCILE answered ZERO_LIVE both for "no such session" and for "already owned by
+  // a live connection" — opposite situations demanding opposite caller responses.
+  describe("reconcile outcome distinguishability (KEIKO-0433)", () => {
+    it("appends the new response code without renumbering the wire protocol", () => {
+      const protocol = readFileSync(
+        new URL(
+          "../../native/runtime-supervisor/macos/keiko_runtime_monitor_protocol.h",
+          import.meta.url,
+        ),
+        "utf8",
+      );
+      expect(protocol).toContain("KEIKO_MONITOR_ALREADY_ACTIVE = 9");
+      // Every pre-existing value keeps its number: reassigning one breaks already-built binaries.
+      for (const [name, value] of [
+        ["KEIKO_MONITOR_ACTIVE", 1],
+        ["KEIKO_MONITOR_ARMED", 2],
+        ["KEIKO_MONITOR_ROOT_OBSERVED", 3],
+        ["KEIKO_MONITOR_ZERO_LIVE", 4],
+        ["KEIKO_MONITOR_ERROR", 5],
+        ["KEIKO_MONITOR_NEEDS_FULL_DISK_ACCESS", 6],
+        ["KEIKO_MONITOR_STARTING", 7],
+        ["KEIKO_MONITOR_FAILED", 8],
+      ]) {
+        expect(protocol).toContain(`${name} = ${String(value)}`);
+      }
+    });
+
+    it("replies ALREADY_ACTIVE only for the live case and keeps ZERO_LIVE for unknown handles", () => {
+      const connection = functionBody(monitorSource, "static void *serve_client(");
+      expect(connection).toContain("RECONCILE_ALREADY_LIVE");
+      expect(connection).toContain("KEIKO_MONITOR_ALREADY_ACTIVE");
+      expect(connection).toContain("KEIKO_MONITOR_ZERO_LIVE");
+      // An owner mismatch must stay indistinguishable from an unknown handle: telling a different
+      // uid that the handle exists is an information leak, not a diagnostic.
+      expect(connection).toMatch(/session->uid != uid[\s\S]{0,400}RECONCILE_UNKNOWN_HANDLE/u);
+    });
+
+    it("gives the supervisor its own branch instead of the generic observe error", () => {
+      const reconcile = functionBody(supervisorSource, "static int reconcile(");
+      expect(reconcile).toContain("KEIKO_MONITOR_ALREADY_ACTIVE");
+      expect(reconcile).toContain("ERROR_TREE_ALREADY_SUPERVISED");
+      expect(reconcile).toMatch(
+        /KEIKO_MONITOR_ALREADY_ACTIVE[\s\S]{0,200}ERROR_TREE_ALREADY_SUPERVISED[\s\S]{0,200}ERROR_TREE_OBSERVE/u,
+      );
+    });
   });
 });

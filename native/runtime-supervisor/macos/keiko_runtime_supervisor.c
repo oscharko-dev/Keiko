@@ -26,7 +26,10 @@ enum error_code {
   ERROR_PROTOCOL = 1,
   ERROR_MONITOR_UNAVAILABLE = 6,
   ERROR_PROCESS_CREATE = 3,
-  ERROR_TREE_OBSERVE = 5
+  ERROR_TREE_OBSERVE = 5,
+  // KEIKO-0433: reconcile found the handle, but a live connection already owns that session.
+  // Distinct from ERROR_TREE_OBSERVE (could not observe) and from the reaped success path.
+  ERROR_TREE_ALREADY_SUPERVISED = 7
 };
 
 struct launch_request {
@@ -340,6 +343,15 @@ static int reconcile(const char *handle) {
     return 1;
   }
   close(monitor);
+  // KEIKO-0433: an already-supervised tree now answers KEIKO_MONITOR_ALREADY_ACTIVE instead of
+  // borrowing ZERO_LIVE. Without this branch the new code would fall into the generic
+  // ERROR_TREE_OBSERVE below and be exactly as opaque as the collapse it was added to fix.
+  // "Someone else already owns this tree" is not an observation failure — it is a live monitor,
+  // and the caller must not go on to report the tree reaped.
+  if (reply.kind == KEIKO_MONITOR_ALREADY_ACTIVE) {
+    (void)send_error(ERROR_TREE_ALREADY_SUPERVISED);
+    return 1;
+  }
   if (reply.kind != KEIKO_MONITOR_ZERO_LIVE || reply.live_processes != 0) {
     (void)send_error(ERROR_TREE_OBSERVE);
     return 1;

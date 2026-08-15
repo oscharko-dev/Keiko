@@ -22,7 +22,13 @@ enum keiko_monitor_response {
   KEIKO_MONITOR_ERROR = 5,
   KEIKO_MONITOR_NEEDS_FULL_DISK_ACCESS = 6,
   KEIKO_MONITOR_STARTING = 7,
-  KEIKO_MONITOR_FAILED = 8
+  KEIKO_MONITOR_FAILED = 8,
+  // KEIKO-0433: RECONCILE against a handle that IS known but already owned by a live connection
+  // used to answer KEIKO_MONITOR_ZERO_LIVE — the same code as "no such session". Those demand
+  // opposite responses: one means the tree is already supervised and the caller should back off,
+  // the other means nothing is left to adopt. Appended, never renumbered: the wire protocol is
+  // shared with already-built binaries, so reassigning an existing value would be breaking.
+  KEIKO_MONITOR_ALREADY_ACTIVE = 9
 };
 
 struct keiko_monitor_request {
