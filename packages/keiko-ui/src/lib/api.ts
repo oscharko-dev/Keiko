@@ -121,6 +121,7 @@ import {
   type GitDeliveryActionSheetRequest,
   type GitDeliveryApprovalClaim,
   type EditorHotExitSnapshotV1,
+  type EditorHotExitWriteResponse,
   type PdfCitationPreviewOpenResponse,
   type PdfCitationPreviewSelection,
   type PdfCitationPreviewStatusRequest,
@@ -1615,12 +1616,6 @@ export async function deleteEditorLocalHistory(
     `/api/editor/local-history/${encodeURIComponent(entryRef)}?${params.toString()}`,
     { method: "DELETE" },
   );
-}
-
-export interface EditorHotExitWriteResponse {
-  readonly snapshotRef: string;
-  readonly contentSizeBytes: number;
-  readonly suppressed?: boolean;
 }
 
 export interface EditorHotExitReadResponse {

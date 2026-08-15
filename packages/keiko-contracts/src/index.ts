@@ -361,7 +361,13 @@ export {
   resolveWorkspaceFileIdentifier,
   selectWorkspaceFileTarget,
 } from "./editor-workspace-path.js";
-export type { EditorHotExitIndexRecordV2, EditorHotExitSnapshotV1 } from "./editor-hot-exit.js";
+export type {
+  EditorHotExitIndexRecordV2,
+  EditorHotExitSnapshotV1,
+  EditorHotExitWriteResponse,
+  EditorHotExitWriteStoredResponse,
+  EditorHotExitWriteSuppressedResponse,
+} from "./editor-hot-exit.js";
 export {
   EDITOR_HOT_EXIT_INDEX_SCHEMA_VERSION,
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
