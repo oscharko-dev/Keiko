@@ -128,9 +128,32 @@ single-credential posture: the proxy layer may not introduce additional secrets.
    term are now collision-resistant SHA-256 digests rather than summaries or literals: the CA set
    is sorted first (so the same set in a different array order still hashes identically — order
    carries no trust meaning) and hashed in full, and the vetted address is hashed too, even though
-   grepping confirmed it never surfaces outside this in-memory `Map` today (no log, thrown message,
-   or export references `tunnelKey`/`caKey`/`pinKey`) — a digest costs nothing and permanently
-   forecloses that mattering if a future diagnostic ever taps this key.
+   grepping confirmed it never surfaces as raw content outside this in-memory `Map` today (no log
+   or thrown message references `tunnelKey`/`caKey`/`pinKey`; `httpsProxyTunnelKey` itself is
+   exported, but only for direct unit testing — see the next correction — and its return value is
+   these same digests, never the raw address or certificate bytes) — a digest costs nothing and
+   permanently forecloses that mattering if a future diagnostic ever taps this key.
+   **Correction (#3157, 2026-08-15), sort comparator locale-sensitivity.** The CA-set sort above,
+   added to satisfy SonarJS S2871 (which requires an explicit comparator rather than default
+   sort's coercion-based one), initially used `(a, b) => a.localeCompare(b)`. Two further Keiko for
+   Quality findings caught that this reintroduced exactly the environment-dependence the digest
+   exists to avoid: `localeCompare`'s result depends on the runtime's collation (locale, ICU data
+   version), so the identical CA set could sort — and therefore hash — differently on two
+   differently-configured hosts, or on the same host across an ICU upgrade. A pool key exists to
+   make identical configurations match each other; a locale-sensitive comparator can silently stop
+   that from happening for an affected configuration, dropping its pool hit rate to zero (wasted
+   reconnects under load, not a security break — a missed pool hit only means a fresh, still
+   correctly vetted tunnel, never an unvetted one). Replaced with `codeUnitCompare`, a plain
+   UTF-16 code-unit comparator written with if-statements rather than a nested ternary (SonarJS
+   S3358 flags those separately — satisfying one rule should not trip another): total, stable, and
+   dependent on nothing but the two strings' own code units — no ICU, no locale, no `Intl` — while
+   still satisfying S2871's actual requirement (a well-defined order) rather than merely its
+   literal one (any explicit function). Pinned directly rather than only through `gatewayFetch`:
+   `httpsProxyTunnelKey` is
+   exported and unit-tested for order-insensitivity (the same CA set in different array orders
+   must produce the same key), because the one real caller, `gatewayTrustedCaCertificates`, always
+   assembles its array in a fixed sequence and so never itself exercises a reordering — the
+   invariant belongs to the function, not to any one caller's incidental behavior.
    **Correction (#3156, 2026-08-15), plain-HTTP path fact-check.** This paragraph previously claimed
    the plain-HTTP absolute-URI proxy path (`fetchHttpViaProxy`) has no equivalent pool because
    Node's default global agent opens an unshared connection per call. Codex P2 caught that this is
