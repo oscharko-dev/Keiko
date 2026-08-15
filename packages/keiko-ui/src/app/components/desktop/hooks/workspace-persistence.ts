@@ -764,18 +764,26 @@ function workspaceWindowIdentity(win: AppWindow): string | undefined {
     : undefined;
 }
 
-export function enforceWorkspaceWindowInvariants(wins: AppWindow[]): AppWindow[] {
+function keepTopmostWindowByIdentity(
+  wins: AppWindow[],
+  identityFor: (win: AppWindow) => string | undefined,
+): AppWindow[] {
   const keepers = new Map<string, AppWindow>();
   for (const win of wins) {
-    const identity = workspaceWindowIdentity(win);
+    const identity = identityFor(win);
     if (identity === undefined) continue;
     const current = keepers.get(identity);
     if (current === undefined || win.z > current.z) keepers.set(identity, win);
   }
-  const filtered = wins.filter((win) => {
-    const identity = workspaceWindowIdentity(win);
+  return wins.filter((win) => {
+    const identity = identityFor(win);
     return identity === undefined || keepers.get(identity) === win;
   });
+}
+
+export function enforceWorkspaceWindowInvariants(wins: AppWindow[]): AppWindow[] {
+  const physical = keepTopmostWindowByIdentity(wins, (win) => win.id);
+  const filtered = keepTopmostWindowByIdentity(physical, workspaceWindowIdentity);
   if (filtered.length === wins.length && wins.length <= MAX_WORKSPACE_WINDOWS) return wins;
   return filtered.slice(0, MAX_WORKSPACE_WINDOWS);
 }

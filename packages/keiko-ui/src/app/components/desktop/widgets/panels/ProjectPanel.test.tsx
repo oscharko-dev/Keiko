@@ -365,6 +365,34 @@ describe("ProjectPanel", () => {
     expect(value.openChat).not.toHaveBeenCalled();
   });
 
+  it("moves the local selection to the chat opened from the project tree", async () => {
+    const user = userEvent.setup();
+    const openChatWindow = vi.fn();
+    const value = session();
+    const secondChat = {
+      ...value.chats[0]!,
+      id: "chat-2",
+      title: "Business workspace",
+      updatedAt: 3,
+    };
+    render(
+      <ChatSessionProvider value={{ ...value, chats: [...value.chats, secondChat] }}>
+        <ProjectPanel openChatWindow={openChatWindow} />
+      </ChatSessionProvider>,
+    );
+    const first = screen.getByRole("treeitem", { name: /Investigate shell audit/ });
+    const second = screen.getByRole("treeitem", { name: /Business workspace/ });
+    expect(first).toHaveAttribute("aria-selected", "true");
+    expect(second).toHaveAttribute("aria-selected", "false");
+
+    await user.click(second);
+
+    expect(first).toHaveAttribute("aria-selected", "false");
+    expect(second).toHaveAttribute("aria-selected", "true");
+    expect(openChatWindow).toHaveBeenCalledWith(secondChat);
+    expect(value.openChat).not.toHaveBeenCalled();
+  });
+
   // #2723 (S3358): the chat-meta branchLabel span's "undefined" (null) branch — the default
   // fixture chat always has a branchLabel, so this covers the omitted case.
   it("omits the branch-label meta span when a chat has no branch label", () => {

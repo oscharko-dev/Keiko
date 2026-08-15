@@ -163,6 +163,7 @@ type CurrentRef<T> = { current: T };
 
 interface ChatWindowProps {
   readonly windowId?: string;
+  readonly suspended?: boolean;
   readonly mini?: boolean;
   readonly minimalChat?: boolean;
   readonly compact?: boolean;
@@ -2412,6 +2413,7 @@ function SendLifecycleStatus({ status }: { readonly status: SendStatus }): React
 interface ComposerCoreProps {
   readonly ready: boolean;
   readonly placeholder: string;
+  readonly suspended?: boolean;
   readonly minimal?: boolean;
   readonly compact?: boolean;
   readonly controlsNarrow?: boolean;
@@ -2770,6 +2772,7 @@ function ComposerVoiceOverlay({
 function ComposerCoreImpl({
   ready,
   placeholder,
+  suspended = false,
   minimal = false,
   compact = false,
   controlsNarrow = false,
@@ -2876,6 +2879,13 @@ function ComposerCoreImpl({
     capability: voiceCapability,
     captureOwner: voiceCaptureOwner,
   });
+  const { cancel: cancelDictation } = dictation;
+  const { leave: leaveVoiceMode } = voiceDialog;
+  useEffect(() => {
+    if (!suspended) return;
+    cancelDictation();
+    leaveVoiceMode();
+  }, [cancelDictation, leaveVoiceMode, suspended]);
   // The canonical send result identifies the assistant row created for this exact spoken turn. TTS
   // remains disabled until that row is visible in the active chat; no latest-message or timestamp
   // heuristic may associate an unrelated concurrent answer with the voice turn.
@@ -5020,6 +5030,7 @@ function ComposerSendNotice({
 function ChatWindowComposerFooter({
   visible,
   activeChat,
+  suspended,
   effectiveCompact,
   effectiveMinimal,
   effectiveControlsNarrow,
@@ -5037,6 +5048,7 @@ function ChatWindowComposerFooter({
 }: {
   readonly visible: readonly ChatMessage[];
   readonly activeChat: Chat | undefined;
+  readonly suspended: boolean;
   readonly effectiveCompact: boolean;
   readonly effectiveMinimal: boolean;
   readonly effectiveControlsNarrow: boolean;
@@ -5067,6 +5079,7 @@ function ChatWindowComposerFooter({
             <ComposerCore
               ready={ready}
               placeholder={composerPlaceholder(visible.length, loading, t)}
+              suspended={suspended}
               minimal={effectiveMinimal}
               compact={effectiveCompact}
               controlsNarrow={effectiveControlsNarrow}
@@ -5103,6 +5116,7 @@ function ChatWindowComposerFooter({
 
 export function ChatWindow({
   windowId,
+  suspended = false,
   mini = false,
   minimalChat = false,
   compact = false,
@@ -5370,6 +5384,7 @@ export function ChatWindow({
       <ChatWindowComposerFooter
         visible={visible}
         activeChat={activeChat}
+        suspended={suspended}
         effectiveCompact={effectiveCompact}
         effectiveMinimal={effectiveMinimal}
         effectiveControlsNarrow={effectiveControlsNarrow}

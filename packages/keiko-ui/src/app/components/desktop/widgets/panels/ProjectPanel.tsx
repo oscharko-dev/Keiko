@@ -326,6 +326,19 @@ function ProjectRow({
   );
 }
 
+function useProjectPanelChatSelection(
+  activeChatId: string | undefined,
+  openChatWindow: (chat: Chat) => void,
+): readonly [string | undefined, (chat: Chat) => void] {
+  const [selectedChatId, setSelectedChatId] = useState(activeChatId);
+  useEffect(() => setSelectedChatId(activeChatId), [activeChatId]);
+  const selectChat = (chat: Chat): void => {
+    setSelectedChatId(chat.id);
+    openChatWindow(chat);
+  };
+  return [selectedChatId, selectChat];
+}
+
 export function ProjectPanel({
   openChatWindow,
 }: {
@@ -334,6 +347,10 @@ export function ProjectPanel({
   const session = useChatSessionCatalog();
   const actions = useChatSessionActions();
   const treeRef = useRef<HTMLDivElement | null>(null);
+  const [selectedChatId, selectChat] = useProjectPanelChatSelection(
+    session.activeChat?.id,
+    openChatWindow,
+  );
 
   return (
     <div className="tw-scroll">
@@ -362,14 +379,12 @@ export function ProjectPanel({
               project={project}
               activeProjectPath={session.activeProject?.path}
               chats={session.activeProject?.path === project.path ? session.chats : []}
-              activeChatId={session.activeChat?.id}
+              activeChatId={selectedChatId}
               treeRef={treeRef}
               onProject={(nextProject) => {
                 void actions.openProject(nextProject);
               }}
-              onChat={(chat) => {
-                openChatWindow(chat);
-              }}
+              onChat={selectChat}
             />
           ))}
         </div>

@@ -170,6 +170,7 @@ interface BodySelection {
 // directly when building the render props below.
 interface SelectBodyOptions {
   readonly windowId: string;
+  readonly suspended: boolean;
   readonly type: WindowType;
   readonly ew: number;
   readonly eh: number;
@@ -189,6 +190,7 @@ interface SelectBodyOptions {
 
 function selectBody({
   windowId,
+  suspended,
   type,
   ew,
   eh,
@@ -219,6 +221,7 @@ function selectBody({
       mode: mini ? "mini" : "full",
       node: def.render(typedCfg, {
         windowId,
+        suspended,
         mini,
         minimalChat,
         compact,
@@ -855,6 +858,7 @@ function WindowFrameImpl({
     () =>
       selectBody({
         windowId: win.id,
+        suspended: win.minimized === true,
         type: win.type,
         ew,
         eh,
@@ -874,6 +878,7 @@ function WindowFrameImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- ew/eh intentionally excluded; bodyBreakpoints is their discrete-crossing proxy (GEN-PERF-RENDER-003) so a same-band resize does not rebuild the body
     [
       win.id,
+      win.minimized,
       win.type,
       win.cfg,
       bodyBreakpoints,

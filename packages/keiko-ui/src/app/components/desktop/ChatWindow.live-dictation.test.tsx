@@ -271,6 +271,25 @@ afterEach(() => {
 });
 
 describe("ChatWindow live dictation mode selection", () => {
+  it("cancels microphone capture when its window becomes suspended", () => {
+    vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: STT });
+    stubCaptureBrowser();
+    const value = makeSession();
+    const rendered = render(
+      <ChatSessionProvider value={value}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+
+    expect(dictationMock.cancel).not.toHaveBeenCalled();
+    rendered.rerender(
+      <ChatSessionProvider value={value}>
+        <ChatWindow suspended />
+      </ChatSessionProvider>,
+    );
+    expect(dictationMock.cancel).toHaveBeenCalledOnce();
+  });
+
   it("keeps STT-only dictation on the batch path", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: STT });
     stubCaptureBrowser();

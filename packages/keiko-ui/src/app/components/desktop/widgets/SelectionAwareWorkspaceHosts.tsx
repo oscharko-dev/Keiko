@@ -1093,6 +1093,7 @@ function BoundChatBody({
   return (
     <ChatWindow
       windowId={ctx.windowId}
+      suspended={ctx.suspended === true}
       mini={ctx.mini === true}
       minimalChat={ctx.minimalChat === true}
       compact={ctx.compact === true}

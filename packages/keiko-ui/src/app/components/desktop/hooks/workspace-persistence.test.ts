@@ -459,6 +459,19 @@ describe("workspace-persistence", () => {
     ]);
   });
 
+  it("keeps only the frontmost window when persisted physical ids collide", () => {
+    const persisted = sanitizePersistedWindows([
+      win({ id: "duplicate", type: "chat", z: 2, cfg: { chatId: "A", title: "A" } }),
+      win({ id: "duplicate", type: "chat", z: 6, cfg: { chatId: "B", title: "B" } }),
+      win({ id: "chat-c", type: "chat", z: 4, cfg: { chatId: "C", title: "C" } }),
+    ]);
+
+    expect(persisted.map((entry) => [entry.id, entry.cfg["chatId"]])).toEqual([
+      ["duplicate", "B"],
+      ["chat-c", "C"],
+    ]);
+  });
+
   it("never persists a private editor-handoff project path", () => {
     const persisted = sanitizePersistedWindows([
       win({

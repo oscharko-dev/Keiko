@@ -209,6 +209,7 @@ export interface LocalizedConfigField {
 
 export interface WindowRenderContext {
   readonly windowId: string;
+  readonly suspended?: boolean;
   readonly mini?: boolean;
   readonly minimalChat?: boolean;
   readonly compact?: boolean;
