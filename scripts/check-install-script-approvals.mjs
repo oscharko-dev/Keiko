@@ -20,15 +20,13 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-
-const LOCKFILE = join(process.cwd(), "package-lock.json");
-const MANIFEST = join(process.cwd(), "package.json");
+import { pathToFileURL } from "node:url";
 
 /**
  * Every third-party package permitted to run an install script, at the exact version reviewed.
  * Adding an entry is a supply-chain decision: state what the script does and why it is acceptable.
  */
-const REVIEWED_INSTALL_SCRIPTS = new Map([
+export const REVIEWED_INSTALL_SCRIPTS = new Map([
   [
     "fsevents",
     {
@@ -51,70 +49,95 @@ const REVIEWED_INSTALL_SCRIPTS = new Map([
   ],
 ]);
 
-function fail(lines) {
-  console.error("check-install-script-approvals: FAIL");
-  for (const line of lines) console.error(`  ${line}`);
-  process.exit(1);
-}
-
-const lock = JSON.parse(readFileSync(LOCKFILE, "utf8"));
-const manifest = JSON.parse(readFileSync(MANIFEST, "utf8"));
-const allowScripts = manifest.allowScripts ?? {};
-
-// Lockfile paths are like "node_modules/a/node_modules/b" — the package name is the last segment
-// after the final "node_modules/", which keeps scoped names (@scope/name) intact.
-function packageNameFromLockPath(lockPath) {
+// Lockfile paths look like "node_modules/a/node_modules/b" — the package name is everything after
+// the final "node_modules/", which keeps scoped names (@scope/name) intact.
+export function packageNameFromLockPath(lockPath) {
   const at = lockPath.lastIndexOf("node_modules/");
   return at === -1 ? lockPath : lockPath.slice(at + "node_modules/".length);
 }
 
-const locked = new Map();
-for (const [lockPath, entry] of Object.entries(lock.packages ?? {})) {
-  if (entry.hasInstallScript !== true) continue;
-  locked.set(packageNameFromLockPath(lockPath), entry.version);
-}
-
-const problems = [];
-
-for (const [name, version] of locked) {
-  const reviewed = REVIEWED_INSTALL_SCRIPTS.get(name);
-  if (reviewed === undefined) {
-    problems.push(
+/** The three ways one locked install-script package can be wrong. Split out of the loop below so
+ * neither function carries the whole decision tree. */
+function problemsForLockedPackage(name, version, record, allowScripts) {
+  if (record === undefined) {
+    return [
       `${name}@${version} runs an install script and has never been reviewed. Read what its ` +
         "script does, then add it to REVIEWED_INSTALL_SCRIPTS in this file and approve it with " +
         "`npm approve-scripts`.",
-    );
-    continue;
+    ];
   }
-  if (reviewed.version !== version) {
+  const problems = [];
+  if (record.version !== version) {
     problems.push(
-      `${name} was reviewed at ${reviewed.version} but the lockfile now resolves ${version}. ` +
+      `${name} was reviewed at ${record.version} but the lockfile now resolves ${version}. ` +
         "Re-read the install script at the new version before updating the recorded version.",
     );
   }
   // npm must also be enforcing it at install time; the pinned key is preferred where npm honours it.
-  const approved = allowScripts[`${name}@${version}`] === true || allowScripts[name] === true;
-  if (!approved) {
+  if (allowScripts[`${name}@${version}`] !== true && allowScripts[name] !== true) {
     problems.push(
       `${name}@${version} is recorded as reviewed here but is not in package.json allowScripts, ` +
-        "so npm would not let `npm ci` complete. Run `npm approve-scripts " +
-        `${name}\`.`,
+        `so npm would not let \`npm ci\` complete. Run \`npm approve-scripts ${name}\`.`,
     );
   }
+  return problems;
 }
 
-for (const name of REVIEWED_INSTALL_SCRIPTS.keys()) {
-  if (!locked.has(name)) {
-    problems.push(
-      `${name} is recorded as a reviewed install-script package but no longer appears in the ` +
-        "lockfile with an install script. Remove its entry so the record stays honest.",
-    );
+/**
+ * @param {{packages?: Record<string, {hasInstallScript?: boolean, version?: string}>}} lock
+ * @param {{allowScripts?: Record<string, boolean>}} manifest
+ * @param {Map<string, {version: string}>} [reviewed]
+ * @returns {{problems: string[], lockedCount: number}}
+ */
+export function findInstallScriptApprovalProblems(
+  lock,
+  manifest,
+  reviewed = REVIEWED_INSTALL_SCRIPTS,
+) {
+  const allowScripts = manifest.allowScripts ?? {};
+  const locked = new Map();
+  for (const [lockPath, entry] of Object.entries(lock.packages ?? {})) {
+    if (entry.hasInstallScript !== true) continue;
+    locked.set(packageNameFromLockPath(lockPath), entry.version);
   }
+
+  const problems = [];
+  for (const [name, version] of locked) {
+    problems.push(...problemsForLockedPackage(name, version, reviewed.get(name), allowScripts));
+  }
+
+  for (const name of reviewed.keys()) {
+    if (!locked.has(name)) {
+      problems.push(
+        `${name} is recorded as a reviewed install-script package but no longer appears in the ` +
+          "lockfile with an install script. Remove its entry so the record stays honest.",
+      );
+    }
+  }
+
+  return { problems, lockedCount: locked.size };
 }
 
-if (problems.length > 0) fail(problems);
+/** @returns {number} process exit code */
+export function runCli(repoRoot = process.cwd()) {
+  const lock = JSON.parse(readFileSync(join(repoRoot, "package-lock.json"), "utf8"));
+  const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+  const { problems, lockedCount } = findInstallScriptApprovalProblems(lock, manifest);
 
-console.log(
-  `check-install-script-approvals: PASS — ${String(locked.size)} third-party install script(s), ` +
-    "all reviewed at the exact locked version and approved for npm.",
-);
+  if (problems.length > 0) {
+    console.error("check-install-script-approvals: FAIL");
+    for (const problem of problems) console.error(`  ${problem}`);
+    return 1;
+  }
+
+  console.log(
+    `check-install-script-approvals: PASS — ${String(lockedCount)} third-party install script(s), ` +
+      "all reviewed at the exact locked version and approved for npm.",
+  );
+  return 0;
+}
+
+// Run as a CLI unless imported by a test.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.exit(runCli());
+}

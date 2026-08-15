@@ -15,13 +15,12 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-
-const WORKFLOWS_DIR = join(process.cwd(), ".github", "workflows");
+import { pathToFileURL } from "node:url";
 
 // ci.yml is the reference: it is the required check, and its list is the one the protected-branch
 // gate's own case statement is kept in step with.
-const REFERENCE = { file: "ci.yml", triggers: ["push", "pull_request"] };
-const FOLLOWERS = [
+export const REFERENCE = { file: "ci.yml", triggers: ["push", "pull_request"] };
+export const FOLLOWERS = [
   { file: "codeql.yml", triggers: ["push", "pull_request"] },
   { file: "dependency-review.yml", triggers: ["pull_request"] },
 ];
@@ -37,7 +36,7 @@ const FOLLOWERS = [
  * @param {string} trigger top-level trigger name, e.g. "push"
  * @returns {string[] | null} the branch patterns, or null when the trigger declares none
  */
-function readBranchList(source, trigger) {
+export function readBranchList(source, trigger) {
   const lines = source.split("\n");
   const triggerAt = lines.indexOf(`  ${trigger}:`);
   if (triggerAt === -1) return null;
@@ -54,7 +53,7 @@ function readBranchList(source, trigger) {
     if (!inBranches) continue;
     const entry = /^ {6}- (.+)$/u.exec(line);
     if (entry === null) {
-      // Any other six-space key ends the branches list (e.g. a sibling `paths:`).
+      // Any other four-space key ends the branches list (e.g. a sibling `paths:`).
       if (/^ {4}\S/u.test(line)) break;
       continue;
     }
@@ -63,58 +62,73 @@ function readBranchList(source, trigger) {
   return inBranches ? branches : null;
 }
 
-function loadTriggerBranches({ file, triggers }) {
-  const source = readFileSync(join(WORKFLOWS_DIR, file), "utf8");
-  return triggers.map((trigger) => {
-    const branches = readBranchList(source, trigger);
-    if (branches === null || branches.length === 0) {
-      console.error(
-        `check-workflow-branch-parity: FAIL — ${file} declares no branch list under \`${trigger}:\`.`,
-      );
-      process.exit(1);
-    }
-    return { trigger, branches: new Set(branches) };
-  });
-}
+/**
+ * Compare every follower's branch set against the reference's.
+ *
+ * @param {(file: string) => string} readWorkflow resolves a workflow file's source
+ * @returns {{ failures: Array<{file: string, trigger: string, missing: string[], extra: string[]}>,
+ *             referenceSize: number }}
+ */
+export function checkWorkflowBranchParity(readWorkflow) {
+  const failures = [];
+  const listsFor = ({ file, triggers }) =>
+    triggers.map((trigger) => {
+      const branches = readBranchList(readWorkflow(file), trigger);
+      if (branches === null || branches.length === 0) {
+        failures.push({ file, trigger, missing: [], extra: [], noList: true });
+        return { trigger, branches: new Set() };
+      }
+      return { trigger, branches: new Set(branches) };
+    });
 
-const referenceLists = loadTriggerBranches(REFERENCE);
-const [{ branches: expected }] = referenceLists;
+  const referenceLists = listsFor(REFERENCE);
+  const expected = referenceLists[0].branches;
 
-// The reference file must first agree with itself: push and pull_request cannot diverge either.
-const failures = [];
-for (const { trigger, branches } of referenceLists.slice(1)) {
-  const missing = [...expected].filter((branch) => !branches.has(branch));
-  const extra = [...branches].filter((branch) => !expected.has(branch));
-  if (missing.length > 0 || extra.length > 0) {
-    failures.push({ file: REFERENCE.file, trigger, missing, extra });
-  }
-}
-
-for (const follower of FOLLOWERS) {
-  for (const { trigger, branches } of loadTriggerBranches(follower)) {
+  const compare = (file, { trigger, branches }) => {
     const missing = [...expected].filter((branch) => !branches.has(branch));
     const extra = [...branches].filter((branch) => !expected.has(branch));
-    if (missing.length > 0 || extra.length > 0) {
-      failures.push({ file: follower.file, trigger, missing, extra });
+    if (missing.length > 0 || extra.length > 0) failures.push({ file, trigger, missing, extra });
+  };
+
+  // The reference file must first agree with itself: push and pull_request cannot diverge either.
+  for (const list of referenceLists.slice(1)) compare(REFERENCE.file, list);
+  for (const follower of FOLLOWERS) {
+    for (const list of listsFor(follower)) compare(follower.file, list);
+  }
+
+  return { failures, referenceSize: expected.size };
+}
+
+/** @returns {number} process exit code */
+export function runCli(workflowsDir) {
+  const readWorkflow = (file) => readFileSync(join(workflowsDir, file), "utf8");
+  const { failures, referenceSize } = checkWorkflowBranchParity(readWorkflow);
+
+  if (failures.length > 0) {
+    console.error(
+      "check-workflow-branch-parity: FAIL — branch trigger lists have drifted from " +
+        `${REFERENCE.file}. A branch missing from codeql.yml is not code-scanned; a branch missing ` +
+        "from dependency-review.yml has no dependency diff reviewed.",
+    );
+    for (const { file, trigger, missing, extra, noList } of failures) {
+      console.error(`  ${file} (${trigger}):`);
+      if (noList === true) console.error("    - declares no branch list at all");
+      for (const branch of missing) console.error(`    - missing: ${branch}`);
+      for (const branch of extra) console.error(`    - not in ${REFERENCE.file}: ${branch}`);
     }
+    return 1;
   }
-}
 
-if (failures.length > 0) {
-  console.error(
-    "check-workflow-branch-parity: FAIL — branch trigger lists have drifted from " +
-      `${REFERENCE.file}. A branch missing from codeql.yml is not code-scanned; a branch missing ` +
-      "from dependency-review.yml has no dependency diff reviewed.",
+  console.log(
+    `check-workflow-branch-parity: PASS — ${String(referenceSize)} branches listed identically ` +
+      `across ${String(FOLLOWERS.length + 1)} workflows.`,
   );
-  for (const { file, trigger, missing, extra } of failures) {
-    console.error(`  ${file} (${trigger}):`);
-    for (const branch of missing) console.error(`    - missing: ${branch}`);
-    for (const branch of extra) console.error(`    - not in ${REFERENCE.file}: ${branch}`);
-  }
-  process.exit(1);
+  return 0;
 }
 
-console.log(
-  `check-workflow-branch-parity: PASS — ${String(expected.size)} branches listed identically ` +
-    `across ${String(FOLLOWERS.length + 1)} workflows.`,
-);
+// Run as a CLI unless imported by a test. `pathToFileURL` (not manual `file://` interpolation) is
+// required for this comparison to hold on a path containing a space, `%`, `#`, `?`, or a Windows
+// drive letter — all of which import.meta.url always encodes canonically.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.exit(runCli(join(process.cwd(), ".github", "workflows")));
+}
