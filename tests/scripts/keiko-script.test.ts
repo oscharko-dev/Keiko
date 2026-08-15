@@ -81,25 +81,35 @@ describe("scripts/keiko.sh", () => {
 
   // freeLoopbackPort()'s probe-then-release is not atomic with a spawned process's own bind (see
   // that function's comment), so an unrelated process occasionally wins the race and the child
-  // exits with EADDRINUSE. Retrying with a freshly probed port is the hermetic fix: bounded,
-  // deterministic on success, and scoped to exactly the one signature that means "the port was
-  // stolen," so any other failure -- a real product defect -- still surfaces through whatever
-  // assertion the caller makes on the returned result. Shared by every test below that spawns a
-  // real child bound to `lifecyclePort` (KEIKO-3157: the health-poll deadline test had its own
-  // unguarded spawn and hit exactly this race).
-  const PORT_COLLISION_RETRY_LIMIT = 2;
+  // exits with EADDRINUSE. A port collision and a child that was never scheduled to bind before
+  // its own caller gave up (KEIKO-3157 Codex P2, second round) are the same *shape* of problem: an
+  // environmental precondition this test needs that the machine did not guarantee on this
+  // specific try. One bounded-retry mechanism serves both, parameterized only by how each caller
+  // recognizes its own failure signature -- reprobing a fresh port before each retry, so any
+  // other failure -- a real product defect -- still surfaces through whatever assertion the
+  // caller makes on the result a persistent failure is returned as-is.
+  const ENVIRONMENTAL_RETRY_LIMIT = 2;
 
-  async function retryOnPortCollision(
+  async function retryOnEnvironmentalFailure(
     attempt: () => SpawnSyncReturns<string>,
+    isEnvironmentalFailure: (result: SpawnSyncReturns<string>) => boolean,
   ): Promise<SpawnSyncReturns<string>> {
     for (let i = 0; ; i += 1) {
       const result = attempt();
-      const isPortCollision = result.status !== 0 && result.stderr.includes("EADDRINUSE");
-      if (!isPortCollision || i >= PORT_COLLISION_RETRY_LIMIT) {
+      if (!isEnvironmentalFailure(result) || i >= ENVIRONMENTAL_RETRY_LIMIT) {
         return result;
       }
       lifecyclePort = await freeLoopbackPort();
     }
+  }
+
+  async function retryOnPortCollision(
+    attempt: () => SpawnSyncReturns<string>,
+  ): Promise<SpawnSyncReturns<string>> {
+    return retryOnEnvironmentalFailure(
+      attempt,
+      (result) => result.status !== 0 && result.stderr.includes("EADDRINUSE"),
+    );
   }
 
   describe("usage", () => {
@@ -300,7 +310,11 @@ describe("scripts/keiko.sh", () => {
       // Also appends one byte to HEALTH_ATTEMPT_COUNTER_FILE per accepted connection when that
       // env var is set -- a discrete, scheduler-independent record of how many times the health
       // poll actually attempted a connection, used instead of wall-clock timing (KEIKO-3157
-      // Codex P2: see the assertion below for why).
+      // Codex P2 round 1). And writes HEALTH_STUB_READY_FILE the instant its own listen()
+      // callback confirms the bind succeeded -- listen()'s callback fires only on a real,
+      // completed bind, never speculatively -- so a caller can tell the difference between "the
+      // stub never got scheduled to run this far" and "it ran and is genuinely listening"
+      // (KEIKO-3157 Codex P2 round 2: see the assertion below for why this matters).
       writeFileSync(
         join(fakeRoot, "dist", "cli", "index.js"),
         [
@@ -310,9 +324,13 @@ describe("scripts/keiko.sh", () => {
           'const port = Number(args[args.indexOf("--port") + 1]);',
           'const host = args[args.indexOf("--host") + 1];',
           "const counterFile = process.env.HEALTH_ATTEMPT_COUNTER_FILE;",
-          "net.createServer((socket) => {",
+          "const readyFile = process.env.HEALTH_STUB_READY_FILE;",
+          "const server = net.createServer((socket) => {",
           '  if (counterFile) fs.appendFileSync(counterFile, "x");',
-          "}).listen(port, host);",
+          "});",
+          "server.listen(port, host, () => {",
+          '  if (readyFile) fs.writeFileSync(readyFile, "1");',
+          "});",
           "",
         ].join("\n"),
       );
@@ -322,52 +340,68 @@ describe("scripts/keiko.sh", () => {
     it("bounds the number of health-check attempts by the deadline, not a fixed iteration count, when the health endpoint hangs", async () => {
       const fakeRoot = writeFakeRoot();
       const attemptCounterFile = join(fakeRoot, "attempts.count");
-      writeFileSync(attemptCounterFile, "");
+      const readyFile = join(fakeRoot, "stub.ready");
       try {
         const startTimeoutSecs = 4;
-        // Codex #3157: KEIKO_UI_PORT is decided before this spawn and polled by the fixed
-        // address keiko.sh derives from it, so the port must be chosen in advance -- there is no
-        // way to have the fake server bind port 0 and report back, the way a caller-discovers-
-        // the-port design would allow, without keiko.sh itself supporting that handshake. That
-        // makes this the exact same freeLoopbackPort() probe-then-release race startLifecycle
-        // above absorbs, not a new one, so it gets the identical treatment: retryOnPortCollision.
-        const start = await retryOnPortCollision(() =>
-          spawnSync("bash", [join(fakeRoot, "scripts", "keiko.sh"), "start"], {
-            encoding: "utf8",
-            timeout: 45_000,
-            env: {
-              ...process.env,
-              KEIKO_STATE_DIR: stateDir,
-              KEIKO_UI_PORT: String(lifecyclePort),
-              KEIKO_START_TIMEOUT_SECS: String(startTimeoutSecs),
-              HEALTH_ATTEMPT_COUNTER_FILE: attemptCounterFile,
-            },
-          }),
+        // Codex P2 (#3157), round 2: the attempt counter proves the deadline behavior only if
+        // the stub was actually listening while cmd_start's poll loop ran -- if the freshly
+        // spawned Node stub is not scheduled to reach its own listen() call before the 4s
+        // deadline elapses, every curl fails on connection-refused (not a timeout) before ever
+        // reaching the stub's connection callback, attemptCount stays at 0, and the assertion
+        // below would fail even though cmd_start expired exactly as it should. That is a
+        // process-scheduling dependency in place of the wall-clock one round 1 removed --
+        // deterministic *given* the stub is listening, and that precondition was not guaranteed.
+        //
+        // retryOnPortCollision does not cover this: a stub that was merely slow to be scheduled
+        // produces no EADDRINUSE. But a stub that never got scheduled at all and a stub that
+        // crashed on a port collision look identical from here -- neither ever reaches its own
+        // listen() success callback, so neither ever writes HEALTH_STUB_READY_FILE. Checking for
+        // that file's absence is a strict superset of the EADDRINUSE check: it is retried through
+        // the same environmental-failure mechanism instead of a second, narrower one, so
+        // retryOnPortCollision itself is not called here. The precondition this test needs -- the
+        // stub was truly listening at some point during the kept run -- holds by construction of
+        // the retry, not by hope for a single try: a run that never got there is discarded and
+        // retried with a fresh port, bounded, exactly like every other environmental race this
+        // file absorbs; a failure that survives every retry surfaces for real via the
+        // existsSync(readyFile) assertion below rather than being silently accepted.
+        const start = await retryOnEnvironmentalFailure(
+          () => {
+            writeFileSync(attemptCounterFile, "");
+            rmSync(readyFile, { force: true });
+            return spawnSync("bash", [join(fakeRoot, "scripts", "keiko.sh"), "start"], {
+              encoding: "utf8",
+              timeout: 45_000,
+              env: {
+                ...process.env,
+                KEIKO_STATE_DIR: stateDir,
+                KEIKO_UI_PORT: String(lifecyclePort),
+                KEIKO_START_TIMEOUT_SECS: String(startTimeoutSecs),
+                HEALTH_ATTEMPT_COUNTER_FILE: attemptCounterFile,
+                HEALTH_STUB_READY_FILE: readyFile,
+              },
+            });
+          },
+          () => !existsSync(readyFile),
         );
 
         expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(1);
         expect(start.stderr).toContain("did not become healthy");
+        expect(existsSync(readyFile)).toBe(true);
 
-        // Codex P2 (#3157): this test used to assert an elapsed-wall-clock ceiling measured with
-        // Date.now() around real child processes, sockets, curl timeouts, and sleeps -- exactly
-        // the scheduler-sensitive measurement AGENTS.md rules out for tests, and a large enough
-        // scheduler pause during the run could trip a fixed millisecond ceiling even when the
-        // script's own deadline and its bounded per-attempt overshoot both behaved correctly.
-        //
-        // The number of connection attempts the health poll actually made is a discrete,
-        // deterministic proxy for the same regression that carries no such risk: a scheduler
-        // pause changes how long each attempt takes, never how many the loop reaches, so this
-        // count cannot be inflated or deflated by machine load -- only by the loop's own control
-        // flow, which is exactly what regressed. Pre-fix, cmd_start always made exactly
-        // startTimeoutSecs*2 attempts (a hardcoded iteration count, independent of timing) -- 8
-        // for this 4s budget, deterministically, every single run. Post-fix, each attempt against
-        // a hung endpoint takes most of curl's --max-time, so the wall-clock deadline caps it at
-        // roughly startTimeoutSecs/2 attempts plus at most one more in flight when the deadline
-        // passes -- 2-3 here. Asserting strictly fewer than startTimeoutSecs attempts sits at
-        // half of the pre-fix formula: unreachable under the old iteration-counting bug (which
-        // never produces fewer than double this ceiling, for any startTimeoutSecs), and clears
-        // the new deadline-bounded behavior with margin to spare regardless of how fast or slow
-        // this specific run was.
+        // The number of connection attempts the health poll actually made, now that the stub is
+        // known to have been listening throughout, is a discrete, deterministic proxy for the
+        // regression itself: a scheduler pause changes how long each attempt takes, never how
+        // many the loop reaches, so this count cannot be inflated or deflated by machine load --
+        // only by the loop's own control flow, which is exactly what regressed. Pre-fix,
+        // cmd_start always made exactly startTimeoutSecs*2 attempts (a hardcoded iteration count,
+        // independent of timing) -- 8 for this 4s budget, deterministically, every single run.
+        // Post-fix, each attempt against a hung endpoint takes most of curl's --max-time, so the
+        // wall-clock deadline caps it at roughly startTimeoutSecs/2 attempts plus at most one
+        // more in flight when the deadline passes -- 2-3 here. Asserting strictly fewer than
+        // startTimeoutSecs attempts sits at half of the pre-fix formula: unreachable under the
+        // old iteration-counting bug (which never produces fewer than double this ceiling, for
+        // any startTimeoutSecs), and clears the new deadline-bounded behavior with margin to
+        // spare regardless of how fast or slow this specific run was.
         const attemptCount = readFileSync(attemptCounterFile, "utf8").length;
         expect(attemptCount).toBeGreaterThan(0);
         expect(attemptCount).toBeLessThan(startTimeoutSecs);
