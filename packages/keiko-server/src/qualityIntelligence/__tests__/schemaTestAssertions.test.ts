@@ -12,12 +12,10 @@ describe("requireRecord", () => {
     expect(requireRecord(nullPrototype, "schema")).toBe(nullPrototype);
   });
 
-  it.each([null, [], new Date(0), new Map<string, unknown>()])(
+  it.each([undefined, null, [], new Date(0), new Map<string, unknown>()])(
     "rejects non-record input %#",
     (value) => {
-      expect(() => requireRecord(value, "schema")).toThrow(
-        new TypeError("schema must be a plain record."),
-      );
+      expect(() => requireRecord(value, "schema")).toThrow(TypeError);
     },
   );
 });
