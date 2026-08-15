@@ -167,14 +167,23 @@ describe("ConnectorApprovalsPanel — content preview character count (KEIKO-018
         { ...APPROVAL, contentPreview: "Fix the flaky gate\n\nFails on retries" },
       ]),
     });
-    for (const theme of ["light", "dark"] as const) {
-      document.documentElement.setAttribute("data-theme", theme);
-      const { container, unmount } = render(<ConnectorApprovalsPanel client={client} />);
-      await screen.findByTestId("acx-content-preview-count");
-      expect(await axe(container)).toHaveNoViolations();
-      unmount();
+    // `data-theme` is shared mutable global state: a throw from render/findByTestId/axe would
+    // otherwise leak the attribute into every later test in this file. Restore it unconditionally,
+    // and unmount in its own nested finally so a failing assertion still tears the tree down.
+    try {
+      for (const theme of ["light", "dark"] as const) {
+        document.documentElement.setAttribute("data-theme", theme);
+        const { container, unmount } = render(<ConnectorApprovalsPanel client={client} />);
+        try {
+          await screen.findByTestId("acx-content-preview-count");
+          expect(await axe(container)).toHaveNoViolations();
+        } finally {
+          unmount();
+        }
+      }
+    } finally {
+      document.documentElement.removeAttribute("data-theme");
     }
-    document.documentElement.removeAttribute("data-theme");
   });
 });
 
