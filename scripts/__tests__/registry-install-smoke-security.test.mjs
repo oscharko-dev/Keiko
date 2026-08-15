@@ -85,10 +85,11 @@ afterEach(() => {
 });
 
 function rejectProcessExit() {
-  vi.spyOn(console, "error").mockImplementation(() => undefined);
-  return vi.spyOn(process, "exit").mockImplementation((code) => {
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  const exit = vi.spyOn(process, "exit").mockImplementation((code) => {
     throw new Error(`process.exit(${String(code)})`);
   });
+  return { consoleError, exit };
 }
 
 function writeExecutable(path, body) {
@@ -1342,9 +1343,13 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(registrySource).toContain("registryYarnLocator()");
     expect(registrySource).toContain("packageManager: yarnPackageManagerFromLocator(yarnLocator)");
     expect(registrySource).toContain("smokeGateYarnLocatorParts(yarnLocator)");
+    expect(registrySource).toContain("outputByteSummary(result)");
+    expect(registrySource).not.toContain("stdout:\\n${result.stdout}");
     expect(registrySource).toContain("withCorepackYarnCacheLock(");
     expect(registrySource).toContain("await provisionPinnedYarnForSetup(yarnLocator, timeoutMs)");
     expect(registrySource).toContain("yarnChildEnv(registry, process.env, yarnHome, yarnLocator)");
+    expect(installableSource).toContain("WINDOWS_SHELL_UNSAFE_ARG");
+    expect(installableSource).toContain("commandForPlatform(cmd, args, options)");
     expect(installableSource).not.toContain('const PINNED_YARN = "yarn@4.9.1"');
     expect(registrySource).not.toContain("KEIKO_REGISTRY_INSTALL_FIXTURE_YARN_LOCATOR");
   });
@@ -2289,10 +2294,13 @@ describe("installable package smoke optional-dependency coverage", () => {
     const previousPath = process.env.PATH;
     process.env.PATH = `${binDir}${delimiter}${previousPath}`;
     try {
-      rejectProcessExit();
+      const { consoleError } = rejectProcessExit();
       await expect(installIntoWithYarn(projectDir, artifact)).rejects.toThrow(
         /process\.exit\(1\)/u,
       );
+      const errorText = consoleError.mock.calls.flat().join("\n");
+      expect(errorText).toContain("stderrBytes=");
+      expect(errorText).not.toContain("rejected");
       expect(existsSync(join(corepackCacheDir(), ".lock"))).toBe(false);
     } finally {
       process.env.PATH = previousPath;

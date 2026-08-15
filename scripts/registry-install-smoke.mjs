@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -89,15 +90,24 @@ function run(cmd, args, options = {}) {
   return result;
 }
 
+function commandSummary(cmd, args) {
+  return `${cmd} (${String(args.length)} arg${args.length === 1 ? "" : "s"})`;
+}
+
+function outputByteSummary(result) {
+  const stdoutBytes = Buffer.byteLength(String(result.stdout ?? ""), "utf8");
+  const stderrBytes = Buffer.byteLength(String(result.stderr ?? ""), "utf8");
+  return `stdoutBytes=${String(stdoutBytes)}, stderrBytes=${String(stderrBytes)}`;
+}
+
 function assertRunSucceeded(cmd, args, result) {
   if (result.error !== undefined) {
-    fail(`${cmd} ${args.join(" ")} could not spawn: ${result.error.message}`);
+    fail(`${commandSummary(cmd, args)} could not spawn: ${result.error.message}`);
   }
   if (result.status !== 0) {
     fail(
-      `${cmd} ${args.join(" ")} exited ${String(result.status)}\n` +
-        `stdout:\n${result.stdout}\n` +
-        `stderr:\n${result.stderr}`,
+      `${commandSummary(cmd, args)} exited ${String(result.status)} ` +
+        `(signal=${String(result.signal)}, ${outputByteSummary(result)})`,
     );
   }
 }
@@ -143,7 +153,10 @@ async function assertInstalledRuntime(projectDir) {
   const bin = join(installedPackageRoot(projectDir), "dist", "cli", "index.js");
   const result = run(process.execPath, [bin, "--version"], { cwd: projectDir });
   if (!result.stdout.includes(rootManifest.version)) {
-    fail(`installed CLI version output did not include ${rootManifest.version}: ${result.stdout}`);
+    fail(
+      `installed CLI version output did not include ${rootManifest.version} ` +
+        `(${outputByteSummary(result)})`,
+    );
   }
   run(process.execPath, [bin, "--help"], { cwd: projectDir });
   assertVendoredPayload(projectDir);

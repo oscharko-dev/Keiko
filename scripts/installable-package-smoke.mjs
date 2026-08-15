@@ -6,6 +6,7 @@
 // runtime mirror of `scripts/check-package-surface.mjs`'s static tarball assertions, intended to
 // fire BEFORE publish so a broken bundle can never reach users.
 
+import { Buffer } from "node:buffer";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
@@ -44,6 +45,7 @@ export const DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS =
 export const NPM_INSTALL_TIMEOUT_MS =
   parsePositiveTimeoutEnv("KEIKO_SMOKE_INSTALL_TIMEOUT_MS") ??
   DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS;
+const WINDOWS_SHELL_UNSAFE_ARG = /[\0\r\n&|<>^%!"]/u;
 const UI_HEALTH_TIMEOUT_MS = 30_000;
 const UI_HEALTH_POLL_INTERVAL_MS = 250;
 const LIFECYCLE_COMMAND_TIMEOUT_MS = 90_000;
@@ -96,10 +98,16 @@ export function parsePositiveTimeoutEnv(name) {
   return parsed;
 }
 
-function commandForPlatform(cmd, options = {}) {
+function assertWindowsShellArguments(cmd, args) {
+  if (args.every((arg) => !WINDOWS_SHELL_UNSAFE_ARG.test(String(arg)))) return;
+  throw smokeGateFailure(`${cmd} Windows shell arguments contain unsafe shell metacharacters`);
+}
+
+function commandForPlatform(cmd, args, options = {}) {
   if (process.platform !== "win32" || (cmd !== "npm" && cmd !== "corepack")) {
     return { command: cmd, shell: false };
   }
+  assertWindowsShellArguments(cmd, args);
   const executable = resolveHostExecutable(cmd, { env: options.env ?? process.env });
   return { command: shellCommandForTrustedExecutable(executable), shell: true };
 }
@@ -107,7 +115,7 @@ function commandForPlatform(cmd, options = {}) {
 function runResult(cmd, args, options = {}) {
   // SECURITY-SHELL-OK: npm/corepack Windows .cmd compatibility, with the executable resolved to a
   // trusted absolute path before the shell is enabled. POSIX and node/bin paths stay shell:false.
-  const { command, shell } = commandForPlatform(cmd, options);
+  const { command, shell } = commandForPlatform(cmd, args, options);
   return spawnSync(command, args, { encoding: "utf8", ...options, shell });
 }
 
@@ -117,6 +125,12 @@ function run(cmd, args, options = {}) {
     fail(`${cmd} ${args.join(" ")} could not spawn: ${result.error.message}`);
   }
   return result;
+}
+
+function childOutputByteSummary(result) {
+  const stdoutBytes = Buffer.byteLength(String(result.stdout ?? ""), "utf8");
+  const stderrBytes = Buffer.byteLength(String(result.stderr ?? ""), "utf8");
+  return `stdoutBytes=${String(stdoutBytes)}, stderrBytes=${String(stderrBytes)}`;
 }
 
 export function terminateProcessTree(child) {
@@ -163,7 +177,7 @@ export function runAsync(cmd, args, options = {}) {
   if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) {
     throw new TypeError("runAsync requires a positive finite timeout in milliseconds");
   }
-  const { command, shell } = commandForPlatform(cmd, spawnOptions);
+  const { command, shell } = commandForPlatform(cmd, args, spawnOptions);
   return new Promise((resolvePromise) => {
     let settled = false;
     const stdout = [];
@@ -1945,11 +1959,14 @@ async function runLockedYarnInstall(tmp, registryUrl, yarnHome, locator) {
 function assertYarnInstallResult(result, registry) {
   if (result.timedOut !== true && result.error === undefined && result.status === 0) return;
   const outcome = result.timedOut === true ? "timed out" : `exited ${String(result.status)}`;
+  const detail =
+    result.error === undefined
+      ? childOutputByteSummary(result)
+      : `error=${result.error.message}; ${childOutputByteSummary(result)}`;
   fail(
     `Yarn registry install ${outcome} ` +
       `(signal=${String(result.signal)}; registry=${registry.registryUrl}; ` +
-      `requests=${registry.requests.join(",")}): ` +
-      `${(result.error?.message ?? result.stderr) || result.stdout}`,
+      `requests=${registry.requests.join(",")}; ${detail})`,
   );
 }
 
