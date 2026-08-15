@@ -297,22 +297,32 @@ describe("scripts/keiko.sh", () => {
       writeFileSync(join(fakeRoot, "dist", "ui", "csp-hashes.json"), "{}");
       // CommonJS, and deliberately dependency-free: accepts a connection on --host/--port and
       // never writes a response, so every curl attempt against it runs to its own --max-time.
+      // Also appends one byte to HEALTH_ATTEMPT_COUNTER_FILE per accepted connection when that
+      // env var is set -- a discrete, scheduler-independent record of how many times the health
+      // poll actually attempted a connection, used instead of wall-clock timing (KEIKO-3157
+      // Codex P2: see the assertion below for why).
       writeFileSync(
         join(fakeRoot, "dist", "cli", "index.js"),
         [
           'const net = require("node:net");',
+          'const fs = require("node:fs");',
           "const args = process.argv.slice(2);",
           'const port = Number(args[args.indexOf("--port") + 1]);',
           'const host = args[args.indexOf("--host") + 1];',
-          "net.createServer((socket) => {}).listen(port, host);",
+          "const counterFile = process.env.HEALTH_ATTEMPT_COUNTER_FILE;",
+          "net.createServer((socket) => {",
+          '  if (counterFile) fs.appendFileSync(counterFile, "x");',
+          "}).listen(port, host);",
           "",
         ].join("\n"),
       );
       return fakeRoot;
     }
 
-    it("fails within roughly the configured budget, not a multiple of it, when the health endpoint hangs", async () => {
+    it("bounds the number of health-check attempts by the deadline, not a fixed iteration count, when the health endpoint hangs", async () => {
       const fakeRoot = writeFakeRoot();
+      const attemptCounterFile = join(fakeRoot, "attempts.count");
+      writeFileSync(attemptCounterFile, "");
       try {
         const startTimeoutSecs = 4;
         // Codex #3157: KEIKO_UI_PORT is decided before this spawn and polled by the fixed
@@ -321,10 +331,8 @@ describe("scripts/keiko.sh", () => {
         // the-port design would allow, without keiko.sh itself supporting that handshake. That
         // makes this the exact same freeLoopbackPort() probe-then-release race startLifecycle
         // above absorbs, not a new one, so it gets the identical treatment: retryOnPortCollision.
-        let elapsedMs = 0;
-        const start = await retryOnPortCollision(() => {
-          const began = Date.now();
-          const result = spawnSync("bash", [join(fakeRoot, "scripts", "keiko.sh"), "start"], {
+        const start = await retryOnPortCollision(() =>
+          spawnSync("bash", [join(fakeRoot, "scripts", "keiko.sh"), "start"], {
             encoding: "utf8",
             timeout: 45_000,
             env: {
@@ -332,21 +340,37 @@ describe("scripts/keiko.sh", () => {
               KEIKO_STATE_DIR: stateDir,
               KEIKO_UI_PORT: String(lifecyclePort),
               KEIKO_START_TIMEOUT_SECS: String(startTimeoutSecs),
+              HEALTH_ATTEMPT_COUNTER_FILE: attemptCounterFile,
             },
-          });
-          elapsedMs = Date.now() - began;
-          return result;
-        });
+          }),
+        );
 
         expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(1);
         expect(start.stderr).toContain("did not become healthy");
-        // Pre-fix this loop ran START_TIMEOUT_SECS*2 iterations at up to (2s curl + 0.5s sleep)
-        // each -- up to 5x the budget, ~20s here for a 4s budget. Post-fix it is a wall-clock
-        // deadline with a fixed ~2.5s worst-case overshoot regardless of the budget, ~6.5s here.
-        // This threshold sits well above the fixed post-fix bound and well below the
-        // multiplicative pre-fix one, so it catches a regression back to iteration counting
-        // without being sensitive to ordinary scheduling jitter.
-        expect(elapsedMs).toBeLessThan(12_000);
+
+        // Codex P2 (#3157): this test used to assert an elapsed-wall-clock ceiling measured with
+        // Date.now() around real child processes, sockets, curl timeouts, and sleeps -- exactly
+        // the scheduler-sensitive measurement AGENTS.md rules out for tests, and a large enough
+        // scheduler pause during the run could trip a fixed millisecond ceiling even when the
+        // script's own deadline and its bounded per-attempt overshoot both behaved correctly.
+        //
+        // The number of connection attempts the health poll actually made is a discrete,
+        // deterministic proxy for the same regression that carries no such risk: a scheduler
+        // pause changes how long each attempt takes, never how many the loop reaches, so this
+        // count cannot be inflated or deflated by machine load -- only by the loop's own control
+        // flow, which is exactly what regressed. Pre-fix, cmd_start always made exactly
+        // startTimeoutSecs*2 attempts (a hardcoded iteration count, independent of timing) -- 8
+        // for this 4s budget, deterministically, every single run. Post-fix, each attempt against
+        // a hung endpoint takes most of curl's --max-time, so the wall-clock deadline caps it at
+        // roughly startTimeoutSecs/2 attempts plus at most one more in flight when the deadline
+        // passes -- 2-3 here. Asserting strictly fewer than startTimeoutSecs attempts sits at
+        // half of the pre-fix formula: unreachable under the old iteration-counting bug (which
+        // never produces fewer than double this ceiling, for any startTimeoutSecs), and clears
+        // the new deadline-bounded behavior with margin to spare regardless of how fast or slow
+        // this specific run was.
+        const attemptCount = readFileSync(attemptCounterFile, "utf8").length;
+        expect(attemptCount).toBeGreaterThan(0);
+        expect(attemptCount).toBeLessThan(startTimeoutSecs);
       } finally {
         rmSync(fakeRoot, { recursive: true, force: true });
       }
