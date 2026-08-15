@@ -994,9 +994,15 @@ export interface AtlassianConnectorPendingApproval {
   // too. Mutually exclusive with `contentPreviewUnavailable`: never both present.
   readonly contentPreview?: string | undefined;
   // KEIKO-0186 P1 (Codex): true exactly when the action HAD a text field to preview but its
-  // entire visible content sanitized away (an all-bidi/all-zero-width payload, or one that
-  // reduces to nothing but floating Unicode combining marks) — see
-  // `isAtlassianContentPreviewUnpresentable`. Emitting an EMPTY `contentPreview` in this case
+  // bounded, sanitized preview carries no PRESENTABLE character — see
+  // `isAtlassianContentPreviewUnpresentable`. That is deliberately wider than "sanitized away to
+  // nothing": four review rounds each found a payload that survives sanitization intact and still
+  // renders blank — whitespace-only, HANGUL FILLER (a Letter), BRAILLE PATTERN BLANK (a Symbol),
+  // and the blank Egyptian hieroglyphs (Letters again). The predicate therefore asks whether any
+  // character is presentable rather than enumerating which ones are invisible, and the approval
+  // panel shows a character count beside every preview so that the next unenumerated blank code
+  // point is a cosmetic gap rather than a governed-approval bypass. Emitting an EMPTY
+  // `contentPreview` in this case
   // would show a reviewer what looks like a contentless action approved in good faith while
   // invisible content is actually written; this field lets the UI say plainly that the content
   // could not be safely previewed instead of silently showing nothing (indistinguishable from an
