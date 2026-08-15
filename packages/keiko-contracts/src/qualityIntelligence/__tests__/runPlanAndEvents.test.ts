@@ -8,6 +8,7 @@ import {
 import {
   QUALITY_INTELLIGENCE_EVENT_SCHEMA_VERSION,
   QUALITY_INTELLIGENCE_RUN_EVENT_KINDS,
+  QUALITY_INTELLIGENCE_STAGE_NAMES,
   assertRunEventSequenceMonotonic,
 } from "../runPlanAndEvents.js";
 import type {
@@ -143,23 +144,14 @@ describe("QualityIntelligenceStageName (KEIKO-0274)", () => {
     expect(bogusPayload.stageName).toBe("not-a-real-stage");
   });
 
-  it("accepts every stage name actually emitted by the four QI workflow descriptors", () => {
-    // Union of PLAN_STAGES (qi:test-design / regeneration) plus the qi:coverage-review,
-    // qi:validation, and qi:artifact-refinement descriptors in keiko-workflows/descriptors.ts.
-    const realStageNames = [
-      "plan",
-      "candidates",
-      "judge",
-      "coverage",
-      "validate",
-      "finalize",
-      "analyse",
-      "report",
-      "run-judges",
-      "reconcile",
-      "refine",
-    ] as const;
-    for (const name of realStageNames) {
+  it("accepts every member of the canonical QUALITY_INTELLIGENCE_STAGE_NAMES export", () => {
+    // Derived from the exported runtime constant, not a copy of its literals: this package cannot
+    // import keiko-workflows/descriptors.ts (the leaf-package rule runs the other way), so the
+    // cross-package proof that every descriptor stage is one of these names lives in
+    // keiko-workflows/qualityIntelligence/__tests__/descriptors.test.ts instead, where both the
+    // descriptors and this same QUALITY_INTELLIGENCE_STAGE_NAMES constant are importable together.
+    // This test only proves the type accepts every name the constant itself declares.
+    for (const name of QUALITY_INTELLIGENCE_STAGE_NAMES) {
       const stage: QualityIntelligenceRunPlan["stages"][number] = {
         name,
         descriptor: `stage:${name}:v1`,

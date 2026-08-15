@@ -131,7 +131,7 @@ export function emitQueuedAndStarted(ctx: RunContext): void {
 
 function assertStageRegistered(
   descriptor: QualityIntelligenceWorkflowDescriptor,
-  stageName: string,
+  stageName: QI.QualityIntelligenceStageName,
 ): void {
   if (!descriptor.stageNames.includes(stageName)) {
     throw new Error(`Stage "${stageName}" is not declared by descriptor ${descriptor.workflowId}`);
