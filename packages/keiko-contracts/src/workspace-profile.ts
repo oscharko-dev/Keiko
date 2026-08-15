@@ -10,8 +10,10 @@ import type { EditorM7ReasonCode, EditorM7SettingId, EditorM7SettingValue } from
 import {
   WORKSPACE_CONTRACT_SCHEMA_VERSION,
   hasOnlyWorkspaceKeys,
+  hasWorkspaceControlCharacter,
   isWorkspaceProfileRef,
   isWorkspaceRecord,
+  isWorkspaceRevision,
   workspaceContractInvalid,
   workspaceContractValid,
 } from "./workspace-contract-primitives.js";
@@ -104,24 +106,12 @@ const PROFILE_KEYS = [
   "settings",
 ] as const;
 
-function isRevision(value: unknown): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= 0;
-}
-
-function hasControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.codePointAt(index) ?? 0;
-    if (code <= 0x1f || code === 0x7f) return true;
-  }
-  return false;
-}
-
 export function isWorkspaceProfileDisplayName(value: unknown): value is string {
   if (typeof value !== "string") return false;
   return [
     value.length > 0,
     value.length <= WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS,
-    !hasControlCharacter(value),
+    !hasWorkspaceControlCharacter(value),
   ].every(Boolean);
 }
 
@@ -161,7 +151,7 @@ function isWorkspaceProfileManifest(value: unknown): value is WorkspaceProfileMa
     value.schemaVersion === WORKSPACE_PROFILE_SCHEMA_VERSION,
     isWorkspaceProfileRef(value.profileRef),
     isWorkspaceProfileDisplayName(value.displayName),
-    isRevision(value.revision),
+    isWorkspaceRevision(value.revision),
     value.settings.profileRef === value.profileRef,
     value.settings.revision === value.revision,
   ].every(Boolean);

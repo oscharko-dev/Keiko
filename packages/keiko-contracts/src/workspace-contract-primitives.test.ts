@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  WORKSPACE_POLICY_VERSION_PATTERN,
+  hasWorkspaceControlCharacter,
   isCanonicalWorkspaceRoot,
   isPortableWorkspaceRelativePath,
   isWorkspaceContentDigest,
@@ -10,6 +12,7 @@ import {
   isWorkspaceManifestRef,
   isWorkspacePathDigest,
   isWorkspaceProfileRef,
+  isWorkspaceRevision,
   isWorkspaceRootIdentityDigest,
   isWorkspaceRootRef,
   isWorkspaceTrustBasisDigest,
@@ -165,5 +168,41 @@ describe("workspace contract primitives", () => {
     // (dotfiles, hidden dirs) and no analogous alias exists in the POSIX open path.
     expect(isCanonicalWorkspaceRoot("/work/app.")).toBe(true);
     expect(isCanonicalWorkspaceRoot("/work/app./child")).toBe(true);
+  });
+});
+
+// KEIKO-0162: isWorkspaceRevision, hasWorkspaceControlCharacter, and WORKSPACE_POLICY_VERSION_PATTERN
+// used to be re-implemented independently in workspace-manifest.ts, workspace-profile.ts, and (for
+// the pattern) workspace-trust.ts -- the revision guard under two different names, the
+// control-character guard twice verbatim, and the pattern character-for-character identical to
+// this file's own (private) OPAQUE_REF_PATTERN under a different name. All three consumers now
+// import the shared definitions asserted here.
+describe("isWorkspaceRevision / hasWorkspaceControlCharacter / WORKSPACE_POLICY_VERSION_PATTERN (KEIKO-0162)", () => {
+  it("accepts only safe-integer revisions >= 0", () => {
+    expect(isWorkspaceRevision(0)).toBe(true);
+    expect(isWorkspaceRevision(42)).toBe(true);
+    expect(isWorkspaceRevision(-1)).toBe(false);
+    expect(isWorkspaceRevision(1.5)).toBe(false);
+    expect(isWorkspaceRevision(Number.MAX_SAFE_INTEGER + 1)).toBe(false);
+    expect(isWorkspaceRevision("1")).toBe(false);
+    expect(isWorkspaceRevision(undefined)).toBe(false);
+  });
+
+  it("flags C0 control characters and DEL, not ordinary or non-ASCII text", () => {
+    expect(hasWorkspaceControlCharacter("ordinary name")).toBe(false);
+    expect(hasWorkspaceControlCharacter("")).toBe(false);
+    expect(hasWorkspaceControlCharacter("tab\there")).toBe(true);
+    expect(hasWorkspaceControlCharacter("new\nline")).toBe(true);
+    expect(hasWorkspaceControlCharacter(`del${String.fromCharCode(0x7f)}here`)).toBe(true);
+    expect(hasWorkspaceControlCharacter("emoji\u{1f600}ok")).toBe(false);
+  });
+
+  it("is the exact opaque-ref syntax rule, shared by reference rather than re-derived (pin)", () => {
+    expect(WORKSPACE_POLICY_VERSION_PATTERN.source).toBe("^[a-z0-9][a-z0-9._-]{2,95}$");
+    expect(WORKSPACE_POLICY_VERSION_PATTERN.test("v1.2.3")).toBe(true);
+    expect(WORKSPACE_POLICY_VERSION_PATTERN.test("release_2026-08")).toBe(true);
+    expect(WORKSPACE_POLICY_VERSION_PATTERN.test("ab")).toBe(false);
+    expect(WORKSPACE_POLICY_VERSION_PATTERN.test("Policy-1")).toBe(false);
+    expect(WORKSPACE_POLICY_VERSION_PATTERN.test("a".repeat(97))).toBe(false);
   });
 });

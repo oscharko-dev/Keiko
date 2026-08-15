@@ -3,11 +3,13 @@
 import {
   WORKSPACE_CONTRACT_SCHEMA_VERSION,
   hasOnlyWorkspaceKeys,
+  hasWorkspaceControlCharacter,
   isCanonicalWorkspaceRoot,
   isWorkspaceFact,
   isWorkspaceManifestDigest,
   isWorkspaceManifestRef,
   isWorkspaceRecord,
+  isWorkspaceRevision,
   isWorkspaceRootIdentityDigest,
   isWorkspaceRootRef,
   isWorkspaceTrustBasisDigest,
@@ -135,24 +137,12 @@ const DISPATCH_KEYS = [
   "operationClass",
 ] as const;
 
-function isNonNegativeRevision(value: unknown): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= 0;
-}
-
-function hasControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.codePointAt(index) ?? 0;
-    if (code <= 0x1f || code === 0x7f) return true;
-  }
-  return false;
-}
-
 function isSafeDisplayName(value: unknown): value is string {
   if (typeof value !== "string") return false;
   return (
     value.length > 0 &&
     value.length <= WORKSPACE_ROOT_DISPLAY_NAME_MAX_CHARS &&
-    !hasControlCharacter(value)
+    !hasWorkspaceControlCharacter(value)
   );
 }
 
@@ -200,7 +190,7 @@ function isWorkspaceManifest(value: unknown): value is WorkspaceManifest {
     isWorkspaceManifestRef(value.manifestRef),
     isWorkspaceManifestDigest(value.manifestDigest),
     typeof value.workspaceId === "string" && value.workspaceId.length > 0,
-    isNonNegativeRevision(value.revision),
+    isWorkspaceRevision(value.revision),
     rootsAreValid(value.roots),
     isWorkspaceRootRef(value.focusedRootRef),
   ].every(Boolean);
@@ -227,7 +217,7 @@ function isWorkspaceRootDispatch(value: unknown): value is WorkspaceRootDispatch
     value.schemaVersion === WORKSPACE_MANIFEST_SCHEMA_VERSION,
     typeof value.workspaceId === "string" && value.workspaceId.length > 0,
     isWorkspaceManifestRef(value.manifestRef),
-    isNonNegativeRevision(value.manifestRevision),
+    isWorkspaceRevision(value.manifestRevision),
     isWorkspaceManifestDigest(value.manifestDigest),
     isWorkspaceRootRef(value.rootRef),
     isWorkspaceRootIdentityDigest(value.rootIdentityDigest),

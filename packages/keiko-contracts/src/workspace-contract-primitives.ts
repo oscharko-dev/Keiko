@@ -44,6 +44,12 @@ export type WorkspaceContractValidation =
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
 const OPAQUE_REF_PATTERN = /^[a-z0-9][a-z0-9._-]{2,95}$/u;
+// workspace-trust.ts's policyVersion field is a free-standing version string, not an opaque
+// reference, but the two happen to share the exact same syntax rule (KEIKO-0162: workspace-trust.ts
+// used to carry its own character-for-character copy of this pattern under a different name).
+// Re-exported under its own name so a future change to either rule does not silently retarget the
+// other by coincidence of a shared regex object.
+export const WORKSPACE_POLICY_VERSION_PATTERN = OPAQUE_REF_PATTERN;
 const SHA_256_PATTERN = /^[a-f0-9]{64}$/u;
 const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 const NON_KNOWN_FACT_OUTCOMES = ["unknown", "unavailable", "absent"] as const;
@@ -66,6 +72,23 @@ export function hasOnlyWorkspaceKeys(value: UnknownRecord, allowed: readonly str
   } catch {
     return false;
   }
+}
+
+// ─── Revision numbers and control-character text (KEIKO-0162) ─────────────────────
+// Shared by workspace-manifest.ts, workspace-profile.ts, and workspace-trust.ts, each of which used
+// to carry its own byte-identical copy of both checks: the revision guard under two different names
+// (isNonNegativeRevision, isRevision) and the control-character guard twice verbatim.
+
+export function isWorkspaceRevision(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+export function hasWorkspaceControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.codePointAt(index) ?? 0;
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
 }
 
 function isOpaqueRef(value: unknown): value is string {

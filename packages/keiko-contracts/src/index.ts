@@ -1409,6 +1409,7 @@ export {
   GIT_REPOSITORY_SCHEMA_VERSION,
   GIT_REPOSITORY_STATES,
   GIT_UNAVAILABLE_REASONS,
+  GIT_STATUS_CODES,
   validateGitRepositoryStatusResponse,
   validateGitRepositoryDiffResponse,
 } from "./git-repository.js";
@@ -4105,6 +4106,8 @@ export {
   WORKSPACE_CONTRACT_SCHEMA_VERSION,
   WORKSPACE_OPAQUE_REF_MAX_CHARS,
   WORKSPACE_PORTABLE_PATH_MAX_BYTES,
+  WORKSPACE_POLICY_VERSION_PATTERN,
+  hasWorkspaceControlCharacter,
   isWorkspaceRootRef,
   isWorkspaceManifestRef,
   isWorkspaceProfileRef,
@@ -4117,6 +4120,7 @@ export {
   isWorkspacePathDigest,
   isWorkspaceIsoInstant,
   isWorkspaceFact,
+  isWorkspaceRevision,
   isCanonicalWorkspaceRoot,
   isPortableWorkspaceRelativePath,
 } from "./workspace-contract-primitives.js";
