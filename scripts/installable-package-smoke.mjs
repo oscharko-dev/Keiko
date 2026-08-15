@@ -43,9 +43,7 @@ export const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 600_000;
 export const WINDOWS_NPM_INSTALL_TIMEOUT_MS = 600_000;
 export const DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS =
   process.platform === "win32" ? WINDOWS_NPM_INSTALL_TIMEOUT_MS : DEFAULT_NPM_INSTALL_TIMEOUT_MS;
-export const NPM_INSTALL_TIMEOUT_MS =
-  parsePositiveTimeoutEnv("KEIKO_SMOKE_INSTALL_TIMEOUT_MS") ??
-  DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS;
+export const NPM_INSTALL_TIMEOUT_MS = DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS;
 const WINDOWS_SHELL_UNSAFE_ARG = /[\0\r\n&|<>^%!"]/u;
 const UI_HEALTH_TIMEOUT_MS = 30_000;
 const UI_HEALTH_POLL_INTERVAL_MS = 250;
@@ -99,6 +97,17 @@ export function smokeGateFailureLogSummary(error) {
   );
 }
 
+export function smokeGateFailureSetupSummary(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    message.startsWith("corepack could not provision ") ||
+    message.startsWith("corepack cached ")
+  ) {
+    return message;
+  }
+  return smokeGateFailureLogSummary(error);
+}
+
 function yarnLocatorLogSummary(locator) {
   const { version } = yarnLocatorParts(locator);
   const locatorSha256 = createHash("sha256").update(locator, "utf8").digest("hex");
@@ -126,6 +135,13 @@ export function parsePositiveTimeoutEnv(name) {
     fail(`${name} must be a safe integer number of milliseconds.`);
   }
   return parsed;
+}
+
+export function npmInstallTimeoutMs() {
+  return (
+    parsePositiveTimeoutEnv("KEIKO_SMOKE_INSTALL_TIMEOUT_MS") ??
+    DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS
+  );
 }
 
 function assertWindowsShellArguments(cmd, args) {
@@ -301,6 +317,13 @@ function lockOwnerPath(lockDir) {
   return join(lockDir, COREPACK_CACHE_LOCK_OWNER_FILE);
 }
 
+function lockOwnerTempPath(lockDir) {
+  return join(
+    lockDir,
+    `${COREPACK_CACHE_LOCK_OWNER_FILE}.${process.pid}.${randomBytes(9).toString("hex")}.tmp`,
+  );
+}
+
 function readCorepackCacheLockOwner(lockDir) {
   try {
     const owner = JSON.parse(readFileSync(lockOwnerPath(lockDir), "utf8"));
@@ -325,18 +348,37 @@ function corepackCacheLockRenewalMs(timeoutMs) {
   return Math.max(COREPACK_CACHE_LOCK_POLL_MS, Math.floor(timeoutMs / 2));
 }
 
-function writeCorepackCacheLockOwnerFile(lockDir, ownerToken, timeoutMs) {
+function corepackCacheLockOwnerRecord(ownerToken, timeoutMs) {
   const leaseMs = corepackCacheLockLeaseMs(timeoutMs);
-  writeFileSync(
-    lockOwnerPath(lockDir),
-    JSON.stringify({
-      acquiredAt: new Date().toISOString(),
-      expiresAtMs: Date.now() + leaseMs,
-      pid: process.pid,
-      token: ownerToken,
-    }),
-    { encoding: "utf8", mode: 0o600 },
-  );
+  return JSON.stringify({
+    acquiredAt: new Date().toISOString(),
+    expiresAtMs: Date.now() + leaseMs,
+    pid: process.pid,
+    token: ownerToken,
+  });
+}
+
+function writeCorepackCacheLockOwnerFile(lockDir, ownerToken, timeoutMs, expectedToken) {
+  const tempPath = lockOwnerTempPath(lockDir);
+  writeFileSync(tempPath, corepackCacheLockOwnerRecord(ownerToken, timeoutMs), {
+    encoding: "utf8",
+    flag: "wx",
+    mode: 0o600,
+  });
+  try {
+    if (
+      expectedToken !== undefined &&
+      readCorepackCacheLockOwner(lockDir)?.token !== expectedToken
+    ) {
+      rmSync(tempPath, { force: true });
+      return false;
+    }
+    renameSync(tempPath, lockOwnerPath(lockDir));
+    return true;
+  } catch (error) {
+    rmSync(tempPath, { force: true });
+    throw error;
+  }
 }
 
 function writeCorepackCacheLockOwner(lockDir, ownerToken, timeoutMs) {
@@ -350,7 +392,7 @@ function writeCorepackCacheLockOwner(lockDir, ownerToken, timeoutMs) {
 
 function renewCorepackCacheLockOwner(lockDir, ownerToken, timeoutMs) {
   if (readCorepackCacheLockOwner(lockDir)?.token !== ownerToken) return;
-  writeCorepackCacheLockOwnerFile(lockDir, ownerToken, timeoutMs);
+  writeCorepackCacheLockOwnerFile(lockDir, ownerToken, timeoutMs, ownerToken);
 }
 
 function startCorepackCacheLockRenewal(lockDir, ownerToken, timeoutMs) {
@@ -534,7 +576,7 @@ async function acquireCorepackCacheLock(locator, timeoutMs) {
 export async function withCorepackYarnCacheLock(
   locator,
   action,
-  timeoutMs = NPM_INSTALL_TIMEOUT_MS,
+  timeoutMs = npmInstallTimeoutMs(),
 ) {
   const lockDir = corepackCacheLockDir(locator);
   if (heldCorepackCacheLocks.has(lockDir)) return await action();
@@ -689,6 +731,7 @@ export function packRoot() {
 }
 
 function installInto(tmp, tarballPath, options) {
+  const timeoutMs = npmInstallTimeoutMs();
   const initResult = run("npm", ["init", "-y"], { cwd: tmp });
   if (initResult.status !== 0) {
     fail(`npm init -y exited ${String(initResult.status)}: ${initResult.stderr}`);
@@ -706,7 +749,7 @@ function installInto(tmp, tarballPath, options) {
       "--no-fund",
       ...(options.includeOptional ? [] : ["--omit=optional"]),
     ],
-    { cwd: tmp, timeout: NPM_INSTALL_TIMEOUT_MS },
+    { cwd: tmp, timeout: timeoutMs },
   );
   if (installResult.status !== 0) {
     fail(
@@ -1060,6 +1103,7 @@ export function resolveVendorClosure(
 }
 
 function packVendoredPackage(entry, destination) {
+  const timeoutMs = npmInstallTimeoutMs();
   // npm names its output `<flattened-name>-<version>.tgz`, which collides across the scope
   // boundary: `@foo/bar@1.2.3` and `foo-bar@1.2.3` both produce `foo-bar-1.2.3.tgz`. A per-package
   // directory keeps the second pack from overwriting the first after its integrity was recorded,
@@ -1074,7 +1118,7 @@ function packVendoredPackage(entry, destination) {
   const result = run(
     "npm",
     ["pack", entry.directory, "--pack-destination", packDir, "--ignore-scripts", "--json"],
-    { cwd: repoRoot, timeout: NPM_INSTALL_TIMEOUT_MS },
+    { cwd: repoRoot, timeout: timeoutMs },
   );
   if (result.status !== 0) {
     fail(
@@ -1875,7 +1919,7 @@ export async function prepareOfflineSmokeForSetup() {
 /** Caches the pinned Yarn, so no gate has to reach the package-manager host mid-run. */
 export async function provisionPinnedYarnForSetup(
   locator = PINNED_YARN,
-  timeoutMs = NPM_INSTALL_TIMEOUT_MS,
+  timeoutMs = npmInstallTimeoutMs(),
 ) {
   const provisioned = await withCorepackYarnCacheLock(
     locator,
@@ -1963,7 +2007,7 @@ function provisionPinnedYarnUnlocked(
   registryUrl,
   home,
   locator = PINNED_YARN,
-  timeoutMs = NPM_INSTALL_TIMEOUT_MS,
+  timeoutMs = npmInstallTimeoutMs(),
 ) {
   // Already cached from an earlier run or a CI setup step: no network call at all. That keeps an
   // outage at the package-manager host from failing a gate whose dependency install is offline.
@@ -1996,14 +2040,15 @@ function provisionPinnedYarnUnlocked(
     // output can carry an endpoint, a proxy URL, or the credentials embedded in one. It is
     // therefore classified rather than quoted (KfQ thread 3780151718).
     throw smokeGateFailure(
-      `corepack could not provision ${locator} before the offline install ` +
+      `corepack could not provision ${yarnLocatorLogSummary(locator)} before the offline install ` +
         `(exit ${String(result.status)}, ${classifyProvisionFailure(result)}) — re-run ` +
         `\`npm run provision:smoke\` on a host with network access to populate the cache`,
     );
   }
   if (!isPinnedYarnCached(locator)) {
     throw smokeGateFailure(
-      `corepack cached ${locator}, but the cached Yarn bytes did not match pinned integrity.`,
+      `corepack cached ${yarnLocatorLogSummary(locator)}, ` +
+        "but the cached Yarn bytes did not match pinned integrity.",
     );
   }
   return true;
@@ -2075,21 +2120,22 @@ function writeYarnInstallManifest(tmp, locator) {
 }
 
 async function runLockedYarnInstall(tmp, registryUrl, yarnHome, locator) {
+  const timeoutMs = npmInstallTimeoutMs();
   return await withCorepackYarnCacheLock(
     locator,
     async () => {
-      await provisionPinnedYarnForSetup(locator, NPM_INSTALL_TIMEOUT_MS);
+      await provisionPinnedYarnForSetup(locator, timeoutMs);
       return await runAsync(
         "corepack",
         ["yarn", "install", "--no-immutable", "--mode=skip-build"],
         {
           cwd: tmp,
-          timeout: NPM_INSTALL_TIMEOUT_MS,
+          timeout: timeoutMs,
           env: yarnChildEnv(registryUrl, process.env, yarnHome, locator),
         },
       );
     },
-    NPM_INSTALL_TIMEOUT_MS,
+    timeoutMs,
   );
 }
 

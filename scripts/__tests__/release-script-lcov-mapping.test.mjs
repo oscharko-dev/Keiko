@@ -4,6 +4,7 @@ import {
   DEFAULT_NPM_INSTALL_TIMEOUT_MS,
   NPM_INSTALL_TIMEOUT_MS,
   WINDOWS_NPM_INSTALL_TIMEOUT_MS,
+  npmInstallTimeoutMs,
   parseArgs,
   parsePositiveTimeoutEnv,
 } from "../installable-package-smoke.mjs";
@@ -87,5 +88,6 @@ describe("release script LCOV mapping seams", () => {
     process.env.KEIKO_SMOKE_INSTALL_TIMEOUT_MS = "120000";
 
     expect(parsePositiveTimeoutEnv("KEIKO_SMOKE_INSTALL_TIMEOUT_MS")).toBe(120_000);
+    expect(npmInstallTimeoutMs()).toBe(120_000);
   });
 });

@@ -44,6 +44,7 @@ import {
   findInstalledCopies,
   runAsync,
   smokeGateFailureLogSummary,
+  smokeGateFailureSetupSummary,
   startLocalRegistry,
   terminateProcessTree,
   vendoredDependencyNames,
@@ -203,7 +204,7 @@ function runProvisionPinnedYarnChild(root, extraEnv = {}, locator = PINNED_YARN)
   );
 }
 
-function runRegistryTimeoutFailure(timeoutValue) {
+function runRegistryTimeoutFailure(timeoutValue, extraEnv = {}) {
   return spawnSync(
     process.execPath,
     [
@@ -226,6 +227,7 @@ function runRegistryTimeoutFailure(timeoutValue) {
       encoding: "utf8",
       env: {
         ...process.env,
+        ...extraEnv,
         KEIKO_REGISTRY_INSTALL_TIMEOUT_MS: timeoutValue,
         NODE_ENV: "test",
         VITEST_WORKER_ID: process.env.VITEST_WORKER_ID ?? "1",
@@ -1424,10 +1426,12 @@ describe("installable package smoke optional-dependency coverage", () => {
     );
     expect(registrySource).toContain("function smokeGateYarnLocatorParts(locator)");
     expect(registrySource).toContain("outputByteSummary(result)");
+    expect(registrySource).toContain("delete spawnOptions.timeout");
+    expect(registrySource).toMatch(/timeout:\s*timeoutMs/u);
     expect(registrySource).toContain('return await runAsync("corepack", installArgs');
     expect(registrySource).not.toContain("stdout:\\n${result.stdout}");
     expect(readFileSync(join(ROOT, "scripts", "prepare-offline-smoke.mjs"), "utf8")).toContain(
-      "smokeGateFailureLogSummary(error)",
+      "smokeGateFailureSetupSummary(error)",
     );
     expect(registrySource).toContain("withCorepackYarnCacheLock(");
     expect(registrySource).toContain("await provisionPinnedYarnForSetup(yarnLocator, timeoutMs)");
@@ -1441,6 +1445,7 @@ describe("installable package smoke optional-dependency coverage", () => {
   it("redacts SmokeGateFailure messages before logging setup failures", () => {
     const rawMessage = `cached Yarn digest ${PINNED_YARN_SHA512} did not match provenance`;
     const summary = smokeGateFailureLogSummary(new Error(rawMessage));
+    const setupSummary = smokeGateFailureSetupSummary(new Error(rawMessage));
 
     expect(summary).toContain("redacted SmokeGateFailure");
     expect(summary).toMatch(/messageSha256=[a-f0-9]{64}/u);
@@ -1449,6 +1454,10 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(summary).toMatch(/stackBytes=\d+/u);
     expect(summary).not.toContain(rawMessage);
     expect(summary).not.toContain(PINNED_YARN_SHA512);
+    expect(setupSummary).toContain("redacted SmokeGateFailure");
+    expect(setupSummary).toContain(`messageBytes=${String(Buffer.byteLength(rawMessage, "utf8"))}`);
+    expect(setupSummary).not.toContain(rawMessage);
+    expect(setupSummary).not.toContain(PINNED_YARN_SHA512);
   });
 
   it("keeps the Corepack cache private and per-user", () => {
@@ -1481,6 +1490,15 @@ describe("installable package smoke optional-dependency coverage", () => {
     } finally {
       rmSync(lockDir, { recursive: true, force: true });
     }
+  });
+
+  it("publishes Corepack cache lock owner records with an atomic rename", () => {
+    const source = readFileSync(join(ROOT, "scripts", "installable-package-smoke.mjs"), "utf8");
+
+    expect(source).toContain("function lockOwnerTempPath(lockDir)");
+    expect(source).toContain("renameSync(tempPath, lockOwnerPath(lockDir))");
+    expect(source).toContain("expectedToken !== undefined");
+    expect(source).not.toContain("writeFileSync(\n    lockOwnerPath(lockDir)");
   });
 
   it("renews the Corepack cache lock lease while the action runs", async () => {
@@ -1857,6 +1875,37 @@ describe("installable package smoke optional-dependency coverage", () => {
 
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("the archive failed its integrity check");
+      expect(result.stderr).not.toContain("redaction-probe-expected");
+      expect(result.stderr).not.toContain("redaction-probe-actual");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps classified Corepack setup failures visible in prepare-offline-smoke", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-prepare-smoke-mismatch-test-"));
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    try {
+      writeExecutable(
+        join(binDir, "corepack"),
+        [
+          'import { writeSync } from "node:fs";',
+          "writeSync(2, 'Mismatch hashes. Expected redaction-probe-expected, got redaction-probe-actual\\n');",
+          "process.exit(44);",
+        ].join("\n"),
+      );
+
+      const result = spawnSync(process.execPath, ["scripts/prepare-offline-smoke.mjs"], {
+        cwd: ROOT,
+        encoding: "utf8",
+        env: isolatedChildEnv(root),
+        timeout: 30_000,
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("the archive failed its integrity check");
+      expect(result.stderr).toContain("npm run provision:smoke");
       expect(result.stderr).not.toContain("redaction-probe-expected");
       expect(result.stderr).not.toContain("redaction-probe-actual");
     } finally {
@@ -2486,6 +2535,29 @@ describe("installable package smoke optional-dependency coverage", () => {
       expect(result.stderr).toBe("");
     },
   );
+
+  it("rejects registry install timeouts above the bounded maximum", () => {
+    const result = runRegistryTimeoutFailure("600001");
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain(
+      "KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be no more than 600000 milliseconds.",
+    );
+    expect(result.stderr).toBe("");
+  });
+
+  it("does not let installable-smoke timeout settings fail registry-smoke imports", () => {
+    const result = runRegistryTimeoutFailure("0", {
+      KEIKO_SMOKE_INSTALL_TIMEOUT_MS: "not-a-number",
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain(
+      "KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be a positive integer number of milliseconds.",
+    );
+    expect(result.stdout).not.toContain("KEIKO_SMOKE_INSTALL_TIMEOUT_MS");
+    expect(result.stderr).toBe("");
+  });
 
   it("cleans registry install temp dirs after npm spawn failures", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-registry-smoke-cleanup-test-"));

@@ -14,14 +14,14 @@
 import {
   isSmokeGateFailure,
   prepareOfflineSmokeForSetup,
-  smokeGateFailureLogSummary,
+  smokeGateFailureSetupSummary,
 } from "./installable-package-smoke.mjs";
 
 try {
   await prepareOfflineSmokeForSetup();
 } catch (error) {
   if (isSmokeGateFailure(error)) {
-    console.error(`installable-smoke failed: ${smokeGateFailureLogSummary(error)}`);
+    console.error(`installable-smoke failed: ${smokeGateFailureSetupSummary(error)}`);
     process.exit(1);
   }
   // Everything else — an unwritable temp directory, a cache path that fails its ownership check —

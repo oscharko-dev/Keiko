@@ -28,6 +28,7 @@ const packageSpec =
   process.env.KEIKO_REGISTRY_INSTALL_PACKAGE ?? `${rootManifest.name}@${rootManifest.version}`;
 const registry = process.env.KEIKO_REGISTRY_URL ?? "https://registry.npmjs.org/";
 const TEST_RUNNER_ENV = "VITEST_WORKER_ID";
+const REGISTRY_INSTALL_TIMEOUT_MAX_MS = 600_000;
 
 function registryYarnLocator() {
   try {
@@ -81,6 +82,13 @@ function registryInstallTimeoutMs() {
       "KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be a safe integer number of milliseconds.",
     );
   }
+  if (parsed > REGISTRY_INSTALL_TIMEOUT_MAX_MS) {
+    throw new SmokeGateFailure(
+      `KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be no more than ${String(
+        REGISTRY_INSTALL_TIMEOUT_MAX_MS,
+      )} milliseconds.`,
+    );
+  }
   return parsed;
 }
 
@@ -117,10 +125,12 @@ function assertTlsVerificationEnabled() {
 }
 
 function run(cmd, args, timeoutMs, options = {}) {
+  const spawnOptions = { ...options };
+  delete spawnOptions.timeout;
   const result = spawnSync(cmd, args, {
     encoding: "utf8",
+    ...spawnOptions,
     timeout: timeoutMs,
-    ...options,
   });
   assertRunSucceeded(cmd, args, result);
   return result;
