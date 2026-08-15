@@ -16,10 +16,12 @@
 // both axes: a hard cap on simultaneously-pending entries and the TTL after which an unresolved
 // entry is dropped.
 
-import type {
-  AtlassianConnectorPendingApproval,
-  JiraLiveSearchRequest,
-  KnowledgeCapsuleId,
+import {
+  ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
+  stripUnsafeFormatChars,
+  type AtlassianConnectorPendingApproval,
+  type JiraLiveSearchRequest,
+  type KnowledgeCapsuleId,
 } from "@oscharko-dev/keiko-contracts";
 import type { AtlassianActionAuthorityContext } from "./actionPolicy.js";
 
@@ -75,6 +77,50 @@ export type AtlassianWriteActionInput =
       readonly pageId: string;
       readonly commentText: string;
     };
+
+// KEIKO-0186: the bounded, sanitized text a human reviewer sees before approving a governed
+// write — never the raw, unbounded action input. Pure: no I/O, no clock, no randomness. Combines
+// only the write action's own text field(s) (never other action metadata like keys or ids),
+// strips Unicode bidi/zero-width/control-character display spoofing the same way every other
+// untrusted display surface in keiko-contracts does (stripUnsafeFormatChars), then truncates to
+// ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS — the exact bound
+// isSafeAtlassianContentPreview enforces on the wire, so the producer and the contract's own
+// validation agree on one bound rather than carrying two that could drift. `transition-issue`
+// carries no text field and always returns undefined; `update-issue-fields` also returns
+// undefined when neither `summary` nor `descriptionText` is present (only labels/priority
+// changing — nothing to preview).
+export function contentPreviewFor(action: AtlassianWriteActionInput): string | undefined {
+  const raw = rawContentFor(action);
+  if (raw === undefined || raw.length === 0) return undefined;
+  const sanitized = stripUnsafeFormatChars(raw);
+  return sanitized.length <= ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS
+    ? sanitized
+    : sanitized.slice(0, ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+}
+
+function rawContentFor(action: AtlassianWriteActionInput): string | undefined {
+  switch (action.type) {
+    case "create-issue":
+    case "update-issue-fields":
+      return joinTextFields(action.summary, action.descriptionText);
+    case "transition-issue":
+      return undefined;
+    case "add-issue-comment":
+    case "add-page-comment":
+      return action.commentText;
+    case "create-page":
+    case "update-page":
+      return joinTextFields(action.title, action.bodyText);
+  }
+}
+
+// Title/summary first, then description/body on its own paragraph — either half may be absent
+// (create-issue's descriptionText is optional; update-issue-fields' summary is too).
+function joinTextFields(first: string | undefined, second: string | undefined): string | undefined {
+  if (first === undefined || first.length === 0) return second;
+  if (second === undefined || second.length === 0) return first;
+  return `${first}\n\n${second}`;
+}
 
 // The validated sync-start request a pending sync approval executes on approve (agent-initiated
 // `sync-space`/`sync-project` under an Ask-for-approval envelope, closing the #2242 open item).

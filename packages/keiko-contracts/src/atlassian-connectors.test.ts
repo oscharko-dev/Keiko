@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
   ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK,
   ATLASSIAN_CONNECTOR_ACTION_CLASS,
   ATLASSIAN_CONNECTOR_ACTION_PROVIDER,
@@ -35,6 +36,7 @@ import {
   isAtlassianSyncTerminalStatus,
   isJiraIssueCitationMetadata,
   isSafeAtlassianConnectorBaseUrl,
+  isSafeAtlassianContentPreview,
   isSafeAtlassianDisplayName,
   isSafeAtlassianIdentifier,
   isSafeConfluenceSpaceKey,
@@ -52,8 +54,10 @@ import {
   type AtlassianConnectorActionType,
   type AtlassianConnectorActionDisposition,
   type AtlassianConnectorActivityReasonCode,
+  type AtlassianConnectorPendingApproval,
   type AtlassianConnectorProvider,
 } from "./atlassian-connectors.js";
+import { validateAtlassianConnectorPendingApproval } from "./atlassian-connectors-validation.js";
 import {
   CODING_WORKBENCH_CONNECTOR_SCOPES,
   CODING_WORKBENCH_MODES,
@@ -800,5 +804,104 @@ describe("isSafeJiraLiveIssueSummary (Issue #2248)", () => {
     expect(isSafeJiraLiveIssueSummary("bell" + "\u0007" + "ring")).toBe(false);
     expect(isSafeJiraLiveIssueSummary(42)).toBe(false);
     expect(isSafeJiraLiveIssueSummary(null)).toBe(false);
+  });
+});
+
+describe("isSafeAtlassianContentPreview (KEIKO-0186)", () => {
+  it("accepts bounded, multi-line real text up to the cap", () => {
+    expect(isSafeAtlassianContentPreview("Fix the flaky gate")).toBe(true);
+    expect(isSafeAtlassianContentPreview("Fix the flaky gate\n\nFails on retries")).toBe(true);
+    expect(
+      isSafeAtlassianContentPreview("x".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS)),
+    ).toBe(true);
+    // TAB/LF/CR are legitimate formatting, not spoofing (a page body is not single-line).
+    expect(
+      isSafeAtlassianContentPreview(
+        "line one" +
+          String.fromCharCode(10) +
+          "line two" +
+          String.fromCharCode(9) +
+          "tabbed" +
+          String.fromCharCode(13, 10) +
+          "line three",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects empty, overlong, control-character, bidi/zero-width, and non-string values", () => {
+    expect(isSafeAtlassianContentPreview("")).toBe(false);
+    expect(
+      isSafeAtlassianContentPreview("x".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS + 1)),
+    ).toBe(false);
+    expect(isSafeAtlassianContentPreview("bell" + "\u0007" + "ring")).toBe(false);
+    // RIGHT-TO-LEFT OVERRIDE (U+202E) and ZERO WIDTH SPACE (U+200B), built at runtime so the
+    // source file never carries an invisible/spoofing byte directly (only this ASCII call).
+    expect(isSafeAtlassianContentPreview("visible" + String.fromCharCode(0x202e) + "evil")).toBe(
+      false,
+    );
+    expect(
+      isSafeAtlassianContentPreview("visible" + String.fromCharCode(0x200b) + "zerowidth"),
+    ).toBe(false);
+    expect(isSafeAtlassianContentPreview(42)).toBe(false);
+    expect(isSafeAtlassianContentPreview(null)).toBe(false);
+    expect(isSafeAtlassianContentPreview(undefined)).toBe(false);
+  });
+});
+
+describe("validateAtlassianConnectorPendingApproval — contentPreview wiring (KEIKO-0186)", () => {
+  const base: AtlassianConnectorPendingApproval = {
+    schemaVersion: "1",
+    approvalId: "ap1",
+    connectorId: "cred-abc",
+    provider: "jira",
+    actionType: "create-issue",
+    actionClass: "connector-write",
+    requiredScope: "issue-tracker.write",
+    risk: "high",
+    reviewReason: "deterministic-risk-approval-required",
+    correlationId: "corr1",
+    requestedAt: 0,
+    expiresAt: 1000,
+  };
+
+  it("accepts an approval with no contentPreview (transition-issue and friends)", () => {
+    expect(validateAtlassianConnectorPendingApproval(base)).toMatchObject({ ok: true });
+  });
+
+  it("accepts an approval whose contentPreview is a bounded, sanitized string", () => {
+    expect(
+      validateAtlassianConnectorPendingApproval({
+        ...base,
+        contentPreview: "Fix the flaky gate\n\nFails on retries",
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
+  it("rejects an approval whose contentPreview exceeds the bound", () => {
+    expect(
+      validateAtlassianConnectorPendingApproval({
+        ...base,
+        contentPreview: "x".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS + 1),
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: [
+        "approval.contentPreview must be a bounded, control-character-free preview when set",
+      ],
+    });
+  });
+
+  it("rejects an approval whose contentPreview carries a raw control character", () => {
+    expect(
+      validateAtlassianConnectorPendingApproval({
+        ...base,
+        contentPreview: "bell" + String.fromCharCode(7) + "ring",
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: [
+        "approval.contentPreview must be a bounded, control-character-free preview when set",
+      ],
+    });
   });
 });

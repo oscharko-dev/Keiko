@@ -833,11 +833,42 @@ export type AtlassianConnectorActionExecutionResult =
   AtlassianConnectorActionExecutionSucceeded | AtlassianConnectorActionExecutionFailed;
 
 // ─── Pending-approval projection (Issue #2244 → rendered by the #2245 UI) ─────
+
+// Bound for the human-reviewable content preview a pending write-action approval carries
+// (KEIKO-0186): long enough that a reviewer can tell what will actually be written, short enough
+// that the approval UI itself cannot become a display/exfiltration channel for an oversized or
+// hostile payload.
+export const ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS = 280;
+
+// A content preview is provider CONTENT in the ADR-0128 D6 sense (like a synced title or a live
+// issue summary) — real text, but bounded and free of bidi/zero-width/control-character display
+// spoofing. Unlike a Jira summary it is not single-line by construction (it may combine a
+// title/summary with a description/body), so — like every other untrusted display surface in
+// this codebase — TAB/LF/CR survive stripUnsafeFormatChars while every other unsafe code point
+// does not; this predicate accepts exactly what that stripper already leaves untouched.
+export function isSafeAtlassianContentPreview(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS &&
+    stripUnsafeFormatChars(value) === value
+  );
+}
+
 // The redacted pending-approval state a `review-required` disposition surfaces: identifiers, the
-// D4 action row (class, required scope, risk), the single review reason, and the TTL window. The
-// submitted action input (summaries, descriptions, comment text, page bodies) NEVER appears
-// here — it is held only inside the server-side registry entry that the approve endpoint
-// consumes, and credentials are never part of that entry either (ADR-0128 D2/D6).
+// D4 action row (class, required scope, risk), the single review reason, and the TTL window.
+//
+// KEIKO-0186: `contentPreview` is the one deliberate, narrow exception to "no submitted content
+// crosses the wire" — and it is a SHORT-LIVED, single-use interactive review surface, not the
+// permanent audit trail. ADR-0128 D6's content-free rule was written for records that are
+// retained and exported; a pending approval exists so a human can inspect what will be written
+// BEFORE approving it, which is impossible if the content is redacted here too. The full,
+// untruncated action input (summaries, descriptions, comment text, page bodies) still never
+// appears here — only a bounded preview, capped by `ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS`
+// — and it is held in full only inside the server-side registry entry that the approve endpoint
+// consumes. `AtlassianConnectorActivityRecord` (the permanent record) stays exactly as
+// content-free as before; this field must never be added there. Credentials are never part of
+// either projection (ADR-0128 D2).
 export interface AtlassianConnectorPendingApproval {
   readonly schemaVersion: typeof ATLASSIAN_CONNECTOR_SCHEMA_VERSION;
   readonly approvalId: string;
@@ -853,6 +884,11 @@ export interface AtlassianConnectorPendingApproval {
   readonly correlationId: string;
   readonly requestedAt: number;
   readonly expiresAt: number;
+  // Bounded, sanitized preview of the content the action would write (summary/description,
+  // comment text, or title/body — see contentPreviewFor in keiko-server's actionApprovals.ts).
+  // Absent for actions with nothing to preview (transition-issue; update-issue-fields touching
+  // only non-text fields) and for every non-write action type (sync/live-search).
+  readonly contentPreview?: string | undefined;
 }
 
 // ─── Jira issue citation metadata (#2243; #2248 presents the same field list) ─

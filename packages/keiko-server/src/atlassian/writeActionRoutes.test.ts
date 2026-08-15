@@ -468,6 +468,71 @@ describe("write-action route — pending approvals (AC2)", () => {
   });
 });
 
+// KEIKO-0186: a human approving a governed Atlassian write could see only the action type and a
+// bare identifier — never the content about to be written — making the review-required check an
+// uninformed rubber-stamp. This is the finding's own acceptance scenario: create a pending
+// approval for each write action with known text, read back the AtlassianConnectorPendingApproval
+// the approve endpoint would return, and assert it contains that text (bounded) — while the SAME
+// action's permanent activity record stays exactly as content-free as before (ADR-0128 D6).
+// transition-issue is deliberately absent from EXPECTED_PREVIEW_SUBSTRINGS: it carries no text
+// field, so it must have no preview.
+const EXPECTED_PREVIEW_SUBSTRINGS: Readonly<
+  Record<WriteActionType, readonly string[] | undefined>
+> = {
+  "create-issue": ["Fix the flaky gate", "Fails on"],
+  "update-issue-fields": ["Sharper"],
+  "transition-issue": undefined,
+  "add-issue-comment": ["Verified on staging"],
+  "create-page": ["Runbook", "Steps here"],
+  "update-page": ["Runbook", "New body"],
+  "add-page-comment": ["Looks right"],
+};
+
+describe("write-action route — content preview on pending approvals (KEIKO-0186)", () => {
+  it("carries a bounded content preview reflecting each action's own text, absent from the permanent activity record", async () => {
+    for (const action of WRITE_ACTIONS) {
+      editorAgentAuthorityRegistry.reset();
+      atlassianActionApprovalRegistry.reset();
+      atlassianSyncJobRegistry.reset();
+      const counter: FetchCounter = { count: 0, requests: [] };
+      const guard = guardWith(counter);
+      const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
+      const { body } = await postAction(action, authority, "governed-assist", guard);
+      const approval = body.approval as AtlassianConnectorPendingApproval;
+      expect(validateAtlassianConnectorPendingApproval(approval).ok).toBe(true);
+
+      const expectedSubstrings = EXPECTED_PREVIEW_SUBSTRINGS[action];
+      if (expectedSubstrings === undefined) {
+        expect(approval.contentPreview, `${action} should have no content preview`).toBeUndefined();
+      } else {
+        for (const substring of expectedSubstrings) {
+          expect(approval.contentPreview, `${action} should preview its own text`).toContain(
+            substring,
+          );
+        }
+      }
+
+      // Redaction-boundary pin: the SAME action's activity record must stay exactly as
+      // content-free as before — present on the approval, absent from the permanent record.
+      const records = atlassianSyncJobRegistry.listActivity(
+        connectorIdForAuthRef(authRefFor(action)),
+      );
+      const pendingRecord = records.find((record) => record.disposition === "review-required");
+      if (pendingRecord === undefined) {
+        throw new Error(`expected a pending-review activity record for ${action}`);
+      }
+      expect(validateAtlassianConnectorActivityRecord(pendingRecord).ok).toBe(true);
+      const serializedRecord = JSON.stringify(pendingRecord);
+      expect(serializedRecord).not.toContain("contentPreview");
+      if (expectedSubstrings !== undefined) {
+        for (const substring of expectedSubstrings) {
+          expect(serializedRecord).not.toContain(substring);
+        }
+      }
+    }
+  });
+});
+
 // ─── AC3: Full access executes; envelope failures deny with the EXISTING codes ─
 describe("write-action route — envelope authority (AC3)", () => {
   it("executes without per-action approval inside a valid Full-access envelope", async () => {

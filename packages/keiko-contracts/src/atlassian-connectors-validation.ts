@@ -40,6 +40,7 @@ import {
   isAtlassianSyncJobStatus,
   isJiraIssueCitationMetadata,
   isSafeAtlassianConnectorBaseUrl,
+  isSafeAtlassianContentPreview,
   isSafeAtlassianDisplayName,
   isSafeAtlassianIdentifier,
   isSafeConfluenceSpaceKey,
@@ -760,6 +761,7 @@ const PENDING_APPROVAL_KEYS: readonly (keyof AtlassianConnectorPendingApproval)[
   "correlationId",
   "requestedAt",
   "expiresAt",
+  "contentPreview",
 ];
 
 // The action row is pinned by the D4 table exactly as the activity validator pins it: a tampered
@@ -784,6 +786,20 @@ function validateApprovalActionRow(input: Record<string, unknown>, errors: strin
   }
 }
 
+// The two independently-optional fields: an identifier token (targetRef) and a bounded,
+// sanitized content preview (contentPreview, KEIKO-0186). Split out so the caller's own
+// complexity stays under the repository's cyclomatic-complexity ceiling.
+function validateApprovalOptionalFields(input: Record<string, unknown>, errors: string[]): void {
+  if (input.targetRef !== undefined && !isSafeAtlassianIdentifier(input.targetRef)) {
+    errors.push("approval.targetRef must be a bounded identifier token when set");
+  }
+  if (input.contentPreview !== undefined && !isSafeAtlassianContentPreview(input.contentPreview)) {
+    errors.push(
+      "approval.contentPreview must be a bounded, control-character-free preview when set",
+    );
+  }
+}
+
 export function validateAtlassianConnectorPendingApproval(
   input: unknown,
 ): AtlassianConnectorValidation<AtlassianConnectorPendingApproval> {
@@ -798,9 +814,7 @@ export function validateAtlassianConnectorPendingApproval(
   if (!isOneOfStrings(input.reviewReason, ATLASSIAN_CONNECTOR_ACTION_REVIEW_REASONS)) {
     errors.push("approval.reviewReason must be a review reason");
   }
-  if (input.targetRef !== undefined && !isSafeAtlassianIdentifier(input.targetRef)) {
-    errors.push("approval.targetRef must be a bounded identifier token when set");
-  }
+  validateApprovalOptionalFields(input, errors);
   pushTimestamp(errors, "approval.requestedAt", input.requestedAt);
   pushTimestamp(errors, "approval.expiresAt", input.expiresAt);
   if (
