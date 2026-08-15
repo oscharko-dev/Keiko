@@ -14,6 +14,7 @@ import type {
   QualityIntelligenceRunEvent,
   QualityIntelligenceRunEventKind,
   QualityIntelligenceRunPlan,
+  QualityIntelligenceRunStage,
 } from "../runPlanAndEvents.js";
 
 const runId = asQualityIntelligenceRunId("run-001");
@@ -33,9 +34,9 @@ type PayloadFactoryTable = {
 const PAYLOAD_FACTORIES: PayloadFactoryTable = {
   "run:queued": () => ({ kind: "run:queued" }),
   "run:started": () => ({ kind: "run:started" }),
-  "stage:started": () => ({ kind: "stage:started", stageName: "ingest" }),
-  "stage:completed": () => ({ kind: "stage:completed", stageName: "ingest" }),
-  "stage:failed": () => ({ kind: "stage:failed", stageName: "ingest", reasonSummary: "redacted" }),
+  "stage:started": () => ({ kind: "stage:started", stageName: "plan" }),
+  "stage:completed": () => ({ kind: "stage:completed", stageName: "plan" }),
+  "stage:failed": () => ({ kind: "stage:failed", stageName: "plan", reasonSummary: "redacted" }),
   "candidate:proposed": () => ({
     kind: "candidate:proposed",
     candidateId: asQualityIntelligenceTestCaseId("tc-1"),
@@ -106,12 +107,65 @@ describe("QualityIntelligenceRunEvent", () => {
       requestedAt: "2026-06-05T00:00:00Z",
       plannerKind: "scripted",
       stages: [
-        { name: "ingest", descriptor: "stage:ingest:v1" },
-        { name: "design", descriptor: "stage:design:v1" },
+        { name: "plan", descriptor: "stage:plan:v1" },
+        { name: "candidates", descriptor: "stage:candidates:v1" },
       ],
     };
     const round = JSON.parse(JSON.stringify(plan)) as QualityIntelligenceRunPlan;
     expect(round).toEqual(plan);
+  });
+});
+
+// KEIKO-0274: `QualityIntelligenceRunStage.name` and the three `stageName` payload fields were a
+// bare `string`, even though every QI workflow draws stage names from a small, fixed vocabulary
+// (the union of all four workflow descriptors' declared stages in keiko-workflows). These are
+// type-level regression tests: a bogus stage name must fail to type-check once the fields are
+// narrowed to `QualityIntelligenceStageName`. Each `@ts-expect-error` fails today (the field is
+// `string`, so the assignment compiles and the directive itself is reported "unused") and starts
+// passing once the fields are retyped.
+describe("QualityIntelligenceStageName (KEIKO-0274)", () => {
+  it("rejects a stage name outside the declared vocabulary on QualityIntelligenceRunStage.name", () => {
+    const bogusStage: QualityIntelligenceRunStage = {
+      // @ts-expect-error — "not-a-real-stage" is not a QualityIntelligenceStageName member
+      name: "not-a-real-stage",
+      descriptor: "stage:bogus:v1",
+    };
+    expect(bogusStage.name).toBe("not-a-real-stage");
+  });
+
+  it("rejects a stage name outside the declared vocabulary on a stage:started payload", () => {
+    const bogusPayload: Extract<QualityIntelligenceRunEvent["payload"], { kind: "stage:started" }> =
+      {
+        kind: "stage:started",
+        // @ts-expect-error — "not-a-real-stage" is not a QualityIntelligenceStageName member
+        stageName: "not-a-real-stage",
+      };
+    expect(bogusPayload.stageName).toBe("not-a-real-stage");
+  });
+
+  it("accepts every stage name actually emitted by the four QI workflow descriptors", () => {
+    // Union of PLAN_STAGES (qi:test-design / regeneration) plus the qi:coverage-review,
+    // qi:validation, and qi:artifact-refinement descriptors in keiko-workflows/descriptors.ts.
+    const realStageNames = [
+      "plan",
+      "candidates",
+      "judge",
+      "coverage",
+      "validate",
+      "finalize",
+      "analyse",
+      "report",
+      "run-judges",
+      "reconcile",
+      "refine",
+    ] as const;
+    for (const name of realStageNames) {
+      const stage: QualityIntelligenceRunPlan["stages"][number] = {
+        name,
+        descriptor: `stage:${name}:v1`,
+      };
+      expect(stage.name).toBe(name);
+    }
   });
 });
 

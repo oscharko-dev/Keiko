@@ -33,6 +33,11 @@ import type { QualityIntelligenceReviewState } from "./reviewRecord.js";
 import type { TestQualityRubricDimension } from "./testQualityRubric.js";
 import type { ModelCapability } from "../gateway.js";
 import type { QualityIntelligenceRetentionPolicyId } from "./retentionPolicy.js";
+import type { QualityIntelligenceConfidence } from "./coverageMap.js";
+import type {
+  QualityIntelligenceRunEventKind,
+  QualityIntelligenceStageName,
+} from "./runPlanAndEvents.js";
 
 // Canonical QI run-status union (GEN-DUP-SEMANTIC-010). The list-view and detail-view
 // projections had re-declared this four-member union inline and could drift apart. Mirrors the
@@ -123,7 +128,8 @@ export interface QualityIntelligenceUiFindingSummary {
   readonly summaryRedacted: string;
   readonly evidenceAtomIds?: readonly string[];
   readonly category?: string;
-  readonly confidence?: number;
+  /** Confidence in `[0, 1]` (not a percentage) — see `QualityIntelligenceConfidence`. */
+  readonly confidence?: QualityIntelligenceConfidence;
 }
 
 /** Evidence reference row — envelope id and atom id only, no content. */
@@ -141,7 +147,11 @@ export interface QualityIntelligenceUiEvidenceRef {
 export interface QualityIntelligenceUiAtomCoverage {
   readonly atomId: string;
   readonly status: "covered" | "weakly-covered" | "uncovered";
-  readonly confidence: number;
+  /**
+   * Confidence in `[0, 1]` (not a percentage) — see `QualityIntelligenceConfidence`. Contrast with
+   * the sibling `QualityIntelligenceUiRunDetail.coveragePercentage`, which IS on a 0-100 scale.
+   */
+  readonly confidence: QualityIntelligenceConfidence;
   readonly requirementExcerptRedacted?: string;
 }
 
@@ -530,19 +540,74 @@ export interface QualityIntelligenceStartRunRequest {
 // only ids / counts / safe enums — never raw prompts, model output, credentials, or source content.
 
 /**
+ * Coded rejection reasons that reach the browser on `QualityIntelligenceSkippedSource.code` and
+ * `QualityIntelligenceRunStreamError.code` — every code `classifyStartError` in
+ * `keiko-server/src/qualityIntelligence/runRoutes.ts` can produce from a `QiIngestionError` /
+ * `QiGenerationError`, plus its own `QI_RUN_FAILED` fallback for a non-coded failure (KEIKO-0274).
+ * Widened with `(string & {})` on both `code` fields rather than closed: keiko-server is free to add
+ * a new coded rejection without a lockstep contracts release, so an unlisted code must stay
+ * assignable. The union exists for the common case — autocomplete and exhaustiveness on the codes
+ * that exist today — not as a closed enum.
+ */
+export type QualityIntelligenceErrorCode =
+  | "QI_BAD_SOURCE"
+  | "QI_CAPABILITY_UNAVAILABLE"
+  | "QI_CAPSULE_UNAVAILABLE"
+  | "QI_FIGMA_SNAPSHOT_UNAVAILABLE"
+  | "QI_IMAGE_DESCRIPTION_UNAVAILABLE"
+  | "QI_IMAGE_UNAVAILABLE"
+  | "QI_MODEL_INCOMPATIBLE"
+  | "QI_MODEL_NOT_CONFIGURED"
+  | "QI_MODEL_SCHEMA_VIOLATION"
+  | "QI_MODEL_TIMEOUT"
+  | "QI_MODEL_UNAVAILABLE"
+  | "QI_NO_EVIDENCE_DIR"
+  | "QI_NO_SOURCES"
+  | "QI_PROMPT_TOO_LARGE"
+  | "QI_RUN_FAILED"
+  | "QI_SOURCE_DENIED"
+  | "QI_SOURCE_EMPTY"
+  | "QI_SOURCE_TOO_LARGE"
+  | "QI_SOURCE_UNSUPPORTED"
+  | "QI_WORKSPACE_NOT_FOUND";
+
+export const QUALITY_INTELLIGENCE_ERROR_CODES: readonly QualityIntelligenceErrorCode[] = [
+  "QI_BAD_SOURCE",
+  "QI_CAPABILITY_UNAVAILABLE",
+  "QI_CAPSULE_UNAVAILABLE",
+  "QI_FIGMA_SNAPSHOT_UNAVAILABLE",
+  "QI_IMAGE_DESCRIPTION_UNAVAILABLE",
+  "QI_IMAGE_UNAVAILABLE",
+  "QI_MODEL_INCOMPATIBLE",
+  "QI_MODEL_NOT_CONFIGURED",
+  "QI_MODEL_SCHEMA_VIOLATION",
+  "QI_MODEL_TIMEOUT",
+  "QI_MODEL_UNAVAILABLE",
+  "QI_NO_EVIDENCE_DIR",
+  "QI_NO_SOURCES",
+  "QI_PROMPT_TOO_LARGE",
+  "QI_RUN_FAILED",
+  "QI_SOURCE_DENIED",
+  "QI_SOURCE_EMPTY",
+  "QI_SOURCE_TOO_LARGE",
+  "QI_SOURCE_UNSUPPORTED",
+  "QI_WORKSPACE_NOT_FOUND",
+] as const;
+
+/**
  * A connected source that ingested to nothing usable (empty / denied / binary / unavailable capsule)
  * and was skipped so the remaining sources still produced the run (Epic #729 N+1 resilience). Carries
  * only a sanitised label, the source kind, and a safe coded reason — never source content.
  */
 export interface QualityIntelligenceSkippedSource {
   readonly label: string;
-  readonly kind: string;
-  readonly code: string;
+  readonly kind: QualityIntelligenceInlineSourceKind;
+  readonly code: QualityIntelligenceErrorCode | (string & {});
 }
 
 export interface QualityIntelligenceSourceSummary {
   readonly label: string;
-  readonly kind: string;
+  readonly kind: QualityIntelligenceInlineSourceKind;
   readonly atomCount: number;
   readonly totalAtomCount?: number;
   readonly droppedAtomCount?: number;
@@ -584,9 +649,9 @@ export interface QualityIntelligenceRunStreamAccepted {
 
 export interface QualityIntelligenceRunStreamEvent {
   readonly type: "event";
-  readonly kind: string;
+  readonly kind: QualityIntelligenceRunEventKind;
   readonly sequence: number;
-  readonly stageName?: string;
+  readonly stageName?: QualityIntelligenceStageName;
   readonly candidateId?: string;
   readonly findingId?: string;
   readonly reasonSummary?: string;
@@ -617,7 +682,7 @@ export interface QualityIntelligenceRunStreamDone {
 
 export interface QualityIntelligenceRunStreamError {
   readonly type: "error";
-  readonly code: string;
+  readonly code: QualityIntelligenceErrorCode | (string & {});
   readonly message: string;
 }
 
