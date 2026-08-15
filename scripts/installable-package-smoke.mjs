@@ -322,14 +322,6 @@ export async function withCorepackYarnCacheLock(
   }
 }
 
-export async function withCorepackYarnCacheLockAsync(
-  locator,
-  action,
-  timeoutMs = NPM_INSTALL_TIMEOUT_MS,
-) {
-  return await withCorepackYarnCacheLock(locator, action, timeoutMs);
-}
-
 function formatTsDiagnostics(diagnostics) {
   return diagnostics
     .map((diagnostic) => {
@@ -1827,7 +1819,7 @@ function writeYarnInstallManifest(tmp, locator) {
 }
 
 async function runLockedYarnInstall(tmp, registryUrl, yarnHome, locator) {
-  return await withCorepackYarnCacheLockAsync(
+  return await withCorepackYarnCacheLock(
     locator,
     async () => {
       await provisionPinnedYarnForSetup(locator, NPM_INSTALL_TIMEOUT_MS);

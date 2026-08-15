@@ -10,7 +10,7 @@ import {
   yarnLocatorParts,
   yarnPackageManagerFromLocator,
 } from "./lib/pinned-yarn.mjs";
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { resolveHostExecutable, shellCommandForTrustedExecutable } from "./lib/host-executable.mjs";
 import {
   isSmokeGateFailure,
   privateYarnHome,
@@ -70,16 +70,7 @@ function run(cmd, args, options = {}) {
     timeout: timeoutMs,
     ...options,
   });
-  if (result.error !== undefined) {
-    fail(`${cmd} ${args.join(" ")} could not spawn: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    fail(
-      `${cmd} ${args.join(" ")} exited ${String(result.status)}\n` +
-        `stdout:\n${result.stdout}\n` +
-        `stderr:\n${result.stderr}`,
-    );
-  }
+  assertRunSucceeded(cmd, args, result);
   return result;
 }
 
@@ -210,7 +201,8 @@ async function runCorepackYarnInstall(projectDir, yarnHome, yarnLocator, install
     async () => {
       await provisionPinnedYarnForSetup(yarnLocator, timeoutMs);
       const env = yarnChildEnv(registry, process.env, yarnHome, yarnLocator);
-      return spawnSync(resolveHostExecutable("corepack", { env }), installArgs, {
+      const executable = resolveHostExecutable("corepack", { env });
+      return spawnSync(shellCommandForTrustedExecutable(executable), installArgs, {
         encoding: "utf8",
         // SECURITY-SHELL-OK: corepack-only Windows .cmd compatibility; argv is fixed by this smoke.
         shell: process.platform === "win32",
