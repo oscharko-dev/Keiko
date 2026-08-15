@@ -25,7 +25,9 @@ import type { CliIo } from "./runner.js";
 // KEIKO_CLI_BIN_PATH: the installation layout is the bin's business, not this package's.
 
 const USAGE = `Usage:
-  keiko audit local-state [--state-dir PATH]   audit a local .keiko tree (default <cwd>/.keiko)
+  keiko audit local-state [--state-dir PATH]   audit a local .keiko tree
+
+Without --state-dir the target is $KEIKO_STATE_DIR when set, otherwise <cwd>/.keiko.
 
 Read-only. Never decrypts and never mutates the tree; no vault key is required.
 Exit code: 0 healthy, 1 audit failure, 2 usage error.`;
@@ -114,7 +116,11 @@ function isAuditClass(value: unknown): boolean {
   const record = value as Record<string, unknown>;
   return (
     typeof record.title === "string" &&
+    // Domain-checked, not just typed: renderReport falls back to printing an unknown status
+    // verbatim, so a status outside the vocabulary would reach the operator as an unlabelled row
+    // that reads neither PASS nor FAIL (review finding on #3159).
     typeof record.status === "string" &&
+    Object.hasOwn(TAG, record.status) &&
     isStringArray(record.findings)
   );
 }
@@ -157,9 +163,12 @@ async function runLocalStateAudit(
     }
     result = validated;
   } catch (error) {
+    // Type, not message: the auditor reads the state tree, so its failure text can quote a path
+    // or a file fragment it was parsing. The class of failure is the actionable part, and it is
+    // body-free (AGENTS.md §7; review finding on #3159).
     io.err(
       `keiko audit: local-state audit could not run — ${
-        error instanceof Error ? error.message : String(error)
+        error instanceof Error ? error.constructor.name : typeof error
       }\n`,
     );
     return 1;

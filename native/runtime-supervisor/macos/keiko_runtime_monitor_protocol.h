@@ -23,6 +23,13 @@ enum keiko_monitor_response {
   KEIKO_MONITOR_NEEDS_FULL_DISK_ACCESS = 6,
   KEIKO_MONITOR_STARTING = 7,
   KEIKO_MONITOR_FAILED = 8,
+  // Compatibility, deliberately without a KEIKO_MONITOR_VERSION bump (review finding on #3159):
+  // an older supervisor paired with a newer daemon receives 9 on one narrow path and does not
+  // recognise it. Its reconcile() already routes every unrecognised reply into ERROR_TREE_OBSERVE,
+  // so it fails closed and reports an observation error instead of misreading the tree as reaped.
+  // Bumping the version instead would make the daemon reject EVERY v1 supervisor outright — a hard
+  // break for the mixed-install case, to avoid a soft, fail-closed degradation in it.
+  //
   // KEIKO-0433: RECONCILE against a handle that IS known but already owned by a live connection
   // used to answer KEIKO_MONITOR_ZERO_LIVE — the same code as "no such session". Those demand
   // opposite responses: one means the tree is already supervised and the caller should back off,

@@ -31,6 +31,7 @@ function repo(overrides = {}) {
     "ci.yml": workflow({ push: ALL, pull_request: ALL }),
     "codeql.yml": workflow({ push: ALL, pull_request: ALL }),
     "dependency-review.yml": workflow({ pull_request: ALL }),
+    "workflow-hygiene.yml": workflow({ push: ALL, pull_request: ALL }),
     ...overrides,
   };
   return (file) => {
@@ -113,7 +114,11 @@ describe("checkWorkflowBranchParity", () => {
 
   it("covers every follower the gate claims to govern", () => {
     expect(REFERENCE.file).toBe("ci.yml");
-    expect(FOLLOWERS.map((f) => f.file)).toEqual(["codeql.yml", "dependency-review.yml"]);
+    expect(FOLLOWERS.map((f) => f.file)).toEqual([
+      "codeql.yml",
+      "dependency-review.yml",
+      "workflow-hygiene.yml",
+    ]);
   });
 });
 

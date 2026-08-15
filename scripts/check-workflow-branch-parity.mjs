@@ -1,13 +1,14 @@
 // Workflow branch-trigger parity gate (audit KEIKO-0955).
 //
-// ci.yml, codeql.yml and dependency-review.yml each carry a hand-maintained list of the branches
+// ci.yml, codeql.yml, dependency-review.yml and workflow-hygiene.yml each carry a hand-maintained
+// list of the branches
 // they trigger on. Nothing compared them, and they drifted: codeql.yml was missing nine long-lived
 // integration branches and dependency-review.yml ten, so pushes to those branches — and pull
 // requests targeting them — ran the full CI matrix while being neither code-scanned nor
 // dependency-reviewed. The gap was invisible because every one of those branches eventually merges
 // into `dev`, which IS listed everywhere, so the final merge was covered and nothing ever went red.
 //
-// This gate makes the three lists one fact. It compares the SETS, so ordering and comment churn are
+// This gate makes those lists one fact. It compares the SETS, so ordering and comment churn are
 // free, and it names the offending file and the exact missing/extra branches on failure.
 //
 // Deliberately not asserted here: `merge_group` and `schedule` triggers, which ADR-0139 D7 scopes
@@ -23,6 +24,10 @@ export const REFERENCE = { file: "ci.yml", triggers: ["push", "pull_request"] };
 export const FOLLOWERS = [
   { file: "codeql.yml", triggers: ["push", "pull_request"] },
   { file: "dependency-review.yml", triggers: ["pull_request"] },
+  // workflow-hygiene.yml carries the same list and is a required context, so it drifts the same
+  // way (review finding on #3159). A branch missing here runs no actionlint, no pinned-SHA check,
+  // no zizmor and no OSV scan.
+  { file: "workflow-hygiene.yml", triggers: ["push", "pull_request"] },
 ];
 
 /**

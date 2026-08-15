@@ -480,9 +480,12 @@ function registerShutdown(server: Server, composition: JourneyComposition): void
           }),
         ]);
       } catch (error) {
+        // The STAGE is the diagnostic; the error text can carry a path or payload the disposing
+        // resource was holding. Stage plus error type answers "which resource failed to dispose"
+        // without reproducing what it held (review finding on #3159).
         process.stderr.write(
           `[coding-runtime-server] shutdown failed during ${stage}: ${
-            error instanceof Error ? error.message : String(error)
+            error instanceof Error ? error.constructor.name : typeof error
           }\n`,
         );
         process.exit(1);

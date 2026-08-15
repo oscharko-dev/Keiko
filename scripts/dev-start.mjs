@@ -231,12 +231,15 @@ export function resolveDevGatewayConfigAction({
 
   const seedFrom = seedCandidates.find((candidate) => fileExists(candidate));
   if (seedFrom === undefined) {
-    if (configuredPath !== undefined) {
-      notices.push(
-        "[dev:start] no gateway config seed candidate is available either — the gateway will " +
-          "start unprovisioned; configure a model in Settings or point KEIKO_CONFIG_FILE at a real file",
-      );
-    }
+    // Said unconditionally. Previously only the stale-path branch reported this, so the plain
+    // "nothing configured and nothing to seed" case — the most common first-run shape — started an
+    // unprovisioned gateway in silence, which is the condition KEIKO-0286 is about (review finding
+    // on #3159).
+    notices.push(
+      "[dev:start] no gateway config is configured and no seed candidate is available — the " +
+        "gateway will start unprovisioned; configure a model in Settings or point " +
+        "KEIKO_CONFIG_FILE at a real file",
+    );
     return { ...result, notices };
   }
   notices.push(`[dev:start] seeded gateway config from ${seedFrom}`);

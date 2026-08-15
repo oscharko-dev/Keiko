@@ -289,14 +289,14 @@ module.exports = {
         "negative-test fixture under tests/architecture/fixtures/local-knowledge/ so the " +
         "gate can be proven live by scripts/arch-check-negative.mjs. The to.path forbids " +
         "both non-allow-listed packages AND every sibling `src/` shim domain (gateway|" +
-        "tools|harness|workflows|audit|ui|verification|evaluations|cli) so a future " +
-        "deep-import is caught (boundary-weakening gap pattern from issues #160 and " +
+        "tools|harness|workflows|audit|ui|verification|evaluations|cli|workspace) so a " +
+        "future deep-import is caught (boundary-weakening gap pattern from issues #160 and " +
         "#165). pathNot only filters self-references; it must NOT silently exclude " +
-        "sibling-but-still-in-src/ domains. `src/workspace/` is intentionally NOT listed " +
-        "in the forbidden src/ domains because the workspace package is allow-listed. " +
-        "`src/gateway/` IS listed in the forbidden src/ domains even though " +
-        "keiko-model-gateway is allow-listed — consumers must import the extracted " +
-        "package, and the retired root `src/*` shims stay forbidden production targets.",
+        "sibling-but-still-in-src/ domains. KEIKO-0373 added `src/workspace/`: it was the " +
+        "one allow-listed dependency whose retired shim this rule still permitted, while " +
+        "`src/gateway/` was already forbidden for exactly the same reason. Both are " +
+        "allow-listed as PACKAGES and both stay forbidden as retired root shims — " +
+        "consumers must import the extracted package.",
       severity: "error",
       from: {
         path:
