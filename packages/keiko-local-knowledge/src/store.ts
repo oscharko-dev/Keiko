@@ -21,6 +21,7 @@ import {
   KNOWLEDGE_CAPSULE_TABLES,
   KNOWLEDGE_CAPSULE_V1_TABLES,
   LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION,
+  type KnowledgeCapsuleMigration,
 } from "@oscharko-dev/keiko-contracts";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: the single 0o700/0o600 hardening pair.
 import {
@@ -147,6 +148,120 @@ function setUserVersion(db: DatabaseSync, version: number): void {
   db.exec(`PRAGMA user_version = ${String(version)}`);
 }
 
+interface MigrationGroup {
+  readonly foreignKeysSuspended: boolean;
+  readonly migrations: readonly KnowledgeCapsuleMigration[];
+}
+
+// Consecutive pending migrations that share the same `requiresForeignKeysSuspended` flag (KEIKO-
+// 0371) apply together in one transaction. With no opted-in migration pending, this produces
+// exactly one "not suspended" group holding every pending migration — byte-identical to the single
+// shared transaction every migration used before the flag existed.
+function groupPendingMigrations(
+  pending: readonly KnowledgeCapsuleMigration[],
+): readonly MigrationGroup[] {
+  const groups: MigrationGroup[] = [];
+  for (const migration of pending) {
+    const foreignKeysSuspended = migration.requiresForeignKeysSuspended === true;
+    const current = groups.at(-1);
+    if (current?.foreignKeysSuspended === foreignKeysSuspended) {
+      groups[groups.length - 1] = {
+        foreignKeysSuspended,
+        migrations: [...current.migrations, migration],
+      };
+    } else {
+      groups.push({ foreignKeysSuspended, migrations: [migration] });
+    }
+  }
+  return groups;
+}
+
+function applyMigrationStatements(
+  db: DatabaseSync,
+  migrations: readonly KnowledgeCapsuleMigration[],
+): void {
+  for (const migration of migrations) {
+    for (const statement of migration.up) {
+      db.exec(statement);
+    }
+    setUserVersion(db, migration.version);
+  }
+}
+
+// The path every migration used before KEIKO-0371: one shared transaction, foreign keys enforced
+// throughout (applyDurabilityPragmas already turned them on before runMigrations ever runs). A
+// migration that does not set `requiresForeignKeysSuspended` still runs exactly this way.
+function applyStandardMigrationGroup(
+  db: DatabaseSync,
+  migrations: readonly KnowledgeCapsuleMigration[],
+): void {
+  db.exec("BEGIN");
+  try {
+    applyMigrationStatements(db, migrations);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+interface ForeignKeyViolationRow {
+  readonly table: string;
+}
+
+// `PRAGMA foreign_key_check` never throws by itself — it returns one row per violation found
+// anywhere in the database (empty when clean) — so a suspended-enforcement rebuild must query it
+// explicitly and fail closed itself rather than trust silence.
+function assertNoForeignKeyViolations(db: DatabaseSync): void {
+  const violations = db
+    .prepare("PRAGMA foreign_key_check")
+    .all() as unknown as ForeignKeyViolationRow[];
+  if (violations.length === 0) return;
+  const tables = [...new Set(violations.map((row) => row.table))]
+    .sort((a, b) => a.localeCompare(b))
+    .join(", ");
+  throw new KnowledgeStoreError(
+    `Foreign key check found ${String(violations.length)} violation(s) in [${tables}] after a ` +
+      "foreign-keys-suspended migration rebuild; rolling back rather than committing orphaned rows.",
+  );
+}
+
+// The KEIKO-0371 path: a migration whose `up` DROPs a table that other tables reference with `ON
+// DELETE CASCADE` must not run with foreign keys on, or the DROP cascades and silently deletes
+// every dependent row (SQLite fires FK actions for DROP TABLE exactly like a real DELETE).
+// `PRAGMA foreign_keys` is a documented no-op once a transaction is open, so it is toggled here,
+// before BEGIN and after COMMIT/ROLLBACK — never inside the transaction. `PRAGMA foreign_key_check`
+// runs before COMMIT so a row the rebuild would orphan aborts the migration instead of corrupting
+// the store; the `finally` guarantees enforcement is back on for every later migration group and
+// for the runtime, whether this group succeeded or failed.
+function applySuspendedForeignKeyMigrationGroup(
+  db: DatabaseSync,
+  migrations: readonly KnowledgeCapsuleMigration[],
+): void {
+  db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    db.exec("BEGIN");
+    try {
+      applyMigrationStatements(db, migrations);
+      assertNoForeignKeyViolations(db);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
+function applyMigrationGroup(db: DatabaseSync, group: MigrationGroup): void {
+  if (group.foreignKeysSuspended) {
+    applySuspendedForeignKeyMigrationGroup(db, group.migrations);
+  } else {
+    applyStandardMigrationGroup(db, group.migrations);
+  }
+}
+
 function runMigrations(db: DatabaseSync): void {
   const start = currentUserVersion(db);
   if (start > LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION) {
@@ -158,17 +273,11 @@ function runMigrations(db: DatabaseSync): void {
   }
   const pending = KNOWLEDGE_CAPSULE_MIGRATIONS.filter((m) => m.version > start);
   if (pending.length === 0) return;
-  db.exec("BEGIN");
   try {
-    for (const migration of pending) {
-      for (const statement of migration.up) {
-        db.exec(statement);
-      }
-      setUserVersion(db, migration.version);
+    for (const group of groupPendingMigrations(pending)) {
+      applyMigrationGroup(db, group);
     }
-    db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
     throw new KnowledgeStoreError(
       `Failed to apply knowledge-capsule migration (start=${String(start)})`,
       { cause: error },
