@@ -2,8 +2,12 @@
 // Pure wire types and validators only. The facade grants no shell, process, provider, credential, or
 // model authority; server handlers must delegate to existing Git read and Git delivery routes.
 
-import type { CodingWorkbenchMode } from "./coding-workbench.js";
-import { compareCodingWorkbenchModeAuthority } from "./coding-workbench.js";
+import type {
+  CodingWorkbenchApprovalRisk,
+  CodingWorkbenchMode,
+  CodingWorkbenchPolicyResourceScope,
+} from "./coding-workbench.js";
+import { CODING_WORKBENCH_MODES, codingWorkbenchPolicyEffectFor } from "./coding-workbench.js";
 
 export const GIT_REPOSITORY_AGENT_SCHEMA_VERSION = "1" as const;
 
@@ -350,15 +354,40 @@ const AUTHORITY_CLASS_BY_OPERATION: Readonly<
   merge: "repository-delivery",
 };
 
-// The lowest mode that performs each class WITHOUT asking first. `governed-assist` asks before every
-// workspace edit and every delivery action, so it admits no execute at all through this facade —
-// there is no channel here to ask on, and an unaskable "ask" fails closed.
-const MINIMUM_MODE_BY_CLASS: Readonly<
-  Record<GitRepositoryAgentAuthorityClass, CodingWorkbenchMode>
+// KEIKO-0227: consolidated onto coding-workbench.ts's shared CODING_WORKBENCH_MODE_POLICIES
+// (ADR-0138 D2's total mode/resource-scope/risk matrix) instead of an independently-maintained
+// threshold table. Each authority class maps to the resource scope + risk pair that carries its
+// intent through that shared matrix. This is a genuine design decision, not a mechanical 1:1
+// substitution -- git-repository-agent.ts's classes have no risk dimension of their own:
+//
+//  - "repository-read" and "workspace-write" both name "workspace-contained" at "low" risk. Reads
+//    never actually reach this lookup (no repository-read operation ever carries an "execute"
+//    mode per MODE_BY_OPERATION -- the `mode !== "execute"` guard below always admits them first),
+//    so this entry exists only for the Record's exhaustiveness; "workspace-contained"/"low" is the
+//    closest honest choice if that ever changed. For "workspace-write" it preserves the existing
+//    threshold unchanged: allowed starting at supervised-coding, approval-required below it.
+//  - "repository-delivery" (fetch/pull/push/pull-request/merge -- leaves the machine or lets the
+//    network in) names "delivery". CODING_WORKBENCH_MODE_POLICIES declares "delivery"
+//    approval-required at every risk tier in every mode, including autonomous-delivery, so the
+//    specific risk chosen here never changes the outcome; "high" is the most honest label for an
+//    action that can affect shared or remote state. This is the deliberate, owner-approved
+//    convergence onto the STRICTER model: the facade previously admitted these five operations
+//    outright once effectiveMode reached autonomous-delivery, with no approval channel of its own
+//    -- a materially more permissive, independently-maintained contract for the identical
+//    operations than the shared table already enforced (ADR-0087 D6: merge is an explicit,
+//    approval-gated action, auto-merge scheduling out of scope; ADR-0129 D4).
+const AUTHORITY_CLASS_POLICY: Readonly<
+  Record<
+    GitRepositoryAgentAuthorityClass,
+    {
+      readonly resourceScope: CodingWorkbenchPolicyResourceScope;
+      readonly risk: CodingWorkbenchApprovalRisk;
+    }
+  >
 > = {
-  "repository-read": "governed-assist",
-  "workspace-write": "supervised-coding",
-  "repository-delivery": "autonomous-delivery",
+  "repository-read": { resourceScope: "workspace-contained", risk: "low" },
+  "workspace-write": { resourceScope: "workspace-contained", risk: "low" },
+  "repository-delivery": { resourceScope: "delivery", risk: "high" },
 };
 
 export function gitRepositoryAgentAuthorityClassFor(
@@ -367,15 +396,12 @@ export function gitRepositoryAgentAuthorityClassFor(
   return AUTHORITY_CLASS_BY_OPERATION[operation];
 }
 
-export function gitRepositoryAgentMinimumMode(
-  operation: GitRepositoryAgentOperationKind,
-): CodingWorkbenchMode {
-  return MINIMUM_MODE_BY_CLASS[AUTHORITY_CLASS_BY_OPERATION[operation]];
-}
-
 /**
  * True when `effectiveMode` admits this operation in this mode without a separate per-action
- * approval. Reads and previews are always admitted; an execute needs its class's minimum mode.
+ * approval. Reads and previews are always admitted. An execute is admitted only when the shared
+ * CODING_WORKBENCH_MODE_POLICIES matrix resolves this operation's class to "allowed" at
+ * `effectiveMode`. "approval-required" is treated as inadmissible here: this boolean facade has no
+ * approval channel of its own, so anything short of an unconditional "allowed" fails closed.
  */
 export function gitRepositoryAgentOperationAdmitted(
   operation: GitRepositoryAgentOperationKind,
@@ -383,9 +409,24 @@ export function gitRepositoryAgentOperationAdmitted(
   effectiveMode: CodingWorkbenchMode,
 ): boolean {
   if (mode !== "execute") return true;
-  return (
-    compareCodingWorkbenchModeAuthority(effectiveMode, gitRepositoryAgentMinimumMode(operation)) >=
-    0
+  const { resourceScope, risk } =
+    AUTHORITY_CLASS_POLICY[gitRepositoryAgentAuthorityClassFor(operation)];
+  return codingWorkbenchPolicyEffectFor(effectiveMode, resourceScope, risk) === "allowed";
+}
+
+/**
+ * The lowest mode that admits this operation's class through `gitRepositoryAgentOperationAdmitted`
+ * without a separate approval, or `undefined` when no mode does -- reachable only for
+ * "repository-delivery" today, whose "delivery" resource scope is approval-required at every risk
+ * tier in every mode. Derived by scanning the same shared matrix `gitRepositoryAgentOperationAdmitted`
+ * itself consults, so it can never disagree with the admission decision above -- there is no
+ * second, independently-maintained threshold anywhere in this module.
+ */
+export function gitRepositoryAgentMinimumMode(
+  operation: GitRepositoryAgentOperationKind,
+): CodingWorkbenchMode | undefined {
+  return CODING_WORKBENCH_MODES.find((mode) =>
+    gitRepositoryAgentOperationAdmitted(operation, "execute", mode),
   );
 }
 
