@@ -48,6 +48,7 @@
     ".dependency-cruiser.*",
     "eslint.config.*",
     "**/{.prettierrc*,prettier.config.*,.prettierignore}",
+    "**/.npmrc",
     "**/*.sql",
     ".gitignore",
     ".env.example",
