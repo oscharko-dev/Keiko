@@ -1,58 +1,172 @@
+import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL, URL } from "node:url";
 
+import {
+  PINNED_YARN,
+  pinnedYarnLocatorParts,
+  yarnPackageManagerFromIntegrityLocator,
+  yarnLocatorParts,
+  yarnPackageManagerFromLocator,
+} from "./lib/pinned-yarn.mjs";
+import {
+  isSmokeGateFailure,
+  privateYarnHome,
+  provisionPinnedYarnForSetup,
+  runAsync,
+  SmokeGateFailure,
+  withCorepackYarnCacheLock,
+  yarnChildEnv,
+  YARN_RC_FILENAME,
+} from "./installable-package-smoke.mjs";
 import rootManifest from "../package.json" with { type: "json" };
 
 const packageSpec =
   process.env.KEIKO_REGISTRY_INSTALL_PACKAGE ?? `${rootManifest.name}@${rootManifest.version}`;
 const registry = process.env.KEIKO_REGISTRY_URL ?? "https://registry.npmjs.org/";
-const timeoutMs = Number.parseInt(process.env.KEIKO_REGISTRY_INSTALL_TIMEOUT_MS ?? "300000", 10);
+const TEST_RUNNER_ENV = "VITEST_WORKER_ID";
+const REGISTRY_INSTALL_TIMEOUT_MAX_MS = 600_000;
+
+function registryYarnLocator() {
+  try {
+    pinnedYarnLocatorParts(PINNED_YARN);
+    return PINNED_YARN;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new SmokeGateFailure(`registry install smoke pinned Yarn locator is invalid: ${reason}`);
+  }
+}
+
+function smokeGateYarnLocatorParts(locator) {
+  try {
+    return yarnLocatorParts(locator);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new SmokeGateFailure(`registry install smoke Yarn locator is invalid: ${reason}`);
+  }
+}
+
+function smokeGateYarnPackageManager(locator) {
+  if (locator === PINNED_YARN) return yarnPackageManagerFromLocator(locator);
+  smokeGateYarnLocatorParts(locator);
+  return yarnPackageManagerFromIntegrityLocator(locator);
+}
+
+function testRegistryYarnLocator(locator) {
+  if (process.env.NODE_ENV !== "test" || process.env[TEST_RUNNER_ENV] === undefined) {
+    throw new SmokeGateFailure("fixture Yarn locators are only accepted inside Vitest");
+  }
+  smokeGateYarnLocatorParts(locator);
+  return locator;
+}
 
 function fail(message) {
   console.error(`registry-install-smoke failed: ${message}`);
   process.exit(1);
 }
 
-function assertTlsVerificationEnabled() {
-  if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
-    fail("NODE_TLS_REJECT_UNAUTHORIZED=0 is not allowed for registry install smoke.");
+function registryInstallTimeoutMs(env = process.env) {
+  const value = env.KEIKO_REGISTRY_INSTALL_TIMEOUT_MS;
+  if (value === undefined || value === "") return 300_000;
+  if (!/^[1-9]\d*$/u.test(value)) {
+    throw new SmokeGateFailure(
+      "KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be a positive integer number of milliseconds.",
+    );
   }
-  const url = new URL(registry);
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new SmokeGateFailure(
+      "KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be a safe integer number of milliseconds.",
+    );
+  }
+  if (parsed > REGISTRY_INSTALL_TIMEOUT_MAX_MS) {
+    throw new SmokeGateFailure(
+      `KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be no more than ${String(
+        REGISTRY_INSTALL_TIMEOUT_MAX_MS,
+      )} milliseconds.`,
+    );
+  }
+  return parsed;
+}
+
+function registryHostnameIsLoopback(hostname) {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname === "[::1]"
+  );
+}
+
+function assertRegistryTlsVerificationEnabled(registryUrl, env = process.env) {
+  if (env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
+    throw new SmokeGateFailure(
+      "NODE_TLS_REJECT_UNAUTHORIZED=0 is not allowed for registry install smoke.",
+    );
+  }
+  const url = new URL(registryUrl);
   if (url.protocol === "https:") return;
-  const loopback =
-    url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
-  if (loopback && process.env.KEIKO_REGISTRY_INSTALL_ALLOW_INSECURE_LOOPBACK === "1") {
+  if (
+    registryHostnameIsLoopback(url.hostname) &&
+    env.KEIKO_REGISTRY_INSTALL_ALLOW_INSECURE_LOOPBACK === "1"
+  ) {
     console.log(
       "registry-install-smoke: using explicit insecure loopback registry override for local test.",
     );
     return;
   }
-  fail(
+  throw new SmokeGateFailure(
     "registry install smoke requires an HTTPS registry URL. " +
       "Only loopback HTTP is allowed with KEIKO_REGISTRY_INSTALL_ALLOW_INSECURE_LOOPBACK=1.",
   );
 }
 
-function run(cmd, args, options = {}) {
+function assertTlsVerificationEnabled() {
+  assertRegistryTlsVerificationEnabled(registry);
+}
+
+function run(cmd, args, timeoutMs, options = {}) {
+  const spawnOptions = { ...options };
+  delete spawnOptions.timeout;
   const result = spawnSync(cmd, args, {
     encoding: "utf8",
+    ...spawnOptions,
     timeout: timeoutMs,
-    ...options,
   });
+  assertRunSucceeded(cmd, args, result);
+  return result;
+}
+
+function commandSummary(cmd, args) {
+  return `${cmd} (${String(args.length)} arg${args.length === 1 ? "" : "s"})`;
+}
+
+function outputByteSummary(result) {
+  const stdoutBytes = Buffer.byteLength(String(result.stdout ?? ""), "utf8");
+  const stderrBytes = Buffer.byteLength(String(result.stderr ?? ""), "utf8");
+  return `stdoutBytes=${String(stdoutBytes)}, stderrBytes=${String(stderrBytes)}`;
+}
+
+function assertRunSucceeded(cmd, args, result) {
   if (result.error !== undefined) {
-    fail(`${cmd} ${args.join(" ")} could not spawn: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    fail(
-      `${cmd} ${args.join(" ")} exited ${String(result.status)}\n` +
-        `stdout:\n${result.stdout}\n` +
-        `stderr:\n${result.stderr}`,
+    throw new SmokeGateFailure(
+      `${commandSummary(cmd, args)} could not spawn: ${result.error.message}`,
     );
   }
-  return result;
+  if (result.outputLimitExceeded === true) {
+    throw new SmokeGateFailure(
+      `${commandSummary(cmd, args)} exceeded output limit (${outputByteSummary(result)})`,
+    );
+  }
+  if (result.status !== 0) {
+    throw new SmokeGateFailure(
+      `${commandSummary(cmd, args)} exited ${String(result.status)} ` +
+        `(signal=${String(result.signal)}, ${outputByteSummary(result)})`,
+    );
+  }
 }
 
 function installedPackageRoot(projectDir) {
@@ -73,10 +187,14 @@ function assertVendoredPayload(projectDir) {
       .map((root) => join(root, "@oscharko-dev", shortName, "dist"))
       .find((candidate) => existsSync(candidate));
     if (dist === undefined) {
-      fail(`registry-installed package missing runtime dependency dist: ${name}`);
+      throw new SmokeGateFailure(
+        `registry-installed package missing runtime dependency dist: ${name}`,
+      );
     }
     if (readdirSync(dist).length === 0) {
-      fail(`registry-installed package has empty runtime dependency dist: ${name}`);
+      throw new SmokeGateFailure(
+        `registry-installed package has empty runtime dependency dist: ${name}`,
+      );
     }
   }
 }
@@ -85,25 +203,28 @@ async function assertRootImport(projectDir) {
   const moduleUrl = pathToFileURL(join(installedPackageRoot(projectDir), "dist", "index.js")).href;
   const mod = await import(moduleUrl);
   if (mod.SDK_VERSION !== rootManifest.version) {
-    fail(
+    throw new SmokeGateFailure(
       `registry-installed root import SDK_VERSION mismatch: ${String(mod.SDK_VERSION)} ` +
         `!= ${rootManifest.version}`,
     );
   }
 }
 
-async function assertInstalledRuntime(projectDir) {
+async function assertInstalledRuntime(projectDir, timeoutMs) {
   const bin = join(installedPackageRoot(projectDir), "dist", "cli", "index.js");
-  const result = run(process.execPath, [bin, "--version"], { cwd: projectDir });
+  const result = run(process.execPath, [bin, "--version"], timeoutMs, { cwd: projectDir });
   if (!result.stdout.includes(rootManifest.version)) {
-    fail(`installed CLI version output did not include ${rootManifest.version}: ${result.stdout}`);
+    throw new SmokeGateFailure(
+      `installed CLI version output did not include ${rootManifest.version} ` +
+        `(${outputByteSummary(result)})`,
+    );
   }
-  run(process.execPath, [bin, "--help"], { cwd: projectDir });
+  run(process.execPath, [bin, "--help"], timeoutMs, { cwd: projectDir });
   assertVendoredPayload(projectDir);
   await assertRootImport(projectDir);
 }
 
-async function npmSmoke() {
+async function npmSmoke(timeoutMs) {
   const projectDir = mkdtempSync(join(tmpdir(), "keiko-registry-npm-"));
   try {
     writeFileSync(
@@ -120,62 +241,137 @@ async function npmSmoke() {
     run(
       "npm",
       ["install", packageSpec, "--ignore-scripts", "--no-audit", "--no-fund", "--omit=optional"],
-      // SECURITY-SHELL-OK: npm-only Windows .cmd compatibility for install smoke; argv is fixed.
-      { cwd: projectDir, shell: process.platform === "win32" },
-    );
-    await assertInstalledRuntime(projectDir);
-  } finally {
-    rmSync(projectDir, { recursive: true, force: true });
-  }
-}
-
-async function yarnSmoke() {
-  const projectDir = mkdtempSync(join(tmpdir(), "keiko-registry-yarn-"));
-  try {
-    writeFileSync(
-      join(projectDir, "package.json"),
-      JSON.stringify(
-        {
-          private: true,
-          packageManager: "yarn@4.9.1",
-          devDependencies: {
-            [rootManifest.name]: rootManifest.version,
-          },
-        },
-        null,
-        2,
-      ) + "\n",
-    );
-    writeFileSync(
-      join(projectDir, ".yarnrc.yml"),
-      [
-        "nodeLinker: node-modules",
-        "enableGlobalCache: false",
-        "enableStrictSsl: true",
-        `cacheFolder: "${join(projectDir, ".yarn-cache").replaceAll("\\", "/")}"`,
-        `npmRegistryServer: "${registry}"`,
-        "npmScopes:",
-        "  oscharko-dev:",
-        `    npmRegistryServer: "${registry}"`,
-        "",
-      ].join("\n"),
-    );
-    run("corepack", ["yarn", "install", "--no-immutable", "--mode=skip-build"], {
-      cwd: projectDir,
-      env: {
-        ...process.env,
-        YARN_ENABLE_GLOBAL_CACHE: "false",
-        YARN_NPM_REGISTRY_SERVER: registry,
+      timeoutMs,
+      {
+        cwd: projectDir,
+        // SECURITY-SHELL-OK: npm-only Windows .cmd compatibility for install smoke; argv is fixed.
+        shell: process.platform === "win32",
       },
-    });
-    await assertInstalledRuntime(projectDir);
+    );
+    await assertInstalledRuntime(projectDir, timeoutMs);
   } finally {
     rmSync(projectDir, { recursive: true, force: true });
   }
 }
 
-assertTlsVerificationEnabled();
-await npmSmoke();
-await yarnSmoke();
+function writeYarnSmokeManifest(projectDir, yarnLocator) {
+  const packageManager = smokeGateYarnPackageManager(yarnLocator);
+  writeFileSync(
+    join(projectDir, "package.json"),
+    JSON.stringify(
+      {
+        private: true,
+        packageManager,
+        devDependencies: {
+          [rootManifest.name]: rootManifest.version,
+        },
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+}
 
-console.log(`registry-install-smoke: PASS - ${packageSpec} installs from ${registry}.`);
+function writeYarnSmokeConfiguration(projectDir) {
+  writeFileSync(
+    join(projectDir, YARN_RC_FILENAME),
+    [
+      "nodeLinker: node-modules",
+      "enableGlobalCache: false",
+      "enableStrictSsl: true",
+      `cacheFolder: "${join(projectDir, ".yarn-cache").replaceAll("\\", "/")}"`,
+      `npmRegistryServer: "${registry}"`,
+      "npmScopes:",
+      "  oscharko-dev:",
+      `    npmRegistryServer: "${registry}"`,
+      "",
+    ].join("\n"),
+  );
+}
+
+async function runCorepackYarnInstall(projectDir, yarnHome, yarnLocator, installArgs, timeoutMs) {
+  return await withCorepackYarnCacheLock(
+    yarnLocator,
+    async () => {
+      await provisionPinnedYarnForSetup(yarnLocator, timeoutMs);
+      const env = yarnChildEnv(registry, process.env, yarnHome, yarnLocator);
+      return await runAsync("corepack", installArgs, {
+        cwd: projectDir,
+        env,
+        timeout: timeoutMs,
+      });
+    },
+    timeoutMs,
+  );
+}
+
+async function checkedCorepackYarnInstall(projectDir, yarnHome, yarnLocator, timeoutMs) {
+  const installArgs = ["yarn", "install", "--no-immutable", "--mode=skip-build"];
+  const result = await runCorepackYarnInstall(
+    projectDir,
+    yarnHome,
+    yarnLocator,
+    installArgs,
+    timeoutMs,
+  );
+  assertRunSucceeded("corepack", installArgs, result);
+}
+
+async function yarnSmoke(yarnLocator, timeoutMs) {
+  const projectDir = mkdtempSync(join(tmpdir(), "keiko-registry-yarn-"));
+  const yarnHome = privateYarnHome();
+  try {
+    writeYarnSmokeManifest(projectDir, yarnLocator);
+    writeYarnSmokeConfiguration(projectDir);
+    await checkedCorepackYarnInstall(projectDir, yarnHome, yarnLocator, timeoutMs);
+    await assertInstalledRuntime(projectDir, timeoutMs);
+  } finally {
+    rmSync(yarnHome, { recursive: true, force: true });
+    rmSync(projectDir, { recursive: true, force: true });
+  }
+}
+
+async function runRegistryInstallSmokeWithLocator(yarnLocator) {
+  const timeoutMs = registryInstallTimeoutMs();
+  assertTlsVerificationEnabled();
+  await npmSmoke(timeoutMs);
+  await yarnSmoke(yarnLocator, timeoutMs);
+
+  console.log(`registry-install-smoke: PASS - ${packageSpec} installs from ${registry}.`);
+}
+
+export async function runRegistryInstallSmoke() {
+  await runRegistryInstallSmokeWithLocator(registryYarnLocator());
+}
+
+export async function runRegistryInstallSmokeForTest(yarnLocator) {
+  await runRegistryInstallSmokeWithLocator(testRegistryYarnLocator(yarnLocator));
+}
+
+export const registryInstallSmokeInternalsForTest = {
+  assertInstalledRuntime,
+  assertRegistryTlsVerificationEnabled,
+  assertRunSucceeded,
+  assertVendoredPayload,
+  commandSummary,
+  outputByteSummary,
+  npmSmoke,
+  registryHostnameIsLoopback,
+  registryInstallTimeoutMs,
+  registryYarnLocator,
+  run,
+  smokeGateYarnPackageManager,
+  testRegistryYarnLocator,
+  writeYarnSmokeConfiguration,
+  writeYarnSmokeManifest,
+  yarnSmoke,
+};
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    await runRegistryInstallSmoke();
+  } catch (error) {
+    if (isSmokeGateFailure(error)) fail(error.message);
+    throw error;
+  }
+}

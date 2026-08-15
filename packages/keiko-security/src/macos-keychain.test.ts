@@ -33,6 +33,7 @@ afterAll(() => {
 // sleep across later suites (review finding on #3037).
 const HANGS = fakeSecurity("exec sleep 30");
 const ANSWERS = fakeSecurity("printf %s AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+const STORES = fakeSecurity("cat >/dev/null");
 // Measured against the shipped binary: 44 is errSecItemNotFound, 1 is an unknown subcommand.
 const REFUSES = fakeSecurity("exit 44");
 const DENIES = fakeSecurity("exit 1");
@@ -170,7 +171,7 @@ describe("writeMacosKeychainSecret", () => {
   it("reports a successful store", () => {
     expect(
       writeMacosKeychainSecret("svc", "acct", "secret", {
-        executable: ANSWERS,
+        executable: STORES,
         platform: "darwin",
         timeoutMs: 30_000,
       }),
@@ -234,7 +235,7 @@ describe("writeMacosKeychainSecret", () => {
     // promptly and never throws.
     const started = process.hrtime.bigint();
     const stored = writeMacosKeychainSecret("svc", "acct", "secret", {
-      executable: ANSWERS,
+      executable: STORES,
       timeoutMs: 30_000,
     });
     expect(Number(process.hrtime.bigint() - started) / 1e6).toBeLessThan(5_000);
