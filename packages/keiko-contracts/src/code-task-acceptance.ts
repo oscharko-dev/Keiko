@@ -192,31 +192,67 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
 // (e.g. free text riding alongside the digest) validated and was returned verbatim — the exact
 // boundary this contract documents itself as content-free. A known fact may carry only `outcome`
 // and `value`; every other outcome may carry only `outcome`.
+// Codex P1 (threads 3789537202, 3789635890): checking one inherited key at a time is an unbounded
+// game of whack-a-mole. Round one restored a check for an inherited `value`; Codex then showed the
+// SAME gap exists for the discriminator itself -- Object.prototype polluted with `outcome:
+// "absent"` lets an otherwise-EMPTY object resolve that branch via ordinary property access, with
+// zero own properties for unknownKeys' Object.getOwnPropertyNames scan to ever see -- and for any
+// undeclared field (a polluted, inherited `promptText` rides along on the object this validator
+// hands onward by reference, since every exported validator here returns its input by reference,
+// not a reconstructed copy). A legitimate JSON-sourced fact never has ANY inherited enumerable
+// property at all (JSON.parse always produces a plain object with none), so rejecting the general
+// case closes every specific one at once instead of naming another key every time a new one is
+// found. Exported so a test can call the actual guard directly with a crafted object, bypassing
+// isRecord on purpose: isRecord answers a different question ("is this a plain object"), and
+// rejecting a non-default prototype there is exactly why this guard is otherwise unreachable from
+// outside -- every real caller already goes through isRecord first, but a test targeting THIS
+// function does not have to. for...in is the right tool for "does anything resolve here that this
+// object does not itself own", unlike debug-lifecycle.ts's plain `in` for closed-set MEMBERSHIP,
+// where prototype traversal is exactly the bug (it would accept "constructor" as a member).
+// Also checked empirically, not just reasoned about: a Proxy whose getPrototypeOf trap reports the
+// real Object.prototype (to clear isRecord) cannot desynchronize this loop from Object.hasOwn
+// either -- for...in's enumerability check and Object.hasOwn both resolve through the same
+// [[GetOwnProperty]] trap call on the same object, so any trap shape that makes for...in see a key
+// as enumerable-and-own-at-this-level makes Object.hasOwn report it as own too. No crafted value,
+// proxy or otherwise, clears isRecord and still makes this function return a false negative without
+// mutating the real global Object.prototype.
+export function hasInheritedEnumerableProperty(record: Record<string, unknown>): boolean {
+  for (const key in record) {
+    if (!Object.hasOwn(record, key)) return true;
+  }
+  return false;
+}
+
 function factErrors(
   value: unknown,
   path: string,
   isValue: (candidate: unknown) => boolean,
 ): readonly string[] {
   if (!isRecord(value)) return [`${path} must be a tagged fact object`];
+  if (hasInheritedEnumerableProperty(value)) {
+    return [`${path} must not resolve any field through its prototype chain`];
+  }
   if (value.outcome === "known") {
-    const extraKeys = unknownKeys(value, ["outcome", "value"], path);
-    if (extraKeys.length > 0) return extraKeys;
-    return isValue(value.value) ? [] : [`${path}.value is invalid for a known fact`];
+    // Collected, not early-returned: an object can carry both an extra own key and an invalid
+    // value, and both are worth reporting (KfQ 3789542365 raised this for the branch below; the
+    // same shape applied here).
+    const errors = unknownKeys(value, ["outcome", "value"], path);
+    if (!isValue(value.value)) errors.push(`${path}.value is invalid for a known fact`);
+    return errors;
   }
   if (
     value.outcome === "unknown" ||
     value.outcome === "unavailable" ||
     value.outcome === "absent"
   ) {
-    // Codex P1: this "in" check was dropped in favour of unknownKeys alone, which only scans OWN
-    // properties -- an Object.create({ value: "secret" })-backed fact with just an own
-    // `outcome: "absent"` then passed with no errors. "in" walks the prototype chain, which is the
-    // point here (contrast debug-lifecycle.ts, where the same operator is wrong for a different
-    // question -- "is this key an approved set member" -- because it would also accept
-    // "constructor"). Restored alongside unknownKeys, not instead of it: unknownKeys still catches
-    // any OTHER extra key this outcome must not carry.
-    if ("value" in value) return [`${path} must not carry a value for outcome ${value.outcome}`];
-    return unknownKeys(value, ["outcome"], path);
+    // KfQ 3789542365: this used to return early on an own "value" field, so unknownKeys never ran
+    // and any OTHER extra own key went unreported. Collected instead, matching the "report every
+    // violation" position already taken for onlyKnownKeys elsewhere in this PR.
+    const errors = unknownKeys(value, ["outcome"], path);
+    if (Object.hasOwn(value, "value")) {
+      errors.push(`${path} must not carry a value for outcome ${value.outcome}`);
+    }
+    return errors;
   }
   return [`${path}.outcome must be known, unknown, unavailable, or absent`];
 }
@@ -234,7 +270,7 @@ function unknownKeys(
   value: Record<string, unknown>,
   allowed: readonly string[],
   path: string,
-): readonly string[] {
+): string[] {
   const errors = Object.getOwnPropertyNames(value)
     .filter((key) => !allowed.includes(key))
     .map((key) => `${path}.${key} is not allowed`);

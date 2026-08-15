@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { CODE_TASK_GOVERNANCE_SCHEMA_VERSION } from "./code-task-governance.js";
 import {
+  hasInheritedEnumerableProperty,
   validateRunControlSnapshotV1,
   validateRuntimeGovernanceOutcomeV1,
   validateRuntimeGovernanceRequestV1,
@@ -285,34 +286,130 @@ describe("prototype-based extra-field smuggling (KfQ / Codex P1 regression)", ()
   it("still accepts an ordinary explicit-absent fact for both", () => {
     expect(validateRunControlSnapshotV1(snapshot())).toMatchObject({ ok: true });
   });
+});
 
-  // This is the pin the two tests above could not deliver (see the block comment). The gap the
-  // restored "in" check closes only opens when a fact's DIRECT prototype is genuinely
-  // Object.prototype (so isRecord's Object.getPrototypeOf(value) === Object.prototype passes) yet
-  // `value` still resolves through it -- which requires Object.prototype ITSELF to carry an
-  // inherited `value`, since an object whose direct prototype is Object.prototype has a chain of
-  // exactly [Object.prototype, null]. That cannot be pinned by mutating the real, process-wide
-  // Object.prototype: doing so live-crashes Node's own internals (confirmed empirically -- some
-  // internal class redefines a "value" accessor and throws on finding a plain data property
-  // already there via inheritance), so a test that did it could take down the whole run, not just
-  // this one case. The safe stand-in below reproduces the identical mechanism -- an object whose
-  // prototype is mutated IN PLACE, never swapped for a different reference, still resolving an
-  // inherited property that Object.keys/Object.getOwnPropertyNames cannot see -- against an
-  // isolated, disposable object instead of the shared global.
-  it('mechanism: "in" resolves an inherited property that no own-property scan can see', () => {
-    const prototypeStandsInForObjectPrototype: Record<string, unknown> = {};
-    const fact = Object.create(prototypeStandsInForObjectPrototype) as Record<string, unknown>;
+// Codex P1 (thread 3789635890, mirrors code-task-acceptance.ts's identical fix): checking one
+// inherited key at a time never pins the guard either -- the tests above are rejected by isRecord
+// before reaching it, and a prior "mechanism" test only demonstrated the for...in language feature
+// in isolation, never calling this file's own code. hasInheritedEnumerableProperty is exported
+// specifically so it can be exercised directly: these tests call the real production guard with a
+// crafted object, bypassing isRecord on purpose (a test targeting this function does not have to
+// satisfy isRecord's separate "is this a plain object" question first, unlike every real caller).
+describe("hasInheritedEnumerableProperty (Codex P1 3789635890)", () => {
+  it("detects an inherited value with only outcome as an own property", () => {
+    const fact = Object.create({ value: "secret" }) as Record<string, unknown>;
     fact.outcome = "absent";
-    expect(Object.getPrototypeOf(fact)).toBe(prototypeStandsInForObjectPrototype);
-    expect(Object.keys(fact)).toEqual(["outcome"]);
-    expect(Object.getOwnPropertyNames(fact)).toEqual(["outcome"]);
+    expect(hasInheritedEnumerableProperty(fact)).toBe(true);
+  });
 
-    prototypeStandsInForObjectPrototype.value = "secret"; // mutated in place, identity preserved
-    expect(Object.getPrototypeOf(fact)).toBe(prototypeStandsInForObjectPrototype);
-    expect(Object.keys(fact)).toEqual(["outcome"]);
-    expect(Object.getOwnPropertyNames(fact)).toEqual(["outcome"]);
+  it("detects an inherited discriminator on an otherwise-empty object", () => {
+    // The gap Codex actually found: pollute "outcome" itself rather than "value". An object with
+    // ZERO own properties still answers fact.outcome === "absent" via inheritance, and
+    // unknownKeys' Object.getOwnPropertyNames scan sees nothing at all to report.
+    const fact = Object.create({ outcome: "absent" }) as Record<string, unknown>;
+    expect(Object.keys(fact)).toEqual([]);
+    expect(fact.outcome).toBe("absent");
+    expect(hasInheritedEnumerableProperty(fact)).toBe(true);
+  });
 
-    expect("value" in fact).toBe(true); // what boundedStringFactErrors/questionFactErrors check
-    expect(fact.value).toBe("secret");
+  it("detects an inherited, wholly undeclared field", () => {
+    // Every validator here returns its input by reference (never a reconstructed copy), so an
+    // inherited field that is not even part of the contract -- promptText is this audit's
+    // recurring example of a smuggled free-text field -- still rides along on the object handed
+    // onward, invisible to unknownKeys because it is not own.
+    const fact = Object.create({ promptText: "leak me" }) as Record<string, unknown>;
+    fact.outcome = "absent";
+    expect(Object.keys(fact)).toEqual(["outcome"]);
+    expect(hasInheritedEnumerableProperty(fact)).toBe(true);
+  });
+
+  it("does not flag an ordinary, fully-own object", () => {
+    expect(hasInheritedEnumerableProperty({ outcome: "absent" })).toBe(false);
+    expect(hasInheritedEnumerableProperty({ outcome: "known", value: "que_1" })).toBe(false);
+  });
+});
+
+// KfQ 3789542344 asked that a pipeline-level test assert the rejection REASON names this guard
+// specifically. Verified, and it cannot be done here for the same reason established in
+// code-task-acceptance.test.ts: isRecord's prototype-identity check runs before
+// boundedStringFactErrors/questionFactErrors ever reach hasInheritedEnumerableProperty, for every
+// fixture whose direct prototype is not exactly Object.prototype -- which is every fixture
+// buildable from outside this process. The direct hasInheritedEnumerableProperty tests above are
+// the reachable, correct home for pinning this guard's behaviour.
+describe("recoveryRef/pendingQuestion: what the pipeline can and cannot pin here (Codex P1 3789635890)", () => {
+  // KfQ 3789542391: isRecord's Object.getPrototypeOf(value) === Object.prototype check rejects a
+  // null-prototype object today, and JSON.parse never produces one, so rejecting is correct -- but
+  // nothing pinned that decision before this test. Unlike the outcome/promptText shapes above,
+  // this one IS reachable through the pipeline: it exercises isRecord's own check, not
+  // hasInheritedEnumerableProperty's.
+  it("rejects a null-prototype recoveryRef and pendingQuestion", () => {
+    const makeNullProto = (): Record<string, unknown> => {
+      const fact: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+      fact.outcome = "absent";
+      return fact;
+    };
+    const recoveryRef = makeNullProto();
+    expect(Object.getPrototypeOf(recoveryRef)).toBeNull();
+    expect(validateRunControlSnapshotV1({ ...snapshot(), recoveryRef }).ok).toBe(false);
+    expect(
+      validateRunControlSnapshotV1({ ...snapshot(), pendingQuestion: makeNullProto() }).ok,
+    ).toBe(false);
+  });
+});
+
+// KfQ 3789542365 (mirrors code-task-acceptance.ts:218): the same "return early on an own value
+// field" shape existed in boundedStringFactErrors and questionFactErrors. A test asserting only
+// ok === false cannot tell early-return from collect-both apart -- both fail for a fixture with just
+// one problem. Only a fixture with TWO independent problems, and an assertion that BOTH specific
+// messages appear, actually pins collect over early-return. Proved red-then-green against a
+// temporary early-return sabotage (see the commit this test shipped in for the measurement).
+describe("boundedStringFactErrors/questionFactErrors collect every violation (KfQ 3789542365)", () => {
+  it("reports both the disallowed value and the unrelated extra key on recoveryRef", () => {
+    const result = validateRunControlSnapshotV1({
+      ...snapshot(),
+      recoveryRef: { outcome: "absent", value: "recovery-7f3a", promptText: "leak me" },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((error) => error.includes("must not carry a value"))).toBe(true);
+    expect(result.errors.some((error) => error.includes("promptText"))).toBe(true);
+  });
+
+  it("reports both the disallowed value and the unrelated extra key on pendingQuestion", () => {
+    const result = validateRunControlSnapshotV1({
+      ...snapshot(),
+      pendingQuestion: { outcome: "absent", value: "que_1", promptText: "leak me" },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((error) => error.includes("must not carry a value"))).toBe(true);
+    expect(result.errors.some((error) => error.includes("promptText"))).toBe(true);
+  });
+
+  // Not KfQ-filed (the finding named only the non-known branches above), but the same early-return
+  // shape existed in both "known" branches too and was fixed the same way for consistency -- an
+  // untested decision either way, so pinned here rather than left implicit.
+  it("reports both the invalid value and the unrelated extra key on a known recoveryRef", () => {
+    const result = validateRunControlSnapshotV1({
+      ...snapshot(),
+      recoveryRef: { outcome: "known", value: "/Users/alice/scratch", promptText: "leak me" },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((error) => error.includes("bounded content-free reference"))).toBe(
+      true,
+    );
+    expect(result.errors.some((error) => error.includes("promptText"))).toBe(true);
+  });
+
+  it("reports both the invalid value and the unrelated extra key on a known pendingQuestion", () => {
+    const result = validateRunControlSnapshotV1({
+      ...snapshot(),
+      pendingQuestion: { outcome: "known", value: "not-a-question-id", promptText: "leak me" },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.some((error) => error.includes("must be a question id"))).toBe(true);
+    expect(result.errors.some((error) => error.includes("promptText"))).toBe(true);
   });
 });

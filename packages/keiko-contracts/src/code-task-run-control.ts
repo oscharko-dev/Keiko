@@ -123,56 +123,88 @@ function grantRefErrors(value: unknown, index: number): string[] {
   return errors;
 }
 
+// Codex P1 (threads 3789537202, 3789635890; mirrors code-task-acceptance.ts's identical helper):
+// checking one inherited key at a time is an unbounded game of whack-a-mole. A restored check for
+// an inherited `value` still misses an inherited discriminator (Object.prototype polluted with
+// outcome: "absent" lets an otherwise-EMPTY object resolve a branch below via ordinary property
+// access, with zero own properties for unknownKeys' Object.getOwnPropertyNames scan to ever see)
+// and any undeclared field (an inherited, wholly unlisted property rides along on the object these
+// validators hand onward by reference). A legitimate JSON-sourced fact never has ANY inherited
+// enumerable property at all, so rejecting the general case closes every specific one at once.
+// Exported so a test can call the actual guard directly with a crafted object, bypassing isRecord
+// on purpose: isRecord answers a different question ("is this a plain object"), and rejecting a
+// non-default prototype there is exactly why this guard is otherwise unreachable from outside --
+// every real caller already goes through isRecord first, but a test targeting this function does
+// not have to. for...in is the right tool for "does anything resolve here that this object does
+// not itself own", unlike debug-lifecycle.ts's plain `in` for closed-set MEMBERSHIP, where
+// prototype traversal is exactly the bug (it would accept "constructor" as a member).
+// Also checked empirically (mirrors code-task-acceptance.ts's identical note): a Proxy whose
+// getPrototypeOf trap reports the real Object.prototype (to clear isRecord) cannot desynchronize
+// this loop from Object.hasOwn either -- both resolve through the same [[GetOwnProperty]] trap call
+// on the same object, so no trap shape clears isRecord and still makes this function return a false
+// negative without mutating the real global Object.prototype.
+export function hasInheritedEnumerableProperty(record: Record<string, unknown>): boolean {
+  for (const key in record) {
+    if (!Object.hasOwn(record, key)) return true;
+  }
+  return false;
+}
+
 // KEIKO-0302 follow-on: the "known" branch checked `value` but never the fact object's OWN keys,
 // so a well-formed known fact padded with an extra field (e.g. free text riding alongside a valid
 // handle) validated and was returned verbatim.
 function boundedStringFactErrors(value: unknown, path: string): string[] {
   if (!isRecord(value)) return [`${path} must be a tagged fact object`];
+  if (hasInheritedEnumerableProperty(value)) {
+    return [`${path} must not resolve any field through its prototype chain`];
+  }
   if (value.outcome === "known") {
-    const extraKeys = unknownKeys(value, ["outcome", "value"], path);
-    if (extraKeys.length > 0) return extraKeys;
+    // Collected, not early-returned (KfQ 3789542365's shape, fixed consistently here too): an
+    // object can carry both an extra own key and an invalid value, and both are worth reporting.
+    const errors = unknownKeys(value, ["outcome", "value"], path);
     // recoveryRef is documented as a content-free handle, so it takes the same lower-kebab shape
     // rather than a bare length bound that a filesystem path would pass.
-    return isContentFreeReasonCode(value.value)
-      ? []
-      : [`${path}.value must be a bounded content-free reference`];
+    if (!isContentFreeReasonCode(value.value)) {
+      errors.push(`${path}.value must be a bounded content-free reference`);
+    }
+    return errors;
   }
   if (
     value.outcome === "absent" ||
     value.outcome === "unavailable" ||
     value.outcome === "unknown"
   ) {
-    // Codex P1: this "in" check was dropped in favour of unknownKeys alone, which only scans OWN
-    // properties -- an Object.create({ value: "secret" })-backed fact with just an own
-    // `outcome: "absent"` then passed with no errors. "in" walks the prototype chain, which is the
-    // point here (contrast debug-lifecycle.ts, where the same operator is wrong for a different
-    // question -- "is this key an approved set member" -- because it would also accept
-    // "constructor"). Restored alongside unknownKeys, not instead of it: unknownKeys still catches
-    // any OTHER extra key this outcome must not carry.
-    if ("value" in value) return [`${path} must not carry a value for outcome ${value.outcome}`];
-    return unknownKeys(value, ["outcome"], path);
+    const errors = unknownKeys(value, ["outcome"], path);
+    if (Object.hasOwn(value, "value")) {
+      errors.push(`${path} must not carry a value for outcome ${value.outcome}`);
+    }
+    return errors;
   }
   return [`${path}.outcome must be known, absent, unavailable, or unknown`];
 }
 
 function questionFactErrors(value: unknown): string[] {
   if (!isRecord(value)) return ["pendingQuestion must be a tagged fact object"];
+  if (hasInheritedEnumerableProperty(value)) {
+    return ["pendingQuestion must not resolve any field through its prototype chain"];
+  }
   if (value.outcome === "known") {
-    const extraKeys = unknownKeys(value, ["outcome", "value"], "pendingQuestion");
-    if (extraKeys.length > 0) return extraKeys;
-    return isCodeTaskQuestionId(value.value) ? [] : ["pendingQuestion.value must be a question id"];
+    const errors = unknownKeys(value, ["outcome", "value"], "pendingQuestion");
+    if (!isCodeTaskQuestionId(value.value)) {
+      errors.push("pendingQuestion.value must be a question id");
+    }
+    return errors;
   }
   if (
     value.outcome === "absent" ||
     value.outcome === "unavailable" ||
     value.outcome === "unknown"
   ) {
-    // Same regression, same fix as boundedStringFactErrors above: "in" walks the prototype chain,
-    // which unknownKeys's own-property scan alone cannot.
-    if ("value" in value) {
-      return [`pendingQuestion must not carry a value for outcome ${value.outcome}`];
+    const errors = unknownKeys(value, ["outcome"], "pendingQuestion");
+    if (Object.hasOwn(value, "value")) {
+      errors.push(`pendingQuestion must not carry a value for outcome ${value.outcome}`);
     }
-    return unknownKeys(value, ["outcome"], "pendingQuestion");
+    return errors;
   }
   return ["pendingQuestion.outcome must be known, absent, unavailable, or unknown"];
 }
