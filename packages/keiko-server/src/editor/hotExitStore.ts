@@ -43,6 +43,7 @@ export interface EditorHotExitStoredSnapshot {
 export interface EditorHotExitWriteResult {
   readonly snapshotRef: string;
   readonly contentSizeBytes: number;
+  readonly serverReceivedAt: number;
 }
 
 export interface EditorHotExitStore {
@@ -326,7 +327,11 @@ export function createEditorHotExitStore(
       if (index.has(ref)) {
         activeVault.set(ref, JSON.stringify(payload));
       }
-      return { snapshotRef: ref, contentSizeBytes: payload.contentSizeBytes };
+      return {
+        snapshotRef: ref,
+        contentSizeBytes: payload.contentSizeBytes,
+        serverReceivedAt: receivedAt,
+      };
     },
     read(snapshotRef, nowMs = Date.now()): EditorHotExitStoredSnapshot | null {
       if (!isSnapshotRef(snapshotRef)) return null;

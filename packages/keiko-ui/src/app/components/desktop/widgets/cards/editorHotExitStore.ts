@@ -116,7 +116,11 @@ function recordExpired(
   now: number,
   ttlMs = EDITOR_HOT_EXIT_TTL_MS,
 ): boolean {
-  return record.updatedAt + ttlMs < now;
+  return recordTtlBasis(record) + ttlMs < now;
+}
+
+function recordTtlBasis(record: EditorHotExitIndexRecordV2): number {
+  return record.serverReceivedAt ?? record.updatedAt;
 }
 
 // All writes and deletes are funnelled through one promise chain so a delete dispatched after a
@@ -162,7 +166,7 @@ async function prune(
   const fresh = records
     .filter((record) => !recordExpired(record, now))
     .filter((record) => record.locatorHash !== incomingKey)
-    .sort((left, right) => left.updatedAt - right.updatedAt);
+    .sort((left, right) => recordTtlBasis(left) - recordTtlBasis(right));
   let total =
     (incoming === null ? 0 : chargedBytes(incoming)) +
     fresh.reduce((sum, record) => sum + chargedBytes(record), 0);
@@ -188,12 +192,13 @@ function shouldPrune(now: number, incomingBytes: number): boolean {
 
 async function pruneIfNeeded(db: IDBDatabase, record: EditorHotExitIndexRecordV2): Promise<void> {
   const incomingBytes = chargedBytes(record);
-  if (!shouldPrune(record.updatedAt, incomingBytes)) {
+  const now = recordTtlBasis(record);
+  if (!shouldPrune(now, incomingBytes)) {
     bytesSinceLastPrune += incomingBytes;
     return;
   }
-  await prune(db, record.updatedAt, record);
-  lastPruneAt = record.updatedAt;
+  await prune(db, now, record);
+  lastPruneAt = now;
   bytesSinceLastPrune = 0;
   forceNextPrune = incomingBytes >= MAX_TOTAL_BYTES;
 }
@@ -265,6 +270,7 @@ export async function writeEditorHotExitSnapshot(snapshot: EditorHotExitSnapshot
       savedContentHash: snapshot.savedContentHash,
       contentSizeBytes: stored.contentSizeBytes,
       updatedAt: snapshot.updatedAt,
+      serverReceivedAt: stored.serverReceivedAt,
       paneId: snapshot.paneId,
       windowId: snapshot.windowId,
     };

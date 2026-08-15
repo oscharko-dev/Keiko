@@ -18,31 +18,40 @@ import {
 const hotExitApi = vi.hoisted(() => {
   const encoder = new TextEncoder();
   let seq = 0;
+  let nextServerReceivedAt: number | null = null;
   const records = new Map<string, unknown>();
   const snapshotRef = (value: number): string => `hot-exit:${value.toString(16).padStart(64, "0")}`;
+  const contentSizeBytes = (content: string): number => encoder.encode(content).length;
   return {
     records,
     reset(): void {
       seq = 0;
+      nextServerReceivedAt = null;
       records.clear();
+    },
+    setNextServerReceivedAt(value: number): void {
+      nextServerReceivedAt = value;
     },
     write: vi.fn((snapshot: EditorHotExitSnapshotV1) => {
       seq += 1;
       const ref = snapshotRef(seq);
+      const receivedAt = nextServerReceivedAt ?? snapshot.updatedAt;
+      nextServerReceivedAt = null;
       records.set(ref, {
         schemaVersion: 1,
         content: snapshot.content,
         baseVersion: snapshot.baseVersion,
         contentHash: snapshot.contentHash,
         savedContentHash: snapshot.savedContentHash,
-        contentSizeBytes: encoder.encode(snapshot.content).length,
+        contentSizeBytes: contentSizeBytes(snapshot.content),
         updatedAt: snapshot.updatedAt,
         paneId: snapshot.paneId,
         windowId: snapshot.windowId,
       });
       return Promise.resolve({
         snapshotRef: ref,
-        contentSizeBytes: encoder.encode(snapshot.content).length,
+        contentSizeBytes: contentSizeBytes(snapshot.content),
+        serverReceivedAt: receivedAt,
       });
     }),
     read: vi.fn((input: { readonly snapshotRef: string }) =>
@@ -417,6 +426,37 @@ describe("editorHotExitStore", () => {
 
     expect(indexedDb.records("keiko-editor-hot-exit", "snapshots").size).toBe(0);
     await expect(readEditorHotExitSnapshot("/repo", "src/app.ts", 2_001)).resolves.toBeNull();
+  });
+
+  it("uses the server receipt timestamp for the local pre-read TTL gate", async () => {
+    const serverReceivedAt = 1_700_000_000_000;
+    const staleClientClock = serverReceivedAt - 10 * EDITOR_HOT_EXIT_TTL_MS;
+    const stored = snapshot({ updatedAt: staleClientClock });
+    hotExitApi.setNextServerReceivedAt(serverReceivedAt);
+
+    await writeEditorHotExitSnapshot(stored);
+
+    vi.mocked(deleteEditorHotExitContent).mockClear();
+    await expect(
+      readEditorHotExitSnapshot("/repo", "src/app.ts", serverReceivedAt + 1),
+    ).resolves.toEqual(stored);
+    expect(deleteEditorHotExitContent).not.toHaveBeenCalled();
+  });
+
+  it("falls back to updatedAt for legacy local index records without a server receipt", async () => {
+    const indexedDb = new FakeIndexedDb();
+    installIndexedDb(indexedDb);
+    const legacy = snapshot({ updatedAt: 4_000 });
+    await writeEditorHotExitSnapshot(legacy);
+    const records = indexedDb.records("keiko-editor-hot-exit", "snapshots");
+    const entry = [...records.entries()][0];
+    if (entry === undefined) throw new Error("Expected a local hot-exit index record.");
+    const [hash, raw] = entry;
+    const legacyRecord = { ...(raw as Record<string, unknown>) };
+    Reflect.deleteProperty(legacyRecord, "serverReceivedAt");
+    records.set(hash, legacyRecord);
+
+    await expect(readEditorHotExitSnapshot("/repo", "src/app.ts", 4_001)).resolves.toEqual(legacy);
   });
 
   it("purges malformed local index records without sending a remote delete", async () => {
