@@ -908,6 +908,12 @@ jobs:
         run: npm sbom --sbom-format cyclonedx --omit dev > sbom.cdx.json
       - name: Workspace SBOM and license gate (Issue #169 AC4)
         run: npm run check:workspace-supply-chain
+      - name: Third-party install-script approvals (KEIKO-0314)
+        # .npmrc's strict-allow-scripts already fails `npm ci` closed on an unapproved script, but
+        # only for what resolves on THIS runner, and npm 11.16.0 ignores a pinned name@version key
+        # for unrs-resolver so its approval has to be unpinned — which would bless any future
+        # version. This reads package-lock.json instead: every platform's tree, exact versions.
+        run: npm run check:install-script-approvals
       - name: Smoke - help exits 0
         run: node dist/cli/index.js --help
       - name: Smoke - version exits 0
