@@ -13,6 +13,7 @@ import {
   tierForCodingContextSource,
   toCodingContextWirePack,
   CODING_CONTEXT_CAPSULE_ID_MAX_CHARS,
+  CODING_CONTEXT_PATH_MAX_CHARS,
   CODING_CONTEXT_CHANGED_FILES_MAX_COUNT,
   CODING_CONTEXT_QUERY_TEXT_MAX_CHARS,
   CODING_CONTEXT_SYMBOL_MAX_CHARS,
@@ -261,7 +262,7 @@ describe("validateCodingContextRequest", () => {
     ["escape", "src/a\u001b[31m.ts"],
     ["whitespace only", "   "],
     ["empty", ""],
-    ["over the length bound", `src/${"a".repeat(4_096)}.ts`],
+    ["over the length bound", `src/${"a".repeat(CODING_CONTEXT_PATH_MAX_CHARS)}.ts`],
   ])("rejects a %s documentPath", (_label, documentPath) => {
     expect(validateCodingContextRequest(validRequest({ documentPath })).ok).toBe(false);
   });

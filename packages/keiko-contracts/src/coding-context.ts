@@ -102,7 +102,7 @@ function isBoundedOptionalString(value: unknown, maxChars: number): boolean {
 // authority outcome, not a malformed-request one — and that status is pinned. Rejecting traversal
 // structurally here would collapse a workspace-escape attempt into a generic 400 and lose the
 // governance signal.
-const CODING_CONTEXT_PATH_MAX_CHARS = 4_096;
+export const CODING_CONTEXT_PATH_MAX_CHARS = 4_096;
 
 function isBoundedDocumentPath(value: unknown): value is string {
   if (!isNonEmptyString(value) || value.length > CODING_CONTEXT_PATH_MAX_CHARS) return false;
