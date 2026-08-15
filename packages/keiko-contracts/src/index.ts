@@ -1150,6 +1150,7 @@ export {
   isAtlassianConnectorProvider,
   isAtlassianConnectorRegistryFailureReason,
   isAtlassianConnectorWriteFailureReason,
+  isAtlassianContentPreviewUnpresentable,
   isAtlassianLiveSearchTemplateId,
   isAtlassianSyncFailureReason,
   isAtlassianSyncJobStatus,
