@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -207,11 +207,15 @@ describe("runAuditCli", () => {
         "] };\n}\n",
     );
     const c = makeIo();
-    const code = await runAuditCli(["local-state", "--state-dir", "/tmp/example/.keiko"], c.io, {
-      KEIKO_LOCAL_STATE_AUDITOR: modulePath,
-    });
-    expect(code).toBe(0);
-    expect(c.out()).toContain("Loaded through the real importer");
+    try {
+      const code = await runAuditCli(["local-state", "--state-dir", "/tmp/example/.keiko"], c.io, {
+        KEIKO_LOCAL_STATE_AUDITOR: modulePath,
+      });
+      expect(code).toBe(0);
+      expect(c.out()).toContain("Loaded through the real importer");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("prints usage and exits 0 for --help", async () => {
@@ -224,6 +228,15 @@ describe("runAuditCli", () => {
 
   it.each([
     ["a non-object class entry", { ok: true, stateDir: "/x", classes: [null] }],
+    ["an empty class list", { ok: true, stateDir: "/x", classes: [] }],
+    [
+      "ok=true alongside a failing class",
+      {
+        ok: true,
+        stateDir: "/x",
+        classes: [{ id: "c", title: "t", status: "fail", findings: ["boom"] }],
+      },
+    ],
     ["a missing stateDir", { ok: true, classes: [] }],
   ])("refuses %s", async (_label, malformed) => {
     const c = makeIo();

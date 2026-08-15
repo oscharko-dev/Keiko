@@ -83,6 +83,23 @@ function problemsForLockedPackage(name, version, record, allowScripts) {
   return problems;
 }
 
+/** An approval npm honours but this file never reviewed is the same hole from the other side:
+ * `npm approve-scripts <pkg>` alone would let a lifecycle script run with no recorded review
+ * (review finding on #3159). Split out to keep the caller inside its complexity budget. */
+function unreviewedApprovals(allowScripts, reviewed) {
+  const problems = [];
+  for (const [key, approved] of Object.entries(allowScripts)) {
+    if (approved !== true) continue;
+    const name = key.includes("@", 1) ? key.slice(0, key.lastIndexOf("@")) : key;
+    if (reviewed.has(name)) continue;
+    problems.push(
+      `package.json allowScripts approves ${key}, which is not in REVIEWED_INSTALL_SCRIPTS. ` +
+        "Every npm-level approval must have a recorded review, or the record is not the record.",
+    );
+  }
+  return problems;
+}
+
 /**
  * @param {{packages?: Record<string, {hasInstallScript?: boolean, version?: string}>}} lock
  * @param {{allowScripts?: Record<string, boolean>}} manifest
@@ -112,6 +129,8 @@ export function findInstallScriptApprovalProblems(
   for (const { name, version } of locked.values()) {
     problems.push(...problemsForLockedPackage(name, version, reviewed.get(name), allowScripts));
   }
+
+  problems.push(...unreviewedApprovals(allowScripts, reviewed));
 
   for (const name of reviewed.keys()) {
     if (!lockedNames.has(name)) {

@@ -207,7 +207,9 @@ It imports only `node:fs` and `node:sqlite`, never decrypts content (every encry
 on-disk sealed markers the product itself writes, so no vault key is required), and never mutates the
 tree.
 
-- `keiko audit local-state --state-dir <path>` — **the operator-facing command.** Audits an existing
+- `keiko audit local-state [--state-dir <path>]` — **the operator-facing command.** Without
+  `--state-dir` the target is `$KEIKO_STATE_DIR` when set, otherwise `<cwd>/.keiko`, matching where
+  the runtime actually keeps its state. Audits an existing
   `.keiko` tree (default `<cwd>/.keiko`); exit `0` when the posture is healthy, `1` on any finding,
   `2` on a usage error. It ships in the packaged product, so the person who actually has a `.keiko`
   directory can verify it without a repository checkout — which is the whole point of a compensating

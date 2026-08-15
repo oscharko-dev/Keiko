@@ -131,7 +131,15 @@ function asAuditResult(value: unknown): AuditResult | undefined {
   if (typeof record.ok !== "boolean") return undefined;
   if (typeof record.stateDir !== "string") return undefined;
   if (!Array.isArray(record.classes)) return undefined;
-  if (!(record.classes as readonly unknown[]).every(isAuditClass)) return undefined;
+  const classes = record.classes as readonly unknown[];
+  if (!classes.every(isAuditClass)) return undefined;
+  // Vacuous: an empty class list would render an empty report and print PASS, which reads as
+  // "audited, nothing wrong" for a tree nothing was checked against.
+  if (classes.length === 0) return undefined;
+  // Contradictory: ok=true alongside a failing class. Reporting the headline verdict over the
+  // detail would hide the finding (review finding on #3159).
+  const anyFailed = classes.some((c) => (c as { status: string }).status === "fail");
+  if (record.ok && anyFailed) return undefined;
   return value as AuditResult;
 }
 
