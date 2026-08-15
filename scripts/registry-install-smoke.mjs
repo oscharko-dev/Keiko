@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL, URL } from "node:url";
 
-import { PINNED_YARN } from "./lib/pinned-yarn.mjs";
+import { PINNED_YARN, pinnedYarnLocatorParts, yarnLocatorParts } from "./lib/pinned-yarn.mjs";
 import {
   privateYarnHome,
   provisionPinnedYarnForSetup,
@@ -16,6 +16,20 @@ import rootManifest from "../package.json" with { type: "json" };
 const packageSpec =
   process.env.KEIKO_REGISTRY_INSTALL_PACKAGE ?? `${rootManifest.name}@${rootManifest.version}`;
 const registry = process.env.KEIKO_REGISTRY_URL ?? "https://registry.npmjs.org/";
+const TEST_YARN_LOCATOR_ENV = "KEIKO_REGISTRY_INSTALL_FIXTURE_YARN_LOCATOR";
+
+function registryYarnLocator() {
+  const fixtureLocator = process.env[TEST_YARN_LOCATOR_ENV];
+  if (fixtureLocator !== undefined) {
+    if (process.env.NODE_ENV !== "test") {
+      throw new TypeError(`${TEST_YARN_LOCATOR_ENV} is only accepted under NODE_ENV=test`);
+    }
+    yarnLocatorParts(fixtureLocator);
+    return fixtureLocator;
+  }
+  pinnedYarnLocatorParts(PINNED_YARN);
+  return PINNED_YARN;
+}
 const timeoutMs = Number.parseInt(process.env.KEIKO_REGISTRY_INSTALL_TIMEOUT_MS ?? "300000", 10);
 
 function fail(message) {
@@ -136,7 +150,8 @@ async function npmSmoke() {
   }
 }
 
-async function yarnSmoke(yarnLocator = PINNED_YARN) {
+async function yarnSmoke() {
+  const yarnLocator = registryYarnLocator();
   const projectDir = mkdtempSync(join(tmpdir(), "keiko-registry-yarn-"));
   const yarnHome = privateYarnHome();
   try {
@@ -180,10 +195,10 @@ async function yarnSmoke(yarnLocator = PINNED_YARN) {
   }
 }
 
-export async function runRegistryInstallSmoke(yarnLocator = PINNED_YARN) {
+export async function runRegistryInstallSmoke() {
   assertTlsVerificationEnabled();
   await npmSmoke();
-  await yarnSmoke(yarnLocator);
+  await yarnSmoke();
 
   console.log(`registry-install-smoke: PASS - ${packageSpec} installs from ${registry}.`);
 }

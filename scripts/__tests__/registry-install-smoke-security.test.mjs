@@ -54,6 +54,7 @@ import {
   PINNED_YARN_VERSION,
   pinnedYarnLocatorParts,
   pinnedYarnVersionFromLocator,
+  yarnLocatorParts,
 } from "../lib/pinned-yarn.mjs";
 
 const ROOT = join(import.meta.dirname, "..", "..");
@@ -178,7 +179,7 @@ function yarnLocatorForBytes(version, bytes) {
 }
 
 function corepackCacheFixtureLines(locator, yarnBytes) {
-  const { version, sha512 } = pinnedYarnLocatorParts(locator);
+  const { version, sha512 } = yarnLocatorParts(locator);
   return [
     'import { mkdirSync, writeFileSync } from "node:fs";',
     'import { join } from "node:path";',
@@ -259,7 +260,7 @@ describe("registry install smoke security posture", () => {
           "-e",
           [
             'import { runRegistryInstallSmoke } from "./scripts/registry-install-smoke.mjs";',
-            `await runRegistryInstallSmoke(${JSON.stringify(fixtureLocator)});`,
+            "await runRegistryInstallSmoke();",
           ].join("\n"),
         ],
         {
@@ -271,7 +272,9 @@ describe("registry install smoke security posture", () => {
             BUNDLED_DEPS: JSON.stringify(ROOT_MANIFEST.bundleDependencies),
             KEIKO_COREPACK_MARKER: marker,
             KEIKO_REGISTRY_INSTALL_PACKAGE: `${ROOT_MANIFEST.name}@${ROOT_MANIFEST.version}`,
+            KEIKO_REGISTRY_INSTALL_FIXTURE_YARN_LOCATOR: fixtureLocator,
             KEIKO_REGISTRY_URL: "https://registry.npmjs.org/",
+            NODE_ENV: "test",
             ROOT_VERSION: ROOT_MANIFEST.version,
             TEMP: sandboxTmp,
             TMP: sandboxTmp,
@@ -1310,7 +1313,7 @@ describe("installable package smoke optional-dependency coverage", () => {
     );
     expect(pinnedYarnVersionFromLocator(PINNED_YARN)).toBe(PINNED_YARN_VERSION);
     expect(
-      pinnedYarnVersionFromLocator(`yarn@${PINNED_YARN_VERSION}-rc.1+sha512.${PINNED_YARN_SHA512}`),
+      yarnLocatorParts(`yarn@${PINNED_YARN_VERSION}-rc.1+sha512.${PINNED_YARN_SHA512}`).version,
     ).toBe(`${PINNED_YARN_VERSION}-rc.1`);
     expect(
       pinnedYarnLocatorParts(
@@ -1318,9 +1321,16 @@ describe("installable package smoke optional-dependency coverage", () => {
       ).sha512,
     ).toBe(PINNED_YARN_SHA512);
     expect(() => pinnedYarnVersionFromLocator(`yarn@${PINNED_YARN_VERSION}`)).toThrow(TypeError);
+    expect(() =>
+      pinnedYarnVersionFromLocator(`yarn@${PINNED_YARN_VERSION}-rc.1+sha512.${PINNED_YARN_SHA512}`),
+    ).toThrow(/version/u);
+    expect(() =>
+      pinnedYarnLocatorParts(`yarn@${PINNED_YARN_VERSION}+sha512.${"0".repeat(128)}`),
+    ).toThrow(/sha512/u);
     expect(installableSource).toContain("locator = PINNED_YARN");
     expect(installableSource).toContain("packageManager: locator");
-    expect(registrySource).toContain("yarnLocator = PINNED_YARN");
+    expect(registrySource).toContain("pinnedYarnLocatorParts(PINNED_YARN)");
+    expect(registrySource).toContain("registryYarnLocator()");
     expect(registrySource).toContain("packageManager: yarnLocator");
     expect(registrySource).toContain("provisionPinnedYarnForSetup(yarnLocator)");
     expect(registrySource).toContain("yarnChildEnv(registry, process.env, yarnHome, yarnLocator)");
@@ -1419,9 +1429,9 @@ describe("installable package smoke optional-dependency coverage", () => {
           "}));",
         ].join("\n"),
       );
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
       const outcome = JSON.parse(result.stdout);
 
-      expect(result.status).toBe(0);
       expect(outcome).toEqual({
         sameDir: true,
         originalCached: true,
@@ -1493,9 +1503,9 @@ describe("installable package smoke optional-dependency coverage", () => {
         },
         fixtureLocator,
       );
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
       const record = JSON.parse(readFileSync(marker, "utf8"));
 
-      expect(result.status).toBe(0);
       expect(record.argv).toEqual(["install", "--global", "--cache-only", fixtureLocator]);
       expect(record.corepackHome).toContain(`keiko-corepack-yarn-${PINNED_YARN_VERSION}-`);
       expect(record.network).toBe("1");

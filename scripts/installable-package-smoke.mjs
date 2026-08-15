@@ -29,13 +29,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import ts from "typescript";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
-import {
-  PINNED_YARN,
-  PINNED_YARN_NAME,
-  pinnedYarnLocatorParts,
-  pinnedYarnSha512FromLocator,
-  pinnedYarnVersionFromLocator,
-} from "./lib/pinned-yarn.mjs";
+import { PINNED_YARN, PINNED_YARN_NAME, yarnLocatorParts } from "./lib/pinned-yarn.mjs";
 import { createStagedPublishPackage } from "./stage-publish-package.mjs";
 
 export const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 600_000;
@@ -1388,7 +1382,7 @@ export function corepackCacheDir(locator = PINNED_YARN) {
   // file it finds there and executes the binary it names, networking disabled or not. The uid is
   // part of the name so two accounts never contend for one path in the first place.
   const owner = process.getuid === undefined ? "win" : String(process.getuid());
-  const version = pinnedYarnVersionFromLocator(locator);
+  const version = yarnLocatorParts(locator).version;
   const dir = join(tmpdir(), `keiko-corepack-${PINNED_YARN_NAME}-${version}-${owner}`);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   assertPrivateDirectory(dir);
@@ -1500,23 +1494,19 @@ export function provisionPinnedYarnForSetup(locator = PINNED_YARN) {
 
 export function isPinnedYarnCached(locator = PINNED_YARN) {
   const entry = pinnedYarnCacheEntryDir(locator);
+  const { sha512 } = yarnLocatorParts(locator);
   return (
     cachedCorepackMetadataMatchesLocator(join(entry, ".corepack"), locator) &&
-    fileSha512Matches(join(entry, "yarn.js"), pinnedYarnSha512FromLocator(locator))
+    fileSha512Matches(join(entry, "yarn.js"), sha512)
   );
 }
 
 function pinnedYarnCacheEntryDir(locator) {
-  return join(
-    corepackCacheDir(locator),
-    "v1",
-    PINNED_YARN_NAME,
-    pinnedYarnVersionFromLocator(locator),
-  );
+  return join(corepackCacheDir(locator), "v1", PINNED_YARN_NAME, yarnLocatorParts(locator).version);
 }
 
 function cachedCorepackMetadataMatchesLocator(path, locator) {
-  const { version, sha512 } = pinnedYarnLocatorParts(locator);
+  const { version, sha512 } = yarnLocatorParts(locator);
   const metadata = readJsonFileIfPresent(path);
   if (!isRecord(metadata) || !isRecord(metadata.locator) || !Array.isArray(metadata.bin)) {
     return false;

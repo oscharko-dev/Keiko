@@ -18,13 +18,24 @@ const PINNED_YARN_LOCATOR_PATTERN = new RegExp(
   "u",
 );
 
-export function pinnedYarnLocatorParts(locator) {
+export function yarnLocatorParts(locator) {
   const match = PINNED_YARN_LOCATOR_PATTERN.exec(locator);
   const parts = match?.groups;
   if (parts?.version === undefined || parts.sha512 === undefined) {
-    throw new TypeError("pinned Yarn locator must be yarn@<semver>+sha512.<128-hex>");
+    throw new TypeError("Yarn locator must be yarn@<semver>+sha512.<128-hex>");
   }
   return { version: parts.version, sha512: parts.sha512.toLowerCase() };
+}
+
+export function pinnedYarnLocatorParts(locator) {
+  const parts = yarnLocatorParts(locator);
+  if (parts.version !== PINNED_YARN_VERSION) {
+    throw new TypeError(`pinned Yarn locator must use version ${PINNED_YARN_VERSION}`);
+  }
+  if (parts.sha512 !== PINNED_YARN_SHA512) {
+    throw new TypeError("pinned Yarn locator sha512 does not match the reviewed digest");
+  }
+  return parts;
 }
 
 export function pinnedYarnVersionFromLocator(locator) {
