@@ -1599,7 +1599,7 @@ const PROVISION_FAILURE_CLASSES = [
     label: "the host was unreachable",
   },
   {
-    pattern: /EINTEGRITY|integrity|checksum|hash mismatch|mismatch hashes/iu,
+    pattern: /\bEINTEGRITY\b|checksum|hash mismatch|\bMismatch hashes\b/iu,
     label: "the archive failed its integrity check",
   },
   {

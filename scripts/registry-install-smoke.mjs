@@ -5,6 +5,12 @@ import { join } from "node:path";
 import { pathToFileURL, URL } from "node:url";
 
 import { PINNED_YARN } from "./lib/pinned-yarn.mjs";
+import {
+  privateYarnHome,
+  provisionPinnedYarnForSetup,
+  yarnChildEnv,
+  YARN_RC_FILENAME,
+} from "./installable-package-smoke.mjs";
 import rootManifest from "../package.json" with { type: "json" };
 
 const packageSpec =
@@ -130,15 +136,17 @@ async function npmSmoke() {
   }
 }
 
-async function yarnSmoke() {
+async function yarnSmoke(yarnLocator = PINNED_YARN) {
   const projectDir = mkdtempSync(join(tmpdir(), "keiko-registry-yarn-"));
+  const yarnHome = privateYarnHome();
   try {
+    provisionPinnedYarnForSetup(yarnLocator);
     writeFileSync(
       join(projectDir, "package.json"),
       JSON.stringify(
         {
           private: true,
-          packageManager: PINNED_YARN,
+          packageManager: yarnLocator,
           devDependencies: {
             [rootManifest.name]: rootManifest.version,
           },
@@ -148,7 +156,7 @@ async function yarnSmoke() {
       ) + "\n",
     );
     writeFileSync(
-      join(projectDir, ".yarnrc.yml"),
+      join(projectDir, YARN_RC_FILENAME),
       [
         "nodeLinker: node-modules",
         "enableGlobalCache: false",
@@ -163,20 +171,23 @@ async function yarnSmoke() {
     );
     run("corepack", ["yarn", "install", "--no-immutable", "--mode=skip-build"], {
       cwd: projectDir,
-      env: {
-        ...process.env,
-        YARN_ENABLE_GLOBAL_CACHE: "false",
-        YARN_NPM_REGISTRY_SERVER: registry,
-      },
+      env: yarnChildEnv(registry, process.env, yarnHome, yarnLocator),
     });
     await assertInstalledRuntime(projectDir);
   } finally {
+    rmSync(yarnHome, { recursive: true, force: true });
     rmSync(projectDir, { recursive: true, force: true });
   }
 }
 
-assertTlsVerificationEnabled();
-await npmSmoke();
-await yarnSmoke();
+export async function runRegistryInstallSmoke(yarnLocator = PINNED_YARN) {
+  assertTlsVerificationEnabled();
+  await npmSmoke();
+  await yarnSmoke(yarnLocator);
 
-console.log(`registry-install-smoke: PASS - ${packageSpec} installs from ${registry}.`);
+  console.log(`registry-install-smoke: PASS - ${packageSpec} installs from ${registry}.`);
+}
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await runRegistryInstallSmoke();
+}

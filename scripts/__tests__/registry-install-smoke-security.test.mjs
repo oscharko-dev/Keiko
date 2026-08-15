@@ -177,28 +177,33 @@ function yarnLocatorForBytes(version, bytes) {
   return `yarn@${version}+sha512.${yarnSha512ForBytes(bytes)}`;
 }
 
-function writeCorepackFixture(binDir, locator, yarnBytes) {
+function corepackCacheFixtureLines(locator, yarnBytes) {
   const { version, sha512 } = pinnedYarnLocatorParts(locator);
+  return [
+    'import { mkdirSync, writeFileSync } from "node:fs";',
+    'import { join } from "node:path";',
+    'if (process.argv[2] === "install") {',
+    `  const entry = join(process.env.COREPACK_HOME, "v1", "yarn", ${JSON.stringify(version)});`,
+    "  mkdirSync(entry, { recursive: true });",
+    "  writeFileSync(",
+    '    join(entry, ".corepack"),',
+    "    JSON.stringify({",
+    `      locator: { name: "yarn", reference: ${JSON.stringify(`${version}+sha512.${sha512}`)} },`,
+    '      bin: ["yarn", "yarnpkg"],',
+    `      hash: ${JSON.stringify(`sha512.${sha512}`)},`,
+    "    }),",
+    '    "utf8",',
+    "  );",
+    `  writeFileSync(join(entry, "yarn.js"), ${JSON.stringify(yarnBytes)}, "utf8");`,
+    "  process.exit(0);",
+    "}",
+  ];
+}
+
+function writeCorepackFixture(binDir, locator, yarnBytes, extraLines = []) {
   writeExecutable(
     join(binDir, "corepack"),
-    [
-      'import { mkdirSync, writeFileSync } from "node:fs";',
-      'import { join } from "node:path";',
-      'if (process.argv[2] === "install") {',
-      `  const entry = join(process.env.COREPACK_HOME, "v1", "yarn", ${JSON.stringify(version)});`,
-      "  mkdirSync(entry, { recursive: true });",
-      "  writeFileSync(",
-      '    join(entry, ".corepack"),',
-      "    JSON.stringify({",
-      `      locator: { name: "yarn", reference: ${JSON.stringify(`${version}+sha512.${sha512}`)} },`,
-      '      bin: ["yarn", "yarnpkg"],',
-      `      hash: ${JSON.stringify(`sha512.${sha512}`)},`,
-      "    }),",
-      '    "utf8",',
-      "  );",
-      `  writeFileSync(join(entry, "yarn.js"), ${JSON.stringify(yarnBytes)}, "utf8");`,
-      "}",
-    ].join("\n"),
+    [...corepackCacheFixtureLines(locator, yarnBytes), ...extraLines].join("\n"),
   );
 }
 
@@ -238,29 +243,44 @@ describe("registry install smoke security posture", () => {
       ];
       writeExecutable(join(binDir, "npm"), installFixture.join("\n"));
       const marker = join(binDir, "corepack-called");
-      writeExecutable(
-        join(binDir, "corepack"),
+      const fixtureBytes = "registry-install-smoke Yarn fixture\n";
+      const fixtureLocator = yarnLocatorForBytes(`${PINNED_YARN_VERSION}-fixture.1`, fixtureBytes);
+      const sandboxTmp = join(binDir, "tmp");
+      mkdirSync(sandboxTmp, { recursive: true });
+      writeCorepackFixture(binDir, fixtureLocator, fixtureBytes, [
+        ...installFixture.slice(2),
+        "writeFileSync(process.env.KEIKO_COREPACK_MARKER, 'called\\n', 'utf8');",
+      ]);
+
+      const result = spawnSync(
+        process.execPath,
         [
-          ...installFixture,
-          "writeFileSync(process.env.COREPACK_MARKER, 'called\\n', 'utf8');",
-        ].join("\n"),
+          "--input-type=module",
+          "-e",
+          [
+            'import { runRegistryInstallSmoke } from "./scripts/registry-install-smoke.mjs";',
+            `await runRegistryInstallSmoke(${JSON.stringify(fixtureLocator)});`,
+          ].join("\n"),
+        ],
+        {
+          cwd: ROOT,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${binDir}${delimiter}${process.env.PATH}`,
+            BUNDLED_DEPS: JSON.stringify(ROOT_MANIFEST.bundleDependencies),
+            KEIKO_COREPACK_MARKER: marker,
+            KEIKO_REGISTRY_INSTALL_PACKAGE: `${ROOT_MANIFEST.name}@${ROOT_MANIFEST.version}`,
+            KEIKO_REGISTRY_URL: "https://registry.npmjs.org/",
+            ROOT_VERSION: ROOT_MANIFEST.version,
+            TEMP: sandboxTmp,
+            TMP: sandboxTmp,
+            TMPDIR: sandboxTmp,
+          },
+        },
       );
 
-      const result = spawnSync(process.execPath, ["scripts/registry-install-smoke.mjs"], {
-        cwd: ROOT,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          PATH: `${binDir}${delimiter}${process.env.PATH}`,
-          BUNDLED_DEPS: JSON.stringify(ROOT_MANIFEST.bundleDependencies),
-          COREPACK_MARKER: marker,
-          KEIKO_REGISTRY_INSTALL_PACKAGE: `${ROOT_MANIFEST.name}@${ROOT_MANIFEST.version}`,
-          KEIKO_REGISTRY_URL: "https://registry.npmjs.org/",
-          ROOT_VERSION: ROOT_MANIFEST.version,
-        },
-      });
-
-      expect(result.status).toBe(0);
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
       expect(result.stdout).toContain(
         `registry-install-smoke: PASS - ${ROOT_MANIFEST.name}@${ROOT_MANIFEST.version} installs`,
       );
@@ -369,7 +389,7 @@ describe("installable package smoke optional-dependency coverage", () => {
     mkdirSync(projectDir, { recursive: true });
     const artifact = localRegistryArtifact(root);
     const fixtureBytes = "registry-flow Yarn fixture\n";
-    const fixtureLocator = yarnLocatorForBytes(PINNED_YARN_VERSION, fixtureBytes);
+    const fixtureLocator = yarnLocatorForBytes(`${PINNED_YARN_VERSION}-registry.1`, fixtureBytes);
     writeCorepackFixture(binDir, fixtureLocator, fixtureBytes);
     const previousPath = process.env.PATH;
     process.env.PATH = `${binDir}${delimiter}${previousPath}`;
@@ -399,7 +419,7 @@ describe("installable package smoke optional-dependency coverage", () => {
     mkdirSync(projectDir, { recursive: true });
     const artifact = localRegistryArtifact(root);
     const fixtureBytes = "hermetic-flow Yarn fixture\n";
-    const fixtureLocator = yarnLocatorForBytes(PINNED_YARN_VERSION, fixtureBytes);
+    const fixtureLocator = yarnLocatorForBytes(`${PINNED_YARN_VERSION}-hermetic.1`, fixtureBytes);
     writeCorepackFixture(binDir, fixtureLocator, fixtureBytes);
     const previousPath = process.env.PATH;
     process.env.PATH = `${binDir}${delimiter}${previousPath}`;
@@ -1130,6 +1150,10 @@ describe("installable package smoke optional-dependency coverage", () => {
       [{ stderr: `getaddrinfo ENOTFOUND ${secret}`, stdout: "", signal: null }, /unreachable/u],
       [{ stderr: `EINTEGRITY ${secret}`, stdout: "", signal: null }, /integrity/u],
       [{ stderr: `Mismatch hashes. Expected ${secret}`, stdout: "", signal: null }, /integrity/u],
+      [
+        { stderr: `unrelated integrity policy ${secret}`, stdout: "", signal: null },
+        /no known class/u,
+      ],
       [{ stderr: `401 Unauthorized ${secret}`, stdout: "", signal: null }, /unauthorized/u],
       [{ stderr: "", stdout: `404 Not Found ${secret}`, signal: null }, /not found/u],
       [{ stderr: `weird ${secret}`, stdout: "", signal: null }, /no known class/u],
@@ -1285,10 +1309,21 @@ describe("installable package smoke optional-dependency coverage", () => {
       "https://repo.yarnpkg.com/4.9.1/packages/yarnpkg-cli/bin/yarn.js",
     );
     expect(pinnedYarnVersionFromLocator(PINNED_YARN)).toBe(PINNED_YARN_VERSION);
+    expect(
+      pinnedYarnVersionFromLocator(`yarn@${PINNED_YARN_VERSION}-rc.1+sha512.${PINNED_YARN_SHA512}`),
+    ).toBe(`${PINNED_YARN_VERSION}-rc.1`);
+    expect(
+      pinnedYarnLocatorParts(
+        `yarn@${PINNED_YARN_VERSION}+sha512.${PINNED_YARN_SHA512.toUpperCase()}`,
+      ).sha512,
+    ).toBe(PINNED_YARN_SHA512);
     expect(() => pinnedYarnVersionFromLocator(`yarn@${PINNED_YARN_VERSION}`)).toThrow(TypeError);
     expect(installableSource).toContain("locator = PINNED_YARN");
     expect(installableSource).toContain("packageManager: locator");
-    expect(registrySource).toContain("packageManager: PINNED_YARN");
+    expect(registrySource).toContain("yarnLocator = PINNED_YARN");
+    expect(registrySource).toContain("packageManager: yarnLocator");
+    expect(registrySource).toContain("provisionPinnedYarnForSetup(yarnLocator)");
+    expect(registrySource).toContain("yarnChildEnv(registry, process.env, yarnHome, yarnLocator)");
     expect(installableSource).not.toContain('const PINNED_YARN = "yarn@4.9.1"');
     expect(registrySource).not.toContain('packageManager: "yarn@4.9.1"');
   });
@@ -1367,9 +1402,12 @@ describe("installable package smoke optional-dependency coverage", () => {
           "writeFileSync(",
           "  join(entry, '.corepack'),",
           "  JSON.stringify({",
-          "    locator: { name: PINNED_YARN_NAME, reference: `${PINNED_YARN_VERSION}+sha512.${fixtureHash}` },",
+          "    locator: {",
+          "      name: PINNED_YARN_NAME,",
+          "      reference: PINNED_YARN_VERSION + '+sha512.' + fixtureHash,",
+          "    },",
           "    bin: ['yarn', 'yarnpkg'],",
-          "    hash: `sha512.${fixtureHash}`,",
+          "    hash: 'sha512.' + fixtureHash,",
           "  }),",
           "  'utf8',",
           ");",
@@ -1432,10 +1470,13 @@ describe("installable package smoke optional-dependency coverage", () => {
           "  JSON.stringify({",
           "    locator: {",
           "      name: 'yarn',",
-          "      reference: `${process.env.PINNED_YARN_VERSION}+sha512.${process.env.PINNED_YARN_SHA512}`,",
+          "      reference:",
+          "        process.env.PINNED_YARN_VERSION +",
+          "        '+sha512.' +",
+          "        process.env.PINNED_YARN_SHA512,",
           "    },",
           "    bin: ['yarn', 'yarnpkg'],",
-          "    hash: `sha512.${process.env.PINNED_YARN_SHA512}`,",
+          "    hash: 'sha512.' + process.env.PINNED_YARN_SHA512,",
           "  }),",
           "  'utf8',",
           ");",
