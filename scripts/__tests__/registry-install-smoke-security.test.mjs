@@ -111,6 +111,9 @@ function processExists(pid) {
 }
 
 function delay(ms) {
+  if (typeof globalThis.setTimeout !== "function") {
+    throw new TypeError("globalThis.setTimeout must be available for delay()");
+  }
   return new Promise((resolvePromise) => globalThis.setTimeout(resolvePromise, ms));
 }
 
@@ -1356,7 +1359,7 @@ describe("installable package smoke optional-dependency coverage", () => {
     );
     expect(registrySource).toContain("function smokeGateYarnLocatorParts(locator)");
     expect(registrySource).toContain("outputByteSummary(result)");
-    expect(registrySource).toContain("corepackInstallCommand(executable, installArgs)");
+    expect(registrySource).toContain('return await runAsync("corepack", installArgs');
     expect(registrySource).not.toContain("stdout:\\n${result.stdout}");
     expect(readFileSync(join(ROOT, "scripts", "prepare-offline-smoke.mjs"), "utf8")).toContain(
       "smokeGateFailureLogSummary(error)",
@@ -1377,6 +1380,8 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(summary).toContain("redacted SmokeGateFailure");
     expect(summary).toMatch(/messageSha256=[a-f0-9]{64}/u);
     expect(summary).toContain(`messageBytes=${String(Buffer.byteLength(rawMessage, "utf8"))}`);
+    expect(summary).toMatch(/stackSha256=[a-f0-9]{64}/u);
+    expect(summary).toMatch(/stackBytes=\d+/u);
     expect(summary).not.toContain(rawMessage);
     expect(summary).not.toContain(PINNED_YARN_SHA512);
   });
@@ -1657,7 +1662,8 @@ describe("installable package smoke optional-dependency coverage", () => {
       );
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(result.stdout).toContain("already cached; no request made");
+      expect(result.stdout).toContain("already cached");
+      expect(result.stdout).not.toContain(fixtureLocator);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1730,7 +1736,9 @@ describe("installable package smoke optional-dependency coverage", () => {
       expect(record.argv).toEqual(["install", "--global", "--cache-only", fixtureLocator]);
       expect(record.corepackHome).toContain(`keiko-corepack-yarn-${PINNED_YARN_VERSION}-`);
       expect(record.network).toBe("1");
-      expect(result.stdout).toContain(`provision-pinned-yarn: ${fixtureLocator} cached`);
+      expect(result.stdout).toContain(`provision-pinned-yarn: yarn@${PINNED_YARN_VERSION} `);
+      expect(result.stdout).toContain("locatorSha256=");
+      expect(result.stdout).not.toContain(fixtureHash);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -2346,10 +2354,12 @@ describe("installable package smoke optional-dependency coverage", () => {
     mkdirSync(projectDir, { recursive: true });
     const artifact = localRegistryArtifact(root);
     const locator = corepackLockFixtureLocator("failure");
-    writeExecutable(
-      join(binDir, "corepack"),
+    writeCorepackFixture(binDir, locator, "failure", [
+      'if (process.argv[2] === "yarn") {',
       "process.stderr.write('rejected\\n'); process.exit(7);",
-    );
+      "}",
+      "process.stderr.write('unexpected corepack invocation\\n'); process.exit(9);",
+    ]);
     const previousPath = process.env.PATH;
     process.env.PATH = `${binDir}${delimiter}${previousPath}`;
     try {
@@ -2358,13 +2368,33 @@ describe("installable package smoke optional-dependency coverage", () => {
         /process\.exit\(1\)/u,
       );
       const errorText = consoleError.mock.calls.flat().join("\n");
-      expect(errorText).toContain("the failure matched no known class");
+      expect(errorText).toContain("Yarn registry install exited 7");
+      expect(errorText).toContain("stderrBytes=9");
       expect(errorText).not.toContain("rejected");
       expect(existsSync(corepackCacheLockDir(locator))).toBe(false);
     } finally {
       process.env.PATH = previousPath;
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("rejects malformed registry install timeouts before smoke work starts", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--input-type=module", "-e", 'import "./scripts/registry-install-smoke.mjs";'],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+        env: { ...process.env, KEIKO_REGISTRY_INSTALL_TIMEOUT_MS: "not-a-number" },
+        timeout: 30_000,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be a positive integer number of milliseconds.",
+    );
+    expect(result.stdout).toBe("");
   });
 
   it("rejects test-only Yarn locators outside Vitest as a smoke gate failure", () => {

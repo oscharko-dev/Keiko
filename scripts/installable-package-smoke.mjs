@@ -85,11 +85,22 @@ function smokeGateFailure(message) {
 
 export function smokeGateFailureLogSummary(error) {
   const message = error instanceof Error ? error.message : String(error);
+  const stack = error instanceof Error ? (error.stack ?? "") : "";
   const messageSha256 = createHash("sha256").update(message, "utf8").digest("hex");
+  const stackSha256 = createHash("sha256").update(stack, "utf8").digest("hex");
   const messageBytes = Buffer.byteLength(message, "utf8");
-  return `redacted SmokeGateFailure (messageSha256=${messageSha256}, messageBytes=${String(
-    messageBytes,
-  )})`;
+  const stackBytes = Buffer.byteLength(stack, "utf8");
+  return (
+    `redacted SmokeGateFailure (messageSha256=${messageSha256}, ` +
+    `messageBytes=${String(messageBytes)}, stackSha256=${stackSha256}, ` +
+    `stackBytes=${String(stackBytes)})`
+  );
+}
+
+function yarnLocatorLogSummary(locator) {
+  const { version } = yarnLocatorParts(locator);
+  const locatorSha256 = createHash("sha256").update(locator, "utf8").digest("hex");
+  return `${PINNED_YARN_NAME}@${version} (locatorSha256=${locatorSha256})`;
 }
 
 export function parsePositiveTimeoutEnv(name) {
@@ -1796,7 +1807,7 @@ export async function provisionPinnedYarnForSetup(
     timeoutMs,
   );
   if (provisioned) {
-    console.log(`provision-pinned-yarn: ${locator} cached in ${corepackCacheDir(locator)}.`);
+    console.log(`provision-pinned-yarn: ${yarnLocatorLogSummary(locator)} cached.`);
   }
 }
 
@@ -1881,7 +1892,7 @@ function provisionPinnedYarnUnlocked(
   // Already cached from an earlier run or a CI setup step: no network call at all. That keeps an
   // outage at the package-manager host from failing a gate whose dependency install is offline.
   if (isPinnedYarnCached(locator) || repairPinnedYarnCacheMetadata(locator)) {
-    console.log(`provision-pinned-yarn: ${locator} already cached; no request made.`);
+    console.log(`provision-pinned-yarn: ${yarnLocatorLogSummary(locator)} already cached.`);
     return false;
   }
   rmSync(pinnedYarnCacheEntryDir(locator), { recursive: true, force: true });

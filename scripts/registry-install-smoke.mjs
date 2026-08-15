@@ -11,11 +11,11 @@ import {
   yarnLocatorParts,
   yarnPackageManagerFromLocator,
 } from "./lib/pinned-yarn.mjs";
-import { resolveHostExecutable, shellCommandForTrustedExecutable } from "./lib/host-executable.mjs";
 import {
   isSmokeGateFailure,
   privateYarnHome,
   provisionPinnedYarnForSetup,
+  runAsync,
   SmokeGateFailure,
   withCorepackYarnCacheLock,
   yarnChildEnv,
@@ -37,12 +37,8 @@ function smokeGateYarnLocatorParts(locator) {
   try {
     return yarnLocatorParts(locator);
   } catch (error) {
-    if (error instanceof TypeError) {
-      throw new SmokeGateFailure(
-        `registry install smoke Yarn locator is invalid: ${error.message}`,
-      );
-    }
-    throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new SmokeGateFailure(`registry install smoke Yarn locator is invalid: ${reason}`);
   }
 }
 
@@ -50,12 +46,8 @@ function smokeGateYarnPackageManager(locator) {
   try {
     return yarnPackageManagerFromLocator(locator);
   } catch (error) {
-    if (error instanceof TypeError) {
-      throw new SmokeGateFailure(
-        `registry install smoke Yarn locator is invalid: ${error.message}`,
-      );
-    }
-    throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new SmokeGateFailure(`registry install smoke Yarn locator is invalid: ${reason}`);
   }
 }
 
@@ -66,11 +58,24 @@ function testRegistryYarnLocator(locator) {
   smokeGateYarnLocatorParts(locator);
   return locator;
 }
-const timeoutMs = Number.parseInt(process.env.KEIKO_REGISTRY_INSTALL_TIMEOUT_MS ?? "300000", 10);
+const timeoutMs = parseRegistryInstallTimeoutEnv();
 
 function fail(message) {
   console.error(`registry-install-smoke failed: ${message}`);
   process.exit(1);
+}
+
+function parseRegistryInstallTimeoutEnv() {
+  const value = process.env.KEIKO_REGISTRY_INSTALL_TIMEOUT_MS;
+  if (value === undefined || value === "") return 300_000;
+  if (!/^[1-9]\d*$/u.test(value)) {
+    fail("KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be a positive integer number of milliseconds.");
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed)) {
+    fail("KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be a safe integer number of milliseconds.");
+  }
+  return parsed;
 }
 
 function assertTlsVerificationEnabled() {
@@ -220,15 +225,6 @@ function writeYarnSmokeManifest(projectDir, yarnLocator) {
   );
 }
 
-function corepackInstallCommand(executable, args) {
-  if (process.platform !== "win32") return { args, command: executable, shell: false };
-  return {
-    args: [],
-    command: [shellCommandForTrustedExecutable(executable), ...args].join(" "),
-    shell: true,
-  };
-}
-
 function writeYarnSmokeConfiguration(projectDir) {
   writeFileSync(
     join(projectDir, YARN_RC_FILENAME),
@@ -252,15 +248,10 @@ async function runCorepackYarnInstall(projectDir, yarnHome, yarnLocator, install
     async () => {
       await provisionPinnedYarnForSetup(yarnLocator, timeoutMs);
       const env = yarnChildEnv(registry, process.env, yarnHome, yarnLocator);
-      const executable = resolveHostExecutable("corepack", { env });
-      const command = corepackInstallCommand(executable, installArgs);
-      return spawnSync(command.command, command.args, {
-        encoding: "utf8",
-        // SECURITY-SHELL-OK: corepack-only Windows .cmd compatibility; argv is fixed by this smoke.
-        shell: command.shell,
-        timeout: timeoutMs,
+      return await runAsync("corepack", installArgs, {
         cwd: projectDir,
         env,
+        timeout: timeoutMs,
       });
     },
     timeoutMs,
