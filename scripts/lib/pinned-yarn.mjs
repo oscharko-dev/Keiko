@@ -45,7 +45,3 @@ export function pinnedYarnLocatorParts(locator) {
 export function pinnedYarnVersionFromLocator(locator) {
   return pinnedYarnLocatorParts(locator).version;
 }
-
-export function pinnedYarnSha512FromLocator(locator) {
-  return pinnedYarnLocatorParts(locator).sha512;
-}
