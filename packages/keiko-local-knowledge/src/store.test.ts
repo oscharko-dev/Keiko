@@ -536,6 +536,125 @@ describe("openKnowledgeStore — capsule_sources foreign key backfill (KEIKO-037
     const entries = readdirSync(tmp);
     expect(entries.some((name) => name.includes(".corrupt."))).toBe(false);
   });
+
+  it("aborts the v33 migration instead of committing a capsule_sources row with no matching knowledge_sources row", () => {
+    // The v10 backfill's `GROUP BY id` should make a dangling capsule_sources.id impossible, but the
+    // migration does not assume that — PRAGMA foreign_key_check inside the suspended-enforcement
+    // transaction is the backstop. This seeds exactly the anomaly that check exists to catch: a
+    // capsule_sources row whose id has no knowledge_sources counterpart at all.
+    const dbPath = join(tmp, "capsules.db");
+    const seed = new DatabaseSync(dbPath);
+    try {
+      for (const migration of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        if (migration.version > 32) break;
+        for (const stmt of migration.up) seed.exec(stmt);
+      }
+      seed.exec(SEED_CAPSULE_SQL);
+      // Deliberately no knowledge_sources row for 'src-1' — capsule_sources is populated directly.
+      seed.exec(SEED_CAPSULE_SOURCE_SQL);
+      seed.exec("PRAGMA user_version = 32");
+    } finally {
+      seed.close();
+    }
+
+    expect(() => openKnowledgeStore({ dbPath })).toThrow(/Failed to open knowledge-capsule store/);
+
+    // A rejected migration must fail closed, not corrupt: the file is not quarantined, and a plain
+    // read against it still sees the original v32 state untouched — capsule_sources kept its row and
+    // was never dropped, because ROLLBACK undid the whole suspended-enforcement transaction.
+    const entries = readdirSync(tmp);
+    expect(entries.some((name) => name.includes(".corrupt."))).toBe(false);
+    const reopened = new DatabaseSync(dbPath);
+    try {
+      const version = reopened.prepare("PRAGMA user_version").get() as unknown as VersionRow;
+      expect(version.user_version).toBe(32);
+      const row = reopened
+        .prepare("SELECT COUNT(*) AS n FROM capsule_sources")
+        .get() as unknown as CountRow;
+      expect(row.n).toBe(1);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("reports every violating table, deduplicated and sorted, when the rebuild finds more than one", () => {
+    // assertNoForeignKeyViolations runs PRAGMA foreign_key_check against the WHOLE database, not
+    // just capsule_sources — a genuine safety net, not a narrow check. Plants a second, unrelated
+    // pre-existing violation (foreign_keys off for that one insert only) alongside the
+    // capsule_sources/knowledge_sources gap, so the reported table list has two distinct entries and
+    // the dedup+sort formatting path actually runs.
+    const dbPath = join(tmp, "capsules.db");
+    const seed = new DatabaseSync(dbPath);
+    try {
+      for (const migration of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        if (migration.version > 32) break;
+        for (const stmt of migration.up) seed.exec(stmt);
+      }
+      seed.exec(SEED_CAPSULE_SQL);
+      seed.exec(SEED_CAPSULE_SOURCE_SQL);
+      seed.exec("PRAGMA foreign_keys = OFF");
+      seed.exec(
+        "INSERT INTO capsule_set_members (set_id, capsule_id, ordinal, composed_at) " +
+          "VALUES ('set-1', 'no-such-capsule', 0, 1000)",
+      );
+      seed.exec("PRAGMA foreign_keys = ON");
+      seed.exec("PRAGMA user_version = 32");
+    } finally {
+      seed.close();
+    }
+
+    let caught: unknown;
+    try {
+      openKnowledgeStore({ dbPath });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(KnowledgeStoreError);
+    const migrationFailure = (caught as Error).cause;
+    expect(migrationFailure).toBeInstanceOf(KnowledgeStoreError);
+    const violationDetail = (migrationFailure as Error).cause;
+    expect(violationDetail).toBeInstanceOf(KnowledgeStoreError);
+    expect((violationDetail as Error).message).toMatch(/\[capsule_set_members, capsule_sources\]/);
+  });
+});
+
+describe("openKnowledgeStore — migration runner failure (standard, non-suspended group)", () => {
+  it("rolls back and rethrows when a normal migration fails mid-group, leaving the store at its prior version", () => {
+    // Every migration before v33 runs through applyStandardMigrationGroup's own BEGIN/COMMIT with no
+    // foreign-key suspension. Pre-creates capsule_membership_changes (the very table v2 tries to
+    // CREATE) so v2's first statement collides and throws — proving the standard group's ROLLBACK
+    // path undoes the whole batch instead of leaving a half-applied schema.
+    const dbPath = join(tmp, "capsules.db");
+    const v1 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((m) => m.version === 1);
+    if (v1 === undefined) throw new Error("v1 migration not found");
+    const seed = new DatabaseSync(dbPath);
+    try {
+      for (const stmt of v1.up) seed.exec(stmt);
+      seed.exec("CREATE TABLE capsule_membership_changes (id INTEGER)");
+      seed.exec("PRAGMA user_version = 1");
+    } finally {
+      seed.close();
+    }
+
+    expect(() => openKnowledgeStore({ dbPath })).toThrow(/Failed to open knowledge-capsule store/);
+
+    const entries = readdirSync(tmp);
+    expect(entries.some((name) => name.includes(".corrupt."))).toBe(false);
+    const reopened = new DatabaseSync(dbPath);
+    try {
+      const version = reopened.prepare("PRAGMA user_version").get() as unknown as VersionRow;
+      // Still 1: the whole v2..v32 group rolled back, so user_version never advanced past v1.
+      expect(version.user_version).toBe(1);
+      const columns = reopened.prepare("PRAGMA table_info('capsule_membership_changes')").all() as {
+        readonly name?: string;
+      }[];
+      // The pre-created placeholder table (one INTEGER column) is still there, unreplaced by v2's
+      // real shape — proof the rest of v2's statements never committed either.
+      expect(columns.map((column) => column.name)).toEqual(["id"]);
+    } finally {
+      reopened.close();
+    }
+  });
 });
 
 describe("openKnowledgeStore — sequential transactions", () => {
