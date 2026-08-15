@@ -780,24 +780,40 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
   it("pins a plain-HTTP proxied request to the vetted address, defeating a hostname that only resolves for Keiko's own lookup", async () => {
     // Mirrors the AUDIT-SEC-001 direct-path test's technique exactly, through a real two-hop
     // forward proxy instead of a direct connect. "pinned-target.invalid" is an RFC 2606 reserved
-    // TLD that does not resolve on any real network; the fake proxy below performs its OWN,
-    // completely unmocked resolution of whatever host the forwarded absolute-URI names (Node's
-    // own http.request hostname resolution does not go through the "node:dns/promises" module
-    // this test mocks, so the proxy's forward-connect is a genuine, real DNS attempt). Before this
-    // fix, the proxy would receive "pinned-target.invalid" verbatim and fail with ENOTFOUND. After
-    // the fix, it receives the vetted "127.0.0.1" and reaches the real origin below.
+    // TLD that does not resolve on any real network. The fake proxy's own outbound hop below
+    // dials a HARDCODED local address/port, never the request line's own authority — matching the
+    // "research egress through a proxy" fixture further down, and NOT the shape CodeQL's
+    // js/request-forgery flags (constructing an outbound request straight from an inbound
+    // request's own URL, unvalidated, is what an actual open/unrestricted proxy looks like; a
+    // real forward proxy enforces its own policy about where it will actually connect, which is
+    // what dialing a fixed local address here mirrors). Before this fix, the request line's
+    // authority the proxy captures below would still be the unresolvable hostname and the second
+    // hop would never even reach the real origin; after the fix it is the vetted "127.0.0.1" and
+    // the real origin below answers.
     const origin = createHttpServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ via: "pinned-proxy" }));
     });
     const originPort = await listen(origin);
     let capturedHost: string | undefined;
+    let capturedRequestLine: string | undefined;
     const proxy = createHttpServer((req, res) => {
       capturedHost = req.headers.host;
-      const forward = httpRequest(req.url ?? "", { headers: req.headers }, (upstreamRes) => {
-        res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
-        upstreamRes.pipe(res);
-      });
+      capturedRequestLine = req.url ?? undefined;
+      const incoming = new URL(req.url ?? "", "http://placeholder");
+      const forward = httpRequest(
+        {
+          hostname: "127.0.0.1",
+          port: originPort,
+          path: `${incoming.pathname}${incoming.search}`,
+          method: req.method,
+          headers: req.headers,
+        },
+        (upstreamRes) => {
+          res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+          upstreamRes.pipe(res);
+        },
+      );
       forward.on("error", () => {
         res.writeHead(502);
         res.end("proxy forward failed");
@@ -811,19 +827,17 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
         lookup: vi.fn(() => Promise.resolve([{ address: "127.0.0.1", family: 4 }])),
       }));
       const { gatewayFetch: pinnedGatewayFetch } = await import("./http.js");
-      const response = await pinnedGatewayFetch(
-        `http://pinned-target.invalid:${String(originPort)}/manual`,
-        {
-          egress: {
-            httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
-            pinProxiedConnectTarget: true,
-          },
+      const response = await pinnedGatewayFetch("http://pinned-target.invalid/manual", {
+        egress: {
+          httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          pinProxiedConnectTarget: true,
         },
-      );
+      });
       expect(await response.json()).toEqual({ via: "pinned-proxy" });
       // The proxy still sees the ORIGINAL hostname via the Host header (virtual-hosting/identity
       // is unaffected) even though the request line it received was rewritten to the address.
-      expect(capturedHost).toBe(`pinned-target.invalid:${String(originPort)}`);
+      expect(capturedHost).toBe("pinned-target.invalid");
+      expect(capturedRequestLine).toBe("http://127.0.0.1/manual");
     } finally {
       await close(origin);
       await close(proxy);
@@ -832,23 +846,21 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
     }
   });
 
-  it("leaves an unresolvable hostname unresolvable through a proxy when the flag is off (default-off preserves the existing gap honestly)", async () => {
-    // Same setup as the test above, MINUS pinProxiedConnectTarget: the forward proxy receives the
-    // literal, genuinely non-resolving hostname, and ITS OWN forward attempt fails — a real proxy
-    // would answer exactly this way (a valid HTTP 502, not a transport-level rejection: fetch never
-    // throws on a non-2xx status). This pins the default behavior: opting in is what changes
-    // anything, nothing is silently different, and gatewayFetch itself never even attempts its own
-    // DNS work here (planGatewayDns.pinForProxyConnect is false without the flag).
+  it("leaves the request-target authority as the literal hostname through a proxy when the flag is off (default-off preserves the existing gap honestly)", async () => {
+    // Same technique as the pinned test above, MINUS pinProxiedConnectTarget: the proxy receives
+    // the request-line's authority UNCHANGED — still the original, non-resolving hostname, never
+    // rewritten to a Keiko-vetted address — captured and asserted directly off the wire. This pins
+    // the default behavior: opting in is what changes anything, nothing is silently different, and
+    // gatewayFetch itself never even attempts its own DNS work here (planGatewayDns.pinForProxyConnect
+    // is false without the flag). The proxy responds immediately rather than attempting a second
+    // hop to the (deliberately unresolvable) authority it received — for the same reason given in
+    // the pinned test above, and because the wire-level assertion below is the direct proof either
+    // way, not an inference from whether a forward attempt happened to succeed or fail.
+    let capturedRequestLine: string | undefined;
     const proxy = createHttpServer((req, res) => {
-      const forward = httpRequest(req.url ?? "", { headers: req.headers }, (upstreamRes) => {
-        res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
-        upstreamRes.pipe(res);
-      });
-      forward.on("error", () => {
-        res.writeHead(502);
-        res.end("proxy forward failed");
-      });
-      req.pipe(forward);
+      capturedRequestLine = req.url ?? undefined;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ via: "unpinned-proxy" }));
     });
     const proxyPort = await listen(proxy);
     try {
@@ -859,9 +871,9 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
       const { gatewayFetch: unpinnedGatewayFetch } = await import("./http.js");
       const response = await unpinnedGatewayFetch("http://pinned-target.invalid/manual", {
         egress: { httpProxy: `http://127.0.0.1:${String(proxyPort)}` },
-        timeoutMs: 2_000,
       });
-      expect(response.status).toBe(502);
+      expect(response.status).toBe(200);
+      expect(capturedRequestLine).toBe("http://pinned-target.invalid/manual");
     } finally {
       await close(proxy);
       vi.doUnmock("node:dns/promises");
