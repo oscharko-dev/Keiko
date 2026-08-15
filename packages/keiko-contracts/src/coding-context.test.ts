@@ -300,6 +300,15 @@ describe("validateCodingContextRequest", () => {
     ).toBe(false);
   });
 
+  it.each(["symbol", "queryText", "capsuleId", "capsuleSetId"])(
+    "rejects a blank or whitespace-only %s, which means malformed rather than absent",
+    (field) => {
+      expect(validateCodingContextRequest(validRequest({ [field]: "" })).ok).toBe(false);
+      expect(validateCodingContextRequest(validRequest({ [field]: "   " })).ok).toBe(false);
+      expect(validateCodingContextRequest(validRequest({ [field]: undefined })).ok).toBe(true);
+    },
+  );
+
   it.each([
     ["symbol", CODING_CONTEXT_SYMBOL_MAX_CHARS],
     ["queryText", CODING_CONTEXT_QUERY_TEXT_MAX_CHARS],

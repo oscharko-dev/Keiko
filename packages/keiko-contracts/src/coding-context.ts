@@ -88,8 +88,13 @@ export const CODING_CONTEXT_QUERY_TEXT_MAX_CHARS = 4_096;
 export const CODING_CONTEXT_CAPSULE_ID_MAX_CHARS = 128;
 export const CODING_CONTEXT_CHANGED_FILES_MAX_COUNT = 64;
 
+// A PRESENT optional string must carry something: `undefined` is the documented absent case, so a
+// blank or whitespace-only symbol/queryText/capsuleId is a malformed value rather than an omission —
+// and a whitespace-only capsuleId would otherwise reach the Local Knowledge scope selector as if it
+// named a capsule.
 function isBoundedOptionalString(value: unknown, maxChars: number): boolean {
-  return value === undefined || (typeof value === "string" && value.length <= maxChars);
+  if (value === undefined) return true;
+  return typeof value === "string" && value.trim().length > 0 && value.length <= maxChars;
 }
 
 // documentPath is BOUNDED and character-checked here, but its containment verdict is deliberately
