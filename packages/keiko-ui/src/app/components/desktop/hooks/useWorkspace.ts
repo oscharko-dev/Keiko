@@ -26,10 +26,7 @@ import type {
 import {
   MAX_WORKSPACE_WINDOWS,
   enforceWorkspaceWindowInvariants,
-  parsePersistedConnections,
-  parsePersistedWindows,
-  sanitizePersistedConnections,
-  sanitizePersistedWindows,
+  sanitizePersistedWorkspace,
 } from "./workspace-persistence";
 import {
   WORKSPACE_CLIPBOARD_PASTE_OFFSET_PX,
@@ -716,32 +713,28 @@ function snapshotFromRaw(
   windows: readonly unknown[],
   connections: readonly unknown[],
 ): WorkspaceSnapshot {
-  const wins = sanitizePersistedWindows(windows as readonly AppWindow[]);
-  return {
-    wins,
-    conns: sanitizePersistedConnections(connections as readonly Connection[], wins),
-  };
+  return sanitizePersistedWorkspace(
+    windows as readonly AppWindow[],
+    connections as readonly Connection[],
+  );
+}
+
+function readPersistedArray(key: string): readonly unknown[] {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw === null) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 function readPersistedWorkspaceSnapshot(): {
   readonly wins: AppWindow[];
   readonly conns: Connection[];
 } {
-  let wins: AppWindow[] | null = null;
-  try {
-    wins = parsePersistedWindows(window.localStorage.getItem(WS_LS));
-  } catch {
-    wins = null;
-  }
-  const resolvedWins = wins ?? [];
-  try {
-    return {
-      wins: resolvedWins,
-      conns: parsePersistedConnections(window.localStorage.getItem(CONN_LS), resolvedWins),
-    };
-  } catch {
-    return { wins: resolvedWins, conns: [] };
-  }
+  return snapshotFromRaw(readPersistedArray(WS_LS), readPersistedArray(CONN_LS));
 }
 
 function workspaceStateEtag(revision: number): string {
@@ -985,12 +978,11 @@ function buildServerWorkspaceSnapshot(
   readonly conns: readonly Connection[];
   readonly serialized: string;
 } {
-  const persistedWins = sanitizePersistedWindows(wins);
-  const persistedConns = sanitizePersistedConnections(conns, persistedWins);
+  const persisted = sanitizePersistedWorkspace(wins, conns);
   return {
-    wins: persistedWins,
-    conns: persistedConns,
-    serialized: JSON.stringify({ windows: persistedWins, connections: persistedConns }),
+    wins: persisted.wins,
+    conns: persisted.conns,
+    serialized: JSON.stringify({ windows: persisted.wins, connections: persisted.conns }),
   };
 }
 
@@ -1041,10 +1033,10 @@ function serializePersistedSnapshot(snapshot: {
   readonly wins: readonly AppWindow[];
   readonly conns: readonly Connection[];
 }): string {
-  const persistedWins = sanitizePersistedWindows(snapshot.wins);
+  const persisted = sanitizePersistedWorkspace(snapshot.wins, snapshot.conns);
   return JSON.stringify({
-    windows: persistedWins,
-    connections: sanitizePersistedConnections(snapshot.conns, persistedWins),
+    windows: persisted.wins,
+    connections: persisted.conns,
   });
 }
 
@@ -1869,15 +1861,14 @@ export function useWorkspace(
       suppressNextLocalPersistRef.current = false;
       return;
     }
-    const persistedWins = sanitizePersistedWindows(wins);
-    const persistedConns = sanitizePersistedConnections(conns, persistedWins);
-    persistList(WS_LS, persistedWins);
-    persistList(CONN_LS, persistedConns);
+    const persisted = sanitizePersistedWorkspace(wins, conns);
+    persistList(WS_LS, persisted.wins);
+    persistList(CONN_LS, persisted.conns);
     // Track what is now durably applied so a cross-tab storage event echoing this
     // exact value is recognised as a no-op (PERSISTENCE-001 equality guard).
     lastAppliedSerializedRef.current = JSON.stringify({
-      windows: persistedWins,
-      connections: persistedConns,
+      windows: persisted.wins,
+      connections: persisted.conns,
     });
   }, [conns, wins]);
 
@@ -1918,6 +1909,11 @@ export function useWorkspace(
       mutations.focus(id);
     },
     [mutations, winsByIdRef, winsRef],
+  );
+  const currentWindowStack = useCallback(
+    (): readonly string[] =>
+      [...winsRef.current].sort((left, right) => right.z - left.z).map((window) => window.id),
+    [winsRef],
   );
   const layout = useMemo(() => makeLayoutActions({ setWins, worldVP }), [setWins, worldVP]);
   const snap = useMemo(
@@ -2135,6 +2131,7 @@ export function useWorkspace(
       openEditorFile: mutations.openEditorFile,
       toggleTool: mutations.toggleTool,
       focus: focusWindow,
+      currentWindowStack,
       currentSelection,
       replaceSelection,
       toggleWindowSelection,
@@ -2181,6 +2178,7 @@ export function useWorkspace(
       connectActions,
       closeWithTeardown,
       focusWindow,
+      currentWindowStack,
       currentSelection,
       replaceSelection,
       toggleWindowSelection,

@@ -252,6 +252,7 @@ export interface WindowRenderContext {
    */
   readonly openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
   readonly focusWindow: (id: string) => void;
+  readonly currentWindowStack?: (() => readonly string[]) | undefined;
   readonly restoreWindow?: ((id: string) => void) | undefined;
   readonly updateWindow: (id: string, patch: Partial<AppWindow>) => void;
   readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;

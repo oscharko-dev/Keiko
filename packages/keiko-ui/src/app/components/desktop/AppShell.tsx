@@ -443,10 +443,12 @@ function chatIdFromWindow(win: AppWindow | undefined): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function projectPathFromWindow(win: AppWindow | undefined): string | undefined {
+export function persistedChatProjectPath(win: AppWindow | undefined): string | undefined {
   if (win?.type !== "chat") return undefined;
   const value = win.cfg["projectPath"];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 class ChatBindingCompensationFailure extends Error {}
@@ -904,7 +906,7 @@ function AppShellInner(): ReactNode {
       if (chat !== undefined) return chat.status === "closed" ? undefined : chat;
       const projectPath =
         target?.projectPath ??
-        projectPathFromWindow(windowSnapshot) ??
+        persistedChatProjectPath(windowSnapshot) ??
         runtimeProjectPathForChat(chatWindowId, chatId);
       if (projectPath === undefined) return undefined;
       try {

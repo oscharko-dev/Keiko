@@ -49,6 +49,7 @@ export interface WorkspaceApi {
   readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
   readonly toggleTool: (type: WindowType) => void;
   readonly focus: (id: string) => void;
+  readonly currentWindowStack?: (() => readonly string[]) | undefined;
   readonly currentSelection: () => WorkspaceUiSelectionState;
   readonly replaceSelection: (windowIds: readonly string[]) => void;
   readonly toggleWindowSelection: (windowId: string) => void;

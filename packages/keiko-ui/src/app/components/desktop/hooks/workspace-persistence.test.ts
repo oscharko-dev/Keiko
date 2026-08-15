@@ -4,6 +4,7 @@ import {
   parsePersistedConnections,
   parsePersistedWindows,
   sanitizePersistedConnections,
+  sanitizePersistedWorkspace,
   sanitizePersistedWindows,
 } from "./workspace-persistence";
 import {
@@ -815,6 +816,60 @@ describe("workspace-persistence", () => {
     ]);
 
     expect(persisted.map((window) => window.id)).toEqual(["chat-other", "chat-front"]);
+  });
+
+  it("fills the capacity with unique windows after duplicate persisted identities", () => {
+    const duplicates = Array.from({ length: 128 }, (_, index) =>
+      win({
+        id: `chat-copy-${String(index)}`,
+        type: "chat",
+        z: index + 1,
+        cfg: { chatId: "chat-shared" },
+      }),
+    );
+    const unique = Array.from({ length: 127 }, (_, index) =>
+      win({ id: `files-${String(index)}`, type: "files", z: 200 + index }),
+    );
+
+    const persisted = sanitizePersistedWindows([...duplicates, ...unique]);
+
+    expect(persisted).toHaveLength(128);
+    expect(persisted.map((window) => window.id)).toContain("chat-copy-127");
+    expect(persisted.map((window) => window.id)).toContain("files-126");
+  });
+
+  it("remaps and deduplicates edges when duplicate restored chats collapse", () => {
+    const snapshot = sanitizePersistedWorkspace(
+      [
+        win({ id: "files-1", type: "files" }),
+        win({ id: "chat-old", type: "chat", z: 2, cfg: { chatId: "chat-shared" } }),
+        win({ id: "chat-front", type: "chat", z: 8, cfg: { chatId: "chat-shared" } }),
+      ],
+      [
+        {
+          id: "connection-old",
+          a: "files-1",
+          b: "chat-old",
+          boundChatWindowId: "chat-old",
+        },
+        {
+          id: "connection-front",
+          a: "files-1",
+          b: "chat-front",
+          boundChatWindowId: "chat-front",
+        },
+      ],
+    );
+
+    expect(snapshot.wins.map((window) => window.id)).toEqual(["files-1", "chat-front"]);
+    expect(snapshot.conns).toEqual([
+      {
+        id: "connection-old",
+        a: "files-1",
+        b: "chat-front",
+        boundChatWindowId: "chat-front",
+      },
+    ]);
   });
 
   it("rejects over-length generic text cfg values (reject, not truncate)", () => {

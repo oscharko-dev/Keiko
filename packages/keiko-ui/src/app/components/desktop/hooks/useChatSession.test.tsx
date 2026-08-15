@@ -701,6 +701,32 @@ describe("useChatSession bootstrap", () => {
     expect(fetchModels).toHaveBeenCalledTimes(2);
   });
 
+  it("shares one gateway model refresh across concurrent chat sessions", async () => {
+    vi.mocked(fetchModels)
+      .mockResolvedValueOnce({ models: [model({ id: "chat-before" })] })
+      .mockResolvedValueOnce({ models: [model({ id: "chat-after" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+
+    const first = renderHook(() => useChatSession({ autoCreate: false }));
+    const second = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => {
+      expect(first.result.current.models.map((entry) => entry.id)).toEqual(["chat-before"]);
+      expect(second.result.current.models.map((entry) => entry.id)).toEqual(["chat-before"]);
+    });
+
+    act(() => {
+      notifyGatewayConfigUpdated();
+    });
+
+    await waitFor(() => {
+      expect(first.result.current.models.map((entry) => entry.id)).toEqual(["chat-after"]);
+      expect(second.result.current.models.map((entry) => entry.id)).toEqual(["chat-after"]);
+    });
+    expect(resetModelRequestCache).toHaveBeenCalledOnce();
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+  });
+
   it("ignores an older gateway model refresh that resolves after the latest one", async () => {
     vi.mocked(fetchModels).mockResolvedValueOnce({ models: [model({ id: "chat-before" })] });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });

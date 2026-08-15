@@ -1054,10 +1054,11 @@ function useBoundChatTitle(args: {
 }
 
 function ChatNotFound(): ReactNode {
+  const agentT = useEditorAgentTranslate();
   return (
     <div className="lk-empty">
-      <p className="lk-empty-title">{"Chat not found"}</p>
-      <p className="lk-empty-body">{"This conversation was deleted or is no longer available."}</p>
+      <p className="lk-empty-title">{agentT("chat.restoration.notFoundTitle")}</p>
+      <p className="lk-empty-body">{agentT("chat.restoration.notFoundBody")}</p>
     </div>
   );
 }
@@ -1075,6 +1076,7 @@ function BoundChatBody({
   readonly targetMissing: boolean;
   readonly waiting: boolean;
 }): ReactNode {
+  const agentT = useEditorAgentTranslate();
   const openRunResult = useCallback(
     (message: ChatMessage): void => {
       if (message.runId === undefined) return;
@@ -1089,7 +1091,7 @@ function BoundChatBody({
   );
   if (targetLookupFailed) return null;
   if (targetMissing) return <ChatNotFound />;
-  if (waiting) return <div className="lk-loading">{"Opening chat..."}</div>;
+  if (waiting) return <div className="lk-loading">{agentT("chat.restoration.opening")}</div>;
   return (
     <ChatWindow
       windowId={ctx.windowId}
@@ -1242,12 +1244,7 @@ function useBoundChatWindowRuntime(
   const { chatId, newChatRequestId, projectPath, selectionHandoffId } = configuration;
   usePublishChatWindowActivity(windowId, session.sending, session.latestGrounded);
   const runtimeTarget = useMemo<ChatWindowRuntimeTarget | undefined>(() => {
-    if (
-      selectionHandoffId !== undefined ||
-      newChatRequestId !== undefined ||
-      routing.lookupFailed ||
-      routing.targetMissing
-    ) {
+    if (newChatRequestId !== undefined || routing.lookupFailed || routing.targetMissing) {
       return undefined;
     }
     const activeTarget = routing.activeTarget;
@@ -1264,7 +1261,6 @@ function useBoundChatWindowRuntime(
     routing.activeTarget,
     routing.lookupFailed,
     routing.targetMissing,
-    selectionHandoffId,
   ]);
   const acceptSelectionHandoff = useCallback(
     (selectionHandoffId: string): void => {
@@ -1274,7 +1270,12 @@ function useBoundChatWindowRuntime(
     },
     [focusWindow, restoreWindow, updateCfg, windowId],
   );
-  usePublishChatWindowRuntime(windowId, runtimeTarget, acceptSelectionHandoff);
+  usePublishChatWindowRuntime(
+    windowId,
+    runtimeTarget,
+    acceptSelectionHandoff,
+    selectionHandoffId === undefined,
+  );
 }
 
 function useBoundChatTitleSync(
@@ -1537,7 +1538,15 @@ function routeEditorSelectionToChat(
   if (targetRoot === undefined) return false;
   const selectionHandoffId = registerEditorSelectionHandoff(targetRoot, handoff);
   if (selectionHandoffId === null) return false;
-  if (routeSelectionHandoffToOpenChat(targetRoot, selectionHandoffId) !== null) return true;
+  if (
+    routeSelectionHandoffToOpenChat(
+      targetRoot,
+      selectionHandoffId,
+      ctx.currentWindowStack?.() ?? [],
+    ) !== null
+  ) {
+    return true;
+  }
   const chatWindowId = ctx.openWindow("chat", {
     projectPathPrivacy: "omit",
     selectionHandoffId,

@@ -1,5 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { prepareNewWindowCfg } from "./AppShell";
+import { persistedChatProjectPath, prepareNewWindowCfg } from "./AppShell";
+import type { AppWindow } from "./windows/types";
+
+function chatWindow(projectPath: string): AppWindow {
+  return {
+    id: "chat-window",
+    type: "chat",
+    x: 0,
+    y: 0,
+    w: 400,
+    h: 400,
+    z: 1,
+    cfg: { projectPath },
+    max: false,
+    zoom: 1,
+  };
+}
+
+describe("persistedChatProjectPath", (): void => {
+  it("normalizes configured paths and rejects whitespace-only values", (): void => {
+    expect(persistedChatProjectPath(chatWindow("  /repo/private  "))).toBe("/repo/private");
+    expect(persistedChatProjectPath(chatWindow(" \t\n "))).toBeUndefined();
+  });
+});
 
 describe("prepareNewWindowCfg", (): void => {
   it("gives every confirmed Chat creation a fresh observable request identity", (): void => {

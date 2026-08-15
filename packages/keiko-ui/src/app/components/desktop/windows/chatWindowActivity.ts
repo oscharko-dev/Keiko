@@ -15,7 +15,16 @@ export interface ChatWindowRuntimeTarget {
 }
 
 interface ChatWindowRuntime extends ChatWindowRuntimeTarget {
+  readonly acceptingSelectionHandoff?: boolean;
   readonly acceptSelectionHandoff: (selectionHandoffId: string) => void;
+}
+
+interface ChatWindowRuntimeState {
+  runtime: ChatWindowRuntime;
+  registration: symbol;
+  registered: boolean;
+  reserved: boolean;
+  readonly pendingSelectionHandoffs: string[];
 }
 
 export type ChatWindowGroundingActivity =
@@ -46,7 +55,7 @@ const FLOW_AFTERGLOW_MS = 2_500;
 
 let snapshot: ReadonlyMap<string, ChatWindowFlow> = new Map();
 const listeners = new Set<() => void>();
-const runtimes = new Map<string, ChatWindowRuntime>();
+const runtimes = new Map<string, ChatWindowRuntimeState>();
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
@@ -138,27 +147,69 @@ export function registerChatWindowRuntime(
   windowId: string,
   runtime: ChatWindowRuntime,
 ): () => void {
-  runtimes.set(windowId, runtime);
+  const registration = Symbol("chat-window-runtime");
+  const existing = runtimes.get(windowId);
+  const state: ChatWindowRuntimeState = existing ?? {
+    runtime,
+    registration,
+    registered: true,
+    reserved: false,
+    pendingSelectionHandoffs: [],
+  };
+  state.runtime = runtime;
+  state.registration = registration;
+  state.registered = true;
+  if (state.reserved && runtime.acceptingSelectionHandoff !== false) state.reserved = false;
+  runtimes.set(windowId, state);
+  dispatchPendingSelectionHandoff(state);
   return (): void => {
-    if (runtimes.get(windowId) === runtime) runtimes.delete(windowId);
+    if (state.registration !== registration) return;
+    state.registered = false;
+    queueMicrotask((): void => {
+      if (state.registration === registration && !state.registered) runtimes.delete(windowId);
+    });
   };
 }
 
 export function chatWindowRuntimeTarget(windowId: string): ChatWindowRuntimeTarget | undefined {
-  const runtime = runtimes.get(windowId);
-  return runtime === undefined
+  const state = runtimes.get(windowId);
+  return state === undefined
     ? undefined
-    : { conversationId: runtime.conversationId, projectPath: runtime.projectPath };
+    : {
+        conversationId: state.runtime.conversationId,
+        projectPath: state.runtime.projectPath,
+      };
+}
+
+function dispatchPendingSelectionHandoff(state: ChatWindowRuntimeState): void {
+  if (!state.registered || state.reserved || state.runtime.acceptingSelectionHandoff === false) {
+    return;
+  }
+  const selectionHandoffId = state.pendingSelectionHandoffs.shift();
+  if (selectionHandoffId === undefined) return;
+  state.reserved = true;
+  state.runtime.acceptSelectionHandoff(selectionHandoffId);
+}
+
+function orderedRuntimeIds(preferredWindowIds: readonly string[]): string[] {
+  const ordered = preferredWindowIds.filter((windowId) => runtimes.has(windowId));
+  const preferred = new Set(ordered);
+  for (const windowId of runtimes.keys()) {
+    if (!preferred.has(windowId)) ordered.push(windowId);
+  }
+  return ordered;
 }
 
 export function routeSelectionHandoffToOpenChat(
   projectPath: string,
   selectionHandoffId: string,
+  preferredWindowIds: readonly string[] = [],
 ): string | null {
-  for (const [windowId, runtime] of runtimes) {
-    if (runtime.projectPath !== projectPath) continue;
-    runtimes.delete(windowId);
-    runtime.acceptSelectionHandoff(selectionHandoffId);
+  for (const windowId of orderedRuntimeIds(preferredWindowIds)) {
+    const state = runtimes.get(windowId);
+    if (state?.runtime.projectPath !== projectPath) continue;
+    state.pendingSelectionHandoffs.push(selectionHandoffId);
+    dispatchPendingSelectionHandoff(state);
     return windowId;
   }
   return null;
@@ -168,11 +219,16 @@ export function usePublishChatWindowRuntime(
   windowId: string,
   target: ChatWindowRuntimeTarget | undefined,
   acceptSelectionHandoff: (selectionHandoffId: string) => void,
+  acceptingSelectionHandoff = true,
 ): void {
   useEffect((): (() => void) | undefined => {
     if (target === undefined) return;
-    return registerChatWindowRuntime(windowId, { ...target, acceptSelectionHandoff });
-  }, [acceptSelectionHandoff, target, windowId]);
+    return registerChatWindowRuntime(windowId, {
+      ...target,
+      acceptingSelectionHandoff,
+      acceptSelectionHandoff,
+    });
+  }, [acceptSelectionHandoff, acceptingSelectionHandoff, target, windowId]);
 }
 
 export function useChatWindowFlows(): ReadonlyMap<string, ChatWindowFlow> {

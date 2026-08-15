@@ -1487,6 +1487,49 @@ const sharedChatMessagesInflight = new Map<
   string,
   Promise<{ readonly messages: readonly ChatMessage[] }>
 >();
+type GatewayModelRefreshResult =
+  | { readonly kind: "success"; readonly models: readonly ModelCapability[] }
+  | { readonly kind: "failure"; readonly message: string };
+const gatewayModelRefreshSubscribers = new Set<(result: GatewayModelRefreshResult) => void>();
+let gatewayModelRefreshGeneration = 0;
+
+function publishGatewayModelRefresh(result: GatewayModelRefreshResult): void {
+  for (const subscriber of gatewayModelRefreshSubscribers) subscriber(result);
+}
+
+function refreshGatewayModels(): void {
+  const generation = gatewayModelRefreshGeneration + 1;
+  gatewayModelRefreshGeneration = generation;
+  invalidateSharedBootstrap();
+  resetModelRequestCache();
+  void fetchModels().then(
+    ({ models }): void => {
+      if (generation === gatewayModelRefreshGeneration) {
+        publishGatewayModelRefresh({ kind: "success", models });
+      }
+    },
+    (error_: unknown): void => {
+      if (generation === gatewayModelRefreshGeneration) {
+        publishGatewayModelRefresh({ kind: "failure", message: errorMessage(error_) });
+      }
+    },
+  );
+}
+
+function subscribeGatewayModelRefresh(
+  subscriber: (result: GatewayModelRefreshResult) => void,
+): () => void {
+  if (gatewayModelRefreshSubscribers.size === 0) {
+    window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
+  }
+  gatewayModelRefreshSubscribers.add(subscriber);
+  return (): void => {
+    gatewayModelRefreshSubscribers.delete(subscriber);
+    if (gatewayModelRefreshSubscribers.size === 0) {
+      window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
+    }
+  };
+}
 
 function cloneSessionPatch(patch: Partial<SessionState>): Partial<SessionState> {
   const cloned: Partial<SessionState> = { ...patch };
@@ -1551,6 +1594,7 @@ function sharedFetchChatMessages(
 
 export function clearChatSessionBootstrapCacheForTests(): void {
   invalidateSharedBootstrap();
+  gatewayModelRefreshGeneration += 1;
   sharedChatListInflight.clear();
   sharedChatMessagesInflight.clear();
   for (const entry of sharedRunSummarySyncs.values()) entry.controller.abort();
@@ -1881,23 +1925,6 @@ function refreshSessionModels(
     models,
     selectedModel: resolveSelectedModelId(previous.selectedModel, models),
   };
-}
-
-interface SessionModelRefreshContext {
-  readonly isCancelled: () => boolean;
-  readonly setError: Dispatch<SetStateAction<string | undefined>>;
-  readonly setState: Dispatch<SetStateAction<SessionState>>;
-}
-
-async function loadRefreshedSessionModels(context: SessionModelRefreshContext): Promise<void> {
-  try {
-    const { models } = await fetchModels();
-    if (!context.isCancelled()) {
-      context.setState((previous) => refreshSessionModels(previous, models));
-    }
-  } catch (error_) {
-    if (!context.isCancelled()) context.setError(errorMessage(error_));
-  }
 }
 
 // Sonar S2004 — extracted out of streamUngrounded's `.catch` handler (itself already nested
@@ -2697,24 +2724,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   }, [autoCreate, canonicalVoiceProjectionRef]);
 
   useEffect(() => {
-    let cancelled = false;
-    let refreshGeneration = 0;
-    const refreshModels = (): void => {
-      refreshGeneration += 1;
-      const generation = refreshGeneration;
-      invalidateSharedBootstrap();
-      resetModelRequestCache();
-      void loadRefreshedSessionModels({
-        isCancelled: () => cancelled || generation !== refreshGeneration,
-        setError,
-        setState,
-      });
-    };
-    window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshModels);
-    return (): void => {
-      cancelled = true;
-      window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshModels);
-    };
+    return subscribeGatewayModelRefresh((result): void => {
+      if (result.kind === "failure") {
+        setError(result.message);
+        return;
+      }
+      setState((previous) => refreshSessionModels(previous, result.models));
+    });
   }, []);
 
   useEffect(() => {

@@ -143,10 +143,9 @@ export function resetConversationMemorySettingsForTests(): void {
       (scope) => !scopeSettingsEqual(scope, DEFAULT_MEMORY_SCOPE),
     ) ||
     currentMode !== DEFAULT_MEMORY_SETTINGS.mode;
-  const modeChanged = currentMode !== DEFAULT_MEMORY_SETTINGS.mode;
   defaultScopeSettings = DEFAULT_MEMORY_SCOPE;
   conversationScopes.clear();
   currentMode = DEFAULT_MEMORY_SETTINGS.mode;
-  if (modeChanged) currentModeRevision += 1;
+  currentModeRevision = 0;
   if (changed) notifySubscribers();
 }

@@ -182,6 +182,7 @@ interface SelectBodyOptions {
   readonly updateCfg: (patch: AppWindow["cfg"]) => void;
   readonly openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
   readonly focusWindow: (id: string) => void;
+  readonly currentWindowStack: (() => readonly string[]) | undefined;
   readonly restoreWindow: ((id: string) => void) | undefined;
   readonly updateWindow: (id: string, patch: Partial<AppWindow>) => void;
   readonly openEditorFile: WorkspaceApi["openEditorFile"];
@@ -202,6 +203,7 @@ function selectBody({
   updateCfg,
   openWindow,
   focusWindow,
+  currentWindowStack,
   restoreWindow,
   updateWindow,
   openEditorFile,
@@ -235,6 +237,7 @@ function selectBody({
         updateCfg,
         openWindow,
         focusWindow,
+        currentWindowStack,
         restoreWindow,
         updateWindow,
         openEditorFile,
@@ -264,6 +267,7 @@ function selectBody({
       updateCfg,
       openWindow,
       focusWindow,
+      currentWindowStack,
       restoreWindow,
       updateWindow,
       openEditorFile,
@@ -842,6 +846,7 @@ function WindowFrameImpl({
     [api],
   );
   const focusWindow = useCallback((id: string): void => api.focus(id), [api]);
+  const currentWindowStack = api.currentWindowStack;
   const restoreWindow = useCallback((id: string): void => api.restore(id), [api]);
   const updateWindow = useCallback(
     (id: string, patch: Partial<AppWindow>): void => api.update(id, patch),
@@ -870,6 +875,7 @@ function WindowFrameImpl({
         updateCfg,
         openWindow,
         focusWindow,
+        currentWindowStack,
         restoreWindow,
         updateWindow,
         openEditorFile,
@@ -889,6 +895,7 @@ function WindowFrameImpl({
       updateCfg,
       openWindow,
       focusWindow,
+      currentWindowStack,
       restoreWindow,
       updateWindow,
       openEditorFile,

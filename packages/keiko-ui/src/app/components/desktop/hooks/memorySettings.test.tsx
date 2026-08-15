@@ -127,6 +127,16 @@ describe("conversation memory settings store", () => {
     expect(currentConversationMemoryModeRevision()).toBe(initialRevision + 2);
   });
 
+  it("restores the mode revision baseline through the test reset seam", () => {
+    const { result } = renderHook(() => useConversationMemorySettings());
+    act(() => result.current.setMemoryMode("autonomous-delivery"));
+    expect(currentConversationMemoryModeRevision()).toBeGreaterThan(0);
+
+    act(() => resetConversationMemorySettingsForTests());
+
+    expect(currentConversationMemoryModeRevision()).toBe(0);
+  });
+
   it.each([-5, 0, Number.NaN, Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY])(
     "fails closed to a zero-token budget for invalid input %s",
     (budget) => {
