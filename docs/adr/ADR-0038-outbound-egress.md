@@ -46,6 +46,34 @@ single-credential posture: the proxy layer may not introduce additional secrets.
    (`FIGMA_NETWORK_UNREACHABLE`, `FIGMA_EGRESS_TIMEOUT`, `FIGMA_EGRESS_FAILED`). This fixes the
    #884 misattribution where a no-proxy runtime reported "the forward proxy rejected the
    request".
+6. **Proxied DNS pinning is opt-in (`egress.pinProxiedConnectTarget`), because the default posture
+   cannot honestly claim it for every deployment.** `gatewayFetch` already resolves and vets a
+   target's DNS itself and pins the actual connect to the validated address set on the direct
+   (unproxied) path (AUDIT-SEC-001) — so a hostname that only looks safe as a literal string but
+   *resolves* to a blocked address (a private/loopback/metadata range) is still refused, not just
+   one that is blocked by its literal shape. Through a proxy, `gatewayFetch` cannot make that same
+   guarantee by default: the proxy resolves the target hostname independently at its own CONNECT
+   (or forwarded-request) time, so a lookup Keiko performs beforehand validates an address set that
+   is never bound to use — a hostile or hijacked name can resolve to a public address for Keiko's
+   own check and rebind to a blocked one for the proxy's connect a moment later. Pre-resolving DNS
+   and trusting that lookup as protection would be a guarantee the code cannot keep, so by default
+   the DNS-level check is skipped entirely when a proxy is configured (the literal-shape check in
+   `outboundTargetBlockedReason` still always runs). Two fixes that look obvious were rejected: a
+   plain pre-proxy lookup is the exact TOCTOU gap just described, not a fix for it; and refusing
+   every proxied request outright breaks first-class, common proxied deployments (Atlassian per
+   ADR-0128 D3, and the model gateway itself) that have nothing to do with the gap. Instead,
+   `egress.pinProxiedConnectTarget` (off by default, never config-file/env-mapped — a caller must
+   construct it explicitly, exactly like `denyLoopback`) makes `gatewayFetch` resolve and vet the
+   target itself, the same way it already does for the direct path, and then hand the *vetted
+   address* — not the hostname — to the proxy layer: the CONNECT tunnel's authority for an HTTPS
+   target, or the forwarded absolute-URI's host for a plain-HTTP target. The proxy has nothing left
+   to resolve, so there is no second, independent resolution to rebind. TLS server-name identity
+   (SNI) and the `Host` header both still carry the real hostname regardless, so certificate
+   validation and virtual-hosting on the origin are unaffected — only the wire-level dial target
+   changes. Resolution returning no usable address fails closed (`PROXY_BLOCKED_BY_POLICY`) rather
+   than silently falling back to an unpinned connect. Enabling this also lifts the `denyLoopback`
+   proxy refusal (D6's own mechanism satisfies the guarantee that refusal exists to protect,
+   instead of requiring an external contract with the proxy operator).
 
 ## Consequences
 
@@ -57,4 +85,12 @@ single-credential posture: the proxy layer may not introduce additional secrets.
   response bodies are size-capped on the streamed paths and at the connector ports.
 - Residual scope: streaming SSE through the CONNECT tunnel inherits the same byte cap as the
   buffered path; proxy authentication remains intentionally unsupported until a concrete
-  customer requirement defines its secret-handling story.
+  customer requirement defines its secret-handling story. Without D6's opt-in
+  `pinProxiedConnectTarget`, a proxied request's DNS-resolved address is still not vetted by
+  Keiko — this is the accepted default posture, not an oversight, because a corporate proxy that
+  filters CONNECT/forwarded requests by hostname (a legitimate, common pattern) would see an
+  IP-literal target instead of a hostname and could reject it; an operator must confirm their
+  proxy tolerates that before opting in. No v1 caller defaults it on, including the Atlassian
+  connector lane (ADR-0128 D3) — its single-host, operator-configured allowlist makes it a
+  reasonable candidate for a future default-on decision once validated against real proxied
+  deployments, but that is a separate, connector-specific call this record does not make.

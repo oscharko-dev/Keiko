@@ -764,6 +764,305 @@ describe("gatewayFetch DNS-rebinding pinning (AUDIT-SEC-001)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// gatewayFetch proxied DNS pinning — egress.pinProxiedConnectTarget (ADR-0038 D6)
+// ---------------------------------------------------------------------------
+//
+// Off a proxy, gatewayFetch already resolves+vets DNS itself and pins the connect to the
+// validated address (AUDIT-SEC-001, above). Through a proxy it normally cannot: the proxy
+// resolves the target hostname independently at its own connect time, so a target that is not
+// LITERALLY loopback/private-shaped but RESOLVES to a blocked address slips through unvalidated
+// (planGatewayDns's `pinForConnect` is false whenever a proxy is used). `pinProxiedConnectTarget`
+// closes that gap by having Keiko resolve+vet the target itself, exactly as it already does for
+// the direct path, and then handing the proxy layer the vetted address instead of the hostname —
+// an HTTPS CONNECT authority or, for a plain-HTTP target, the forwarded absolute-URI's host.
+
+describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6)", () => {
+  it("pins a plain-HTTP proxied request to the vetted address, defeating a hostname that only resolves for Keiko's own lookup", async () => {
+    // Mirrors the AUDIT-SEC-001 direct-path test's technique exactly, through a real two-hop
+    // forward proxy instead of a direct connect. "pinned-target.invalid" is an RFC 2606 reserved
+    // TLD that does not resolve on any real network; the fake proxy below performs its OWN,
+    // completely unmocked resolution of whatever host the forwarded absolute-URI names (Node's
+    // own http.request hostname resolution does not go through the "node:dns/promises" module
+    // this test mocks, so the proxy's forward-connect is a genuine, real DNS attempt). Before this
+    // fix, the proxy would receive "pinned-target.invalid" verbatim and fail with ENOTFOUND. After
+    // the fix, it receives the vetted "127.0.0.1" and reaches the real origin below.
+    const origin = createHttpServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ via: "pinned-proxy" }));
+    });
+    const originPort = await listen(origin);
+    let capturedHost: string | undefined;
+    const proxy = createHttpServer((req, res) => {
+      capturedHost = req.headers.host;
+      const forward = httpRequest(req.url ?? "", { headers: req.headers }, (upstreamRes) => {
+        res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+        upstreamRes.pipe(res);
+      });
+      forward.on("error", () => {
+        res.writeHead(502);
+        res.end("proxy forward failed");
+      });
+      req.pipe(forward);
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "127.0.0.1", family: 4 }])),
+      }));
+      const { gatewayFetch: pinnedGatewayFetch } = await import("./http.js");
+      const response = await pinnedGatewayFetch(
+        `http://pinned-target.invalid:${String(originPort)}/manual`,
+        {
+          egress: {
+            httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+            pinProxiedConnectTarget: true,
+          },
+        },
+      );
+      expect(await response.json()).toEqual({ via: "pinned-proxy" });
+      // The proxy still sees the ORIGINAL hostname via the Host header (virtual-hosting/identity
+      // is unaffected) even though the request line it received was rewritten to the address.
+      expect(capturedHost).toBe(`pinned-target.invalid:${String(originPort)}`);
+    } finally {
+      await close(origin);
+      await close(proxy);
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+    }
+  });
+
+  it("leaves an unresolvable hostname unresolvable through a proxy when the flag is off (default-off preserves the existing gap honestly)", async () => {
+    // Same setup as the test above, MINUS pinProxiedConnectTarget: the forward proxy receives the
+    // literal, genuinely non-resolving hostname, and ITS OWN forward attempt fails — a real proxy
+    // would answer exactly this way (a valid HTTP 502, not a transport-level rejection: fetch never
+    // throws on a non-2xx status). This pins the default behavior: opting in is what changes
+    // anything, nothing is silently different, and gatewayFetch itself never even attempts its own
+    // DNS work here (planGatewayDns.pinForProxyConnect is false without the flag).
+    const proxy = createHttpServer((req, res) => {
+      const forward = httpRequest(req.url ?? "", { headers: req.headers }, (upstreamRes) => {
+        res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+        upstreamRes.pipe(res);
+      });
+      forward.on("error", () => {
+        res.writeHead(502);
+        res.end("proxy forward failed");
+      });
+      req.pipe(forward);
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "127.0.0.1", family: 4 }])),
+      }));
+      const { gatewayFetch: unpinnedGatewayFetch } = await import("./http.js");
+      const response = await unpinnedGatewayFetch("http://pinned-target.invalid/manual", {
+        egress: { httpProxy: `http://127.0.0.1:${String(proxyPort)}` },
+        timeoutMs: 2_000,
+      });
+      expect(response.status).toBe(502);
+    } finally {
+      await close(proxy);
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+    }
+  });
+
+  it("pins an HTTPS proxied CONNECT tunnel's authority to the vetted address instead of the hostname", async () => {
+    // "localhost" is used as the target (rather than an *.invalid host, as above) because this
+    // path goes through startTargetTls, which validates the origin's certificate against the SNI
+    // servername — TEST_TLS_CERT's SAN only covers localhost/127.0.0.1, and generating a
+    // throwaway cert for a second hostname is unnecessary: the mechanism under test is what
+    // authority the CONNECT line carries, which this asserts DIRECTLY off the wire rather than
+    // inferring it from whether the connection happened to succeed. See the plain-HTTP test above
+    // for the genuine "defeats a hostname that cannot resolve on its own" proof.
+    const dir = mkdtempSync(join(tmpdir(), "keiko-proxy-pin-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json", connection: "close" });
+      res.end(JSON.stringify({ secure: true }));
+    });
+    const originSockets = new Set<Socket>();
+    origin.on("connection", (socket) => {
+      originSockets.add(socket);
+      socket.once("close", () => originSockets.delete(socket));
+    });
+    const originPort = await listen(origin);
+    let capturedConnectAuthority: string | undefined;
+    const proxySockets = new Set<Socket>();
+    const proxy = createHttpServer();
+    proxy.on("connection", (socket) => {
+      proxySockets.add(socket);
+      socket.once("close", () => proxySockets.delete(socket));
+    });
+    proxy.on("connect", (req, clientSocket, head) => {
+      capturedConnectAuthority = req.url ?? "";
+      const [host, portText] = capturedConnectAuthority.split(":");
+      const upstream = netConnect(Number(portText), host, () => {
+        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length > 0) upstream.write(head);
+        pipeBounded(upstream, clientSocket);
+        pipeBounded(clientSocket, upstream);
+      });
+      upstream.on("error", () => clientSocket.destroy());
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "127.0.0.1", family: 4 }])),
+      }));
+      const { gatewayFetch: pinnedGatewayFetch } = await import("./http.js");
+      const response = await pinnedGatewayFetch(`https://localhost:${String(originPort)}/secure`, {
+        egress: {
+          httpsProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          caBundlePath,
+          pinProxiedConnectTarget: true,
+        },
+      });
+      expect(await response.json()).toEqual({ secure: true });
+      expect(capturedConnectAuthority).toBe(`127.0.0.1:${String(originPort)}`);
+    } finally {
+      for (const socket of proxySockets) socket.destroy();
+      for (const socket of originSockets) socket.destroy();
+      await close(proxy);
+      await close(origin);
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still refuses a proxied request when the vetted address is blocked (e.g. metadata), before contacting the proxy", async () => {
+    let proxyHits = 0;
+    const proxy = createHttpServer(() => {
+      proxyHits += 1;
+    });
+    proxy.on("connect", (_req, clientSocket) => {
+      proxyHits += 1;
+      clientSocket.destroy();
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "169.254.169.254", family: 4 }])),
+      }));
+      const { gatewayFetch: pinnedGatewayFetch } = await import("./http.js");
+      await expect(
+        pinnedGatewayFetch("https://metadata-behind-proxy.invalid/latest/meta-data", {
+          egress: {
+            httpsProxy: `http://127.0.0.1:${String(proxyPort)}`,
+            pinProxiedConnectTarget: true,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "PROXY_BLOCKED_BY_POLICY" });
+      expect(proxyHits).toBe(0);
+    } finally {
+      await close(proxy);
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+    }
+  });
+
+  it("fails closed rather than falling back to unpinned proxying when resolution yields no usable address", async () => {
+    let proxyHits = 0;
+    const proxy = createHttpServer(() => {
+      proxyHits += 1;
+    });
+    proxy.on("connect", (_req, clientSocket) => {
+      proxyHits += 1;
+      clientSocket.destroy();
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([])),
+      }));
+      const { gatewayFetch: pinnedGatewayFetch } = await import("./http.js");
+      await expect(
+        pinnedGatewayFetch("https://empty-resolution.invalid/path", {
+          egress: {
+            httpsProxy: `http://127.0.0.1:${String(proxyPort)}`,
+            pinProxiedConnectTarget: true,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "PROXY_BLOCKED_BY_POLICY" });
+      expect(proxyHits).toBe(0);
+    } finally {
+      await close(proxy);
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+    }
+  });
+
+  it("allows research egress through a proxy once pinning covers it, instead of the blanket refusal", async () => {
+    // Companion to "refuses research egress through a proxy" above: denyLoopback refuses a
+    // proxied request because it cannot normally pin the address. Adding pinProxiedConnectTarget
+    // removes exactly that obstacle, so the combination is no longer refused. The mocked address
+    // is deliberately public (203.0.113.10, RFC 5737 TEST-NET-3, matching the ORIGINAL refusal
+    // test's own choice) — 127.0.0.1 would itself be blocked by denyLoopback and the test would
+    // pass for the wrong reason. The target hostname is likewise a non-loopback-looking string
+    // (outboundTargetBlockedReason's LITERAL check runs before any DNS lookup, so "localhost"
+    // would be blocked regardless of what the mock answers). The proxy forwards to the local
+    // origin by path only, ignoring the absolute-URI's host, so this test never actually dials
+    // 203.0.113.10 (reserved/non-routable, but not a real connection this hermetic suite should
+    // attempt either way) — it isolates "is the blanket refusal lifted" from "does the specific
+    // address get dialed", which the dedicated CONNECT-authority test above already covers.
+    const origin = createHttpServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ via: "research-proxy" }));
+    });
+    const originPort = await listen(origin);
+    const proxy = createHttpServer((req, res) => {
+      const incoming = new URL(req.url ?? "", "http://placeholder");
+      const forward = httpRequest(
+        {
+          hostname: "127.0.0.1",
+          port: originPort,
+          path: `${incoming.pathname}${incoming.search}`,
+          method: req.method,
+          headers: req.headers,
+        },
+        (upstreamRes) => {
+          res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+          upstreamRes.pipe(res);
+        },
+      );
+      forward.on("error", () => {
+        res.writeHead(502);
+        res.end("proxy forward failed");
+      });
+      req.pipe(forward);
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "203.0.113.10", family: 4 }])),
+      }));
+      const { gatewayFetch: researchGatewayFetch } = await import("./http.js");
+      const response = await researchGatewayFetch("http://research-target.invalid/docs", {
+        egress: {
+          denyLoopback: true,
+          pinProxiedConnectTarget: true,
+          httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+        },
+      });
+      expect(await response.json()).toEqual({ via: "research-proxy" });
+    } finally {
+      await close(origin);
+      await close(proxy);
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // isMissingIssuerError — only UNABLE_TO_GET_ISSUER_CERT_LOCALLY triggers fallback
 // ---------------------------------------------------------------------------
 

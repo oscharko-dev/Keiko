@@ -221,7 +221,16 @@ and its host is extracted as the connector's **sole** allowlisted egress host. A
 requests may only target that host; there is no cross-connector or wildcard allowlist. This is
 enforced twice: once at connector-creation validation, and again at request-construction time in
 the `AtlassianHttpPort` adapter (defense in depth, mirroring the existing
-`outboundTargetBlockedReason` DNS/address re-check pattern in `keiko-model-gateway/src/http.ts`).
+`outboundTargetBlockedReason` literal hostname/address-shape re-check in
+`keiko-model-gateway/src/http.ts`, applied via `classifyOutboundHost` — see `httpPort.ts`'s
+`isBlockedLoopbackTarget`). That literal-shape check runs unconditionally, proxied or not; the
+gateway's *DNS-resolved* address re-check (`enforceOutboundTargetPolicy` with `resolveDns: true`)
+additionally requires `egress.pinProxiedConnectTarget` when this connector's traffic is proxied
+(ADR-0038 D6) — proxied deployments are first-class for this lane (below), and this connector does
+not enable that opt-in by default in v1, so a proxied connector's DNS-resolved address is covered
+by the literal check but not independently re-validated after resolution. See `httpPort.ts`'s
+residual-gap comment above `isBlockedLoopbackTarget` for the full reasoning and what enabling it
+would require.
 
 **Transport:** the concrete adapter is built from `gatewayFetch` (ADR-0038), reusing its existing
 proxy/CA composition unchanged — no connector-specific proxy or CA logic is introduced. Proxy
