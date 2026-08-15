@@ -221,7 +221,17 @@ async function readLastSync(
     const path = isAbsolute(rawPath) ? rawPath : resolve(repo.repositoryRoot, rawPath);
     if (!containsPath(repo.repositoryRoot, path)) return undefined;
     const info = await stat(path);
-    return { lastFetchAtMs: Math.round(info.mtimeMs) };
+    const lastFetchAtMs = Math.round(info.mtimeMs);
+    // Codex P2 (thread 3788736980): a pre-epoch mtime (a restored archive, or `touch -d
+    // 1960-01-01`) makes Node report a NEGATIVE mtimeMs, which Math.round preserves -- and the
+    // wire contract declares lastFetchAtMs a non-negative integer
+    // (git-repository-summary.ts's isGitLastSyncMetadata, pinned by its own test asserting
+    // lastFetchAtMs: -1 is rejected). Reconciled on the producer side, not by loosening that
+    // validator: a pre-epoch mtime is a filesystem artifact, not a meaningful "last synced at"
+    // signal, so it is omitted here the same way every other "cannot determine" case above is,
+    // rather than forwarding a value the contract then fails a legitimate local repository on.
+    if (lastFetchAtMs < 0) return undefined;
+    return { lastFetchAtMs };
   } catch {
     return undefined;
   }

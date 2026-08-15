@@ -148,6 +148,21 @@ function isNonNegativeInteger(input: unknown): input is number {
 
 const TEXT_ENCODER = new TextEncoder();
 
+// The producer clamps `diff` to `maxBytes` by cutting the ENCODED byte buffer at an arbitrary
+// offset and decoding it back to a string (Buffer.subarray(0, maxBytes).toString("utf8")), which
+// can land inside a multi-byte UTF-8 sequence. The WHATWG UTF-8 decoder replaces an incomplete
+// trailing sequence at end-of-input with exactly one U+FFFD replacement character, never more --
+// that is the decoder's defined behaviour, not this codebase's own formula, so it cannot drift the
+// way a hand-derived number could. U+FFFD itself encodes to 3 UTF-8 bytes (EF BF BD). The smallest
+// number of bytes an "incomplete" trailing sequence can consist of is 1 (a lone leading byte of a
+// 2/3/4-byte sequence): fewer than 1 byte isn't a sequence at all. So the worst case is a 1-byte
+// remnant, still counted against maxBytes, replaced by the 3-byte replacement character on
+// re-encode -- an overage of (replacement bytes) - (minimum remnant bytes).
+const UTF8_REPLACEMENT_CHARACTER_BYTES = 3; // U+FFFD = EF BF BD
+const MIN_INCOMPLETE_UTF8_SEQUENCE_BYTES = 1;
+export const GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES =
+  UTF8_REPLACEMENT_CHARACTER_BYTES - MIN_INCOMPLETE_UTF8_SEQUENCE_BYTES;
+
 function validateChange(input: unknown, reasons: string[], index: number): void {
   if (!isRecord(input)) {
     reasons.push(`changes[${String(index)}] must be an object`);
@@ -251,9 +266,19 @@ function validateDiffTruncationConsistency(
   reasons: string[],
 ): void {
   if (!isString(input.diff) || !isNonNegativeInteger(input.maxBytes)) return;
-  const exceedsCap = TEXT_ENCODER.encode(input.diff).length > input.maxBytes;
-  if (exceedsCap && input.truncated !== true) {
+  const actualBytes = TEXT_ENCODER.encode(input.diff).length;
+  if (actualBytes > input.maxBytes && input.truncated !== true) {
     reasons.push("truncated must be true when diff exceeds maxBytes");
+  }
+  // `truncated: true` describes that the SOURCE was cut, not a waiver on the OUTPUT bound: a
+  // hostile response could otherwise claim truncated: true and carry a diff of any size. The
+  // producer's own truncation can legitimately overshoot maxBytes by at most
+  // GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES (see its derivation above); anything past that is not a
+  // truncation artifact.
+  if (actualBytes > input.maxBytes + GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES) {
+    reasons.push(
+      `diff must not exceed maxBytes by more than ${String(GIT_DIFF_TRUNCATION_MAX_OVERAGE_BYTES)} bytes`,
+    );
   }
 }
 

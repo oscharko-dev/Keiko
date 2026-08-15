@@ -45,11 +45,16 @@ type UnknownRecord = Readonly<Record<string, unknown>>;
 
 const OPAQUE_REF_PATTERN = /^[a-z0-9][a-z0-9._-]{2,95}$/u;
 // workspace-trust.ts's policyVersion field is a free-standing version string, not an opaque
-// reference, but the two happen to share the exact same syntax rule (KEIKO-0162: workspace-trust.ts
-// used to carry its own character-for-character copy of this pattern under a different name).
-// Re-exported under its own name so a future change to either rule does not silently retarget the
-// other by coincidence of a shared regex object.
-export const WORKSPACE_POLICY_VERSION_PATTERN = OPAQUE_REF_PATTERN;
+// reference, but the two happen to share the exact same syntax rule today (KEIKO-0162:
+// workspace-trust.ts used to carry its own character-for-character copy of this pattern under a
+// different name). A distinct RegExp literal, not an alias to OPAQUE_REF_PATTERN: this is a
+// clarity choice, not a mutation-safety one -- neither pattern carries the `g`/`y` flag, so
+// `.test()` never reads or writes `.lastIndex` on either object (KfQ thread 3788742105 raised a
+// shared-mutable-lastIndex concern that does not apply here, confirmed by checking the flags and
+// every call site). The two literals exist separately so a future change to either rule is a
+// one-line diff at its own definition, not an implicit change to the object the other rule also
+// happens to reference.
+export const WORKSPACE_POLICY_VERSION_PATTERN = /^[a-z0-9][a-z0-9._-]{2,95}$/u;
 const SHA_256_PATTERN = /^[a-f0-9]{64}$/u;
 const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 const NON_KNOWN_FACT_OUTCOMES = ["unknown", "unavailable", "absent"] as const;

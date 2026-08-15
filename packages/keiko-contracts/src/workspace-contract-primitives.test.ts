@@ -197,12 +197,25 @@ describe("isWorkspaceRevision / hasWorkspaceControlCharacter / WORKSPACE_POLICY_
     expect(hasWorkspaceControlCharacter("emoji\u{1f600}ok")).toBe(false);
   });
 
-  it("is the exact opaque-ref syntax rule, shared by reference rather than re-derived (pin)", () => {
+  it("is the exact opaque-ref syntax rule, kept in sync by value rather than re-derived (pin)", () => {
     expect(WORKSPACE_POLICY_VERSION_PATTERN.source).toBe("^[a-z0-9][a-z0-9._-]{2,95}$");
     expect(WORKSPACE_POLICY_VERSION_PATTERN.test("v1.2.3")).toBe(true);
     expect(WORKSPACE_POLICY_VERSION_PATTERN.test("release_2026-08")).toBe(true);
     expect(WORKSPACE_POLICY_VERSION_PATTERN.test("ab")).toBe(false);
     expect(WORKSPACE_POLICY_VERSION_PATTERN.test("Policy-1")).toBe(false);
     expect(WORKSPACE_POLICY_VERSION_PATTERN.test("a".repeat(97))).toBe(false);
+  });
+
+  // KfQ thread 3788742105 raised a shared-mutable-RegExp-state concern: that a consumer mutating
+  // `.lastIndex` on this exported pattern could corrupt matching elsewhere. That mechanism requires
+  // the `g` or `y` flag -- without either, `.test()` never reads or writes `.lastIndex` at all, so
+  // this pin is what makes the concern inapplicable, not merely commentary about it: if either flag
+  // were ever added here, this test would fail before the mutation risk became real.
+  it("carries neither the global nor sticky flag, so .lastIndex is inert for .test()", () => {
+    expect(WORKSPACE_POLICY_VERSION_PATTERN.global).toBe(false);
+    expect(WORKSPACE_POLICY_VERSION_PATTERN.sticky).toBe(false);
+    WORKSPACE_POLICY_VERSION_PATTERN.lastIndex = 999_999;
+    expect(WORKSPACE_POLICY_VERSION_PATTERN.test("v1.2.3")).toBe(true);
+    WORKSPACE_POLICY_VERSION_PATTERN.lastIndex = 0;
   });
 });

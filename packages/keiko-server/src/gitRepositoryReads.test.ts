@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import { Readable } from "node:stream";
@@ -354,6 +354,33 @@ describe("GET /api/git/summary", () => {
       .mockResolvedValueOnce(ok(porcelain(["# branch.head main"])))
       .mockResolvedValueOnce(ok(""))
       .mockResolvedValueOnce(ok(`${missing}\n`));
+
+    const result = await handleGitSummary(
+      ctx(`/api/git/summary?root=${encodeURIComponent(root)}`),
+      deps(runner, (value) => value),
+    );
+
+    expect((result.body as { lastSync?: unknown }).lastSync).toBeUndefined();
+  });
+
+  // Codex P2 (thread 3788736980): a restored archive or `touch -d 1960-01-01` leaves FETCH_HEAD
+  // with a pre-epoch mtime, which Node reports as a NEGATIVE mtimeMs -- forwarding that verbatim
+  // would make the wire contract's own validator (isGitLastSyncMetadata, which requires a
+  // non-negative integer) reject a response this route itself produced, failing the summary fetch
+  // for an otherwise valid local repository. Omitted here rather than surfaced as a meaningless
+  // negative timestamp, the same way every other "cannot determine" case in readLastSync is.
+  it("omits lastSync when FETCH_HEAD has a pre-epoch mtime", async () => {
+    const fetchHead = join(root, "FETCH_HEAD");
+    await writeFile(fetchHead, "0".repeat(40));
+    const realFetchHead = await realpath(fetchHead);
+    const preEpoch = new Date("1960-01-01T00:00:00Z");
+    await utimes(realFetchHead, preEpoch, preEpoch);
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(ok(porcelain(["# branch.head main"])))
+      .mockResolvedValueOnce(ok(""))
+      .mockResolvedValueOnce(ok(`${realFetchHead}\n`));
 
     const result = await handleGitSummary(
       ctx(`/api/git/summary?root=${encodeURIComponent(root)}`),
