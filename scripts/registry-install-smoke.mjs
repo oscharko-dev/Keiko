@@ -8,6 +8,7 @@ import { PINNED_YARN, pinnedYarnLocatorParts, yarnLocatorParts } from "./lib/pin
 import {
   privateYarnHome,
   provisionPinnedYarnForSetup,
+  withCorepackYarnCacheLock,
   yarnChildEnv,
   YARN_RC_FILENAME,
 } from "./installable-package-smoke.mjs";
@@ -155,7 +156,6 @@ async function yarnSmoke() {
   const projectDir = mkdtempSync(join(tmpdir(), "keiko-registry-yarn-"));
   const yarnHome = privateYarnHome();
   try {
-    provisionPinnedYarnForSetup(yarnLocator);
     writeFileSync(
       join(projectDir, "package.json"),
       JSON.stringify(
@@ -184,10 +184,17 @@ async function yarnSmoke() {
         "",
       ].join("\n"),
     );
-    run("corepack", ["yarn", "install", "--no-immutable", "--mode=skip-build"], {
-      cwd: projectDir,
-      env: yarnChildEnv(registry, process.env, yarnHome, yarnLocator),
-    });
+    withCorepackYarnCacheLock(
+      yarnLocator,
+      () => {
+        provisionPinnedYarnForSetup(yarnLocator, timeoutMs);
+        run("corepack", ["yarn", "install", "--no-immutable", "--mode=skip-build"], {
+          cwd: projectDir,
+          env: yarnChildEnv(registry, process.env, yarnHome, yarnLocator),
+        });
+      },
+      timeoutMs,
+    );
     await assertInstalledRuntime(projectDir);
   } finally {
     rmSync(yarnHome, { recursive: true, force: true });

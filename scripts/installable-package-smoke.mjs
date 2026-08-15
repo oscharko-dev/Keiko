@@ -172,6 +172,83 @@ function sleep(ms) {
   return new Promise((resolvePromise) => globalThis.setTimeout(resolvePromise, ms));
 }
 
+const COREPACK_CACHE_LOCK_POLL_MS = 100;
+const COREPACK_CACHE_LOCK_STALE_MS = 30 * 60_000;
+const heldCorepackCacheLocks = new Set();
+
+function sleepSync(ms) {
+  const buffer = new SharedArrayBuffer(4);
+  Atomics.wait(new Int32Array(buffer), 0, 0, ms);
+}
+
+function corepackCacheLockDir(locator) {
+  return `${corepackCacheDir(locator)}.lock`;
+}
+
+function removeStaleCorepackCacheLock(lockDir, timeoutMs) {
+  let stats;
+  try {
+    stats = statSync(lockDir);
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  const staleAfterMs = Math.max(timeoutMs * 2, COREPACK_CACHE_LOCK_STALE_MS);
+  if (Date.now() - stats.mtimeMs > staleAfterMs) {
+    rmSync(lockDir, { recursive: true, force: true });
+  }
+}
+
+function acquireCorepackCacheLock(locator, timeoutMs) {
+  const lockDir = corepackCacheLockDir(locator);
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    try {
+      mkdirSync(lockDir, { mode: 0o700 });
+      writeFileSync(join(lockDir, "owner.json"), JSON.stringify({ pid: process.pid, locator }));
+      return () => rmSync(lockDir, { recursive: true, force: true });
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    }
+    removeStaleCorepackCacheLock(lockDir, timeoutMs);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      fail(`timed out waiting for Corepack cache lock for ${locator}`);
+    }
+    sleepSync(Math.min(COREPACK_CACHE_LOCK_POLL_MS, remainingMs));
+  }
+}
+
+export function withCorepackYarnCacheLock(locator, action, timeoutMs = NPM_INSTALL_TIMEOUT_MS) {
+  const lockDir = corepackCacheLockDir(locator);
+  if (heldCorepackCacheLocks.has(lockDir)) return action();
+  const release = acquireCorepackCacheLock(locator, timeoutMs);
+  heldCorepackCacheLocks.add(lockDir);
+  try {
+    return action();
+  } finally {
+    heldCorepackCacheLocks.delete(lockDir);
+    release();
+  }
+}
+
+export async function withCorepackYarnCacheLockAsync(
+  locator,
+  action,
+  timeoutMs = NPM_INSTALL_TIMEOUT_MS,
+) {
+  const lockDir = corepackCacheLockDir(locator);
+  if (heldCorepackCacheLocks.has(lockDir)) return await action();
+  const release = acquireCorepackCacheLock(locator, timeoutMs);
+  heldCorepackCacheLocks.add(lockDir);
+  try {
+    return await action();
+  } finally {
+    heldCorepackCacheLocks.delete(lockDir);
+    release();
+  }
+}
+
 function formatTsDiagnostics(diagnostics) {
   return diagnostics
     .map((diagnostic) => {
@@ -1476,20 +1553,18 @@ export function prepareOfflineSmokeForSetup() {
 }
 
 /** Caches the pinned Yarn, so no gate has to reach the package-manager host mid-run. */
-export function provisionPinnedYarnForSetup(locator = PINNED_YARN) {
-  if (isPinnedYarnCached(locator)) {
-    console.log(`provision-pinned-yarn: ${locator} already cached; no request made.`);
-    return;
+export function provisionPinnedYarnForSetup(
+  locator = PINNED_YARN,
+  timeoutMs = NPM_INSTALL_TIMEOUT_MS,
+) {
+  const provisioned = withCorepackYarnCacheLock(
+    locator,
+    () => provisionPinnedYarnUnlocked(undefined, undefined, locator, timeoutMs),
+    timeoutMs,
+  );
+  if (provisioned) {
+    console.log(`provision-pinned-yarn: ${locator} cached in ${corepackCacheDir(locator)}.`);
   }
-  // No registry and no private home, and both are correct here rather than omissions. This step
-  // runs BEFORE any local registry exists and downloads the Yarn TOOL from upstream — it resolves
-  // no project dependency, because there is no project: `corepack install --cache-only` only
-  // populates the package-manager cache. Node drops an env entry whose value is `undefined`, so
-  // the child sees no `YARN_NPM_REGISTRY_SERVER` at all rather than a broken one. The hermeticity
-  // guarantee belongs to the INSTALL, which runs with `COREPACK_ENABLE_NETWORK: "0"` and the
-  // loopback registry asserted — and which this step is what makes possible offline (#3130).
-  provisionPinnedYarn(undefined, undefined, locator);
-  console.log(`provision-pinned-yarn: ${locator} cached in ${corepackCacheDir(locator)}.`);
 }
 
 export function isPinnedYarnCached(locator = PINNED_YARN) {
@@ -1548,10 +1623,18 @@ function fileSha512Matches(path, expectedSha512) {
   }
 }
 
-function provisionPinnedYarn(registryUrl, home, locator = PINNED_YARN) {
+function provisionPinnedYarnUnlocked(
+  registryUrl,
+  home,
+  locator = PINNED_YARN,
+  timeoutMs = NPM_INSTALL_TIMEOUT_MS,
+) {
   // Already cached from an earlier run or a CI setup step: no network call at all. That keeps an
   // outage at the package-manager host from failing a gate whose dependency install is offline.
-  if (isPinnedYarnCached(locator)) return;
+  if (isPinnedYarnCached(locator)) {
+    console.log(`provision-pinned-yarn: ${locator} already cached; no request made.`);
+    return false;
+  }
   rmSync(pinnedYarnCacheEntryDir(locator), { recursive: true, force: true });
   // Provisioning must see the SAME sanitized environment as the install, or `COREPACK_HOME` is
   // honoured here and stripped there — Corepack would then cache the tool in one place and search
@@ -1561,7 +1644,7 @@ function provisionPinnedYarn(registryUrl, home, locator = PINNED_YARN) {
     COREPACK_ENABLE_NETWORK: "1",
   };
   const result = run("corepack", ["install", "--global", "--cache-only", locator], {
-    timeout: NPM_INSTALL_TIMEOUT_MS,
+    timeout: timeoutMs,
     env,
   });
   if (result.status !== 0) {
@@ -1579,6 +1662,7 @@ function provisionPinnedYarn(registryUrl, home, locator = PINNED_YARN) {
   if (!isPinnedYarnCached(locator)) {
     fail(`corepack cached ${locator}, but the cached Yarn bytes did not match pinned integrity.`);
   }
+  return true;
 }
 
 // Matched against the failed downloader's output to route the failure. Only the right-hand label
@@ -1629,12 +1713,7 @@ function writeYarnConfiguration(tmp, registryUrl) {
   writeFileSync(join(tmp, YARN_RC_FILENAME), `${lines.join("\n")}\n`);
 }
 
-export async function installIntoWithYarn(tmp, artifact, vendored, locator = PINNED_YARN) {
-  assertRegistryOnlyDescriptors(vendored ?? new Map());
-  assertStagedRootDescriptors(artifact.manifest);
-  const registry = await startLocalRegistry(artifact, vendored);
-  const yarnHome = privateYarnHome();
-  provisionPinnedYarn(registry.registryUrl, yarnHome, locator);
+function writeYarnInstallManifest(tmp, locator) {
   writeFileSync(
     join(tmp, "package.json"),
     `${JSON.stringify(
@@ -1649,6 +1728,44 @@ export async function installIntoWithYarn(tmp, artifact, vendored, locator = PIN
     )}\n`,
     "utf8",
   );
+}
+
+async function runLockedYarnInstall(tmp, registryUrl, yarnHome, locator) {
+  return await withCorepackYarnCacheLockAsync(
+    locator,
+    async () => {
+      provisionPinnedYarnUnlocked(registryUrl, yarnHome, locator, NPM_INSTALL_TIMEOUT_MS);
+      return await runAsync(
+        "corepack",
+        ["yarn", "install", "--no-immutable", "--mode=skip-build"],
+        {
+          cwd: tmp,
+          timeout: NPM_INSTALL_TIMEOUT_MS,
+          env: yarnChildEnv(registryUrl, process.env, yarnHome, locator),
+        },
+      );
+    },
+    NPM_INSTALL_TIMEOUT_MS,
+  );
+}
+
+function assertYarnInstallResult(result, registry) {
+  if (result.timedOut !== true && result.error === undefined && result.status === 0) return;
+  const outcome = result.timedOut === true ? "timed out" : `exited ${String(result.status)}`;
+  fail(
+    `Yarn registry install ${outcome} ` +
+      `(signal=${String(result.signal)}; registry=${registry.registryUrl}; ` +
+      `requests=${registry.requests.join(",")}): ` +
+      `${(result.error?.message ?? result.stderr) || result.stdout}`,
+  );
+}
+
+export async function installIntoWithYarn(tmp, artifact, vendored, locator = PINNED_YARN) {
+  assertRegistryOnlyDescriptors(vendored ?? new Map());
+  assertStagedRootDescriptors(artifact.manifest);
+  const registry = await startLocalRegistry(artifact, vendored);
+  const yarnHome = privateYarnHome();
+  writeYarnInstallManifest(tmp, locator);
   rmSync(join(tmp, "yarn.lock"), { force: true });
   // `npmRegistryServer` is set GLOBALLY, not only for the `oscharko-dev` scope (#3130): every
   // package this install resolves must come from the local registry, which serves the packed root
@@ -1657,24 +1774,8 @@ export async function installIntoWithYarn(tmp, artifact, vendored, locator = PIN
   // did — turn every Keiko pull request red.
   writeYarnConfiguration(tmp, registry.registryUrl);
   try {
-    const result = await runAsync(
-      "corepack",
-      ["yarn", "install", "--no-immutable", "--mode=skip-build"],
-      {
-        cwd: tmp,
-        timeout: NPM_INSTALL_TIMEOUT_MS,
-        env: yarnChildEnv(registry.registryUrl, process.env, yarnHome, locator),
-      },
-    );
-    if (result.timedOut === true || result.error !== undefined || result.status !== 0) {
-      const outcome = result.timedOut === true ? "timed out" : `exited ${String(result.status)}`;
-      fail(
-        `Yarn registry install ${outcome} ` +
-          `(signal=${String(result.signal)}; registry=${registry.registryUrl}; ` +
-          `requests=${registry.requests.join(",")}): ` +
-          `${(result.error?.message ?? result.stderr) || result.stdout}`,
-      );
-    }
+    const result = await runLockedYarnInstall(tmp, registry.registryUrl, yarnHome, locator);
+    assertYarnInstallResult(result, registry);
   } finally {
     await registry.close();
     rmSync(yarnHome, { recursive: true, force: true });

@@ -44,6 +44,7 @@ import {
   terminateProcessTree,
   vendoredDependencyNames,
   vendoredDependencyRequirements,
+  withCorepackYarnCacheLock,
   yarnChildEnv,
 } from "../installable-package-smoke.mjs";
 import { provenancePublishArgs } from "../lib/npm-publish-preflight.mjs";
@@ -1332,7 +1333,8 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(registrySource).toContain("pinnedYarnLocatorParts(PINNED_YARN)");
     expect(registrySource).toContain("registryYarnLocator()");
     expect(registrySource).toContain("packageManager: yarnLocator");
-    expect(registrySource).toContain("provisionPinnedYarnForSetup(yarnLocator)");
+    expect(registrySource).toContain("withCorepackYarnCacheLock(");
+    expect(registrySource).toContain("provisionPinnedYarnForSetup(yarnLocator, timeoutMs)");
     expect(registrySource).toContain("yarnChildEnv(registry, process.env, yarnHome, yarnLocator)");
     expect(installableSource).not.toContain('const PINNED_YARN = "yarn@4.9.1"');
     expect(registrySource).not.toContain('packageManager: "yarn@4.9.1"');
@@ -1346,6 +1348,22 @@ describe("installable package smoke optional-dependency coverage", () => {
       expect(dir.endsWith(`-${String(process.getuid())}`)).toBe(true);
       const mode = statSync(dir).mode & 0o777;
       expect(mode & 0o022).toBe(0);
+    }
+  });
+
+  it("holds the Corepack cache lock while cached Yarn may execute", () => {
+    const lockDir = `${corepackCacheDir()}.lock`;
+    rmSync(lockDir, { recursive: true, force: true });
+    try {
+      const result = withCorepackYarnCacheLock(PINNED_YARN, () => {
+        expect(existsSync(lockDir)).toBe(true);
+        return withCorepackYarnCacheLock(PINNED_YARN, () => "locked");
+      });
+
+      expect(result).toBe("locked");
+      expect(existsSync(lockDir)).toBe(false);
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
     }
   });
 
