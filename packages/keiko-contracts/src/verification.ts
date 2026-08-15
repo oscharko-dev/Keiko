@@ -359,6 +359,20 @@ export function isVerificationResult(value: unknown): value is VerificationResul
   );
 }
 
+// Shared across the package (KEIKO-0159): counts a bounded `{ status }[]` collection by one status
+// and compares against a caller-supplied count. Both isStatusCounts here and
+// editor-agent-verification.ts's parseCounts enforce "count equals the number of items at this
+// status" over VERIFICATION_STATUSES; each call site keeps its own, differently-shaped bound check
+// (VERIFICATION_MAX_REPORT_RESULTS vs EDITOR_AGENT_VERIFICATION_MAX_STEPS) since those bounds are not
+// the same invariant, but the equality rule itself is now defined exactly once.
+export function countMatchesStatus(
+  count: number,
+  status: VerificationStatus,
+  items: readonly { readonly status: VerificationStatus }[],
+): boolean {
+  return count === items.filter((item) => item.status === status).length;
+}
+
 function isStatusCounts(
   value: unknown,
   results: readonly VerificationResult[],
@@ -367,22 +381,26 @@ function isStatusCounts(
   for (const status of VERIFICATION_STATUSES) {
     const count = value[status];
     if (!isIntegerWithin(count, 0, VERIFICATION_MAX_REPORT_RESULTS)) return false;
-    if (count !== results.filter((result) => result.status === status).length) return false;
+    if (!countMatchesStatus(count, status, results)) return false;
   }
   return true;
 }
 
-function matchesOverallStatus(
+// Shared across the package (KEIKO-0159): editor-agent-verification.ts re-exports no local copy of
+// this rule and imports it directly instead, so a change to what counts as a passing verification
+// report cannot drift between the canonical contract and the agent-facing guard. The parameter is
+// deliberately the minimal projected shape (not VerificationResult) so it also accepts
+// RedactedVerificationStep, the agent-facing surface's own step shape, without coupling the two
+// report types together.
+export function matchesOverallStatus(
   overallStatus: VerificationStatus,
-  results: readonly VerificationResult[],
+  items: readonly { readonly status: VerificationStatus }[],
 ): boolean {
   if (overallStatus === "cancelled") return true;
-  if (results.some((result) => result.status === "cancelled")) {
+  if (items.some((item) => item.status === "cancelled")) {
     return false;
   }
-  const allOk = results.every(
-    (result) => result.status === "passed" || result.status === "skipped",
-  );
+  const allOk = items.every((item) => item.status === "passed" || item.status === "skipped");
   return overallStatus === (allOk ? "passed" : "failed");
 }
 

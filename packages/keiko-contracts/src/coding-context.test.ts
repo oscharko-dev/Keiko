@@ -6,10 +6,18 @@ import {
   CODING_CONTEXT_SOURCE_KINDS,
   CODING_CONTEXT_SOURCE_TIER_BY_KIND,
   CODING_CONTEXT_SOURCE_TIERS,
+  buildContextSelectors,
+  collectContextErrors,
+  collectEditorSessionIdError,
   embeddingProvidersAllowed,
   isBoundedEditorSessionId,
   isCodingContextCitation,
   isCodingContextPurpose,
+  isCostClass,
+  isNonEmptyString,
+  isNonNegativeInteger,
+  isRecord,
+  isStringArray,
   tierForCodingContextSource,
   toCodingContextWirePack,
   CODING_CONTEXT_CAPSULE_ID_MAX_CHARS,
@@ -23,6 +31,7 @@ import {
   type CodingContextPack,
   type CodingContextRequest,
 } from "./coding-context.js";
+import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
 
 function citation(overrides: Partial<CodingContextCitation> = {}): CodingContextCitation {
   return {
@@ -334,5 +343,64 @@ describe("validateCodingContextRequest", () => {
     expect(validateCodingContextRequest(validRequest({ [field]: "a".repeat(max + 1) })).ok).toBe(
       false,
     );
+  });
+});
+
+// KEIKO-0159: isRecord, isNonEmptyString, isNonNegativeInteger, isCostClass, isStringArray,
+// collectEditorSessionIdError, collectContextErrors, and buildContextSelectors used to be
+// re-implemented byte-for-byte in editor-completion.ts, editor-inline-completion.ts, and (all but
+// isCostClass) editor-test-generation.ts. They now live here as the single shared implementation
+// that all three import instead of carrying their own copy.
+describe("shared completion-contract primitives (KEIKO-0159)", () => {
+  it("isNonEmptyString is a distinct, non-trimming rule from the editor-session-id / documentPath checks above", () => {
+    // A whitespace-only string has length > 0, so the completion contracts' historical `root` /
+    // `componentName` semantics accept it -- only isBoundedEditorSessionId and documentPath (both
+    // exercised above) reject it via their own trim-sensitive check. Sharing this primitive under
+    // the two contracts' existing name must not silently pull in the stricter rule.
+    expect(isNonEmptyString("   ")).toBe(true);
+    expect(isNonEmptyString("")).toBe(false);
+    expect(isNonEmptyString(7)).toBe(false);
+    expect(isBoundedEditorSessionId("   ")).toBe(false);
+  });
+
+  it("isRecord / isNonNegativeInteger / isCostClass / isStringArray guard their exact shapes", () => {
+    expect(isRecord({})).toBe(true);
+    expect(isRecord([])).toBe(false);
+    expect(isRecord(null)).toBe(false);
+    expect(isNonNegativeInteger(0)).toBe(true);
+    expect(isNonNegativeInteger(-1)).toBe(false);
+    expect(isNonNegativeInteger(1.5)).toBe(false);
+    expect(isCostClass("medium")).toBe(true);
+    expect(isCostClass("huge")).toBe(false);
+    expect(isStringArray(["a", "b"])).toBe(true);
+    expect(isStringArray(["a", 1])).toBe(false);
+  });
+
+  it("collectEditorSessionIdError reports the one shared bounded-bytes message", () => {
+    const errors: string[] = [];
+    collectEditorSessionIdError("\u{1f600}".repeat(65), errors);
+    expect(errors).toEqual([
+      `editorSessionId must be a non-empty string of at most ${EDITOR_AGENT_SESSION_ID_MAX_BYTES.toString()} UTF-8 bytes when provided`,
+    ]);
+  });
+
+  it("collectEditorSessionIdError is a no-op for an absent value", () => {
+    const errors: string[] = [];
+    collectEditorSessionIdError(undefined, errors);
+    expect(errors).toEqual([]);
+  });
+
+  it("collectContextErrors and buildContextSelectors validate and project the same selector shape", () => {
+    const errors: string[] = [];
+    collectContextErrors({ queryText: "q", changedFiles: ["a.ts"] }, errors);
+    expect(errors).toEqual([]);
+    expect(buildContextSelectors({ queryText: "q", changedFiles: ["a.ts"] })).toEqual({
+      queryText: "q",
+      changedFiles: ["a.ts"],
+    });
+
+    const conflicting: string[] = [];
+    collectContextErrors({ capsuleId: "a", capsuleSetId: "b" }, conflicting);
+    expect(conflicting).toContain("context must not set both capsuleId and capsuleSetId");
   });
 });

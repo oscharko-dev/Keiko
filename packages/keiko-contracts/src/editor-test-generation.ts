@@ -38,8 +38,16 @@ import {
   type LanguageRange,
 } from "./language-service.js";
 import type { EditorCompletionContextSelectors } from "./editor-completion.js";
-import { isBoundedEditorSessionId, type CodingContextWirePack } from "./coding-context.js";
-import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
+import {
+  buildContextSelectors,
+  collectContextErrors,
+  collectEditorSessionIdError,
+  isBoundedEditorSessionId,
+  isNonEmptyString,
+  isNonNegativeInteger,
+  isRecord,
+  type CodingContextWirePack,
+} from "./coding-context.js";
 
 // Schema version for the test-generation envelope. Bump as a new string member when the shape changes
 // incompatibly; consumers pin against the literal to detect skew.
@@ -249,21 +257,11 @@ export interface EditorTestGenerationParseFail {
 }
 export type EditorTestGenerationParse = EditorTestGenerationParseOk | EditorTestGenerationParseFail;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
-}
-
-function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
-}
-
-function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
-}
+// isRecord, isNonEmptyString, isNonNegativeInteger, isStringArray, collectContextErrors, and
+// buildContextSelectors moved to coding-context.ts (KEIKO-0159): this file previously
+// re-implemented all six byte-for-byte identically to editor-completion.ts /
+// editor-inline-completion.ts (isCostClass is not duplicated here -- this contract has no
+// maxCostClass field).
 
 // A LanguageRange is `{ start, end }` of two LanguagePositions. Defined locally because the
 // language-service module exposes only the position guard; this keeps the test-generation contract a
@@ -283,30 +281,6 @@ function isWireSymbol(value: unknown): value is EditorTestGenerationWireSymbol {
 
 function isOverlayArray(value: unknown): value is readonly LanguageDocumentOverlay[] {
   return Array.isArray(value) && value.length > 0 && value.every(isLanguageDocumentOverlay);
-}
-
-// Collects the optional, content-bearing context selectors (identical invariants to the completion
-// gateway). Unknown-typed fields are rejected so a malformed selector cannot silently widen retrieval;
-// an absent `context` is valid.
-function collectContextErrors(context: unknown, errors: string[]): void {
-  if (context === undefined) {
-    return;
-  }
-  if (!isRecord(context)) {
-    errors.push("context must be an object when provided");
-    return;
-  }
-  for (const field of ["queryText", "symbol", "capsuleId", "capsuleSetId"] as const) {
-    if (context[field] !== undefined && typeof context[field] !== "string") {
-      errors.push(`context.${field} must be a string when provided`);
-    }
-  }
-  if (context.changedFiles !== undefined && !isStringArray(context.changedFiles)) {
-    errors.push("context.changedFiles must be an array of strings when provided");
-  }
-  if (context.capsuleId !== undefined && context.capsuleSetId !== undefined) {
-    errors.push("context must not set both capsuleId and capsuleSetId");
-  }
 }
 
 // Collects the shape errors for a single-document target (file/selection/symbol/frontend-component).
@@ -360,27 +334,13 @@ function collectRequestErrors(value: Record<string, unknown>): string[] {
   if (!isNonEmptyString(value.root)) {
     errors.push("root must be a non-empty string");
   }
-  if (value.editorSessionId !== undefined && !isBoundedEditorSessionId(value.editorSessionId)) {
-    errors.push(
-      `editorSessionId must be a non-empty string of at most ${EDITOR_AGENT_SESSION_ID_MAX_BYTES.toString()} UTF-8 bytes when provided`,
-    );
-  }
+  collectEditorSessionIdError(value.editorSessionId, errors);
   collectTargetErrors(value.target, errors);
   if (!isNonNegativeInteger(value.contextBudgetBytes)) {
     errors.push("contextBudgetBytes must be a non-negative integer");
   }
   collectContextErrors(value.context, errors);
   return errors;
-}
-
-function buildContextSelectors(context: Record<string, unknown>): EditorCompletionContextSelectors {
-  return {
-    ...(typeof context.queryText === "string" ? { queryText: context.queryText } : {}),
-    ...(typeof context.symbol === "string" ? { symbol: context.symbol } : {}),
-    ...(isStringArray(context.changedFiles) ? { changedFiles: context.changedFiles } : {}),
-    ...(typeof context.capsuleId === "string" ? { capsuleId: context.capsuleId } : {}),
-    ...(typeof context.capsuleSetId === "string" ? { capsuleSetId: context.capsuleSetId } : {}),
-  };
 }
 
 // Validates an `unknown` payload into an EditorTestGenerationWireRequest, reporting one error per failed
