@@ -97,6 +97,10 @@ const PUBLISHED_DOWNLOAD_NAMES = [
 ];
 const RELEASE_NAME = ROOT_MANIFEST.name;
 const RELEASE_SPEC = `${RELEASE_NAME}@${RELEASE_VERSION}`;
+// These cases drive the real orchestrator and its stubbed npm/gh/git/curl child-process graph.
+// Full script coverage recorded 19.6 s under the bounded two-worker scheduler. The repository-wide
+// default remains 15 s; this subprocess-heavy suite alone uses an evidence-based 60 s deadline.
+const RELEASE_PIPELINE_TEST_TIMEOUT_MS = 60_000;
 
 // A deterministic sha the stub `git` returns for both `rev-parse HEAD` and
 // `rev-parse v<version>^{}`, so ensureReleaseTag() sees HEAD === tag and proceeds.
@@ -1127,6 +1131,7 @@ const NO_REGISTRY_TOKEN_ENV = {
 
 describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
   "release-publish pipeline (real orchestrator, stubbed npm/gh/git)",
+  { timeout: RELEASE_PIPELINE_TEST_TIMEOUT_MS },
   () => {
     let lastRun;
 

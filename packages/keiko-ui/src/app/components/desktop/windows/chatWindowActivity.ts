@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 
+import { EDITOR_SELECTION_HANDOFF_TTL_MS } from "../editorSelectionHandoffPolicy";
+
 export type ChatWindowFlowIntensity = "light" | "heavy";
 
 export interface ChatWindowFlow {
@@ -24,7 +26,19 @@ interface ChatWindowRuntimeState {
   registration: symbol;
   registered: boolean;
   reserved: boolean;
-  readonly pendingSelectionHandoffs: string[];
+  readonly pendingSelectionHandoffs: PendingSelectionHandoff[];
+}
+
+interface PendingSelectionHandoff {
+  readonly id: string;
+  readonly preferredWindowIds: readonly string[];
+  readonly onAbandoned?: (() => void) | undefined;
+  readonly onUnavailable?: (() => string | null | void) | undefined;
+}
+
+interface StagedRuntimeHandoffs {
+  readonly pending: PendingSelectionHandoff[];
+  readonly timeoutId: ReturnType<typeof setTimeout>;
 }
 
 export type ChatWindowGroundingActivity =
@@ -52,10 +66,12 @@ const HEAVY_FILES_READ = 4;
 const HEAVY_EXCERPT_BYTES = 8_192;
 const HEAVY_REFERENCES = 4;
 const FLOW_AFTERGLOW_MS = 2_500;
+const MAX_RETAINED_SELECTION_HANDOFFS = 64;
 
 let snapshot: ReadonlyMap<string, ChatWindowFlow> = new Map();
 const listeners = new Set<() => void>();
 const runtimes = new Map<string, ChatWindowRuntimeState>();
+const stagedRuntimeHandoffs = new Map<string, StagedRuntimeHandoffs>();
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
@@ -160,13 +176,16 @@ export function registerChatWindowRuntime(
   state.registration = registration;
   state.registered = true;
   if (state.reserved && runtime.acceptingSelectionHandoff !== false) state.reserved = false;
+  enqueuePendingSelectionHandoffs(state, takeStagedRuntimeHandoffs(windowId));
   runtimes.set(windowId, state);
   dispatchPendingSelectionHandoff(state);
   return (): void => {
     if (state.registration !== registration) return;
     state.registered = false;
     queueMicrotask((): void => {
-      if (state.registration === registration && !state.registered) runtimes.delete(windowId);
+      if (state.registration !== registration || state.registered) return;
+      runtimes.delete(windowId);
+      reroutePendingSelectionHandoffs(state);
     });
   };
 }
@@ -185,30 +204,136 @@ function dispatchPendingSelectionHandoff(state: ChatWindowRuntimeState): void {
   if (!state.registered || state.reserved || state.runtime.acceptingSelectionHandoff === false) {
     return;
   }
-  const selectionHandoffId = state.pendingSelectionHandoffs.shift();
-  if (selectionHandoffId === undefined) return;
+  const pending = state.pendingSelectionHandoffs.shift();
+  if (pending === undefined) return;
   state.reserved = true;
-  state.runtime.acceptSelectionHandoff(selectionHandoffId);
+  state.runtime.acceptSelectionHandoff(pending.id);
 }
 
 function orderedRuntimeIds(preferredWindowIds: readonly string[]): string[] {
-  const ordered = preferredWindowIds.filter((windowId) => runtimes.has(windowId));
+  const available = (windowId: string): boolean => runtimes.get(windowId)?.registered === true;
+  const ordered = preferredWindowIds.filter(available);
   const preferred = new Set(ordered);
   for (const windowId of runtimes.keys()) {
-    if (!preferred.has(windowId)) ordered.push(windowId);
+    if (available(windowId) && !preferred.has(windowId)) ordered.push(windowId);
   }
   return ordered;
+}
+
+function abandonPendingSelectionHandoffs(pending: readonly PendingSelectionHandoff[]): void {
+  for (const handoff of pending) handoff.onAbandoned?.();
+}
+
+function enqueuePendingSelectionHandoffs(
+  state: ChatWindowRuntimeState,
+  pending: readonly PendingSelectionHandoff[],
+): void {
+  const available = Math.max(
+    0,
+    MAX_RETAINED_SELECTION_HANDOFFS - state.pendingSelectionHandoffs.length,
+  );
+  state.pendingSelectionHandoffs.push(...pending.slice(0, available));
+  abandonPendingSelectionHandoffs(pending.slice(available));
+}
+
+function takeStagedRuntimeHandoffs(windowId: string): PendingSelectionHandoff[] {
+  const staged = stagedRuntimeHandoffs.get(windowId);
+  if (staged === undefined) return [];
+  clearTimeout(staged.timeoutId);
+  stagedRuntimeHandoffs.delete(windowId);
+  return staged.pending;
+}
+
+function abandonStagedRuntimeHandoffs(windowId: string): void {
+  const staged = stagedRuntimeHandoffs.get(windowId);
+  if (staged === undefined) return;
+  clearTimeout(staged.timeoutId);
+  stagedRuntimeHandoffs.delete(windowId);
+  abandonPendingSelectionHandoffs(staged.pending);
+}
+
+function stagedRuntimeHandoffCount(): number {
+  let count = 0;
+  for (const staged of stagedRuntimeHandoffs.values()) count += staged.pending.length;
+  return count;
+}
+
+function evictStagedRuntimeTargetsForCapacity(incomingCount: number): void {
+  while (stagedRuntimeHandoffCount() + incomingCount > MAX_RETAINED_SELECTION_HANDOFFS) {
+    const oldestWindowId = stagedRuntimeHandoffs.keys().next().value;
+    if (typeof oldestWindowId !== "string") return;
+    abandonStagedRuntimeHandoffs(oldestWindowId);
+  }
+}
+
+function stageRuntimeHandoffs(windowId: string, pending: readonly PendingSelectionHandoff[]): void {
+  if (pending.length === 0) return;
+  const state = runtimes.get(windowId);
+  if (state?.registered === true) {
+    enqueuePendingSelectionHandoffs(state, pending);
+    dispatchPendingSelectionHandoff(state);
+    return;
+  }
+  const existing = takeStagedRuntimeHandoffs(windowId);
+  const combined = [...existing, ...pending];
+  const retained = combined.slice(0, MAX_RETAINED_SELECTION_HANDOFFS);
+  abandonPendingSelectionHandoffs(combined.slice(MAX_RETAINED_SELECTION_HANDOFFS));
+  evictStagedRuntimeTargetsForCapacity(retained.length);
+  stagedRuntimeHandoffs.set(windowId, {
+    pending: retained,
+    timeoutId: setTimeout(
+      (): void => abandonStagedRuntimeHandoffs(windowId),
+      EDITOR_SELECTION_HANDOFF_TTL_MS,
+    ),
+  });
+}
+
+function openFallbackForPending(pending: readonly PendingSelectionHandoff[]): void {
+  for (const [index, handoff] of pending.entries()) {
+    const fallbackWindowId = handoff.onUnavailable?.();
+    if (typeof fallbackWindowId !== "string" || fallbackWindowId.length === 0) {
+      handoff.onAbandoned?.();
+      continue;
+    }
+    stageRuntimeHandoffs(fallbackWindowId, pending.slice(index + 1));
+    return;
+  }
+}
+
+function reroutePendingSelectionHandoffs(state: ChatWindowRuntimeState): void {
+  const pending = state.pendingSelectionHandoffs.splice(0);
+  for (const [index, handoff] of pending.entries()) {
+    const routed = routeSelectionHandoffToOpenChat(
+      state.runtime.projectPath,
+      handoff.id,
+      handoff.preferredWindowIds,
+      handoff.onUnavailable,
+      handoff.onAbandoned,
+    );
+    if (routed === null) {
+      openFallbackForPending(pending.slice(index));
+      return;
+    }
+  }
 }
 
 export function routeSelectionHandoffToOpenChat(
   projectPath: string,
   selectionHandoffId: string,
   preferredWindowIds: readonly string[] = [],
+  onUnavailable?: (() => string | null | void) | undefined,
+  onAbandoned?: (() => void) | undefined,
 ): string | null {
   for (const windowId of orderedRuntimeIds(preferredWindowIds)) {
     const state = runtimes.get(windowId);
     if (state?.runtime.projectPath !== projectPath) continue;
-    state.pendingSelectionHandoffs.push(selectionHandoffId);
+    if (state.pendingSelectionHandoffs.length >= MAX_RETAINED_SELECTION_HANDOFFS) continue;
+    state.pendingSelectionHandoffs.push({
+      id: selectionHandoffId,
+      preferredWindowIds: [...preferredWindowIds],
+      onAbandoned,
+      onUnavailable,
+    });
     dispatchPendingSelectionHandoff(state);
     return windowId;
   }
