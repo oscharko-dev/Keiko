@@ -319,6 +319,11 @@ static int supervise(int monitor, const char *handle, pid_t root) {
         unsigned char proof[8] = {0};
         (void)waitpid(root, &status, 0);
         write_u32(proof, WIFEXITED(status) ? (uint32_t)WEXITSTATUS(status) : 137u);
+        // KEIKO-0270: proof+4 is the containment count the harness asserts is zero. It was never
+        // written here, so those four bytes stayed at their initialiser and the assertion could
+        // not fail — it read a constant the producer hard-coded, not an observation. Carry the
+        // monitor's own live_processes so the check becomes load-bearing.
+        write_u32(proof + 4, reply.live_processes);
         return send_response(RESPONSE_REAPED, proof, sizeof(proof));
       } else {
         return 0;

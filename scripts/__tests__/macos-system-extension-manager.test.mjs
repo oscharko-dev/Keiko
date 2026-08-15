@@ -16,6 +16,16 @@ const monitorSource = readFileSync(
   ),
   "utf8",
 );
+// KEIKO-0261/0278: the macOS harness source (for its platform-independent contract pins) and the
+// Windows harness source (for its lifecycle guards) are read as text, same as the .m/.c sources.
+const macosProtocolHarness = readFileSync(
+  new URL("../../native/runtime-supervisor/macos/test-protocol.mjs", import.meta.url),
+  "utf8",
+);
+const windowsProtocolHarness = readFileSync(
+  new URL("../../native/runtime-supervisor/test-protocol.mjs", import.meta.url),
+  "utf8",
+);
 const supervisorSource = readFileSync(
   new URL("../../native/runtime-supervisor/macos/keiko_runtime_supervisor.c", import.meta.url),
   "utf8",
@@ -101,6 +111,49 @@ describe("macOS system-extension activation manager", () => {
     expect(qualify).toContain("finally {");
     expect(qualify).toContain('child.kill("SIGKILL")');
     expect(qualify).toContain("await exited.catch");
+  });
+
+  // KEIKO-0278: the pin above covered only the macOS `qualify`. The two Windows harness functions
+  // had no finally at all — `assertControlEofFailsClosed` had no watchdog whatsoever — so a
+  // supervisor that hangs on control EOF hung the entire native-quality lane instead of failing
+  // with a named stage. Both are now pinned to the same three tokens.
+  describe.each([["qualifyWindows"], ["assertControlEofFailsClosed"]])(
+    "%s carries the harness lifecycle guard",
+    (name) => {
+      it("clears its deadline, SIGKILLs on an incomplete run, and awaits the exit", () => {
+        const body = functionBody(windowsProtocolHarness, `async function ${name}(`);
+        expect(body).toContain("finally {");
+        expect(body).toContain("clearTimeout(deadline)");
+        expect(body).toContain('child.kill("SIGKILL")');
+        expect(body).toContain("await exited.catch");
+      });
+    },
+  );
+
+  // KEIKO-0261: fd 3 and fd 4 are the supervisor's control and response pipes. The qualification
+  // fixture never touches them, so nothing behavioural observes the close — this source pin is the
+  // only thing between that trust boundary and a silent deletion.
+  it("pins the macOS fd-3/fd-4 close and the non-PATH spawn form", () => {
+    // The harness writes these as regex literals, so the source text carries escaped parens.
+    for (const descriptor of [3, 4]) {
+      expect(macosProtocolHarness).toMatch(
+        new RegExp(`posix_spawn_file_actions_addclose\\\\\\(&actions, ${String(descriptor)}`, "u"),
+      );
+    }
+    expect(macosProtocolHarness).toMatch(/posix_spawnp\|execvp\|execlp\|execvP/u);
+    // The pins must sit ABOVE the darwin guard or they only run on macOS, which is where they are
+    // least needed — the source contract is platform-independent by design.
+    const guardAt = macosProtocolHarness.indexOf('process.platform === "darwin"');
+    expect(macosProtocolHarness.indexOf("posix_spawn_file_actions_addclose")).toBeLessThan(guardAt);
+  });
+
+  // The pin above proves the HARNESS asserts it; this proves the assertion is currently true of the
+  // supervisor it guards, so the pair cannot both drift into agreeing about nothing.
+  it("keeps the supervisor's fd-3/fd-4 close and non-PATH spawn in place", () => {
+    expect(supervisorSource).toContain("posix_spawn_file_actions_addclose(&actions, 3)");
+    expect(supervisorSource).toContain("posix_spawn_file_actions_addclose(&actions, 4)");
+    expect(supervisorSource).toMatch(/posix_spawn\(/u);
+    expect(supervisorSource).not.toMatch(/posix_spawnp|execvp|execlp|execvP/u);
   });
 
   // KEIKO-0419: the daemon emitted no diagnostic output at all, so an Endpoint Security failure,
