@@ -72,6 +72,60 @@ describe("git repository agent operation contract", () => {
     }
   });
 
+  // KEIKO-0449: the screen looked keys up in a case-SENSITIVE Set, so `{Shell:"rm -rf /"}` and
+  // `{GHENDPOINT:…}` walked straight past a control whose whole job is to reject command-shaped
+  // payloads. Both the camelCase entries in the table (ghEndpoint, gitSubcommand) and the plain
+  // lowercase ones must deny every case variant, or normalising only one side re-opens the other.
+  it("rejects direct-shell keys regardless of the case they are written in", () => {
+    const variants = [
+      "Shell",
+      "SHELL",
+      "Command",
+      "ARGV",
+      "Token",
+      "Url",
+      "Env",
+      "GhEndpoint",
+      "ghendpoint",
+      "GITSUBCOMMAND",
+      "gitsubcommand",
+      "GitSubcommand",
+      "Credential",
+      "ProviderPayload",
+      "RepositoryRoot",
+    ];
+    for (const key of variants) {
+      expect(
+        parseGitRepositoryAgentOperationRequest({
+          schemaVersion: "1",
+          operation: "status",
+          mode: "read",
+          projectId: "/repos/alpha",
+          payload: { [key]: "rm -rf /" },
+        }),
+      ).toMatchObject({ ok: false, denialReason: "unsupported-direct-shell" });
+    }
+  });
+
+  // The screen recursed into every record and array element with no depth budget, so a deeply
+  // nested body got an uncapped walk and could surface a RangeError as an untyped 500 instead of a
+  // typed denial. Exceeding the budget must deny (fail closed), never accept.
+  it("denies a pathologically nested payload instead of throwing", () => {
+    let payload: Record<string, unknown> = { leaf: "value" };
+    for (let depth = 0; depth < 5_000; depth += 1) {
+      payload = { nested: payload };
+    }
+    expect(
+      parseGitRepositoryAgentOperationRequest({
+        schemaVersion: "1",
+        operation: "status",
+        mode: "read",
+        projectId: "/repos/alpha",
+        payload,
+      }),
+    ).toMatchObject({ ok: false, denialReason: "unsupported-direct-shell" });
+  });
+
   it("rejects invalid operation/mode pairings", () => {
     expect(
       parseGitRepositoryAgentOperationRequest({
@@ -192,21 +246,57 @@ describe("agent facade autonomy admission", () => {
     }
   });
 
-  it("admits every execute in autonomous-delivery", () => {
-    for (const operation of GIT_REPOSITORY_AGENT_OPERATION_KINDS) {
+  // KEIKO-0227: converges this facade's admission onto coding-workbench.ts's shared
+  // CODING_WORKBENCH_MODE_POLICIES (ADR-0138 D2's total matrix) instead of an independently
+  // maintained threshold table. workspace-contained writes are allowed at autonomous-delivery
+  // (the matrix: workspace-contained is "allowed" at every risk tier there), same as before.
+  // Delivery stays approval-required at EVERY risk tier in EVERY mode, including
+  // autonomous-delivery — this boolean facade has no approval channel of its own, so
+  // "approval-required" reads as inadmissible here regardless of mode (see the dedicated test
+  // below). This replaces the prior behavior, where MINIMUM_MODE_BY_CLASS admitted delivery
+  // outright once the mode reached autonomous-delivery with no approval channel at all — a
+  // materially more permissive, independently-maintained contract for the identical operations
+  // than coding-workbench.ts's shared table already enforced (ADR-0087, ADR-0129 D4).
+  it("admits every workspace-contained execute in autonomous-delivery, but keeps delivery approval-required", () => {
+    for (const operation of WORKSPACE_WRITES) {
       expect(gitRepositoryAgentOperationAdmitted(operation, "execute", "autonomous-delivery")).toBe(
         true,
       );
+    }
+    for (const operation of DELIVERY) {
+      expect(gitRepositoryAgentOperationAdmitted(operation, "execute", "autonomous-delivery")).toBe(
+        false,
+      );
+    }
+  });
+
+  // KEIKO-0227 regression: must fail against the pre-consolidation MINIMUM_MODE_BY_CLASS table,
+  // which admitted these five operations outright (with no approval channel at all) once
+  // effectiveMode reached autonomous-delivery — contradicting coding-workbench.ts's own
+  // CODING_WORKBENCH_MODE_POLICIES, which has always declared "delivery" approval-required at
+  // every risk tier in every mode (ADR-0138 D2). ADR-0087 governs the actual delivery execution
+  // (merge is an explicit, approval-gated action; auto-merge scheduling is out of scope) — this
+  // facade's admission must not be more permissive than the gateway it delegates to.
+  it("never admits a repository-delivery operation through the boolean facade, in any mode", () => {
+    for (const operation of DELIVERY) {
+      for (const mode of CODING_WORKBENCH_MODES) {
+        expect(gitRepositoryAgentOperationAdmitted(operation, "execute", mode)).toBe(false);
+      }
+      // No mode alone ever admits it — the facade has no approval channel, so there is no
+      // "minimum mode" to report; a separate approval is required regardless of mode.
+      expect(gitRepositoryAgentMinimumMode(operation)).toBeUndefined();
     }
   });
 
   // Monotonic (ADR-0138): authority never decreases as the mode rises, so an operation admitted at
   // one mode is admitted at every higher one. Derived from the production minimum, not restated.
+  // A repository-delivery operation's minimum is `undefined` (no mode alone admits it — see
+  // above), which is vacuously monotonic: never admitted, at any mode.
   it("is monotonic in the mode ordering", () => {
     const ranks: readonly CodingWorkbenchMode[] = CODING_WORKBENCH_MODES;
     for (const operation of GIT_REPOSITORY_AGENT_OPERATION_KINDS) {
       const minimum = gitRepositoryAgentMinimumMode(operation);
-      const minimumIndex = ranks.indexOf(minimum);
+      const minimumIndex = minimum === undefined ? Infinity : ranks.indexOf(minimum);
       ranks.forEach((mode, index) => {
         expect(gitRepositoryAgentOperationAdmitted(operation, "execute", mode)).toBe(
           index >= minimumIndex,

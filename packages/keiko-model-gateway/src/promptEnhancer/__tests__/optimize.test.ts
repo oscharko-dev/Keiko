@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  PROMPT_CANDIDATE_RANKING_EXPECTED_ORDER,
+  PROMPT_CANDIDATE_RANKING_FIXTURE,
+} from "@oscharko-dev/keiko-contracts";
+import {
   PROMPT_CRITIC_DIMENSIONS,
   PROMPT_ENHANCER_SCHEMA_VERSION,
   validatePromptCandidateSelection,
@@ -381,5 +385,19 @@ describe("rankCandidates tie-breaking", () => {
     const ranked = rankCandidates(input);
     expect(ranked.map((c) => c.profile)).toEqual(["fast", "precise", "research"]);
     expect(input.map((c) => c.profile)).toEqual(snapshot);
+  });
+});
+
+// KEIKO-1026 — the candidate total order is implemented twice and cannot be shared as code:
+// keiko-contracts' compareRankedScorecards validates that a persisted selection is already in this
+// order, and contracts is the leaf that may not import this package. Two independent
+// implementations of one order drift silently — the validator would start rejecting selections this
+// ranker emits and neither suite would notice, because each only exercised its own copy. The shared
+// fixture is the link: the same expected order is asserted on both sides.
+describe("shared ranking-order fixture (KEIKO-1026)", () => {
+  it("ranks the shared fixture into the one expected order", () => {
+    expect(rankCandidates(PROMPT_CANDIDATE_RANKING_FIXTURE).map((c) => c.candidateId)).toEqual(
+      PROMPT_CANDIDATE_RANKING_EXPECTED_ORDER,
+    );
   });
 });

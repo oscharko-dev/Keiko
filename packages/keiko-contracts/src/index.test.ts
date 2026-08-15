@@ -436,7 +436,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("knowledge-capsule schema value re-exports are reachable through the barrel (#265)", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(32);
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(33);
     // The string contract version and the integer DB version must remain distinct so the
     // contract surface and the on-disk DDL can evolve independently.
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
@@ -980,7 +980,8 @@ describe("keiko-contracts package surface", () => {
     // Count assertions are intentional surface pins; bump deliberately when the surface changes.
     expect(m.GIT_PR_CHANGE_TYPES).toHaveLength(7);
     expect(m.GIT_PR_READINESS_BLOCKER_CODES).toHaveLength(9);
-    expect(m.GIT_PR_RECOMMENDATIONS).toHaveLength(5);
+    // 6 since KEIKO-0479 added "keep-as-is" for an already-ready PR with nothing outstanding.
+    expect(m.GIT_PR_RECOMMENDATIONS).toHaveLength(6);
     expect(m.GIT_PR_REJECTION_REASONS).toHaveLength(9);
 
     expect(typeof m.synthesizePullRequestMetadata).toBe("function");

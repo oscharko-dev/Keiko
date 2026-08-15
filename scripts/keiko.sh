@@ -140,8 +140,12 @@ cmd_start() {
       rm -f "$PID_FILE"
       return 1
     fi
+    # --max-time bounds a single attempt: if the port is held by something that accepts the
+    # connection but never answers (e.g. another process won the ephemeral-port race against
+    # this pid), curl must not block past START_TIMEOUT_SECS — an unbounded call here defeats
+    # that budget entirely and hangs cmd_start indefinitely instead of failing closed.
     # S5332: HEALTH_URL derives only from the strict loopback allowlist validated before startup.
-    if curl -fsS "$HEALTH_URL" 2>/dev/null | grep -q '"status":"ok"'; then # NOSONAR
+    if curl -fsS "$HEALTH_URL" --max-time 2 2>/dev/null | grep -q '"status":"ok"'; then # NOSONAR
       echo "Keiko UI running on ${LOOPBACK_DISPLAY} (pid ${pid})."
       echo "Logs: ${LOG_FILE}"
       return 0

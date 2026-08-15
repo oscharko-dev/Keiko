@@ -979,7 +979,10 @@ function detectMissingTopics(
   return topics.slice(0, MAX_MISSING_TOPICS);
 }
 
-const CLARIFICATION_TEMPLATES: Readonly<Record<MissingContextTopic, string>> = {
+// Exported so the validator checks against the SAME strings the analyzer emits. A second copy in
+// prompt-enhancer-validation.ts meant the two could drift and the validator would then reject the
+// analyzer's own output — the copy could not detect that, since both sides would have to be edited.
+export const CLARIFICATION_TEMPLATES: Readonly<Record<MissingContextTopic, string>> = {
   subject: "What specific subject or task should this prompt address?",
   scope: "Which part of the work should the task focus on?",
   audience: "Who is the intended audience for the output?",
@@ -989,7 +992,7 @@ const CLARIFICATION_TEMPLATES: Readonly<Record<MissingContextTopic, string>> = {
   "success-criteria": "What defines a successful outcome for this task?",
 };
 
-const ASSUMPTION_TEMPLATES: Readonly<Record<MissingContextTopic, string>> = {
+export const ASSUMPTION_TEMPLATES: Readonly<Record<MissingContextTopic, string>> = {
   subject: "Assuming the broadest reasonable interpretation of the requested subject.",
   scope: "Assuming the task applies to the most relevant available scope.",
   audience: "Assuming a general professional audience.",

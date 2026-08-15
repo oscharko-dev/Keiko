@@ -156,8 +156,10 @@ export interface ContextAssemblyDiagnostics {
 // ─── Provenance reference (the atomic source pointer) ─────────────────────── [PR2, additive]
 // A stable, content-addressable pointer to a single authoritative source. No raw text,
 // no absolute paths — only stable IDs plus an optional relative workspace path and line
-// range for repo-file items. contentHash is fileContentHash (keiko-workspace) at compaction
-// time; a mismatch at rehydration time means the source has changed and the summary MAY be stale.
+// range for repo-file items. contentHash is hashExcerptContent over the EXCERPT the ref points at
+// (see compaction-helpers.ts, its only live producer) — not a whole-file hash — so it invalidates
+// on a change to the referenced range rather than anywhere in the file; a mismatch at rehydration
+// time means that excerpt has changed and the summary MAY be stale.
 // REFINEMENT over ADR-0053 D1: the fourth kind is "message" (a conversation message id) rather
 // than "intentionally-not-persisted"; the not-persisted case is carried by notPersistedReason on
 // any kind. ADR-0053 D1 note updated to match.
@@ -172,8 +174,9 @@ export interface ContextProvenanceRef {
   // Closed line range [startLine, endLine] (1-indexed, inclusive). Present only when a line range
   // was recorded. Prefer line ranges over whole-file rehydration.
   readonly lineRange?: { readonly startLine: number; readonly endLine: number } | undefined;
-  // SHA-256 hex of the file content at compaction time. A mismatch at rehydration time signals
-  // invalidation. Present only when fileContentHash ran successfully.
+  // SHA-256 hex of the EXCERPT content at compaction time (hashExcerptContent), matching
+  // ContextRehydrationHandle.contentHash. A mismatch at rehydration time signals invalidation.
+  // Present only when the hash was computed successfully.
   readonly contentHash?: string | undefined;
   // Stable evidence atom id (evidenceAtomStableId output). Present when kind === "evidence-atom".
   readonly evidenceAtomId?: string | undefined;
@@ -533,8 +536,18 @@ export function resolveContextTokenAccounting(
 function calibratedTokenCount(fallbackTokens: number, accounting: ContextTokenAccounting): number {
   const scaleMilli = accounting.scaleMilli ?? 1_000;
   const offsetTokens = accounting.offsetTokens ?? 0;
-  // Clamp defends callers that construct a ContextTokenAccounting object literal directly (the
-  // type system permits it) without passing through validateContextProfile.
+  // An out-of-range calibration falls back to the UNCALIBRATED estimate rather than through the
+  // clamp. `??` does not substitute for 0, so `scaleMilli: 0` survived and the whole expression
+  // collapsed to Math.max(0, 0) — every text reported as costing zero tokens. That is the permissive
+  // direction: this is the single canonical token currency, so a silent uniform under-count makes
+  // every lane, prompt segment and compaction decision believe its content is free, and the failure
+  // surfaces only as a provider-side context overflow with nothing pointing at the calibration.
+  // The rule mirrors the sibling validator (context-engineering-validation.ts), expressed inline
+  // because this is a hot per-segment path.
+  if (!Number.isInteger(scaleMilli) || scaleMilli <= 0) return fallbackTokens;
+  if (!Number.isInteger(offsetTokens) || offsetTokens < 0) return fallbackTokens;
+  // Floor only on the valid-calibration path: it defends callers that build a
+  // ContextTokenAccounting literal directly (the type system permits it) without validating it.
   return Math.max(0, Math.ceil((fallbackTokens * scaleMilli) / 1_000 + offsetTokens));
 }
 

@@ -256,8 +256,8 @@ function listSqliteMaster(
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 32 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(32);
+  it("is the integer 33 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(33);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -760,6 +760,54 @@ describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
     }
   });
 
+  it("applies v33 on top of a v32 database and adds the capsule_sources->knowledge_sources foreign key, matching a fresh install's shape (KEIKO-0371)", () => {
+    // KEIKO-0371: a fresh install's capsule_sources has always carried `FOREIGN KEY (id)
+    // REFERENCES knowledge_sources(id) ON DELETE RESTRICT`, but no migration ever added it to a
+    // store created at v1 (SQLite cannot ALTER a foreign key onto an existing table). This is the
+    // audit's own prescribed acceptance shape: applying the migration chain from an empty database
+    // produces a capsule_sources table whose foreign_key_list matches a fresh KNOWLEDGE_CAPSULE_DDL
+    // apply. Seeding a full lineage first (rather than migrating an empty database) additionally
+    // exercises the v33 COPY statement's column list against real rows, not just an empty table.
+    //
+    // This test does NOT assert row survival: unlike the real runtime (openKnowledgeStore in
+    // packages/keiko-local-knowledge/src/store.ts), this file applies `up` statements with a plain
+    // per-statement loop with no shared transaction — it has no notion of
+    // `requiresForeignKeysSuspended` and never suspends foreign-key enforcement, so v33's `DROP
+    // TABLE capsule_sources` genuinely cascades here exactly like the reverted first attempt did.
+    // Reproducing the suspension recipe again in this test would restate the very mechanism under
+    // test (AGENTS.md #2285) instead of exercising it. The zero-row-loss + ON DELETE RESTRICT
+    // enforcement proof runs against the real migration engine instead: see
+    // "openKnowledgeStore — capsule_sources foreign key backfill (KEIKO-0371)" in
+    // packages/keiko-local-knowledge/src/store.test.ts.
+    const migrated = new DatabaseSync(":memory:");
+    const fresh = new DatabaseSync(":memory:");
+    try {
+      const v33 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((m) => m.version === 33);
+      if (v33 === undefined) throw new Error("expected v33 migration");
+      for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        if (entry.version >= 33) break;
+        for (const stmt of entry.up) migrated.exec(stmt);
+      }
+      seedFullLineage(migrated);
+      expect(countRows(migrated, "capsule_sources")).toBe(1);
+
+      for (const stmt of v33.up) migrated.exec(stmt);
+
+      for (const stmt of KNOWLEDGE_CAPSULE_DDL) fresh.exec(stmt);
+      const fkList = (db: DatabaseSync): unknown[] =>
+        db.prepare("PRAGMA foreign_key_list('capsule_sources')").all();
+      expect(fkList(migrated)).toEqual(fkList(fresh));
+      expect(fkList(migrated)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ table: "knowledge_sources", on_delete: "RESTRICT" }),
+        ]),
+      );
+    } finally {
+      migrated.close();
+      fresh.close();
+    }
+  });
+
   it("v31 discards only obsolete runtime vector-index materialization state", () => {
     const db = new DatabaseSync(":memory:");
     try {
@@ -1181,16 +1229,59 @@ describe("redactPathInDiagnostic", () => {
     );
   });
 
+  // The invariant this pins is the prefix-with-separator gate: `/Users/foobar` must NOT be misread
+  // as `/Users/foo` + `bar` and rewritten to `~bar/x`. That still holds. What changed (KEIKO-1039)
+  // is the fallback for a path that matches NO rewrite: it used to be returned byte-for-byte, which
+  // leaked the directory layout and another account's username into diagnostic text.
   it("does not collapse `/Users/foobar` into `/Users/foo` (prefix-with-separator gate)", () => {
-    expect(redactPathInDiagnostic("/Users/foobar/x", { homePrefix: "/Users/foo" })).toBe(
-      "/Users/foobar/x",
+    const redacted = redactPathInDiagnostic("/Users/foobar/x", { homePrefix: "/Users/foo" });
+    expect(redacted).not.toContain("~");
+    expect(redacted).not.toContain("foobar");
+    expect(redacted).toBe("<path>/x");
+  });
+
+  // KEIKO-1039: the two rewrites are an allowlist of transforms, so an absolute path under neither
+  // the configured HOME nor a Windows drive was passed through raw. isSafeScopePath explicitly
+  // accepts such paths as legitimate pod scopes (external volume, other account, mounted share).
+  it.each([
+    ["/Volumes/External/docs/secret.pdf", "<path>/secret.pdf"],
+    ["/srv/share/other-user/notes.md", "<path>/notes.md"],
+    ["/etc/passwd", "<path>/passwd"],
+    ["//server/share/report.docx", "<unc>/report.docx"],
+  ])("redacts the non-home absolute path %s", (input, expected) => {
+    expect(redactPathInDiagnostic(input, { homePrefix: "/Users/foo" })).toBe(expected);
+  });
+
+  it("never returns a non-home absolute path verbatim", () => {
+    for (const input of ["/a/b/c", "/Volumes/x/y", "//unc/share/f"]) {
+      expect(redactPathInDiagnostic(input, { homePrefix: "/Users/foo" })).not.toBe(input);
+    }
+  });
+
+  it("leaves relative paths and home-rewritten paths alone", () => {
+    expect(redactPathInDiagnostic("docs/report.pdf")).toBe("docs/report.pdf");
+    expect(redactPathInDiagnostic("/Users/foo/secret.txt", { homePrefix: "/Users/foo" })).toBe(
+      "~/secret.txt",
     );
   });
 
-  it("rewrites a Windows drive prefix to `<drive>/…` and normalises separators", () => {
-    expect(redactPathInDiagnostic("C:\\Users\\victim\\file.txt")).toBe(
-      "<drive>/Users/victim/file.txt",
-    );
+  // KEIKO-1039 follow-on: redactRemainingAbsolutePath's fail-closed collapse was scoped to values
+  // starting with "/", so a drive-masked path — which starts with "<drive>/", not "/" — skipped it
+  // and kept its full directory tail (username, folder layout) verbatim. That is the same leak
+  // class KEIKO-1039 closed for the POSIX/UNC fallback, just left open on the Windows branch. The
+  // basename-only collapse below is the fix; the separate ordering test right after this one pins
+  // the #265 property (a Windows-style HOME still wins over drive masking) so that invariant stays
+  // explicitly asserted rather than only living in the comment above redactPathInDiagnostic.
+  it("rewrites a Windows drive prefix to `<drive>/…`, collapses the tail, and normalises separators", () => {
+    expect(redactPathInDiagnostic("C:\\Users\\victim\\file.txt")).toBe("<drive>/file.txt");
+  });
+
+  it("matches a Windows-style HOME prefix before masking the drive letter (#265 ordering)", () => {
+    expect(
+      redactPathInDiagnostic("C:\\Users\\victim\\docs\\file.txt", {
+        homePrefix: "C:\\Users\\victim",
+      }),
+    ).toBe("~/docs/file.txt");
   });
 
   it("truncates at the first NUL byte", () => {

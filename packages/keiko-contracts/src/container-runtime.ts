@@ -11,6 +11,7 @@
 // process, shell, or filesystem authority.
 
 import type { CommandRule } from "./tools.js";
+import { deepFreeze } from "./deep-freeze.js";
 import type {
   RuntimeCapabilityState,
   RuntimeCapabilityUnavailableReason,
@@ -191,6 +192,11 @@ export interface ContainerRunnerEvent {
 // safety control is the server-frozen argv + closed catalog (D2/D3) — this list is pure defense-in-
 // depth against escalation flags the server NEVER emits, catching a hypothetical future regression
 // where a client-influenced token reaches the argv.
+//
+// ALIAS-COMPLETENESS RULE: the matcher in keiko-tools/src/sandbox.ts is an exact-token comparison
+// (it only splits `--flag=value` at the `=`), so every spelling of a denied flag must be listed
+// separately — denying `--user` without `-u` denies nothing a caller cannot trivially rewrite. The
+// `--volume`/`--net` entries below already follow this; new entries must too.
 const CONTAINER_DENY_FLAGS = Object.freeze([
   "--privileged",
   "--volume", // long form of -v; the server uses only the short `-v`, so reject any extra mount
@@ -201,10 +207,18 @@ const CONTAINER_DENY_FLAGS = Object.freeze([
   "--pid",
   "--ipc",
   "--user",
+  "-u", // short alias of --user; alias-completeness rule — deny every spelling of a denied flag
+  "--entrypoint", // replaces the program the container executes
+  "--userns", // user-namespace remapping, including `host` (defeats the uid boundary)
+  "--group-add", // supplementary groups, including privileged ones
+  "--device-cgroup-rule", // grants device access without --device
   "-c",
 ] as const);
 
-export const CONTAINER_TASK_RULES: readonly CommandRule[] = Object.freeze([
+// deepFreeze, not Object.freeze: freezing only the outer array leaves each rule object's own
+// top-level fields (executable, allowedSubcommands, denyFlags) writable — the identical bug class
+// command-runner.ts's COMMAND_TASK_RULES already documents and was fixed for (KEIKO-0139).
+export const CONTAINER_TASK_RULES: readonly CommandRule[] = deepFreeze([
   {
     executable: "docker",
     allowedSubcommands: Object.freeze(["version", "info", "run"]),

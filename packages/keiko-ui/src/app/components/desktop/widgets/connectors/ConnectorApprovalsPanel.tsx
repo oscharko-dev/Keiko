@@ -169,6 +169,45 @@ function ApprovalMeta({
   );
 }
 
+// KEIKO-0186: the bounded content preview a reviewer needs to see BEFORE Approve/Reject — the
+// one field on this contract that deliberately carries real (bounded, sanitized) action content
+// instead of redacting it. Renders nothing when the server has nothing to preview (a
+// transition-issue action, or a field-only update-issue-fields action).
+//
+// KEIKO-0186 P1 (Codex): when the action HAD text but nothing presentable survived sanitization
+// (e.g. an all-zero-width-space comment), the server sends contentPreviewUnavailable instead of
+// an empty contentPreview. That case renders an explicit, plainly-worded message — never nothing
+// — so a reviewer never mistakes "content existed but could not be safely shown" for "there was
+// never anything to preview." The two fields are mutually exclusive on the wire (validated by
+// isSafeAtlassianContentPreview's contract), so exactly one of the three branches below applies.
+function ApprovalContentPreview({
+  approval,
+}: {
+  readonly approval: AtlassianConnectorPendingApproval;
+}): ReactNode {
+  const t = useTranslate();
+  if (approval.contentPreviewUnavailable === true) {
+    return (
+      <p
+        className="acx-content-preview acx-content-preview-unavailable"
+        data-testid="acx-content-preview-unavailable"
+      >
+        {t("atlassianConnectors.approvals.contentPreviewUnavailable")}
+      </p>
+    );
+  }
+  if (approval.contentPreview === undefined) return null;
+  return (
+    <p className="acx-content-preview" data-testid="acx-content-preview">
+      <span className="acx-content-preview-label">
+        {t("atlassianConnectors.approvals.contentPreview")}
+      </span>
+      {": "}
+      {approval.contentPreview}
+    </p>
+  );
+}
+
 function ApprovalActions({
   id,
   busy,
@@ -215,6 +254,7 @@ function ApprovalRow({
     <li className="acx-card" data-testid="acx-approval" data-approval-id={approval.approvalId}>
       <p className="acx-card-title">{t(actionTypeLabelKey(approval.actionType))}</p>
       <ApprovalMeta approval={approval} />
+      <ApprovalContentPreview approval={approval} />
       {outcome === undefined ? (
         <ApprovalActions
           id={approval.approvalId}

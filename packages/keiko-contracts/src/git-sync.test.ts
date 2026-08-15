@@ -148,6 +148,76 @@ describe("validateGitSyncPreview", () => {
   });
 });
 
+// KEIKO-0310: reason, branch, remote, and upstream were all declared but unvalidated when present;
+// the executable/blockReason correlation the field comments imply was never checked at all.
+describe("validateGitSyncPreview optional fields and the executable/blockReason correlation (KEIKO-0310)", () => {
+  it("accepts every declared unavailable reason", () => {
+    for (const reason of ["not-a-repository", "unsafe-repository", "git-error"] as const) {
+      expect(validateGitSyncPreview({ ...validPreview(), available: false, reason })).toEqual({
+        ok: true,
+      });
+    }
+  });
+
+  it("rejects a reason outside the closed union", () => {
+    const result = validateGitSyncPreview({ ...validPreview(), reason: "not-a-known-reason" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reasons).toContain("reason invalid");
+  });
+
+  it.each(["branch", "remote"] as const)("rejects a non-string %s when present", (key) => {
+    const result = validateGitSyncPreview({ ...validPreview(), [key]: 5 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reasons).toContain(`${key} must be a string when present`);
+  });
+
+  it("rejects a malformed upstream", () => {
+    expect(validateGitSyncPreview({ ...validPreview(), upstream: { ref: 7 } }).ok).toBe(false);
+    expect(validateGitSyncPreview({ ...validPreview(), upstream: "origin/main" }).ok).toBe(false);
+  });
+
+  it("accepts an upstream with only ref", () => {
+    expect(validateGitSyncPreview({ ...validPreview(), upstream: { ref: "origin/main" } })).toEqual(
+      { ok: true },
+    );
+  });
+
+  // The producer (keiko-server syncExecution.ts buildSyncPreview) sets
+  // `executable: blockReason === undefined` directly, so the two are exact complements.
+  it("rejects executable: true with a blockReason present", () => {
+    const result = validateGitSyncPreview({
+      ...validPreview(),
+      executable: true,
+      blockReason: "no-upstream",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reasons).toContain("blockReason must be absent when executable is true");
+    }
+  });
+
+  it("rejects executable: false with no blockReason", () => {
+    const input = validPreview();
+    input.executable = false;
+    delete input.blockReason;
+    const result = validateGitSyncPreview(input);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reasons).toContain("blockReason must be present when executable is false");
+    }
+  });
+
+  it("accepts executable: true with no blockReason, and executable: false with one", () => {
+    const ready = validPreview();
+    ready.executable = true;
+    delete ready.blockReason;
+    expect(validateGitSyncPreview(ready)).toEqual({ ok: true });
+    expect(
+      validateGitSyncPreview({ ...validPreview(), executable: false, blockReason: "no-remote" }),
+    ).toEqual({ ok: true });
+  });
+});
+
 describe("validateGitSyncExecuteResponse", () => {
   it("accepts a populated execute response", () => {
     expect(validateGitSyncExecuteResponse(validExecute())).toEqual({ ok: true });

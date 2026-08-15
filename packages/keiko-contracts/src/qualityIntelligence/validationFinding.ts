@@ -14,6 +14,7 @@ import type {
   QualityIntelligenceTestCaseId,
   QualityIntelligenceValidationFindingId,
 } from "./ids.js";
+import type { QualityIntelligenceConfidence } from "./coverageMap.js";
 
 export type QualityIntelligenceValidationFindingKind =
   | "logic-defect"
@@ -122,7 +123,8 @@ export interface QualityIntelligenceCoverageGapFinding extends QualityIntelligen
 export interface QualityIntelligenceRequirementQualityFinding extends QualityIntelligenceValidationFindingCommon {
   readonly kind: "requirement-quality";
   readonly category: QualityIntelligenceRequirementQualityCategory;
-  readonly confidence: number;
+  /** Confidence in `[0, 1]` (not a percentage) — see `QualityIntelligenceConfidence`. */
+  readonly confidence: QualityIntelligenceConfidence;
 }
 
 export interface QualityIntelligenceTestQualityFinding extends QualityIntelligenceValidationFindingCommon {

@@ -249,6 +249,23 @@ describe("validateAuxiliaryCapabilityOutcomeV1", () => {
     ).toMatchObject({ ok: false });
   });
 
+  // KEIKO-0302 follow-on: same gap as the research queryTextDigest above, exercised through the
+  // other two consumers of the shared factErrors helper (resultDigest and childResultCount).
+  it("rejects a result digest or child result count fact wrapper padded with an extra field", () => {
+    expect(
+      validateAuxiliaryCapabilityOutcomeV1({
+        ...accepted(),
+        resultDigest: { outcome: "known", value: DIGEST, promptText: "leak me" },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateAuxiliaryCapabilityOutcomeV1({
+        ...accepted(),
+        childResultCount: { outcome: "known", value: 0, promptText: "leak me" },
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
   it("exposes the capability vocabulary", () => {
     expect(AUXILIARY_CAPABILITIES).toEqual(["research", "skill", "child-agent"]);
   });
@@ -399,6 +416,32 @@ describe("auxiliary request rejection paths", () => {
         }),
       ).toMatchObject({ ok: true });
     }
+  });
+
+  // KEIKO-0302 follow-on: factErrors validated the tagged fact's `outcome`/`value` shape but never
+  // rejected an extra key riding alongside a well-formed value — so a valid known digest padded
+  // with free text (or an absent fact padded with free text, distinct from the "carries a value"
+  // case already covered above) validated and was returned verbatim. This contract family is
+  // documented as content-free (see the module header), so any extra key must be rejected.
+  it("rejects a digest fact wrapper padded with an extra field", () => {
+    expect(
+      errorsFor({
+        ...researchRequest(),
+        research: {
+          ...researchRequest().research,
+          queryTextDigest: { outcome: "known", value: DIGEST, promptText: "leak me" },
+        },
+      }),
+    ).toContain("researchScope.queryTextDigest.promptText is not allowed");
+    expect(
+      errorsFor({
+        ...researchRequest(),
+        research: {
+          ...researchRequest().research,
+          queryTextDigest: { outcome: "absent", promptText: "leak me" },
+        },
+      }),
+    ).toContain("researchScope.queryTextDigest.promptText is not allowed");
   });
 
   it("rejects an outcome tag outside the closed vocabulary", () => {

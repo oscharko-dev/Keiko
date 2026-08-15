@@ -57,7 +57,7 @@ export interface QualityIntelligenceWorkflowDescriptor {
   readonly workflowId: QualityIntelligenceWorkflowId;
   readonly displayName: string;
   readonly description: string;
-  readonly stageNames: readonly string[];
+  readonly stageNames: readonly QualityIntelligence.QualityIntelligenceStageName[];
   readonly emittedEventKinds: readonly QualityIntelligence.QualityIntelligenceRunEventKind[];
   readonly defaultLimits: QualityIntelligenceWorkflowLimits;
   readonly preferredCostClass: "low" | "medium" | "high";
@@ -65,7 +65,9 @@ export interface QualityIntelligenceWorkflowDescriptor {
 
 const FROZEN_DEFAULT_LIMITS = QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS;
 
-function freezeStringArray(values: readonly string[]): readonly string[] {
+// Generic rather than retyped to the one caller (stageNames): keeps the helper reusable for any
+// future frozen string-literal array field without hand-widening it again (KEIKO-0274).
+function freezeStringArray<T extends string>(values: readonly T[]): readonly T[] {
   return Object.freeze([...values]);
 }
 

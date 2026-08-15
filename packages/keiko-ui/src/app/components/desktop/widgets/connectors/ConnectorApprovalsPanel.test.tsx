@@ -60,6 +60,87 @@ describe("ConnectorApprovalsPanel — rendering", () => {
   });
 });
 
+describe("ConnectorApprovalsPanel — content preview (KEIKO-0186)", () => {
+  it("renders the content preview before the Approve/Reject buttons when the server supplied one", async () => {
+    const client = makeClient({
+      listApprovals: vi.fn(async () => [
+        { ...APPROVAL, contentPreview: "Fix the flaky gate\n\nFails on retries" },
+      ]),
+    });
+    render(<ConnectorApprovalsPanel client={client} />);
+    const row = await screen.findByTestId("acx-approval");
+    const preview = await screen.findByTestId("acx-content-preview");
+    expect(preview).toHaveTextContent("Content: Fix the flaky gate");
+    expect(preview).toHaveTextContent("Fails on retries");
+    // Before the Approve/Reject buttons, not after: the preview text precedes "Approve" in the
+    // row's reading order.
+    const rowText = row.textContent ?? "";
+    const previewIndex = rowText.indexOf("Fix the flaky gate");
+    const approveIndex = rowText.indexOf("Approve");
+    expect(previewIndex).toBeGreaterThanOrEqual(0);
+    expect(approveIndex).toBeGreaterThan(previewIndex);
+  });
+
+  it("renders nothing extra when the server supplied no preview (transition-issue, or nothing to preview)", async () => {
+    render(<ConnectorApprovalsPanel client={makeClient()} />);
+    await screen.findByTestId("acx-approval");
+    expect(screen.queryByTestId("acx-content-preview")).not.toBeInTheDocument();
+  });
+
+  it("has no axe violations with a content preview present (light and dark)", async () => {
+    const client = makeClient({
+      listApprovals: vi.fn(async () => [
+        { ...APPROVAL, contentPreview: "Fix the flaky gate\n\nFails on retries" },
+      ]),
+    });
+    for (const theme of ["light", "dark"] as const) {
+      document.documentElement.setAttribute("data-theme", theme);
+      const { container, unmount } = render(<ConnectorApprovalsPanel client={client} />);
+      await screen.findByTestId("acx-content-preview");
+      expect(await axe(container)).toHaveNoViolations();
+      unmount();
+    }
+    document.documentElement.removeAttribute("data-theme");
+  });
+});
+
+// KEIKO-0186 P1 (Codex): a write action's text can sanitize/truncate to nothing presentable (e.g.
+// an all-zero-width-space comment). The server signals that with contentPreviewUnavailable: true
+// instead of an empty contentPreview -- the panel must say so plainly, not render nothing, or a
+// reviewer would mistake "unpresentable" for "there was never anything to preview."
+describe("ConnectorApprovalsPanel — content preview unavailable (KEIKO-0186 P1)", () => {
+  it("renders an explicit unavailable message before Approve/Reject when the server could not produce a preview", async () => {
+    const client = makeClient({
+      listApprovals: vi.fn(async () => [{ ...APPROVAL, contentPreviewUnavailable: true as const }]),
+    });
+    render(<ConnectorApprovalsPanel client={client} />);
+    const row = await screen.findByTestId("acx-approval");
+    const unavailable = await screen.findByTestId("acx-content-preview-unavailable");
+    expect(unavailable).toHaveTextContent(/could not be safely previewed/i);
+    // Never the ordinary preview element -- the two states are mutually exclusive.
+    expect(screen.queryByTestId("acx-content-preview")).not.toBeInTheDocument();
+    const rowText = row.textContent ?? "";
+    const previewIndex = rowText.indexOf("could not be safely previewed");
+    const approveIndex = rowText.indexOf("Approve");
+    expect(previewIndex).toBeGreaterThanOrEqual(0);
+    expect(approveIndex).toBeGreaterThan(previewIndex);
+  });
+
+  it("has no axe violations with the unavailable message present (light and dark)", async () => {
+    const client = makeClient({
+      listApprovals: vi.fn(async () => [{ ...APPROVAL, contentPreviewUnavailable: true as const }]),
+    });
+    for (const theme of ["light", "dark"] as const) {
+      document.documentElement.setAttribute("data-theme", theme);
+      const { container, unmount } = render(<ConnectorApprovalsPanel client={client} />);
+      await screen.findByTestId("acx-content-preview-unavailable");
+      expect(await axe(container)).toHaveNoViolations();
+      unmount();
+    }
+    document.documentElement.removeAttribute("data-theme");
+  });
+});
+
 describe("ConnectorApprovalsPanel — approve outcomes", () => {
   it("approves and shows a typed success result", async () => {
     const user = userEvent.setup();

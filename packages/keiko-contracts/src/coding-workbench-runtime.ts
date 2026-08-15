@@ -1,3 +1,4 @@
+import { deepFreeze } from "./deep-freeze.js";
 import type {
   CodingWorkbenchActionClass,
   CodingWorkbenchAuthorityEnvelope,
@@ -11,6 +12,7 @@ import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_CONNECTOR_SCOPES,
   CODING_WORKBENCH_MODEL_SOURCES,
+  CODING_WORKBENCH_MODES,
   CODING_WORKBENCH_RUNTIME_SOURCES,
 } from "./coding-workbench.js";
 import { validateCodingWorkbenchAuthorityEnvelope } from "./coding-workbench-validation.js";
@@ -188,9 +190,11 @@ export interface CodingWorkbenchRuntimeAdapterPort {
   readonly stop: (runId: string) => Promise<void>;
 }
 
+// deepFreeze: a shallow freeze left every per-state array writable, so
+// `LEGAL_TRANSITIONS.succeeded.push("running")` succeeded against the transition guard that reads it.
 const LEGAL_TRANSITIONS: Readonly<
   Record<CodingWorkbenchRuntimeStateName, readonly CodingWorkbenchRuntimeStateName[]>
-> = Object.freeze({
+> = deepFreeze({
   unavailable: ["idle", "recovery-required"],
   idle: ["starting", "unavailable", "recovery-required"],
   starting: ["ready", "failed", "cancelled", "taken-over", "recovery-required"],
@@ -554,16 +558,14 @@ function validateStartIntent(value: Record<string, unknown>, errors: string[]): 
   ) {
     errors.push("taskIntent must be a bounded non-empty string");
   }
-  const modes: readonly CodingWorkbenchMode[] = [
-    "governed-assist",
-    "supervised-coding",
-    "autonomous-delivery",
-  ];
-  const sources: readonly CodingWorkbenchModelSource[] = [
-    "keiko-model-gateway",
-    "openai-api-key-through-gateway",
-    "chatgpt-codex-subscription-profile",
-  ];
-  if (!isOneOf(value.requestedMode, modes)) errors.push("requestedMode is invalid");
-  if (!isOneOf(value.modelSource, sources)) errors.push("modelSource is invalid");
+  // Validated against the package's own frozen tables, not local copies. The re-declared arrays here
+  // were a second source of truth for two closed vocabularies the rest of this same file already
+  // validates against CODING_WORKBENCH_MODEL_SOURCES — so adding a mode would have silently left
+  // this one validator rejecting it.
+  if (!isOneOf(value.requestedMode, CODING_WORKBENCH_MODES)) {
+    errors.push("requestedMode is invalid");
+  }
+  if (!isOneOf(value.modelSource, CODING_WORKBENCH_MODEL_SOURCES)) {
+    errors.push("modelSource is invalid");
+  }
 }

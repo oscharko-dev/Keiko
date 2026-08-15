@@ -15,6 +15,11 @@ import {
 import type { OutboundHttpEgressConfig } from "./types.js";
 
 export type { OutboundHttpEgressConfig } from "./types.js";
+// Re-exported so a caller can classify a target's address class (e.g. "loopback") by hostname
+// string alone, with no DNS resolution and no dependency on any `OutboundHttpEgressConfig` flag —
+// safe to use unconditionally, proxied or not (see keiko-server's Atlassian httpPort.ts for why
+// that distinction matters: `denyLoopback` cannot be pinned on a proxied request there).
+export { classifyOutboundHost } from "./egress-policy.js";
 
 // Captured once at module load, before any test can monkey-patch `globalThis.fetch`. Used to
 // detect a caller-substituted global fetch (the established test convention in this codebase,
@@ -417,6 +422,25 @@ function hostHeader(url: URL): string {
   return isDefaultPort ? url.hostname : `${url.hostname}:${url.port}`;
 }
 
+// Formats a resolved address as a bare authority host: an IPv6 literal MUST be bracketed in a URI
+// authority (RFC 3986); an IPv4 literal never is. Used only for `pinProxiedConnectTarget` (ADR-0038
+// D6) — the resolved address becomes the actual dial target instead of an informational value, so
+// this is the one place in the file where that distinction is load-bearing rather than cosmetic.
+function addressAuthorityHost(address: LookupAddress): string {
+  return address.family === 6 ? `[${address.address}]` : address.address;
+}
+
+// Same bracketing rule via the URL setter. Verified empirically (not assumed): `url.hostname =
+// "::1"` (unbracketed) silently leaves the URL UNCHANGED — no exception, no error — so an unwary
+// caller could believe the target was pinned to the vetted address while the original hostname
+// (never resolved by Keiko) actually went out on the wire. `url.hostname = "[::1]"` (bracketed) is
+// the only form the WHATWG URL setter accepts for an IPv6 host.
+function rewriteHostToAddress(target: URL, address: LookupAddress): URL {
+  const rewritten = new URL(target.href);
+  rewritten.hostname = addressAuthorityHost(address);
+  return rewritten;
+}
+
 function noProxyRuleMatches(rule: string, host: string, hostPort: string): boolean {
   if (rule.length === 0) return false;
   if (rule === "*") return true;
@@ -763,9 +787,17 @@ async function createTlsTunnel(
   proxy: URL,
   ca: readonly string[],
   signal: AbortSignal | undefined,
+  pinnedAddress: LookupAddress | undefined,
 ): Promise<tls.TLSSocket> {
   const socket = await openProxySocket(proxy, ca, signal);
-  const authority = `${target.hostname}:${targetPort(target)}`;
+  // pinProxiedConnectTarget (ADR-0038 D6): when set, the CONNECT authority is the address Keiko
+  // itself resolved and vetted, not the hostname — the proxy dials exactly that address instead of
+  // re-resolving DNS on its own, closing the DNS-rebinding TOCTOU gap a pre-proxy-only lookup
+  // cannot close. TLS server-name identity is untouched below (startTargetTls still uses
+  // target.hostname), so certificate validation still runs against the real hostname regardless.
+  const connectHost =
+    pinnedAddress === undefined ? target.hostname : addressAuthorityHost(pinnedAddress);
+  const authority = `${connectHost}:${targetPort(target)}`;
   socket.write(`CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`);
   const status = connectStatus(await readConnectHeader(socket, signal));
   if (status === 407) {
@@ -849,25 +881,42 @@ function responseFromClientRequest(
   });
 }
 
-async function fetchHttpViaProxy(
-  target: URL,
-  init: RequestInit,
-  proxy: URL,
-  ca: readonly string[],
-  maxResponseBytes?: number,
-): Promise<Response> {
-  const body = await bodyToWire(init.body);
-  const headers = headersToRecord(init.headers);
+function assertNoForwardedCredentialHeader(headers: Record<string, string>): void {
   if (hasForwardedCredentialHeader(headers)) {
     throw new OutboundHttpEgressError(
       "PROXY_BLOCKED_BY_POLICY",
       "Refusing to forward credential headers to a plaintext HTTP target through the configured proxy.",
     );
   }
-  // Ensure Host header omits the default port (fixes SigV4 pre-signed S3 URLs).
+}
+
+// pinProxiedConnectTarget (ADR-0038 D6): a plain-HTTP proxy request has no CONNECT tunnel to pin
+// (unlike fetchHttpsViaProxy) — the proxy forwards an absolute-URI request itself and resolves its
+// host independently. Rewriting the request-target's host to the vetted address makes the proxy
+// dial that address directly (nothing left to resolve); the caller's Host header still carries the
+// real hostname, so the origin's virtual-hosting is unaffected.
+function proxyRequestTarget(target: URL, pinnedAddress: LookupAddress | undefined): URL {
+  return pinnedAddress === undefined ? target : rewriteHostToAddress(target, pinnedAddress);
+}
+
+async function fetchHttpViaProxy(
+  target: URL,
+  init: RequestInit,
+  proxy: URL,
+  ca: readonly string[],
+  maxResponseBytes: number | undefined,
+  pinnedAddress: LookupAddress | undefined,
+): Promise<Response> {
+  const body = await bodyToWire(init.body);
+  const headers = headersToRecord(init.headers);
+  assertNoForwardedCredentialHeader(headers);
+  // Ensure Host header omits the default port (fixes SigV4 pre-signed S3 URLs). Read from the
+  // ORIGINAL target even when pinned, so the origin server's virtual-hosting still sees the real
+  // hostname — only the absolute-URI request line below changes.
   if (!Object.hasOwn(headers, "host")) {
     headers.host = hostHeader(target);
   }
+  const requestTarget = proxyRequestTarget(target, pinnedAddress);
   const request = proxy.protocol === "https:" ? httpsRequest : httpRequest;
   const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
   return responseFromClientRequest((resolve, reject) => {
@@ -877,7 +926,7 @@ async function fetchHttpViaProxy(
         hostname: proxy.hostname,
         port: proxyPort(proxy),
         method: init.method ?? "GET",
-        path: target.href,
+        path: requestTarget.href,
         headers,
         ca: proxy.protocol === "https:" ? [...ca] : undefined,
         signal: init.signal ?? undefined,
@@ -907,7 +956,8 @@ async function fetchHttpsViaProxy(
   init: RequestInit,
   proxy: URL,
   ca: readonly string[],
-  maxResponseBytes?: number,
+  maxResponseBytes: number | undefined,
+  pinnedAddress: LookupAddress | undefined,
 ): Promise<Response> {
   const body = await bodyToWire(init.body);
   const headers = headersToRecord(init.headers);
@@ -920,9 +970,13 @@ async function fetchHttpsViaProxy(
     headers.host = hostHeader(target);
   }
   const tunnelKey = httpsProxyTunnelKey(target, proxy, ca);
+  // An idle pooled tunnel was itself vetted (pinned or not) when it was first created; reusing it
+  // does not reopen the DNS-rebinding gap, it is exactly as trusted as any other kept-alive reuse
+  // already is for up to HTTPS_PROXY_TUNNEL_IDLE_TTL_MS. Only a genuinely fresh tunnel needs the
+  // current call's pinned address.
   const socket =
     takeIdleHttpsProxyTunnel(tunnelKey) ??
-    (await createTlsTunnel(target, proxy, ca, init.signal ?? undefined));
+    (await createTlsTunnel(target, proxy, ca, init.signal ?? undefined, pinnedAddress));
   socket.setKeepAlive(true);
   const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
   return responseFromClientRequest((resolve, reject) => {
@@ -967,12 +1021,13 @@ function fetchViaProxy(
   init: RequestInit,
   proxy: URL,
   egress: OutboundHttpEgressConfig | undefined,
-  maxResponseBytes?: number,
+  maxResponseBytes: number | undefined,
+  pinnedAddress: LookupAddress | undefined,
 ): Promise<Response> {
   const ca = gatewayTrustedCaCertificates(egress?.caBundlePath);
   return target.protocol === "https:"
-    ? fetchHttpsViaProxy(target, init, proxy, ca, maxResponseBytes)
-    : fetchHttpViaProxy(target, init, proxy, ca, maxResponseBytes);
+    ? fetchHttpsViaProxy(target, init, proxy, ca, maxResponseBytes, pinnedAddress)
+    : fetchHttpViaProxy(target, init, proxy, ca, maxResponseBytes, pinnedAddress);
 }
 
 // `pinnedAddresses` is set exactly when gatewayFetch itself resolved DNS for this target (no
@@ -1039,17 +1094,28 @@ async function fetchDirectWithCaFallback(
 
 // How DNS participates in one gatewayFetch call. `pinForConnect` means Keiko resolves the target
 // itself and pins the vetted address set for the actual connect — possible only on the direct
-// native-fetch path, where Keiko owns the socket. Off that path there is no address binding at all.
+// native-fetch path, where Keiko owns the socket. `pinForProxyConnect` is the proxied counterpart
+// (ADR-0038 D6): Keiko still resolves and vets the target itself, but hands the vetted address to
+// the proxy layer instead of dialing it directly, closing the same DNS-rebinding gap on the
+// CONNECT/absolute-URI path — opt-in only (`egress.pinProxiedConnectTarget`), since a proxy that
+// filters by hostname would see an IP-literal target instead. Neither flag ever applies to a
+// test-injected `fetchImpl` or a caller-substituted `globalThis.fetch`.
 interface GatewayDnsPlan {
   readonly pinForConnect: boolean;
+  readonly pinForProxyConnect: boolean;
 }
 
 function planGatewayDns(
   usesRealTransport: boolean,
   proxy: URL | undefined,
   doFetch: typeof globalThis.fetch,
+  egress: OutboundHttpEgressConfig | undefined,
 ): GatewayDnsPlan {
-  return { pinForConnect: usesRealTransport && proxy === undefined && doFetch === NATIVE_FETCH };
+  return {
+    pinForConnect: usesRealTransport && proxy === undefined && doFetch === NATIVE_FETCH,
+    pinForProxyConnect:
+      usesRealTransport && proxy !== undefined && egress?.pinProxiedConnectTarget === true,
+  };
 }
 
 /**
@@ -1057,21 +1123,86 @@ function planGatewayDns(
  * steered at a local service. Keiko can only guarantee that when it owns the connect and pins the
  * vetted addresses.
  *
- * Through a proxy it cannot. The proxy resolves the hostname independently at connect time, so a
- * pre-proxy lookup validates an address set that is never bound to use: a hostile name can resolve
- * publicly during the policy check and rebind to loopback for the proxy's own connect. Treating
- * that lookup as rebinding protection would be a guarantee the code cannot keep, so the
- * combination fails closed instead. A deployment that needs proxied research egress must give the
- * gateway a proxy that enforces the same address policy — that is a deliberate future contract,
- * not something to infer here.
+ * Through a proxy it cannot, UNLESS the caller has also set `pinProxiedConnectTarget` (ADR-0038
+ * D6): without it, the proxy resolves the hostname independently at connect time, so a pre-proxy
+ * lookup validates an address set that is never bound to use — a hostile name can resolve publicly
+ * during the policy check and rebind to loopback for the proxy's own connect. Treating that lookup
+ * as rebinding protection would be a guarantee the code cannot keep, so the combination fails
+ * closed instead. `pinProxiedConnectTarget` is exactly the deployment-side opt-in this docstring
+ * used to describe as a future contract: it makes gatewayFetch hand the proxy a vetted address
+ * instead of a hostname, so the address IS bound to use and the refusal no longer applies.
  */
 function refuseUnpinnableResearchEgress(
   proxy: URL | undefined,
   egress: OutboundHttpEgressConfig | undefined,
 ): void {
-  if (proxy !== undefined && egress?.denyLoopback === true) {
+  const stillUnpinnable = proxy !== undefined && egress?.pinProxiedConnectTarget !== true;
+  if (stillUnpinnable && egress?.denyLoopback === true) {
     throw blockedTargetError("research egress cannot pin addresses through a proxy");
   }
+}
+
+// pinProxiedConnectTarget (ADR-0038 D6) resolved DNS but the resolver returned no usable address —
+// the target may still be broken/unreachable, but pinning must never SILENTLY fall back to letting
+// the proxy resolve it unvetted just because Keiko's own lookup came back empty. Fail closed, the
+// same posture as every other rejection this function's caller (enforceOutboundTargetPolicy) makes.
+function requirePinnedAddress(addresses: readonly LookupAddress[] | undefined): LookupAddress {
+  const first = addresses?.[0];
+  if (first === undefined) {
+    throw blockedTargetError("proxied DNS resolution returned no usable address to pin");
+  }
+  return first;
+}
+
+interface GatewayDnsResolution {
+  readonly pinnedAddresses: readonly LookupAddress[] | undefined;
+  readonly proxyPinnedAddress: LookupAddress | undefined;
+  readonly redirectPolicy: { readonly resolveDns: boolean };
+}
+
+// Extracted from gatewayFetch to keep its line count and cyclomatic complexity within budget.
+// Resolves and vets the target's DNS exactly once per call, per whichever plan planGatewayDns
+// picked, and derives every address binding a caller of gatewayFetch needs from that single
+// lookup: the direct-path pinned set (AUDIT-SEC-001), the proxy-path pinned address (ADR-0038 D6),
+// and the resolveDns flag the redirect re-check must reuse.
+async function resolveGatewayDns(
+  target: URL,
+  egress: OutboundHttpEgressConfig | undefined,
+  usesRealTransport: boolean,
+  proxy: URL | undefined,
+  doFetch: typeof globalThis.fetch,
+): Promise<GatewayDnsResolution> {
+  const dns = planGatewayDns(usesRealTransport, proxy, doFetch, egress);
+  const resolveDns = dns.pinForConnect || dns.pinForProxyConnect;
+  const vettedAddresses = await enforceOutboundTargetPolicy(target, egress, { resolveDns });
+  return {
+    pinnedAddresses: dns.pinForConnect ? vettedAddresses : undefined,
+    proxyPinnedAddress: dns.pinForProxyConnect ? requirePinnedAddress(vettedAddresses) : undefined,
+    redirectPolicy: { resolveDns },
+  };
+}
+
+interface GatewayProxyPlan {
+  readonly doFetch: typeof globalThis.fetch;
+  readonly target: URL;
+  readonly usesRealTransport: boolean;
+  readonly proxy: URL | undefined;
+}
+
+// Extracted from gatewayFetch to keep its line count and cyclomatic complexity within budget.
+function planGatewayProxy(
+  url: string,
+  fetchImpl: typeof fetch | undefined,
+  egress: OutboundHttpEgressConfig | undefined,
+): GatewayProxyPlan {
+  const doFetch = fetchImpl ?? globalThis.fetch;
+  const target = new URL(url);
+  const usesRealTransport = fetchImpl === undefined;
+  const proxyRaw = usesRealTransport ? proxyForTarget(target, egress) : undefined;
+  // Validate the configured proxy before target DNS work so malformed/credentialed proxy settings
+  // fail with their deterministic policy error rather than an unrelated target lookup failure.
+  const proxy = proxyRaw === undefined ? undefined : parseProxyUrl(proxyRaw);
+  return { doFetch, target, usesRealTransport, proxy };
 }
 
 export async function gatewayFetch(
@@ -1092,22 +1223,24 @@ export async function gatewayFetch(
     composedSignal !== undefined
       ? { ...rest, redirect: "manual", signal: composedSignal }
       : { ...rest, redirect: "manual" };
-  const doFetch = fetchImpl ?? globalThis.fetch;
-  const target = new URL(url);
-  const usesRealTransport = fetchImpl === undefined;
-  const proxyRaw = usesRealTransport ? proxyForTarget(target, egress) : undefined;
-  // Validate the configured proxy before target DNS work so malformed/credentialed proxy settings
-  // fail with their deterministic policy error rather than an unrelated target lookup failure.
-  const proxy = proxyRaw === undefined ? undefined : parseProxyUrl(proxyRaw);
+  const { doFetch, target, usesRealTransport, proxy } = planGatewayProxy(url, fetchImpl, egress);
   refuseUnpinnableResearchEgress(proxy, egress);
-  const dns = planGatewayDns(usesRealTransport, proxy, doFetch);
-  const vettedAddresses = await enforceOutboundTargetPolicy(target, egress, {
-    resolveDns: dns.pinForConnect,
-  });
-  const pinnedAddresses = dns.pinForConnect ? vettedAddresses : undefined;
-  const redirectPolicy = { resolveDns: dns.pinForConnect };
+  const { pinnedAddresses, proxyPinnedAddress, redirectPolicy } = await resolveGatewayDns(
+    target,
+    egress,
+    usesRealTransport,
+    proxy,
+    doFetch,
+  );
   if (proxy !== undefined) {
-    const response = await fetchViaProxy(target, init, proxy, egress, maxResponseBytes);
+    const response = await fetchViaProxy(
+      target,
+      init,
+      proxy,
+      egress,
+      maxResponseBytes,
+      proxyPinnedAddress,
+    );
     await enforceRedirectTargetPolicy(target, response, egress, redirectPolicy);
     return response;
   }

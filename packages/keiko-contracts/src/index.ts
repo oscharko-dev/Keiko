@@ -706,6 +706,7 @@ export type {
 } from "./debug/debug-lifecycle.js";
 export {
   DEBUG_LIFECYCLE_SCHEMA_VERSION,
+  isDebugLifecycleEvent,
   isDebugLifecycleEvidence,
 } from "./debug/debug-lifecycle.js";
 
@@ -1126,6 +1127,7 @@ export {
   ATLASSIAN_CONNECTOR_WORKBENCH_ACTION_CLASS,
   ATLASSIAN_CONNECTOR_WORKBENCH_RESOURCE_SCOPE,
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
+  ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
   ATLASSIAN_CONFLUENCE_SPACE_KEY_MAX_CHARS,
   ATLASSIAN_JIRA_PROJECT_KEY_MAX_CHARS,
   ATLASSIAN_JQL_MAX_CHARS,
@@ -1148,12 +1150,14 @@ export {
   isAtlassianConnectorProvider,
   isAtlassianConnectorRegistryFailureReason,
   isAtlassianConnectorWriteFailureReason,
+  isAtlassianContentPreviewUnpresentable,
   isAtlassianLiveSearchTemplateId,
   isAtlassianSyncFailureReason,
   isAtlassianSyncJobStatus,
   isAtlassianSyncTerminalStatus,
   isJiraIssueCitationMetadata,
   isSafeAtlassianConnectorBaseUrl,
+  isSafeAtlassianContentPreview,
   isSafeAtlassianDisplayName,
   isSafeAtlassianIdentifier,
   isSafeConfluenceSpaceKey,
@@ -1370,6 +1374,7 @@ export {
 export type {
   CodingWorkbenchCodexAuthCommandLabel,
   CodingWorkbenchCodexAuthMethod,
+  CodingWorkbenchCodexAuthMethodRow,
   CodingWorkbenchCodexAuthSetupPlan,
   CodingWorkbenchCodexAuthSetupRequest,
   CodingWorkbenchCodexAuthStateRoot,
@@ -1390,6 +1395,7 @@ export {
   CODING_WORKBENCH_CODEX_AUTH_STATUSES,
   CODING_WORKBENCH_CODEX_CREDENTIAL_STORES,
   CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES,
+  codingWorkbenchCodexAuthMethodRowFor,
   selectCodingWorkbenchRuntimeProfile,
   validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexAuthSetupRequest,
@@ -1415,6 +1421,7 @@ export {
   GIT_REPOSITORY_SCHEMA_VERSION,
   GIT_REPOSITORY_STATES,
   GIT_UNAVAILABLE_REASONS,
+  GIT_STATUS_CODES,
   validateGitRepositoryStatusResponse,
   validateGitRepositoryDiffResponse,
 } from "./git-repository.js";
@@ -2318,6 +2325,7 @@ export {
 // ─── Shared text-safety primitive (Epic #177/#189 grounding hardening, GRD-001) ──
 export {
   containsAbsolutePath,
+  containsBidiOrZeroWidth,
   containsPseudoRoleMarker,
   redactAbsolutePaths,
   stripUnsafeFormatChars,
@@ -3344,6 +3352,7 @@ export {
   workspaceChordKeyForPlatform,
   workspaceChordsCollide,
   workspacePlatformModifiers,
+  isWorkspaceChordAcceptable,
   isWorkspaceDispatchableChord,
   isWorkspaceReservedChord,
   workspaceInverseAction,
@@ -4111,6 +4120,8 @@ export {
   WORKSPACE_CONTRACT_SCHEMA_VERSION,
   WORKSPACE_OPAQUE_REF_MAX_CHARS,
   WORKSPACE_PORTABLE_PATH_MAX_BYTES,
+  WORKSPACE_POLICY_VERSION_PATTERN,
+  hasWorkspaceControlCharacter,
   isWorkspaceRootRef,
   isWorkspaceManifestRef,
   isWorkspaceProfileRef,
@@ -4123,6 +4134,7 @@ export {
   isWorkspacePathDigest,
   isWorkspaceIsoInstant,
   isWorkspaceFact,
+  isWorkspaceRevision,
   isCanonicalWorkspaceRoot,
   isPortableWorkspaceRelativePath,
 } from "./workspace-contract-primitives.js";
@@ -4705,3 +4717,13 @@ export {
   editorM7SnippetDiagnostics,
   matchingEditorM7Snippets,
 } from "./editor-snippets.js";
+
+// ─── Shared candidate-ranking fixture (KEIKO-1026) ──────────────────────────────
+// Plain DATA, not a formula: the deterministic candidate total order is implemented in this package
+// (compareRankedScorecards) and in keiko-model-gateway (compareCandidates), and the leaf cannot
+// import the gateway. Both suites assert this one expected order, so a drift in either comparator
+// turns exactly one of them red.
+export {
+  PROMPT_CANDIDATE_RANKING_EXPECTED_ORDER,
+  PROMPT_CANDIDATE_RANKING_FIXTURE,
+} from "./prompt-enhancer-ranking-fixture.js";

@@ -197,6 +197,31 @@ describe("CodingRuntimeOperationCoordinator", () => {
     expect(port.answer).not.toHaveBeenCalled();
   });
 
+  it("answers a question with the requestId/expectedRevision/questionId binding folded into the contract parse (KEIKO-0411)", async () => {
+    // prepare() already validated requestId/expectedRevision/questionId out of band before this
+    // point (isExactRecord + expectedRevision-vs-current.revision + validQuestionId); this proves
+    // the call site now also passes them through parseCodingWorkbenchRuntimeQuestionAnswerRequest
+    // (as questionRequestId) without breaking the happy path, and that the port still receives
+    // exactly the answers the contract validated.
+    const port = questionPort();
+    const subject = coordinator({ port });
+    await expect(
+      subject.answerQuestion("run-1", {
+        requestId: "req-1",
+        expectedRevision: 3,
+        questionId: "que_1",
+        answers: [["Continue"]],
+      }),
+    ).resolves.toEqual({ ok: true, snapshot: publicSnapshot() });
+    expect(port.answer).toHaveBeenCalledWith({
+      runId: "run-1",
+      requestId: "req-1",
+      expectedRevision: 3,
+      questionId: "que_1",
+      answers: [["Continue"]],
+    });
+  });
+
   it("fails closed when answering throws and routes rejections to the reject surface", async () => {
     const port = questionPort({
       answer: () => Promise.reject(new Error("protocol failure")),

@@ -26,6 +26,12 @@ const STATIC_DIR = join(REPO_ROOT, "dist", "ui", "static");
 // absent (it does not build), so that one test skips there and runs wherever the package is built.
 const DIST_READY = existsSync(ENTRY) && existsSync(STATIC_DIR);
 
+// Probes an OS-assigned ephemeral port and releases it immediately. The port is then handed to
+// a SEPARATE process (scripts/keiko.sh, which spawns its own `node` child), so the probe-then-
+// release-then-reuse handoff is inherently non-atomic: nothing holds the port reserved between
+// this function returning and that other process's own bind(). On a busy machine an unrelated
+// process can win that gap. Callers that spawn a real listener on the returned port must treat a
+// resulting EADDRINUSE as retryable-with-a-fresh-port, not as a defect (see startLifecycle below).
 function freeLoopbackPort(): Promise<number> {
   return new Promise<number>((resolvePort, reject) => {
     const server = createServer();
@@ -212,8 +218,29 @@ describe("scripts/keiko.sh", () => {
       run(["stop"], lifecycleEnv());
     });
 
+    // freeLoopbackPort()'s probe-then-release is not atomic with this spawned process's own
+    // bind (see the comment on that function), so an unrelated process occasionally wins the
+    // race and the real `keiko ui` child exits with EADDRINUSE. scripts/keiko.sh's health poll
+    // now bounds every curl attempt, so that loses the race promptly and visibly instead of
+    // hanging — but the test itself must not fail on a collision it can trivially route around.
+    // Retrying with a freshly probed port is the hermetic fix: bounded, deterministic on
+    // success, and scoped to exactly the one signature (EADDRINUSE) that means "the port was
+    // stolen," so any other failure — a real product defect — still surfaces on the first try.
+    const PORT_COLLISION_RETRY_LIMIT = 2;
+
+    async function startLifecycle(): Promise<SpawnSyncReturns<string>> {
+      for (let attempt = 0; ; attempt += 1) {
+        const start = run(["start"], lifecycleEnv());
+        const isPortCollision = start.status !== 0 && start.stderr.includes("EADDRINUSE");
+        if (!isPortCollision || attempt >= PORT_COLLISION_RETRY_LIMIT) {
+          return start;
+        }
+        lifecyclePort = await freeLoopbackPort();
+      }
+    }
+
     it("starts healthy, reports running, and stops cleanly", async () => {
-      const start = run(["start"], lifecycleEnv());
+      const start = await startLifecycle();
       expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(0);
       expect(start.stdout).toContain("running");
 

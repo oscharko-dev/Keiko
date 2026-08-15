@@ -24,6 +24,8 @@ import {
 } from "./editor-agent-governance.js";
 import { EDITOR_VERIFICATION_SCHEMA_VERSION, isVerificationKind } from "./editor-verification.js";
 import {
+  countMatchesStatus,
+  matchesOverallStatus,
   VERIFICATION_FAILURE_MESSAGE_MAX_CHARS,
   VERIFICATION_MAX_FAILURE_LOCATIONS,
   type VerificationFailureLocation,
@@ -91,8 +93,23 @@ export type EditorAgentVerificationResult =
     };
 
 // ─── Pure redaction projection (server maps the trusted producer's report through this) ───────────
+// KEIKO-0424: the projection used to copy file/line/column/message/ruleId straight through with no
+// bound or path check, while the consumer-side parser below (parseLocation et al.) already rejects
+// exactly those unbounded values. A producer report whose location.file is absolute, or whose
+// message exceeds the cap, was therefore emitted at 200 and then hard-rejected wholesale by
+// isEditorAgentVerificationResult on the receiving side -- turning a partially-usable verification
+// result into an unparseable one with no diagnostic. projectLocation now applies the SAME bounds
+// (isBoundedTargetPath, isValidLocationCoordinatePair, isValidLocationTextPair) the parser enforces,
+// dropping an out-of-bound location entirely rather than truncating it (a truncated compiler/linter
+// message on a content-free-by-construction surface could mislead), so the redacted report this
+// function emits always round-trips through the agent-facing parser it is paired with.
 
-function projectLocation(location: VerificationFailureLocation): VerificationFailureLocation {
+function projectLocation(
+  location: VerificationFailureLocation,
+): VerificationFailureLocation | null {
+  if (!isBoundedTargetPath(location.file)) return null;
+  if (!isValidLocationCoordinatePair(location.line, location.column)) return null;
+  if (!isValidLocationTextPair(location.message, location.ruleId)) return null;
   return {
     file: location.file,
     ...(location.line === undefined ? {} : { line: location.line }),
@@ -102,12 +119,24 @@ function projectLocation(location: VerificationFailureLocation): VerificationFai
   };
 }
 
+function projectLocations(
+  locations: readonly VerificationFailureLocation[],
+): readonly VerificationFailureLocation[] {
+  const projected: VerificationFailureLocation[] = [];
+  for (const location of locations) {
+    if (projected.length >= VERIFICATION_MAX_FAILURE_LOCATIONS) break;
+    const candidate = projectLocation(location);
+    if (candidate !== null) projected.push(candidate);
+  }
+  return projected;
+}
+
 function redactStep(result: VerificationReport["results"][number]): RedactedVerificationStep {
   return {
     kind: result.kind,
     status: result.status,
     durationMs: result.durationMs,
-    ...(result.locations === undefined ? {} : { locations: result.locations.map(projectLocation) }),
+    ...(result.locations === undefined ? {} : { locations: projectLocations(result.locations) }),
   };
 }
 
@@ -270,23 +299,36 @@ function canonicalRequest(input: Record<string, unknown>): EditorAgentVerificati
   };
 }
 
+// Scalar-level rule (KEIKO-0424): factored out of hasValidLocationCoordinates so projectLocation can
+// apply the identical column-requires-line rule to a strongly-typed VerificationFailureLocation
+// without going through an untyped Record -- a VerificationFailureLocation interface has no index
+// signature, so it is not assignable to Readonly<Record<string, unknown>> (TS2345), and narrowing
+// hasValidLocationCoordinates/hasValidLocationText onto a Record-free parameter type instead breaks
+// the "value is Record<...> & {...}" intersection parseLocation's own narrowing relies on (TS2559 /
+// TS2339 on later `value.file`/`.message` access). Operating on the two extracted scalars sidesteps
+// both hazards while keeping exactly one implementation of the rule.
+function isValidLocationCoordinatePair(line: unknown, column: unknown): boolean {
+  if (line !== undefined && !isPositiveSafeInteger(line)) return false;
+  return column === undefined || (line !== undefined && isPositiveSafeInteger(column));
+}
+
+function isValidLocationTextPair(message: unknown, ruleId: unknown): boolean {
+  if (!isBoundedResultText(message, VERIFICATION_FAILURE_MESSAGE_MAX_CHARS)) return false;
+  return (
+    ruleId === undefined || isBoundedResultText(ruleId, EDITOR_AGENT_VERIFICATION_RULE_ID_MAX_CHARS)
+  );
+}
+
 function hasValidLocationCoordinates(
   value: Readonly<Record<string, unknown>>,
 ): value is Readonly<Record<string, unknown>> & { line?: number; column?: number } {
-  if (value.line !== undefined && !isPositiveSafeInteger(value.line)) return false;
-  return (
-    value.column === undefined || (value.line !== undefined && isPositiveSafeInteger(value.column))
-  );
+  return isValidLocationCoordinatePair(value.line, value.column);
 }
 
 function hasValidLocationText(
   value: Readonly<Record<string, unknown>>,
 ): value is Readonly<Record<string, unknown>> & { message: string; ruleId?: string } {
-  if (!isBoundedResultText(value.message, VERIFICATION_FAILURE_MESSAGE_MAX_CHARS)) return false;
-  return (
-    value.ruleId === undefined ||
-    isBoundedResultText(value.ruleId, EDITOR_AGENT_VERIFICATION_RULE_ID_MAX_CHARS)
-  );
+  return isValidLocationTextPair(value.message, value.ruleId);
 }
 
 function parseLocation(value: unknown): VerificationFailureLocation | null {
@@ -335,6 +377,11 @@ function parseStep(value: unknown): RedactedVerificationStep | null {
   };
 }
 
+// KEIKO-0159: the "count equals the number of steps at this status" rule and the overall-status rule
+// below both used to be byte-for-byte re-implementations of verification.ts's isStatusCounts /
+// matchesOverallStatus. Both are now imported from ./verification.js; this file keeps only its own
+// bound (EDITOR_AGENT_VERIFICATION_MAX_STEPS), which is a different invariant from
+// VERIFICATION_MAX_REPORT_RESULTS and stays local.
 function parseCounts(
   value: unknown,
   steps: readonly RedactedVerificationStep[],
@@ -344,21 +391,9 @@ function parseCounts(
     const count = value[status];
     if (!isSafeNonNegativeInteger(count) || count > EDITOR_AGENT_VERIFICATION_MAX_STEPS)
       return null;
-    if (count !== steps.filter((step) => step.status === status).length) return null;
+    if (!countMatchesStatus(count, status, steps)) return null;
   }
   return projectCounts(value as unknown as VerificationReport["counts"]);
-}
-
-function matchesOverallStatus(
-  overallStatus: VerificationStatus,
-  steps: readonly RedactedVerificationStep[],
-): boolean {
-  if (overallStatus === "cancelled") return true;
-  if (steps.some((step) => step.status === "cancelled")) return false;
-  const expected = steps.every((step) => step.status === "passed" || step.status === "skipped")
-    ? "passed"
-    : "failed";
-  return overallStatus === expected;
 }
 
 function isReportEnvelope(value: unknown): value is Record<string, unknown> & {

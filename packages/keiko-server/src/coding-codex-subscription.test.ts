@@ -221,6 +221,56 @@ describe("coding Codex subscription profile routes", () => {
     expect(JSON.stringify(result)).not.toContain("accessToken");
   });
 
+  // Pins the full method -> {commandLabel, requiresSecretInput, credentialTransport} mapping for
+  // the other two methods too (only device-code's success shape was asserted before), so
+  // consolidating the server's own copy of this formula onto the contracts' canonical
+  // codingWorkbenchCodexAuthMethodRowFor cannot silently change any method's setup plan.
+  it("returns a browser-login setup plan without executing Codex or exposing paths", async () => {
+    const result = await handleCodingCodexSubscriptionSetup(
+      ctx({ method: "chatgpt-browser-login" }),
+      deps(approvedRuntime()),
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: {
+        method: "chatgpt-browser-login",
+        commandLabel: "codex-login",
+        requiresSecretInput: false,
+        stateScope: "keiko-owned-state",
+        stateRoot: "keiko-codex-runtime-state",
+        usesGlobalCodexHome: false,
+      },
+    });
+    expect((result as { body: Record<string, unknown> }).body.credentialTransport).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("auth.json");
+    expect(JSON.stringify(result)).not.toContain(".codex");
+    expect(JSON.stringify(result)).not.toContain("/private/user");
+  });
+
+  it("returns an access-token setup plan naming the stdin transport, without exposing paths", async () => {
+    const result = await handleCodingCodexSubscriptionSetup(
+      ctx({ method: "codex-access-token" }),
+      deps(approvedRuntime()),
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: {
+        method: "codex-access-token",
+        commandLabel: "codex-login-with-access-token",
+        requiresSecretInput: true,
+        credentialTransport: "stdin",
+        stateScope: "keiko-owned-state",
+        stateRoot: "keiko-codex-runtime-state",
+        usesGlobalCodexHome: false,
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("auth.json");
+    expect(JSON.stringify(result)).not.toContain(".codex");
+    expect(JSON.stringify(result)).not.toContain("/private/user");
+  });
+
   it("invalidates the injected profile coordinator when setup starts login", async () => {
     let calls = 0;
     const coordinator = createCodexSubscriptionProfileCoordinator({

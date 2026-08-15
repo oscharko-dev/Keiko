@@ -5,11 +5,13 @@ import { strictestCodingWorkbenchPolicyEffect } from "./coding-workbench.js";
 import type { CodingWorkbenchPolicyEffect } from "./coding-workbench.js";
 import {
   WORKSPACE_CONTRACT_SCHEMA_VERSION,
+  WORKSPACE_POLICY_VERSION_PATTERN,
   hasOnlyWorkspaceKeys,
   isWorkspaceFact,
   isWorkspaceManifestDigest,
   isWorkspaceManifestRef,
   isWorkspaceRecord,
+  isWorkspaceRevision,
   isWorkspaceRootIdentityDigest,
   isWorkspaceRootRef,
   isWorkspaceTrustBasisDigest,
@@ -119,19 +121,14 @@ const STATUS_KEYS = [
   "reason",
   "revision",
 ] as const;
-const POLICY_VERSION_PATTERN = /^[a-z0-9][a-z0-9._-]{2,95}$/u;
 const PROJECT_ID_MAX_CHARS = 4_096;
-
-function isRevision(value: unknown): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= 0;
-}
 
 function isWorkspaceTrustBinding(value: unknown): value is WorkspaceTrustBinding {
   return (
     isWorkspaceRecord(value) &&
     hasOnlyWorkspaceKeys(value, BINDING_KEYS) &&
     isWorkspaceManifestRef(value.manifestRef) &&
-    isRevision(value.manifestRevision) &&
+    isWorkspaceRevision(value.manifestRevision) &&
     isWorkspaceManifestDigest(value.manifestDigest) &&
     isWorkspaceRootRef(value.rootRef) &&
     isWorkspaceRootIdentityDigest(value.rootIdentityDigest) &&
@@ -194,8 +191,9 @@ function isWorkspaceTrustRecord(value: unknown): value is WorkspaceTrustRecord {
     value.kind === "workspace-trust",
     value.schemaVersion === WORKSPACE_TRUST_SCHEMA_VERSION,
     value.decidedBy === "server",
-    isRevision(value.revision),
-    typeof value.policyVersion === "string" && POLICY_VERSION_PATTERN.test(value.policyVersion),
+    isWorkspaceRevision(value.revision),
+    typeof value.policyVersion === "string" &&
+      WORKSPACE_POLICY_VERSION_PATTERN.test(value.policyVersion),
   ].every(Boolean);
   return (
     fieldsValid &&
@@ -228,7 +226,7 @@ function isWorkspaceTrustStatusValue(value: unknown): value is WorkspaceTrustSta
     isWorkspaceTrustLevel(value.trust),
     value.decidedBy === "server",
     isWorkspaceTrustReason(value.reason),
-    value.revision === null || isRevision(value.revision),
+    value.revision === null || isWorkspaceRevision(value.revision),
   ].every(Boolean);
   return (
     fieldsValid &&

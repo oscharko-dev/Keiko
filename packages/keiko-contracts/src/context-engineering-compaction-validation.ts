@@ -21,6 +21,7 @@ import {
 import type { ContextProvenanceRefKind } from "./context-engineering.js";
 import { isContextLaneId } from "./context-engineering-validation.js";
 import type { ContextValidationResult } from "./context-engineering-validation.js";
+import { isValidScopePath } from "./connected-context.js";
 import { containsAbsolutePath, containsPseudoRoleMarker } from "./text-safety.js";
 
 const PROVENANCE_REF_KINDS: ReadonlySet<string> = new Set([
@@ -102,7 +103,7 @@ function collectProvenanceRef(value: unknown, prefix: string): string[] {
   const reasons: string[] = [];
   pushIf(reasons, !isContextProvenanceRefKind(value.kind), `${prefix}.kind invalid`);
   pushIf(reasons, !isNonEmptyTrimmed(value.stableId), `${prefix}.stableId invalid`);
-  pushIf(reasons, !isOptionalNonEmptyString(value.scopePath), `${prefix}.scopePath invalid`);
+  pushIf(reasons, !isOptionalRelativeScopePath(value.scopePath), `${prefix}.scopePath invalid`);
   pushIf(reasons, !isOptionalNonEmptyString(value.contentHash), `${prefix}.contentHash invalid`);
   pushIf(
     reasons,
@@ -225,7 +226,7 @@ function collectInvalidationKey(value: unknown, prefix: string): string[] {
     return [`${prefix} invalid`];
   }
   const reasons: string[] = [];
-  pushIf(reasons, !isNonEmptyTrimmed(value.scopePath), `${prefix}.scopePath invalid`);
+  pushIf(reasons, !isRelativeScopePath(value.scopePath), `${prefix}.scopePath invalid`);
   pushIf(reasons, !isNonEmptyTrimmed(value.contentHash), `${prefix}.contentHash invalid`);
   return reasons;
 }
@@ -260,7 +261,7 @@ function collectHandleOptionals(value: Record<string, unknown>, prefix: string):
     value.kind !== undefined && !isContextProvenanceRefKind(value.kind),
     `${prefix}.kind invalid`,
   );
-  pushIf(reasons, !isOptionalNonEmptyString(value.scopePath), `${prefix}.scopePath invalid`);
+  pushIf(reasons, !isOptionalRelativeScopePath(value.scopePath), `${prefix}.scopePath invalid`);
   pushIf(reasons, !isOptionalNonEmptyString(value.contentHash), `${prefix}.contentHash invalid`);
   pushIf(
     reasons,
@@ -495,6 +496,35 @@ function hasValues(value: unknown): boolean {
   return Array.isArray(value) && value.length > 0;
 }
 
+// The contracts these validators guard document every scopePath as a RELATIVE workspace path that is
+// "deny-checked before use", but the checks were non-empty-string only, so `/etc/passwd` and
+// `../../secrets` both validated. A compaction record is persisted state a later turn rehydrates,
+// and this structural validator is the only gate between that stored record and the rehydration
+// caller — of which there is more than one. The package already ships the predicate; it is applied
+// here rather than deferred.
+function isRelativeScopePath(value: unknown): boolean {
+  return isValidScopePath(value, { mustBeRelative: true });
+}
+
+function isOptionalRelativeScopePath(value: unknown): boolean {
+  return value === undefined || isRelativeScopePath(value);
+}
+
+// Same rule for the path-bearing string arrays (filesInspected / filesChanged).
+function collectPathArray(value: unknown, prefix: string): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    return [`${prefix} invalid`];
+  }
+  const reasons: string[] = [];
+  value.forEach((entry, index) => {
+    pushIf(reasons, !isRelativeScopePath(entry), `${prefix}[${String(index)}] invalid`);
+  });
+  return reasons;
+}
+
 function collectStringArray(value: unknown, prefix: string): string[] {
   if (value === undefined) {
     return [];
@@ -547,15 +577,11 @@ function collectRecordOptionals(value: Record<string, unknown>, prefix: string):
     ),
     ...collectModelSummary(value.modelSummary, prefix),
   );
-  for (const key of [
-    "decisions",
-    "openQuestions",
-    "filesInspected",
-    "filesChanged",
-    "failingTests",
-    "droppedCategories",
-  ] as const) {
+  for (const key of ["decisions", "openQuestions", "failingTests", "droppedCategories"] as const) {
     reasons.push(...collectStringArray(value[key], `${prefix}.${key}`));
+  }
+  for (const key of ["filesInspected", "filesChanged"] as const) {
+    reasons.push(...collectPathArray(value[key], `${prefix}.${key}`));
   }
   return reasons;
 }

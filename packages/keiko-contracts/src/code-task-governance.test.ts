@@ -386,6 +386,57 @@ describe("governance validator mutation robustness (#2386)", () => {
     });
   });
 
+  // KEIKO-0302 follow-on: grantRefFactErrors/questionRefFactErrors validated the INNER
+  // grant.value/question.value object's own keys, but never the outer fact wrapper's — so a
+  // well-formed known fact padded with an extra field (e.g. free text riding alongside a valid
+  // grant) validated and was returned verbatim. Content-free is the entire point of this contract
+  // family (see the module header).
+  it("rejects a grant or question fact wrapper padded with an extra field", () => {
+    const base = allowedAction();
+    expect(
+      validateGovernedActionV1({
+        ...base,
+        grant: {
+          outcome: "known",
+          value: { grantId: "grt-1", grantScope: "task" },
+          promptText: "leak me",
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGovernedActionV1({
+        ...base,
+        decision: "denied",
+        grant: { outcome: "absent", promptText: "leak me" },
+        question: { outcome: "absent" },
+      }).ok,
+    ).toBe(false);
+
+    const approval = {
+      ...base,
+      decision: "approval-required" as const,
+      grant: { outcome: "absent" as const },
+    };
+    expect(
+      validateGovernedActionV1({
+        ...approval,
+        question: {
+          outcome: "known",
+          value: { questionId: "que_1", expectedRevision: 2 },
+          promptText: "leak me",
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGovernedActionV1({
+        ...base,
+        decision: "denied",
+        grant: { outcome: "absent" },
+        question: { outcome: "absent", promptText: "leak me" },
+      }).ok,
+    ).toBe(false);
+  });
+
   it("reports the exact execution projection vocabulary", () => {
     expect(validateCodeTaskExecutionV1(null)).toEqual({
       ok: false,
@@ -476,5 +527,91 @@ describe("governance validator mutation robustness (#2386)", () => {
       ok: false,
       errors: ["failure.outcome must be known, absent, unavailable, or unknown"],
     });
+  });
+
+  // KEIKO-0302 follow-on: same gap as the grant/question facts above, in this module's third
+  // tagged-fact validator.
+  it("rejects a failure fact wrapper padded with an extra field", () => {
+    const withFailure = (failure: unknown): unknown => ({ ...execution(), failure });
+    expect(
+      validateCodeTaskExecutionV1(
+        withFailure({ outcome: "known", value: "budget-exceeded", promptText: "leak me" }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      validateCodeTaskExecutionV1(withFailure({ outcome: "absent", promptText: "leak me" })).ok,
+    ).toBe(false);
+  });
+});
+
+// KfQ Critical on code-task-acceptance.ts's identical unknownKeys (this file mirrors it):
+// Object.keys sees only OWN enumerable properties. A value shaped via Object.create(secretHolder)
+// can carry every required field as an OWN property -- so its own-key shape is indistinguishable
+// from a legitimate input -- while one extra field rides the prototype chain, invisible to
+// Object.keys, Object.getOwnPropertyNames, and even an exact-own-property-count check (which is
+// what isAbsent's Object.keys(value).length === 1 amounts to). isRecord now rejects any
+// non-default prototype outright, and every own-key scan in this file additionally checks
+// non-enumerable and symbol-keyed own properties.
+describe("prototype-based extra-field smuggling (KfQ Critical)", () => {
+  it("rejects a governed action with an extra field reachable only through the prototype", () => {
+    const legitimate = allowedAction();
+    const hostile = Object.create({ secretApiKey: "sk-leak-me" }) as Record<string, unknown>;
+    Object.assign(hostile, legitimate);
+    expect(Object.keys(hostile)).toEqual(Object.keys(legitimate));
+    expect(hostile.secretApiKey).toBe("sk-leak-me");
+    expect(validateGovernedActionV1(hostile).ok).toBe(false);
+  });
+
+  it("rejects a code-task execution with an extra field reachable only through the prototype", () => {
+    const legitimate = execution();
+    const hostile = Object.create({ secretApiKey: "sk-leak-me" }) as Record<string, unknown>;
+    Object.assign(hostile, legitimate);
+    expect(Object.keys(hostile)).toEqual(Object.keys(legitimate));
+    expect(validateCodeTaskExecutionV1(hostile).ok).toBe(false);
+  });
+
+  it("rejects an absent-outcome question fact with a non-enumerable or symbol-keyed extra (isAbsent)", () => {
+    // isAbsent's own check used to be Object.keys(value).length === 1 -- an own-ENUMERABLE-count
+    // assertion that a non-enumerable or symbol-keyed extra field defeats even with the correct,
+    // default prototype (isRecord's prototype check does not apply here, unlike the other cases in
+    // this block -- this one specifically exercises isAbsent's own getOwnPropertyNames/symbol scan).
+    const withHidden: Record<string, unknown> = { outcome: "absent" };
+    Object.defineProperty(withHidden, "leaked", { value: "secret", enumerable: false });
+    expect(Object.keys(withHidden)).toEqual(["outcome"]); // enumerable-only view looks complete
+    const hiddenResult = validateGovernedActionV1({
+      ...allowedAction(),
+      decision: "denied",
+      grant: { outcome: "absent" },
+      question: withHidden,
+    });
+    expect(hiddenResult.ok).toBe(false);
+
+    const withSymbol = { outcome: "absent", [Symbol("leaked")]: "secret" };
+    const symbolResult = validateGovernedActionV1({
+      ...allowedAction(),
+      decision: "denied",
+      grant: { outcome: "absent" },
+      question: withSymbol,
+    });
+    expect(symbolResult.ok).toBe(false);
+  });
+
+  it("rejects the degenerate Object.create(valid) case with nothing own at all", () => {
+    expect(validateGovernedActionV1(Object.create(allowedAction())).ok).toBe(false);
+    expect(validateCodeTaskExecutionV1(Object.create(execution())).ok).toBe(false);
+  });
+
+  it("rejects a non-enumerable own extra field and a symbol-keyed own extra field", () => {
+    const withHidden: Record<string, unknown> = { ...allowedAction() };
+    Object.defineProperty(withHidden, "hiddenSecret", { value: "leak", enumerable: false });
+    expect(validateGovernedActionV1(withHidden).ok).toBe(false);
+
+    const withSymbol: Record<string, unknown> = { ...execution(), [Symbol("secret")]: "leak" };
+    expect(validateCodeTaskExecutionV1(withSymbol).ok).toBe(false);
+  });
+
+  it("still accepts ordinary plain-object input", () => {
+    expect(validateGovernedActionV1(allowedAction())).toMatchObject({ ok: true });
+    expect(validateCodeTaskExecutionV1(execution())).toMatchObject({ ok: true });
   });
 });

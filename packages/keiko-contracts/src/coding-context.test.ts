@@ -6,18 +6,32 @@ import {
   CODING_CONTEXT_SOURCE_KINDS,
   CODING_CONTEXT_SOURCE_TIER_BY_KIND,
   CODING_CONTEXT_SOURCE_TIERS,
+  buildContextSelectors,
+  collectContextErrors,
+  collectEditorSessionIdError,
   embeddingProvidersAllowed,
   isBoundedEditorSessionId,
   isCodingContextCitation,
   isCodingContextPurpose,
+  isCostClass,
+  isNonEmptyString,
+  isNonNegativeInteger,
+  isRecord,
+  isStringArray,
   tierForCodingContextSource,
   toCodingContextWirePack,
+  CODING_CONTEXT_CAPSULE_ID_MAX_CHARS,
+  CODING_CONTEXT_PATH_MAX_CHARS,
+  CODING_CONTEXT_CHANGED_FILES_MAX_COUNT,
+  CODING_CONTEXT_QUERY_TEXT_MAX_CHARS,
+  CODING_CONTEXT_SYMBOL_MAX_CHARS,
   validateCodingContextRequest,
   type CodingContextCitation,
   type CodingContextExcerpt,
   type CodingContextPack,
   type CodingContextRequest,
 } from "./coding-context.js";
+import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
 
 function citation(overrides: Partial<CodingContextCitation> = {}): CodingContextCitation {
   return {
@@ -81,6 +95,20 @@ describe("coding-context purpose + tiering", () => {
     expect(tierForCodingContextSource("memory")).toBe("retained-memory");
     expect(tierForCodingContextSource("quality-intelligence")).toBe("derived-evidence");
   });
+
+  // ADR-0152 D6: every existing coding enum literal and wire projection must stay byte-identical.
+  // RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND (the neutral, new-purpose-facing table in
+  // retrieval-context.ts) classifies connected-context as "external-connected" for governance
+  // auditability — correct for new retrieval purposes (e.g. chat-grounding), but
+  // CODING_CONTEXT_SOURCE_TIER_BY_KIND must NOT alias that value: this exact tier crosses the
+  // existing coding wire in RetrievalContextCitation.sourceTier (serialized by
+  // toCodingContextWirePack for every existing coding purpose) and is persisted verbatim by
+  // codingContextEvidence.ts, both still under schemaVersion "1". Promoting connected-context's
+  // CODING tier is D6's own "separate schema decision," not something a shared-table edit may do
+  // silently.
+  it("keeps connected-context's CODING tier byte-identical to the existing wire (ADR-0152 D6)", () => {
+    expect(tierForCodingContextSource("connected-context")).toBe("first-party-workspace");
+  });
 });
 
 describe("coding-context budgets (per-keystroke exclusion)", () => {
@@ -130,6 +158,53 @@ describe("isCodingContextCitation (content-free guard)", () => {
     expect(isCodingContextCitation({ ...citation(), sourceKind: "nope" })).toBe(false);
     expect(isCodingContextCitation({ ...citation(), sourceTier: "nope" })).toBe(false);
     expect(isCodingContextCitation({ ...citation(), score: "high" })).toBe(false);
+  });
+
+  // Codex finding (ADR-0152 D6 follow-on): isCodingContextCitation delegated to
+  // isRetrievalContextCitation, whose tier-equality check is hard-wired to the NEUTRAL table
+  // (RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND). connected-context deliberately diverges between the
+  // two tables (neutral: "external-connected", coding: "first-party-workspace" — see the
+  // "keeps connected-context's CODING tier byte-identical" test above), so a citation carrying
+  // EXACTLY the tier tierForCodingContextSource("connected-context") produces was rejected by its
+  // own validator. Pinned in both directions so this can never silently regress again: the coding
+  // tier is accepted, and the neutral profile's tier for the same kind is rejected as a
+  // misrepresentation (the whole point of the tier-equality check this contract enforces).
+  it("validates connected-context citations against the CODING tier, not the neutral table's (regression)", () => {
+    expect(
+      isCodingContextCitation(
+        citation({ sourceKind: "connected-context", sourceTier: "first-party-workspace" }),
+      ),
+    ).toBe(true);
+    expect(
+      isCodingContextCitation(
+        citation({ sourceKind: "connected-context", sourceTier: "external-connected" }),
+      ),
+    ).toBe(false);
+  });
+
+  // Proves the producer (tierForCodingContextSource, and by extension toCodingContextWirePack)
+  // and the validator actually agree, rather than asserting it from two separately hand-written
+  // expectations that could themselves drift apart the same way the two tier tables just did.
+  it("round-trips a connected-context excerpt through toCodingContextWirePack and re-validates every entry", () => {
+    const pack: CodingContextPack = {
+      schemaVersion: CODING_CONTEXT_SCHEMA_VERSION,
+      purpose: "completion",
+      excerpts: [
+        excerpt("connected content", {
+          sourceKind: "connected-context",
+          sourceTier: tierForCodingContextSource("connected-context"),
+        }),
+      ],
+      usedBytes: 10,
+      budgetBytes: CODING_CONTEXT_BUDGETS.completion.budgetBytes,
+      droppedForBudget: 0,
+      omissions: [],
+    };
+    const wirePack = toCodingContextWirePack(pack);
+    expect(wirePack.entries).toHaveLength(1);
+    for (const entry of wirePack.entries) {
+      expect(isCodingContextCitation(entry)).toBe(true);
+    }
   });
 });
 
@@ -244,5 +319,135 @@ describe("validateCodingContextRequest", () => {
     if (!result.ok) {
       expect(result.reasons).toContain("request.localKnowledgeScope ambiguous");
     }
+  });
+
+  // KEIKO-0420: the only bounded field was editorSessionId. documentPath was checked for
+  // non-emptiness alone, and symbol/queryText/capsuleId/capsuleSetId/changedFiles had no bound at
+  // all — so multi-megabyte free text returned ok:true from a function named
+  // validateCodingContextRequest. A caller reading ok:true reasonably treats the request as vetted,
+  // so the contract has to hold the bounds it claims. Containment stays the route's verdict (below).
+  it.each([
+    ["NUL byte", "src/a\u0000.ts"],
+    ["newline", "src/a\n.ts"],
+    ["escape", "src/a\u001b[31m.ts"],
+    ["whitespace only", "   "],
+    ["empty", ""],
+    ["over the length bound", `src/${"a".repeat(CODING_CONTEXT_PATH_MAX_CHARS)}.ts`],
+  ])("rejects a %s documentPath", (_label, documentPath) => {
+    expect(validateCodingContextRequest(validRequest({ documentPath })).ok).toBe(false);
+  });
+
+  // Containment is the ROUTE's verdict: keiko-server answers 403 DENIED for a documentPath that
+  // escapes the workspace root — an authority outcome, not a malformed-request one — and that
+  // status is pinned (contextRoutes.test.ts, editorSecurityBoundary.test.ts). Rejecting traversal
+  // structurally here would collapse a workspace-escape attempt into a generic 400 and lose the
+  // governance signal, so this validator bounds and character-checks the field and stops there.
+  it.each(["../../../../etc/shadow", "/etc/shadow", "C:\\secrets.txt"])(
+    "leaves the containment verdict for %j to the route, which answers 403 DENIED",
+    (documentPath) => {
+      expect(validateCodingContextRequest(validRequest({ documentPath })).ok).toBe(true);
+    },
+  );
+
+  it("rejects a changedFiles entry with the same path shapes it rejects for documentPath", () => {
+    expect(
+      validateCodingContextRequest(validRequest({ changedFiles: ["src/../src/a.ts"] })).ok,
+    ).toBe(false);
+    expect(validateCodingContextRequest(validRequest({ changedFiles: ["/etc/shadow"] })).ok).toBe(
+      false,
+    );
+  });
+
+  it("caps the changedFiles list at the same count the route enforces", () => {
+    const withinCap = Array.from(
+      { length: CODING_CONTEXT_CHANGED_FILES_MAX_COUNT },
+      (_unused, index) => `src/f${String(index)}.ts`,
+    );
+    expect(validateCodingContextRequest(validRequest({ changedFiles: withinCap })).ok).toBe(true);
+    expect(
+      validateCodingContextRequest(
+        validRequest({ changedFiles: [...withinCap, "src/overflow.ts"] }),
+      ).ok,
+    ).toBe(false);
+  });
+
+  it.each(["symbol", "queryText", "capsuleId", "capsuleSetId"])(
+    "rejects a blank or whitespace-only %s, which means malformed rather than absent",
+    (field) => {
+      expect(validateCodingContextRequest(validRequest({ [field]: "" })).ok).toBe(false);
+      expect(validateCodingContextRequest(validRequest({ [field]: "   " })).ok).toBe(false);
+      expect(validateCodingContextRequest(validRequest({ [field]: undefined })).ok).toBe(true);
+    },
+  );
+
+  it.each([
+    ["symbol", CODING_CONTEXT_SYMBOL_MAX_CHARS],
+    ["queryText", CODING_CONTEXT_QUERY_TEXT_MAX_CHARS],
+    ["capsuleId", CODING_CONTEXT_CAPSULE_ID_MAX_CHARS],
+    ["capsuleSetId", CODING_CONTEXT_CAPSULE_ID_MAX_CHARS],
+  ])("bounds the free-text field %s", (field, max) => {
+    expect(validateCodingContextRequest(validRequest({ [field]: "a".repeat(max) })).ok).toBe(true);
+    expect(validateCodingContextRequest(validRequest({ [field]: "a".repeat(max + 1) })).ok).toBe(
+      false,
+    );
+  });
+});
+
+// KEIKO-0159: isRecord, isNonEmptyString, isNonNegativeInteger, isCostClass, isStringArray,
+// collectEditorSessionIdError, collectContextErrors, and buildContextSelectors used to be
+// re-implemented byte-for-byte in editor-completion.ts, editor-inline-completion.ts, and (all but
+// isCostClass) editor-test-generation.ts. They now live here as the single shared implementation
+// that all three import instead of carrying their own copy.
+describe("shared completion-contract primitives (KEIKO-0159)", () => {
+  it("isNonEmptyString is a distinct, non-trimming rule from the editor-session-id / documentPath checks above", () => {
+    // A whitespace-only string has length > 0, so the completion contracts' historical `root` /
+    // `componentName` semantics accept it -- only isBoundedEditorSessionId and documentPath (both
+    // exercised above) reject it via their own trim-sensitive check. Sharing this primitive under
+    // the two contracts' existing name must not silently pull in the stricter rule.
+    expect(isNonEmptyString("   ")).toBe(true);
+    expect(isNonEmptyString("")).toBe(false);
+    expect(isNonEmptyString(7)).toBe(false);
+    expect(isBoundedEditorSessionId("   ")).toBe(false);
+  });
+
+  it("isRecord / isNonNegativeInteger / isCostClass / isStringArray guard their exact shapes", () => {
+    expect(isRecord({})).toBe(true);
+    expect(isRecord([])).toBe(false);
+    expect(isRecord(null)).toBe(false);
+    expect(isNonNegativeInteger(0)).toBe(true);
+    expect(isNonNegativeInteger(-1)).toBe(false);
+    expect(isNonNegativeInteger(1.5)).toBe(false);
+    expect(isCostClass("medium")).toBe(true);
+    expect(isCostClass("huge")).toBe(false);
+    expect(isStringArray(["a", "b"])).toBe(true);
+    expect(isStringArray(["a", 1])).toBe(false);
+  });
+
+  it("collectEditorSessionIdError reports the one shared bounded-bytes message", () => {
+    const errors: string[] = [];
+    collectEditorSessionIdError("\u{1f600}".repeat(65), errors);
+    expect(errors).toEqual([
+      `editorSessionId must be a non-empty string of at most ${EDITOR_AGENT_SESSION_ID_MAX_BYTES.toString()} UTF-8 bytes when provided`,
+    ]);
+  });
+
+  it("collectEditorSessionIdError is a no-op for an absent value", () => {
+    const errors: string[] = [];
+    collectEditorSessionIdError(undefined, errors);
+    expect(errors).toEqual([]);
+  });
+
+  it("collectContextErrors and buildContextSelectors validate and project the same selector shape", () => {
+    const errors: string[] = [];
+    collectContextErrors({ queryText: "q", changedFiles: ["a.ts"] }, errors);
+    expect(errors).toEqual([]);
+    expect(buildContextSelectors({ queryText: "q", changedFiles: ["a.ts"] })).toEqual({
+      queryText: "q",
+      changedFiles: ["a.ts"],
+    });
+
+    const conflicting: string[] = [];
+    collectContextErrors({ capsuleId: "a", capsuleSetId: "b" }, conflicting);
+    expect(conflicting).toContain("context must not set both capsuleId and capsuleSetId");
   });
 });

@@ -468,6 +468,195 @@ describe("write-action route — pending approvals (AC2)", () => {
   });
 });
 
+// KEIKO-0186: a human approving a governed Atlassian write could see only the action type and a
+// bare identifier — never the content about to be written — making the review-required check an
+// uninformed rubber-stamp. This is the finding's own acceptance scenario: create a pending
+// approval for each write action with known text, read back the AtlassianConnectorPendingApproval
+// the approve endpoint would return, and assert it contains that text (bounded) — while the SAME
+// action's permanent activity record stays exactly as content-free as before (ADR-0128 D6).
+// transition-issue is deliberately absent from EXPECTED_PREVIEW_SUBSTRINGS: it carries no text
+// field, so it must have no preview.
+const EXPECTED_PREVIEW_SUBSTRINGS: Readonly<
+  Record<WriteActionType, readonly string[] | undefined>
+> = {
+  "create-issue": ["Fix the flaky gate", "Fails on"],
+  "update-issue-fields": ["Sharper"],
+  "transition-issue": undefined,
+  "add-issue-comment": ["Verified on staging"],
+  "create-page": ["Runbook", "Steps here"],
+  "update-page": ["Runbook", "New body"],
+  "add-page-comment": ["Looks right"],
+};
+
+describe("write-action route — content preview on pending approvals (KEIKO-0186)", () => {
+  it("carries a bounded content preview reflecting each action's own text, absent from the permanent activity record", async () => {
+    for (const action of WRITE_ACTIONS) {
+      editorAgentAuthorityRegistry.reset();
+      atlassianActionApprovalRegistry.reset();
+      atlassianSyncJobRegistry.reset();
+      const counter: FetchCounter = { count: 0, requests: [] };
+      const guard = guardWith(counter);
+      const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
+      const { body } = await postAction(action, authority, "governed-assist", guard);
+      const approval = body.approval as AtlassianConnectorPendingApproval;
+      expect(validateAtlassianConnectorPendingApproval(approval).ok).toBe(true);
+
+      const expectedSubstrings = EXPECTED_PREVIEW_SUBSTRINGS[action];
+      if (expectedSubstrings === undefined) {
+        expect(approval.contentPreview, `${action} should have no content preview`).toBeUndefined();
+      } else {
+        for (const substring of expectedSubstrings) {
+          expect(approval.contentPreview, `${action} should preview its own text`).toContain(
+            substring,
+          );
+        }
+      }
+
+      // Redaction-boundary pin: the SAME action's activity record must stay exactly as
+      // content-free as before — present on the approval, absent from the permanent record.
+      const records = atlassianSyncJobRegistry.listActivity(
+        connectorIdForAuthRef(authRefFor(action)),
+      );
+      const pendingRecord = records.find((record) => record.disposition === "review-required");
+      if (pendingRecord === undefined) {
+        throw new Error(`expected a pending-review activity record for ${action}`);
+      }
+      expect(validateAtlassianConnectorActivityRecord(pendingRecord).ok).toBe(true);
+      const serializedRecord = JSON.stringify(pendingRecord);
+      expect(serializedRecord).not.toContain("contentPreview");
+      if (expectedSubstrings !== undefined) {
+        for (const substring of expectedSubstrings) {
+          expect(serializedRecord).not.toContain(substring);
+        }
+      }
+    }
+  });
+});
+
+// KEIKO-0186 P1 (Codex): a write action's text can be non-empty on the wire yet sanitize (or
+// truncate) to nothing presentable -- e.g. an all-zero-width-space comment. Emitting an empty
+// contentPreview in that case would show a reviewer what looks like a contentless action while
+// invisible content is actually written: the exact failure this class of finding is about. Every
+// case below must produce contentPreviewUnavailable === true and contentPreview === undefined,
+// through the SAME route as the test above, with the SAME activity-record redaction pin.
+// transition-issue is excluded: it has no text field, so hostile-text substitution does not apply.
+type TextBearingWriteActionType = Exclude<WriteActionType, "transition-issue">;
+
+function hostileActionRequest(
+  action: TextBearingWriteActionType,
+  hostileText: string,
+): Record<string, unknown> {
+  switch (action) {
+    case "create-issue":
+      return {
+        type: "create-issue",
+        projectKey: "PROJ",
+        issueTypeId: "10004",
+        summary: hostileText,
+      };
+    case "update-issue-fields":
+      return { type: "update-issue-fields", issueKey: "PROJ-9", summary: hostileText };
+    case "add-issue-comment":
+      return { type: "add-issue-comment", issueKey: "PROJ-9", commentText: hostileText };
+    case "create-page":
+      return { type: "create-page", spaceId: "777", title: hostileText, bodyText: "" };
+    case "update-page":
+      return {
+        type: "update-page",
+        pageId: "123",
+        title: hostileText,
+        bodyText: "",
+        currentVersion: 4,
+      };
+    case "add-page-comment":
+      return { type: "add-page-comment", pageId: "123", commentText: hostileText };
+  }
+}
+
+async function postHostileAction(
+  action: TextBearingWriteActionType,
+  hostileText: string,
+  authority: AuthorityContext,
+  guard: AtlassianConnectorCredentialDeps,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const result = await handleExecuteAtlassianConnectorAction(
+    ctx(
+      { action: hostileActionRequest(action, hostileText), authority },
+      { authRef: authRefFor(action) },
+    ),
+    deps(guard, "governed-assist"),
+  );
+  return result as { status: number; body: Record<string, unknown> };
+}
+
+// Every write action with a text field (all but transition-issue).
+const TEXT_BEARING_WRITE_ACTIONS: readonly TextBearingWriteActionType[] = [
+  "create-issue",
+  "update-issue-fields",
+  "add-issue-comment",
+  "create-page",
+  "update-page",
+  "add-page-comment",
+];
+
+describe("write-action route — unpresentable content preview after sanitization (KEIKO-0186 P1)", () => {
+  it("an all-zero-width-space payload is reported unavailable for every text-bearing action, never as an empty preview", async () => {
+    const allZeroWidth = String.fromCharCode(0x200b).repeat(12);
+    for (const action of TEXT_BEARING_WRITE_ACTIONS) {
+      editorAgentAuthorityRegistry.reset();
+      atlassianActionApprovalRegistry.reset();
+      atlassianSyncJobRegistry.reset();
+      const counter: FetchCounter = { count: 0, requests: [] };
+      const guard = guardWith(counter);
+      const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
+      const { body } = await postHostileAction(action, allZeroWidth, authority, guard);
+      const approval = body.approval as AtlassianConnectorPendingApproval;
+      expect(validateAtlassianConnectorPendingApproval(approval).ok, action).toBe(true);
+      expect(approval.contentPreviewUnavailable, action).toBe(true);
+      expect(approval.contentPreview, action).toBeUndefined();
+
+      // Redaction-boundary pin, exactly as above: still content-free on the permanent record.
+      const records = atlassianSyncJobRegistry.listActivity(
+        connectorIdForAuthRef(authRefFor(action)),
+      );
+      const pendingRecord = records.find((record) => record.disposition === "review-required");
+      if (pendingRecord === undefined) {
+        throw new Error(`expected a pending-review activity record for ${action}`);
+      }
+      expect(validateAtlassianConnectorActivityRecord(pendingRecord).ok, action).toBe(true);
+      expect(JSON.stringify(pendingRecord), action).not.toContain("contentPreview");
+    }
+  });
+
+  it("an all-bidi-override payload is reported unavailable, not an empty preview", async () => {
+    const allBidi = String.fromCharCode(0x202e).repeat(12);
+    const counter: FetchCounter = { count: 0, requests: [] };
+    const guard = guardWith(counter);
+    const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
+    const { body } = await postHostileAction("create-issue", allBidi, authority, guard);
+    const approval = body.approval as AtlassianConnectorPendingApproval;
+    expect(validateAtlassianConnectorPendingApproval(approval).ok).toBe(true);
+    expect(approval.contentPreviewUnavailable).toBe(true);
+    expect(approval.contentPreview).toBeUndefined();
+  });
+
+  it("a mixed bidi+zero-width payload that sanitizes to empty is reported unavailable, not an empty preview", async () => {
+    const mixedInvisible =
+      String.fromCharCode(0x202e) +
+      String.fromCharCode(0x200b) +
+      String.fromCharCode(0x202e) +
+      String.fromCharCode(0x200b);
+    const counter: FetchCounter = { count: 0, requests: [] };
+    const guard = guardWith(counter);
+    const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
+    const { body } = await postHostileAction("add-page-comment", mixedInvisible, authority, guard);
+    const approval = body.approval as AtlassianConnectorPendingApproval;
+    expect(validateAtlassianConnectorPendingApproval(approval).ok).toBe(true);
+    expect(approval.contentPreviewUnavailable).toBe(true);
+    expect(approval.contentPreview).toBeUndefined();
+  });
+});
+
 // ─── AC3: Full access executes; envelope failures deny with the EXISTING codes ─
 describe("write-action route — envelope authority (AC3)", () => {
   it("executes without per-action approval inside a valid Full-access envelope", async () => {

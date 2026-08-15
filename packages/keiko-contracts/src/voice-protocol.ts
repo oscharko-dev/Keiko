@@ -738,6 +738,9 @@ function validateSessionCreatePayload(value: Record<string, unknown>, reasons: s
 }
 
 function validateErrorPayload(value: Record<string, unknown>, reasons: string[]): void {
+  if (!hasOnlyFields(value, VOICE_ERROR_FIELDS)) {
+    reasons.push("error fields invalid");
+  }
   if (!isVoiceProtocolErrorCode(value.code)) {
     reasons.push("error code invalid");
   }
@@ -745,6 +748,390 @@ function validateErrorPayload(value: Record<string, unknown>, reasons: string[])
     reasons.push("error correlationId invalid");
   }
 }
+
+// ─── Per-kind payload validation (KEIKO-0392; every VoiceControlMessageKind member) ─────────────
+// Every message kind gets a structural payload check, driven by its declared interface shape above,
+// so a wrong-typed or missing field is rejected the same way session.create's already is. Each kind
+// also gets a closed "no fields beyond the envelope and this kind's own payload" check via
+// hasOnlyFields, the same treatment session.create's VOICE_SESSION_CREATE_FIELDS already applied —
+// KfQ thread 3788570882 found this narrower for the other 17 kinds (16 plus the pre-existing `error`
+// validator) and every one of their shapes is already precisely typed above, so deriving an exact
+// per-kind allowlist from it carries none of the "getting it wrong" risk a hand-guessed list would.
+// Free-text fields (sdp, candidate, text) are additionally length-bounded — this is a wire boundary
+// carrying WebRTC signaling and transcripts, hostile input is assumed. None of the interfaces
+// declares an array-typed field, so there is no array to bound.
+//
+// Layering note: keiko-server independently re-validates `sdp` more strictly (voice-realtime.ts'
+// isApprovedDirectionalSdp, voice-live-dictation.ts's handleOffer — SDP prefix + exact audio
+// direction) after calling validateVoiceControlMessage, and both routes resolve any rejection here or
+// there to the same "invalid-message" outcome. The VOICE_SDP_MAX_LENGTH bound below is expressed in
+// `.length` (UTF-16 code units), which is always <= `Buffer.byteLength(value, "utf8")` for any
+// string, so it can never reject an SDP that route's own byte-length bound (256_000 bytes) currently
+// accepts — this contract-level check narrows nothing a route already owns.
+const VOICE_ENVELOPE_FIELD_NAMES = [
+  "protocolVersion",
+  "sessionId",
+  "seq",
+  "direction",
+  "kind",
+] as const;
+const VOICE_SESSION_CREATED_FIELDS: ReadonlySet<string> = new Set([
+  ...VOICE_ENVELOPE_FIELD_NAMES,
+  "profile",
+  "controlTransport",
+  "mediaTransport",
+  "negotiationMode",
+  "providerLocality",
+]);
+const VOICE_SESSION_CLOSE_FIELDS: ReadonlySet<string> = new Set([
+  ...VOICE_ENVELOPE_FIELD_NAMES,
+  "reason",
+]);
+const VOICE_CAPABILITY_OFFER_FIELDS: ReadonlySet<string> = new Set([
+  ...VOICE_ENVELOPE_FIELD_NAMES,
+  "profile",
+  "capabilities",
+]);
+const VOICE_CAPABILITY_SELECT_FIELDS: ReadonlySet<string> = new Set([
+  ...VOICE_ENVELOPE_FIELD_NAMES,
+  "profile",
+]);
+const VOICE_SDP_FIELDS: ReadonlySet<string> = new Set([...VOICE_ENVELOPE_FIELD_NAMES, "sdp"]);
+const VOICE_ICE_CANDIDATE_FIELDS: ReadonlySet<string> = new Set([
+  ...VOICE_ENVELOPE_FIELD_NAMES,
+  "candidate",
+  "sdpMid",
+  "sdpMLineIndex",
+]);
+const VOICE_MEDIA_TRACK_STATE_FIELDS: ReadonlySet<string> = new Set([
+  ...VOICE_ENVELOPE_FIELD_NAMES,
+  "track",
+  "state",
+]);
+const VOICE_ENVELOPE_ONLY_FIELDS: ReadonlySet<string> = new Set(VOICE_ENVELOPE_FIELD_NAMES);
+const VOICE_CONTROL_INTERRUPT_FIELDS: ReadonlySet<string> = new Set([
+  ...VOICE_ENVELOPE_FIELD_NAMES,
+  "atMs",
+]);
+const VOICE_TRANSCRIPT_TEXT_FIELDS: ReadonlySet<string> = new Set([
+  ...VOICE_ENVELOPE_FIELD_NAMES,
+  "text",
+]);
+const VOICE_PLAYBACK_STATE_FIELDS: ReadonlySet<string> = new Set([
+  ...VOICE_ENVELOPE_FIELD_NAMES,
+  "state",
+]);
+const VOICE_POLICY_DECISION_FIELDS: ReadonlySet<string> = new Set([
+  ...VOICE_ENVELOPE_FIELD_NAMES,
+  "decision",
+  "reason",
+]);
+const VOICE_ERROR_FIELDS: ReadonlySet<string> = new Set([
+  ...VOICE_ENVELOPE_FIELD_NAMES,
+  "code",
+  "correlationId",
+]);
+const VOICE_CONTROL_TRANSPORT_SET: ReadonlySet<string> = new Set(VOICE_CONTROL_TRANSPORTS);
+const VOICE_MEDIA_TRANSPORT_SET: ReadonlySet<string> = new Set(VOICE_MEDIA_TRANSPORTS);
+const VOICE_SESSION_CLOSE_REASON_SET: ReadonlySet<string> = new Set(VOICE_SESSION_CLOSE_REASONS);
+const VOICE_MEDIA_TRACK_KIND_SET: ReadonlySet<string> = new Set(VOICE_MEDIA_TRACK_KINDS);
+const VOICE_MEDIA_TRACK_STATE_SET: ReadonlySet<string> = new Set(VOICE_MEDIA_TRACK_STATES);
+const VOICE_PLAYBACK_STATE_SET: ReadonlySet<string> = new Set(VOICE_PLAYBACK_STATES);
+const VOICE_POLICY_DECISION_SET: ReadonlySet<string> = new Set(VOICE_POLICY_DECISIONS);
+
+const VOICE_SDP_MAX_LENGTH = 256_000;
+// A real ICE candidate line (RFC 5245-style, including TURN relay extensions) is well under 1 KiB;
+// this bound is generous headroom against a hostile string, not a realistic candidate size.
+const VOICE_ICE_CANDIDATE_MAX_LENGTH = 4096;
+const VOICE_SDP_MID_MAX_LENGTH = 128;
+// Matches the scale of run-request.ts's MAX_VOICE_COMMITTED_TEXT_CHARS for a downstream aggregated
+// committed voice transcript; an individual protocol-level transcript segment is bounded no looser.
+const VOICE_TRANSCRIPT_TEXT_MAX_LENGTH = 8192;
+
+function isVoiceControlTransport(value: unknown): value is VoiceControlTransport {
+  return typeof value === "string" && VOICE_CONTROL_TRANSPORT_SET.has(value);
+}
+
+function isVoiceMediaTransport(value: unknown): value is VoiceMediaTransport {
+  return typeof value === "string" && VOICE_MEDIA_TRANSPORT_SET.has(value);
+}
+
+function isVoiceSessionCloseReason(value: unknown): value is VoiceSessionCloseReason {
+  return typeof value === "string" && VOICE_SESSION_CLOSE_REASON_SET.has(value);
+}
+
+function isVoiceMediaTrackKind(value: unknown): value is VoiceMediaTrackKind {
+  return typeof value === "string" && VOICE_MEDIA_TRACK_KIND_SET.has(value);
+}
+
+function isVoiceMediaTrackState(value: unknown): value is VoiceMediaTrackState {
+  return typeof value === "string" && VOICE_MEDIA_TRACK_STATE_SET.has(value);
+}
+
+function isVoicePlaybackState(value: unknown): value is VoicePlaybackState {
+  return typeof value === "string" && VOICE_PLAYBACK_STATE_SET.has(value);
+}
+
+function isVoicePolicyDecision(value: unknown): value is VoicePolicyDecision {
+  return typeof value === "string" && VOICE_POLICY_DECISION_SET.has(value);
+}
+
+function isOptionalVoiceUnavailableReason(
+  value: unknown,
+): value is VoiceUnavailableReason | undefined {
+  return (
+    value === undefined ||
+    value === "no-voice-provider" ||
+    value === "policy-disabled" ||
+    value === "provider-unreachable"
+  );
+}
+
+function isBoundedSdp(value: unknown): value is string {
+  return isNonEmptyTrimmed(value) && value.length <= VOICE_SDP_MAX_LENGTH;
+}
+
+function isBoundedIceCandidate(value: unknown): value is string {
+  // An empty string is the WebRTC trickle-ICE "end-of-candidates" sentinel and is valid; only type
+  // and an upper length bound are enforced (this protocol's single-shot proxied-SDP flow embeds ICE
+  // in the offer/answer and does not exercise trickle, but the contract still decodes the kind).
+  return typeof value === "string" && value.length <= VOICE_ICE_CANDIDATE_MAX_LENGTH;
+}
+
+function isOptionalNullableSdpMid(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    (typeof value === "string" && value.length > 0 && value.length <= VOICE_SDP_MID_MAX_LENGTH)
+  );
+}
+
+function isOptionalNullableSdpMLineIndex(value: unknown): boolean {
+  return value === undefined || value === null || isFiniteNonNegativeInteger(value);
+}
+
+function isBoundedTranscriptText(value: unknown): value is string {
+  // Interim (partial) transcript text may legitimately be empty (no words recognised yet); only type
+  // and an upper length bound are enforced, matching the ICE candidate rationale above.
+  return typeof value === "string" && value.length <= VOICE_TRANSCRIPT_TEXT_MAX_LENGTH;
+}
+
+function isOptionalFiniteNonNegativeNumber(value: unknown): boolean {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0);
+}
+
+const VOICE_CAPABILITY_OFFER_CAPABILITIES_FIELDS: ReadonlySet<string> = new Set([
+  "speechToText",
+  "speechOutput",
+  "realtimeVoice",
+  "realtimeToolCalling",
+]);
+
+function isVoiceCapabilityOfferCapabilities(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasOnlyFields(value, VOICE_CAPABILITY_OFFER_CAPABILITIES_FIELDS) &&
+    typeof value.speechToText === "boolean" &&
+    typeof value.speechOutput === "boolean" &&
+    typeof value.realtimeVoice === "boolean" &&
+    (value.realtimeToolCalling === undefined || typeof value.realtimeToolCalling === "boolean")
+  );
+}
+
+function validateSessionCreatedPayload(value: Record<string, unknown>, reasons: string[]): void {
+  if (!hasOnlyFields(value, VOICE_SESSION_CREATED_FIELDS)) {
+    reasons.push("session.created fields invalid");
+  }
+  if (!isVoiceProfile(value.profile)) {
+    reasons.push("session.created profile invalid");
+  }
+  if (!isVoiceControlTransport(value.controlTransport)) {
+    reasons.push("session.created controlTransport invalid");
+  }
+  if (!isVoiceMediaTransport(value.mediaTransport)) {
+    reasons.push("session.created mediaTransport invalid");
+  }
+  if (!isVoiceNegotiationMode(value.negotiationMode)) {
+    reasons.push("session.created negotiationMode invalid");
+  }
+  if (!isOptionalVoiceProviderLocality(value.providerLocality)) {
+    reasons.push("session.created providerLocality invalid");
+  }
+}
+
+function validateSessionClosePayload(
+  value: Record<string, unknown>,
+  reasons: string[],
+  kind: "session.close" | "session.closed",
+): void {
+  if (!hasOnlyFields(value, VOICE_SESSION_CLOSE_FIELDS)) {
+    reasons.push(`${kind} fields invalid`);
+  }
+  if (!isVoiceSessionCloseReason(value.reason)) {
+    reasons.push(`${kind} reason invalid`);
+  }
+}
+
+function validateCapabilityOfferPayload(value: Record<string, unknown>, reasons: string[]): void {
+  if (!hasOnlyFields(value, VOICE_CAPABILITY_OFFER_FIELDS)) {
+    reasons.push("capability.offer fields invalid");
+  }
+  if (!isVoiceProfile(value.profile)) {
+    reasons.push("capability.offer profile invalid");
+  }
+  if (!isVoiceCapabilityOfferCapabilities(value.capabilities)) {
+    reasons.push("capability.offer capabilities invalid");
+  }
+}
+
+function validateCapabilitySelectPayload(value: Record<string, unknown>, reasons: string[]): void {
+  if (!hasOnlyFields(value, VOICE_CAPABILITY_SELECT_FIELDS)) {
+    reasons.push("capability.select fields invalid");
+  }
+  if (!isVoiceProfile(value.profile)) {
+    reasons.push("capability.select profile invalid");
+  }
+}
+
+function validateSdpPayload(
+  value: Record<string, unknown>,
+  reasons: string[],
+  kind: "signal.sdp.offer" | "signal.sdp.answer",
+): void {
+  if (!hasOnlyFields(value, VOICE_SDP_FIELDS)) {
+    reasons.push(`${kind} fields invalid`);
+  }
+  if (!isBoundedSdp(value.sdp)) {
+    reasons.push(`${kind} sdp invalid`);
+  }
+}
+
+function validateIceCandidatePayload(value: Record<string, unknown>, reasons: string[]): void {
+  if (!hasOnlyFields(value, VOICE_ICE_CANDIDATE_FIELDS)) {
+    reasons.push("signal.ice.candidate fields invalid");
+  }
+  if (!isBoundedIceCandidate(value.candidate)) {
+    reasons.push("signal.ice.candidate candidate invalid");
+  }
+  if (!isOptionalNullableSdpMid(value.sdpMid)) {
+    reasons.push("signal.ice.candidate sdpMid invalid");
+  }
+  if (!isOptionalNullableSdpMLineIndex(value.sdpMLineIndex)) {
+    reasons.push("signal.ice.candidate sdpMLineIndex invalid");
+  }
+}
+
+function validateMediaTrackStatePayload(value: Record<string, unknown>, reasons: string[]): void {
+  if (!hasOnlyFields(value, VOICE_MEDIA_TRACK_STATE_FIELDS)) {
+    reasons.push("media.track.state fields invalid");
+  }
+  if (!isVoiceMediaTrackKind(value.track)) {
+    reasons.push("media.track.state track invalid");
+  }
+  if (!isVoiceMediaTrackState(value.state)) {
+    reasons.push("media.track.state state invalid");
+  }
+}
+
+function validateEnvelopeOnlyPayload(
+  value: Record<string, unknown>,
+  reasons: string[],
+  kind: "control.cancel" | "transcript.discarded",
+): void {
+  // control.cancel / transcript.discarded carry no fields beyond the shared envelope, which
+  // validateEnvelope (called by every caller of this function) already checks the shape of.
+  if (!hasOnlyFields(value, VOICE_ENVELOPE_ONLY_FIELDS)) {
+    reasons.push(`${kind} fields invalid`);
+  }
+}
+
+function validateControlInterruptPayload(value: Record<string, unknown>, reasons: string[]): void {
+  if (!hasOnlyFields(value, VOICE_CONTROL_INTERRUPT_FIELDS)) {
+    reasons.push("control.interrupt fields invalid");
+  }
+  if (!isOptionalFiniteNonNegativeNumber(value.atMs)) {
+    reasons.push("control.interrupt atMs invalid");
+  }
+}
+
+function validateTranscriptTextPayload(
+  value: Record<string, unknown>,
+  reasons: string[],
+  kind: "transcript.partial" | "transcript.committed",
+): void {
+  if (!hasOnlyFields(value, VOICE_TRANSCRIPT_TEXT_FIELDS)) {
+    reasons.push(`${kind} fields invalid`);
+  }
+  if (!isBoundedTranscriptText(value.text)) {
+    reasons.push(`${kind} text invalid`);
+  }
+}
+
+function validatePlaybackStatePayload(value: Record<string, unknown>, reasons: string[]): void {
+  if (!hasOnlyFields(value, VOICE_PLAYBACK_STATE_FIELDS)) {
+    reasons.push("playback.state fields invalid");
+  }
+  if (!isVoicePlaybackState(value.state)) {
+    reasons.push("playback.state state invalid");
+  }
+}
+
+function validatePolicyDecisionPayload(value: Record<string, unknown>, reasons: string[]): void {
+  if (!hasOnlyFields(value, VOICE_POLICY_DECISION_FIELDS)) {
+    reasons.push("policy.decision fields invalid");
+  }
+  if (!isVoicePolicyDecision(value.decision)) {
+    reasons.push("policy.decision decision invalid");
+  }
+  if (!isOptionalVoiceUnavailableReason(value.reason)) {
+    reasons.push("policy.decision reason invalid");
+  }
+}
+
+type VoicePayloadValidator = (value: Record<string, unknown>, reasons: string[]) => void;
+
+// Exhaustive per-kind dispatch: Record totality over VoiceControlMessageKind means a new kind added
+// to the union without an entry here fails to compile, mirroring VOICE_CONTROL_MESSAGE_REPLAY /
+// VOICE_CONTROL_MESSAGE_REDACTION above.
+const VOICE_CONTROL_MESSAGE_PAYLOAD_VALIDATORS: Record<
+  VoiceControlMessageKind,
+  VoicePayloadValidator
+> = {
+  "session.create": validateSessionCreatePayload,
+  "session.created": validateSessionCreatedPayload,
+  "session.close": (value, reasons): void => {
+    validateSessionClosePayload(value, reasons, "session.close");
+  },
+  "session.closed": (value, reasons): void => {
+    validateSessionClosePayload(value, reasons, "session.closed");
+  },
+  "capability.offer": validateCapabilityOfferPayload,
+  "capability.select": validateCapabilitySelectPayload,
+  "signal.sdp.offer": (value, reasons): void => {
+    validateSdpPayload(value, reasons, "signal.sdp.offer");
+  },
+  "signal.sdp.answer": (value, reasons): void => {
+    validateSdpPayload(value, reasons, "signal.sdp.answer");
+  },
+  "signal.ice.candidate": validateIceCandidatePayload,
+  "media.track.state": validateMediaTrackStatePayload,
+  "control.cancel": (value, reasons): void => {
+    validateEnvelopeOnlyPayload(value, reasons, "control.cancel");
+  },
+  "control.interrupt": validateControlInterruptPayload,
+  "transcript.partial": (value, reasons): void => {
+    validateTranscriptTextPayload(value, reasons, "transcript.partial");
+  },
+  "transcript.committed": (value, reasons): void => {
+    validateTranscriptTextPayload(value, reasons, "transcript.committed");
+  },
+  "transcript.discarded": (value, reasons): void => {
+    validateEnvelopeOnlyPayload(value, reasons, "transcript.discarded");
+  },
+  "playback.state": validatePlaybackStatePayload,
+  "policy.decision": validatePolicyDecisionPayload,
+  error: validateErrorPayload,
+};
 
 export function isVoiceControlMessageKind(value: unknown): value is VoiceControlMessageKind {
   return (
@@ -813,15 +1200,19 @@ function validateEnvelope(value: Record<string, unknown>, reasons: string[]): vo
   }
 }
 
-// Structural guard for the shared envelope, the v1-compatible session.create payload, and bounded
-// content-free error correlation identifiers. Productive transports apply their own narrower
-// direction/authority allowlists after this decoder.
+// Structural guard for the shared envelope and every kind-specific payload (dispatched through
+// VOICE_CONTROL_MESSAGE_PAYLOAD_VALIDATORS, one validator per VoiceControlMessageKind — session.
+// create's v1-compatible shape and error's bounded content-free correlation identifier included).
+// Productive transports still apply their own narrower direction/authority allowlists after this
+// decoder.
 export function isVoiceControlMessage(value: unknown): value is VoiceControlMessage {
   return validateVoiceControlMessage(value).ok;
 }
 
-// Deep validation of the shared envelope, the published v1-compatible session.create shape, and the
-// content-free portion of error payloads, returning every reason it is malformed. It grants no
+// Deep validation of the shared envelope and the kind-specific payload shape for every
+// VoiceControlMessageKind, returning every reason it is malformed. Record totality in
+// VOICE_CONTROL_MESSAGE_PAYLOAD_VALIDATORS makes a new kind added to the union without a validator a
+// compile error (exhaustiveness), rather than a silent structural-validation gap. Grants no
 // productive authority by itself.
 export function validateVoiceControlMessage(value: unknown): VoiceProtocolValidation {
   if (!isRecord(value)) {
@@ -829,10 +1220,9 @@ export function validateVoiceControlMessage(value: unknown): VoiceProtocolValida
   }
   const reasons: string[] = [];
   validateEnvelope(value, reasons);
-  if (value.kind === "session.create") {
-    validateSessionCreatePayload(value, reasons);
-  } else if (value.kind === "error") {
-    validateErrorPayload(value, reasons);
+  const { kind } = value;
+  if (isVoiceControlMessageKind(kind)) {
+    VOICE_CONTROL_MESSAGE_PAYLOAD_VALIDATORS[kind](value, reasons);
   }
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }

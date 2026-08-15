@@ -40,6 +40,7 @@ import {
   isAtlassianSyncJobStatus,
   isJiraIssueCitationMetadata,
   isSafeAtlassianConnectorBaseUrl,
+  isSafeAtlassianContentPreview,
   isSafeAtlassianDisplayName,
   isSafeAtlassianIdentifier,
   isSafeConfluenceSpaceKey,
@@ -107,10 +108,13 @@ function onlyKnownKeys(
   errors: string[],
 ): void {
   const allowedSet = new Set(allowed);
+  // No early return: these validators exist to catch EVERY credential- or body-like field a hostile
+  // or buggy caller smuggled onto a payload, so stopping at the first understated the scope of what
+  // was rejected. Matches `exactKeys` in coding-workbench-runtime-api-validation.ts and the
+  // enumerate-every-reason convention the rest of the package follows.
   for (const key of Object.keys(value)) {
     if (!allowedSet.has(key)) {
       errors.push(`${field} must not include ${key}`);
-      return;
     }
   }
 }
@@ -757,6 +761,8 @@ const PENDING_APPROVAL_KEYS: readonly (keyof AtlassianConnectorPendingApproval)[
   "correlationId",
   "requestedAt",
   "expiresAt",
+  "contentPreview",
+  "contentPreviewUnavailable",
 ];
 
 // The action row is pinned by the D4 table exactly as the activity validator pins it: a tampered
@@ -781,6 +787,27 @@ function validateApprovalActionRow(input: Record<string, unknown>, errors: strin
   }
 }
 
+// The independently-optional fields: an identifier token (targetRef) and the mutually-exclusive
+// content-preview pair (contentPreview / contentPreviewUnavailable, KEIKO-0186 — exactly one of
+// them, or neither, is ever set: never both). Split out so the caller's own complexity stays
+// under the repository's cyclomatic-complexity ceiling.
+function validateApprovalOptionalFields(input: Record<string, unknown>, errors: string[]): void {
+  if (input.targetRef !== undefined && !isSafeAtlassianIdentifier(input.targetRef)) {
+    errors.push("approval.targetRef must be a bounded identifier token when set");
+  }
+  if (input.contentPreview !== undefined && !isSafeAtlassianContentPreview(input.contentPreview)) {
+    errors.push(
+      "approval.contentPreview must be a bounded, control-character-free preview when set",
+    );
+  }
+  if (input.contentPreviewUnavailable !== undefined && input.contentPreviewUnavailable !== true) {
+    errors.push("approval.contentPreviewUnavailable must be true when set");
+  }
+  if (input.contentPreview !== undefined && input.contentPreviewUnavailable !== undefined) {
+    errors.push("approval.contentPreview and approval.contentPreviewUnavailable are exclusive");
+  }
+}
+
 export function validateAtlassianConnectorPendingApproval(
   input: unknown,
 ): AtlassianConnectorValidation<AtlassianConnectorPendingApproval> {
@@ -795,9 +822,7 @@ export function validateAtlassianConnectorPendingApproval(
   if (!isOneOfStrings(input.reviewReason, ATLASSIAN_CONNECTOR_ACTION_REVIEW_REASONS)) {
     errors.push("approval.reviewReason must be a review reason");
   }
-  if (input.targetRef !== undefined && !isSafeAtlassianIdentifier(input.targetRef)) {
-    errors.push("approval.targetRef must be a bounded identifier token when set");
-  }
+  validateApprovalOptionalFields(input, errors);
   pushTimestamp(errors, "approval.requestedAt", input.requestedAt);
   pushTimestamp(errors, "approval.expiresAt", input.expiresAt);
   if (

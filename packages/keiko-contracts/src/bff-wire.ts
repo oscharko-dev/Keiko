@@ -97,7 +97,9 @@ export interface GroundingLimits {
   readonly hybridMaxExcerptBytes: number; // NEW: shared excerpt-byte budget for the hybrid rerank
 }
 
-export const DEFAULT_GROUNDING_LIMITS: GroundingLimits = {
+// Frozen at runtime: `as const` is compile-time only, and these are shared singletons a consumer
+// could otherwise mutate in place for the rest of the process.
+export const DEFAULT_GROUNDING_LIMITS: GroundingLimits = Object.freeze({
   maxConnectedSources: 16,
   maxLocalKnowledgeSources: 16,
   maxPromptReferences: 16,
@@ -105,11 +107,11 @@ export const DEFAULT_GROUNDING_LIMITS: GroundingLimits = {
   referenceBudget: 10,
   hybridMaxCandidates: 100,
   hybridMaxExcerptBytes: 131_072,
-} as const;
+});
 
 // Hard safety ceilings: an operator config may TUNE a limit but never raise it past these
 // (preserves the original DoS-bounding intent of the fan-out caps).
-export const GROUNDING_LIMIT_CEILINGS: GroundingLimits = {
+export const GROUNDING_LIMIT_CEILINGS: GroundingLimits = Object.freeze({
   maxConnectedSources: 64,
   maxLocalKnowledgeSources: 64,
   maxPromptReferences: 64,
@@ -117,7 +119,7 @@ export const GROUNDING_LIMIT_CEILINGS: GroundingLimits = {
   referenceBudget: 256,
   hybridMaxCandidates: 256,
   hybridMaxExcerptBytes: 524_288,
-} as const;
+});
 
 // Pure resolver: fill each field from `partial` when it is a positive integer, else the default;
 // then clamp to the ceiling. Invalid (non-positive / non-integer) present fields fall back to the

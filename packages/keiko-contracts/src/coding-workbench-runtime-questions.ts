@@ -1,10 +1,12 @@
 import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
+import { CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS } from "./coding-workbench-runtime-api.js";
 import {
   exactKeys,
   invalid,
   isOneOf,
   isRecord,
   result,
+  validateSafeId,
   validateUntrustedDisplayText,
 } from "./coding-workbench-runtime-api-validation.js";
 
@@ -42,7 +44,16 @@ export interface CodingWorkbenchRuntimeQuestionsResponse {
   readonly questions: readonly CodingWorkbenchRuntimeQuestionRequest[];
 }
 
+/**
+ * Bound to the observed revision and the exact question-request id, matching the
+ * approval-decision and research-revoke request contracts (KEIKO-0411): a stale or forged answer
+ * fails closed the same way a stale or forged revoke does. `questionRequestId` is the `que_...`
+ * id the question surface already mints (see `isQuestionId` below), carried back on the answer.
+ */
 export interface CodingWorkbenchRuntimeQuestionAnswerRequest {
+  readonly requestId: string;
+  readonly expectedRevision: number;
+  readonly questionRequestId: string;
   readonly answers: readonly (readonly string[])[];
 }
 
@@ -77,7 +88,16 @@ export function parseCodingWorkbenchRuntimeQuestionAnswerRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeQuestionAnswerRequest> {
   if (!isRecord(value)) return invalid("question answer must be an object");
-  const errors = exactKeys(value, ["answers"], "questionAnswer");
+  const errors = exactKeys(
+    value,
+    ["requestId", "expectedRevision", "questionRequestId", "answers"],
+    "questionAnswer",
+  );
+  validateSafeId(value.requestId, "requestId", errors, CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS);
+  if (!Number.isSafeInteger(value.expectedRevision) || Number(value.expectedRevision) < 0) {
+    errors.push("expectedRevision must be a non-negative safe integer");
+  }
+  if (!isQuestionId(value.questionRequestId)) errors.push("questionRequestId is invalid");
   validateAnswers(value.answers, errors);
   return result(value, errors);
 }
@@ -243,6 +263,15 @@ function validateAnswers(value: unknown, errors: string[]): void {
     else if (new Set(answer).size !== answer.length)
       errors.push(`answers[${String(index)}] must not contain duplicate selections`);
   });
+  // Per-array caps above bound each answer individually (32 arrays x 32 selections x 4096 chars),
+  // but not their sum: matches the aggregate budget checkBoundedQuestionRequests already enforces
+  // on the outbound side, gated on no per-item error the same way that function gates its own check.
+  if (
+    errors.length === 0 &&
+    serializedBytes({ answers: value }) > CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES
+  ) {
+    errors.push("answers exceed the aggregate UTF-8 byte budget");
+  }
 }
 
 function validateText(value: unknown, path: string, max: number, errors: string[]): void {

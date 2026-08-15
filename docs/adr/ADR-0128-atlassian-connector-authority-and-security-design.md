@@ -221,7 +221,28 @@ and its host is extracted as the connector's **sole** allowlisted egress host. A
 requests may only target that host; there is no cross-connector or wildcard allowlist. This is
 enforced twice: once at connector-creation validation, and again at request-construction time in
 the `AtlassianHttpPort` adapter (defense in depth, mirroring the existing
-`outboundTargetBlockedReason` DNS/address re-check pattern in `keiko-model-gateway/src/http.ts`).
+`outboundTargetBlockedReason` literal hostname/address-shape re-check in
+`keiko-model-gateway/src/http.ts`, applied via `classifyOutboundHost` — see `httpPort.ts`'s
+`isBlockedLoopbackTarget`). That literal-shape check runs unconditionally, proxied or not; the
+gateway's *DNS-resolved* address re-check (`enforceOutboundTargetPolicy` with `resolveDns: true`)
+additionally requires `egress.pinProxiedConnectTarget` when this connector's traffic is proxied
+(ADR-0038 D6) — proxied deployments are first-class for this lane (below).
+
+**Correction (#3156, 2026-08-15).** This connector sets `pinProxiedConnectTarget` together with
+`denyLoopback` by default (`connectorEgressConfig` in `httpPort.ts`), so a proxied connector's
+DNS-resolved address is independently re-validated after resolution against the same
+loopback/private/link-local/metadata policy as the direct path, not merely covered by the
+literal-shape check. This text previously said the connector left that opt-in off in v1, covering a
+proxied deployment's resolved address by the literal check alone; two independent reviewers flagged
+that a DNS name classified as safe by its literal shape but resolving into blocked address space was
+therefore unvetted whenever this connector was proxied — a live SSRF and internal-reconnaissance
+path, not a theoretical one, since operators commonly point connectors at internal reverse proxies.
+The accepted trade-off is that a corporate proxy filtering CONNECT by hostname rather than by
+resolved address could reject the now-pinned, IP-literal CONNECT authority; that is an
+operator-visible, diagnosable failure, weighed as preferable to a silent internal-address bypass for
+a lane whose target is already a single, operator-configured host. See `httpPort.ts`'s comment above
+`isBlockedLoopbackTarget` for the full reasoning and ADR-0038 D6 for what the two flags do and do
+not permit individually.
 
 **Transport:** the concrete adapter is built from `gatewayFetch` (ADR-0038), reusing its existing
 proxy/CA composition unchanged — no connector-specific proxy or CA logic is introduced. Proxy
