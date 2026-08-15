@@ -17,10 +17,16 @@ const sonarCompatibilityPlugin = {
       create(context) {
         return {
           Literal(node) {
+            if (typeof node.value !== "number") return;
             const source = context.sourceCode.getText(node);
-            if (typeof node.value === "number" && source.includes(".") && source.includes("_")) {
-              context.report({ messageId: "forbidden", node });
-            }
+            // KEIKO-0381: the separator must be IN the fractional part. Testing the
+            // whole literal for "." and "_" independently also condemns `1_000_000.5`, where the
+            // underscores only group the integer part — a legitimate literal the message
+            // ("...in a fractional numeric literal") does not even describe.
+            const fractionStart = source.indexOf(".");
+            if (fractionStart === -1) return;
+            if (!source.slice(fractionStart + 1).includes("_")) return;
+            context.report({ messageId: "forbidden", node });
           },
         };
       },
