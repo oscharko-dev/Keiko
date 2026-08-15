@@ -1574,6 +1574,7 @@ export const EN_MESSAGES = {
   "atlassianConnectors.approvals.risk": "Risk",
   "atlassianConnectors.approvals.disposition": "Disposition",
   "atlassianConnectors.approvals.reason": "Reason",
+  "atlassianConnectors.approvals.contentPreview": "Content",
   "atlassianConnectors.approvals.approve": "Approve",
   "atlassianConnectors.approvals.approving": "Approving…",
   "atlassianConnectors.approvals.reject": "Reject",

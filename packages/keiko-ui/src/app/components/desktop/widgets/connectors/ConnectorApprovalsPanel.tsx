@@ -169,6 +169,24 @@ function ApprovalMeta({
   );
 }
 
+// KEIKO-0186: the bounded content preview a reviewer needs to see BEFORE Approve/Reject — the
+// one field on this contract that deliberately carries real (bounded, sanitized) action content
+// instead of redacting it. Renders nothing when the server has nothing to preview (a
+// transition-issue action, or a field-only update-issue-fields action).
+function ApprovalContentPreview({ preview }: { readonly preview: string | undefined }): ReactNode {
+  const t = useTranslate();
+  if (preview === undefined) return null;
+  return (
+    <p className="acx-content-preview" data-testid="acx-content-preview">
+      <span className="acx-content-preview-label">
+        {t("atlassianConnectors.approvals.contentPreview")}
+      </span>
+      {": "}
+      {preview}
+    </p>
+  );
+}
+
 function ApprovalActions({
   id,
   busy,
@@ -215,6 +233,7 @@ function ApprovalRow({
     <li className="acx-card" data-testid="acx-approval" data-approval-id={approval.approvalId}>
       <p className="acx-card-title">{t(actionTypeLabelKey(approval.actionType))}</p>
       <ApprovalMeta approval={approval} />
+      <ApprovalContentPreview preview={approval.contentPreview} />
       {outcome === undefined ? (
         <ApprovalActions
           id={approval.approvalId}
