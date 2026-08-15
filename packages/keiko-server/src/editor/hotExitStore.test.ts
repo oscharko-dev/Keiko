@@ -90,6 +90,7 @@ describe("editor hot-exit server store", () => {
     expect(result.snapshotRef).toMatch(/^hot-exit:[a-f0-9]{64}$/u);
     expect(result.snapshotRef).not.toContain("/repo");
     expect(result.snapshotRef).not.toContain("src/app.ts");
+    expect(result.serverReceivedAt).toBe(FIXED_RECEIPT_MS);
     expect(recovered?.content).toBe(stored.content);
     const vaultBytes = readFileSync(join(stateDir, "editor-hot-exit", "snapshots.vault"), "utf8");
     expect(vaultBytes).not.toContain(stored.content);

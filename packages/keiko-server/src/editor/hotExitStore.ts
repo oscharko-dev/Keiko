@@ -11,6 +11,7 @@ import {
   EDITOR_HOT_EXIT_TTL_MS,
   type EditorDocumentVersion,
   type EditorHotExitSnapshotV1,
+  type EditorHotExitWriteStoredResponse,
 } from "@oscharko-dev/keiko-contracts";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
@@ -40,10 +41,7 @@ export interface EditorHotExitStoredSnapshot {
   readonly windowId: string;
 }
 
-export interface EditorHotExitWriteResult {
-  readonly snapshotRef: string;
-  readonly contentSizeBytes: number;
-}
+export type EditorHotExitWriteResult = EditorHotExitWriteStoredResponse;
 
 export interface EditorHotExitStore {
   readonly snapshotRefFor: (workspaceRoot: string, relativePath: string) => string;
@@ -326,7 +324,11 @@ export function createEditorHotExitStore(
       if (index.has(ref)) {
         activeVault.set(ref, JSON.stringify(payload));
       }
-      return { snapshotRef: ref, contentSizeBytes: payload.contentSizeBytes };
+      return {
+        snapshotRef: ref,
+        contentSizeBytes: payload.contentSizeBytes,
+        serverReceivedAt: receivedAt,
+      };
     },
     read(snapshotRef, nowMs = Date.now()): EditorHotExitStoredSnapshot | null {
       if (!isSnapshotRef(snapshotRef)) return null;

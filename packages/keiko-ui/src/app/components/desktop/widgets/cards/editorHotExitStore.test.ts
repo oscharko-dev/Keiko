@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   deleteEditorHotExitSnapshot,
   readEditorHotExitSnapshot,
+  setEditorHotExitLocalClockForTests,
   writeEditorHotExitSnapshot,
 } from "./editorHotExitStore";
 import {
@@ -18,31 +19,41 @@ import {
 const hotExitApi = vi.hoisted(() => {
   const encoder = new TextEncoder();
   let seq = 0;
+  let nextServerReceivedAt: number | null = null;
   const records = new Map<string, unknown>();
   const snapshotRef = (value: number): string => `hot-exit:${value.toString(16).padStart(64, "0")}`;
+  const contentSizeBytes = (content: string): number => encoder.encode(content).length;
   return {
     records,
     reset(): void {
       seq = 0;
+      nextServerReceivedAt = null;
       records.clear();
+    },
+    setNextServerReceivedAt(value: number): void {
+      nextServerReceivedAt = value;
     },
     write: vi.fn((snapshot: EditorHotExitSnapshotV1) => {
       seq += 1;
       const ref = snapshotRef(seq);
+      const receivedAt = nextServerReceivedAt ?? snapshot.updatedAt;
+      nextServerReceivedAt = null;
       records.set(ref, {
         schemaVersion: 1,
         content: snapshot.content,
         baseVersion: snapshot.baseVersion,
         contentHash: snapshot.contentHash,
         savedContentHash: snapshot.savedContentHash,
-        contentSizeBytes: encoder.encode(snapshot.content).length,
+        contentSizeBytes: contentSizeBytes(snapshot.content),
         updatedAt: snapshot.updatedAt,
+        serverReceivedAt: receivedAt,
         paneId: snapshot.paneId,
         windowId: snapshot.windowId,
       });
       return Promise.resolve({
         snapshotRef: ref,
-        contentSizeBytes: encoder.encode(snapshot.content).length,
+        contentSizeBytes: contentSizeBytes(snapshot.content),
+        serverReceivedAt: receivedAt,
       });
     }),
     read: vi.fn((input: { readonly snapshotRef: string }) =>
@@ -71,6 +82,7 @@ type FakeOpenRequest = FakeIdbRequest<FakeDatabase> & {
 };
 
 let fakeGetAllCount = 0;
+let localClockNow = 1_000;
 
 class FakeIdbRequest<T = unknown> {
   result!: T;
@@ -347,6 +359,8 @@ async function expectRejectedMessage(promise: Promise<unknown>, message: string)
 
 beforeEach(() => {
   fakeGetAllCount = 0;
+  localClockNow = 1_000;
+  setEditorHotExitLocalClockForTests(() => localClockNow);
   hotExitApi.reset();
   vi.mocked(writeEditorHotExitContent).mockClear();
   vi.mocked(readEditorHotExitContent).mockClear();
@@ -355,6 +369,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setEditorHotExitLocalClockForTests(null);
   removeIndexedDb();
 });
 
@@ -417,6 +432,37 @@ describe("editorHotExitStore", () => {
 
     expect(indexedDb.records("keiko-editor-hot-exit", "snapshots").size).toBe(0);
     await expect(readEditorHotExitSnapshot("/repo", "src/app.ts", 2_001)).resolves.toBeNull();
+  });
+
+  it("uses the server receipt timestamp for the local pre-read TTL gate", async () => {
+    const serverReceivedAt = 1_700_000_000_000;
+    const staleClientClock = serverReceivedAt - 10 * EDITOR_HOT_EXIT_TTL_MS;
+    const stored = snapshot({ updatedAt: staleClientClock });
+    hotExitApi.setNextServerReceivedAt(serverReceivedAt);
+
+    await writeEditorHotExitSnapshot(stored);
+
+    vi.mocked(deleteEditorHotExitContent).mockClear();
+    await expect(
+      readEditorHotExitSnapshot("/repo", "src/app.ts", serverReceivedAt + 1),
+    ).resolves.toEqual(stored);
+    expect(deleteEditorHotExitContent).not.toHaveBeenCalled();
+  });
+
+  it("falls back to updatedAt for legacy local index records without a server receipt", async () => {
+    const indexedDb = new FakeIndexedDb();
+    installIndexedDb(indexedDb);
+    const legacy = snapshot({ updatedAt: 4_000 });
+    await writeEditorHotExitSnapshot(legacy);
+    const records = indexedDb.records("keiko-editor-hot-exit", "snapshots");
+    const entry = [...records.entries()][0];
+    if (entry === undefined) throw new Error("Expected a local hot-exit index record.");
+    const [hash, raw] = entry;
+    const legacyRecord = { ...(raw as Record<string, unknown>) };
+    Reflect.deleteProperty(legacyRecord, "serverReceivedAt");
+    records.set(hash, legacyRecord);
+
+    await expect(readEditorHotExitSnapshot("/repo", "src/app.ts", 4_001)).resolves.toEqual(legacy);
   });
 
   it("purges malformed local index records without sending a remote delete", async () => {
@@ -482,7 +528,9 @@ describe("editorHotExitStore", () => {
   });
 
   it("does not full-scan the snapshot store for every small debounced write", async () => {
+    localClockNow = 10_000;
     await writeEditorHotExitSnapshot(snapshot({ relativePath: "src/one.ts", updatedAt: 10_000 }));
+    localClockNow = 39_999;
     await writeEditorHotExitSnapshot(snapshot({ relativePath: "src/two.ts", updatedAt: 10_100 }));
 
     expect(fakeGetAllCount).toBe(1);
@@ -539,12 +587,39 @@ describe("editorHotExitStore", () => {
     });
 
     await writeEditorHotExitSnapshot(expired);
+    localClockNow = freshNow;
     await writeEditorHotExitSnapshot(fresh);
 
     await expect(readEditorHotExitSnapshot("/repo", "src/old.ts", freshNow)).resolves.toBeNull();
     await expect(readEditorHotExitSnapshot("/repo", "src/new.ts", freshNow)).resolves.toEqual(
       fresh,
     );
+  });
+
+  it("uses the local operation clock when pruning expired records", async () => {
+    const indexedDb = new FakeIndexedDb();
+    installIndexedDb(indexedDb);
+    const expired = snapshot({
+      relativePath: "src/old.ts",
+      contentHash: "d".repeat(64),
+      updatedAt: 1_000,
+    });
+    const fresh = snapshot({
+      relativePath: "src/new.ts",
+      contentHash: "e".repeat(64),
+      updatedAt: 2_000,
+    });
+
+    await writeEditorHotExitSnapshot(expired);
+    localClockNow = 1_000 + EDITOR_HOT_EXIT_TTL_MS + 10;
+    hotExitApi.setNextServerReceivedAt(2_000);
+    await writeEditorHotExitSnapshot(fresh);
+
+    const serialized = JSON.stringify([
+      ...indexedDb.records("keiko-editor-hot-exit", "snapshots").values(),
+    ]);
+    expect(serialized).not.toContain(expired.contentHash);
+    expect(serialized).toContain(fresh.contentHash);
   });
 
   it("evicts the oldest fresh snapshots when total hot-exit storage exceeds the quota", async () => {
