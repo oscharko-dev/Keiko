@@ -32,6 +32,7 @@ import {
   type CodingContextRequest,
 } from "./coding-context.js";
 import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
+import { RETRIEVAL_CONTEXT_SOURCE_TIERS } from "./retrieval-context.js";
 
 function citation(overrides: Partial<CodingContextCitation> = {}): CodingContextCitation {
   return {
@@ -108,6 +109,22 @@ describe("coding-context purpose + tiering", () => {
   // silently.
   it("keeps connected-context's CODING tier byte-identical to the existing wire (ADR-0152 D6)", () => {
     expect(tierForCodingContextSource("connected-context")).toBe("first-party-workspace");
+  });
+
+  // Codex finding follow-on (ADR-0152 D6): CODING_CONTEXT_SOURCE_TIERS used to be a bare re-export
+  // of RETRIEVAL_CONTEXT_SOURCE_TIERS (`RETRIEVAL_CONTEXT_SOURCE_TIERS as CODING_CONTEXT_SOURCE_TIERS`)
+  // rather than something derived from CODING_CONTEXT_SOURCE_TIER_BY_KIND, so adding a neutral-only
+  // tier (external-connected) silently widened the coding catalog too — even though no coding kind
+  // is ever mapped to it (see CODING_CONTEXT_SOURCE_TIER_BY_KIND above, and the byte-identical test
+  // just above this one). The neutral catalog is correctly wider; only the coding one must exclude it.
+  it("excludes the neutral-only external-connected tier from the coding catalog", () => {
+    expect(RETRIEVAL_CONTEXT_SOURCE_TIERS).toContain("external-connected");
+    expect(CODING_CONTEXT_SOURCE_TIERS).not.toContain("external-connected");
+  });
+
+  it("the coding catalog is exactly the tiers CODING_CONTEXT_SOURCE_TIER_BY_KIND actually uses", () => {
+    const usedTiers = new Set(Object.values(CODING_CONTEXT_SOURCE_TIER_BY_KIND));
+    expect(new Set(CODING_CONTEXT_SOURCE_TIERS)).toEqual(usedTiers);
   });
 });
 

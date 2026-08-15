@@ -228,15 +228,19 @@ gateway's *DNS-resolved* address re-check (`enforceOutboundTargetPolicy` with `r
 additionally requires `egress.pinProxiedConnectTarget` when this connector's traffic is proxied
 (ADR-0038 D6) — proxied deployments are first-class for this lane (below).
 
-**Correction (#3156, 2026-08-15).** This connector sets `pinProxiedConnectTarget` together with
-`denyLoopback` by default (`connectorEgressConfig` in `httpPort.ts`), so a proxied connector's
-DNS-resolved address is independently re-validated after resolution against the same
-loopback/private/link-local/metadata policy as the direct path, not merely covered by the
-literal-shape check. This text previously said the connector left that opt-in off in v1, covering a
-proxied deployment's resolved address by the literal check alone; two independent reviewers flagged
-that a DNS name classified as safe by its literal shape but resolving into blocked address space was
-therefore unvetted whenever this connector was proxied — a live SSRF and internal-reconnaissance
-path, not a theoretical one, since operators commonly point connectors at internal reverse proxies.
+**Correction (#3156, 2026-08-15).** The platform-level default for `pinProxiedConnectTarget` stays
+off for a generic `gatewayFetch` caller (ADR-0038 D6: a caller must construct it explicitly, exactly
+like `denyLoopback`) — nothing about that default changes here. This connector is one such caller,
+and it opts in on every call: `connectorEgressConfig` in `httpPort.ts` unconditionally sets both
+`pinProxiedConnectTarget` and `denyLoopback` to `true` in the config this connector passes to
+`gatewayFetch`, so a proxied connector's DNS-resolved address is independently re-validated after
+resolution against the same loopback/private/link-local/metadata policy as the direct path, not
+merely covered by the literal-shape check. This text previously said the connector left that
+opt-in off in v1, covering a proxied deployment's resolved address by the literal check alone; two
+independent reviewers flagged that a DNS name classified as safe by its literal shape but resolving
+into blocked address space was therefore unvetted whenever this connector was proxied — a live
+SSRF and internal-reconnaissance path, not a theoretical one, since operators commonly point
+connectors at internal reverse proxies.
 The accepted trade-off is that a corporate proxy filtering CONNECT by hostname rather than by
 resolved address could reject the now-pinned, IP-literal CONNECT authority; that is an
 operator-visible, diagnosable failure, weighed as preferable to a silent internal-address bypass for

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { lookup as dnsLookup } from "node:dns/promises";
 import type { LookupAddress } from "node:dns";
@@ -818,9 +819,87 @@ async function createTlsTunnel(
   return startTargetTls(target, socket, ca, signal);
 }
 
-function httpsProxyTunnelKey(target: URL, proxy: URL, ca: readonly string[]): string {
-  const caKey = ca.map((cert) => `${String(cert.length)}:${cert.slice(0, 32)}`).join("|");
-  return `${proxy.protocol}//${proxy.host}|${target.protocol}//${target.host}|${caKey}`;
+// Includes this call's pinning posture (#3156 pool-identity follow-up to the DNS-rebinding fix
+// above), not just (proxy, target, ca): an idle tunnel is handed back to fetchHttpsViaProxy below
+// verbatim, socket and all, so two calls whose keys collide are treated as fully interchangeable
+// no matter how each one's actual TCP peer was chosen. Before this, an UNPINNED call (the proxy
+// resolves the hostname itself, at its own discretion) and a PINNED call to the identical
+// (proxy, target, ca) triple produced the SAME key, so a pinned request could silently be served
+// the unpinned call's pooled tunnel: resolveGatewayDns's vetting for the pinned call would have no
+// bearing on the peer the request actually rode, because that peer was chosen entirely by the
+// earlier, unpinned call, before the pinned call ever ran. Folding in "unpinned" or a digest of
+// the vetted address (see below for why a digest, not the address itself) makes a pinned and an
+// unpinned call to the same (proxy, target, ca) triple compute DIFFERENT keys, so neither can be
+// served from the other's pool entry, in either direction, and two pinned calls that happened to
+// resolve to different addresses can't collide either. (The plain-HTTP absolute-URI proxy path,
+// fetchHttpViaProxy, DOES reuse its connection to
+// the proxy -- it passes no explicit `agent`, and on this repo's pinned Node, http.globalAgent's
+// keepAlive defaults to true, unlike a freshly constructed `new Agent()`. That reuse is not the
+// same defect, though: Agent.getName() keys purely on host/port, so what gets pooled is the hop to
+// the proxy, never the ultimate destination -- each request's real target lives in that request's
+// own absolute-URI, computed fresh per call by proxyRequestTarget below, never cached or inherited
+// from an earlier call on the same socket. See ADR-0038 D6's #3156 plain-HTTP correction for the
+// full reasoning, including how this was verified rather than assumed.)
+//
+// Both variable terms below are collision-resistant digests, not raw/summarized values (#3157,
+// Codex P1 + Keiko for Quality): the CA term used to be `${cert.length}:${cert.slice(0, 32)}` per
+// certificate -- for PEM input that summary is almost entirely the near-universal
+// "-----BEGIN CERTIFICATE-----" header, so two DIFFERENT certificate sets sharing a byte length
+// routinely produced the IDENTICAL summary. A call configured with a tightened or entirely
+// different trust bundle could then be served an idle tunnel authenticated under an earlier call's
+// (looser or unrelated) trust set, with its own bundle never actually applied -- the same class of
+// bug as the pinning-posture gap above, one field over. Hashing the full certificate bytes (sorted
+// first, with an explicit comparator so the sort is well-defined rather than relying on the
+// default coercion-based ordering -- this only has to be a STABLE total order within one running
+// process, not a human-meaningful one, so locale-awareness is incidental, not a requirement) makes
+// the SAME set in a different array order hash identically -- order carries no trust meaning --
+// while two distinct bundles produce different keys with overwhelming probability,
+// and a byte-identical set collapses to the same key exactly when it should. The pin term's address
+// literal is hashed for a different reason: it is an internal-network IP with no legitimate reason
+// to be human-legible in a key whose only job is to differ from other keys, never to be read back
+// (this key is a private, in-memory Map key -- grepped and confirmed never logged, thrown, or
+// otherwise surfaced -- but a digest costs nothing and permanently forecloses that ever mattering
+// if some future change adds diagnostics here).
+//
+// The sort's comparator is a plain UTF-16 code-unit comparison, not `localeCompare` (#3157,
+// Keiko for Quality x2): an earlier version of this line used `(a, b) => a.localeCompare(b)` to
+// satisfy SonarJS S2871, which requires an explicit comparator rather than default sort's
+// coercion-based one. That satisfied the rule's letter while breaking the one property the sort
+// exists for: `localeCompare`'s result depends on the runtime's collation (locale, ICU data
+// version), which is exactly the kind of environment-dependence the previous paragraph already
+// said this sort must NOT have. Two hosts -- or the same host across an ICU upgrade -- could
+// order the identical CA set differently and so hash it to different keys, silently dropping the
+// pool's hit rate to zero for that CA configuration (wasted reconnects under load, not a
+// correctness/security break, since a MISSED pool hit only means a fresh, still-correctly-vetted
+// tunnel; but a real defect, and introduced by this file's own #3157 fix). codeUnitCompare below
+// is total, stable, and depends on nothing but the two strings' own UTF-16 code units -- no ICU,
+// no locale, no Intl -- while still an explicit comparator function, satisfying S2871 for the
+// reason it actually asks for (a well-defined order) rather than the one that happened to also
+// compile (a human-friendly one). Written with if-statements rather than a nested ternary
+// (`a < b ? -1 : a > b ? 1 : 0`) because SonarJS S3358 flags nested ternaries separately --
+// satisfying one rule should not trip another.
+function keyMaterialDigest(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function codeUnitCompare(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
+export function httpsProxyTunnelKey(
+  target: URL,
+  proxy: URL,
+  ca: readonly string[],
+  pinnedAddress: LookupAddress | undefined,
+): string {
+  const caKey = keyMaterialDigest(JSON.stringify([...ca].sort(codeUnitCompare)));
+  const pinKey =
+    pinnedAddress === undefined
+      ? "unpinned"
+      : `pinned:${keyMaterialDigest(addressAuthorityHost(pinnedAddress))}`;
+  return `${proxy.protocol}//${proxy.host}|${target.protocol}//${target.host}|${caKey}|${pinKey}`;
 }
 
 function usableIdleTunnel(socket: tls.TLSSocket): boolean {
@@ -969,11 +1048,11 @@ async function fetchHttpsViaProxy(
   if (!Object.hasOwn(headers, "host")) {
     headers.host = hostHeader(target);
   }
-  const tunnelKey = httpsProxyTunnelKey(target, proxy, ca);
-  // An idle pooled tunnel was itself vetted (pinned or not) when it was first created; reusing it
-  // does not reopen the DNS-rebinding gap, it is exactly as trusted as any other kept-alive reuse
-  // already is for up to HTTPS_PROXY_TUNNEL_IDLE_TTL_MS. Only a genuinely fresh tunnel needs the
-  // current call's pinned address.
+  const tunnelKey = httpsProxyTunnelKey(target, proxy, ca, pinnedAddress);
+  // The key now carries this call's pinning posture (see httpsProxyTunnelKey above), so an idle
+  // pooled entry is only ever a cache hit here when it was established under the IDENTICAL
+  // posture -- unpinned reusing unpinned, or pinned reusing the same vetted address -- never a
+  // pinned call silently inheriting an unpinned tunnel's unvetted peer, or the reverse (#3156).
   const socket =
     takeIdleHttpsProxyTunnel(tunnelKey) ??
     (await createTlsTunnel(target, proxy, ca, init.signal ?? undefined, pinnedAddress));
