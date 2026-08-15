@@ -403,6 +403,44 @@ describe("contentPreviewFor", () => {
   // can populate a truncation-surviving tail. A raw payload padded with zero-width characters
   // simply sanitizes down to something short enough that truncation never triggers.
 
+  // KEIKO-0186 P3 (Codex): U+3164 HANGUL FILLER renders as nothing but belongs to Unicode general
+  // category Lo (a letter), so stripUnsafeFormatChars never touches it (it is not bidi/zero-width/
+  // control) and it survives sanitization exactly like whitespace and combining marks do -- which
+  // also means, like them, it CAN populate a truncation-surviving tail.
+
+  it("an all-HANGUL-FILLER payload survives sanitization non-empty and is reported unavailable", () => {
+    const hangulFiller = String.fromCodePoint(0x3164).repeat(5);
+    expect(
+      contentPreviewFor({
+        type: "add-issue-comment",
+        issueKey: "PROJ-9",
+        commentText: hangulFiller,
+      }),
+    ).toEqual({ status: "unavailable" });
+  });
+
+  it("a bare variation selector payload is reported unavailable", () => {
+    const variationSelector16 = String.fromCodePoint(0xfe0f);
+    expect(
+      contentPreviewFor({
+        type: "add-page-comment",
+        pageId: "123",
+        commentText: variationSelector16,
+      }),
+    ).toEqual({ status: "unavailable" });
+  });
+
+  it("truncation can create an all-HANGUL-FILLER tail even when the untruncated text has a base character past the bound", () => {
+    const fillerPrefix = String.fromCodePoint(0x3164).repeat(
+      ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
+    );
+    const summary = fillerPrefix + "X";
+    expect(summary.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+    expect(contentPreviewFor({ type: "create-issue", projectKey: "PROJ", summary })).toEqual({
+      status: "unavailable",
+    });
+  });
+
   it("agrees with isSafeAtlassianContentPreview in every case: an emitted 'available' text always passes the contract predicate", () => {
     const cases: readonly AtlassianWriteActionInput[] = [
       { type: "create-issue", projectKey: "PROJ", summary: "Fix the flaky gate" },
@@ -426,10 +464,12 @@ describe("contentPreviewFor", () => {
     }
   });
 
-  it("agrees with isSafeAtlassianContentPreview in every unavailable case: empty, combining-marks-only, whitespace-only, and whitespace-plus-combining strings all fail the contract predicate too", () => {
+  it("agrees with isSafeAtlassianContentPreview in every unavailable case: empty, combining-marks-only, whitespace-only, whitespace-plus-combining, and default-ignorable-only strings all fail the contract predicate too", () => {
     expect(isSafeAtlassianContentPreview("")).toBe(false);
     expect(isSafeAtlassianContentPreview(String.fromCharCode(0x301).repeat(5))).toBe(false);
     expect(isSafeAtlassianContentPreview(" ")).toBe(false);
     expect(isSafeAtlassianContentPreview(" " + String.fromCharCode(0x301))).toBe(false);
+    expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x3164))).toBe(false);
+    expect(isSafeAtlassianContentPreview(String.fromCodePoint(0xfe0f))).toBe(false);
   });
 });

@@ -631,7 +631,7 @@ async function expectUnavailablePreview(
   expect(JSON.stringify(pendingRecord), action).not.toContain("contentPreview");
 }
 
-describe("write-action route — unpresentable content preview after sanitization (KEIKO-0186 P1/P2)", () => {
+describe("write-action route — unpresentable content preview after sanitization (KEIKO-0186 P1/P2/P3)", () => {
   it("an all-zero-width-space payload is reported unavailable for every text-bearing action, never as an empty preview", async () => {
     const allZeroWidth = String.fromCharCode(0x200b).repeat(12);
     for (const action of TEXT_BEARING_WRITE_ACTIONS) {
@@ -704,6 +704,34 @@ describe("write-action route — unpresentable content preview after sanitizatio
       Math.ceil(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS / 2),
     );
     const commentText = pairs.slice(0, ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS) + "X";
+    expect(commentText.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+    await expectUnavailablePreview("add-issue-comment", commentText);
+  });
+
+  // KEIKO-0186 P3 (Codex): U+3164 HANGUL FILLER renders as nothing but belongs to Unicode general
+  // category Lo (a letter), so it matches none of \s, \p{M}, or the P2 predicate's \p{Cf} -- a
+  // third input class reaching the same "apparently blank, classified available" failure. It
+  // survives sanitization exactly like whitespace/combining marks (stripUnsafeFormatChars only
+  // targets bidi/zero-width/control code points), so it can also populate a truncation window,
+  // same as they can.
+
+  it("an all-HANGUL-FILLER payload is reported unavailable for every text-bearing action", async () => {
+    const hangulFiller = String.fromCodePoint(0x3164).repeat(5);
+    for (const action of TEXT_BEARING_WRITE_ACTIONS) {
+      await expectUnavailablePreview(action, hangulFiller);
+    }
+  });
+
+  it("a bare variation selector payload is reported unavailable", async () => {
+    const variationSelector16 = String.fromCodePoint(0xfe0f);
+    await expectUnavailablePreview("add-page-comment", variationSelector16);
+  });
+
+  it("truncation can produce an all-HANGUL-FILLER tail through the real route, even when the untruncated text has a base character past the bound", async () => {
+    const fillerPrefix = String.fromCodePoint(0x3164).repeat(
+      ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
+    );
+    const commentText = fillerPrefix + "X";
     expect(commentText.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
     await expectUnavailablePreview("add-issue-comment", commentText);
   });

@@ -840,21 +840,26 @@ export type AtlassianConnectorActionExecutionResult =
 // hostile payload.
 export const ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS = 280;
 
-// KEIKO-0186 P1/P2 (Codex): ask the real question — is there any VISIBLE BASE CHARACTER left for
-// a reviewer to read — instead of enumerating unpresentable shapes one at a time. P1 covered
+// KEIKO-0186 P1/P2/P3 (Codex): ask the real question — is there any VISIBLE BASE CHARACTER left
+// for a reviewer to read — instead of enumerating unpresentable shapes one at a time. P1 covered
 // "empty" and "entirely Unicode combining marks" via `^\p{M}+$`, but that anchored pattern stops
 // matching the moment ANY other character is present, including whitespace: a lone space, a run
 // of TAB/LF, or whitespace around a floating combining mark (e.g. a space then a combining acute
-// accent) all satisfied it and were classified presentable (P2). A negative pattern only ever
-// covers the shapes someone thought to enumerate; this predicate instead strips everything that
-// can never itself BE a visible base character — Unicode whitespace and combining marks — and
-// asks whether anything survives. Format characters (`\p{Cf}`, e.g. a stray soft hyphen) are
-// stripped too: a broader net than the specific bidi/zero-width code points
-// `stripUnsafeFormatChars` enumerates, so this predicate does not silently depend on that list
-// staying exhaustive. A payload composed only of these must not reach the wire as
-// `contentPreview`; see `contentPreviewFor` in keiko-server's actionApprovals.ts, which checks
-// this same condition on the producing side so the two can never disagree.
-const NON_BASE_CHARACTER_PATTERN = /[\s\p{M}\p{Cf}]/gu;
+// accent) all satisfied it and were classified presentable (P2). P2 in turn stripped whitespace,
+// combining marks, and `\p{Cf}` format characters — but U+3164 HANGUL FILLER (used historically to
+// fill empty Hangul input slots) and the variation-selector families render as nothing while
+// belonging to Unicode general category `Lo` (a LETTER), so neither `\p{M}` nor `\p{Cf}` (nor
+// `\s`) touches them (P3). Each round enumerated one more invisible shape; the actual Unicode
+// property for "renders as nothing, whatever its general category" is
+// `Default_Ignorable_Code_Point` — it is what HANGUL FILLER, the zero-width family, variation
+// selectors, and the Mongolian vowel separator all have in common, in one property instead of a
+// growing enumeration. (Supported by every `u`-flag RegExp on this repository's pinned Node
+// >=24.18.0 <25 — see the `isSafeAtlassianContentPreview` doc comment below for the evidence this
+// needs no runtime capability guard.) A payload composed only of whitespace, combining marks, and
+// default-ignorable code points must not reach the wire as `contentPreview`; see
+// `contentPreviewFor` in keiko-server's actionApprovals.ts, which checks this same condition on
+// the producing side so the two can never disagree.
+const NON_BASE_CHARACTER_PATTERN = /[\s\p{M}\p{Default_Ignorable_Code_Point}]/gu;
 
 export function isAtlassianContentPreviewUnpresentable(value: string): boolean {
   return value.replace(NON_BASE_CHARACTER_PATTERN, "").length === 0;
@@ -866,9 +871,22 @@ export function isAtlassianContentPreviewUnpresentable(value: string): boolean {
 // title/summary with a description/body), so — like every other untrusted display surface in
 // this codebase — TAB/LF/CR survive stripUnsafeFormatChars while every other unsafe code point
 // does not; this predicate accepts exactly what that stripper already leaves untouched. It also
-// rejects a preview with no visible base character — whitespace-only, combining-marks-only, or
-// any mix of the two — for the same reason the producer never emits one (see
-// `isAtlassianContentPreviewUnpresentable` above) — the producer and this predicate must agree.
+// rejects a preview with no visible base character — whitespace-only, combining-marks-only,
+// default-ignorable-only (HANGUL FILLER, variation selectors, …), or any mix of the three — for
+// the same reason the producer never emits one (see `isAtlassianContentPreviewUnpresentable`
+// above) — the producer and this predicate must agree.
+//
+// No runtime capability guard for the `\p{Default_Ignorable_Code_Point}` / `\p{M}` Unicode
+// property escapes above: this repository's `package.json` pins `engines.node` to
+// `>=24.18.0 <25`, and CI (`.github/workflows/ci.yml`) runs every job on exactly `24.18.0` — the
+// V8 build in that Node version has supported `u`-flag Unicode property escapes, including binary
+// properties like `Default_Ignorable_Code_Point` and `ID_Start`/`ID_Continue`, since long before
+// this engines floor (V8 shipped the feature by Node 10). `\p{M}`/`\p{Cf}`/`\p{L}`/`\p{N}` and
+// binary properties are already used unguarded throughout this codebase (e.g.
+// `packages/keiko-server/src/coding-runtime/researchContentQuarantine.ts`,
+// `packages/keiko-workspace/src/repoSearchSourceClassification.ts`) — a guard here would be dead
+// code checking a capability the pinned runtime has always had, which is worse than no guard: it
+// invites a reader to wonder what failure mode it exists to catch when none does.
 export function isSafeAtlassianContentPreview(value: unknown): value is string {
   return (
     typeof value === "string" &&
