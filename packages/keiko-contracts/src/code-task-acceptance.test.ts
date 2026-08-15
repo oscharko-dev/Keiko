@@ -330,13 +330,14 @@ describe("prototype-based extra-field smuggling (KfQ Critical)", () => {
     expect(validateCodeTaskAcceptanceContribution(validContribution()).ok).toBe(true);
   });
 
-  // Codex P1: KEIKO-0302's follow-on fix (commit 0ad76a4e) replaced factErrors's "value" in value
-  // check with unknownKeys alone for the absent/unknown/unavailable branch. unknownKeys scans only
-  // OWN properties, so a fact shaped via Object.create({ value: "secret" }) carrying just an own
-  // outcome: "absent" passed with zero errors -- the inherited `value` was invisible to the scan
-  // while ordinary property access still resolved it. "in" walks the prototype chain, which is
-  // what actually caught this before the regression, and is restored alongside unknownKeys here.
-  it("rejects a receiptDigest fact with a value reachable only through the prototype", () => {
+  // Codex P1 (thread 3789461971): this fixture does NOT exercise the restored "in" check.
+  // Object.create({ value: "secret" }) has a non-default prototype, so isRecord's own,
+  // already-hardened prototype-identity check rejects it before factErrors ever reaches the
+  // "value" in value branch -- confirmed by deleting that branch and re-running: this test still
+  // passes. It remains a valid pin of the OVERALL contract ("this attack shape is rejected"), just
+  // not of the specific guard its comment used to claim. Kept, relabeled honestly; the mechanism
+  // test below is what actually pins the "in" branch.
+  it("rejects a receiptDigest fact shaped via Object.create (caught by isRecord's prototype check)", () => {
     const hostileFact = Object.create({ value: "secret" }) as Record<string, unknown>;
     hostileFact.outcome = "absent";
     expect(Object.keys(hostileFact)).toEqual(["outcome"]); // own-key view looks complete
@@ -350,5 +351,43 @@ describe("prototype-based extra-field smuggling (KfQ Critical)", () => {
       scenarios: [{ ...scenario, receiptDigest: hostileFact }],
     });
     expect(result.ok).toBe(false);
+  });
+
+  // This is the pin the comment above could not deliver. The gap the restored "in" check closes
+  // only opens when a fact's DIRECT prototype is genuinely Object.prototype (so isRecord's
+  // Object.getPrototypeOf(value) === Object.prototype passes) yet `value` still resolves through
+  // it -- which requires Object.prototype ITSELF to carry an inherited `value`, since a value whose
+  // direct prototype is Object.prototype has a chain of exactly [Object.prototype, null]. That
+  // cannot be pinned by mutating the real, process-wide Object.prototype: doing so live-crashes
+  // Node's own internals (confirmed empirically -- some internal class redefines a "value"
+  // accessor and throws on finding a plain data property already there via inheritance), so any
+  // test that did it would be able to take down the whole run, not just this one case. The safe
+  // stand-in below reproduces the identical mechanism -- an object whose prototype is mutated IN
+  // PLACE (never swapped for a different reference) still resolving an inherited property that
+  // Object.keys/Object.getOwnPropertyNames cannot see -- against an isolated, disposable object
+  // instead of the shared global. It does not call the exported validator (there is no safe way to
+  // make isRecord observe a genuinely polluted Object.prototype from outside this process), but it
+  // exercises the exact same three primitives factErrors's guard is built from, in the exact same
+  // order, so it stays meaningful if that logic's mechanism is ever the thing that regresses again.
+  it('mechanism: "in" resolves an inherited property that no own-property scan can see', () => {
+    const prototypeStandsInForObjectPrototype: Record<string, unknown> = {};
+    const fact = Object.create(prototypeStandsInForObjectPrototype) as Record<string, unknown>;
+    fact.outcome = "absent";
+    // isRecord's own check, unmodified, for a fact whose direct prototype IS the stand-in --
+    // playing the role "IS Object.prototype" plays for the real guard.
+    expect(Object.getPrototypeOf(fact)).toBe(prototypeStandsInForObjectPrototype);
+    expect(Object.keys(fact)).toEqual(["outcome"]); // own-property scan sees nothing wrong
+    expect(Object.getOwnPropertyNames(fact)).toEqual(["outcome"]);
+
+    // The pollution: mutate the EXISTING prototype object in place. Object identity is preserved,
+    // so the isRecord-equivalent check above would still pass after this line runs.
+    prototypeStandsInForObjectPrototype.value = "secret";
+    expect(Object.getPrototypeOf(fact)).toBe(prototypeStandsInForObjectPrototype);
+    expect(Object.keys(fact)).toEqual(["outcome"]); // still invisible to any own-property scan
+    expect(Object.getOwnPropertyNames(fact)).toEqual(["outcome"]);
+
+    // What factErrors's restored guard actually checks:
+    expect("value" in fact).toBe(true);
+    expect(fact.value).toBe("secret");
   });
 });

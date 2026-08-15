@@ -248,15 +248,16 @@ describe("run-control content-free references", () => {
   });
 });
 
-// Codex P1: KEIKO-0302's follow-on fix (commit 0ad76a4e) replaced boundedStringFactErrors's and
-// questionFactErrors's "value" in value check with unknownKeys alone. unknownKeys scans only OWN
-// properties (Object.keys / Object.getOwnPropertyNames), so a fact shaped via
-// Object.create({ value: "secret" }) carrying just an own outcome: "absent" passed with zero
-// errors: the inherited `value` was invisible to the scan while ordinary property access
-// (`fact.value`) still resolved it. "in" walks the prototype chain, which is what actually caught
-// this before the regression.
+// Codex P1 (thread 3789461971, filed against the sibling code-task-acceptance.ts pin but the same
+// gap applies here): the two tests below whose fixture is Object.create({ value: "secret" }) do
+// NOT exercise the restored "in" branch. That construction has a non-default prototype, so
+// isRecord's own, already-present prototype-identity check rejects it before boundedStringFactErrors
+// / questionFactErrors ever reach their "value" in value line -- confirmed by deleting both "in"
+// branches and re-running: both tests still pass. They remain valid pins of the overall contract
+// ("this attack shape is rejected"), relabeled honestly below; the mechanism test after them is
+// what actually pins the "in" branch itself.
 describe("prototype-based extra-field smuggling (KfQ / Codex P1 regression)", () => {
-  it("rejects a recoveryRef fact with a value reachable only through the prototype", () => {
+  it("rejects a recoveryRef fact shaped via Object.create (caught by isRecord's prototype check)", () => {
     const hostileFact = Object.create({ value: "secret" }) as Record<string, unknown>;
     hostileFact.outcome = "absent";
     expect(Object.keys(hostileFact)).toEqual(["outcome"]); // own-key view looks complete
@@ -266,7 +267,7 @@ describe("prototype-based extra-field smuggling (KfQ / Codex P1 regression)", ()
     expect(result.ok).toBe(false);
   });
 
-  it("rejects a pendingQuestion fact with a value reachable only through the prototype", () => {
+  it("rejects a pendingQuestion fact shaped via Object.create (caught by isRecord's prototype check)", () => {
     const hostileFact = Object.create({ value: "secret" }) as Record<string, unknown>;
     hostileFact.outcome = "absent";
     const result = validateRunControlSnapshotV1({ ...snapshot(), pendingQuestion: hostileFact });
@@ -283,5 +284,35 @@ describe("prototype-based extra-field smuggling (KfQ / Codex P1 regression)", ()
 
   it("still accepts an ordinary explicit-absent fact for both", () => {
     expect(validateRunControlSnapshotV1(snapshot())).toMatchObject({ ok: true });
+  });
+
+  // This is the pin the two tests above could not deliver (see the block comment). The gap the
+  // restored "in" check closes only opens when a fact's DIRECT prototype is genuinely
+  // Object.prototype (so isRecord's Object.getPrototypeOf(value) === Object.prototype passes) yet
+  // `value` still resolves through it -- which requires Object.prototype ITSELF to carry an
+  // inherited `value`, since an object whose direct prototype is Object.prototype has a chain of
+  // exactly [Object.prototype, null]. That cannot be pinned by mutating the real, process-wide
+  // Object.prototype: doing so live-crashes Node's own internals (confirmed empirically -- some
+  // internal class redefines a "value" accessor and throws on finding a plain data property
+  // already there via inheritance), so a test that did it could take down the whole run, not just
+  // this one case. The safe stand-in below reproduces the identical mechanism -- an object whose
+  // prototype is mutated IN PLACE, never swapped for a different reference, still resolving an
+  // inherited property that Object.keys/Object.getOwnPropertyNames cannot see -- against an
+  // isolated, disposable object instead of the shared global.
+  it('mechanism: "in" resolves an inherited property that no own-property scan can see', () => {
+    const prototypeStandsInForObjectPrototype: Record<string, unknown> = {};
+    const fact = Object.create(prototypeStandsInForObjectPrototype) as Record<string, unknown>;
+    fact.outcome = "absent";
+    expect(Object.getPrototypeOf(fact)).toBe(prototypeStandsInForObjectPrototype);
+    expect(Object.keys(fact)).toEqual(["outcome"]);
+    expect(Object.getOwnPropertyNames(fact)).toEqual(["outcome"]);
+
+    prototypeStandsInForObjectPrototype.value = "secret"; // mutated in place, identity preserved
+    expect(Object.getPrototypeOf(fact)).toBe(prototypeStandsInForObjectPrototype);
+    expect(Object.keys(fact)).toEqual(["outcome"]);
+    expect(Object.getOwnPropertyNames(fact)).toEqual(["outcome"]);
+
+    expect("value" in fact).toBe(true); // what boundedStringFactErrors/questionFactErrors check
+    expect(fact.value).toBe("secret");
   });
 });
