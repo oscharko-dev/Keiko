@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isDebugLifecycleEvidence } from "./debug-lifecycle.js";
+import {
+  DEBUG_LIFECYCLE_EVENT_KINDS,
+  DEBUG_LIFECYCLE_REASONS,
+  DEBUG_SESSION_STATES,
+  EVIDENCE_KEYS,
+  isDebugLifecycleEvidence,
+} from "./debug-lifecycle.js";
 
 const valid = {
   schemaVersion: "1",
@@ -77,45 +83,18 @@ describe("debug lifecycle evidence", () => {
     ).toBe(true);
   });
 
-  it.each(["start", "active", "stop", "failure", "session-revoked", "teardown"])(
-    "accepts closed event kind %s",
-    (eventKind) => {
-      expect(isDebugLifecycleEvidence({ ...valid, eventKind })).toBe(true);
-    },
-  );
+  // Derived from the production lookups (KEIKO-0377) rather than restated here — the third
+  // hand-maintained copy of each vocabulary this finding flags — so a member added to the union AND
+  // its Record<Union, true> table is automatically exercised here too, with nothing left to forget.
+  it.each(DEBUG_LIFECYCLE_EVENT_KINDS)("accepts closed event kind %s", (eventKind) => {
+    expect(isDebugLifecycleEvidence({ ...valid, eventKind })).toBe(true);
+  });
 
-  it.each([
-    "reserved",
-    "starting",
-    "running",
-    "paused",
-    "stopping",
-    "stopped",
-    "failed",
-    "revoked",
-    "terminationPending",
-    "restartThrottled",
-  ])("accepts closed state %s", (state) => {
+  it.each(DEBUG_SESSION_STATES)("accepts closed state %s", (state) => {
     expect(isDebugLifecycleEvidence({ ...valid, state })).toBe(true);
   });
 
-  it.each([
-    "requested",
-    "adapterExit",
-    "debuggeeExit",
-    "malformedFrame",
-    "frameOverflow",
-    "outputOverflow",
-    "wallTimeout",
-    "inactivityTimeout",
-    "activationRevoked",
-    "serverShutdown",
-    "startupFailed",
-    "restartThrottled",
-    "writeFailure",
-    "unexpectedEof",
-    "stopped",
-  ])("accepts closed reason %s", (reason) => {
+  it.each(DEBUG_LIFECYCLE_REASONS)("accepts closed reason %s", (reason) => {
     expect(isDebugLifecycleEvidence({ ...valid, reason })).toBe(true);
   });
 
@@ -184,5 +163,57 @@ describe("debug lifecycle evidence", () => {
     const inherited = Object.create(valid) as unknown;
     expect(Object.keys(inherited as object)).toEqual([]);
     expect(isDebugLifecycleEvidence(inherited)).toBe(false);
+  });
+});
+
+// KEIKO-0377: the closed vocabularies are now Record<Union, true> tables so a member missing from a
+// table is a compile error (proven by the manual mutation check in the finding's own
+// mustFailBeforeFix, not repeatable here as a permanent test without breaking the build). These
+// tests pin the exported derivations' exact sizes as a second, independent guard, and prove the
+// `Object.hasOwn`-based membership check does not fall back to prototype-chain lookups.
+describe("debug lifecycle closed-vocabulary derivation (KEIKO-0377)", () => {
+  it("exports exactly the ten documented session states", () => {
+    expect(DEBUG_SESSION_STATES).toHaveLength(10);
+    expect(new Set(DEBUG_SESSION_STATES).size).toBe(10);
+  });
+
+  it("exports exactly the six documented event kinds", () => {
+    expect(DEBUG_LIFECYCLE_EVENT_KINDS).toHaveLength(6);
+    expect(new Set(DEBUG_LIFECYCLE_EVENT_KINDS).size).toBe(6);
+  });
+
+  it("exports exactly the fifteen documented reasons", () => {
+    expect(DEBUG_LIFECYCLE_REASONS).toHaveLength(15);
+    expect(new Set(DEBUG_LIFECYCLE_REASONS).size).toBe(15);
+  });
+
+  it("exports EVIDENCE_KEYS with exactly the fourteen documented evidence fields", () => {
+    const keys = Object.keys(EVIDENCE_KEYS);
+    expect(keys).toHaveLength(14);
+    expect(keys.sort()).toEqual(Object.keys(valid).sort());
+  });
+
+  // A naive `key in TABLE` membership check (rather than `Object.hasOwn`) would answer `true` for
+  // any of these — they exist on Object.prototype, not as an own property of any specific table —
+  // so a hostile record could smuggle a prototype method name past hasClosedVocabulary/hasExactKeys
+  // as though it were a legitimate vocabulary member.
+  it.each(["constructor", "toString", "hasOwnProperty", "__proto__", "valueOf"])(
+    "rejects the prototype-chain name %s standing in for eventKind/state/reason",
+    (name) => {
+      expect(isDebugLifecycleEvidence({ ...valid, eventKind: name })).toBe(false);
+      expect(isDebugLifecycleEvidence({ ...valid, state: name })).toBe(false);
+      expect(isDebugLifecycleEvidence({ ...valid, reason: name })).toBe(false);
+    },
+  );
+
+  it("rejects the prototype-chain name constructor standing in for a required evidence key", () => {
+    const candidate = Object.fromEntries(
+      Object.entries(valid).filter(([key]) => key !== "schemaVersion"),
+    ) as Record<string, unknown>;
+    // `Object.defineProperty` rather than `candidate.constructor = ...`: direct assignment to
+    // `.constructor` type-checks against Object.prototype's `constructor: Function`, not the index
+    // signature, for a reason unrelated to what this test is exercising.
+    Object.defineProperty(candidate, "constructor", { value: "1", enumerable: true });
+    expect(isDebugLifecycleEvidence(candidate)).toBe(false);
   });
 });
