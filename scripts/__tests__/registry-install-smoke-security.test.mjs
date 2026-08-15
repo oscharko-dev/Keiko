@@ -52,6 +52,7 @@ import {
   PINNED_YARN_SHA512,
   PINNED_YARN_SOURCE_URL,
   PINNED_YARN_VERSION,
+  pinnedYarnLocatorParts,
   pinnedYarnVersionFromLocator,
 } from "../lib/pinned-yarn.mjs";
 
@@ -174,6 +175,31 @@ function yarnSha512ForBytes(bytes) {
 
 function yarnLocatorForBytes(version, bytes) {
   return `yarn@${version}+sha512.${yarnSha512ForBytes(bytes)}`;
+}
+
+function writeCorepackFixture(binDir, locator, yarnBytes) {
+  const { version, sha512 } = pinnedYarnLocatorParts(locator);
+  writeExecutable(
+    join(binDir, "corepack"),
+    [
+      'import { mkdirSync, writeFileSync } from "node:fs";',
+      'import { join } from "node:path";',
+      'if (process.argv[2] === "install") {',
+      `  const entry = join(process.env.COREPACK_HOME, "v1", "yarn", ${JSON.stringify(version)});`,
+      "  mkdirSync(entry, { recursive: true });",
+      "  writeFileSync(",
+      '    join(entry, ".corepack"),',
+      "    JSON.stringify({",
+      `      locator: { name: "yarn", reference: ${JSON.stringify(`${version}+sha512.${sha512}`)} },`,
+      '      bin: ["yarn", "yarnpkg"],',
+      `      hash: ${JSON.stringify(`sha512.${sha512}`)},`,
+      "    }),",
+      '    "utf8",',
+      "  );",
+      `  writeFileSync(join(entry, "yarn.js"), ${JSON.stringify(yarnBytes)}, "utf8");`,
+      "}",
+    ].join("\n"),
+  );
 }
 
 describe("registry install smoke security posture", () => {
@@ -342,11 +368,13 @@ describe("installable package smoke optional-dependency coverage", () => {
     mkdirSync(binDir, { recursive: true });
     mkdirSync(projectDir, { recursive: true });
     const artifact = localRegistryArtifact(root);
-    writeExecutable(join(binDir, "corepack"), "process.exit(0);");
+    const fixtureBytes = "registry-flow Yarn fixture\n";
+    const fixtureLocator = yarnLocatorForBytes(PINNED_YARN_VERSION, fixtureBytes);
+    writeCorepackFixture(binDir, fixtureLocator, fixtureBytes);
     const previousPath = process.env.PATH;
     process.env.PATH = `${binDir}${delimiter}${previousPath}`;
     try {
-      await installIntoWithYarn(projectDir, artifact);
+      await installIntoWithYarn(projectDir, artifact, undefined, fixtureLocator);
       expect(readFileSync(join(projectDir, "package.json"), "utf8")).toContain(
         ROOT_MANIFEST.version,
       );
@@ -370,11 +398,13 @@ describe("installable package smoke optional-dependency coverage", () => {
     mkdirSync(binDir, { recursive: true });
     mkdirSync(projectDir, { recursive: true });
     const artifact = localRegistryArtifact(root);
-    writeExecutable(join(binDir, "corepack"), "process.exit(0);");
+    const fixtureBytes = "hermetic-flow Yarn fixture\n";
+    const fixtureLocator = yarnLocatorForBytes(PINNED_YARN_VERSION, fixtureBytes);
+    writeCorepackFixture(binDir, fixtureLocator, fixtureBytes);
     const previousPath = process.env.PATH;
     process.env.PATH = `${binDir}${delimiter}${previousPath}`;
     try {
-      await installIntoWithYarn(projectDir, artifact, new Map());
+      await installIntoWithYarn(projectDir, artifact, new Map(), fixtureLocator);
       // The default name must NOT be present. Writing under a private name is only half of the
       // isolation — leaving a `.yarnrc.yml` behind would restore exactly the ancestor-and-default
       // discovery the private name exists to defeat (KfQ thread 3780545615).
@@ -1256,7 +1286,8 @@ describe("installable package smoke optional-dependency coverage", () => {
     );
     expect(pinnedYarnVersionFromLocator(PINNED_YARN)).toBe(PINNED_YARN_VERSION);
     expect(() => pinnedYarnVersionFromLocator(`yarn@${PINNED_YARN_VERSION}`)).toThrow(TypeError);
-    expect(installableSource).toContain("packageManager: PINNED_YARN");
+    expect(installableSource).toContain("locator = PINNED_YARN");
+    expect(installableSource).toContain("packageManager: locator");
     expect(registrySource).toContain("packageManager: PINNED_YARN");
     expect(installableSource).not.toContain('const PINNED_YARN = "yarn@4.9.1"');
     expect(registrySource).not.toContain('packageManager: "yarn@4.9.1"');

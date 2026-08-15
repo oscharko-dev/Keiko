@@ -1418,7 +1418,12 @@ export function privateYarnHome() {
  */
 export const YARN_RC_FILENAME = `.yarnrc-keiko-${randomBytes(9).toString("hex")}.yml`;
 
-export function yarnChildEnv(registryUrl, baseEnv = process.env, home = undefined) {
+export function yarnChildEnv(
+  registryUrl,
+  baseEnv = process.env,
+  home = undefined,
+  locator = PINNED_YARN,
+) {
   // Every `YARN_*` variable is dropped, not a curated subset: Yarn maps each of its settings to
   // one, and an ambient `YARN_NODE_LINKER=pnp` or `YARN_RC_FILENAME` would change the install
   // shape just as surely as a registry override. The gate then re-asserts only what it needs, so
@@ -1434,7 +1439,7 @@ export function yarnChildEnv(registryUrl, baseEnv = process.env, home = undefine
     // A private home keeps an ambient `~/.yarnrc.yml` out of this install entirely.
     ...(home === undefined ? {} : { HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: home }),
     // Explicit, so the cache does not follow the private home and vanish between runs.
-    COREPACK_HOME: corepackCacheDir(),
+    COREPACK_HOME: corepackCacheDir(locator),
     COREPACK_ENABLE_PROJECT_SPEC: "1",
     YARN_ENABLE_GLOBAL_CACHE: "false",
     YARN_ENABLE_TELEMETRY: "false",
@@ -1561,7 +1566,10 @@ function provisionPinnedYarn(registryUrl, home, locator = PINNED_YARN) {
   // Provisioning must see the SAME sanitized environment as the install, or `COREPACK_HOME` is
   // honoured here and stripped there — Corepack would then cache the tool in one place and search
   // another with networking already disabled. Only the network flag differs.
-  const env = { ...yarnChildEnv(registryUrl, process.env, home), COREPACK_ENABLE_NETWORK: "1" };
+  const env = {
+    ...yarnChildEnv(registryUrl, process.env, home, locator),
+    COREPACK_ENABLE_NETWORK: "1",
+  };
   const result = run("corepack", ["install", "--global", "--cache-only", locator], {
     timeout: NPM_INSTALL_TIMEOUT_MS,
     env,
@@ -1631,19 +1639,19 @@ function writeYarnConfiguration(tmp, registryUrl) {
   writeFileSync(join(tmp, YARN_RC_FILENAME), `${lines.join("\n")}\n`);
 }
 
-export async function installIntoWithYarn(tmp, artifact, vendored) {
+export async function installIntoWithYarn(tmp, artifact, vendored, locator = PINNED_YARN) {
   assertRegistryOnlyDescriptors(vendored ?? new Map());
   assertStagedRootDescriptors(artifact.manifest);
   const registry = await startLocalRegistry(artifact, vendored);
   const yarnHome = privateYarnHome();
-  provisionPinnedYarn(registry.registryUrl, yarnHome);
+  provisionPinnedYarn(registry.registryUrl, yarnHome, locator);
   writeFileSync(
     join(tmp, "package.json"),
     `${JSON.stringify(
       {
         private: true,
         type: "module",
-        packageManager: PINNED_YARN,
+        packageManager: locator,
         dependencies: { [rootPackageJson.name]: rootVersion },
       },
       null,
@@ -1665,7 +1673,7 @@ export async function installIntoWithYarn(tmp, artifact, vendored) {
       {
         cwd: tmp,
         timeout: NPM_INSTALL_TIMEOUT_MS,
-        env: yarnChildEnv(registry.registryUrl, process.env, yarnHome),
+        env: yarnChildEnv(registry.registryUrl, process.env, yarnHome, locator),
       },
     );
     if (result.timedOut === true || result.error !== undefined || result.status !== 0) {
