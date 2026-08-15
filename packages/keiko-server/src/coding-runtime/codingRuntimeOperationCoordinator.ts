@@ -189,7 +189,16 @@ export class CodingRuntimeOperationCoordinator {
       let accepted: boolean;
       try {
         if (action === "answer") {
+          // requestId/expectedRevision/questionId are already bound and verified by prepare()
+          // above (isExactRecord + expectedRevision-vs-current.revision + the one-use requestId
+          // replay reservation) and by validQuestionId just above — this is a consolidation of
+          // that existing binding into the shared contract type (KEIKO-0411), not a new check at
+          // this call site. The values are already known-valid; the aggregate answers byte budget
+          // below is the one genuinely new protection this parse call adds here.
           const answers = parseCodingWorkbenchRuntimeQuestionAnswerRequest({
+            requestId: operation.value.requestId,
+            expectedRevision: operation.value.expectedRevision,
+            questionRequestId: operation.value.questionId,
             answers: operation.value.answers,
           });
           if (!answers.ok) {
