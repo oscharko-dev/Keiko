@@ -11,16 +11,42 @@
 //
 // Idempotent: a cached tool and an existing seed are left alone.
 
-import { prepareOfflineSmokeForSetup } from "./installable-package-smoke.mjs";
+import { pathToFileURL } from "node:url";
 
-try {
-  prepareOfflineSmokeForSetup();
-} catch (error) {
-  // A Corepack failure already exits through the smoke's own diagnostic. This catch is for
-  // everything else — an unwritable temp directory, a cache path that fails its ownership check —
-  // which would otherwise surface as a raw Node stack trace in a CI setup step and name neither
-  // the step nor the cause.
-  const reason = error instanceof Error ? error.message : String(error);
-  console.error(`prepare-offline-smoke: could not prepare the offline smoke: ${reason}`);
-  process.exit(1);
+import {
+  isSmokeGateFailure,
+  prepareOfflineSmokeForSetup,
+  smokeGateFailureLogSummary,
+  smokeGateFailureSetupSummary,
+} from "./installable-package-smoke.mjs";
+
+export async function runPrepareOfflineSmoke(options = {}) {
+  const {
+    exit = (code) => process.exit(code),
+    isFailure = isSmokeGateFailure,
+    prepare = prepareOfflineSmokeForSetup,
+    setupSummary = smokeGateFailureSetupSummary,
+    writeError = (message) => console.error(message),
+  } = options;
+  try {
+    await prepare();
+  } catch (error) {
+    if (isFailure(error)) {
+      writeError(`installable-smoke failed: ${setupSummary(error)}`);
+      exit(1);
+      return;
+    }
+    // Everything else may carry local paths or endpoint-shaped text, so keep only the stable
+    // fingerprint and byte counts while naming the failing setup step.
+    writeError(
+      `prepare-offline-smoke: could not prepare the offline smoke: ${smokeGateFailureLogSummary(
+        error,
+      )}`,
+    );
+    exit(1);
+  }
+}
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await runPrepareOfflineSmoke();
 }

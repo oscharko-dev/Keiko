@@ -27,6 +27,7 @@ describe("installable-package-smoke script", () => {
     const source = readFileSync(scriptPath, "utf8");
     expect(source).toContain("export const DEFAULT_NPM_INSTALL_TIMEOUT_MS");
     expect(source).toContain("export const WINDOWS_NPM_INSTALL_TIMEOUT_MS");
+    expect(source).toContain("export function npmInstallTimeoutMs");
     expect(source).toContain("export function parseArgs");
     expect(source).toContain("export function parsePositiveTimeoutEnv");
     expect(source).toContain("await main()");
@@ -48,7 +49,8 @@ describe("installable-package-smoke script", () => {
 
   it("guards `npm install` with a hard timeout so a hung install cannot wedge CI", () => {
     const source = readFileSync(scriptPath, "utf8");
-    expect(source).toMatch(/timeout:\s*NPM_INSTALL_TIMEOUT_MS/);
+    expect(source).toContain("const timeoutMs = npmInstallTimeoutMs()");
+    expect(source).toMatch(/timeout:\s*timeoutMs/);
   });
 
   it("uses a long bounded `npm install` timeout and keeps an override escape hatch", () => {

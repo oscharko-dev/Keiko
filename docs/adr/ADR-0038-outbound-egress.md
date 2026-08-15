@@ -98,15 +98,39 @@ single-credential posture: the proxy layer may not introduce additional secrets.
    `fetchHttpsViaProxy`'s CONNECT-tunnel pool (`idleHttpsProxyTunnels`, a short-lived, same-process
    keep-alive cache keyed by `httpsProxyTunnelKey`) reuses an already-established tunnel verbatim,
    including whatever peer it actually connected to, for up to
-   `HTTPS_PROXY_TUNNEL_IDLE_TTL_MS` (30s). The key originally identified a pooled entry by
-   `(proxy, target, ca)` alone, so an unpinned call and a pinned call to the identical triple
-   computed the same key and could share one pooled tunnel: a pinned call could silently be served
-   an earlier unpinned call's tunnel, whose peer the proxy chose entirely on its own — this
-   pinning mechanism's own vetting never touched it, making the guarantee above hold for the
-   *call that created* a tunnel but not necessarily for the call that *reused* it. The key now also
-   carries the calling request's pinning posture (`"unpinned"`, or the exact vetted address when
-   pinned), so a pinned and an unpinned call — or two pinned calls that resolved to different
-   addresses — can never be served from each other's pool entry.
+   `HTTPS_PROXY_TUNNEL_IDLE_TTL_MS` (30s).
+   *Before this fix*, the key identified a pooled entry by `(proxy, target, ca)` alone, so an
+   unpinned call and a pinned call to the identical triple computed the same key and could share
+   one pooled tunnel: a pinned call could silently be served an earlier unpinned call's tunnel,
+   whose peer the proxy chose entirely on its own — the pinning mechanism's own vetting never
+   touched it, making the guarantee above hold for the call that *created* a tunnel but not
+   necessarily for the call that *reused* it.
+   *As implemented today* (verify directly against `httpsProxyTunnelKey` in `http.ts` rather than
+   trusting this paragraph — it is pinned by the `"never serves a pinned request the pooled
+   tunnel…"` test in `http.test.ts`), the key also carries the calling request's pinning posture
+   (`"unpinned"`, or a digest of the exact vetted address when pinned — see the #3157 addendum
+   below for why a digest rather than the literal address), so a pinned and an unpinned call — or
+   two pinned calls that resolved to different addresses — can never be served from each other's
+   pool entry.
+   **Addendum (#3157, 2026-08-15), CA-set collision and address legibility.** Two Keiko for Quality
+   findings examined this same key. One claimed the key was still `(proxy, target, ca)` only, with
+   no pinning term at all — that describes the state *before* the pool-identity fix directly above
+   and does not apply to the code as it exists now (the same confirmation applies: check
+   `httpsProxyTunnelKey` and the pinning-posture test directly rather than this paragraph). The
+   other was a real, separate defect the first finding's proximity had obscured: the CA term was
+   `${cert.length}:${cert.slice(0, 32)}` per certificate — for PEM input that summary is almost
+   entirely the shared `-----BEGIN CERTIFICATE-----` header, so two CA bundles that are
+   byte-for-byte different but share one certificate's length routinely produced the identical
+   summary (confirmed directly: two 1150-byte test certificates differing only after byte 32
+   collided). A call that deliberately tightened or changed its trusted roots could then be served
+   an idle tunnel authenticated under an earlier, unrelated call's trust set — the same class of
+   defect as the pinning-posture gap above, one field over. Both the CA term and the pinned-address
+   term are now collision-resistant SHA-256 digests rather than summaries or literals: the CA set
+   is sorted first (so the same set in a different array order still hashes identically — order
+   carries no trust meaning) and hashed in full, and the vetted address is hashed too, even though
+   grepping confirmed it never surfaces outside this in-memory `Map` today (no log, thrown message,
+   or export references `tunnelKey`/`caKey`/`pinKey`) — a digest costs nothing and permanently
+   forecloses that mattering if a future diagnostic ever taps this key.
    **Correction (#3156, 2026-08-15), plain-HTTP path fact-check.** This paragraph previously claimed
    the plain-HTTP absolute-URI proxy path (`fetchHttpViaProxy`) has no equivalent pool because
    Node's default global agent opens an unshared connection per call. Codex P2 caught that this is

@@ -6,6 +6,7 @@
 // runtime mirror of `scripts/check-package-surface.mjs`'s static tarball assertions, intended to
 // fire BEFORE publish so a broken bundle can never reach users.
 
+import { Buffer } from "node:buffer";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
@@ -28,19 +29,26 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import ts from "typescript";
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { resolveHostExecutable, shellCommandForTrustedExecutable } from "./lib/host-executable.mjs";
+import {
+  PINNED_YARN,
+  PINNED_YARN_NAME,
+  yarnLocatorParts,
+  yarnPackageManagerFromIntegrityLocator,
+  yarnPackageManagerFromLocator,
+} from "./lib/pinned-yarn.mjs";
 import { createStagedPublishPackage } from "./stage-publish-package.mjs";
 
 export const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 600_000;
 export const WINDOWS_NPM_INSTALL_TIMEOUT_MS = 600_000;
 export const DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS =
   process.platform === "win32" ? WINDOWS_NPM_INSTALL_TIMEOUT_MS : DEFAULT_NPM_INSTALL_TIMEOUT_MS;
-export const NPM_INSTALL_TIMEOUT_MS =
-  parsePositiveTimeoutEnv("KEIKO_SMOKE_INSTALL_TIMEOUT_MS") ??
-  DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS;
+export const NPM_INSTALL_TIMEOUT_MS = initialNpmInstallTimeoutMs();
+const WINDOWS_SHELL_UNSAFE_ARG = /[\0\r\n&|<>^%!"]/u;
 const UI_HEALTH_TIMEOUT_MS = 30_000;
 const UI_HEALTH_POLL_INTERVAL_MS = 250;
 const LIFECYCLE_COMMAND_TIMEOUT_MS = 90_000;
+const TEST_RUNNER_ENV = "VITEST_WORKER_ID";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
 const rootPackageSurfaceContract = JSON.parse(
@@ -60,6 +68,68 @@ function fail(message) {
   process.exit(1);
 }
 
+export class SmokeGateFailure extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "SmokeGateFailure";
+  }
+}
+
+export function isSmokeGateFailure(error) {
+  return error instanceof SmokeGateFailure;
+}
+
+function smokeGateFailure(message) {
+  return new SmokeGateFailure(message);
+}
+
+function initialNpmInstallTimeoutMs() {
+  const value = process.env.KEIKO_SMOKE_INSTALL_TIMEOUT_MS;
+  if (value === undefined || value === "") return DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS;
+  if (!/^[1-9]\d*$/u.test(value)) return DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) ? parsed : DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS;
+}
+
+export function smokeGateFailureLogSummary(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  const stack = error instanceof Error ? (error.stack ?? "") : "";
+  const messageSha256 = createHash("sha256").update(message, "utf8").digest("hex");
+  const stackSha256 = createHash("sha256").update(stack, "utf8").digest("hex");
+  const messageBytes = Buffer.byteLength(message, "utf8");
+  const stackBytes = Buffer.byteLength(stack, "utf8");
+  return (
+    `redacted SmokeGateFailure (messageSha256=${messageSha256}, ` +
+    `messageBytes=${String(messageBytes)}, stackSha256=${stackSha256}, ` +
+    `stackBytes=${String(stackBytes)})`
+  );
+}
+
+export function smokeGateFailureSetupSummary(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    message.startsWith("corepack could not provision ") ||
+    message.startsWith("corepack cached ")
+  ) {
+    return message;
+  }
+  return smokeGateFailureLogSummary(error);
+}
+
+function yarnLocatorLogSummary(locator) {
+  const { version } = yarnLocatorParts(locator);
+  const locatorSha256 = createHash("sha256").update(locator, "utf8").digest("hex");
+  return `${PINNED_YARN_NAME}@${version} (locatorSha256=${locatorSha256})`;
+}
+
+function yarnPackageManagerFromSmokeLocator(locator) {
+  if (locator === PINNED_YARN) return yarnPackageManagerFromLocator(locator);
+  if (process.env.NODE_ENV !== "test" || process.env[TEST_RUNNER_ENV] === undefined) {
+    throw smokeGateFailure("fixture Yarn locators are only accepted inside Vitest");
+  }
+  return yarnPackageManagerFromIntegrityLocator(locator);
+}
+
 export function parsePositiveTimeoutEnv(name) {
   const value = process.env[name];
   if (value === undefined || value === "") {
@@ -75,21 +145,66 @@ export function parsePositiveTimeoutEnv(name) {
   return parsed;
 }
 
+export function npmInstallTimeoutMs() {
+  return (
+    parsePositiveTimeoutEnv("KEIKO_SMOKE_INSTALL_TIMEOUT_MS") ??
+    DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS
+  );
+}
+
+function assertWindowsShellArguments(cmd, args) {
+  if (args.every((arg) => !WINDOWS_SHELL_UNSAFE_ARG.test(String(arg)))) return;
+  throw smokeGateFailure(`${cmd} Windows shell arguments contain unsafe shell metacharacters`);
+}
+
+function commandForPlatform(cmd, args, options = {}) {
+  if (process.platform !== "win32" || (cmd !== "npm" && cmd !== "corepack")) {
+    return { command: cmd, shell: false };
+  }
+  assertWindowsShellArguments(cmd, args);
+  const executable = resolveHostExecutable(cmd, { env: options.env ?? process.env });
+  // SECURITY-SHELL-OK: npm/corepack Windows .cmd compatibility, with trusted absolute executable.
+  return { command: shellCommandForTrustedExecutable(executable), shell: true };
+}
+
+function runResult(cmd, args, options = {}) {
+  // SECURITY-SHELL-OK: npm/corepack Windows .cmd compatibility, with the executable resolved to a
+  // trusted absolute path before the shell is enabled. POSIX and node/bin paths stay shell:false.
+  const { command, shell } = commandForPlatform(cmd, args, options);
+  return spawnSync(command, args, { encoding: "utf8", ...options, shell });
+}
+
 function run(cmd, args, options = {}) {
-  // SECURITY-SHELL-OK: npm-only Windows .cmd compatibility; node/bin paths stay shell:false.
-  // `npm` resolves to `npm.cmd` on Windows, which modern Node refuses to spawn without a shell
-  // (CVE-2024-27980 hardening); route npm — and only npm — through the shell so the packaged-artifact
-  // smoke is cross-platform (the #284 OS matrix surfaced this). `node` is a real executable and is
-  // spawned directly (no shell) so absolute bin paths never pass through shell word-splitting. The
-  // npm arguments are tool-internal literals plus a tarball path under a controlled directory — no
-  // untrusted shell input. POSIX is unaffected: the shell runs the same `npm …` invocation.
-  const needsShell = process.platform === "win32" && (cmd === "npm" || cmd === "corepack");
-  const result = spawnSync(cmd, args, { encoding: "utf8", shell: needsShell, ...options });
+  const result = runResult(cmd, args, options);
   if (result.error) {
     fail(`${cmd} ${args.join(" ")} could not spawn: ${result.error.message}`);
   }
   return result;
 }
+
+function childOutputByteSummary(result) {
+  const stdoutBytes = Buffer.byteLength(String(result.stdout ?? ""), "utf8");
+  const stderrBytes = Buffer.byteLength(String(result.stderr ?? ""), "utf8");
+  return `stdoutBytes=${String(stdoutBytes)}, stderrBytes=${String(stderrBytes)}`;
+}
+
+function safeErrorCode(error) {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  const { code } = error;
+  return typeof code === "string" && /^[A-Z0-9_]+$/u.test(code) ? code : undefined;
+}
+
+function corepackSpawnFailureSetupSummary(error, timeoutMs) {
+  const code = safeErrorCode(error);
+  if (code === "ETIMEDOUT") {
+    return `corepack did not finish before the ${String(timeoutMs)}ms setup timeout`;
+  }
+  if (code === "ENOENT") return "corepack executable was not found";
+  if (code !== undefined) return `corepack spawn failed with code ${code}`;
+  return "corepack spawn failed before producing output";
+}
+
+const DEFAULT_ASYNC_OUTPUT_LIMIT_BYTES = 10 * 1024 * 1024;
 
 export function terminateProcessTree(child) {
   if (child.pid === undefined) return;
@@ -108,7 +223,7 @@ export function terminateProcessTree(child) {
   }
 }
 
-function settleTimedOutProcess(child, stdout, stderr, settle) {
+function settleTerminatedProcess(child, stdout, stderr, settle, details) {
   let terminationError;
   try {
     terminateProcessTree(child);
@@ -119,7 +234,7 @@ function settleTimedOutProcess(child, stdout, stderr, settle) {
   child.stderr?.destroy();
   child.unref();
   settle({
-    timedOut: true,
+    ...details,
     status: null,
     signal: process.platform === "win32" ? "TASKKILL" : "SIGKILL",
     stdout: stdout.join(""),
@@ -130,34 +245,68 @@ function settleTimedOutProcess(child, stdout, stderr, settle) {
   });
 }
 
+function settleTimedOutProcess(child, stdout, stderr, settle) {
+  settleTerminatedProcess(child, stdout, stderr, settle, { timedOut: true });
+}
+
+function settleOutputLimitedProcess(child, stdout, stderr, settle) {
+  settleTerminatedProcess(child, stdout, stderr, settle, { outputLimitExceeded: true });
+}
+
+function asyncOutputLimitBytes(outputLimitBytes) {
+  const limit = outputLimitBytes ?? DEFAULT_ASYNC_OUTPUT_LIMIT_BYTES;
+  if (typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0) {
+    throw new TypeError("runAsync requires a positive finite outputLimitBytes");
+  }
+  return Math.floor(limit);
+}
+
+function appendBoundedOutput(chunks, chunk, state) {
+  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+  const remaining = state.limitBytes - state.capturedBytes;
+  if (remaining > 0) {
+    const accepted = buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer;
+    chunks.push(accepted.toString("utf8"));
+    state.capturedBytes += accepted.byteLength;
+  }
+  return buffer.byteLength > remaining;
+}
+
 export function runAsync(cmd, args, options = {}) {
-  const needsShell = process.platform === "win32" && (cmd === "npm" || cmd === "corepack");
-  const { timeout, ...spawnOptions } = options;
+  const { timeout, outputLimitBytes, ...spawnOptions } = options;
   if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) {
     throw new TypeError("runAsync requires a positive finite timeout in milliseconds");
   }
+  const outputState = { capturedBytes: 0, limitBytes: asyncOutputLimitBytes(outputLimitBytes) };
+  const { command, shell } = commandForPlatform(cmd, args, spawnOptions);
   return new Promise((resolvePromise) => {
     let settled = false;
     const stdout = [];
     const stderr = [];
-    // SECURITY-SHELL-OK: corepack-only Windows .cmd compatibility; argv is fixed by this smoke.
-    const child = spawn(cmd, args, {
+    // SECURITY-SHELL-OK: npm/corepack Windows .cmd compatibility, with trusted absolute executable.
+    const child = spawn(command, args, {
       ...spawnOptions,
       detached: process.platform !== "win32",
-      shell: needsShell,
+      shell,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    child.stdout?.on("data", (chunk) => stdout.push(String(chunk)));
-    child.stderr?.on("data", (chunk) => stderr.push(String(chunk)));
     const settle = (result) => {
       if (settled) return;
       settled = true;
       globalThis.clearTimeout(timer);
       resolvePromise(result);
     };
+    const capture = (chunks) => (chunk) => {
+      if (settled) return;
+      if (appendBoundedOutput(chunks, chunk, outputState)) {
+        settleOutputLimitedProcess(child, stdout, stderr, settle);
+      }
+    };
     const timer = globalThis.setTimeout(() => {
       settleTimedOutProcess(child, stdout, stderr, settle);
     }, timeout);
+    child.stdout?.on("data", capture(stdout));
+    child.stderr?.on("data", capture(stderr));
     child.once("error", (error) => {
       settle({ error, status: null, signal: null, stdout: "", stderr: "" });
     });
@@ -169,6 +318,309 @@ export function runAsync(cmd, args, options = {}) {
 
 function sleep(ms) {
   return new Promise((resolvePromise) => globalThis.setTimeout(resolvePromise, ms));
+}
+
+const COREPACK_CACHE_LOCK_POLL_MS = 100;
+const COREPACK_CACHE_LOCK_STALE_MS = 30 * 60_000;
+const COREPACK_CACHE_LOCK_OWNER_FILE = "owner.json";
+const COREPACK_CACHE_STALE_CLAIM_FILE = "stale-claimer.json";
+const COREPACK_CACHE_STALE_CLAIM_STALE_MS = 60_000;
+const COREPACK_CACHE_LOCK_MISSING_CODES = new Set(["ENOENT", "ENOTDIR"]);
+const COREPACK_CACHE_STALE_CLAIM_RACE_CODES = new Set(["EEXIST", "ENOENT", "ENOTDIR"]);
+const heldCorepackCacheLocks = new Set();
+
+export function corepackCacheLockDir(locator) {
+  return join(corepackCacheDir(locator), ".lock");
+}
+
+function sameDirectoryIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function lockOwnerPath(lockDir) {
+  return join(lockDir, COREPACK_CACHE_LOCK_OWNER_FILE);
+}
+
+function lockOwnerTempPath(lockDir) {
+  return join(
+    lockDir,
+    `${COREPACK_CACHE_LOCK_OWNER_FILE}.${process.pid}.${randomBytes(9).toString("hex")}.tmp`,
+  );
+}
+
+function readCorepackCacheLockOwner(lockDir) {
+  try {
+    const owner = JSON.parse(readFileSync(lockOwnerPath(lockDir), "utf8"));
+    if (typeof owner?.token !== "string") return undefined;
+    return {
+      expiresAtMs:
+        typeof owner.expiresAtMs === "number" && Number.isFinite(owner.expiresAtMs)
+          ? owner.expiresAtMs
+          : undefined,
+      token: owner.token,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function corepackCacheLockLeaseMs(timeoutMs) {
+  return Math.max(timeoutMs * 2, COREPACK_CACHE_LOCK_STALE_MS);
+}
+
+function corepackCacheLockRenewalMs(timeoutMs) {
+  return Math.max(COREPACK_CACHE_LOCK_POLL_MS, Math.floor(timeoutMs / 2));
+}
+
+function corepackCacheLockOwnerRecord(ownerToken, timeoutMs) {
+  const leaseMs = corepackCacheLockLeaseMs(timeoutMs);
+  return JSON.stringify({
+    acquiredAt: new Date().toISOString(),
+    expiresAtMs: Date.now() + leaseMs,
+    pid: process.pid,
+    token: ownerToken,
+  });
+}
+
+function writeCorepackCacheLockOwnerFile(lockDir, ownerToken, timeoutMs, expectedToken) {
+  const tempPath = lockOwnerTempPath(lockDir);
+  writeFileSync(tempPath, corepackCacheLockOwnerRecord(ownerToken, timeoutMs), {
+    encoding: "utf8",
+    flag: "wx",
+    mode: 0o600,
+  });
+  try {
+    if (
+      expectedToken !== undefined &&
+      readCorepackCacheLockOwner(lockDir)?.token !== expectedToken
+    ) {
+      rmSync(tempPath, { force: true });
+      return false;
+    }
+    renameSync(tempPath, lockOwnerPath(lockDir));
+    return true;
+  } catch (error) {
+    rmSync(tempPath, { force: true });
+    throw error;
+  }
+}
+
+function writeCorepackCacheLockOwner(lockDir, ownerToken, timeoutMs) {
+  try {
+    writeCorepackCacheLockOwnerFile(lockDir, ownerToken, timeoutMs);
+  } catch (error) {
+    rmSync(lockDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function renewCorepackCacheLockOwner(lockDir, ownerToken, timeoutMs) {
+  if (readCorepackCacheLockOwner(lockDir)?.token !== ownerToken) return;
+  writeCorepackCacheLockOwnerFile(lockDir, ownerToken, timeoutMs, ownerToken);
+}
+
+function startCorepackCacheLockRenewal(lockDir, ownerToken, timeoutMs) {
+  let renewalError;
+  const timer = globalThis.setInterval(() => {
+    try {
+      renewCorepackCacheLockOwner(lockDir, ownerToken, timeoutMs);
+    } catch (error) {
+      renewalError = error;
+      globalThis.clearInterval(timer);
+    }
+  }, corepackCacheLockRenewalMs(timeoutMs));
+  timer.unref?.();
+  return {
+    assertHealthy: () => {
+      if (renewalError !== undefined) throw renewalError;
+    },
+    stop: () => globalThis.clearInterval(timer),
+  };
+}
+
+function releaseCorepackCacheLock(lockDir, ownerToken) {
+  if (readCorepackCacheLockOwner(lockDir)?.token === ownerToken) {
+    rmSync(lockDir, { recursive: true, force: true });
+  }
+}
+
+function statCorepackCacheLock(lockDir) {
+  try {
+    return statSync(lockDir);
+  } catch (error) {
+    if (COREPACK_CACHE_LOCK_MISSING_CODES.has(error?.code)) return undefined;
+    throw error;
+  }
+}
+
+function corepackCacheLockIsStale(lockDir, stats, timeoutMs) {
+  const owner = readCorepackCacheLockOwner(lockDir);
+  if (owner?.expiresAtMs !== undefined) return Date.now() > owner.expiresAtMs;
+  const staleAfterMs = Math.max(timeoutMs * 2, COREPACK_CACHE_LOCK_STALE_MS);
+  return Date.now() - stats.mtimeMs > staleAfterMs;
+}
+
+function staleClaimPath(lockDir) {
+  return join(lockDir, COREPACK_CACHE_STALE_CLAIM_FILE);
+}
+
+function staleClaimTombstonePath(lockDir) {
+  return join(
+    lockDir,
+    `${COREPACK_CACHE_STALE_CLAIM_FILE}.${process.pid}.${randomBytes(9).toString("hex")}`,
+  );
+}
+
+function readCorepackCacheStaleClaim(path) {
+  try {
+    const claim = JSON.parse(readFileSync(path, "utf8"));
+    return {
+      expiresAtMs:
+        typeof claim?.expiresAtMs === "number" && Number.isFinite(claim.expiresAtMs)
+          ? claim.expiresAtMs
+          : undefined,
+      token: typeof claim?.token === "string" ? claim.token : undefined,
+    };
+  } catch {
+    return { expiresAtMs: undefined, token: undefined };
+  }
+}
+
+function staleClaimIsExpired(claim, stats) {
+  const expiresAtMs = claim.expiresAtMs ?? stats.mtimeMs + COREPACK_CACHE_STALE_CLAIM_STALE_MS;
+  return Date.now() > expiresAtMs;
+}
+
+function restoreLiveStaleClaim(claimPath, tombstonePath) {
+  try {
+    writeFileSync(claimPath, readFileSync(tombstonePath), { flag: "wx", mode: 0o600 });
+  } catch (error) {
+    rmSync(tombstonePath, { force: true });
+    if (COREPACK_CACHE_STALE_CLAIM_RACE_CODES.has(error?.code)) return false;
+    throw error;
+  }
+  rmSync(tombstonePath, { force: true });
+  return false;
+}
+
+function removeExpiredStaleClaim(lockDir) {
+  const claimPath = staleClaimPath(lockDir);
+  const claimStats = statCorepackCacheLock(claimPath);
+  if (claimStats === undefined) return true;
+  const claim = readCorepackCacheStaleClaim(claimPath);
+  if (!staleClaimIsExpired(claim, claimStats)) return false;
+  const tombstonePath = staleClaimTombstonePath(lockDir);
+  try {
+    renameSync(claimPath, tombstonePath);
+  } catch (error) {
+    if (COREPACK_CACHE_LOCK_MISSING_CODES.has(error?.code)) return true;
+    throw error;
+  }
+  const tombstoneStats = statSync(tombstonePath);
+  const tombstoneClaim = readCorepackCacheStaleClaim(tombstonePath);
+  if (
+    !sameDirectoryIdentity(claimStats, tombstoneStats) ||
+    !staleClaimIsExpired(tombstoneClaim, tombstoneStats)
+  ) {
+    return restoreLiveStaleClaim(claimPath, tombstonePath);
+  }
+  rmSync(tombstonePath, { force: true });
+  return true;
+}
+
+function writeStaleCorepackCacheClaim(lockDir) {
+  const token = `${process.pid}-${randomBytes(9).toString("hex")}`;
+  const claimedAtMs = Date.now();
+  try {
+    writeFileSync(
+      staleClaimPath(lockDir),
+      JSON.stringify({
+        claimedAt: new Date(claimedAtMs).toISOString(),
+        expiresAtMs: claimedAtMs + COREPACK_CACHE_STALE_CLAIM_STALE_MS,
+        pid: process.pid,
+        token,
+      }),
+      { encoding: "utf8", flag: "wx", mode: 0o600 },
+    );
+    return token;
+  } catch (error) {
+    if (COREPACK_CACHE_STALE_CLAIM_RACE_CODES.has(error?.code)) return undefined;
+    throw error;
+  }
+}
+
+function claimStaleCorepackCacheLock(lockDir) {
+  const token = writeStaleCorepackCacheClaim(lockDir);
+  if (token !== undefined) return token;
+  if (!removeExpiredStaleClaim(lockDir)) return undefined;
+  return writeStaleCorepackCacheClaim(lockDir);
+}
+
+function removeStaleCorepackCacheLock(lockDir, timeoutMs) {
+  const stats = statCorepackCacheLock(lockDir);
+  if (stats === undefined || !corepackCacheLockIsStale(lockDir, stats, timeoutMs)) return;
+  const claimToken = claimStaleCorepackCacheLock(lockDir);
+  const currentStats = statCorepackCacheLock(lockDir);
+  if (
+    claimToken !== undefined &&
+    currentStats !== undefined &&
+    readCorepackCacheStaleClaim(staleClaimPath(lockDir)).token === claimToken &&
+    sameDirectoryIdentity(stats, currentStats)
+  ) {
+    rmSync(lockDir, { recursive: true, force: true });
+  }
+}
+
+async function acquireCorepackCacheLock(locator, timeoutMs) {
+  const lockDir = corepackCacheLockDir(locator);
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const ownerToken = `${process.pid}-${randomBytes(9).toString("hex")}`;
+    try {
+      mkdirSync(lockDir, { mode: 0o700 });
+      writeCorepackCacheLockOwner(lockDir, ownerToken, timeoutMs);
+      const renewal = startCorepackCacheLockRenewal(lockDir, ownerToken, timeoutMs);
+      return () => {
+        renewal.stop();
+        releaseCorepackCacheLock(lockDir, ownerToken);
+        renewal.assertHealthy();
+      };
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+    }
+    removeStaleCorepackCacheLock(lockDir, timeoutMs);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw smokeGateFailure(`timed out waiting for Corepack cache lock for ${locator}`);
+    }
+    await sleep(Math.min(COREPACK_CACHE_LOCK_POLL_MS, remainingMs));
+  }
+}
+
+export async function withCorepackYarnCacheLock(
+  locator,
+  action,
+  timeoutMs = npmInstallTimeoutMs(),
+) {
+  const lockDir = corepackCacheLockDir(locator);
+  if (heldCorepackCacheLocks.has(lockDir)) return await action();
+  const release = await acquireCorepackCacheLock(locator, timeoutMs);
+  heldCorepackCacheLocks.add(lockDir);
+  let actionResult;
+  let actionError;
+  try {
+    actionResult = await action();
+  } catch (error) {
+    actionError = error;
+  }
+  heldCorepackCacheLocks.delete(lockDir);
+  try {
+    release();
+  } catch (error) {
+    if (actionError === undefined) throw error;
+  }
+  if (actionError !== undefined) throw actionError;
+  return actionResult;
 }
 
 function formatTsDiagnostics(diagnostics) {
@@ -303,6 +755,7 @@ export function packRoot() {
 }
 
 function installInto(tmp, tarballPath, options) {
+  const timeoutMs = npmInstallTimeoutMs();
   const initResult = run("npm", ["init", "-y"], { cwd: tmp });
   if (initResult.status !== 0) {
     fail(`npm init -y exited ${String(initResult.status)}: ${initResult.stderr}`);
@@ -320,7 +773,7 @@ function installInto(tmp, tarballPath, options) {
       "--no-fund",
       ...(options.includeOptional ? [] : ["--omit=optional"]),
     ],
-    { cwd: tmp, timeout: NPM_INSTALL_TIMEOUT_MS },
+    { cwd: tmp, timeout: timeoutMs },
   );
   if (installResult.status !== 0) {
     fail(
@@ -674,6 +1127,7 @@ export function resolveVendorClosure(
 }
 
 function packVendoredPackage(entry, destination) {
+  const timeoutMs = npmInstallTimeoutMs();
   // npm names its output `<flattened-name>-<version>.tgz`, which collides across the scope
   // boundary: `@foo/bar@1.2.3` and `foo-bar@1.2.3` both produce `foo-bar-1.2.3.tgz`. A per-package
   // directory keeps the second pack from overwriting the first after its integrity was recorded,
@@ -688,7 +1142,7 @@ function packVendoredPackage(entry, destination) {
   const result = run(
     "npm",
     ["pack", entry.directory, "--pack-destination", packDir, "--ignore-scripts", "--json"],
-    { cwd: repoRoot, timeout: NPM_INSTALL_TIMEOUT_MS },
+    { cwd: repoRoot, timeout: timeoutMs },
   );
   if (result.status !== 0) {
     fail(
@@ -1371,18 +1825,18 @@ export async function startLocalRegistry(artifact, vendored) {
  * Corepack caches package managers under `COREPACK_HOME`, which defaults to a path inside `HOME`.
  * Since the child gets a private, empty home for rc isolation, leaving the cache to follow it would
  * make every run download Yarn afresh — turning an occasional network dependency into a per-run
- * one. The cache therefore lives at a stable path of its own, keyed by the pinned version so a
- * bump does not reuse the previous tool (#3130).
+ * one. The cache therefore lives at a stable path of its own, keyed by the pinned version and
+ * reviewed digest so a bump or digest correction does not reuse the previous tool (#3130/#3134).
  */
-export function corepackCacheDir() {
+export function corepackCacheDir(locator = PINNED_YARN) {
   // This directory holds an EXECUTABLE that Corepack will run, so it gets the same fail-closed
   // validation as the vendor seed cache — and it needs it more. A predictable path on a shared
   // POSIX host is pre-creatable by another account, and Corepack trusts a `.corepack` metadata
   // file it finds there and executes the binary it names, networking disabled or not. The uid is
   // part of the name so two accounts never contend for one path in the first place.
   const owner = process.getuid === undefined ? "win" : String(process.getuid());
-  const version = PINNED_YARN.replace(/[^a-zA-Z0-9.]+/gu, "-");
-  const dir = join(tmpdir(), `keiko-corepack-${version}-${owner}`);
+  const { version, sha512 } = yarnLocatorParts(locator);
+  const dir = join(tmpdir(), `keiko-corepack-${PINNED_YARN_NAME}-${version}-${sha512}-${owner}`);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   assertPrivateDirectory(dir);
   return dir;
@@ -1411,7 +1865,24 @@ export function privateYarnHome() {
  */
 export const YARN_RC_FILENAME = `.yarnrc-keiko-${randomBytes(9).toString("hex")}.yml`;
 
-export function yarnChildEnv(registryUrl, baseEnv = process.env, home = undefined) {
+function yarnUnsafeHttpWhitelist(registryUrl) {
+  try {
+    const url = new URL(registryUrl);
+    if (url.protocol !== "http:") return "127.0.0.1";
+    if (url.hostname === "[::1]") return "::1";
+    if (url.hostname === "localhost" || url.hostname === "127.0.0.1") return url.hostname;
+  } catch {
+    return "127.0.0.1";
+  }
+  return "127.0.0.1";
+}
+
+export function yarnChildEnv(
+  registryUrl,
+  baseEnv = process.env,
+  home = undefined,
+  locator = PINNED_YARN,
+) {
   // Every `YARN_*` variable is dropped, not a curated subset: Yarn maps each of its settings to
   // one, and an ambient `YARN_NODE_LINKER=pnp` or `YARN_RC_FILENAME` would change the install
   // shape just as surely as a registry override. The gate then re-asserts only what it needs, so
@@ -1427,7 +1898,7 @@ export function yarnChildEnv(registryUrl, baseEnv = process.env, home = undefine
     // A private home keeps an ambient `~/.yarnrc.yml` out of this install entirely.
     ...(home === undefined ? {} : { HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: home }),
     // Explicit, so the cache does not follow the private home and vanish between runs.
-    COREPACK_HOME: corepackCacheDir(),
+    COREPACK_HOME: corepackCacheDir(locator),
     COREPACK_ENABLE_PROJECT_SPEC: "1",
     YARN_ENABLE_GLOBAL_CACHE: "false",
     YARN_ENABLE_TELEMETRY: "false",
@@ -1435,14 +1906,12 @@ export function yarnChildEnv(registryUrl, baseEnv = process.env, home = undefine
     YARN_NPM_REGISTRY_SERVER: registryUrl,
     // Points Yarn at the private rc name above, so the ancestor walk finds only our own file.
     YARN_RC_FILENAME,
-    YARN_UNSAFE_HTTP_WHITELIST: "127.0.0.1",
+    YARN_UNSAFE_HTTP_WHITELIST: yarnUnsafeHttpWhitelist(registryUrl),
     // Corepack must not reach repo.yarnpkg.com during the install: the pinned tool is provisioned
     // beforehand, so an outage there cannot fail a gate that claims to resolve offline (#3130).
     COREPACK_ENABLE_NETWORK: "0",
   };
 }
-
-const PINNED_YARN = "yarn@4.9.1";
 
 /**
  * Downloads the pinned Yarn into Corepack's cache if it is not there yet. This is the one network
@@ -1462,8 +1931,8 @@ const PINNED_YARN = "yarn@4.9.1";
  * belong — the same defect the two-invocation ordering had, in a different job. Seeding here makes
  * the fixture independent of where the prune sits in any given lane (#3130).
  */
-export function prepareOfflineSmokeForSetup() {
-  provisionPinnedYarnForSetup();
+export async function prepareOfflineSmokeForSetup() {
+  await provisionPinnedYarnForSetup();
   const destination = persistentVendorSeedDir();
   const seeded = seedVendoredRegistry(destination);
   console.log(
@@ -1472,52 +1941,143 @@ export function prepareOfflineSmokeForSetup() {
 }
 
 /** Caches the pinned Yarn, so no gate has to reach the package-manager host mid-run. */
-export function provisionPinnedYarnForSetup() {
-  if (isPinnedYarnCached()) {
-    console.log(`provision-pinned-yarn: ${PINNED_YARN} already cached; no request made.`);
-    return;
+export async function provisionPinnedYarnForSetup(
+  locator = PINNED_YARN,
+  timeoutMs = npmInstallTimeoutMs(),
+) {
+  const provisioned = await withCorepackYarnCacheLock(
+    locator,
+    () => provisionPinnedYarnUnlocked(undefined, undefined, locator, timeoutMs),
+    timeoutMs,
+  );
+  if (provisioned) {
+    console.log(`provision-pinned-yarn: ${yarnLocatorLogSummary(locator)} cached.`);
   }
-  // No registry and no private home, and both are correct here rather than omissions. This step
-  // runs BEFORE any local registry exists and downloads the Yarn TOOL from upstream — it resolves
-  // no project dependency, because there is no project: `corepack install --cache-only` only
-  // populates the package-manager cache. Node drops an env entry whose value is `undefined`, so
-  // the child sees no `YARN_NPM_REGISTRY_SERVER` at all rather than a broken one. The hermeticity
-  // guarantee belongs to the INSTALL, which runs with `COREPACK_ENABLE_NETWORK: "0"` and the
-  // loopback registry asserted — and which this step is what makes possible offline (#3130).
-  provisionPinnedYarn(undefined, undefined);
-  console.log(`provision-pinned-yarn: ${PINNED_YARN} cached in ${corepackCacheDir()}.`);
 }
 
-function isPinnedYarnCached() {
-  const cache = join(corepackCacheDir(), "v1", "yarn");
-  if (!existsSync(cache)) return false;
-  return readdirSync(cache).includes(PINNED_YARN.split("@").at(-1) ?? "");
+export function isPinnedYarnCached(locator = PINNED_YARN) {
+  const entry = pinnedYarnCacheEntryDir(locator);
+  const { sha512 } = yarnLocatorParts(locator);
+  return (
+    cachedCorepackMetadataMatchesLocator(join(entry, ".corepack"), locator) &&
+    fileSha512Matches(join(entry, "yarn.js"), sha512)
+  );
 }
 
-function provisionPinnedYarn(registryUrl, home) {
+function repairPinnedYarnCacheMetadata(locator) {
+  const entry = pinnedYarnCacheEntryDir(locator);
+  const { version, sha512 } = yarnLocatorParts(locator);
+  if (!fileSha512Matches(join(entry, "yarn.js"), sha512)) return false;
+  writeFileSync(
+    join(entry, ".corepack"),
+    JSON.stringify({
+      bin: ["yarn", "yarnpkg"],
+      hash: `sha512.${sha512}`,
+      locator: { name: PINNED_YARN_NAME, reference: `${version}+sha512.${sha512}` },
+    }),
+    "utf8",
+  );
+  return cachedCorepackMetadataMatchesLocator(join(entry, ".corepack"), locator);
+}
+
+function pinnedYarnCacheEntryDir(locator) {
+  return join(corepackCacheDir(locator), "v1", PINNED_YARN_NAME, yarnLocatorParts(locator).version);
+}
+
+function cachedCorepackMetadataMatchesLocator(path, locator) {
+  const { version, sha512 } = yarnLocatorParts(locator);
+  const metadata = readJsonFileIfPresent(path);
+  if (!isRecord(metadata) || !isRecord(metadata.locator) || !Array.isArray(metadata.bin)) {
+    return false;
+  }
+  const reference = metadata.locator.reference;
+  return (
+    metadata.locator.name === PINNED_YARN_NAME &&
+    (reference === version || reference === `${version}+sha512.${sha512}`) &&
+    metadata.hash === `sha512.${sha512}` &&
+    metadata.bin.includes("yarn") &&
+    metadata.bin.includes("yarnpkg")
+  );
+}
+
+function readJsonFileIfPresent(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    if (error instanceof SyntaxError || error?.code === "ENOENT" || error?.code === "ENOTDIR") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function fileSha512Matches(path, expectedSha512) {
+  try {
+    return (
+      statSync(path).isFile() &&
+      createHash("sha512").update(readFileSync(path)).digest("hex") === expectedSha512
+    );
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return false;
+    throw error;
+  }
+}
+
+function provisionPinnedYarnUnlocked(
+  registryUrl,
+  home,
+  locator = PINNED_YARN,
+  timeoutMs = npmInstallTimeoutMs(),
+) {
   // Already cached from an earlier run or a CI setup step: no network call at all. That keeps an
   // outage at the package-manager host from failing a gate whose dependency install is offline.
-  if (isPinnedYarnCached()) return;
+  if (isPinnedYarnCached(locator) || repairPinnedYarnCacheMetadata(locator)) {
+    console.log(`provision-pinned-yarn: ${yarnLocatorLogSummary(locator)} already cached.`);
+    return false;
+  }
+  rmSync(pinnedYarnCacheEntryDir(locator), { recursive: true, force: true });
   // Provisioning must see the SAME sanitized environment as the install, or `COREPACK_HOME` is
   // honoured here and stripped there — Corepack would then cache the tool in one place and search
   // another with networking already disabled. Only the network flag differs.
-  const env = { ...yarnChildEnv(registryUrl, process.env, home), COREPACK_ENABLE_NETWORK: "1" };
-  const result = run("corepack", ["install", "--global", "--cache-only", PINNED_YARN], {
-    timeout: NPM_INSTALL_TIMEOUT_MS,
+  const env = {
+    ...yarnChildEnv(registryUrl, process.env, home, locator),
+    COREPACK_ENABLE_NETWORK: "1",
+  };
+  const provisionArgs = ["install", "--global", "--cache-only", locator];
+  const result = runResult("corepack", provisionArgs, {
+    timeout: timeoutMs,
     env,
   });
+  if (result.error !== undefined) {
+    throw smokeGateFailure(
+      `corepack could not provision ${yarnLocatorLogSummary(locator)} before the offline install ` +
+        `(${corepackSpawnFailureSetupSummary(result.error, timeoutMs)}) - re-run ` +
+        "`npm run provision:smoke` on a host with Corepack available",
+    );
+  }
   if (result.status !== 0) {
     // The other children in this gate run against the local tree or the loopback registry, so
     // their stderr is echoed verbatim, as every sibling smoke gate does — that is what makes them
     // debuggable. Corepack is the one child that contacts a remote host, so it is the one whose
     // output can carry an endpoint, a proxy URL, or the credentials embedded in one. It is
     // therefore classified rather than quoted (KfQ thread 3780151718).
-    fail(
-      `corepack could not provision ${PINNED_YARN} before the offline install ` +
+    throw smokeGateFailure(
+      `corepack could not provision ${yarnLocatorLogSummary(locator)} before the offline install ` +
         `(exit ${String(result.status)}, ${classifyProvisionFailure(result)}) — re-run ` +
         `\`npm run provision:smoke\` on a host with network access to populate the cache`,
     );
   }
+  if (!isPinnedYarnCached(locator)) {
+    throw smokeGateFailure(
+      `corepack cached ${yarnLocatorLogSummary(locator)}, ` +
+        "but the cached Yarn bytes did not match pinned integrity.",
+    );
+  }
+  return true;
 }
 
 // Matched against the failed downloader's output to route the failure. Only the right-hand label
@@ -1528,7 +2088,7 @@ const PROVISION_FAILURE_CLASSES = [
     label: "the host was unreachable",
   },
   {
-    pattern: /EINTEGRITY|integrity|checksum|hash mismatch/iu,
+    pattern: /\bEINTEGRITY\b|checksum|hash mismatch|\bMismatch hashes\b/iu,
     label: "the archive failed its integrity check",
   },
   {
@@ -1563,24 +2123,19 @@ function writeYarnConfiguration(tmp, registryUrl) {
     "supportedArchitectures:",
     ...architectureLines,
     "unsafeHttpWhitelist:",
-    "  - 127.0.0.1",
+    `  - ${JSON.stringify(yarnUnsafeHttpWhitelist(registryUrl))}`,
   ];
   writeFileSync(join(tmp, YARN_RC_FILENAME), `${lines.join("\n")}\n`);
 }
 
-export async function installIntoWithYarn(tmp, artifact, vendored) {
-  assertRegistryOnlyDescriptors(vendored ?? new Map());
-  assertStagedRootDescriptors(artifact.manifest);
-  const registry = await startLocalRegistry(artifact, vendored);
-  const yarnHome = privateYarnHome();
-  provisionPinnedYarn(registry.registryUrl, yarnHome);
+function writeYarnInstallManifest(tmp, locator) {
   writeFileSync(
     join(tmp, "package.json"),
     `${JSON.stringify(
       {
         private: true,
         type: "module",
-        packageManager: PINNED_YARN,
+        packageManager: yarnPackageManagerFromSmokeLocator(locator),
         dependencies: { [rootPackageJson.name]: rootVersion },
       },
       null,
@@ -1588,6 +2143,54 @@ export async function installIntoWithYarn(tmp, artifact, vendored) {
     )}\n`,
     "utf8",
   );
+}
+
+async function runLockedYarnInstall(tmp, registryUrl, yarnHome, locator) {
+  const timeoutMs = npmInstallTimeoutMs();
+  return await withCorepackYarnCacheLock(
+    locator,
+    async () => {
+      await provisionPinnedYarnForSetup(locator, timeoutMs);
+      return await runAsync(
+        "corepack",
+        ["yarn", "install", "--no-immutable", "--mode=skip-build"],
+        {
+          cwd: tmp,
+          timeout: timeoutMs,
+          env: yarnChildEnv(registryUrl, process.env, yarnHome, locator),
+        },
+      );
+    },
+    timeoutMs,
+  );
+}
+
+function yarnInstallOutcome(result) {
+  if (result.outputLimitExceeded === true) return "exceeded output limit";
+  if (result.timedOut === true) return "timed out";
+  return `exited ${String(result.status)}`;
+}
+
+function assertYarnInstallResult(result, registry) {
+  if (result.timedOut !== true && result.error === undefined && result.status === 0) return;
+  const outcome = yarnInstallOutcome(result);
+  const detail =
+    result.error === undefined
+      ? childOutputByteSummary(result)
+      : `error=${result.error.message}; ${childOutputByteSummary(result)}`;
+  fail(
+    `Yarn registry install ${outcome} ` +
+      `(signal=${String(result.signal)}; registry=${registry.registryUrl}; ` +
+      `requests=${registry.requests.join(",")}; ${detail})`,
+  );
+}
+
+export async function installIntoWithYarn(tmp, artifact, vendored, locator = PINNED_YARN) {
+  assertRegistryOnlyDescriptors(vendored ?? new Map());
+  assertStagedRootDescriptors(artifact.manifest);
+  const registry = await startLocalRegistry(artifact, vendored);
+  const yarnHome = privateYarnHome();
+  writeYarnInstallManifest(tmp, locator);
   rmSync(join(tmp, "yarn.lock"), { force: true });
   // `npmRegistryServer` is set GLOBALLY, not only for the `oscharko-dev` scope (#3130): every
   // package this install resolves must come from the local registry, which serves the packed root
@@ -1595,29 +2198,23 @@ export async function installIntoWithYarn(tmp, artifact, vendored) {
   // gate depend on live npm for the transitive graph, so an unrelated upstream publish could — and
   // did — turn every Keiko pull request red.
   writeYarnConfiguration(tmp, registry.registryUrl);
+  let installResult;
+  let setupFailure;
   try {
-    const result = await runAsync(
-      "corepack",
-      ["yarn", "install", "--no-immutable", "--mode=skip-build"],
-      {
-        cwd: tmp,
-        timeout: NPM_INSTALL_TIMEOUT_MS,
-        env: yarnChildEnv(registry.registryUrl, process.env, yarnHome),
-      },
-    );
-    if (result.timedOut === true || result.error !== undefined || result.status !== 0) {
-      const outcome = result.timedOut === true ? "timed out" : `exited ${String(result.status)}`;
-      fail(
-        `Yarn registry install ${outcome} ` +
-          `(signal=${String(result.signal)}; registry=${registry.registryUrl}; ` +
-          `requests=${registry.requests.join(",")}): ` +
-          `${(result.error?.message ?? result.stderr) || result.stdout}`,
-      );
+    try {
+      installResult = await runLockedYarnInstall(tmp, registry.registryUrl, yarnHome, locator);
+    } catch (error) {
+      if (!isSmokeGateFailure(error)) throw error;
+      setupFailure = error;
     }
   } finally {
     await registry.close();
     rmSync(yarnHome, { recursive: true, force: true });
   }
+  if (setupFailure !== undefined) {
+    fail(setupFailure.message);
+  }
+  assertYarnInstallResult(installResult, registry);
 }
 
 function assertCliExecutable(tmp) {
