@@ -247,3 +247,41 @@ describe("run-control content-free references", () => {
     ).toBe(false);
   });
 });
+
+// Codex P1: KEIKO-0302's follow-on fix (commit 0ad76a4e) replaced boundedStringFactErrors's and
+// questionFactErrors's "value" in value check with unknownKeys alone. unknownKeys scans only OWN
+// properties (Object.keys / Object.getOwnPropertyNames), so a fact shaped via
+// Object.create({ value: "secret" }) carrying just an own outcome: "absent" passed with zero
+// errors: the inherited `value` was invisible to the scan while ordinary property access
+// (`fact.value`) still resolved it. "in" walks the prototype chain, which is what actually caught
+// this before the regression.
+describe("prototype-based extra-field smuggling (KfQ / Codex P1 regression)", () => {
+  it("rejects a recoveryRef fact with a value reachable only through the prototype", () => {
+    const hostileFact = Object.create({ value: "secret" }) as Record<string, unknown>;
+    hostileFact.outcome = "absent";
+    expect(Object.keys(hostileFact)).toEqual(["outcome"]); // own-key view looks complete
+    expect(Object.getOwnPropertyNames(hostileFact)).toEqual(["outcome"]);
+    expect("value" in hostileFact).toBe(true);
+    const result = validateRunControlSnapshotV1({ ...snapshot(), recoveryRef: hostileFact });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a pendingQuestion fact with a value reachable only through the prototype", () => {
+    const hostileFact = Object.create({ value: "secret" }) as Record<string, unknown>;
+    hostileFact.outcome = "absent";
+    const result = validateRunControlSnapshotV1({ ...snapshot(), pendingQuestion: hostileFact });
+    expect(result.ok).toBe(false);
+  });
+
+  it("rejects a recoveryRef/pendingQuestion fact with a non-default prototype and nothing own", () => {
+    const degenerate = Object.create({ outcome: "absent" }) as Record<string, unknown>;
+    expect(validateRunControlSnapshotV1({ ...snapshot(), recoveryRef: degenerate }).ok).toBe(false);
+    expect(validateRunControlSnapshotV1({ ...snapshot(), pendingQuestion: degenerate }).ok).toBe(
+      false,
+    );
+  });
+
+  it("still accepts an ordinary explicit-absent fact for both", () => {
+    expect(validateRunControlSnapshotV1(snapshot())).toMatchObject({ ok: true });
+  });
+});

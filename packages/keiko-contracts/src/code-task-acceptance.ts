@@ -208,6 +208,14 @@ function factErrors(
     value.outcome === "unavailable" ||
     value.outcome === "absent"
   ) {
+    // Codex P1: this "in" check was dropped in favour of unknownKeys alone, which only scans OWN
+    // properties -- an Object.create({ value: "secret" })-backed fact with just an own
+    // `outcome: "absent"` then passed with no errors. "in" walks the prototype chain, which is the
+    // point here (contrast debug-lifecycle.ts, where the same operator is wrong for a different
+    // question -- "is this key an approved set member" -- because it would also accept
+    // "constructor"). Restored alongside unknownKeys, not instead of it: unknownKeys still catches
+    // any OTHER extra key this outcome must not carry.
+    if ("value" in value) return [`${path} must not carry a value for outcome ${value.outcome}`];
     return unknownKeys(value, ["outcome"], path);
   }
   return [`${path}.outcome must be known, unknown, unavailable, or absent`];

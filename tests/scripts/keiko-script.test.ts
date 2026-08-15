@@ -1,6 +1,8 @@
 import { spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import {
+  cpSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -266,5 +268,70 @@ describe("scripts/keiko.sh", () => {
       const after = run(["status"], lifecycleEnv());
       expect(after.stdout).toContain("not running");
     }, 30_000);
+  });
+
+  describe("cmd_start health-poll deadline (KfQ #3156, scripts/keiko.sh)", () => {
+    // A real port collision does not exercise this: the spawned `node dist/cli/index.js` crashes
+    // on EADDRINUSE via an unhandled rejection well under a second after the attempt, so `kill -0`
+    // stops seeing it as alive almost immediately -- it never stays around long enough to hang a
+    // health check. To reproduce "accepts connections but never answers" (the scenario the code
+    // comment above the curl call describes) without mocking keiko.sh itself, per this file's own
+    // no-mocks rule, this points the REAL, unmodified script at a substitute dist/cli/index.js
+    // under a throwaway root: identical script, identical logic, only the downstream server is a
+    // stub. `ENTRY` is derived from the invoked script's own path (`$ROOT/dist/cli/index.js`), so
+    // running a copy of keiko.sh from a fake root is the only way to control what it spawns.
+    function writeFakeRoot(): string {
+      const fakeRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-fake-root-")));
+      mkdirSync(join(fakeRoot, "scripts"), { recursive: true });
+      cpSync(SCRIPT, join(fakeRoot, "scripts", "keiko.sh"));
+      mkdirSync(join(fakeRoot, "dist", "cli"), { recursive: true });
+      mkdirSync(join(fakeRoot, "dist", "ui", "static"), { recursive: true });
+      writeFileSync(join(fakeRoot, "dist", "ui", "csp-hashes.json"), "{}");
+      // CommonJS, and deliberately dependency-free: accepts a connection on --host/--port and
+      // never writes a response, so every curl attempt against it runs to its own --max-time.
+      writeFileSync(
+        join(fakeRoot, "dist", "cli", "index.js"),
+        [
+          'const net = require("node:net");',
+          "const args = process.argv.slice(2);",
+          'const port = Number(args[args.indexOf("--port") + 1]);',
+          'const host = args[args.indexOf("--host") + 1];',
+          "net.createServer((socket) => {}).listen(port, host);",
+          "",
+        ].join("\n"),
+      );
+      return fakeRoot;
+    }
+
+    it("fails within roughly the configured budget, not a multiple of it, when the health endpoint hangs", () => {
+      const fakeRoot = writeFakeRoot();
+      try {
+        const startTimeoutSecs = 4;
+        const began = Date.now();
+        const start = spawnSync("bash", [join(fakeRoot, "scripts", "keiko.sh"), "start"], {
+          encoding: "utf8",
+          timeout: 45_000,
+          env: {
+            ...process.env,
+            KEIKO_STATE_DIR: stateDir,
+            KEIKO_UI_PORT: String(lifecyclePort),
+            KEIKO_START_TIMEOUT_SECS: String(startTimeoutSecs),
+          },
+        });
+        const elapsedMs = Date.now() - began;
+
+        expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(1);
+        expect(start.stderr).toContain("did not become healthy");
+        // Pre-fix this loop ran START_TIMEOUT_SECS*2 iterations at up to (2s curl + 0.5s sleep)
+        // each -- up to 5x the budget, ~20s here for a 4s budget. Post-fix it is a wall-clock
+        // deadline with a fixed ~2.5s worst-case overshoot regardless of the budget, ~6.5s here.
+        // This threshold sits well above the fixed post-fix bound and well below the
+        // multiplicative pre-fix one, so it catches a regression back to iteration counting
+        // without being sensitive to ordinary scheduling jitter.
+        expect(elapsedMs).toBeLessThan(12_000);
+      } finally {
+        rmSync(fakeRoot, { recursive: true, force: true });
+      }
+    }, 20_000);
   });
 });

@@ -33,8 +33,21 @@ import {
 } from "./code-task-governance.js";
 import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
 
+// Matches the hardening in code-task-acceptance.ts/code-task-governance.ts (KfQ Critical): a value
+// shaped via Object.create(secretHolder) can carry every required field as an OWN property while
+// one extra field rides the prototype chain, invisible to any own-property-only scan. Rejecting any
+// non-default prototype closes this at the single choke point every validator in this file already
+// passes through. This alone does not defend against a genuinely polluted GLOBAL Object.prototype
+// (Object.getPrototypeOf(value) === Object.prototype stays true even after Object.prototype itself
+// gains a property, since mutating an object in place never changes its identity) -- that case is
+// what the "value" in value / "in" checks below independently exist for.
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
+  );
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -45,14 +58,21 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
   return typeof value === "string" && (allowed as readonly string[]).includes(value);
 }
 
+// Object.getOwnPropertyNames (not Object.keys) plus an own-symbol check, matching the sibling
+// files' idiom: Object.keys alone misses a non-enumerable own property. isRecord above rejects a
+// non-default prototype; neither closes a genuinely polluted Object.prototype (see its comment).
 function unknownKeys(
   value: Record<string, unknown>,
   allowed: readonly string[],
   path: string,
 ): string[] {
-  return Object.keys(value)
+  const errors = Object.getOwnPropertyNames(value)
     .filter((key) => !allowed.includes(key))
     .map((key) => `${path}.${key} is not allowed`);
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    errors.push(`${path} must not carry symbol-keyed properties`);
+  }
+  return errors;
 }
 
 // ─── RunControlSnapshotV1 (produced for #2389) ─────────────────────────────────────
@@ -122,6 +142,14 @@ function boundedStringFactErrors(value: unknown, path: string): string[] {
     value.outcome === "unavailable" ||
     value.outcome === "unknown"
   ) {
+    // Codex P1: this "in" check was dropped in favour of unknownKeys alone, which only scans OWN
+    // properties -- an Object.create({ value: "secret" })-backed fact with just an own
+    // `outcome: "absent"` then passed with no errors. "in" walks the prototype chain, which is the
+    // point here (contrast debug-lifecycle.ts, where the same operator is wrong for a different
+    // question -- "is this key an approved set member" -- because it would also accept
+    // "constructor"). Restored alongside unknownKeys, not instead of it: unknownKeys still catches
+    // any OTHER extra key this outcome must not carry.
+    if ("value" in value) return [`${path} must not carry a value for outcome ${value.outcome}`];
     return unknownKeys(value, ["outcome"], path);
   }
   return [`${path}.outcome must be known, absent, unavailable, or unknown`];
@@ -139,6 +167,11 @@ function questionFactErrors(value: unknown): string[] {
     value.outcome === "unavailable" ||
     value.outcome === "unknown"
   ) {
+    // Same regression, same fix as boundedStringFactErrors above: "in" walks the prototype chain,
+    // which unknownKeys's own-property scan alone cannot.
+    if ("value" in value) {
+      return [`pendingQuestion must not carry a value for outcome ${value.outcome}`];
+    }
     return unknownKeys(value, ["outcome"], "pendingQuestion");
   }
   return ["pendingQuestion.outcome must be known, absent, unavailable, or unknown"];

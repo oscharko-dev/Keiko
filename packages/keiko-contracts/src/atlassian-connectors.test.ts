@@ -808,7 +808,7 @@ describe("isSafeJiraLiveIssueSummary (Issue #2248)", () => {
   });
 });
 
-describe("isAtlassianContentPreviewUnpresentable (KEIKO-0186 P1)", () => {
+describe("isAtlassianContentPreviewUnpresentable (KEIKO-0186 P1/P2)", () => {
   it("is true for an empty string", () => {
     expect(isAtlassianContentPreviewUnpresentable("")).toBe(true);
   });
@@ -826,6 +826,61 @@ describe("isAtlassianContentPreviewUnpresentable (KEIKO-0186 P1)", () => {
   it("is false for ordinary text", () => {
     expect(isAtlassianContentPreviewUnpresentable("Fix the flaky gate")).toBe(false);
     expect(isAtlassianContentPreviewUnpresentable("x")).toBe(false);
+  });
+
+  // KEIKO-0186 P2 (Codex): the P1 pattern (^\p{M}+$) is anchored end-to-end, so it stops matching
+  // the moment ANY other character is present -- including whitespace. A lone space, a run of
+  // TAB/LF, or whitespace next to a floating combining mark all satisfied it and were classified
+  // presentable. The fix asks positively whether a visible base character survives once
+  // whitespace, combining marks, and format characters are all stripped -- these cases pin that
+  // whitespace alone, and whitespace mixed with the P1 shapes in either order, are unpresentable.
+  it("is true for whitespace only: space, TAB, LF, and a mix of all three", () => {
+    const space = " ";
+    const tab = String.fromCharCode(9);
+    const lf = String.fromCharCode(10);
+    expect(isAtlassianContentPreviewUnpresentable(space)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(tab)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(lf)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(space + tab + lf + space)).toBe(true);
+  });
+
+  it("is true for whitespace next to a combining mark, in either order", () => {
+    const spaceThenMark = " " + String.fromCharCode(0x301);
+    const markThenSpace = String.fromCharCode(0x301) + " ";
+    expect(isAtlassianContentPreviewUnpresentable(spaceThenMark)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(markThenSpace)).toBe(true);
+    // A run mixing TAB and multiple combining marks in both orders is still nothing but the two
+    // ignorable categories -- no base character anywhere in it.
+    const mixed =
+      " " + String.fromCharCode(0x301) + String.fromCharCode(9) + String.fromCharCode(0x301);
+    expect(isAtlassianContentPreviewUnpresentable(mixed)).toBe(true);
+  });
+
+  it("is true for whitespace next to a zero-width/format character, independent of stripUnsafeFormatChars having run first", () => {
+    // \p{Cf} (Format) covers ZERO WIDTH SPACE (U+200B) directly, so this predicate does not rely
+    // on stripUnsafeFormatChars already having removed it -- defense in depth, not a redundant
+    // check: the producer always sanitizes first, but this predicate must be correct on its own.
+    const zeroWidthOnly = String.fromCharCode(0x200b).repeat(3);
+    const spaceThenZeroWidth = " " + String.fromCharCode(0x200b);
+    expect(isAtlassianContentPreviewUnpresentable(zeroWidthOnly)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(spaceThenZeroWidth)).toBe(true);
+  });
+
+  it("distinguishes a truncation window that is all whitespace/combining marks from the untruncated string that has a base character just past it", () => {
+    // Builds a candidate whose first MAX characters (what contentPreviewFor's bound would keep)
+    // are alternating space + combining-mark pairs, with a real base character appended right
+    // after that window -- exactly the shape truncation can produce in practice.
+    const pairs = (" " + String.fromCharCode(0x301)).repeat(
+      Math.ceil(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS / 2),
+    );
+    const withBaseCharPastTheBound =
+      pairs.slice(0, ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS) + "X";
+    const truncationWindow = withBaseCharPastTheBound.slice(
+      0,
+      ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
+    );
+    expect(isAtlassianContentPreviewUnpresentable(withBaseCharPastTheBound)).toBe(false);
+    expect(isAtlassianContentPreviewUnpresentable(truncationWindow)).toBe(true);
   });
 });
 
@@ -850,7 +905,7 @@ describe("isSafeAtlassianContentPreview (KEIKO-0186)", () => {
     ).toBe(true);
   });
 
-  it("rejects empty, overlong, control-character, bidi/zero-width, combining-marks-only, and non-string values", () => {
+  it("rejects empty, overlong, control-character, bidi/zero-width, combining-marks-only, whitespace-only, and non-string values", () => {
     expect(isSafeAtlassianContentPreview("")).toBe(false);
     expect(
       isSafeAtlassianContentPreview("x".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS + 1)),
@@ -867,6 +922,14 @@ describe("isSafeAtlassianContentPreview (KEIKO-0186)", () => {
     // KEIKO-0186 P1: non-empty but entirely Unicode combining marks -- no base character, exactly
     // as uninformative to a reviewer as empty (see isAtlassianContentPreviewUnpresentable above).
     expect(isSafeAtlassianContentPreview(String.fromCharCode(0x301).repeat(5))).toBe(false);
+    // KEIKO-0186 P2: whitespace-only, and whitespace next to a combining mark, are exactly as
+    // uninformative -- neither is a shape the P1 anchored pattern (^\p{M}+$) caught.
+    expect(isSafeAtlassianContentPreview(" ")).toBe(false);
+    expect(isSafeAtlassianContentPreview(String.fromCharCode(9) + String.fromCharCode(10))).toBe(
+      false,
+    );
+    expect(isSafeAtlassianContentPreview(" " + String.fromCharCode(0x301))).toBe(false);
+    expect(isSafeAtlassianContentPreview(String.fromCharCode(0x301) + " ")).toBe(false);
     expect(isSafeAtlassianContentPreview(42)).toBe(false);
     expect(isSafeAtlassianContentPreview(null)).toBe(false);
     expect(isSafeAtlassianContentPreview(undefined)).toBe(false);

@@ -93,6 +93,22 @@ single-credential posture: the proxy layer may not introduce additional secrets.
    paragraph read as "enabling the flag lifts the denyLoopback refusal," which two independent
    reviewers correctly read as a possible bypass; it was imprecise about *which* refusal — the
    blanket pre-flight one, not the per-address policy denial — and is corrected here.
+   **Correction (#3156, 2026-08-15), pool identity.** The vetting guarantee above only holds if a
+   vetted connection is never handed to a call other than the one that vetted it.
+   `fetchHttpsViaProxy`'s CONNECT-tunnel pool (`idleHttpsProxyTunnels`, a short-lived, same-process
+   keep-alive cache keyed by `httpsProxyTunnelKey`) reuses an already-established tunnel verbatim,
+   including whatever peer it actually connected to, for up to
+   `HTTPS_PROXY_TUNNEL_IDLE_TTL_MS` (30s). The key originally identified a pooled entry by
+   `(proxy, target, ca)` alone, so an unpinned call and a pinned call to the identical triple
+   computed the same key and could share one pooled tunnel: a pinned call could silently be served
+   an earlier unpinned call's tunnel, whose peer the proxy chose entirely on its own — this
+   pinning mechanism's own vetting never touched it, making the guarantee above hold for the
+   *call that created* a tunnel but not necessarily for the call that *reused* it. The key now also
+   carries the calling request's pinning posture (`"unpinned"`, or the exact vetted address when
+   pinned), so a pinned and an unpinned call — or two pinned calls that resolved to different
+   addresses — can never be served from each other's pool entry. The plain-HTTP absolute-URI proxy
+   path (`fetchHttpViaProxy`) has no equivalent pool (no custom keep-alive agent is configured;
+   Node's default global agent opens an unshared connection per call), so it has no matching gap.
 
 ## Consequences
 

@@ -332,6 +332,77 @@ describe("contentPreviewFor", () => {
     });
   });
 
+  // KEIKO-0186 P2 (Codex): the P1 predicate (^\p{M}+$) is anchored end-to-end, so any OTHER
+  // character defeated it -- including whitespace. A whitespace-only payload, or whitespace next
+  // to the P1 shapes, rendered as an apparently blank-but-"available" preview: the same failure
+  // mode as P1, reached through a different input. Each case below must be "unavailable".
+
+  it("a whitespace-only payload (space, TAB, LF, and a mix) is reported unavailable, not a blank-looking preview", () => {
+    const space = " ";
+    const tab = String.fromCharCode(9);
+    const lf = String.fromCharCode(10);
+    for (const whitespace of [space, tab, lf, space + tab + lf + space]) {
+      expect(
+        contentPreviewFor({
+          type: "add-issue-comment",
+          issueKey: "PROJ-9",
+          commentText: whitespace,
+        }),
+      ).toEqual({ status: "unavailable" });
+    }
+  });
+
+  it("whitespace next to a combining mark, in either order, is reported unavailable", () => {
+    const spaceThenMark = " " + String.fromCharCode(0x301);
+    const markThenSpace = String.fromCharCode(0x301) + " ";
+    expect(
+      contentPreviewFor({ type: "create-issue", projectKey: "PROJ", summary: spaceThenMark }),
+    ).toEqual({ status: "unavailable" });
+    expect(
+      contentPreviewFor({ type: "create-issue", projectKey: "PROJ", summary: markThenSpace }),
+    ).toEqual({ status: "unavailable" });
+  });
+
+  it("whitespace next to a zero-width character sanitizes to whitespace-only and is reported unavailable", () => {
+    const spaceThenZeroWidth = " " + String.fromCharCode(0x200b);
+    expect(
+      contentPreviewFor({
+        type: "add-page-comment",
+        pageId: "123",
+        commentText: spaceThenZeroWidth,
+      }),
+    ).toEqual({ status: "unavailable" });
+  });
+
+  it("truncation can create a whitespace-only tail even when the untruncated text has a base character past the bound", () => {
+    const spacePrefix = " ".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+    const summary = spacePrefix + "X";
+    expect(summary.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+    expect(contentPreviewFor({ type: "create-issue", projectKey: "PROJ", summary })).toEqual({
+      status: "unavailable",
+    });
+  });
+
+  it("truncation can create a whitespace-plus-combining-mark tail even when the untruncated text has a base character past the bound", () => {
+    // Same shape as the all-combining-marks truncation case above, but the truncation window is
+    // alternating space + combining-mark pairs instead of combining marks alone.
+    const pairs = (" " + String.fromCharCode(0x301)).repeat(
+      Math.ceil(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS / 2),
+    );
+    const summary = pairs.slice(0, ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS) + "X";
+    expect(summary.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+    expect(contentPreviewFor({ type: "create-issue", projectKey: "PROJ", summary })).toEqual({
+      status: "unavailable",
+    });
+  });
+
+  // No separate "truncation-induced whitespace-plus-zero-width" case: zero-width characters are
+  // removed by stripUnsafeFormatChars during sanitization, which runs BEFORE truncation, so they
+  // can never be part of what survives INTO a truncation window -- only whitespace and combining
+  // marks are both preserved by sanitization and classified as non-base-character, so only they
+  // can populate a truncation-surviving tail. A raw payload padded with zero-width characters
+  // simply sanitizes down to something short enough that truncation never triggers.
+
   it("agrees with isSafeAtlassianContentPreview in every case: an emitted 'available' text always passes the contract predicate", () => {
     const cases: readonly AtlassianWriteActionInput[] = [
       { type: "create-issue", projectKey: "PROJ", summary: "Fix the flaky gate" },
@@ -355,8 +426,10 @@ describe("contentPreviewFor", () => {
     }
   });
 
-  it("agrees with isSafeAtlassianContentPreview in every unavailable case: an empty string and an all-combining-mark string both fail the contract predicate too", () => {
+  it("agrees with isSafeAtlassianContentPreview in every unavailable case: empty, combining-marks-only, whitespace-only, and whitespace-plus-combining strings all fail the contract predicate too", () => {
     expect(isSafeAtlassianContentPreview("")).toBe(false);
     expect(isSafeAtlassianContentPreview(String.fromCharCode(0x301).repeat(5))).toBe(false);
+    expect(isSafeAtlassianContentPreview(" ")).toBe(false);
+    expect(isSafeAtlassianContentPreview(" " + String.fromCharCode(0x301))).toBe(false);
   });
 });

@@ -947,6 +947,94 @@ describe("gatewayFetch proxied DNS pinning (pinProxiedConnectTarget, ADR-0038 D6
     }
   });
 
+  it("never serves a pinned request the pooled tunnel an earlier unpinned call left idle (#3156 pool identity)", async () => {
+    // Codex P1, follow-up to the DNS-rebinding fix above: httpsProxyTunnelKey used to be
+    // (proxy, target, ca) only, blind to whether the pooled tunnel's peer was ever vetted. An
+    // unpinned caller (e.g. the manual research crawler, which never sets
+    // pinProxiedConnectTarget) and a pinned caller fetching the identical (proxy, target, ca)
+    // triple within the 30s idle window would compute the SAME key, so the pinned call could be
+    // served the unpinned call's already-pooled tunnel verbatim -- a peer the PROXY chose on its
+    // own, never touched by resolveGatewayDns's vetting for the pinned call. Both calls target the
+    // same literal "127.0.0.1" (no real DNS needed for the unpinned leg, and the mock below covers
+    // the pinned leg) so the only thing that can legitimately differ between them is pinning
+    // posture -- isolating the pool-identity question from address vetting itself, which the
+    // dedicated CONNECT-authority test above already covers. Both calls share ONE dynamically
+    // re-imported module instance (a single vi.doMock + import, no resetModules between them) so
+    // they see the SAME idleHttpsProxyTunnels pool -- using two separate module instances would
+    // give each an empty pool of its own and prove nothing.
+    const dir = mkdtempSync(join(tmpdir(), "keiko-pool-identity-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    let proxyConnects = 0;
+    let originRequests = 0;
+    const originSockets = new Set<Socket>();
+    const proxySockets = new Set<Socket>();
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
+      originRequests += 1;
+      res.writeHead(200, { "content-type": "application/json", connection: "keep-alive" });
+      res.end(JSON.stringify({ path: req.url, count: originRequests }));
+    });
+    origin.on("connection", (socket) => {
+      originSockets.add(socket);
+      socket.once("close", () => originSockets.delete(socket));
+    });
+    const originPort = await listen(origin);
+    const proxy = createHttpServer();
+    proxy.on("connection", (socket) => {
+      proxySockets.add(socket);
+      socket.once("close", () => proxySockets.delete(socket));
+    });
+    proxy.on("connect", (req, clientSocket, head) => {
+      proxyConnects += 1;
+      const [host, portText] = (req.url ?? "").split(":");
+      const upstream = netConnect(Number(portText), host, () => {
+        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length > 0) upstream.write(head);
+        pipeBounded(upstream, clientSocket);
+        pipeBounded(clientSocket, upstream);
+      });
+      upstream.on("error", () => clientSocket.destroy());
+    });
+    const proxyPort = await listen(proxy);
+    const egress = { httpsProxy: `http://127.0.0.1:${String(proxyPort)}`, caBundlePath };
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "127.0.0.1", family: 4 }])),
+      }));
+      const { gatewayFetch: freshGatewayFetch } = await import("./http.js");
+
+      // First: an UNPINNED fetch -- no pinProxiedConnectTarget -- exactly the shape a non-Atlassian
+      // caller like the manual crawler makes. Establishes tunnel #1 and pools it (the origin
+      // answers keep-alive).
+      const first = await freshGatewayFetch(`https://127.0.0.1:${String(originPort)}/first`, {
+        egress,
+      });
+      expect(await first.json()).toEqual({ path: "/first", count: 1 });
+      expect(proxyConnects).toBe(1);
+
+      // Second: a PINNED fetch to the IDENTICAL (proxy, target, ca) triple, inside the idle
+      // window (immediately after, no sleep needed -- HTTPS_PROXY_TUNNEL_IDLE_TTL_MS is 30s).
+      const second = await freshGatewayFetch(`https://127.0.0.1:${String(originPort)}/second`, {
+        egress: { ...egress, pinProxiedConnectTarget: true },
+      });
+      expect(await second.json()).toEqual({ path: "/second", count: 2 });
+      // The load-bearing assertion: a genuinely NEW CONNECT tunnel was established for the pinned
+      // request rather than reusing tunnel #1 from the pool. Before the fix this stayed at 1 --
+      // the pooled, unpinned tunnel silently served the pinned request, and resolveGatewayDns's
+      // vetting for that request never touched the peer it actually rode.
+      expect(proxyConnects).toBe(2);
+    } finally {
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+      for (const socket of proxySockets) socket.destroy();
+      for (const socket of originSockets) socket.destroy();
+      await close(proxy);
+      await close(origin);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("still refuses a proxied request when the vetted address is blocked (e.g. metadata), before contacting the proxy", async () => {
     let proxyHits = 0;
     const proxy = createHttpServer(() => {

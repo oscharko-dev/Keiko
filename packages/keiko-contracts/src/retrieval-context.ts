@@ -106,19 +106,38 @@ export const RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND: Readonly<
 // EXISTING coding wire (RetrievalContextCitation.sourceTier via toCodingContextWirePack, and the
 // codingContextEvidence.ts persisted manifest) under a schemaVersion that has not changed, so D6
 // requires it to stay "first-party-workspace" until promoting it is made its own lockstep decision.
-export const CODING_CONTEXT_SOURCE_TIER_BY_KIND: Readonly<
-  Record<CodingContextSourceKind, RetrievalContextSourceTier>
-> = {
-  "repo-search": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["repo-search"],
-  "files-focus": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["files-focus"],
-  "editor-state": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["editor-state"],
-  "git-context": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["git-context"],
+//
+// Every entry below is a literal, not a reference into RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND: this
+// table is typed via `satisfies` rather than the wide `Record<CodingContextSourceKind,
+// RetrievalContextSourceTier>` annotation so TypeScript infers each property's own literal type
+// instead of widening every value to the full neutral union — the earlier version referenced the
+// neutral table for the non-diverging entries, which is why widening happened. That inferred,
+// per-key-literal object type is what CodingContextSourceTier and CODING_CONTEXT_SOURCE_TIERS below
+// derive from directly (Codex finding, ADR-0152 D6 follow-on): deriving the coding profile's tier
+// union and catalog from this table's actual values — instead of hand-listing them, or aliasing
+// RetrievalContextSourceTier / RETRIEVAL_CONTEXT_SOURCE_TIERS as coding-context.ts previously did —
+// is what stops a neutral-only tier (external-connected) from silently widening the coding profile's
+// type AND wire output the next time the neutral vocabulary grows.
+export const CODING_CONTEXT_SOURCE_TIER_BY_KIND = {
+  "repo-search": "first-party-workspace",
+  "files-focus": "first-party-workspace",
+  "editor-state": "first-party-workspace",
+  "git-context": "first-party-workspace",
   "connected-context": "first-party-workspace",
-  "local-knowledge": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["local-knowledge"],
-  memory: RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND.memory,
-  "quality-intelligence": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["quality-intelligence"],
-  "workflow-context": RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND["workflow-context"],
-} as const;
+  "local-knowledge": "indexed-knowledge",
+  memory: "retained-memory",
+  "quality-intelligence": "derived-evidence",
+  "workflow-context": "derived-evidence",
+} as const satisfies Readonly<Record<CodingContextSourceKind, RetrievalContextSourceTier>>;
+
+/** The tier union CODING_CONTEXT_SOURCE_TIER_BY_KIND's values actually use — see the table above. */
+export type CodingContextSourceTier =
+  (typeof CODING_CONTEXT_SOURCE_TIER_BY_KIND)[CodingContextSourceKind];
+
+/** Deduplicated, declaration-ordered catalog derived from CODING_CONTEXT_SOURCE_TIER_BY_KIND. */
+export const CODING_CONTEXT_SOURCE_TIERS: readonly CodingContextSourceTier[] = [
+  ...new Set(Object.values(CODING_CONTEXT_SOURCE_TIER_BY_KIND)),
+];
 
 export type RetrievalContextOmissionReason =
   "unavailable" | "not-ready" | "denied" | "too-expensive" | "out-of-budget";

@@ -329,4 +329,26 @@ describe("prototype-based extra-field smuggling (KfQ Critical)", () => {
     // produces a plain object with the default Object.prototype and only enumerable own properties.
     expect(validateCodeTaskAcceptanceContribution(validContribution()).ok).toBe(true);
   });
+
+  // Codex P1: KEIKO-0302's follow-on fix (commit 0ad76a4e) replaced factErrors's "value" in value
+  // check with unknownKeys alone for the absent/unknown/unavailable branch. unknownKeys scans only
+  // OWN properties, so a fact shaped via Object.create({ value: "secret" }) carrying just an own
+  // outcome: "absent" passed with zero errors -- the inherited `value` was invisible to the scan
+  // while ordinary property access still resolved it. "in" walks the prototype chain, which is
+  // what actually caught this before the regression, and is restored alongside unknownKeys here.
+  it("rejects a receiptDigest fact with a value reachable only through the prototype", () => {
+    const hostileFact = Object.create({ value: "secret" }) as Record<string, unknown>;
+    hostileFact.outcome = "absent";
+    expect(Object.keys(hostileFact)).toEqual(["outcome"]); // own-key view looks complete
+    expect("value" in hostileFact).toBe(true); // yet the secret still resolves
+    const base = validContribution();
+    const scenario = base.scenarios[0];
+    expect(scenario).toBeDefined();
+    if (scenario === undefined) return;
+    const result = validateCodeTaskAcceptanceContribution({
+      ...base,
+      scenarios: [{ ...scenario, receiptDigest: hostileFact }],
+    });
+    expect(result.ok).toBe(false);
+  });
 });

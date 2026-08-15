@@ -840,16 +840,24 @@ export type AtlassianConnectorActionExecutionResult =
 // hostile payload.
 export const ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS = 280;
 
-// KEIKO-0186 P1 (Codex): a string made ENTIRELY of Unicode combining marks (general category M*)
-// carries no base character to attach to — rendered alone it is as informative to a reviewer as
-// an empty string, even though `.length > 0`. A payload composed only of accepted characters that
-// still reduce to this (or to genuine emptiness) after stripUnsafeFormatChars must not reach the
-// wire as `contentPreview`; see `contentPreviewFor` in keiko-server's actionApprovals.ts, which
-// checks this same condition on the producing side so the two can never disagree.
-const COMBINING_MARKS_ONLY_PATTERN = /^\p{M}+$/u;
+// KEIKO-0186 P1/P2 (Codex): ask the real question — is there any VISIBLE BASE CHARACTER left for
+// a reviewer to read — instead of enumerating unpresentable shapes one at a time. P1 covered
+// "empty" and "entirely Unicode combining marks" via `^\p{M}+$`, but that anchored pattern stops
+// matching the moment ANY other character is present, including whitespace: a lone space, a run
+// of TAB/LF, or whitespace around a floating combining mark (e.g. a space then a combining acute
+// accent) all satisfied it and were classified presentable (P2). A negative pattern only ever
+// covers the shapes someone thought to enumerate; this predicate instead strips everything that
+// can never itself BE a visible base character — Unicode whitespace and combining marks — and
+// asks whether anything survives. Format characters (`\p{Cf}`, e.g. a stray soft hyphen) are
+// stripped too: a broader net than the specific bidi/zero-width code points
+// `stripUnsafeFormatChars` enumerates, so this predicate does not silently depend on that list
+// staying exhaustive. A payload composed only of these must not reach the wire as
+// `contentPreview`; see `contentPreviewFor` in keiko-server's actionApprovals.ts, which checks
+// this same condition on the producing side so the two can never disagree.
+const NON_BASE_CHARACTER_PATTERN = /[\s\p{M}\p{Cf}]/gu;
 
 export function isAtlassianContentPreviewUnpresentable(value: string): boolean {
-  return value.length === 0 || COMBINING_MARKS_ONLY_PATTERN.test(value);
+  return value.replace(NON_BASE_CHARACTER_PATTERN, "").length === 0;
 }
 
 // A content preview is provider CONTENT in the ADR-0128 D6 sense (like a synced title or a live
@@ -858,7 +866,8 @@ export function isAtlassianContentPreviewUnpresentable(value: string): boolean {
 // title/summary with a description/body), so — like every other untrusted display surface in
 // this codebase — TAB/LF/CR survive stripUnsafeFormatChars while every other unsafe code point
 // does not; this predicate accepts exactly what that stripper already leaves untouched. It also
-// rejects an all-combining-mark string for the same reason the producer never emits one (see
+// rejects a preview with no visible base character — whitespace-only, combining-marks-only, or
+// any mix of the two — for the same reason the producer never emits one (see
 // `isAtlassianContentPreviewUnpresentable` above) — the producer and this predicate must agree.
 export function isSafeAtlassianContentPreview(value: unknown): value is string {
   return (

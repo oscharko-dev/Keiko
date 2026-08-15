@@ -12,6 +12,7 @@ import type { IncomingMessage } from "node:http";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
   validateAtlassianConnectorActivityRecord,
@@ -599,45 +600,48 @@ const TEXT_BEARING_WRITE_ACTIONS: readonly TextBearingWriteActionType[] = [
   "add-page-comment",
 ];
 
-describe("write-action route — unpresentable content preview after sanitization (KEIKO-0186 P1)", () => {
+// Shared assertion sequence for "the action had text, but nothing presentable survived
+// sanitization/bounding": the approval must validate, must carry contentPreviewUnavailable
+// (never an empty or absent-without-explanation contentPreview), and the SAME action's permanent
+// activity record must stay exactly as content-free as any other pending-review action.
+async function expectUnavailablePreview(
+  action: TextBearingWriteActionType,
+  hostileText: string,
+): Promise<void> {
+  editorAgentAuthorityRegistry.reset();
+  atlassianActionApprovalRegistry.reset();
+  atlassianSyncJobRegistry.reset();
+  const counter: FetchCounter = { count: 0, requests: [] };
+  const guard = guardWith(counter);
+  const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
+  const { body } = await postHostileAction(action, hostileText, authority, guard);
+  const approval = body.approval as AtlassianConnectorPendingApproval;
+  expect(validateAtlassianConnectorPendingApproval(approval).ok, action).toBe(true);
+  expect(approval.contentPreviewUnavailable, action).toBe(true);
+  expect(approval.contentPreview, action).toBeUndefined();
+
+  // Redaction-boundary pin, exactly as the KEIKO-0186 test above: still content-free on the
+  // permanent record.
+  const records = atlassianSyncJobRegistry.listActivity(connectorIdForAuthRef(authRefFor(action)));
+  const pendingRecord = records.find((record) => record.disposition === "review-required");
+  if (pendingRecord === undefined) {
+    throw new Error(`expected a pending-review activity record for ${action}`);
+  }
+  expect(validateAtlassianConnectorActivityRecord(pendingRecord).ok, action).toBe(true);
+  expect(JSON.stringify(pendingRecord), action).not.toContain("contentPreview");
+}
+
+describe("write-action route — unpresentable content preview after sanitization (KEIKO-0186 P1/P2)", () => {
   it("an all-zero-width-space payload is reported unavailable for every text-bearing action, never as an empty preview", async () => {
     const allZeroWidth = String.fromCharCode(0x200b).repeat(12);
     for (const action of TEXT_BEARING_WRITE_ACTIONS) {
-      editorAgentAuthorityRegistry.reset();
-      atlassianActionApprovalRegistry.reset();
-      atlassianSyncJobRegistry.reset();
-      const counter: FetchCounter = { count: 0, requests: [] };
-      const guard = guardWith(counter);
-      const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
-      const { body } = await postHostileAction(action, allZeroWidth, authority, guard);
-      const approval = body.approval as AtlassianConnectorPendingApproval;
-      expect(validateAtlassianConnectorPendingApproval(approval).ok, action).toBe(true);
-      expect(approval.contentPreviewUnavailable, action).toBe(true);
-      expect(approval.contentPreview, action).toBeUndefined();
-
-      // Redaction-boundary pin, exactly as above: still content-free on the permanent record.
-      const records = atlassianSyncJobRegistry.listActivity(
-        connectorIdForAuthRef(authRefFor(action)),
-      );
-      const pendingRecord = records.find((record) => record.disposition === "review-required");
-      if (pendingRecord === undefined) {
-        throw new Error(`expected a pending-review activity record for ${action}`);
-      }
-      expect(validateAtlassianConnectorActivityRecord(pendingRecord).ok, action).toBe(true);
-      expect(JSON.stringify(pendingRecord), action).not.toContain("contentPreview");
+      await expectUnavailablePreview(action, allZeroWidth);
     }
   });
 
   it("an all-bidi-override payload is reported unavailable, not an empty preview", async () => {
     const allBidi = String.fromCharCode(0x202e).repeat(12);
-    const counter: FetchCounter = { count: 0, requests: [] };
-    const guard = guardWith(counter);
-    const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
-    const { body } = await postHostileAction("create-issue", allBidi, authority, guard);
-    const approval = body.approval as AtlassianConnectorPendingApproval;
-    expect(validateAtlassianConnectorPendingApproval(approval).ok).toBe(true);
-    expect(approval.contentPreviewUnavailable).toBe(true);
-    expect(approval.contentPreview).toBeUndefined();
+    await expectUnavailablePreview("create-issue", allBidi);
   });
 
   it("a mixed bidi+zero-width payload that sanitizes to empty is reported unavailable, not an empty preview", async () => {
@@ -646,14 +650,62 @@ describe("write-action route — unpresentable content preview after sanitizatio
       String.fromCharCode(0x200b) +
       String.fromCharCode(0x202e) +
       String.fromCharCode(0x200b);
-    const counter: FetchCounter = { count: 0, requests: [] };
-    const guard = guardWith(counter);
-    const authority = registerEnvelope("governed-assist", BOTH_WRITE_SCOPES);
-    const { body } = await postHostileAction("add-page-comment", mixedInvisible, authority, guard);
-    const approval = body.approval as AtlassianConnectorPendingApproval;
-    expect(validateAtlassianConnectorPendingApproval(approval).ok).toBe(true);
-    expect(approval.contentPreviewUnavailable).toBe(true);
-    expect(approval.contentPreview).toBeUndefined();
+    await expectUnavailablePreview("add-page-comment", mixedInvisible);
+  });
+
+  // KEIKO-0186 P2 (Codex): the P1 predicate's anchored pattern (^\p{M}+$) stopped matching the
+  // moment any OTHER character was present, including whitespace -- a whitespace-only preview, or
+  // whitespace next to a P1 shape, rendered as an apparently blank "available" preview. Same
+  // failure mode as P1 (a reviewer approving content they cannot see), reached through a
+  // different input; same fix (isAtlassianContentPreviewUnpresentable), so the same route/helper
+  // pins it here too.
+
+  it("a whitespace-only (space) payload is reported unavailable for every text-bearing action", async () => {
+    for (const action of TEXT_BEARING_WRITE_ACTIONS) {
+      await expectUnavailablePreview(action, " ");
+    }
+  });
+
+  it("TAB, LF, and mixed-whitespace payloads are reported unavailable via the comment fields (summary/title reject multi-line text on the wire, so a single space is the only whitespace value the loop above can share across every action)", async () => {
+    const tab = String.fromCharCode(9);
+    const lf = String.fromCharCode(10);
+    await expectUnavailablePreview("add-issue-comment", tab);
+    await expectUnavailablePreview("add-page-comment", lf);
+    await expectUnavailablePreview("add-issue-comment", " " + tab + lf + " ");
+  });
+
+  it("whitespace next to a combining mark, in either order, is reported unavailable", async () => {
+    const spaceThenMark = " " + String.fromCharCode(0x301);
+    const markThenSpace = String.fromCharCode(0x301) + " ";
+    await expectUnavailablePreview("create-issue", spaceThenMark);
+    await expectUnavailablePreview("create-issue", markThenSpace);
+  });
+
+  it("whitespace next to a zero-width character sanitizes to whitespace-only and is reported unavailable", async () => {
+    const spaceThenZeroWidth = " " + String.fromCharCode(0x200b);
+    await expectUnavailablePreview("add-page-comment", spaceThenZeroWidth);
+  });
+
+  it("truncation can produce a whitespace-only tail through the real route, even when the untruncated text has a base character past the bound", async () => {
+    // create-issue's summary/create-page's title are capped at 255 chars on the wire (well under
+    // MAX+1) -- commentText has no such ceiling (bounded at 100,000 chars), so it is the field
+    // that can actually carry a payload long enough to exercise truncation through the real route.
+    const spacePrefix = " ".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+    const commentText = spacePrefix + "X";
+    expect(commentText.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+    await expectUnavailablePreview("add-issue-comment", commentText);
+  });
+
+  it("truncation can produce a whitespace-plus-combining-mark tail through the real route, even when the untruncated text has a base character past the bound", async () => {
+    // No separate "truncation-induced whitespace-plus-zero-width" pin: zero-width characters are
+    // removed by sanitization, which runs BEFORE truncation, so they can never be part of what
+    // survives INTO a truncation window (see the equivalent note in actionApprovals.test.ts).
+    const pairs = (" " + String.fromCharCode(0x301)).repeat(
+      Math.ceil(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS / 2),
+    );
+    const commentText = pairs.slice(0, ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS) + "X";
+    expect(commentText.length).toBeGreaterThan(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS);
+    await expectUnavailablePreview("add-issue-comment", commentText);
   });
 });
 

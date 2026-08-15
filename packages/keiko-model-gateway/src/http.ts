@@ -818,9 +818,31 @@ async function createTlsTunnel(
   return startTargetTls(target, socket, ca, signal);
 }
 
-function httpsProxyTunnelKey(target: URL, proxy: URL, ca: readonly string[]): string {
+// Includes this call's pinning posture (#3156 pool-identity follow-up to the DNS-rebinding fix
+// above), not just (proxy, target, ca): an idle tunnel is handed back to fetchHttpsViaProxy below
+// verbatim, socket and all, so two calls whose keys collide are treated as fully interchangeable
+// no matter how each one's actual TCP peer was chosen. Before this, an UNPINNED call (the proxy
+// resolves the hostname itself, at its own discretion) and a PINNED call to the identical
+// (proxy, target, ca) triple produced the SAME key, so a pinned request could silently be served
+// the unpinned call's pooled tunnel: resolveGatewayDns's vetting for the pinned call would have no
+// bearing on the peer the request actually rode, because that peer was chosen entirely by the
+// earlier, unpinned call, before the pinned call ever ran. Folding in "unpinned" or the exact
+// vetted address literal makes a pinned and an unpinned call to the same (proxy, target, ca)
+// triple compute DIFFERENT keys, so neither can be served from the other's pool entry, in either
+// direction, and two pinned calls that happened to resolve to different addresses can't collide
+// either. (The plain-HTTP absolute-URI proxy path, fetchHttpViaProxy, has no analogous pool at
+// all -- it never configures a custom keep-alive agent, so Node's default global agent opens a
+// fresh, unshared connection per call -- so there is no matching gap to close there.)
+function httpsProxyTunnelKey(
+  target: URL,
+  proxy: URL,
+  ca: readonly string[],
+  pinnedAddress: LookupAddress | undefined,
+): string {
   const caKey = ca.map((cert) => `${String(cert.length)}:${cert.slice(0, 32)}`).join("|");
-  return `${proxy.protocol}//${proxy.host}|${target.protocol}//${target.host}|${caKey}`;
+  const pinKey =
+    pinnedAddress === undefined ? "unpinned" : `pinned:${addressAuthorityHost(pinnedAddress)}`;
+  return `${proxy.protocol}//${proxy.host}|${target.protocol}//${target.host}|${caKey}|${pinKey}`;
 }
 
 function usableIdleTunnel(socket: tls.TLSSocket): boolean {
@@ -969,11 +991,11 @@ async function fetchHttpsViaProxy(
   if (!Object.hasOwn(headers, "host")) {
     headers.host = hostHeader(target);
   }
-  const tunnelKey = httpsProxyTunnelKey(target, proxy, ca);
-  // An idle pooled tunnel was itself vetted (pinned or not) when it was first created; reusing it
-  // does not reopen the DNS-rebinding gap, it is exactly as trusted as any other kept-alive reuse
-  // already is for up to HTTPS_PROXY_TUNNEL_IDLE_TTL_MS. Only a genuinely fresh tunnel needs the
-  // current call's pinned address.
+  const tunnelKey = httpsProxyTunnelKey(target, proxy, ca, pinnedAddress);
+  // The key now carries this call's pinning posture (see httpsProxyTunnelKey above), so an idle
+  // pooled entry is only ever a cache hit here when it was established under the IDENTICAL
+  // posture -- unpinned reusing unpinned, or pinned reusing the same vetted address -- never a
+  // pinned call silently inheriting an unpinned tunnel's unvetted peer, or the reverse (#3156).
   const socket =
     takeIdleHttpsProxyTunnel(tunnelKey) ??
     (await createTlsTunnel(target, proxy, ca, init.signal ?? undefined, pinnedAddress));
