@@ -73,6 +73,11 @@ const ROOT = join(import.meta.dirname, "..", "..");
 const ROOT_MANIFEST = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 
 const SMOKE_INVOCATION = /npm run smoke:install(?::optional)?/u;
+// This proof copies and archives the complete staged product. The synchronous npm child cannot
+// yield to Vitest's timer, and full script coverage runs it alongside other filesystem-heavy
+// workers (159 s on the incident run versus 18 s in isolation). This is a harness deadline, not a
+// product performance budget, so keep it bounded without rejecting a valid instrumented pack.
+const STAGED_PACK_TEST_TIMEOUT_MS = 5 * 60_000;
 
 /**
  * `ci.yml` split into its top-level jobs, so a workflow assertion can be scoped to the job that
@@ -485,20 +490,24 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
-  it("packs the root through the staged publish tree", () => {
-    const previous = process.env.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS;
-    process.env.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS = "1";
-    let artifact;
-    try {
-      artifact = packRoot();
-      expect(existsSync(artifact.tarballPath)).toBe(true);
-      expect(artifact.manifest.bundleDependencies).toEqual(ROOT_MANIFEST.bundleDependencies);
-    } finally {
-      artifact?.cleanup();
-      if (previous === undefined) delete process.env.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS;
-      else process.env.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS = previous;
-    }
-  }, 60_000);
+  it(
+    "packs the root through the staged publish tree",
+    () => {
+      const previous = process.env.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS;
+      process.env.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS = "1";
+      let artifact;
+      try {
+        artifact = packRoot();
+        expect(existsSync(artifact.tarballPath)).toBe(true);
+        expect(artifact.manifest.bundleDependencies).toEqual(ROOT_MANIFEST.bundleDependencies);
+      } finally {
+        artifact?.cleanup();
+        if (previous === undefined) delete process.env.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS;
+        else process.env.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS = previous;
+      }
+    },
+    STAGED_PACK_TEST_TIMEOUT_MS,
+  );
 
   it("runs the Yarn registry flow through the isolated project", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-yarn-registry-test-"));
