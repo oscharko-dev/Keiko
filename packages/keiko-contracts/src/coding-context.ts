@@ -44,12 +44,27 @@ export {
 export type { CodingContextPurpose, CodingContextSourceKind, CodingContextSourceTier };
 export type CodingContextOmissionReason = RetrievalContextOmissionReason;
 export type CodingContextOmission = RetrievalContextOmission<CodingContextSourceKind>;
-export type CodingContextCitation = RetrievalContextCitation<CodingContextSourceKind>;
-export type CodingContextExcerpt = RetrievalContextExcerpt<CodingContextSourceKind>;
-export type CodingContextPack = RetrievalContextPack<CodingContextSourceKind, CodingContextPurpose>;
+// Both generics now carry CodingContextSourceTier as their SourceTier argument (Codex follow-on,
+// ADR-0152 D6): sourceTier fields type as the closed coding union, not the wide neutral one, so a
+// hand-constructed CodingContextCitation carrying "external-connected" is a compile error, matching
+// what isCodingContextCitation already rejected at runtime.
+export type CodingContextCitation = RetrievalContextCitation<
+  CodingContextSourceKind,
+  CodingContextSourceTier
+>;
+export type CodingContextExcerpt = RetrievalContextExcerpt<
+  CodingContextSourceKind,
+  CodingContextSourceTier
+>;
+export type CodingContextPack = RetrievalContextPack<
+  CodingContextSourceKind,
+  CodingContextPurpose,
+  CodingContextSourceTier
+>;
 export type CodingContextWirePack = RetrievalContextWirePack<
   CodingContextSourceKind,
-  CodingContextPurpose
+  CodingContextPurpose,
+  CodingContextSourceTier
 >;
 export type CodingContextBudget = RetrievalContextBudget;
 export type CodingContextScopeKind = RetrievalContextScopeKind;

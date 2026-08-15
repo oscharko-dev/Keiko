@@ -26,17 +26,11 @@ function countByTier(
     number
   >;
   for (const entry of wirePack.entries) {
-    // entry.sourceTier is typed as the wide neutral RetrievalContextSourceTier: the shared
-    // RetrievalContextCitation interface (retrieval-context.ts) does not parameterize sourceTier by
-    // profile, only sourceKind — narrowing that is a separate, larger change than this fix's scope
-    // (deriving CODING_CONTEXT_SOURCE_TIER_BY_KIND / CODING_CONTEXT_SOURCE_TIERS /
-    // CodingContextSourceTier from the coding mapping). Every CodingContextWirePack in this codebase
-    // is built by toCodingContextWirePack from citations whose sourceTier came from
-    // tierForCodingContextSource — verified the sole caller (codingContext.ts's
-    // `assembleRetrievalContext({ tierForSourceKind: tierForCodingContextSource, ... })`) — which
-    // only ever returns a CodingContextSourceTier. The cast documents that invariant explicitly
-    // rather than trusting it silently.
-    counts[entry.sourceTier as CodingContextSourceTier] += 1;
+    // No cast needed (Codex follow-on, ADR-0152 D6): entry.sourceTier now types as
+    // CodingContextSourceTier — RetrievalContextCitation carries its own SourceTier type parameter,
+    // and CodingContextWirePack instantiates it with CodingContextSourceTier — so this index is
+    // exhaustive and type-checked against the same catalog CODING_CONTEXT_SOURCE_TIERS derives from.
+    counts[entry.sourceTier] += 1;
   }
   return counts;
 }

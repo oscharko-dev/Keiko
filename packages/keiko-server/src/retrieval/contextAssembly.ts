@@ -51,6 +51,7 @@ export interface RetrievalContextProvider<
 export interface AssembleRetrievalContextInput<
   SourceKind extends RetrievalContextSourceKind,
   Purpose extends RetrievalPurpose,
+  SourceTier extends RetrievalContextSourceTier = RetrievalContextSourceTier,
 > {
   readonly purpose: Purpose;
   readonly budget: RetrievalContextBudget;
@@ -58,7 +59,7 @@ export interface AssembleRetrievalContextInput<
   readonly allowEmbeddingProviders: boolean;
   readonly signal: AbortSignal;
   readonly providers: readonly RetrievalContextProvider<SourceKind>[];
-  readonly tierForSourceKind: (kind: SourceKind) => RetrievalContextSourceTier;
+  readonly tierForSourceKind: (kind: SourceKind) => SourceTier;
 }
 
 interface AssemblyState<SourceKind extends RetrievalContextSourceKind> {
@@ -120,12 +121,15 @@ async function collectProvider<SourceKind extends RetrievalContextSourceKind>(
   collectOutcome(await provider.run(budget), state);
 }
 
-function packCandidates<SourceKind extends RetrievalContextSourceKind>(
+function packCandidates<
+  SourceKind extends RetrievalContextSourceKind,
+  SourceTier extends RetrievalContextSourceTier,
+>(
   candidates: readonly RetrievalContextCandidate<SourceKind>[],
   budgetBytes: number,
-  tierForSourceKind: (kind: SourceKind) => RetrievalContextSourceTier,
+  tierForSourceKind: (kind: SourceKind) => SourceTier,
 ): {
-  readonly excerpts: readonly RetrievalContextExcerpt<SourceKind>[];
+  readonly excerpts: readonly RetrievalContextExcerpt<SourceKind, SourceTier>[];
   readonly usedBytes: number;
   readonly droppedForBudget: number;
 } {
@@ -156,9 +160,10 @@ function packCandidates<SourceKind extends RetrievalContextSourceKind>(
 export async function assembleRetrievalContext<
   SourceKind extends RetrievalContextSourceKind,
   Purpose extends RetrievalPurpose,
+  SourceTier extends RetrievalContextSourceTier = RetrievalContextSourceTier,
 >(
-  input: AssembleRetrievalContextInput<SourceKind, Purpose>,
-): Promise<RetrievalContextPack<SourceKind, Purpose>> {
+  input: AssembleRetrievalContextInput<SourceKind, Purpose, SourceTier>,
+): Promise<RetrievalContextPack<SourceKind, Purpose, SourceTier>> {
   const budget = effectiveRetrievalContextBudget(input.budget, input.requestedBudgetBytes);
   const state: AssemblyState<SourceKind> = { candidates: [], omissions: [] };
   for (const provider of orderedProviders(input.providers)) {
