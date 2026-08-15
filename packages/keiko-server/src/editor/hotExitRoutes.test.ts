@@ -83,8 +83,13 @@ function createFakeHotExitStore(): FakeHotExitStore {
     snapshotRefFor,
     write(snapshot, snapshotRef) {
       writes.push(snapshot);
-      snapshots.set(snapshotRef, storedSnapshot(snapshot));
-      return { snapshotRef, contentSizeBytes: Buffer.byteLength(snapshot.content, "utf8") };
+      const stored = storedSnapshot(snapshot);
+      snapshots.set(snapshotRef, stored);
+      return {
+        snapshotRef,
+        contentSizeBytes: stored.contentSizeBytes,
+        serverReceivedAt: stored.serverReceivedAt ?? snapshot.updatedAt,
+      };
     },
     read(snapshotRef) {
       return snapshots.get(snapshotRef) ?? null;
@@ -178,6 +183,25 @@ describe("editor hot-exit routes", () => {
     });
     expect(fake.writes).toHaveLength(0);
     expect(fake.deletes).toEqual([expectedRef]);
+  });
+
+  it("returns the server receipt timestamp on successful hot-exit writes", async () => {
+    const fake = createFakeHotExitStore();
+    const stored = snapshot({ updatedAt: 2_000 });
+
+    const result = await handleEditorHotExitWrite(
+      postContext("/api/editor/hot-exit/write", { snapshot: stored }),
+      deps(fake.store),
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: {
+        snapshotRef: snapshotRefFor(root, "src/app.ts"),
+        contentSizeBytes: Buffer.byteLength(stored.content, "utf8"),
+        serverReceivedAt: 2_005,
+      },
+    });
   });
 
   it("binds recovery reads to the workspace root and relative path", async () => {

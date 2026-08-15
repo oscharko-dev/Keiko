@@ -1073,11 +1073,6 @@
       "count": 1
     }
   },
-  "src/app/components/desktop/widgets/cards/editorHotExitStore.ts": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 9
-    }
-  },
   "src/app/components/desktop/widgets/cards/editorOutlineModel.ts": {
     "complexity": {
       "count": 1
