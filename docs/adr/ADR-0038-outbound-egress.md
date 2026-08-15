@@ -71,9 +71,28 @@ single-credential posture: the proxy layer may not introduce additional secrets.
    (SNI) and the `Host` header both still carry the real hostname regardless, so certificate
    validation and virtual-hosting on the origin are unaffected — only the wire-level dial target
    changes. Resolution returning no usable address fails closed (`PROXY_BLOCKED_BY_POLICY`) rather
-   than silently falling back to an unpinned connect. Enabling this also lifts the `denyLoopback`
-   proxy refusal (D6's own mechanism satisfies the guarantee that refusal exists to protect,
-   instead of requiring an external contract with the proxy operator).
+   than silently falling back to an unpinned connect.
+   **Correction (#3156, 2026-08-15).** `pinProxiedConnectTarget` does not itself permit or deny any
+   address class, and it never lifts loopback (or any other) denial. Whether a resolved address is
+   blocked stays entirely governed by that class's own flag — `denyLoopback`, `allowPrivateNetwork`,
+   `allowLinkLocalAndMetadata` — evaluated by the same `outboundAddressBlockedReason` check the
+   direct path already uses, once pinning makes that evaluation reachable at all on the proxied
+   path. What pinning actually changes is narrower: `refuseUnpinnableResearchEgress` blanket-refuses
+   an entire request pre-flight whenever it is proxied, unpinned, and `denyLoopback` is set — a
+   fail-safe that exists only because, without pinning, Keiko cannot vet what the proxy will
+   actually connect to, so it refuses outright rather than risk a silent bypass. Enabling
+   `pinProxiedConnectTarget` removes the precondition for that blanket pre-flight refusal (Keiko can
+   now vet the resolved address itself), so the request is no longer refused outright — but a
+   loopback-resolving hostname with `denyLoopback: true` still set is still refused, now via the
+   same granular, resolved-address policy check the direct path uses instead of an exemption from
+   it. The two flags are meant to be set together: `pinProxiedConnectTarget` alone, without
+   `denyLoopback`, resolves and pins the address but still permits loopback through (loopback is the
+   one target class that defaults to allowed absent an explicit `denyLoopback: true` — every other
+   class defaults to blocked); `denyLoopback` alone, proxied and left unpinned, hits the blanket
+   pre-flight refusal above rather than being vetted per request. An earlier version of this
+   paragraph read as "enabling the flag lifts the denyLoopback refusal," which two independent
+   reviewers correctly read as a possible bypass; it was imprecise about *which* refusal — the
+   blanket pre-flight one, not the per-address policy denial — and is corrected here.
 
 ## Consequences
 
@@ -85,12 +104,17 @@ single-credential posture: the proxy layer may not introduce additional secrets.
   response bodies are size-capped on the streamed paths and at the connector ports.
 - Residual scope: streaming SSE through the CONNECT tunnel inherits the same byte cap as the
   buffered path; proxy authentication remains intentionally unsupported until a concrete
-  customer requirement defines its secret-handling story. Without D6's opt-in
-  `pinProxiedConnectTarget`, a proxied request's DNS-resolved address is still not vetted by
-  Keiko — this is the accepted default posture, not an oversight, because a corporate proxy that
-  filters CONNECT/forwarded requests by hostname (a legitimate, common pattern) would see an
-  IP-literal target instead of a hostname and could reject it; an operator must confirm their
-  proxy tolerates that before opting in. No v1 caller defaults it on, including the Atlassian
-  connector lane (ADR-0128 D3) — its single-host, operator-configured allowlist makes it a
-  reasonable candidate for a future default-on decision once validated against real proxied
-  deployments, but that is a separate, connector-specific call this record does not make.
+  customer requirement defines its secret-handling story. Without a caller explicitly setting
+  D6's opt-in `pinProxiedConnectTarget` (paired with `denyLoopback`), a proxied request's
+  DNS-resolved address is still not vetted by Keiko — this is the accepted default posture for a
+  generic `gatewayFetch` caller, not an oversight, because a corporate proxy that filters
+  CONNECT/forwarded requests by hostname (a legitimate, common pattern) would see an IP-literal
+  target instead of a hostname and could reject it; an operator must confirm their proxy
+  tolerates that before opting in.
+  **Correction (#3156, 2026-08-15).** The Atlassian connector lane (ADR-0128 D3) now sets both
+  flags by default: a DNS name that only resolves into loopback/private/link-local/metadata space
+  after an operator has already configured it is a confirmed, silent SSRF and
+  internal-reconnaissance path, and that risk outweighs the hostname-filtering-proxy compatibility
+  concern for a lane whose target is a single, operator-configured host to begin with. No other v1
+  caller defaults either flag on — that remains a separate, caller-specific call this record does
+  not make on their behalf.

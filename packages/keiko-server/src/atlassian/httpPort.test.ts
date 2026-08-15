@@ -4,7 +4,10 @@
 // hop, only the connector's configured host is contacted, redirects are surfaced (never
 // followed), and every transport failure classifies into the closed, content-free result union.
 
-import { describe, expect, it } from "vitest";
+import { once } from "node:events";
+import { createServer as createHttpServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { describe, expect, it, vi } from "vitest";
 import {
   AtlassianCredentialCustodyError,
   atlassianAuthorizationHeaderValue,
@@ -480,27 +483,29 @@ describe("createGatewayAtlassianHttpBodyPort — write channel (Issue #2244)", (
   });
 });
 
-// ─── Connector egress posture (KEIKO-0316) ───────────────────────────────────
+// ─── Connector egress posture (KEIKO-0316, #3156) ────────────────────────────
 // The connector lane must never inherit the model gateway's private-network opt-ins. Those
 // flags exist for an operator's own approved, customer-hosted MODEL provider; an Atlassian
 // connector base URL is client-supplied through the connector-management routes, so inheriting
 // them would turn the `/verify` probe into an internal-reconnaissance oracle. Both port
 // factories therefore derive their own egress config: proxy/CA transport settings are honoured,
-// `denyLoopback` is pinned on, and `allowPrivateNetwork`/`allowLinkLocalAndMetadata` are never
-// carried over — mirroring researchEgressConfig() in coding-runtime/researchEgressPort.ts.
+// `denyLoopback` and `pinProxiedConnectTarget` are now pinned on (#3156 — see httpPort.ts's
+// connectorEgressConfig comment for why both, together, close the proxied-DNS-rebinding gap
+// without reintroducing the blanket proxy refusal an earlier, denyLoopback-alone attempt caused),
+// and `allowPrivateNetwork`/`allowLinkLocalAndMetadata` are never carried over — mirroring
+// researchEgressConfig() in coding-runtime/researchEgressPort.ts.
 
 const PERMISSIVE_GATEWAY_EGRESS: OutboundHttpEgressConfig = {
   allowPrivateNetwork: true,
   allowLinkLocalAndMetadata: true,
 };
 
-// Loopback IS in this list even though `denyLoopback` is never pinned on the egress config
-// handed to gatewayFetch (that flag is overloaded in the gateway: refuseUnpinnableResearchEgress
-// throws for any proxied request that sets it, which broke every proxied Atlassian deployment).
-// KEIKO-0316's loopback half is instead closed by a plain hostname-string classification in
-// httpPort.ts (classifyOutboundHost) applied unconditionally, so it blocks loopback the same way
-// under a permissive gateway egress as the private/metadata classes below — without touching the
-// proxy-incompatible flag at all.
+// Loopback is blocked two ways now: the plain hostname-string classification in httpPort.ts
+// (classifyOutboundHost, applied unconditionally to the LITERAL base URL, proxied or not) catches
+// every base URL in this list directly; `denyLoopback` on the egress config (see above) is the
+// second, DNS-resolution-based layer that additionally catches a hostname that only resolves to
+// loopback (a rebinding attack) rather than naming it literally — exercised by the dedicated
+// "proxied DNS-rebinding refusal" tests further down, not by this literal-hostname list.
 const INTERNAL_BASE_URLS = [
   "https://10.0.0.5",
   "https://172.16.4.9",
@@ -601,5 +606,121 @@ describe("Atlassian connector egress posture", () => {
     })({ method: "GET", url: "https://localhost/rest/api/3/myself", timeoutMs: 30_000 });
     expect(credentials.resolvedRefs).toHaveLength(0);
     expect(calls).toHaveLength(0);
+  });
+});
+
+// ─── Proxied DNS-rebinding refusal (#3156) ───────────────────────────────────
+// Two independent reviewers flagged the same question from opposite sides: does the proxied path
+// actually vet a connector hostname's RESOLVED address, or does it just pin an unvetted one? These
+// tests use the REAL gatewayFetch transport (no fetchImpl fake) with "node:dns/promises" mocked, so
+// the production dnsLookup call inside enforceOutboundTargetPolicy is fully controlled — matching
+// the AUDIT-SEC-001 pattern in keiko-model-gateway/src/http.test.ts. A fetchImpl fake cannot
+// exercise this: it makes gatewayFetch treat the request as unproxied (`usesRealTransport` false),
+// so neither DNS-pinning path is ever reached and a fake-based test would prove nothing here.
+
+async function listenLocal(server: ReturnType<typeof createHttpServer>): Promise<number> {
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  return (server.address() as AddressInfo).port;
+}
+
+function closeServer(server: ReturnType<typeof createHttpServer>): Promise<void> {
+  return new Promise((resolve) => {
+    server.closeAllConnections();
+    server.close(() => {
+      resolve();
+    });
+  });
+}
+
+describe("Atlassian connector egress posture — proxied DNS-rebinding refusal (#3156)", () => {
+  it("refuses a connector host that DNS-resolves to loopback through a proxy, before the proxy is ever contacted", async () => {
+    // "mycompany.atlassian.example" is not literally loopback-shaped (classifyOutboundHost would
+    // not flag it), so this only reaches the DNS-resolution-based check — exactly the rebinding
+    // scenario the reviewers described: an operator configured a legitimate-looking host, and it
+    // now resolves somewhere it should not.
+    let proxyContacts = 0;
+    const proxy = createHttpServer();
+    proxy.on("connect", (_req, clientSocket) => {
+      proxyContacts += 1;
+      clientSocket.destroy();
+    });
+    const proxyPort = await listenLocal(proxy);
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "127.0.0.1", family: 4 }])),
+      }));
+      const { createGatewayAtlassianHttpPort: freshPort } = await import("./httpPort.js");
+      const result = await freshPort({
+        baseUrl: "https://mycompany.atlassian.example",
+        authRef: AUTH_REF,
+        credentials: resolver(),
+        egress: () => ({ httpsProxy: `http://127.0.0.1:${String(proxyPort)}` }),
+      })({
+        method: "GET",
+        url: "https://mycompany.atlassian.example/rest/api/3/myself",
+        // Short: a proxy that swallows the CONNECT with no clean error can otherwise stall this
+        // request past vitest's own test timeout before the port's internal abort fires.
+        timeoutMs: 5_000,
+      });
+      expect(result).toEqual({ kind: "network-error" });
+      // The load-bearing assertion: without denyLoopback + pinProxiedConnectTarget on the
+      // connector's egress config, gatewayFetch never resolves DNS for a proxied request at all,
+      // so the request reaches the proxy's CONNECT handler (which this test's fake then destroys,
+      // ALSO surfacing as "network-error" — the same outward result for a different reason). Only
+      // this count distinguishes "refused before any proxy contact" from "reached the proxy
+      // unvetted and failed for an unrelated reason."
+      expect(proxyContacts).toBe(0);
+    } finally {
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+      await closeServer(proxy);
+    }
+  });
+
+  it("does not blanket-refuse ordinary proxied traffic — DNS is actually attempted, not short-circuited", async () => {
+    // Proves the fix does not reintroduce the exact regression connectorEgressConfig's own comment
+    // warns about: denyLoopback alone, WITHOUT pinProxiedConnectTarget, makes
+    // refuseUnpinnableResearchEgress throw synchronously for every proxied request, before DNS is
+    // ever attempted — that is what broke every proxied Atlassian deployment the first time
+    // denyLoopback was tried here. The mocked address is deliberately public (203.0.113.10, RFC
+    // 5737 TEST-NET-3) so a failure downstream of the DNS lookup (this fake proxy immediately
+    // destroys the CONNECT socket, same as the refusal test above) cannot be mistaken for the
+    // blanket-refusal this test exists to rule out. The discriminating signal is that `lookup` was
+    // called at all: refuseUnpinnableResearchEgress's throw happens strictly before any DNS work,
+    // so reaching the mock proves the request was NOT short-circuited there.
+    const proxy = createHttpServer();
+    proxy.on("connect", (_req, clientSocket) => {
+      clientSocket.destroy();
+    });
+    const proxyPort = await listenLocal(proxy);
+    try {
+      vi.resetModules();
+      const lookup = vi.fn(() => Promise.resolve([{ address: "203.0.113.10", family: 4 }]));
+      vi.doMock("node:dns/promises", () => ({ lookup }));
+      const { createGatewayAtlassianHttpPort: freshPort } = await import("./httpPort.js");
+      const result = await freshPort({
+        baseUrl: "https://mycompany.atlassian.example",
+        authRef: AUTH_REF,
+        credentials: resolver(),
+        egress: () => ({ httpsProxy: `http://127.0.0.1:${String(proxyPort)}` }),
+      })({
+        method: "GET",
+        url: "https://mycompany.atlassian.example/rest/api/3/myself",
+        // Short: a proxy that swallows the CONNECT with no clean error can otherwise stall this
+        // request past vitest's own test timeout before the port's internal abort fires.
+        timeoutMs: 5_000,
+      });
+      expect(result).toEqual({ kind: "network-error" });
+      expect(lookup).toHaveBeenCalledWith(
+        "mycompany.atlassian.example",
+        expect.objectContaining({ all: true }),
+      );
+    } finally {
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+      await closeServer(proxy);
+    }
   });
 });
