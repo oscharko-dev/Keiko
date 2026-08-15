@@ -103,12 +103,13 @@ function isUnknownArray(value: unknown): value is readonly unknown[] {
 
 function tryParseJsonRecord(raw: string | null): Record<string, unknown> | null {
   if (raw === null) return null;
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    return isRecord(parsed) ? parsed : null;
+    parsed = JSON.parse(raw);
   } catch {
-    return null;
+    throw new TypeError("Invalid persisted workspace JSON.");
   }
+  return isRecord(parsed) ? parsed : null;
 }
 
 function parseJsonRecord(raw: string, context: string): Record<string, unknown> {
@@ -215,11 +216,32 @@ async function openRoundTripSurfaces(page: Page): Promise<RoundTripSurfaces> {
   await page.goto("/");
   await openEditorWorkspace(page);
   const editorWindow = page.locator(`.window[data-window-id="${EDITOR_WINDOW_ID}"]`);
-  const chatWindow = page.getByRole("region", { name: `Chat — ${CHAT_TITLE}` });
+  const chatWindow = page.locator(`.window[data-window-id="${CHAT_WINDOW_ID}"]`);
   await expect(editorWindow.locator(".monaco-editor").first()).toBeVisible();
   await expect(chatWindow.getByRole("textbox", { name: "Chat message" })).toBeVisible();
   await expect(chatWindow.getByRole("button", { name: "Apply to editor" })).toHaveCount(2);
   return { editorWindow, chatWindow };
+}
+
+async function persistedChatProjectPath(page: Page): Promise<unknown> {
+  return page.evaluate((chatWindowId): unknown => {
+    const raw = window.localStorage.getItem("keiko.workspace.v4");
+    if (raw === null) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    const candidates: readonly unknown[] = parsed;
+    const chatWindow: unknown = candidates.find(
+      (candidate): boolean =>
+        typeof candidate === "object" &&
+        candidate !== null &&
+        "id" in candidate &&
+        candidate.id === chatWindowId,
+    );
+    if (typeof chatWindow !== "object" || chatWindow === null || !("cfg" in chatWindow))
+      return null;
+    const cfg = chatWindow.cfg;
+    return typeof cfg === "object" && cfg !== null && "projectPath" in cfg ? cfg.projectPath : null;
+  }, CHAT_WINDOW_ID);
 }
 
 function normalizeBuffer(text: string): string {
@@ -349,19 +371,20 @@ async function proveSelectionHandoff(
   await selectStrictSubstring(page, surfaces.editorWindow);
   await expectSelectionSnapshot(request, fixture);
   await invokeAskCommand(page);
+  const handoffChatWindow = page.locator('section.window[data-top="true"]');
   const prompt = await waitForPersistedPrompt(request, fixture);
   expect(prompt).toContain(`Root-relative file (JSON): "${RELATIVE_PATH}"`);
   expect(prompt).toContain("Range: L3:C1-L3:C10");
   expect(prompt).toContain(`Selection (JSON):\n"${SELECTED_TEXT}"`);
   expect(prompt).not.toContain(BEFORE_SENTINEL);
   expect(prompt).not.toContain(AFTER_SENTINEL);
-  const promptBubble = surfaces.chatWindow
+  const promptBubble = handoffChatWindow
     .locator('article.chat-msg[data-role="user"]')
     .filter({ hasText: PROMPT_PREFIX })
     .last();
   await expect(promptBubble).toBeVisible();
   await expect(promptBubble.locator(".chat-msg-content")).toHaveText(prompt);
-  await expect(surfaces.chatWindow.getByText(new RegExp(REPLY_MARKER, "u")).last()).toBeVisible({
+  await expect(handoffChatWindow.getByText(new RegExp(REPLY_MARKER, "u")).last()).toBeVisible({
     timeout: 30_000,
   });
   await expect
@@ -573,6 +596,7 @@ test("editor selection and assistant code blocks round-trip through governed rev
   const surfaces = await openRoundTripSurfaces(page);
 
   await proveSelectionHandoff(page, request, fixture, surfaces, testInfo);
+  await expect.poll(() => persistedChatProjectPath(page)).toBe(fixture.root);
   await rejectFirstCandidate(page, fixture, surfaces, testInfo);
   await selectStrictSubstring(page, surfaces.editorWindow);
   await expectSelectionSnapshot(request, fixture);

@@ -4,7 +4,7 @@ import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import type { AppWindow, WindowCfgValue } from "../windows/types";
 import { clampWorkspaceGroupOrigin } from "../windowRecovery";
 import type { ViewportWorld } from "./useWorkspace.types";
-import { sanitizePersistedWindows } from "./workspace-persistence";
+import { MAX_WORKSPACE_WINDOWS, sanitizePersistedWindows } from "./workspace-persistence";
 
 const WORKSPACE_CLIPBOARD_KIND = "keiko.workspace.windows";
 const WORKSPACE_CLIPBOARD_VERSION = 1;
@@ -37,6 +37,7 @@ export interface DuplicateWorkspaceClipboardArgs {
 }
 
 export interface DuplicateWorkspaceClipboardResult {
+  readonly limitReached: boolean;
   readonly wins: readonly AppWindow[];
   readonly pastedWindowIds: readonly string[];
   readonly nextZ: number;
@@ -229,9 +230,15 @@ export function duplicateWorkspaceClipboardWindows({
 }: DuplicateWorkspaceClipboardArgs): DuplicateWorkspaceClipboardResult | null {
   const descriptors = parseWorkspaceClipboardPayload(payload);
   if (descriptors.length === 0 || !Number.isFinite(pasteOffsetPx)) return null;
+  const capacity = Math.max(0, MAX_WORKSPACE_WINDOWS - wins.length);
+  const acceptedDescriptors = descriptors.slice(0, capacity);
+  const limitReached = acceptedDescriptors.length < descriptors.length;
+  if (acceptedDescriptors.length === 0) {
+    return { limitReached, wins, pastedWindowIds: [], nextZ: zStart };
+  }
   const existingIds = new Set(wins.map((win) => win.id));
   let z = zStart;
-  const duplicated = descriptors.map((descriptor, index) => {
+  const duplicated = acceptedDescriptors.map((descriptor, index) => {
     const def = WIN_TYPES[descriptor.type];
     const win: AppWindow = {
       id: nextDuplicateId(descriptor.type, existingIds, nowMs, index),
@@ -249,6 +256,7 @@ export function duplicateWorkspaceClipboardWindows({
   });
   const clamped = clampPastedWindows(duplicated, viewport);
   return {
+    limitReached,
     wins: [...wins, ...clamped],
     pastedWindowIds: clamped.map((win) => win.id),
     nextZ: z,

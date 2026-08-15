@@ -5,7 +5,7 @@
 
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useVoiceDialogMode } from "./useVoiceDialogMode";
+import { resetVoiceDialogueOwnerForTests, useVoiceDialogMode } from "./useVoiceDialogMode";
 import type { VoiceCapabilityResolution } from "@/lib/types";
 import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
 
@@ -81,6 +81,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetVoiceDialogueOwnerForTests();
   localStorage.clear();
   vi.unstubAllGlobals();
 });
@@ -121,6 +122,64 @@ describe("useVoiceDialogMode — availability gating", () => {
     const { result } = renderHook(() => useVoiceDialogMode({ capability: FULL_REALTIME }));
     expect(result.current.available).toBe(true);
     expect(result.current.availablePersonas).toEqual(PERSONAS);
+  });
+
+  it("allows only one mounted chat to own realtime voice at a time", () => {
+    const first = renderHook(() => useVoiceDialogMode({ capability: FULL_REALTIME }));
+    const second = renderHook(() => useVoiceDialogMode({ capability: FULL_REALTIME }));
+
+    act(() => first.result.current.enter());
+    expect(first.result.current.active).toBe(true);
+    expect(second.result.current.available).toBe(false);
+
+    act(() => second.result.current.enter());
+    expect(second.result.current.active).toBe(false);
+
+    act(() => first.result.current.leave());
+    expect(second.result.current.available).toBe(true);
+  });
+
+  it("blocks a second capture lease even when both modes belong to one chat", () => {
+    const first = renderHook(() =>
+      useVoiceDialogMode({ capability: FULL_REALTIME, captureOwner: "chat-a" }),
+    );
+    const second = renderHook(() =>
+      useVoiceDialogMode({ capability: FULL_REALTIME, captureOwner: "chat-a" }),
+    );
+
+    let firstClaimed = false;
+    act(() => {
+      firstClaimed = first.result.current.enter();
+    });
+    expect(firstClaimed).toBe(true);
+    expect(second.result.current.available).toBe(false);
+
+    let secondClaimed = true;
+    act(() => {
+      secondClaimed = second.result.current.enter();
+    });
+    expect(secondClaimed).toBe(false);
+    expect(second.result.current.active).toBe(false);
+  });
+
+  it("deactivates and releases capture when the owner identity changes", () => {
+    const first = renderHook(
+      ({ owner }: { readonly owner: string }) =>
+        useVoiceDialogMode({ capability: FULL_REALTIME, captureOwner: owner }),
+      { initialProps: { owner: "chat-a" } },
+    );
+    const second = renderHook(() =>
+      useVoiceDialogMode({ capability: FULL_REALTIME, captureOwner: "chat-b" }),
+    );
+
+    act(() => first.result.current.enter());
+    expect(first.result.current.active).toBe(true);
+    expect(second.result.current.available).toBe(false);
+
+    first.rerender({ owner: "chat-a-replacement" });
+
+    expect(first.result.current.active).toBe(false);
+    expect(second.result.current.available).toBe(true);
   });
 
   it("is unavailable for full-realtime WITHOUT WebRTC media", () => {

@@ -1,7 +1,8 @@
-import { useRef, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
+import { useRef, useState, type PointerEvent as ReactPointerEvent, type ReactElement } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useWorkspace, type UseWorkspaceOptions } from "./useWorkspace";
+import { MAX_WORKSPACE_WINDOWS } from "./workspace-persistence";
 import type { AppWindow, Connection } from "../windows/types";
 
 const WORKSPACE_STORAGE_KEY = "keiko.workspace.v4";
@@ -63,6 +64,7 @@ function fakePointer(clientX = 100, clientY = 120): ReactPointerEvent<Element> {
 function Harness(options: UseWorkspaceOptions = {}): ReactElement {
   const wsRef = useRef<HTMLDivElement>(null);
   const workspace = useWorkspace(wsRef, options);
+  const [editorResults, setEditorResults] = useState<readonly boolean[]>([]);
 
   return (
     <main ref={wsRef} data-testid="workspace" className="workspace">
@@ -79,6 +81,9 @@ function Harness(options: UseWorkspaceOptions = {}): ReactElement {
       <textarea aria-label="editor text input" />
       <button type="button" onClick={() => workspace.api.close("files-1")}>
         close files
+      </button>
+      <button type="button" onClick={() => workspace.api.close("chat-1")}>
+        close chat
       </button>
       <button
         type="button"
@@ -111,6 +116,16 @@ function Harness(options: UseWorkspaceOptions = {}): ReactElement {
       <button type="button" onClick={() => workspace.api.pasteCopiedWindows()}>
         paste copied windows
       </button>
+      <button
+        type="button"
+        onClick={() => {
+          const first = workspace.api.openEditorFile({ root: "/repo-a", path: "src/a.ts" });
+          const second = workspace.api.openEditorFile({ root: "/repo-b", path: "src/b.ts" });
+          setEditorResults([first.ok, second.ok]);
+        }}
+      >
+        open two editors
+      </button>
       <output data-testid="wins">{JSON.stringify(workspace.wins ?? [])}</output>
       <output data-testid="conns">{JSON.stringify(workspace.conns)}</output>
       <output data-testid="connecting">{JSON.stringify(workspace.connecting)}</output>
@@ -118,6 +133,7 @@ function Harness(options: UseWorkspaceOptions = {}): ReactElement {
       <output data-testid="image-sources">
         {JSON.stringify(workspace.api.linkedImageSources?.("quality") ?? null)}
       </output>
+      <output data-testid="editor-results">{JSON.stringify(editorResults)}</output>
     </main>
   );
 }
@@ -165,6 +181,30 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("reserves workspace capacity across editor allocations queued in one event", async () => {
+    const onWindowLimitReached = vi.fn();
+    persistWorkspace(
+      Array.from({ length: MAX_WORKSPACE_WINDOWS - 1 }, (_unused, index) =>
+        filesWindow({ id: `files-${String(index)}` }),
+      ),
+    );
+    render(<Harness onWindowLimitReached={onWindowLimitReached} />);
+    await waitFor(() => expect(readWins()).toHaveLength(MAX_WORKSPACE_WINDOWS - 1));
+    mockWorkspaceRect();
+
+    fireEvent.click(screen.getByRole("button", { name: "open two editors" }));
+
+    await waitFor(() => {
+      expect(JSON.parse(screen.getByTestId("editor-results").textContent ?? "[]")).toEqual([
+        true,
+        false,
+      ]);
+    });
+    expect(readWins()).toHaveLength(MAX_WORKSPACE_WINDOWS);
+    expect(readWins().filter((win) => win.type === "editor")).toHaveLength(1);
+    expect(onWindowLimitReached).toHaveBeenCalledExactlyOnceWith(MAX_WORKSPACE_WINDOWS);
   });
 
   it("adopts workspace snapshots written by another tab", async () => {
@@ -445,6 +485,66 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
 
     await waitFor(() => expect(readWins().some((w) => w.id === "files-1")).toBe(false));
     expect(onScopeUnbind).not.toHaveBeenCalled();
+  });
+
+  it("snapshots the chat owner before closing a bound chat window", async () => {
+    const onScopeUnbind = vi.fn();
+    persistWorkspace([
+      filesWindow(),
+      appWindow({ cfg: { chatId: "chat-private", projectPath: "/private" } }),
+    ]);
+    render(<Harness onScopeUnbind={onScopeUnbind} />);
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "connect" }));
+    await waitFor(() => expect(readConns()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "close chat" }));
+
+    await waitFor(() => expect(readWins().some((win) => win.id === "chat-1")).toBe(false));
+    expect(onScopeUnbind).toHaveBeenCalledWith(
+      "chat-1",
+      expect.objectContaining({ root: "/repo" }),
+      { conversationId: "chat-private", projectPath: "/private" },
+    );
+  });
+
+  it("retains a connected window until unbind is accepted and permits a retry", async () => {
+    const onScopeUnbind = vi
+      .fn<NonNullable<UseWorkspaceOptions["onScopeUnbind"]>>()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    persistWorkspace([filesWindow(), appWindow()]);
+    render(<Harness onScopeUnbind={onScopeUnbind} />);
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+    fireEvent.click(screen.getByRole("button", { name: "connect" }));
+    await waitFor(() => expect(readConns()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "close files" }));
+    await waitFor(() => expect(onScopeUnbind).toHaveBeenCalledOnce());
+    expect(readWins().some((win) => win.id === "files-1")).toBe(true);
+    expect(readConns()).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "close files" }));
+    await waitFor(() => expect(onScopeUnbind).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(readWins().some((win) => win.id === "files-1")).toBe(false));
+  });
+
+  it("retains a connected window when its unbind callback rejects", async () => {
+    const onScopeUnbind = vi.fn<NonNullable<UseWorkspaceOptions["onScopeUnbind"]>>(() =>
+      Promise.reject(new TypeError("customer-specific detail")),
+    );
+    persistWorkspace([filesWindow(), appWindow()]);
+    render(<Harness onScopeUnbind={onScopeUnbind} />);
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+    fireEvent.click(screen.getByRole("button", { name: "connect" }));
+    await waitFor(() => expect(readConns()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "close files" }));
+
+    await waitFor(() => expect(onScopeUnbind).toHaveBeenCalledOnce());
+    expect(readWins().some((win) => win.id === "files-1")).toBe(true);
+    expect(readConns()).toHaveLength(1);
   });
 
   it("updates the persisted connection snapshot when a Files window changes visible scope", async () => {

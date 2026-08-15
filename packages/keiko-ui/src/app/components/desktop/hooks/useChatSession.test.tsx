@@ -1,4 +1,5 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { Chat, ChatMessage, ModelCapability, ProjectWithAvailability } from "@/lib/types";
@@ -13,6 +14,7 @@ import {
   fetchRunReport,
   fetchModels,
   fetchProjects,
+  patchChatMessage,
   regenerateDesktopChat,
   resetModelRequestCache,
   sendDesktopChat,
@@ -30,8 +32,10 @@ import {
   notifyChatDeleted,
   notifyChatUpsert,
   pickChatModelId,
+  RUN_SUMMARY_SYNC_INTERVAL_MS,
   resolveSelectedModelId,
   type SendMessageOutcome,
+  type ChatSessionApi,
   useChatSession,
 } from "./useChatSession";
 import {
@@ -228,7 +232,42 @@ describe("useChatSession pure guards", () => {
   });
 });
 
+function ImmediateChatBinding({
+  session,
+  target,
+}: {
+  readonly session: ChatSessionApi;
+  readonly target: Chat;
+}): ReactNode {
+  const { activeChat, loading, openChat } = session;
+  useEffect((): void => {
+    if (!loading && activeChat?.id !== target.id) void openChat(target);
+  }, [activeChat?.id, loading, openChat, target]);
+  return <output data-testid="immediate-chat-binding">{activeChat?.id ?? "none"}</output>;
+}
+
+function ImmediateChatBindingHarness({ target }: { readonly target: Chat }): ReactNode {
+  const session = useChatSession({ autoCreate: false });
+  return <ImmediateChatBinding session={session} target={target} />;
+}
+
 describe("useChatSession bootstrap", () => {
+  it("honors a child window binding immediately after bootstrap", async () => {
+    const bootstrapChat = chat({ id: "chat-bootstrap", updatedAt: 20 });
+    const boundChat = chat({ id: "chat-bound", updatedAt: 10 });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [bootstrapChat, boundChat] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+
+    render(<ImmediateChatBindingHarness target={boundChat} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("immediate-chat-binding")).toHaveTextContent(boundChat.id),
+    );
+    expect(fetchChatMessages).toHaveBeenCalledWith(boundChat.id, boundChat.projectPath);
+  });
+
   it("loads the newest existing chat and falls back from a stale selected model", async () => {
     const latest = chat({ id: "chat-latest", selectedModel: "stale-model", updatedAt: 20 });
     vi.mocked(fetchModels).mockResolvedValue({
@@ -250,6 +289,29 @@ describe("useChatSession bootstrap", () => {
     expect(result.current.activeChat?.id).toBe("chat-latest");
     expect(result.current.selectedModel).toBe("chat-live");
     expect(result.current.messages).toHaveLength(1);
+  });
+
+  it("surfaces a project catalog bootstrap failure instead of treating it as empty", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockRejectedValue(new TypeError("project catalog unavailable"));
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toContain("project catalog unavailable");
+    expect(fetchChats).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a chat catalog bootstrap failure instead of treating it as empty", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockRejectedValue(new TypeError("chat catalog unavailable"));
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toContain("chat catalog unavailable");
+    expect(result.current.activeProject).toBeUndefined();
   });
 
   it("shares concurrent cold bootstrap requests across session instances", async () => {
@@ -374,6 +436,8 @@ describe("useChatSession bootstrap", () => {
     });
     const otherChat = chat({ id: "chat-other", projectPath: "/other", title: "Other chat" });
     const creation = deferred<Awaited<ReturnType<typeof createDesktopChat>>>();
+    const upsertListener = vi.fn();
+    window.addEventListener("keiko:chat-upsert", upsertListener);
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
     vi.mocked(fetchProjects).mockResolvedValue({
       projects: [project("/repo"), project("/other")],
@@ -407,6 +471,9 @@ describe("useChatSession bootstrap", () => {
     await expect(creationPromise!).resolves.toEqual(created);
     expect(result.current.activeProject?.path).toBe("/other");
     expect(result.current.activeChat?.id).toBe(otherChat.id);
+    expect(upsertListener).toHaveBeenCalledOnce();
+    expect((upsertListener.mock.calls[0]?.[0] as CustomEvent<Chat>).detail).toEqual(created);
+    window.removeEventListener("keiko:chat-upsert", upsertListener);
   });
 
   it("selects a newly added folder even when no conversation model can create a chat", async () => {
@@ -505,6 +572,35 @@ describe("useChatSession bootstrap", () => {
     expect(rendered.result.current.messages).toEqual([pendingSummary]);
   });
 
+  it("keeps a shared run-summary poll alive while another session remains subscribed", async () => {
+    const pendingSummary = message({
+      id: "shared-run-summary",
+      role: "system",
+      runId: "run-shared",
+      workflowStatus: "running",
+    });
+    const completedSummary = { ...pendingSummary, workflowStatus: "completed" as const };
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat()] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [pendingSummary] });
+    vi.mocked(fetchRunReport)
+      .mockResolvedValueOnce({ report: { status: "running" } })
+      .mockResolvedValueOnce({ report: { status: "completed" } });
+    vi.mocked(patchChatMessage).mockResolvedValue({ message: completedSummary });
+
+    const first = renderHook(() => useChatSession({ autoCreate: false }));
+    const second = renderHook(() => useChatSession({ autoCreate: false }));
+    await vi.waitFor(() => expect(fetchRunReport).toHaveBeenCalledOnce());
+
+    first.unmount();
+    await vi.waitFor(() => expect(fetchRunReport).toHaveBeenCalledTimes(2), {
+      timeout: RUN_SUMMARY_SYNC_INTERVAL_MS + 1_000,
+    });
+    await vi.waitFor(() => expect(second.result.current.messages).toEqual([completedSummary]));
+    expect(patchChatMessage).toHaveBeenCalledOnce();
+  });
+
   it("surfaces regeneration failures and releases the owned send state", async () => {
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
@@ -555,10 +651,31 @@ describe("useChatSession bootstrap", () => {
     notifyChatUpsert(chat({ id: "chat-new", selectedModel: "chat-live", updatedAt: 40 }));
     await waitFor(() => expect(result.current.chats[0]?.id).toBe("chat-new"));
 
+    const memory = renderHook(() => useConversationMemorySettings("chat-new"));
+    act(() => memory.result.current.setMemoryEnabled(true));
+
     notifyChatDeleted("chat-new");
     await waitFor(() =>
       expect(result.current.chats.some((item) => item.id === "chat-new")).toBe(false),
     );
+    expect(memory.result.current.memoryEnabled).toBe(false);
+  });
+
+  it("keeps chat mutation broadcasts inside their owning project catalog", async () => {
+    const projectBChat = chat({ id: "chat-b", projectPath: "/repo-b", updatedAt: 20 });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo-b")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [projectBChat] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      notifyChatUpsert(chat({ id: "chat-a", projectPath: "/repo-a", updatedAt: 40 }));
+    });
+
+    expect(result.current.chats.map((candidate) => candidate.id)).toEqual(["chat-b"]);
+    expect(result.current.activeProject?.path).toBe("/repo-b");
   });
 
   it("drops the API model cache before refreshing after a gateway update", async () => {
@@ -581,6 +698,32 @@ describe("useChatSession bootstrap", () => {
     await waitFor(() =>
       expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-after"]),
     );
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares one gateway model refresh across concurrent chat sessions", async () => {
+    vi.mocked(fetchModels)
+      .mockResolvedValueOnce({ models: [model({ id: "chat-before" })] })
+      .mockResolvedValueOnce({ models: [model({ id: "chat-after" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+
+    const first = renderHook(() => useChatSession({ autoCreate: false }));
+    const second = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => {
+      expect(first.result.current.models.map((entry) => entry.id)).toEqual(["chat-before"]);
+      expect(second.result.current.models.map((entry) => entry.id)).toEqual(["chat-before"]);
+    });
+
+    act(() => {
+      notifyGatewayConfigUpdated();
+    });
+
+    await waitFor(() => {
+      expect(first.result.current.models.map((entry) => entry.id)).toEqual(["chat-after"]);
+      expect(second.result.current.models.map((entry) => entry.id)).toEqual(["chat-after"]);
+    });
+    expect(resetModelRequestCache).toHaveBeenCalledOnce();
     expect(fetchModels).toHaveBeenCalledTimes(2);
   });
 
@@ -691,13 +834,46 @@ describe("useChatSession bootstrap", () => {
     expect(result.current.activeChat?.id).toBe("other-open");
     expect(result.current.chats.map((item) => item.id)).toEqual(["other-trashed", "other-open"]);
   });
+
+  it("does not create a replacement chat when an isolated window opens an empty project", async () => {
+    const groundedChat = chat({
+      id: "chat-boot",
+      selectedModel: "chat-live",
+      connectedScopes: [
+        { kind: "workspace-root", root: "/repo", relativePaths: [], connectedAtMs: 1 },
+      ],
+    });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [groundedChat] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(askGrounded).mockResolvedValue({
+      answer: "grounded reply",
+      citations: [],
+    } as unknown as Awaited<ReturnType<typeof askGrounded>>);
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async (): Promise<void> => {
+      await result.current.sendMessage({ text: "Ground this first." });
+    });
+    expect(result.current.latestGrounded).toBeDefined();
+    vi.mocked(fetchChats).mockResolvedValueOnce({ chats: [] });
+
+    await act(async (): Promise<void> => {
+      await result.current.openProject(project("/empty"));
+    });
+
+    expect(result.current.activeProject?.path).toBe("/empty");
+    expect(result.current.activeChat).toBeUndefined();
+    expect(result.current.messages).toEqual([]);
+    expect(result.current.latestGrounded).toBeUndefined();
+    expect(createDesktopChat).not.toHaveBeenCalled();
+  });
 });
 
-// 0.3.0 release audit — the composer draft and the staged attachment queue are one app-wide
-// slot (the chat window is a singleton). Switching conversations reset the stream bubble, the
-// grounded answer and the document note, but never the composer: a document attached in chat A
-// was extracted and sent into chat B, possibly under a different model and provider. Content a
-// user staged in one conversation must never ride along into another.
+// 0.3.0 release audit — a session's composer draft and staged attachments must stay bound to its
+// conversation. ADR-0114 now mounts one session per chat window; switching a session still clears
+// its own composer, while sibling windows have independent session instances.
 describe("useChatSession conversation switch — composer isolation", () => {
   async function setupTwoChatSession(): Promise<
     ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>
@@ -1263,6 +1439,12 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
   // never regresses to more than one of each per grounded turn.
   it("issues exactly one messages fetch and one chats fetch per grounded turn", async () => {
     const { result } = await setupGroundedSession();
+
+    // Privacy default is off. This explicit action models the user's Brain-icon activation and
+    // proves that the enabled retrieval request still receives the standard 1,200-token budget.
+    act(() => {
+      result.current.setMemoryEnabled(true);
+    });
 
     // Reset the boot-time fetch counts so we measure only the grounded turn's traffic.
     vi.mocked(fetchChatMessages).mockClear();
@@ -2842,6 +3024,113 @@ describe("useChatSession canonical Voice FIFO", () => {
     windowA.unmount();
   });
 
+  it("reconciles a fallback delivery into the remounted target chat session", async () => {
+    const chatA = chat({ id: "chat-a", updatedAt: 2 });
+    const chatB = chat({ id: "chat-b", updatedAt: 1 });
+    const firstRequest = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    const fallbackRequest = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    vi.mocked(sendDesktopChat)
+      .mockImplementationOnce((_request, signal) => {
+        signal?.addEventListener(
+          "abort",
+          () => firstRequest.reject(new DOMException("cancelled", "AbortError")),
+          { once: true },
+        );
+        return firstRequest.promise;
+      })
+      .mockReturnValueOnce(fallbackRequest.promise);
+    const fallbackWindow = await setupVoiceQueueSession([chatA, chatB]);
+    const targetWindow = await setupVoiceQueueSession([chatA, chatB]);
+    await act(async () => targetWindow.result.current.openChat(chatB));
+    let delivery: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      delivery = targetWindow.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("survives remount", "voice-remount", chatB),
+      );
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+
+    targetWindow.unmount();
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledTimes(2));
+    const replacementA = await setupVoiceQueueSession([chatA, chatB]);
+    const replacementB = await setupVoiceQueueSession([chatA, chatB]);
+    await act(async () => {
+      await Promise.all([
+        replacementA.result.current.openChat(chatB),
+        replacementB.result.current.openChat(chatB),
+      ]);
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue({
+      messages: [
+        message({ id: "voice-remount-user", chatId: chatB.id, content: "survives remount" }),
+        message({
+          id: "voice-remount-assistant",
+          chatId: chatB.id,
+          content: "Answer: survives remount",
+          role: "assistant",
+        }),
+      ],
+    });
+    vi.mocked(fetchChatMessages).mockClear();
+    vi.mocked(fetchChats).mockClear();
+
+    fallbackRequest.resolve(completedTurn("survives remount", "voice-remount-assistant", chatB.id));
+    await act(async () => {
+      await delivery;
+    });
+
+    for (const replacement of [replacementA, replacementB]) {
+      expect(replacement.result.current.messages).toContainEqual(
+        expect.objectContaining({ id: "voice-remount-assistant", chatId: chatB.id }),
+      );
+      replacement.unmount();
+    }
+    expect(fetchChatMessages).toHaveBeenCalledOnce();
+    expect(fetchChats).toHaveBeenCalledOnce();
+    fallbackWindow.unmount();
+  });
+
+  it("delivers each queued turn through the chat session that accepted it", async () => {
+    const chatA = chat({ id: "chat-a", updatedAt: 2 });
+    const chatB = chat({ id: "chat-b", updatedAt: 1 });
+    const firstRequest = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    vi.mocked(sendDesktopChat)
+      .mockReturnValueOnce(firstRequest.promise)
+      .mockResolvedValueOnce(completedTurn("voice from B", "assistant-b", chatB.id));
+    const windowA = await setupVoiceQueueSession([chatA, chatB]);
+    const windowB = await setupVoiceQueueSession([chatA, chatB]);
+    await act(async () => windowB.result.current.openChat(chatB));
+
+    let first: Promise<SendMessageOutcome> | undefined;
+    let second: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      first = windowA.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("voice from A", "voice-owner-a", chatA),
+      );
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+    act(() => {
+      second = windowB.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("voice from B", "voice-owner-b", chatB),
+      );
+    });
+
+    firstRequest.resolve(completedTurn("voice from A", "assistant-a", chatA.id));
+    await act(async () => {
+      await first;
+      await second;
+    });
+
+    expect(windowA.result.current.messages).toContainEqual(
+      expect.objectContaining({ id: "assistant-a", chatId: chatA.id }),
+    );
+    expect(windowB.result.current.messages).toContainEqual(
+      expect.objectContaining({ id: "assistant-b", chatId: chatB.id }),
+    );
+    windowA.unmount();
+    windowB.unmount();
+  });
+
   it("keeps a final bound to its chat project while another project is opening", async () => {
     const originalProject = project("/repo");
     const nextProject = project("/next");
@@ -4026,6 +4315,31 @@ describe("useChatSession memory autonomy hydration", () => {
     const settings = renderHook(() => useConversationMemorySettings());
 
     await waitFor(() => expect(settings.result.current.memoryMode).toBe("autonomous-delivery"));
+  });
+
+  it("shares one in-flight policy hydration across concurrent session mounts", async () => {
+    mockMinimalBootstrap();
+    const hydration = deferred<{
+      requestedMode: "supervised-coding";
+      effectiveMode: "supervised-coding";
+      deploymentCeiling: "supervised-coding";
+      revision: number;
+    }>();
+    vi.mocked(loadMemoryAutonomyMode).mockReturnValue(hydration.promise);
+
+    renderHook(() => useChatSession({ autoCreate: false }));
+    renderHook(() => useChatSession({ autoCreate: false }));
+
+    expect(loadMemoryAutonomyMode).toHaveBeenCalledOnce();
+    await act(async () => {
+      hydration.resolve({
+        requestedMode: "supervised-coding",
+        effectiveMode: "supervised-coding",
+        deploymentCeiling: "supervised-coding",
+        revision: 1,
+      });
+      await hydration.promise;
+    });
   });
 
   it("does not let a stale hydration response overwrite a newer selection", async () => {

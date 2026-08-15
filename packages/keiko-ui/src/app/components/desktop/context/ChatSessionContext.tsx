@@ -57,14 +57,12 @@ export type ChatSessionCatalog = Pick<
   | "loading"
   | "error"
 >;
-export type ChatSessionActivity = Pick<ChatSessionApi, "sending" | "latestGrounded">;
 
 const ChatSessionStateContext = createContext<ChatSessionSettledState | null>(null);
 const ChatSessionStreamContext = createContext<ChatSessionStream | null>(null);
 const ChatSessionActionsContext = createContext<ChatSessionActions | null>(null);
 const ChatSessionCatalogContext = createContext<ChatSessionCatalog | null>(null);
 const ChatSessionProjectContext = createContext<ProjectWithAvailability | null>(null);
-const ChatSessionActivityContext = createContext<ChatSessionActivity | null>(null);
 
 interface ChatSessionProviderProps {
   readonly value: ChatSessionApi;
@@ -166,10 +164,6 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       value.error,
     ],
   );
-  const activity = useMemo<ChatSessionActivity>(
-    () => ({ sending: value.sending, latestGrounded: value.latestGrounded }),
-    [value.sending, value.latestGrounded],
-  );
   const stream = useMemo<ChatSessionStream>(
     () => ({ streamingAssistantMessage: value.streamingAssistantMessage }),
     [value.streamingAssistantMessage],
@@ -230,13 +224,11 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
     <ChatSessionActionsContext.Provider value={actions}>
       <ChatSessionCatalogContext.Provider value={catalog}>
         <ChatSessionProjectContext.Provider value={value.activeProject ?? null}>
-          <ChatSessionActivityContext.Provider value={activity}>
-            <ChatSessionStateContext.Provider value={state}>
-              <ChatSessionStreamContext.Provider value={stream}>
-                {children}
-              </ChatSessionStreamContext.Provider>
-            </ChatSessionStateContext.Provider>
-          </ChatSessionActivityContext.Provider>
+          <ChatSessionStateContext.Provider value={state}>
+            <ChatSessionStreamContext.Provider value={stream}>
+              {children}
+            </ChatSessionStreamContext.Provider>
+          </ChatSessionStateContext.Provider>
         </ChatSessionProjectContext.Provider>
       </ChatSessionCatalogContext.Provider>
     </ChatSessionActionsContext.Provider>
@@ -304,8 +296,4 @@ export function useOptionalChatSessionProject(): ProjectWithAvailability | null 
 
 export function useOptionalChatSessionActions(): ChatSessionActions | null {
   return useContext(ChatSessionActionsContext);
-}
-
-export function useOptionalChatSessionActivity(): ChatSessionActivity | null {
-  return useContext(ChatSessionActivityContext);
 }

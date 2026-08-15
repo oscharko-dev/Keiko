@@ -1,5 +1,12 @@
 import { spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -53,7 +60,10 @@ describe("scripts/keiko.sh", () => {
   let lifecyclePort: number;
 
   beforeEach(async () => {
-    stateDir = mkdtempSync(join(tmpdir(), "keiko-script-"));
+    // macOS exposes its temporary directory through `/var`, which resolves through the
+    // `/var -> /private/var` compatibility symlink. The production path boundary correctly
+    // refuses symlinked ancestors, so the fixture must hand it the canonical directory it created.
+    stateDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-script-")));
     lifecyclePort = await freeLoopbackPort();
   });
 

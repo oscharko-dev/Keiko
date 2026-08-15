@@ -163,6 +163,7 @@ type CurrentRef<T> = { current: T };
 
 interface ChatWindowProps {
   readonly windowId?: string;
+  readonly suspended?: boolean;
   readonly mini?: boolean;
   readonly minimalChat?: boolean;
   readonly compact?: boolean;
@@ -2412,6 +2413,7 @@ function SendLifecycleStatus({ status }: { readonly status: SendStatus }): React
 interface ComposerCoreProps {
   readonly ready: boolean;
   readonly placeholder: string;
+  readonly suspended?: boolean;
   readonly minimal?: boolean;
   readonly compact?: boolean;
   readonly controlsNarrow?: boolean;
@@ -2770,6 +2772,7 @@ function ComposerVoiceOverlay({
 function ComposerCoreImpl({
   ready,
   placeholder,
+  suspended = false,
   minimal = false,
   compact = false,
   controlsNarrow = false,
@@ -2851,6 +2854,7 @@ function ComposerCoreImpl({
   const playbackButtonRef = useRef<HTMLButtonElement>(null);
   const voiceDialogButtonRef = useRef<HTMLButtonElement>(null);
   const normalVoiceDialogButtonRef = useRef<HTMLButtonElement>(null);
+  const voiceCaptureOwner = useId();
   // Insert appends the reviewed transcript into the existing draft (separated by a space) and returns
   // focus to the composer so the keyboard-first text workflow is preserved; it never auto-sends.
   const insertTranscript = useCallback(
@@ -2865,12 +2869,23 @@ function ComposerCoreImpl({
   );
   const dictation = useDictation({
     onInsert: insertTranscript,
+    captureOwner: voiceCaptureOwner,
     realtime: { enabled: liveDictationEnabled },
   });
   // Issue #1559/#1560 — dialog-mode availability + persona selection. Voice Dialogue combines
   // WebRTC input/transcription with canonical chat and independent TTS; Realtime never answers.
   // Batch STT dictation remains a separate "speech to draft" feature.
-  const voiceDialog = useVoiceDialogMode({ capability: voiceCapability });
+  const voiceDialog = useVoiceDialogMode({
+    capability: voiceCapability,
+    captureOwner: voiceCaptureOwner,
+  });
+  const { cancel: cancelDictation } = dictation;
+  const { leave: leaveVoiceMode } = voiceDialog;
+  useEffect(() => {
+    if (!suspended) return;
+    cancelDictation();
+    leaveVoiceMode();
+  }, [cancelDictation, leaveVoiceMode, suspended]);
   // The canonical send result identifies the assistant row created for this exact spoken turn. TTS
   // remains disabled until that row is visible in the active chat; no latest-message or timestamp
   // heuristic may associate an unrelated concurrent answer with the voice turn.
@@ -3056,8 +3071,9 @@ function ComposerCoreImpl({
     }
     primeAudioOutput();
     setPendingVoiceAnswer(null);
+    voiceDialogSessionChatIdRef.current = undefined;
+    if (!voiceDialog.enter()) return;
     voiceDialogSessionChatIdRef.current = activeChat?.id;
-    voiceDialog.enter();
     realtimeVoice.start();
   }, [activeChat?.id, primeAudioOutput, voiceDialog, voiceDialogAvailable, realtimeVoice]);
   const leaveVoiceDialog = useCallback(() => {
@@ -4441,13 +4457,81 @@ function MemoryDisclosureButton({
       data-tip={disclosure.memoryDisclosureLabel}
       onClick={disclosure.toggleDisclosure}
     >
-      <BrainIcon size={16} />
+      <ChevronIcon size={16} />
       {disclosure.memoryCount > 0 ? (
         <span className="chat-memory-count" aria-hidden="true">
           {disclosure.memoryCountLabel}
         </span>
       ) : null}
     </button>
+  );
+}
+
+function MemoryActivationButton({
+  enabled,
+  onChange,
+}: {
+  readonly enabled: boolean;
+  readonly onChange: (next: boolean) => void;
+}): ReactNode {
+  const t = useTranslate();
+  const label = enabled ? t("chat.memory.disableForChat") : t("chat.memory.enableForChat");
+  return (
+    <button
+      type="button"
+      className={`chat-memory-activation-toggle ui-tip cmp-tip-end ${styles.memoryActivationButton}`}
+      aria-label={label}
+      aria-pressed={enabled}
+      data-enabled={enabled ? "true" : "false"}
+      data-tip={label}
+      onClick={() => {
+        onChange(!enabled);
+      }}
+    >
+      <BrainIcon size={16} />
+    </button>
+  );
+}
+
+export function normalizeMemoryBudgetInput(value: string): number {
+  const next = Number(value);
+  return Number.isFinite(next) && next > 0 ? Math.floor(next) : 0;
+}
+
+function MemoryBudgetSetting({
+  budgetTokens,
+  setBudgetTokens,
+}: {
+  readonly budgetTokens: number;
+  readonly setBudgetTokens: (next: number) => void;
+}): ReactNode {
+  const t = useTranslate();
+  const generatedId = useId();
+  const inputId = `${generatedId}-chat-memory-budget`;
+  const helpId = `${generatedId}-chat-memory-budget-help`;
+  const change = useCallback(
+    (event: ChangeEvent<HTMLInputElement>): void => {
+      setBudgetTokens(normalizeMemoryBudgetInput(event.target.value));
+    },
+    [setBudgetTokens],
+  );
+  return (
+    <div className={styles.memoryBudgetSetting}>
+      <label htmlFor={inputId}>{t("memoria.settings.budget")}</label>
+      <div className={styles.memoryBudgetControl}>
+        <input
+          id={inputId}
+          type="number"
+          min={0}
+          step={100}
+          value={budgetTokens}
+          aria-describedby={helpId}
+          onChange={change}
+        />
+        <span>{t("memoria.settings.budgetUnit")}</span>
+      </div>
+      <p id={helpId}>{t("memoria.settings.budgetHelp")}</p>
+    </div>
   );
 }
 
@@ -4476,12 +4560,16 @@ function memoryActionKey(action: ConversationMemoryActionWire): string {
 
 function MemoryPanelImpl({
   latestMemory,
+  memoryBudgetTokens,
+  setMemoryBudgetTokens,
   acceptCandidate,
   rejectCandidate,
   forgetMemoryAction,
   disclosure,
 }: {
   readonly latestMemory: ConversationMemoryResultWire | undefined;
+  readonly memoryBudgetTokens: number;
+  readonly setMemoryBudgetTokens: (next: number) => void;
   readonly acceptCandidate: (proposalId: string) => Promise<void>;
   readonly rejectCandidate: (proposalId: string) => Promise<void>;
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
@@ -4494,6 +4582,10 @@ function MemoryPanelImpl({
     <section className="chat-memory-panel" aria-label={t("chat.memory.panel")}>
       <div id={disclosure.disclosureId} className="chat-memory-disclosure">
         <p className="chat-memory-summary">{memorySummaryLabel(latestMemory, t)}</p>
+        <MemoryBudgetSetting
+          budgetTokens={memoryBudgetTokens}
+          setBudgetTokens={setMemoryBudgetTokens}
+        />
         {latestMemory?.context.memories.map((memory) => (
           <article key={memory.memoryId} className="chat-memory-item">
             <div className="chat-memory-item-head">
@@ -4653,6 +4745,8 @@ function ChatWindowStatusHeader({
   replaceChat,
   memoryControl,
   latestMemory,
+  memoryBudgetTokens,
+  setMemoryBudgetTokens,
   acceptMemoryCandidate,
   rejectMemoryCandidate,
   forgetMemoryAction,
@@ -4664,6 +4758,8 @@ function ChatWindowStatusHeader({
   readonly replaceChat: (chat: Chat) => void;
   readonly memoryControl: ReactNode;
   readonly latestMemory: ConversationMemoryResultWire | undefined;
+  readonly memoryBudgetTokens: number;
+  readonly setMemoryBudgetTokens: (next: number) => void;
   readonly acceptMemoryCandidate: (proposalId: string) => Promise<void>;
   readonly rejectMemoryCandidate: (proposalId: string) => Promise<void>;
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
@@ -4683,6 +4779,8 @@ function ChatWindowStatusHeader({
       {activeChat !== undefined ? (
         <MemoryPanel
           latestMemory={latestMemory}
+          memoryBudgetTokens={memoryBudgetTokens}
+          setMemoryBudgetTokens={setMemoryBudgetTokens}
           acceptCandidate={acceptMemoryCandidate}
           rejectCandidate={rejectMemoryCandidate}
           forgetMemoryAction={forgetMemoryAction}
@@ -4932,6 +5030,7 @@ function ComposerSendNotice({
 function ChatWindowComposerFooter({
   visible,
   activeChat,
+  suspended,
   effectiveCompact,
   effectiveMinimal,
   effectiveControlsNarrow,
@@ -4949,6 +5048,7 @@ function ChatWindowComposerFooter({
 }: {
   readonly visible: readonly ChatMessage[];
   readonly activeChat: Chat | undefined;
+  readonly suspended: boolean;
   readonly effectiveCompact: boolean;
   readonly effectiveMinimal: boolean;
   readonly effectiveControlsNarrow: boolean;
@@ -4979,6 +5079,7 @@ function ChatWindowComposerFooter({
             <ComposerCore
               ready={ready}
               placeholder={composerPlaceholder(visible.length, loading, t)}
+              suspended={suspended}
               minimal={effectiveMinimal}
               compact={effectiveCompact}
               controlsNarrow={effectiveControlsNarrow}
@@ -5015,6 +5116,7 @@ function ChatWindowComposerFooter({
 
 export function ChatWindow({
   windowId,
+  suspended = false,
   mini = false,
   minimalChat = false,
   compact = false,
@@ -5050,6 +5152,10 @@ export function ChatWindow({
     retryPendingCanonicalVoiceTurn,
     discardPendingCanonicalVoiceTurn,
     replaceChat,
+    memoryEnabled,
+    setMemoryEnabled,
+    memoryBudgetTokens,
+    setMemoryBudgetTokens,
     latestMemory,
     lastSentDocuments,
     lastSentImages = [],
@@ -5127,8 +5233,13 @@ export function ChatWindow({
   // GEN-PERF-CHAT-014 — a JSX literal in the header prop would hand ChatScopeHeader a
   // fresh element identity every render and defeat its memo.
   const memoryControl = useMemo(
-    () => <MemoryDisclosureButton disclosure={memoryDisclosure} />,
-    [memoryDisclosure],
+    () => (
+      <div className={styles.memoryControls}>
+        <MemoryActivationButton enabled={memoryEnabled} onChange={setMemoryEnabled} />
+        <MemoryDisclosureButton disclosure={memoryDisclosure} />
+      </div>
+    ),
+    [memoryDisclosure, memoryEnabled, setMemoryEnabled],
   );
   const questionAnchorsRef = useRef(new Map<string, HTMLDivElement>());
   const [focusedQuestionId, setFocusedQuestionId] = useState<string | null>(null);
@@ -5215,6 +5326,8 @@ export function ChatWindow({
         replaceChat={replaceChat}
         memoryControl={memoryControl}
         latestMemory={latestMemory}
+        memoryBudgetTokens={memoryBudgetTokens}
+        setMemoryBudgetTokens={setMemoryBudgetTokens}
         acceptMemoryCandidate={acceptMemoryCandidate}
         rejectMemoryCandidate={rejectMemoryCandidate}
         forgetMemoryAction={forgetMemoryAction}
@@ -5271,6 +5384,7 @@ export function ChatWindow({
       <ChatWindowComposerFooter
         visible={visible}
         activeChat={activeChat}
+        suspended={suspended}
         effectiveCompact={effectiveCompact}
         effectiveMinimal={effectiveMinimal}
         effectiveControlsNarrow={effectiveControlsNarrow}

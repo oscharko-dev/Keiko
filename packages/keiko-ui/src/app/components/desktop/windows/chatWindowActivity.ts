@@ -1,0 +1,240 @@
+"use client";
+
+import { useEffect, useState, useSyncExternalStore } from "react";
+
+export type ChatWindowFlowIntensity = "light" | "heavy";
+
+export interface ChatWindowFlow {
+  readonly flowing: boolean;
+  readonly intensity: ChatWindowFlowIntensity;
+}
+
+export interface ChatWindowRuntimeTarget {
+  readonly conversationId: string;
+  readonly projectPath: string;
+}
+
+interface ChatWindowRuntime extends ChatWindowRuntimeTarget {
+  readonly acceptingSelectionHandoff?: boolean;
+  readonly acceptSelectionHandoff: (selectionHandoffId: string) => void;
+}
+
+interface ChatWindowRuntimeState {
+  runtime: ChatWindowRuntime;
+  registration: symbol;
+  registered: boolean;
+  reserved: boolean;
+  readonly pendingSelectionHandoffs: string[];
+}
+
+export type ChatWindowGroundingActivity =
+  | {
+      readonly groundingKind: "connected-context";
+      readonly contextPack: {
+        readonly usage: { readonly filesRead: number; readonly excerptBytes: number };
+      };
+    }
+  | {
+      readonly groundingKind: "hybrid";
+      readonly contextPack: {
+        readonly folder: {
+          readonly usage: { readonly filesRead: number; readonly excerptBytes: number };
+        };
+        readonly knowledge: { readonly referencesUsed: number };
+      };
+    }
+  | {
+      readonly groundingKind: "local-knowledge";
+      readonly contextPack: { readonly referencesUsed: number };
+    };
+
+const HEAVY_FILES_READ = 4;
+const HEAVY_EXCERPT_BYTES = 8_192;
+const HEAVY_REFERENCES = 4;
+const FLOW_AFTERGLOW_MS = 2_500;
+
+let snapshot: ReadonlyMap<string, ChatWindowFlow> = new Map();
+const listeners = new Set<() => void>();
+const runtimes = new Map<string, ChatWindowRuntimeState>();
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return (): void => {
+    listeners.delete(listener);
+  };
+}
+
+function publishSnapshot(next: ReadonlyMap<string, ChatWindowFlow>): void {
+  snapshot = next;
+  for (const listener of listeners) listener();
+}
+
+function publishFlow(windowId: string, flow: ChatWindowFlow): void {
+  const current = snapshot.get(windowId);
+  if (current?.flowing === flow.flowing && current.intensity === flow.intensity) return;
+  publishSnapshot(new Map(snapshot).set(windowId, flow));
+}
+
+function removeFlow(windowId: string): void {
+  if (!snapshot.has(windowId)) return;
+  const next = new Map(snapshot);
+  next.delete(windowId);
+  publishSnapshot(next);
+}
+
+function isHeavyFolder(filesRead: number, excerptBytes: number): boolean {
+  return filesRead >= HEAVY_FILES_READ || excerptBytes >= HEAVY_EXCERPT_BYTES;
+}
+
+export function groundingIntensity(latest: ChatWindowGroundingActivity): ChatWindowFlowIntensity {
+  switch (latest.groundingKind) {
+    case "connected-context":
+      return isHeavyFolder(
+        latest.contextPack.usage.filesRead,
+        latest.contextPack.usage.excerptBytes,
+      )
+        ? "heavy"
+        : "light";
+    case "hybrid":
+      return isHeavyFolder(
+        latest.contextPack.folder.usage.filesRead,
+        latest.contextPack.folder.usage.excerptBytes,
+      ) || latest.contextPack.knowledge.referencesUsed >= HEAVY_REFERENCES
+        ? "heavy"
+        : "light";
+    case "local-knowledge":
+      return latest.contextPack.referencesUsed >= HEAVY_REFERENCES ? "heavy" : "light";
+  }
+}
+
+function useChannelFlow(
+  sending: boolean,
+  latest: ChatWindowGroundingActivity | undefined,
+): ChatWindowFlow {
+  const [intensity, setIntensity] = useState<ChatWindowFlowIntensity>("light");
+  const [afterglow, setAfterglow] = useState(false);
+  useEffect((): (() => void) | undefined => {
+    if (latest === undefined) {
+      setAfterglow(false);
+      return;
+    }
+    setIntensity(groundingIntensity(latest));
+    setAfterglow(true);
+    const timer = setTimeout((): void => setAfterglow(false), FLOW_AFTERGLOW_MS);
+    return (): void => clearTimeout(timer);
+  }, [latest]);
+  return { flowing: sending || afterglow, intensity };
+}
+
+export function usePublishChatWindowActivity(
+  windowId: string,
+  sending: boolean,
+  latest: ChatWindowGroundingActivity | undefined,
+): void {
+  const flow = useChannelFlow(sending, latest);
+  useEffect((): void => {
+    publishFlow(windowId, flow);
+  }, [flow, windowId]);
+  useEffect(
+    (): (() => void) => (): void => {
+      removeFlow(windowId);
+    },
+    [windowId],
+  );
+}
+
+export function registerChatWindowRuntime(
+  windowId: string,
+  runtime: ChatWindowRuntime,
+): () => void {
+  const registration = Symbol("chat-window-runtime");
+  const existing = runtimes.get(windowId);
+  const state: ChatWindowRuntimeState = existing ?? {
+    runtime,
+    registration,
+    registered: true,
+    reserved: false,
+    pendingSelectionHandoffs: [],
+  };
+  state.runtime = runtime;
+  state.registration = registration;
+  state.registered = true;
+  if (state.reserved && runtime.acceptingSelectionHandoff !== false) state.reserved = false;
+  runtimes.set(windowId, state);
+  dispatchPendingSelectionHandoff(state);
+  return (): void => {
+    if (state.registration !== registration) return;
+    state.registered = false;
+    queueMicrotask((): void => {
+      if (state.registration === registration && !state.registered) runtimes.delete(windowId);
+    });
+  };
+}
+
+export function chatWindowRuntimeTarget(windowId: string): ChatWindowRuntimeTarget | undefined {
+  const state = runtimes.get(windowId);
+  return state === undefined
+    ? undefined
+    : {
+        conversationId: state.runtime.conversationId,
+        projectPath: state.runtime.projectPath,
+      };
+}
+
+function dispatchPendingSelectionHandoff(state: ChatWindowRuntimeState): void {
+  if (!state.registered || state.reserved || state.runtime.acceptingSelectionHandoff === false) {
+    return;
+  }
+  const selectionHandoffId = state.pendingSelectionHandoffs.shift();
+  if (selectionHandoffId === undefined) return;
+  state.reserved = true;
+  state.runtime.acceptSelectionHandoff(selectionHandoffId);
+}
+
+function orderedRuntimeIds(preferredWindowIds: readonly string[]): string[] {
+  const ordered = preferredWindowIds.filter((windowId) => runtimes.has(windowId));
+  const preferred = new Set(ordered);
+  for (const windowId of runtimes.keys()) {
+    if (!preferred.has(windowId)) ordered.push(windowId);
+  }
+  return ordered;
+}
+
+export function routeSelectionHandoffToOpenChat(
+  projectPath: string,
+  selectionHandoffId: string,
+  preferredWindowIds: readonly string[] = [],
+): string | null {
+  for (const windowId of orderedRuntimeIds(preferredWindowIds)) {
+    const state = runtimes.get(windowId);
+    if (state?.runtime.projectPath !== projectPath) continue;
+    state.pendingSelectionHandoffs.push(selectionHandoffId);
+    dispatchPendingSelectionHandoff(state);
+    return windowId;
+  }
+  return null;
+}
+
+export function usePublishChatWindowRuntime(
+  windowId: string,
+  target: ChatWindowRuntimeTarget | undefined,
+  acceptSelectionHandoff: (selectionHandoffId: string) => void,
+  acceptingSelectionHandoff = true,
+): void {
+  useEffect((): (() => void) | undefined => {
+    if (target === undefined) return;
+    return registerChatWindowRuntime(windowId, {
+      ...target,
+      acceptingSelectionHandoff,
+      acceptSelectionHandoff,
+    });
+  }, [acceptSelectionHandoff, acceptingSelectionHandoff, target, windowId]);
+}
+
+export function useChatWindowFlows(): ReadonlyMap<string, ChatWindowFlow> {
+  return useSyncExternalStore(
+    subscribe,
+    (): ReadonlyMap<string, ChatWindowFlow> => snapshot,
+    (): ReadonlyMap<string, ChatWindowFlow> => snapshot,
+  );
+}

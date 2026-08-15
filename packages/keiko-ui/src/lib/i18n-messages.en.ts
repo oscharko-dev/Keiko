@@ -615,6 +615,8 @@ export const EN_MESSAGES = {
   "chat.grounding.connectKnowledgeFailed":
     "Keiko could not connect that knowledge source. Check that it is still available and try again.",
   "chat.memory.panel": "Conversation memory",
+  "chat.memory.enableForChat": "Enable MemoriaViva for this chat",
+  "chat.memory.disableForChat": "Disable MemoriaViva for this chat",
   "chat.memory.included": "{count} memories included",
   "chat.memory.noneIncluded": "No memories included",
   "chat.memory.disclosurePending": "MemoriaViva disclosure appears after the next response.",
@@ -1242,6 +1244,9 @@ export const EN_MESSAGES = {
   "updates.phase.cancelled": "Update cancelled",
   "select.placeholder": "Select an option",
   "workspace.empty.openWindow": "Open a new window",
+  "workspace.notice.dismiss": "Dismiss workspace notice",
+  "workspace.windowLimitReached":
+    "The workspace already has {limit} open windows. Close a window and try again.",
   "workspace.empty.description": "Empty workspace. Open a window to start working.",
   "workspace.empty.title": "Empty workspace",
   "workspace.empty.subtitle": "Open a window to start working",

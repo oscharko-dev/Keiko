@@ -23,11 +23,13 @@ import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import {
+  MAX_VISION_HINTS,
   makeFigmaSnapshotLoader,
   makeFigmaVisionHintProvider,
   stripJsonCodeFence,
   type FigmaVisionScreenRequest,
 } from "../figmaSnapshotAdapter.js";
+import { requireRecord } from "./schemaTestAssertions.js";
 
 function emptyStore(): EvidenceStore {
   return { put: () => "", list: () => [], get: () => undefined, delete: () => undefined };
@@ -158,6 +160,47 @@ function recordVisionSnapshot(dir: string): {
   const screen = loaded.screens[0];
   if (screen === undefined) throw new Error("expected screen");
   return { loaded, screen };
+}
+
+function expectStructuredVisionRequest(seenRequests: readonly GatewayRequest[]): void {
+  expect(seenRequests).toHaveLength(1);
+  const request = seenRequests[0];
+  if (request === undefined) throw new TypeError("expected one gateway request");
+  expect(request.modelId).toBe("vision-low");
+  expect(request.messages.map((message) => message.role)).toEqual(["system", "user"]);
+  const user = request.messages[1];
+  if (user === undefined) throw new TypeError("expected a vision user message");
+  expect(user.content).toContain("Screen id:");
+  const contentParts = user.contentParts ?? [];
+  const textPart = contentParts.find((part) => part.type === "text");
+  const imagePart = contentParts.find((part) => part.type === "image_url");
+  expect(textPart?.text).toContain("Screen id:");
+  expect(imagePart?.image_url.url).toMatch(/^data:image\/png;base64,/u);
+  expect(request.responseFormat).toMatchObject({
+    type: "json_schema",
+    name: "quality_intelligence_figma_vision_hints",
+    strict: true,
+    schema: {
+      type: "object",
+      required: ["hints"],
+      additionalProperties: false,
+      properties: {
+        hints: {
+          type: "array",
+          items: { type: "string" },
+        },
+      },
+    },
+  });
+  const responseFormat = request.responseFormat;
+  if (responseFormat?.type !== "json_schema") {
+    throw new TypeError("Vision response format must use json_schema");
+  }
+  const schema = requireRecord(responseFormat.schema, "Vision response schema");
+  const properties = requireRecord(schema.properties, "Vision response properties");
+  const hints = requireRecord(properties.hints, "Vision hints schema");
+  expect(hints).not.toHaveProperty("minItems");
+  expect(hints.maxItems).toBe(MAX_VISION_HINTS);
 }
 
 // ─── Snapshot loader ──────────────────────────────────────────────────────────────
@@ -352,12 +395,20 @@ describe("makeFigmaVisionHintProvider", () => {
         call: (request) => {
           seenRequests.push(request);
           return Promise.resolve(
-            normalizedResponse(JSON.stringify(["Primary CTA is visually disabled"]), "vision-low"),
+            normalizedResponse(
+              JSON.stringify({ hints: ["Primary CTA is visually disabled"] }),
+              "vision-low",
+            ),
           );
         },
       };
       const deps = depsWith({
-        config: configWith([capability("vision-low", { supportsImageInput: true })]),
+        config: configWith([
+          capability("vision-low", {
+            supportsImageInput: true,
+            supportsResponseFormat: true,
+          }),
+        ]),
         configPresent: true,
         evidenceDir: dir,
         modelPortFactory: () => port,
@@ -374,13 +425,47 @@ describe("makeFigmaVisionHintProvider", () => {
         }),
       ).resolves.toEqual(["Primary CTA is visually disabled"]);
 
-      const user = seenRequests[0]?.messages[1];
-      expect(seenRequests[0]?.modelId).toBe("vision-low");
-      expect(user?.content).toContain("Screen id:");
-      const textPart = user?.contentParts?.find((part) => part.type === "text");
-      const imagePart = user?.contentParts?.find((part) => part.type === "image_url");
-      expect(textPart?.text).toContain("Screen id:");
-      expect(imagePart?.image_url.url).toMatch(/^data:image\/png;base64,/u);
+      expectStructuredVisionRequest(seenRequests);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("omits strict response format when the image model lacks structured output", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-vision-tolerant-"));
+    const seenRequests: GatewayRequest[] = [];
+    try {
+      const { loaded, screen } = recordVisionSnapshot(dir);
+      const port: ModelPort = {
+        call: (request) => {
+          seenRequests.push(request);
+          return Promise.resolve(normalizedResponse(JSON.stringify({ hints: ["Visible CTA"] })));
+        },
+      };
+      const deps = depsWith({
+        config: configWith([
+          capability("vision", {
+            structuredOutput: false,
+            supportsImageInput: true,
+            supportsResponseFormat: true,
+          }),
+        ]),
+        configPresent: true,
+        evidenceDir: dir,
+        modelPortFactory: () => port,
+      });
+
+      await expect(
+        makeFigmaVisionHintProvider(deps)({
+          snapshotRunId: loaded.runId,
+          screenId: screen.screenId,
+          image: screen.image,
+          imageRelativePath: screen.image.relativePath,
+          baselineText: "Screen: Login [s1]",
+        }),
+      ).resolves.toEqual(["Visible CTA"]);
+      expect(seenRequests).toHaveLength(1);
+      expect(seenRequests[0]?.responseFormat).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

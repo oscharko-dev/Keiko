@@ -51,7 +51,7 @@ const MAX_EDITOR_LAYOUT_SPLIT_DEPTH = 32;
 // MAX_WORKSPACE_WINDOWS/MAX_WORKSPACE_CONNECTIONS) on the client parse path: the
 // localStorage route otherwise accepts unbounded arrays the server would reject,
 // leaving local state permanently divergent from the server snapshot.
-const MAX_PERSISTED_WINDOWS = 128;
+export const MAX_WORKSPACE_WINDOWS = 128;
 const MAX_PERSISTED_CONNECTIONS = 512;
 
 const CREDENTIAL_KEY_MARKERS = [
@@ -90,7 +90,13 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
   // chat has not been named yet". It must survive the snapshot: a dropped marker would be
   // re-derived from the title TEXT on the next reload, which is the display-string dependency it
   // was introduced to remove.
-  chat: ["chatId", CHAT_TITLE_IS_DEFAULT_CFG_KEY],
+  chat: [
+    "chatId",
+    "memoryEnabled",
+    "projectPath",
+    "projectPathPrivacy",
+    CHAT_TITLE_IS_DEFAULT_CFG_KEY,
+  ],
   editor: ["openFiles", "layoutJson", "rootSessionsJson"],
   files: ["activeFilePath", "activeDirectoryPath", "resolvedRoot"],
   figma: ["snapshotRunId", "selectedScreenIdsJson", "selectedScreenName"],
@@ -619,6 +625,9 @@ function sanitizeConfigValue(
   key: string,
   value: unknown,
 ): AppWindow["cfg"][string] {
+  if (type === "chat" && key === "projectPathPrivacy") {
+    return value === "omit" ? value : undefined;
+  }
   if (type === "editor") return sanitizeEditorConfigValue(key, value);
   if (type === "pdfCitationPreview") {
     return sanitizePdfCitationPreviewConfigValue(key, value);
@@ -660,6 +669,9 @@ function sanitizeCfgForPersistence(type: WindowType, cfg: unknown): AppWindow["c
     if (!allowedKeys.has(key)) continue;
     const next = sanitizeConfigValue(type, key, value);
     if (next !== undefined) out[key] = next;
+  }
+  if (type === "chat" && out["projectPathPrivacy"] === "omit") {
+    delete out["projectPath"];
   }
   return out;
 }
@@ -742,28 +754,88 @@ function migrateLegacyFigmaWindow(win: AppWindow): AppWindow {
   };
 }
 
-function dedupeSingletonWindows(wins: readonly AppWindow[]): AppWindow[] {
-  const keepers = new Map<WindowType, AppWindow>();
+function workspaceWindowIdentity(win: AppWindow): string | undefined {
+  if (WIN_TYPES[win.type].singleton === true) return `singleton:${win.type}`;
+  let identity: unknown;
+  if (win.type === "chat") identity = win.cfg["chatId"];
+  else if (win.type === "qiRun") identity = win.cfg["runId"];
+  return typeof identity === "string" && identity.length > 0
+    ? `${win.type}:${identity}`
+    : undefined;
+}
+
+function keepTopmostWindowByIdentity(
+  wins: AppWindow[],
+  identityFor: (win: AppWindow) => string | undefined,
+): AppWindow[] {
+  const keepers = new Map<string, AppWindow>();
   for (const win of wins) {
-    if (WIN_TYPES[win.type].singleton !== true) continue;
-    const current = keepers.get(win.type);
-    if (current === undefined || win.z > current.z) keepers.set(win.type, win);
+    const identity = identityFor(win);
+    if (identity === undefined) continue;
+    const current = keepers.get(identity);
+    if (current === undefined || win.z > current.z) keepers.set(identity, win);
   }
-  return wins.filter(
-    (win) => WIN_TYPES[win.type].singleton !== true || keepers.get(win.type) === win,
-  );
+  return wins.filter((win) => {
+    const identity = identityFor(win);
+    return identity === undefined || keepers.get(identity) === win;
+  });
+}
+
+export function enforceWorkspaceWindowInvariants(wins: AppWindow[]): AppWindow[] {
+  const physical = keepTopmostWindowByIdentity(wins, (win) => win.id);
+  const filtered = keepTopmostWindowByIdentity(physical, workspaceWindowIdentity);
+  if (filtered.length === wins.length && wins.length <= MAX_WORKSPACE_WINDOWS) return wins;
+  return filtered.slice(0, MAX_WORKSPACE_WINDOWS);
+}
+
+interface SanitizedWorkspaceWindows {
+  readonly wins: AppWindow[];
+  readonly aliases: ReadonlyMap<string, string>;
+}
+
+function survivingWindow(
+  removed: AppWindow,
+  retained: readonly AppWindow[],
+): AppWindow | undefined {
+  const physical = retained.find((candidate) => candidate.id === removed.id);
+  if (physical !== undefined) return physical;
+  const identity = workspaceWindowIdentity(removed);
+  return identity === undefined
+    ? undefined
+    : retained.find((candidate) => workspaceWindowIdentity(candidate) === identity);
+}
+
+function recordWindowAlias(aliases: Map<string, string>, removedId: string, keptId: string): void {
+  if (removedId === keptId) return;
+  for (const [alias, target] of aliases) {
+    if (target === removedId) aliases.set(alias, keptId);
+  }
+  aliases.set(removedId, keptId);
+}
+
+function collectPersistedWindows(wins: readonly AppWindow[]): SanitizedWorkspaceWindows {
+  let retained: AppWindow[] = [];
+  const aliases = new Map<string, string>();
+  for (const win of wins) {
+    const next = sanitizeWindow(win);
+    if (next === null) continue;
+    const candidates = [...retained, migrateLegacyFigmaWindow(next)];
+    const filtered = enforceWorkspaceWindowInvariants(candidates);
+    for (const removed of candidates) {
+      if (filtered.includes(removed)) continue;
+      const survivor = survivingWindow(removed, filtered);
+      if (survivor !== undefined) recordWindowAlias(aliases, removed.id, survivor.id);
+    }
+    retained = filtered;
+    // Count the identities that can actually survive, not hostile/legacy duplicates. This keeps
+    // scanning until the bounded snapshot contains MAX_WORKSPACE_WINDOWS distinct windows.
+    if (retained.length >= MAX_WORKSPACE_WINDOWS) break;
+  }
+  return { wins: retained, aliases };
 }
 
 export function sanitizePersistedWindows(wins: readonly AppWindow[]): AppWindow[] {
-  const out: AppWindow[] = [];
-  for (const win of wins) {
-    const next = sanitizeWindow(win);
-    if (next !== null) out.push(migrateLegacyFigmaWindow(next));
-    // Mirror the server's MAX_WORKSPACE_WINDOWS bound; anything beyond it could
-    // never round-trip through the server snapshot anyway.
-    if (out.length >= MAX_PERSISTED_WINDOWS) break;
-  }
-  return dedupeSingletonWindows(out);
+  return collectPersistedWindows(wins).wins;
 }
 
 export function parsePersistedWindows(raw: string | null): AppWindow[] | null {
@@ -778,49 +850,115 @@ export function parsePersistedWindows(raw: string | null): AppWindow[] | null {
   }
 }
 
-export function sanitizePersistedConnections(
+function remapWindowId(windowId: string, aliases: ReadonlyMap<string, string>): string {
+  let current = windowId;
+  for (let hop = 0; hop < MAX_WORKSPACE_WINDOWS; hop += 1) {
+    const next = aliases.get(current);
+    if (next === undefined || next === current) return current;
+    current = next;
+  }
+  return current;
+}
+
+function connectionEndpointKey(a: string, b: string): string {
+  return a < b ? `${a}\u0000${b}` : `${b}\u0000${a}`;
+}
+
+function remappedBoundChatWindowId(
+  conn: Connection,
+  aliases: ReadonlyMap<string, string>,
+  windowIds: ReadonlySet<string>,
+): string | undefined {
+  if (typeof conn.boundChatWindowId !== "string" || conn.boundChatWindowId.length === 0) {
+    return undefined;
+  }
+  const remapped = remapWindowId(conn.boundChatWindowId, aliases);
+  return windowIds.has(remapped) ? remapped : undefined;
+}
+
+function sanitizeConnection(
+  conn: Connection,
+  aliases: ReadonlyMap<string, string>,
+  windowIds: ReadonlySet<string>,
+): Connection | null {
+  const a = typeof conn.a === "string" ? remapWindowId(conn.a, aliases) : undefined;
+  const b = typeof conn.b === "string" ? remapWindowId(conn.b, aliases) : undefined;
+  if (
+    typeof conn.id !== "string" ||
+    a === undefined ||
+    b === undefined ||
+    !windowIds.has(a) ||
+    !windowIds.has(b)
+  ) {
+    return null;
+  }
+  const scopeSnapshotElided =
+    conn.boundScopeElided === true ||
+    typeof conn.boundRoot === "string" ||
+    typeof conn.boundScopeKind === "string" ||
+    typeof conn.boundRelativePath === "string";
+  const boundChatWindowId = remappedBoundChatWindowId(conn, aliases, windowIds);
+  const boundConnector =
+    (conn.boundConnectorKind === "capsule" || conn.boundConnectorKind === "capsule-set") &&
+    typeof conn.boundConnectorId === "string" &&
+    conn.boundConnectorId.length > 0;
+  return {
+    id: conn.id,
+    a,
+    b,
+    ...(boundChatWindowId === undefined ? {} : { boundChatWindowId }),
+    ...(scopeSnapshotElided ? { boundScopeElided: true } : {}),
+    ...(boundConnector
+      ? { boundConnectorKind: conn.boundConnectorKind, boundConnectorId: conn.boundConnectorId }
+      : {}),
+  };
+}
+
+function sanitizeConnections(
   conns: readonly Connection[],
   wins: readonly AppWindow[],
+  aliases: ReadonlyMap<string, string>,
+  deduplicateEndpoints: boolean,
 ): Connection[] {
   const windowIds = new Set(wins.map((win) => win.id));
+  const connectionIds = new Set<string>();
+  const endpointKeys = new Set<string>();
   const out: Connection[] = [];
   for (const conn of conns) {
+    const sanitized = sanitizeConnection(conn, aliases, windowIds);
+    if (sanitized === null) continue;
+    const endpointKey = connectionEndpointKey(sanitized.a, sanitized.b);
     if (
-      typeof conn.id !== "string" ||
-      typeof conn.a !== "string" ||
-      typeof conn.b !== "string" ||
-      !windowIds.has(conn.a) ||
-      !windowIds.has(conn.b)
+      connectionIds.has(sanitized.id) ||
+      (deduplicateEndpoints && endpointKeys.has(endpointKey))
     ) {
       continue;
     }
-    const scopeSnapshotElided =
-      conn.boundScopeElided === true ||
-      typeof conn.boundRoot === "string" ||
-      typeof conn.boundScopeKind === "string" ||
-      typeof conn.boundRelativePath === "string";
-    const boundChatWindowId =
-      typeof conn.boundChatWindowId === "string" &&
-      conn.boundChatWindowId.length > 0 &&
-      windowIds.has(conn.boundChatWindowId);
-    const boundConnector =
-      (conn.boundConnectorKind === "capsule" || conn.boundConnectorKind === "capsule-set") &&
-      typeof conn.boundConnectorId === "string" &&
-      conn.boundConnectorId.length > 0;
-    out.push({
-      id: conn.id,
-      a: conn.a,
-      b: conn.b,
-      ...(boundChatWindowId ? { boundChatWindowId: conn.boundChatWindowId } : {}),
-      ...(scopeSnapshotElided ? { boundScopeElided: true } : {}),
-      ...(boundConnector
-        ? { boundConnectorKind: conn.boundConnectorKind, boundConnectorId: conn.boundConnectorId }
-        : {}),
-    });
+    out.push(sanitized);
+    connectionIds.add(sanitized.id);
+    endpointKeys.add(endpointKey);
     // Mirror the server's MAX_WORKSPACE_CONNECTIONS bound (see sanitizePersistedWindows).
     if (out.length >= MAX_PERSISTED_CONNECTIONS) break;
   }
   return out;
+}
+
+export function sanitizePersistedConnections(
+  conns: readonly Connection[],
+  wins: readonly AppWindow[],
+): Connection[] {
+  return sanitizeConnections(conns, wins, new Map(), false);
+}
+
+export function sanitizePersistedWorkspace(
+  wins: readonly AppWindow[],
+  conns: readonly Connection[],
+): { readonly wins: AppWindow[]; readonly conns: Connection[] } {
+  const sanitized = collectPersistedWindows(wins);
+  return {
+    wins: sanitized.wins,
+    conns: sanitizeConnections(conns, sanitized.wins, sanitized.aliases, true),
+  };
 }
 
 export function parsePersistedConnections(

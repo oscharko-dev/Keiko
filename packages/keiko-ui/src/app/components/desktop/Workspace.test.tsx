@@ -128,7 +128,7 @@ describe("otherConnectionEndpoint (S3358)", () => {
 });
 
 describe("M1 — empty startup layout", () => {
-  it("renders the empty-state affordance when wins is an empty array", () => {
+  it("renders the empty-state affordance when wins is an empty array", async () => {
     render(
       <Workspace
         ws={workspace({ wins: [] })}
@@ -136,8 +136,8 @@ describe("M1 — empty startup layout", () => {
         openPalette={() => undefined}
       />,
     );
-    expect(screen.getByText("Empty workspace")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open a new window" })).toHaveClass(
+    expect(await screen.findByText("Empty workspace")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Open a new window" })).toHaveClass(
       "empty-workspace-blob",
     );
   });
@@ -152,7 +152,7 @@ describe("M1 — empty startup layout", () => {
         openPalette={openPalette}
       />,
     );
-    await user.click(screen.getByRole("button", { name: "Open a new window" }));
+    await user.click(await screen.findByRole("button", { name: "Open a new window" }));
     expect(openPalette).toHaveBeenCalledTimes(1);
   });
 
@@ -169,8 +169,11 @@ describe("M1 — empty startup layout", () => {
     expect(screen.queryByText("Empty workspace")).toBeNull();
   });
 
-  it("does not render minimized windows on the workspace surface", () => {
-    const wins = [appWindow({ id: "agents-1", type: "agents", minimized: true })];
+  it("keeps minimized windows mounted but hidden so background work can continue", () => {
+    const wins = [
+      appWindow({ id: "agents-1", type: "agents", minimized: true }),
+      appWindow({ id: "agents-2", type: "agents", minimized: false }),
+    ];
     const { container } = render(
       <Workspace
         ws={workspace({ wins })}
@@ -179,7 +182,12 @@ describe("M1 — empty startup layout", () => {
       />,
     );
 
-    expect(container.querySelector('[data-window-id="agents-1"]')).toBeNull();
+    const minimizedWindow = container.querySelector('[data-window-id="agents-1"]');
+    expect(minimizedWindow).toHaveAttribute("hidden");
+    expect(minimizedWindow?.getAttribute("style")).toContain("display: none");
+    const activeWindow = container.querySelector('[data-window-id="agents-2"]');
+    expect(activeWindow).not.toHaveAttribute("hidden");
+    expect(activeWindow?.getAttribute("style")).not.toContain("display: none");
     expect(screen.queryByText("Empty workspace")).toBeNull();
   });
 });

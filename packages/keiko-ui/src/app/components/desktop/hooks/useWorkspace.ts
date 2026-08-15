@@ -18,15 +18,15 @@ import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../
 import { clampWorkspaceWindowOrigin } from "../windowRecovery";
 import type {
   ChatBindingTarget,
+  ChatUnbindTarget,
   UseWorkspaceResult,
   ViewportWorld,
   WorkspaceApi,
 } from "./useWorkspace.types";
 import {
-  parsePersistedConnections,
-  parsePersistedWindows,
-  sanitizePersistedConnections,
-  sanitizePersistedWindows,
+  MAX_WORKSPACE_WINDOWS,
+  enforceWorkspaceWindowInvariants,
+  sanitizePersistedWorkspace,
 } from "./workspace-persistence";
 import {
   WORKSPACE_CLIPBOARD_PASTE_OFFSET_PX,
@@ -37,6 +37,7 @@ import {
   boundConnectorScopeOf,
   connectorChatBind,
   boundScopeOf,
+  chatUnbindTarget,
   filesChatBindScope,
   isWorkspaceWindowSelectable,
   makeConnectActions,
@@ -712,32 +713,28 @@ function snapshotFromRaw(
   windows: readonly unknown[],
   connections: readonly unknown[],
 ): WorkspaceSnapshot {
-  const wins = sanitizePersistedWindows(windows as readonly AppWindow[]);
-  return {
-    wins,
-    conns: sanitizePersistedConnections(connections as readonly Connection[], wins),
-  };
+  return sanitizePersistedWorkspace(
+    windows as readonly AppWindow[],
+    connections as readonly Connection[],
+  );
+}
+
+function readPersistedArray(key: string): readonly unknown[] {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw === null) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 function readPersistedWorkspaceSnapshot(): {
   readonly wins: AppWindow[];
   readonly conns: Connection[];
 } {
-  let wins: AppWindow[] | null = null;
-  try {
-    wins = parsePersistedWindows(window.localStorage.getItem(WS_LS));
-  } catch {
-    wins = null;
-  }
-  const resolvedWins = wins ?? [];
-  try {
-    return {
-      wins: resolvedWins,
-      conns: parsePersistedConnections(window.localStorage.getItem(CONN_LS), resolvedWins),
-    };
-  } catch {
-    return { wins: resolvedWins, conns: [] };
-  }
+  return snapshotFromRaw(readPersistedArray(WS_LS), readPersistedArray(CONN_LS));
 }
 
 function workspaceStateEtag(revision: number): string {
@@ -864,6 +861,10 @@ function surfaceWorkspaceKeepaliveOvercap(byteLength: number): void {
   );
 }
 
+export function reportConnectionUnbindFailure(): void {
+  reportClientDiagnostic("[keiko] workspace connection unbind callback failed");
+}
+
 // Server sync failures were swallowed by bare `catch { return null; }` — network
 // errors, non-OK statuses (e.g. a 413 over the server body cap) and malformed
 // payloads were indistinguishable and invisible, silently degrading the workspace
@@ -977,12 +978,11 @@ function buildServerWorkspaceSnapshot(
   readonly conns: readonly Connection[];
   readonly serialized: string;
 } {
-  const persistedWins = sanitizePersistedWindows(wins);
-  const persistedConns = sanitizePersistedConnections(conns, persistedWins);
+  const persisted = sanitizePersistedWorkspace(wins, conns);
   return {
-    wins: persistedWins,
-    conns: persistedConns,
-    serialized: JSON.stringify({ windows: persistedWins, connections: persistedConns }),
+    wins: persisted.wins,
+    conns: persisted.conns,
+    serialized: JSON.stringify({ windows: persisted.wins, connections: persisted.conns }),
   };
 }
 
@@ -1033,10 +1033,10 @@ function serializePersistedSnapshot(snapshot: {
   readonly wins: readonly AppWindow[];
   readonly conns: readonly Connection[];
 }): string {
-  const persistedWins = sanitizePersistedWindows(snapshot.wins);
+  const persisted = sanitizePersistedWorkspace(snapshot.wins, snapshot.conns);
   return JSON.stringify({
-    windows: persistedWins,
-    connections: sanitizePersistedConnections(snapshot.conns, persistedWins),
+    windows: persisted.wins,
+    connections: persisted.conns,
   });
 }
 
@@ -1449,7 +1449,7 @@ function useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef }: UseKeybo
         runContentZoomChord(e, setWins, zoomKey, targetId);
         return;
       }
-      if (!/^Arrow/.test(e.key)) return;
+      if (!e.key.startsWith("Arrow")) return;
       // GEN-UI-KEYBOARD-009 — Cmd/Ctrl+Alt+Arrow snaps the focused window to a
       // half/maximized region (the keyboard equivalent of an edge/quadrant drag
       // snap). Checked before the move/resize branch below because it shares the
@@ -1543,6 +1543,7 @@ function useConnectionPrune(
 // reached or persistence failed) vetoes the edge so no dangling ungrounded edge is drawn.
 export interface UseWorkspaceOptions {
   readonly cameraSmoothness?: number | undefined;
+  readonly onWindowLimitReached?: ((limit: number) => void) | undefined;
   readonly onScopeBind?:
     | ((
         chatWindowId: string,
@@ -1550,7 +1551,13 @@ export interface UseWorkspaceOptions {
         target?: ChatBindingTarget,
       ) => boolean | Promise<boolean>)
     | undefined;
-  readonly onScopeUnbind?: ((chatWindowId: string, scope: ChatConnectedScope) => void) | undefined;
+  readonly onScopeUnbind?:
+    | ((
+        chatWindowId: string,
+        scope: ChatConnectedScope,
+        target?: ChatUnbindTarget,
+      ) => boolean | Promise<boolean>)
+    | undefined;
   readonly onConnectorBind?:
     | ((
         chatWindowId: string,
@@ -1559,7 +1566,12 @@ export interface UseWorkspaceOptions {
       ) => boolean | Promise<boolean>)
     | undefined;
   readonly onConnectorUnbind?:
-    ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => void) | undefined;
+    | ((
+        chatWindowId: string,
+        scope: ChatLocalKnowledgeScope,
+        target?: ChatUnbindTarget,
+      ) => boolean | Promise<boolean>)
+    | undefined;
 }
 
 // S3776 — closeWithTeardown's per-connection unbind logic (below) used to run inside a
@@ -1595,32 +1607,72 @@ function connectionUnbindScope(
   return filesChatBindScope(win, other, Date.now());
 }
 
-function unbindClosedWindowConnection(
+async function unbindClosedWindowConnection(
   closedWindowId: string,
   closedWin: AppWindow,
   conn: Connection,
   winsById: ReadonlyMap<string, AppWindow>,
-  unbindScope: (chatWindowId: string, scope: ChatConnectedScope) => void,
-  unbindConnectorScope: (chatWindowId: string, scope: ChatLocalKnowledgeScope) => void,
-): void {
+  unbindScope: (
+    chatWindowId: string,
+    scope: ChatConnectedScope,
+    target?: ChatUnbindTarget,
+  ) => boolean | Promise<boolean>,
+  unbindConnectorScope: (
+    chatWindowId: string,
+    scope: ChatLocalKnowledgeScope,
+    target?: ChatUnbindTarget,
+  ) => boolean | Promise<boolean>,
+): Promise<boolean> {
   const otherId = connectionOtherEndpoint(conn, closedWindowId);
-  if (otherId === null) return;
+  if (otherId === null) return true;
   const other = winsById.get(otherId);
-  if (other === undefined) return;
+  if (other === undefined) return true;
   const chatWindowId = connectionChatWindowId(conn, closedWin, other);
+  const chatWindow = chatWindowId === closedWin.id ? closedWin : winsById.get(chatWindowId ?? "");
+  const target = chatUnbindTarget(chatWindow);
   const scope = connectionUnbindScope(conn, closedWin, other);
-  if (scope !== null && chatWindowId !== null) unbindScope(chatWindowId, scope);
   const connectorScope = boundConnectorScopeOf(conn) ?? connectorChatBind(closedWin, other);
-  if (connectorScope !== null && chatWindowId !== null) {
-    unbindConnectorScope(chatWindowId, connectorScope);
+  if (chatWindowId === null) return true;
+  try {
+    const results: Promise<boolean>[] = [];
+    if (scope !== null) results.push(Promise.resolve(unbindScope(chatWindowId, scope, target)));
+    if (connectorScope !== null) {
+      results.push(Promise.resolve(unbindConnectorScope(chatWindowId, connectorScope, target)));
+    }
+    return (await Promise.all(results)).every(Boolean);
+  } catch {
+    reportConnectionUnbindFailure();
+    return false;
   }
+}
+
+function useWorkspaceWindowState(): {
+  readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
+  readonly wins: AppWindow[] | null;
+  readonly winsReadyRef: RefObject<boolean>;
+  readonly winsRef: RefObject<AppWindow[]>;
+} {
+  const [wins, setWins] = useState<AppWindow[] | null>(null);
+  const committedWinsRef = useRef<AppWindow[] | null>(null);
+  const winsRef = useRef<AppWindow[]>([]);
+  const winsReadyRef = useRef(false);
+  const setBoundedWins = useCallback<Dispatch<SetStateAction<AppWindow[] | null>>>((update) => {
+    const current = committedWinsRef.current;
+    const next = typeof update === "function" ? update(current) : update;
+    const bounded = next === null ? null : enforceWorkspaceWindowInvariants(next);
+    committedWinsRef.current = bounded;
+    winsRef.current = bounded ?? [];
+    winsReadyRef.current = bounded !== null;
+    setWins(bounded);
+  }, []);
+  return { setWins: setBoundedWins, wins, winsReadyRef, winsRef };
 }
 
 export function useWorkspace(
   wsRef: RefObject<HTMLElement | null>,
   opts: UseWorkspaceOptions = {},
 ): UseWorkspaceResult {
-  const [wins, setWins] = useState<AppWindow[] | null>(null);
+  const { setWins, wins, winsReadyRef, winsRef } = useWorkspaceWindowState();
   const [selection, setSelection] = useState<WorkspaceUiSelectionState>({
     focusedWindowId: null,
     selectedWindowIds: [],
@@ -1640,6 +1692,7 @@ export function useWorkspace(
     onScopeUnbind,
     onConnectorBind,
     onConnectorUnbind,
+    onWindowLimitReached,
   } = opts;
   // GEN-PERF-RENDER-001 — route the optional scope-bind callbacks through refs so the
   // connectActions/api memos never rebind when a parent (AppShell) passes NEW callback
@@ -1655,6 +1708,8 @@ export function useWorkspace(
   onConnectorBindRef.current = onConnectorBind;
   const onConnectorUnbindRef = useRef(onConnectorUnbind);
   onConnectorUnbindRef.current = onConnectorUnbind;
+  const onWindowLimitReachedRef = useRef(onWindowLimitReached);
+  onWindowLimitReachedRef.current = onWindowLimitReached;
   const stableScopeBind = useCallback(
     (
       chatWindowId: string,
@@ -1663,9 +1718,15 @@ export function useWorkspace(
     ): boolean | Promise<boolean> => onScopeBindRef.current?.(chatWindowId, scope, target) ?? true,
     [],
   );
-  const stableScopeUnbind = useCallback((chatWindowId: string, scope: ChatConnectedScope): void => {
-    onScopeUnbindRef.current?.(chatWindowId, scope);
-  }, []);
+  const stableScopeUnbind = useCallback(
+    (
+      chatWindowId: string,
+      scope: ChatConnectedScope,
+      target?: ChatUnbindTarget,
+    ): boolean | Promise<boolean> =>
+      onScopeUnbindRef.current?.(chatWindowId, scope, target) ?? true,
+    [],
+  );
   const stableConnectorBind = useCallback(
     (
       chatWindowId: string,
@@ -1676,11 +1737,17 @@ export function useWorkspace(
     [],
   );
   const stableConnectorUnbind = useCallback(
-    (chatWindowId: string, scope: ChatLocalKnowledgeScope): void => {
-      onConnectorUnbindRef.current?.(chatWindowId, scope);
-    },
+    (
+      chatWindowId: string,
+      scope: ChatLocalKnowledgeScope,
+      target?: ChatUnbindTarget,
+    ): boolean | Promise<boolean> =>
+      onConnectorUnbindRef.current?.(chatWindowId, scope, target) ?? true,
     [],
   );
+  const stableWindowLimitReached = useCallback((limit: number): void => {
+    onWindowLimitReachedRef.current?.(limit);
+  }, []);
 
   const zc = useRef<number>(3);
   const snapZone = useRef<SnapZone | null>(null);
@@ -1694,10 +1761,6 @@ export function useWorkspace(
     suppressNextServerPersistRef.current = true;
   }, []);
 
-  const winsRef = useRef<AppWindow[]>([]);
-  winsRef.current = wins ?? [];
-  const winsReadyRef = useRef(false);
-  winsReadyRef.current = wins !== null;
   const selectionRef = useRef<WorkspaceUiSelectionState>(selection);
   selectionRef.current = selection;
   const workspaceClipboardRef = useRef<string | null>(null);
@@ -1730,6 +1793,7 @@ export function useWorkspace(
   connsByIdRef.current = connsById;
   const connsByEndpointRef = useRef<ReadonlyMap<string, readonly Connection[]>>(connsByEndpoint);
   connsByEndpointRef.current = connsByEndpoint;
+  const pendingWindowClosesRef = useRef(new Set<string>());
   // Refs for the click-to-connect flow. connectingRef is a synchronous view of
   // the `connecting` state for handlers fired from child components (confirm).
   // connectCleanupRef stores the global pointermove listener disposer so we
@@ -1797,15 +1861,14 @@ export function useWorkspace(
       suppressNextLocalPersistRef.current = false;
       return;
     }
-    const persistedWins = sanitizePersistedWindows(wins);
-    const persistedConns = sanitizePersistedConnections(conns, persistedWins);
-    persistList(WS_LS, persistedWins);
-    persistList(CONN_LS, persistedConns);
+    const persisted = sanitizePersistedWorkspace(wins, conns);
+    persistList(WS_LS, persisted.wins);
+    persistList(CONN_LS, persisted.conns);
     // Track what is now durably applied so a cross-tab storage event echoing this
     // exact value is recognised as a no-op (PERSISTENCE-001 equality guard).
     lastAppliedSerializedRef.current = JSON.stringify({
-      windows: persistedWins,
-      connections: persistedConns,
+      windows: persisted.wins,
+      connections: persisted.conns,
     });
   }, [conns, wins]);
 
@@ -1822,8 +1885,15 @@ export function useWorkspace(
   // now routed through refs (stable* wrappers, GEN-PERF-RENDER-001), so even a parent
   // swapping their identities every render no longer rebinds connectActions/api.
   const mutations = useMemo(
-    () => makeMutations({ setWins, zc, worldVP, winsRef }),
-    [setWins, zc, worldVP, winsRef],
+    () =>
+      makeMutations({
+        onWindowLimitReached: stableWindowLimitReached,
+        setWins,
+        zc,
+        worldVP,
+        winsRef,
+      }),
+    [setWins, stableWindowLimitReached, worldVP, winsRef],
   );
   const focusWindow = useCallback<WorkspaceApi["focus"]>(
     (id) => {
@@ -1839,6 +1909,11 @@ export function useWorkspace(
       mutations.focus(id);
     },
     [mutations, winsByIdRef, winsRef],
+  );
+  const currentWindowStack = useCallback(
+    (): readonly string[] =>
+      [...winsRef.current].sort((left, right) => right.z - left.z).map((window) => window.id),
+    [winsRef],
   );
   const layout = useMemo(() => makeLayoutActions({ setWins, worldVP }), [setWins, worldVP]);
   const snap = useMemo(
@@ -1868,6 +1943,7 @@ export function useWorkspace(
         onScopeUnbind: stableScopeUnbind,
         onConnectorBind: stableConnectorBind,
         onConnectorUnbind: stableConnectorUnbind,
+        onConnectionUnbindFailure: reportConnectionUnbindFailure,
       }),
     [
       wsRef,
@@ -1898,20 +1974,33 @@ export function useWorkspace(
   // effect afterwards only sweeps the now-orphaned edge objects.
   const closeWithTeardown = useCallback<WorkspaceApi["close"]>(
     (id) => {
+      if (pendingWindowClosesRef.current.has(id)) return;
       const win = winsByIdRef.current.get(id);
-      if (win !== undefined) {
-        for (const c of connsByEndpointRef.current.get(id) ?? []) {
+      const connections = connsByEndpointRef.current.get(id) ?? [];
+      if (win === undefined || connections.length === 0) {
+        mutations.close(id);
+        return;
+      }
+      pendingWindowClosesRef.current.add(id);
+      const teardown = Promise.all(
+        connections.map((connection) =>
           unbindClosedWindowConnection(
             id,
             win,
-            c,
+            connection,
             winsByIdRef.current,
             stableScopeUnbind,
             stableConnectorUnbind,
-          );
-        }
-      }
-      mutations.close(id);
+          ),
+        ),
+      );
+      void teardown
+        .then((accepted): void => {
+          if (accepted.every(Boolean)) mutations.close(id);
+        })
+        .finally((): void => {
+          pendingWindowClosesRef.current.delete(id);
+        });
     },
     [winsByIdRef, connsByEndpointRef, mutations, stableScopeUnbind, stableConnectorUnbind],
   );
@@ -2011,12 +2100,14 @@ export function useWorkspace(
       pasteOffsetPx: WORKSPACE_CLIPBOARD_PASTE_OFFSET_PX * workspaceClipboardPasteCountRef.current,
     });
     if (result === null) return false;
+    if (result.limitReached) stableWindowLimitReached(MAX_WORKSPACE_WINDOWS);
+    if (result.pastedWindowIds.length === 0) return false;
     zc.current = result.nextZ;
     workspaceClipboardPasteCountRef.current += 1;
     setWins(result.wins as AppWindow[]);
     setSelection(replaceWorkspaceSelection(result.wins, result.pastedWindowIds));
     return true;
-  }, [setWins, winsReadyRef, winsRef, worldVP, zc]);
+  }, [setWins, stableWindowLimitReached, winsReadyRef, winsRef, worldVP, zc]);
 
   // Component unmount must also drop the global listener.
   useEffect(
@@ -2040,6 +2131,7 @@ export function useWorkspace(
       openEditorFile: mutations.openEditorFile,
       toggleTool: mutations.toggleTool,
       focus: focusWindow,
+      currentWindowStack,
       currentSelection,
       replaceSelection,
       toggleWindowSelection,
@@ -2086,6 +2178,7 @@ export function useWorkspace(
       connectActions,
       closeWithTeardown,
       focusWindow,
+      currentWindowStack,
       currentSelection,
       replaceSelection,
       toggleWindowSelection,

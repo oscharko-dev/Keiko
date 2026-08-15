@@ -22,6 +22,7 @@ import type {
   QualityIntelligenceGenerationPort,
   QualityIntelligenceGenerationPortArgs,
 } from "@oscharko-dev/keiko-workflows";
+import { requireRecord } from "./schemaTestAssertions.js";
 
 // ─── Fake infrastructure ─────────────────────────────────────────────────────
 
@@ -697,6 +698,27 @@ function configWithSeeding(modelId: string): ReturnType<typeof parseGatewayConfi
   );
 }
 
+interface CandidateSchemaContract {
+  readonly properties: Readonly<Record<string, unknown>>;
+  readonly required: readonly string[];
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function requiredCandidateSchema(schema: unknown): CandidateSchemaContract {
+  const root = requireRecord(schema, "Response schema");
+  const properties = requireRecord(root.properties, "Response schema properties");
+  const testCases = requireRecord(properties.testCases, "testCases schema");
+  const candidate = requireRecord(testCases.items, "Candidate schema");
+  const candidateProperties = requireRecord(candidate.properties, "Candidate properties");
+  const required = candidate.required;
+  if (!Array.isArray(required)) throw new TypeError("Candidate required fields must be an array.");
+  if (!isStringArray(required)) throw new TypeError("Candidate required fields must be strings.");
+  return { properties: candidateProperties, required };
+}
+
 describe("createQiGenerationPort.generate — determinism-first parameters", () => {
   // eslint-disable-next-line complexity
   it("sends a json_schema responseFormat when the model supports it", async () => {
@@ -712,6 +734,20 @@ describe("createQiGenerationPort.generate — determinism-first parameters", () 
     }
     expect(responseFormat.name).toBe("quality_intelligence_test_design");
     expect(responseFormat.strict).toBe(true);
+    const candidateSchema = requiredCandidateSchema(responseFormat.schema);
+    const expectedCandidateFields = new Set([
+      "title",
+      "preconditions",
+      "steps",
+      "expectedResults",
+      "priority",
+      "riskClass",
+      "tags",
+      "derivedFromEvidenceIndexes",
+    ]);
+    expect(candidateSchema.required).toHaveLength(expectedCandidateFields.size);
+    expect(new Set(candidateSchema.required)).toEqual(expectedCandidateFields);
+    expect(new Set(Object.keys(candidateSchema.properties))).toEqual(expectedCandidateFields);
     expect(calls[0]?.request.temperature).toBe(0);
     expect(calls[0]?.request.topP).toBe(1);
     expect(result.modelParameters?.temperature).toBe(0);

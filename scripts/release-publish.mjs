@@ -375,6 +375,10 @@ function runGh(args) {
 }
 
 function loadDotEnvToken() {
+  // Hermetic callers (including the real-orchestrator test lane) may explicitly disable the local
+  // credential fallback. Without this, a developer's private `.env` changes which fail-closed
+  // preflight branch the exact same test reaches. The opt-out can only remove an auth source.
+  if (process.env.KEIKO_RELEASE_DISABLE_DOTENV_TOKEN === "1") return undefined;
   const envPath = join(repoRoot, ".env");
   if (!existsSync(envPath)) return undefined;
   const lines = readFileSync(envPath, "utf8").split(/\r?\n/u);

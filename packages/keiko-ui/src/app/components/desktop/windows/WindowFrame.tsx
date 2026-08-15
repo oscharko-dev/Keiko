@@ -170,6 +170,7 @@ interface BodySelection {
 // directly when building the render props below.
 interface SelectBodyOptions {
   readonly windowId: string;
+  readonly suspended: boolean;
   readonly type: WindowType;
   readonly ew: number;
   readonly eh: number;
@@ -181,6 +182,7 @@ interface SelectBodyOptions {
   readonly updateCfg: (patch: AppWindow["cfg"]) => void;
   readonly openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
   readonly focusWindow: (id: string) => void;
+  readonly currentWindowStack: (() => readonly string[]) | undefined;
   readonly restoreWindow: ((id: string) => void) | undefined;
   readonly updateWindow: (id: string, patch: Partial<AppWindow>) => void;
   readonly openEditorFile: WorkspaceApi["openEditorFile"];
@@ -189,6 +191,7 @@ interface SelectBodyOptions {
 
 function selectBody({
   windowId,
+  suspended,
   type,
   ew,
   eh,
@@ -200,6 +203,7 @@ function selectBody({
   updateCfg,
   openWindow,
   focusWindow,
+  currentWindowStack,
   restoreWindow,
   updateWindow,
   openEditorFile,
@@ -219,6 +223,7 @@ function selectBody({
       mode: mini ? "mini" : "full",
       node: def.render(typedCfg, {
         windowId,
+        suspended,
         mini,
         minimalChat,
         compact,
@@ -232,6 +237,7 @@ function selectBody({
         updateCfg,
         openWindow,
         focusWindow,
+        currentWindowStack,
         restoreWindow,
         updateWindow,
         openEditorFile,
@@ -261,6 +267,7 @@ function selectBody({
       updateCfg,
       openWindow,
       focusWindow,
+      currentWindowStack,
       restoreWindow,
       updateWindow,
       openEditorFile,
@@ -839,6 +846,7 @@ function WindowFrameImpl({
     [api],
   );
   const focusWindow = useCallback((id: string): void => api.focus(id), [api]);
+  const currentWindowStack = api.currentWindowStack;
   const restoreWindow = useCallback((id: string): void => api.restore(id), [api]);
   const updateWindow = useCallback(
     (id: string, patch: Partial<AppWindow>): void => api.update(id, patch),
@@ -855,6 +863,7 @@ function WindowFrameImpl({
     () =>
       selectBody({
         windowId: win.id,
+        suspended: win.minimized === true,
         type: win.type,
         ew,
         eh,
@@ -866,6 +875,7 @@ function WindowFrameImpl({
         updateCfg,
         openWindow,
         focusWindow,
+        currentWindowStack,
         restoreWindow,
         updateWindow,
         openEditorFile,
@@ -874,6 +884,7 @@ function WindowFrameImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- ew/eh intentionally excluded; bodyBreakpoints is their discrete-crossing proxy (GEN-PERF-RENDER-003) so a same-band resize does not rebuild the body
     [
       win.id,
+      win.minimized,
       win.type,
       win.cfg,
       bodyBreakpoints,
@@ -884,6 +895,7 @@ function WindowFrameImpl({
       updateCfg,
       openWindow,
       focusWindow,
+      currentWindowStack,
       restoreWindow,
       updateWindow,
       openEditorFile,
@@ -1196,9 +1208,10 @@ function WindowFrameImpl({
       width: win.w,
       height: win.h,
       zIndex: win.z,
+      display: win.minimized === true ? "none" : undefined,
       transform: `translate3d(${String(win.x)}px, ${String(win.y)}px, 0)`,
     }),
-    [win.x, win.y, win.w, win.h, win.z],
+    [win.x, win.y, win.w, win.h, win.z, win.minimized],
   );
   const contentZoomStyle = useMemo<CSSProperties>(
     () => ({
@@ -1238,6 +1251,7 @@ function WindowFrameImpl({
       data-selected={booleanDataAttribute(selected)}
       data-dragging={booleanDataAttribute(draggingWindow)}
       data-window-id={win.id}
+      hidden={win.minimized === true}
       style={sectionStyle}
       // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- window regions are keyboard-reachable so Space can toggle multi-selection without a drag gesture
       tabIndex={0}

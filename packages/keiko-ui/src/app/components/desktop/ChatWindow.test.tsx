@@ -20,6 +20,7 @@ import {
   copyableMessageText,
   messageForSelectedResponseVersion,
   MemoryActionForgetButtons,
+  normalizeMemoryBudgetInput,
   rootDisplayName,
 } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
@@ -137,7 +138,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
     removePendingAttachment: vi.fn(),
     clearPendingAttachments: vi.fn(),
-    memoryEnabled: true,
+    memoryEnabled: false,
     setMemoryEnabled: vi.fn(),
     memoryBudgetTokens: 1200,
     setMemoryBudgetTokens: vi.fn(),
@@ -858,24 +859,57 @@ describe("ChatWindow memory disclosure", () => {
     expect(screen.getByText(/Used 42 of 1200 MemoriaViva tokens/i)).toBeInTheDocument();
   });
 
-  it("renders the memory brain as visually disabled when no memories were included", () => {
-    renderWindow(makeSession({ activeChat: makeChat() }));
+  it("keeps an explicitly activated chat enabled before its first response", async () => {
+    const user = userEvent.setup();
+    renderWindow(makeSession({ activeChat: makeChat(), memoryEnabled: true }));
 
-    const disclosureButton = screen.getByRole("button", { name: /no memories included/i });
-    expect(disclosureButton).toHaveAttribute("data-empty", "true");
-    expect(document.querySelector(".chat-scope-header")).toContainElement(disclosureButton);
-    expect(disclosureButton.querySelector(".chat-memory-count")).toBeNull();
-    expect(disclosureButton.querySelector("svg")).not.toBeNull();
+    const activationButton = screen.getByRole("button", {
+      name: "Disable MemoriaViva for this chat",
+    });
+    expect(activationButton).toHaveAttribute("data-enabled", "true");
+    expect(activationButton).toHaveAttribute("aria-pressed", "true");
+    expect(document.querySelector(".chat-scope-header")).toContainElement(activationButton);
+    expect(activationButton.querySelector("svg")).not.toBeNull();
+    const disclosure = screen.getByRole("button", { name: /no memories included/i });
+    expect(disclosure.querySelector("svg")).not.toBeNull();
+    await user.click(disclosure);
+    expect(screen.getByLabelText("Memory context budget")).toHaveValue(1200);
     expect(screen.queryByText("No memories included")).toBeNull();
   });
 
   it("uses unique disclosure ids for multiple chat windows", () => {
     render(
       <>
-        <ChatSessionProvider value={makeSession({ activeChat: makeChat({ id: "chat-a" }) })}>
+        <ChatSessionProvider
+          value={makeSession({
+            activeChat: makeChat({ id: "chat-a" }),
+            latestMemory: {
+              context: {
+                enabled: false,
+                text: "",
+                memories: [],
+                budget: { tokens: 0, used: 0 },
+              },
+              actions: [],
+            },
+          })}
+        >
           <ChatWindow />
         </ChatSessionProvider>
-        <ChatSessionProvider value={makeSession({ activeChat: makeChat({ id: "chat-b" }) })}>
+        <ChatSessionProvider
+          value={makeSession({
+            activeChat: makeChat({ id: "chat-b" }),
+            latestMemory: {
+              context: {
+                enabled: false,
+                text: "",
+                memories: [],
+                budget: { tokens: 0, used: 0 },
+              },
+              actions: [],
+            },
+          })}
+        >
           <ChatWindow />
         </ChatSessionProvider>
       </>,
@@ -2186,7 +2220,7 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
     expect(document.querySelector(".cmp-model-menu")).toHaveStyle({ width: "118px" });
   });
 
-  it("uses the memory brain disclosure icon and hides history controls in minimal mode", () => {
+  it("uses the memory activation icon and hides history controls in minimal mode", () => {
     const { container } = render(
       <ChatSessionProvider
         value={makeSession({
@@ -2198,45 +2232,162 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
     );
 
     expect(container.querySelector(".chatw")).toHaveClass("chatw-minimal");
-    const disclosure = screen.getByRole("button", { name: "No memories included" });
-    expect(disclosure).toHaveClass("chat-memory-disclosure-toggle");
-    expect(disclosure).toHaveAttribute("data-empty", "true");
-    expect(disclosure).toHaveAttribute("data-tip", "No memories included");
-    expect(disclosure.querySelector("svg")).not.toBeNull();
+    const activation = screen.getByRole("button", {
+      name: "Enable MemoriaViva for this chat",
+    });
+    expect(activation).toHaveClass("chat-memory-activation-toggle");
+    expect(activation).toHaveAttribute("data-enabled", "false");
+    expect(activation).toHaveAttribute("data-tip", "Enable MemoriaViva for this chat");
+    expect(activation.querySelector("svg")).not.toBeNull();
     expect(screen.queryByText(/Approximate context:/)).toBeNull();
     expect(screen.queryByRole("button", { name: /clear history/i })).toBeNull();
   });
 });
 
 describe("ChatWindow memory controls", () => {
-  it("keeps MemoriaViva configuration out of the chat window while preserving disclosure", () => {
-    renderWindow(
-      makeSession({
-        activeChat: makeChat(),
-      }),
-    );
-
-    expect(screen.queryByRole("switch")).toBeNull();
-    expect(document.querySelector(".chat-memory-budget")).toBeNull();
-    expect(document.querySelector(".chat-memory-toggle")).toBeNull();
-    expect(screen.getByRole("button", { name: /no memories included/i })).toHaveClass(
-      "chat-memory-disclosure-toggle",
-    );
-  });
-
-  it("shows the pending summary before any memory result has arrived", async () => {
+  it("uses the branded brain icon as the per-conversation MemoriaViva control", async () => {
+    const setMemoryEnabled = vi.fn();
+    const setMemoryBudgetTokens = vi.fn();
     const user = userEvent.setup();
     renderWindow(
       makeSession({
         activeChat: makeChat(),
+        memoryEnabled: true,
+        setMemoryEnabled,
+        memoryBudgetTokens: 1200,
+        setMemoryBudgetTokens,
+      }),
+    );
+
+    const toggle = screen.getByRole("button", {
+      name: "Disable MemoriaViva for this chat",
+    });
+    expect(toggle).toHaveClass("chat-memory-activation-toggle");
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(toggle).toHaveAttribute("data-enabled", "true");
+    expect(toggle.querySelector("svg")).not.toBeNull();
+    expect(screen.queryByRole("switch", { name: /MemoriaViva/i })).toBeNull();
+    await user.click(toggle);
+    expect(setMemoryEnabled).toHaveBeenCalledWith(false);
+    expect(document.querySelector(".chat-memory-budget")).toBeNull();
+    await user.click(screen.getByRole("button", { name: /no memories included/i }));
+    const budget = screen.getByLabelText("Memory context budget");
+    fireEvent.change(budget, { target: { value: "2400" } });
+    expect(setMemoryBudgetTokens).toHaveBeenCalledWith(2400);
+    const normalizationCases: readonly (readonly [string, number])[] = [
+      ["", 0],
+      ["0", 0],
+      ["-100", 0],
+      ["1200.75", 1200],
+      ["1e309", 0],
+    ];
+    for (const [value, expected] of normalizationCases) {
+      fireEvent.change(budget, { target: { value } });
+      expect(normalizeMemoryBudgetInput(value)).toBe(expected);
+      expect(setMemoryBudgetTokens).toHaveBeenLastCalledWith(expected);
+    }
+  });
+
+  it("routes each memory icon only to its owning chat session", async () => {
+    const setPrivateMemoryEnabled = vi.fn();
+    const setBusinessMemoryEnabled = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <>
+        <section data-testid="private-chat">
+          <ChatSessionProvider
+            value={makeSession({
+              activeChat: makeChat({ id: "private" }),
+              memoryEnabled: true,
+              setMemoryEnabled: setPrivateMemoryEnabled,
+            })}
+          >
+            <ChatWindow />
+          </ChatSessionProvider>
+        </section>
+        <section data-testid="business-chat">
+          <ChatSessionProvider
+            value={makeSession({
+              activeChat: makeChat({ id: "business" }),
+              memoryEnabled: false,
+              setMemoryEnabled: setBusinessMemoryEnabled,
+            })}
+          >
+            <ChatWindow />
+          </ChatSessionProvider>
+        </section>
+      </>,
+    );
+
+    const privateControl = within(screen.getByTestId("private-chat")).getByRole("button", {
+      name: "Disable MemoriaViva for this chat",
+    });
+    const businessControl = within(screen.getByTestId("business-chat")).getByRole("button", {
+      name: "Enable MemoriaViva for this chat",
+    });
+    expect(privateControl).toHaveAttribute("data-enabled", "true");
+    expect(businessControl).toHaveAttribute("data-enabled", "false");
+    expect(screen.queryByRole("switch", { name: /MemoriaViva/i })).toBeNull();
+
+    await user.click(businessControl);
+    expect(setBusinessMemoryEnabled).toHaveBeenCalledWith(true);
+    expect(setPrivateMemoryEnabled).not.toHaveBeenCalled();
+  });
+
+  it("routes each memory budget control only to its owning chat session", async () => {
+    const privateBudget = vi.fn();
+    const businessBudget = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <>
+        <section data-testid="private-budget-chat">
+          <ChatSessionProvider
+            value={makeSession({
+              activeChat: makeChat({ id: "private-budget" }),
+              setMemoryBudgetTokens: privateBudget,
+            })}
+          >
+            <ChatWindow />
+          </ChatSessionProvider>
+        </section>
+        <section data-testid="business-budget-chat">
+          <ChatSessionProvider
+            value={makeSession({
+              activeChat: makeChat({ id: "business-budget" }),
+              setMemoryBudgetTokens: businessBudget,
+            })}
+          >
+            <ChatWindow />
+          </ChatSessionProvider>
+        </section>
+      </>,
+    );
+
+    const business = within(screen.getByTestId("business-budget-chat"));
+    await user.click(business.getByRole("button", { name: /no memories included/i }));
+    fireEvent.change(business.getByLabelText("Memory context budget"), {
+      target: { value: "1800" },
+    });
+
+    expect(businessBudget).toHaveBeenCalledWith(1800);
+    expect(privateBudget).not.toHaveBeenCalled();
+  });
+
+  it("opens per-chat memory settings before any memory result has arrived", async () => {
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        memoryEnabled: true,
         latestMemory: undefined,
       }),
     );
 
-    const disclosureButton = screen.getByRole("button", { name: /no memories included/i });
-    await user.click(disclosureButton);
+    await user.click(screen.getByRole("button", { name: /no memories included/i }));
+    expect(screen.getByLabelText("Memory context budget")).toHaveValue(1200);
+    expect(screen.getByText(/appears after the next response/i)).toBeInTheDocument();
     expect(
-      screen.getByText("MemoriaViva disclosure appears after the next response."),
+      screen.getByRole("button", { name: "Disable MemoriaViva for this chat" }),
     ).toBeInTheDocument();
   });
 
