@@ -167,8 +167,12 @@ describe("dependency-cruiser severity gate covers every forbidden rule (KEIKO-02
   });
 
   it("catches a rule that declares no severity at all", () => {
-    const [first, ...rest] = config.forbidden ?? [];
-    expect(findSofteningViolations([{ name: first.name }, ...rest])).toEqual([
+    const rules = config.forbidden ?? [];
+    const first = rules[0];
+    // Narrowing, not ceremony: `noUncheckedIndexedAccess` types rules[0] as possibly undefined, and
+    // an empty `forbidden` array would make the assertion below vacuous anyway.
+    if (first === undefined) throw new Error("config.forbidden must not be empty");
+    expect(findSofteningViolations([{ name: first.name }, ...rules.slice(1)])).toEqual([
       `${first.name} is at severity "(unset)"`,
     ]);
   });
