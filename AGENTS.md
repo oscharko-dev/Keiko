@@ -380,6 +380,16 @@ These cost real time when rediscovered. They are all real and current.
   packaged surface contract; run `npm run check:package-surface:assembled` and update the expected
   surface. The aggregate builds the product, prepares the CLI mode, builds the UI, removes
   build-only and host-native artifacts, and then runs the fail-closed surface checker.
+- **`check:package-surface:assembled` prunes the LIVE `node_modules`, not a staged copy.** Its
+  `prune:package-build-artifacts` and `prune:package-native-optionals` steps run against the real
+  checkout: they delete `node_modules/@napi-rs/canvas` and `canvas-*` (root, and the same under
+  every `packages/*/node_modules`), and remove `packages/<name>/node_modules` entirely for every one
+  of the ~23 workspaces listed in the root `package.json`'s `bundleDependencies`. Nothing later in
+  the aggregate restores them. Run `npm test` afterward in the same checkout and
+  `scripts/__tests__/registry-install-smoke-security.test.mjs`'s dependency-closure test fails —
+  `@napi-rs/canvas` missing from the tree it walks — a false regression with nothing to do with your
+  change. Run the assembled surface check LAST, after `npm test`, or restore first with
+  `npm install`.
 - **A new long-lived integration branch (`feat/…`) must be added in THREE places in
   `.github/workflows/ci.yml`**: the `push:` trigger list, the `pull_request:` trigger list, AND
   the protected-branch-gate `case` allowlist (`refs/heads/<branch>:` and `*:<branch>` patterns) —
