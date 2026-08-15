@@ -128,7 +128,7 @@ describe("otherConnectionEndpoint (S3358)", () => {
 });
 
 describe("M1 — empty startup layout", () => {
-  it("renders the empty-state affordance when wins is an empty array", () => {
+  it("renders the empty-state affordance when wins is an empty array", async () => {
     render(
       <Workspace
         ws={workspace({ wins: [] })}
@@ -136,8 +136,8 @@ describe("M1 — empty startup layout", () => {
         openPalette={() => undefined}
       />,
     );
-    expect(screen.getByText("Empty workspace")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open a new window" })).toHaveClass(
+    expect(await screen.findByText("Empty workspace")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Open a new window" })).toHaveClass(
       "empty-workspace-blob",
     );
   });
@@ -152,7 +152,7 @@ describe("M1 — empty startup layout", () => {
         openPalette={openPalette}
       />,
     );
-    await user.click(screen.getByRole("button", { name: "Open a new window" }));
+    await user.click(await screen.findByRole("button", { name: "Open a new window" }));
     expect(openPalette).toHaveBeenCalledTimes(1);
   });
 

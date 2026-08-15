@@ -11,7 +11,6 @@ import type {
   RefObject,
 } from "react";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
-import { EmptyWorkspaceBlob } from "./EmptyWorkspaceBlob";
 import { Icons } from "./Icons";
 import {
   acquireGrabbingBodyStyle,
@@ -70,6 +69,14 @@ const WorkspaceShader = dynamic(
     ssr: false,
     loading: () => null,
   },
+);
+
+// The animated empty-state illustration is only needed while the workspace has no windows. Keep
+// its large SVG path and animation code out of the initial desktop bundle; the stable `.ws-empty`
+// container remains mounted while this non-critical decoration loads.
+const EmptyWorkspaceBlob = dynamic(
+  () => import("./EmptyWorkspaceBlob").then((mod) => mod.EmptyWorkspaceBlob),
+  { ssr: false, loading: () => null },
 );
 
 interface WorkspaceProps {
