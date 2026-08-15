@@ -163,9 +163,14 @@ single-credential posture: the proxy layer may not introduce additional secrets.
    constructs explicitly still defaults to `false`, which is the easy way to misremember this).
    `fetchHttpViaProxy` passes no explicit `agent`, so it runs on that keep-alive-by-default global
    agent, and connection reuse to the proxy does happen. The conclusion — no matching gap — survives
-   anyway, for a different reason: Node's `Agent.getName()` pooling key is `host:port:localAddress`
-   only (verified directly: identical for two requests to the same proxy that differ solely in
-   `path`), so what gets reused is the transport hop to the proxy, never the ultimate destination.
+   anyway, for a different reason. `http.Agent.getName()` keys on `host:port:localAddress` only
+   (verified directly: identical for two requests to the same proxy that differ solely in `path`).
+   `https.Agent.getName()` is NOT the same — it extends that key with TLS options including `ca`,
+   so through an HTTPS proxy, which `fetchHttpViaProxy` selects via `httpsRequest`, a changed CA
+   bundle does produce a different key. That difference does not affect the conclusion, because
+   what both keys share is the part that matters here: **neither includes `path`**, so what gets
+   reused is the transport hop to the proxy, never the ultimate destination. (Corrected 2026-08-15
+   after review: the earlier text generalised one agent's key structure to both.)
    Each request's real target lives entirely in that request's own absolute-URI
    (`proxyRequestTarget(target, pinnedAddress)`, computed fresh inside `fetchHttpViaProxy` from that
    call's own `pinnedAddress`, never cached or carried over from an earlier call), which the proxy
