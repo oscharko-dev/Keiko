@@ -24,6 +24,7 @@ import rootManifest from "../package.json" with { type: "json" };
 const packageSpec =
   process.env.KEIKO_REGISTRY_INSTALL_PACKAGE ?? `${rootManifest.name}@${rootManifest.version}`;
 const registry = process.env.KEIKO_REGISTRY_URL ?? "https://registry.npmjs.org/";
+const TEST_RUNNER_ENV = "VITEST_WORKER_ID";
 
 function registryYarnLocator() {
   pinnedYarnLocatorParts(PINNED_YARN);
@@ -31,8 +32,8 @@ function registryYarnLocator() {
 }
 
 function testRegistryYarnLocator(locator) {
-  if (process.env.NODE_ENV !== "test") {
-    throw new TypeError("fixture Yarn locators are only accepted under NODE_ENV=test");
+  if (process.env.NODE_ENV !== "test" || process.env[TEST_RUNNER_ENV] === undefined) {
+    throw new TypeError("fixture Yarn locators are only accepted inside Vitest");
   }
   yarnLocatorParts(locator);
   return locator;

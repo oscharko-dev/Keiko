@@ -200,12 +200,13 @@ const COREPACK_CACHE_LOCK_POLL_MS = 100;
 const COREPACK_CACHE_LOCK_STALE_MS = 30 * 60_000;
 const COREPACK_CACHE_LOCK_OWNER_FILE = "owner.json";
 const COREPACK_CACHE_STALE_CLAIM_FILE = "stale-claimer.json";
+const COREPACK_CACHE_STALE_CLAIM_STALE_MS = 60_000;
 const COREPACK_CACHE_LOCK_MISSING_CODES = new Set(["ENOENT", "ENOTDIR"]);
 const COREPACK_CACHE_STALE_CLAIM_RACE_CODES = new Set(["EEXIST", "ENOENT", "ENOTDIR"]);
 const heldCorepackCacheLocks = new Set();
 
 function corepackCacheLockDir(locator) {
-  return `${corepackCacheDir(locator)}.lock`;
+  return join(corepackCacheDir(locator), ".lock");
 }
 
 function sameDirectoryIdentity(left, right) {
@@ -219,18 +220,27 @@ function lockOwnerPath(lockDir) {
 function readCorepackCacheLockOwner(lockDir) {
   try {
     const owner = JSON.parse(readFileSync(lockOwnerPath(lockDir), "utf8"));
-    return typeof owner?.token === "string" ? owner.token : undefined;
+    if (typeof owner?.token !== "string") return undefined;
+    return {
+      expiresAtMs:
+        typeof owner.expiresAtMs === "number" && Number.isFinite(owner.expiresAtMs)
+          ? owner.expiresAtMs
+          : undefined,
+      token: owner.token,
+    };
   } catch {
     return undefined;
   }
 }
 
-function writeCorepackCacheLockOwner(lockDir, ownerToken) {
+function writeCorepackCacheLockOwner(lockDir, ownerToken, timeoutMs) {
+  const leaseMs = Math.max(timeoutMs * 2, COREPACK_CACHE_LOCK_STALE_MS);
   try {
     writeFileSync(
       lockOwnerPath(lockDir),
       JSON.stringify({
         acquiredAt: new Date().toISOString(),
+        expiresAtMs: Date.now() + leaseMs,
         pid: process.pid,
         token: ownerToken,
       }),
@@ -243,7 +253,7 @@ function writeCorepackCacheLockOwner(lockDir, ownerToken) {
 }
 
 function releaseCorepackCacheLock(lockDir, ownerToken) {
-  if (readCorepackCacheLockOwner(lockDir) === ownerToken) {
+  if (readCorepackCacheLockOwner(lockDir)?.token === ownerToken) {
     rmSync(lockDir, { recursive: true, force: true });
   }
 }
@@ -257,15 +267,33 @@ function statCorepackCacheLock(lockDir) {
   }
 }
 
-function corepackCacheLockIsStale(stats, timeoutMs) {
+function corepackCacheLockIsStale(lockDir, stats, timeoutMs) {
+  const owner = readCorepackCacheLockOwner(lockDir);
+  if (owner?.expiresAtMs !== undefined) return Date.now() > owner.expiresAtMs;
   const staleAfterMs = Math.max(timeoutMs * 2, COREPACK_CACHE_LOCK_STALE_MS);
   return Date.now() - stats.mtimeMs > staleAfterMs;
 }
 
-function claimStaleCorepackCacheLock(lockDir) {
+function staleClaimPath(lockDir) {
+  return join(lockDir, COREPACK_CACHE_STALE_CLAIM_FILE);
+}
+
+function removeExpiredStaleClaim(lockDir) {
+  try {
+    const path = staleClaimPath(lockDir);
+    if (Date.now() - statSync(path).mtimeMs <= COREPACK_CACHE_STALE_CLAIM_STALE_MS) return false;
+    rmSync(path, { force: true });
+    return true;
+  } catch (error) {
+    if (COREPACK_CACHE_LOCK_MISSING_CODES.has(error?.code)) return true;
+    throw error;
+  }
+}
+
+function writeStaleCorepackCacheClaim(lockDir) {
   try {
     writeFileSync(
-      join(lockDir, COREPACK_CACHE_STALE_CLAIM_FILE),
+      staleClaimPath(lockDir),
       JSON.stringify({ claimedAt: new Date().toISOString(), pid: process.pid }),
       { encoding: "utf8", flag: "wx", mode: 0o600 },
     );
@@ -276,9 +304,14 @@ function claimStaleCorepackCacheLock(lockDir) {
   }
 }
 
+function claimStaleCorepackCacheLock(lockDir) {
+  if (writeStaleCorepackCacheClaim(lockDir)) return true;
+  return removeExpiredStaleClaim(lockDir) && writeStaleCorepackCacheClaim(lockDir);
+}
+
 function removeStaleCorepackCacheLock(lockDir, timeoutMs) {
   const stats = statCorepackCacheLock(lockDir);
-  if (stats === undefined || !corepackCacheLockIsStale(stats, timeoutMs)) return;
+  if (stats === undefined || !corepackCacheLockIsStale(lockDir, stats, timeoutMs)) return;
   if (claimStaleCorepackCacheLock(lockDir) && sameDirectoryIdentity(stats, statSync(lockDir))) {
     rmSync(lockDir, { recursive: true, force: true });
   }
@@ -291,7 +324,7 @@ async function acquireCorepackCacheLock(locator, timeoutMs) {
     const ownerToken = `${process.pid}-${randomBytes(9).toString("hex")}`;
     try {
       mkdirSync(lockDir, { mode: 0o700 });
-      writeCorepackCacheLockOwner(lockDir, ownerToken);
+      writeCorepackCacheLockOwner(lockDir, ownerToken, timeoutMs);
       return () => releaseCorepackCacheLock(lockDir, ownerToken);
     } catch (error) {
       if (error?.code !== "EEXIST") throw error;
@@ -1617,14 +1650,7 @@ export function yarnChildEnv(
  * the fixture independent of where the prune sits in any given lane (#3130).
  */
 export async function prepareOfflineSmokeForSetup() {
-  try {
-    await provisionPinnedYarnForSetup();
-  } catch (error) {
-    if (isSmokeGateFailure(error)) {
-      fail(error.message);
-    }
-    throw error;
-  }
+  await provisionPinnedYarnForSetup();
   const destination = persistentVendorSeedDir();
   const seeded = seedVendoredRegistry(destination);
   console.log(
@@ -1654,6 +1680,22 @@ export function isPinnedYarnCached(locator = PINNED_YARN) {
     cachedCorepackMetadataMatchesLocator(join(entry, ".corepack"), locator) &&
     fileSha512Matches(join(entry, "yarn.js"), sha512)
   );
+}
+
+function repairPinnedYarnCacheMetadata(locator) {
+  const entry = pinnedYarnCacheEntryDir(locator);
+  const { version, sha512 } = yarnLocatorParts(locator);
+  if (!fileSha512Matches(join(entry, "yarn.js"), sha512)) return false;
+  writeFileSync(
+    join(entry, ".corepack"),
+    JSON.stringify({
+      bin: ["yarn", "yarnpkg"],
+      hash: `sha512.${sha512}`,
+      locator: { name: PINNED_YARN_NAME, reference: `${version}+sha512.${sha512}` },
+    }),
+    "utf8",
+  );
+  return cachedCorepackMetadataMatchesLocator(join(entry, ".corepack"), locator);
 }
 
 function pinnedYarnCacheEntryDir(locator) {
@@ -1711,7 +1753,7 @@ function provisionPinnedYarnUnlocked(
 ) {
   // Already cached from an earlier run or a CI setup step: no network call at all. That keeps an
   // outage at the package-manager host from failing a gate whose dependency install is offline.
-  if (isPinnedYarnCached(locator)) {
+  if (isPinnedYarnCached(locator) || repairPinnedYarnCacheMetadata(locator)) {
     console.log(`provision-pinned-yarn: ${locator} already cached; no request made.`);
     return false;
   }

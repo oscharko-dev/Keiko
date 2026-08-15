@@ -9,6 +9,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -285,6 +286,7 @@ describe("registry install smoke security posture", () => {
             TEMP: sandboxTmp,
             TMP: sandboxTmp,
             TMPDIR: sandboxTmp,
+            VITEST_WORKER_ID: process.env.VITEST_WORKER_ID ?? "1",
           },
         },
       );
@@ -1358,11 +1360,13 @@ describe("installable package smoke optional-dependency coverage", () => {
   });
 
   it("holds the Corepack cache lock while cached Yarn may execute", async () => {
-    const lockDir = `${corepackCacheDir()}.lock`;
+    const lockDir = join(corepackCacheDir(), ".lock");
     rmSync(lockDir, { recursive: true, force: true });
     try {
       const result = await withCorepackYarnCacheLock(PINNED_YARN, async () => {
         expect(existsSync(lockDir)).toBe(true);
+        const owner = JSON.parse(readFileSync(join(lockDir, "owner.json"), "utf8"));
+        expect(owner.expiresAtMs).toBeGreaterThan(Date.now());
         return await withCorepackYarnCacheLock(PINNED_YARN, () => "locked");
       });
 
@@ -1374,7 +1378,7 @@ describe("installable package smoke optional-dependency coverage", () => {
   });
 
   it("does not release a Corepack cache lock it no longer owns", async () => {
-    const lockDir = `${corepackCacheDir()}.lock`;
+    const lockDir = join(corepackCacheDir(), ".lock");
     rmSync(lockDir, { recursive: true, force: true });
     try {
       await withCorepackYarnCacheLock(PINNED_YARN, () => {
@@ -1388,6 +1392,30 @@ describe("installable package smoke optional-dependency coverage", () => {
       });
 
       expect(existsSync(lockDir)).toBe(true);
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers an abandoned stale Corepack cache lock claim", async () => {
+    const lockDir = join(corepackCacheDir(), ".lock");
+    const claimPath = join(lockDir, "stale-claimer.json");
+    rmSync(lockDir, { recursive: true, force: true });
+    try {
+      mkdirSync(lockDir, { mode: 0o700 });
+      writeFileSync(
+        join(lockDir, "owner.json"),
+        JSON.stringify({ expiresAtMs: Date.now() - 1, pid: 1, token: "dead" }),
+        "utf8",
+      );
+      writeFileSync(claimPath, "{}\n", "utf8");
+      const old = new Date(Date.now() - 120_000);
+      utimesSync(claimPath, old, old);
+
+      const result = await withCorepackYarnCacheLock(PINNED_YARN, () => "reclaimed", 1_000);
+
+      expect(result).toBe("reclaimed");
+      expect(existsSync(lockDir)).toBe(false);
     } finally {
       rmSync(lockDir, { recursive: true, force: true });
     }
@@ -1481,6 +1509,36 @@ describe("installable package smoke optional-dependency coverage", () => {
         originalCached: true,
         alternateCached: false,
       });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs missing Corepack metadata when the cached Yarn bytes match", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-corepack-metadata-repair-test-"));
+    const fixtureBytes = "metadata repair Yarn fixture\n";
+    const fixtureLocator = yarnLocatorForBytes(`${PINNED_YARN_VERSION}-metadata.1`, fixtureBytes);
+    try {
+      const result = runIsolatedSmokeModule(
+        root,
+        [
+          'import { mkdirSync, writeFileSync } from "node:fs";',
+          'import { join } from "node:path";',
+          "import { corepackCacheDir, isPinnedYarnCached, provisionPinnedYarnForSetup } from './scripts/installable-package-smoke.mjs';",
+          "import { PINNED_YARN_NAME } from './scripts/lib/pinned-yarn.mjs';",
+          `const locator = ${JSON.stringify(fixtureLocator)};`,
+          `const fixtureBytes = ${JSON.stringify(fixtureBytes)};`,
+          `const version = ${JSON.stringify(`${PINNED_YARN_VERSION}-metadata.1`)};`,
+          "const entry = join(corepackCacheDir(locator), 'v1', PINNED_YARN_NAME, version);",
+          "mkdirSync(entry, { recursive: true });",
+          "writeFileSync(join(entry, 'yarn.js'), fixtureBytes, 'utf8');",
+          "await provisionPinnedYarnForSetup(locator);",
+          "if (!isPinnedYarnCached(locator)) process.exit(2);",
+        ].join("\n"),
+      );
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("already cached; no request made");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -2179,7 +2237,7 @@ describe("installable package smoke optional-dependency coverage", () => {
       await expect(installIntoWithYarn(projectDir, artifact)).rejects.toThrow(
         /process\.exit\(1\)/u,
       );
-      expect(existsSync(`${corepackCacheDir()}.lock`)).toBe(false);
+      expect(existsSync(join(corepackCacheDir(), ".lock"))).toBe(false);
     } finally {
       process.env.PATH = previousPath;
       rmSync(root, { recursive: true, force: true });

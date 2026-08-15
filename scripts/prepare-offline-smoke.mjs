@@ -11,15 +11,18 @@
 //
 // Idempotent: a cached tool and an existing seed are left alone.
 
-import { prepareOfflineSmokeForSetup } from "./installable-package-smoke.mjs";
+import { isSmokeGateFailure, prepareOfflineSmokeForSetup } from "./installable-package-smoke.mjs";
 
 try {
   await prepareOfflineSmokeForSetup();
 } catch (error) {
-  // A Corepack failure already exits through the smoke's own diagnostic. This catch is for
-  // everything else — an unwritable temp directory, a cache path that fails its ownership check —
-  // which would otherwise surface as a raw Node stack trace in a CI setup step and name neither
-  // the step nor the cause.
+  if (isSmokeGateFailure(error)) {
+    console.error(`installable-smoke failed: ${error.message}`);
+    process.exit(1);
+  }
+  // Everything else — an unwritable temp directory, a cache path that fails its ownership check —
+  // would otherwise surface as a raw Node stack trace in a CI setup step and name neither the step
+  // nor the cause.
   const reason = error instanceof Error ? error.message : String(error);
   console.error(`prepare-offline-smoke: could not prepare the offline smoke: ${reason}`);
   process.exit(1);

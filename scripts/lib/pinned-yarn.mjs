@@ -21,7 +21,7 @@ const PINNED_YARN_LOCATOR_PATTERN = new RegExp(
 export function yarnLocatorParts(locator) {
   const match = PINNED_YARN_LOCATOR_PATTERN.exec(locator);
   const parts = match?.groups;
-  if (parts?.version === undefined || parts.sha512 === undefined) {
+  if (parts?.version === undefined || parts?.sha512 === undefined) {
     throw new TypeError("Yarn locator must be yarn@<semver>+sha512.<128-hex>");
   }
   return { version: parts.version, sha512: parts.sha512.toLowerCase() };
