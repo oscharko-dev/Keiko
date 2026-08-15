@@ -355,6 +355,7 @@ export const registryInstallSmokeInternalsForTest = {
   assertVendoredPayload,
   commandSummary,
   outputByteSummary,
+  npmSmoke,
   registryHostnameIsLoopback,
   registryInstallTimeoutMs,
   registryYarnLocator,
@@ -363,6 +364,7 @@ export const registryInstallSmokeInternalsForTest = {
   testRegistryYarnLocator,
   writeYarnSmokeConfiguration,
   writeYarnSmokeManifest,
+  yarnSmoke,
 };
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {

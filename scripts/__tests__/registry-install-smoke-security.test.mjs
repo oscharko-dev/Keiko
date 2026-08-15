@@ -213,6 +213,51 @@ function writeRegistryInstalledRuntimeFixture(root) {
   );
 }
 
+function registryInstallFixtureLines() {
+  return [
+    'import { mkdirSync, writeFileSync } from "node:fs";',
+    'import { join } from "node:path";',
+    "const version = process.env.ROOT_VERSION;",
+    "const bundled = JSON.parse(process.env.BUNDLED_DEPS ?? '[]');",
+    "const root = join(process.cwd(), 'node_modules', '@oscharko-dev', 'keiko');",
+    "mkdirSync(join(root, 'dist', 'cli'), { recursive: true });",
+    "writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module' }));",
+    "writeFileSync(join(root, 'dist', 'index.js'), `export const SDK_VERSION = ${JSON.stringify(version)};\\n`);",
+    "writeFileSync(",
+    "  join(root, 'dist', 'cli', 'index.js'),",
+    "  `if (process.argv.includes('--version')) console.log('${version}'); else if (process.argv.includes('--help')) console.log('help'); else process.exit(2);\\n`,",
+    ");",
+    "for (const name of bundled) {",
+    "  const shortName = name.replace(/^@oscharko-dev\\//u, '');",
+    "  const dist = join(root, 'node_modules', '@oscharko-dev', shortName, 'dist');",
+    "  mkdirSync(dist, { recursive: true });",
+    "  writeFileSync(join(dist, 'index.js'), 'export {};\\n');",
+    "}",
+  ];
+}
+
+async function withRegistryFixtureInstallerEnv(binDir, marker, action) {
+  const values = {
+    BUNDLED_DEPS: JSON.stringify(ROOT_MANIFEST.bundleDependencies),
+    KEIKO_COREPACK_MARKER: marker,
+    PATH: `${binDir}${delimiter}${process.env.PATH}`,
+    ROOT_VERSION: ROOT_MANIFEST.version,
+  };
+  const previous = new Map(Object.keys(values).map((name) => [name, process.env[name]]));
+  try {
+    Object.assign(process.env, values);
+    return await action();
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) {
+        Reflect.deleteProperty(process.env, name);
+      } else {
+        process.env[name] = value;
+      }
+    }
+  }
+}
+
 function isolatedChildEnv(root, extraEnv = {}) {
   const sandboxTmp = join(root, "tmp");
   const sandboxHome = join(root, "home");
@@ -343,26 +388,7 @@ describe("registry install smoke security posture", () => {
   it("always executes the Yarn registry install proof for the root package", () => {
     const binDir = mkdtempSync(join(tmpdir(), "keiko-registry-smoke-bin-"));
     try {
-      const installFixture = [
-        'import { mkdirSync, writeFileSync } from "node:fs";',
-        'import { join } from "node:path";',
-        "const version = process.env.ROOT_VERSION;",
-        "const bundled = JSON.parse(process.env.BUNDLED_DEPS ?? '[]');",
-        "const root = join(process.cwd(), 'node_modules', '@oscharko-dev', 'keiko');",
-        "mkdirSync(join(root, 'dist', 'cli'), { recursive: true });",
-        "writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module' }));",
-        "writeFileSync(join(root, 'dist', 'index.js'), `export const SDK_VERSION = ${JSON.stringify(version)};\\n`);",
-        "writeFileSync(",
-        "  join(root, 'dist', 'cli', 'index.js'),",
-        "  `if (process.argv.includes('--version')) console.log('${version}'); else if (process.argv.includes('--help')) console.log('help'); else process.exit(2);\\n`,",
-        ");",
-        "for (const name of bundled) {",
-        "  const shortName = name.replace(/^@oscharko-dev\\//u, '');",
-        "  const dist = join(root, 'node_modules', '@oscharko-dev', shortName, 'dist');",
-        "  mkdirSync(dist, { recursive: true });",
-        "  writeFileSync(join(dist, 'index.js'), 'export {};\\n');",
-        "}",
-      ];
+      const installFixture = registryInstallFixtureLines();
       writeExecutable(join(binDir, "npm"), installFixture.join("\n"));
       const marker = join(binDir, "corepack-called");
       const fixtureBytes = "registry-install-smoke Yarn fixture\n";
@@ -408,6 +434,29 @@ describe("registry install smoke security posture", () => {
       expect(result.stdout).toContain(
         `registry-install-smoke: PASS - ${ROOT_MANIFEST.name}@${ROOT_MANIFEST.version} installs`,
       );
+      expect(existsSync(marker)).toBe(true);
+    } finally {
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  it("covers the npm and Yarn registry smoke phases in process", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "keiko-registry-smoke-phases-"));
+    try {
+      const fixtureBytes = "registry-install-smoke in-process Yarn fixture\n";
+      const fixtureLocator = yarnLocatorForBytes(`${PINNED_YARN_VERSION}-fixture.2`, fixtureBytes);
+      const installFixture = registryInstallFixtureLines();
+      const marker = join(binDir, "corepack-called");
+      writeExecutable(join(binDir, "npm"), installFixture.join("\n"));
+      writeCorepackFixture(binDir, fixtureLocator, fixtureBytes, [
+        ...installFixture.slice(2),
+        "writeFileSync(process.env.KEIKO_COREPACK_MARKER, 'called\\n', 'utf8');",
+      ]);
+
+      await withRegistryFixtureInstallerEnv(binDir, marker, async () => {
+        await expect(registrySmoke.npmSmoke(5_000)).resolves.toBeUndefined();
+        await expect(registrySmoke.yarnSmoke(fixtureLocator, 5_000)).resolves.toBeUndefined();
+      });
       expect(existsSync(marker)).toBe(true);
     } finally {
       rmSync(binDir, { recursive: true, force: true });
