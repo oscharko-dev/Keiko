@@ -506,17 +506,21 @@ async function deniedBody(response: Response): Promise<string> {
   return text;
 }
 
-function breakpointMutationBody(): Record<string, unknown> {
+function breakpointMutationBody(
+  fileId = "src/private-entry.ts",
+  line = 12,
+  expectedRevision = 0,
+): Record<string, unknown> {
   return {
     schemaVersion: "1",
     workspaceId,
-    expectedRevision: 0,
-    fileId: "src/private-entry.ts",
+    expectedRevision,
+    fileId,
     breakpoints: [
       {
         id: "request-breakpoint",
-        fileId: "src/private-entry.ts",
-        line: 12,
+        fileId,
+        line,
         enabled: true,
         kind: "line",
         verification: "pending",
@@ -552,6 +556,21 @@ function requiredFirst<T>(values: readonly T[]): T {
   const first = values[0];
   if (first === undefined) throw new Error("invalid route test fixture");
   return first;
+}
+
+interface CapturedSetBreakpointsArgs {
+  readonly source?: { readonly path?: string };
+  readonly breakpoints?: readonly { readonly line?: unknown }[];
+}
+
+function breakpointRequestPath(args: unknown): string | undefined {
+  return (args as CapturedSetBreakpointsArgs).source?.path;
+}
+
+function breakpointRequestLines(args: unknown): readonly unknown[] {
+  return ((args as CapturedSetBreakpointsArgs).breakpoints ?? []).map(
+    (breakpoint) => breakpoint.line,
+  );
 }
 
 // Recursively collect every [key, primitive-value] pair of a payload. Used to assert redaction in a
@@ -903,6 +922,58 @@ describe("governed DAP debug routes", () => {
     expect(response.status).toBe(200);
     expect(body.snapshot.revision).toBe(initial.revision + 2);
     expect(requiredFirst(body.snapshot.breakpoints).verification).toBe("verified");
+  });
+
+  it("retries active breakpoint reconciliation from the latest snapshot after verification drift", async () => {
+    enableDebug();
+    const cookie = cookieFrom(await bootstrap());
+    const started = await debugJson("/api/editor/debug/sessions", cookie, {
+      schemaVersion: "1",
+      workspaceId,
+      target: { kind: "file", fileId: "src/private-entry.ts" },
+      activationRevision: ACTIVATION_REVISION,
+    });
+    expect(started.status).toBe(201);
+    const initial = (await (await instrumentation(cookie)).json()) as {
+      readonly revision: number;
+      readonly etag: string;
+    };
+
+    manager.delayedCommand = "setBreakpoints";
+    const delayedEdit = putBreakpoints(cookie, breakpointMutationBody(), initial.etag);
+    await vi.waitFor(() => {
+      expect(manager.requests.filter((entry) => entry.command === "setBreakpoints")).toHaveLength(
+        1,
+      );
+    });
+    manager.delayedCommand = undefined;
+    const afterDelayedCommit = (await (await instrumentation(cookie)).json()) as {
+      readonly revision: number;
+      readonly etag: string;
+    };
+    const currentEdit = await putBreakpoints(
+      cookie,
+      breakpointMutationBody("src/private-entry.ts", 34, afterDelayedCommit.revision),
+      afterDelayedCommit.etag,
+    );
+    manager.releaseDelayedRequest();
+    const driftedEdit = await delayedEdit;
+    const persisted = (await (await instrumentation(cookie)).json()) as {
+      readonly breakpoints: readonly { readonly line: number; readonly verification: string }[];
+    };
+
+    const calls = manager.requests.filter((entry) => entry.command === "setBreakpoints");
+    expect(currentEdit.status).toBe(200);
+    expect(driftedEdit.status).toBe(200);
+    expect(calls.map((entry) => breakpointRequestLines(entry.args))).toStrictEqual([
+      [12],
+      [34],
+      [34],
+    ]);
+    expect(requiredFirst(persisted.breakpoints)).toMatchObject({
+      line: 34,
+      verification: "verified",
+    });
   });
 
   it("reconciles persisted pending breakpoints during session startup", async () => {
@@ -2120,6 +2191,62 @@ describe("renameInstrumentation orchestration (KEIKO-0179 follow-up, Codex P1 on
         "src/renamed.ts",
       ]);
       expect(migrated.snapshot.breakpoints[0]?.verification).toBe("verified");
+    }
+  });
+
+  it("re-arms a renamed path from the latest snapshot after verification drift", async () => {
+    const service = buildRenameService();
+    const initial = service.breakpoints.snapshot(workspaceRoot);
+    if (!initial.ok) throw new Error("expected an available breakpoint snapshot");
+    const armed = service.breakpoints.setBreakpointsForFile(
+      workspaceRoot,
+      initial.snapshot.revision,
+      initial.snapshot.etag,
+      "src/app.ts",
+      [{ line: 4, enabled: true }],
+    );
+    expect(armed.ok).toBe(true);
+    await bindLiveSession("rename-drift-binding");
+    manager.delayedCommand = "setBreakpoints";
+
+    const rename = service.renameInstrumentation(workspaceRoot, [
+      { previousFileId: "src/app.ts", nextFileId: "src/renamed.ts" },
+    ]);
+    await vi.waitFor(() => {
+      const calls = manager.requests.filter((entry) => entry.command === "setBreakpoints");
+      expect(calls).toHaveLength(1);
+      expect(breakpointRequestPath(requiredFirst(calls).args)).toBe(
+        "/keiko-execution-root/src/app.ts",
+      );
+    });
+    manager.delayedCommand = undefined;
+    const renamed = service.breakpoints.snapshot(workspaceRoot);
+    if (!renamed.ok) throw new Error("expected a renamed breakpoint snapshot");
+    const concurrentEdit = service.breakpoints.setBreakpointsForFile(
+      workspaceRoot,
+      renamed.snapshot.revision,
+      renamed.snapshot.etag,
+      "src/renamed.ts",
+      [{ line: 9, enabled: true }],
+    );
+    expect(concurrentEdit.ok).toBe(true);
+
+    manager.releaseDelayedRequest();
+    await rename;
+
+    const calls = manager.requests.filter((entry) => entry.command === "setBreakpoints");
+    expect(calls.map((entry) => breakpointRequestPath(entry.args))).toStrictEqual([
+      "/keiko-execution-root/src/app.ts",
+      "/keiko-execution-root/src/renamed.ts",
+      "/keiko-execution-root/src/renamed.ts",
+    ]);
+    expect(calls.map((entry) => breakpointRequestLines(entry.args))).toStrictEqual([[], [4], [9]]);
+    const migrated = service.breakpoints.snapshot(workspaceRoot);
+    expect(migrated.ok).toBe(true);
+    if (migrated.ok) {
+      expect(migrated.snapshot.breakpoints).toMatchObject([
+        { fileId: "src/renamed.ts", line: 9, verification: "verified" },
+      ]);
     }
   });
 
