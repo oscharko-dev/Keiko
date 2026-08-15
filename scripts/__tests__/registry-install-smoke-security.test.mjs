@@ -1348,10 +1348,17 @@ describe("installable package smoke optional-dependency coverage", () => {
       pinnedYarnVersionFromLocator(`yarn@${PINNED_YARN_VERSION}-rc.1+sha512.${PINNED_YARN_SHA512}`),
     ).toThrow(/version/u);
     expect(() =>
+      yarnPackageManagerFromLocator(
+        `yarn@${PINNED_YARN_VERSION}-rc.1+sha512.${PINNED_YARN_SHA512}`,
+      ),
+    ).toThrow(/version/u);
+    expect(() =>
       pinnedYarnLocatorParts(`yarn@${PINNED_YARN_VERSION}+sha512.${"0".repeat(128)}`),
     ).toThrow(/sha512/u);
     expect(installableSource).toContain("locator = PINNED_YARN");
-    expect(installableSource).toContain("packageManager: yarnPackageManagerFromLocator(locator)");
+    expect(installableSource).toContain(
+      "packageManager: yarnPackageManagerFromSmokeLocator(locator)",
+    );
     expect(registrySource).toContain("pinnedYarnLocatorParts(PINNED_YARN)");
     expect(registrySource).toContain("registryYarnLocator()");
     expect(registrySource).toContain(

@@ -49,6 +49,7 @@ const WINDOWS_SHELL_UNSAFE_ARG = /[\0\r\n&|<>^%!"]/u;
 const UI_HEALTH_TIMEOUT_MS = 30_000;
 const UI_HEALTH_POLL_INTERVAL_MS = 250;
 const LIFECYCLE_COMMAND_TIMEOUT_MS = 90_000;
+const TEST_RUNNER_ENV = "VITEST_WORKER_ID";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
 const rootPackageSurfaceContract = JSON.parse(
@@ -101,6 +102,15 @@ function yarnLocatorLogSummary(locator) {
   const { version } = yarnLocatorParts(locator);
   const locatorSha256 = createHash("sha256").update(locator, "utf8").digest("hex");
   return `${PINNED_YARN_NAME}@${version} (locatorSha256=${locatorSha256})`;
+}
+
+function yarnPackageManagerFromSmokeLocator(locator) {
+  if (locator === PINNED_YARN) return yarnPackageManagerFromLocator(locator);
+  if (process.env.NODE_ENV !== "test" || process.env[TEST_RUNNER_ENV] === undefined) {
+    throw smokeGateFailure("fixture Yarn locators are only accepted inside Vitest");
+  }
+  const { version, sha512 } = yarnLocatorParts(locator);
+  return `${PINNED_YARN_NAME}@${version}+sha512.${sha512}`;
 }
 
 export function parsePositiveTimeoutEnv(name) {
@@ -1988,7 +1998,7 @@ function writeYarnInstallManifest(tmp, locator) {
       {
         private: true,
         type: "module",
-        packageManager: yarnPackageManagerFromLocator(locator),
+        packageManager: yarnPackageManagerFromSmokeLocator(locator),
         dependencies: { [rootPackageJson.name]: rootVersion },
       },
       null,

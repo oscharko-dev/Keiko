@@ -29,8 +29,13 @@ const registry = process.env.KEIKO_REGISTRY_URL ?? "https://registry.npmjs.org/"
 const TEST_RUNNER_ENV = "VITEST_WORKER_ID";
 
 function registryYarnLocator() {
-  pinnedYarnLocatorParts(PINNED_YARN);
-  return PINNED_YARN;
+  try {
+    pinnedYarnLocatorParts(PINNED_YARN);
+    return PINNED_YARN;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new SmokeGateFailure(`registry install smoke pinned Yarn locator is invalid: ${reason}`);
+  }
 }
 
 function smokeGateYarnLocatorParts(locator) {
@@ -43,12 +48,9 @@ function smokeGateYarnLocatorParts(locator) {
 }
 
 function smokeGateYarnPackageManager(locator) {
-  try {
-    return yarnPackageManagerFromLocator(locator);
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new SmokeGateFailure(`registry install smoke Yarn locator is invalid: ${reason}`);
-  }
+  if (locator === PINNED_YARN) return yarnPackageManagerFromLocator(locator);
+  const { version, sha512 } = smokeGateYarnLocatorParts(locator);
+  return `yarn@${version}+sha512.${sha512}`;
 }
 
 function testRegistryYarnLocator(locator) {
