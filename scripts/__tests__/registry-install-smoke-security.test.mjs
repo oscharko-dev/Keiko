@@ -3178,8 +3178,8 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
-  it("preserves redacted Corepack permission diagnostics", async () => {
-    if (process.platform === "win32") return;
+  it("preserves redacted Corepack permission diagnostics", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
     const root = mkdtempSync(join(tmpdir(), "keiko-yarn-setup-eacces-test-"));
     const binDir = join(root, "bin");
     const projectDir = join(root, "project");
