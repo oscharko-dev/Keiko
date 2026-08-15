@@ -978,6 +978,74 @@ describe("AppShell grounding connections", () => {
     expect(reportError).toHaveBeenCalledTimes(2);
   });
 
+  it("compensates a timed-out scope unbind before retaining the visible edge", async () => {
+    vi.stubGlobal("reportError", vi.fn());
+    const scope = fileScope("/late-unbind");
+    const current = chat({ connectedScopes: [scope], updatedAt: 1 });
+    const removed = chat({ connectedScopes: [], updatedAt: 2 });
+    const restored = chat({ connectedScopes: [scope], updatedAt: 3 });
+    const persisted = deferred<{ readonly chat: Chat }>();
+    mocks.state.session = {
+      ...(mocks.state.session as TestSession),
+      activeChat: current,
+      chats: [current],
+    };
+    mocks.updateChatConnectedScopes
+      .mockReturnValueOnce(persisted.promise)
+      .mockResolvedValueOnce({ chat: restored });
+    await renderMounted();
+    vi.useFakeTimers();
+
+    const unbinding = Promise.resolve(
+      mocks.state.workspaceOptions?.onScopeUnbind?.("chat-window", scope),
+    );
+    await vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS);
+    await expect(unbinding).resolves.toBe(false);
+
+    await act(async (): Promise<void> => {
+      persisted.resolve({ chat: removed });
+      await persisted.promise;
+      await Promise.resolve();
+    });
+
+    expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(2, "chat-1", [scope]);
+    expect(mocks.state.session?.replaceChat).not.toHaveBeenCalledWith(removed);
+  });
+
+  it("compensates a timed-out connector unbind before retaining the visible edge", async () => {
+    vi.stubGlobal("reportError", vi.fn());
+    const scope = capsuleScope("cap-late-unbind");
+    const current = chat({ localKnowledgeScopes: [scope], updatedAt: 1 });
+    const removed = chat({ localKnowledgeScopes: [], updatedAt: 2 });
+    const restored = chat({ localKnowledgeScopes: [scope], updatedAt: 3 });
+    const persisted = deferred<{ readonly chat: Chat }>();
+    mocks.state.session = {
+      ...(mocks.state.session as TestSession),
+      activeChat: current,
+      chats: [current],
+    };
+    mocks.updateChatLocalKnowledgeScopes
+      .mockReturnValueOnce(persisted.promise)
+      .mockResolvedValueOnce({ chat: restored });
+    await renderMounted();
+    vi.useFakeTimers();
+
+    const unbinding = Promise.resolve(
+      mocks.state.workspaceOptions?.onConnectorUnbind?.("chat-window", scope),
+    );
+    await vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS);
+    await expect(unbinding).resolves.toBe(false);
+
+    await act(async (): Promise<void> => {
+      persisted.resolve({ chat: removed });
+      await persisted.promise;
+      await Promise.resolve();
+    });
+
+    expect(mocks.updateChatLocalKnowledgeScopes).toHaveBeenNthCalledWith(2, "chat-1", [scope]);
+    expect(mocks.state.session?.replaceChat).not.toHaveBeenCalledWith(removed);
+  });
+
   it("surfaces a distinct diagnostic when stale-bind compensation fails", async (): Promise<void> => {
     const reportError = vi.fn();
     vi.stubGlobal("reportError", reportError);

@@ -513,8 +513,8 @@ function groundingMutationFailureKey(
   return mutationFailedKey;
 }
 
-async function persistCurrentChatBinding<T>(
-  target: ChatBindingTarget | undefined,
+async function persistCurrentChatScopes<T>(
+  target: ChatLookupTarget | undefined,
   attempt: ChatMutationAttempt,
   chatId: string,
   previous: readonly T[],
@@ -522,10 +522,10 @@ async function persistCurrentChatBinding<T>(
   persist: (id: string, scopes: readonly T[] | null) => Promise<{ readonly chat: Chat }>,
   remember: (chat: Chat) => void,
 ): Promise<Chat | undefined> {
-  if (!attempt.isCurrent() || (target !== undefined && !target.isCurrent())) return undefined;
-  const response = await persist(chatId, next);
+  if (!attempt.isCurrent() || !chatLookupTargetIsCurrent(target)) return undefined;
+  const response = await persist(chatId, next.length > 0 ? next : null);
   remember(response.chat);
-  if (attempt.isCurrent() && (target === undefined || target.isCurrent())) return response.chat;
+  if (attempt.isCurrent() && chatLookupTargetIsCurrent(target)) return response.chat;
   try {
     const compensation = await persist(chatId, previous.length > 0 ? previous : null);
     remember(compensation.chat);
@@ -979,7 +979,7 @@ function AppShellInner(): ReactNode {
         return rejectForLimit(current.length + lkScopes.length, cap);
       }
       try {
-        const persisted = await persistCurrentChatBinding(
+        const persisted = await persistCurrentChatScopes(
           target,
           attempt,
           chat.id,
@@ -1060,15 +1060,24 @@ function AppShellInner(): ReactNode {
         return await serializeChatMutation(
           groundingMutationQueueRef.current,
           groundingMutationKey(chatWindowId, target),
-          async (): Promise<boolean> => {
+          async (attempt): Promise<boolean> => {
             const chat = await resolveChatForWindow(chatWindowId, target);
             if (chat === undefined) {
               return rejectForConnectionFailure(t("scope.disconnectError"));
             }
-            const next = removeConnectedScope(effectiveScopes(chat), scope);
-            const res = await updateChatConnectedScopes(chat.id, next.length > 0 ? next : null);
-            rememberGroundingChat(res.chat);
-            session.replaceChat(res.chat);
+            const current = effectiveScopes(chat);
+            const next = removeConnectedScope(current, scope);
+            const persisted = await persistCurrentChatScopes(
+              target,
+              attempt,
+              chat.id,
+              current,
+              next,
+              updateChatConnectedScopes,
+              rememberGroundingChat,
+            );
+            if (persisted === undefined) return false;
+            session.replaceChat(persisted);
             setSourceConnectionNotice(null);
             return true;
           },
@@ -1118,7 +1127,7 @@ function AppShellInner(): ReactNode {
         return rejectForLimit(folderScopes.length + current.length, cap);
       }
       try {
-        const persisted = await persistCurrentChatBinding(
+        const persisted = await persistCurrentChatScopes(
           target,
           attempt,
           chat.id,
@@ -1179,20 +1188,26 @@ function AppShellInner(): ReactNode {
         return await serializeChatMutation(
           groundingMutationQueueRef.current,
           groundingMutationKey(chatWindowId, target),
-          async (): Promise<boolean> => {
+          async (attempt): Promise<boolean> => {
             const chat = await resolveChatForWindow(chatWindowId, target);
             if (chat === undefined) {
               return rejectForConnectionFailure(t("scope.disconnectError"));
             }
             const key =
               scope.kind === "capsule" ? `capsule:${scope.capsuleId}` : `set:${scope.capsuleSetId}`;
-            const next = removeConnectorScope(effectiveLocalKnowledgeScopes(chat), key);
-            const res = await updateChatLocalKnowledgeScopes(
+            const current = effectiveLocalKnowledgeScopes(chat);
+            const next = removeConnectorScope(current, key);
+            const persisted = await persistCurrentChatScopes(
+              target,
+              attempt,
               chat.id,
-              next.length > 0 ? next : null,
+              current,
+              next,
+              updateChatLocalKnowledgeScopes,
+              rememberGroundingChat,
             );
-            rememberGroundingChat(res.chat);
-            session.replaceChat(res.chat);
+            if (persisted === undefined) return false;
+            session.replaceChat(persisted);
             setSourceConnectionNotice(null);
             return true;
           },

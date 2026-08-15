@@ -1051,6 +1051,31 @@ describe("ChatWindowSessionHost target missing", () => {
     });
   });
 
+  it("fails visibly when a new-chat snapshot targets a project that no longer exists", async () => {
+    const ctx = context();
+    chatSessionState.projects = [];
+    chatSessionState.activeProject = undefined;
+    chatSessionState.loading = false;
+
+    render(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{
+            title: "Removed project chat",
+            newChatRequestId: "request-removed-project",
+            projectPath: "/removed-project",
+          }}
+          ctx={ctx}
+        />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not open chat.");
+    expect(screen.queryByTestId("chat-window")).not.toBeInTheDocument();
+    expect(screen.queryByText("Opening chat...")).not.toBeInTheDocument();
+    expect(chatSessionState.openNewChat).not.toHaveBeenCalled();
+  });
+
   it("retries a failed same-title request under a new confirmation identity", async (): Promise<void> => {
     const first = deferred<Chat | undefined>();
     const second = deferred<Chat | undefined>();

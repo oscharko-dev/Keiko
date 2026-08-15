@@ -1148,7 +1148,11 @@ function useBoundChatControls(
   configuration: BoundChatConfig,
   ctx: WindowRenderContext,
   session: ChatSessionApi,
-): { readonly creating: ChatCreationControl; readonly handoff: SelectionHandoffControl } {
+): {
+  readonly configuredProjectMissing: boolean;
+  readonly creating: ChatCreationControl;
+  readonly handoff: SelectionHandoffControl;
+} {
   const coordinator = useChatCreationCoordinator(session.openNewChat, session.replaceChat);
   const handoff = useSelectionHandoffControl({
     chatId: configuration.chatId,
@@ -1161,19 +1165,19 @@ function useBoundChatControls(
     configuration.projectPath === undefined
       ? session.activeProject
       : session.projects.find((project): boolean => project.path === configuration.projectPath);
+  const configuredProjectMissing =
+    !session.loading && configuration.projectPath !== undefined && configuredProject === undefined;
   const creating = useChatCreationControl({
     activeProject: configuredProject,
     chatId: configuration.chatId,
     coordinator,
-    loading:
-      session.loading ||
-      (configuration.projectPath !== undefined && configuredProject === undefined),
+    loading: session.loading || configuredProjectMissing,
     newChatRequestId: configuration.newChatRequestId,
     selectionHandoffId: configuration.selectionHandoffId,
     title: configuration.title,
     updateCfg: ctx.updateCfg,
   });
-  return { creating, handoff };
+  return { configuredProjectMissing, creating, handoff };
 }
 
 function boundChatWaiting(args: {
@@ -1186,7 +1190,7 @@ function boundChatWaiting(args: {
   return (
     args.sessionLoading ||
     args.controls.handoff.pending ||
-    args.controls.creating.pending ||
+    (!args.controls.configuredProjectMissing && args.controls.creating.pending) ||
     args.routing.switchingProject ||
     args.routing.resolvingLegacyProject ||
     args.memoryHydrating ||
@@ -1272,6 +1276,21 @@ function useBoundChatWindowRuntime(
   usePublishChatWindowRuntime(windowId, runtimeTarget, acceptSelectionHandoff);
 }
 
+function useBoundChatTitleSync(
+  configuration: BoundChatConfig,
+  routing: BoundChatRouting,
+  session: ChatSessionApi,
+  ctx: WindowRenderContext,
+): void {
+  useBoundChatTitle({
+    activeTarget: routing.activeTarget,
+    chatId: configuration.chatId,
+    loading: session.loading,
+    title: configuration.title,
+    updateCfg: ctx.updateCfg,
+  });
+}
+
 function BoundChatWindowSessionHost({
   cfg,
   ctx,
@@ -1295,13 +1314,8 @@ function BoundChatWindowSessionHost({
     updateCfg: ctx.updateCfg,
   });
   const controls = useBoundChatControls(configuration, ctx, session);
-  useBoundChatTitle({
-    activeTarget: routing.activeTarget,
-    chatId: configuration.chatId,
-    loading: session.loading,
-    title: configuration.title,
-    updateCfg: ctx.updateCfg,
-  });
+  const targetLookupFailed = routing.lookupFailed || controls.configuredProjectMissing;
+  useBoundChatTitleSync(configuration, routing, session, ctx);
   const waitingForTarget = boundChatWaiting({
     chatId: configuration.chatId,
     controls,
@@ -1311,11 +1325,11 @@ function BoundChatWindowSessionHost({
   });
   return (
     <ChatSessionProvider value={memory.session}>
-      <BoundChatAlerts controls={controls} lookupFailed={routing.lookupFailed} />
+      <BoundChatAlerts controls={controls} lookupFailed={targetLookupFailed} />
       <BoundChatBody
         activeProjectPath={session.activeProject?.path}
         ctx={ctx}
-        targetLookupFailed={routing.lookupFailed}
+        targetLookupFailed={targetLookupFailed}
         targetMissing={routing.targetMissing}
         waiting={waitingForTarget}
       />

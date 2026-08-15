@@ -509,6 +509,44 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
     );
   });
 
+  it("retains a connected window until unbind is accepted and permits a retry", async () => {
+    const onScopeUnbind = vi
+      .fn<NonNullable<UseWorkspaceOptions["onScopeUnbind"]>>()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    persistWorkspace([filesWindow(), appWindow()]);
+    render(<Harness onScopeUnbind={onScopeUnbind} />);
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+    fireEvent.click(screen.getByRole("button", { name: "connect" }));
+    await waitFor(() => expect(readConns()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "close files" }));
+    await waitFor(() => expect(onScopeUnbind).toHaveBeenCalledOnce());
+    expect(readWins().some((win) => win.id === "files-1")).toBe(true);
+    expect(readConns()).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "close files" }));
+    await waitFor(() => expect(onScopeUnbind).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(readWins().some((win) => win.id === "files-1")).toBe(false));
+  });
+
+  it("retains a connected window when its unbind callback rejects", async () => {
+    const onScopeUnbind = vi.fn<NonNullable<UseWorkspaceOptions["onScopeUnbind"]>>(() =>
+      Promise.reject(new TypeError("customer-specific detail")),
+    );
+    persistWorkspace([filesWindow(), appWindow()]);
+    render(<Harness onScopeUnbind={onScopeUnbind} />);
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+    fireEvent.click(screen.getByRole("button", { name: "connect" }));
+    await waitFor(() => expect(readConns()).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "close files" }));
+
+    await waitFor(() => expect(onScopeUnbind).toHaveBeenCalledOnce());
+    expect(readWins().some((win) => win.id === "files-1")).toBe(true);
+    expect(readConns()).toHaveLength(1);
+  });
+
   it("updates the persisted connection snapshot when a Files window changes visible scope", async () => {
     persistWorkspace(
       [filesWindow(), appWindow()],

@@ -23,10 +23,15 @@ import {
   type ChatSessionApi,
   type SendMessageOutcome,
 } from "./hooks/useChatSession";
+import { resetConversationMemorySettingsForTests } from "./hooks/memorySettings";
 import * as api from "@/lib/api";
 import type { Chat, ChatMessage, DesktopChatSendResponse, ModelCapability } from "@/lib/types";
 import type { StreamHandlers } from "@/lib/api";
 import { notifyGatewayConfigUpdated } from "./widgets/shared/gatewaySetupBus";
+
+afterEach(() => {
+  resetConversationMemorySettingsForTests();
+});
 
 // ─── UI test helpers ──────────────────────────────────────────────────────────
 

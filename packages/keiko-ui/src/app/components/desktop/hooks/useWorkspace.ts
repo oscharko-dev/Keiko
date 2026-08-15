@@ -1615,30 +1615,42 @@ function connectionUnbindScope(
   return filesChatBindScope(win, other, Date.now());
 }
 
-function unbindClosedWindowConnection(
+async function unbindClosedWindowConnection(
   closedWindowId: string,
   closedWin: AppWindow,
   conn: Connection,
   winsById: ReadonlyMap<string, AppWindow>,
-  unbindScope: (chatWindowId: string, scope: ChatConnectedScope, target?: ChatUnbindTarget) => void,
+  unbindScope: (
+    chatWindowId: string,
+    scope: ChatConnectedScope,
+    target?: ChatUnbindTarget,
+  ) => boolean | Promise<boolean>,
   unbindConnectorScope: (
     chatWindowId: string,
     scope: ChatLocalKnowledgeScope,
     target?: ChatUnbindTarget,
-  ) => void,
-): void {
+  ) => boolean | Promise<boolean>,
+): Promise<boolean> {
   const otherId = connectionOtherEndpoint(conn, closedWindowId);
-  if (otherId === null) return;
+  if (otherId === null) return true;
   const other = winsById.get(otherId);
-  if (other === undefined) return;
+  if (other === undefined) return true;
   const chatWindowId = connectionChatWindowId(conn, closedWin, other);
   const chatWindow = chatWindowId === closedWin.id ? closedWin : winsById.get(chatWindowId ?? "");
   const target = chatUnbindTarget(chatWindow);
   const scope = connectionUnbindScope(conn, closedWin, other);
-  if (scope !== null && chatWindowId !== null) unbindScope(chatWindowId, scope, target);
   const connectorScope = boundConnectorScopeOf(conn) ?? connectorChatBind(closedWin, other);
-  if (connectorScope !== null && chatWindowId !== null) {
-    unbindConnectorScope(chatWindowId, connectorScope, target);
+  if (chatWindowId === null) return true;
+  try {
+    const results: Promise<boolean>[] = [];
+    if (scope !== null) results.push(Promise.resolve(unbindScope(chatWindowId, scope, target)));
+    if (connectorScope !== null) {
+      results.push(Promise.resolve(unbindConnectorScope(chatWindowId, connectorScope, target)));
+    }
+    return (await Promise.all(results)).every(Boolean);
+  } catch {
+    reportConnectionUnbindFailure();
+    return false;
   }
 }
 
@@ -1789,6 +1801,7 @@ export function useWorkspace(
   connsByIdRef.current = connsById;
   const connsByEndpointRef = useRef<ReadonlyMap<string, readonly Connection[]>>(connsByEndpoint);
   connsByEndpointRef.current = connsByEndpoint;
+  const pendingWindowClosesRef = useRef(new Set<string>());
   // Refs for the click-to-connect flow. connectingRef is a synchronous view of
   // the `connecting` state for handlers fired from child components (confirm).
   // connectCleanupRef stores the global pointermove listener disposer so we
@@ -1965,20 +1978,33 @@ export function useWorkspace(
   // effect afterwards only sweeps the now-orphaned edge objects.
   const closeWithTeardown = useCallback<WorkspaceApi["close"]>(
     (id) => {
+      if (pendingWindowClosesRef.current.has(id)) return;
       const win = winsByIdRef.current.get(id);
-      if (win !== undefined) {
-        for (const c of connsByEndpointRef.current.get(id) ?? []) {
+      const connections = connsByEndpointRef.current.get(id) ?? [];
+      if (win === undefined || connections.length === 0) {
+        mutations.close(id);
+        return;
+      }
+      pendingWindowClosesRef.current.add(id);
+      const teardown = Promise.all(
+        connections.map((connection) =>
           unbindClosedWindowConnection(
             id,
             win,
-            c,
+            connection,
             winsByIdRef.current,
             stableScopeUnbind,
             stableConnectorUnbind,
-          );
-        }
-      }
-      mutations.close(id);
+          ),
+        ),
+      );
+      void teardown
+        .then((accepted): void => {
+          if (accepted.every(Boolean)) mutations.close(id);
+        })
+        .finally((): void => {
+          pendingWindowClosesRef.current.delete(id);
+        });
     },
     [winsByIdRef, connsByEndpointRef, mutations, stableScopeUnbind, stableConnectorUnbind],
   );
