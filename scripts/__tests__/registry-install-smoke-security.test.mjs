@@ -6,9 +6,11 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,25 +30,49 @@ import {
   writeSeedIndex,
   hostBindingSuffixes,
   corepackCacheDir,
+  corepackCacheLockDir,
   privateYarnHome,
   assertStagedRootDescriptors,
   YARN_RC_FILENAME,
   isStagedVendorArchive,
   classifyProvisionFailure,
   persistentVendorSeedDir,
+  provisionPinnedYarnForSetup,
   seedThenPack,
   loadSeedIndex,
   seedVendoredRegistry,
   stubManifest,
   findInstalledCopies,
+  isSmokeGateFailure,
   runAsync,
+  SmokeGateFailure,
+  parsePositiveTimeoutEnv,
+  smokeGateFailureLogSummary,
+  smokeGateFailureSetupSummary,
   startLocalRegistry,
   terminateProcessTree,
   vendoredDependencyNames,
   vendoredDependencyRequirements,
+  withCorepackYarnCacheLock,
   yarnChildEnv,
 } from "../installable-package-smoke.mjs";
+import {
+  registryInstallSmokeInternalsForTest as registrySmoke,
+  runRegistryInstallSmoke,
+  runRegistryInstallSmokeForTest,
+} from "../registry-install-smoke.mjs";
+import { runPrepareOfflineSmoke } from "../prepare-offline-smoke.mjs";
 import { provenancePublishArgs } from "../lib/npm-publish-preflight.mjs";
+import {
+  PINNED_YARN,
+  PINNED_YARN_SHA512,
+  PINNED_YARN_SOURCE_URL,
+  PINNED_YARN_VERSION,
+  pinnedYarnLocatorParts,
+  pinnedYarnVersionFromLocator,
+  yarnLocatorParts,
+  yarnPackageManagerFromLocator,
+} from "../lib/pinned-yarn.mjs";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const ROOT_MANIFEST = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
@@ -78,15 +104,26 @@ afterEach(() => {
 });
 
 function rejectProcessExit() {
-  vi.spyOn(console, "error").mockImplementation(() => undefined);
-  return vi.spyOn(process, "exit").mockImplementation((code) => {
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  const exit = vi.spyOn(process, "exit").mockImplementation((code) => {
     throw new Error(`process.exit(${String(code)})`);
   });
+  return { consoleError, exit };
 }
 
 function writeExecutable(path, body) {
-  writeFileSync(path, `#!/usr/bin/env node\n${body}\n`, "utf8");
+  if (process.platform === "win32") {
+    writeWindowsExecutable(path, body);
+    return;
+  }
+  writeFileSync(path, `#!${process.execPath}\n${body}\n`, "utf8");
   chmodSync(path, 0o755);
+}
+
+function writeWindowsExecutable(path, body) {
+  const scriptPath = `${path}.mjs`;
+  writeFileSync(scriptPath, `${body}\n`, "utf8");
+  writeFileSync(`${path}.cmd`, `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`, "utf8");
 }
 
 function processExists(pid) {
@@ -97,6 +134,31 @@ function processExists(pid) {
     if (error?.code === "ESRCH") return false;
     if (error?.code === "EPERM") return true;
     throw error;
+  }
+}
+
+function delay(ms) {
+  if (typeof globalThis.setTimeout !== "function") {
+    throw new TypeError("globalThis.setTimeout must be available for delay()");
+  }
+  return new Promise((resolvePromise) => globalThis.setTimeout(resolvePromise, ms));
+}
+
+async function withTemporaryProcessEnv(name, value, action) {
+  const previous = process.env[name];
+  try {
+    if (value === undefined) {
+      Reflect.deleteProperty(process.env, name);
+    } else {
+      process.env[name] = value;
+    }
+    return await action();
+  } finally {
+    if (previous === undefined) {
+      Reflect.deleteProperty(process.env, name);
+    } else {
+      process.env[name] = previous;
+    }
   }
 }
 
@@ -134,6 +196,208 @@ function writeVendoredRuntimeFixture(root) {
   writeFileSync(join(typescriptRoot, "package.json"), '{"name":"typescript"}\n', "utf8");
 }
 
+function writeRegistryInstalledRuntimeFixture(root) {
+  const packageRoot = join(root, "node_modules", "@oscharko-dev", "keiko");
+  writeVendoredRuntimeFixture(root);
+  mkdirSync(join(packageRoot, "dist", "cli"), { recursive: true });
+  writeFileSync(
+    join(packageRoot, "dist", "cli", "index.js"),
+    [
+      "if (process.argv.includes('--version')) {",
+      `  process.stdout.write(${JSON.stringify(`${ROOT_MANIFEST.version}\n`)});`,
+      "} else {",
+      "  process.stdout.write('help\\n');",
+      "}",
+    ].join("\n"),
+    "utf8",
+  );
+  writeFileSync(
+    join(packageRoot, "dist", "index.js"),
+    `export const SDK_VERSION = ${JSON.stringify(ROOT_MANIFEST.version)};\n`,
+    "utf8",
+  );
+}
+
+function registryInstallFixtureLines() {
+  return [
+    'import { mkdirSync, writeFileSync } from "node:fs";',
+    'import { join } from "node:path";',
+    "const version = process.env.ROOT_VERSION;",
+    "const bundled = JSON.parse(process.env.BUNDLED_DEPS ?? '[]');",
+    "const root = join(process.cwd(), 'node_modules', '@oscharko-dev', 'keiko');",
+    "mkdirSync(join(root, 'dist', 'cli'), { recursive: true });",
+    "writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module' }));",
+    "writeFileSync(join(root, 'dist', 'index.js'), `export const SDK_VERSION = ${JSON.stringify(version)};\\n`);",
+    "writeFileSync(",
+    "  join(root, 'dist', 'cli', 'index.js'),",
+    "  `if (process.argv.includes('--version')) console.log('${version}'); else if (process.argv.includes('--help')) console.log('help'); else process.exit(2);\\n`,",
+    ");",
+    "for (const name of bundled) {",
+    "  const shortName = name.replace(/^@oscharko-dev\\//u, '');",
+    "  const dist = join(root, 'node_modules', '@oscharko-dev', shortName, 'dist');",
+    "  mkdirSync(dist, { recursive: true });",
+    "  writeFileSync(join(dist, 'index.js'), 'export {};\\n');",
+    "}",
+  ];
+}
+
+async function withRegistryFixtureInstallerEnv(binDir, marker, action) {
+  return await withTemporaryProcessEnvValues(
+    {
+      BUNDLED_DEPS: JSON.stringify(ROOT_MANIFEST.bundleDependencies),
+      KEIKO_COREPACK_MARKER: marker,
+      PATH: `${binDir}${delimiter}${process.env.PATH}`,
+      ROOT_VERSION: ROOT_MANIFEST.version,
+    },
+    action,
+  );
+}
+
+async function withTemporaryProcessEnvValues(values, action) {
+  const previous = new Map(Object.keys(values).map((name) => [name, process.env[name]]));
+  try {
+    Object.assign(process.env, values);
+    return await action();
+  } finally {
+    restoreProcessEnvValues(previous);
+  }
+}
+
+function restoreProcessEnvValues(previous) {
+  for (const [name, value] of previous) {
+    if (value === undefined) {
+      Reflect.deleteProperty(process.env, name);
+    } else {
+      process.env[name] = value;
+    }
+  }
+}
+
+function yarnSmokeEnv(binDir, extra = {}) {
+  return {
+    BUNDLED_DEPS: JSON.stringify(ROOT_MANIFEST.bundleDependencies),
+    PATH: `${binDir}${delimiter}${process.env.PATH}`,
+    ROOT_VERSION: ROOT_MANIFEST.version,
+    ...extra,
+  };
+}
+
+function isolatedChildEnv(root, extraEnv = {}) {
+  const sandboxTmp = join(root, "tmp");
+  const sandboxHome = join(root, "home");
+  mkdirSync(sandboxTmp, { recursive: true });
+  mkdirSync(sandboxHome, { recursive: true });
+  return {
+    HOME: sandboxHome,
+    PATH: join(root, "bin"),
+    TMPDIR: sandboxTmp,
+    TMP: sandboxTmp,
+    TEMP: sandboxTmp,
+    USERPROFILE: sandboxHome,
+    ...extraEnv,
+  };
+}
+
+function runIsolatedSmokeModule(root, source, extraEnv = {}) {
+  return spawnSync(process.execPath, ["--input-type=module", "-e", source], {
+    cwd: ROOT,
+    encoding: "utf8",
+    env: isolatedChildEnv(root, extraEnv),
+    timeout: 15_000,
+  });
+}
+
+function runProvisionPinnedYarnChild(root, extraEnv = {}, locator = PINNED_YARN) {
+  return runIsolatedSmokeModule(
+    root,
+    [
+      'import { provisionPinnedYarnForSetup } from "./scripts/installable-package-smoke.mjs";',
+      "try {",
+      `  await provisionPinnedYarnForSetup(${JSON.stringify(locator)});`,
+      "} catch (error) {",
+      "  console.error(error instanceof Error ? error.message : String(error));",
+      "  process.exit(1);",
+      "}",
+    ].join("\n"),
+    extraEnv,
+  );
+}
+
+function runRegistryTimeoutFailure(timeoutValue, extraEnv = {}) {
+  return spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      [
+        'import { isSmokeGateFailure } from "./scripts/installable-package-smoke.mjs";',
+        'import { runRegistryInstallSmokeForTest } from "./scripts/registry-install-smoke.mjs";',
+        "try {",
+        `  await runRegistryInstallSmokeForTest(${JSON.stringify(PINNED_YARN)});`,
+        "  process.exit(64);",
+        "} catch (error) {",
+        "  if (!isSmokeGateFailure(error)) throw error;",
+        "  process.stdout.write(error.message);",
+        "}",
+      ].join("\n"),
+    ],
+    {
+      cwd: ROOT,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ...extraEnv,
+        KEIKO_REGISTRY_INSTALL_TIMEOUT_MS: timeoutValue,
+        NODE_ENV: "test",
+        VITEST_WORKER_ID: process.env.VITEST_WORKER_ID ?? "1",
+      },
+      timeout: 30_000,
+    },
+  );
+}
+
+function yarnSha512ForBytes(bytes) {
+  return createHash("sha512").update(bytes).digest("hex");
+}
+
+function yarnLocatorForBytes(version, bytes) {
+  return `yarn@${version}+sha512.${yarnSha512ForBytes(bytes)}`;
+}
+
+function corepackLockFixtureLocator(label) {
+  return yarnLocatorForBytes(`${PINNED_YARN_VERSION}-lock.${process.pid}.${label}`, label);
+}
+
+function corepackCacheFixtureLines(locator, yarnBytes) {
+  const { version, sha512 } = yarnLocatorParts(locator);
+  return [
+    'import { mkdirSync, writeFileSync } from "node:fs";',
+    'import { join } from "node:path";',
+    'if (process.argv[2] === "install") {',
+    `  const entry = join(process.env.COREPACK_HOME, "v1", "yarn", ${JSON.stringify(version)});`,
+    "  mkdirSync(entry, { recursive: true });",
+    "  writeFileSync(",
+    '    join(entry, ".corepack"),',
+    "    JSON.stringify({",
+    `      locator: { name: "yarn", reference: ${JSON.stringify(`${version}+sha512.${sha512}`)} },`,
+    '      bin: ["yarn", "yarnpkg"],',
+    `      hash: ${JSON.stringify(`sha512.${sha512}`)},`,
+    "    }),",
+    '    "utf8",',
+    "  );",
+    `  writeFileSync(join(entry, "yarn.js"), ${JSON.stringify(yarnBytes)}, "utf8");`,
+    "  process.exit(0);",
+    "}",
+  ];
+}
+
+function writeCorepackFixture(binDir, locator, yarnBytes, extraLines = []) {
+  writeExecutable(
+    join(binDir, "corepack"),
+    [...corepackCacheFixtureLines(locator, yarnBytes), ...extraLines].join("\n"),
+  );
+}
+
 describe("registry install smoke security posture", () => {
   it("does not disable TLS verification for npm, yarn, or Node", () => {
     const source = readFileSync(join(ROOT, "scripts", "registry-install-smoke.mjs"), "utf8");
@@ -148,54 +412,80 @@ describe("registry install smoke security posture", () => {
   it("always executes the Yarn registry install proof for the root package", () => {
     const binDir = mkdtempSync(join(tmpdir(), "keiko-registry-smoke-bin-"));
     try {
-      const installFixture = [
-        'import { mkdirSync, writeFileSync } from "node:fs";',
-        'import { join } from "node:path";',
-        "const version = process.env.ROOT_VERSION;",
-        "const bundled = JSON.parse(process.env.BUNDLED_DEPS ?? '[]');",
-        "const root = join(process.cwd(), 'node_modules', '@oscharko-dev', 'keiko');",
-        "mkdirSync(join(root, 'dist', 'cli'), { recursive: true });",
-        "writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module' }));",
-        "writeFileSync(join(root, 'dist', 'index.js'), `export const SDK_VERSION = ${JSON.stringify(version)};\\n`);",
-        "writeFileSync(",
-        "  join(root, 'dist', 'cli', 'index.js'),",
-        "  `if (process.argv.includes('--version')) console.log('${version}'); else if (process.argv.includes('--help')) console.log('help'); else process.exit(2);\\n`,",
-        ");",
-        "for (const name of bundled) {",
-        "  const shortName = name.replace(/^@oscharko-dev\\//u, '');",
-        "  const dist = join(root, 'node_modules', '@oscharko-dev', shortName, 'dist');",
-        "  mkdirSync(dist, { recursive: true });",
-        "  writeFileSync(join(dist, 'index.js'), 'export {};\\n');",
-        "}",
-      ];
+      const installFixture = registryInstallFixtureLines();
       writeExecutable(join(binDir, "npm"), installFixture.join("\n"));
       const marker = join(binDir, "corepack-called");
-      writeExecutable(
-        join(binDir, "corepack"),
+      const fixtureBytes = "registry-install-smoke Yarn fixture\n";
+      const fixtureLocator = yarnLocatorForBytes(`${PINNED_YARN_VERSION}-fixture.1`, fixtureBytes);
+      const sandboxTmp = join(binDir, "tmp");
+      mkdirSync(sandboxTmp, { recursive: true });
+      writeCorepackFixture(binDir, fixtureLocator, fixtureBytes, [
+        ...installFixture.slice(2),
+        "writeFileSync(process.env.KEIKO_COREPACK_MARKER, 'called\\n', 'utf8');",
+      ]);
+
+      const result = spawnSync(
+        process.execPath,
         [
-          ...installFixture,
-          "writeFileSync(process.env.COREPACK_MARKER, 'called\\n', 'utf8');",
-        ].join("\n"),
+          "--input-type=module",
+          "-e",
+          [
+            'import { runRegistryInstallSmokeForTest } from "./scripts/registry-install-smoke.mjs";',
+            `await runRegistryInstallSmokeForTest(${JSON.stringify(fixtureLocator)});`,
+          ].join("\n"),
+        ],
+        {
+          cwd: ROOT,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${binDir}${delimiter}${process.env.PATH}`,
+            BUNDLED_DEPS: JSON.stringify(ROOT_MANIFEST.bundleDependencies),
+            KEIKO_COREPACK_MARKER: marker,
+            KEIKO_REGISTRY_INSTALL_PACKAGE: `${ROOT_MANIFEST.name}@${ROOT_MANIFEST.version}`,
+            KEIKO_REGISTRY_URL: "https://registry.npmjs.org/",
+            NODE_ENV: "test",
+            ROOT_VERSION: ROOT_MANIFEST.version,
+            TEMP: sandboxTmp,
+            TMP: sandboxTmp,
+            TMPDIR: sandboxTmp,
+            VITEST_WORKER_ID: process.env.VITEST_WORKER_ID ?? "1",
+          },
+        },
       );
 
-      const result = spawnSync(process.execPath, ["scripts/registry-install-smoke.mjs"], {
-        cwd: ROOT,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          PATH: `${binDir}${delimiter}${process.env.PATH}`,
-          BUNDLED_DEPS: JSON.stringify(ROOT_MANIFEST.bundleDependencies),
-          COREPACK_MARKER: marker,
-          KEIKO_REGISTRY_INSTALL_PACKAGE: `${ROOT_MANIFEST.name}@${ROOT_MANIFEST.version}`,
-          KEIKO_REGISTRY_URL: "https://registry.npmjs.org/",
-          ROOT_VERSION: ROOT_MANIFEST.version,
-        },
-      });
-
-      expect(result.status).toBe(0);
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
       expect(result.stdout).toContain(
         `registry-install-smoke: PASS - ${ROOT_MANIFEST.name}@${ROOT_MANIFEST.version} installs`,
       );
+      expect(existsSync(marker)).toBe(true);
+    } finally {
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  });
+
+  it("covers the npm and Yarn registry smoke phases in process", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "keiko-registry-smoke-phases-"));
+    try {
+      const fixtureBytes = "registry-install-smoke in-process Yarn fixture\n";
+      const fixtureLocator = yarnLocatorForBytes(`${PINNED_YARN_VERSION}-fixture.2`, fixtureBytes);
+      const installFixture = registryInstallFixtureLines();
+      const marker = join(binDir, "corepack-called");
+      writeExecutable(join(binDir, "npm"), installFixture.join("\n"));
+      writeCorepackFixture(binDir, fixtureLocator, fixtureBytes, [
+        ...installFixture.slice(2),
+        "writeFileSync(process.env.KEIKO_COREPACK_MARKER, 'called\\n', 'utf8');",
+      ]);
+
+      await withRegistryFixtureInstallerEnv(binDir, marker, async () => {
+        await expect(registrySmoke.npmSmoke(5_000)).resolves.toBeUndefined();
+        await expect(registrySmoke.yarnSmoke(fixtureLocator, 5_000)).resolves.toBeUndefined();
+        const consoleLog = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        await expect(runRegistryInstallSmokeForTest(fixtureLocator)).resolves.toBeUndefined();
+        expect(consoleLog).toHaveBeenCalledWith(
+          expect.stringContaining("registry-install-smoke: PASS"),
+        );
+      });
       expect(existsSync(marker)).toBe(true);
     } finally {
       rmSync(binDir, { recursive: true, force: true });
@@ -304,11 +594,13 @@ describe("installable package smoke optional-dependency coverage", () => {
     mkdirSync(binDir, { recursive: true });
     mkdirSync(projectDir, { recursive: true });
     const artifact = localRegistryArtifact(root);
-    writeExecutable(join(binDir, "corepack"), "process.exit(0);");
+    const fixtureBytes = "registry-flow Yarn fixture\n";
+    const fixtureLocator = yarnLocatorForBytes(`${PINNED_YARN_VERSION}-registry.1`, fixtureBytes);
+    writeCorepackFixture(binDir, fixtureLocator, fixtureBytes);
     const previousPath = process.env.PATH;
     process.env.PATH = `${binDir}${delimiter}${previousPath}`;
     try {
-      await installIntoWithYarn(projectDir, artifact);
+      await installIntoWithYarn(projectDir, artifact, undefined, fixtureLocator);
       expect(readFileSync(join(projectDir, "package.json"), "utf8")).toContain(
         ROOT_MANIFEST.version,
       );
@@ -332,11 +624,13 @@ describe("installable package smoke optional-dependency coverage", () => {
     mkdirSync(binDir, { recursive: true });
     mkdirSync(projectDir, { recursive: true });
     const artifact = localRegistryArtifact(root);
-    writeExecutable(join(binDir, "corepack"), "process.exit(0);");
+    const fixtureBytes = "hermetic-flow Yarn fixture\n";
+    const fixtureLocator = yarnLocatorForBytes(`${PINNED_YARN_VERSION}-hermetic.1`, fixtureBytes);
+    writeCorepackFixture(binDir, fixtureLocator, fixtureBytes);
     const previousPath = process.env.PATH;
     process.env.PATH = `${binDir}${delimiter}${previousPath}`;
     try {
-      await installIntoWithYarn(projectDir, artifact, new Map());
+      await installIntoWithYarn(projectDir, artifact, new Map(), fixtureLocator);
       // The default name must NOT be present. Writing under a private name is only half of the
       // isolation — leaving a `.yarnrc.yml` behind would restore exactly the ancestor-and-default
       // discovery the private name exists to defeat (KfQ thread 3780545615).
@@ -468,6 +762,23 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(env.YARN_ENABLE_TELEMETRY).toBe("false");
     // Corepack must not fetch the package manager mid-install; the pinned tool is provisioned first.
     expect(env.COREPACK_ENABLE_NETWORK).toBe("0");
+  });
+
+  it("falls back to loopback when deriving a Yarn unsafe HTTP whitelist from malformed input", () => {
+    const env = yarnChildEnv("not a registry url", { PATH: "/usr/bin" });
+
+    expect(env.YARN_UNSAFE_HTTP_WHITELIST).toBe("127.0.0.1");
+  });
+
+  it.each([
+    ["http://127.0.0.1:12345", "127.0.0.1"],
+    ["http://localhost:12345", "localhost"],
+    ["http://[::1]:12345", "::1"],
+    ["https://registry.npmjs.org/", "127.0.0.1"],
+  ])("whitelists the validated loopback hostname for Yarn: %s", (registryUrl, expected) => {
+    const env = yarnChildEnv(registryUrl, { PATH: "/usr/bin" });
+
+    expect(env.YARN_UNSAFE_HTTP_WHITELIST).toBe(expected);
   });
 
   // A stub's platform guards must reach the PACKUMENT, not just the tarball: Yarn decides
@@ -1061,6 +1372,11 @@ describe("installable package smoke optional-dependency coverage", () => {
     const cases = [
       [{ stderr: `getaddrinfo ENOTFOUND ${secret}`, stdout: "", signal: null }, /unreachable/u],
       [{ stderr: `EINTEGRITY ${secret}`, stdout: "", signal: null }, /integrity/u],
+      [{ stderr: `Mismatch hashes. Expected ${secret}`, stdout: "", signal: null }, /integrity/u],
+      [
+        { stderr: `unrelated integrity policy ${secret}`, stdout: "", signal: null },
+        /no known class/u,
+      ],
       [{ stderr: `401 Unauthorized ${secret}`, stdout: "", signal: null }, /unauthorized/u],
       [{ stderr: "", stdout: `404 Not Found ${secret}`, signal: null }, /not found/u],
       [{ stderr: `weird ${secret}`, stdout: "", signal: null }, /no known class/u],
@@ -1200,9 +1516,377 @@ describe("installable package smoke optional-dependency coverage", () => {
   // The Corepack cache holds an executable Corepack will run, so a predictable shared path is a
   // code-execution surface, not merely a data one: another account could pre-create it with a
   // forged `.corepack` metadata file and binary.
+  it("pins Yarn with a reviewed Corepack integrity locator", () => {
+    const installableSource = readFileSync(
+      join(ROOT, "scripts", "installable-package-smoke.mjs"),
+      "utf8",
+    );
+    const registrySource = readFileSync(
+      join(ROOT, "scripts", "registry-install-smoke.mjs"),
+      "utf8",
+    );
+
+    expect(PINNED_YARN).toBe(`yarn@${PINNED_YARN_VERSION}+sha512.${PINNED_YARN_SHA512}`);
+    expect(PINNED_YARN_SHA512).toMatch(/^[a-f0-9]{128}$/u);
+    expect(PINNED_YARN_SOURCE_URL).toBe(
+      "https://repo.yarnpkg.com/4.9.1/packages/yarnpkg-cli/bin/yarn.js",
+    );
+    expect(yarnPackageManagerFromLocator(PINNED_YARN)).toBe(PINNED_YARN);
+    expect(pinnedYarnVersionFromLocator(PINNED_YARN)).toBe(PINNED_YARN_VERSION);
+    expect(
+      yarnLocatorParts(`yarn@${PINNED_YARN_VERSION}-rc.1+sha512.${PINNED_YARN_SHA512}`).version,
+    ).toBe(`${PINNED_YARN_VERSION}-rc.1`);
+    expect(
+      pinnedYarnLocatorParts(
+        `yarn@${PINNED_YARN_VERSION}+sha512.${PINNED_YARN_SHA512.toUpperCase()}`,
+      ).sha512,
+    ).toBe(PINNED_YARN_SHA512);
+    expect(() => pinnedYarnVersionFromLocator(`yarn@${PINNED_YARN_VERSION}`)).toThrow(TypeError);
+    expect(() =>
+      pinnedYarnVersionFromLocator(`yarn@${PINNED_YARN_VERSION}-rc.1+sha512.${PINNED_YARN_SHA512}`),
+    ).toThrow(/version/u);
+    expect(() =>
+      yarnPackageManagerFromLocator(
+        `yarn@${PINNED_YARN_VERSION}-rc.1+sha512.${PINNED_YARN_SHA512}`,
+      ),
+    ).toThrow(/version/u);
+    expect(() =>
+      pinnedYarnLocatorParts(`yarn@${PINNED_YARN_VERSION}+sha512.${"0".repeat(128)}`),
+    ).toThrow(/sha512/u);
+    expect(installableSource).toContain("locator = PINNED_YARN");
+    expect(installableSource).toContain(
+      "packageManager: yarnPackageManagerFromSmokeLocator(locator)",
+    );
+    expect(registrySource).toContain("pinnedYarnLocatorParts(PINNED_YARN)");
+    expect(registrySource).toContain("registryYarnLocator()");
+    expect(registrySource).toContain(
+      "const packageManager = smokeGateYarnPackageManager(yarnLocator)",
+    );
+    expect(registrySource).toContain("function smokeGateYarnLocatorParts(locator)");
+    expect(registrySource).toContain("outputByteSummary(result)");
+    expect(registrySource).toContain("delete spawnOptions.timeout");
+    expect(registrySource).toMatch(/timeout:\s*timeoutMs/u);
+    expect(registrySource).toContain('return await runAsync("corepack", installArgs');
+    expect(registrySource).not.toContain("stdout:\\n${result.stdout}");
+    const prepareSource = readFileSync(join(ROOT, "scripts", "prepare-offline-smoke.mjs"), "utf8");
+    expect(prepareSource).toContain("setupSummary = smokeGateFailureSetupSummary");
+    expect(prepareSource).toContain("setupSummary(error)");
+    expect(registrySource).toContain("withCorepackYarnCacheLock(");
+    expect(registrySource).toContain("await provisionPinnedYarnForSetup(yarnLocator, timeoutMs)");
+    expect(registrySource).toContain("yarnChildEnv(registry, process.env, yarnHome, yarnLocator)");
+    expect(installableSource).toContain("WINDOWS_SHELL_UNSAFE_ARG");
+    expect(installableSource).toContain("commandForPlatform(cmd, args, options)");
+    expect(installableSource).not.toContain('const PINNED_YARN = "yarn@4.9.1"');
+    expect(registrySource).not.toContain("KEIKO_REGISTRY_INSTALL_FIXTURE_YARN_LOCATOR");
+  });
+
+  it("redacts SmokeGateFailure messages before logging setup failures", () => {
+    const rawMessage = `cached Yarn digest ${PINNED_YARN_SHA512} did not match provenance`;
+    const summary = smokeGateFailureLogSummary(new Error(rawMessage));
+    const setupSummary = smokeGateFailureSetupSummary(new Error(rawMessage));
+
+    expect(summary).toContain("redacted SmokeGateFailure");
+    expect(summary).toMatch(/messageSha256=[a-f0-9]{64}/u);
+    expect(summary).toContain(`messageBytes=${String(Buffer.byteLength(rawMessage, "utf8"))}`);
+    expect(summary).toMatch(/stackSha256=[a-f0-9]{64}/u);
+    expect(summary).toMatch(/stackBytes=\d+/u);
+    expect(summary).not.toContain(rawMessage);
+    expect(summary).not.toContain(PINNED_YARN_SHA512);
+    expect(setupSummary).toContain("redacted SmokeGateFailure");
+    expect(setupSummary).toContain(`messageBytes=${String(Buffer.byteLength(rawMessage, "utf8"))}`);
+    expect(setupSummary).not.toContain(rawMessage);
+    expect(setupSummary).not.toContain(PINNED_YARN_SHA512);
+  });
+
+  it("keeps classified setup summaries visible while hashing unexpected failures", () => {
+    const provisionMessage = "corepack could not provision yarn@fixture before the offline install";
+    const cacheMessage = "corepack cached yarn@fixture, but integrity did not match";
+    const rawMessage = `unexpected setup error ${PINNED_YARN_SHA512}`;
+    const summary = smokeGateFailureLogSummary(rawMessage);
+    const stacklessError = new Error(rawMessage);
+    stacklessError.stack = undefined;
+
+    expect(isSmokeGateFailure(new SmokeGateFailure(rawMessage))).toBe(true);
+    expect(isSmokeGateFailure(new Error(rawMessage))).toBe(false);
+    expect(smokeGateFailureSetupSummary(new SmokeGateFailure(provisionMessage))).toBe(
+      provisionMessage,
+    );
+    expect(smokeGateFailureSetupSummary(new SmokeGateFailure(cacheMessage))).toBe(cacheMessage);
+    expect(summary).toContain("redacted SmokeGateFailure");
+    expect(summary).toContain(`messageBytes=${String(Buffer.byteLength(rawMessage, "utf8"))}`);
+    expect(summary).toContain("stackBytes=0");
+    expect(summary).not.toContain(rawMessage);
+    expect(summary).not.toContain(PINNED_YARN_SHA512);
+    expect(smokeGateFailureLogSummary(stacklessError)).toContain("stackBytes=0");
+    expect(smokeGateFailureSetupSummary("opaque setup failure")).toBe(
+      smokeGateFailureLogSummary("opaque setup failure"),
+    );
+  });
+
+  it("rejects unsafe install smoke timeout values in process", async () => {
+    await withTemporaryProcessEnvValues(
+      { KEIKO_SMOKE_INSTALL_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER + 1) },
+      async () => {
+        const { consoleError } = rejectProcessExit();
+
+        expect(() => parsePositiveTimeoutEnv("KEIKO_SMOKE_INSTALL_TIMEOUT_MS")).toThrow(
+          /process\.exit\(1\)/u,
+        );
+        expect(consoleError.mock.calls.flat().join("\n")).toContain(
+          "KEIKO_SMOKE_INSTALL_TIMEOUT_MS must be a safe integer",
+        );
+      },
+    );
+  });
+
+  it("validates registry smoke Yarn locators in process", () => {
+    const fixtureLocator = `yarn@${PINNED_YARN_VERSION}+sha512.${"a".repeat(128)}`;
+
+    expect(registrySmoke.registryYarnLocator()).toBe(PINNED_YARN);
+    expect(registrySmoke.smokeGateYarnPackageManager(PINNED_YARN)).toBe(PINNED_YARN);
+    expect(registrySmoke.smokeGateYarnPackageManager(fixtureLocator)).toBe(fixtureLocator);
+    expect(registrySmoke.testRegistryYarnLocator(fixtureLocator)).toBe(fixtureLocator);
+    expect(() => registrySmoke.testRegistryYarnLocator(`yarn@${PINNED_YARN_VERSION}`)).toThrow(
+      /Yarn locator is invalid/u,
+    );
+  });
+
+  it("keeps registry fixture Yarn locators test-only", () => {
+    const fixtureLocator = `yarn@${PINNED_YARN_VERSION}+sha512.${"b".repeat(128)}`;
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousVitestWorkerId = process.env.VITEST_WORKER_ID;
+
+    try {
+      process.env.NODE_ENV = "production";
+      delete process.env.VITEST_WORKER_ID;
+
+      expect(() => registrySmoke.testRegistryYarnLocator(fixtureLocator)).toThrow(
+        /fixture Yarn locators are only accepted inside Vitest/u,
+      );
+    } finally {
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = previousNodeEnv;
+      }
+      if (previousVitestWorkerId === undefined) {
+        delete process.env.VITEST_WORKER_ID;
+      } else {
+        process.env.VITEST_WORKER_ID = previousVitestWorkerId;
+      }
+    }
+  });
+
+  it("validates registry smoke timeout values in process", () => {
+    expect(registrySmoke.registryInstallTimeoutMs({})).toBe(300_000);
+    expect(registrySmoke.registryInstallTimeoutMs({ KEIKO_REGISTRY_INSTALL_TIMEOUT_MS: "" })).toBe(
+      300_000,
+    );
+    expect(
+      registrySmoke.registryInstallTimeoutMs({ KEIKO_REGISTRY_INSTALL_TIMEOUT_MS: "120000" }),
+    ).toBe(120_000);
+    expect(() =>
+      registrySmoke.registryInstallTimeoutMs({ KEIKO_REGISTRY_INSTALL_TIMEOUT_MS: "01" }),
+    ).toThrow(/positive integer/u);
+    expect(() =>
+      registrySmoke.registryInstallTimeoutMs({
+        KEIKO_REGISTRY_INSTALL_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER + 1),
+      }),
+    ).toThrow(/safe integer/u);
+    expect(() =>
+      registrySmoke.registryInstallTimeoutMs({ KEIKO_REGISTRY_INSTALL_TIMEOUT_MS: "600001" }),
+    ).toThrow(/no more than 600000/u);
+    expect(registrySmoke.commandSummary("npm", ["install"])).toBe("npm (1 arg)");
+    expect(registrySmoke.outputByteSummary({})).toBe("stdoutBytes=0, stderrBytes=0");
+    expect(() => registrySmoke.smokeGateYarnPackageManager("not-a-yarn-locator")).toThrow(
+      /registry install smoke Yarn locator is invalid/u,
+    );
+  });
+
+  it("validates registry TLS and loopback overrides in process", () => {
+    const consoleLog = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    expect(registrySmoke.registryHostnameIsLoopback("localhost")).toBe(true);
+    expect(registrySmoke.registryHostnameIsLoopback("127.0.0.1")).toBe(true);
+    expect(registrySmoke.registryHostnameIsLoopback("::1")).toBe(true);
+    expect(registrySmoke.registryHostnameIsLoopback("[::1]")).toBe(true);
+    expect(registrySmoke.registryHostnameIsLoopback("registry.npmjs.org")).toBe(false);
+    expect(() =>
+      registrySmoke.assertRegistryTlsVerificationEnabled("https://registry.npmjs.org/"),
+    ).not.toThrow();
+    expect(() =>
+      registrySmoke.assertRegistryTlsVerificationEnabled("https://registry.npmjs.org/", {
+        NODE_TLS_REJECT_UNAUTHORIZED: "0",
+      }),
+    ).toThrow(/NODE_TLS_REJECT_UNAUTHORIZED=0/u);
+    expect(() =>
+      registrySmoke.assertRegistryTlsVerificationEnabled("http://[::1]:4873/", {
+        KEIKO_REGISTRY_INSTALL_ALLOW_INSECURE_LOOPBACK: "1",
+      }),
+    ).not.toThrow();
+    expect(consoleLog).toHaveBeenCalledWith(expect.stringContaining("insecure loopback"));
+    expect(() =>
+      registrySmoke.assertRegistryTlsVerificationEnabled("http://registry.npmjs.org/", {}),
+    ).toThrow(/requires an HTTPS registry URL/u);
+  });
+
+  it("fails the default registry smoke entrypoint before work when TLS is disabled", async () => {
+    await withTemporaryProcessEnv("NODE_TLS_REJECT_UNAUTHORIZED", "0", async () => {
+      await expect(runRegistryInstallSmoke()).rejects.toThrow(/NODE_TLS_REJECT_UNAUTHORIZED=0/u);
+    });
+  });
+
+  it("fails the test registry smoke entrypoint before work when TLS is disabled", async () => {
+    await withTemporaryProcessEnv("NODE_TLS_REJECT_UNAUTHORIZED", "0", async () => {
+      await expect(runRegistryInstallSmokeForTest(PINNED_YARN)).rejects.toThrow(
+        /NODE_TLS_REJECT_UNAUTHORIZED=0/u,
+      );
+    });
+  });
+
+  it("bounds registry smoke command diagnostics in process", () => {
+    expect(registrySmoke.commandSummary("npm", ["install"])).toBe("npm (1 arg)");
+    expect(registrySmoke.commandSummary("corepack", ["yarn", "install"])).toBe("corepack (2 args)");
+    expect(registrySmoke.outputByteSummary({ stdout: "abc", stderr: "de" })).toBe(
+      "stdoutBytes=3, stderrBytes=2",
+    );
+    expect(() =>
+      registrySmoke.assertRunSucceeded("npm", ["install"], { error: new Error("missing") }),
+    ).toThrow(/npm \(1 arg\) could not spawn: missing/u);
+    expect(() =>
+      registrySmoke.assertRunSucceeded("corepack", ["yarn"], {
+        outputLimitExceeded: true,
+        stderr: "err",
+        stdout: "out",
+      }),
+    ).toThrow(/corepack \(1 arg\) exceeded output limit/u);
+    expect(() =>
+      registrySmoke.assertRunSucceeded("node", ["script"], {
+        signal: null,
+        status: 7,
+        stderr: "err",
+        stdout: "out",
+      }),
+    ).toThrow(/node \(1 arg\) exited 7/u);
+    expect(() =>
+      registrySmoke.assertRunSucceeded("node", ["--version"], { status: 0 }),
+    ).not.toThrow();
+  });
+
+  it("uses the explicit registry smoke command timeout", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-registry-run-timeout-test-"));
+    try {
+      const fixture = join(root, "delayed.mjs");
+      writeFileSync(fixture, "setTimeout(() => process.stdout.write('ready'), 50);\n", "utf8");
+
+      const result = registrySmoke.run(process.execPath, [fixture], 1_000, { timeout: 1 });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("ready");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("writes Yarn registry smoke project files in process", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-registry-yarn-files-test-"));
+    try {
+      registrySmoke.writeYarnSmokeManifest(root, PINNED_YARN);
+      registrySmoke.writeYarnSmokeConfiguration(root);
+
+      const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+      const yarnConfig = readFileSync(join(root, YARN_RC_FILENAME), "utf8");
+
+      expect(manifest.packageManager).toBe(PINNED_YARN);
+      expect(manifest.devDependencies[ROOT_MANIFEST.name]).toBe(ROOT_MANIFEST.version);
+      expect(yarnConfig).toContain("enableStrictSsl: true");
+      expect(yarnConfig).toContain('npmRegistryServer: "https://registry.npmjs.org/"');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("checks a registry-installed runtime fixture in process", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-registry-runtime-test-"));
+    try {
+      writeRegistryInstalledRuntimeFixture(root);
+
+      expect(() => registrySmoke.assertVendoredPayload(root)).not.toThrow();
+      await expect(registrySmoke.assertInstalledRuntime(root, 1_000)).resolves.toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects registry-installed fixtures without vendored runtime dist", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-registry-runtime-missing-test-"));
+    try {
+      mkdirSync(join(root, "node_modules", "@oscharko-dev", "keiko"), { recursive: true });
+
+      expect(() => registrySmoke.assertVendoredPayload(root)).toThrow(
+        /missing runtime dependency/u,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects registry-installed fixtures with an empty vendored runtime dist", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-registry-runtime-empty-test-"));
+    try {
+      const packageRoot = join(root, "node_modules", "@oscharko-dev", "keiko");
+      const name = ROOT_MANIFEST.bundleDependencies[0];
+      const shortName = name.replace(/^@oscharko-dev\//u, "");
+      mkdirSync(join(packageRoot, "node_modules", "@oscharko-dev", shortName, "dist"), {
+        recursive: true,
+      });
+
+      expect(() => registrySmoke.assertVendoredPayload(root)).toThrow(
+        /empty runtime dependency dist/u,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects registry-installed fixtures with mismatched CLI version output", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-registry-cli-mismatch-test-"));
+    try {
+      const binDir = join(root, "node_modules", "@oscharko-dev", "keiko", "dist", "cli");
+      mkdirSync(binDir, { recursive: true });
+      writeFileSync(join(binDir, "index.js"), "process.stdout.write('0.0.0\\n');\n", "utf8");
+
+      await expect(registrySmoke.assertInstalledRuntime(root, 5_000)).rejects.toThrow(
+        /installed CLI version output did not include/u,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects registry-installed fixtures with mismatched root SDK version", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-registry-sdk-mismatch-test-"));
+    try {
+      writeRegistryInstalledRuntimeFixture(root);
+      writeFileSync(
+        join(root, "node_modules", "@oscharko-dev", "keiko", "dist", "index.js"),
+        "export const SDK_VERSION = '0.0.0';\n",
+        "utf8",
+      );
+
+      await expect(registrySmoke.assertInstalledRuntime(root, 5_000)).rejects.toThrow(
+        /root import SDK_VERSION mismatch/u,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the Corepack cache private and per-user", () => {
-    const dir = corepackCacheDir();
+    const locator = corepackLockFixtureLocator("private");
+    const dir = corepackCacheDir(locator);
     expect(existsSync(dir)).toBe(true);
+    expect(dir).toContain(yarnLocatorParts(locator).sha512);
     // Separate paths per account, so two users never contend for one directory.
     if (process.getuid !== undefined) {
       expect(dir.endsWith(`-${String(process.getuid())}`)).toBe(true);
@@ -1211,13 +1895,199 @@ describe("installable package smoke optional-dependency coverage", () => {
     }
   });
 
+  it("holds the Corepack cache lock while cached Yarn may execute", async () => {
+    const locator = corepackLockFixtureLocator("held");
+    const lockDir = corepackCacheLockDir(locator);
+    rmSync(lockDir, { recursive: true, force: true });
+    try {
+      const result = await withCorepackYarnCacheLock(locator, async () => {
+        expect(existsSync(lockDir)).toBe(true);
+        const owner = JSON.parse(readFileSync(join(lockDir, "owner.json"), "utf8"));
+        expect(owner.expiresAtMs).toBeGreaterThan(Date.now());
+        return await withCorepackYarnCacheLock(locator, () => "locked");
+      });
+
+      expect(result).toBe("locked");
+      expect(existsSync(lockDir)).toBe(false);
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
+
+  it("publishes Corepack cache lock owner records with an atomic rename", () => {
+    const source = readFileSync(join(ROOT, "scripts", "installable-package-smoke.mjs"), "utf8");
+
+    expect(source).toContain("function lockOwnerTempPath(lockDir)");
+    expect(source).toContain("renameSync(tempPath, lockOwnerPath(lockDir))");
+    expect(source).toContain("expectedToken !== undefined");
+    expect(source).not.toContain("writeFileSync(\n    lockOwnerPath(lockDir)");
+  });
+
+  it("renews the Corepack cache lock lease while the action runs", async () => {
+    const locator = corepackLockFixtureLocator("renew");
+    const lockDir = corepackCacheLockDir(locator);
+    rmSync(lockDir, { recursive: true, force: true });
+    try {
+      await withCorepackYarnCacheLock(
+        locator,
+        async () => {
+          const first = JSON.parse(readFileSync(join(lockDir, "owner.json"), "utf8")).expiresAtMs;
+          let renewed = first;
+          for (let attempt = 0; attempt < 10 && renewed <= first; attempt += 1) {
+            await delay(50);
+            renewed = JSON.parse(readFileSync(join(lockDir, "owner.json"), "utf8")).expiresAtMs;
+          }
+          expect(renewed).toBeGreaterThan(first);
+        },
+        50,
+      );
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves action errors when lock renewal also fails", async () => {
+    const locator = corepackLockFixtureLocator("renewal-action-error");
+    const lockDir = corepackCacheLockDir(locator);
+    const ownerPath = join(lockDir, "owner.json");
+    rmSync(lockDir, { recursive: true, force: true });
+    try {
+      await expect(
+        withCorepackYarnCacheLock(
+          locator,
+          async () => {
+            chmodSync(ownerPath, 0o400);
+            await delay(150);
+            throw new Error("action failed while lock renewal was unhealthy");
+          },
+          50,
+        ),
+      ).rejects.toThrow("action failed while lock renewal was unhealthy");
+    } finally {
+      if (existsSync(ownerPath)) chmodSync(ownerPath, 0o600);
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not release a Corepack cache lock it no longer owns", async () => {
+    const locator = corepackLockFixtureLocator("release");
+    const lockDir = corepackCacheLockDir(locator);
+    rmSync(lockDir, { recursive: true, force: true });
+    try {
+      await withCorepackYarnCacheLock(locator, () => {
+        rmSync(lockDir, { recursive: true, force: true });
+        mkdirSync(lockDir, { mode: 0o700 });
+        writeFileSync(
+          join(lockDir, "owner.json"),
+          JSON.stringify({ pid: process.pid, token: "replacement" }),
+          "utf8",
+        );
+      });
+
+      expect(existsSync(lockDir)).toBe(true);
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers an abandoned stale Corepack cache lock claim", async () => {
+    const locator = corepackLockFixtureLocator("claim");
+    const lockDir = corepackCacheLockDir(locator);
+    const claimPath = join(lockDir, "stale-claimer.json");
+    rmSync(lockDir, { recursive: true, force: true });
+    try {
+      mkdirSync(lockDir, { mode: 0o700 });
+      writeFileSync(
+        join(lockDir, "owner.json"),
+        JSON.stringify({ expiresAtMs: Date.now() - 1, pid: 1, token: "dead" }),
+        "utf8",
+      );
+      writeFileSync(claimPath, "{}\n", "utf8");
+      const old = new Date(Date.now() - 120_000);
+      utimesSync(claimPath, old, old);
+
+      const result = await withCorepackYarnCacheLock(locator, () => "reclaimed", 1_000);
+
+      expect(result).toBe("reclaimed");
+      expect(existsSync(lockDir)).toBe(false);
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves another worker's live stale Corepack cache lock claim", async () => {
+    const locator = corepackLockFixtureLocator("live-claim");
+    const lockDir = corepackCacheLockDir(locator);
+    const claimPath = join(lockDir, "stale-claimer.json");
+    rmSync(lockDir, { recursive: true, force: true });
+    try {
+      mkdirSync(lockDir, { mode: 0o700 });
+      writeFileSync(
+        join(lockDir, "owner.json"),
+        JSON.stringify({ expiresAtMs: Date.now() - 1, pid: 1, token: "dead" }),
+        "utf8",
+      );
+      writeFileSync(
+        claimPath,
+        JSON.stringify({
+          claimedAt: new Date().toISOString(),
+          expiresAtMs: Date.now() + 60_000,
+          pid: 2,
+          token: "other-worker",
+        }),
+        "utf8",
+      );
+      const claimStats = statSync(claimPath);
+
+      await expect(withCorepackYarnCacheLock(locator, () => "blocked", 25)).rejects.toThrow(
+        /timed out waiting for Corepack cache lock/u,
+      );
+
+      const preservedStats = statSync(claimPath);
+      expect(preservedStats.dev).toBe(claimStats.dev);
+      expect(preservedStats.ino).toBe(claimStats.ino);
+      expect(JSON.parse(readFileSync(claimPath, "utf8")).token).toBe("other-worker");
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a fresh legacy Corepack cache lock claim until its mtime lease expires", async () => {
+    const locator = corepackLockFixtureLocator("legacy-claim");
+    const lockDir = corepackCacheLockDir(locator);
+    const claimPath = join(lockDir, "stale-claimer.json");
+    rmSync(lockDir, { recursive: true, force: true });
+    try {
+      mkdirSync(lockDir, { mode: 0o700 });
+      writeFileSync(
+        join(lockDir, "owner.json"),
+        JSON.stringify({ expiresAtMs: Date.now() - 1, pid: 1, token: "dead" }),
+        "utf8",
+      );
+      writeFileSync(claimPath, "{}\n", "utf8");
+      const claimStats = statSync(claimPath);
+
+      await expect(withCorepackYarnCacheLock(locator, () => "blocked", 25)).rejects.toThrow(
+        /timed out waiting for Corepack cache lock/u,
+      );
+
+      const preservedStats = statSync(claimPath);
+      expect(preservedStats.dev).toBe(claimStats.dev);
+      expect(preservedStats.ino).toBe(claimStats.ino);
+      expect(readFileSync(claimPath, "utf8")).toBe("{}\n");
+    } finally {
+      rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the Corepack cache off the private home so it survives between runs", () => {
+    const locator = corepackLockFixtureLocator("child-env");
     const home = privateYarnHome();
     try {
-      const env = yarnChildEnv("http://127.0.0.1:12345", { PATH: "/usr/bin" }, home);
+      const env = yarnChildEnv("http://127.0.0.1:12345", { PATH: "/usr/bin" }, home, locator);
       // If the cache followed HOME it would be empty every run, and the gate would download the
       // package manager on each invocation instead of only when it is genuinely absent.
-      expect(env.COREPACK_HOME).toBe(corepackCacheDir());
+      expect(env.COREPACK_HOME).toBe(corepackCacheDir(locator));
       expect(env.COREPACK_HOME.startsWith(home)).toBe(false);
       expect(existsSync(env.COREPACK_HOME)).toBe(true);
     } finally {
@@ -1246,6 +2116,347 @@ describe("installable package smoke optional-dependency coverage", () => {
       expect(inherited.HOME).toBe("/real/home");
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("scopes the Corepack cache key by version and hash", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-corepack-cache-key-test-"));
+    const fixtureBytes = "fixture Yarn bytes\n";
+    const fixtureLocator = yarnLocatorForBytes(PINNED_YARN_VERSION, fixtureBytes);
+    const fixtureHash = yarnSha512ForBytes(fixtureBytes);
+    const alternateHashLocator = `yarn@${PINNED_YARN_VERSION}+sha512.${"0".repeat(128)}`;
+    try {
+      const result = runIsolatedSmokeModule(
+        root,
+        [
+          'import { mkdirSync, writeFileSync } from "node:fs";',
+          'import { join } from "node:path";',
+          "import { corepackCacheDir, isPinnedYarnCached } from './scripts/installable-package-smoke.mjs';",
+          "import { PINNED_YARN_NAME, PINNED_YARN_VERSION } from './scripts/lib/pinned-yarn.mjs';",
+          `const locator = ${JSON.stringify(fixtureLocator)};`,
+          `const alternate = ${JSON.stringify(alternateHashLocator)};`,
+          `const fixtureBytes = ${JSON.stringify(fixtureBytes)};`,
+          `const fixtureHash = ${JSON.stringify(fixtureHash)};`,
+          "const originalDir = corepackCacheDir(locator);",
+          "const alternateDir = corepackCacheDir(alternate);",
+          "const entry = join(originalDir, 'v1', PINNED_YARN_NAME, PINNED_YARN_VERSION);",
+          "mkdirSync(entry, { recursive: true });",
+          "writeFileSync(",
+          "  join(entry, '.corepack'),",
+          "  JSON.stringify({",
+          "    locator: {",
+          "      name: PINNED_YARN_NAME,",
+          "      reference: PINNED_YARN_VERSION + '+sha512.' + fixtureHash,",
+          "    },",
+          "    bin: ['yarn', 'yarnpkg'],",
+          "    hash: 'sha512.' + fixtureHash,",
+          "  }),",
+          "  'utf8',",
+          ");",
+          "writeFileSync(join(entry, 'yarn.js'), fixtureBytes, 'utf8');",
+          "console.log(JSON.stringify({",
+          "  sameDir: originalDir === alternateDir,",
+          "  originalCached: isPinnedYarnCached(locator),",
+          "  alternateCached: isPinnedYarnCached(alternate),",
+          "}));",
+        ].join("\n"),
+      );
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      const outcome = JSON.parse(result.stdout);
+
+      expect(outcome).toEqual({
+        sameDir: false,
+        originalCached: true,
+        alternateCached: false,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs missing Corepack metadata when the cached Yarn bytes match", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-corepack-metadata-repair-test-"));
+    const fixtureBytes = "metadata repair Yarn fixture\n";
+    const fixtureLocator = yarnLocatorForBytes(`${PINNED_YARN_VERSION}-metadata.1`, fixtureBytes);
+    try {
+      const result = runIsolatedSmokeModule(
+        root,
+        [
+          'import { mkdirSync, writeFileSync } from "node:fs";',
+          'import { join } from "node:path";',
+          "import { corepackCacheDir, isPinnedYarnCached, provisionPinnedYarnForSetup } from './scripts/installable-package-smoke.mjs';",
+          "import { PINNED_YARN_NAME } from './scripts/lib/pinned-yarn.mjs';",
+          `const locator = ${JSON.stringify(fixtureLocator)};`,
+          `const fixtureBytes = ${JSON.stringify(fixtureBytes)};`,
+          `const version = ${JSON.stringify(`${PINNED_YARN_VERSION}-metadata.1`)};`,
+          "const entry = join(corepackCacheDir(locator), 'v1', PINNED_YARN_NAME, version);",
+          "mkdirSync(entry, { recursive: true });",
+          "writeFileSync(join(entry, 'yarn.js'), fixtureBytes, 'utf8');",
+          "await provisionPinnedYarnForSetup(locator);",
+          "if (!isPinnedYarnCached(locator)) process.exit(2);",
+        ].join("\n"),
+      );
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("already cached");
+      expect(result.stdout).not.toContain(fixtureLocator);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("provisions the integrity-pinned Yarn locator on a cold Corepack cache", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-corepack-cold-cache-test-"));
+    const binDir = join(root, "bin");
+    const marker = join(root, "corepack-call.json");
+    const fixtureBytes = "freshly downloaded Yarn bytes\n";
+    const fixtureLocator = yarnLocatorForBytes(PINNED_YARN_VERSION, fixtureBytes);
+    const fixtureHash = yarnSha512ForBytes(fixtureBytes);
+    mkdirSync(binDir, { recursive: true });
+    try {
+      writeExecutable(
+        join(binDir, "corepack"),
+        [
+          'import { mkdirSync, writeFileSync } from "node:fs";',
+          'import { join } from "node:path";',
+          "writeFileSync(",
+          "  process.env.KEIKO_COREPACK_MARKER,",
+          "  JSON.stringify({",
+          "    argv: process.argv.slice(2),",
+          "    corepackHome: process.env.COREPACK_HOME,",
+          "    network: process.env.COREPACK_ENABLE_NETWORK,",
+          "  }),",
+          "  'utf8',",
+          ");",
+          "const entry = join(",
+          "  process.env.COREPACK_HOME,",
+          "  'v1',",
+          "  'yarn',",
+          "  process.env.PINNED_YARN_VERSION,",
+          ");",
+          "mkdirSync(",
+          "  entry,",
+          "  { recursive: true },",
+          ");",
+          "writeFileSync(",
+          "  join(entry, '.corepack'),",
+          "  JSON.stringify({",
+          "    locator: {",
+          "      name: 'yarn',",
+          "      reference:",
+          "        process.env.PINNED_YARN_VERSION +",
+          "        '+sha512.' +",
+          "        process.env.PINNED_YARN_SHA512,",
+          "    },",
+          "    bin: ['yarn', 'yarnpkg'],",
+          "    hash: 'sha512.' + process.env.PINNED_YARN_SHA512,",
+          "  }),",
+          "  'utf8',",
+          ");",
+          "writeFileSync(join(entry, 'yarn.js'), process.env.FIXTURE_YARN_BYTES, 'utf8');",
+        ].join("\n"),
+      );
+      const result = runProvisionPinnedYarnChild(
+        root,
+        {
+          FIXTURE_YARN_BYTES: fixtureBytes,
+          KEIKO_COREPACK_MARKER: marker,
+          PINNED_YARN_SHA512: fixtureHash,
+          PINNED_YARN_VERSION,
+        },
+        fixtureLocator,
+      );
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      const record = JSON.parse(readFileSync(marker, "utf8"));
+
+      expect(record.argv).toEqual(["install", "--global", "--cache-only", fixtureLocator]);
+      expect(record.corepackHome).toContain(`keiko-corepack-yarn-${PINNED_YARN_VERSION}-`);
+      expect(record.network).toBe("1");
+      expect(result.stdout).toContain(`provision-pinned-yarn: yarn@${PINNED_YARN_VERSION} `);
+      expect(result.stdout).toContain("locatorSha256=");
+      expect(result.stdout).not.toContain(fixtureHash);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed and redacts Corepack output when the cold download hash mismatches", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-corepack-mismatch-test-"));
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    try {
+      writeExecutable(
+        join(binDir, "corepack"),
+        [
+          'import { writeSync } from "node:fs";',
+          "writeSync(2, 'Mismatch hashes. Expected redaction-probe-expected, got redaction-probe-actual\\n');",
+          "process.exit(44);",
+        ].join("\n"),
+      );
+      const result = runProvisionPinnedYarnChild(root);
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("the archive failed its integrity check");
+      expect(result.stderr).not.toContain("redaction-probe-expected");
+      expect(result.stderr).not.toContain("redaction-probe-actual");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a successfully provisioned Corepack cache with mismatched Yarn bytes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-corepack-cache-mismatch-test-"));
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const locator = yarnLocatorForBytes(`${PINNED_YARN_VERSION}-cache-mismatch`, "expected");
+    const cacheDir = corepackCacheDir(locator);
+    try {
+      rmSync(cacheDir, { recursive: true, force: true });
+      writeCorepackFixture(binDir, locator, "actual");
+
+      await withTemporaryProcessEnvValues(yarnSmokeEnv(binDir), async () => {
+        await expect(provisionPinnedYarnForSetup(locator, 5_000)).rejects.toThrow(
+          /but the cached Yarn bytes did not match pinned integrity/u,
+        );
+      });
+    } finally {
+      rmSync(cacheDir, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("runs prepare-offline-smoke setup without exiting when preparation succeeds", async () => {
+    const exit = vi.fn();
+    const prepare = vi.fn(async () => undefined);
+    const writeError = vi.fn();
+
+    await runPrepareOfflineSmoke({ exit, prepare, writeError });
+
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(writeError).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+  });
+
+  it("accepts default prepare-offline-smoke reporters when preparation succeeds", async () => {
+    const prepare = vi.fn(async () => undefined);
+
+    await runPrepareOfflineSmoke({ prepare });
+
+    expect(prepare).toHaveBeenCalledOnce();
+  });
+
+  it("reports classified prepare-offline-smoke setup failures in process", async () => {
+    const exit = vi.fn();
+    const writeError = vi.fn();
+    const failure = new SmokeGateFailure("corepack cached yarn@fixture but digest mismatched");
+
+    await runPrepareOfflineSmoke({
+      exit,
+      prepare: async () => {
+        throw failure;
+      },
+      writeError,
+    });
+
+    expect(writeError).toHaveBeenCalledWith(
+      "installable-smoke failed: corepack cached yarn@fixture but digest mismatched",
+    );
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it("reports unexpected prepare-offline-smoke setup failures with context", async () => {
+    const exit = vi.fn();
+    const writeError = vi.fn();
+    const failure = new TypeError("temp directory is not writable");
+
+    await runPrepareOfflineSmoke({
+      exit,
+      prepare: async () => {
+        throw failure;
+      },
+      writeError,
+    });
+
+    expect(writeError).toHaveBeenCalledWith(
+      `prepare-offline-smoke: could not prepare the offline smoke: ${smokeGateFailureLogSummary(
+        failure,
+      )}`,
+    );
+    expect(writeError.mock.calls.flat().join("\n")).not.toContain("temp directory is not writable");
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it("reports string prepare-offline-smoke setup failures with context", async () => {
+    const exit = vi.fn();
+    const writeError = vi.fn();
+    const failure = "tmp denied";
+
+    await runPrepareOfflineSmoke({
+      exit,
+      prepare: () => Promise.reject(failure),
+      writeError,
+    });
+
+    expect(writeError).toHaveBeenCalledWith(
+      `prepare-offline-smoke: could not prepare the offline smoke: ${smokeGateFailureLogSummary(
+        failure,
+      )}`,
+    );
+    expect(writeError.mock.calls.flat().join("\n")).not.toContain(failure);
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it("reports redacted prepare-offline-smoke failures through default reporters", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const exit = vi.spyOn(process, "exit").mockImplementation((code) => {
+      throw new Error(`process.exit(${String(code)})`);
+    });
+    const failure = "default reporter secret";
+
+    await expect(
+      runPrepareOfflineSmoke({
+        prepare: () => Promise.reject(failure),
+      }),
+    ).rejects.toThrow(/process\.exit\(1\)/u);
+
+    const errorText = consoleError.mock.calls.flat().join("\n");
+    expect(errorText).toContain(
+      `prepare-offline-smoke: could not prepare the offline smoke: ${smokeGateFailureLogSummary(
+        failure,
+      )}`,
+    );
+    expect(errorText).not.toContain(failure);
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps classified Corepack setup failures visible in prepare-offline-smoke", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-prepare-smoke-mismatch-test-"));
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    try {
+      writeExecutable(
+        join(binDir, "corepack"),
+        [
+          'import { writeSync } from "node:fs";',
+          "writeSync(2, 'Mismatch hashes. Expected redaction-probe-expected, got redaction-probe-actual\\n');",
+          "process.exit(44);",
+        ].join("\n"),
+      );
+
+      const result = spawnSync(process.execPath, ["scripts/prepare-offline-smoke.mjs"], {
+        cwd: ROOT,
+        encoding: "utf8",
+        env: isolatedChildEnv(root),
+        timeout: 30_000,
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("the archive failed its integrity check");
+      expect(result.stderr).toContain("npm run provision:smoke");
+      expect(result.stderr).not.toContain("redaction-probe-expected");
+      expect(result.stderr).not.toContain("redaction-probe-actual");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -1834,21 +3045,382 @@ describe("installable package smoke optional-dependency coverage", () => {
     mkdirSync(binDir, { recursive: true });
     mkdirSync(projectDir, { recursive: true });
     const artifact = localRegistryArtifact(root);
-    writeExecutable(
-      join(binDir, "corepack"),
+    const locator = corepackLockFixtureLocator("failure");
+    writeCorepackFixture(binDir, locator, "failure", [
+      'if (process.argv[2] === "yarn") {',
       "process.stderr.write('rejected\\n'); process.exit(7);",
-    );
+      "}",
+      "process.stderr.write('unexpected corepack invocation\\n'); process.exit(9);",
+    ]);
     const previousPath = process.env.PATH;
     process.env.PATH = `${binDir}${delimiter}${previousPath}`;
     try {
-      rejectProcessExit();
-      await expect(installIntoWithYarn(projectDir, artifact)).rejects.toThrow(
+      const { consoleError } = rejectProcessExit();
+      await expect(installIntoWithYarn(projectDir, artifact, undefined, locator)).rejects.toThrow(
         /process\.exit\(1\)/u,
       );
+      const errorText = consoleError.mock.calls.flat().join("\n");
+      expect(errorText).toContain("Yarn registry install exited 7");
+      expect(errorText).toContain("stderrBytes=9");
+      expect(errorText).not.toContain("rejected");
+      expect(existsSync(corepackCacheLockDir(locator))).toBe(false);
     } finally {
       process.env.PATH = previousPath;
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("fails closed when Corepack setup cannot cache the pinned Yarn", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-yarn-setup-failure-test-"));
+    const binDir = join(root, "bin");
+    const projectDir = join(root, "project");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(projectDir, { recursive: true });
+    const artifact = localRegistryArtifact(root);
+    const locator = corepackLockFixtureLocator("setup-failure");
+    const redactionProbe = "corepack-redaction-probe-token";
+    writeExecutable(
+      join(binDir, "corepack"),
+      [
+        'import { writeSync } from "node:fs";',
+        "if (process.argv[2] === 'install') {",
+        `  writeSync(2, '404 Not Found ${redactionProbe}\\n');`,
+        "  process.exit(44);",
+        "}",
+        "process.stderr.write('unexpected yarn install\\n'); process.exit(9);",
+      ].join("\n"),
+    );
+
+    try {
+      const { consoleError } = rejectProcessExit();
+      await withTemporaryProcessEnvValues(yarnSmokeEnv(binDir), async () => {
+        await expect(installIntoWithYarn(projectDir, artifact, undefined, locator)).rejects.toThrow(
+          /process\.exit\(1\)/u,
+        );
+      });
+      const errorText = consoleError.mock.calls.flat().join("\n");
+      expect(errorText).toContain("corepack could not provision yarn@");
+      expect(errorText).toContain("the requested version was not found");
+      expect(errorText).toContain("npm run provision:smoke");
+      expect(errorText).not.toContain(redactionProbe);
+      expect(existsSync(corepackCacheLockDir(locator))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves redacted Corepack setup timeout diagnostics", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-yarn-setup-timeout-test-"));
+    const binDir = join(root, "bin");
+    const projectDir = join(root, "project");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(projectDir, { recursive: true });
+    const artifact = localRegistryArtifact(root);
+    const locator = corepackLockFixtureLocator("setup-timeout");
+    writeExecutable(
+      join(binDir, "corepack"),
+      [
+        "if (process.argv[2] === 'install') {",
+        "  await new Promise(() => { setInterval(() => undefined, 1000); });",
+        "}",
+        "process.stderr.write('unexpected yarn install\\n'); process.exit(9);",
+      ].join("\n"),
+    );
+
+    try {
+      const { consoleError } = rejectProcessExit();
+      await withTemporaryProcessEnvValues(
+        yarnSmokeEnv(binDir, { KEIKO_SMOKE_INSTALL_TIMEOUT_MS: "1000" }),
+        async () => {
+          await expect(
+            installIntoWithYarn(projectDir, artifact, undefined, locator),
+          ).rejects.toThrow(/process\.exit\(1\)/u);
+        },
+      );
+      const errorText = consoleError.mock.calls.flat().join("\n");
+      expect(errorText).toContain("corepack could not provision yarn@");
+      expect(errorText).toContain("corepack did not finish before the 1000ms setup timeout");
+      expect(errorText).toContain("npm run provision:smoke");
+      expect(errorText).not.toContain(root);
+      expect(existsSync(corepackCacheLockDir(locator))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves redacted Corepack missing-executable diagnostics", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-yarn-setup-enoent-test-"));
+    const binDir = join(root, "bin");
+    const projectDir = join(root, "project");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(projectDir, { recursive: true });
+    const artifact = localRegistryArtifact(root);
+    const locator = corepackLockFixtureLocator("setup-enoent");
+
+    try {
+      const { consoleError } = rejectProcessExit();
+      await withTemporaryProcessEnvValues(
+        yarnSmokeEnv(binDir, { PATH: binDir, KEIKO_SMOKE_INSTALL_TIMEOUT_MS: "1000" }),
+        async () => {
+          await expect(
+            installIntoWithYarn(projectDir, artifact, undefined, locator),
+          ).rejects.toThrow(/process\.exit\(1\)/u);
+        },
+      );
+      const errorText = consoleError.mock.calls.flat().join("\n");
+      expect(errorText).toContain("corepack could not provision yarn@");
+      expect(errorText).toContain("corepack executable was not found");
+      expect(errorText).toContain("npm run provision:smoke");
+      expect(errorText).not.toContain(root);
+      expect(existsSync(corepackCacheLockDir(locator))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves redacted Corepack permission diagnostics", async () => {
+    if (process.platform === "win32") return;
+    const root = mkdtempSync(join(tmpdir(), "keiko-yarn-setup-eacces-test-"));
+    const binDir = join(root, "bin");
+    const projectDir = join(root, "project");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(projectDir, { recursive: true });
+    const corepackPath = join(binDir, "corepack");
+    const artifact = localRegistryArtifact(root);
+    const locator = corepackLockFixtureLocator("setup-eacces");
+    writeFileSync(corepackPath, "#!/bin/sh\nexit 9\n", "utf8");
+    chmodSync(corepackPath, 0o644);
+
+    try {
+      const { consoleError } = rejectProcessExit();
+      await withTemporaryProcessEnvValues(
+        yarnSmokeEnv(binDir, { PATH: binDir, KEIKO_SMOKE_INSTALL_TIMEOUT_MS: "1000" }),
+        async () => {
+          await expect(
+            installIntoWithYarn(projectDir, artifact, undefined, locator),
+          ).rejects.toThrow(/process\.exit\(1\)/u);
+        },
+      );
+      const errorText = consoleError.mock.calls.flat().join("\n");
+      expect(errorText).toContain("corepack could not provision yarn@");
+      expect(errorText).toContain("corepack spawn failed with code EACCES");
+      expect(errorText).toContain("npm run provision:smoke");
+      expect(errorText).not.toContain(root);
+      expect(existsSync(corepackCacheLockDir(locator))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when the Yarn registry install command times out", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-yarn-registry-timeout-test-"));
+    const binDir = join(root, "bin");
+    const projectDir = join(root, "project");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(projectDir, { recursive: true });
+    const artifact = localRegistryArtifact(root);
+    const locator = corepackLockFixtureLocator("timeout");
+    writeCorepackFixture(binDir, locator, "timeout", [
+      "if (process.argv.includes('--no-immutable')) {",
+      "  await new Promise(() => { setInterval(() => undefined, 1000); });",
+      "}",
+      "process.stderr.write('unexpected corepack invocation\\n'); process.exit(9);",
+    ]);
+
+    try {
+      const { consoleError } = rejectProcessExit();
+      await withTemporaryProcessEnvValues(
+        yarnSmokeEnv(binDir, { KEIKO_SMOKE_INSTALL_TIMEOUT_MS: "1000" }),
+        async () => {
+          await expect(
+            installIntoWithYarn(projectDir, artifact, undefined, locator),
+          ).rejects.toThrow(/process\.exit\(1\)/u);
+        },
+      );
+      const errorText = consoleError.mock.calls.flat().join("\n");
+      expect(errorText).toContain("Yarn registry install timed out");
+      expect(errorText).toContain("stdoutBytes=0");
+      expect(errorText).toContain("stderrBytes=0");
+      expect(existsSync(corepackCacheLockDir(locator))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["not-a-number", "0", "-1", "01", " 5"])(
+    "rejects malformed registry install timeout %s before smoke work starts",
+    (timeoutValue) => {
+      const result = runRegistryTimeoutFailure(timeoutValue);
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain(
+        "KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be a positive integer number of milliseconds.",
+      );
+      expect(result.stderr).toBe("");
+    },
+  );
+
+  it("rejects registry install timeouts above the bounded maximum", () => {
+    const result = runRegistryTimeoutFailure("600001");
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain(
+      "KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be no more than 600000 milliseconds.",
+    );
+    expect(result.stderr).toBe("");
+  });
+
+  it("does not let installable-smoke timeout settings fail registry-smoke imports", () => {
+    const result = runRegistryTimeoutFailure("0", {
+      KEIKO_SMOKE_INSTALL_TIMEOUT_MS: "not-a-number",
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain(
+      "KEIKO_REGISTRY_INSTALL_TIMEOUT_MS must be a positive integer number of milliseconds.",
+    );
+    expect(result.stdout).not.toContain("KEIKO_SMOKE_INSTALL_TIMEOUT_MS");
+    expect(result.stderr).toBe("");
+  });
+
+  it("cleans registry install temp dirs after npm spawn failures", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-registry-smoke-cleanup-test-"));
+    try {
+      const binDir = join(root, "bin");
+      mkdirSync(binDir, { recursive: true });
+      writeExecutable(
+        join(binDir, "npm"),
+        "process.stderr.write('install failed\\n'); process.exit(7);",
+      );
+
+      const result = runIsolatedSmokeModule(
+        root,
+        [
+          'import { isSmokeGateFailure } from "./scripts/installable-package-smoke.mjs";',
+          'import { PINNED_YARN } from "./scripts/lib/pinned-yarn.mjs";',
+          'import { runRegistryInstallSmokeForTest } from "./scripts/registry-install-smoke.mjs";',
+          "try {",
+          "  await runRegistryInstallSmokeForTest(PINNED_YARN);",
+          "  process.exit(64);",
+          "} catch (error) {",
+          "  if (!isSmokeGateFailure(error)) throw error;",
+          "  process.stdout.write(error.message);",
+          "}",
+        ].join("\n"),
+        { NODE_ENV: "test", VITEST_WORKER_ID: process.env.VITEST_WORKER_ID ?? "1" },
+      );
+      const leftovers = readdirSync(join(root, "tmp")).filter((entry) =>
+        entry.startsWith("keiko-registry-npm-"),
+      );
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("npm (6 args) exited 7");
+      expect(leftovers).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts explicit insecure IPv6 loopback registry overrides before smoke work", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-registry-smoke-ipv6-test-"));
+    try {
+      const binDir = join(root, "bin");
+      mkdirSync(binDir, { recursive: true });
+      writeExecutable(
+        join(binDir, "npm"),
+        "process.stderr.write('install failed\\n'); process.exit(7);",
+      );
+
+      const result = runIsolatedSmokeModule(
+        root,
+        [
+          'import { isSmokeGateFailure } from "./scripts/installable-package-smoke.mjs";',
+          'import { PINNED_YARN } from "./scripts/lib/pinned-yarn.mjs";',
+          'import { runRegistryInstallSmokeForTest } from "./scripts/registry-install-smoke.mjs";',
+          "try {",
+          "  await runRegistryInstallSmokeForTest(PINNED_YARN);",
+          "  process.exit(64);",
+          "} catch (error) {",
+          "  if (!isSmokeGateFailure(error)) throw error;",
+          "  process.stdout.write(error.message);",
+          "}",
+        ].join("\n"),
+        {
+          KEIKO_REGISTRY_INSTALL_ALLOW_INSECURE_LOOPBACK: "1",
+          KEIKO_REGISTRY_URL: "http://[::1]:9",
+          NODE_ENV: "test",
+          VITEST_WORKER_ID: process.env.VITEST_WORKER_ID ?? "1",
+        },
+      );
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("npm (6 args) exited 7");
+      expect(result.stdout).not.toContain("requires an HTTPS registry URL");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects test-only Yarn locators outside Vitest as a smoke gate failure", () => {
+    const env = { ...process.env, NODE_ENV: "production" };
+    delete env.VITEST_WORKER_ID;
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        [
+          'import { isSmokeGateFailure } from "./scripts/installable-package-smoke.mjs";',
+          'import { runRegistryInstallSmokeForTest } from "./scripts/registry-install-smoke.mjs";',
+          "try {",
+          `  await runRegistryInstallSmokeForTest(${JSON.stringify(PINNED_YARN)});`,
+          "  process.exit(64);",
+          "} catch (error) {",
+          "  if (!isSmokeGateFailure(error)) throw error;",
+          "  process.stdout.write(error.message);",
+          "}",
+        ].join("\n"),
+      ],
+      { cwd: ROOT, encoding: "utf8", env, timeout: 30_000 },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/fixture Yarn locators are only accepted inside Vitest/u);
+  });
+
+  it("rejects test Yarn locators without integrity as a smoke gate failure", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        [
+          'import { isSmokeGateFailure } from "./scripts/installable-package-smoke.mjs";',
+          'import { runRegistryInstallSmokeForTest } from "./scripts/registry-install-smoke.mjs";',
+          "try {",
+          `  await runRegistryInstallSmokeForTest("yarn@${PINNED_YARN_VERSION}");`,
+          "  process.exit(64);",
+          "} catch (error) {",
+          "  if (!isSmokeGateFailure(error)) throw error;",
+          "  process.stdout.write(error.message);",
+          "}",
+        ].join("\n"),
+      ],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_ENV: "test",
+          VITEST_WORKER_ID: process.env.VITEST_WORKER_ID ?? "1",
+        },
+        timeout: 30_000,
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/Yarn locator is invalid/u);
   });
 
   it.each([undefined, 0, Number.NaN, Number.POSITIVE_INFINITY])(
@@ -1859,6 +3431,29 @@ describe("installable package smoke optional-dependency coverage", () => {
       );
     },
   );
+
+  it.each([0, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects an invalid asynchronous command output limit: %s",
+    (outputLimitBytes) => {
+      expect(() =>
+        runAsync(process.execPath, ["--version"], { outputLimitBytes, timeout: 1_000 }),
+      ).toThrow(/requires a positive finite outputLimitBytes/u);
+    },
+  );
+
+  it("terminates asynchronous commands that exceed the captured-output limit", async () => {
+    const result = await runAsync(
+      process.execPath,
+      ["-e", "process.stdout.write('x'.repeat(2048)); setInterval(() => {}, 60_000);"],
+      { outputLimitBytes: 128, timeout: 5_000 },
+    );
+
+    expect(result.outputLimitExceeded).toBe(true);
+    expect(result.timedOut).toBeUndefined();
+    expect(result.status).toBeNull();
+    expect(result.signal).toBe(process.platform === "win32" ? "TASKKILL" : "SIGKILL");
+    expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(128);
+  });
 
   it("settles a timed-out process-tree run and terminates its ready descendant", async () => {
     const fixtureRoot = mkdtempSync(join(tmpdir(), "keiko-install-timeout-"));
