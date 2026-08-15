@@ -38,6 +38,13 @@ describe("editor agent translations", () => {
     expect(translateEditorAgent("de", "chat.creation.titleSaveFailed")).toBe(
       "Der Chat wurde geöffnet, aber sein Titel konnte nicht gespeichert werden.",
     );
+    expect(translateEditorAgent("de", "chat.restoration.opening")).toBe("Der Chat wird geöffnet…");
+    expect(translateEditorAgent("de", "chat.restoration.notFoundTitle")).toBe(
+      "Chat nicht gefunden",
+    );
+    expect(translateEditorAgent("de", "chat.restoration.notFoundBody")).toBe(
+      "Diese Unterhaltung wurde gelöscht oder ist nicht mehr verfügbar.",
+    );
   });
 
   it("localizes conflict and recent-action surfaces", () => {

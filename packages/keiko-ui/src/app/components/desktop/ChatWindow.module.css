@@ -168,6 +168,120 @@
   text-align: center;
 }
 
+.memoryControls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.memoryActivationButton {
+  align-items: center;
+  background: var(--surface-primary);
+  background: color-mix(in oklch, var(--surface-primary) 78%, transparent);
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  color: var(--text-secondary);
+  display: inline-flex;
+  flex: none;
+  height: 32px;
+  justify-content: center;
+  min-width: 32px;
+  opacity: 1;
+  padding: 0;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    color 0.15s ease,
+    opacity 0.15s ease;
+  width: 32px;
+}
+
+.memoryActivationButton[data-enabled="true"] {
+  background: var(--surface-secondary);
+  background: color-mix(in oklch, var(--accent) 22%, var(--surface-primary));
+  border-color: var(--accent);
+  border-color: color-mix(in oklch, var(--accent) 78%, var(--border-strong));
+  box-shadow: 0 0 0 1px var(--accent);
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--accent) 18%, transparent),
+    0 0 18px color-mix(in oklch, var(--accent) 38%, transparent);
+  color: var(--accent);
+  opacity: 1;
+}
+
+.memoryActivationButton:hover {
+  background: var(--surface-secondary);
+  background: color-mix(in oklch, var(--surface-secondary) 68%, transparent);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+  opacity: 0.86;
+}
+
+.memoryActivationButton[data-enabled="true"]:hover {
+  background: var(--surface-secondary);
+  background: color-mix(in oklch, var(--accent) 26%, var(--surface-primary));
+  border-color: var(--accent);
+  border-color: color-mix(in oklch, var(--accent) 88%, var(--border-strong));
+  color: var(--accent);
+  opacity: 1;
+}
+
+.memoryActivationButton:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.memoryBudgetSetting {
+  display: grid;
+  gap: 0.35rem;
+  margin-block: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.6rem;
+  background: var(--surface-secondary);
+}
+
+.memoryBudgetSetting > label {
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.memoryBudgetSetting > p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.memoryBudgetControl {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.memoryBudgetControl input {
+  width: min(10rem, 100%);
+  min-width: 0;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.45rem;
+  color: var(--text-primary);
+  background: var(--surface-primary);
+  font: inherit;
+}
+
+.memoryBudgetControl input:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.memoryBudgetControl span {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
 .responseVersionControl {
   align-items: center;
   display: flex;

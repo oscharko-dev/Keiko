@@ -3,11 +3,13 @@
 // NOT removed. One shared polite live region in the badge layer now announces the auto-cancellation,
 // and ONLY the timeout revert path drives it (a user-initiated confirm/blur disarm stays silent).
 
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectionsLayer } from "./ConnectionsLayer";
 import type { AppWindow, Connection } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
+import { usePublishChatWindowActivity } from "./chatWindowActivity";
+import type { ChatWindowGroundingActivity } from "./chatWindowActivity";
 
 function appWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow {
   return {
@@ -135,5 +137,126 @@ describe("ConnectionsLayer — GEN-UI-A11Y-015 auto-disarm announcement", () => 
       vi.advanceTimersByTime(3000);
     });
     expect(status?.textContent).toBe("");
+  });
+});
+
+function ChatActivity({
+  id,
+  latest,
+  sending,
+}: {
+  readonly id: string;
+  readonly latest?: ChatWindowGroundingActivity;
+  readonly sending: boolean;
+}): null {
+  usePublishChatWindowActivity(id, sending, latest);
+  return null;
+}
+
+describe("ConnectionsLayer per-chat activity", () => {
+  it("animates only the data channel owned by the sending chat window", async () => {
+    const isolatedWins: readonly AppWindow[] = [
+      appWindow({ id: "chat-a", type: "chat", x: 0, y: 0 }),
+      appWindow({ id: "files-a", type: "files", x: 1000, y: 0 }),
+      appWindow({ id: "chat-b", type: "chat", x: 0, y: 500 }),
+      appWindow({ id: "files-b", type: "files", x: 1000, y: 500 }),
+    ];
+    const isolatedConns: readonly Connection[] = [
+      { id: "c-a", a: "chat-a", b: "files-a" },
+      { id: "c-b", a: "chat-b", b: "files-b" },
+    ];
+
+    render(
+      <>
+        <ChatActivity id="chat-a" sending />
+        <ChatActivity id="chat-b" sending={false} />
+        <ConnectionsLayer wins={isolatedWins} conns={isolatedConns} connecting={null} api={api()} />
+      </>,
+    );
+
+    await waitFor((): void =>
+      expect(document.querySelector("#conn-path-c-a")).toHaveAttribute("data-active", "true"),
+    );
+    expect(document.querySelector("#conn-path-c-b")).not.toHaveAttribute("data-active");
+  });
+
+  it("keeps a grounded channel active for its bounded afterglow and then releases it", () => {
+    vi.useFakeTimers();
+    const view = render(
+      <>
+        <ChatActivity
+          id="chat-1"
+          sending={false}
+          latest={{
+            groundingKind: "connected-context",
+            contextPack: { usage: { filesRead: 4, excerptBytes: 512 } },
+          }}
+        />
+        <ConnectionsLayer wins={wins} conns={conns} connecting={null} api={api()} />
+      </>,
+    );
+
+    expect(document.querySelector("#conn-path-c-1")).toHaveAttribute("data-active", "true");
+    expect(document.querySelector("#conn-path-c-1")).toHaveAttribute("data-intensity", "heavy");
+    act((): void => {
+      vi.advanceTimersByTime(2_500);
+    });
+    expect(document.querySelector("#conn-path-c-1")).not.toHaveAttribute("data-active");
+
+    view.unmount();
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  it("preserves the last grounded intensity while the next send is in flight", async () => {
+    const heavyActivity: ChatWindowGroundingActivity = {
+      groundingKind: "connected-context",
+      contextPack: { usage: { filesRead: 4, excerptBytes: 512 } },
+    };
+    const view = render(
+      <>
+        <ChatActivity id="chat-1" sending={false} latest={heavyActivity} />
+        <ConnectionsLayer wins={wins} conns={conns} connecting={null} api={api()} />
+      </>,
+    );
+    expect(document.querySelector("#conn-path-c-1")).toHaveAttribute("data-intensity", "heavy");
+
+    view.rerender(
+      <>
+        <ChatActivity id="chat-1" sending />
+        <ConnectionsLayer wins={wins} conns={conns} connecting={null} api={api()} />
+      </>,
+    );
+
+    await waitFor((): void =>
+      expect(document.querySelector("#conn-path-c-1")).toHaveAttribute("data-active", "true"),
+    );
+    expect(document.querySelector("#conn-path-c-1")).toHaveAttribute("data-intensity", "heavy");
+  });
+
+  it("clears a grounded channel immediately when its activity is cleared", async () => {
+    const activity: ChatWindowGroundingActivity = {
+      groundingKind: "connected-context",
+      contextPack: { usage: { filesRead: 4, excerptBytes: 512 } },
+    };
+    const view = render(
+      <>
+        <ChatActivity id="chat-1" sending={false} latest={activity} />
+        <ConnectionsLayer wins={wins} conns={conns} connecting={null} api={api()} />
+      </>,
+    );
+    expect(document.querySelector("#conn-path-c-1")).toHaveAttribute("data-active", "true");
+
+    view.rerender(
+      <>
+        <ChatActivity id="chat-1" sending={false} />
+        <ConnectionsLayer wins={wins} conns={conns} connecting={null} api={api()} />
+      </>,
+    );
+
+    await waitFor((): void =>
+      expect(document.querySelector("#conn-path-c-1")).not.toHaveAttribute("data-active"),
+    );
+    expect(document.querySelector("#conn-path-c-1")).not.toHaveAttribute("data-intensity");
   });
 });

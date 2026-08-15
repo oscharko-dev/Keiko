@@ -99,6 +99,7 @@ interface ChatWindowCfg extends WindowCfgRecord {
   readonly chatId?: string;
   readonly title?: string;
   readonly modelId?: string;
+  readonly projectPathPrivacy?: "omit";
   readonly selectionHandoffId?: string;
   readonly newChatRequestId?: string;
 }
@@ -208,6 +209,7 @@ export interface LocalizedConfigField {
 
 export interface WindowRenderContext {
   readonly windowId: string;
+  readonly suspended?: boolean;
   readonly mini?: boolean;
   readonly minimalChat?: boolean;
   readonly compact?: boolean;
@@ -250,6 +252,7 @@ export interface WindowRenderContext {
    */
   readonly openWindow: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
   readonly focusWindow: (id: string) => void;
+  readonly currentWindowStack?: (() => readonly string[]) | undefined;
   readonly restoreWindow?: ((id: string) => void) | undefined;
   readonly updateWindow: (id: string, patch: Partial<AppWindow>) => void;
   readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
@@ -316,7 +319,6 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     w: 480,
     h: 480,
     min: { w: 300, h: 260 },
-    singleton: true,
     config: [
       {
         key: "title",

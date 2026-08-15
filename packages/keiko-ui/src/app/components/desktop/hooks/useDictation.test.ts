@@ -23,6 +23,7 @@ import type { VoiceTranscriptionResult } from "@/lib/api";
 import { VoiceLiveDictationControlError } from "./voice-live-dictation-client";
 import type { VoiceLiveDictationControlClient } from "./voice-live-dictation-client";
 import type { VoiceRtcSession, VoiceRtcTransport } from "./voice-rtc-transport";
+import { resetVoiceCaptureOwnerForTests } from "./voice-capture-owner";
 
 interface FakeRecorder {
   readonly recorder: DictationRecorder;
@@ -202,7 +203,44 @@ function setup(opts: {
 }
 
 afterEach(() => {
+  resetVoiceCaptureOwnerForTests();
   vi.useRealTimers();
+});
+
+describe("useDictation — page microphone ownership", () => {
+  it("prevents a second chat from capturing until the owning chat releases the microphone", async () => {
+    const firstRecorder = makeRecorder({});
+    const secondRecorder = makeRecorder({});
+    const first = renderHook(() =>
+      useDictation({
+        onInsert: vi.fn(),
+        captureOwner: "chat-window-a",
+        createRecorder: () => firstRecorder.recorder,
+      }),
+    );
+    const second = renderHook(() =>
+      useDictation({
+        onInsert: vi.fn(),
+        captureOwner: "chat-window-b",
+        createRecorder: () => secondRecorder.recorder,
+      }),
+    );
+
+    act(() => first.result.current.start());
+    await waitFor(() => expect(first.result.current.phase).toBe("recording"));
+    act(() => second.result.current.start());
+
+    expect(secondRecorder.start).not.toHaveBeenCalled();
+    expect(second.result.current.error).toMatchObject({
+      reason: "unavailable",
+      message: "The microphone is active in another chat.",
+    });
+
+    act(() => first.result.current.cancel());
+    act(() => second.result.current.start());
+    await waitFor(() => expect(second.result.current.phase).toBe("recording"));
+    expect(secondRecorder.start).toHaveBeenCalledOnce();
+  });
 });
 
 describe("useDictation — enabled happy path (AC2)", () => {

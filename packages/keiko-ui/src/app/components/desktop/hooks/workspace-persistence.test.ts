@@ -4,6 +4,7 @@ import {
   parsePersistedConnections,
   parsePersistedWindows,
   sanitizePersistedConnections,
+  sanitizePersistedWorkspace,
   sanitizePersistedWindows,
 } from "./workspace-persistence";
 import {
@@ -439,16 +440,59 @@ describe("workspace-persistence", () => {
     expect(persisted[0]?.cfg).toEqual({ snapshotRunId: "fs-current" });
   });
 
-  it("normalizes every persisted singleton window by registry ownership", () => {
+  it("normalizes persisted singleton windows while preserving distinct chats", () => {
     const persisted = sanitizePersistedWindows([
       win({ id: "quality-old", type: "quality", z: 2, cfg: { stale: "old" } }),
       win({ id: "quality-current", type: "quality", z: 6, cfg: { fresh: "current" } }),
-      win({ id: "chat-a", type: "chat", z: 1, cfg: { title: "A" } }),
-      win({ id: "chat-b", type: "chat", z: 3, cfg: { title: "B" } }),
+      win({
+        id: "chat-a",
+        type: "chat",
+        z: 1,
+        cfg: { chatId: "A", memoryEnabled: false, projectPath: "/repo-a", title: "A" },
+      }),
+      win({ id: "chat-b", type: "chat", z: 3, cfg: { chatId: "B", title: "B" } }),
     ]);
 
-    expect(persisted.map((entry) => entry.id)).toEqual(["quality-current", "chat-b"]);
-    expect(persisted.find((entry) => entry.type === "chat")?.cfg).toEqual({ title: "B" });
+    expect(persisted.map((entry) => entry.id)).toEqual(["quality-current", "chat-a", "chat-b"]);
+    expect(persisted.filter((entry) => entry.type === "chat").map((entry) => entry.cfg)).toEqual([
+      { chatId: "A", memoryEnabled: false, projectPath: "/repo-a", title: "A" },
+      { chatId: "B", title: "B" },
+    ]);
+  });
+
+  it("keeps only the frontmost window when persisted physical ids collide", () => {
+    const persisted = sanitizePersistedWindows([
+      win({ id: "duplicate", type: "chat", z: 2, cfg: { chatId: "A", title: "A" } }),
+      win({ id: "duplicate", type: "chat", z: 6, cfg: { chatId: "B", title: "B" } }),
+      win({ id: "chat-c", type: "chat", z: 4, cfg: { chatId: "C", title: "C" } }),
+    ]);
+
+    expect(persisted.map((entry) => [entry.id, entry.cfg["chatId"]])).toEqual([
+      ["duplicate", "B"],
+      ["chat-c", "C"],
+    ]);
+  });
+
+  it("never persists a private editor-handoff project path", () => {
+    const persisted = sanitizePersistedWindows([
+      win({
+        id: "chat-private-handoff",
+        type: "chat",
+        cfg: {
+          chatId: "private-chat",
+          projectPath: "/Users/customer/private-repository",
+          projectPathPrivacy: "omit",
+          title: "Private handoff",
+        },
+      }),
+    ]);
+
+    expect(persisted[0]?.cfg).toEqual({
+      chatId: "private-chat",
+      projectPathPrivacy: "omit",
+      title: "Private handoff",
+    });
+    expect(JSON.stringify(persisted)).not.toContain("/Users/customer/private-repository");
   });
 
   it("preserves standalone Figma JSON references without persisting raw JSON payloads", () => {
@@ -762,6 +806,70 @@ describe("workspace-persistence", () => {
       b: "chat-1",
     }));
     expect(sanitizePersistedConnections(conns, endpoints)).toHaveLength(512);
+  });
+
+  it("keeps only the frontmost persisted window for each bound chat identity", () => {
+    const persisted = sanitizePersistedWindows([
+      win({ id: "chat-old", type: "chat", z: 2, cfg: { chatId: "chat-a" } }),
+      win({ id: "chat-other", type: "chat", z: 4, cfg: { chatId: "chat-b" } }),
+      win({ id: "chat-front", type: "chat", z: 8, cfg: { chatId: "chat-a" } }),
+    ]);
+
+    expect(persisted.map((window) => window.id)).toEqual(["chat-other", "chat-front"]);
+  });
+
+  it("fills the capacity with unique windows after duplicate persisted identities", () => {
+    const duplicates = Array.from({ length: 128 }, (_, index) =>
+      win({
+        id: `chat-copy-${String(index)}`,
+        type: "chat",
+        z: index + 1,
+        cfg: { chatId: "chat-shared" },
+      }),
+    );
+    const unique = Array.from({ length: 127 }, (_, index) =>
+      win({ id: `files-${String(index)}`, type: "files", z: 200 + index }),
+    );
+
+    const persisted = sanitizePersistedWindows([...duplicates, ...unique]);
+
+    expect(persisted).toHaveLength(128);
+    expect(persisted.map((window) => window.id)).toContain("chat-copy-127");
+    expect(persisted.map((window) => window.id)).toContain("files-126");
+  });
+
+  it("remaps and deduplicates edges when duplicate restored chats collapse", () => {
+    const snapshot = sanitizePersistedWorkspace(
+      [
+        win({ id: "files-1", type: "files" }),
+        win({ id: "chat-old", type: "chat", z: 2, cfg: { chatId: "chat-shared" } }),
+        win({ id: "chat-front", type: "chat", z: 8, cfg: { chatId: "chat-shared" } }),
+      ],
+      [
+        {
+          id: "connection-old",
+          a: "files-1",
+          b: "chat-old",
+          boundChatWindowId: "chat-old",
+        },
+        {
+          id: "connection-front",
+          a: "files-1",
+          b: "chat-front",
+          boundChatWindowId: "chat-front",
+        },
+      ],
+    );
+
+    expect(snapshot.wins.map((window) => window.id)).toEqual(["files-1", "chat-front"]);
+    expect(snapshot.conns).toEqual([
+      {
+        id: "connection-old",
+        a: "files-1",
+        b: "chat-front",
+        boundChatWindowId: "chat-front",
+      },
+    ]);
   });
 
   it("rejects over-length generic text cfg values (reject, not truncate)", () => {

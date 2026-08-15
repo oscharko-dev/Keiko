@@ -113,7 +113,7 @@ export interface FigmaVisionHintProviderOptions {
 
 const MAX_VISION_IMAGE_BYTES = 4 * 1024 * 1024;
 const MAX_VISION_BASELINE_BYTES = 12_000;
-const MAX_VISION_HINTS = 24;
+export const MAX_VISION_HINTS = 24;
 const FIGMA_VISION_TIMEOUT_MS = 30_000;
 
 const encoder = new TextEncoder();
@@ -204,6 +204,24 @@ function visionUserText(request: FigmaVisionScreenRequest, baselineText: string)
   );
 }
 
+const VISION_RESPONSE_FORMAT = {
+  type: "json_schema" as const,
+  name: "quality_intelligence_figma_vision_hints",
+  strict: true,
+  schema: {
+    type: "object",
+    required: ["hints"],
+    additionalProperties: false,
+    properties: {
+      hints: {
+        type: "array",
+        maxItems: MAX_VISION_HINTS,
+        items: { type: "string" },
+      },
+    },
+  },
+};
+
 function buildVisionRequest(
   request: FigmaVisionScreenRequest,
   modelId: string,
@@ -220,7 +238,9 @@ function buildVisionRequest(
         content:
           "You are an additive UI test-generation vision pass. Use the image only to recover " +
           "semantics missing from the structural baseline. Do not contradict, replace, or restate " +
-          "the baseline. Return concise JSON: an array of strings.",
+          "the baseline. Return concise visual hints as JSON, for example " +
+          '{ "hints": ["hint"] }. Return an ' +
+          "empty hints array when the baseline is already complete.",
       },
       {
         role: "user",
@@ -233,14 +253,7 @@ function buildVisionRequest(
     ],
     ...(structuredOutput
       ? {
-          responseFormat: {
-            type: "json_schema" as const,
-            schema: {
-              type: "array",
-              items: { type: "string" },
-              maxItems: MAX_VISION_HINTS,
-            },
-          },
+          responseFormat: VISION_RESPONSE_FORMAT,
         }
       : {}),
   };
@@ -284,6 +297,7 @@ function makeGatewayFigmaVisionCall(
     );
     const structuredOutput =
       closureModelSelection?.modelId === modelId &&
+      closureModelSelection.capability.structuredOutput &&
       closureModelSelection.capability.supportsResponseFormat === true;
     const gatewayRequest = buildVisionRequest(
       request,

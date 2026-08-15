@@ -34,6 +34,7 @@ const PROJ_CARET_BTN_STYLE: CSSProperties = {
   color: "inherit",
   cursor: "pointer",
 };
+const PROJECT_CHAT_GROUP_STYLE: CSSProperties = { border: 0, margin: 0, minWidth: 0 };
 
 interface ProjectRowProps {
   readonly project: ProjectWithAvailability;
@@ -252,8 +253,7 @@ function ProjectChatList({
   onChat,
 }: ProjectChatListProps): ReactNode {
   return (
-    // role="group" groups child treeitems under their parent (APG tree pattern).
-    <div className="proj-chats" role="group" aria-label={project.name}>
+    <fieldset className="proj-chats" aria-label={project.name} style={PROJECT_CHAT_GROUP_STYLE}>
       {isActiveProject && chats.length === 0 && <div className="proj-empty">{"No chats"}</div>}
       {isActiveProject &&
         chats.length > 0 &&
@@ -278,7 +278,7 @@ function ProjectChatList({
           </button>
         ))}
       {!isActiveProject && <div className="proj-empty">{"Select project to load chats"}</div>}
-    </div>
+    </fieldset>
   );
 }
 
@@ -326,10 +326,31 @@ function ProjectRow({
   );
 }
 
-export function ProjectPanel(): ReactNode {
+function useProjectPanelChatSelection(
+  activeChatId: string | undefined,
+  openChatWindow: (chat: Chat) => void,
+): readonly [string | undefined, (chat: Chat) => void] {
+  const [selectedChatId, setSelectedChatId] = useState(activeChatId);
+  useEffect(() => setSelectedChatId(activeChatId), [activeChatId]);
+  const selectChat = (chat: Chat): void => {
+    setSelectedChatId(chat.id);
+    openChatWindow(chat);
+  };
+  return [selectedChatId, selectChat];
+}
+
+export function ProjectPanel({
+  openChatWindow,
+}: {
+  readonly openChatWindow: (chat: Chat) => void;
+}): ReactNode {
   const session = useChatSessionCatalog();
   const actions = useChatSessionActions();
   const treeRef = useRef<HTMLDivElement | null>(null);
+  const [selectedChatId, selectChat] = useProjectPanelChatSelection(
+    session.activeChat?.id,
+    openChatWindow,
+  );
 
   return (
     <div className="tw-scroll">
@@ -358,14 +379,12 @@ export function ProjectPanel(): ReactNode {
               project={project}
               activeProjectPath={session.activeProject?.path}
               chats={session.activeProject?.path === project.path ? session.chats : []}
-              activeChatId={session.activeChat?.id}
+              activeChatId={selectedChatId}
               treeRef={treeRef}
               onProject={(nextProject) => {
                 void actions.openProject(nextProject);
               }}
-              onChat={(chat) => {
-                void actions.openChat(chat);
-              }}
+              onChat={selectChat}
             />
           ))}
         </div>

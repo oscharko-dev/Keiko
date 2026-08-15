@@ -265,9 +265,9 @@ describe("Issue #1580 — stable api identity and currentView accessor", () => {
     const { result, rerender } = renderHook(() =>
       useWorkspace(wsRef, {
         onScopeBind: () => true,
-        onScopeUnbind: () => undefined,
+        onScopeUnbind: () => true,
         onConnectorBind: () => true,
-        onConnectorUnbind: () => undefined,
+        onConnectorUnbind: () => true,
       }),
     );
     const firstApi = result.current.api;

@@ -17,6 +17,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type {
   ChatBindingTarget,
+  ChatUnbindTarget,
   FilesWindowContext,
   OpenEditorFileResult,
   ViewportWorld,
@@ -35,6 +36,7 @@ import {
   EDITOR_SIDEBAR_MIN_WIDTH,
   EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
 } from "../editorSidebarSizing";
+import { MAX_WORKSPACE_WINDOWS } from "./workspace-persistence";
 
 function addPosition(
   vp: ViewportWorld,
@@ -48,7 +50,25 @@ function addPosition(
   return { x, y };
 }
 
+function nextWindowId(type: WindowType, wins: readonly AppWindow[], sequence: number): string {
+  const base =
+    type === "chat"
+      ? `${type}-${Date.now().toString(36)}-${sequence.toString(36)}`
+      : `${type}-${Date.now().toString(36)}`;
+  if (!wins.some((window) => window.id === base)) return base;
+  let suffix = 1;
+  while (wins.some((window) => window.id === `${base}-${suffix.toString(36)}`)) suffix += 1;
+  return `${base}-${suffix.toString(36)}`;
+}
+
+function initialWindowCfg(type: WindowType, cfg: AppWindow["cfg"] | undefined): AppWindow["cfg"] {
+  const initial = cfg ?? {};
+  if (type !== "chat" || typeof initial["memoryEnabled"] === "boolean") return initial;
+  return { ...initial, memoryEnabled: false };
+}
+
 interface MutateArgs {
+  readonly onWindowLimitReached?: ((limit: number) => void) | undefined;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly zc: RefObject<number>;
   readonly worldVP: () => ViewportWorld | null;
@@ -305,24 +325,116 @@ function makeMaximize(args: MutateArgs): WorkspaceApi["maximize"] {
     });
 }
 
+interface NewWindowAllocationArgs {
+  readonly cfg: AppWindow["cfg"] | undefined;
+  readonly defaultH: number;
+  readonly defaultMinH: number;
+  readonly defaultMinW: number;
+  readonly defaultW: number;
+  readonly list: readonly AppWindow[];
+  readonly type: WindowType;
+  readonly vp: ViewportWorld;
+  readonly zc: RefObject<number>;
+}
+
+function allocateNewWindow(args: NewWindowAllocationArgs): {
+  readonly id: string | null;
+  readonly windows: readonly AppWindow[];
+} {
+  // Keep live UI state inside the same trust boundary enforced by local persistence and the BFF.
+  // Existing singleton/per-identity windows are focused before this allocation is attempted.
+  if (args.list.length >= MAX_WORKSPACE_WINDOWS) return { id: null, windows: args.list };
+  const { x, y } = addPosition(args.vp, args.defaultW, args.defaultH, args.list.length, 40);
+  const typeDefinition = WIN_TYPES[args.type];
+  const id =
+    typeDefinition.singleton === true
+      ? args.type
+      : nextWindowId(args.type, args.list, args.zc.current + 1);
+  return {
+    id,
+    windows: [
+      ...args.list,
+      {
+        id,
+        type: args.type,
+        x,
+        y,
+        w: Math.max(args.defaultW, args.defaultMinW),
+        h: Math.max(args.defaultH, args.defaultMinH),
+        z: ++args.zc.current,
+        cfg: initialWindowCfg(args.type, args.cfg),
+        max: false,
+        zoom: 1,
+      },
+    ],
+  };
+}
+
+function reusesExistingWindow(
+  list: readonly AppWindow[],
+  type: WindowType,
+  cfg: AppWindow["cfg"] | undefined,
+): boolean {
+  if (WIN_TYPES[type].singleton === true) return list.some((window) => window.type === type);
+  let identityKey: "chatId" | "runId" | undefined;
+  if (type === "qiRun") identityKey = "runId";
+  if (type === "chat") identityKey = "chatId";
+  if (identityKey === undefined) return false;
+  const identity = cfg?.[identityKey];
+  return (
+    typeof identity === "string" &&
+    identity.length > 0 &&
+    list.some((window) => window.type === type && window.cfg[identityKey] === identity)
+  );
+}
+
+function newWindowGeometry(
+  type: WindowType,
+  cfg: AppWindow["cfg"] | undefined,
+): {
+  readonly defaultH: number;
+  readonly defaultMinH: number;
+  readonly defaultMinW: number;
+  readonly defaultW: number;
+} {
+  const typeDefinition = WIN_TYPES[type];
+  const isFigmaView =
+    type === "figma" &&
+    typeof cfg?.["selectedScreenIdsJson"] === "string" &&
+    cfg["selectedScreenIdsJson"].length > 0;
+  const figmaView = WIN_TYPES.figmaView;
+  return {
+    defaultW: isFigmaView ? figmaView.w : typeDefinition.w,
+    defaultH: isFigmaView ? figmaView.h : typeDefinition.h,
+    defaultMinW: isFigmaView
+      ? Math.max(typeDefinition.min.w, figmaView.min.w)
+      : typeDefinition.min.w,
+    defaultMinH: isFigmaView
+      ? Math.max(typeDefinition.min.h, figmaView.min.h)
+      : typeDefinition.min.h,
+  };
+}
+
 function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
   const { setWins, zc, worldVP } = args;
   return (type, cfg) => {
     const t = WIN_TYPES[type];
-    const isFigmaView =
-      type === "figma" &&
-      typeof cfg?.["selectedScreenIdsJson"] === "string" &&
-      cfg["selectedScreenIdsJson"].length > 0;
+    const currentWins = args.winsRef?.current;
+    if (
+      currentWins !== undefined &&
+      currentWins.length >= MAX_WORKSPACE_WINDOWS &&
+      !reusesExistingWindow(currentWins, type, cfg)
+    ) {
+      if (worldVP() !== null) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
+      return null;
+    }
     // GEN-DUP-NEAR-007 — source the scoped Figma-view card geometry from its registry entry
     // (WIN_TYPES.figmaView) instead of duplicating the literals here. The Math.max clamp against
     // the figma-manager type's minimums (`t`) is preserved, so the effective defaults are
     // unchanged (fv.min.w=300 → Math.max(320,300)=320; fv.min.h=260 → Math.max(360,260)=360).
-    const fv = WIN_TYPES.figmaView;
-    const defaultW = isFigmaView ? fv.w : t.w;
-    const defaultH = isFigmaView ? fv.h : t.h;
-    const defaultMinW = isFigmaView ? Math.max(t.min.w, fv.min.w) : t.min.w;
-    const defaultMinH = isFigmaView ? Math.max(t.min.h, fv.min.h) : t.min.h;
+    const { defaultW, defaultH, defaultMinW, defaultMinH } = newWindowGeometry(type, cfg);
     let createdId: string | null = null;
+    let windowLimitReached = false;
     setWins((ws) => {
       const vp = worldVP();
       if (vp === null) return ws;
@@ -374,25 +486,22 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
           );
         }
       }
-      const { x, y } = addPosition(vp, defaultW, defaultH, list.length, 40);
-      const id = t.singleton === true ? type : `${type}-${Date.now().toString(36)}`;
-      createdId = id;
-      return [
-        ...list,
-        {
-          id,
-          type,
-          x,
-          y,
-          w: Math.max(defaultW, defaultMinW),
-          h: Math.max(defaultH, defaultMinH),
-          z: ++zc.current,
-          cfg: cfg ?? {},
-          max: false,
-          zoom: 1,
-        },
-      ];
+      const allocation = allocateNewWindow({
+        cfg,
+        defaultH,
+        defaultMinH,
+        defaultMinW,
+        defaultW,
+        list,
+        type,
+        vp,
+        zc,
+      });
+      createdId = allocation.id;
+      windowLimitReached = allocation.id === null;
+      return [...allocation.windows];
     });
+    if (windowLimitReached) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
     return createdId;
   };
 }
@@ -448,6 +557,13 @@ function makeOpenEditorFile(args: MutateArgs): WorkspaceApi["openEditorFile"] {
       });
       return result;
     }
+    if (currentWins.length >= MAX_WORKSPACE_WINDOWS) {
+      args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
+      return {
+        ok: false,
+        message: "Unable to open editor because the workspace window limit is reached.",
+      };
+    }
     const t = WIN_TYPES.editor;
     const { x, y } = addPosition(vp, t.w, t.h, currentWins.length, 40);
     const id = `editor-${Date.now().toString(36)}`;
@@ -493,6 +609,16 @@ function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
   const { setWins, zc, worldVP } = args;
   return (type) => {
     const t = WIN_TYPES[type];
+    const currentWins = args.winsRef?.current;
+    if (
+      currentWins !== undefined &&
+      currentWins.length >= MAX_WORKSPACE_WINDOWS &&
+      !currentWins.some((window) => window.type === type)
+    ) {
+      if (worldVP() !== null) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
+      return;
+    }
+    let windowLimitReached = false;
     setWins((ws) => {
       const vp = worldVP();
       if (vp === null) return ws;
@@ -506,12 +632,17 @@ function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
       if (existing !== undefined) {
         return list.filter((w) => w.type !== type);
       }
+      if (list.length >= MAX_WORKSPACE_WINDOWS) {
+        windowLimitReached = true;
+        return list;
+      }
       const { x, y } = addPosition(vp, t.w, t.h, list.length, 28);
       return [
         ...list,
         { id: type, type, x, y, w: t.w, h: t.h, z: ++zc.current, cfg: {}, max: false, zoom: 1 },
       ];
     });
+    if (windowLimitReached) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
   };
 }
 
@@ -569,7 +700,7 @@ export function replaceWorkspaceSelection(
   windowIds: readonly string[],
 ): WorkspaceUiSelectionState {
   return normalizeWorkspaceSelection(wins, {
-    focusedWindowId: windowIds[windowIds.length - 1] ?? null,
+    focusedWindowId: windowIds.at(-1) ?? null,
     selectedWindowIds: windowIds,
   });
 }
@@ -897,7 +1028,13 @@ interface ConnectArgs {
         target?: ChatBindingTarget,
       ) => boolean | Promise<boolean>)
     | undefined;
-  readonly onScopeUnbind?: ((chatWindowId: string, scope: ChatConnectedScope) => void) | undefined;
+  readonly onScopeUnbind?:
+    | ((
+        chatWindowId: string,
+        scope: ChatConnectedScope,
+        target?: ChatUnbindTarget,
+      ) => boolean | Promise<boolean>)
+    | undefined;
   // Epic #189 Slice 3 M3 — invoked when a Connector↔Chat relationship edge is created/removed,
   // with the selected ChatLocalKnowledgeScope from the connector window's cfg. The composition
   // root (AppShell) appends/removes it from the active chat's localKnowledgeScopes.
@@ -909,7 +1046,13 @@ interface ConnectArgs {
       ) => boolean | Promise<boolean>)
     | undefined;
   readonly onConnectorUnbind?:
-    ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => void) | undefined;
+    | ((
+        chatWindowId: string,
+        scope: ChatLocalKnowledgeScope,
+        target?: ChatUnbindTarget,
+      ) => boolean | Promise<boolean>)
+    | undefined;
+  readonly onConnectionUnbindFailure?: (() => void) | undefined;
 }
 
 function isDuplicate(cs: readonly Connection[], a: string, b: string): boolean {
@@ -928,14 +1071,28 @@ function chatConversationId(win: AppWindow | undefined): string | undefined {
   return typeof chatId === "string" && chatId.length > 0 ? chatId : undefined;
 }
 
+function chatProjectPath(win: AppWindow | undefined): string | undefined {
+  if (win?.type !== "chat") return undefined;
+  const projectPath = win.cfg["projectPath"];
+  return typeof projectPath === "string" && projectPath.length > 0 ? projectPath : undefined;
+}
+
+export function chatUnbindTarget(win: AppWindow | undefined): ChatUnbindTarget | undefined {
+  const conversationId = chatConversationId(win);
+  if (conversationId === undefined) return undefined;
+  return { conversationId, projectPath: chatProjectPath(win) };
+}
+
 function chatBindingTarget(
   chatWindowId: string | null,
   conversationId: string | undefined,
   winById: (id: string) => AppWindow | undefined,
 ): ChatBindingTarget | undefined {
   if (chatWindowId === null) return undefined;
+  const chatWindow = winById(chatWindowId);
   return {
     conversationId,
+    projectPath: chatProjectPath(chatWindow),
     isCurrent: (): boolean => chatConversationId(winById(chatWindowId)) === conversationId,
   };
 }
@@ -975,6 +1132,31 @@ function resolveBindAcceptance(
     }
     return true;
   } catch {
+    return false;
+  }
+}
+
+async function connectionUnbindAccepted(
+  chatWindowId: string,
+  boundScope: ChatConnectedScope | null,
+  connectorScope: ChatLocalKnowledgeScope | null,
+  target: ChatUnbindTarget | undefined,
+  onScopeUnbind: ConnectArgs["onScopeUnbind"],
+  onConnectorUnbind: ConnectArgs["onConnectorUnbind"],
+  onConnectionUnbindFailure: ConnectArgs["onConnectionUnbindFailure"],
+): Promise<boolean> {
+  try {
+    const results: Promise<boolean>[] = [];
+    if (boundScope !== null && onScopeUnbind !== undefined) {
+      results.push(Promise.resolve(onScopeUnbind(chatWindowId, boundScope, target)));
+    }
+    if (connectorScope !== null && onConnectorUnbind !== undefined) {
+      results.push(Promise.resolve(onConnectorUnbind(chatWindowId, connectorScope, target)));
+    }
+    const resolved = await Promise.all(results);
+    return resolved.every(Boolean);
+  } catch {
+    onConnectionUnbindFailure?.();
     return false;
   }
 }
@@ -1189,6 +1371,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     onScopeUnbind,
     onConnectorBind,
     onConnectorUnbind,
+    onConnectionUnbindFailure,
   } = args;
 
   const winById = (id: string): AppWindow | undefined =>
@@ -1197,6 +1380,10 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     connsByIdRef?.current.get(id) ?? connsRef.current.find((c) => c.id === id);
   const connectionsFor = (id: string): readonly Connection[] =>
     connsByEndpointRef?.current.get(id) ?? connsRef.current.filter((c) => c.a === id || c.b === id);
+  const pendingConnectionRemovals = new Set<string>();
+  const removeStoredConnection = (id: string): void => {
+    setConns((connections) => connections.filter((connection) => connection.id !== id));
+  };
   // The window on the other end of `c` from `id`, resolved through winById, or null when the
   // connection doesn't touch `id` or the other endpoint no longer exists.
   const connectedWindow = (c: Connection, id: string): AppWindow | null => {
@@ -1356,21 +1543,40 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     // and re-deriving from it would unbind the WRONG source. Falls back to cfg-derivation for
     // edges persisted before the snapshot fields existed.
     const conn = connById(id);
-    setConns((cs) => cs.filter((c) => c.id !== id));
-    if (conn === undefined || options?.unbind === false) return;
+    if (conn === undefined || options?.unbind === false) {
+      removeStoredConnection(id);
+      return;
+    }
     const a = winById(conn.a);
     const b = winById(conn.b);
     const bothLive = a !== undefined && b !== undefined;
     const chatWindowId = conn.boundChatWindowId ?? (bothLive ? chatWindowIdInPair(a, b) : null);
+    const target = chatUnbindTarget(chatWindowId === null ? undefined : winById(chatWindowId));
     const boundScope =
       boundScopeOf(conn) ??
       (conn.boundScopeElided === true || !bothLive ? null : filesChatBindScope(a, b, Date.now()));
-    if (boundScope !== null && chatWindowId !== null) onScopeUnbind?.(chatWindowId, boundScope);
     const connectorScope =
       boundConnectorScopeOf(conn) ?? (bothLive ? connectorChatBind(a, b) : null);
-    if (connectorScope !== null && chatWindowId !== null) {
-      onConnectorUnbind?.(chatWindowId, connectorScope);
+    const canUnbindScope = boundScope !== null && onScopeUnbind !== undefined;
+    const canUnbindConnector = connectorScope !== null && onConnectorUnbind !== undefined;
+    if (chatWindowId === null || (!canUnbindScope && !canUnbindConnector)) {
+      removeStoredConnection(id);
+      return;
     }
+    if (pendingConnectionRemovals.has(id)) return;
+    pendingConnectionRemovals.add(id);
+    void connectionUnbindAccepted(
+      chatWindowId,
+      boundScope,
+      connectorScope,
+      target,
+      onScopeUnbind,
+      onConnectorUnbind,
+      onConnectionUnbindFailure,
+    ).then((accepted): void => {
+      pendingConnectionRemovals.delete(id);
+      if (accepted) removeStoredConnection(id);
+    });
   };
 
   const connect: WorkspaceApi["connect"] = (a, b) => {

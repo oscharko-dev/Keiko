@@ -11,27 +11,44 @@ import type {
   GroundingLimits,
 } from "@/lib/types";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
+import { MAX_WORKSPACE_WINDOWS } from "./hooks/workspace-persistence";
 import type { AppWindow, Connection } from "./windows/types";
 import appShellStyles from "./AppShell.module.css";
+import { registerChatWindowRuntime } from "./windows/chatWindowActivity";
 
 interface WorkspaceHookOptions {
+  readonly onWindowLimitReached?: (limit: number) => void;
   readonly onScopeBind?: (
     chatWindowId: string,
     scope: ChatConnectedScope,
     target?: ChatBindingTarget,
   ) => boolean | Promise<boolean>;
-  readonly onScopeUnbind?: (chatWindowId: string, scope: ChatConnectedScope) => void;
+  readonly onScopeUnbind?: (
+    chatWindowId: string,
+    scope: ChatConnectedScope,
+    target?: ChatUnbindTarget,
+  ) => boolean | Promise<boolean>;
   readonly onConnectorBind?: (
     chatWindowId: string,
     scope: ChatLocalKnowledgeScope,
     target?: ChatBindingTarget,
   ) => boolean | Promise<boolean>;
-  readonly onConnectorUnbind?: (chatWindowId: string, scope: ChatLocalKnowledgeScope) => void;
+  readonly onConnectorUnbind?: (
+    chatWindowId: string,
+    scope: ChatLocalKnowledgeScope,
+    target?: ChatUnbindTarget,
+  ) => boolean | Promise<boolean>;
 }
 
 interface ChatBindingTarget {
   readonly conversationId: string | undefined;
+  readonly projectPath?: string | undefined;
   readonly isCurrent: () => boolean;
+}
+
+interface ChatUnbindTarget {
+  readonly conversationId: string;
+  readonly projectPath: string | undefined;
 }
 
 interface TestSession {
@@ -57,6 +74,7 @@ const mocks = vi.hoisted(() => ({
     rightRailOnTool: undefined as ((id: string) => void) | undefined,
   },
   fetchConfig: vi.fn(),
+  fetchChats: vi.fn(),
   fetchStartupUpdatePreflight: vi.fn(),
   updateChatConnectedScopes: vi.fn(),
   updateChatLocalKnowledgeScopes: vi.fn(),
@@ -113,6 +131,7 @@ function restoreDialogMethod(
 }
 
 vi.mock("@/lib/api", () => ({
+  fetchChats: mocks.fetchChats,
   fetchConfig: mocks.fetchConfig,
   fetchStartupUpdatePreflight: mocks.fetchStartupUpdatePreflight,
   updateChatConnectedScopes: mocks.updateChatConnectedScopes,
@@ -433,6 +452,7 @@ describe("AppShell grounding connections", () => {
       configPresent: false,
       effectiveGroundingLimits: DEFAULT_GROUNDING_LIMITS,
     });
+    mocks.fetchChats.mockReset().mockResolvedValue({ chats: [] });
     mocks.fetchStartupUpdatePreflight.mockResolvedValue({
       schemaVersion: 1,
       checkedAt: "2026-06-30T12:00:00.000Z",
@@ -762,6 +782,134 @@ describe("AppShell grounding connections", () => {
     expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
   });
 
+  it("resolves grounding against the chat window's private project session", async (): Promise<void> => {
+    const privateChat = chat({ id: "chat-private", projectPath: "/private", updatedAt: 4 });
+    const grounded = chat({
+      id: privateChat.id,
+      projectPath: privateChat.projectPath,
+      connectedScopes: [fileScope("/repo")],
+      updatedAt: 5,
+    });
+    mocks.state.workspaceResult = workspaceResult([
+      win(
+        "chat",
+        { chatId: privateChat.id, projectPath: privateChat.projectPath },
+        "private-window",
+      ),
+    ]);
+    mocks.fetchChats.mockResolvedValueOnce({ chats: [privateChat] });
+    mocks.updateChatConnectedScopes.mockResolvedValueOnce({ chat: grounded });
+
+    await renderMounted();
+    const accepted = await mocks.state.workspaceOptions?.onScopeBind?.(
+      "private-window",
+      fileScope("/repo"),
+    );
+
+    expect(accepted).toBe(true);
+    expect(mocks.fetchChats).toHaveBeenCalledWith("/private");
+    expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
+      privateChat.id,
+      expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
+    );
+    expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(grounded);
+  });
+
+  it("resolves a privacy-omitted chat through its transient window target", async (): Promise<void> => {
+    const privateChat = chat({ id: "chat-private", projectPath: "/private", updatedAt: 4 });
+    const grounded = chat({
+      id: privateChat.id,
+      projectPath: privateChat.projectPath,
+      connectedScopes: [fileScope("/repo")],
+      updatedAt: 5,
+    });
+    mocks.state.workspaceResult = workspaceResult([
+      win("chat", { chatId: privateChat.id, projectPathPrivacy: "omit" }, "private-window"),
+    ]);
+    mocks.fetchChats.mockResolvedValueOnce({ chats: [privateChat] });
+    mocks.updateChatConnectedScopes.mockResolvedValueOnce({ chat: grounded });
+    const unregister = registerChatWindowRuntime("private-window", {
+      conversationId: privateChat.id,
+      projectPath: privateChat.projectPath,
+      acceptSelectionHandoff: vi.fn(),
+    });
+
+    try {
+      await renderMounted();
+      const accepted = await mocks.state.workspaceOptions?.onScopeBind?.(
+        "private-window",
+        fileScope("/repo"),
+      );
+
+      expect(accepted).toBe(true);
+      expect(mocks.fetchChats).toHaveBeenCalledWith("/private");
+      expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
+        privateChat.id,
+        expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
+      );
+    } finally {
+      unregister();
+    }
+  });
+
+  it("resolves a transient private chat before its workspace snapshot is committed", async () => {
+    const privateChat = chat({ id: "chat-private", projectPath: "/private", updatedAt: 4 });
+    const grounded = chat({
+      id: privateChat.id,
+      projectPath: privateChat.projectPath,
+      connectedScopes: [fileScope("/repo")],
+      updatedAt: 5,
+    });
+    mocks.state.workspaceResult = workspaceResult([]);
+    mocks.fetchChats.mockResolvedValueOnce({ chats: [privateChat] });
+    mocks.updateChatConnectedScopes.mockResolvedValueOnce({ chat: grounded });
+    const unregister = registerChatWindowRuntime("private-window", {
+      conversationId: privateChat.id,
+      projectPath: privateChat.projectPath,
+      acceptSelectionHandoff: vi.fn(),
+    });
+
+    try {
+      await renderMounted();
+      const accepted = await mocks.state.workspaceOptions?.onScopeBind?.(
+        "private-window",
+        fileScope("/repo"),
+      );
+
+      expect(accepted).toBe(true);
+      expect(mocks.fetchChats).toHaveBeenCalledWith("/private");
+      expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(
+        privateChat.id,
+        expect.arrayContaining([expect.objectContaining({ root: "/repo" })]),
+      );
+    } finally {
+      unregister();
+    }
+  });
+
+  it("surfaces a redacted diagnostic when a private chat lookup fails", async (): Promise<void> => {
+    const reportError = vi.fn();
+    vi.stubGlobal("reportError", reportError);
+    mocks.state.workspaceResult = workspaceResult([
+      win("chat", { chatId: "chat-private", projectPath: "/private" }, "private-window"),
+    ]);
+    mocks.fetchChats.mockRejectedValueOnce(new Error("customer-specific upstream detail"));
+
+    await renderMounted();
+    const accepted = await mocks.state.workspaceOptions?.onScopeBind?.(
+      "private-window",
+      fileScope("/repo"),
+    );
+
+    expect(accepted).toBe(false);
+    expect(await screen.findByText(/Keiko could not connect that source/u)).toBeInTheDocument();
+    expect(reportError).toHaveBeenCalledOnce();
+    expect(String(reportError.mock.calls[0]?.[0])).toMatch(
+      /^Error: Chat lookup failed\. Correlation ID: /u,
+    );
+    expect(String(reportError.mock.calls[0]?.[0])).not.toContain("customer-specific");
+  });
+
   it("derives a queued bind from the latest confirmed grounding state", async (): Promise<void> => {
     const firstPersist = deferred<{ readonly chat: Chat }>();
     const firstScope = fileScope("/first");
@@ -828,6 +976,74 @@ describe("AppShell grounding connections", () => {
     expect(mocks.state.session?.replaceChat).not.toHaveBeenCalledWith(updated);
     expect(mocks.recordReadsContextRelationship).not.toHaveBeenCalledWith("chat-1", "/late");
     expect(reportError).toHaveBeenCalledTimes(2);
+  });
+
+  it("compensates a timed-out scope unbind before retaining the visible edge", async () => {
+    vi.stubGlobal("reportError", vi.fn());
+    const scope = fileScope("/late-unbind");
+    const current = chat({ connectedScopes: [scope], updatedAt: 1 });
+    const removed = chat({ connectedScopes: [], updatedAt: 2 });
+    const restored = chat({ connectedScopes: [scope], updatedAt: 3 });
+    const persisted = deferred<{ readonly chat: Chat }>();
+    mocks.state.session = {
+      ...(mocks.state.session as TestSession),
+      activeChat: current,
+      chats: [current],
+    };
+    mocks.updateChatConnectedScopes
+      .mockReturnValueOnce(persisted.promise)
+      .mockResolvedValueOnce({ chat: restored });
+    await renderMounted();
+    vi.useFakeTimers();
+
+    const unbinding = Promise.resolve(
+      mocks.state.workspaceOptions?.onScopeUnbind?.("chat-window", scope),
+    );
+    await vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS);
+    await expect(unbinding).resolves.toBe(false);
+
+    await act(async (): Promise<void> => {
+      persisted.resolve({ chat: removed });
+      await persisted.promise;
+      await Promise.resolve();
+    });
+
+    expect(mocks.updateChatConnectedScopes).toHaveBeenNthCalledWith(2, "chat-1", [scope]);
+    expect(mocks.state.session?.replaceChat).not.toHaveBeenCalledWith(removed);
+  });
+
+  it("compensates a timed-out connector unbind before retaining the visible edge", async () => {
+    vi.stubGlobal("reportError", vi.fn());
+    const scope = capsuleScope("cap-late-unbind");
+    const current = chat({ localKnowledgeScopes: [scope], updatedAt: 1 });
+    const removed = chat({ localKnowledgeScopes: [], updatedAt: 2 });
+    const restored = chat({ localKnowledgeScopes: [scope], updatedAt: 3 });
+    const persisted = deferred<{ readonly chat: Chat }>();
+    mocks.state.session = {
+      ...(mocks.state.session as TestSession),
+      activeChat: current,
+      chats: [current],
+    };
+    mocks.updateChatLocalKnowledgeScopes
+      .mockReturnValueOnce(persisted.promise)
+      .mockResolvedValueOnce({ chat: restored });
+    await renderMounted();
+    vi.useFakeTimers();
+
+    const unbinding = Promise.resolve(
+      mocks.state.workspaceOptions?.onConnectorUnbind?.("chat-window", scope),
+    );
+    await vi.advanceTimersByTimeAsync(CHAT_MUTATION_TIMEOUT_MS);
+    await expect(unbinding).resolves.toBe(false);
+
+    await act(async (): Promise<void> => {
+      persisted.resolve({ chat: removed });
+      await persisted.promise;
+      await Promise.resolve();
+    });
+
+    expect(mocks.updateChatLocalKnowledgeScopes).toHaveBeenNthCalledWith(2, "chat-1", [scope]);
+    expect(mocks.state.session?.replaceChat).not.toHaveBeenCalledWith(removed);
   });
 
   it("surfaces a distinct diagnostic when stale-bind compensation fails", async (): Promise<void> => {
@@ -954,11 +1170,24 @@ describe("AppShell grounding connections", () => {
     const notice = await screen.findByText(/already has 16 of 16 connected sources/u);
     expect(notice.closest(".source-limit-alert")).toHaveAttribute("role", "alert");
 
-    await user.click(screen.getByRole("button", { name: "Dismiss source connection notice" }));
+    await user.click(screen.getByRole("button", { name: "Dismiss workspace notice" }));
 
     await waitFor(() => {
       expect(document.querySelector(".source-limit-alert")).toBeNull();
     });
+  });
+
+  it("surfaces and announces a rejected window allocation", async () => {
+    await renderMounted();
+
+    act(() => {
+      mocks.state.workspaceOptions?.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
+    });
+
+    const notice = await screen.findByText(
+      `The workspace already has ${String(MAX_WORKSPACE_WINDOWS)} open windows. Close a window and try again.`,
+    );
+    expect(notice.closest(".source-limit-alert")).toHaveAttribute("role", "alert");
   });
 
   it("lets the user dismiss the missing-ready-chat source connection notice", async () => {
@@ -984,7 +1213,7 @@ describe("AppShell grounding connections", () => {
     const notice = await screen.findByText("Open a ready chat window before connecting a source.");
     expect(notice.closest(".source-limit-alert")).toHaveAttribute("role", "alert");
 
-    await user.click(screen.getByRole("button", { name: "Dismiss source connection notice" }));
+    await user.click(screen.getByRole("button", { name: "Dismiss workspace notice" }));
 
     await waitFor(() => {
       expect(document.querySelector(".source-limit-alert")).toBeNull();
@@ -1014,6 +1243,113 @@ describe("AppShell grounding connections", () => {
       expect.arrayContaining([expect.objectContaining({ capsuleId: "cap-b" })]),
     );
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(updated);
+  });
+
+  it("unbinds a detached private-project chat from its immutable close snapshot", async () => {
+    const privateScope = fileScope("/private/source");
+    const privateChat = chat({
+      id: "chat-private",
+      projectPath: "/private",
+      connectedScopes: [privateScope],
+      updatedAt: 4,
+    });
+    const updated = chat({
+      id: privateChat.id,
+      projectPath: privateChat.projectPath,
+      connectedScopes: [],
+      updatedAt: 5,
+    });
+    mocks.fetchChats.mockResolvedValueOnce({ chats: [privateChat] });
+    mocks.updateChatConnectedScopes.mockResolvedValueOnce({ chat: updated });
+    await renderMounted();
+
+    act((): void => {
+      mocks.state.workspaceOptions?.onScopeUnbind?.("closed-window", privateScope, {
+        conversationId: privateChat.id,
+        projectPath: privateChat.projectPath,
+      });
+    });
+
+    await waitFor((): void => {
+      expect(mocks.updateChatConnectedScopes).toHaveBeenCalledWith(privateChat.id, null);
+    });
+    expect(mocks.fetchChats).toHaveBeenCalledWith("/private");
+    expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(updated);
+  });
+
+  it("rejects an unbind and surfaces a notice when private chat lookup fails", async () => {
+    const reportError = vi.fn();
+    vi.stubGlobal("reportError", reportError);
+    const privateScope = fileScope("/private/source");
+    mocks.fetchChats.mockRejectedValueOnce(new Error("customer-specific upstream detail"));
+    await renderMounted();
+
+    let accepted = true;
+    await act(async () => {
+      accepted =
+        (await mocks.state.workspaceOptions?.onScopeUnbind?.("closed-window", privateScope, {
+          conversationId: "chat-private",
+          projectPath: "/private",
+        })) !== false;
+    });
+
+    expect(accepted).toBe(false);
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(await screen.findByText("Unable to disconnect scope.")).toBeInTheDocument();
+    expect(reportError).toHaveBeenCalledOnce();
+    expect(String(reportError.mock.calls[0]?.[0])).toMatch(
+      /^Error: Chat lookup failed\. Correlation ID: /u,
+    );
+    expect(String(reportError.mock.calls[0]?.[0])).not.toContain("customer-specific");
+  });
+
+  it("rejects an unbind when its bound chat can no longer be resolved", async () => {
+    mocks.state.session = {
+      ...(mocks.state.session as TestSession),
+      chats: [],
+      activeChat: undefined,
+    };
+    await renderMounted();
+
+    let accepted = true;
+    await act(async () => {
+      accepted =
+        (await mocks.state.workspaceOptions?.onScopeUnbind?.(
+          "missing-window",
+          fileScope("/private/source"),
+          { conversationId: "chat-missing", projectPath: undefined },
+        )) !== false;
+    });
+
+    expect(accepted).toBe(false);
+    expect(mocks.fetchChats).not.toHaveBeenCalled();
+    expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
+    expect(await screen.findByText("Unable to disconnect scope.")).toBeInTheDocument();
+  });
+
+  it("rejects connector unbind when the server mutation fails", async () => {
+    vi.stubGlobal("reportError", vi.fn());
+    const currentChat = chat({ localKnowledgeScopes: [capsuleScope("cap-a")] });
+    mocks.state.session = {
+      ...(mocks.state.session as TestSession),
+      chats: [currentChat],
+      activeChat: currentChat,
+    };
+    mocks.updateChatLocalKnowledgeScopes.mockRejectedValueOnce(new Error("upstream detail"));
+    await renderMounted();
+
+    let accepted = true;
+    await act(async () => {
+      accepted =
+        (await mocks.state.workspaceOptions?.onConnectorUnbind?.(
+          "chat-window",
+          capsuleScope("cap-a"),
+        )) !== false;
+    });
+
+    expect(accepted).toBe(false);
+    expect(await screen.findByText("Unable to disconnect scope.")).toBeInTheDocument();
+    expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
   });
 
   it("compensates a connector bind when its chat ownership changes in flight", async (): Promise<void> => {

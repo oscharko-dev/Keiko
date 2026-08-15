@@ -23,10 +23,15 @@ import {
   type ChatSessionApi,
   type SendMessageOutcome,
 } from "./hooks/useChatSession";
+import { resetConversationMemorySettingsForTests } from "./hooks/memorySettings";
 import * as api from "@/lib/api";
 import type { Chat, ChatMessage, DesktopChatSendResponse, ModelCapability } from "@/lib/types";
 import type { StreamHandlers } from "@/lib/api";
 import { notifyGatewayConfigUpdated } from "./widgets/shared/gatewaySetupBus";
+
+afterEach(() => {
+  resetConversationMemorySettingsForTests();
+});
 
 // ─── UI test helpers ──────────────────────────────────────────────────────────
 
@@ -810,6 +815,7 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
     expect(view.result.current.activeChat?.connectedScope).toBeUndefined();
     expect(view.result.current.activeChat?.connectedScopes).toHaveLength(1);
 
+    act(() => view.result.current.setMemoryEnabled(true));
     act(() => view.result.current.setDraft("ground plural scope"));
     await act(async () => {
       await view.result.current.sendMessage();

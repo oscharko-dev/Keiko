@@ -11,7 +11,7 @@
 // resolves to a non-blocking `error` phase that leaves the composer fully usable (AC4). The audio and
 // transcript live only in React state for the lifetime of the flow and are never logged.
 
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { useCallback, useEffect, useId, useMemo, useReducer, useRef } from "react";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { ApiError, transcribeDictation } from "@/lib/api";
 import type { VoiceTranscriptionRequest, VoiceTranscriptionResult } from "@/lib/api";
@@ -43,6 +43,7 @@ import {
   type VoiceRtcSession,
   type VoiceRtcTransport,
 } from "./voice-rtc-transport";
+import { claimVoiceCapture, releaseVoiceCapture } from "./voice-capture-owner";
 
 // Upper bound on a single dictation clip, matching the BFF's MAX_DICTATION_MS (voice-handlers.ts).
 // Recording auto-stops at this point so a clip can never exceed the server's accepted duration.
@@ -176,6 +177,9 @@ export interface UseDictationOptions {
   // Appends the reviewed transcript into the composer draft. The hook never sends — insertion is the
   // terminal action, after which the user sends through the normal composer flow.
   readonly onInsert: (text: string) => void;
+  // Chat-window identity shared with Voice Dialogue. It serializes every microphone capture on the
+  // page without coupling the two controllers or leaking capture state between conversations.
+  readonly captureOwner?: string | undefined;
   // Optional BCP-47 hint forwarded to the provider.
   readonly language?: string | undefined;
   // Optional voice-activity detector. When provided (dialogue mode), the recording stream is monitored
@@ -282,6 +286,9 @@ function buildTranscribeRequest(
 
 export function useDictation(options: UseDictationOptions): DictationController {
   const { onInsert, language } = options;
+  const internalCaptureOwner = useId();
+  const captureOwner = options.captureOwner ?? internalCaptureOwner;
+  const captureLeaseRef = useRef(Symbol("dictation-capture"));
   const [state, dispatch] = useReducer(dictationReducer, INITIAL_STATE);
 
   // Stable refs for the injectable seams and the live session/timer so the action callbacks stay
@@ -351,6 +358,10 @@ export function useDictation(options: UseDictationOptions): DictationController 
   // (AC3 — "stopping or leaving dialog mode releases microphone resources deterministically").
   const cancelledRef = useRef(false);
 
+  const releaseCapture = useCallback((): void => {
+    releaseVoiceCapture(captureLeaseRef.current);
+  }, []);
+
   const clearAutoStop = useCallback((): void => {
     if (autoStopRef.current !== undefined) {
       clearTimeout(autoStopRef.current);
@@ -414,7 +425,8 @@ export function useDictation(options: UseDictationOptions): DictationController 
     realtimeFinalTranscriptRef.current = undefined;
     realtimeTranscriptErrorRef.current = undefined;
     realtimeDeltaSeenRef.current = false;
-  }, [clearRealtimeDisconnectGrace]);
+    releaseCapture();
+  }, [clearRealtimeDisconnectGrace, releaseCapture]);
 
   const failRealtimeConnection = useCallback(
     (session: VoiceRtcSession): void => {
@@ -553,6 +565,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
         return session.stop();
       })
       .then((capture) => {
+        releaseCapture();
         if (capture === undefined) {
           return undefined;
         }
@@ -568,13 +581,14 @@ export function useDictation(options: UseDictationOptions): DictationController 
         dispatch({ type: "preview", transcript: result.transcript });
       })
       .catch((error: unknown) => {
+        releaseCapture();
         if (!mountedRef.current) return;
         dispatch({ type: "error", ...classifyError(error) });
       })
       .finally(() => {
         stoppingRef.current = false;
       });
-  }, [clearAutoStop, detachVad, language, latency, postRollMs, transcribe]);
+  }, [clearAutoStop, detachVad, language, latency, postRollMs, releaseCapture, transcribe]);
 
   const stopRealtime = useCallback((): void => {
     const session = realtimeSessionRef.current;
@@ -673,6 +687,7 @@ export function useDictation(options: UseDictationOptions): DictationController 
           // leaving voice mode mid-permission must still release the mic deterministically (AC3).
           if (!mountedRef.current || cancelledRef.current) {
             session.cancel();
+            releaseCapture();
             return;
           }
           sessionRef.current = session;
@@ -695,11 +710,12 @@ export function useDictation(options: UseDictationOptions): DictationController 
         },
         (error: unknown) => {
           startingRef.current = false;
+          releaseCapture();
           if (!mountedRef.current) return;
           dispatch({ type: "error", ...classifyError(error) });
         },
       );
-  }, [latency, recorderFactory, stopBatch, vad]);
+  }, [latency, recorderFactory, releaseCapture, stopBatch, vad]);
 
   const startRealtime = useCallback((): void => {
     if (
@@ -843,12 +859,20 @@ export function useDictation(options: UseDictationOptions): DictationController 
   ]);
 
   const start = useCallback((): void => {
+    if (!claimVoiceCapture(captureOwner, captureLeaseRef.current)) {
+      dispatch({
+        type: "error",
+        reason: "unavailable",
+        message: "The microphone is active in another chat.",
+      });
+      return;
+    }
     if (realtimeEnabled && !realtimeFallbackToBatchRef.current) {
       startRealtime();
       return;
     }
     startBatch();
-  }, [realtimeEnabled, startBatch, startRealtime]);
+  }, [captureOwner, realtimeEnabled, startBatch, startRealtime]);
 
   const cancel = useCallback((): void => {
     // Mark any in-flight start() as cancelled so a microphone grant that resolves after this call is
@@ -861,9 +885,10 @@ export function useDictation(options: UseDictationOptions): DictationController 
     sessionRef.current?.cancel();
     sessionRef.current = undefined;
     cleanupRealtime();
+    releaseCapture();
     startingRef.current = false;
     dispatch({ type: "reset" });
-  }, [cleanupRealtime, clearAutoStop, detachVad]);
+  }, [cleanupRealtime, clearAutoStop, detachVad, releaseCapture]);
 
   const discard = useCallback((): void => {
     cancel();
@@ -904,8 +929,9 @@ export function useDictation(options: UseDictationOptions): DictationController 
       sessionRef.current?.cancel();
       sessionRef.current = undefined;
       cleanupRealtime();
+      releaseCapture();
     };
-  }, [cleanupRealtime]);
+  }, [cleanupRealtime, releaseCapture]);
 
   return {
     phase: state.phase,

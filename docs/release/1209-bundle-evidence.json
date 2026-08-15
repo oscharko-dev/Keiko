@@ -2,10 +2,10 @@
   "releaseEvidenceVersion": 1,
   "staticExport": {
     "root": "dist/ui/static",
-    "fileCount": 285
+    "fileCount": 290
   },
   "b1": {
-    "firstLoadScriptCount": 17,
+    "firstLoadScriptCount": 18,
     "monacoMarkersInFirstLoad": 0,
     "ok": true
   },
@@ -73,5 +73,5 @@
       "workerLabel": null
     }
   ],
-  "measurementSha256": "8eab43859a2fb0eaa3880b3a26e462c30aa95376a0d255efa1bb08b797b42d39"
+  "measurementSha256": "f0d0e986f9d547ce206682fc0ced3c0eddd2d49f568ddd472f937c4868a37207"
 }

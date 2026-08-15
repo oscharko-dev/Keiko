@@ -4,6 +4,7 @@ import {
   buildWorkspaceClipboardPayload,
   duplicateWorkspaceClipboardWindows,
 } from "./workspaceClipboard";
+import { MAX_WORKSPACE_WINDOWS } from "./workspace-persistence";
 
 const viewport = { x: 0, y: 0, w: 800, h: 600 };
 
@@ -79,6 +80,28 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
     expect(duplicated?.nextZ).toBe(22);
   });
 
+  it("pastes only the windows that fit inside the workspace-wide limit", () => {
+    const existing = Array.from({ length: MAX_WORKSPACE_WINDOWS - 1 }, (_, index) =>
+      win("files", {}, `files-${String(index)}`),
+    );
+    const payload = buildWorkspaceClipboardPayload(
+      [win("files", {}, "copy-a"), win("editor", {}, "copy-b")],
+      ["copy-a", "copy-b"],
+    );
+    const duplicated = duplicateWorkspaceClipboardWindows({
+      wins: existing,
+      payload: payload ?? "",
+      viewport,
+      zStart: MAX_WORKSPACE_WINDOWS,
+      nowMs: 2_500,
+      pasteOffsetPx: 32,
+    });
+
+    expect(duplicated?.wins).toHaveLength(MAX_WORKSPACE_WINDOWS);
+    expect(duplicated?.pastedWindowIds).toHaveLength(1);
+    expect(duplicated?.limitReached).toBe(true);
+  });
+
   it("skips singleton and keyed windows that the workspace normally dedupes", () => {
     const payload = buildWorkspaceClipboardPayload(
       [
@@ -136,7 +159,7 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
     ]);
     const singletonPayload = workspacePayload([
       {
-        type: "chat",
+        type: "chatHistory",
         x: 0,
         y: 0,
         w: 200,

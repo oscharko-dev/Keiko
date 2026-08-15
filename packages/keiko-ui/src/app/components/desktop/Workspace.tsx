@@ -11,7 +11,6 @@ import type {
   RefObject,
 } from "react";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
-import { EmptyWorkspaceBlob } from "./EmptyWorkspaceBlob";
 import { Icons } from "./Icons";
 import {
   acquireGrabbingBodyStyle,
@@ -70,6 +69,14 @@ const WorkspaceShader = dynamic(
     ssr: false,
     loading: () => null,
   },
+);
+
+// The animated empty-state illustration is only needed while the workspace has no windows. Keep
+// its large SVG path and animation code out of the initial desktop bundle; the stable `.ws-empty`
+// container remains mounted while this non-critical decoration loads.
+const EmptyWorkspaceBlob = dynamic(
+  () => import("./EmptyWorkspaceBlob").then((mod) => mod.EmptyWorkspaceBlob),
+  { ssr: false, loading: () => null },
 );
 
 interface WorkspaceProps {
@@ -585,6 +592,7 @@ function WorkspaceEmptyState({ empty, onNewWindow }: WorkspaceEmptyStateProps): 
 interface WorkspaceSceneProps {
   readonly style: CSSProperties;
   readonly snapPrev: SnapPrev | null;
+  readonly wins: readonly AppWindow[] | null;
   readonly visibleWins: readonly AppWindow[] | null;
   readonly conns: readonly Connection[];
   readonly connecting: ConnectingState | null;
@@ -599,6 +607,7 @@ interface WorkspaceSceneProps {
 function WorkspaceScene({
   style,
   snapPrev,
+  wins,
   visibleWins,
   conns,
   connecting,
@@ -620,8 +629,8 @@ function WorkspaceScene({
       {visibleWins !== null ? (
         <ConnectionsLayer wins={visibleWins} conns={conns} connecting={connecting} api={api} />
       ) : null}
-      {visibleWins !== null
-        ? visibleWins.map((w) => (
+      {wins !== null
+        ? wins.map((w) => (
             <WindowFrame
               key={w.id}
               win={w}
@@ -1231,6 +1240,7 @@ export function Workspace({
       <WorkspaceScene
         style={sceneStyle}
         snapPrev={snapPrev}
+        wins={wins}
         visibleWins={visibleWins}
         conns={conns}
         connecting={connecting}

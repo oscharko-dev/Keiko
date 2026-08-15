@@ -258,15 +258,15 @@
       }
     },
     "keiko-ui": {
-      "files": 415,
+      "files": 417,
       "uncoveredFiles": 3,
-      "uncoveredLines": 2993,
-      "totalLines": 38047,
+      "uncoveredLines": 2965,
+      "totalLines": 39048,
       "coverage": {
-        "lines": 92.13,
-        "statements": 89.19,
-        "branches": 81.12,
-        "functions": 90.83
+        "lines": 92.41,
+        "statements": 89.49,
+        "branches": 81.68,
+        "functions": 91.22
       }
     },
     "keiko-verification": {

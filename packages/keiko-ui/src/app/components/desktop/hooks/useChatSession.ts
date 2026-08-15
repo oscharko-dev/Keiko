@@ -74,6 +74,7 @@ import { canonicalVoiceSha256Hex } from "./canonical-voice-hasher";
 import { extractDocumentContext, type PendingDocument } from "./documentContext";
 import {
   currentConversationMemoryModeRevision,
+  removeConversationMemorySettings,
   useConversationMemorySettings,
 } from "./memorySettings";
 
@@ -292,10 +293,12 @@ async function deletePendingImage(attachment: PendingAttachment): Promise<void> 
 }
 
 const DEFAULT_CHAT_TITLE = "New chat";
+const NO_CONVERSATION_MODEL_MESSAGE =
+  "No conversation-eligible model is configured. Connect a gateway in Settings.";
 const DEFAULT_CONVERSATION_MEMORY_USER_ID = "local-operator";
 const CHAT_UPSERT_EVENT = "keiko:chat-upsert";
 const CHAT_DELETE_EVENT = "keiko:chat-delete";
-const RUN_SUMMARY_SYNC_INTERVAL_MS = 1_000;
+export const RUN_SUMMARY_SYNC_INTERVAL_MS = 1_000;
 const RUN_SUMMARY_SYNC_MAX_ATTEMPTS = 120;
 const RUN_SUMMARY_SYNC_MAX_INTERVAL_MS = 15_000;
 const CANONICAL_VOICE_QUEUE_REGULAR_MAX_ITEMS = 128;
@@ -643,6 +646,7 @@ export function notifyChatUpsert(chat: Chat): void {
 
 export function notifyChatDeleted(chatId: string): void {
   invalidateSharedBootstrap();
+  removeConversationMemorySettings(chatId);
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(CHAT_DELETE_EVENT, { detail: { chatId } }));
 }
@@ -677,6 +681,14 @@ function hasGroundingScope(chat: Chat): boolean {
     chat.localKnowledgeScope !== undefined ||
     (chat.localKnowledgeScopes !== undefined && chat.localKnowledgeScopes.length > 0)
   );
+}
+
+function clearLatestChatContext(
+  setLatestGrounded: (value: undefined) => void,
+  setLatestMemory: (value: undefined) => void,
+): void {
+  setLatestGrounded(undefined);
+  setLatestMemory(undefined);
 }
 
 export type ChatSessionApi = UseChatSessionResult;
@@ -868,6 +880,9 @@ interface CanonicalVoiceQueueItem {
   readonly byteLength: number;
   readonly promise: Promise<SendMessageOutcome>;
   readonly resolve: (outcome: SendMessageOutcome) => void;
+  // The hook that accepted this turn owns its React-visible delivery. A different hook may hold the
+  // page FIFO drain lease, but it must dispatch through this runtime while the owner remains mounted.
+  readonly deliveryOwner: symbol;
 }
 
 interface CanonicalVoiceProjection {
@@ -905,7 +920,9 @@ interface CanonicalVoicePageOutbox {
   };
   readonly settledRef: { current: Map<string, CanonicalVoiceSettledDelivery> };
   drainingOwner: symbol | undefined;
-  activeDelivery: { readonly key: string; readonly abort: () => void } | undefined;
+  activeDelivery:
+    { readonly key: string; readonly runtimeOwner: symbol; readonly abort: () => void } | undefined;
+  readonly runtimes: Map<symbol, CanonicalVoiceDeliveryRuntimeRegistration>;
   readonly wakes: Set<() => void>;
   readonly statusSubscribers: Set<(status: CanonicalVoiceOutboxStatus) => void>;
   status: CanonicalVoiceOutboxStatus;
@@ -924,6 +941,7 @@ const canonicalVoicePageOutbox: CanonicalVoicePageOutbox = {
   settledRef: { current: new Map() },
   drainingOwner: undefined,
   activeDelivery: undefined,
+  runtimes: new Map(),
   wakes: new Set(),
   statusSubscribers: new Set(),
   status: { suspendedChatId: undefined, revision: 0 },
@@ -1086,6 +1104,7 @@ export function clearCanonicalVoicePageOutboxForTests(): void {
   canonicalVoicePageOutbox.drainingOwner = undefined;
   canonicalVoicePageOutbox.activeDelivery?.abort();
   canonicalVoicePageOutbox.activeDelivery = undefined;
+  canonicalVoicePageOutbox.runtimes.clear();
   canonicalVoicePageOutbox.wakes.clear();
   setCanonicalVoicePageOutboxSuspended(undefined);
   canonicalVoicePageOutbox.statusSubscribers.clear();
@@ -1140,6 +1159,35 @@ function completedSendOutcome(
 interface SendMessage {
   (options: SendMessageOptions & { readonly reportOutcome: true }): Promise<SendMessageOutcome>;
   (options?: SendMessageOptions): Promise<void>;
+}
+
+interface CanonicalVoiceDeliveryRuntimeRegistration {
+  readonly sendRef: { current: SendMessage | null };
+  readonly waitForSendSlotRef: { current: (signal: AbortSignal) => Promise<void> };
+  readonly onDeliveryDelayed: () => void;
+  readonly activeChatIdRef: { current: string | undefined };
+  readonly reconcilePersistedTarget: (target: CanonicalVoiceSendTarget) => Promise<void>;
+}
+
+interface SelectedCanonicalVoiceDeliveryRuntime {
+  readonly owner: symbol;
+  readonly registration: CanonicalVoiceDeliveryRuntimeRegistration;
+}
+
+function selectCanonicalVoiceDeliveryRuntime(
+  item: CanonicalVoiceQueueItem,
+  fallbackOwner: symbol,
+): SelectedCanonicalVoiceDeliveryRuntime | undefined {
+  const targetChatId = item.target.chat.id;
+  const original = canonicalVoicePageOutbox.runtimes.get(item.deliveryOwner);
+  if (original?.activeChatIdRef.current === targetChatId) {
+    return { owner: item.deliveryOwner, registration: original };
+  }
+  for (const [owner, registration] of canonicalVoicePageOutbox.runtimes) {
+    if (registration.activeChatIdRef.current === targetChatId) return { owner, registration };
+  }
+  const fallback = canonicalVoicePageOutbox.runtimes.get(fallbackOwner);
+  return fallback === undefined ? undefined : { owner: fallbackOwner, registration: fallback };
 }
 
 interface CanonicalVoiceDeliveryRuntime {
@@ -1252,6 +1300,21 @@ async function deliverCanonicalVoiceQueueItem(
   return { kind: "aborted" };
 }
 
+async function reconcileCanonicalVoiceTargetRuntimes(
+  item: CanonicalVoiceQueueItem,
+  deliveryOwner: symbol,
+  delivery: CanonicalVoiceQueueDelivery,
+): Promise<void> {
+  if (delivery.kind !== "terminal" || !canonicalVoiceOutcomeIsPersisted(delivery.outcome)) return;
+  const reconciliations: Promise<void>[] = [];
+  for (const [owner, registration] of canonicalVoicePageOutbox.runtimes) {
+    if (owner !== deliveryOwner && registration.activeChatIdRef.current === item.target.chat.id) {
+      reconciliations.push(registration.reconcilePersistedTarget(item.target));
+    }
+  }
+  await Promise.all(reconciliations);
+}
+
 export interface UseChatSessionResult {
   projects: ProjectWithAvailability[];
   chats: Chat[];
@@ -1360,6 +1423,27 @@ interface SessionState {
   selectedModel: string | undefined;
 }
 
+function chatBelongsToSessionCatalog(previous: SessionState, chat: Chat): boolean {
+  return (
+    previous.activeProject?.path === chat.projectPath ||
+    previous.activeChat?.id === chat.id ||
+    previous.chats.some((candidate) => candidate.id === chat.id)
+  );
+}
+
+function applyChatUpsert(previous: SessionState, chat: Chat): SessionState {
+  if (!chatBelongsToSessionCatalog(previous, chat)) return previous;
+  return {
+    ...previous,
+    chats: upsertChatIntoList(previous.chats, chat),
+    activeChat: previous.activeChat?.id === chat.id ? chat : previous.activeChat,
+    selectedModel:
+      previous.activeChat?.id === chat.id
+        ? resolveSelectedModelId(chat.selectedModel, previous.models)
+        : previous.selectedModel,
+  };
+}
+
 function projectOptimisticMessage(
   previous: SessionState,
   chatId: string,
@@ -1403,6 +1487,49 @@ const sharedChatMessagesInflight = new Map<
   string,
   Promise<{ readonly messages: readonly ChatMessage[] }>
 >();
+type GatewayModelRefreshResult =
+  | { readonly kind: "success"; readonly models: readonly ModelCapability[] }
+  | { readonly kind: "failure"; readonly message: string };
+const gatewayModelRefreshSubscribers = new Set<(result: GatewayModelRefreshResult) => void>();
+let gatewayModelRefreshGeneration = 0;
+
+function publishGatewayModelRefresh(result: GatewayModelRefreshResult): void {
+  for (const subscriber of gatewayModelRefreshSubscribers) subscriber(result);
+}
+
+function refreshGatewayModels(): void {
+  const generation = gatewayModelRefreshGeneration + 1;
+  gatewayModelRefreshGeneration = generation;
+  invalidateSharedBootstrap();
+  resetModelRequestCache();
+  void fetchModels().then(
+    ({ models }): void => {
+      if (generation === gatewayModelRefreshGeneration) {
+        publishGatewayModelRefresh({ kind: "success", models });
+      }
+    },
+    (error_: unknown): void => {
+      if (generation === gatewayModelRefreshGeneration) {
+        publishGatewayModelRefresh({ kind: "failure", message: errorMessage(error_) });
+      }
+    },
+  );
+}
+
+function subscribeGatewayModelRefresh(
+  subscriber: (result: GatewayModelRefreshResult) => void,
+): () => void {
+  if (gatewayModelRefreshSubscribers.size === 0) {
+    window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
+  }
+  gatewayModelRefreshSubscribers.add(subscriber);
+  return (): void => {
+    gatewayModelRefreshSubscribers.delete(subscriber);
+    if (gatewayModelRefreshSubscribers.size === 0) {
+      window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
+    }
+  };
+}
 
 function cloneSessionPatch(patch: Partial<SessionState>): Partial<SessionState> {
   const cloned: Partial<SessionState> = { ...patch };
@@ -1431,7 +1558,9 @@ function cloneChatMessagesPayload(payload: { readonly messages: readonly ChatMes
   return { messages: Array.from(payload.messages) };
 }
 
-function sharedFetchChats(projectPath: string): Promise<{ readonly chats: readonly Chat[] }> {
+export function sharedFetchChats(
+  projectPath: string,
+): Promise<{ readonly chats: readonly Chat[] }> {
   const existing = sharedChatListInflight.get(projectPath);
   if (existing !== undefined) return existing.then(cloneChatListPayload);
   const pending = fetchChats(projectPath)
@@ -1465,8 +1594,11 @@ function sharedFetchChatMessages(
 
 export function clearChatSessionBootstrapCacheForTests(): void {
   invalidateSharedBootstrap();
+  gatewayModelRefreshGeneration += 1;
   sharedChatListInflight.clear();
   sharedChatMessagesInflight.clear();
+  for (const entry of sharedRunSummarySyncs.values()) entry.controller.abort();
+  sharedRunSummarySyncs.clear();
 }
 
 function isPendingRunSummaryMessage(message: ChatMessage): boolean {
@@ -1533,7 +1665,14 @@ interface RunSummarySyncResult {
   readonly message: ChatMessage;
 }
 
-const sharedRunSummarySyncs = new Map<string, Promise<RunSummarySyncResult | undefined>>();
+interface SharedRunSummarySync {
+  readonly controller: AbortController;
+  promise: Promise<RunSummarySyncResult | undefined>;
+  readonly subscribers: Map<AbortSignal, () => void>;
+  persistentSubscriber: boolean;
+}
+
+const sharedRunSummarySyncs = new Map<string, SharedRunSummarySync>();
 
 function runSummarySharedSyncKey(chat: Chat, projectPath: string, message: ChatMessage): string {
   return `${chat.id}:${projectPath}:${message.id}:${message.runId ?? ""}`;
@@ -1626,24 +1765,62 @@ async function pollRunSummaryPatch(
   return undefined;
 }
 
+function releaseRunSummarySubscriber(entry: SharedRunSummarySync, signal: AbortSignal): void {
+  const listener = entry.subscribers.get(signal);
+  if (listener === undefined) return;
+  signal.removeEventListener("abort", listener);
+  entry.subscribers.delete(signal);
+  if (entry.subscribers.size === 0 && !entry.persistentSubscriber) entry.controller.abort();
+}
+
+function subscribeRunSummary(entry: SharedRunSummarySync, signal?: AbortSignal): void {
+  if (signal === undefined) {
+    entry.persistentSubscriber = true;
+    return;
+  }
+  if (signal.aborted || entry.subscribers.has(signal)) return;
+  const release = (): void => releaseRunSummarySubscriber(entry, signal);
+  entry.subscribers.set(signal, release);
+  signal.addEventListener("abort", release, { once: true });
+}
+
+function clearRunSummarySubscribers(entry: SharedRunSummarySync): void {
+  for (const [signal, listener] of entry.subscribers) {
+    signal.removeEventListener("abort", listener);
+  }
+  entry.subscribers.clear();
+}
+
 function sharedRunSummaryPatch(
   chat: Chat,
   projectPath: string,
   message: ChatMessage,
   signal?: AbortSignal,
 ): Promise<RunSummarySyncResult | undefined> {
+  if (signal?.aborted === true) return Promise.resolve(undefined);
   const key = runSummarySharedSyncKey(chat, projectPath, message);
   const existing = sharedRunSummarySyncs.get(key);
-  if (existing !== undefined) return existing;
-  // GEN-PERF-CHAT-011 — the poll is aborted when the owning hook unmounts (signal from the hook's
-  // AbortController). The shared cache is keyed per (chat, project, message, runId); chat is a
-  // singleton window (Step 03) so a single hook owns the poll for a given run.
-  const pending = pollRunSummaryPatch(chat, projectPath, message, signal).finally(() => {
-    if (sharedRunSummarySyncs.get(key) === pending) {
+  if (existing !== undefined && !existing.controller.signal.aborted) {
+    subscribeRunSummary(existing, signal);
+    return existing.promise;
+  }
+  if (existing !== undefined) sharedRunSummarySyncs.delete(key);
+  const controller = new AbortController();
+  const entry: SharedRunSummarySync = {
+    controller,
+    promise: Promise.resolve(undefined),
+    subscribers: new Map(),
+    persistentSubscriber: false,
+  };
+  subscribeRunSummary(entry, signal);
+  const pending = pollRunSummaryPatch(chat, projectPath, message, controller.signal).finally(() => {
+    clearRunSummarySubscribers(entry);
+    if (sharedRunSummarySyncs.get(key) === entry) {
       sharedRunSummarySyncs.delete(key);
     }
   });
-  sharedRunSummarySyncs.set(key, pending);
+  entry.promise = pending;
+  sharedRunSummarySyncs.set(key, entry);
   return pending;
 }
 
@@ -1654,14 +1831,12 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   const chatModels = modelPayload.models.filter(isConversationEligibleModel);
   const defaultModel = pickChatModelId(chatModels);
 
-  const projectPayload = await fetchProjects().catch(() => ({ projects: [] }));
+  const projectPayload = await fetchProjects();
   const projects = sortProjects(projectPayload.projects);
   const project = projects.find((item) => item.available) ?? projects[0];
 
   const chatPayload =
-    project === undefined
-      ? { chats: [] as readonly Chat[] }
-      : await sharedFetchChats(project.path).catch(() => ({ chats: [] as readonly Chat[] }));
+    project === undefined ? { chats: [] as readonly Chat[] } : await sharedFetchChats(project.path);
   const sortedChats = sortChats(chatPayload.chats);
   const latestChat = pickResumableChat(sortedChats);
   if (project !== undefined && latestChat !== undefined) {
@@ -1750,23 +1925,6 @@ function refreshSessionModels(
     models,
     selectedModel: resolveSelectedModelId(previous.selectedModel, models),
   };
-}
-
-interface SessionModelRefreshContext {
-  readonly isCancelled: () => boolean;
-  readonly setError: Dispatch<SetStateAction<string | undefined>>;
-  readonly setState: Dispatch<SetStateAction<SessionState>>;
-}
-
-async function loadRefreshedSessionModels(context: SessionModelRefreshContext): Promise<void> {
-  try {
-    const { models } = await fetchModels();
-    if (!context.isCancelled()) {
-      context.setState((previous) => refreshSessionModels(previous, models));
-    }
-  } catch (error_) {
-    if (!context.isCancelled()) context.setError(errorMessage(error_));
-  }
 }
 
 // Sonar S2004 — extracted out of streamUngrounded's `.catch` handler (itself already nested
@@ -1977,6 +2135,47 @@ export interface UseChatSessionOptions {
   readonly loadMemoryAutonomyModeImpl?: typeof loadMemoryAutonomyMode;
 }
 
+type MemoryAutonomyModeLoader = typeof loadMemoryAutonomyMode;
+const memoryAutonomyModeHydrations = new WeakMap<
+  MemoryAutonomyModeLoader,
+  ReturnType<MemoryAutonomyModeLoader>
+>();
+
+function sharedLoadMemoryAutonomyMode(
+  loader: MemoryAutonomyModeLoader,
+): ReturnType<MemoryAutonomyModeLoader> {
+  const active = memoryAutonomyModeHydrations.get(loader);
+  if (active !== undefined) return active;
+  const started = loader();
+  memoryAutonomyModeHydrations.set(loader, started);
+  const clear = (): void => {
+    if (memoryAutonomyModeHydrations.get(loader) === started) {
+      memoryAutonomyModeHydrations.delete(loader);
+    }
+  };
+  void started.then(clear, clear);
+  return started;
+}
+
+function activeConversationMemoryScope(state: SessionState): string | undefined {
+  return state.activeChat?.id;
+}
+
+function activeProjectIdentity(state: SessionState): string | undefined {
+  return state.activeProject?.path;
+}
+
+function synchronizeRenderedIdentity(
+  activeRef: { current: string | undefined },
+  renderedRef: { current: string | undefined },
+  next: string | undefined,
+): void {
+  const previous = renderedRef.current;
+  if (previous === next) return;
+  if (activeRef.current === previous || activeRef.current === next) activeRef.current = next;
+  renderedRef.current = next;
+}
+
 export function useChatSession(options: UseChatSessionOptions = {}): UseChatSessionResult {
   // 0.3.0 release audit — the pre-send attachment notices are user-facing text and were hardcoded
   // English. `documentContext` is not a component and cannot call a hook, so the session hook
@@ -2037,6 +2236,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // chat changes (see openChat) so a stale answer never overhangs into another conversation.
   const [latestGrounded, setLatestGrounded] = useState<GroundedAnswerWire | undefined>();
   const [latestMemory, setLatestMemory] = useState<ConversationMemoryResultWire | undefined>();
+  const renderedChatIdentity = activeConversationMemoryScope(state);
+  const renderedProjectIdentity = activeProjectIdentity(state);
   const {
     memoryEnabled,
     setMemoryEnabled,
@@ -2044,16 +2245,15 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     setMemoryBudgetTokens,
     memoryMode,
     setMemoryMode,
-  } = useConversationMemorySettings();
-  // Hydrate the server-persisted autonomy mode once per session mount so chat/voice requests use
-  // the user's actual selection even if no autonomy-settings surface is opened. The settings
-  // store is a module-level singleton, so redundant hydration across multiple mounted sessions is
-  // a harmless no-op (publish() skips an identical value); a failure leaves the safe
-  // "governed-assist" default untouched.
+  } = useConversationMemorySettings(renderedChatIdentity);
+  // Hydrate the server-persisted autonomy mode so chat/voice requests use the user's actual
+  // selection even if no autonomy-settings surface is opened. The settings authority mode is
+  // process-wide, so simultaneously mounting many windows shares the same in-flight request; a
+  // failure leaves the safe "governed-assist" default untouched.
   useEffect(() => {
     let active = true;
     const revisionAtHydrationStart = currentConversationMemoryModeRevision();
-    void loadMemoryAutonomyModeImpl()
+    void sharedLoadMemoryAutonomyMode(loadMemoryAutonomyModeImpl)
       .then((policy) => {
         // A newer selection (this hydration in another mounted session, or a change made through
         // MemoriaVivaWindow) already landed while this request was in flight — applying the stale
@@ -2069,19 +2269,27 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         // chat failure, and keiko-ui has no client-side diagnostic sink to route through instead
         // of console.*, which product code must not call directly).
       });
-    return () => {
+    return (): void => {
       active = false;
     };
   }, [loadMemoryAutonomyModeImpl, setMemoryMode]);
   const mountedRef = useRef(true);
-  const activeChatIdRef = useRef<string | undefined>(undefined);
+  const activeChatIdRef = useRef<string | undefined>(renderedChatIdentity);
+  const renderedActiveChatIdRef = useRef(renderedChatIdentity);
+  synchronizeRenderedIdentity(activeChatIdRef, renderedActiveChatIdRef, renderedChatIdentity);
   // GEN-DUP-SEMANTIC-016 — two named predicates for the two repeated stale-landing guards so the
   // intent reads at the call site. `activeChatIdRef.current` is read at CALL time (not captured),
   // preserving the existing ref-based guard behaviour exactly.
   const isStillActiveChat = (id: string): boolean => activeChatIdRef.current === id;
   const isSupersededOrAborted = (id: string, signal: AbortSignal): boolean =>
     signal.aborted || activeChatIdRef.current !== id;
-  const activeProjectPathRef = useRef<string | undefined>(undefined);
+  const activeProjectPathRef = useRef<string | undefined>(renderedProjectIdentity);
+  const renderedProjectPathRef = useRef(renderedProjectIdentity);
+  synchronizeRenderedIdentity(
+    activeProjectPathRef,
+    renderedProjectPathRef,
+    renderedProjectIdentity,
+  );
   const runSummarySyncingRef = useRef<Set<string>>(new Set());
   // GEN-PERF-CHAT-011 — a per-hook AbortController for the run-summary pollers, aborted on unmount
   // so the poll loop stops at its fetch/sleep edges instead of running out its remaining attempts.
@@ -2095,7 +2303,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const selectedModelPersistRef = useRef(0);
   // COMP-5 — synchronous read of the current model list inside setSelectedModel
   // (which is intentionally `useCallback(..., [])`) without recreating the callback.
-  const modelsRef = useRef<readonly ModelCapability[]>([]);
+  const modelsRef = useRef<readonly ModelCapability[]>(state.models);
+  modelsRef.current = state.models;
   // Issue #147 — pending-attachment state. Cleared after a successful send (AC #3).
   const [pendingAttachments, setPendingAttachments] = useState<readonly PendingAttachment[]>([]);
   // GEN-PERF-MEMORY-001 — live mirror of pendingAttachments so the unmount cleanup can revoke any
@@ -2185,14 +2394,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     });
   }, []);
 
-  // 0.3.0 release audit — the composer (draft text + staged attachment queue) is ONE app-wide
-  // slot because the chat window is a singleton (ADR-0114). Switching the active conversation
-  // reset the stream bubble, the grounded answer, the latest memory and the document note, but
-  // never the composer — so a document staged in chat A was extracted and sent into chat B, under
-  // whatever model and provider chat B had selected. Content a user staged for one conversation
-  // must never ride along into another: every path that changes the active conversation clears it
-  // fail-closed. Placed here, on the state that owns the composer, so a new switch path cannot
-  // forget to call it.
+  // 0.3.0 release audit — each mounted session owns one composer (draft text + staged attachment
+  // queue). Switching that session to another conversation must clear the composer fail-closed so
+  // content staged for chat A cannot ride into chat B. ADR-0114 now mounts one session per chat
+  // window, so this reset is local to that window and never touches a sibling composer.
   const resetComposerForConversationSwitch = useCallback((): void => {
     setDraft("");
     clearPendingAttachments();
@@ -2362,6 +2567,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       if (!isInFlight(sendStatusRef.current)) release();
     });
   }, []);
+  const waitForCanonicalVoiceSendSlotRef = useRef(waitForCanonicalVoiceSendSlot);
+  waitForCanonicalVoiceSendSlotRef.current = waitForCanonicalVoiceSendSlot;
 
   const updateOwnedSendStatus = useCallback(
     (signal: AbortSignal, next: SendStatus): void => {
@@ -2483,18 +2690,6 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   );
 
   useEffect(() => {
-    activeChatIdRef.current = state.activeChat?.id;
-  }, [state.activeChat?.id]);
-
-  useEffect(() => {
-    activeProjectPathRef.current = state.activeProject?.path;
-  }, [state.activeProject?.path]);
-
-  useEffect(() => {
-    modelsRef.current = state.models;
-  }, [state.models]);
-
-  useEffect(() => {
     let cancelled = false;
     async function run(): Promise<void> {
       setLoading(true);
@@ -2523,45 +2718,25 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       }
     }
     void run();
-    return () => {
+    return (): void => {
       cancelled = true;
     };
   }, [autoCreate, canonicalVoiceProjectionRef]);
 
   useEffect(() => {
-    let cancelled = false;
-    let refreshGeneration = 0;
-    const refreshModels = (): void => {
-      refreshGeneration += 1;
-      const generation = refreshGeneration;
-      invalidateSharedBootstrap();
-      resetModelRequestCache();
-      void loadRefreshedSessionModels({
-        isCancelled: () => cancelled || generation !== refreshGeneration,
-        setError,
-        setState,
-      });
-    };
-    window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshModels);
-    return () => {
-      cancelled = true;
-      window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshModels);
-    };
+    return subscribeGatewayModelRefresh((result): void => {
+      if (result.kind === "failure") {
+        setError(result.message);
+        return;
+      }
+      setState((previous) => refreshSessionModels(previous, result.models));
+    });
   }, []);
 
   useEffect(() => {
     return subscribeChatMutations((mutation) => {
       if (mutation.type === "upsert") {
-        const { chat } = mutation;
-        setState((previous) => ({
-          ...previous,
-          chats: upsertChatIntoList(previous.chats, chat),
-          activeChat: previous.activeChat?.id === chat.id ? chat : previous.activeChat,
-          selectedModel:
-            previous.activeChat?.id === chat.id
-              ? resolveSelectedModelId(chat.selectedModel, previous.models)
-              : previous.selectedModel,
-        }));
+        setState((previous) => applyChatUpsert(previous, mutation.chat));
         return;
       }
       setState((previous) => ({
@@ -2584,7 +2759,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     if (canonicalVoiceQueueControllerRef.current.signal.aborted) {
       canonicalVoiceQueueControllerRef.current = new AbortController();
     }
-    return () => {
+    return (): void => {
       mountedRef.current = false;
       sendStatusRef.current = "cancelled";
       sendControllerRef.current?.abort();
@@ -2720,7 +2895,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     ): Promise<Chat | undefined> => {
       const modelId = resolveSelectedModelId(state.selectedModel, state.models);
       if (modelId === undefined) {
-        setError("No conversation-eligible model is configured. Connect a gateway in Settings.");
+        setError(NO_CONVERSATION_MODEL_MESSAGE);
         return undefined;
       }
       setError(undefined);
@@ -2741,12 +2916,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const targetPath = projectOverride?.path ?? state.activeProject?.path;
         if (targetPath !== undefined) input.projectPath = targetPath;
         const created = await createDesktopChat(input);
+        notifyChatUpsert(created.chat);
         if (targetPath !== undefined && activeProjectPathRef.current !== targetPath) {
           return created.chat;
         }
         activeChatIdRef.current = created.chat.id;
         activeProjectPathRef.current = created.project.path;
-        notifyChatUpsert(created.chat);
         setState({
           projects: Array.from(created.projects),
           chats: sortChats(created.chats),
@@ -2782,7 +2957,19 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const latest = pickResumableChat(sorted);
         if (latest === undefined) {
           if (activeProjectPathRef.current !== project.path) return;
-          await openNewChat(project);
+          if (autoCreate) {
+            await openNewChat(project);
+          } else {
+            activeChatIdRef.current = undefined;
+            setState((previous) => ({
+              ...previous,
+              chats: sorted,
+              messages: [],
+              activeProject: project,
+              activeChat: undefined,
+            }));
+            clearLatestChatContext(setLatestGrounded, setLatestMemory);
+          }
           return;
         }
         const messagePayload = await sharedFetchChatMessages(latest.id, project.path);
@@ -2806,7 +2993,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setError(errorMessage(error_));
       }
     },
-    [canonicalVoiceProjectionRef, openNewChat, resetComposerForConversationSwitch, state.models],
+    [
+      autoCreate,
+      canonicalVoiceProjectionRef,
+      openNewChat,
+      resetComposerForConversationSwitch,
+      state.models,
+    ],
   );
 
   const openChat = useCallback(
@@ -2874,6 +3067,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const projectPayload = await fetchProjects();
         setState((previous) => ({ ...previous, projects: Array.from(projectPayload.projects) }));
         await openProject(created.project);
+        if (pickChatModelId(state.models) === undefined) setError(NO_CONVERSATION_MODEL_MESSAGE);
         setNotice(projectResponseWarningMessage(created));
         return created.project;
       } catch (error_) {
@@ -2881,7 +3075,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return undefined;
       }
     },
-    [openProject],
+    [openProject, state.models],
   );
 
   // Removes a temp optimistic message from state by id (AC#3 — no partial kept).
@@ -3516,6 +3710,59 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   sendMessageRef.current = sendMessage;
 
+  const reconcilePersistedCanonicalVoiceTarget = useCallback(
+    async (target: CanonicalVoiceSendTarget): Promise<void> => {
+      const chatId = target.chat.id;
+      try {
+        const [messagePayload, chatsPayload] = await Promise.all([
+          sharedFetchChatMessages(chatId, target.project.path),
+          sharedFetchChats(target.project.path),
+        ]);
+        if (!mountedRef.current || activeChatIdRef.current !== chatId) return;
+        const refreshedActive = chatsPayload.chats.find((chat) => chat.id === chatId);
+        setState((previous) =>
+          previous.activeChat?.id !== chatId
+            ? previous
+            : {
+                ...previous,
+                messages: mergeCanonicalVoiceProjections(
+                  messagePayload.messages,
+                  chatId,
+                  canonicalVoiceProjectionRef.current,
+                ),
+                chats: sortChats(chatsPayload.chats),
+                activeChat: refreshedActive ?? previous.activeChat,
+              },
+        );
+      } catch (error_) {
+        if (mountedRef.current && activeChatIdRef.current === chatId)
+          setError(errorMessage(error_));
+      }
+    },
+    [canonicalVoiceProjectionRef],
+  );
+
+  useEffect(() => {
+    const owner = canonicalVoiceQueueOwnerRef.current;
+    const registration: CanonicalVoiceDeliveryRuntimeRegistration = {
+      sendRef: sendMessageRef,
+      waitForSendSlotRef: waitForCanonicalVoiceSendSlotRef,
+      onDeliveryDelayed: () => setError(CANONICAL_VOICE_PENDING_ERROR),
+      activeChatIdRef,
+      reconcilePersistedTarget: reconcilePersistedCanonicalVoiceTarget,
+    };
+    canonicalVoicePageOutbox.runtimes.set(owner, registration);
+    wakeCanonicalVoicePageOutbox();
+    return (): void => {
+      if (canonicalVoicePageOutbox.runtimes.get(owner) === registration) {
+        canonicalVoicePageOutbox.runtimes.delete(owner);
+      }
+      const activeDelivery = canonicalVoicePageOutbox.activeDelivery;
+      if (activeDelivery?.runtimeOwner === owner) activeDelivery.abort();
+      wakeCanonicalVoicePageOutbox();
+    };
+  }, [reconcilePersistedCanonicalVoiceTarget]);
+
   const releaseCanonicalVoiceProjection = useCallback(
     (item: CanonicalVoiceQueueItem): void => {
       const projection = canonicalVoiceProjectionRef.current.get(item.key);
@@ -3538,24 +3785,34 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       item: CanonicalVoiceQueueItem,
       signal: AbortSignal,
     ): Promise<CanonicalVoiceQueueDelivery | undefined> => {
-      const sender = sendMessageRef.current;
+      const selectedRuntime = selectCanonicalVoiceDeliveryRuntime(
+        item,
+        canonicalVoiceQueueOwnerRef.current,
+      );
+      if (selectedRuntime === undefined) return undefined;
+      const sender = selectedRuntime.registration.sendRef.current;
       if (sender === null) return undefined;
       const itemController = new AbortController();
       const abortItem = (): void => itemController.abort();
       signal.addEventListener("abort", abortItem, { once: true });
-      canonicalVoicePageOutbox.activeDelivery = { key: item.key, abort: abortItem };
+      canonicalVoicePageOutbox.activeDelivery = {
+        key: item.key,
+        runtimeOwner: selectedRuntime.owner,
+        abort: abortItem,
+      };
       try {
-        return await deliverCanonicalVoiceQueueItem(item, {
+        const delivery = await deliverCanonicalVoiceQueueItem(item, {
           signal: itemController.signal,
           send: sender,
-          waitForSendSlot: () => waitForCanonicalVoiceSendSlot(itemController.signal),
-          onDeliveryDelayed: () => {
-            setError(CANONICAL_VOICE_PENDING_ERROR);
-          },
+          waitForSendSlot: () =>
+            selectedRuntime.registration.waitForSendSlotRef.current(itemController.signal),
+          onDeliveryDelayed: selectedRuntime.registration.onDeliveryDelayed,
           onUserPersisted: () => {
             releaseCanonicalVoiceProjection(item);
           },
         });
+        await reconcileCanonicalVoiceTargetRuntimes(item, selectedRuntime.owner, delivery);
+        return delivery;
       } finally {
         signal.removeEventListener("abort", abortItem);
         if (canonicalVoicePageOutbox.activeDelivery?.key === item.key) {
@@ -3563,7 +3820,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         }
       }
     },
-    [releaseCanonicalVoiceProjection, waitForCanonicalVoiceSendSlot],
+    [releaseCanonicalVoiceProjection],
   );
 
   const settleQueuedCanonicalVoiceDelivery = useCallback(
@@ -3641,7 +3898,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     settleQueuedCanonicalVoiceDelivery,
   ]);
 
-  drainCanonicalVoiceQueueRef.current = () => {
+  drainCanonicalVoiceQueueRef.current = (): void => {
     void drainCanonicalVoiceQueue();
   };
 
@@ -3651,7 +3908,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     };
     canonicalVoicePageOutbox.statusSubscribers.add(observeStatus);
     observeStatus(canonicalVoicePageOutbox.status);
-    return () => {
+    return (): void => {
       canonicalVoicePageOutbox.statusSubscribers.delete(observeStatus);
     };
   }, []);
@@ -3668,7 +3925,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     };
     canonicalVoicePageOutbox.wakes.add(wake);
     wake();
-    return () => {
+    return (): void => {
       canonicalVoicePageOutbox.wakes.delete(wake);
     };
   }, [loading]);
@@ -3760,6 +4017,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         byteLength,
         promise,
         resolve: resolveOutcome,
+        deliveryOwner: canonicalVoiceQueueOwnerRef.current,
       };
       canonicalVoiceDeliveriesRef.current.set(key, { contentDigest, promise });
       canonicalVoiceQueueRef.current.push(item);
