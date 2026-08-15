@@ -458,14 +458,25 @@ function registerShutdown(server: Server, composition: JourneyComposition): void
         stage = "deps.dispose";
         await composition.deps.dispose?.();
         stage = "server.close";
+        // The timeout REJECTS rather than resolves. Resolving would have let a socket that never
+        // closed fall through to the exit(0) below — turning the hang this bound exists to surface
+        // back into a silent clean shutdown, which is the defect KEIKO-0429 is about, one layer
+        // further down (review finding on #3159).
         await Promise.race([
           new Promise<void>((resolve) => {
             server.close(() => {
               resolve();
             });
           }),
-          new Promise<void>((resolve) => {
-            setTimeout(resolve, SERVER_CLOSE_TIMEOUT_MS).unref();
+          new Promise<void>((_resolve, reject) => {
+            setTimeout(() => {
+              reject(
+                new Error(
+                  `server.close did not complete within ${String(SERVER_CLOSE_TIMEOUT_MS)}ms ` +
+                    "(a connection is still open)",
+                ),
+              );
+            }, SERVER_CLOSE_TIMEOUT_MS).unref();
           }),
         ]);
       } catch (error) {

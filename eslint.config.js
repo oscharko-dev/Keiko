@@ -25,7 +25,12 @@ const sonarCompatibilityPlugin = {
             // ("...in a fractional numeric literal") does not even describe.
             const fractionStart = source.indexOf(".");
             if (fractionStart === -1) return;
-            if (!source.slice(fractionStart + 1).includes("_")) return;
+            // The exponent is not the fractional part either: `1.0e1_0` groups digits in the
+            // EXPONENT and its fraction is a bare `0`. Flagging it repeated the original mistake
+            // one field over — the message would name a fractional separator that is not there
+            // (review finding on #3159). Cut at the exponent marker before testing.
+            const fraction = source.slice(fractionStart + 1).split(/[eE]/u)[0];
+            if (!fraction.includes("_")) return;
             context.report({ messageId: "forbidden", node });
           },
         };

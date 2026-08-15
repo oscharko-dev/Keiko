@@ -116,6 +116,80 @@ describe("runAuditCli", () => {
     expect(audited?.replaceAll("\\", "/")).toBe("/home/operator/.keiko");
   });
 
+  // Review findings on #3159: the guard branches below were all reachable and none was covered.
+  it("rejects an empty --state-dir value as a usage error", async () => {
+    const c = makeIo();
+    expect(await runAuditCli(["local-state", "--state-dir", ""], c.io, env)).toBe(2);
+    expect(c.err()).toContain("keiko audit local-state");
+  });
+
+  it("fails closed on an empty auditor path, same as an unset one", async () => {
+    const c = makeIo();
+    const code = await runAuditCli(["local-state"], c.io, { KEIKO_LOCAL_STATE_AUDITOR: "" });
+    expect(code).toBe(1);
+    expect(c.err()).toContain("KEIKO_LOCAL_STATE_AUDITOR");
+    expect(c.out()).toBe("");
+  });
+
+  it("refuses a module that does not export auditLocalState", async () => {
+    const c = makeIo();
+    const code = await runAuditCli(["local-state"], c.io, env, {
+      loadAuditor: () => Promise.resolve({} as never),
+    });
+    expect(code).toBe(1);
+    expect(c.err()).toContain("does not export");
+    expect(c.out()).toBe("");
+  });
+
+  it.each([
+    ["a non-boolean ok", { ok: "yes", stateDir: "/x", classes: [] }],
+    ["a missing classes array", { ok: true, stateDir: "/x" }],
+    ["a malformed class entry", { ok: true, stateDir: "/x", classes: [{ title: 1 }] }],
+    ["a non-object result", "clean"],
+  ])("refuses a result with %s rather than reporting a verdict", async (_label, malformed) => {
+    const c = makeIo();
+    const code = await runAuditCli(["local-state"], c.io, env, {
+      loadAuditor: () => Promise.resolve({ auditLocalState: () => malformed } as never),
+    });
+    // A truthy non-boolean `ok` used to print PASS — the one command whose job is proving the
+    // at-rest claims announcing a clean tree it never read.
+    expect(code).toBe(1);
+    expect(c.err()).toContain("cannot read");
+    expect(c.out()).toBe("");
+  });
+
+  it("audits KEIKO_STATE_DIR when the operator moved the state tree", async () => {
+    const c = makeIo();
+    let audited: string | undefined;
+    const loadAuditor = (): Promise<{ auditLocalState: (stateDir: string) => typeof HEALTHY }> =>
+      Promise.resolve({
+        auditLocalState: (stateDir: string) => {
+          audited = stateDir;
+          return HEALTHY;
+        },
+      });
+
+    await runAuditCli(
+      ["local-state"],
+      c.io,
+      { ...env, KEIKO_STATE_DIR: "/srv/keiko-state" },
+      {
+        cwd: "/home/operator",
+        loadAuditor,
+      },
+    );
+    expect(audited).toBe("/srv/keiko-state");
+
+    // An explicit --state-dir still wins over the environment.
+    await runAuditCli(
+      ["local-state", "--state-dir", "/tmp/explicit"],
+      c.io,
+      { ...env, KEIKO_STATE_DIR: "/srv/keiko-state" },
+      { cwd: "/home/operator", loadAuditor },
+    );
+    expect(audited).toBe("/tmp/explicit");
+  });
+
   it("fails closed when the auditor module cannot be loaded", async () => {
     const c = makeIo();
     const code = await runAuditCli(["local-state"], c.io, env, {

@@ -99,6 +99,36 @@ function importAuditor(specifier: string): Promise<AuditorModule> {
   return import(specifier) as Promise<AuditorModule>;
 }
 
+/**
+ * The auditor is loaded by path at runtime, so its shape is an assumption until checked. A missing
+ * `classes` array made renderReport throw, and a truthy non-boolean `ok` reported PASS — the one
+ * command whose whole job is proving the at-rest claims would have announced a clean tree on
+ * malformed input (review finding on #3159). Validated rather than cast.
+ */
+function isStringArray(value: unknown): boolean {
+  return Array.isArray(value) && (value as readonly unknown[]).every((s) => typeof s === "string");
+}
+
+function isAuditClass(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.title === "string" &&
+    typeof record.status === "string" &&
+    isStringArray(record.findings)
+  );
+}
+
+function asAuditResult(value: unknown): AuditResult | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.ok !== "boolean") return undefined;
+  if (typeof record.stateDir !== "string") return undefined;
+  if (!Array.isArray(record.classes)) return undefined;
+  if (!(record.classes as readonly unknown[]).every(isAuditClass)) return undefined;
+  return value as AuditResult;
+}
+
 async function runLocalStateAudit(
   stateDir: string,
   auditorPath: string,
@@ -108,8 +138,24 @@ async function runLocalStateAudit(
   const load = deps.loadAuditor ?? importAuditor;
   let result: AuditResult;
   try {
-    const auditor = await load(pathToFileURL(auditorPath).href);
-    result = auditor.auditLocalState(stateDir);
+    const auditor: unknown = await load(pathToFileURL(auditorPath).href);
+    const audit = (auditor as Partial<AuditorModule> | null)?.auditLocalState;
+    if (typeof audit !== "function") {
+      io.err(
+        "keiko audit: the module at the configured auditor path does not export " +
+          "auditLocalState; the installation is incomplete or the path is wrong.\n",
+      );
+      return 1;
+    }
+    const validated = asAuditResult(audit(stateDir));
+    if (validated === undefined) {
+      io.err(
+        "keiko audit: the auditor returned a result this CLI cannot read. Refusing to report a " +
+          "verdict rather than guess one.\n",
+      );
+      return 1;
+    }
+    result = validated;
   } catch (error) {
     io.err(
       `keiko audit: local-state audit could not run — ${
@@ -156,6 +202,15 @@ export async function runAuditCli(
     return 1;
   }
 
-  const stateDir = parsed.stateDir ?? join(deps.cwd ?? process.cwd(), ".keiko");
+  // KEIKO_STATE_DIR is where the product actually keeps its state when the operator moved it, so
+  // defaulting to <cwd>/.keiko while that is set audits a directory the runtime does not use —
+  // and a PASS on the wrong tree is worse than no answer (review finding on #3159). An explicit
+  // --state-dir still wins over both.
+  const configuredStateDir = env.KEIKO_STATE_DIR;
+  const defaultStateDir =
+    configuredStateDir !== undefined && configuredStateDir !== ""
+      ? configuredStateDir
+      : join(deps.cwd ?? process.cwd(), ".keiko");
+  const stateDir = parsed.stateDir ?? defaultStateDir;
   return runLocalStateAudit(stateDir, auditorPath, io, deps);
 }

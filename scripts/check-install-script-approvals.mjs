@@ -95,19 +95,26 @@ export function findInstallScriptApprovalProblems(
   reviewed = REVIEWED_INSTALL_SCRIPTS,
 ) {
   const allowScripts = manifest.allowScripts ?? {};
+  // Keyed by name@version, not name. A Map keyed by name alone collapses two entries for the same
+  // package at different lockfile paths — `node_modules/pkg` and `node_modules/other/node_modules/
+  // pkg` — so one of the two versions vanished before validation. In a supply-chain gate that is
+  // the wrong direction to lose information in: the surviving entry could be the reviewed one while
+  // an unreviewed transitive copy went unmentioned (review finding on #3159).
   const locked = new Map();
   for (const [lockPath, entry] of Object.entries(lock.packages ?? {})) {
     if (entry.hasInstallScript !== true) continue;
-    locked.set(packageNameFromLockPath(lockPath), entry.version);
+    const name = packageNameFromLockPath(lockPath);
+    locked.set(`${name}@${entry.version}`, { name, version: entry.version });
   }
+  const lockedNames = new Set([...locked.values()].map((entry) => entry.name));
 
   const problems = [];
-  for (const [name, version] of locked) {
+  for (const { name, version } of locked.values()) {
     problems.push(...problemsForLockedPackage(name, version, reviewed.get(name), allowScripts));
   }
 
   for (const name of reviewed.keys()) {
-    if (!locked.has(name)) {
+    if (!lockedNames.has(name)) {
       problems.push(
         `${name} is recorded as a reviewed install-script package but no longer appears in the ` +
           "lockfile with an install script. Remove its entry so the record stays honest.",

@@ -42,6 +42,19 @@ describe("local Sonar compatibility preflight", () => {
     expect(await lint("const budgetMs = 1_500_000.5;\n")).toEqual([]);
   }, 45_000);
 
+  it("accepts a digit separator in the exponent", async () => {
+    // `1.0e1_0`'s fraction is a bare `0`; the separator groups the exponent. Flagging it repeated
+    // the original mistake one field over (review finding on #3159).
+    expect(await lint("const scaled = 1.0e1_0;\n")).toEqual([]);
+    expect(await lint("const alsoScaled = 1.5E1_0;\n")).toEqual([]);
+  }, 45_000);
+
+  it("still rejects a fractional separator that also carries an exponent", async () => {
+    expect(await lint("const epsilon = 1.234_5e10;\n")).toContainEqual(
+      expect.objectContaining({ ruleId: "keiko-sonar/no-fractional-numeric-separators" }),
+    );
+  }, 45_000);
+
   it("still rejects a separator in the fractional part of a grouped literal", async () => {
     expect(await lint("const ratio = 1_000.000_001;\n")).toContainEqual(
       expect.objectContaining({ ruleId: "keiko-sonar/no-fractional-numeric-separators" }),

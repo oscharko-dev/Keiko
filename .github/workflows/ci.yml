@@ -912,6 +912,9 @@ jobs:
       - name: Workspace SBOM and license gate (Issue #169 AC4)
         run: npm run check:workspace-supply-chain
       - name: Third-party install-script approvals (KEIKO-0314)
+        # Reads two local JSON files with Node builtins and makes no network call, so this bounds a
+        # stall rather than a download; without it the job's own limit is the only ceiling.
+        timeout-minutes: 1
         # .npmrc's strict-allow-scripts already fails `npm ci` closed on an unapproved script, but
         # only for what resolves on THIS runner, and npm 11.16.0 ignores a pinned name@version key
         # for unrs-resolver so its approval has to be unpinned — which would bless any future
