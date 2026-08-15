@@ -105,6 +105,34 @@ describe("runCli", () => {
     expect(c.out()).toContain("Keiko doctor");
   });
 
+  // KEIKO-0230: the local-state audit was reachable only through `npm run audit:local-state`, which
+  // needs the monorepo. The audience with a ~/.keiko tree to audit is exactly the audience without
+  // it, so the compensating control the at-rest contract names was unreachable by everyone who
+  // needed it. These pin the dispatch entry and the help line that make it reachable.
+  it("lists the audit subcommand in help (KEIKO-0230)", () => {
+    const c = makeIo();
+    const code = runCli(["--help"], c.io);
+    expect(code).toBe(0);
+    expect(c.out()).toContain("keiko audit local-state");
+  });
+
+  it("dispatches audit local-state and fails closed when the auditor is not installed", async () => {
+    const c = makeIo();
+    // No KEIKO_LOCAL_STATE_AUDITOR: a packaged install always sets it from the bin entry, so its
+    // absence means the auditor is genuinely missing. It must say so and exit non-zero rather than
+    // print nothing and return 0 — a silent skip reads as "audited, nothing wrong".
+    const code = await runCli(["audit", "local-state"], c.io, {});
+    expect(code).toBe(1);
+    expect(c.err()).toContain("KEIKO_LOCAL_STATE_AUDITOR");
+  });
+
+  it("rejects an unknown audit subcommand with a usage error", async () => {
+    const c = makeIo();
+    const code = await runCli(["audit", "everything"], c.io, {});
+    expect(code).toBe(2);
+    expect(c.err()).toContain("keiko audit local-state");
+  });
+
   it("lists the launcher subcommand in help (epic #121 child #125)", () => {
     const c = makeIo();
     const code = runCli(["--help"], c.io);

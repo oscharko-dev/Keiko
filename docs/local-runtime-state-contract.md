@@ -207,8 +207,14 @@ It imports only `node:fs` and `node:sqlite`, never decrypts content (every encry
 on-disk sealed markers the product itself writes, so no vault key is required), and never mutates the
 tree.
 
-- `npm run audit:local-state -- --state-dir <path>` — audit an existing `.keiko` tree (default
-  `<cwd>/.keiko`). Maintainer-facing; exit `0` when the posture is healthy, `1` on any finding.
+- `keiko audit local-state --state-dir <path>` — **the operator-facing command.** Audits an existing
+  `.keiko` tree (default `<cwd>/.keiko`); exit `0` when the posture is healthy, `1` on any finding,
+  `2` on a usage error. It ships in the packaged product, so the person who actually has a `.keiko`
+  directory can verify it without a repository checkout — which is the whole point of a compensating
+  control (KEIKO-0230). It runs the same `scripts/lib/local-state-audit.mjs` module described above,
+  not a second implementation.
+- `npm run audit:local-state -- --state-dir <path>` — the same audit from a repository checkout.
+  Maintainer-facing; identical output and exit codes.
 - `npm run check:local-state` — maintainer self-test. It generates a genuinely-encrypted healthy
   fixture and a deliberately drifted one, then asserts the auditor passes the former and detects the
   drift in the latter. The required GitHub `ci` check runs the regression coverage through

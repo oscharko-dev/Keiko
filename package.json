@@ -27,6 +27,7 @@
   },
   "files": [
     "dist",
+    "scripts/lib/local-state-audit.mjs",
     "README.md",
     "LICENSE",
     "NOTICE",
