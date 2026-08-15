@@ -878,13 +878,39 @@ export const ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS = 280;
 // correct here, not a bug to route around. `\p{L}` already covers CJK ideographs and other
 // non-Latin scripts, so this decision is narrower than it first appears: it excludes symbols and
 // emoji specifically, not non-Latin text.
+//
+// KEIKO-0186 P5 (Codex): U+13441 EGYPTIAN HIEROGLYPH FULL BLANK and U+13442 HALF BLANK are `\p{Lo}`
+// (LETTERS) — not Default_Ignorable_Code_Point — and survive stripUnsafeFormatChars, yet render
+// blank on a client with the font. A fifth input class defeated the allowlist for the same reason
+// HANGUL FILLER defeated it under P3: Unicode general categories classify code points, not
+// rendering behaviour, and there is no property meaning "renders blank" to test for. Whether a
+// glyph renders at all further depends on the READER'S fonts, which this contract cannot see —
+// that is not a gap in this enumeration, it is a gap no enumeration can close. So P5 stops treating
+// the predicate as the sole defence:
+//
+//   1. KNOWN_BLANK_LETTER_PATTERN below closes today's specific case (cheap, and it does close
+//      this exact report) — but it is NOT presented as "the fix", because the next blank-glyph
+//      Letter is exactly as unenumerable as this one was before a report named it.
+//   2. The actual fix lives in the UI: ConnectorApprovalsPanel now derives and renders a
+//      content-free CHARACTER COUNT alongside every available preview (see
+//      packages/keiko-ui/.../ConnectorApprovalsPanel.tsx). A preview that looks empty next to "12
+//      characters" is self-evidently suspicious to a human reviewer, and that signal holds for
+//      every future blank code point without this predicate having to predict it. The requirement
+//      was never "classify visibility perfectly" (provably impossible — see above); it is "a human
+//      must never approve content they cannot see without knowing it", which a structural,
+//      content-free signal satisfies even when classification fails. This predicate is now a
+//      heuristic backed by that structural signal, not a complete classifier: a future blank code
+//      point becomes a cosmetic gap (the preview looks like text but is actually invisible glyphs),
+//      not a governed-approval bypass (the reviewer sees the count and can tell either way).
+const KNOWN_BLANK_LETTER_PATTERN = /[\u{13441}\u{13442}]/u;
 const PRESENTABLE_GENERAL_CATEGORY_PATTERN = /[\p{L}\p{N}\p{P}]/u;
 const DEFAULT_IGNORABLE_PATTERN = /\p{Default_Ignorable_Code_Point}/u;
 
 function isPresentableCharacter(character: string): boolean {
   return (
     PRESENTABLE_GENERAL_CATEGORY_PATTERN.test(character) &&
-    !DEFAULT_IGNORABLE_PATTERN.test(character)
+    !DEFAULT_IGNORABLE_PATTERN.test(character) &&
+    !KNOWN_BLANK_LETTER_PATTERN.test(character)
   );
 }
 
@@ -904,10 +930,12 @@ export function isAtlassianContentPreviewUnpresentable(value: string): boolean {
 // does not; this predicate accepts exactly what that stripper already leaves untouched. It also
 // rejects a preview with no character from the {Letter, Number, Punctuation} allowlist —
 // whitespace-only, combining-marks-only, default-ignorable-only (HANGUL FILLER, variation
-// selectors, …), symbol/emoji-only (including U+2800 BRAILLE PATTERN BLANK), or any mix — for the
-// same reason the producer never emits one (see `isAtlassianContentPreviewUnpresentable` above,
-// including the deliberate, documented decision to exclude `\p{S}`/emoji from the allowlist) —
-// the producer and this predicate must agree.
+// selectors, …), symbol/emoji-only (including U+2800 BRAILLE PATTERN BLANK), known-blank-letter-only
+// (U+13441/U+13442 EGYPTIAN HIEROGLYPH FULL/HALF BLANK), or any mix — for the same reason the
+// producer never emits one (see `isAtlassianContentPreviewUnpresentable` above, including the
+// deliberate, documented decision to exclude `\p{S}`/emoji from the allowlist, and the P5 note
+// that this predicate is a heuristic backed by the UI's character-count signal, not a complete
+// classifier) — the producer and this predicate must agree.
 //
 // No runtime capability guard for the `\p{Default_Ignorable_Code_Point}` / `\p{L}` / `\p{N}` /
 // `\p{P}` Unicode property escapes above: this repository's `package.json` pins `engines.node` to

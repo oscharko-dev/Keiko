@@ -778,6 +778,17 @@ describe("write-action route — unpresentable content preview after sanitizatio
     expect(approval.contentPreviewUnavailable).toBeUndefined();
     expect(approval.contentPreview).toBe(done);
   });
+
+  // KEIKO-0186 P5 (Codex): U+13441 EGYPTIAN HIEROGLYPH FULL BLANK and U+13442 HALF BLANK are
+  // Unicode general category Lo (letters) that render blank -- a fifth input class defeating
+  // character-property classification, closed here (KNOWN_BLANK_LETTER_PATTERN) but no longer the
+  // sole defence; see ConnectorApprovalsPanel's character-count signal.
+  it("an all-EGYPTIAN-HIEROGLYPH-BLANK payload is reported unavailable for every text-bearing action", async () => {
+    const blanks = String.fromCodePoint(0x13441) + String.fromCodePoint(0x13442);
+    for (const action of TEXT_BEARING_WRITE_ACTIONS) {
+      await expectUnavailablePreview(action, blanks);
+    }
+  });
 });
 
 // ─── AC3: Full access executes; envelope failures deny with the EXISTING codes ─

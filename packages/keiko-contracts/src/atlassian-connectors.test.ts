@@ -976,6 +976,30 @@ describe("isAtlassianContentPreviewUnpresentable (KEIKO-0186 P1-P4)", () => {
     expect(isAtlassianContentPreviewUnpresentable(withBaseCharPastTheBound)).toBe(false);
     expect(isAtlassianContentPreviewUnpresentable(truncationWindow)).toBe(true);
   });
+
+  // KEIKO-0186 P5 (Codex): U+13441 EGYPTIAN HIEROGLYPH FULL BLANK and U+13442 HALF BLANK are
+  // Unicode general category Lo (LETTERS) -- not Default_Ignorable_Code_Point -- yet render blank
+  // on a client with the font. A fifth input class defeats character-property classification for
+  // the same structural reason HANGUL FILLER did under P3: general category tracks
+  // classification, not rendering, and whether a glyph renders at all depends on the reader's own
+  // fonts besides. This predicate closes today's specific report (KNOWN_BLANK_LETTER_PATTERN,
+  // cheap and narrow) but is no longer the only defence -- see ConnectorApprovalsPanel's
+  // character-count signal, which holds for a blank Letter nobody has reported yet.
+  it("is true for EGYPTIAN HIEROGLYPH FULL BLANK (U+13441) and HALF BLANK (U+13442), alone, repeated, and mixed with each other or whitespace", () => {
+    const fullBlank = String.fromCodePoint(0x13441);
+    const halfBlank = String.fromCodePoint(0x13442);
+    expect(isAtlassianContentPreviewUnpresentable(fullBlank)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(halfBlank)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(fullBlank.repeat(3))).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(fullBlank + halfBlank)).toBe(true);
+    expect(isAtlassianContentPreviewUnpresentable(" " + fullBlank)).toBe(true);
+  });
+
+  it("is false for a real base character alongside an EGYPTIAN HIEROGLYPH BLANK: only one presentable character is required", () => {
+    expect(isAtlassianContentPreviewUnpresentable("Done" + String.fromCodePoint(0x13441))).toBe(
+      false,
+    );
+  });
 });
 
 describe("isSafeAtlassianContentPreview (KEIKO-0186)", () => {
@@ -999,7 +1023,7 @@ describe("isSafeAtlassianContentPreview (KEIKO-0186)", () => {
     ).toBe(true);
   });
 
-  it("rejects empty, overlong, control-character, bidi/zero-width, combining-marks-only, whitespace-only, default-ignorable-only, symbol/emoji-only, and non-string values", () => {
+  it("rejects empty, overlong, control-character, bidi/zero-width, combining-marks-only, whitespace-only, default-ignorable-only, symbol/emoji-only, blank-letter-only, and non-string values", () => {
     expect(isSafeAtlassianContentPreview("")).toBe(false);
     expect(
       isSafeAtlassianContentPreview("x".repeat(ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS + 1)),
@@ -1036,6 +1060,13 @@ describe("isSafeAtlassianContentPreview (KEIKO-0186)", () => {
     // oversight (see isAtlassianContentPreviewUnpresentable's definition for the reasoning).
     expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x2800))).toBe(false);
     expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x1f600))).toBe(false);
+    // KEIKO-0186 P5: EGYPTIAN HIEROGLYPH FULL BLANK (U+13441) and HALF BLANK (U+13442) are
+    // Unicode general category Lo (letters) that render blank -- like HANGUL FILLER, the
+    // allowlist alone would wrongly accept them; KNOWN_BLANK_LETTER_PATTERN is why they are still
+    // rejected. See isAtlassianContentPreviewUnpresentable for why this predicate is now a
+    // heuristic backed by the UI's character-count signal, not the sole defence.
+    expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x13441))).toBe(false);
+    expect(isSafeAtlassianContentPreview(String.fromCodePoint(0x13442))).toBe(false);
     expect(isSafeAtlassianContentPreview(42)).toBe(false);
     expect(isSafeAtlassianContentPreview(null)).toBe(false);
     expect(isSafeAtlassianContentPreview(undefined)).toBe(false);
