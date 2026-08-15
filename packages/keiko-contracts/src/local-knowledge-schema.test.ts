@@ -1217,10 +1217,23 @@ describe("redactPathInDiagnostic", () => {
     );
   });
 
-  it("rewrites a Windows drive prefix to `<drive>/…` and normalises separators", () => {
-    expect(redactPathInDiagnostic("C:\\Users\\victim\\file.txt")).toBe(
-      "<drive>/Users/victim/file.txt",
-    );
+  // KEIKO-1039 follow-on: redactRemainingAbsolutePath's fail-closed collapse was scoped to values
+  // starting with "/", so a drive-masked path — which starts with "<drive>/", not "/" — skipped it
+  // and kept its full directory tail (username, folder layout) verbatim. That is the same leak
+  // class KEIKO-1039 closed for the POSIX/UNC fallback, just left open on the Windows branch. The
+  // basename-only collapse below is the fix; the separate ordering test right after this one pins
+  // the #265 property (a Windows-style HOME still wins over drive masking) so that invariant stays
+  // explicitly asserted rather than only living in the comment above redactPathInDiagnostic.
+  it("rewrites a Windows drive prefix to `<drive>/…`, collapses the tail, and normalises separators", () => {
+    expect(redactPathInDiagnostic("C:\\Users\\victim\\file.txt")).toBe("<drive>/file.txt");
+  });
+
+  it("matches a Windows-style HOME prefix before masking the drive letter (#265 ordering)", () => {
+    expect(
+      redactPathInDiagnostic("C:\\Users\\victim\\docs\\file.txt", {
+        homePrefix: "C:\\Users\\victim",
+      }),
+    ).toBe("~/docs/file.txt");
   });
 
   it("truncates at the first NUL byte", () => {

@@ -149,7 +149,19 @@ function basenameOf(value: string): string {
 // returned byte-for-byte. That leaks filesystem layout, another local account's username, or a
 // volume label into diagnostic text the rest of this package redacts aggressively. Only the final
 // segment survives, mirroring redactCandidate() in keiko-local-knowledge's diagnostic-redactor.
+//
+// A drive-masked path (replaceDrivePrefix's output, "<drive>/…") is the SAME risk class as a
+// non-home POSIX or UNC path, not the safe, identity-preserving "~/…" home rewrite: it still
+// reveals another Windows account's username and full directory layout. It just no longer starts
+// with "/", so it fell through this check unredacted until KEIKO-0302 follow-on closed the gap
+// below. Recognizing that prefix here — rather than collapsing inside replaceDrivePrefix — keeps
+// this function the single place that owns "collapse an absolute path outside home to a basename."
+const DRIVE_MASKED_PREFIX = "<drive>/";
+
 function redactRemainingAbsolutePath(value: string): string {
+  if (value.startsWith(DRIVE_MASKED_PREFIX)) {
+    return `${DRIVE_MASKED_PREFIX}${basenameOf(value.slice(DRIVE_MASKED_PREFIX.length))}`;
+  }
   if (!value.startsWith("/")) return value;
   if (value.startsWith("//")) return `<unc>/${basenameOf(value)}`;
   return `<path>/${basenameOf(value)}`;
