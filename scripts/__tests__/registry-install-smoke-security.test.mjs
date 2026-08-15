@@ -47,6 +47,13 @@ import {
   yarnChildEnv,
 } from "../installable-package-smoke.mjs";
 import { provenancePublishArgs } from "../lib/npm-publish-preflight.mjs";
+import {
+  PINNED_YARN,
+  PINNED_YARN_SHA512,
+  PINNED_YARN_SOURCE_URL,
+  PINNED_YARN_VERSION,
+  pinnedYarnVersionFromLocator,
+} from "../lib/pinned-yarn.mjs";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const ROOT_MANIFEST = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
@@ -127,6 +134,39 @@ function writeVendoredRuntimeFixture(root) {
   const typescriptRoot = join(root, "node_modules", "typescript");
   mkdirSync(typescriptRoot, { recursive: true });
   writeFileSync(join(typescriptRoot, "package.json"), '{"name":"typescript"}\n', "utf8");
+}
+
+function isolatedChildEnv(root, extraEnv = {}) {
+  const sandboxTmp = join(root, "tmp");
+  mkdirSync(sandboxTmp, { recursive: true });
+  return {
+    ...process.env,
+    PATH: `${join(root, "bin")}${delimiter}${process.env.PATH ?? ""}`,
+    TMPDIR: sandboxTmp,
+    TMP: sandboxTmp,
+    TEMP: sandboxTmp,
+    ...extraEnv,
+  };
+}
+
+function runIsolatedSmokeModule(root, source, extraEnv = {}) {
+  return spawnSync(process.execPath, ["--input-type=module", "-e", source], {
+    cwd: ROOT,
+    encoding: "utf8",
+    env: isolatedChildEnv(root, extraEnv),
+    timeout: 15_000,
+  });
+}
+
+function runProvisionPinnedYarnChild(root, extraEnv = {}) {
+  return runIsolatedSmokeModule(
+    root,
+    [
+      'import { provisionPinnedYarnForSetup } from "./scripts/installable-package-smoke.mjs";',
+      "provisionPinnedYarnForSetup();",
+    ].join("\n"),
+    extraEnv,
+  );
 }
 
 describe("registry install smoke security posture", () => {
@@ -1052,6 +1092,7 @@ describe("installable package smoke optional-dependency coverage", () => {
     const cases = [
       [{ stderr: `getaddrinfo ENOTFOUND ${secret}`, stdout: "", signal: null }, /unreachable/u],
       [{ stderr: `EINTEGRITY ${secret}`, stdout: "", signal: null }, /integrity/u],
+      [{ stderr: `Mismatch hashes. Expected ${secret}`, stdout: "", signal: null }, /integrity/u],
       [{ stderr: `401 Unauthorized ${secret}`, stdout: "", signal: null }, /unauthorized/u],
       [{ stderr: "", stdout: `404 Not Found ${secret}`, signal: null }, /not found/u],
       [{ stderr: `weird ${secret}`, stdout: "", signal: null }, /no known class/u],
@@ -1191,6 +1232,28 @@ describe("installable package smoke optional-dependency coverage", () => {
   // The Corepack cache holds an executable Corepack will run, so a predictable shared path is a
   // code-execution surface, not merely a data one: another account could pre-create it with a
   // forged `.corepack` metadata file and binary.
+  it("pins Yarn with a reviewed Corepack integrity locator", () => {
+    const installableSource = readFileSync(
+      join(ROOT, "scripts", "installable-package-smoke.mjs"),
+      "utf8",
+    );
+    const registrySource = readFileSync(
+      join(ROOT, "scripts", "registry-install-smoke.mjs"),
+      "utf8",
+    );
+
+    expect(PINNED_YARN).toBe(`yarn@${PINNED_YARN_VERSION}+sha512.${PINNED_YARN_SHA512}`);
+    expect(PINNED_YARN_SHA512).toMatch(/^[a-f0-9]{128}$/u);
+    expect(PINNED_YARN_SOURCE_URL).toBe(
+      "https://repo.yarnpkg.com/4.9.1/packages/yarnpkg-cli/bin/yarn.js",
+    );
+    expect(pinnedYarnVersionFromLocator(PINNED_YARN)).toBe(PINNED_YARN_VERSION);
+    expect(installableSource).toContain("packageManager: PINNED_YARN");
+    expect(registrySource).toContain("packageManager: PINNED_YARN");
+    expect(installableSource).not.toContain('const PINNED_YARN = "yarn@4.9.1"');
+    expect(registrySource).not.toContain('packageManager: "yarn@4.9.1"');
+  });
+
   it("keeps the Corepack cache private and per-user", () => {
     const dir = corepackCacheDir();
     expect(existsSync(dir)).toBe(true);
@@ -1237,6 +1300,107 @@ describe("installable package smoke optional-dependency coverage", () => {
       expect(inherited.HOME).toBe("/real/home");
     } finally {
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the Corepack cache key and lookup stable across a hash change", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-corepack-cache-key-test-"));
+    const alternateHashLocator = `yarn@${PINNED_YARN_VERSION}+sha512.${"0".repeat(128)}`;
+    try {
+      const result = runIsolatedSmokeModule(
+        root,
+        [
+          'import { mkdirSync } from "node:fs";',
+          'import { join } from "node:path";',
+          "import { corepackCacheDir, isPinnedYarnCached } from './scripts/installable-package-smoke.mjs';",
+          "import { PINNED_YARN, PINNED_YARN_VERSION } from './scripts/lib/pinned-yarn.mjs';",
+          `const alternate = ${JSON.stringify(alternateHashLocator)};`,
+          "const originalDir = corepackCacheDir(PINNED_YARN);",
+          "const alternateDir = corepackCacheDir(alternate);",
+          "mkdirSync(join(originalDir, 'v1', 'yarn', PINNED_YARN_VERSION), { recursive: true });",
+          "console.log(JSON.stringify({",
+          "  sameDir: originalDir === alternateDir,",
+          "  originalCached: isPinnedYarnCached(PINNED_YARN),",
+          "  alternateCached: isPinnedYarnCached(alternate),",
+          "}));",
+        ].join("\n"),
+      );
+      const outcome = JSON.parse(result.stdout);
+
+      expect(result.status).toBe(0);
+      expect(outcome).toEqual({
+        sameDir: true,
+        originalCached: true,
+        alternateCached: true,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("provisions the integrity-pinned Yarn locator on a cold Corepack cache", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-corepack-cold-cache-test-"));
+    const binDir = join(root, "bin");
+    const marker = join(root, "corepack-call.json");
+    mkdirSync(binDir, { recursive: true });
+    try {
+      writeExecutable(
+        join(binDir, "corepack"),
+        [
+          'import { mkdirSync, writeFileSync } from "node:fs";',
+          'import { join } from "node:path";',
+          "writeFileSync(",
+          "  process.env.KEIKO_COREPACK_MARKER,",
+          "  JSON.stringify({",
+          "    argv: process.argv.slice(2),",
+          "    corepackHome: process.env.COREPACK_HOME,",
+          "    network: process.env.COREPACK_ENABLE_NETWORK,",
+          "  }),",
+          "  'utf8',",
+          ");",
+          "mkdirSync(",
+          "  join(process.env.COREPACK_HOME, 'v1', 'yarn', process.env.PINNED_YARN_VERSION),",
+          "  { recursive: true },",
+          ");",
+        ].join("\n"),
+      );
+      const result = runProvisionPinnedYarnChild(root, {
+        KEIKO_COREPACK_MARKER: marker,
+        PINNED_YARN_VERSION,
+      });
+      const record = JSON.parse(readFileSync(marker, "utf8"));
+
+      expect(result.status).toBe(0);
+      expect(record.argv).toEqual(["install", "--global", "--cache-only", PINNED_YARN]);
+      expect(record.corepackHome).toContain(`keiko-corepack-yarn-${PINNED_YARN_VERSION}-`);
+      expect(record.network).toBe("1");
+      expect(result.stdout).toContain(`provision-pinned-yarn: ${PINNED_YARN} cached`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed and redacts Corepack output when the cold download hash mismatches", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-corepack-mismatch-test-"));
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    try {
+      writeExecutable(
+        join(binDir, "corepack"),
+        [
+          'import { writeSync } from "node:fs";',
+          "writeSync(2, 'Mismatch hashes. Expected secret, got tampered\\n');",
+          "process.exit(44);",
+        ].join("\n"),
+      );
+      const result = runProvisionPinnedYarnChild(root);
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("the archive failed its integrity check");
+      expect(result.stderr).not.toContain("Expected secret");
+      expect(result.stderr).not.toContain("tampered");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

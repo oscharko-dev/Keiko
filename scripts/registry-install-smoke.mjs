@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL, URL } from "node:url";
 
+import { PINNED_YARN } from "./lib/pinned-yarn.mjs";
 import rootManifest from "../package.json" with { type: "json" };
 
 const packageSpec =
@@ -137,7 +138,7 @@ async function yarnSmoke() {
       JSON.stringify(
         {
           private: true,
-          packageManager: "yarn@4.9.1",
+          packageManager: PINNED_YARN,
           devDependencies: {
             [rootManifest.name]: rootManifest.version,
           },

@@ -29,6 +29,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import ts from "typescript";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { PINNED_YARN, PINNED_YARN_NAME, pinnedYarnVersionFromLocator } from "./lib/pinned-yarn.mjs";
 import { createStagedPublishPackage } from "./stage-publish-package.mjs";
 
 export const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 600_000;
@@ -1374,15 +1375,15 @@ export async function startLocalRegistry(artifact, vendored) {
  * one. The cache therefore lives at a stable path of its own, keyed by the pinned version so a
  * bump does not reuse the previous tool (#3130).
  */
-export function corepackCacheDir() {
+export function corepackCacheDir(locator = PINNED_YARN) {
   // This directory holds an EXECUTABLE that Corepack will run, so it gets the same fail-closed
   // validation as the vendor seed cache — and it needs it more. A predictable path on a shared
   // POSIX host is pre-creatable by another account, and Corepack trusts a `.corepack` metadata
   // file it finds there and executes the binary it names, networking disabled or not. The uid is
   // part of the name so two accounts never contend for one path in the first place.
   const owner = process.getuid === undefined ? "win" : String(process.getuid());
-  const version = PINNED_YARN.replace(/[^a-zA-Z0-9.]+/gu, "-");
-  const dir = join(tmpdir(), `keiko-corepack-${version}-${owner}`);
+  const version = pinnedYarnVersionFromLocator(locator);
+  const dir = join(tmpdir(), `keiko-corepack-${PINNED_YARN_NAME}-${version}-${owner}`);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   assertPrivateDirectory(dir);
   return dir;
@@ -1442,8 +1443,6 @@ export function yarnChildEnv(registryUrl, baseEnv = process.env, home = undefine
   };
 }
 
-const PINNED_YARN = "yarn@4.9.1";
-
 /**
  * Downloads the pinned Yarn into Corepack's cache if it is not there yet. This is the one network
  * call the smoke may still make, and it is tool provisioning rather than dependency resolution:
@@ -1488,10 +1487,10 @@ export function provisionPinnedYarnForSetup() {
   console.log(`provision-pinned-yarn: ${PINNED_YARN} cached in ${corepackCacheDir()}.`);
 }
 
-function isPinnedYarnCached() {
-  const cache = join(corepackCacheDir(), "v1", "yarn");
+export function isPinnedYarnCached(locator = PINNED_YARN) {
+  const cache = join(corepackCacheDir(locator), "v1", PINNED_YARN_NAME);
   if (!existsSync(cache)) return false;
-  return readdirSync(cache).includes(PINNED_YARN.split("@").at(-1) ?? "");
+  return readdirSync(cache).includes(pinnedYarnVersionFromLocator(locator));
 }
 
 function provisionPinnedYarn(registryUrl, home) {
@@ -1528,7 +1527,7 @@ const PROVISION_FAILURE_CLASSES = [
     label: "the host was unreachable",
   },
   {
-    pattern: /EINTEGRITY|integrity|checksum|hash mismatch/iu,
+    pattern: /EINTEGRITY|integrity|checksum|hash mismatch|mismatch hashes/iu,
     label: "the archive failed its integrity check",
   },
   {
