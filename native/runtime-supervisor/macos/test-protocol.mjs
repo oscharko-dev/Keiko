@@ -154,37 +154,28 @@ function stripDisabledPreprocessorBranches(source) {
   return kept.join("\n");
 }
 
-function stripCCommentsPreservingLiterals(rawSource) {
-  // Order matters: C translation splices `\<newline>` pairs BEFORE preprocessing, so a directive
-  // like `#if \\\n0` becomes `#if 0` at compile time. Running `stripDisabledPreprocessorBranches`
-  // first would miss such continued directives and leave a genuinely-inactive branch visible to
-  // the byte scanner (codex 3792824427 on #3202). Splice first, then strip disabled branches,
-  // then comment-strip.
-  const source = stripDisabledPreprocessorBranches(rawSource.replace(/\\\r?\n/gu, ""));
+// Strip C block and line comments in one pass, preserving string literals verbatim (no
+// interpretation). Throws on unterminated `/* ... */` so a truncated source fails the harness at
+// a named stage instead of silently matching tokens before the unclosed comment.
+function stripCCommentsOnly(rawSource) {
   let out = "";
   let i = 0;
-  while (i < source.length) {
-    const ch = source[i];
-    const next = source[i + 1];
+  while (i < rawSource.length) {
+    const ch = rawSource[i];
+    const next = rawSource[i + 1];
     if (ch === "/" && next === "*") {
-      const end = source.indexOf("*/", i + 2);
-      // Unterminated `/* ... */` never compiles. Returning the partial prefix here would let a
-      // truncated source silently satisfy the source-contract regexes (the tokens before the
-      // unclosed comment would still match). Throw so a malformed input fails the harness at a
-      // named stage instead of passing quietly.
+      const end = rawSource.indexOf("*/", i + 2);
       if (end === -1) throw new Error("unterminated C block comment: no `*/` after opening `/*`");
       out += "  ";
       i = end + 2;
     } else if (ch === "/" && next === "/") {
-      // Line comment CAN end at EOF without a newline; this is valid C, so return the accumulated
-      // output (everything before the `//` is preserved). Unlike the block-comment case, no
-      // token can be silently hidden by a `//` at EOF because everything after is comment text
-      // that the scanner would drop anyway.
-      const end = source.indexOf("\n", i + 2);
+      // Line comment CAN end at EOF without a newline; that is valid C, and no token can be
+      // hidden by a `//` at EOF because everything after is comment text.
+      const end = rawSource.indexOf("\n", i + 2);
       if (end === -1) return out;
       i = end;
     } else if (ch === '"') {
-      const copied = copyStringLiteralVerbatim(source, i, out);
+      const copied = copyStringLiteralVerbatim(rawSource, i, out);
       out = copied.out;
       i = copied.next;
     } else {
@@ -193,6 +184,18 @@ function stripCCommentsPreservingLiterals(rawSource) {
     }
   }
   return out;
+}
+
+// KEIKO-0277 (review-follow-up on 44b9ef9b): C translation phase 3 removes comments BEFORE
+// phase 4 executes preprocessor directives. Running `stripDisabledPreprocessorBranches` on text
+// that still contains comments would interpret a `#else` or `#endif` inside a `/* */` block as
+// a real directive, exposing a following disabled control to the byte scanner. Correct chain:
+//   phase 2 (line splice) → phase 3 (comment strip) → phase 4 (#if 0 strip)
+// String literals are PRESERVED throughout so the negative `\/bin\/sh` assertion still trips on
+// a real `execve("/bin/sh", …)`, and a `// old: execve("/bin/sh")` still gets stripped by the
+// comment pass regardless.
+function stripCCommentsPreservingLiterals(rawSource) {
+  return stripDisabledPreprocessorBranches(stripCCommentsOnly(rawSource.replace(/\\\r?\n/gu, "")));
 }
 
 const rawSource = await readFile(supervisorSource, "utf8");
@@ -288,6 +291,24 @@ assert.equal(
   splicedDirectiveStripped.match(/SHOULD_BE_STRIPPED_BY_SPLICED_IF/u),
   null,
   "line splicing must run BEFORE disabled-branch stripping so `#if \\\\\\n0` is recognised as `#if 0`",
+);
+// KEIKO-0277 (review-follow-up on 44b9ef9b): a `#else` that lives ONLY inside a `/* */` block
+// is invisible to the C preprocessor (translation phase 3 removes comments before phase 4
+// interprets directives). Running disabled-branch stripping on comment-inclusive text would
+// treat that commented `#else` as an early exit from `stripping`, exposing the following
+// disabled control. Proves comment stripping runs BEFORE disabled-branch stripping.
+const commentedElseSample =
+  "int keep(void) { return 1; }\n" +
+  "#if 0\n" +
+  "/* #else */\n" +
+  "STILL_INSIDE_DISABLED_BRANCH();\n" +
+  "#endif\n" +
+  "int live(void) { return 2; }\n";
+const commentedElseStripped = stripCCommentsPreservingLiterals(commentedElseSample);
+assert.equal(
+  commentedElseStripped.match(/STILL_INSIDE_DISABLED_BRANCH/u),
+  null,
+  "comment stripping must run BEFORE disabled-branch stripping so a `#else` inside `/* */` is not seen as a directive",
 );
 
 // KEIKO-0277: Windows-sibling two-mode shape. `--helper <path>` qualifies an exact staged binary

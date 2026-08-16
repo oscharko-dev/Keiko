@@ -1178,6 +1178,54 @@ test("still ignores JSX child conditionals whose branches are only expressions",
   ).toEqual([]);
 });
 
+// KEIKO-0299 (review-follow-up on 44b9ef9b): `{label ?? "Default"}`, `{a || "Fallback"}`,
+// `{ready && "Ready now"}` — the logical-fallback shapes that used to be invisible to both
+// the AST scanner and the per-line fallback.
+test("collects literal operands of `??`, `||`, and `&&` in JSX children", () => {
+  for (const src of [
+    '<span>{label ?? "Default label"}</span>',
+    '<span>{label || "Fallback label"}</span>',
+    '<span>{ready && "Ready now"}</span>',
+  ]) {
+    const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx")
+      .findings.map((f) => f.text)
+      .join(" | ");
+    expect(texts.length).toBeGreaterThan(0);
+  }
+});
+
+// KEIKO-0299 (review-follow-up on 44b9ef9b): user-facing attribute EXPRESSIONS. The per-line
+// pass only sees `aria-label="Copy"`; an `aria-label={cond ? "Copied" : "Copy code block"}` or
+// `title={hasSources ? undefined : "Attach a source…"}` used to be invisible. The AST pass now
+// restricts to the same attribute-name set the per-line policy targets.
+test("collects literals from user-facing attribute value expressions", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<button aria-label={copied ? "Copied" : "Copy code block"}>x</button>',
+    "packages/x/y.tsx",
+  )
+    .findings.map((f) => f.text)
+    .sort();
+  expect(texts).toContain("Copied");
+  expect(texts).toContain("Copy code block");
+});
+
+test("collects a `??` fallback in a user-facing attribute expression", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<div title={label ?? "Attach a source"} />',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Attach a source");
+});
+
+test("still ignores expression values on non-user-facing attributes", () => {
+  expect(
+    untranslatedLiteralsInSource(
+      '<div className={cond ? "primary" : "secondary"} />',
+      "packages/x/y.tsx",
+    ).findings,
+  ).toEqual([]);
+});
+
 // KEIKO-0299 (review-follow-up): multi-line JSX text now collapses intra-node whitespace so a
 // reformat or indentation change does not churn the ratcheted ledger. Same rendered copy, same
 // ledger entry, either shape.

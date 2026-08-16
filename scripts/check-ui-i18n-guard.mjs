@@ -619,6 +619,32 @@ function isJsxExpressionChildOfElement(node) {
   return parent !== undefined && (ts.isJsxElement(parent) || ts.isJsxFragment(parent));
 }
 
+// KEIKO-0299 (review-follow-up on 44b9ef9b): the per-line attribute pass only sees directly
+// quoted values (`aria-label="Copy"`). A user-facing attribute whose value is an EXPRESSION
+// (`aria-label={cond ? "Copied" : "Copy code block"}`, `title={hasSources ? undefined : "Attach"}`,
+// `placeholder={label ?? "Fallback"}`) is invisible to it. The AST pass now collects literals
+// from expression values on THIS specific set of attribute names, reusing the same recursion
+// (`jsxChildExpressionLiteralTexts`) that handles conditional / template / logical shapes for
+// JSX children. The name set matches USER_FACING_ATTRIBUTE_NAME_RE above — same policy, two
+// scanning surfaces.
+const USER_FACING_ATTRIBUTE_NAMES = new Set([
+  "aria-label",
+  "aria-description",
+  "aria-placeholder",
+  "alt",
+  "placeholder",
+  "title",
+  "data-tip",
+]);
+
+function jsxAttributeName(attribute) {
+  const name = attribute.name;
+  if (name === undefined) return null;
+  if (ts.isIdentifier(name)) return name.text;
+  // JsxNamespacedName covers `xml:lang="…"`; we don't scan those.
+  return null;
+}
+
 // `.ts`/`.mts`/`.cts` are parsed as TypeScript so that generic syntax (`<T>`, `ReadonlySet<...>`)
 // is not misread as JSX. Everything else — including the no-filename call path used by the tests —
 // falls back to TSX so an unknown extension does not silently drop JSX text on the floor. The
@@ -628,6 +654,35 @@ function scriptKindForFile(filename) {
   if (typeof filename !== "string") return ts.ScriptKind.TSX;
   if (/\.(ts|mts|cts)$/.test(filename)) return ts.ScriptKind.TS;
   return ts.ScriptKind.TSX;
+}
+
+function jsxTextResult(node, sourceFile) {
+  const text = node.text;
+  if (text.trim().length === 0) return null;
+  const line = ts.getLineAndCharacterOfPosition(sourceFile, node.getStart(sourceFile)).line + 1;
+  return { line, text: text.trim() };
+}
+
+function jsxChildExpressionResults(node, sourceFile) {
+  if (!node.expression || !isJsxExpressionChildOfElement(node)) return [];
+  const expr = node.expression;
+  const line = ts.getLineAndCharacterOfPosition(sourceFile, expr.getStart(sourceFile)).line + 1;
+  return jsxChildExpressionLiteralTexts(expr)
+    .filter((t) => t.length > 0)
+    .map((text) => ({ line, text }));
+}
+
+function jsxAttributeExpressionResults(node, sourceFile) {
+  const name = jsxAttributeName(node);
+  if (name === null || !USER_FACING_ATTRIBUTE_NAMES.has(name)) return [];
+  const initializer = node.initializer;
+  if (initializer === undefined || !ts.isJsxExpression(initializer)) return [];
+  const expr = initializer.expression;
+  if (expr === undefined) return [];
+  const line = ts.getLineAndCharacterOfPosition(sourceFile, expr.getStart(sourceFile)).line + 1;
+  return jsxChildExpressionLiteralTexts(expr)
+    .filter((t) => t.length > 0)
+    .map((text) => ({ line, text }));
 }
 
 function collectJsxTextAndExpressions(source, filename) {
@@ -640,20 +695,12 @@ function collectJsxTextAndExpressions(source, filename) {
   const results = [];
   const visit = (node) => {
     if (ts.isJsxText(node)) {
-      // JsxText carries the raw span, which is what a user sees; trim so pure whitespace between
-      // sibling tags is not flagged (the compiler emits it as one node per gap).
-      const text = node.text;
-      if (text.trim().length > 0) {
-        const line =
-          ts.getLineAndCharacterOfPosition(sourceFile, node.getStart(sourceFile)).line + 1;
-        results.push({ line, text: text.trim() });
-      }
-    } else if (ts.isJsxExpression(node) && node.expression && isJsxExpressionChildOfElement(node)) {
-      const expr = node.expression;
-      const line = ts.getLineAndCharacterOfPosition(sourceFile, expr.getStart(sourceFile)).line + 1;
-      for (const literalText of jsxChildExpressionLiteralTexts(expr)) {
-        if (literalText.length > 0) results.push({ line, text: literalText });
-      }
+      const result = jsxTextResult(node, sourceFile);
+      if (result !== null) results.push(result);
+    } else if (ts.isJsxExpression(node)) {
+      results.push(...jsxChildExpressionResults(node, sourceFile));
+    } else if (ts.isJsxAttribute(node)) {
+      results.push(...jsxAttributeExpressionResults(node, sourceFile));
     }
     ts.forEachChild(node, visit);
   };
@@ -687,12 +734,31 @@ function jsxChildExpressionLiteralTexts(expr) {
       ...jsxChildExpressionLiteralTexts(expr.whenFalse),
     ];
   }
+  if (ts.isBinaryExpression(expr) && isRenderingFallbackOperator(expr.operatorToken.kind)) {
+    return [
+      ...jsxChildExpressionLiteralTexts(expr.left),
+      ...jsxChildExpressionLiteralTexts(expr.right),
+    ];
+  }
   // Unwrap `( ... )` so nested conditionals whose branches carry a parenthesised inner conditional
   // — e.g. `{a ? (b ? "One" : "Two") : "Three"}` — still surface each literal branch.
   if (ts.isParenthesizedExpression(expr)) {
     return jsxChildExpressionLiteralTexts(expr.expression);
   }
   return [];
+}
+
+// KEIKO-0299 (review-follow-up on 44b9ef9b): `{label ?? "Default"}`, `{label || "Fallback"}`,
+// and `{ready && "Ready now"}` are all common user-copy fallback shapes. Each is a
+// BinaryExpression whose right operand (and, for `??` / `||`, the left operand too) can be a
+// rendered user-visible literal. `+`, `&`, arithmetic and comparison operators are not fallback
+// operators and their operands are not rendered as user copy — those stay excluded.
+function isRenderingFallbackOperator(kind) {
+  return (
+    kind === ts.SyntaxKind.QuestionQuestionToken ||
+    kind === ts.SyntaxKind.BarBarToken ||
+    kind === ts.SyntaxKind.AmpersandAmpersandToken
+  );
 }
 
 /**

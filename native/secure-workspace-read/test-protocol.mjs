@@ -340,22 +340,14 @@ function skipStringLiteral(source, start) {
   return i;
 }
 
-// Two scan modes over the same walker:
-//   `stripCommentsAndStrings` — comments blanked, string literal BODIES blanked (both mode both).
-//     Used for every assertion whose subject is a code identifier.
-//   `stripCommentsOnly` — comments blanked, string literals PRESERVED. Used for the two
-//     assertions that observe bytestrings inside `"..."` (WINDOWS_RESERVED_STEMS pass and the
-//     `ascii_name_equals(..., "GLOBALROOT")` check). Reading `nativeSourceRaw` for those
-//     leaves a commented-out `ascii_name_equals(..., "GLOBALROOT")` visible to the assertion —
-//     exactly the regression the comment-stripping fix exists to prevent. This mode closes that
-//     hole while still letting the assertion observe the string literal.
-function scanCSource(rawSource, { stripStringLiterals }) {
-  // Order matters: C translation splices `\<newline>` pairs BEFORE preprocessing, so a directive
-  // like `#if \\\n0` becomes `#if 0` at compile time. Running `stripDisabledPreprocessorBranches`
-  // first would miss such continued directives and leave a genuinely-inactive branch visible to
-  // the byte scanner (codex 3792824427 on #3202). Splice first, then strip disabled branches,
-  // then run the comment/literal walker.
-  const source = stripDisabledPreprocessorBranches(preprocessCLineSplices(rawSource));
+// KEIKO-0417 (review-follow-up on 44b9ef9b): C translation phase 3 removes comments BEFORE
+// phase 4 executes preprocessor directives, so `#else` (or `#if`, `#endif`) inside a `/* */`
+// block is never seen by the preprocessor. Running `stripDisabledPreprocessorBranches` on text
+// that still contains comments would interpret those directives, potentially exiting `stripping`
+// early on a commented `#else` and exposing the following disabled control to the scanner. Strip
+// comments FIRST (preserving string literals), then strip disabled preprocessor branches, then
+// optionally blank string literal bodies. Line splicing runs first of all (translation phase 2).
+function stripCComments(source) {
   let out = "";
   let i = 0;
   while (i < source.length) {
@@ -364,18 +356,15 @@ function scanCSource(rawSource, { stripStringLiterals }) {
     if (ch === "/" && next === "*") {
       const end = source.indexOf("*/", i + 2);
       // Unterminated `/* ... */` never compiles. Returning the partial prefix would let a
-      // truncated source silently satisfy the source-contract regexes on the tokens BEFORE the
-      // unclosed comment. Throw so a malformed input fails the harness at a named stage instead
-      // of passing quietly (KEIKO-0417 review-follow-up on #3202).
+      // truncated source silently satisfy the source-contract regexes on tokens BEFORE the
+      // unclosed comment. Throw so a malformed input fails the harness at a named stage.
       if (end === -1) throw new Error("unterminated C block comment: no `*/` after opening `/*`");
       out += "  ";
       i = end + 2;
       continue;
     }
     if (ch === "/" && next === "/") {
-      // Line comment CAN end at EOF without a trailing newline; return the accumulated output.
-      // Unlike the block-comment case, no token can be silently hidden by a `//` at EOF because
-      // everything after is comment text the scanner would drop anyway.
+      // Line comment CAN end at EOF without a newline; return the accumulated output.
       const end = source.indexOf("\n", i + 2);
       if (end === -1) return out;
       i = end;
@@ -383,7 +372,7 @@ function scanCSource(rawSource, { stripStringLiterals }) {
     }
     if (ch === '"') {
       const after = skipStringLiteral(source, i);
-      out += stripStringLiterals ? '""' : source.slice(i, after);
+      out += source.slice(i, after);
       i = after;
       continue;
     }
@@ -393,12 +382,36 @@ function scanCSource(rawSource, { stripStringLiterals }) {
   return out;
 }
 
+// Post-pass for the `stripCommentsAndStrings` mode: blanks `"..."` bodies so an assertion whose
+// subject is a code identifier cannot be satisfied by that identifier appearing inside a string
+// literal. Runs AFTER `stripCComments` and `stripDisabledPreprocessorBranches`, so it never sees
+// a string that lived only inside a comment or a disabled branch.
+function stripStringLiteralBodies(source) {
+  let out = "";
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '"') {
+      out += '""';
+      i = skipStringLiteral(source, i);
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+// Public composition helpers. Order: splice → strip comments → strip #if 0 → (optional) blank
+// string bodies. This mirrors the C translation phase order (phase 2, 3, 4 respectively).
 function stripCommentsAndStrings(rawSource) {
-  return scanCSource(rawSource, { stripStringLiterals: true });
+  return stripStringLiteralBodies(
+    stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource))),
+  );
 }
 
 function stripCommentsOnly(rawSource) {
-  return scanCSource(rawSource, { stripStringLiterals: false });
+  return stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource)));
 }
 
 async function assertWindowsSourceContract() {
@@ -539,6 +552,24 @@ function assertDisabledPreprocessorBranchesAreStripped() {
     splicedDirective.match(/SHOULD_BE_STRIPPED_BY_SPLICED_IF/u),
     null,
     "line splicing must run BEFORE disabled-branch stripping so `#if \\\\\\n0` is recognised as `#if 0`",
+  );
+  // KEIKO-0417 (review-follow-up on 44b9ef9b): a `#else` that lives ONLY inside a `/* */` block
+  // is invisible to the C preprocessor (translation phase 3 removes comments before phase 4
+  // interprets directives). Running disabled-branch stripping on comment-inclusive text would
+  // treat that commented `#else` as an early exit from `stripping`, exposing the following
+  // disabled control. Proves comment stripping runs BEFORE disabled-branch stripping.
+  const commentedElse = stripCommentsAndStrings(
+    "int keep(void) { return 1; }\n" +
+      "#if 0\n" +
+      "/* #else */\n" +
+      "STILL_INSIDE_DISABLED_BRANCH();\n" +
+      "#endif\n" +
+      "int live(void) { return 2; }\n",
+  );
+  assert.equal(
+    commentedElse.match(/STILL_INSIDE_DISABLED_BRANCH/u),
+    null,
+    "comment stripping must run BEFORE disabled-branch stripping so a `#else` inside `/* */` is not seen as a directive",
   );
 }
 
@@ -724,32 +755,22 @@ function frameHeaderShapeCases(fixture, pathBytes) {
 }
 
 function frameByteValidationCases(fixture, rootBytes, pathBytes) {
-  const nulPath = Buffer.concat([
-    Buffer.from("a", "utf8"),
-    Buffer.of(0x00),
-    Buffer.from("b", "utf8"),
-  ]);
+  // Note: dedicated NUL-byte probes for both root and path used to sit here, but codex 3792855835
+  // on #3202 observed they cannot isolate the `memchr(..., 0, ...)` guards — `valid_utf8`
+  // (secure_workspace_read.c line 48: `if (cp == 0 || ...) return 0`) independently rejects code
+  // point zero, so removing either `memchr` check leaves the request rejected by the UTF-8 check
+  // at the same status 1. Coverage of "NUL is rejected" is already provided by that downstream
+  // interaction; keeping dedicated probes would only misleadingly document a pin they do not
+  // actually isolate. The invalid-UTF-8 cases below DO isolate `valid_utf8` (the sequence
+  // `0xc3, 0x28` contains no NUL, so `memchr` would not reject it — only the UTF-8 continuation
+  // check does). Note preserved so a future contributor does not re-add the false pins.
   return [
-    // Path payloads that violate the well-formedness rules (NUL byte, invalid UTF-8).
     {
-      label: "path contains an interior NUL byte",
-      frame: malformedRequest({ root: fixture, pathBytes: nulPath }),
-    },
-    {
-      label: "path is invalid UTF-8",
+      label: "path is invalid UTF-8 (isolates valid_utf8; no NUL, so memchr would pass)",
       frame: malformedRequest({ root: fixture, pathBytes: Buffer.of(0xc3, 0x28) }),
     },
-    // Root payloads that violate the same rules the path payloads do — the parser rejects both
-    // fields, but only the path side was covered before this pair landed.
     {
-      label: "root contains an interior NUL byte",
-      frame: malformedRequest({
-        rootBytes: Buffer.concat([rootBytes, Buffer.of(0x00), Buffer.from("suffix", "utf8")]),
-        pathBytes,
-      }),
-    },
-    {
-      label: "root is invalid UTF-8",
+      label: "root is invalid UTF-8 (isolates valid_utf8; no NUL, so memchr would pass)",
       frame: malformedRequest({
         rootBytes: Buffer.concat([rootBytes, Buffer.of(0xc3, 0x28)]),
         pathBytes,
