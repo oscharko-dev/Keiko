@@ -1671,6 +1671,33 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(screen.queryByText("Chat not found")).not.toBeInTheDocument();
   });
 
+  it("attempts a bound chat restoration once while the logical session remains unchanged", async () => {
+    const current = chatFixture("chat-current", "Current", 1);
+    const target = chatFixture("chat-target", "Target", 2);
+    chatSessionState.activeChat = current;
+    chatSessionState.chats = [current, target];
+    chatSessionState.loading = false;
+    useChatSessionMock.mockImplementation(() => ({ ...chatSessionState }));
+    const ctx = context();
+    const view = render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: target.id }} ctx={ctx} />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void =>
+      expect(chatSessionState.openChat).toHaveBeenCalledExactlyOnceWith(target),
+    );
+
+    view.rerender(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: target.id }} ctx={ctx} />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void => expect(chatSessionState.openChat).toHaveBeenCalledTimes(1));
+  });
+
   // The honest case stays honest: a conversation trashed from Chat History remains in the list
   // with status "closed", which is the only proof the window has that it really is gone.
   it("still reports a trashed conversation as deleted rather than retargeting", async (): Promise<void> => {

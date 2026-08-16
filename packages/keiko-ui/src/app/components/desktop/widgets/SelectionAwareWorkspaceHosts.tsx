@@ -947,14 +947,13 @@ function useBoundChatRouting(args: {
   );
   const lookupFailed =
     legacyProject.failed || projectRestoreFailed(session, switchingProject, liveTargetPresent);
+  const { chats, loading, openChat } = session;
   useEffect((): void => {
-    if (session.loading || selectionHandoffId !== undefined || chatId === undefined) return;
+    if (loading || selectionHandoffId !== undefined || chatId === undefined) return;
     if (activeTarget?.id === chatId) return;
-    const target = session.chats.find(
-      (chat): boolean => chat.id === chatId && chat.status !== "closed",
-    );
-    if (target !== undefined) void session.openChat(target);
-  }, [activeTarget?.id, chatId, selectionHandoffId, session]);
+    const target = chats.find((chat): boolean => chat.id === chatId && chat.status !== "closed");
+    if (target !== undefined) void openChat(target);
+  }, [activeTarget?.id, chatId, chats, loading, openChat, selectionHandoffId]);
   const targetMissing = boundChatTargetMissing({
     activeTargetId: activeTarget?.id,
     chatId,
