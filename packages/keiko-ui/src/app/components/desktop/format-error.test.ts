@@ -98,10 +98,7 @@ describe("formatUserError", () => {
 
   it("gives the circuit-open code the same friendly bare-code text (KEIKO-0353)", () => {
     expect(
-      formatUserError(
-        new ApiError("GATEWAY_CIRCUIT_OPEN", "GATEWAY_CIRCUIT_OPEN", 503),
-        "Retry",
-      ),
+      formatUserError(new ApiError("GATEWAY_CIRCUIT_OPEN", "GATEWAY_CIRCUIT_OPEN", 503), "Retry"),
     ).toBe(
       "The model gateway is temporarily unavailable while the circuit breaker is open. (GATEWAY_CIRCUIT_OPEN)",
     );

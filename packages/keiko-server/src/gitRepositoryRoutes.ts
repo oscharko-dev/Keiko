@@ -371,6 +371,40 @@ export function classifyCloneOutcome(result: GitProcessResult): RouteResult | nu
   return { status: failure.status, body: errorBody(failure.code, failure.message) };
 }
 
+// KEIKO-0341: map each typed body-validation error to its own distinguishable
+// 400-response, so an operator debugging a failed clone can tell "malformed JSON"
+// from "missing repositoryUrl" from "wrong shape" without the correlation id.
+function bodyValidationErrorResponse(error: unknown): RouteResult | undefined {
+  if (
+    error instanceof MalformedJsonBodyError ||
+    error instanceof NotAnObjectBodyError ||
+    error instanceof MissingFieldError ||
+    error instanceof InvalidFieldTypeError
+  ) {
+    return { status: 400, body: errorBody("BAD_REQUEST", error.message) };
+  }
+  return undefined;
+}
+
+function handleCloneError(ctx: RouteContext, deps: UiHandlerDeps, error: unknown): RouteResult {
+  if (error instanceof BodyTooLargeError) {
+    return { status: 413, body: errorBody("PAYLOAD_TOO_LARGE", "Request body is too large.") };
+  }
+  if (error instanceof UiStoreError) {
+    return {
+      status: error.status,
+      body: errorBody(error.code, redactedErrorMessage(error.message, deps)),
+    };
+  }
+  const typed = bodyValidationErrorResponse(error);
+  if (typed !== undefined) return typed;
+  const correlationId = reportCloneFailure(ctx, deps, error);
+  return {
+    status: 400,
+    body: errorBody("BAD_REQUEST", "The clone request is invalid.", correlationId),
+  };
+}
+
 export function createCloneRepositoryHandler(
   cloneRunner: CloneRepositoryRunner = cloneRepository,
 ): (ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult> {
@@ -399,36 +433,7 @@ export function createCloneRepositoryHandler(
         body: { project: projectWithWorkspaceAvailability(deps.store, project) },
       };
     } catch (error) {
-      if (error instanceof BodyTooLargeError) {
-        return { status: 413, body: errorBody("PAYLOAD_TOO_LARGE", "Request body is too large.") };
-      }
-      if (error instanceof UiStoreError) {
-        return {
-          status: error.status,
-          body: errorBody(error.code, redactedErrorMessage(error.message, deps)),
-        };
-      }
-      // KEIKO-0341: give parse/shape/missing-field/type validation failures pairwise
-      // distinguishable messages so an operator debugging a failed clone can tell
-      // "malformed JSON" from "missing repositoryUrl" from "wrong shape" without
-      // needing the redacted diagnostic correlation id every time.
-      if (error instanceof MalformedJsonBodyError) {
-        return { status: 400, body: errorBody("BAD_REQUEST", error.message) };
-      }
-      if (error instanceof NotAnObjectBodyError) {
-        return { status: 400, body: errorBody("BAD_REQUEST", error.message) };
-      }
-      if (error instanceof MissingFieldError) {
-        return { status: 400, body: errorBody("BAD_REQUEST", error.message) };
-      }
-      if (error instanceof InvalidFieldTypeError) {
-        return { status: 400, body: errorBody("BAD_REQUEST", error.message) };
-      }
-      const correlationId = reportCloneFailure(ctx, deps, error);
-      return {
-        status: 400,
-        body: errorBody("BAD_REQUEST", "The clone request is invalid.", correlationId),
-      };
+      return handleCloneError(ctx, deps, error);
     }
   };
 }

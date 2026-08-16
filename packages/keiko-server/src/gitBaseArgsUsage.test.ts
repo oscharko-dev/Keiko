@@ -18,8 +18,7 @@ const GIT_CALL_SITE_FILES = [
 ] as const;
 
 // Adjacent quoted string literals: "--no-pager"[optional whitespace/comma/newline]"--no-optional-locks".
-const HAND_TYPED_PREFIX =
-  /["']--no-pager["'][\s,]*["']--no-optional-locks["']/u;
+const HAND_TYPED_PREFIX = /["']--no-pager["'][\s,]*["']--no-optional-locks["']/u;
 
 describe("keiko-server never re-hardcodes GIT_BASE_ARGS", () => {
   for (const relative of GIT_CALL_SITE_FILES) {

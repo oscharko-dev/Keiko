@@ -52,8 +52,7 @@ describe("QueueEventSink ring buffer", () => {
     const sub = recordingWriter();
     sink.attach(sub.writer, -1);
     const replayedBytes = sub.events.reduce(
-      (total, replayed) =>
-        total + new TextEncoder().encode(JSON.stringify(replayed)).length,
+      (total, replayed) => total + new TextEncoder().encode(JSON.stringify(replayed)).length,
       0,
     );
     expect(replayedBytes).toBeLessThanOrEqual(maxBytes);

@@ -751,11 +751,7 @@ describe("memory handlers", () => {
     vault.insertMemory(makeMemory("in-enum-1", "archive me", { status: "accepted" }));
 
     const result = await handleArchiveMemory(
-      makeCtx(
-        "/api/memory/in-enum-1/archive",
-        { reason: "user-request" },
-        { id: "in-enum-1" },
-      ),
+      makeCtx("/api/memory/in-enum-1/archive", { reason: "user-request" }, { id: "in-enum-1" }),
       makeDeps({ memoryVault: vault }),
     );
 

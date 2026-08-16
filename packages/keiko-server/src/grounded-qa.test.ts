@@ -565,10 +565,10 @@ describe("buildGroundedGatewayMessages", () => {
     // deriveContextProfileFromCapability so both the exploration and final-answer phases
     // share one budget mechanism.
     const capability = customModelConfig(CHAT_MODEL).capabilities?.[0];
+    if (capability === undefined) throw new Error("expected capability");
     expect(groundedPromptInputTokensForCapability(capability)).toBe(57_904);
-    expect(capability).toBeDefined();
     expect(groundedPromptInputTokensForCapability(capability)).toBe(
-      deriveContextProfileFromCapability(capability!).effectiveInputBudget,
+      deriveContextProfileFromCapability(capability).effectiveInputBudget,
     );
   });
 
@@ -581,11 +581,11 @@ describe("buildGroundedGatewayMessages", () => {
       contextWindow: 0,
       maxOutputTokens: 0,
     }).capabilities?.[0];
-    expect(capability).toBeDefined();
+    if (capability === undefined) throw new Error("expected capability");
     const budget = groundedPromptInputTokensForCapability(capability);
     expect(budget).toBeDefined();
     expect(budget).toBeGreaterThan(0);
-    expect(budget).toBe(deriveContextProfileFromCapability(capability!).effectiveInputBudget);
+    expect(budget).toBe(deriveContextProfileFromCapability(capability).effectiveInputBudget);
   });
 
   it("accepts a model-derived prompt budget override without mutating the pack default", () => {
