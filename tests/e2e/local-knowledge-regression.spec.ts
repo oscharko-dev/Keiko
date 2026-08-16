@@ -1,10 +1,12 @@
 /* eslint-disable max-lines-per-function */
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   copyFileSync,
   existsSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   rmSync,
   statSync,
@@ -13,6 +15,8 @@ import {
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { basename, join } from "node:path";
+import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
+import { evidenceArtifactPath, evidenceScreenshotPath } from "./support/evidence.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 const CORPUS_ROOT =
@@ -24,6 +28,59 @@ const RUN_LEDGER = join(CORPUS_ROOT, "runs", "local-knowledge-regression.jsonl")
 const PASS_COUNT = Number(process.env.KEIKO_LK_REGRESSION_PASSES ?? "5");
 const INCLUDE_LARGE_PDF = process.env.KEIKO_LK_INCLUDE_LARGE_PDF !== "0";
 const MAX_FILE_BYTES = 1024 * 1024 * 1024;
+const GROUNDING_EVIDENCE_ROOT = "docs/design-system/evidence/3184";
+
+const GROUNDING_EVIDENCE_MODES = [
+  {
+    file: "01-dark.png",
+    theme: "dark",
+    contrast: "no-preference",
+    forcedColors: "none",
+    reducedMotion: "no-preference",
+  },
+  {
+    file: "02-light.png",
+    theme: "light",
+    contrast: "no-preference",
+    forcedColors: "none",
+    reducedMotion: "no-preference",
+  },
+  {
+    file: "03-dark-hc.png",
+    theme: "dark",
+    contrast: "more",
+    forcedColors: "none",
+    reducedMotion: "no-preference",
+  },
+  {
+    file: "04-light-hc.png",
+    theme: "light",
+    contrast: "more",
+    forcedColors: "none",
+    reducedMotion: "no-preference",
+  },
+  {
+    file: "05-prefers-contrast.png",
+    theme: "dark",
+    contrast: "more",
+    forcedColors: "none",
+    reducedMotion: "no-preference",
+  },
+  {
+    file: "06-forced-colors.png",
+    theme: "dark",
+    contrast: "no-preference",
+    forcedColors: "active",
+    reducedMotion: "no-preference",
+  },
+  {
+    file: "07-reduced-motion.png",
+    theme: "dark",
+    contrast: "no-preference",
+    forcedColors: "none",
+    reducedMotion: "reduce",
+  },
+] as const;
 
 interface CapsuleListEntry {
   readonly id: string;
@@ -630,6 +687,72 @@ async function resetWorkspaceState(page: Page): Promise<void> {
   });
 }
 
+async function captureGroundingCatalogEvidence(
+  page: Page,
+  chatWindow: ReturnType<Page["getByRole"]>,
+): Promise<void> {
+  const captures: Array<Record<string, unknown>> = [];
+  const a11yCaptures: Array<Record<string, unknown>> = [];
+  for (const mode of GROUNDING_EVIDENCE_MODES) {
+    await page.emulateMedia({
+      colorScheme: mode.theme,
+      contrast: mode.contrast,
+      forcedColors: mode.forcedColors,
+      reducedMotion: mode.reducedMotion,
+    });
+    await page.evaluate(({ theme, contrast }) => {
+      document.documentElement.dataset.theme = theme;
+      if (contrast === "more") document.documentElement.dataset.hc = "more";
+      else delete document.documentElement.dataset.hc;
+    }, mode);
+    await chatWindow.screenshot({
+      path: evidenceScreenshotPath(`${GROUNDING_EVIDENCE_ROOT}/${mode.file}`),
+    });
+    const violations = await runAxe(
+      page,
+      '.window[data-window-id="local-knowledge-catalog-refresh-chat"]',
+    );
+    const serious = seriousOrCritical(violations);
+    expect(serious, formatViolations(serious)).toEqual([]);
+    captures.push({
+      ...mode,
+      menuHasFreshPod: await page
+        .getByRole("option", { name: "Knowledge Pod: Grounding catalog fresh" })
+        .isVisible(),
+      selectedUnavailable: await page
+        .getByRole("option", { name: "Knowledge Pod (unavailable)" })
+        .count(),
+    });
+    a11yCaptures.push({ file: mode.file, seriousOrCriticalViolations: serious.length });
+  }
+
+  await page.setViewportSize({ width: 560, height: 820 });
+  await chatWindow.screenshot({
+    path: evidenceScreenshotPath(`${GROUNDING_EVIDENCE_ROOT}/08-responsive-560.png`),
+  });
+  const sourceSha256 = createHash("sha256")
+    .update(readFileSync("packages/keiko-ui/src/app/components/desktop/ChatWindow.tsx"))
+    .digest("hex");
+  const proof = {
+    issue: 3184,
+    verdict: "PASS",
+    proofType: "browser-capture-plus-axe-core",
+    sourceSha256,
+    captures,
+    responsive: { file: "08-responsive-560.png", viewport: { width: 560, height: 820 } },
+  };
+  writeFileSync(
+    evidenceArtifactPath(`${GROUNDING_EVIDENCE_ROOT}/grounding-catalog-fidelity-proof.json`),
+    `${JSON.stringify(proof, null, 2)}\n`,
+    "utf8",
+  );
+  writeFileSync(
+    evidenceArtifactPath(`${GROUNDING_EVIDENCE_ROOT}/a11y-proof.json`),
+    `${JSON.stringify({ issue: 3184, verdict: "PASS", captures: a11yCaptures }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
 async function uiCreateCapsule(page: Page, displayName: string): Promise<void> {
   await page.getByRole("button", { name: "Create Knowledge Pod", exact: true }).click();
   const createDialog = page.getByRole("dialog", { name: "Create Knowledge Pod" });
@@ -997,6 +1120,73 @@ test.describe.serial("Local Knowledge full regression campaign", () => {
       includeLargePdf: INCLUDE_LARGE_PDF,
       files: readdirSync(CORPUS_ROOT).sort(),
     });
+  });
+
+  test("refreshes the mounted chat grounding catalog when the picker reopens", async ({
+    page,
+    request,
+  }) => {
+    resetMutableCorpus(corpus);
+    resetLocalKnowledgeDb();
+    await ensureProject(request);
+
+    const initialName = "Grounding catalog initial";
+    const initialId = await createCapsule(request, initialName);
+    await connectFolder(request, initialId, corpus.smallFiles);
+    await indexCapsule(request, initialId);
+    await expectIndexed(request, initialId);
+
+    const chat = await apiJson<{ readonly chat: { readonly id: string; readonly title: string } }>(
+      request,
+      "post",
+      "/api/chats",
+      {
+        projectPath: CORPUS_DATA_ROOT,
+        selectedModel: "e2e-chat-model",
+        title: "Local Knowledge catalog refresh",
+      },
+      201,
+    );
+    await page.addInitScript(
+      ({ chatId, title }) => {
+        window.localStorage.setItem(
+          "keiko.workspace.v4",
+          JSON.stringify([
+            {
+              id: "local-knowledge-catalog-refresh-chat",
+              type: "chat",
+              x: 64,
+              y: 40,
+              w: 900,
+              h: 760,
+              z: 10,
+              cfg: { chatId, title },
+              max: false,
+            },
+          ]),
+        );
+        window.localStorage.removeItem("keiko.conns.v1");
+      },
+      { chatId: chat.chat.id, title: chat.chat.title },
+    );
+    await page.goto("/");
+
+    const chatWindow = page.getByRole("region", { name: "Chat — Local Knowledge catalog refresh" });
+    const grounding = chatWindow.getByLabel("Grounding mode");
+    await grounding.click();
+    await expect(page.getByRole("option", { name: `Knowledge Pod: ${initialName}` })).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    const freshName = "Grounding catalog fresh";
+    const freshId = await createCapsule(request, freshName);
+    await connectFolder(request, freshId, corpus.smallFiles);
+    await indexCapsule(request, freshId);
+    await expectIndexed(request, freshId);
+
+    await grounding.click();
+    await expect(page.getByRole("option", { name: `Knowledge Pod: ${freshName}` })).toBeVisible();
+    await expect(page.getByRole("option", { name: `Knowledge Pod: ${initialName}` })).toBeVisible();
+    await captureGroundingCatalogEvidence(page, chatWindow);
   });
 
   test("runs the persistent Local Knowledge regression plan", async ({ page, request }) => {

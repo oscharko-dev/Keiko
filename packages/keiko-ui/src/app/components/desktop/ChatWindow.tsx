@@ -3558,6 +3558,7 @@ interface ScopeOption {
   readonly label: string;
   readonly badge?: string;
   readonly description?: string;
+  readonly disabled?: boolean;
 }
 
 const UNAVAILABLE_CAPSULE_LABEL = "Knowledge Pod";
@@ -3594,6 +3595,7 @@ function capsuleOptions(
       label: t("chat.grounding.unavailable", {
         label: UNAVAILABLE_CAPSULE_LABEL,
       }),
+      disabled: true,
     },
   ];
 }
@@ -3627,6 +3629,7 @@ function capsuleSetOptions(
       label: t("chat.grounding.unavailable", {
         label: UNAVAILABLE_CAPSULE_SET_LABEL,
       }),
+      disabled: true,
     },
   ];
 }
@@ -3636,7 +3639,9 @@ function capsuleSetOptions(
 interface KnowledgeCatalog {
   readonly capsules: readonly CapsuleListEntry[];
   readonly capsuleSets: readonly CapsuleSetListEntry[];
+  readonly loading: boolean;
   readonly loadError: string | null;
+  readonly refresh: () => void;
 }
 
 interface KnowledgeCatalogSnapshot {
@@ -3710,6 +3715,14 @@ async function loadKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot>
   return knowledgeCatalogPending;
 }
 
+// A grounding-picker reopen is a deliberate catalog lifecycle event, distinct from gateway
+// configuration changes. It bypasses only this read-only catalog's TTL; simultaneous chat windows
+// still share the in-flight request above.
+function refreshKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot> {
+  knowledgeCatalogCache = undefined;
+  return loadKnowledgeCatalogSnapshot();
+}
+
 export function clearKnowledgeCatalogCacheForTests(): void {
   knowledgeCatalogCache = undefined;
   knowledgeCatalogPending = undefined;
@@ -3717,25 +3730,67 @@ export function clearKnowledgeCatalogCacheForTests(): void {
 
 function useKnowledgeCatalog(): KnowledgeCatalog {
   const t = useTranslate();
+  const initialSnapshotRef = useRef<KnowledgeCatalogSnapshot | undefined>(
+    cachedKnowledgeCatalogSnapshot(Date.now()),
+  );
+  const mountedRef = useRef(true);
+  const requestGenerationRef = useRef(0);
   const [snapshot, setSnapshot] = useState<KnowledgeCatalogSnapshot>(
-    cachedKnowledgeCatalogSnapshot(Date.now()) ?? EMPTY_KNOWLEDGE_CATALOG,
+    initialSnapshotRef.current ?? EMPTY_KNOWLEDGE_CATALOG,
+  );
+  const [loading, setLoading] = useState(initialSnapshotRef.current === undefined);
+
+  const applyCatalogSnapshot = useCallback(
+    (load: () => Promise<KnowledgeCatalogSnapshot>): void => {
+      const requestGeneration = requestGenerationRef.current + 1;
+      requestGenerationRef.current = requestGeneration;
+      setLoading(true);
+      // Do not present a cached catalog as current while a deliberate reopen is resolving. Any
+      // active scope is retained by capsuleOptions/capsuleSetOptions as a disabled unavailable row.
+      setSnapshot(EMPTY_KNOWLEDGE_CATALOG);
+      void load().then((next) => {
+        if (!mountedRef.current || requestGeneration !== requestGenerationRef.current) return;
+        setSnapshot(next);
+        setLoading(false);
+      });
+    },
+    [],
   );
 
   useEffect(() => {
-    let cancelled = false;
-    void loadKnowledgeCatalogSnapshot().then((next) => {
-      if (!cancelled) setSnapshot(next);
-    });
+    if (initialSnapshotRef.current !== undefined) return;
+    applyCatalogSnapshot(loadKnowledgeCatalogSnapshot);
+  }, [applyCatalogSnapshot]);
+
+  useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      cancelled = true;
+      mountedRef.current = false;
+      requestGenerationRef.current += 1;
     };
   }, []);
+
+  const refresh = useCallback((): void => {
+    applyCatalogSnapshot(refreshKnowledgeCatalogSnapshot);
+  }, [applyCatalogSnapshot]);
 
   return {
     capsules: snapshot.capsules,
     capsuleSets: snapshot.capsuleSets,
+    loading,
     loadError: snapshot.loadError === null ? null : formatScopeUpdateError(snapshot.loadError, t),
+    refresh,
   };
+}
+
+const SELECTABLE_CAPSULE_SET_READINESS: ReadonlySet<string> = new Set(["ready", "degraded"]);
+
+function isSelectableGroundingCapsuleSet(capsuleSet: CapsuleSetListEntry): boolean {
+  const readiness = capsuleSet.knowledgePod?.readiness;
+  return (
+    capsuleSet.capsuleCount > 0 &&
+    (readiness === undefined || SELECTABLE_CAPSULE_SET_READINESS.has(readiness))
+  );
 }
 
 // Extracted from LocalKnowledgeScopeControl's handleChange (SonarCloud S3776) — the "Model only"
@@ -3854,9 +3909,10 @@ function LocalKnowledgeScopeControl({
   readonly connected: boolean;
 }): ReactNode {
   const t = useTranslate();
-  const { capsules, capsuleSets, loadError } = catalog;
+  const { capsules, capsuleSets, loading, loadError, refresh } = catalog;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const hasOpenedRef = useRef(false);
 
   async function handleChange(value: string): Promise<void> {
     setBusy(true);
@@ -3872,12 +3928,22 @@ function LocalKnowledgeScopeControl({
 
   const value = groundedModeValue(chat);
   const capsuleChoices = capsuleOptions(chat, capsules, t);
-  const capsuleSetChoices = capsuleSetOptions(chat, capsuleSets, t);
+  const capsuleSetChoices = capsuleSetOptions(
+    chat,
+    capsuleSets.filter(isSelectableGroundingCapsuleSet),
+    t,
+  );
   // Audit F-12 — a disabled option must say why: without a connected Files source the reason
   // for the greyed-out "Live Files context" entry is otherwise undiscoverable.
   const liveFilesAvailable = hasFolderGroundingScope(chat);
   // C172 — a catalog load failure surfaces here too; an update error wins.
   const displayedError = error ?? loadError;
+  const catalogEmpty = !loading && capsules.length === 0 && capsuleSetChoices.length === 0;
+  const controlsDisabled = busy || loading;
+  const handlePickerOpen = (): void => {
+    if (hasOpenedRef.current) refresh();
+    hasOpenedRef.current = true;
+  };
   // uiux-fix F041 (C178) — classed instead of inline-styled (theme/hover/focus
   // layer lives in globals.css; the select was the shell's only raw UA widget).
   return (
@@ -3886,33 +3952,42 @@ function LocalKnowledgeScopeControl({
       <KeikoSelect
         triggerClassName="scope-grounding-select"
         value={value}
-        disabled={busy}
+        disabled={controlsDisabled}
         ariaLabel={t("chat.grounding.mode")}
         menuTitle={t("chat.grounding.strategy")}
+        onOpen={handlePickerOpen}
         sections={[
           {
             options: [
-              { value: "none", label: t("chat.grounding.modelOnly") },
+              { value: "none", label: t("chat.grounding.modelOnly"), disabled: loading },
               {
                 value: "files",
                 label: t("chat.grounding.liveFiles"),
-                disabled: !liveFilesAvailable,
+                disabled: loading || !liveFilesAvailable,
                 ...(liveFilesAvailable
                   ? {}
                   : { description: t("chat.grounding.liveFilesUnavailableHint") }),
               },
               ...(value === "multi"
-                ? [{ value: "multi", label: t("chat.grounding.multiple"), disabled: true }]
+                ? [
+                    {
+                      value: "multi",
+                      label: t("chat.grounding.multiple"),
+                      disabled: true,
+                    },
+                  ]
                 : []),
               ...capsuleChoices.map((capsule) => ({
                 value: capsule.value,
                 label: capsule.label,
+                disabled: loading || capsule.disabled === true,
                 ...(capsule.badge !== undefined ? { badge: capsule.badge } : {}),
                 ...(capsule.description !== undefined ? { description: capsule.description } : {}),
               })),
               ...capsuleSetChoices.map((capsuleSet) => ({
                 value: capsuleSet.value,
                 label: capsuleSet.label,
+                disabled: loading || capsuleSet.disabled === true,
                 ...(capsuleSet.badge !== undefined ? { badge: capsuleSet.badge } : {}),
                 ...(capsuleSet.description !== undefined
                   ? { description: capsuleSet.description }
@@ -3925,6 +4000,14 @@ function LocalKnowledgeScopeControl({
           void handleChange(next);
         }}
       />
+      {loading ? (
+        <span className="scope-connect-hint" role="status" aria-live="polite">
+          {t("chat.grounding.catalogLoading")}
+        </span>
+      ) : null}
+      {catalogEmpty ? (
+        <span className="scope-connect-hint">{t("chat.grounding.catalogEmpty")}</span>
+      ) : null}
       {displayedError !== null ? (
         <span role="alert" className="scope-connect-error">
           {displayedError}
