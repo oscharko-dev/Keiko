@@ -691,8 +691,8 @@ async function captureGroundingCatalogEvidence(
   page: Page,
   chatWindow: ReturnType<Page["getByRole"]>,
 ): Promise<void> {
-  const captures: Array<Record<string, unknown>> = [];
-  const a11yCaptures: Array<Record<string, unknown>> = [];
+  const captures: Record<string, unknown>[] = [];
+  const a11yCaptures: Record<string, unknown>[] = [];
   for (const mode of GROUNDING_EVIDENCE_MODES) {
     await page.emulateMedia({
       colorScheme: mode.theme,
