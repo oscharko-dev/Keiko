@@ -3897,6 +3897,115 @@ async function applyLocalKnowledgeScopeChange(
   }
 }
 
+function staticGroundingOptions(
+  value: string,
+  loading: boolean,
+  liveFilesAvailable: boolean,
+  t: I18nTranslate,
+): ScopeOption[] {
+  const options: ScopeOption[] = [
+    { value: "none", label: t("chat.grounding.modelOnly"), disabled: loading },
+    {
+      value: "files",
+      label: t("chat.grounding.liveFiles"),
+      disabled: loading || !liveFilesAvailable,
+      ...(liveFilesAvailable ? {} : { description: t("chat.grounding.liveFilesUnavailableHint") }),
+    },
+  ];
+  if (value === "multi") {
+    options.push({
+      value: "multi",
+      label: t("chat.grounding.multiple"),
+      disabled: true,
+    });
+  }
+  return options;
+}
+
+function catalogGroundingOption(option: ScopeOption, loading: boolean): ScopeOption {
+  return loading ? { ...option, disabled: true } : option;
+}
+
+function catalogGroundingOptions(
+  capsuleChoices: readonly ScopeOption[],
+  capsuleSetChoices: readonly ScopeOption[],
+  loading: boolean,
+): ScopeOption[] {
+  return [
+    ...capsuleChoices.map((capsule) => catalogGroundingOption(capsule, loading)),
+    ...capsuleSetChoices.map((capsuleSet) => catalogGroundingOption(capsuleSet, loading)),
+  ];
+}
+
+function GroundingModeSelect({
+  value,
+  loading,
+  disabled,
+  liveFilesAvailable,
+  capsuleChoices,
+  capsuleSetChoices,
+  t,
+  onOpen,
+  onValueChange,
+}: {
+  readonly value: string;
+  readonly loading: boolean;
+  readonly disabled: boolean;
+  readonly liveFilesAvailable: boolean;
+  readonly capsuleChoices: readonly ScopeOption[];
+  readonly capsuleSetChoices: readonly ScopeOption[];
+  readonly t: I18nTranslate;
+  readonly onOpen: () => void;
+  readonly onValueChange: (next: string) => void;
+}): ReactNode {
+  const options = [
+    ...staticGroundingOptions(value, loading, liveFilesAvailable, t),
+    ...catalogGroundingOptions(capsuleChoices, capsuleSetChoices, loading),
+  ];
+  return (
+    <KeikoSelect
+      triggerClassName="scope-grounding-select"
+      value={value}
+      disabled={disabled}
+      ariaLabel={t("chat.grounding.mode")}
+      menuTitle={t("chat.grounding.strategy")}
+      onOpen={onOpen}
+      sections={[{ options }]}
+      onValueChange={onValueChange}
+    />
+  );
+}
+
+function GroundingCatalogStatus({
+  loading,
+  empty,
+  error,
+  t,
+}: {
+  readonly loading: boolean;
+  readonly empty: boolean;
+  readonly error: string | null;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  return (
+    <>
+      {loading ? (
+        <span className="scope-connect-hint" role="status" aria-live="polite">
+          {t("chat.grounding.catalogLoading")}
+        </span>
+      ) : null}
+      {empty ? (
+        <span className="scope-connect-hint">{t("chat.grounding.catalogEmpty")}</span>
+      ) : null}
+      {error !== null ? (
+        <span role="alert" className="scope-connect-error">
+          {error}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
 function LocalKnowledgeScopeControl({
   chat,
   onChatChanged,
@@ -3949,70 +4058,20 @@ function LocalKnowledgeScopeControl({
   return (
     <div className="scope-grounding" data-connected={connected ? "true" : "false"}>
       <span className="scope-grounding-label mono">{t("chat.grounding.label")}</span>
-      <KeikoSelect
-        triggerClassName="scope-grounding-select"
+      <GroundingModeSelect
         value={value}
+        loading={loading}
         disabled={controlsDisabled}
-        ariaLabel={t("chat.grounding.mode")}
-        menuTitle={t("chat.grounding.strategy")}
+        liveFilesAvailable={liveFilesAvailable}
+        capsuleChoices={capsuleChoices}
+        capsuleSetChoices={capsuleSetChoices}
+        t={t}
         onOpen={handlePickerOpen}
-        sections={[
-          {
-            options: [
-              { value: "none", label: t("chat.grounding.modelOnly"), disabled: loading },
-              {
-                value: "files",
-                label: t("chat.grounding.liveFiles"),
-                disabled: loading || !liveFilesAvailable,
-                ...(liveFilesAvailable
-                  ? {}
-                  : { description: t("chat.grounding.liveFilesUnavailableHint") }),
-              },
-              ...(value === "multi"
-                ? [
-                    {
-                      value: "multi",
-                      label: t("chat.grounding.multiple"),
-                      disabled: true,
-                    },
-                  ]
-                : []),
-              ...capsuleChoices.map((capsule) => ({
-                value: capsule.value,
-                label: capsule.label,
-                disabled: loading || capsule.disabled === true,
-                ...(capsule.badge !== undefined ? { badge: capsule.badge } : {}),
-                ...(capsule.description !== undefined ? { description: capsule.description } : {}),
-              })),
-              ...capsuleSetChoices.map((capsuleSet) => ({
-                value: capsuleSet.value,
-                label: capsuleSet.label,
-                disabled: loading || capsuleSet.disabled === true,
-                ...(capsuleSet.badge !== undefined ? { badge: capsuleSet.badge } : {}),
-                ...(capsuleSet.description !== undefined
-                  ? { description: capsuleSet.description }
-                  : {}),
-              })),
-            ],
-          },
-        ]}
         onValueChange={(next) => {
           void handleChange(next);
         }}
       />
-      {loading ? (
-        <span className="scope-connect-hint" role="status" aria-live="polite">
-          {t("chat.grounding.catalogLoading")}
-        </span>
-      ) : null}
-      {catalogEmpty ? (
-        <span className="scope-connect-hint">{t("chat.grounding.catalogEmpty")}</span>
-      ) : null}
-      {displayedError !== null ? (
-        <span role="alert" className="scope-connect-error">
-          {displayedError}
-        </span>
-      ) : null}
+      <GroundingCatalogStatus loading={loading} empty={catalogEmpty} error={displayedError} t={t} />
     </div>
   );
 }
