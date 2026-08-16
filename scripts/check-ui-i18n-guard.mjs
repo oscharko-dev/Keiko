@@ -625,9 +625,16 @@ function isJsxExpressionChildOfElement(node) {
 // `placeholder={label ?? "Fallback"}`) is invisible to it. The AST pass now collects literals
 // from expression values on THIS specific set of attribute names, reusing the same recursion
 // (`jsxChildExpressionLiteralTexts`) that handles conditional / template / logical shapes for
-// JSX children. The name set matches USER_FACING_ATTRIBUTE_NAME_RE above — same policy, two
-// scanning surfaces.
+// JSX children.
+//
+// Names come from BOTH the kebab-case intrinsic-element policy (USER_FACING_ATTRIBUTE_NAME_RE
+// above) AND the camelCase policy custom components use for the same accessible-name roles
+// (LABEL_FIELD_NAME_RE below). Codex 3792890962 on #3202 called out `ariaLabel` on `KeikoSelect`
+// as the concrete case that was missing — the AST scanner had only kebab-case ARIA names, so
+// `ariaLabel={cond ? "Working now" : "Select source"}` slipped past both scanners. The unified
+// set makes the AST policy match the per-line one at parity.
 const USER_FACING_ATTRIBUTE_NAMES = new Set([
+  // Kebab-case (HTML / ARIA on intrinsic elements — matches USER_FACING_ATTRIBUTE_NAME_RE).
   "aria-label",
   "aria-description",
   "aria-placeholder",
@@ -635,6 +642,22 @@ const USER_FACING_ATTRIBUTE_NAMES = new Set([
   "placeholder",
   "title",
   "data-tip",
+  // camelCase (React props on custom components — matches LABEL_FIELD_NAME_RE, extended with
+  // the ARIA-mirroring props components spell in camelCase).
+  "ariaLabel",
+  "ariaDescription",
+  "ariaPlaceholder",
+  "label",
+  "labelText",
+  "description",
+  "desc",
+  "cta",
+  "scope",
+  "group",
+  "menuTitle",
+  "tip",
+  "hint",
+  "summary",
 ]);
 
 function jsxAttributeName(attribute) {
@@ -682,10 +705,8 @@ function jsxAttributeExpressionResults(node, sourceFile) {
 
 function collectJsxTextAndExpressions(source, filename) {
   const kind = scriptKindForFile(filename);
-  const sourceName =
-    typeof filename === "string"
-      ? filename
-      : `<ui-i18n>.${kind === ts.ScriptKind.TSX ? "tsx" : "ts"}`;
+  const syntheticExtension = kind === ts.ScriptKind.TSX ? "tsx" : "ts";
+  const sourceName = typeof filename === "string" ? filename : `<ui-i18n>.${syntheticExtension}`;
   const sourceFile = ts.createSourceFile(sourceName, source, ts.ScriptTarget.Latest, true, kind);
   const results = [];
   const visit = (node) => {
@@ -754,6 +775,11 @@ function jsxChildExpressionLiteralTexts(expr, sourceFile) {
 // and is never rendered, so a literal on the left (`{"Feature enabled" && value}`) is code, not
 // copy, and MUST NOT enter the ledger — otherwise a false ledger entry or unnecessary
 // exemption is required. Coderabbit 3792888551.
+//
+// `+` follows a THIRD pattern (codex 3792890969 on #3202): a JSX child like `{"Welcome back, " +
+// name}` renders the concatenation as user copy, so a literal on either operand IS user-visible
+// and must enter the ledger. Same behaviour as `??` / `||` here — both operands get traversed;
+// the recursion filters non-literal operands to empty results naturally.
 function binaryFallbackLiteralTexts(expr, sourceFile) {
   if (expr.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
     return jsxChildExpressionLiteralTexts(expr.right, sourceFile);
@@ -768,7 +794,8 @@ function isRenderingFallbackOperator(kind) {
   return (
     kind === ts.SyntaxKind.QuestionQuestionToken ||
     kind === ts.SyntaxKind.BarBarToken ||
-    kind === ts.SyntaxKind.AmpersandAmpersandToken
+    kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+    kind === ts.SyntaxKind.PlusToken
   );
 }
 

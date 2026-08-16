@@ -275,8 +275,12 @@ assert.equal(
   "stripCCommentsPreservingLiterals must strip tokens inside `#if 0 ... #endif`",
 );
 assert.ok(
-  disabledIfStripped.includes("keep_before") && disabledIfStripped.includes("keep_after"),
-  "code before/after the outer `#if 0 ... #endif` must survive the strip",
+  disabledIfStripped.includes("keep_before"),
+  "code BEFORE the outer `#if 0 ... #endif` must survive the strip",
+);
+assert.ok(
+  disabledIfStripped.includes("keep_after"),
+  "code AFTER the outer `#if 0 ... #endif` must survive the strip",
 );
 const nestedIfSample =
   "int keep(void) { return 0; }\n" +
@@ -289,8 +293,12 @@ assert.equal(
   "stripCCommentsPreservingLiterals must count nested `#if` inside a `#if 0` block",
 );
 assert.ok(
-  nestedIfStripped.includes("keep") && nestedIfStripped.includes("live"),
-  "code before/after the outer `#if 0 ... #endif` (with nesting) must survive the strip",
+  nestedIfStripped.includes("keep"),
+  "code BEFORE the outer `#if 0 ... #endif` (with nesting) must survive the strip",
+);
+assert.ok(
+  nestedIfStripped.includes("live"),
+  "code AFTER the outer `#if 0 ... #endif` (with nesting) must survive the strip",
 );
 // KEIKO-0277 (review-follow-up on 7c976f77): a `\`-continued directive `#if \\\n0` splices to
 // `#if 0` at C translation phase 2, before preprocessing. Running the disabled-branch strip on

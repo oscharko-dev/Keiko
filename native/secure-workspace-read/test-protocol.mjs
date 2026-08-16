@@ -599,8 +599,12 @@ function assertBasicDisabledIfStrip() {
     "scanCSource must count nested `#if` inside a `#if 0` block",
   );
   assert.ok(
-    nestedIf.includes("keep") && nestedIf.includes("live"),
-    "code before/after the outer `#if 0 ... #endif` must survive the strip",
+    nestedIf.includes("keep"),
+    "code BEFORE the outer `#if 0 ... #endif` must survive the strip",
+  );
+  assert.ok(
+    nestedIf.includes("live"),
+    "code AFTER the outer `#if 0 ... #endif` must survive the strip",
   );
 }
 

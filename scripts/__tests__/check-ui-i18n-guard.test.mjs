@@ -1268,6 +1268,51 @@ test("assigns each attribute-expression branch its own source line", () => {
   expect(byText.get("Copy code block")).toBe(4);
 });
 
+// KEIKO-0299 (review-follow-up on af74e79b): custom components spell accessible-name props in
+// camelCase (`<KeikoSelect ariaLabel="…">`), so the AST attribute pass now recognises both
+// kebab-case ARIA names AND their camelCase equivalents plus the label-field set custom
+// components use for the same role. Codex 3792890962.
+test("collects literals from camelCase user-facing attribute expressions", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<KeikoSelect ariaLabel={busy ? "Working now" : "Select source"} />',
+    "packages/x/y.tsx",
+  )
+    .findings.map((f) => f.text)
+    .sort();
+  expect(texts).toContain("Working now");
+  expect(texts).toContain("Select source");
+});
+
+test("collects literals from `label` and `description` prop expressions on custom components", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<Item label={cond ? "Enabled" : "Disabled"} description={fallback ?? "Long description"} />',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Enabled");
+  expect(texts).toContain("Disabled");
+  expect(texts).toContain("Long description");
+});
+
+// KEIKO-0299 (review-follow-up on af74e79b): a JSX child like `{"Welcome back, " + name}`
+// renders the concatenation as user copy — the literal on either operand IS user-visible and
+// must enter the ledger. Codex 3792890969.
+test("collects literals from `+` string concatenation in JSX children", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{"Welcome back, " + name}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Welcome back,");
+});
+
+test("collects literals on both sides of a JSX child `+`", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{"Hello, " + name + " your account"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Hello,");
+  expect(texts).toContain("your account");
+});
+
 // KEIKO-0299 (review-follow-up): multi-line JSX text now collapses intra-node whitespace so a
 // reformat or indentation change does not churn the ratcheted ledger. Same rendered copy, same
 // ledger entry, either shape.
