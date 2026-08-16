@@ -722,11 +722,12 @@ describe("desktop files browser", () => {
     expect([first, second]).toContain(onDisk.content);
   });
 
-  // Codex review of #3200: omitting both baseVersion and expectedModifiedAt is the documented
-  // forced-save path. Serializing the region must not turn the second forced save into a
-  // STALE_PATH — that would happen if the write still used the pre-lock target, because the
-  // winner's atomic rename changed the inode that snapshot points at.
-  it("allows both forced saves (no concurrency tokens) to complete under the mutex", async () => {
+  // Two chained forced saves (no concurrency tokens) fail closed on the second: the winner's
+  // atomic rename changed the inode the loser's resolved snapshot points at. That is deliberate.
+  // Handing the write the refreshed snapshot instead would make it accept ANY inode now at the
+  // path — including a file an unrelated actor created there after a delete/rename, which this
+  // mutex does not cover — and silently overwrite it. Recoverable STALE_PATH beats a silent clobber.
+  it("fails the second chained forced save closed rather than trusting a replaced inode", async () => {
     const results = await Promise.allSettled([
       writeFilesContent({
         store,
@@ -742,11 +743,10 @@ describe("desktop files browser", () => {
       }),
     ]);
 
-    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(2);
-    const onDisk = await readFilesContent(store, root, "src/app.ts");
-    expect(['export const value = "forced-a";\n', 'export const value = "forced-b";\n']).toContain(
-      onDisk.content,
-    );
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.filter((r) => r.status === "rejected");
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]).toMatchObject({ reason: { status: 409 } });
   });
 
   it("prefers baseVersion over expectedModifiedAt for conflict detection", async () => {

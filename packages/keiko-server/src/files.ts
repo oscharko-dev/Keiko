@@ -1687,15 +1687,24 @@ async function verifyThenWrite(args: {
     throw stalePathError();
   }
   const refreshed: ResolvedTarget = { ...args.target, stats: refreshedStats };
+  // The refreshed stats feed the CONFLICT CHECK only. The write deliberately keeps guarding
+  // against the ORIGINAL resolved identity: assertResolvedTargetStillCurrent compares against
+  // `target.stats`, so handing it the refreshed snapshot would make it accept whatever inode now
+  // sits at the path — including a file an unrelated actor created there after a delete or rename,
+  // which this mutex does not cover — and a tokenless save would silently overwrite it.
+  // The cost is that the second of two chained forced saves fails with STALE_PATH. Fail-closed is
+  // the right side of that trade: a recoverable STALE_PATH beats a silent clobber. Telling
+  // "replaced by a previous holder of this key" apart from "replaced by a stranger" needs per-key
+  // identity tracking; tracked as follow-up on #2901.
   await assertNoWriteConflict(refreshed, args.baseVersion, args.expectedModifiedAt);
   let protection: FilesContentWireResponse["localHistoryProtection"];
   if (args.beforeWrite !== undefined) {
-    const current = await readStableEditableContent(refreshed);
+    const current = await readStableEditableContent(args.target);
     protection = args.beforeWrite(current.content);
   }
   return {
     localHistoryProtection: protection,
-    updatedStats: await writeExistingResolvedFile(refreshed, args.content),
+    updatedStats: await writeExistingResolvedFile(args.target, args.content),
   };
 }
 
