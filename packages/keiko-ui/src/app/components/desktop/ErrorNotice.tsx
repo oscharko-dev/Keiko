@@ -67,15 +67,11 @@ export function ErrorNoticeFromError({
   id,
   onDismiss,
 }: ErrorNoticeProps): ReactNode {
-  // KEIKO-0353: without this the localized notice copy is unreachable at every locale — the
-  // formatter is a plain module, so the active translator has to be handed to it here, at the
-  // component boundary that can call the hook.
-  const t = useTranslate();
   return (
     <ErrorNotice
       id={id}
       className={className}
-      notice={toUserErrorNotice(error, fallback, t)}
+      notice={toUserErrorNotice(error, fallback)}
       onDismiss={onDismiss}
     />
   );
