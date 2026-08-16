@@ -699,7 +699,7 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
       "help me decide",
       "entscheidung treffen",
       "entscheidung vorbereiten",
-      "entscheidung uber",
+      "bereite eine belastbare entscheidung uber",
       "entscheide zwischen",
     ],
     weak: ["recommend", "empfehlung", "option", "tradeoff", "vergleich", "compare"],
