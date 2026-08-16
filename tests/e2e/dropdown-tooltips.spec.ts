@@ -20,6 +20,9 @@ function chatModel(id: string): Record<string, unknown> {
   return {
     id,
     kind: "chat",
+    // #3182: a catalog entry may be chat-capable but unavailable for a conversation until
+    // readiness succeeds. This mock models the ready provider contract used by this journey.
+    conversationReady: true,
     contextWindow: 8192,
     maxOutputTokens: 1024,
     toolCalling: true,
@@ -73,6 +76,16 @@ async function createFreshChatWindow(page: Page): Promise<void> {
     .getByRole("dialog", { name: "New Chat window" })
     .getByRole("button", { name: "Open Chat" })
     .click();
+}
+
+async function runVisibleReadiness(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Settings" }).click();
+  const settings = page.getByRole("region", { name: /^Settings/u });
+  await settings.getByRole("button", { name: "Run readiness check" }).click();
+  await expect(settings.getByText("Working today", { exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
+  await settings.getByRole("button", { name: "Close Settings window" }).click();
 }
 
 async function createProjectFixture(request: APIRequestContext): Promise<() => void> {
@@ -141,6 +154,7 @@ test("fresh chats remain distinct and reopening a model picker refetches its cat
   try {
     await page.goto("/");
     await expect.poll(() => modelRequestCount).toBeGreaterThan(0);
+    await runVisibleReadiness(page);
     await createFreshChatWindow(page);
     await createFreshChatWindow(page);
 
