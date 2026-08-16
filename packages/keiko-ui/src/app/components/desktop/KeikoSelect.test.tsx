@@ -392,15 +392,16 @@ describe("KeikoSelect interactions", () => {
     expect(trigger).toHaveFocus();
   });
 
-  // GEN-UI-A11Y-008 / test-plan #32 — aria-selected must track the roving focus
-  // (activeIndex), and a labelled section must expose role=group with its label so
-  // listbox->option ownership and group semantics survive.
-  it("moves aria-selected with roving focus and exposes labelled sections as named groups", async () => {
+  // GEN-UI-A11Y-008 / test-plan #32 — aria-selected reflects the committed value,
+  // independently of roving focus, and a labelled section exposes role=group with
+  // its label so listbox->option ownership and group semantics survive.
+  it("keeps committed aria-selected stable while roving focus moves through a named group", async () => {
+    const onValueChange = vi.fn();
     render(
       <KeikoSelect
         ariaLabel="Strategy"
         menuTitle="Strategy"
-        onValueChange={vi.fn()}
+        onValueChange={onValueChange}
         sections={sections}
         value="model"
       />,
@@ -419,16 +420,18 @@ describe("KeikoSelect interactions", () => {
     expect(group).toBeInTheDocument();
     expect(group).toContainElement(modelOption);
 
-    // ArrowDown moves the roving focus — aria-selected follows it to the next
-    // enabled option, and the previously selected option clears.
+    // ArrowDown moves roving focus only. It must not announce a new selection
+    // until an explicit Enter, Space, or pointer commit changes the controlled value.
     fireEvent.keyDown(modelOption, { key: "ArrowDown" });
     const filesOption = screen.getByRole("option", { name: "Live Files context" });
     expect(filesOption).toHaveFocus();
-    expect(filesOption).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("option", { name: "Model only" })).toHaveAttribute(
-      "aria-selected",
-      "false",
-    );
+    expect(filesOption).toHaveClass("ksel-option-active");
+    expect(filesOption).toHaveAttribute("aria-selected", "false");
+    expect(modelOption).toHaveAttribute("aria-selected", "true");
+    expect(onValueChange).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(filesOption, { key: "Enter" });
+    expect(onValueChange).toHaveBeenCalledWith("files");
   });
 
   it("ignores disabled triggers and disabled option commits", async () => {
