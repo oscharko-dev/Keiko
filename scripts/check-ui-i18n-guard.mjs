@@ -766,9 +766,18 @@ function jsxChildExpressionLiteralTexts(expr, sourceFile) {
     return text.length > 0 ? [{ line: lineOf(expr), text }] : [];
   }
   if (ts.isTemplateExpression(expr)) {
+    // Head + trailing spans are the template's LITERAL parts.
     const parts = [expr.head.text, ...expr.templateSpans.map((span) => span.literal.text)];
     const combined = parts.join(" ").trim().replace(/\s+/gu, " ");
-    return combined.length > 0 ? [{ line: lineOf(expr), text: combined }] : [];
+    const templateEntry = combined.length > 0 ? [{ line: lineOf(expr), text: combined }] : [];
+    // Each `${…}` substitution can itself contain literals — a common case is
+    // `` `${expanded ? "Collapse" : "Expand"} ${project.name}` ``, where the two branch strings
+    // are user-visible but the template-part scan sees only whitespace between the spans. Codex
+    // 3792964062. Recurse into each span expression the same way we recurse for JSX children.
+    const substitutionEntries = expr.templateSpans.flatMap((span) =>
+      jsxChildExpressionLiteralTexts(span.expression, sourceFile),
+    );
+    return [...templateEntry, ...substitutionEntries];
   }
   if (ts.isConditionalExpression(expr)) {
     return [

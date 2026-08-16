@@ -127,18 +127,40 @@ function copyQuotedVerbatim(source, start, out, quote) {
 // stripping stops — the else branch IS the live code. Non-literal `#if <expr>` and general
 // preprocessor constants are intentionally out of scope: this is not a preprocessor, it targets
 // the specific "disabled code" marker (`#if 0`) that hides tokens from the compiler.
+const PREPROCESSOR_PATTERNS = {
+  OPEN_IF: /^#\s*(?:if|ifdef|ifndef)\b/u,
+  CLOSE_ENDIF: /^#\s*endif\b/u,
+  ELSE_DIRECTIVE: /^#\s*else\b/u,
+  ELIF_DIRECTIVE: /^#\s*elif\b/u,
+  // DISABLED_IF (codex 3792928022 on #3202): `#if 0`, `#if (0)`, `#if 0L` (integer suffixes),
+  // or `#if 0 && FEATURE` (C left-to-right `&&` short-circuits regardless of FEATURE, single
+  // trailing identifier optionally `!`-prefixed).
+  DISABLED_IF: /^#\s*if\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*(?:&&\s+!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u,
+  // `#elif <constant-false>` shares the same pattern with `elif` in place of `if` (codex
+  // 3792964066). Without this, an outer `#elif 1` in a `#if 0 ... #elif 1 ... #endif` ladder was
+  // treated as "still stripping" and the compiler-included branch was dropped from the scan.
+  DISABLED_ELIF:
+    /^#\s*elif\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*(?:&&\s+!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u,
+};
+
+// Advance the stripping state machine for one line while `stripping` is true. Extracted so the
+// outer loop stays under the complexity ceiling.
+function advanceStrippingState(trimmed, depth) {
+  const p = PREPROCESSOR_PATTERNS;
+  if (p.OPEN_IF.test(trimmed)) return { stripping: true, depth: depth + 1 };
+  if (p.CLOSE_ENDIF.test(trimmed)) {
+    return depth === 0 ? { stripping: false, depth: 0 } : { stripping: true, depth: depth - 1 };
+  }
+  if (depth === 0 && p.ELSE_DIRECTIVE.test(trimmed)) return { stripping: false, depth: 0 };
+  // `#elif` at outer depth: keep stripping only if the condition is deterministically false;
+  // otherwise conservatively stop stripping — the compiler may include this branch.
+  if (depth === 0 && p.ELIF_DIRECTIVE.test(trimmed) && !p.DISABLED_ELIF.test(trimmed)) {
+    return { stripping: false, depth: 0 };
+  }
+  return { stripping: true, depth };
+}
+
 function stripDisabledPreprocessorBranches(source) {
-  const OPEN_IF = /^#\s*(?:if|ifdef|ifndef)\b/u;
-  const CLOSE_ENDIF = /^#\s*endif\b/u;
-  const ELSE_DIRECTIVE = /^#\s*else\b/u;
-  // DISABLED_IF (review-follow-up on af74e79b, codex 3792928022): C accepts constant
-  // expressions in `#if`, so a disabled block can appear as `#if 0`, `#if (0)`, `#if 0L`
-  // (integer suffixes `U`, `L`, `LL`, `UL`, `ULL` and their lowercase equivalents), or
-  // `#if 0 && FEATURE` (C left-to-right `&&` short-circuits regardless of FEATURE). The
-  // composite `&&` form is recognised for a SINGLE trailing identifier (optionally `!`-prefixed);
-  // more elaborate constant-expression evaluation stays out of scope.
-  const DISABLED_IF =
-    /^#\s*if\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*(?:&&\s+!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u;
   const lines = source.split("\n");
   const kept = [];
   let stripping = false;
@@ -146,14 +168,12 @@ function stripDisabledPreprocessorBranches(source) {
   for (const line of lines) {
     const trimmed = line.trimStart();
     if (stripping) {
-      if (OPEN_IF.test(trimmed)) depth += 1;
-      else if (CLOSE_ENDIF.test(trimmed)) {
-        if (depth === 0) stripping = false;
-        else depth -= 1;
-      } else if (depth === 0 && ELSE_DIRECTIVE.test(trimmed)) stripping = false;
+      const next = advanceStrippingState(trimmed, depth);
+      stripping = next.stripping;
+      depth = next.depth;
       continue;
     }
-    if (DISABLED_IF.test(trimmed)) {
+    if (PREPROCESSOR_PATTERNS.DISABLED_IF.test(trimmed)) {
       stripping = true;
       depth = 0;
       continue;
@@ -208,31 +228,103 @@ function stripCCommentsOnly(rawSource) {
 // that still contains comments would interpret a `#else` or `#endif` inside a `/* */` block as
 // a real directive, exposing a following disabled control to the byte scanner. Correct chain:
 //   phase 2 (line splice) → phase 3 (comment strip) → phase 4 (#if 0 strip)
-// String literals are PRESERVED throughout so the negative `\/bin\/sh` assertion still trips on
-// a real `execve("/bin/sh", …)`, and a `// old: execve("/bin/sh")` still gets stripped by the
-// comment pass regardless.
+//
+// Two modes over the same pipeline (codex 3792964064 on #3202):
+//  - `stripCCommentsAndStrings` blanks string literal bodies too, so the positive
+//    identifier/call pins (`assert.match`) below cannot be satisfied by an identifier that
+//    happens to appear inside a compiled diagnostic string. Without this, a deleted
+//    `posix_spawn_file_actions_addclose(&actions, 3)` control whose old text remained in a
+//    diagnostic like `"posix_spawn_file_actions_addclose(&actions, 3)"` would still satisfy
+//    the pin — the exact regression the source-only qualification exists to catch.
+//  - `stripCCommentsPreservingLiterals` keeps string bodies verbatim; used ONLY for the
+//    negative shell-string check (`\/bin\/sh` etc.), where a real `execve("/bin/sh", …)`
+//    should still trip. Comment/preprocessor stripping still applies to both modes, so a
+//    commented-out `execve("/bin/sh")` cannot trigger the negative pin either.
+function stripCCommentsAndStrings(rawSource) {
+  return stripStringLiteralBodies(stripCCommentsPreservingLiterals(rawSource));
+}
+
 function stripCCommentsPreservingLiterals(rawSource) {
   return stripDisabledPreprocessorBranches(stripCCommentsOnly(rawSource.replace(/\\\r?\n/gu, "")));
 }
 
+// Blanks `"..."` and `'...'` bodies (leaves the quotes so length is preserved and later
+// scanners still see distinct tokens). `skipCharLiteral`/`skipStringLiteral` are inline below.
+function stripStringLiteralBodies(source) {
+  let out = "";
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '"') {
+      out += '""';
+      i = skipQuoted(source, i, '"');
+      continue;
+    }
+    if (ch === "'") {
+      out += "''";
+      i = skipQuoted(source, i, "'");
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+function skipQuoted(source, start, quote) {
+  let i = start + 1;
+  while (i < source.length) {
+    const c = source[i];
+    if (c === "\\") {
+      i += 2;
+      continue;
+    }
+    if (c === quote) return i + 1;
+    i += 1;
+  }
+  return i;
+}
+
 const rawSource = await readFile(supervisorSource, "utf8");
-const sourceText = stripCCommentsPreservingLiterals(rawSource);
-assert.match(sourceText, /KEIKO_MONITOR_ARM/u);
-assert.match(sourceText, /KEIKO_MONITOR_STOP/u);
-assert.match(sourceText, /KEIKO_MONITOR_ZERO_LIVE/u);
+// String-blanked scan for positive identifier / call pins — a diagnostic string that happens
+// to contain the pinned tokens must NOT satisfy the assertion.
+const codeText = stripCCommentsAndStrings(rawSource);
+// String-preserving scan for the negative shell-string check — a real `execve("/bin/sh", …)`
+// must still trip it. Comments and disabled `#if 0` blocks are stripped from both scans.
+const codeAndLiteralsText = stripCCommentsPreservingLiterals(rawSource);
+assert.match(codeText, /KEIKO_MONITOR_ARM/u);
+assert.match(codeText, /KEIKO_MONITOR_STOP/u);
+assert.match(codeText, /KEIKO_MONITOR_ZERO_LIVE/u);
 // KEIKO-0261: fd 3 and fd 4 are the supervisor's control and response pipes. Closing both in the
 // child's spawn file actions is what keeps the supervised runtime off them — without it the
 // runtime could speak the control protocol to its own supervisor. The qualification fixture never
 // touches those descriptors, so no behavioural test observes this; the source pin is the only
 // thing standing between the boundary and a silent deletion.
-assert.match(sourceText, /posix_spawn_file_actions_addclose\(&actions, 3\)/u);
-assert.match(sourceText, /posix_spawn_file_actions_addclose\(&actions, 4\)/u);
+assert.match(codeText, /posix_spawn_file_actions_addclose\(&actions, 3\)/u);
+assert.match(codeText, /posix_spawn_file_actions_addclose\(&actions, 4\)/u);
 // The non-PATH spawn form: posix_spawn takes an explicit path, so a hostile PATH cannot redirect
-// the launch. The negative below rejects every PATH-searching sibling.
-assert.match(sourceText, /posix_spawn\(/u);
+// the launch. The negative below rejects every PATH-searching sibling — literal-preserving scan
+// so a real `execve("/bin/sh", …)` still trips.
+assert.match(codeText, /posix_spawn\(/u);
 assert.doesNotMatch(
-  sourceText,
+  codeAndLiteralsText,
   /setsid|setpgid|killpg|\/bin\/sh|system\(|posix_spawnp|execvp|execlp|execvP/u,
+);
+
+// Codex 3792964064 negative self-test: a deleted control retained only as text inside a compiled
+// diagnostic string must NOT satisfy the positive pin. Take the real source, replace the fd-3
+// close with an equivalent-shaped STRING literal, and prove the string-blanked scan rejects it.
+// The literal-preserving scan would still see the text and fail this test — proof that the two
+// modes are load-bearing.
+const stringHiddenSource = rawSource.replace(
+  /posix_spawn_file_actions_addclose\(&actions, 3\);/u,
+  '(void)"posix_spawn_file_actions_addclose(&actions, 3)";',
+);
+const stringHiddenBlanked = stripCCommentsAndStrings(stringHiddenSource);
+assert.equal(
+  stringHiddenBlanked.match(/posix_spawn_file_actions_addclose\(&actions, 3\)/u),
+  null,
+  "stripCCommentsAndStrings must not let a compiled diagnostic string satisfy the positive pin",
 );
 
 // KEIKO-0277 (review-follow-up) negative self-test: proves stripCCommentsPreservingLiterals is
@@ -384,6 +476,35 @@ assert.match(
   charLiteralWithSlashSlash,
   /posix_spawn_file_actions_addclose\(&actions, 3\)/u,
   "stripCCommentsPreservingLiterals must not treat `'//'` inside a char literal as a line-comment start",
+);
+
+// Codex 3792964066 (#elif handling): `#if 0 ... #elif 1 ... #endif` — the elif branch is
+// compiler-included, so a control that lives there is LIVE and must be visible to the scan.
+// Before this fix, the scanner treated `#elif` as if it were still part of the disabled block
+// and dropped the live branch through the closing `#endif`.
+const elifWithLiveBranch = stripCCommentsPreservingLiterals(
+  "int keep_before(void) { return 1; }\n" +
+    "#if 0\nDEAD_BRANCH();\n#elif 1\nLIVE_BRANCH_TOKEN();\n#endif\n" +
+    "int keep_after(void) { return 2; }\n",
+);
+assert.match(
+  elifWithLiveBranch,
+  /LIVE_BRANCH_TOKEN/u,
+  "outer-depth `#elif <non-zero>` must stop stripping so the live branch is visible to the scan",
+);
+assert.equal(
+  elifWithLiveBranch.match(/DEAD_BRANCH/u),
+  null,
+  "the disabled `#if 0` half before `#elif` must still be stripped",
+);
+// A `#elif 0` is deterministically false — its branch is dead, keep stripping through it.
+const elifDisabledSample = stripCCommentsPreservingLiterals(
+  "#if 0\nA();\n#elif 0\nSHOULD_BE_STRIPPED_BY_ELIF_ZERO();\n#endif\nint live(void) { return 1; }\n",
+);
+assert.equal(
+  elifDisabledSample.match(/SHOULD_BE_STRIPPED_BY_ELIF_ZERO/u),
+  null,
+  "`#elif 0` at outer depth must keep stripping (its branch is deterministically dead)",
 );
 
 // KEIKO-0277: Windows-sibling two-mode shape. `--helper <path>` qualifies an exact staged binary

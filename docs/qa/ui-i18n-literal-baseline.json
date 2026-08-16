@@ -603,6 +603,8 @@
       "Web search"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/ProjectPanel.tsx": [
+      "Collapse",
+      "Expand",
       "No chats",
       "No registered projects",
       "Projects",

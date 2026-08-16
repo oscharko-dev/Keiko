@@ -1148,6 +1148,28 @@ test("still ignores JSX child template expressions that contain only interpolati
   ).toEqual([]);
 });
 
+// KEIKO-0299 (review-follow-up on 4b557d96): a template expression whose SUBSTITUTIONS contain
+// literals (`` `${expanded ? "Collapse" : "Expand"} ${project.name}` ``) had its branch strings
+// invisible to the ledger — the template-part scan sees only whitespace between the spans. Codex
+// 3792964062. Recurse into each `span.expression` using the same helper so conditionals,
+// templates, and logical fallbacks inside substitutions all surface.
+test("collects literals inside template substitutions", () => {
+  const src = '<span>{`${expanded ? "Collapse" : "Expand"} ${project.name}`}</span>';
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx")
+    .findings.map((f) => f.text)
+    .sort();
+  expect(texts).toContain("Collapse");
+  expect(texts).toContain("Expand");
+});
+
+test("collects a `??` fallback inside a template substitution", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{`Prefix ${label ?? "Fallback label"} suffix`}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Fallback label");
+});
+
 // KEIKO-0299 (review-follow-up on 7c976f77): a ConditionalExpression like
 // `{busyKind === "index" ? "Indexing…" : "Index"}` is the other common JSX-child shape and
 // used to be invisible to both the AST helper (it is neither StringLiteral nor

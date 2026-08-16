@@ -304,12 +304,40 @@ function preprocessCLineSplices(source) {
 // The composite `&&` form is now recognised for a SINGLE trailing identifier (optionally
 // prefixed with `!`). More elaborate constant-expression evaluation stays out of scope: this is
 // deliberately a "disabled code" marker recogniser, not a preprocessor.
+const PREPROCESSOR_PATTERNS = {
+  OPEN_IF: /^#\s*(?:if|ifdef|ifndef)\b/u,
+  CLOSE_ENDIF: /^#\s*endif\b/u,
+  ELSE_DIRECTIVE: /^#\s*else\b/u,
+  ELIF_DIRECTIVE: /^#\s*elif\b/u,
+  DISABLED_IF: /^#\s*if\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*(?:&&\s+!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u,
+  // `#elif <constant-false-condition>` shares the same pattern as `#if 0` (with `elif` instead
+  // of `if`). Codex 3792964066: without this, an outer `#elif 1` in a `#if 0 ... #elif 1 ... #endif`
+  // ladder was treated as "still stripping" and the live branch was dropped from the scan.
+  DISABLED_ELIF:
+    /^#\s*elif\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*(?:&&\s+!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u,
+};
+
+// Advance the stripping state machine for one line while `stripping` is true. Return the new
+// {stripping, depth} pair. Extracted so the outer loop stays under the complexity ceiling.
+function advanceStrippingState(trimmed, depth) {
+  const p = PREPROCESSOR_PATTERNS;
+  if (p.OPEN_IF.test(trimmed)) return { stripping: true, depth: depth + 1 };
+  if (p.CLOSE_ENDIF.test(trimmed)) {
+    return depth === 0 ? { stripping: false, depth: 0 } : { stripping: true, depth: depth - 1 };
+  }
+  if (depth === 0 && p.ELSE_DIRECTIVE.test(trimmed)) return { stripping: false, depth: 0 };
+  // `#elif` at outer depth: keep stripping only if the condition is deterministically false
+  // (`#elif 0`, `#elif 0 && FOO`); otherwise conservatively stop stripping — the compiler may
+  // include this branch. A future contributor can tighten this if needed; a false stop is a
+  // safe direction (we scan too much, no security control is missed) whereas a false continue
+  // would drop live code from the scan.
+  if (depth === 0 && p.ELIF_DIRECTIVE.test(trimmed) && !p.DISABLED_ELIF.test(trimmed)) {
+    return { stripping: false, depth: 0 };
+  }
+  return { stripping: true, depth };
+}
+
 function stripDisabledPreprocessorBranches(source) {
-  const OPEN_IF = /^#\s*(?:if|ifdef|ifndef)\b/u;
-  const CLOSE_ENDIF = /^#\s*endif\b/u;
-  const ELSE_DIRECTIVE = /^#\s*else\b/u;
-  const DISABLED_IF =
-    /^#\s*if\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*(?:&&\s+!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u;
   const lines = source.split("\n");
   const kept = [];
   let stripping = false;
@@ -317,14 +345,12 @@ function stripDisabledPreprocessorBranches(source) {
   for (const line of lines) {
     const trimmed = line.trimStart();
     if (stripping) {
-      if (OPEN_IF.test(trimmed)) depth += 1;
-      else if (CLOSE_ENDIF.test(trimmed)) {
-        if (depth === 0) stripping = false;
-        else depth -= 1;
-      } else if (depth === 0 && ELSE_DIRECTIVE.test(trimmed)) stripping = false;
+      const next = advanceStrippingState(trimmed, depth);
+      stripping = next.stripping;
+      depth = next.depth;
       continue;
     }
-    if (DISABLED_IF.test(trimmed)) {
+    if (PREPROCESSOR_PATTERNS.DISABLED_IF.test(trimmed)) {
       stripping = true;
       depth = 0;
       continue;
@@ -579,6 +605,36 @@ function assertDisabledPreprocessorBranchesAreStripped() {
   assertMultilineCommentBeforeIfPreservesLines();
   assertDisabledIfVariants();
   assertCharLiteralHandling();
+  assertElifBranchHandling();
+}
+
+// Codex 3792964066 (#elif handling): `#if 0 ... #elif 1 ... #endif` — the elif branch is
+// compiler-included, so a control that lives there is LIVE and must be visible to the scan.
+// A `#elif 0` is deterministically false — its branch is dead, keep stripping through it.
+function assertElifBranchHandling() {
+  const elifWithLiveBranch = stripCommentsAndStrings(
+    "int keep_before(void) { return 1; }\n" +
+      "#if 0\nDEAD_BRANCH();\n#elif 1\nLIVE_BRANCH_TOKEN();\n#endif\n" +
+      "int keep_after(void) { return 2; }\n",
+  );
+  assert.match(
+    elifWithLiveBranch,
+    /LIVE_BRANCH_TOKEN/u,
+    "outer-depth `#elif <non-zero>` must stop stripping so the live branch is visible to the scan",
+  );
+  assert.equal(
+    elifWithLiveBranch.match(/DEAD_BRANCH/u),
+    null,
+    "the disabled `#if 0` half before `#elif` must still be stripped",
+  );
+  const elifDisabled = stripCommentsAndStrings(
+    "#if 0\nA();\n#elif 0\nSHOULD_BE_STRIPPED_BY_ELIF_ZERO();\n#endif\nint live(void) { return 1; }\n",
+  );
+  assert.equal(
+    elifDisabled.match(/SHOULD_BE_STRIPPED_BY_ELIF_ZERO/u),
+    null,
+    "`#elif 0` at outer depth must keep stripping (its branch is deterministically dead)",
+  );
 }
 
 function assertBasicDisabledIfStrip() {
