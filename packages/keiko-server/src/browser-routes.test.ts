@@ -12,6 +12,10 @@ import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import { createRunRegistry } from "./runs.js";
 import { createUiServer, UI_HOST } from "./server.js";
+import { EventEmitter } from "node:events";
+import type { ServerResponse } from "node:http";
+import { openBrowserSseStream } from "./browser.js";
+import type { SseBackpressureSignal } from "./sse-write.js";
 import {
   BrowserToolError,
   type BrowserEventEmitter,
@@ -659,5 +663,120 @@ describe("GET /api/browser/sessions/:id/events (SSE)", () => {
       clearTimeout(timeout);
     }
     expect(received).toContain("event: browser:session-closed");
+  });
+});
+
+// KEIKO-0142: browser.ts hand-rolled the write+destroy backpressure check instead of the shared
+// writeOrDestroy helper, so it had no per-connection AbortController, no unsubscribe on a
+// backpressure kill, and no observable signal. Mirrors command-runner-routes.test.ts's block.
+interface FakeSseRes {
+  res: ServerResponse;
+  readonly writes: string[];
+  destroyCount: number;
+  ended: boolean;
+  writeReturns: boolean;
+  readonly emitClose: () => void;
+}
+
+function makeFakeSseRes(): FakeSseRes {
+  const writes: string[] = [];
+  const emitter = new EventEmitter();
+  const state: FakeSseRes = {
+    res: undefined as unknown as ServerResponse,
+    writes,
+    destroyCount: 0,
+    ended: false,
+    writeReturns: true,
+    emitClose: (): void => {
+      emitter.emit("close");
+    },
+  };
+  const res = {
+    writeHead(): ServerResponse {
+      return res as unknown as ServerResponse;
+    },
+    write(chunk: string): boolean {
+      writes.push(chunk);
+      return state.writeReturns;
+    },
+    end(): ServerResponse {
+      state.ended = true;
+      return res as unknown as ServerResponse;
+    },
+    destroy(): void {
+      state.destroyCount += 1;
+    },
+    on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.on(event, listener);
+      return res as unknown as ServerResponse;
+    },
+  };
+  state.res = res as unknown as ServerResponse;
+  return state;
+}
+
+function browserEvent(sessionId: string, kind: string, seq: number): BrowserEventEnvelope {
+  return {
+    schemaVersion: "1",
+    type: `browser:${kind}`,
+    runId: "run-bp",
+    fingerprint: "fp-bp",
+    seq,
+    ts: 1_700_000_000_000,
+    kind,
+    sessionId,
+    payload: { reason: "chrome-disconnected" },
+  } as unknown as BrowserEventEnvelope;
+}
+
+describe("openBrowserSseStream backpressure (KEIKO-0142)", () => {
+  it("aborts, unsubscribes, destroys once, and signals when res.write returns false", () => {
+    const fake = makeFakeSseRes();
+    const manager = new FakeBrowserSessionManager();
+    const signals: SseBackpressureSignal[] = [];
+    fake.writeReturns = false;
+    openBrowserSseStream(
+      fake.res,
+      manager,
+      "session-bp",
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+
+    manager.emit("session-bp", browserEvent("session-bp", "navigated", 1));
+
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.accepted).toBe(false);
+    expect(signals[0]?.frameBytes).toBeGreaterThan(0);
+
+    const writesAfterKill = fake.writes.length;
+    manager.emit("session-bp", browserEvent("session-bp", "navigated", 2));
+    expect(fake.writes).toHaveLength(writesAfterKill);
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+
+    expect(() => {
+      fake.emitClose();
+    }).not.toThrow();
+  });
+
+  it("keeps the session-closed early-return intact while wired to the controller", () => {
+    // The session-closed branch must still unsubscribe and end the response — migrating to
+    // writeOrDestroy must not drop or reorder it.
+    const fake = makeFakeSseRes();
+    const manager = new FakeBrowserSessionManager();
+    openBrowserSseStream(fake.res, manager, "session-close", (value) => value);
+
+    manager.emit("session-close", browserEvent("session-close", "session-closed", 1));
+
+    expect(fake.ended).toBe(true);
+    expect(fake.destroyCount).toBe(0);
+    // Unsubscribed: a further event for the same session produces no additional write.
+    const writesAfterClose = fake.writes.length;
+    manager.emit("session-close", browserEvent("session-close", "navigated", 2));
+    expect(fake.writes).toHaveLength(writesAfterClose);
   });
 });

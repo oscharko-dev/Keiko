@@ -12,6 +12,10 @@ import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import { createRunRegistry } from "./runs.js";
 import { createUiServer, UI_HOST } from "./server.js";
+import { EventEmitter } from "node:events";
+import type { ServerResponse } from "node:http";
+import { openTerminalSseStream } from "./terminal-routes.js";
+import type { SseBackpressureSignal } from "./sse-write.js";
 import {
   TerminalToolError,
   type TerminalEventEmitter,
@@ -478,3 +482,118 @@ describe("GET /api/terminal/events", () => {
 
 // Host-check guard coverage lives in tests/ui/host-check.test.ts (fetch() rewrites the Host
 // header before transmission so an in-process test cannot exercise that path through fetch).
+
+// KEIKO-0142: terminal-routes hand-rolled the write+destroy backpressure check instead of the
+// shared writeOrDestroy helper, so it had no per-connection AbortController, no unsubscribe on a
+// backpressure kill, and no observable signal — a slow-client termination was indistinguishable
+// from an intentional cancel. Mirrors command-runner-routes.test.ts's already-migrated block.
+interface FakeSseRes {
+  res: ServerResponse;
+  readonly writes: string[];
+  destroyCount: number;
+  writeReturns: boolean;
+  readonly emitClose: () => void;
+}
+
+function makeFakeSseRes(): FakeSseRes {
+  const writes: string[] = [];
+  const emitter = new EventEmitter();
+  const state: FakeSseRes = {
+    res: undefined as unknown as ServerResponse,
+    writes,
+    destroyCount: 0,
+    writeReturns: true,
+    emitClose: (): void => {
+      emitter.emit("close");
+    },
+  };
+  const res = {
+    writeHead(): ServerResponse {
+      return res as unknown as ServerResponse;
+    },
+    write(chunk: string): boolean {
+      writes.push(chunk);
+      return state.writeReturns;
+    },
+    end(): ServerResponse {
+      return res as unknown as ServerResponse;
+    },
+    destroy(): void {
+      state.destroyCount += 1;
+    },
+    on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.on(event, listener);
+      return res as unknown as ServerResponse;
+    },
+  };
+  state.res = res as unknown as ServerResponse;
+  return state;
+}
+
+describe("openTerminalSseStream backpressure (KEIKO-0142)", () => {
+  it("aborts, unsubscribes, destroys once, and signals when res.write returns false", () => {
+    const fake = makeFakeSseRes();
+    const manager = new FakeTerminalExecutionManager();
+    const signals: SseBackpressureSignal[] = [];
+    fake.writeReturns = false;
+    openTerminalSseStream(
+      fake.res,
+      manager,
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+
+    manager.emitExternal({
+      kind: "execution-completed",
+      executionId: "exec-bp",
+      payload: { exitCode: 0, durationMs: 1, truncated: false, timedOut: false },
+    } as unknown as TerminalEventEnvelope);
+
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.accepted).toBe(false);
+    expect(signals[0]?.frameBytes).toBeGreaterThan(0);
+
+    // The abort unsubscribed, so a second event produces no further writes or destroys.
+    const writesAfterKill = fake.writes.length;
+    manager.emitExternal({
+      kind: "execution-completed",
+      executionId: "exec-bp-2",
+      payload: { exitCode: 0, durationMs: 1, truncated: false, timedOut: false },
+    } as unknown as TerminalEventEnvelope);
+    expect(fake.writes).toHaveLength(writesAfterKill);
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+
+    // close firing after an abort-driven unsubscribe must not double-unsubscribe or throw.
+    expect(() => {
+      fake.emitClose();
+    }).not.toThrow();
+  });
+
+  it("keeps the normal write path intact when res.write returns true", () => {
+    const fake = makeFakeSseRes();
+    const manager = new FakeTerminalExecutionManager();
+    const signals: SseBackpressureSignal[] = [];
+    openTerminalSseStream(
+      fake.res,
+      manager,
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+
+    manager.emitExternal({
+      kind: "execution-completed",
+      executionId: "exec-ok",
+      payload: { exitCode: 0, durationMs: 1, truncated: false, timedOut: false },
+    } as unknown as TerminalEventEnvelope);
+
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+    expect(fake.writes.length).toBeGreaterThan(1);
+  });
+});
