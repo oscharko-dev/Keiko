@@ -139,6 +139,110 @@ describe("createEntailmentStage — inertness", () => {
     expect(createEntailmentStage(deps, [], "unconfigured-model")).toBeUndefined();
   });
 
+  // KEIKO-0359: going inert used to be entirely silent, so a model whose capability metadata
+  // Gateway Setup never enriched was indistinguishable from one that genuinely cannot do
+  // structured output — and the stage stayed off indefinitely with nothing to act on.
+  it("reports capability-unenriched when the model has no explicit capability entry (KEIKO-0359)", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    // "unconfigured-model" has no config.capabilities entry and is not in the built-in registry,
+    // so findConfiguredCapability serves defaultCapabilityForConfiguredModel's placeholder.
+    const deps = depsWith(portReturning("{}"), (r) => records.push(r));
+    expect(
+      createEntailmentStage(deps, [], "unconfigured-model", { diagnostics: deps.diagnostics }),
+    ).toBeUndefined();
+
+    const inert = records.filter((r) => r.errorClass === "EntailmentStageInert");
+    expect(inert).toHaveLength(1);
+    expect(inert[0]?.message).toBe("capability-unenriched");
+    expect(inert[0]?.source).toBe("grounded.entailment-stage");
+    expect(inert[0]?.correlationId).toBeTruthy();
+  });
+
+  it("distinguishes a genuinely incompatible model from an unenriched one (KEIKO-0359)", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    // Explicitly enriched, but declares no structured-output support — a real incompatibility,
+    // not a configuration gap, so it must NOT be reported as unenriched.
+    const baseCapability = configWithChatModel().capabilities?.[0];
+    if (baseCapability === undefined) throw new Error("expected a base capability");
+    const incompatible = parseGatewayConfig(
+      {
+        providers: [
+          {
+            modelId: "declared-incompatible",
+            baseUrl: "https://fake.example.com/v1",
+            apiKey: "k",
+            capability: {
+              ...baseCapability,
+              id: "declared-incompatible",
+              supportsResponseFormat: false,
+            },
+          },
+        ],
+      },
+      {},
+    );
+    const deps: UiHandlerDeps = {
+      ...depsWith(portReturning("{}"), (r) => records.push(r)),
+      config: incompatible,
+    };
+    expect(
+      createEntailmentStage(deps, [], "declared-incompatible", { diagnostics: deps.diagnostics }),
+    ).toBeUndefined();
+
+    const inert = records.filter((r) => r.errorClass === "EntailmentStageInert");
+    expect(inert).toHaveLength(1);
+    expect(inert[0]?.message).toBe("model-incompatible");
+  });
+
+  it("reports model-port-unavailable for a compatible model with no port (KEIKO-0359)", () => {
+    // The third inert cause: capability is fine, but no ModelPort can be built. Must be
+    // distinguishable from both the unenriched and the incompatible case.
+    const records: ServerDiagnosticRecord[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsWith(portReturning("{}"), (r) => records.push(r)),
+      modelPortFactory: () => undefined,
+    };
+
+    expect(
+      createEntailmentStage(deps, [], MODEL_ID, { diagnostics: deps.diagnostics }),
+    ).toBeUndefined();
+
+    const inert = records.filter((r) => r.errorClass === "EntailmentStageInert");
+    expect(inert).toHaveLength(1);
+    expect(inert[0]?.message).toBe("model-port-unavailable");
+  });
+
+  it("stays inert rather than throwing when the diagnostics sink throws (KEIKO-0359)", () => {
+    // Observability must never break the path it observes: an unhealthy diagnostics backend
+    // must not turn a safely-inert stage into a failed grounded ask.
+    const deps: UiHandlerDeps = {
+      ...depsWith(portReturning("{}")),
+      diagnostics: {
+        record: (): never => {
+          throw new Error("diagnostics backend down");
+        },
+      },
+    };
+
+    expect(() =>
+      createEntailmentStage(deps, [], "unconfigured-model", { diagnostics: deps.diagnostics }),
+    ).not.toThrow();
+    expect(
+      createEntailmentStage(deps, [], "unconfigured-model", { diagnostics: deps.diagnostics }),
+    ).toBeUndefined();
+  });
+
+  it("keeps the inert diagnostic body-free (KEIKO-0359)", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const deps = depsWith(portReturning("{}"), (r) => records.push(r));
+    createEntailmentStage(deps, [], "unconfigured-model", { diagnostics: deps.diagnostics });
+    const serialized = JSON.stringify(records);
+    // The reason code carries the whole signal; no capability payload, endpoint, or key.
+    expect(serialized).not.toContain("fake.example.com");
+    expect(serialized).not.toContain("contextWindow");
+    expect(serialized).not.toContain("supportsResponseFormat");
+  });
+
   it("is inert (undefined) when a capsule policy denies answerSynthesis", () => {
     const stage = createEntailmentStage(
       depsWith(portReturning('{"verdict":"unsupported"}')),

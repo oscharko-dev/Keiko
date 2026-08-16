@@ -32,6 +32,10 @@ export interface ServerDiagnosticRecord {
   readonly gatewayRequestId?: string | undefined;
   // Bounded numeric occurrence for rate-limited diagnostics; never parsed from content.
   readonly occurrenceCount?: number | undefined;
+  // Serialized byte count of the SSE frame that was rejected when a stream was destroyed for
+  // backpressure (SseBackpressureKill). A count only — never body bytes — so it cannot leak
+  // model tokens if logged.
+  readonly frameBytes?: number | undefined;
   // How many models survived the discovery cap when a gateway-setup discovery was truncated
   // (GATEWAY_DISCOVERY_TRUNCATED). Kept separate from `occurrenceCount`, which counts how often a
   // rate-limited diagnostic fired — an aggregator summing that field must not pick up a model

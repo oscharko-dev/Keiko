@@ -4,6 +4,11 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  sseBackpressureReporter,
+  writeOrDestroy,
+  type SseBackpressureSignal,
+} from "./sse-write.js";
+import {
   BrowserToolError,
   type BrowserEventEnvelope,
   type BrowserSessionManager,
@@ -255,33 +260,62 @@ export function handleBrowserEvents(ctx: RouteContext, deps: UiHandlerDeps): Han
   if (!guard.hasSession(sessionId)) {
     return { status: 404, body: errorBody("SESSION_NOT_FOUND", "Browser session not found.") };
   }
-  openBrowserSseStream(ctx.res, guard, sessionId, deps.redactor);
+  openBrowserSseStream(
+    ctx.res,
+    guard,
+    sessionId,
+    deps.redactor,
+    sseBackpressureReporter(deps, "browser"),
+  );
   ctx.req.on("close", () => {
     ctx.res.end();
   });
   return STREAMING;
 }
 
-function openBrowserSseStream(
+// Exported for unit testing the backpressure path. `onBackpressure` is optional and defaults to
+// undefined in production (no behavior change); it is emitted exactly once when a frame is rejected
+// because the client is not draining, before the socket is destroyed.
+export function openBrowserSseStream(
   res: ServerResponse,
   manager: BrowserSessionManager,
   sessionId: string,
   redactor: UiHandlerDeps["redactor"],
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
 ): void {
   res.writeHead(200, SSE_HEADERS);
-  startSseHeartbeat(res);
+  // Per-connection abort: a slow-client backpressure kill (writeOrDestroy) aborts this controller,
+  // which unsubscribes from the manager so no further frames are produced for a dead socket. The
+  // res.on("close") listener also unsubscribes; `unsubscribed` guards against the double call.
+  // subscribe() returns synchronously and events fire only asynchronously afterward, so no event
+  // (hence no abort) can occur before `unsubscribe` is assigned.
+  const controller = new AbortController();
+  startSseHeartbeat(res, undefined, undefined, {
+    controller,
+    ...(onBackpressure === undefined ? {} : { onBackpressure }),
+  });
   let seq = 0;
   const unsubscribe = manager.subscribe(sessionId, (event) => {
     seq += 1;
-    writeBrowserEvent(res, event, seq, redactor);
+    writeBrowserEvent(res, event, seq, redactor, controller, onBackpressure);
     if (event.kind === "session-closed") {
-      unsubscribe();
+      stop();
       res.end();
     }
   });
-  res.write(readyMessage());
-  res.on("close", () => {
+  let unsubscribed = false;
+  const stop = (): void => {
+    if (unsubscribed) return;
+    unsubscribed = true;
     unsubscribe();
+  };
+  controller.signal.addEventListener("abort", stop, { once: true });
+  // The ready frame goes through the same protective path: a client that is already not draining
+  // must abort and unsubscribe here too, rather than leaving the subscription live until some
+  // later event happens to trip writeOrDestroy.
+  writeOrDestroy(res, readyMessage(), controller, onBackpressure);
+  res.on("close", () => {
+    stop();
   });
 }
 
@@ -290,11 +324,11 @@ function writeBrowserEvent(
   event: BrowserEventEnvelope,
   seq: number,
   redactor: UiHandlerDeps["redactor"],
+  controller: AbortController,
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
 ): void {
   const redacted = redactor(event);
   const data = JSON.stringify(redacted);
   const frame = `id: ${String(seq)}\nevent: browser:${event.kind}\ndata: ${data}\n\n`;
-  if (!res.write(frame)) {
-    res.destroy();
-  }
+  writeOrDestroy(res, frame, controller, onBackpressure);
 }
