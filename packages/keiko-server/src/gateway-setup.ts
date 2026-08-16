@@ -3906,6 +3906,10 @@ function readSetupRequest(
   });
 }
 
+function bodyFreeAuditStoreFailure(): string {
+  return "Gateway setup audit could not be persisted.";
+}
+
 function bodyFreeVerificationFailure(): string {
   // Provider exceptions are outside Keiko's trust boundary and may embed response bodies, request
   // fragments, endpoints, or customer content. Secret-string replacement cannot make such an
@@ -4521,15 +4525,21 @@ function recordGatewaySetupAudit(
   try {
     deps.evidenceStore.put(`gateway-setup-${randomUUID()}`, JSON.stringify(record));
   } catch (error) {
-    emitServerDiagnostic(deps.diagnostics, {
-      correlationId: record.correlationId,
-      timestamp: record.timestamp,
-      operation: "POST /api/gateway/setup",
-      source: "gateway-setup.audit",
-      errorClass: "GatewaySetupAuditStoreFailure",
-      message: `Gateway setup audit persistence failed: ${error instanceof Error ? error.message : String(error)}`,
-      code: "GATEWAY_SETUP_AUDIT_STORE_FAILED",
-    });
+    // Body-free by construction (KEIKO-0497 review, Codex P1): a failing evidence store can throw
+    // Errors whose message carries the absolute evidence path, injected store text, or PII —
+    // interpolating error.message into a diagnostic would leak all of that. serverDiagnosticFromError
+    // classifies the error content-free; the summary is a fixed allowlisted string, never derived
+    // from the error.
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: record.correlationId,
+        operation: "POST /api/gateway/setup",
+        source: "gateway-setup.audit",
+        error,
+        redact: bodyFreeAuditStoreFailure,
+      }),
+    );
   }
 }
 
