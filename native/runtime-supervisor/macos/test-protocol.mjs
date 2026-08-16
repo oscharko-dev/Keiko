@@ -131,10 +131,14 @@ function stripDisabledPreprocessorBranches(source) {
   const OPEN_IF = /^#\s*(?:if|ifdef|ifndef)\b/u;
   const CLOSE_ENDIF = /^#\s*endif\b/u;
   const ELSE_DIRECTIVE = /^#\s*else\b/u;
-  // DISABLED_IF (coderabbit 3792888543 on #3202): C accepts constant expressions in `#if`, so a
-  // disabled block can legitimately appear as `#if (0)` or `#if 0L` (integer suffixes `U`, `L`,
-  // `LL`, `UL`, `ULL` and their lowercase equivalents). Recognise those shapes too.
-  const DISABLED_IF = /^#\s*if\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*$/u;
+  // DISABLED_IF (review-follow-up on af74e79b, codex 3792928022): C accepts constant
+  // expressions in `#if`, so a disabled block can appear as `#if 0`, `#if (0)`, `#if 0L`
+  // (integer suffixes `U`, `L`, `LL`, `UL`, `ULL` and their lowercase equivalents), or
+  // `#if 0 && FEATURE` (C left-to-right `&&` short-circuits regardless of FEATURE). The
+  // composite `&&` form is recognised for a SINGLE trailing identifier (optionally `!`-prefixed);
+  // more elaborate constant-expression evaluation stays out of scope.
+  const DISABLED_IF =
+    /^#\s*if\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*(?:&&\s+!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u;
   const lines = source.split("\n");
   const kept = [];
   let stripping = false;
@@ -346,10 +350,21 @@ assert.equal(
   null,
   "block-comment stripping must preserve newlines so a following `#if 0` stays at line-start",
 );
-// Coderabbit 3792888543 (disabled-if variants): `#if (0)`, `#if 0L`, `#if (0U)` and their
-// integer-suffix variants are all constant-zero conditions the C preprocessor treats identically
-// to `#if 0`.
-for (const variant of ["#if (0)", "#if 0L", "#if 0U", "#if 0LL", "#if (0UL)", "#if  0"]) {
+// Coderabbit 3792888543 (disabled-if variants): `#if (0)`, `#if 0L`, `#if (0U)` and integer-
+// suffix variants. Codex 3792928022: `#if 0 && FEATURE` also short-circuits to 0 (C left-to-
+// right `&&`), so a control wrapped in that composite form is likewise disabled.
+for (const variant of [
+  "#if (0)",
+  "#if 0L",
+  "#if 0U",
+  "#if 0LL",
+  "#if (0UL)",
+  "#if  0",
+  "#if 0 && FEATURE",
+  "#if 0 && FEATURE_NAME",
+  "#if (0) && FLAG",
+  "#if 0L && !DISABLED_MACRO",
+]) {
   const stripped = stripCCommentsPreservingLiterals(
     `${variant}\nSHOULD_BE_STRIPPED_BY_DISABLED_IF_VARIANT();\n#endif\nint live(void) { return 1; }\n`,
   );

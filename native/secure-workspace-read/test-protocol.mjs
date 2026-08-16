@@ -296,16 +296,20 @@ function preprocessCLineSplices(source) {
 // Non-literal `#if <expr>` is intentionally out of scope: this is not a preprocessor, it
 // targets the specific "disabled code" marker that hides tokens from the compiler.
 //
-// DISABLED_IF (review-follow-up on a0ee79ae, coderabbit 3792888543): C accepts constant
-// expressions in `#if`, so a disabled block can legitimately appear as `#if (0)` or `#if 0L`
-// (integer suffixes `U`, `L`, `LL`, `UL`, `ULL` and their lowercase equivalents). Recognize
-// those shapes too. Composite conditions like `#if 0 && SOMETHING` are intentionally NOT
-// recognised — the pin is deliberately narrow (a "disabled code" marker, not a preprocessor).
+// DISABLED_IF (review-follow-up on af74e79b, codex 3792928022): C accepts constant expressions
+// in `#if`, so a disabled block can appear as any of:
+//   `#if 0`, `#if (0)`, `#if 0L`, `#if 0U`, `#if 0LL`, `#if (0UL)`
+//   `#if 0 && FEATURE` (short-circuits to 0 regardless of FEATURE — C left-to-right `&&`)
+//   `#if (0) && FEATURE_NAME`
+// The composite `&&` form is now recognised for a SINGLE trailing identifier (optionally
+// prefixed with `!`). More elaborate constant-expression evaluation stays out of scope: this is
+// deliberately a "disabled code" marker recogniser, not a preprocessor.
 function stripDisabledPreprocessorBranches(source) {
   const OPEN_IF = /^#\s*(?:if|ifdef|ifndef)\b/u;
   const CLOSE_ENDIF = /^#\s*endif\b/u;
   const ELSE_DIRECTIVE = /^#\s*else\b/u;
-  const DISABLED_IF = /^#\s*if\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*$/u;
+  const DISABLED_IF =
+    /^#\s*if\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*(?:&&\s+!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u;
   const lines = source.split("\n");
   const kept = [];
   let stripping = false;
@@ -662,8 +666,22 @@ function assertMultilineCommentBeforeIfPreservesLines() {
 
 // Coderabbit 3792888543: `#if (0)`, `#if 0L`, `#if (0U)` and integer-suffix variants are all
 // constant-zero conditions the C preprocessor treats identically to `#if 0`.
+// Codex 3792928022: `#if 0 && FEATURE` also short-circuits to 0 (C left-to-right `&&`), so a
+// control wrapped in that composite form is likewise disabled and must be stripped.
 function assertDisabledIfVariants() {
-  for (const variant of ["#if (0)", "#if 0L", "#if 0U", "#if 0LL", "#if (0UL)", "#if  0"]) {
+  const variants = [
+    "#if (0)",
+    "#if 0L",
+    "#if 0U",
+    "#if 0LL",
+    "#if (0UL)",
+    "#if  0",
+    "#if 0 && FEATURE",
+    "#if 0 && FEATURE_NAME",
+    "#if (0) && FLAG",
+    "#if 0L && !DISABLED_MACRO",
+  ];
+  for (const variant of variants) {
     const stripped = stripCommentsAndStrings(
       `${variant}\nSHOULD_BE_STRIPPED_BY_DISABLED_IF_VARIANT();\n#endif\nint live(void) { return 1; }\n`,
     );
@@ -814,26 +832,27 @@ async function assertProtocolCases(binary, fixture, outside) {
 // case pins one guard by constructing a frame the helper must reject with status 1
 // (KSR_MALFORMED_REQUEST). Kept platform-agnostic and run for every configuration — the parser is
 // the same on every platform. Split by axis so no one builder function crosses the 50-line ceiling.
-function frameLengthMismatchCases(fixture, rootBytes, pathBytes) {
+function frameLengthMismatchCases(fixture, pathBytes) {
+  // Note: dedicated "declared rootLen/pathLen exceeds supplied bytes" probes used to sit here too,
+  // but codex 3792928019 on #3202 correctly observed they cannot isolate the two
+  // `fread(...) != declared_length` guards. Overstating rootLen by 1 consumes the first byte of
+  // pathBytes; the subsequent path fread returns pathBytes.length - 1 bytes; the trailing byte
+  // of the calloc'd path buffer is `\0`; and `memchr(out->path, 0, declaredPathLen)` rejects at
+  // the same status 1. Overstating pathLen has the mirror effect: calloc leaves a trailing `\0`
+  // that memchr catches. Both probes therefore pass with or without the fread-length guards.
+  // Not reframed because inputs that TRULY isolate those guards would need instrumented builds
+  // (or a distinguishable status enum); left out rather than misleadingly claiming to pin them.
+  //
+  // Note: zero-length root and zero-length path used to be listed here as separate cases, but
+  // codex 3792824428 on #3202 correctly observed they cannot isolate the early `root_len == 0`
+  // / `path_len == 0` guards — removing either check leaves the request to be rejected by the
+  // downstream `valid_root("")` / `valid_path("")` at the same status 1, so the probes would
+  // pass with or without the guard they claim to pin. Coverage of "empty is rejected" is
+  // already provided by the interaction between the length fields and the downstream validators;
+  // dedicated zero-length probes would only document overlapping behaviour, not isolate a
+  // unique boundary. Kept out rather than reframed to avoid misleading a reader into believing
+  // the pre-check is what fires.
   return [
-    // Header says more root/path bytes than actually appended: read overruns the frame.
-    {
-      label: "declared rootLen exceeds supplied root bytes",
-      frame: malformedRequest({ root: fixture, pathBytes, declaredRootLen: rootBytes.length + 1 }),
-    },
-    {
-      label: "declared pathLen exceeds supplied path bytes",
-      frame: malformedRequest({ root: fixture, pathBytes, declaredPathLen: pathBytes.length + 1 }),
-    },
-    // Note: zero-length root and zero-length path used to be listed here as separate cases, but
-    // codex 3792824428 on #3202 correctly observed they cannot isolate the early `root_len == 0`
-    // / `path_len == 0` guards — removing either check leaves the request to be rejected by the
-    // downstream `valid_root("")` / `valid_path("")` at the same status 1, so the probes would
-    // pass with or without the guard they claim to pin. Coverage of "empty is rejected" is
-    // already provided by the interaction between the length fields and the downstream validators;
-    // dedicated zero-length probes would only document overlapping behaviour, not isolate a
-    // unique boundary. Kept out rather than reframed to avoid misleading a reader into believing
-    // the pre-check is what fires.
     // Size cap breaches: proves the constants are actually enforced, not just declared. Each
     // root retains its platform's valid absolute-root prefix (`/` on POSIX, `<letter>:\` on
     // Windows) so that `valid_root` would NOT reject it if the size cap were removed. A pre-
@@ -906,7 +925,7 @@ function buildMalformedFrameCases(fixture) {
   const rootBytes = Buffer.from(fixture, "utf8");
   const pathBytes = Buffer.from("nested/good.txt", "utf8");
   return [
-    ...frameLengthMismatchCases(fixture, rootBytes, pathBytes),
+    ...frameLengthMismatchCases(fixture, pathBytes),
     ...frameHeaderShapeCases(fixture, pathBytes),
     ...frameByteValidationCases(fixture, rootBytes, pathBytes),
   ];
