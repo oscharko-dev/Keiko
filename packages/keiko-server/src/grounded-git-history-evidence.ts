@@ -196,18 +196,16 @@ async function resolveGitRepositoryForHistory(
   if (!containsPath(realRepositoryRoot, selectedRoot)) {
     return undefined;
   }
-  // resolveGitMembership already reports the prefix from the same rev-parse call.
-  // Use it directly, but fall back to relative() when realPath resolution moved
-  // the repository root under a symlinked path (git reports the symlink root, the
-  // realPath resolution walked to the real one).
-  const prefix = membership.membership.prefix;
-  const selectedRootPrefix =
-    realRepositoryRoot === repositoryRoot
-      ? toPosix(prefix)
-      : toPosix(relative(realRepositoryRoot, selectedRoot));
+  // The prefix is derived from the resolved paths rather than read off
+  // membership.prefix: resolveGitMembership applies `.trim()` to the --show-prefix line,
+  // which mangles a directory name that legitimately begins or ends with whitespace, and
+  // stripSelectedPrefix would then fail to match any returned filename (leaving history
+  // evidence silently empty). relative() is byte-exact and costs no extra process — the
+  // shared resolver is still what buys us the single bounded round trip and the hardened
+  // toplevel/ownership parsing this call site previously hand-rolled.
   return {
     repositoryRoot: realRepositoryRoot,
-    selectedRootPrefix,
+    selectedRootPrefix: toPosix(relative(realRepositoryRoot, selectedRoot)),
   };
 }
 

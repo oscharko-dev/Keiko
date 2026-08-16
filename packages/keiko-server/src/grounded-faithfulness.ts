@@ -28,8 +28,13 @@ import {
 
 // Deterministic no-evidence answer used when the folder/multi-source path abstains BEFORE the
 // model call. Kept generic (no scope path) so it is safe to display and speak verbatim.
+// Source-neutral on purpose: this constant is now shared by the folder, multi-source AND
+// hybrid topologies (KEIKO-0196), and a hybrid scope may contain only knowledge-capsule
+// connectors with no repository scope searched at all. Naming "repository evidence" there
+// would report on a source that was never queried, so the wording states only what is
+// true of every topology — nothing in the connected scope matched.
 export const GROUNDED_NO_EVIDENCE_ANSWER =
-  "I could not find repository evidence in the connected scope to answer this question. " +
+  "I could not find evidence in the connected scope to answer this question. " +
   "No answer is given because there is nothing to ground it in.";
 
 // ─── Evidence-presence predicates ─────────────────────────────────────────────
@@ -66,7 +71,7 @@ export interface ParsedInlineCitation {
 
 // A bracketed token qualifies as a repository citation only when its path segment looks like a real
 // repo path: it must contain a `/` or a filename extension, and be built from path-safe characters.
-// This is deliberately conservative so ordinary prose brackets (`[1]`, `[TODO]`, `[a, b]`) and
+// This is deliberately conservative so ordinary prose brackets (`[1]`, `[note]`, `[a, b]`) and
 // markdown links (`[text](url)`) are NOT misread as citations.
 const BRACKET_RE = /\[([^\]\n]{1,200})\]/g;
 const LINE_RANGE_SUFFIX_RE = /:(\d+)(?:-(\d+))?$/;
@@ -415,7 +420,7 @@ export function incompleteAnswerMarker(nowMs: number): UncertaintyMarker {
 export function noEvidenceMarker(nowMs: number): UncertaintyMarker {
   return {
     kind: "no-evidence",
-    claim: "No repository evidence matched the connected scope for this question.",
+    claim: "No evidence matched the connected scope for this question.",
     impactedAtomIds: [],
     emittedAtMs: nowMs,
   };

@@ -90,6 +90,7 @@ import {
   buildPackCitationIndex,
   incompleteAnswerMarker,
   missingCitationMarker,
+  noEvidenceMarker,
   packHasUsableEvidence,
   reconcileInlineCitations,
   unsupportedCitationMarker,
@@ -364,13 +365,11 @@ function answerBudgetClipped(dimensions: readonly string[], nowMs: number): Unce
   };
 }
 
+// Delegates to the shared marker factory so all three grounding topologies emit byte-identical
+// no-evidence claims (KEIKO-0196). This used to be a hand-copied duplicate of the same literal,
+// which is why grounded-faithfulness.ts's noEvidenceMarker had zero production call sites.
 function noEvidence(nowMs: number): UncertaintyMarker {
-  return {
-    kind: "no-evidence",
-    claim: "No repository evidence matched the connected scope for this question.",
-    impactedAtomIds: [],
-    emittedAtMs: nowMs,
-  };
+  return noEvidenceMarker(nowMs);
 }
 
 function toolUnavailable(claim: string, nowMs: number): UncertaintyMarker {

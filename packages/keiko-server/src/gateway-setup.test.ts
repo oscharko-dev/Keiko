@@ -37,6 +37,7 @@ import {
   modelIdFromDiscoveryItem,
   normalizeDiscoveryPayload,
   normalizeDiscoveryPayloadForSetup,
+  parseModelDiscovery,
   rawConfigFromCurrent,
   smokeTestCandidates,
   stripTrailingSlashes,
@@ -5226,6 +5227,77 @@ describe("handleGatewaySetup", () => {
     expect(JSON.stringify(result.body)).not.toContain("upstream returned 500 with body");
     expect(JSON.stringify(diagnostics)).not.toContain(providerBody);
     expect(JSON.stringify(diagnostics)).not.toContain("upstream returned 500 with body");
+    deps.store.close();
+  });
+
+  it("emits an operator diagnostic when model discovery truncates (KEIKO-0325)", async () => {
+    // The parser raising `truncated` is only half the fix: before this consumer existed the
+    // flag had no reader, so setup still proceeded silently with the first 100 models. The
+    // diagnostic is the operator-visible signal, and must stay body-free (a count and a code,
+    // never a model id or an endpoint).
+    const uiDir = await tempDir("keiko-gw-ui-discovery-truncated-");
+    const evidenceDir = await tempDir("keiko-gw-ev-discovery-truncated-");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const oversized = Array.from({ length: MAX_DISCOVERED_MODELS + 5 }, (_unused, index) => ({
+      id: `discovered-model-${String(index)}`,
+    }));
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(parseModelDiscovery({ data: oversized })),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve([...modelIds]),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+    });
+
+    await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          operation: "POST /api/gateway/setup",
+          source: "gateway-setup.discovery",
+          code: "GATEWAY_DISCOVERY_TRUNCATED",
+          occurrenceCount: MAX_DISCOVERED_MODELS,
+        }),
+      ]),
+    );
+    const serialized = JSON.stringify(diagnostics);
+    expect(serialized).not.toContain("discovered-model-");
+    expect(serialized).not.toContain("llm-gateway.example.com");
+    expect(serialized).not.toContain("example-secret-token");
+    deps.store.close();
+  });
+
+  it("does not emit the truncation diagnostic when discovery fits the cap (KEIKO-0325)", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-discovery-fits-");
+    const evidenceDir = await tempDir("keiko-gw-ev-discovery-fits-");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const withinCap = Array.from({ length: 3 }, (_unused, index) => ({
+      id: `discovered-model-${String(index)}`,
+    }));
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(parseModelDiscovery({ data: withinCap })),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve([...modelIds]),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+    });
+
+    await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+
+    expect(
+      diagnostics.filter((record) => record.code === "GATEWAY_DISCOVERY_TRUNCATED"),
+    ).toHaveLength(0);
     deps.store.close();
   });
 
