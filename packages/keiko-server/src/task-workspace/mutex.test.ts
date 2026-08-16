@@ -151,19 +151,32 @@ describe("createWorkspaceMutexRegistry", () => {
   });
 });
 
-describe("fileWriteKey filesystem identity (#3200 review)", () => {
-  it("collapses every alias spelling of one file to a single key", () => {
-    // dev+ino is the filesystem's own identity, so it is spelling-independent by construction —
-    // which is the point: realpath() preserves the caller's casing on macOS, and toLowerCase() is
-    // not full Unicode case folding, so no path-string normalization can cover the alias class.
-    const identity = { dev: 16_777_233, ino: 4_242 };
-    expect(fileWriteKey(identity)).toBe(fileWriteKey({ ...identity }));
+describe("fileWriteKey identity (#3200 review)", () => {
+  it("stays stable across the atomic rename every save performs", () => {
+    // The key must not change when the write replaces the target: an inode-based key would shift
+    // on every save, letting a request that resolves mid-rename derive a different key and enter
+    // the critical section concurrently. The path does not move.
+    const before = fileWriteKey("/tmp/project/app.ts");
+    const after = fileWriteKey("/tmp/project/app.ts");
+    expect(before).toBe(after);
   });
 
-  it("separates distinct files, including the same inode on a different device", () => {
-    const base = { dev: 16_777_233, ino: 4_242 };
-    expect(fileWriteKey(base)).not.toBe(fileWriteKey({ dev: base.dev, ino: 4_243 }));
-    // Inode numbers are only unique per device; a bare ino key would collide across mounts.
-    expect(fileWriteKey(base)).not.toBe(fileWriteKey({ dev: 16_777_234, ino: base.ino }));
+  it("folds case- and normalization-equivalent spellings on case-insensitive platforms", () => {
+    const upper = fileWriteKey("/tmp/project/Foo.ts");
+    const lower = fileWriteKey("/tmp/project/foo.ts");
+    const nfc = fileWriteKey("/tmp/project/caf\u00e9.ts");
+    const nfd = fileWriteKey("/tmp/project/cafe\u0301.ts");
+    if (process.platform === "darwin" || process.platform === "win32") {
+      expect(upper).toBe(lower);
+      expect(nfc).toBe(nfd);
+    } else {
+      // Linux filesystems are byte-sensitive: these genuinely are different files.
+      expect(upper).not.toBe(lower);
+      expect(nfc).not.toBe(nfd);
+    }
+  });
+
+  it("separates genuinely different files", () => {
+    expect(fileWriteKey("/tmp/project/a.ts")).not.toBe(fileWriteKey("/tmp/project/b.ts"));
   });
 });

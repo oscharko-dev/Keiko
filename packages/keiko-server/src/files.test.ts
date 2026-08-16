@@ -46,6 +46,7 @@ import {
   normalizeRelativePath,
   resolveRoot,
   setFileWriteCriticalSectionBarrierForTests,
+  setFileWriteQueueObserverForTests,
 } from "./files.js";
 import type { RouteContext, UiHandlerDeps } from "./index.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
@@ -720,6 +721,15 @@ describe("desktop files browser", () => {
     });
     await holderInside;
 
+    // Wait for the contender to actually REACH the lock, not merely for an event-loop turn: it
+    // still has async realpath/lstat/stat work to finish first, and releasing before it queues
+    // would let this test pass with serialization removed.
+    const secondQueued = new Promise<void>((queued) => {
+      setFileWriteQueueObserverForTests(() => {
+        setFileWriteQueueObserverForTests(undefined);
+        queued();
+      });
+    });
     const second = writeFilesContent({
       store,
       rootInput: root,
@@ -727,12 +737,12 @@ describe("desktop files browser", () => {
       content: 'export const value = "second";\n',
       baseVersion: initial.session.version,
     });
-    // Give the second request every chance to reach the lock before the holder is released.
-    await new Promise((tick) => setImmediate(tick));
+    await secondQueued;
     releaseHolder?.();
 
     const results = await Promise.allSettled([first, second]);
     setFileWriteCriticalSectionBarrierForTests(undefined);
+    setFileWriteQueueObserverForTests(undefined);
 
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     const rejected = results.filter((r) => r.status === "rejected");

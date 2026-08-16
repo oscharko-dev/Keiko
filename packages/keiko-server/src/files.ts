@@ -1671,6 +1671,17 @@ export function setFileWriteCriticalSectionBarrierForTests(
   fileWriteCriticalSectionBarrier = barrier;
 }
 
+// Fires immediately BEFORE a writer calls runExclusive, i.e. the moment it is about to queue on
+// its key. A concurrency test needs this to know the contender has finished its async
+// realpath/lstat/stat work and actually reached the lock — yielding an event-loop turn does not
+// prove that, so a test relying on one can pass with serialization removed.
+let fileWriteQueueObserver: (() => void) | undefined;
+
+/** Installs (or clears with `undefined`) the queue-entry observer. Tests only. */
+export function setFileWriteQueueObserverForTests(observer: (() => void) | undefined): void {
+  fileWriteQueueObserver = observer;
+}
+
 // The serialized verify->write critical section (KEIKO-0495). Extracted so
 // writeResolvedFilesContent stays within its function-length bound.
 async function verifyThenWrite(args: {
@@ -1696,8 +1707,18 @@ async function verifyThenWrite(args: {
   let refreshedStats;
   try {
     refreshedStats = await stat(args.target.path);
-  } catch {
-    throw stalePathError();
+  } catch (error) {
+    // Only DISAPPEARANCE is staleness. A revoked permission (EACCES/EPERM) or an I/O failure is
+    // not a concurrent rename, and collapsing it into 409 STALE_PATH would hide a 403 DENIED or
+    // 500 IO_ERROR behind a retryable-looking status for both the client and diagnostics.
+    const code =
+      typeof error === "object" && error !== null
+        ? (error as NodeJS.ErrnoException).code
+        : undefined;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      throw stalePathError();
+    }
+    throw mapNodeFsError(error);
   }
   const refreshed: ResolvedTarget = { ...args.target, stats: refreshedStats };
   // The refreshed stats feed the CONFLICT CHECK only. The write deliberately keeps guarding
@@ -1754,8 +1775,9 @@ async function writeResolvedFilesContent(args: {
   // loser re-verify against the winner's result and fail closed as it should. This REUSES the
   // shared WorkspaceMutexRegistry rather than introducing a second locking mechanism; the existing
   // conflict checks are untouched and still do the deciding.
+  fileWriteQueueObserver?.();
   const { localHistoryProtection, updatedStats } = await fileWriteMutex.runExclusive(
-    [fileWriteKey(args.target.stats)],
+    [fileWriteKey(args.target.path)],
     () => verifyThenWrite(args),
   );
   return {

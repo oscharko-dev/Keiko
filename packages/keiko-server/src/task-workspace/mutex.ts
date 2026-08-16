@@ -16,6 +16,7 @@
 // process crash it simply vanishes — nothing it protected survives either, and the durable record is the
 // persisted advisory lock + visible lifecycle state (#447 reconciliation/repair resolve any stale lock).
 
+import { comparablePath } from "@oscharko-dev/keiko-git";
 import { compareStrings } from "@oscharko-dev/keiko-contracts";
 
 export interface WorkspaceMutexRegistry {
@@ -51,13 +52,19 @@ export function provisionKey(repositoryId: string, taskId: string): string {
 // verification and the second silently overwrite the first. Keyed by resolved real path so two
 // routes reaching the same inode serialize even via different request paths. Lowest tier — a
 // file write takes exactly one key, so it can never participate in a multi-key deadlock.
-export function fileWriteKey(identity: { readonly dev: number; readonly ino: number }): string {
-  // Keyed by the filesystem's OWN identity, not by a path string. Path normalization cannot get
-  // this right: realpath() preserves the caller's casing on macOS, and toLowerCase() is not full
-  // Unicode case folding (Greek final sigma folds to itself while capital sigma folds to small
-  // sigma), so alias spellings of one file would land in separate queues and reopen the
-  // lost-update race this key exists to close. dev+ino covers the whole alias class exactly.
-  return `file:${String(identity.dev)}:${String(identity.ino)}`;
+export function fileWriteKey(realPath: string): string {
+  // Keyed by the canonicalized PATH, deliberately not by dev+ino. The write replaces the target by
+  // atomic rename, so the inode changes on every single save: an inode key would let a second
+  // request that resolves mid-rename derive a different key and enter the "critical" section
+  // concurrently — the exact race this lock exists to prevent, on the common path rather than an
+  // exotic one. The path is stable across the replacement.
+  //
+  // comparablePath is the same rule containsPath uses to decide "same file", so the lock agrees
+  // with containment. It is case- and NFC/NFD-insensitive on darwin and win32 and byte-exact
+  // elsewhere. It is not full Unicode case folding (Greek final sigma folds to itself), so a
+  // pathological alias pair can still split; that residual is tracked on #2901 and is strictly
+  // narrower than the every-write breakage an inode key would cause.
+  return `file:${comparablePath(realPath)}`;
 }
 
 function keyTier(key: string): number {
