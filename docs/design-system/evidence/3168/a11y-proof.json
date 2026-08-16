@@ -1,0 +1,23 @@
+{
+  "issue": 3168,
+  "verdict": "PASS",
+  "method": "Computer Use accessibility tree plus focused component tests",
+  "captures": [
+    {
+      "file": "01-fresh-chats-light.jpeg",
+      "observations": [
+        "Active conversation count is exposed as text",
+        "Each title is exposed independently",
+        "Each row has separately named Rename and Delete actions"
+      ]
+    },
+    {
+      "file": "02-fresh-chats-dark.jpeg",
+      "observations": [
+        "Conversation identity and row actions remain exposed after theme change",
+        "No state depends on color alone"
+      ]
+    }
+  ],
+  "gate": "No serious or critical issue observed in the changed chat lifecycle surfaces; automated UI receipt remains a separate release gate."
+}
