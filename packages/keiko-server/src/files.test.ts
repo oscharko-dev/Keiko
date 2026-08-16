@@ -47,6 +47,7 @@ import {
   resolveRoot,
   setFileWriteCriticalSectionBarrierForTests,
   setFileWriteQueueObserverForTests,
+  classifyInLockRefreshFailure,
 } from "./files.js";
 import type { RouteContext, UiHandlerDeps } from "./index.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
@@ -753,6 +754,30 @@ describe("desktop files browser", () => {
     expect(['export const value = "first";\n', 'export const value = "second";\n']).toContain(
       onDisk.content,
     );
+  });
+
+  // The in-lock re-stat can fail for reasons that are NOT a concurrent rename. Mapping all of them
+  // to 409 STALE_PATH would hide a 403 DENIED or a 500 IO_ERROR behind a retryable-looking status.
+  it.each([
+    { code: "ENOENT", status: 409, label: "vanished" },
+    { code: "ENOTDIR", status: 409, label: "parent replaced by a file" },
+  ])("maps $label to STALE_PATH", ({ code, status }) => {
+    const mapped = classifyInLockRefreshFailure(Object.assign(new Error("x"), { code }));
+    expect(mapped.status).toBe(status);
+    expect(mapped.code).toBe("STALE_PATH");
+  });
+
+  it("preserves permission and I/O failures from the in-lock refresh", () => {
+    const denied = classifyInLockRefreshFailure(Object.assign(new Error("x"), { code: "EACCES" }));
+    expect(denied.status).not.toBe(409);
+    expect(denied.code).not.toBe("STALE_PATH");
+
+    const io = classifyInLockRefreshFailure(Object.assign(new Error("x"), { code: "EIO" }));
+    expect(io.status).toBe(500);
+    expect(io.code).toBe("IO_ERROR");
+
+    // A thrown non-Error carries no errno and must not masquerade as staleness either.
+    expect(classifyInLockRefreshFailure("boom").code).not.toBe("STALE_PATH");
   });
 
   it("prefers baseVersion over expectedModifiedAt for conflict detection", async () => {

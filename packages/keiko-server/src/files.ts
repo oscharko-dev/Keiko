@@ -1658,6 +1658,16 @@ async function resolvedIfPresent(path: string): Promise<string | undefined> {
   }
 }
 
+// Only DISAPPEARANCE is staleness. A revoked permission (EACCES/EPERM) or an I/O failure is not a
+// concurrent rename, and collapsing it into 409 STALE_PATH would hide a 403 DENIED or 500 IO_ERROR
+// behind a retryable-looking status for both the client and diagnostics. Exported so the mapping is
+// testable directly rather than by provoking a platform-specific errno.
+export function classifyInLockRefreshFailure(error: unknown): FilesError {
+  const code =
+    typeof error === "object" && error !== null ? (error as NodeJS.ErrnoException).code : undefined;
+  return code === "ENOENT" || code === "ENOTDIR" ? stalePathError() : mapNodeFsError(error);
+}
+
 // Test seam for the KEIKO-0495 critical section. Awaited once per holder immediately after the
 // in-lock re-stat and before the conflict check, which is the exact point a concurrency test needs
 // to hold a writer while another queues behind it on the same key. Undefined in production, so the
@@ -1708,17 +1718,7 @@ async function verifyThenWrite(args: {
   try {
     refreshedStats = await stat(args.target.path);
   } catch (error) {
-    // Only DISAPPEARANCE is staleness. A revoked permission (EACCES/EPERM) or an I/O failure is
-    // not a concurrent rename, and collapsing it into 409 STALE_PATH would hide a 403 DENIED or
-    // 500 IO_ERROR behind a retryable-looking status for both the client and diagnostics.
-    const code =
-      typeof error === "object" && error !== null
-        ? (error as NodeJS.ErrnoException).code
-        : undefined;
-    if (code === "ENOENT" || code === "ENOTDIR") {
-      throw stalePathError();
-    }
-    throw mapNodeFsError(error);
+    throw classifyInLockRefreshFailure(error);
   }
   const refreshed: ResolvedTarget = { ...args.target, stats: refreshedStats };
   // The refreshed stats feed the CONFLICT CHECK only. The write deliberately keeps guarding
