@@ -109,8 +109,13 @@ const nativeSonarExclusions = Object.freeze([
 const approvedScopeValueDigests = new Map([
   ["sonar.sources", "cdb4ee2aea69cc6a83331bbe96dc2caa9a299d21329efb0336fc02a82e1839a8"],
   ["sonar.tests", "cdb4ee2aea69cc6a83331bbe96dc2caa9a299d21329efb0336fc02a82e1839a8"],
-  ["sonar.exclusions", "e235a0d62060feb08934e07faebf1e1073b8870ba2d0bb69c191f54efa98d51d"],
-  ["sonar.test.inclusions", "0f68df73cf871d30aa6e012f1dc7876aab13ccdbb717c1f997ecc1f08dbdef6f"],
+  // Digest re-pinned after appending `native/runtime-supervisor/protocol-harness.mjs` to both the
+  // exclusions and the test inclusions (KEIKO-0304 review-follow-up on #3202): the harness is
+  // shared test infrastructure that the three test-protocol.mjs files it was extracted from
+  // already sit in, so it carries their same Sonar disposition. Re-computed the SHA-256 of the
+  // raw value after `=` via `createHash("sha256").update(value).digest("hex")`.
+  ["sonar.exclusions", "473671c476a93c9c40317beb305325b728ebcb31e102d9390ef37749a2f63724"],
+  ["sonar.test.inclusions", "4045d38d83836d62b3648b1d56de44a45a059673afb4d20f4d2b49a18c4490fc"],
   ["sonar.test.exclusions", "5a01270e497c669e4f0abd5cef680f9eb0139bb8b82da51719b443b076fcd638"],
   [
     "sonar.typescript.tsconfigPaths",
@@ -150,6 +155,14 @@ const testScopeRules = Object.freeze([
   [
     "native/runtime-supervisor/macos/test-protocol.mjs",
     (path) => path === "native/runtime-supervisor/macos/test-protocol.mjs",
+  ],
+  // KEIKO-0304 (review-follow-up on #3202): shared codec/process helpers imported ONLY by the
+  // three test-protocol.mjs files above. It carries their Sonar disposition — test infrastructure,
+  // not main-code — so an exact-path classifier here matches the sibling entries rather than
+  // introducing a broader wildcard that could pick up other native `.mjs` in the future.
+  [
+    "native/runtime-supervisor/protocol-harness.mjs",
+    (path) => path === "native/runtime-supervisor/protocol-harness.mjs",
   ],
 ]);
 export const SONAR_TEST_INCLUSION_PATTERNS = Object.freeze(
