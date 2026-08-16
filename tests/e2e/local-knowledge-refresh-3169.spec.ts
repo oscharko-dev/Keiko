@@ -1,10 +1,13 @@
 import { expect, test } from "@playwright/test";
 
 async function expectEmptyKnowledgeIndex(page: import("@playwright/test").Page): Promise<void> {
-  await expect(page.getByRole("heading", { name: "Knowledge Pods" })).toBeVisible();
-  await expect(page.getByText("0 Knowledge Pods", { exact: true })).toBeVisible();
-  await expect(page.getByText("No Knowledge Pods yet", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Create your first Knowledge Pod" })).toBeVisible();
+  const surface = page.getByRole("region", { name: "Local Knowledge" });
+  await expect(surface.getByRole("heading", { name: "Knowledge Pods", level: 1 })).toBeVisible();
+  await expect(surface.getByText("0 Knowledge Pods", { exact: true })).toBeVisible();
+  await expect(surface.getByText("No Knowledge Pods yet", { exact: true })).toBeVisible();
+  await expect(
+    surface.getByRole("button", { name: "Create your first Knowledge Pod" }),
+  ).toBeVisible();
 }
 
 test("reopening Local Knowledge reloads a truthful empty index", async ({ page }) => {
@@ -17,4 +20,3 @@ test("reopening Local Knowledge reloads a truthful empty index", async ({ page }
   await page.getByRole("button", { name: "Local Knowledge", exact: true }).click();
   await expectEmptyKnowledgeIndex(page);
 });
-
