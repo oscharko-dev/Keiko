@@ -188,6 +188,15 @@ describe("analyzePrompt task classification (AC2)", () => {
     expect(regressionTests.taskClass).toBe("code-generation");
     expect(regressionTests.domain).toBe("software");
   });
+
+  it("classifies the audited German knowledge-management request as decision support", () => {
+    const analysis = analyze(
+      "Bereite eine belastbare Entscheidung über die Einführung eines Wissensmanagement-Tools vor. Alternativen, Budget, Nutzerzahl, Entscheidungskriterien und Zeitrahmen sind noch unbekannt.",
+    );
+
+    expect(analysis.taskClass).toBe("decision-support");
+    expect(analysis.taskClassConfidence).not.toBe("weak");
+  });
 });
 
 // ─── AC1: full structured analysis ───────────────────────────────────────────────
