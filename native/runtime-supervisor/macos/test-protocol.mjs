@@ -196,13 +196,22 @@ function processLadderLine(line, stack, kept) {
     return;
   }
   if (frame.depth > 0) {
-    if (frame.mode === KEEPING) kept.push(line);
+    if (allFramesKeeping(stack)) kept.push(line);
     return;
   }
-  handleOuterDirectiveOrLine(line, trimmed, frame, kept);
+  handleOuterDirectiveOrLine(line, trimmed, frame, stack, kept);
 }
 
-function handleOuterDirectiveOrLine(line, trimmed, frame, kept) {
+// Codex 3793050405 on #3202: the compiler emits a line only if EVERY enclosing `#if 0` ladder
+// picks the branch that contains it. A nested `#if 0 ... #else PIN` inside a stripping parent
+// still has its own KEEPING frame at the top, but the parent's STRIPPING means clang drops the
+// whole outer branch — including that inner `#else`.
+function allFramesKeeping(stack) {
+  for (const frame of stack) if (frame.mode !== KEEPING) return false;
+  return true;
+}
+
+function handleOuterDirectiveOrLine(line, trimmed, frame, stack, kept) {
   const p = PREPROCESSOR_PATTERNS;
   if (p.ELSE_DIRECTIVE.test(trimmed)) {
     applyElseTransition(frame);
@@ -212,7 +221,7 @@ function handleOuterDirectiveOrLine(line, trimmed, frame, kept) {
     applyElifTransition(trimmed, frame);
     return;
   }
-  if (frame.mode === KEEPING) kept.push(line);
+  if (allFramesKeeping(stack)) kept.push(line);
 }
 
 function applyElseTransition(frame) {
@@ -636,6 +645,30 @@ assert.equal(
   nestedInsideLiveStripped.match(/NESTED_DEAD_TOKEN/u),
   null,
   "nested `#if 0` inside a live `#else` branch must have its body stripped",
+);
+// Codex 3793050405 (inverse nesting): a nested `#if 0 ... #else PIN` inside a STRIPPING
+// parent must have its inner `#else` body stripped too. Every frame on the stack must be
+// KEEPING for a line to survive; clang omits the whole outer branch.
+const nestedInsideDeadSample =
+  "int keep_before(void) { return 1; }\n" +
+  "#if 0\n" +
+  "#if 0\n" +
+  "OUTER_DEAD_INNER_STRIPPING();\n" +
+  "#else\n" +
+  "NESTED_ELSE_INSIDE_DEAD_PIN();\n" +
+  "#endif\n" +
+  "#endif\n" +
+  "int keep_after(void) { return 2; }\n";
+const nestedInsideDeadStripped = stripCCommentsPreservingLiterals(nestedInsideDeadSample);
+assert.equal(
+  nestedInsideDeadStripped.match(/NESTED_ELSE_INSIDE_DEAD_PIN/u),
+  null,
+  "nested `#else` INSIDE a dead outer `#if 0` branch must still be stripped (parent frame is STRIPPING)",
+);
+assert.equal(
+  nestedInsideDeadStripped.match(/OUTER_DEAD_INNER_STRIPPING/u),
+  null,
+  "the outer dead branch's own body must still be stripped",
 );
 // Coderabbit 3793025301: unterminated `'...'` and `"..."` must throw for the same reason
 // unterminated `/* ... */` throws — silently accepting them drops every token after the stray

@@ -384,13 +384,23 @@ function processLadderLine(line, stack, kept) {
     return;
   }
   if (frame.depth > 0) {
-    if (frame.mode === KEEPING) kept.push(line);
+    if (allFramesKeeping(stack)) kept.push(line);
     return;
   }
-  handleOuterDirectiveOrLine(line, trimmed, frame, kept);
+  handleOuterDirectiveOrLine(line, trimmed, frame, stack, kept);
 }
 
-function handleOuterDirectiveOrLine(line, trimmed, frame, kept) {
+// Codex 3793050405 on #3202: the compiler emits a line only if EVERY enclosing `#if 0` ladder
+// picks the branch that contains it. A nested `#if 0 ... #else PIN` inside a stripping parent
+// still has its own KEEPING frame at the top, but the parent's STRIPPING means clang drops the
+// whole outer branch — including that inner `#else`. Return true only when every frame on the
+// stack is keeping.
+function allFramesKeeping(stack) {
+  for (const frame of stack) if (frame.mode !== KEEPING) return false;
+  return true;
+}
+
+function handleOuterDirectiveOrLine(line, trimmed, frame, stack, kept) {
   const p = PREPROCESSOR_PATTERNS;
   if (p.ELSE_DIRECTIVE.test(trimmed)) {
     applyElseTransition(frame);
@@ -400,7 +410,7 @@ function handleOuterDirectiveOrLine(line, trimmed, frame, kept) {
     applyElifTransition(trimmed, frame);
     return;
   }
-  if (frame.mode === KEEPING) kept.push(line);
+  if (allFramesKeeping(stack)) kept.push(line);
 }
 
 function applyElseTransition(frame) {
@@ -776,10 +786,15 @@ function assertLaterElifAfterLiveStripped() {
     null,
     "any `#elif` after a live branch must be stripped",
   );
-  // Coderabbit 3793025299: nested `#if 0` inside a live `#elif`/`#else` branch must strip
-  // its body too. The single-frame model treated it as ordinary depth-tracking and let the
-  // dead nested body reach the source-contract assertions.
-  const nestedInsideLive = stripCommentsAndStrings(
+  assertNestedIfZeroInsideLiveElseStripped();
+  assertNestedElseInsideDeadParentStripped();
+}
+
+// Coderabbit 3793025299: nested `#if 0` inside a live `#elif`/`#else` branch must strip its
+// body too. The single-frame model treated it as ordinary depth-tracking and let the dead
+// nested body reach the source-contract assertions.
+function assertNestedIfZeroInsideLiveElseStripped() {
+  const stripped = stripCommentsAndStrings(
     "int keep_before(void) { return 1; }\n" +
       "#if 0\n" +
       "OUTER_DEAD();\n" +
@@ -793,24 +808,52 @@ function assertLaterElifAfterLiveStripped() {
       "int keep_after(void) { return 2; }\n",
   );
   assert.match(
-    nestedInsideLive,
+    stripped,
     /LIVE_BEFORE_NESTED/u,
     "live outer content BEFORE the nested `#if 0` must be visible",
   );
   assert.match(
-    nestedInsideLive,
+    stripped,
     /LIVE_AFTER_NESTED/u,
     "live outer content AFTER the nested `#if 0` must be visible",
   );
   assert.equal(
-    nestedInsideLive.match(/NESTED_DEAD_TOKEN/u),
+    stripped.match(/NESTED_DEAD_TOKEN/u),
     null,
     "nested `#if 0` inside a live `#else` branch must have its body stripped",
   );
   assert.equal(
-    nestedInsideLive.match(/OUTER_DEAD/u),
+    stripped.match(/OUTER_DEAD/u),
     null,
     "the dead `#if 0` half of the outer ladder must still be stripped",
+  );
+}
+
+// Codex 3793050405: the INVERSE nesting — a nested `#if 0` inside a STRIPPING parent's dead
+// branch. Its own `#else` locally transitions to KEEPING mode, but the outer frame is still
+// STRIPPING, so clang omits the whole outer branch including the inner `#else` body. Every
+// frame on the stack must be KEEPING for a line to survive.
+function assertNestedElseInsideDeadParentStripped() {
+  const stripped = stripCommentsAndStrings(
+    "int keep_before(void) { return 1; }\n" +
+      "#if 0\n" +
+      "#if 0\n" +
+      "OUTER_DEAD_INNER_STRIPPING();\n" +
+      "#else\n" +
+      "NESTED_ELSE_INSIDE_DEAD_PIN();\n" +
+      "#endif\n" +
+      "#endif\n" +
+      "int keep_after(void) { return 2; }\n",
+  );
+  assert.equal(
+    stripped.match(/NESTED_ELSE_INSIDE_DEAD_PIN/u),
+    null,
+    "a nested `#else` INSIDE a dead outer `#if 0` branch must still be stripped (parent frame is STRIPPING)",
+  );
+  assert.equal(
+    stripped.match(/OUTER_DEAD_INNER_STRIPPING/u),
+    null,
+    "the outer dead branch's own body must still be stripped",
   );
 }
 
