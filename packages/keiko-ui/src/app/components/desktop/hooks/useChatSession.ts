@@ -1500,6 +1500,7 @@ const sharedChatMessagesInflight = new Map<
   Promise<{ readonly messages: readonly ChatMessage[] }>
 >();
 type GatewayModelRefreshResult =
+  | { readonly kind: "pending" }
   | { readonly kind: "success"; readonly models: readonly ModelCapability[] }
   | { readonly kind: "failure"; readonly message: string };
 const gatewayModelRefreshSubscribers = new Set<(result: GatewayModelRefreshResult) => void>();
@@ -1514,6 +1515,10 @@ function refreshGatewayModels(): void {
   gatewayModelRefreshGeneration = generation;
   invalidateSharedBootstrap();
   resetModelRequestCache();
+  // A gateway change makes the prior catalog untrustworthy immediately. Keep the picker empty
+  // until this exact refresh succeeds so a stale model can never be selected during a request or
+  // after its failure.
+  publishGatewayModelRefresh({ kind: "pending" });
   void fetchModels().then(
     ({ models }): void => {
       if (generation === gatewayModelRefreshGeneration) {
@@ -2749,6 +2754,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   useEffect(() => {
     return subscribeGatewayModelRefresh((result): void => {
+      if (result.kind === "pending") {
+        setError(undefined);
+        setState((previous) => refreshSessionModels(previous, []));
+        return;
+      }
       if (result.kind === "failure") {
         setError(result.message);
         return;

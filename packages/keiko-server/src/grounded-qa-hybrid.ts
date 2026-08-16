@@ -129,6 +129,11 @@ import {
   redactString,
 } from "./grounded-qa.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
+import {
+  captureConversationReadinessAdmission,
+  withConversationReadinessAdmission,
+  type ConversationReadinessAdmission,
+} from "./conversation-readiness-admission.js";
 
 // ─── Canonical connector reader ───────────────────────────────────────────────
 
@@ -173,6 +178,7 @@ export interface HybridGroundedAskCtx {
   readonly contextProfile: UiHandlerDeps["contextProfile"];
   readonly deps: UiHandlerDeps;
   readonly signal: AbortSignal;
+  readonly readinessAdmission?: ConversationReadinessAdmission | undefined;
   readonly folderRetriever?: FolderRetriever;
   readonly connectorRetrieve?: ConnectorRetrieve;
   readonly answer?: HybridAnswerer;
@@ -1617,10 +1623,19 @@ interface AnswerMeta {
 
 function resolveHybridAnswerer(ctx: HybridGroundedAskCtx): ResolvedAnswerer | RouteResult {
   if (ctx.answer !== undefined) return { answer: ctx.answer };
-  const model = ctx.deps.modelPortFactory(ctx.modelId);
-  if (model === undefined) {
+  const readinessAdmission =
+    ctx.readinessAdmission ?? captureConversationReadinessAdmission(ctx.deps, ctx.modelId);
+  if ("status" in readinessAdmission) return readinessAdmission;
+  const resolvedModel = ctx.deps.modelPortFactory(ctx.modelId);
+  if (resolvedModel === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
+  const model = withConversationReadinessAdmission(
+    resolvedModel,
+    ctx.modelId,
+    readinessAdmission,
+    ctx.deps,
+  );
   return { answer: createHybridAnswerer(model, ctx.modelId, ctx.signal) };
 }
 

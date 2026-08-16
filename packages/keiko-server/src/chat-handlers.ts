@@ -95,6 +95,7 @@ import {
 } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
+import { conversationModelNotReadyResult } from "./conversation-readiness-admission.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
 import {
   FORGOTTEN_MEMORY_SUPPRESSION_REASON,
@@ -778,10 +779,7 @@ function invalidChatModelResult(modelId: string, deps: UiHandlerDeps): RouteResu
 }
 
 function unreadyChatModelResult(): RouteResult {
-  return {
-    status: 400,
-    body: errorBody("BAD_REQUEST", "The selected model is not ready for conversations."),
-  };
+  return conversationModelNotReadyResult();
 }
 
 export function createUserMessage(

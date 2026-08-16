@@ -16,6 +16,8 @@ import {
   KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
   maxUtf8BytesForTokenBudget,
   standardPodModelUsePolicy,
+  UNVERIFIED_GATEWAY,
+  type KnowledgeCapsuleId,
   type KnowledgePodModelUsePolicy,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -40,7 +42,7 @@ import {
   type GroundedRunner,
 } from "./grounded-qa.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
-import type { UiHandlerDeps } from "./deps.js";
+import type { RuntimeGatewayConfig, UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
@@ -213,6 +215,48 @@ function deps(
     store,
     ...overrides,
   };
+}
+
+function runtimeGatewayConfig(config: GatewayConfig, ready: boolean): RuntimeGatewayConfig {
+  let current = config;
+  let generation = 0;
+  const observations = new Map<string, ReturnType<RuntimeGatewayConfig["verifiedCapability"]>>();
+  const holder: RuntimeGatewayConfig = {
+    storagePath: join(tmp, "gateway.json"),
+    current: () => current,
+    present: () => true,
+    set(next): void {
+      if (next === undefined) throw new Error("test runtime config must stay configured");
+      current = next;
+      generation += 1;
+      observations.clear();
+    },
+    generation: () => generation,
+    verification: () => UNVERIFIED_GATEWAY,
+    recordVerification: () => undefined,
+    verifiedCapability: (modelId) => observations.get(modelId),
+    recordVerifiedCapability(modelId, fields, checkedAt, observedGeneration): void {
+      if (observedGeneration !== undefined && observedGeneration !== generation) return;
+      observations.set(modelId, { modelId, generation, checkedAt, fields: { ...fields } });
+    },
+    clearVerifiedCapability(modelId, observedGeneration): boolean {
+      if (observedGeneration !== undefined && observedGeneration !== generation) return false;
+      return observations.delete(modelId);
+    },
+  };
+  if (ready) {
+    holder.recordVerifiedCapability(
+      CHAT_MODEL,
+      { conversationReady: true },
+      "2026-08-16T00:00:00.000Z",
+      generation,
+    );
+  }
+  return holder;
+}
+
+function unreadyRuntimeGatewayConfig(config: GatewayConfig): RuntimeGatewayConfig {
+  return runtimeGatewayConfig(config, false);
 }
 
 function fakeModel(content: string, seenRequests: GatewayRequest[]): ModelPort {
@@ -513,6 +557,38 @@ function connectTestScope(chatId: string): void {
   });
 }
 
+type GroundedTopology = "single-folder" | "multi-folder" | "hybrid" | "local-knowledge";
+
+function connectGroundedTopology(chatId: string, kind: GroundedTopology): void {
+  if (kind === "single-folder") {
+    connectTestScope(chatId);
+  } else if (kind === "multi-folder") {
+    store.updateChat(chatId, {
+      connectedScopes: [
+        { kind: "directory", relativePaths: ["src"], connectedAtMs: NOW },
+        { kind: "files", relativePaths: ["package.json"], connectedAtMs: NOW + 1 },
+      ],
+    });
+  } else if (kind === "hybrid") {
+    connectTestScope(chatId);
+    store.updateChat(chatId, {
+      localKnowledgeScope: {
+        kind: "capsule",
+        capsuleId: "readiness-hybrid-capsule" as KnowledgeCapsuleId,
+        connectedAtMs: NOW + 1,
+      },
+    });
+  } else {
+    store.updateChat(chatId, {
+      localKnowledgeScope: {
+        kind: "capsule",
+        capsuleId: "readiness-local-capsule" as KnowledgeCapsuleId,
+        connectedAtMs: NOW,
+      },
+    });
+  }
+}
+
 async function setupChatWithScope(): Promise<{ chatId: string; projectPath: string }> {
   const chat = await setupChatWithoutScope();
   connectTestScope(chat.chatId);
@@ -747,6 +823,130 @@ describe("modelWindowAwareBudget", () => {
 });
 
 describe("handleGroundedAsk", () => {
+  it.each(["single-folder", "multi-folder", "hybrid", "local-knowledge"] as const)(
+    "rejects a configured but unready %s ask before provider egress",
+    async (kind) => {
+      const { chatId, projectPath } = await setupChatWithoutScope();
+      seedScopedRepo(projectPath);
+      connectGroundedTopology(chatId, kind);
+      let providerCalls = 0;
+      const model: ModelPort = {
+        call: () => {
+          providerCalls += 1;
+          return Promise.resolve({
+            modelId: CHAT_MODEL,
+            content: "must not run",
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "unready-grounded",
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "medium",
+            },
+          });
+        },
+      };
+      const config = customModelConfig();
+      const runtime = unreadyRuntimeGatewayConfig(config);
+      const sharedDeps = deps(model, {}, { config, gatewayConfig: runtime });
+
+      const result = await handleGroundedAsk(
+        ctx(JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION })),
+        sharedDeps,
+      );
+
+      expect(result).toEqual({
+        status: 400,
+        body: {
+          error: {
+            code: "BAD_REQUEST",
+            message: "The selected model is not ready for conversations.",
+          },
+        },
+      });
+      expect(providerCalls).toBe(0);
+    },
+  );
+
+  it.each(["single-folder", "multi-folder", "hybrid", "local-knowledge"] as const)(
+    "rejects a %s ask when its admitted gateway generation changes during async memory work",
+    async (kind) => {
+      const { chatId, projectPath } = await setupChatWithoutScope();
+      seedScopedRepo(projectPath);
+      connectGroundedTopology(chatId, kind);
+      const memoryDir = join(tmp, `readiness-race-${kind}`);
+      mkdirSync(memoryDir);
+      const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+      const rememberedId = `readiness-race-memory-${kind}` as MemoryId;
+      insertGroundedTestMemory(
+        memoryVault,
+        rememberedId,
+        "The current release requires an explicit readiness check.",
+      );
+      memoryVault.upsertEmbedding(rememberedId, {
+        provider: "test-provider",
+        modelId: "text-embedding-3-small",
+        metric: "cosine",
+        vector: Float32Array.from([1, 0]),
+      });
+      const embeddingStarted = deferred<undefined>();
+      const embedding = deferred<OpenAIEmbeddingOutcome>();
+      const config = customModelConfig();
+      const runtime = runtimeGatewayConfig(config, true);
+      let providerCalls = 0;
+      const model = fakeModel("must not run", []);
+      const guardedModel: ModelPort = {
+        call: (request, signal) => {
+          providerCalls += 1;
+          return model.call(request, signal);
+        },
+      };
+      const outcome = handleGroundedAsk(
+        ctx(
+          JSON.stringify({
+            chatId,
+            content: GROUNDED_FIXTURE_QUESTION,
+            memory: { enabled: true, budgetTokens: 900, context: {} },
+          }),
+        ),
+        deps(
+          guardedModel,
+          {},
+          {
+            config,
+            gatewayConfig: runtime,
+            memoryVault,
+            localKnowledgeEmbeddingRequest: () => {
+              embeddingStarted.resolve(undefined);
+              return embedding.promise;
+            },
+          },
+        ),
+      );
+      await embeddingStarted.promise;
+      runtime.set(customModelConfig(), true);
+      embedding.resolve({
+        ok: true,
+        value: { vector: Float32Array.from([1, 0]), modelId: "text-embedding-3-small" },
+      });
+
+      await expect(outcome).resolves.toEqual({
+        status: 400,
+        body: {
+          error: {
+            code: "BAD_REQUEST",
+            message: "The selected model is not ready for conversations.",
+          },
+        },
+      });
+      expect(providerCalls).toBe(0);
+      memoryVault.close();
+    },
+  );
+
   it("shares the chat turn serializer with the ungrounded route", async () => {
     const { chatId, projectPath } = await setupChatWithoutScope();
     const firstResponse = deferred<NormalizedResponse>();
@@ -2811,9 +3011,7 @@ describe("handleGroundedAsk", () => {
     expect(body.error.code).toBe("BAD_REQUEST");
     expect(body.error.message).toBe("modelId must be a configured chat model id.");
     expect(requests).toEqual([]);
-    expect(store.listMessages(chat.id)).toMatchObject([
-      { role: "user", content: "What is alpha?" },
-    ]);
+    expect(store.listMessages(chat.id)).toEqual([]);
   });
 
   it("retains the single-connector user turn when the client disconnects after answering", async () => {

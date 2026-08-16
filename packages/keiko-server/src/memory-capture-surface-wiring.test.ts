@@ -224,7 +224,7 @@ describe("post-commit capture-surface attribution", () => {
 
     runPostCommitConversationMemorySideEffects(
       deps,
-      sendRequest("Let's keep doing morning stand-ups.", "voice"),
+      sendRequest("The user prefers stand-ups at 9am.", "voice"),
       context(),
       "gpt-test",
       EMPTY_MEMORY_RESULT,
@@ -242,7 +242,7 @@ describe("post-commit capture-surface attribution", () => {
 
     runPostCommitConversationMemorySideEffects(
       deps,
-      sendRequest("I'm on UTC+1 this week."),
+      sendRequest("The user's timezone is UTC+1."),
       context(),
       "gpt-test",
       EMPTY_MEMORY_RESULT,
@@ -264,7 +264,7 @@ describe("post-commit capture-surface attribution", () => {
         chatId: "conversation-a",
         projectPath: "project-a",
         messages: [
-          { role: "user", content: "We ship on Fridays." },
+          { role: "user", content: "The user ships on Fridays." },
           { role: "assistant", content: "Noted." },
         ],
         modelId: "gpt-test",

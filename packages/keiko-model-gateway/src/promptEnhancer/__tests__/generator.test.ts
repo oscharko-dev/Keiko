@@ -275,6 +275,18 @@ describe("generateEnhancedPrompt — intent-specific shaping", () => {
     );
   });
 
+  it("does not treat German prices as a travel cue", () => {
+    const { analysis, prompt } = generateForProductionInput(
+      "Bereite eine belastbare Entscheidung über die Einführung eines Wissensmanagement-Tools vor. Vergleiche Preise, Alternativen und Budget.",
+    );
+
+    expect(analysis.taskClass).toBe("decision-support");
+    expect(trustedText(prompt)).toMatch(/decision-support analyst|task lens: decision support/i);
+    expect(trustedText(prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
   it("keeps the audited German knowledge-management request out of the travel frame", () => {
     const prompt = generateFor(
       { taskClass: "factual-qa", domain: "general", recommendedProfile: "precise" },

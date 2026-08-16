@@ -751,6 +751,56 @@ describe("useChatSession bootstrap", () => {
     expect(fetchModels).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    ["configuration replacement", notifyGatewayConfigUpdated],
+    ["readiness update", notifyGatewayModelReadinessUpdated],
+    ["picker refresh", requestGatewayModelCatalogRefresh],
+  ])(
+    "invalidates selectable models synchronously during a %s and only restores them after a later current success",
+    async (_label, refreshCatalog) => {
+      const pending = deferred<{ models: ModelCapability[] }>();
+      vi.mocked(fetchModels)
+        .mockResolvedValueOnce({ models: [model({ id: "chat-before" })] })
+        .mockImplementationOnce(() => pending.promise)
+        .mockResolvedValueOnce({ models: [model({ id: "chat-recovered" })] });
+      vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+      vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+
+      const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+      await waitFor(() =>
+        expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-before"]),
+      );
+      expect(result.current.selectedModel).toBe("chat-before");
+
+      act(() => {
+        refreshCatalog();
+      });
+
+      expect(result.current.models).toEqual([]);
+      expect(result.current.selectedModel).toBeUndefined();
+
+      await act(async () => {
+        pending.reject(new Error("gateway unavailable"));
+        try {
+          await pending.promise;
+        } catch {
+          // The refresh path intentionally reports the failure through hook state.
+        }
+      });
+      await waitFor(() => expect(result.current.error).toBe("gateway unavailable"));
+      expect(result.current.models).toEqual([]);
+      expect(result.current.selectedModel).toBeUndefined();
+
+      act(() => {
+        refreshCatalog();
+      });
+      await waitFor(() =>
+        expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-recovered"]),
+      );
+      expect(result.current.selectedModel).toBe("chat-recovered");
+    },
+  );
+
   it("refreshes the eligible model catalog without emitting a configuration replacement", async () => {
     vi.mocked(fetchModels)
       .mockResolvedValueOnce({ models: [model({ id: "chat-before" })] })
