@@ -143,42 +143,67 @@ const PREPROCESSOR_PATTERNS = {
     /^#\s*elif\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*(?:&&\s+!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u,
 };
 
-// Advance the stripping state machine for one line while `stripping` is true. Extracted so the
-// outer loop stays under the complexity ceiling.
-function advanceStrippingState(trimmed, depth) {
+// Ladder state modes (codex 3792986617 on #3202): the compiler picks EXACTLY ONE branch of a
+// `#if / #elif / #else / #endif` ladder, so the scanner tracks three positions within a tracked
+// `#if 0` ladder — STRIPPING_PRE_LIVE (before the live branch), KEEPING_LIVE (in the live
+// branch), STRIPPING_POST_LIVE (after the live branch — remaining branches are dead). The
+// previous single-flag model lost track of the outer ladder after `#elif 1` set stripping=false
+// and copied the subsequent dead `#else` body into the scan.
+const OUTSIDE = "outside";
+const STRIPPING_PRE_LIVE = "stripping_pre_live";
+const KEEPING_LIVE = "keeping_live";
+const STRIPPING_POST_LIVE = "stripping_post_live";
+
+function advanceLadderState(trimmed, state) {
   const p = PREPROCESSOR_PATTERNS;
-  if (p.OPEN_IF.test(trimmed)) return { stripping: true, depth: depth + 1 };
+  if (state.mode === OUTSIDE) {
+    if (p.DISABLED_IF.test(trimmed)) return { mode: STRIPPING_PRE_LIVE, depth: 0 };
+    return state;
+  }
+  return advanceInsideLadder(trimmed, state);
+}
+
+function advanceInsideLadder(trimmed, state) {
+  const p = PREPROCESSOR_PATTERNS;
+  if (p.OPEN_IF.test(trimmed)) return { ...state, depth: state.depth + 1 };
   if (p.CLOSE_ENDIF.test(trimmed)) {
-    return depth === 0 ? { stripping: false, depth: 0 } : { stripping: true, depth: depth - 1 };
+    if (state.depth === 0) return { mode: OUTSIDE, depth: 0 };
+    return { ...state, depth: state.depth - 1 };
   }
-  if (depth === 0 && p.ELSE_DIRECTIVE.test(trimmed)) return { stripping: false, depth: 0 };
-  // `#elif` at outer depth: keep stripping only if the condition is deterministically false;
-  // otherwise conservatively stop stripping — the compiler may include this branch.
-  if (depth === 0 && p.ELIF_DIRECTIVE.test(trimmed) && !p.DISABLED_ELIF.test(trimmed)) {
-    return { stripping: false, depth: 0 };
+  if (state.depth > 0) return state;
+  if (p.ELSE_DIRECTIVE.test(trimmed)) {
+    const mode = state.mode === STRIPPING_PRE_LIVE ? KEEPING_LIVE : STRIPPING_POST_LIVE;
+    return { mode, depth: 0 };
   }
-  return { stripping: true, depth };
+  if (p.ELIF_DIRECTIVE.test(trimmed)) return advanceOnElif(trimmed, state);
+  return state;
+}
+
+function advanceOnElif(trimmed, state) {
+  if (state.mode !== STRIPPING_PRE_LIVE) return { mode: STRIPPING_POST_LIVE, depth: 0 };
+  if (PREPROCESSOR_PATTERNS.DISABLED_ELIF.test(trimmed)) return state;
+  return { mode: KEEPING_LIVE, depth: 0 };
+}
+
+function shouldKeepLine(before, next) {
+  if (before.mode === STRIPPING_PRE_LIVE || before.mode === STRIPPING_POST_LIVE) return false;
+  // Directive lines that consumed to change state are dropped (preprocessor artifacts, never
+  // assertion targets). `#include` and other non-ladder directives don't change ladder state
+  // (advanceLadderState is a no-op for them) and are kept.
+  if (next.mode !== before.mode || next.depth !== before.depth) return false;
+  return true;
 }
 
 function stripDisabledPreprocessorBranches(source) {
   const lines = source.split("\n");
   const kept = [];
-  let stripping = false;
-  let depth = 0;
+  let state = { mode: OUTSIDE, depth: 0 };
   for (const line of lines) {
     const trimmed = line.trimStart();
-    if (stripping) {
-      const next = advanceStrippingState(trimmed, depth);
-      stripping = next.stripping;
-      depth = next.depth;
-      continue;
-    }
-    if (PREPROCESSOR_PATTERNS.DISABLED_IF.test(trimmed)) {
-      stripping = true;
-      depth = 0;
-      continue;
-    }
-    kept.push(line);
+    const before = state;
+    const next = advanceLadderState(trimmed, state);
+    if (shouldKeepLine(before, next)) kept.push(line);
+    state = next;
   }
   return kept.join("\n");
 }
@@ -505,6 +530,47 @@ assert.equal(
   elifDisabledSample.match(/SHOULD_BE_STRIPPED_BY_ELIF_ZERO/u),
   null,
   "`#elif 0` at outer depth must keep stripping (its branch is deterministically dead)",
+);
+// Codex 3792986617: after a LIVE branch in the ladder, EVERY subsequent branch is dead — the
+// compiler picks exactly one. `#if 0 ... #elif 1 ... #else DEAD ... #endif` must strip the
+// `#else` body too, otherwise a fd-close or spawn control retained only there satisfies the
+// source contract after the live implementation is deleted.
+const elifThenDeadElseSample = stripCCommentsPreservingLiterals(
+  "int keep_before(void) { return 1; }\n" +
+    "#if 0\nDEAD_A();\n" +
+    "#elif 1\nLIVE_TOKEN();\n" +
+    "#else\nDEAD_ELSE_TOKEN();\n" +
+    "#endif\n" +
+    "int keep_after(void) { return 2; }\n",
+);
+assert.match(elifThenDeadElseSample, /LIVE_TOKEN/u, "live `#elif 1` branch must be visible");
+assert.equal(
+  elifThenDeadElseSample.match(/DEAD_A/u),
+  null,
+  "`#if 0` branch before a live `#elif` must be stripped",
+);
+assert.equal(
+  elifThenDeadElseSample.match(/DEAD_ELSE_TOKEN/u),
+  null,
+  "`#else` after a live `#elif` must be stripped (the compiler picks exactly one branch)",
+);
+// Also cover: `#if 0 ... #elif 1 ... #elif SOMETHING ... #endif` — the second `#elif` is dead
+// (the first `#elif 1` was live). Its body must be stripped.
+const elifThenDeadElifSample = stripCCommentsPreservingLiterals(
+  "#if 0\nDEAD_A();\n" +
+    "#elif 1\nLIVE_TOKEN2();\n" +
+    "#elif SOMETHING\nDEAD_ELIF_TOKEN();\n" +
+    "#endif\n",
+);
+assert.match(
+  elifThenDeadElifSample,
+  /LIVE_TOKEN2/u,
+  "the first live `#elif` branch must be visible",
+);
+assert.equal(
+  elifThenDeadElifSample.match(/DEAD_ELIF_TOKEN/u),
+  null,
+  "any `#elif` after a live branch must be stripped",
 );
 
 // KEIKO-0277: Windows-sibling two-mode shape. `--helper <path>` qualifies an exact staged binary

@@ -268,6 +268,7 @@
       "Side-by-side comparison of the file on disk and the recovered unsaved changes. Keep local restores the recovered changes; use disk keeps the file on disk.",
       "Side-by-side comparison of the latest file on disk and the local editor buffer. Keep local preserves your buffer; reload replaces it with the file on disk.",
       "Tests",
+      "this file",
       "Use disk",
       "Workspace file events require a refresh.",
       "Workspace file watching is ."
@@ -784,6 +785,9 @@
       "Pods",
       "Removed pages could not be detected this run (the crawl reached its page limit).",
       "Start indexing Knowledge Pod"
+    ],
+    "packages/keiko-ui/src/app/memoriaviva/components/MemoryAutonomyControl.tsx": [
+      "memoria.settings.mode. Error"
     ],
     "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": ["MemoriaViva"],
     "packages/keiko-ui/src/app/memoriaviva/detail/MemoryDetailClient.tsx": [

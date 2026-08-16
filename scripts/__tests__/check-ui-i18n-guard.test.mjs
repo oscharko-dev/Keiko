@@ -1170,6 +1170,23 @@ test("collects a `??` fallback inside a template substitution", () => {
   expect(texts).toContain("Fallback label");
 });
 
+// KEIKO-0299 (review-follow-up on 4d7d131a): a call expression like `definedOr(x, "this file")`
+// returns its second argument verbatim when the first is undefined — the string IS user-visible
+// copy. Codex 3792986615. Traverse call arguments too. Non-literal args produce empty results;
+// obvious non-copy strings are filtered by `isTranslatableCopy` downstream.
+test("collects literal arguments passed to a rendered call expression", () => {
+  const src = '<p>{`Agent patch review for ${definedOr(name, "this file")}`}</p>';
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("this file");
+});
+
+test("still ignores calls whose only literal arguments are machine tokens", () => {
+  expect(
+    untranslatedLiteralsInSource('<p>{translate("feature.title")}</p>', "packages/x/y.tsx")
+      .findings,
+  ).toEqual([]);
+});
+
 // KEIKO-0299 (review-follow-up on 7c976f77): a ConditionalExpression like
 // `{busyKind === "index" ? "Indexing…" : "Index"}` is the other common JSX-child shape and
 // used to be invisible to both the AST helper (it is neither StringLiteral nor

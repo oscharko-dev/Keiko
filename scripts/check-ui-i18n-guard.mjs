@@ -759,26 +759,8 @@ function collectJsxTextAndExpressions(source, filename) {
 // exemption marker on one branch would silently apply to the other, and the ledger diff would
 // point reviewers at the wrong source location.
 function jsxChildExpressionLiteralTexts(expr, sourceFile) {
-  const lineOf = (node) =>
-    ts.getLineAndCharacterOfPosition(sourceFile, node.getStart(sourceFile)).line + 1;
-  if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
-    const text = expr.text.trim();
-    return text.length > 0 ? [{ line: lineOf(expr), text }] : [];
-  }
-  if (ts.isTemplateExpression(expr)) {
-    // Head + trailing spans are the template's LITERAL parts.
-    const parts = [expr.head.text, ...expr.templateSpans.map((span) => span.literal.text)];
-    const combined = parts.join(" ").trim().replace(/\s+/gu, " ");
-    const templateEntry = combined.length > 0 ? [{ line: lineOf(expr), text: combined }] : [];
-    // Each `${…}` substitution can itself contain literals — a common case is
-    // `` `${expanded ? "Collapse" : "Expand"} ${project.name}` ``, where the two branch strings
-    // are user-visible but the template-part scan sees only whitespace between the spans. Codex
-    // 3792964062. Recurse into each span expression the same way we recurse for JSX children.
-    const substitutionEntries = expr.templateSpans.flatMap((span) =>
-      jsxChildExpressionLiteralTexts(span.expression, sourceFile),
-    );
-    return [...templateEntry, ...substitutionEntries];
-  }
+  const stringLike = stringLikeExpressionTexts(expr, sourceFile);
+  if (stringLike !== null) return stringLike;
   if (ts.isConditionalExpression(expr)) {
     return [
       ...jsxChildExpressionLiteralTexts(expr.whenTrue, sourceFile),
@@ -788,12 +770,51 @@ function jsxChildExpressionLiteralTexts(expr, sourceFile) {
   if (ts.isBinaryExpression(expr) && isRenderingFallbackOperator(expr.operatorToken.kind)) {
     return binaryFallbackLiteralTexts(expr, sourceFile);
   }
-  // Unwrap `( ... )` so nested conditionals whose branches carry a parenthesised inner conditional
-  // — e.g. `{a ? (b ? "One" : "Two") : "Three"}` — still surface each literal branch.
+  // Unwrap `( ... )` so nested conditionals whose branches carry a parenthesised inner
+  // conditional — e.g. `{a ? (b ? "One" : "Two") : "Three"}` — still surface each literal.
   if (ts.isParenthesizedExpression(expr)) {
     return jsxChildExpressionLiteralTexts(expr.expression, sourceFile);
   }
+  // KEIKO-0299 (review-follow-up on 4d7d131a): a helper call that returns one of its arguments
+  // verbatim renders the literal argument as user copy — the concrete case is
+  // `definedOr(x, "this file")` in `EditorRuntimeWidget.tsx`. Codex 3792986615. Traverse each
+  // argument via the same helper; non-literal arguments produce empty results and
+  // `isTranslatableCopy` filters obvious machine tokens downstream. False positives (a `t("…")`
+  // key lookup, a `console.log(...)` diagnostic) can be marked `// i18n-exempt: <reason>`.
+  if (ts.isCallExpression(expr)) {
+    return expr.arguments.flatMap((arg) => jsxChildExpressionLiteralTexts(arg, sourceFile));
+  }
   return [];
+}
+
+function lineOfNode(node, sourceFile) {
+  return ts.getLineAndCharacterOfPosition(sourceFile, node.getStart(sourceFile)).line + 1;
+}
+
+// String-shaped expressions (StringLiteral / NoSubstitutionTemplateLiteral / TemplateExpression)
+// extracted so the outer dispatcher stays under the complexity ceiling. Returns null when the
+// expression is not one of these shapes, so the caller can try other branches.
+function stringLikeExpressionTexts(expr, sourceFile) {
+  if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
+    const text = expr.text.trim();
+    return text.length > 0 ? [{ line: lineOfNode(expr, sourceFile), text }] : [];
+  }
+  if (ts.isTemplateExpression(expr)) return templateExpressionLiteralTexts(expr, sourceFile);
+  return null;
+}
+
+function templateExpressionLiteralTexts(expr, sourceFile) {
+  // Head + trailing spans are the template's LITERAL parts.
+  const parts = [expr.head.text, ...expr.templateSpans.map((span) => span.literal.text)];
+  const combined = parts.join(" ").trim().replace(/\s+/gu, " ");
+  const templateEntry =
+    combined.length > 0 ? [{ line: lineOfNode(expr, sourceFile), text: combined }] : [];
+  // Each `${…}` substitution can itself contain literals — a common case is
+  // `` `${expanded ? "Collapse" : "Expand"} ${project.name}` ``. Codex 3792964062.
+  const substitutionEntries = expr.templateSpans.flatMap((span) =>
+    jsxChildExpressionLiteralTexts(span.expression, sourceFile),
+  );
+  return [...templateEntry, ...substitutionEntries];
 }
 
 // KEIKO-0299 (review-follow-up on a0ee79ae): `??` and `||` in JSX children can render EITHER
