@@ -55,12 +55,36 @@ const MAX_LANGUAGE_HINT_CHARS = 35;
 // caps its control-plane sessions (MAX_ACTIVE_SESSIONS = 64), so an unbounded burst of
 // upgrades cannot exhaust the WebSocket server or the downstream transcription budget.
 export const MAX_ACTIVE_LIVE_DICTATION_SESSIONS = 64;
+// A rejected socket that ignores the close handshake would otherwise pin the server for
+// ws's default 30 s close timeout. Terminate after 2 s if the client has not acknowledged.
+const LIVE_DICTATION_REJECT_TERMINATE_TIMEOUT_MS = 2_000;
 
 // Pure predicate exposed for regression coverage of KEIKO-0342. Callers pass the current
 // wss.clients.size AFTER this connection has been admitted (the WebSocket server always
 // adds the socket to the clients set before onConnection fires).
 export function liveDictationSessionExceedsCap(activeClientCount: number): boolean {
   return activeClientCount > MAX_ACTIVE_LIVE_DICTATION_SESSIONS;
+}
+
+// ws 8.x emits 'error' on the WebSocket for a protocol error during close; an unhandled event
+// terminates the Node process. Attach a NOOP listener BEFORE close(1013), then fall back to
+// terminate() after a bounded grace so a stuck rejected socket cannot pin the server for ws's
+// default 30 s close-timeout. Extracted so the onConnection method stays under its LOC ceiling.
+function rejectOverCapSocket(ws: WsSocket): void {
+  ws.on("error", () => {
+    // NOOP — swallow protocol errors on a socket we are already rejecting.
+  });
+  ws.close(1013, "too many live-dictation sessions");
+  const terminateTimer = setTimeout(() => {
+    try {
+      ws.terminate();
+    } catch {
+      // NOOP — terminate is best-effort; a socket already gone is fine.
+    }
+  }, LIVE_DICTATION_REJECT_TERMINATE_TIMEOUT_MS);
+  ws.on("close", () => {
+    clearTimeout(terminateTimer);
+  });
 }
 
 type LiveSessionCreateMessage = VoiceSessionCreateMessage & {
@@ -596,7 +620,7 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
     // socket. wss.clients already includes this new one by the time onConnection runs, so
     // liveDictationSessionExceedsCap rejects the excess. Match voice-realtime.ts's close(1013).
     if (liveDictationSessionExceedsCap(this.wss.clients.size)) {
-      ws.close(1013, "too many live-dictation sessions");
+      rejectOverCapSocket(ws);
       return;
     }
     const voice = resolveVoiceCapability(currentGatewayConfig(deps) ?? { providers: [] }, {

@@ -33,6 +33,16 @@ describe("QueueEventSink ring buffer", () => {
     expect(buffered.map((e) => e.seq)).toEqual([3, 4, 5]);
   });
 
+  it("rejects a non-finite or negative maxBytes at construction (KEIKO-0165 hardening)", () => {
+    // NaN, Infinity, and negatives would all silently disable the byte cap in the
+    // `bufferedBytes > this.maxBytes` comparison, letting replay grow without bound —
+    // the exact regression this cap exists to prevent. Fail loudly at construction.
+    expect(() => new QueueEventSink({ maxBytes: Number.NaN })).toThrow(RangeError);
+    expect(() => new QueueEventSink({ maxBytes: Number.POSITIVE_INFINITY })).toThrow(RangeError);
+    expect(() => new QueueEventSink({ maxBytes: -1 })).toThrow(RangeError);
+    expect(() => new QueueEventSink({ maxBytes: 0 })).not.toThrow();
+  });
+
   it("bounds aggregate replay bytes when maxBytes is set (KEIKO-0165)", () => {
     // Emit events whose count is under bufferCapacity but whose combined serialized bytes
     // exceed maxBytes; the sink must evict oldest until aggregate <= maxBytes and only

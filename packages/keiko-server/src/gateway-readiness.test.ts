@@ -884,6 +884,9 @@ describe("longContextTokens (KEIKO-0358)", () => {
     const capability = { ...createDefaultChatCapability("probe-model"), contextWindow: 0 };
     expect(longContextTokens(undefined, capability)).toBe(64_000);
     expect(longContextTokens(undefined, capability)).toBeGreaterThan(32_000);
+    // An absent capability arrives from the same fallback path (contextWindow ??= 0),
+    // so it must yield the extended budget too — pin both branches.
+    expect(longContextTokens(undefined, undefined)).toBe(64_000);
   });
 
   it("still caps a genuinely small window at the default budget", () => {

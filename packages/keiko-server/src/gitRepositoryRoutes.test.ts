@@ -326,6 +326,39 @@ describe("git repository routes", () => {
     expect(messages[2]).toMatch(/destinationPath/u);
     expect(cloneRunner).not.toHaveBeenCalled();
   });
+
+  // KEIKO-0341 coverage extension: prove each remaining typed error class also
+  // surfaces its own distinguishable message and never invokes cloneRunner.
+  it.each([
+    {
+      caseName: "non-object body (bare JSON array)",
+      rawBody: JSON.stringify([{ repositoryUrl: "x", destinationPath: "/tmp/a" }]),
+      matcher: /object/u,
+    },
+    {
+      caseName: "non-string repositoryUrl (numeric)",
+      rawBody: JSON.stringify({ repositoryUrl: 42, destinationPath: "/tmp/app" }),
+      matcher: /repositoryUrl.*string/u,
+    },
+    {
+      caseName: "whitespace-only repositoryUrl (empty after trim)",
+      rawBody: JSON.stringify({ repositoryUrl: "   ", destinationPath: "/tmp/app" }),
+      matcher: /repositoryUrl.*required/u,
+    },
+  ])(
+    "rejects a $caseName with a distinguishable message and never runs the cloner",
+    async (input) => {
+      const cloneRunner = vi.fn(() => Promise.resolve(null));
+      const handler = createCloneRepositoryHandler(cloneRunner);
+      const result = await handler(ctxRaw(input.rawBody), deps());
+      expect(result.status).toBe(400);
+      const body = result.body as { readonly error?: { readonly message?: unknown } };
+      const message = body.error?.message;
+      expect(typeof message).toBe("string");
+      expect(message as string).toMatch(input.matcher);
+      expect(cloneRunner).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // The clone outcome projection is exercised directly: it is the only place that decides what a user

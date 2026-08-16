@@ -7720,23 +7720,25 @@ describe("normalizeDiscoveryPayload", () => {
     expect(normalizeDiscoveryPayload(payload)).toHaveLength(MAX_DISCOVERED_MODELS);
   });
 
-  it("flags .truncated when the payload exceeds the cap (KEIKO-0325)", () => {
-    const oversized = {
-      data: Array.from({ length: MAX_DISCOVERED_MODELS + 5 }, (_unused, index) => ({
+  it("flags .truncated at exactly MAX_DISCOVERED_MODELS + 1 (KEIKO-0325 boundary)", () => {
+    // Test the exact boundary so a regression from `>` to `>=` cannot pass this pin.
+    const boundary = {
+      data: Array.from({ length: MAX_DISCOVERED_MODELS + 1 }, (_unused, index) => ({
         id: `m-${String(index)}`,
       })),
     };
-    // Before the fix, an oversized discovery silently dropped everything past the cap;
-    // the caller had no way to tell that models were missing.
-    expect(normalizeDiscoveryPayloadForSetup(oversized).truncated).toBe(true);
+    expect(normalizeDiscoveryPayloadForSetup(boundary).truncated).toBe(true);
   });
 
-  it("leaves .truncated absent when the payload fits within the cap (KEIKO-0325)", () => {
-    const small = {
-      data: Array.from({ length: 5 }, (_unused, index) => ({ id: `m-${String(index)}` })),
+  it("leaves .truncated absent at exactly MAX_DISCOVERED_MODELS (KEIKO-0325 boundary)", () => {
+    // Exact-fit case: N == cap is still not truncated. Keep the wire representation
+    // tight — no redundant `truncated: false` on the happy path.
+    const exact = {
+      data: Array.from({ length: MAX_DISCOVERED_MODELS }, (_unused, index) => ({
+        id: `m-${String(index)}`,
+      })),
     };
-    // Keep the wire representation tight: no redundant `truncated: false` on the happy path.
-    expect(normalizeDiscoveryPayloadForSetup(small).truncated).toBeUndefined();
+    expect(normalizeDiscoveryPayloadForSetup(exact).truncated).toBeUndefined();
   });
 });
 

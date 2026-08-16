@@ -92,7 +92,14 @@ export class QueueEventSink {
 
   constructor(options: QueueEventSinkOptions = {}) {
     this.capacity = options.bufferCapacity ?? DEFAULT_BUFFER_CAPACITY;
-    this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BUFFER_BYTES;
+    const maxBytes = options.maxBytes ?? DEFAULT_MAX_BUFFER_BYTES;
+    // Reject NaN / Infinity / negatives: any of the three silently disables the byte cap
+    // and lets a run's replay grow without bound — the exact class KEIKO-0165 exists to
+    // prevent. A caller passing a bogus option should fail loudly at construction.
+    if (!Number.isFinite(maxBytes) || maxBytes < 0) {
+      throw new RangeError("QueueEventSink maxBytes must be a finite, non-negative number");
+    }
+    this.maxBytes = maxBytes;
   }
 
   // Attaches an SSE writer: replays the buffered events with `seq` strictly greater than
