@@ -90,6 +90,25 @@ describe("HealthScanFindings — load error", () => {
       expect(screen.getByText(/scan load failed/i)).toBeInTheDocument();
     });
   });
+
+  // A previous successful scan must not be presented as fresh while the current refresh is
+  // rate-limited. In particular, the summary count is a health claim, not a stale-cache badge.
+  it("does not retain a zero-finding health claim when a refresh is rate-limited", async () => {
+    const initialFetch = scanWith(resultWith([]));
+    const rateLimitedRefresh = vi
+      .fn()
+      .mockRejectedValue(new Error("Health scan refresh is rate-limited"));
+    const { rerender } = render(<HealthScanFindings fetchImpl={initialFetch} />);
+
+    await waitFor(() => expect(screen.getByText("No issues found")).toBeInTheDocument());
+    rerender(<HealthScanFindings fetchImpl={rateLimitedRefresh} />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("Health scan refresh is rate-limited"),
+    );
+    expect(screen.queryByText("0 findings")).not.toBeInTheDocument();
+    expect(screen.queryByText("No issues found")).not.toBeInTheDocument();
+  });
 });
 
 describe("HealthScanFindings — populated state", () => {
