@@ -98,6 +98,16 @@ test("sends a chat message and streams a persisted assistant reply @smoke", asyn
   await seedChatWindow(page, chat);
 
   await page.goto("/");
+
+  // Conversation readiness is deliberately generation-bound and cannot be inferred from a model
+  // merely existing in configuration. Exercise the same visible readiness action a user must run
+  // before chat, then close Settings and continue through the real composer. This keeps the smoke
+  // aligned with the fail-closed product contract instead of bypassing it through a test-only API.
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Run readiness check" }).click();
+  await expect(page.getByText("Gateway connected", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Close Settings window" }).click();
+
   const chatWindow = page.getByRole("region", { name: "Chat — E2E chat send" });
   await expect(chatWindow).toBeVisible();
 
