@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/oscharko-dev/Keiko/security/advisories/new
+    about: Suspected vulnerability or data-loss issue? Use this private channel, never the public issue form — see SECURITY.md.
   - name: Account-free User-Finding Report
     url: https://github.com/oscharko-dev/Keiko/blob/dev/docs/user-finding-report.md
     about: Use the structured account-free report form when the reporter cannot sign in to GitHub.

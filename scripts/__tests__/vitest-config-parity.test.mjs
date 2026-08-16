@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { globSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -82,6 +82,55 @@ describe("vitest config timeout parity (GEN-TEST-FLAKE-001)", () => {
     expect(scripts["test:coverage:packages:merge"]).toContain(
       `--config ${JUDGING_COVERAGE_CONFIG}`,
     );
+  });
+});
+
+// KEIKO-0251: the root suite's `include` list collected zero *.test.tsx files while the package
+// coverage config collected eight, so `npm test` and `conversation:release-check` — the loop
+// AGENTS.md §3 documents as the local minimum — went green without ever running the editor's two
+// a11y suites or its GEN-PERF-EDITOR-005 per-keystroke allocation pin. The two lists diverged
+// silently because nothing compared them. This is that comparison. It asserts the collected SET of
+// files, not the pattern text, so a differently-spelled but equivalent glob still passes and a
+// dropped entry still fails.
+function collectTestFiles(config) {
+  return new Set(
+    config.test.include
+      .flatMap((pattern) => globSync(pattern, { cwd: repoRoot }))
+      .map((path) => path.replaceAll("\\", "/"))
+      .filter((path) => !path.includes("node_modules/") && !path.startsWith("packages/keiko-ui/")),
+  );
+}
+
+describe("root suite collects the same component tests as the coverage gate (KEIKO-0251)", () => {
+  it("collects the identical set of *.test.tsx files", async () => {
+    const [rootConfig, coverageConfig] = await Promise.all([
+      loadConfig("vitest.config.ts"),
+      loadConfig(JUDGING_COVERAGE_CONFIG),
+    ]);
+    const tsxOnly = (files) => [...files].filter((path) => path.endsWith(".test.tsx")).sort();
+    const rootTsx = tsxOnly(collectTestFiles(rootConfig));
+    const coverageTsx = tsxOnly(collectTestFiles(coverageConfig));
+
+    // Guard the guard: if the editor package ever stops shipping .test.tsx files, an empty-vs-empty
+    // comparison would pass while proving nothing. Assert the corpus is non-empty first.
+    expect(
+      coverageTsx.length,
+      "the coverage gate must still collect editor component tests",
+    ).toBeGreaterThan(0);
+    expect(
+      rootTsx,
+      "vitest.config.ts must collect every *.test.tsx the package coverage gate does, " +
+        "or `npm test` goes green on untested editor components",
+    ).toEqual(coverageTsx);
+  });
+
+  it("wires the React plugin the .test.tsx files need to parse", async () => {
+    const rootConfig = await loadConfig("vitest.config.ts");
+    expect(
+      rootConfig.plugins?.flat(Infinity).length ?? 0,
+      "vitest.config.ts must declare @vitejs/plugin-react; without it the collected " +
+        ".test.tsx files fail to transform",
+    ).toBeGreaterThan(0);
   });
 });
 

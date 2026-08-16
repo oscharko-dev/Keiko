@@ -192,18 +192,74 @@ function ensureDependencies() {
   run(npmCommand(), ["ci", "--no-audit", "--no-fund"], repoRoot);
 }
 
+/**
+ * Decide what dev-start should do about the gateway config. Pure, so the decision is unit-tested
+ * without touching the filesystem (same pattern as npmCommand/resolveExternalOpener above).
+ *
+ * KEIKO-0286: skipping the seed whenever KEIKO_CONFIG_FILE is merely SET defeats the safety net
+ * exactly when it is needed. Sourcing an operator .env that carries a stale KEIKO_CONFIG_FILE
+ * leaves the variable pointing at a file that does not exist; the server then degrades to zero
+ * providers with no diagnostic — the "no provisioned config" condition that blocked four prior
+ * live-test attempts. A configured path only earns the skip when the file is actually there.
+ *
+ * Repointing matters as much as seeding: the development runner inherits this process's
+ * environment, so a seed written while KEIKO_CONFIG_FILE still names the dead path would be
+ * invisible to the server and would reproduce the very condition this exists to prevent.
+ *
+ * @returns {{ repointTo?: string, seedFrom?: string, notices: string[] }}
+ */
+export function resolveDevGatewayConfigAction({
+  configuredPath,
+  devConfigFile,
+  seedCandidates,
+  fileExists,
+}) {
+  if (configuredPath !== undefined && fileExists(configuredPath)) return { notices: [] };
+
+  const notices = [];
+  const result = {};
+  if (configuredPath !== undefined) {
+    // Path only, never contents: the file this names holds credential references.
+    notices.push(
+      `[dev:start] KEIKO_CONFIG_FILE points at ${configuredPath}, which does not exist ` +
+        "(a stale value from a sourced operator .env does this); falling back to the local dev " +
+        "config so the gateway does not start with zero providers",
+    );
+    result.repointTo = devConfigFile;
+  }
+  if (fileExists(devConfigFile)) return { ...result, notices };
+
+  const seedFrom = seedCandidates.find((candidate) => fileExists(candidate));
+  if (seedFrom === undefined) {
+    // Said unconditionally. Previously only the stale-path branch reported this, so the plain
+    // "nothing configured and nothing to seed" case — the most common first-run shape — started an
+    // unprovisioned gateway in silence, which is the condition KEIKO-0286 is about (review finding
+    // on #3159).
+    notices.push(
+      "[dev:start] no gateway config is configured and no seed candidate is available — the " +
+        "gateway will start unprovisioned; configure a model in Settings or point " +
+        "KEIKO_CONFIG_FILE at a real file",
+    );
+    return { ...result, notices };
+  }
+  notices.push(`[dev:start] seeded gateway config from ${seedFrom}`);
+  return { ...result, seedFrom, notices };
+}
+
 function ensureDevGatewayConfig() {
-  if (process.env.KEIKO_CONFIG_FILE !== undefined || existsSync(devGatewayConfigFile)) {
-    return;
+  const { repointTo, seedFrom, notices } = resolveDevGatewayConfigAction({
+    configuredPath: process.env.KEIKO_CONFIG_FILE,
+    devConfigFile: devGatewayConfigFile,
+    seedCandidates: gatewayConfigSeedCandidates,
+    fileExists: existsSync,
+  });
+  if (repointTo !== undefined) process.env.KEIKO_CONFIG_FILE = repointTo;
+  if (seedFrom !== undefined) {
+    mkdirSync(dirname(devGatewayConfigFile), { recursive: true });
+    copyFileSync(seedFrom, devGatewayConfigFile);
+    chmodSync(devGatewayConfigFile, 0o600);
   }
-  const source = gatewayConfigSeedCandidates.find((candidate) => existsSync(candidate));
-  if (source === undefined) {
-    return;
-  }
-  mkdirSync(dirname(devGatewayConfigFile), { recursive: true });
-  copyFileSync(source, devGatewayConfigFile);
-  chmodSync(devGatewayConfigFile, 0o600);
-  console.log(`[dev:start] seeded gateway config from ${source}`);
+  for (const notice of notices) console.log(notice);
 }
 
 function checkPortAvailable(port) {

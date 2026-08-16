@@ -1,10 +1,20 @@
 import { defineConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
 export default defineConfig({
+  // KEIKO-0251: the editor's component tests are .test.tsx and need JSX transformed. Without this
+  // plugin the include entry below collects the files and then fails to parse them.
+  plugins: [react()],
   test: {
     environment: "node",
     include: [
       "tests/**/*.test.ts",
       "packages/*/src/**/*.test.ts",
+      // KEIKO-0251: the editor package owns React/Monaco component shells whose tests are
+      // file-level jsdom .test.tsx. They were collected only by vitest.coverage.packages.config.ts,
+      // so `npm test` and `conversation:release-check` went green without ever running the two
+      // a11y suites or the GEN-PERF-EDITOR-005 per-keystroke allocation pin. Keep this entry and
+      // the coverage config's in lockstep — vitest-config-parity.test.mjs pins that they match.
+      "packages/keiko-editor/src/**/*.test.tsx",
       // Issue #287: the QI supply-chain gate is a Node ESM script (.mjs), so its harness
       // tests are .test.mjs and live under scripts/__tests__/ next to the script itself.
       "scripts/__tests__/**/*.test.mjs",

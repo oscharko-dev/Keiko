@@ -134,6 +134,17 @@ jobs:
         # the cause. Running the anchor check FIRST turns that into a message naming the corrected
         # line. The script uses only Node builtins, so it needs no dependency install (#3130).
         run: node scripts/check-zizmor-anchors.mjs
+      - name: Verify the branch trigger lists agree across ci, codeql and dependency-review
+        # Same independent-reporting guard as the steps around it (ADR-0159).
+        if: ${{ !cancelled() && steps.checkout.outcome != 'failure' }}
+        # Reads three workflow files with Node builtins and makes no network call.
+        timeout-minutes: 2
+        # KEIKO-0955: codeql.yml and dependency-review.yml had silently fallen nine and ten branches
+        # behind ci.yml, so pushes to those integration branches were never code-scanned and pull
+        # requests targeting them had no dependency diff reviewed. Nothing went red, because every
+        # such branch eventually merges into `dev`, which was listed everywhere. Node builtins only,
+        # so no dependency install is needed here either (#3130).
+        run: node scripts/check-workflow-branch-parity.mjs
       - name: Run zizmor
         # The standalone `zizmor` job's job-level `if:` reproduced verbatim at step level. A job
         # never skips because a sibling job failed, so `!cancelled()` is what makes the step-level

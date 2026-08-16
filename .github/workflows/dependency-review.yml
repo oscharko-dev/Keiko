@@ -1,11 +1,25 @@
 name: Dependency Review
 
+# KEIKO-0955: the branch lists below must stay identical to ci.yml's. Long-lived integration
+# branches were missing, so pushes to them and pull requests targeting them were never covered.
+# scripts/check-workflow-branch-parity.mjs fails the gate if the three lists drift apart again.
 on:
   pull_request:
     branches:
       - dev
+      - feat/dev
+      - feat/epic-open-code-engine-in-keiko-2473
       - feat/keiko-editor
       - feat/keiko-agent-native-editor-foundation-and-runtime
+      - feat/prompt-enhancer-1307
+      - feat/keiko-establish-governed-end-to-end-git-delivery
+      - feat/keiko-voice-digital-twin
+      - feat/keiko-isolated-task-workspaces
+      - feat/keiko-colleague-like-voice-dialogue-mode
+      - feat/keiko-repository-centered-desktop-workflow
+      - feat/epic-built-in-editor-2285-M11
+      - feat/epic-memoria-viva-2538
+      - epic/coding-workbench-opencode-codex
       - "release/**"
   # ADR-0139 D7: the merge queue re-triggers this workflow so the required check reports on the
   # merge group; the diff itself was already reviewed on the pull request head, so the job is

@@ -18,6 +18,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 
 import {
@@ -44,10 +45,24 @@ const PROBE_EXPECTED_RULE = "adr-0019-direction-2-security-only-contracts";
 const PROBE_EXPECTED_RESOLVED = "packages/keiko-harness/dist/index.js";
 const REQUIRED_DIST_ENTRYPOINTS = [PROBE_EXPECTED_RESOLVED];
 // Superset of the production `includeOnly`: fixtures + relative-path targets + src +
-// packages/<name>/(src|dist). The `dist` suffix mirrors the production widening from
-// Wave-2 audit #2627 so the bare-specifier visibility probe (run separately below) has
-// the same graph shape available to the fixture scan.
-const INCLUDE_ONLY_OVERRIDE = String.raw`^(tests/architecture/fixtures|\.\./|src|packages/[^/]+/(src|dist))`;
+// packages/<name>/(src|dist) + the external trust destinations. The `dist` suffix mirrors the
+// production widening from Wave-2 audit #2627 so the bare-specifier visibility probe (run
+// separately below) has the same graph shape available to the fixture scan. The provider-SDK
+// and `node:fs`/`node:fs/promises` alternatives mirror the production EXTERNAL_TRUST_DESTINATIONS
+// widening (audit KEIKO-0255) so trust rules 1, 4 and 5 are proven live by name here instead of
+// being silently pruned before evaluation. This override must stay a superset of the production
+// `includeOnly`; assertProductionIncludeOnlyIsCovered() below fails the gate if it drifts below it.
+// DERIVED from the production filter, not restated beside it. A hand-copied twin drifts silently:
+// production could admit a new destination alternative that this copy lacks, and the fixture scan
+// would prune that destination while every assertion stayed green — the rule it proves would be
+// dead exactly the way KEIKO-0255 found trust-1/4/5 dead (review finding on #3159).
+const PRODUCTION_INCLUDE_ONLY = createRequire(import.meta.url)(join(process.cwd(), RULES_FILE))
+  .options.includeOnly;
+const INCLUDE_ONLY_OVERRIDE =
+  String.raw`^(tests/architecture/fixtures|\.\./|` +
+  // Strip the production regex's own `^(` … `)` wrapper and fold its alternatives in.
+  PRODUCTION_INCLUDE_ONLY.replace(/^\^\(/u, "").replace(/\)$/u, "") +
+  ")";
 
 // One expected rule per physically-extracted package boundary. Most rules should fire exactly once
 // against their dedicated fixture subdir; workflows intentionally fires twice because it pins both
@@ -88,12 +103,57 @@ const EXPECTED_DEPCRUISER_RULE_COUNTS = {
   "adr-0019-direction-8-ui-not-node-domain-values": 3,
   "adr-0042-editor-not-node-domain-values": 8,
   "adr-0019-direction-9-root-product-composition-only": 1,
+  // trust-1/4/5 target destinations outside the first-party namespace (provider SDKs under
+  // node_modules, the node:fs and node:fs/promises builtins). Until audit KEIKO-0255 they were
+  // pruned by `includeOnly` before evaluation and fired nowhere — present in the config, dead in
+  // practice, and covered only by the AST checker below. These three entries are the pin that
+  // keeps the dependency-cruiser layer live: drop the includeOnly widening or the fixture path
+  // from either rule's from.path and the expected count falls to 0 and this gate goes red.
+  "adr-0019-trust-1-provider-sdk-isolation": 1,
   "adr-0019-trust-2-ui-no-provider-config": 1,
   "adr-0019-trust-3-ui-no-gateway-internals": 1,
+  "adr-0019-trust-4-no-direct-fs-outside-workspace": 1,
+  "adr-0019-trust-5-patch-routes-through-tools": 1,
   "adr-0019-trust-6-evidence-allowed-callers": 1,
   "adr-0019-trust-7-cli-server-no-port-bypass": 1,
   "adr-0019-trust-8-no-do-not-follow-in-prod": 1,
 };
+
+// Representative module paths spanning every alternative of the production `includeOnly`.
+// The fixture-scan override must admit everything production admits: if it ever drops below the
+// production filter, fixtures would be evaluated against a NARROWER graph than production and a
+// rule could pass here while being dead in the real scan — the exact failure mode KEIKO-0255
+// found. Regex superset is not decidable in general, so this asserts it behaviourally.
+const INCLUDE_ONLY_COVERAGE_SAMPLES = [
+  "src/cli/index.ts",
+  "packages/keiko-tools/src/exec.ts",
+  "packages/keiko-harness/dist/index.js",
+  "node_modules/openai/index.js",
+  "node_modules/@anthropic-ai/sdk/index.js",
+  "node_modules/some-ai-sdk/index.js",
+  "node:fs",
+  "fs",
+  "node:fs/promises",
+  "fs/promises",
+];
+
+function assertProductionIncludeOnlyIsCovered() {
+  const productionRe = new RegExp(PRODUCTION_INCLUDE_ONLY);
+  const overrideRe = new RegExp(INCLUDE_ONLY_OVERRIDE);
+  const uncovered = INCLUDE_ONLY_COVERAGE_SAMPLES.filter(
+    (sample) => productionRe.test(sample) && !overrideRe.test(sample),
+  );
+  if (uncovered.length > 0) {
+    console.error(
+      "arch-check-negative: FAIL — the fixture-scan includeOnly override is no longer a superset " +
+        "of the production includeOnly; these paths are cruised in production but pruned here:",
+    );
+    for (const sample of uncovered) {
+      console.error(`  - ${sample}`);
+    }
+    process.exit(1);
+  }
+}
 
 const EXPECTED_IMPORT_POLICY_RULE_COUNTS = {
   "gen-perf-cli-001-cli-heavy-graphs-load-lazily": 1,
@@ -123,6 +183,8 @@ if (missingDist.length > 0) {
   }
   process.exit(1);
 }
+
+assertProductionIncludeOnlyIsCovered();
 
 const probeOutcome = runBareSpecifierVisibilityProbe({
   repoRoot: process.cwd(),

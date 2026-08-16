@@ -10,10 +10,81 @@ import {
   pairedDevBrowserUrl,
   resolveDevPairingSecret,
   requiredRuntimeHealth,
+  resolveDevGatewayConfigAction,
   resolveExternalOpener,
   run,
   shouldShellNpmCommand,
 } from "../dev-start.mjs";
+
+// KEIKO-0286: a stale KEIKO_CONFIG_FILE inherited from a sourced operator .env used to suppress the
+// dev-config seed entirely. The server then started with zero providers and said nothing — the
+// "no provisioned config" condition that blocked four prior live-test attempts.
+describe("dev-start gateway config resolution (KEIKO-0286)", () => {
+  const DEV_CONFIG = "/state/ui/keiko.config.json";
+  const SEEDS = ["/repo/.keiko/ui/keiko.config.json", "/repo/sandbox/.keiko/ui/keiko.config.json"];
+  const existsOnly =
+    (...present) =>
+    (path) =>
+      present.includes(path);
+
+  it("leaves a configured path alone when the file is really there", () => {
+    const action = resolveDevGatewayConfigAction({
+      configuredPath: "/operator/keiko.config.json",
+      devConfigFile: DEV_CONFIG,
+      seedCandidates: SEEDS,
+      fileExists: existsOnly("/operator/keiko.config.json"),
+    });
+    expect(action).toEqual({ notices: [] });
+  });
+
+  it("seeds AND repoints when the configured path does not exist", () => {
+    const action = resolveDevGatewayConfigAction({
+      configuredPath: "/gone/keiko.config.json",
+      devConfigFile: DEV_CONFIG,
+      seedCandidates: SEEDS,
+      fileExists: existsOnly(SEEDS[0]),
+    });
+    // Repointing is the half that makes the seed take effect: the development runner inherits this
+    // environment, so seeding without repointing leaves the server reading the dead path.
+    expect(action.repointTo).toBe(DEV_CONFIG);
+    expect(action.seedFrom).toBe(SEEDS[0]);
+    expect(action.notices.join("\n")).toContain("does not exist");
+  });
+
+  it("repoints without reseeding when a dev config already exists", () => {
+    const action = resolveDevGatewayConfigAction({
+      configuredPath: "/gone/keiko.config.json",
+      devConfigFile: DEV_CONFIG,
+      seedCandidates: SEEDS,
+      fileExists: existsOnly(DEV_CONFIG),
+    });
+    expect(action.repointTo).toBe(DEV_CONFIG);
+    expect(action.seedFrom).toBeUndefined();
+  });
+
+  it("says so out loud when nothing can be seeded, instead of degrading silently", () => {
+    const action = resolveDevGatewayConfigAction({
+      configuredPath: "/gone/keiko.config.json",
+      devConfigFile: DEV_CONFIG,
+      seedCandidates: SEEDS,
+      fileExists: existsOnly(),
+    });
+    expect(action.seedFrom).toBeUndefined();
+    expect(action.notices.join("\n")).toContain("start unprovisioned");
+  });
+
+  it("never puts config file contents in a notice, only paths", () => {
+    const action = resolveDevGatewayConfigAction({
+      configuredPath: "/gone/keiko.config.json",
+      devConfigFile: DEV_CONFIG,
+      seedCandidates: SEEDS,
+      fileExists: existsOnly(SEEDS[0]),
+    });
+    for (const notice of action.notices) {
+      expect(notice).not.toMatch(/apiKey|secret|token|cred:/iu);
+    }
+  });
+});
 
 describe("dev-start runtime health gate", () => {
   afterEach(() => {

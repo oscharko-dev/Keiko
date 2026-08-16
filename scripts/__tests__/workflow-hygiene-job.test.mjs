@@ -53,6 +53,11 @@ const GATE_STEPS = [
   // NUMBER, so a drifted anchor surfaces as the finding it was accepted for rather than as its
   // cause. Running the check first makes the required context name the corrected line.
   "Verify the zizmor ignore anchors still point at what they document",
+  // KEIKO-0955: codeql.yml and dependency-review.yml had silently fallen nine and ten branches
+  // behind ci.yml, so pushes to those integration branches were never code-scanned. Placed with the
+  // other repository-owned checks, ahead of the hosted scanners, and carrying the same guard so its
+  // finding is never suppressed by an earlier gate's failure.
+  "Verify the branch trigger lists agree across ci, codeql and dependency-review",
   "Run zizmor",
   "Scan dependency manifests with OSV Scanner",
 ];

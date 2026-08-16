@@ -11,18 +11,29 @@ if (process.platform === "win32") {
 // (`bin: dist/cli/index.js` in the root package.json) and is the only
 // `src/cli/` file with a shebang.
 //
-// The bin entry is the authoritative reference point for two installation-
+// The bin entry is the authoritative reference point for three installation-
 // dependent paths the cli package needs:
 //   - the packaged UI static export at `dist/ui/static`, used by `keiko ui`;
 //   - the bin executable path itself, used by `keiko start` when it re-execs
-//     the cli as a detached child to serve the UI.
-// We surface both via env vars before dispatch so the cli package does not
+//     the cli as a detached child to serve the UI;
+//   - the local-state auditor at `scripts/lib/local-state-audit.mjs`, used by
+//     `keiko audit local-state` (KEIKO-0230). It stays a standalone,
+//     builtins-only script with no package-graph edge, so the cli imports it
+//     at runtime by path rather than depending on it.
+// We surface all three via env vars before dispatch so the cli package does not
 // have to deep-import the bin or know its own installation layout. Tests can
-// override either variable to point at fixtures.
+// override any variable to point at fixtures.
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT_DIST = resolve(HERE, "..");
+const PACKAGE_ROOT = resolve(ROOT_DIST, "..");
 process.env.KEIKO_CLI_BIN_PATH ??= resolve(HERE, "index.js");
 process.env.KEIKO_UI_STATIC_ROOT ??= resolve(ROOT_DIST, "ui", "static");
+process.env.KEIKO_LOCAL_STATE_AUDITOR ??= resolve(
+  PACKAGE_ROOT,
+  "scripts",
+  "lib",
+  "local-state-audit.mjs",
+);
 
 // Process-level catch-alls: a stray async error outside any request must exit
 // with one clean, redacted line instead of a raw stack. The logic lives in

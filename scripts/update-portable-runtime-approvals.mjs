@@ -122,12 +122,30 @@ async function approvedOpencodeArchives(version, existingArchives, deps) {
     const name = OPENCODE_ARCHIVE_BY_TARGET[target];
     const url = `${OPENCODE_RELEASE_BASE}/v${version}/${name}`;
     const payload = await fetchBuffer(url, ARCHIVE_MAX_BYTES, RELEASE_HOSTS, deps);
+    const digest = sha256(payload);
+    const previous = existingArchives[target];
+    // KEIKO-0157: executableTreeSha256 is a digest of the EXTRACTED executable tree, and this
+    // script has no extractor — it can only carry the previous value forward. That is correct
+    // when the archive bytes are unchanged and a lie when they are not: the refreshed entry would
+    // pair a new sha256 with a tree digest describing the old contents, and both this script and
+    // check:portable-approvals (JSON-shape only, no network) would report success. The drift then
+    // surfaced at tag time, when portable-assets.yml fails closed on "approved executable tree
+    // digest mismatch" — during a release cut rather than at PR review. Fail here instead.
+    if (digest !== previous.sha256) {
+      fail(
+        `OpenCode archive for ${target} changed (sha256 ${digest} != approved ${previous.sha256}), ` +
+          "so its executableTreeSha256 can no longer be carried forward. Regenerate the executable " +
+          "tree digest independently (extract the archive and hash it with hashDirectoryTree, the " +
+          "way prepare-approved-sidecar-payloads.mjs verifies it) and update the approvals entry " +
+          "with both values together.",
+      );
+    }
     archives[target] = {
       url,
-      sha256: sha256(payload),
+      sha256: digest,
       sizeBytes: payload.byteLength,
       executableName: target === "windows-x64" ? "opencode.exe" : "opencode",
-      executableTreeSha256: existingArchives[target].executableTreeSha256,
+      executableTreeSha256: previous.executableTreeSha256,
     };
   }
   return archives;

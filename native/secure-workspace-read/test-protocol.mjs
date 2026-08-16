@@ -499,13 +499,17 @@ async function runConcurrentUpdater(label, update, read) {
   );
 }
 
+// KEIKO-0446: returns whether this read actually observed a known generation, so the caller can
+// require that at least one did. It used to return void on every non-zero status, which made the
+// whole suite vacuous — see the liveness assertion in assertFileGenerationConsistency.
 function assertKnownGeneration(result, generations) {
   const decoded = response(result);
-  if (decoded.status !== 0) return;
+  if (decoded.status !== 0) return false;
   assert.ok(
     generations.some((generation) => decoded.content.equals(generation)),
     "successful concurrent read returned external, partial, or mixed bytes",
   );
+  return true;
 }
 
 async function assertFileGenerationConsistency(binary, fixture) {
@@ -515,6 +519,12 @@ async function assertFileGenerationConsistency(binary, fixture) {
     Buffer.from(`${"b".repeat(32_767)}\n`),
   ];
   await writeFile(target, generations[0]);
+  // KEIKO-0446: every non-zero status was silently accepted, and nothing required a single read to
+  // succeed. A helper that answered KSR_ACCESS_DENIED (or CHANGED_DURING_READ, or MALFORMED) to all
+  // 32 reads passed this suite unchanged — the suite proved only "no read returned WRONG bytes",
+  // never "reads work". The target here is a plain regular file inside the fixture root, only ever
+  // replaced atomically by rename, so a correct helper must succeed on a substantial fraction.
+  let successfulReads = 0;
   await runConcurrentUpdater(
     "file-generation",
     async (attempt) => {
@@ -527,11 +537,21 @@ async function assertFileGenerationConsistency(binary, fixture) {
       }
     },
     async () => {
-      assertKnownGeneration(
-        await run(binary, request(fixture, "concurrent-generation.txt")),
-        generations,
-      );
+      if (
+        assertKnownGeneration(
+          await run(binary, request(fixture, "concurrent-generation.txt")),
+          generations,
+        )
+      ) {
+        successfulReads += 1;
+      }
     },
+  );
+  assert.ok(
+    successfulReads > 0,
+    `file-generation consistency: none of the ${String(CONCURRENT_CONSISTENCY_READS)} concurrent ` +
+      "reads observed a known generation — a helper that fails closed under all contention would " +
+      "satisfy every other assertion in this suite",
   );
 }
 

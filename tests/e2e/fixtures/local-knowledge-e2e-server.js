@@ -75,6 +75,23 @@ async function handleChat(req, res) {
   });
 }
 
+// KEIKO-0406 diagnostic, body-free per AGENTS.md §7. Deliberately NOT error.message: V8's
+// JSON.parse echoes a snippet of the input it choked on ("Unexpected token 'o', \"not-json\" is
+// not valid JSON"), so logging the message would put request-body bytes — a credential in the
+// wrong request — into the CI log. The error's TYPE plus the frame that threw carries the whole
+// diagnostic this exists for: it separates "the client sent something malformed" from "this
+// fixture has a bug" without reproducing anything the client sent (review finding on #3159).
+// process.stderr.write rather than console.error: `console` is not a declared global for
+// tests/e2e/fixtures/*.js, and widening that for one diagnostic line is the wrong trade.
+function reportRequestFailure(error) {
+  const kind = error instanceof Error ? error.constructor.name : typeof error;
+  const frame =
+    error instanceof Error && typeof error.stack === "string"
+      ? (/\n\s*at\s+(.+)/u.exec(error.stack)?.[1] ?? "unknown site")
+      : "unknown site";
+  process.stderr.write(`[local-knowledge-e2e-server] request failed: ${kind} at ${frame}\n`);
+}
+
 async function handleRequest(req, res) {
   try {
     if (req.method === "GET" && req.url === "/v1/models") {
@@ -93,7 +110,13 @@ async function handleRequest(req, res) {
       return;
     }
     jsonResponse(res, 404, { error: "not found" });
-  } catch {
+  } catch (error) {
+    // KEIKO-0406: a malformed body, an over-size rejection from readJsonBody and an internal bug in
+    // handleEmbeddings/handleChat/vectorFor all collapse to the same cause-less 400. Without this
+    // line a failing local-knowledge E2E run gives the operator no way to tell "the client sent
+    // something bad" from "this fixture has a bug". See reportRequestFailure for what is and is
+    // not written, and why.
+    reportRequestFailure(error);
     if (!res.headersSent) jsonResponse(res, 400, { error: "invalid request" });
   }
 }

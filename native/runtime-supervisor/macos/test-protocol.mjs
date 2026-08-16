@@ -165,7 +165,20 @@ const sourceText = await readFile(source, "utf8");
 assert.match(sourceText, /KEIKO_MONITOR_ARM/u);
 assert.match(sourceText, /KEIKO_MONITOR_STOP/u);
 assert.match(sourceText, /KEIKO_MONITOR_ZERO_LIVE/u);
-assert.doesNotMatch(sourceText, /setsid|setpgid|killpg|\/bin\/sh|system\(/u);
+// KEIKO-0261: fd 3 and fd 4 are the supervisor's control and response pipes. Closing both in the
+// child's spawn file actions is what keeps the supervised runtime off them — without it the
+// runtime could speak the control protocol to its own supervisor. The qualification fixture never
+// touches those descriptors, so no behavioural test observes this; the source pin is the only
+// thing standing between the boundary and a silent deletion.
+assert.match(sourceText, /posix_spawn_file_actions_addclose\(&actions, 3\)/u);
+assert.match(sourceText, /posix_spawn_file_actions_addclose\(&actions, 4\)/u);
+// The non-PATH spawn form: posix_spawn takes an explicit path, so a hostile PATH cannot redirect
+// the launch. The negative below rejects every PATH-searching sibling.
+assert.match(sourceText, /posix_spawn\(/u);
+assert.doesNotMatch(
+  sourceText,
+  /setsid|setpgid|killpg|\/bin\/sh|system\(|posix_spawnp|execvp|execlp|execvP/u,
+);
 
 if (process.platform === "darwin") {
   const helperIndex = process.argv.indexOf("--helper");

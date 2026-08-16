@@ -16,6 +16,16 @@ const monitorSource = readFileSync(
   ),
   "utf8",
 );
+// KEIKO-0261/0278: the macOS harness source (for its platform-independent contract pins) and the
+// Windows harness source (for its lifecycle guards) are read as text, same as the .m/.c sources.
+const macosProtocolHarness = readFileSync(
+  new URL("../../native/runtime-supervisor/macos/test-protocol.mjs", import.meta.url),
+  "utf8",
+);
+const windowsProtocolHarness = readFileSync(
+  new URL("../../native/runtime-supervisor/test-protocol.mjs", import.meta.url),
+  "utf8",
+);
 const supervisorSource = readFileSync(
   new URL("../../native/runtime-supervisor/macos/keiko_runtime_supervisor.c", import.meta.url),
   "utf8",
@@ -81,7 +91,11 @@ describe("macOS system-extension activation manager", () => {
 
     expect(reply).toContain("sent == (ssize_t)sizeof(reply)");
     expect(reply).toContain("shutdown(session->descriptor, SHUT_RDWR)");
-    expect(connection).toContain("session->descriptor < 0 && session->uid == uid");
+    // KEIKO-0433 split the old single `session->descriptor < 0 && session->uid == uid` guard into
+    // three outcomes. Both halves of that guard must survive the split: a session already owned by
+    // a live connection is adopted by nobody, and an owner mismatch still fails.
+    expect(connection).toContain("session->descriptor >= 0");
+    expect(connection).toContain("session->uid != uid");
     expect(reserve).toContain("KEIKO_MAX_CONNECTIONS");
     expect(main).toContain("reserve_connection()");
     expect(main).toContain("errno != EINTR && errno != ECONNABORTED");
@@ -97,5 +111,184 @@ describe("macOS system-extension activation manager", () => {
     expect(qualify).toContain("finally {");
     expect(qualify).toContain('child.kill("SIGKILL")');
     expect(qualify).toContain("await exited.catch");
+  });
+
+  // KEIKO-0278: the pin above covered only the macOS `qualify`. The two Windows harness functions
+  // had no finally at all — `assertControlEofFailsClosed` had no watchdog whatsoever — so a
+  // supervisor that hangs on control EOF hung the entire native-quality lane instead of failing
+  // with a named stage. Both are now pinned to the same three tokens.
+  describe.each([["qualifyWindows"], ["assertControlEofFailsClosed"]])(
+    "%s carries the harness lifecycle guard",
+    (name) => {
+      it("clears its deadline, SIGKILLs on an incomplete run, and awaits the exit", () => {
+        const body = functionBody(windowsProtocolHarness, `async function ${name}(`);
+        expect(body).toContain("finally {");
+        expect(body).toContain("clearTimeout(deadline)");
+        expect(body).toContain('child.kill("SIGKILL")');
+        expect(body).toContain("await exited.catch");
+      });
+    },
+  );
+
+  // KEIKO-0261: fd 3 and fd 4 are the supervisor's control and response pipes. The qualification
+  // fixture never touches them, so nothing behavioural observes the close — this source pin is the
+  // only thing between that trust boundary and a silent deletion.
+  it("pins the macOS fd-3/fd-4 close and the non-PATH spawn form", () => {
+    // The harness writes these as regex literals, so the source text carries escaped parens.
+    for (const descriptor of [3, 4]) {
+      expect(macosProtocolHarness).toMatch(
+        new RegExp(`posix_spawn_file_actions_addclose\\\\\\(&actions, ${String(descriptor)}`, "u"),
+      );
+    }
+    expect(macosProtocolHarness).toMatch(/posix_spawnp\|execvp\|execlp\|execvP/u);
+    // The pins must sit ABOVE the darwin guard or they only run on macOS, which is where they are
+    // least needed — the source contract is platform-independent by design.
+    const guardAt = macosProtocolHarness.indexOf('process.platform === "darwin"');
+    expect(macosProtocolHarness.indexOf("posix_spawn_file_actions_addclose")).toBeLessThan(guardAt);
+  });
+
+  // The pin above proves the HARNESS asserts it; this proves the assertion is currently true of the
+  // supervisor it guards, so the pair cannot both drift into agreeing about nothing.
+  it("keeps the supervisor's fd-3/fd-4 close and non-PATH spawn in place", () => {
+    expect(supervisorSource).toContain("posix_spawn_file_actions_addclose(&actions, 3)");
+    expect(supervisorSource).toContain("posix_spawn_file_actions_addclose(&actions, 4)");
+    expect(supervisorSource).toMatch(/posix_spawn\(/u);
+    expect(supervisorSource).not.toMatch(/posix_spawnp|execvp|execlp|execvP/u);
+  });
+
+  // KEIKO-0419: the daemon emitted no diagnostic output at all, so an Endpoint Security failure,
+  // a Full-Disk-Access refusal and a kill-switch fan-out were equally invisible to an operator.
+  describe("runtime monitor diagnostics (KEIKO-0419)", () => {
+    it("logs through os_log under the documented subsystem", () => {
+      expect(monitorSource).toContain("#include <os/log.h>");
+      expect(monitorSource).toContain('os_log_create("com.oscharko.keiko.runtime-monitor"');
+    });
+
+    it("logs every endpoint state transition, including the one that bypasses the setter", () => {
+      expect(functionBody(monitorSource, "static void set_endpoint_state(")).toContain("os_log(");
+      // start_endpoint_security assigns ENDPOINT_STATE_ACTIVE directly under the lock rather than
+      // through set_endpoint_state, so it needs its own line or the transition that matters most
+      // would be the only silent one.
+      expect(functionBody(monitorSource, "static void *start_endpoint_security(")).toContain(
+        "os_log(",
+      );
+    });
+
+    it("logs the kill-switch fan-out and the Endpoint Security failure branches", () => {
+      expect(functionBody(monitorSource, "static void stop_session(")).toContain("os_log(");
+      const endpoint = functionBody(monitorSource, "static void *start_endpoint_security(");
+      expect(endpoint).toContain("es_new_client denied");
+      expect(endpoint).toContain("es_subscribe failed");
+      expect(functionBody(monitorSource, "static void *serve_client(")).toContain("os_log_error(");
+    });
+
+    it("keeps the per-event hot path free of logging", () => {
+      // Logging every fork/exec/exit machine-wide would recreate the hot-path cost the O(n)-scan
+      // finding warns about. Decision points only.
+      expect(functionBody(monitorSource, "static void endpoint_event(")).not.toContain("os_log");
+    });
+
+    it("logs no process command lines, argv or environment", () => {
+      for (const line of monitorSource.split("\n").filter((l) => l.includes("os_log"))) {
+        expect(line).not.toMatch(/argv|environ|cmdline|executable->path/u);
+      }
+    });
+  });
+
+  // KEIKO-0450: every non-zero exit discarded its reason, including the NSError the OS supplied,
+  // so three different operator actions all surfaced as one generic failure.
+  describe("system extension manager diagnostics (KEIKO-0450)", () => {
+    it("reports the OS-supplied reason instead of discarding the NSError", () => {
+      expect(source).not.toContain("(void)error;");
+      expect(source).toContain("error.localizedDescription.UTF8String");
+    });
+
+    it("distinguishes the three activation failure causes", () => {
+      const activate = functionBody(source, "static int activate_extension(");
+      const messages = [...activate.matchAll(/fprintf\(stderr,\s*\n?\s*"([^"]+)/gu)].map(
+        (match) => match[1],
+      );
+      expect(messages.length).toBeGreaterThanOrEqual(3);
+      expect(new Set(messages).size).toBe(messages.length);
+    });
+
+    it("writes nothing to stderr on the success paths", () => {
+      // portable-macos-activation.ts requires result.stderr === "" on success; a diagnostic on a
+      // success path would break that caller.
+      const activate = functionBody(source, "static int activate_extension(");
+      const successReturn = activate.slice(activate.lastIndexOf('puts("active")'));
+      expect(successReturn).not.toContain("fprintf(stderr");
+    });
+  });
+
+  // KEIKO-0283: an accepted connection that never wrote its handshake blocked serve_client's first
+  // read forever while holding one of the 32 slots, so a stalled same-team peer could exhaust the
+  // budget and lock out every ARM/RECONCILE — the kill-switch among them.
+  describe("accepted connection handshake deadline (KEIKO-0283)", () => {
+    it("bounds the pre-handshake read on every accepted descriptor", () => {
+      const main = functionBody(monitorSource, "int main(");
+      expect(main).toContain("SO_RCVTIMEO");
+      expect(main).toContain("SO_SNDTIMEO");
+      expect(main).toContain("KEIKO_HANDSHAKE_TIMEOUT_SECONDS");
+      // Alongside SO_NOSIGPIPE, not instead of it.
+      expect(main).toContain("SO_NOSIGPIPE");
+    });
+
+    it("restores blocking reads once the handshake is valid", () => {
+      // The long-lived read after the handshake is the deliberate dead-man's switch for supervisor
+      // liveness. Leaving a timeout on it would tear down healthy sessions every few seconds.
+      const connection = functionBody(monitorSource, "static void *serve_client(");
+      expect(connection).toMatch(
+        /request_valid\(&request, peer\)[\s\S]*?struct timeval blocking = \{\.tv_sec = 0, \.tv_usec = 0\}/u,
+      );
+      expect(connection).toMatch(/blocking[\s\S]*?while \(read_exact\(descriptor/u);
+    });
+  });
+
+  // KEIKO-0433: RECONCILE answered ZERO_LIVE both for "no such session" and for "already owned by
+  // a live connection" — opposite situations demanding opposite caller responses.
+  describe("reconcile outcome distinguishability (KEIKO-0433)", () => {
+    it("appends the new response code without renumbering the wire protocol", () => {
+      const protocol = readFileSync(
+        new URL(
+          "../../native/runtime-supervisor/macos/keiko_runtime_monitor_protocol.h",
+          import.meta.url,
+        ),
+        "utf8",
+      );
+      expect(protocol).toContain("KEIKO_MONITOR_ALREADY_ACTIVE = 9");
+      // Every pre-existing value keeps its number: reassigning one breaks already-built binaries.
+      for (const [name, value] of [
+        ["KEIKO_MONITOR_ACTIVE", 1],
+        ["KEIKO_MONITOR_ARMED", 2],
+        ["KEIKO_MONITOR_ROOT_OBSERVED", 3],
+        ["KEIKO_MONITOR_ZERO_LIVE", 4],
+        ["KEIKO_MONITOR_ERROR", 5],
+        ["KEIKO_MONITOR_NEEDS_FULL_DISK_ACCESS", 6],
+        ["KEIKO_MONITOR_STARTING", 7],
+        ["KEIKO_MONITOR_FAILED", 8],
+      ]) {
+        expect(protocol).toContain(`${name} = ${String(value)}`);
+      }
+    });
+
+    it("replies ALREADY_ACTIVE only for the live case and keeps ZERO_LIVE for unknown handles", () => {
+      const connection = functionBody(monitorSource, "static void *serve_client(");
+      expect(connection).toContain("RECONCILE_ALREADY_LIVE");
+      expect(connection).toContain("KEIKO_MONITOR_ALREADY_ACTIVE");
+      expect(connection).toContain("KEIKO_MONITOR_ZERO_LIVE");
+      // An owner mismatch must stay indistinguishable from an unknown handle: telling a different
+      // uid that the handle exists is an information leak, not a diagnostic.
+      expect(connection).toMatch(/session->uid != uid[\s\S]{0,400}RECONCILE_UNKNOWN_HANDLE/u);
+    });
+
+    it("gives the supervisor its own branch instead of the generic observe error", () => {
+      const reconcile = functionBody(supervisorSource, "static int reconcile(");
+      expect(reconcile).toContain("KEIKO_MONITOR_ALREADY_ACTIVE");
+      expect(reconcile).toContain("ERROR_TREE_ALREADY_SUPERVISED");
+      expect(reconcile).toMatch(
+        /KEIKO_MONITOR_ALREADY_ACTIVE[\s\S]{0,200}ERROR_TREE_ALREADY_SUPERVISED[\s\S]{0,200}ERROR_TREE_OBSERVE/u,
+      );
+    });
   });
 });
