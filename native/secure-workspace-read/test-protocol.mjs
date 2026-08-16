@@ -336,13 +336,16 @@ const PREPROCESSOR_PATTERNS = {
 //   `sawUnknownLive` — a preceding branch was POTENTIALLY live (`#elif FEATURE`). Subsequent
 //     branches may also be live (the ladder does not know which the compiler picked), so a
 //     later `#else` or `#elif 1` is treated as maybe-live, NOT as definitively live.
-// This replaces the earlier PRE_LIVE / KEEPING_LIVE / POST_LIVE enum, which incorrectly moved
-// an unknown `#elif` to KEEPING_LIVE and then stripped the following `#else` — the reviewer's
-// evidence was `#if 0 ... #elif FEATURE ... #else FORBIDDEN_CONTROL ... #endif`, where the
-// old scanner dropped `FORBIDDEN_CONTROL` on the floor because it thought `#elif FEATURE`
-// was the picked branch.
 const STRIPPING = "stripping";
 const KEEPING = "keeping";
+// Codex 3793074555 on #3202: `#if 1 ... #else DEAD ... #endif` has a compiler-dead `#else`,
+// but if the stack is empty for it the `#else` body ends up in the scan. Recognise
+// deterministically-true `#if` (bare `1` with optional integer suffix and parens) so its
+// ladder pushes a frame with mode=KEEPING and sawDefLive=true — subsequent `#elif`/`#else`
+// then strip. Composite conditions like `#if 1 && FEATURE` are intentionally NOT recognised
+// (they short-circuit to FEATURE); stays consistent with the DISABLED_IF policy of only
+// tracking constant conditions.
+const DEFINITIVELY_TRUE_IF = /^#\s*if\s+\(?\s*1[UuLl]{0,3}\s*\)?\s*$/u;
 const DEFINITIVELY_TRUE_ELIF = /^#\s*elif\s+\(?\s*1[UuLl]{0,3}\s*\)?\s*$/u;
 
 // Stack-based ladder state (coderabbit 3793025299 on #3202): the previous single-frame model
@@ -367,6 +370,13 @@ function processLadderLine(line, stack, kept) {
   const trimmed = line.trimStart();
   if (p.DISABLED_IF.test(trimmed)) {
     stack.push({ mode: STRIPPING, sawDefLive: false, sawUnkLive: false, depth: 0 });
+    return;
+  }
+  // Codex 3793074555: `#if 1 ... #else DEAD ... #endif` — track the ladder so the `#else` is
+  // stripped. The if-body is definitively live (mode=KEEPING); sawDefLive=true so subsequent
+  // `#elif`/`#else` transitions set mode=STRIPPING via applyElifTransition/applyElseTransition.
+  if (DEFINITIVELY_TRUE_IF.test(trimmed)) {
+    stack.push({ mode: KEEPING, sawDefLive: true, sawUnkLive: false, depth: 0 });
     return;
   }
   if (stack.length === 0) {

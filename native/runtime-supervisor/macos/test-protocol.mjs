@@ -158,6 +158,10 @@ const PREPROCESSOR_PATTERNS = {
 // `#elif FEATURE` is still kept (else could be picked if FEATURE turned out false).
 const STRIPPING = "stripping";
 const KEEPING = "keeping";
+// Codex 3793074555 on #3202: `#if 1 ... #else DEAD ... #endif` — the `#else` is compiler-dead.
+// Track constant-true `#if` so the else-body gets stripped. Composite conditions like `#if 1
+// && FEATURE` intentionally NOT recognised (they short-circuit to FEATURE).
+const DEFINITIVELY_TRUE_IF = /^#\s*if\s+\(?\s*1[UuLl]{0,3}\s*\)?\s*$/u;
 const DEFINITIVELY_TRUE_ELIF = /^#\s*elif\s+\(?\s*1[UuLl]{0,3}\s*\)?\s*$/u;
 
 // Stack-based ladder state (coderabbit 3793025299 on #3202): every `#if 0` — top-level OR
@@ -179,6 +183,12 @@ function processLadderLine(line, stack, kept) {
   const trimmed = line.trimStart();
   if (p.DISABLED_IF.test(trimmed)) {
     stack.push({ mode: STRIPPING, sawDefLive: false, sawUnkLive: false, depth: 0 });
+    return;
+  }
+  // Codex 3793074555: `#if 1 ... #else DEAD ... #endif`. The if-body is definitively live,
+  // subsequent `#elif`/`#else` are dead.
+  if (DEFINITIVELY_TRUE_IF.test(trimmed)) {
+    stack.push({ mode: KEEPING, sawDefLive: true, sawUnkLive: false, depth: 0 });
     return;
   }
   if (stack.length === 0) {
@@ -375,9 +385,16 @@ assert.match(codeText, /posix_spawn_file_actions_addclose\(&actions, 4\)/u);
 // the launch. The negative below rejects every PATH-searching sibling — literal-preserving scan
 // so a real `execve("/bin/sh", …)` still trips.
 assert.match(codeText, /posix_spawn\(/u);
+// Codex 3793074557 on #3202: the earlier form only rejected the exact `/bin/sh` path. A
+// supervisor rewritten to wrap the requested command with `posix_spawn("/bin/bash", ...
+// "-c", ...)` or `/bin/zsh` would still satisfy the positive `posix_spawn(` pin AND miss this
+// negative. Widened to any absolute path under `/bin/`, `/usr/bin/`, `/usr/local/bin/`, or
+// `/sbin/` whose executable name ends in `sh` — that covers `sh`, `bash`, `zsh`, `ksh`,
+// `dash`, `ash`, `csh`, `tcsh`, and `fish` on any of the standard system paths, without
+// tripping on unrelated tokens containing "sh".
 assert.doesNotMatch(
   codeAndLiteralsText,
-  /setsid|setpgid|killpg|\/bin\/sh|system\(|posix_spawnp|execvp|execlp|execvP/u,
+  /setsid|setpgid|killpg|\/(?:s?bin|usr\/(?:local\/)?bin)\/[a-z]*sh\b|system\(|posix_spawnp|execvp|execlp|execvP/u,
 );
 
 // Codex 3792964064 negative self-test: a deleted control retained only as text inside a compiled
@@ -670,6 +687,71 @@ assert.equal(
   null,
   "the outer dead branch's own body must still be stripped",
 );
+// Codex 3793074555: `#if 1 ... #else DEAD ... #endif`. The if-body is live, the else-body
+// is compiler-dead. Track constant-true `#if` so the else-body gets stripped.
+const constantTrueIfSample =
+  "int keep_before(void) { return 1; }\n" +
+  "#if 1\n" +
+  "LIVE_IN_IF_ONE();\n" +
+  "#else\n" +
+  "DEAD_IN_ELSE_OF_IF_ONE();\n" +
+  "#endif\n" +
+  "int keep_after(void) { return 2; }\n";
+const constantTrueIfStripped = stripCCommentsPreservingLiterals(constantTrueIfSample);
+assert.match(constantTrueIfStripped, /LIVE_IN_IF_ONE/u, "the `#if 1` body must be visible");
+assert.equal(
+  constantTrueIfStripped.match(/DEAD_IN_ELSE_OF_IF_ONE/u),
+  null,
+  "the `#else` after `#if 1` must be stripped (compiler picks the if-body)",
+);
+// Also cover `#if 1L` and `#if (1)` — same constant-true variants as the DISABLED_IF suffixes.
+for (const variant of ["#if (1)", "#if 1L", "#if 1U", "#if (1UL)"]) {
+  const stripped = stripCCommentsPreservingLiterals(
+    variant + "\nLIVE_VARIANT();\n#else\nDEAD_ELSE_OF_TRUE_VARIANT();\n#endif\n",
+  );
+  assert.match(
+    stripped,
+    /LIVE_VARIANT/u,
+    "constant-true #if variant must keep the if-body: " + variant,
+  );
+  assert.equal(
+    stripped.match(/DEAD_ELSE_OF_TRUE_VARIANT/u),
+    null,
+    "constant-true #if variant must strip the else-body: " + variant,
+  );
+}
+// Codex 3793074557 negative self-test: mutate the real source to insert a hard-coded shell
+// path OTHER than `/bin/sh` and prove the widened negative assertion trips. If the code base
+// had a real `posix_spawn(..., "/bin/bash", "-c", ...)` call, we'd want the test to fail.
+const alternateShellSample = rawSource.replace(
+  /posix_spawn\(/u,
+  '_dummy_marker(); posix_spawn("/bin/bash", "-c", ...',
+);
+const alternateShellStripped = stripCCommentsPreservingLiterals(alternateShellSample);
+assert.match(
+  alternateShellStripped,
+  /\/(?:s?bin|usr\/(?:local\/)?bin)\/[a-z]*sh\b/u,
+  "widened shell-path negative assertion regex must match `/bin/bash`",
+);
+for (const shellPath of [
+  "/bin/bash",
+  "/bin/zsh",
+  "/bin/ksh",
+  "/bin/dash",
+  "/bin/csh",
+  "/bin/tcsh",
+  "/usr/bin/bash",
+  "/usr/local/bin/fish",
+  "/sbin/nologin_but_not_sh_ending", // sanity: this one must NOT match (ends in "ending")
+]) {
+  const shouldMatch = /sh$/.test(shellPath);
+  const actual = /\/(?:s?bin|usr\/(?:local\/)?bin)\/[a-z]*sh\b/u.test(shellPath);
+  assert.equal(
+    actual,
+    shouldMatch,
+    `shell-path regex on ${shellPath}: expected ${shouldMatch}, got ${actual}`,
+  );
+}
 // Coderabbit 3793025301: unterminated `'...'` and `"..."` must throw for the same reason
 // unterminated `/* ... */` throws — silently accepting them drops every token after the stray
 // quote from the scan.
