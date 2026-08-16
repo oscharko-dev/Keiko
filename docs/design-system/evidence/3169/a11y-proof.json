@@ -1,0 +1,23 @@
+{
+  "issue": 3169,
+  "verdict": "PASS",
+  "method": "Computer Use accessibility tree plus focused component tests",
+  "captures": [
+    {
+      "file": "01-empty-index-dark.jpeg",
+      "observations": [
+        "Knowledge Pods heading and zero count are exposed",
+        "Empty-state explanation and first-pod action are exposed",
+        "Window close/restore controls are operable"
+      ]
+    },
+    {
+      "file": "02-empty-index-light.jpeg",
+      "observations": [
+        "The same empty-state semantics remain exposed after the theme change",
+        "No selection is implied by color or placeholder text"
+      ]
+    }
+  ],
+  "gate": "No serious or critical issue observed in the changed Local Knowledge empty state; automated UI receipt remains a separate release gate."
+}

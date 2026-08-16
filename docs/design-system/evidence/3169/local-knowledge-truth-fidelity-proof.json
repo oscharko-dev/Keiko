@@ -1,0 +1,22 @@
+{
+  "issue": 3169,
+  "verdict": "PASS",
+  "captureMethod": "Google Chrome via Computer Use",
+  "captures": [
+    {
+      "file": "01-empty-index-dark.jpeg",
+      "theme": "dark",
+      "state": "reopened-empty-index",
+      "viewport": { "width": 1366, "height": 768 },
+      "podCount": 0
+    },
+    {
+      "file": "02-empty-index-light.jpeg",
+      "theme": "light",
+      "state": "reopened-empty-index",
+      "viewport": { "width": 1366, "height": 768 },
+      "podCount": 0
+    }
+  ],
+  "summary": "The real browser reloads Local Knowledge after reopening and renders an explicit, actionable empty index in both themes."
+}
