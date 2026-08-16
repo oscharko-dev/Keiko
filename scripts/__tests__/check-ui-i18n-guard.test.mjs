@@ -1226,6 +1226,48 @@ test("still ignores expression values on non-user-facing attributes", () => {
   ).toEqual([]);
 });
 
+// KEIKO-0299 (review-follow-up on a0ee79ae): `&&` short-circuits. The LEFT operand only
+// controls evaluation and is NEVER rendered as user copy; only the right operand is. A
+// literal on the left (`{"Feature enabled" && value}`) is code, not rendered text, and must
+// not enter the ledger. Coderabbit 3792888551.
+test("does not collect the left operand of `&&` in JSX children", () => {
+  expect(
+    untranslatedLiteralsInSource('<span>{"Feature enabled" && value}</span>', "packages/x/y.tsx")
+      .findings,
+  ).toEqual([]);
+});
+
+test("still collects the right operand of `&&` in JSX children", () => {
+  const findings = untranslatedLiteralsInSource(
+    '<span>{ready && "Ready now"}</span>',
+    "packages/x/y.tsx",
+  ).findings;
+  expect(findings.map((f) => f.text)).toContain("Ready now");
+});
+
+// KEIKO-0299 (review-follow-up on a0ee79ae): each recursively-extracted literal must carry its
+// own source position, not the outer expression's start line. A multi-line conditional whose
+// branches sit on different lines has to report those lines exactly so an exemption on one
+// branch does not silently cover the other and the ledger diff points reviewers at the right
+// spot. Coderabbit 3792888549.
+test("assigns each conditional branch its own source line", () => {
+  const src = '<span>{\n  cond\n    ? "First branch"\n    : "Second branch"\n}</span>';
+  const byText = new Map(
+    untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => [f.text, f.line]),
+  );
+  expect(byText.get("First branch")).toBe(3);
+  expect(byText.get("Second branch")).toBe(4);
+});
+
+test("assigns each attribute-expression branch its own source line", () => {
+  const src = '<button aria-label={\n  cond\n    ? "Copied"\n    : "Copy code block"\n}>x</button>';
+  const byText = new Map(
+    untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => [f.text, f.line]),
+  );
+  expect(byText.get("Copied")).toBe(3);
+  expect(byText.get("Copy code block")).toBe(4);
+});
+
 // KEIKO-0299 (review-follow-up): multi-line JSX text now collapses intra-node whitespace so a
 // reformat or indentation change does not churn the ratcheted ledger. Same rendered copy, same
 // ledger entry, either shape.

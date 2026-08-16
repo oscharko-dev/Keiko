@@ -295,11 +295,17 @@ function preprocessCLineSplices(source) {
 // `#else` at the outer `#if 0`'s depth stripping stops — the else branch IS the live code.
 // Non-literal `#if <expr>` is intentionally out of scope: this is not a preprocessor, it
 // targets the specific "disabled code" marker that hides tokens from the compiler.
+//
+// DISABLED_IF (review-follow-up on a0ee79ae, coderabbit 3792888543): C accepts constant
+// expressions in `#if`, so a disabled block can legitimately appear as `#if (0)` or `#if 0L`
+// (integer suffixes `U`, `L`, `LL`, `UL`, `ULL` and their lowercase equivalents). Recognize
+// those shapes too. Composite conditions like `#if 0 && SOMETHING` are intentionally NOT
+// recognised — the pin is deliberately narrow (a "disabled code" marker, not a preprocessor).
 function stripDisabledPreprocessorBranches(source) {
   const OPEN_IF = /^#\s*(?:if|ifdef|ifndef)\b/u;
   const CLOSE_ENDIF = /^#\s*endif\b/u;
   const ELSE_DIRECTIVE = /^#\s*else\b/u;
-  const DISABLED_IF = /^#\s*if\s+0\b/u;
+  const DISABLED_IF = /^#\s*if\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*$/u;
   const lines = source.split("\n");
   const kept = [];
   let stripping = false;
@@ -340,6 +346,26 @@ function skipStringLiteral(source, start) {
   return i;
 }
 
+// KEIKO-0417 (review-follow-up on a0ee79ae): C character constants can be multi-character
+// (`'CreateFileW('`, implementation-defined `int` value) and can contain sequences that would
+// otherwise look like comment starts (`'//'`, `'/*'`). Coderabbit 3792888545. Without skipping
+// them, `stripCComments` would treat those sequences as real comments and drop the following
+// bytes, and `stripStringLiteralBodies` would leave the char literal's body visible as if it
+// were code. Skip the char literal the same way `skipStringLiteral` handles `"..."`.
+function skipCharLiteral(source, start) {
+  let i = start + 1;
+  while (i < source.length) {
+    const c = source[i];
+    if (c === "\\") {
+      i += 2;
+      continue;
+    }
+    if (c === "'") return i + 1;
+    i += 1;
+  }
+  return i;
+}
+
 // KEIKO-0417 (review-follow-up on 44b9ef9b): C translation phase 3 removes comments BEFORE
 // phase 4 executes preprocessor directives, so `#else` (or `#if`, `#endif`) inside a `/* */`
 // block is never seen by the preprocessor. Running `stripDisabledPreprocessorBranches` on text
@@ -359,7 +385,11 @@ function stripCComments(source) {
       // truncated source silently satisfy the source-contract regexes on tokens BEFORE the
       // unclosed comment. Throw so a malformed input fails the harness at a named stage.
       if (end === -1) throw new Error("unterminated C block comment: no `*/` after opening `/*`");
-      out += "  ";
+      // Coderabbit 3792888538 (on macOS sibling; same logic here): replace non-newline chars
+      // in the block-comment span with spaces so newlines are PRESERVED. Subsequent line-based
+      // scans (`stripDisabledPreprocessorBranches`) then see directives at their original line
+      // positions and inspection error messages point at the right physical line.
+      out += source.slice(i, end + 2).replace(/[^\n]/gu, " ");
       i = end + 2;
       continue;
     }
@@ -376,16 +406,26 @@ function stripCComments(source) {
       i = after;
       continue;
     }
+    if (ch === "'") {
+      // Preserve the char literal verbatim so a `'//'` or `'/*'` inside it is not misread as a
+      // comment start on the next byte (coderabbit 3792888545).
+      const after = skipCharLiteral(source, i);
+      out += source.slice(i, after);
+      i = after;
+      continue;
+    }
     out += ch;
     i += 1;
   }
   return out;
 }
 
-// Post-pass for the `stripCommentsAndStrings` mode: blanks `"..."` bodies so an assertion whose
-// subject is a code identifier cannot be satisfied by that identifier appearing inside a string
-// literal. Runs AFTER `stripCComments` and `stripDisabledPreprocessorBranches`, so it never sees
-// a string that lived only inside a comment or a disabled branch.
+// Post-pass for the `stripCommentsAndStrings` mode: blanks `"..."` bodies AND char literal
+// bodies so an assertion whose subject is a code identifier cannot be satisfied by that
+// identifier appearing inside a literal (`'CreateFileW('` as a multi-character constant would
+// otherwise satisfy the `CreateFileW(` assertion — coderabbit 3792888545). Runs AFTER
+// `stripCComments` and `stripDisabledPreprocessorBranches`, so it never sees a literal that
+// lived only inside a comment or a disabled branch.
 function stripStringLiteralBodies(source) {
   let out = "";
   let i = 0;
@@ -394,6 +434,11 @@ function stripStringLiteralBodies(source) {
     if (ch === '"') {
       out += '""';
       i = skipStringLiteral(source, i);
+      continue;
+    }
+    if (ch === "'") {
+      out += "''";
+      i = skipCharLiteral(source, i);
       continue;
     }
     out += ch;
@@ -438,7 +483,14 @@ async function assertWindowsSourceContract() {
   assert.match(nativeSource, /if \(!binary_standard_io\(\)\) return 1;.*parse_request\(/su);
   for (const stem of WINDOWS_RESERVED_STEMS)
     assert.ok(nativeSourceCommentsStripped.includes(`"${stem}"`));
-  assert.match(nativeSource, /while \(name_length < length && component\[name_length\] != '\.'\)/u);
+  // Assertions that embed CHARACTER literals (`'.'`, `':'`, `'?'`, `'~'`) must consume the
+  // comments-only scan output: `stripCommentsAndStrings` blanks char literal bodies (so a
+  // multi-character constant like `'CreateFileW('` cannot satisfy an assertion), which would
+  // also blank the very literals these checks want to observe. Coderabbit 3792888545.
+  assert.match(
+    nativeSourceCommentsStripped,
+    /while \(name_length < length && component\[name_length\] != '\.'\)/u,
+  );
   assert.match(
     nativeSourceCommentsStripped,
     /ascii_name_equals\(component, name_length, "GLOBALROOT"\)/u,
@@ -448,7 +500,7 @@ async function assertWindowsSourceContract() {
   assert.match(nativeSource, /bytes\[4\] == 0xb9 \|\| bytes\[4\] == 0xb2 \|\| bytes\[4\] == 0xb3/u);
   assert.match(nativeSource, /_Static_assert\(sizeof\(KSR_SUPERSCRIPT_ONE_UTF8\) == 3/u);
   assert.doesNotMatch(nativeSource, /char name\[10\]/u);
-  assert.match(nativeSource, /\*q == ':' \|\| \*q == '\?' \|\| \*q == '~'/u);
+  assert.match(nativeSourceCommentsStripped, /\*q == ':' \|\| \*q == '\?' \|\| \*q == '~'/u);
   assert.equal(nativeSource.match(/CreateFileW\(/gu)?.length, 1);
 
   assertCommentStrippingIsLoadBearing(rawSource);
@@ -517,6 +569,15 @@ function assertCommentStrippingIsLoadBearing(rawSource) {
 // `#if X ... #endif` inside the disabled block must count toward the balance; code after
 // the outer `#endif` must survive.
 function assertDisabledPreprocessorBranchesAreStripped() {
+  assertBasicDisabledIfStrip();
+  assertSplicedDisabledIfStrip();
+  assertCommentedElseIsIgnored();
+  assertMultilineCommentBeforeIfPreservesLines();
+  assertDisabledIfVariants();
+  assertCharLiteralHandling();
+}
+
+function assertBasicDisabledIfStrip() {
   const disabledIf = stripCommentsAndStrings(
     "int keep_before(void) { return 1; }\n" +
       "#if 0\nCreateFileW(bogus);\n#endif\n" +
@@ -541,8 +602,11 @@ function assertDisabledPreprocessorBranchesAreStripped() {
     nestedIf.includes("keep") && nestedIf.includes("live"),
     "code before/after the outer `#if 0 ... #endif` must survive the strip",
   );
-  // KEIKO-0417 (review-follow-up on 7c976f77): a `\`-continued `#if \\\n0` splices to `#if 0`
-  // at C translation phase 2, before preprocessing. Proves the line-splice pre-pass runs FIRST.
+}
+
+// KEIKO-0417 (review-follow-up on 7c976f77): a `\`-continued `#if \\\n0` splices to `#if 0`
+// at C translation phase 2, before preprocessing. Proves the line-splice pre-pass runs FIRST.
+function assertSplicedDisabledIfStrip() {
   const splicedDirective = stripCommentsAndStrings(
     "int keep_before(void) { return 1; }\n" +
       "#if \\\n0\nSHOULD_BE_STRIPPED_BY_SPLICED_IF();\n#endif\n" +
@@ -553,11 +617,12 @@ function assertDisabledPreprocessorBranchesAreStripped() {
     null,
     "line splicing must run BEFORE disabled-branch stripping so `#if \\\\\\n0` is recognised as `#if 0`",
   );
-  // KEIKO-0417 (review-follow-up on 44b9ef9b): a `#else` that lives ONLY inside a `/* */` block
-  // is invisible to the C preprocessor (translation phase 3 removes comments before phase 4
-  // interprets directives). Running disabled-branch stripping on comment-inclusive text would
-  // treat that commented `#else` as an early exit from `stripping`, exposing the following
-  // disabled control. Proves comment stripping runs BEFORE disabled-branch stripping.
+}
+
+// KEIKO-0417 (review-follow-up on 44b9ef9b): a `#else` that lives ONLY inside a `/* */` block
+// is invisible to the C preprocessor (translation phase 3 removes comments before phase 4
+// interprets directives). Proves comment stripping runs BEFORE disabled-branch stripping.
+function assertCommentedElseIsIgnored() {
   const commentedElse = stripCommentsAndStrings(
     "int keep(void) { return 1; }\n" +
       "#if 0\n" +
@@ -570,6 +635,60 @@ function assertDisabledPreprocessorBranchesAreStripped() {
     commentedElse.match(/STILL_INSIDE_DISABLED_BRANCH/u),
     null,
     "comment stripping must run BEFORE disabled-branch stripping so a `#else` inside `/* */` is not seen as a directive",
+  );
+}
+
+// Coderabbit 3792888538: a multi-line block comment must be replaced with a same-length span of
+// spaces AND newlines, so a `#if 0` directive on a line following the comment stays at
+// line-start in the output.
+function assertMultilineCommentBeforeIfPreservesLines() {
+  const stripped = stripCommentsAndStrings(
+    "int keep(void) { return 1; }\n" +
+      "/* multi\n line \n block */\n" +
+      "#if 0\n" +
+      "SHOULD_BE_STRIPPED_AFTER_MULTILINE_COMMENT();\n" +
+      "#endif\n",
+  );
+  assert.equal(
+    stripped.match(/SHOULD_BE_STRIPPED_AFTER_MULTILINE_COMMENT/u),
+    null,
+    "block-comment stripping must preserve newlines so a following `#if 0` stays at line-start",
+  );
+}
+
+// Coderabbit 3792888543: `#if (0)`, `#if 0L`, `#if (0U)` and integer-suffix variants are all
+// constant-zero conditions the C preprocessor treats identically to `#if 0`.
+function assertDisabledIfVariants() {
+  for (const variant of ["#if (0)", "#if 0L", "#if 0U", "#if 0LL", "#if (0UL)", "#if  0"]) {
+    const stripped = stripCommentsAndStrings(
+      `${variant}\nSHOULD_BE_STRIPPED_BY_DISABLED_IF_VARIANT();\n#endif\nint live(void) { return 1; }\n`,
+    );
+    assert.equal(
+      stripped.match(/SHOULD_BE_STRIPPED_BY_DISABLED_IF_VARIANT/u),
+      null,
+      `disabled-if strip must recognise the constant-zero variant: ${variant}`,
+    );
+  }
+}
+
+// Coderabbit 3792888545: a multi-character constant `'CreateFileW('` must not satisfy the
+// source-contract regex for `CreateFileW(`, and a `//` inside a char constant must not start a
+// false line comment.
+function assertCharLiteralHandling() {
+  const charLiteralMultiChar = stripCommentsAndStrings(
+    "int f(void) { return 'CreateFileW('; }\nint g(void) { return 1; }\n",
+  );
+  assert.equal(
+    charLiteralMultiChar.match(/CreateFileW\(/u),
+    null,
+    "stripCommentsAndStrings must blank multi-character char-literal bodies",
+  );
+  const charLiteralWithSlashSlash = stripCComments(
+    "int f(void) { return '//'; }\nOBJ_DONT_REPARSE_LIVE;\n",
+  );
+  assert.ok(
+    charLiteralWithSlashSlash.includes("OBJ_DONT_REPARSE_LIVE"),
+    "stripCComments must not treat `'//'` inside a char literal as a line-comment start",
   );
 }
 

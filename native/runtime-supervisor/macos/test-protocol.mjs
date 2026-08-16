@@ -97,11 +97,13 @@ async function qualify(helper, fixture, root) {
 // trips the negative `\/bin\/sh` assertion below, but a `// old: execve("/bin/sh")` no longer
 // does. Line splicing (`\<newline>` pairs) runs first, so a `\`-continued line comment cannot
 // hide a control on its spliced-in tail either.
-// Copy a C string literal starting at the opening `"` (index i) verbatim to `out`. Returns the
-// index of the byte AFTER the closing `"` (or the end of source on unterminated input).
-function copyStringLiteralVerbatim(source, start, out) {
+// Copy a C string OR character literal starting at the opening quote (index i) verbatim to
+// `out`. `quote` is `"` for string literals and `'` for char literals. Returns the index of the
+// byte AFTER the matching closing quote (or the end of source on unterminated input). Backslash
+// escape handling is identical for both.
+function copyQuotedVerbatim(source, start, out, quote) {
   let i = start + 1;
-  let result = out + '"';
+  let result = out + quote;
   while (i < source.length) {
     const c = source[i];
     if (c === "\\") {
@@ -111,7 +113,7 @@ function copyStringLiteralVerbatim(source, start, out) {
     }
     result += c;
     i += 1;
-    if (c === '"') return { out: result, next: i };
+    if (c === quote) return { out: result, next: i };
   }
   return { out: result, next: i };
 }
@@ -129,7 +131,10 @@ function stripDisabledPreprocessorBranches(source) {
   const OPEN_IF = /^#\s*(?:if|ifdef|ifndef)\b/u;
   const CLOSE_ENDIF = /^#\s*endif\b/u;
   const ELSE_DIRECTIVE = /^#\s*else\b/u;
-  const DISABLED_IF = /^#\s*if\s+0\b/u;
+  // DISABLED_IF (coderabbit 3792888543 on #3202): C accepts constant expressions in `#if`, so a
+  // disabled block can legitimately appear as `#if (0)` or `#if 0L` (integer suffixes `U`, `L`,
+  // `LL`, `UL`, `ULL` and their lowercase equivalents). Recognise those shapes too.
+  const DISABLED_IF = /^#\s*if\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*$/u;
   const lines = source.split("\n");
   const kept = [];
   let stripping = false;
@@ -154,9 +159,13 @@ function stripDisabledPreprocessorBranches(source) {
   return kept.join("\n");
 }
 
-// Strip C block and line comments in one pass, preserving string literals verbatim (no
-// interpretation). Throws on unterminated `/* ... */` so a truncated source fails the harness at
-// a named stage instead of silently matching tokens before the unclosed comment.
+// Strip C block and line comments in one pass, preserving string AND character literals
+// verbatim (no interpretation). Throws on unterminated `/* ... */`.
+// - Block comments: replaced with a same-length span of spaces AND newlines preserved
+//   (coderabbit 3792888538) so subsequent line-based scans see directives at their original
+//   physical line positions.
+// - Char literals (`'...'`): skipped verbatim so a `'//'` or `'/*'` inside a multi-character
+//   constant cannot start a false comment (coderabbit 3792888545).
 function stripCCommentsOnly(rawSource) {
   let out = "";
   let i = 0;
@@ -166,7 +175,7 @@ function stripCCommentsOnly(rawSource) {
     if (ch === "/" && next === "*") {
       const end = rawSource.indexOf("*/", i + 2);
       if (end === -1) throw new Error("unterminated C block comment: no `*/` after opening `/*`");
-      out += "  ";
+      out += rawSource.slice(i, end + 2).replace(/[^\n]/gu, " ");
       i = end + 2;
     } else if (ch === "/" && next === "/") {
       // Line comment CAN end at EOF without a newline; that is valid C, and no token can be
@@ -175,7 +184,11 @@ function stripCCommentsOnly(rawSource) {
       if (end === -1) return out;
       i = end;
     } else if (ch === '"') {
-      const copied = copyStringLiteralVerbatim(rawSource, i, out);
+      const copied = copyQuotedVerbatim(rawSource, i, out, '"');
+      out = copied.out;
+      i = copied.next;
+    } else if (ch === "'") {
+      const copied = copyQuotedVerbatim(rawSource, i, out, "'");
       out = copied.out;
       i = copied.next;
     } else {
@@ -309,6 +322,45 @@ assert.equal(
   commentedElseStripped.match(/STILL_INSIDE_DISABLED_BRANCH/u),
   null,
   "comment stripping must run BEFORE disabled-branch stripping so a `#else` inside `/* */` is not seen as a directive",
+);
+// Coderabbit 3792888538 (block-comment newlines): a multi-line block comment must be replaced
+// with a same-length span of spaces AND newlines, so a `#if 0` directive on a line after the
+// comment stays at line-start in the stripped output.
+const multilineCommentBeforeIf =
+  "int keep(void) { return 1; }\n" +
+  "/* multi\n line \n block */\n" +
+  "#if 0\n" +
+  "SHOULD_BE_STRIPPED_AFTER_MULTILINE_COMMENT();\n" +
+  "#endif\n";
+const multilineStripped = stripCCommentsPreservingLiterals(multilineCommentBeforeIf);
+assert.equal(
+  multilineStripped.match(/SHOULD_BE_STRIPPED_AFTER_MULTILINE_COMMENT/u),
+  null,
+  "block-comment stripping must preserve newlines so a following `#if 0` stays at line-start",
+);
+// Coderabbit 3792888543 (disabled-if variants): `#if (0)`, `#if 0L`, `#if (0U)` and their
+// integer-suffix variants are all constant-zero conditions the C preprocessor treats identically
+// to `#if 0`.
+for (const variant of ["#if (0)", "#if 0L", "#if 0U", "#if 0LL", "#if (0UL)", "#if  0"]) {
+  const stripped = stripCCommentsPreservingLiterals(
+    `${variant}\nSHOULD_BE_STRIPPED_BY_DISABLED_IF_VARIANT();\n#endif\nint live(void) { return 1; }\n`,
+  );
+  assert.equal(
+    stripped.match(/SHOULD_BE_STRIPPED_BY_DISABLED_IF_VARIANT/u),
+    null,
+    `disabled-if strip must recognise the constant-zero variant: ${variant}`,
+  );
+}
+// Coderabbit 3792888545 (char literals): a `//` sequence inside a char constant must not start
+// a false line comment (which would drop the following code from the scan and let a deleted
+// control on the dropped line pass the source contract).
+const charLiteralWithSlashSlash = stripCCommentsPreservingLiterals(
+  "int f(void) { return '//'; }\nposix_spawn_file_actions_addclose(&actions, 3);\n",
+);
+assert.match(
+  charLiteralWithSlashSlash,
+  /posix_spawn_file_actions_addclose\(&actions, 3\)/u,
+  "stripCCommentsPreservingLiterals must not treat `'//'` inside a char literal as a line-comment start",
 );
 
 // KEIKO-0277: Windows-sibling two-mode shape. `--helper <path>` qualifies an exact staged binary

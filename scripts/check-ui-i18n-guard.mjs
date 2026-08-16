@@ -665,11 +665,9 @@ function jsxTextResult(node, sourceFile) {
 
 function jsxChildExpressionResults(node, sourceFile) {
   if (!node.expression || !isJsxExpressionChildOfElement(node)) return [];
-  const expr = node.expression;
-  const line = ts.getLineAndCharacterOfPosition(sourceFile, expr.getStart(sourceFile)).line + 1;
-  return jsxChildExpressionLiteralTexts(expr)
-    .filter((t) => t.length > 0)
-    .map((text) => ({ line, text }));
+  return jsxChildExpressionLiteralTexts(node.expression, sourceFile).filter(
+    (entry) => entry.text.length > 0,
+  );
 }
 
 function jsxAttributeExpressionResults(node, sourceFile) {
@@ -679,10 +677,7 @@ function jsxAttributeExpressionResults(node, sourceFile) {
   if (initializer === undefined || !ts.isJsxExpression(initializer)) return [];
   const expr = initializer.expression;
   if (expr === undefined) return [];
-  const line = ts.getLineAndCharacterOfPosition(sourceFile, expr.getStart(sourceFile)).line + 1;
-  return jsxChildExpressionLiteralTexts(expr)
-    .filter((t) => t.length > 0)
-    .map((text) => ({ line, text }));
+  return jsxChildExpressionLiteralTexts(expr, sourceFile).filter((entry) => entry.text.length > 0);
 }
 
 function collectJsxTextAndExpressions(source, filename) {
@@ -718,41 +713,57 @@ function collectJsxTextAndExpressions(source, filename) {
 // (codex 3792824431 on #3202): both branches are user-visible bytes, one at a time, and the
 // ledger records exact strings — so we emit each branch as its own entry rather than joining
 // them. Recursion covers nested conditionals and templates inside branches.
-function jsxChildExpressionLiteralTexts(expr) {
+//
+// Each returned entry carries its OWN line (coderabbit 3792888549 on #3202): a multi-line
+// conditional like `{\n  cond\n  ? "First"\n  : "Second"\n}` reports "First" on its own line and
+// "Second" on its own line, not both on the conditional's opening-brace line. Otherwise the
+// exemption marker on one branch would silently apply to the other, and the ledger diff would
+// point reviewers at the wrong source location.
+function jsxChildExpressionLiteralTexts(expr, sourceFile) {
+  const lineOf = (node) =>
+    ts.getLineAndCharacterOfPosition(sourceFile, node.getStart(sourceFile)).line + 1;
   if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
     const text = expr.text.trim();
-    return text.length > 0 ? [text] : [];
+    return text.length > 0 ? [{ line: lineOf(expr), text }] : [];
   }
   if (ts.isTemplateExpression(expr)) {
     const parts = [expr.head.text, ...expr.templateSpans.map((span) => span.literal.text)];
     const combined = parts.join(" ").trim().replace(/\s+/gu, " ");
-    return combined.length > 0 ? [combined] : [];
+    return combined.length > 0 ? [{ line: lineOf(expr), text: combined }] : [];
   }
   if (ts.isConditionalExpression(expr)) {
     return [
-      ...jsxChildExpressionLiteralTexts(expr.whenTrue),
-      ...jsxChildExpressionLiteralTexts(expr.whenFalse),
+      ...jsxChildExpressionLiteralTexts(expr.whenTrue, sourceFile),
+      ...jsxChildExpressionLiteralTexts(expr.whenFalse, sourceFile),
     ];
   }
   if (ts.isBinaryExpression(expr) && isRenderingFallbackOperator(expr.operatorToken.kind)) {
-    return [
-      ...jsxChildExpressionLiteralTexts(expr.left),
-      ...jsxChildExpressionLiteralTexts(expr.right),
-    ];
+    return binaryFallbackLiteralTexts(expr, sourceFile);
   }
   // Unwrap `( ... )` so nested conditionals whose branches carry a parenthesised inner conditional
   // — e.g. `{a ? (b ? "One" : "Two") : "Three"}` — still surface each literal branch.
   if (ts.isParenthesizedExpression(expr)) {
-    return jsxChildExpressionLiteralTexts(expr.expression);
+    return jsxChildExpressionLiteralTexts(expr.expression, sourceFile);
   }
   return [];
 }
 
-// KEIKO-0299 (review-follow-up on 44b9ef9b): `{label ?? "Default"}`, `{label || "Fallback"}`,
-// and `{ready && "Ready now"}` are all common user-copy fallback shapes. Each is a
-// BinaryExpression whose right operand (and, for `??` / `||`, the left operand too) can be a
-// rendered user-visible literal. `+`, `&`, arithmetic and comparison operators are not fallback
-// operators and their operands are not rendered as user copy — those stay excluded.
+// KEIKO-0299 (review-follow-up on a0ee79ae): `??` and `||` in JSX children can render EITHER
+// operand as user-visible copy (`?? / ||` return the first defined/truthy value), so both sides
+// count as candidate literals. `&&` short-circuits: the LEFT operand only controls evaluation
+// and is never rendered, so a literal on the left (`{"Feature enabled" && value}`) is code, not
+// copy, and MUST NOT enter the ledger — otherwise a false ledger entry or unnecessary
+// exemption is required. Coderabbit 3792888551.
+function binaryFallbackLiteralTexts(expr, sourceFile) {
+  if (expr.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+    return jsxChildExpressionLiteralTexts(expr.right, sourceFile);
+  }
+  return [
+    ...jsxChildExpressionLiteralTexts(expr.left, sourceFile),
+    ...jsxChildExpressionLiteralTexts(expr.right, sourceFile),
+  ];
+}
+
 function isRenderingFallbackOperator(kind) {
   return (
     kind === ts.SyntaxKind.QuestionQuestionToken ||
