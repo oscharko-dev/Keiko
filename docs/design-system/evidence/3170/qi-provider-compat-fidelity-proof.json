@@ -1,0 +1,28 @@
+{
+  "issue": 3170,
+  "verdict": "PASS",
+  "captureMethod": "Google Chrome via Computer Use",
+  "providerModel": "gpt-4o-mini",
+  "runId": "qi-run-a5144e08-5346-4378-89e0-49c5162cbd56",
+  "captures": [
+    {
+      "file": "01-qi-succeeded-light.jpeg",
+      "theme": "light",
+      "state": "Succeeded",
+      "viewport": { "width": 1366, "height": 768 },
+      "testCases": 2,
+      "coveragePercent": 100,
+      "quality": 100
+    },
+    {
+      "file": "02-qi-succeeded-dark.jpeg",
+      "theme": "dark",
+      "state": "Succeeded",
+      "viewport": { "width": 1366, "height": 768 },
+      "testCases": 2,
+      "coveragePercent": 100,
+      "quality": 100
+    }
+  ],
+  "summary": "The fixed strict-schema path completed a real gpt-4o-mini Quality Intelligence run and the terminal UI reports its result truthfully in both themes."
+}

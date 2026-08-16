@@ -1,0 +1,23 @@
+{
+  "issue": 3170,
+  "verdict": "PASS",
+  "method": "Computer Use accessibility tree plus focused component tests",
+  "captures": [
+    {
+      "file": "01-qi-succeeded-light.jpeg",
+      "observations": [
+        "Run id and terminal status are exposed as text",
+        "Test-case count, coverage, quality, and review status are exposed",
+        "Export controls and generated cases remain operable"
+      ]
+    },
+    {
+      "file": "02-qi-succeeded-dark.jpeg",
+      "observations": [
+        "The same terminal result semantics remain exposed after the theme change",
+        "Success truth does not depend on color alone"
+      ]
+    }
+  ],
+  "gate": "No serious or critical issue observed in the changed Quality Intelligence terminal surface; automated UI receipt remains a separate release gate."
+}
