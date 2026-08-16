@@ -20,6 +20,7 @@ import * as monaco from "monaco-editor/editor/editor.api.js";
 // Monaco's broad feature/language `register.all` entrypoints so rich language services stay out
 // of the static export under ADR-0042 D3.6.
 import "monaco-editor/features/find/register.js";
+import "monaco-editor/features/format/register.js";
 import "monaco-editor/features/hover/register.js";
 import "monaco-editor/features/inlineCompletions/register.js";
 import "monaco-editor/features/quickCommand/register.js";

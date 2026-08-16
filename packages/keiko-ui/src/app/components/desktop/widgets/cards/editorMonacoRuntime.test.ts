@@ -39,6 +39,7 @@ vi.mock("monaco-editor/editor/editor.api.js", () => ({
   },
 }));
 vi.mock("monaco-editor/features/find/register.js", () => trackEditorFeatureImport("find"));
+vi.mock("monaco-editor/features/format/register.js", () => trackEditorFeatureImport("format"));
 vi.mock("monaco-editor/features/hover/register.js", () => trackEditorFeatureImport("hover"));
 vi.mock("monaco-editor/features/inlineCompletions/register.js", () =>
   trackEditorFeatureImport("inlineCompletions"),
@@ -157,7 +158,15 @@ describe("ensureMonacoRuntime", () => {
   it("registers the standalone editor UX features used by smoke coverage", async () => {
     await import("./editorMonacoRuntime");
     expect(editorFeatureImports).toEqual(
-      new Set(["find", "hover", "inlineCompletions", "quickCommand", "quickHelp", "suggest"]),
+      new Set([
+        "find",
+        "format",
+        "hover",
+        "inlineCompletions",
+        "quickCommand",
+        "quickHelp",
+        "suggest",
+      ]),
     );
   });
 

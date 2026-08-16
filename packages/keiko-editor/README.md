@@ -406,7 +406,7 @@ Notes:
   integrity hashes, the SBOM + license gate (`npm run check:workspace-supply-chain`), and the
   no-CDN policy are the controls that bound this supply-chain exposure (blueprint §12, risk R1).
 - **Known advisory — resolved for the host mount via a patched override (#1196); runtime sink stays
-  closed.** `monaco-editor@0.56.0` declares `dompurify@3.2.7` as an npm dependency, which carries a set
+  closed.** `monaco-editor@0.56.0` declares `dompurify@3.4.8` as an npm dependency, which carries a set
   of **moderate** DOMPurify advisories (`npm audit` reports several distinct XSS / mutation-XSS /
   prototype-pollution items affecting `<= 3.4.10`), all rated moderate (0 high/critical). #1193 deferred
   any change before the host runtime path existed because the only `npm audit fix` was a semver-major
@@ -433,7 +433,7 @@ Notes:
     reached. **Hover** (`hover.enabled`) is enabled only when a governed hover provider is wired
     (#1201); the hover bridge (`hover-bridge.ts`) renders the server's plain-text quick info inside an
     inert Markdown code fence sized longer than any backtick run in the content (`toInertCodeFence`),
-    so the Markdown renderer HTML-escapes the content and the vendored DOMPurify only ever processes
+    so the Markdown renderer HTML-escapes the content and the vendored DOMPurify 3.4.8 copy only ever processes
     inert, escaped text — never active markup a buffer's own type signatures could smuggle in. The
     #1196 host bootstrap also disables Monaco's built-in TypeScript/JavaScript `modeConfiguration`
     providers for completion, hover, diagnostics, formatting, symbols, code actions, rename,
@@ -443,10 +443,9 @@ Notes:
     superseded by a narrower executable invariant: active markup never crosses a bridge, hover input
     is inert-fenced, and every other enabled governed surface receives primitive plain text only.
   - **Eventual fix unchanged.** The durable remediation is still upgrading `monaco-editor` to a release
-    that vendors DOMPurify `>= 3.3.2`; as of #1201 no such release exists (the latest `0.56.0-dev`
-    builds still vendor and pin `3.2.7`), so the patched override plus inert hover rendering are the
-    interim controls. Revisit when a suggest-documentation or other `IMarkdownString` surface is wired,
-    or when a newer Monaco ships.
+    that vendors DOMPurify `> 3.4.10`; as of 0.3.8, Monaco 0.56.0 still declares and vendors `3.4.8`,
+    so the patched override plus inert hover rendering are the interim controls. Revisit when a
+    suggest-documentation or other `IMarkdownString` surface is wired, or when a newer Monaco ships.
 - `monaco-editor` and `@monaco-editor/react` are consumed by the #1193 runtime helpers and mounted by
   `keiko-ui` through the #1196 client-only Workspace editor surface.
 

@@ -11,8 +11,8 @@
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 1403120,
-    "loadedTotalBytes": 1403120,
+    "shipsTotalBytes": 1406597,
+    "loadedTotalBytes": 1406597,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
@@ -53,21 +53,21 @@
   "editorRuntimeChunkCount": 7,
   "editorRuntimeChunks": [
     {
-      "path": "dist/ui/static/_next/static/chunks/332y4rxl_-om5.js",
-      "gzipBytes": 605785,
-      "rawBytes": 2462144,
+      "path": "dist/ui/static/_next/static/chunks/0mbdm3_1syk7-.js",
+      "gzipBytes": 606969,
+      "rawBytes": 2466918,
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/0whzayf9-3svq.js",
-      "gzipBytes": 287594,
-      "rawBytes": 1210421,
+      "path": "dist/ui/static/_next/static/chunks/1vw7oo5hltkzg.js",
+      "gzipBytes": 288709,
+      "rawBytes": 1216156,
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/1m6yvoiop9zvh.js",
-      "gzipBytes": 287126,
-      "rawBytes": 1210421,
+      "path": "dist/ui/static/_next/static/chunks/1_x579f2fgjyr.js",
+      "gzipBytes": 288304,
+      "rawBytes": 1216156,
       "workerLabel": null
     },
     {
@@ -95,5 +95,5 @@
       "workerLabel": "editor"
     }
   ],
-  "measurementSha256": "b51d684b83e97e9da4e95da2f705622d1ddc5d06a70b5b86559b82d0694cadba"
+  "measurementSha256": "a47f06fb143a0d8e7f256b6121646b9d3d11fec72cf7b1b7a319820a55df29c8"
 }
