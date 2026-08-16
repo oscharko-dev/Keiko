@@ -153,6 +153,13 @@ describe("defaultGitFileHistoryEvidenceProvider", () => {
     const separatorIndex = logArgs.indexOf("--");
     expect(separatorIndex).toBeGreaterThanOrEqual(0);
     expect(logArgs.slice(separatorIndex + 1)).toEqual(["."]);
+    // KEIKO-0516: repository resolution goes through the shared resolveGitMembership
+    // primitive, which asks for --show-prefix in the same rev-parse call. The pre-fix
+    // hand-rolled rev-parse asked only for --show-toplevel; the new call must include
+    // both flags so the selectedRootPrefix is available without a second round-trip.
+    const revParseCalls = mutableCalls.filter((args) => args.includes("rev-parse"));
+    expect(revParseCalls).toHaveLength(1);
+    expect(revParseCalls[0]).toEqual(expect.arrayContaining(["--show-toplevel", "--show-prefix"]));
   });
 
   it("scopes git log by the selected subfolder so the commit cap is not spent repo-wide (KEIKO-0421)", async () => {

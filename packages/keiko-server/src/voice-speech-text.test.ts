@@ -62,6 +62,16 @@ describe("toSpeakableText", () => {
     expect(spoken).not.toContain("Runbook");
   });
 
+  it("strips markdown links whose URL is longer than 2000 chars (KEIKO-0473)", () => {
+    const longUrl = `https://example.invalid/doc?token=${"a".repeat(2200)}`;
+    const spoken = toSpeakableText(`See [the source document](${longUrl}) for details.`);
+    expect(spoken).toBe("See the source document for details.");
+    expect(spoken).not.toContain("[");
+    expect(spoken).not.toContain("]");
+    expect(spoken).not.toContain("(");
+    expect(spoken).not.toContain("token=");
+  });
+
   it("omits fenced code while retaining short inline identifiers", () => {
     const markdown = [
       "Nutze `npm test`.",

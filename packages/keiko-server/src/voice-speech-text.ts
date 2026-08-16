@@ -77,10 +77,12 @@ function stripHtml(text: string): string {
   return parts.join("");
 }
 
-// Realistic markdown link labels/URLs never approach this length; bounding the search window
-// keeps every scan O(1) instead of O(remaining text), which is what made the previous regex
-// (`\[([^\]\n]+)\]\([^\n)]*\)`) quadratic on many-`[`-with-no-`]` adversarial input.
-const MAX_MARKDOWN_LINK_SPAN = 2000;
+// Bounding the search window keeps every scan O(1) instead of O(remaining text), which is
+// what made the previous regex (`\[([^\]\n]+)\]\([^\n)]*\)`) quadratic on many-`[`-with-no-`]`
+// adversarial input. Widened to 8000 (KEIKO-0473 / GEN-VOICE-DICTATION-TTS-002): real
+// presigned or query-string-bearing citation URLs can exceed 2000 chars, and the previous
+// window silently gave up mid-link, leaking stray `[`, `]`, and `(` into synthesized speech.
+const MAX_MARKDOWN_LINK_SPAN = 8000;
 
 type MarkdownLinkMatch =
   | { readonly kind: "match"; readonly label: string; readonly end: number }

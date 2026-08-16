@@ -3,7 +3,7 @@
 // Output is content-free: per-file recency/churn metrics only, filtered back to the selected root.
 
 import { createHash } from "node:crypto";
-import { isAbsolute, relative, resolve } from "node:path";
+import { relative } from "node:path";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   isValidScopePath,
@@ -23,6 +23,7 @@ import {
   containsPath,
   defaultGitProcessRunner,
   GIT_BASE_ARGS,
+  resolveGitMembership,
   type GitProcessRunner,
 } from "@oscharko-dev/keiko-git";
 
@@ -175,20 +176,17 @@ async function resolveGitRepositoryForHistory(
   } catch {
     return undefined;
   }
-  const revParse = await runner(
-    [...GIT_BASE_ARGS, "-C", selectedRoot, "rev-parse", "--show-toplevel"],
-    { cwd: selectedRoot, maxBytes: 16 * 1024, timeoutMs: GIT_HISTORY_TIMEOUT_MS },
-  );
-  if (revParse.exitCode !== 0) {
+  // KEIKO-0516: reuse the shared resolveGitMembership primitive instead of hand-rolling
+  // a rev-parse. It ships the same call with --show-prefix in one round trip so we get
+  // the selected root's prefix without a separate relative()-of-realPath computation,
+  // and it centralises the ownership/toplevel-parsing hardening.
+  const membership = await resolveGitMembership(selectedRoot, runner, {
+    timeoutMs: GIT_HISTORY_TIMEOUT_MS,
+  });
+  if (!membership.ok) {
     return undefined;
   }
-  const rawRepositoryRoot = revParse.stdout.split(/\r?\n/u)[0]?.trim();
-  if (rawRepositoryRoot === undefined || rawRepositoryRoot.length === 0) {
-    return undefined;
-  }
-  const repositoryRoot = isAbsolute(rawRepositoryRoot)
-    ? resolve(rawRepositoryRoot)
-    : resolve(selectedRoot, rawRepositoryRoot);
+  const repositoryRoot = membership.membership.repositoryRoot;
   let realRepositoryRoot: string;
   try {
     realRepositoryRoot = inputs.fs.realPath(repositoryRoot);
@@ -198,9 +196,18 @@ async function resolveGitRepositoryForHistory(
   if (!containsPath(realRepositoryRoot, selectedRoot)) {
     return undefined;
   }
+  // resolveGitMembership already reports the prefix from the same rev-parse call.
+  // Use it directly, but fall back to relative() when realPath resolution moved
+  // the repository root under a symlinked path (git reports the symlink root, the
+  // realPath resolution walked to the real one).
+  const prefix = membership.membership.prefix;
+  const selectedRootPrefix =
+    realRepositoryRoot === repositoryRoot
+      ? toPosix(prefix)
+      : toPosix(relative(realRepositoryRoot, selectedRoot));
   return {
     repositoryRoot: realRepositoryRoot,
-    selectedRootPrefix: toPosix(relative(realRepositoryRoot, selectedRoot)),
+    selectedRootPrefix,
   };
 }
 

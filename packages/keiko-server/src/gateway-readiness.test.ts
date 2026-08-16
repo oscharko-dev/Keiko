@@ -12,6 +12,7 @@ import {
   EMBEDDING_EVIDENCE_PATTERN,
   TESTED_CONTEXT_TOKENS_PATTERN,
   handleGatewayReadiness,
+  longContextTokens,
   runGatewayReadiness,
 } from "./gateway-readiness.js";
 import type { RouteContext } from "./routes.js";
@@ -870,6 +871,27 @@ describe("gateway readiness route", () => {
 
     expect(recorded).toEqual(["failed"]);
     deps.store.close();
+  });
+});
+
+describe("longContextTokens (KEIKO-0358)", () => {
+  it("returns the extended long-context budget for an unknown contextWindow", () => {
+    // Before the fix, contextWindow=0 (a placeholder / not-yet-probed capability) fell
+    // through to DEFAULT_LONG_CONTEXT_TOKENS (32_000). That capped the deep-probe test
+    // token budget at 32k for the very model shapes it was meant to expose. Assume the
+    // extended budget for the unknown case so a genuinely long-context model can be
+    // probed near its real ceiling instead of silently being tested short.
+    const capability = { ...createDefaultChatCapability("probe-model"), contextWindow: 0 };
+    expect(longContextTokens(undefined, capability)).toBe(64_000);
+    expect(longContextTokens(undefined, capability)).toBeGreaterThan(32_000);
+  });
+
+  it("still caps a genuinely small window at the default budget", () => {
+    // Fix must be scoped to the 0 sentinel. A model that reports a small but positive
+    // window (e.g. 16k) still probes only up to DEFAULT_LONG_CONTEXT_TOKENS so the probe
+    // never asks past the model's real ceiling.
+    const capability = { ...createDefaultChatCapability("probe-model"), contextWindow: 16_000 };
+    expect(longContextTokens(undefined, capability)).toBe(32_000);
   });
 });
 

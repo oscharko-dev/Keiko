@@ -953,7 +953,9 @@ function documentInputPayloadResult(start: number, payload: unknown): GatewayRea
   );
 }
 
-function longContextTokens(
+// Exported for regression coverage of KEIKO-0358: an unknown contextWindow (0) must not
+// cause the deep long-context probe to silently cap at DEFAULT_LONG_CONTEXT_TOKENS.
+export function longContextTokens(
   options: GatewayReadinessOptions | undefined,
   capability: ModelCapability | undefined,
 ): number {
@@ -963,6 +965,12 @@ function longContextTokens(
     return Math.min(options.maxContextTokens, deploymentCeiling, MAX_CONTEXT_TOKENS);
   }
   if (contextWindow >= EXTENDED_LONG_CONTEXT_TOKENS) return EXTENDED_LONG_CONTEXT_TOKENS;
+  // KEIKO-0358: an unknown/not-yet-probed contextWindow (0) is not evidence the model is
+  // short-context; capping such probes at 32k lets a genuinely long-context model look
+  // healthy from the readiness lane and then run out of room in production. Assume the
+  // extended budget for the 0 case; genuinely small windows (1..EXTENDED-1) still cap at
+  // DEFAULT_LONG_CONTEXT_TOKENS to avoid probing past the model's real ceiling.
+  if (contextWindow === 0) return EXTENDED_LONG_CONTEXT_TOKENS;
   return DEFAULT_LONG_CONTEXT_TOKENS;
 }
 
