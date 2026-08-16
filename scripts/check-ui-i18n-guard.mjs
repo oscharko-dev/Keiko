@@ -632,15 +632,11 @@ function scriptKindForFile(filename) {
 
 function collectJsxTextAndExpressions(source, filename) {
   const kind = scriptKindForFile(filename);
-  const sourceFile = ts.createSourceFile(
+  const sourceName =
     typeof filename === "string"
       ? filename
-      : `<ui-i18n>.${kind === ts.ScriptKind.TSX ? "tsx" : "ts"}`,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    kind,
-  );
+      : `<ui-i18n>.${kind === ts.ScriptKind.TSX ? "tsx" : "ts"}`;
+  const sourceFile = ts.createSourceFile(sourceName, source, ts.ScriptTarget.Latest, true, kind);
   const results = [];
   const visit = (node) => {
     if (ts.isJsxText(node)) {
