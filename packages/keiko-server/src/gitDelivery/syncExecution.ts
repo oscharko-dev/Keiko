@@ -23,7 +23,11 @@ import {
   type GitSyncPreview,
   type GitUpstreamSummary,
 } from "@oscharko-dev/keiko-contracts";
-import { classifyGitRemoteFailure, type GitRemoteFailureReason } from "@oscharko-dev/keiko-git";
+import {
+  classifyGitRemoteFailure,
+  GIT_BASE_ARGS,
+  type GitRemoteFailureReason,
+} from "@oscharko-dev/keiko-git";
 import {
   defaultGitNetworkProcessRunner,
   defaultGitProcessRunner,
@@ -69,7 +73,7 @@ function runWith(
   seams: NormalizedSyncSeams,
   args: readonly string[],
 ): Promise<GitProcessResult> {
-  return runner(["--no-pager", "--no-optional-locks", "-C", repoRoot, ...args], {
+  return runner([...GIT_BASE_ARGS, "-C", repoRoot, ...args], {
     cwd: repoRoot,
     maxBytes: seams.maxBytes,
     timeoutMs: seams.timeoutMs,

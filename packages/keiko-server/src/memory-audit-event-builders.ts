@@ -62,6 +62,15 @@ function classifyStatusTransition(
   previous: MemoryStatus | undefined,
   next: MemoryStatus,
 ): UpdateClassification | undefined {
+  // KEIKO-0431: an `undefined` previous status means the in-memory transition cache
+  // didn't see the pre-image (fresh process — cache resets on every server restart).
+  // Treating that as "record just moved to `next`" produces a spurious archived/accepted/
+  // rejected audit event for every already-in-that-state update after a restart.
+  // Fall through to the plain `memory:updated` path in that case; a real transition
+  // fires only when we can observe `previous !== next` with both sides known.
+  if (previous === undefined) {
+    return undefined;
+  }
   if (previous === next) {
     return undefined;
   }
@@ -86,6 +95,11 @@ function classifyPinTransition(
   previousPinned: boolean | undefined,
   nextPinned: boolean,
 ): UpdateClassification | undefined {
+  // KEIKO-0431: same reasoning as classifyStatusTransition — an `undefined` pre-image
+  // is a cache miss, not "just pinned/unpinned", so we cannot emit a transition event.
+  if (previousPinned === undefined) {
+    return undefined;
+  }
   if (previousPinned === nextPinned) {
     return undefined;
   }

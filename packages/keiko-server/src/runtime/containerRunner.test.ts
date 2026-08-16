@@ -337,13 +337,17 @@ describe("ContainerRunnerManager — execution", () => {
     expect(result.failureReason).toBe("output-capped");
   });
 
-  it("times out a hanging container run", async () => {
+  it("times out a hanging container run and emits run-completed (ADR-0018 D7)", async () => {
     const manager = makeManager(makeSpawn({ hangs: true }), {
       policy: { ...DEFAULT_SANDBOX_POLICY, defaultTimeoutMs: 20 },
     });
+    const events = collect(manager);
     const result = await manager.execute({ projectId: workspaceRoot, taskId: PILOT_ID });
     expect(result.timedOut).toBe(true);
     expect(result.failureReason).toBe("timed-out");
+    // ADR-0018 D7: a timeout is a "completed with timedOut=true" outcome — Terminal and
+    // Commands emit run-completed here; container-run must not diverge into run-failed.
+    expect(events.map((event) => event.kind)).toEqual(["run-started", "run-completed"]);
   });
 
   it("cancels an in-flight run via abort", async () => {

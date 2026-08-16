@@ -194,6 +194,11 @@ describe("desktop chat production gateway reuse", () => {
 
       const rejected = await sendBreakerChat(fixture, "must fail before transport");
       expect(gatewayErrorCode(rejected)).toBe("GATEWAY_CIRCUIT_OPEN");
+      // KEIKO-0353: a circuit-open failure must surface as 503 "temporarily unavailable"
+      // like a transport failure does — not 502, which the pre-fix code returned because
+      // CircuitOpenError has retryable=false (the breaker's internal auto-recovery signal,
+      // not the client's "give up" signal).
+      expect(rejected.status).toBe(503);
       expect(fetchSpy).toHaveBeenCalledTimes(5);
     } finally {
       vi.unstubAllGlobals();

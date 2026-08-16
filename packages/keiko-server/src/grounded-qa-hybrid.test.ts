@@ -48,6 +48,7 @@ import {
 
 import { handleGroundedAsk, type GroundedRunner, type HybridSeam } from "./grounded-qa.js";
 import { ClarificationNeededError } from "./grounded-orchestrator.js";
+import { GROUNDED_NO_EVIDENCE_ANSWER } from "./grounded-faithfulness.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   parseGatewayConfig,
@@ -1326,7 +1327,9 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
 
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
-    expect(answer.content).toBe("No evidence found in the selected connected sources.");
+    // KEIKO-0196: the hybrid abstention text now matches folder + multi-source (they both
+    // emit GROUNDED_NO_EVIDENCE_ANSWER via grounded-faithfulness.ts).
+    expect(answer.content).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
@@ -1517,7 +1520,9 @@ describe("hybrid grounded ask — not-ready connector is skipped", () => {
 
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
-    expect(answer.content).toBe("No evidence found in the selected connected sources.");
+    // KEIKO-0196: the hybrid abstention text now matches folder + multi-source (they both
+    // emit GROUNDED_NO_EVIDENCE_ANSWER via grounded-faithfulness.ts).
+    expect(answer.content).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
@@ -2616,7 +2621,9 @@ describe("shared byte budget — oversized evidence fails closed", () => {
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
 
-    expect(answer.content).toBe("No evidence found in the selected connected sources.");
+    // KEIKO-0196: the hybrid abstention text now matches folder + multi-source (they both
+    // emit GROUNDED_NO_EVIDENCE_ANSWER via grounded-faithfulness.ts).
+    expect(answer.content).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);

@@ -3,6 +3,7 @@
 // chat-completions smoke call, stores the resulting config on disk with private permissions, and
 // updates the in-memory runtime config without exposing credentials back to the browser.
 
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import {
@@ -56,7 +57,11 @@ import type {
   VerifiedModelCapabilityFields,
 } from "./deps.js";
 import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
-import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
 import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import {
   classifyFigmaTransportError,
@@ -1265,6 +1270,11 @@ export function parseModelDiscovery(payload: unknown): GatewayDiscoveredModels {
       entries.push(classified);
     }
   }
+  // KEIKO-0325: raise a truncation flag alongside the limited slice so callers can
+  // surface "N of M models discovered; add the rest by deployment name" instead of the
+  // pre-fix silent drop. Kept optional-and-off-by-default so a fitting-within-cap
+  // discovery does not carry a redundant `truncated: false` on the wire.
+  const wasTruncated = entries.length > MAX_DISCOVERED_MODELS;
   const limited = entries.slice(0, MAX_DISCOVERED_MODELS);
   if (limited.length === 0) {
     throw new Error("model discovery returned no model ids");
@@ -1279,6 +1289,7 @@ export function parseModelDiscovery(payload: unknown): GatewayDiscoveredModels {
       .filter((entry) => entry.kind === "chat" && entry.supportsImageInput)
       .map((entry) => entry.id),
     modelMetadata: Object.fromEntries(limited.map((entry) => [entry.id, entry.metadata])),
+    ...(wasTruncated ? { truncated: true } : {}),
   };
 }
 
@@ -3947,6 +3958,8 @@ interface SetupVerificationInput {
   readonly egress: GatewayEgressConfig | undefined;
   readonly figmaAccessToken: string | undefined;
   readonly current: GatewayConfig | undefined;
+  /** Operator diagnostic sink; used to surface discovery truncation (KEIKO-0325). */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 interface SetupCandidateModels {
@@ -3955,6 +3968,12 @@ interface SetupCandidateModels {
   readonly embeddingModelIds: readonly string[];
   readonly imageInputModelIds: readonly string[];
   readonly modelMetadata: Readonly<Record<string, GatewayDiscoveredModelMetadata>>;
+  // KEIKO-0325: true when the raw discovery payload contained more distinct model ids
+  // than the caller (MAX_DISCOVERED_MODELS) admits, so the downstream setup pipeline can
+  // surface the truncation instead of silently proceeding with the first 100 models.
+  // Absent for legacy string-array discovery outputs and for payloads that fit within
+  // the cap; consumers should treat missing as `false`.
+  readonly truncated?: boolean;
 }
 
 function isGatewaySetupTestResult(
@@ -4049,6 +4068,10 @@ function normalizeDiscoveryResult(result: GatewayModelDiscoveryOutput): SetupCan
       embeddingModelIds: result.embeddingModelIds,
       imageInputModelIds: result.imageInputModelIds ?? [],
       modelMetadata: result.modelMetadata ?? {},
+      // KEIKO-0325: propagate the discovery-truncation flag from parseModelDiscovery
+      // so downstream setup can surface "N of M models discovered" instead of the
+      // pre-fix silent drop past MAX_DISCOVERED_MODELS.
+      ...(result.truncated === true ? { truncated: true } : {}),
     };
   }
   return normalizeLegacyDiscoveryResult(result);
@@ -4350,12 +4373,34 @@ function candidateProbeOptions(
   };
 }
 
+// KEIKO-0325: discovery silently dropped everything past MAX_DISCOVERED_MODELS. The parser now
+// raises `truncated`; this is the consumer that makes it operator-visible. Body-free by
+// construction — a count and a code, never a model id or an endpoint.
+function reportDiscoveryTruncation(
+  diagnostics: ServerDiagnosticSink | undefined,
+  candidateModels: SetupCandidateModels,
+): void {
+  if (candidateModels.truncated !== true) return;
+  emitServerDiagnostic(diagnostics, {
+    correlationId: randomUUID(),
+    timestamp: new Date().toISOString(),
+    operation: "POST /api/gateway/setup",
+    source: "gateway-setup.discovery",
+    errorClass: "GatewayDiscoveryTruncated",
+    message:
+      "Model discovery exceeded the discovery cap; setup continued with the retained models.",
+    code: "GATEWAY_DISCOVERY_TRUNCATED",
+    retainedModelCount: candidateModels.modelIds.length,
+  });
+}
+
 async function verifySetupCandidate(input: SetupVerificationInput): Promise<VerifiedSetup> {
   // Defence-in-depth: never send the credential to a candidate URL that has not passed the same
   // scheme/credential/loopback validation as the originally submitted base URL.
   validateBaseUrl(input.baseUrl, "candidate", input.egress);
   const validationConfig = validationConfigForSetup(input);
   const candidateModels = await candidateModelIdsForSetup(input, validationConfig);
+  reportDiscoveryTruncation(input.diagnostics, candidateModels);
   const smokeTimeoutMs =
     input.deploymentNames.length > 0
       ? DEPLOYMENT_SMOKE_TIMEOUT_MS
@@ -4648,6 +4693,7 @@ async function trySetupCandidate(
     egress: egressForCandidateValidation(deps),
     figmaAccessToken: request.figmaAccessToken,
     current,
+    diagnostics: deps.diagnostics,
   });
   const workflowEligibilityError = validateWorkflowEligibleModelIds(request, verified.config);
   if (workflowEligibilityError !== undefined) return workflowEligibilityError;

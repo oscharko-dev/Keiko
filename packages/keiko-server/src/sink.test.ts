@@ -33,6 +33,44 @@ describe("QueueEventSink ring buffer", () => {
     expect(buffered.map((e) => e.seq)).toEqual([3, 4, 5]);
   });
 
+  it("rejects a non-finite or negative maxBytes at construction (KEIKO-0165 hardening)", () => {
+    // NaN, Infinity, and negatives would all silently disable the byte cap in the
+    // `bufferedBytes > this.maxBytes` comparison, letting replay grow without bound —
+    // the exact regression this cap exists to prevent. Fail loudly at construction.
+    expect(() => new QueueEventSink({ maxBytes: Number.NaN })).toThrow(RangeError);
+    expect(() => new QueueEventSink({ maxBytes: Number.POSITIVE_INFINITY })).toThrow(RangeError);
+    expect(() => new QueueEventSink({ maxBytes: -1 })).toThrow(RangeError);
+    expect(() => new QueueEventSink({ maxBytes: 0 })).not.toThrow();
+  });
+
+  it("bounds aggregate replay bytes when maxBytes is set (KEIKO-0165)", () => {
+    // Emit events whose count is under bufferCapacity but whose combined serialized bytes
+    // exceed maxBytes; the sink must evict oldest until aggregate <= maxBytes and only
+    // replay that bounded slice to a newly-attached writer.
+    const largePayloadEvent = (seq: number): StreamEvent => ({
+      ...event(seq, "patch:proposed"),
+      // Extra fields ride along in the serialized shape via `as` cast: measure honestly.
+      ...({ diff: "x".repeat(4096) } as Record<string, string>),
+    });
+    const single = new TextEncoder().encode(JSON.stringify(largePayloadEvent(1))).length;
+    const maxBytes = single * 3 + 8; // room for exactly three
+    const sink = new QueueEventSink({ bufferCapacity: 1024, maxBytes });
+    for (let i = 1; i <= 6; i++) {
+      sink.emit(largePayloadEvent(i));
+    }
+    expect(sink.bufferedByteSize()).toBeLessThanOrEqual(maxBytes);
+    const sub = recordingWriter();
+    sink.attach(sub.writer, -1);
+    const replayedBytes = sub.events.reduce(
+      (total, replayed) => total + new TextEncoder().encode(JSON.stringify(replayed)).length,
+      0,
+    );
+    expect(replayedBytes).toBeLessThanOrEqual(maxBytes);
+    // Only the last N events survive; earliest were evicted first (ring semantics).
+    expect(sub.events.length).toBeLessThan(6);
+    expect(sub.events[sub.events.length - 1]?.seq).toBe(6);
+  });
+
   it("replays only events after the given seq on attach (Last-Event-ID resume)", () => {
     const sink = new QueueEventSink();
     for (let i = 1; i <= 4; i++) {

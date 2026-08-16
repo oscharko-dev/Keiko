@@ -3,7 +3,7 @@
 // Output is content-free: per-file recency/churn metrics only, filtered back to the selected root.
 
 import { createHash } from "node:crypto";
-import { isAbsolute, relative, resolve } from "node:path";
+import { relative } from "node:path";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   isValidScopePath,
@@ -22,6 +22,8 @@ import {
 import {
   containsPath,
   defaultGitProcessRunner,
+  GIT_BASE_ARGS,
+  resolveGitMembership,
   type GitProcessRunner,
 } from "@oscharko-dev/keiko-git";
 
@@ -174,20 +176,17 @@ async function resolveGitRepositoryForHistory(
   } catch {
     return undefined;
   }
-  const revParse = await runner(
-    ["--no-pager", "--no-optional-locks", "-C", selectedRoot, "rev-parse", "--show-toplevel"],
-    { cwd: selectedRoot, maxBytes: 16 * 1024, timeoutMs: GIT_HISTORY_TIMEOUT_MS },
-  );
-  if (revParse.exitCode !== 0) {
+  // KEIKO-0516: reuse the shared resolveGitMembership primitive instead of hand-rolling
+  // a rev-parse. It ships the same call with --show-prefix in one round trip so we get
+  // the selected root's prefix without a separate relative()-of-realPath computation,
+  // and it centralises the ownership/toplevel-parsing hardening.
+  const membership = await resolveGitMembership(selectedRoot, runner, {
+    timeoutMs: GIT_HISTORY_TIMEOUT_MS,
+  });
+  if (!membership.ok) {
     return undefined;
   }
-  const rawRepositoryRoot = revParse.stdout.split(/\r?\n/u)[0]?.trim();
-  if (rawRepositoryRoot === undefined || rawRepositoryRoot.length === 0) {
-    return undefined;
-  }
-  const repositoryRoot = isAbsolute(rawRepositoryRoot)
-    ? resolve(rawRepositoryRoot)
-    : resolve(selectedRoot, rawRepositoryRoot);
+  const repositoryRoot = membership.membership.repositoryRoot;
   let realRepositoryRoot: string;
   try {
     realRepositoryRoot = inputs.fs.realPath(repositoryRoot);
@@ -197,16 +196,30 @@ async function resolveGitRepositoryForHistory(
   if (!containsPath(realRepositoryRoot, selectedRoot)) {
     return undefined;
   }
+  // The prefix is derived from the resolved paths rather than read off
+  // membership.prefix: resolveGitMembership applies `.trim()` to the --show-prefix line,
+  // which mangles a directory name that legitimately begins or ends with whitespace, and
+  // stripSelectedPrefix would then fail to match any returned filename (leaving history
+  // evidence silently empty). relative() is byte-exact and costs no extra process — the
+  // shared resolver is still what buys us the single bounded round trip and the hardened
+  // toplevel/ownership parsing this call site previously hand-rolled.
   return {
     repositoryRoot: realRepositoryRoot,
     selectedRootPrefix: toPosix(relative(realRepositoryRoot, selectedRoot)),
   };
 }
 
-function gitHistoryArgs(repositoryRoot: string): readonly string[] {
+// Path-scope the log so the GIT_HISTORY_COMMIT_LIMIT cap is spent inside the selected
+// root rather than repo-wide, which starved subfolder scopes in busy monorepos
+// (issue #2901 / KEIKO-0421). Empty prefix maps explicitly to "." — git treats an
+// empty-string pathspec differently from omitting one. A non-empty prefix is wrapped in
+// `:(literal)` so a directory whose name looks like a git pathspec magic word (e.g.
+// `feature-*` or `:(exclude)docs`) cannot be re-read as a glob or a magic signature.
+// Mirrors gitRoutes.ts's literalGitPathspec used by every other keiko-server git read.
+function gitHistoryArgs(repositoryRoot: string, selectedRootPrefix: string): readonly string[] {
+  const pathspec = selectedRootPrefix.length > 0 ? `:(literal)${selectedRootPrefix}` : ".";
   return [
-    "--no-pager",
-    "--no-optional-locks",
+    ...GIT_BASE_ARGS,
     "-C",
     repositoryRoot,
     "-c",
@@ -218,6 +231,7 @@ function gitHistoryArgs(repositoryRoot: string): readonly string[] {
     `--format=${GIT_HISTORY_RECORD_SEP}%ct`,
     "--name-only",
     "--",
+    pathspec,
   ];
 }
 
@@ -356,7 +370,7 @@ export const defaultGitFileHistoryEvidenceProvider: GitFileHistoryEvidenceProvid
     return [];
   }
   throwIfCancelled(inputs.signal);
-  const result = await runner(gitHistoryArgs(repo.repositoryRoot), {
+  const result = await runner(gitHistoryArgs(repo.repositoryRoot, repo.selectedRootPrefix), {
     cwd: repo.repositoryRoot,
     maxBytes: GIT_HISTORY_MAX_BYTES,
     timeoutMs: GIT_HISTORY_TIMEOUT_MS,

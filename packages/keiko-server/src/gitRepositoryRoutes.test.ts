@@ -36,6 +36,15 @@ function ctx(body: unknown): RouteContext {
   };
 }
 
+function ctxRaw(rawBody: string): RouteContext {
+  return {
+    req: Readable.from([Buffer.from(rawBody, "utf8")]) as IncomingMessage,
+    res: {} as ServerResponse,
+    params: {},
+    url: new URL("http://127.0.0.1/api/repositories/clone"),
+  };
+}
+
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "keiko-repo-route-"));
   store = createInMemoryUiStore();
@@ -288,6 +297,68 @@ describe("git repository routes", () => {
     expect(result.status).toBe(409);
     expect(result.body).toMatchObject({ error: { code: "PROJECT_EXISTS" } });
   });
+
+  // KEIKO-0341: parse/shape/validation failures must produce pairwise distinguishable
+  // messages instead of collapsing into one opaque "The clone request is invalid."
+  it("distinguishes malformed JSON, missing repositoryUrl, and missing destinationPath in the error message", async () => {
+    const cloneRunner = vi.fn(() => Promise.resolve(null));
+    const handler = createCloneRepositoryHandler(cloneRunner);
+    const malformed = await handler(ctxRaw("{not json at all"), deps());
+    const missingRepositoryUrl = await handler(
+      ctx({ destinationPath: join(tmp, "app-a") }),
+      deps(),
+    );
+    const missingDestination = await handler(
+      ctx({ repositoryUrl: "https://github.com/acme/app.git" }),
+      deps(),
+    );
+
+    const messages = [malformed, missingRepositoryUrl, missingDestination].map((result) => {
+      expect(result.status).toBe(400);
+      const body = result.body as { readonly error?: { readonly message?: unknown } };
+      const message = body.error?.message;
+      expect(typeof message).toBe("string");
+      return message as string;
+    });
+    expect(new Set(messages).size).toBe(3);
+    expect(messages[0]).toMatch(/JSON/u);
+    expect(messages[1]).toMatch(/repositoryUrl/u);
+    expect(messages[2]).toMatch(/destinationPath/u);
+    expect(cloneRunner).not.toHaveBeenCalled();
+  });
+
+  // KEIKO-0341 coverage extension: prove each remaining typed error class also
+  // surfaces its own distinguishable message and never invokes cloneRunner.
+  it.each([
+    {
+      caseName: "non-object body (bare JSON array)",
+      rawBody: JSON.stringify([{ repositoryUrl: "x", destinationPath: "/tmp/a" }]),
+      matcher: /object/u,
+    },
+    {
+      caseName: "non-string repositoryUrl (numeric)",
+      rawBody: JSON.stringify({ repositoryUrl: 42, destinationPath: "/tmp/app" }),
+      matcher: /repositoryUrl.*string/u,
+    },
+    {
+      caseName: "whitespace-only repositoryUrl (empty after trim)",
+      rawBody: JSON.stringify({ repositoryUrl: "   ", destinationPath: "/tmp/app" }),
+      matcher: /repositoryUrl.*required/u,
+    },
+  ])(
+    "rejects a $caseName with a distinguishable message and never runs the cloner",
+    async (input) => {
+      const cloneRunner = vi.fn(() => Promise.resolve(null));
+      const handler = createCloneRepositoryHandler(cloneRunner);
+      const result = await handler(ctxRaw(input.rawBody), deps());
+      expect(result.status).toBe(400);
+      const body = result.body as { readonly error?: { readonly message?: unknown } };
+      const message = body.error?.message;
+      expect(typeof message).toBe("string");
+      expect(message as string).toMatch(input.matcher);
+      expect(cloneRunner).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // The clone outcome projection is exercised directly: it is the only place that decides what a user
