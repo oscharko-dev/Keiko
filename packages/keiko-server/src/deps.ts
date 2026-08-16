@@ -384,6 +384,11 @@ export interface GatewayDiscoveredModels {
   readonly embeddingModelIds: readonly string[];
   readonly imageInputModelIds?: readonly string[];
   readonly modelMetadata?: Readonly<Record<string, GatewayDiscoveredModelMetadata>>;
+  // KEIKO-0325: true when the raw discovery payload contained more distinct model ids
+  // than the caller (MAX_DISCOVERED_MODELS) admits. Absent or false when the discovery
+  // fit within the cap. Callers should surface this to the operator so the missing
+  // models can be added via manual deployment names instead of being silently absent.
+  readonly truncated?: boolean;
 }
 
 export interface GatewayDiscoveredModelMetadata {

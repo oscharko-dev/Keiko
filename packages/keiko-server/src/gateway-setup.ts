@@ -1265,6 +1265,11 @@ export function parseModelDiscovery(payload: unknown): GatewayDiscoveredModels {
       entries.push(classified);
     }
   }
+  // KEIKO-0325: raise a truncation flag alongside the limited slice so callers can
+  // surface "N of M models discovered; add the rest by deployment name" instead of the
+  // pre-fix silent drop. Kept optional-and-off-by-default so a fitting-within-cap
+  // discovery does not carry a redundant `truncated: false` on the wire.
+  const wasTruncated = entries.length > MAX_DISCOVERED_MODELS;
   const limited = entries.slice(0, MAX_DISCOVERED_MODELS);
   if (limited.length === 0) {
     throw new Error("model discovery returned no model ids");
@@ -1279,6 +1284,7 @@ export function parseModelDiscovery(payload: unknown): GatewayDiscoveredModels {
       .filter((entry) => entry.kind === "chat" && entry.supportsImageInput)
       .map((entry) => entry.id),
     modelMetadata: Object.fromEntries(limited.map((entry) => [entry.id, entry.metadata])),
+    ...(wasTruncated ? { truncated: true } : {}),
   };
 }
 
