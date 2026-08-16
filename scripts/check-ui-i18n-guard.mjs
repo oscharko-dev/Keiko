@@ -697,10 +697,28 @@ function jsxAttributeExpressionResults(node, sourceFile) {
   const name = jsxAttributeName(node);
   if (name === null || !USER_FACING_ATTRIBUTE_NAMES.has(name)) return [];
   const initializer = node.initializer;
-  if (initializer === undefined || !ts.isJsxExpression(initializer)) return [];
-  const expr = initializer.expression;
-  if (expr === undefined) return [];
-  return jsxChildExpressionLiteralTexts(expr, sourceFile).filter((entry) => entry.text.length > 0);
+  if (initializer === undefined) return [];
+  // Directly quoted camelCase prop (`<KeikoSelect ariaLabel="Relationship type" />`): the
+  // initializer is a `StringLiteral`, NOT a `JsxExpression`. The per-line attribute pass only
+  // recognises kebab-case attributes before `=`, and `LABEL_FIELD_NAME_RE` expects `:` (object
+  // literal syntax), so this shape was invisible to both scanners before this branch landed
+  // (codex 3792941801 on #3202). Real cases: `RelationshipCreateDialog.tsx`,
+  // `VoiceDialogMode.tsx`.
+  if (ts.isStringLiteral(initializer)) {
+    const text = initializer.text.trim();
+    if (text.length === 0) return [];
+    const line =
+      ts.getLineAndCharacterOfPosition(sourceFile, initializer.getStart(sourceFile)).line + 1;
+    return [{ line, text }];
+  }
+  // Expression-valued: `ariaLabel={cond ? "a" : "b"}`. Reuse the JSX-child recursion so all the
+  // conditional/template/logical shapes work the same way in attribute values as in children.
+  if (ts.isJsxExpression(initializer) && initializer.expression !== undefined) {
+    return jsxChildExpressionLiteralTexts(initializer.expression, sourceFile).filter(
+      (entry) => entry.text.length > 0,
+    );
+  }
+  return [];
 }
 
 function collectJsxTextAndExpressions(source, filename) {

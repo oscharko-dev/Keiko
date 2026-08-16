@@ -1293,6 +1293,29 @@ test("collects literals from `label` and `description` prop expressions on custo
   expect(texts).toContain("Long description");
 });
 
+// KEIKO-0299 (review-follow-up on 9547abd1): a directly-quoted camelCase prop like
+// `<KeikoSelect ariaLabel="Relationship type" />` has a StringLiteral initializer (not a
+// JsxExpression), so the AST attribute pass silently dropped it. The per-line fallback only
+// recognises kebab-case attribute names before `=`, and LABEL_FIELD_NAME_RE expects `:`, so
+// nothing caught it. Codex 3792941801.
+test("collects directly quoted camelCase prop literals", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<KeikoSelect ariaLabel="Relationship type" label="Source" />',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Relationship type");
+  expect(texts).toContain("Source");
+});
+
+test("still ignores directly quoted values on non-user-facing camelCase props", () => {
+  expect(
+    untranslatedLiteralsInSource(
+      '<KeikoSelect testId="relationship-picker" className="primary" />',
+      "packages/x/y.tsx",
+    ).findings,
+  ).toEqual([]);
+});
+
 // KEIKO-0299 (review-follow-up on af74e79b): a JSX child like `{"Welcome back, " + name}`
 // renders the concatenation as user copy — the literal on either operand IS user-visible and
 // must enter the ledger. Codex 3792890969.
