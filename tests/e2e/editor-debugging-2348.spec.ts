@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { arch, cpus, platform, release, totalmem } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -75,6 +76,9 @@ const CAP_RENDERED_ROWS = 200;
 const CAP_RESIDUAL_HEAP_BYTES = 16 * 1_024 * 1_024;
 const SHA_256 = /^[0-9a-f]{64}$/u;
 const FULL_COMMIT = /^[0-9a-f]{40}$/u;
+const requireFromSpec = createRequire(import.meta.url);
+// D12 measures both checkout apps through this spec's Playwright harness, not the checkout cwd.
+const PLAYWRIGHT_TEST_VERSION = packageVersionFromSpec("@playwright/test");
 const DEBUG_ACTIVATION_STATES = new Set([
   "available",
   "disabled",
@@ -90,6 +94,19 @@ const DEBUG_ACTIVATION_REASONS = new Set([
   "WORKSPACE_ACTIVATION_UNSET",
   "WORKSPACE_DISABLED",
 ]);
+
+function packageVersionFromSpec(packageName: string): string {
+  const packageJson = requireFromSpec(`${packageName}/package.json`) as unknown;
+  if (
+    typeof packageJson !== "object" ||
+    packageJson === null ||
+    !("version" in packageJson) ||
+    typeof packageJson.version !== "string"
+  ) {
+    throw new Error(`${packageName} package.json must expose a version string`);
+  }
+  return packageJson.version;
+}
 
 interface DebugSessionProjection {
   readonly pauseGeneration: number;
@@ -1137,10 +1154,7 @@ function resolveCapProvenance(browser: Browser | null): D12RunProvenance {
     npmVersion: commandVersion("npm", ["--version"]),
     osRelease: release(),
     platform: platform(),
-    playwrightVersion: commandVersion(process.execPath, [
-      "-p",
-      "require('@playwright/test/package.json').version",
-    ]),
+    playwrightVersion: PLAYWRIGHT_TEST_VERSION,
     zlibVersion: process.versions.zlib,
   };
 }

@@ -21,13 +21,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/oscharko-dev/Keiko-for-Quality"><picture>
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/oscharko-dev/Keiko-for-Quality/quality-cards/cards/oscharko-dev/Keiko-light.svg">
-    <img src="https://raw.githubusercontent.com/oscharko-dev/Keiko-for-Quality/quality-cards/cards/oscharko-dev/Keiko.svg" width="340" alt="Reviewed by Keiko for Quality">
-  </picture></a>
-</p>
-
-<p align="center">
   <a href="#download">Download</a>
   ·
   <a href="#quickstart-with-npm">npm</a>

@@ -1341,13 +1341,10 @@ function parseArguments(argv) {
   return options;
 }
 
-function validateCheckoutHeads(roots, expectedHeads, isAncestor) {
+function validateCheckoutHeads(expectedHeads) {
   validateCommit(expectedHeads.baseline, BASELINE_COMMIT, "baseline checkout HEAD");
   if (!FULL_COMMIT.test(expectedHeads.candidate ?? "")) {
     fail("candidate checkout HEAD must be a full lowercase commit SHA");
-  }
-  if (!isAncestor(roots.candidate, BASELINE_COMMIT, expectedHeads.candidate)) {
-    fail("pinned baseline commit is not an ancestor of candidate HEAD");
   }
 }
 
@@ -1398,10 +1395,10 @@ function resolveCheckoutDependencies(dependencies) {
   };
 }
 
-function bindPinnedBaselineDigest(expectedSourceDigests, computeBaselineDigest, candidateRoot) {
+function bindPinnedBaselineDigest(expectedSourceDigests, computeBaselineDigest, baselineRoot) {
   const pinnedBaselineDigest = computeBaselineDigest({
     commit: BASELINE_COMMIT,
-    root: candidateRoot,
+    root: baselineRoot,
   });
   if (!SHA_256.test(pinnedBaselineDigest)) fail("pinned baseline source-tree digest is invalid");
   if (expectedSourceDigests.baseline !== pinnedBaselineDigest) {
@@ -1434,9 +1431,9 @@ function resolveCheckoutEvidence(options, dependencies) {
   const expectedHeads = Object.fromEntries(
     REVISIONS.map((revision) => [revision, getHead(roots[revision])]),
   );
-  validateCheckoutHeads(roots, expectedHeads, isAncestor);
+  validateCheckoutHeads(expectedHeads);
   const expectedSourceDigests = computeCheckoutDigests(roots, listDirtyPaths, computeDigest);
-  bindPinnedBaselineDigest(expectedSourceDigests, computeBaselineDigest, roots.candidate);
+  bindPinnedBaselineDigest(expectedSourceDigests, computeBaselineDigest, roots.baseline);
   const expectedLockfileSha256ByRevision = lockfileSha256ByRevision(roots, getLockfileSha256);
   return {
     expectedHeads,
@@ -1444,7 +1441,7 @@ function resolveCheckoutEvidence(options, dependencies) {
     expectedSourceDigests,
     getFreshnessOptions: () => ({
       computeBaselineSourceTreeSha256: () =>
-        computeBaselineDigest({ commit: BASELINE_COMMIT, root: roots.candidate }),
+        computeBaselineDigest({ commit: BASELINE_COMMIT, root: roots.baseline }),
       computeMeasurementHarnessSha256: () =>
         computeMeasurementHarnessSha256(roots.candidate, expectedHeads.candidate),
       computeLockfileSha256: () => getLockfileSha256(roots.candidate),

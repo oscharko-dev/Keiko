@@ -16,6 +16,7 @@ import type {
   EditorSignatureHelpResolver,
 } from "../index.js";
 import { KeikoCodeEditor, countLines } from "./KeikoCodeEditor.js";
+import { MONACO_BUILTIN_ACTION_IDS } from "./command-actions.js";
 import { baseProps, buildBuffer, buildFileModel, dirtyFileModel } from "./test-harness.js";
 import type { KeikoCodeEditorProps } from "./types.js";
 
@@ -32,6 +33,7 @@ interface CapturedEditor {
   }) => void;
   runSaveAction: () => void;
   runAction: (id: string, editor: unknown) => void;
+  actionLookups: () => readonly string[];
   formatRuns: () => number;
   saveKeybinding: () => number | undefined;
   focus: ReturnType<typeof vi.fn>;
@@ -238,6 +240,7 @@ vi.mock("@monaco-editor/react", () => {
     disposed: { action: boolean; cursor: boolean; selection: boolean };
     saveRun: () => void;
     actionRuns: Map<string, (editor?: unknown) => void>;
+    actionLookups: string[];
     formatRunCount: number;
     saveKeybindings: readonly number[] | undefined;
     cursorListener: ((e: { position: { lineNumber: number; column: number } }) => void) | null;
@@ -266,6 +269,7 @@ vi.mock("@monaco-editor/react", () => {
       disposed: { action: false, cursor: false, selection: false },
       saveRun: (): void => undefined,
       actionRuns: new Map(),
+      actionLookups: [],
       formatRunCount: 0,
       saveKeybindings: undefined,
       cursorListener: null,
@@ -334,14 +338,16 @@ vi.mock("@monaco-editor/react", () => {
           },
         };
       },
-      getAction: (id): { run: () => void } | null =>
-        id === "editor.action.formatDocument"
+      getAction: (id): { run: () => void } | null => {
+        s.actionLookups.push(id);
+        return id === MONACO_BUILTIN_ACTION_IDS.format
           ? {
               run: (): void => {
                 s.formatRunCount += 1;
               },
             }
-          : null,
+          : null;
+      },
       onDidChangeCursorPosition: (listener): { dispose: () => void } => {
         s.cursorListener = listener;
         return {
@@ -423,6 +429,7 @@ vi.mock("@monaco-editor/react", () => {
         if (run === undefined) throw new Error(`missing editor action ${id}`);
         run(editor);
       },
+      actionLookups: (): readonly string[] => s.actionLookups,
       formatRuns: (): number => s.formatRunCount,
       saveKeybinding: (): number | undefined => s.saveKeybindings?.[0],
       focus: s.focus,
@@ -868,9 +875,11 @@ describe("KeikoCodeEditor — save command", () => {
     expect(captured.editor?.formatRuns()).toBe(0);
 
     rerender(<KeikoCodeEditor {...baseProps({ formatRequestNonce: 1 })} />);
+    expect(captured.editor?.actionLookups()).toEqual([MONACO_BUILTIN_ACTION_IDS.format]);
     expect(captured.editor?.formatRuns()).toBe(1);
 
     rerender(<KeikoCodeEditor {...baseProps({ formatRequestNonce: 1 })} />);
+    expect(captured.editor?.actionLookups()).toEqual([MONACO_BUILTIN_ACTION_IDS.format]);
     expect(captured.editor?.formatRuns()).toBe(1);
   });
 

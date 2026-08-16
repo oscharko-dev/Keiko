@@ -46,7 +46,7 @@ a missing or misconfigured local Monaco asset fails closed rather than silently 
 ls node_modules/monaco-editor/esm/vs/editor/editor.worker.js
 ls node_modules/monaco-editor/esm/vs/language/typescript/ts.worker.js
 
-# Confirm the pinned version matches the budget file (0.55.1).
+# Confirm the pinned version matches the budget file (0.56.0).
 node -e "console.log(require('monaco-editor/package.json').version)"
 ```
 
@@ -57,7 +57,7 @@ In the Console, a `MonacoEnvironment`/`getWorker` error names the worker that fa
 **Resolution**
 
 - Reinstall dependencies so the pinned Monaco workers are present: `npm ci`. The lockfile enforces the
-  `0.55.1` pin and SHA-512 integrity.
+  `0.56.0` pin and SHA-512 integrity.
 - Confirm the host installs the runtime once before the first mount (`configureMonacoLoader` +
   `installMonacoEnvironment`) behind a client-only boundary; see the
   [host integration guide](runbook.md#host-integration-guide). Importing `monaco-editor` during a
@@ -244,7 +244,7 @@ Two related cases:
    (`KEIKO_EDITOR_TEST_GENERATION_EXECUTION`, default off) off, the route runs governed discovery for
    provenance but makes no model call and yields `deferred`. No v1 flow executes model-generated code.
 2. The verification gates enforce the editor's boundaries: the dependency-direction rule
-   (`arch:check` / `arch:check:negative`), the bundle-size budget (own-code gzip ceiling, the `0.55.1`
+   (`arch:check` / `arch:check:negative`), the bundle-size budget (own-code gzip ceiling, the `0.56.0`
    Monaco pin, and first-load isolation in `editor-bundle-size.budget.json`), the package test suite,
    and the documentation link check. A failure names the boundary that regressed.
 

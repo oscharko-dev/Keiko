@@ -15,7 +15,7 @@
 import type { MonacoWorkerFactories } from "./workers.js";
 
 function createEditorWorker(): Worker {
-  return new Worker(new URL("monaco-editor/esm/vs/editor/editor.worker.js", import.meta.url), {
+  return new Worker(new URL("monaco-editor/editor/editor.worker.js", import.meta.url), {
     type: "module",
   });
 }

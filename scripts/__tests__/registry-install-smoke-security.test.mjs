@@ -27,6 +27,7 @@ import {
   assertRegistryOnlyDescriptors,
   assertHostBindingsAreReal,
   assertStubsAreForeignOnly,
+  lockfilePackageInstallsOnHost,
   writeSeedIndex,
   hostBindingSuffixes,
   corepackCacheDir,
@@ -1242,6 +1243,46 @@ describe("installable package smoke optional-dependency coverage", () => {
       expect(() =>
         assertStubsAreForeignOnly(stubbed, write("elsewhere.json", { os: [other, "!aix"] })),
       ).not.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("honours the lockfile libc scope when judging native stubs", () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-libc-platform-"));
+    const write = (file, scope) => {
+      const path = join(dir, file);
+      writeFileSync(
+        path,
+        JSON.stringify({
+          packages: { "node_modules/demo-native": { version: "1.0.2", ...scope } },
+        }),
+        "utf8",
+      );
+      return path;
+    };
+    try {
+      const glibcLock = write("glibc.json", {
+        cpu: ["x64"],
+        libc: ["glibc"],
+        os: ["linux"],
+      });
+      const muslLock = write("musl.json", { cpu: ["x64"], libc: ["musl"], os: ["linux"] });
+      const darwinLock = write("darwin.json", { cpu: ["arm64"], os: ["darwin"] });
+      const linuxGlibc = { arch: "x64", libc: "glibc", platform: "linux" };
+      const linuxMusl = { arch: "x64", libc: "musl", platform: "linux" };
+      const darwin = { arch: "arm64", libc: undefined, platform: "darwin" };
+      const cases = [
+        [glibcLock, linuxGlibc, true],
+        [glibcLock, linuxMusl, false],
+        [muslLock, linuxMusl, true],
+        [muslLock, linuxGlibc, false],
+        [darwinLock, darwin, true],
+        [glibcLock, darwin, false],
+      ];
+      for (const [lockfilePath, host, expected] of cases) {
+        expect(lockfilePackageInstallsOnHost("demo-native", lockfilePath, host)).toBe(expected);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

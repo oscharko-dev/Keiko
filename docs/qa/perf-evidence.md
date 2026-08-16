@@ -58,9 +58,10 @@ On Linux you can also drive the producer directly, without the container:
 npm run perf:evidence:regen
 ```
 
-On Linux this provisions two clean checkouts (pinned baseline `18750d079e2a61c7d7044f3f6ec977a104b9884f`, candidate = your
-HEAD), runs the official D12 producer (warm-ups, six alternating Common runs, three cap runs, at full
-sample depth via `KEIKO_D12_FULL_SAMPLE_DEPTH=1`), refreshes the bundle
+On Linux this provisions two clean checkouts (pinned baseline
+`18750d079e2a61c7d7044f3f6ec977a104b9884f`, candidate = your HEAD), runs the official D12 producer
+(warm-ups, six alternating Common runs, three cap runs, at full sample depth via
+`KEIKO_D12_FULL_SAMPLE_DEPTH=1`), refreshes the bundle
 evidence from a fresh production build, validates everything with the independent checker, and
 copies both documents back — review and commit them as your final commit (the documents are not
 subject paths, so committing them does not invalidate what they bind).
@@ -74,9 +75,11 @@ throwaway clone below; only after mounting your working checkout directly re-run
 
 - **Full, non-worktree checkout.** In a git worktree, `$PWD/.git` is a file pointing at the main
   repository and the container cannot resolve it. Make a self-contained clone first —
-  `git clone --no-local . <dest>` — and mount that alone; the pinned baseline commit must be
-  present (`git merge-base --is-ancestor 18750d079e2a61c7d7044f3f6ec977a104b9884f HEAD`). Name the clone directory `*.noindex`
-  so Spotlight does not index-storm the host during the run.
+  `git clone --no-local . <dest>` — and mount that alone. The wrapper fetches the exact pinned
+  baseline commit when needed; it may be a squash-only foreign commit, so Git ancestry is not the
+  trust anchor. Commit identity, clean checkouts, source-tree digests, lockfile digests, and the
+  independent evidence checker are. Name the clone directory `*.noindex` so Spotlight does not
+  index-storm the host during the run.
 - **Single occupancy.** Measurement is exclusive: before starting, check
   `docker ps` for any other `node:24*` measurement container (other agents measure too) and do
   not run builds/tests/gates on the host for the duration. A budget verdict measured on a loaded
@@ -120,6 +123,9 @@ misleading anywhere else.
   provisions both checkouts with `npm ci --ignore-scripts` under a deterministic environment
   allowlist. A dependency change is therefore measured as part of the candidate instead of making
   evidence generation impossible or silently substituting dependency state.
+- The pinned baseline is exact by commit and digest, not by being an ancestor of the candidate.
+  This keeps the same reference usable after squash-only integrations while still refusing a dirty
+  checkout or a document whose baseline digest no longer matches the pinned commit.
 - Budgets are enforced in exactly one place: `scripts/perf-evidence-gate.mjs` (`npm run check:perf-evidence`), reading the committed
   document on every pull request (ADR-0156 D1/D5). Measurement lanes — this one and the scheduled
   workflow — measure and record; they never abort on a budget verdict, because the document that
