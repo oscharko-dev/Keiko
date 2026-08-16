@@ -69,12 +69,12 @@ export const SALIENCE_SYSTEM_PROMPT = `You extract durable memories from a chat 
 Return ONLY a JSON object of the shape {"items":[...]} (no prose, no markdown fences). Each element of "items":
 { "body": string, "type": string, "confidence": number, "scope": string, "source": "user", "tags": string[] }
 
-Capture ONLY facts the USER asserted about THEMSELVES or THEIR work that are durable and worth remembering: identity, stable preferences, project and technology facts, decisions, constraints, goals, environment, team, and recurring workflow lessons. Write each "body" as a concise, self-contained, third-person statement in the same language as the user's fact or the conversation. Do not translate German or multilingual facts into English.
+Capture ONLY facts the USER asserted about THEMSELVES or THEIR work that are durable and worth remembering: identity, stable preferences, project and technology facts, decisions, constraints, goals, environment, team, and recurring workflow lessons. Copy each "body" verbatim from one complete declarative sentence or whole line in the user message. Never paraphrase, translate, combine, infer, or complete the user's wording.
 
 Examples:
-- "My name is Paul." -> "The user's name is Paul."
-- "Hallo Keiko, ich bin Paul." -> "Der Nutzer heißt Paul."
-- "Wir bauen Atlas in Rust mit PostgreSQL." -> "Der Nutzer baut Atlas in Rust mit PostgreSQL."
+- "My name is Paul." -> "My name is Paul."
+- "Hallo Keiko, ich bin Paul." -> "Hallo Keiko, ich bin Paul."
+- "Wir bauen Atlas in Rust mit PostgreSQL." -> "Wir bauen Atlas in Rust mit PostgreSQL."
 
 Capture LIBERALLY — the bar is low; when in doubt, include it.
 
@@ -410,6 +410,27 @@ function candidateBody(item: RawSalienceItem, policy: CapturePolicyOptions): str
   return memoryTextSecretEgressRejectionReason(body, policy) === null ? body : null;
 }
 
+function addEvidenceSegment(text: string, segments: Set<string>): void {
+  const trimmed = text.trim();
+  if (trimmed.length > 0) segments.add(trimmed);
+}
+
+function userEvidenceSegments(userText: string): ReadonlySet<string> {
+  const segments = new Set<string>();
+  for (const line of userText.split(/\r?\n/u)) {
+    addEvidenceSegment(line, segments);
+    for (const sentence of line.split(/(?<=[.!?。！？])\s+/u)) {
+      addEvidenceSegment(sentence, segments);
+    }
+  }
+  return segments;
+}
+
+function isUserAssertionBody(body: string, userText: string): boolean {
+  if (/[?？]/u.test(body)) return false;
+  return userEvidenceSegments(userText).has(body);
+}
+
 function candidateScope(
   scopeKind: MemoryScopeKindHint,
   context: CaptureContext,
@@ -427,12 +448,17 @@ function buildCandidate(
   item: RawSalienceItem,
   context: CaptureContext,
   policy: CapturePolicyOptions,
+  userText: string,
   onDrop: (reason: ModelDropReason) => void,
 ): CaptureOutcome | null {
   const metadata = candidateMetadata(item, onDrop);
   if (metadata === null) return null;
   const body = candidateBody(item, policy);
   if (body === null) return null;
+  if (!isUserAssertionBody(body, userText)) {
+    onDrop("non-user-source");
+    return null;
+  }
   const scope = candidateScope(metadata.scopeKind, context, policy);
   if (scope === null) {
     return null;
@@ -465,13 +491,14 @@ function collectAcceptedCandidates(
   items: readonly RawSalienceItem[],
   context: CaptureContext,
   policy: CapturePolicyOptions,
+  userText: string,
   seen: ReadonlySet<string>[],
   onDrop: (reason: ModelDropReason) => void,
 ): CaptureOutcome[] {
   const accepted: CaptureOutcome[] = [];
   for (const item of items) {
     if (accepted.length >= MAX_CANDIDATES) break;
-    const candidate = buildCandidate(item, context, policy, onDrop);
+    const candidate = buildCandidate(item, context, policy, userText, onDrop);
     if (candidate === null) continue;
     const bigrams = charBigrams(normalizeForDedup(item.body));
     if (isNearDuplicate(bigrams, seen)) continue;
@@ -521,7 +548,14 @@ export async function extractSalientMemories(
   const recordDrop = (reason: ModelDropReason): void => {
     droppedByReason.set(reason, (droppedByReason.get(reason) ?? 0) + 1);
   };
-  const accepted = collectAcceptedCandidates(items, context, policy, seen, recordDrop);
+  const accepted = collectAcceptedCandidates(
+    items,
+    context,
+    policy,
+    input.userText,
+    seen,
+    recordDrop,
+  );
   emitExtractionDiagnostics(deps, items, accepted.length, droppedByReason);
   return accepted;
 }
