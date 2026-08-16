@@ -1658,6 +1658,47 @@ async function resolvedIfPresent(path: string): Promise<string | undefined> {
   }
 }
 
+// The serialized verify->write critical section (KEIKO-0495). Extracted so
+// writeResolvedFilesContent stays within its function-length bound.
+async function verifyThenWrite(args: {
+  readonly target: ResolvedTarget;
+  readonly content: string;
+  readonly expectedModifiedAt?: number | undefined;
+  readonly baseVersion?: EditorDocumentVersion | undefined;
+  readonly beforeWrite?:
+    | ((content: string) => NonNullable<FilesContentWireResponse["localHistoryProtection"]>)
+    | undefined;
+}): Promise<{
+  readonly localHistoryProtection: FilesContentWireResponse["localHistoryProtection"];
+  readonly updatedStats: Stats;
+}> {
+  // Re-stat INSIDE the lock. `args.target.stats` was captured before queuing, so a queued
+  // request would otherwise re-run the conflict check against its own pre-lock snapshot and
+  // never see the winner's write — surfacing an unrelated STALE_PATH from the rename guard
+  // instead of the STALE_SESSION / WRITE_CONFLICT this check exists to report.
+  // A delete or rename between resolveInsideRoot() and this in-lock stat rejects with a raw
+  // ENOENT. runFilesHandler only translates FilesError, so without this it would surface as an
+  // opaque 500 instead of the 409 STALE_PATH that writeExistingResolvedFile already produces
+  // for exactly this race.
+  let refreshedStats;
+  try {
+    refreshedStats = await stat(args.target.path);
+  } catch {
+    throw stalePathError();
+  }
+  const refreshed: ResolvedTarget = { ...args.target, stats: refreshedStats };
+  await assertNoWriteConflict(refreshed, args.baseVersion, args.expectedModifiedAt);
+  let protection: FilesContentWireResponse["localHistoryProtection"];
+  if (args.beforeWrite !== undefined) {
+    const current = await readStableEditableContent(args.target);
+    protection = args.beforeWrite(current.content);
+  }
+  return {
+    localHistoryProtection: protection,
+    updatedStats: await writeExistingResolvedFile(args.target, args.content),
+  };
+}
+
 async function writeResolvedFilesContent(args: {
   readonly target: ResolvedTarget;
   readonly content: string;
@@ -1690,23 +1731,7 @@ async function writeResolvedFilesContent(args: {
   // conflict checks are untouched and still do the deciding.
   const { localHistoryProtection, updatedStats } = await fileWriteMutex.runExclusive(
     [fileWriteKey(args.target.path)],
-    async () => {
-      // Re-stat INSIDE the lock. `args.target.stats` was captured before queuing, so a queued
-      // request would otherwise re-run the conflict check against its own pre-lock snapshot and
-      // never see the winner's write — surfacing an unrelated STALE_PATH from the rename guard
-      // instead of the STALE_SESSION / WRITE_CONFLICT this check exists to report.
-      const refreshed: ResolvedTarget = { ...args.target, stats: await stat(args.target.path) };
-      await assertNoWriteConflict(refreshed, args.baseVersion, args.expectedModifiedAt);
-      let protection: FilesContentWireResponse["localHistoryProtection"];
-      if (args.beforeWrite !== undefined) {
-        const current = await readStableEditableContent(args.target);
-        protection = args.beforeWrite(current.content);
-      }
-      return {
-        localHistoryProtection: protection,
-        updatedStats: await writeExistingResolvedFile(args.target, args.content),
-      };
-    },
+    () => verifyThenWrite(args),
   );
   return {
     ...base,
