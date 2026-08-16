@@ -5262,10 +5262,15 @@ describe("handleGatewaySetup", () => {
           operation: "POST /api/gateway/setup",
           source: "gateway-setup.discovery",
           code: "GATEWAY_DISCOVERY_TRUNCATED",
-          occurrenceCount: MAX_DISCOVERED_MODELS,
+          // Dedicated field, not `occurrenceCount` — that one counts how often a rate-limited
+          // diagnostic fired, so an aggregator summing it must not pick up a model count.
+          retainedModelCount: MAX_DISCOVERED_MODELS,
         }),
       ]),
     );
+    // occurrenceCount keeps its own meaning (rate-limited firing count) and must stay unset here.
+    const truncation = diagnostics.find((record) => record.code === "GATEWAY_DISCOVERY_TRUNCATED");
+    expect(truncation?.occurrenceCount).toBeUndefined();
     const serialized = JSON.stringify(diagnostics);
     expect(serialized).not.toContain("discovered-model-");
     expect(serialized).not.toContain("llm-gateway.example.com");

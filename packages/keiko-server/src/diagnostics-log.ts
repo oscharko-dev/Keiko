@@ -32,6 +32,11 @@ export interface ServerDiagnosticRecord {
   readonly gatewayRequestId?: string | undefined;
   // Bounded numeric occurrence for rate-limited diagnostics; never parsed from content.
   readonly occurrenceCount?: number | undefined;
+  // How many models survived the discovery cap when a gateway-setup discovery was truncated
+  // (GATEWAY_DISCOVERY_TRUNCATED). Kept separate from `occurrenceCount`, which counts how often a
+  // rate-limited diagnostic fired — an aggregator summing that field must not pick up a model
+  // count. A bounded count only; never a model id or an endpoint.
+  readonly retainedModelCount?: number | undefined;
 }
 
 export interface ServerDiagnosticSink {

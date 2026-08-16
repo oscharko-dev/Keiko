@@ -4390,7 +4390,7 @@ function reportDiscoveryTruncation(
     message:
       "Model discovery exceeded the discovery cap; setup continued with the retained models.",
     code: "GATEWAY_DISCOVERY_TRUNCATED",
-    occurrenceCount: candidateModels.modelIds.length,
+    retainedModelCount: candidateModels.modelIds.length,
   });
 }
 
