@@ -19,7 +19,7 @@ on:
       - feat/keiko-repository-centered-desktop-workflow
       - feat/epic-built-in-editor-2285-M11
       - feat/epic-memoria-viva-2538
-      - epic/coding-workbench-opencode-codex
+      - "epic/**"
       - "release/**"
   pull_request:
     branches:
@@ -36,7 +36,7 @@ on:
       - feat/keiko-repository-centered-desktop-workflow
       - feat/epic-built-in-editor-2285-M11
       - feat/epic-memoria-viva-2538
-      - epic/coding-workbench-opencode-codex
+      - "epic/**"
       - "release/**"
   # ADR-0139 D7: code scanning also validates merge-queue groups.
   merge_group:

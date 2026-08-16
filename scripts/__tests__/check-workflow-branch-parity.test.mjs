@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { describe, expect, it, vi } from "vitest";
@@ -123,6 +124,16 @@ describe("checkWorkflowBranchParity", () => {
 });
 
 describe("runCli", () => {
+  it("keeps canonical epic branches on every governed workflow trigger", () => {
+    const workflowsDir = resolve(import.meta.dirname, "..", "..", ".github", "workflows");
+    for (const { file, triggers } of [REFERENCE, ...FOLLOWERS]) {
+      const source = readFileSync(resolve(workflowsDir, file), "utf8");
+      for (const trigger of triggers) {
+        expect(readBranchList(source, trigger), `${file}:${trigger}`).toContain("epic/**");
+      }
+    }
+  });
+
   it("returns 0 and reports the branch count against the real workflows", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     try {
