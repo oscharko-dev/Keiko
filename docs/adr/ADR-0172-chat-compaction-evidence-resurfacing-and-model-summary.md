@@ -34,12 +34,19 @@ had to reason about.
 
 ## Decision
 
-### D1 — Compaction evidence persistence is best-effort and never reaches the send path
+### D1 — Compaction evidence persistence is failure-isolated from the send path
 
 `persistChatCompactionEvidence` returns `void` and wraps everything after its fast-path guard —
 the chatId hash, the runId construction, and the store write — so that a malformed chatId or a
-throwing evidence store cannot escape into the chat send path. A chat turn is never failed, delayed,
-or altered because its compaction evidence could not be written.
+throwing evidence store cannot escape into the chat send path. A chat turn is never **failed** or
+**altered** because its compaction evidence could not be written.
+
+It is failure-isolated, not latency-isolated. The store write is synchronous and runs before the
+buffered handler returns its `RouteResult`, so a slow filesystem or store still adds latency to the
+send. That is a deliberate trade — the record is written while the data is unambiguously in hand,
+rather than deferred to a path where a crash could lose it — but it is a real cost and is recorded
+here rather than claimed away. Moving persistence off the response path is the obvious future
+change if that latency ever becomes material.
 
 The fast path (no compaction record) returns immediately without touching the store.
 
@@ -90,12 +97,19 @@ it never carries the only copy of anything. Nothing downstream may require it to
 ### D5 — Summary output is validated and redacted before persistence
 
 The model's response is not trusted. Output passes `validateContextCompactionRecord`,
-`redactAbsolutePaths`, `stripUnsafeFormatChars`, and `containsPseudoRoleMarker`, and the record
-retains the resulting `validationState` as either `accepted` or `redacted` — so a persisted summary
-always states whether it was altered on the way in.
+`redactAbsolutePaths`, `stripUnsafeFormatChars`, and `containsPseudoRoleMarker`. A summary that
+survives retains `validationState` as either `accepted` or `redacted`, so a usable summary always
+states whether it was altered on the way in.
 
-A summary that cannot be brought into a valid, redacted state is dropped rather than stored in a
-degraded form.
+A summary that cannot be brought into a valid state is **not silently dropped**. The failure is
+recorded: `failureModelSummary` persists a record with `validationState: "rejected"`, empty content,
+and the failure reason — `invalid` (schema or unsafe output), `timed-out`, or `unavailable` (no
+usable model). Only the rejected *content* is discarded; the fact that an enrichment was attempted
+and why it failed is retained.
+
+This matters for D4's premise: because a rejected record is still persisted, a reader can always
+distinguish "enrichment was never attempted" from "enrichment ran and produced nothing usable".
+A record carrying only a rejected summary remains a complete, valid compaction record.
 
 ## Consequences
 

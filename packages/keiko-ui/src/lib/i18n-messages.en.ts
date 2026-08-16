@@ -586,11 +586,6 @@ export const EN_MESSAGES = {
   "chat.error.send": "Could not send message.",
   "chat.error.load": "Could not load chat.",
   "chat.error.scopeUpdate": "Unable to update knowledge scope.",
-  "error.gatewayCircuitOpen.title": "Model gateway is temporarily unavailable",
-  "error.gatewayCircuitOpen.message":
-    "The model gateway is temporarily unavailable while the circuit breaker is open.",
-  "error.gatewayCircuitOpen.remediation":
-    "The system is automatically retrying. Wait a moment, or switch to another configured model.",
   "chat.error.memoryUpdate": "Unable to update memory.",
   "chat.grounding.label": "Grounding",
   "chat.grounding.mode": "Grounding mode",

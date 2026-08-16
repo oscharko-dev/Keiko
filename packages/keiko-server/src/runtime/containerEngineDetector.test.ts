@@ -211,9 +211,8 @@ describe("detectContainerEngines — kill-switch + never-throws", () => {
       processEnv: {},
       now: () => 1,
     });
-    // One macrotask boundary is enough for both engines' first call to reach its suspension
-    // point. Sequentially only "docker" would have started here.
-    await new Promise((resolve) => setImmediate(resolve));
+    // Both probes record `started` synchronously before they await the gate, so no scheduler
+    // turn is needed: assert directly. Sequentially only "docker" would have started here.
     expect(started).toEqual(["docker", "podman"]);
 
     release?.();

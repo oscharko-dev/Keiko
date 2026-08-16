@@ -275,7 +275,15 @@ describe("portable update activation", () => {
     const install = await makeInstall();
     mkdirSync(install.stateDir, { recursive: true });
     const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
-    const kill = vi.fn();
+    // Ordering matters, not just the call: a rollback that restored the old install BEFORE
+    // killing the child would still satisfy a bare toHaveBeenCalled. Assert inside the mock
+    // that the promoted layout is still in place when the signal is sent.
+    const kill = vi.fn(() => {
+      expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(
+        TARGET_VERSION,
+      );
+      return true;
+    });
     const activator = createPortableUpdateActivator({
       env: {
         KEIKO_STATE_DIR: install.stateDir,

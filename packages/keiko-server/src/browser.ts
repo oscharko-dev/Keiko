@@ -3,7 +3,11 @@
 // events are exempt by the same gate. SSE framing reuses the existing sse.ts helpers.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { writeOrDestroy, type SseBackpressureSignal } from "./sse-write.js";
+import {
+  sseBackpressureReporter,
+  writeOrDestroy,
+  type SseBackpressureSignal,
+} from "./sse-write.js";
 import {
   BrowserToolError,
   type BrowserEventEnvelope,
@@ -256,7 +260,13 @@ export function handleBrowserEvents(ctx: RouteContext, deps: UiHandlerDeps): Han
   if (!guard.hasSession(sessionId)) {
     return { status: 404, body: errorBody("SESSION_NOT_FOUND", "Browser session not found.") };
   }
-  openBrowserSseStream(ctx.res, guard, sessionId, deps.redactor);
+  openBrowserSseStream(
+    ctx.res,
+    guard,
+    sessionId,
+    deps.redactor,
+    sseBackpressureReporter(deps, "browser"),
+  );
   ctx.req.on("close", () => {
     ctx.res.end();
   });
@@ -297,7 +307,10 @@ export function openBrowserSseStream(
     unsubscribe();
   };
   controller.signal.addEventListener("abort", stop, { once: true });
-  res.write(readyMessage());
+  // The ready frame goes through the same protective path: a client that is already not draining
+  // must abort and unsubscribe here too, rather than leaving the subscription live until some
+  // later event happens to trip writeOrDestroy.
+  writeOrDestroy(res, readyMessage(), controller, onBackpressure);
   res.on("close", () => {
     stop();
   });

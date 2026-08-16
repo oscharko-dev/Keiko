@@ -3,7 +3,11 @@
 // SSE framing mirrors /api/browser/*/events.
 
 import type { ServerResponse, IncomingMessage } from "node:http";
-import { writeOrDestroy, type SseBackpressureSignal } from "./sse-write.js";
+import {
+  sseBackpressureReporter,
+  writeOrDestroy,
+  type SseBackpressureSignal,
+} from "./sse-write.js";
 import { TerminalToolError } from "./terminal-errors.js";
 import {
   buildTerminalPolicySummary,
@@ -223,7 +227,7 @@ export function handleDeleteTerminalExecution(ctx: RouteContext, deps: UiHandler
 export function handleTerminalEvents(ctx: RouteContext, deps: UiHandlerDeps): HandlerOutcome {
   const guard = requireTerminal(deps);
   if (isRouteResult(guard)) return guard;
-  openTerminalSseStream(ctx.res, guard, deps.redactor);
+  openTerminalSseStream(ctx.res, guard, deps.redactor, sseBackpressureReporter(deps, "terminal"));
   ctx.req.on("close", () => {
     ctx.res.end();
   });
@@ -259,7 +263,10 @@ export function openTerminalSseStream(
     unsubscribe();
   };
   controller.signal.addEventListener("abort", stop, { once: true });
-  res.write(readyMessage());
+  // The ready frame goes through the same protective path: a client that is already not draining
+  // must abort and unsubscribe here too, rather than leaving the subscription live until some
+  // later event happens to trip writeOrDestroy.
+  writeOrDestroy(res, readyMessage(), controller, onBackpressure);
   res.on("close", () => {
     stop();
   });

@@ -763,6 +763,47 @@ describe("openBrowserSseStream backpressure (KEIKO-0142)", () => {
     }).not.toThrow();
   });
 
+  it("protects the ready frame itself, not just later events (KEIKO-0142)", () => {
+    const fake = makeFakeSseRes();
+    const manager = new FakeBrowserSessionManager();
+    const signals: SseBackpressureSignal[] = [];
+    fake.writeReturns = false;
+    openBrowserSseStream(
+      fake.res,
+      manager,
+      "session-ready",
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+  });
+
+  it("kills on an event frame when the ready frame was accepted (KEIKO-0142)", () => {
+    const fake = makeFakeSseRes();
+    const manager = new FakeBrowserSessionManager();
+    const signals: SseBackpressureSignal[] = [];
+    openBrowserSseStream(
+      fake.res,
+      manager,
+      "session-late",
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+    expect(fake.destroyCount).toBe(0);
+
+    fake.writeReturns = false;
+    manager.emit("session-late", browserEvent("session-late", "navigated", 1));
+
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+  });
+
   it("keeps the session-closed early-return intact while wired to the controller", () => {
     // The session-closed branch must still unsubscribe and end the response — migrating to
     // writeOrDestroy must not drop or reorder it.

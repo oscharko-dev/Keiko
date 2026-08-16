@@ -573,6 +573,53 @@ describe("openTerminalSseStream backpressure (KEIKO-0142)", () => {
     }).not.toThrow();
   });
 
+  it("protects the ready frame itself, not just later events (KEIKO-0142)", () => {
+    // The ready frame is written before any manager event. If it is rejected and bypasses
+    // writeOrDestroy, the subscription stays live on a socket that is already not draining.
+    const fake = makeFakeSseRes();
+    const manager = new FakeTerminalExecutionManager();
+    const signals: SseBackpressureSignal[] = [];
+    fake.writeReturns = false;
+    openTerminalSseStream(
+      fake.res,
+      manager,
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+
+    // Destroyed and signalled immediately, with no manager event required.
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+  });
+
+  it("kills on an event frame when the ready frame was accepted (KEIKO-0142)", () => {
+    // The complementary path: ready frame accepted, a later event frame rejected.
+    const fake = makeFakeSseRes();
+    const manager = new FakeTerminalExecutionManager();
+    const signals: SseBackpressureSignal[] = [];
+    openTerminalSseStream(
+      fake.res,
+      manager,
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+    expect(fake.destroyCount).toBe(0);
+
+    fake.writeReturns = false;
+    manager.emitExternal({
+      kind: "execution-completed",
+      executionId: "exec-late",
+      payload: { exitCode: 0, durationMs: 1, truncated: false, timedOut: false },
+    } as unknown as TerminalEventEnvelope);
+
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+  });
+
   it("keeps the normal write path intact when res.write returns true", () => {
     const fake = makeFakeSseRes();
     const manager = new FakeTerminalExecutionManager();

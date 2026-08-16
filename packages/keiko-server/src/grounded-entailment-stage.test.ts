@@ -194,6 +194,24 @@ describe("createEntailmentStage — inertness", () => {
     expect(inert[0]?.message).toBe("model-incompatible");
   });
 
+  it("reports model-port-unavailable for a compatible model with no port (KEIKO-0359)", () => {
+    // The third inert cause: capability is fine, but no ModelPort can be built. Must be
+    // distinguishable from both the unenriched and the incompatible case.
+    const records: ServerDiagnosticRecord[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsWith(portReturning("{}"), (r) => records.push(r)),
+      modelPortFactory: () => undefined,
+    };
+
+    expect(
+      createEntailmentStage(deps, [], MODEL_ID, { diagnostics: deps.diagnostics }),
+    ).toBeUndefined();
+
+    const inert = records.filter((r) => r.errorClass === "EntailmentStageInert");
+    expect(inert).toHaveLength(1);
+    expect(inert[0]?.message).toBe("model-port-unavailable");
+  });
+
   it("keeps the inert diagnostic body-free (KEIKO-0359)", () => {
     const records: ServerDiagnosticRecord[] = [];
     const deps = depsWith(portReturning("{}"), (r) => records.push(r));
