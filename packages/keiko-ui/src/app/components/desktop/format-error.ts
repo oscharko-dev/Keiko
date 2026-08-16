@@ -100,11 +100,6 @@ function friendlyMessageForCode(
   if (code === "GATEWAY_TIMEOUT" && (message.length === 0 || message === code)) {
     return "The model gateway timed out before the model returned a response.";
   }
-  // KEIKO-0353: circuit-open is auto-recovering; tell the user that instead of
-  // falling through to a raw redacted transport message that reads as permanent.
-  if (code === "GATEWAY_CIRCUIT_OPEN" && (message.length === 0 || message === code)) {
-    return "The model gateway is temporarily unavailable while the circuit breaker is open.";
-  }
   return message.length > 0 ? message : fallback;
 }
 
@@ -116,7 +111,6 @@ function titleForError(message: string, code: string | undefined): string {
     return "Narrow the connected-source question";
   }
   if (code === "GATEWAY_TIMEOUT") return "Model gateway timed out";
-  if (code === "GATEWAY_CIRCUIT_OPEN") return "Model gateway is temporarily unavailable";
   if (code === "PAYLOAD_TOO_LARGE") return "Request is too large";
   if (code === "NO_MODEL") return "No model is available";
   if (code !== undefined) return "Request failed";
@@ -132,9 +126,6 @@ function remediationForError(message: string, code: string | undefined): string 
   }
   if (code === "GATEWAY_TIMEOUT") {
     return "Retry. If it repeats, use a smaller prompt or another model, then check gateway URL, proxy, and deployment in Settings.";
-  }
-  if (code === "GATEWAY_CIRCUIT_OPEN") {
-    return "The system is automatically retrying. Wait a moment, or switch to another configured model.";
   }
   if (code === "PAYLOAD_TOO_LARGE") {
     return "Reduce the selected scope or remove large attachments before retrying.";

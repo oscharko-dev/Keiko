@@ -164,13 +164,18 @@ describe("defaultGitFileHistoryEvidenceProvider", () => {
 
   it("scopes git log by the selected subfolder so the commit cap is not spent repo-wide (KEIKO-0421)", async () => {
     const subScopeRoot = join(ROOT, "src");
-    // Make src a subfolder of a "real" repo root; runner reports ROOT as the repo root
-    // from `git rev-parse --show-toplevel`, so selectedRootPrefix resolves to "src".
+    mkdirSync(subScopeRoot, { recursive: true });
+    // resolveGitMembership reads BOTH --show-toplevel AND --show-prefix from a single
+    // rev-parse call, so the mock must emit both lines — otherwise the returned prefix
+    // is empty and the log falls back to "." even when scope root != repo root. On macOS
+    // the /var → /private/var realpath fallback masked this via relative(), but Linux
+    // resolves the paths identically and needs the prefix directly. Trailing "/" mirrors
+    // git's own --show-prefix output; trimTrailingSlash in keiko-git strips it.
     const mutableCalls: string[][] = [];
     const runner: GitProcessRunner = (args) => {
       mutableCalls.push([...args]);
       if (args.includes("rev-parse")) {
-        return Promise.resolve(ok(`${ROOT}\n`));
+        return Promise.resolve(ok(`${ROOT}\nsrc/\n`));
       }
       return Promise.resolve(ok(""));
     };
@@ -189,7 +194,9 @@ describe("defaultGitFileHistoryEvidenceProvider", () => {
     const logArgs = mutableCalls[1] ?? [];
     const separatorIndex = logArgs.indexOf("--");
     expect(separatorIndex).toBeGreaterThanOrEqual(0);
-    expect(logArgs.slice(separatorIndex + 1)).toEqual(["src"]);
+    // Pathspec is literalised via :(literal) so a directory whose name looks like a git
+    // pathspec magic word (e.g. ":(exclude)docs") is treated as a literal folder name.
+    expect(logArgs.slice(separatorIndex + 1)).toEqual([":(literal)src"]);
   });
 
   it("respects selected relativePaths", async () => {

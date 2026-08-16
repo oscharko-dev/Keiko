@@ -80,30 +80,6 @@ describe("formatUserError", () => {
     });
   });
 
-  it("names the circuit-open outage and points to its auto-retry (KEIKO-0353)", () => {
-    // Before the fix, GATEWAY_CIRCUIT_OPEN fell through to the generic "Request failed"
-    // title with no remediation, so a user hitting a down provider was told LESS as the
-    // outage persisted — the initial transport error surfaced friendlier text than the
-    // breaker did once it opened.
-    const notice = toUserErrorNotice(
-      new ApiError("GATEWAY_CIRCUIT_OPEN", "GATEWAY_CIRCUIT_OPEN", 503),
-      "Could not send message.",
-    );
-
-    expect(notice.title).toBe("Model gateway is temporarily unavailable");
-    expect(notice.title).not.toBe("Request failed");
-    expect(notice.code).toBe("GATEWAY_CIRCUIT_OPEN");
-    expect(notice.remediation).toContain("automatically retrying");
-  });
-
-  it("gives the circuit-open code the same friendly bare-code text (KEIKO-0353)", () => {
-    expect(
-      formatUserError(new ApiError("GATEWAY_CIRCUIT_OPEN", "GATEWAY_CIRCUIT_OPEN", 503), "Retry"),
-    ).toBe(
-      "The model gateway is temporarily unavailable while the circuit breaker is open. (GATEWAY_CIRCUIT_OPEN)",
-    );
-  });
-
   it("parses the trailing support code from formatted error strings", () => {
     expect(toUserErrorNotice("Gateway returned 502. (GATEWAY_UPSTREAM_FAILURE)", "Retry")).toEqual({
       title: "Request failed",

@@ -3961,6 +3961,12 @@ interface SetupCandidateModels {
   readonly embeddingModelIds: readonly string[];
   readonly imageInputModelIds: readonly string[];
   readonly modelMetadata: Readonly<Record<string, GatewayDiscoveredModelMetadata>>;
+  // KEIKO-0325: true when the raw discovery payload contained more distinct model ids
+  // than the caller (MAX_DISCOVERED_MODELS) admits, so the downstream setup pipeline can
+  // surface the truncation instead of silently proceeding with the first 100 models.
+  // Absent for legacy string-array discovery outputs and for payloads that fit within
+  // the cap; consumers should treat missing as `false`.
+  readonly truncated?: boolean;
 }
 
 function isGatewaySetupTestResult(
@@ -4055,6 +4061,10 @@ function normalizeDiscoveryResult(result: GatewayModelDiscoveryOutput): SetupCan
       embeddingModelIds: result.embeddingModelIds,
       imageInputModelIds: result.imageInputModelIds ?? [],
       modelMetadata: result.modelMetadata ?? {},
+      // KEIKO-0325: propagate the discovery-truncation flag from parseModelDiscovery
+      // so downstream setup can surface "N of M models discovered" instead of the
+      // pre-fix silent drop past MAX_DISCOVERED_MODELS.
+      ...(result.truncated === true ? { truncated: true } : {}),
     };
   }
   return normalizeLegacyDiscoveryResult(result);

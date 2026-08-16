@@ -214,9 +214,12 @@ async function resolveGitRepositoryForHistory(
 // Path-scope the log so the GIT_HISTORY_COMMIT_LIMIT cap is spent inside the selected
 // root rather than repo-wide, which starved subfolder scopes in busy monorepos
 // (issue #2901 / KEIKO-0421). Empty prefix maps explicitly to "." — git treats an
-// empty-string pathspec differently from omitting one.
+// empty-string pathspec differently from omitting one. A non-empty prefix is wrapped in
+// `:(literal)` so a directory whose name looks like a git pathspec magic word (e.g.
+// `feature-*` or `:(exclude)docs`) cannot be re-read as a glob or a magic signature.
+// Mirrors gitRoutes.ts's literalGitPathspec used by every other keiko-server git read.
 function gitHistoryArgs(repositoryRoot: string, selectedRootPrefix: string): readonly string[] {
-  const pathspec = selectedRootPrefix.length > 0 ? selectedRootPrefix : ".";
+  const pathspec = selectedRootPrefix.length > 0 ? `:(literal)${selectedRootPrefix}` : ".";
   return [
     ...GIT_BASE_ARGS,
     "-C",
