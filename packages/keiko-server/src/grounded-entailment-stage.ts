@@ -75,14 +75,21 @@ function recordDiagnostic(
   if (sink === undefined) {
     return;
   }
-  sink.record({
-    correlationId: observability.correlationId,
-    timestamp: new Date(nowMs).toISOString(),
-    operation: "grounded.entailment",
-    source: "grounded.entailment-stage",
-    errorClass,
-    message,
-  });
+  // Observability must never break the path it observes. Before this guard, a throwing sink
+  // propagated out of createEntailmentStage's inert branch, so an unhealthy diagnostics backend
+  // could fail a grounded request that would otherwise have degraded safely to "no entailment".
+  try {
+    sink.record({
+      correlationId: observability.correlationId,
+      timestamp: new Date(nowMs).toISOString(),
+      operation: "grounded.entailment",
+      source: "grounded.entailment-stage",
+      errorClass,
+      message,
+    });
+  } catch {
+    // A diagnostics failure is never allowed to escalate into a failed grounded ask.
+  }
 }
 
 function markersFor(

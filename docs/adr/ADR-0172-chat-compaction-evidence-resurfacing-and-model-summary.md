@@ -85,7 +85,13 @@ rehydration.
 
 ### D4 — The model-generated summary is enrichment, never a dependency
 
-`enrichChatCompactionWithModelSummary` makes a real gateway call with a JSON-schema response format.
+`enrichChatCompactionWithModelSummary` makes a real gateway call. `modelSummaryResponseMode`
+selects between two modes: a JSON-schema response format when gateway configuration is present and
+the model advertises `supportsResponseFormat`, and a **legacy** mode otherwise, where no
+`responseFormat` is sent and JSON is parsed out of ordinary response content. The structured-output
+boundary is therefore provider-enforced only in the first mode; in legacy mode it rests entirely on
+this side's own parsing and the D5 validation below, which is why that validation is not optional.
+
 It is bounded by the contract constants `CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS`,
 `…_MAX_ITEM_CHARS`, and `…_MAX_ITEMS`, and carries `CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION`
 so a prompt change is identifiable in persisted records.
@@ -98,8 +104,13 @@ it never carries the only copy of anything. Nothing downstream may require it to
 
 The model's response is not trusted. Output passes `validateContextCompactionRecord`,
 `redactAbsolutePaths`, `stripUnsafeFormatChars`, and `containsPseudoRoleMarker`. A summary that
-survives retains `validationState` as either `accepted` or `redacted`, so a usable summary always
-states whether it was altered on the way in.
+survives retains `validationState` as either `accepted` or `redacted`.
+
+`redacted` has a narrower meaning than "altered in any way". `normalizeSummaryText` computes it from
+redaction, unsafe-format stripping, and length clamping only — NFKC normalization and whitespace
+collapsing are applied but deliberately **not** counted, so a summary whose only change was
+`"foo   bar"` → `"foo bar"` is persisted as `accepted`. The state answers "was content removed or
+rewritten for safety?", not "is this byte-identical to what the model returned?".
 
 A summary that cannot be brought into a valid state is **not silently dropped**. The failure is
 recorded: `failureModelSummary` persists a record with `validationState: "rejected"`, empty content,
@@ -107,9 +118,14 @@ and the failure reason — `invalid` (schema or unsafe output), `timed-out`, or 
 usable model). Only the rejected *content* is discarded; the fact that an enrichment was attempted
 and why it failed is retained.
 
-This matters for D4's premise: because a rejected record is still persisted, a reader can always
+This matters for D4's premise: because a rejected record is persisted, a reader can normally
 distinguish "enrichment was never attempted" from "enrichment ran and produced nothing usable".
 A record carrying only a rejected summary remains a complete, valid compaction record.
+
+That distinction is best-effort, not an audit guarantee. The rejected record is written through the
+same D1 path, so if that write throws it is swallowed and the earlier summary-free record is all
+that remains — indistinguishable from an attempt that never happened. Enrichment observability is
+therefore as reliable as evidence persistence itself, and no more.
 
 ## Consequences
 

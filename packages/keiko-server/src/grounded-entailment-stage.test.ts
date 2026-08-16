@@ -212,6 +212,26 @@ describe("createEntailmentStage — inertness", () => {
     expect(inert[0]?.message).toBe("model-port-unavailable");
   });
 
+  it("stays inert rather than throwing when the diagnostics sink throws (KEIKO-0359)", () => {
+    // Observability must never break the path it observes: an unhealthy diagnostics backend
+    // must not turn a safely-inert stage into a failed grounded ask.
+    const deps: UiHandlerDeps = {
+      ...depsWith(portReturning("{}")),
+      diagnostics: {
+        record: (): never => {
+          throw new Error("diagnostics backend down");
+        },
+      },
+    };
+
+    expect(() =>
+      createEntailmentStage(deps, [], "unconfigured-model", { diagnostics: deps.diagnostics }),
+    ).not.toThrow();
+    expect(
+      createEntailmentStage(deps, [], "unconfigured-model", { diagnostics: deps.diagnostics }),
+    ).toBeUndefined();
+  });
+
   it("keeps the inert diagnostic body-free (KEIKO-0359)", () => {
     const records: ServerDiagnosticRecord[] = [];
     const deps = depsWith(portReturning("{}"), (r) => records.push(r));

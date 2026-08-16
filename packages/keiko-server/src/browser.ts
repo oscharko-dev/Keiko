@@ -284,13 +284,16 @@ export function openBrowserSseStream(
   onBackpressure?: (signal: SseBackpressureSignal) => void,
 ): void {
   res.writeHead(200, SSE_HEADERS);
-  startSseHeartbeat(res);
   // Per-connection abort: a slow-client backpressure kill (writeOrDestroy) aborts this controller,
   // which unsubscribes from the manager so no further frames are produced for a dead socket. The
   // res.on("close") listener also unsubscribes; `unsubscribed` guards against the double call.
   // subscribe() returns synchronously and events fire only asynchronously afterward, so no event
   // (hence no abort) can occur before `unsubscribe` is assigned.
   const controller = new AbortController();
+  startSseHeartbeat(res, undefined, undefined, {
+    controller,
+    ...(onBackpressure === undefined ? {} : { onBackpressure }),
+  });
   let seq = 0;
   const unsubscribe = manager.subscribe(sessionId, (event) => {
     seq += 1;

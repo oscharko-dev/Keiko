@@ -9,6 +9,24 @@ import type { ServerResponse } from "node:http";
 import type { StreamEvent } from "./sink.js";
 import type { Redactor } from "./deps.js";
 import { redactedEventJson } from "./sse-frame-cache.js";
+import { writeOrDestroy, type SseBackpressureSignal } from "./sse-write.js";
+
+/**
+ * Optional protective wiring for the heartbeat. A heartbeat can be the FIRST write rejected on an
+ * idle stream, so without this the connection is destroyed with no abort of the producer and no
+ * backpressure signal — the slow-client kill is silent and indistinguishable from a normal close.
+ * Omitting it preserves the historical behaviour exactly (plain write + destroy).
+ */
+export interface SseHeartbeatBackpressure {
+  readonly controller: AbortController;
+  readonly onBackpressure?: ((signal: SseBackpressureSignal) => void) | undefined;
+}
+
+function writeOrDestroyLegacy(res: ServerResponse, frame: string): boolean {
+  const accepted = res.write(frame);
+  if (!accepted) res.destroy();
+  return accepted;
+}
 
 export const SSE_HEADERS: Readonly<Record<string, string>> = {
   "Content-Type": "text/event-stream; charset=utf-8",
@@ -21,15 +39,22 @@ export function startSseHeartbeat(
   res: ServerResponse,
   intervalMs = 15000,
   observableEvent?: "heartbeat",
+  backpressure?: SseHeartbeatBackpressure,
 ): () => void {
+  // With `backpressure` supplied every heartbeat frame goes through the same protective path as
+  // event frames: abort the producer, signal the observer, then destroy. Without it the historical
+  // plain write + destroy is kept byte-for-byte so the six other SSE callers are unaffected.
+  const writeFrame = (frame: string): boolean =>
+    backpressure === undefined
+      ? writeOrDestroyLegacy(res, frame)
+      : writeOrDestroy(res, frame, backpressure.controller, backpressure.onBackpressure);
   const timer = setInterval(() => {
     if (res.destroyed || res.writableEnded) return;
-    if (!res.write(": keep-alive\n\n")) {
-      res.destroy();
+    if (!writeFrame(": keep-alive\n\n")) {
       return;
     }
-    if (observableEvent === "heartbeat" && !res.write("event: heartbeat\ndata: {}\n\n")) {
-      res.destroy();
+    if (observableEvent === "heartbeat") {
+      writeFrame("event: heartbeat\ndata: {}\n\n");
     }
   }, intervalMs);
   // The heartbeat must never be what keeps the process alive: on shutdown the
