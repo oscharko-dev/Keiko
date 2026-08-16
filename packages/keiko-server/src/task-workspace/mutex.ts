@@ -16,6 +16,7 @@
 // process crash it simply vanishes — nothing it protected survives either, and the durable record is the
 // persisted advisory lock + visible lifecycle state (#447 reconciliation/repair resolve any stale lock).
 
+import { comparablePath } from "@oscharko-dev/keiko-git";
 import { compareStrings } from "@oscharko-dev/keiko-contracts";
 
 export interface WorkspaceMutexRegistry {
@@ -52,7 +53,12 @@ export function provisionKey(repositoryId: string, taskId: string): string {
 // routes reaching the same inode serialize even via different request paths. Lowest tier — a
 // file write takes exactly one key, so it can never participate in a multi-key deadlock.
 export function fileWriteKey(realPath: string): string {
-  return `file:${realPath}`;
+  // Keyed by filesystem IDENTITY, not by the path string. realpath() does not settle this: on
+  // macOS it preserves the caller's casing, so realpath("Foo.ts") and realpath("foo.ts") return
+  // different strings for the same inode — which would put two saves of one file in two mutex
+  // queues and reopen the very lost-update race this key exists to close. comparablePath is the
+  // same rule containsPath uses to decide "same file", so the lock agrees with containment.
+  return `file:${comparablePath(realPath)}`;
 }
 
 function keyTier(key: string): number {

@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  fileWriteKey,
   activePointerKey,
   createWorkspaceMutexRegistry,
   provisionKey,
@@ -147,5 +148,31 @@ describe("createWorkspaceMutexRegistry", () => {
     expect(workspaceKey("ws-abc")).toBe("ws:ws-abc");
     expect(provisionKey("repo-1", "task-2")).toBe("prov:repo-1:task-2");
     expect(activePointerKey("repo-1")).toBe("active:repo-1");
+  });
+});
+
+describe("fileWriteKey filesystem identity (#3200 review)", () => {
+  it("maps case-equivalent spellings of one file to one key on case-insensitive platforms", () => {
+    const upper = fileWriteKey("/tmp/project/Foo.ts");
+    const lower = fileWriteKey("/tmp/project/foo.ts");
+    // realpath() does not canonicalize case on macOS, so without comparablePath these two
+    // spellings of the SAME inode would land in separate mutex queues and reopen the
+    // lost-update race the key exists to close.
+    if (process.platform === "darwin" || process.platform === "win32") {
+      expect(upper).toBe(lower);
+    } else {
+      // Linux filesystems are byte-sensitive: these genuinely are different files.
+      expect(upper).not.toBe(lower);
+    }
+  });
+
+  it("maps NFC and NFD spellings to one key on normalization-insensitive platforms", () => {
+    const nfc = fileWriteKey("/tmp/project/café.ts");
+    const nfd = fileWriteKey("/tmp/project/café.ts");
+    if (process.platform === "darwin" || process.platform === "win32") {
+      expect(nfc).toBe(nfd);
+    } else {
+      expect(nfc).not.toBe(nfd);
+    }
   });
 });
