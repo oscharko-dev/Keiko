@@ -1659,6 +1659,45 @@ describe("makeMutations.add — scoped Figma-view card geometry (#GEN-DUP-NEAR-0
 });
 
 describe("makeMutations.add — Chat singleton", () => {
+  it("replaces conversation cfg for a fresh-chat request instead of merging the old binding", () => {
+    let wins: AppWindow[] | null = [
+      win(
+        "chat",
+        {
+          chatId: "chat-old",
+          title: "Old chat",
+          titleIsDefault: false,
+          selectionHandoffId: "selection-old",
+        },
+        "chat",
+      ),
+    ];
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const { add } = makeMutations({
+      setWins,
+      zc: { current: 4 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    add("chat", {
+      title: undefined,
+      chatId: undefined,
+      selectionHandoffId: undefined,
+      newChatRequestId: "request-fresh",
+    });
+
+    expect(wins?.[0]?.cfg).toStrictEqual({
+      title: undefined,
+      chatId: undefined,
+      selectionHandoffId: undefined,
+      newChatRequestId: "request-fresh",
+    });
+    expect(Object.hasOwn(wins?.[0]?.cfg ?? {}, "chatId")).toBe(true);
+    expect(wins?.[0]?.cfg).not.toHaveProperty("titleIsDefault");
+  });
+
   it("reuses the existing chat window and switches its target conversation", () => {
     let wins: AppWindow[] | null = [win("chat", { chatId: "chat-1", title: "Chat 1" }, "chat")];
     const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {

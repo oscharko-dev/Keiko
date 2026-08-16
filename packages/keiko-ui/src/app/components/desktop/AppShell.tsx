@@ -94,6 +94,11 @@ export function prepareNewWindowCfg(
   return type === "chat"
     ? {
         ...cfg,
+        // The Chat window is a singleton, so `add()` merges this cfg into the existing window.
+        // Preserve an explicit `undefined` when the dialog omitted its localized default title;
+        // otherwise the previous conversation's title survives the merge and is persisted on the
+        // new conversation.
+        title: cfg.title,
         chatId: undefined,
         selectionHandoffId: undefined,
         newChatRequestId,

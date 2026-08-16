@@ -196,6 +196,7 @@ interface ChatCreationResult {
 
 interface ActiveChatCreation {
   readonly correlationId: string;
+  deliveredToCurrentOwner: boolean;
   desiredTitle: string | undefined;
   isOwnerCurrent: () => boolean;
   owner: ChatCreationOwner;
@@ -287,10 +288,17 @@ function activeCreationResult(
   replaceChat: ChatSessionApi["replaceChat"],
 ): Promise<ChatCreationResult> {
   if (active.reconciliation !== null) return active.reconciliation;
-  const reconciliation = reconcileActiveChatCreation(
-    active,
-    replaceChat,
-    (): boolean => currentRef.current === active && active.isOwnerCurrent(),
+  const isCurrent = (): boolean => currentRef.current === active && active.isOwnerCurrent();
+  const reconciliation = reconcileActiveChatCreation(active, replaceChat, isCurrent).then(
+    (result): ChatCreationResult => {
+      // A successful result has already reached the owner that requested it. `updateCfg()` can make
+      // that owner non-current before `release()` runs, but the settled creation must still be
+      // removed: a later New-chat confirmation in the same project is a new user intent, not a
+      // request to reuse this conversation. Inactive project creations never produce a chat result,
+      // so they remain adoptable when navigation returns.
+      if (result.chat !== undefined && isCurrent()) active.deliveredToCurrentOwner = true;
+      return result;
+    },
   );
   const tracked = reconciliation.finally((): void => {
     if (active.reconciliation === tracked) active.reconciliation = null;
@@ -313,6 +321,7 @@ function useChatCreationCoordinator(
         const promise = openNewChat(project, title);
         const created: ActiveChatCreation = {
           correlationId: newClientCorrelationId(),
+          deliveredToCurrentOwner: false,
           desiredTitle: normalizedChatTitle(title),
           isOwnerCurrent,
           owner,
@@ -348,7 +357,13 @@ function useChatCreationCoordinator(
   const release = useCallback<ChatCreationCoordinator["release"]>((owner): void => {
     for (const [projectPath, active] of activeByProjectRef.current) {
       if (!sameCreationOwner(active.owner, owner)) continue;
-      if (active.settledChat !== undefined && !active.isOwnerCurrent()) return;
+      if (
+        active.settledChat !== undefined &&
+        !active.deliveredToCurrentOwner &&
+        !active.isOwnerCurrent()
+      ) {
+        return;
+      }
       activeByProjectRef.current.delete(projectPath);
       if (currentRef.current === active) currentRef.current = null;
       return;

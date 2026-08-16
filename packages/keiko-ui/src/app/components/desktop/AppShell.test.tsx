@@ -21,6 +21,18 @@ describe("prepareNewWindowCfg", (): void => {
     });
   });
 
+  it("clears a singleton Chat's retained title when the default title is omitted", (): void => {
+    const cfg = prepareNewWindowCfg("chat", {}, "new-chat-request-3");
+
+    expect(cfg).toStrictEqual({
+      title: undefined,
+      chatId: undefined,
+      selectionHandoffId: undefined,
+      newChatRequestId: "new-chat-request-3",
+    });
+    expect(Object.hasOwn(cfg, "title")).toBe(true);
+  });
+
   it("leaves non-Chat creation configuration byte-identical", (): void => {
     const cfg = { title: "Files", root: "/workspace" };
     expect(prepareNewWindowCfg("files", cfg, "unused-request")).toBe(cfg);

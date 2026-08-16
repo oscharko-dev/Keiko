@@ -973,6 +973,67 @@ describe("ChatWindowSessionHost target missing", () => {
     });
   });
 
+  it("creates a distinct chat for a later confirmation in the same project", async (): Promise<void> => {
+    const firstCreation = deferred<Chat | undefined>();
+    const first = chatFixture("chat-first", "First chat", 2);
+    const second = chatFixture("chat-second", "Second chat", 3);
+    chatSessionState.activeChat = undefined;
+    chatSessionState.chats = [];
+    chatSessionState.openNewChat
+      .mockReturnValueOnce(firstCreation.promise)
+      .mockResolvedValueOnce(second);
+    const ctx = context();
+    const view = render(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ title: first.title, newChatRequestId: "request-1" }}
+          ctx={ctx}
+        />
+      </I18nProvider>,
+    );
+
+    vi.mocked(ctx.updateCfg).mockImplementation((patch): void => {
+      if (patch["chatId"] !== first.id) return;
+      chatSessionState.activeChat = first;
+      chatSessionState.chats = [first];
+      view.rerender(
+        <I18nProvider>
+          <ChatWindowSessionHost cfg={{ chatId: first.id, title: first.title }} ctx={ctx} />
+        </I18nProvider>,
+      );
+    });
+    await act(async (): Promise<void> => {
+      firstCreation.resolve(first);
+      await firstCreation.promise;
+    });
+
+    await waitFor((): void =>
+      expect(ctx.updateCfg).toHaveBeenCalledWith({
+        chatId: first.id,
+        title: first.title,
+        newChatRequestId: undefined,
+      }),
+    );
+
+    view.rerender(
+      <I18nProvider>
+        <ChatWindowSessionHost
+          cfg={{ title: second.title, newChatRequestId: "request-2" }}
+          ctx={ctx}
+        />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void => expect(chatSessionState.openNewChat).toHaveBeenCalledTimes(2));
+    await waitFor((): void =>
+      expect(ctx.updateCfg).toHaveBeenLastCalledWith({
+        chatId: second.id,
+        title: second.title,
+        newChatRequestId: undefined,
+      }),
+    );
+  });
+
   it("adopts a replacement request and binds only its latest title", async (): Promise<void> => {
     const creation = deferred<Chat | undefined>();
     const created = chatFixture("chat-created", "First title", 2);

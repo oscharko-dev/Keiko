@@ -331,11 +331,19 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
         const existing = list.find((w) => w.type === type);
         if (existing !== undefined) {
           createdId = existing.id;
+          const startsFreshChat =
+            type === "chat" &&
+            typeof cfg?.["newChatRequestId"] === "string" &&
+            cfg["newChatRequestId"].length > 0;
           return list.map((w) =>
             w.id === existing.id
               ? {
                   ...w,
-                  cfg: cfg === undefined ? w.cfg : { ...w.cfg, ...cfg },
+                  // A fresh-chat request changes the identity of the singleton's entire
+                  // conversation binding. Replace its cfg atomically so a prior chatId/title (or
+                  // a server-synced snapshot of them) cannot survive an ordinary singleton merge.
+                  cfg:
+                    cfg === undefined ? w.cfg : startsFreshChat ? { ...cfg } : { ...w.cfg, ...cfg },
                   minimized: false,
                   z: ++zc.current,
                 }
