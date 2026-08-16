@@ -182,6 +182,42 @@ const countMatches = (haystack: string, needles: readonly string[]): number => {
 
 const INTENT_FRAMES: readonly PromptIntentRule[] = [
   {
+    id: "analytical-decision-support",
+    strong: [
+      "entscheidung treffen",
+      "entscheidung vorbereiten",
+      "entscheidung uber",
+      "entscheide zwischen",
+      "help me decide",
+      "compare options",
+    ],
+    weak: ["entscheidung", "alternativen", "entscheidungskriterien", "trade-offs", "pros and cons"],
+    role: "You are an analytical decision-support advisor.",
+    goal: "Help the user compare options and reason through the decision in the Input section.",
+    context: [
+      "Task lens: analytical decision support.",
+      "Keep alternatives, criteria, tradeoffs, assumptions, and unresolved information explicit.",
+    ],
+    taskDecomposition: [
+      "Identify the decision, available options, constraints, stakeholders, and decision horizon.",
+      "Separate known facts from missing information, assumptions, and information that needs verification.",
+      "Define or refine decision criteria, then compare options against them with explicit tradeoffs.",
+      "Present a reasoned recommendation only to the extent supported by the available evidence.",
+      "State the open questions or next steps needed to make the decision robust.",
+    ],
+    constraints: [
+      "Do not invent options, criteria, costs, stakeholders, or evidence that are not supplied.",
+      "Separate a recommendation from the facts and assumptions on which it depends.",
+    ],
+    qualityCriteria: [
+      "Decision usefulness: alternatives, criteria, tradeoffs, and uncertainty are explicit.",
+      "Traceability: recommendations are tied to supplied evidence and stated assumptions.",
+    ],
+    uncertaintyHandling: [
+      "If options, criteria, constraints, stakeholders, or time horizon are missing, ask for them or state the assumptions before finalizing a recommendation.",
+    ],
+  },
+  {
     id: "software-quality-audit",
     strong: [
       "codequalitat",
@@ -720,18 +756,24 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
   },
 ];
 
+interface IntentRuleScore {
+  readonly score: number;
+  readonly strongHits: number;
+  readonly weakHits: number;
+}
+
 function scoreIntentRule(
   rule: PromptIntentRule,
   searchText: string,
   analysis: PromptTaskAnalysis,
-): number {
+): IntentRuleScore {
   const strongHits = countMatches(searchText, rule.strong);
   const weakHits = countMatches(searchText, rule.weak);
   const lexicalScore = strongHits * 4 + weakHits;
-  if (lexicalScore === 0) return 0;
+  if (lexicalScore === 0) return { score: 0, strongHits, weakHits };
   const taskClassBonus = rule.taskClasses?.includes(analysis.taskClass) ? 1 : 0;
   const domainBonus = rule.domains?.includes(analysis.domain) ? 1 : 0;
-  return lexicalScore + taskClassBonus + domainBonus;
+  return { score: lexicalScore + taskClassBonus + domainBonus, strongHits, weakHits };
 }
 
 function resolveIntentFrame(
@@ -741,9 +783,12 @@ function resolveIntentFrame(
   const searchText = foldForSearch(normalizePromptDraft(input.text));
   let best: { readonly rule: PromptIntentRule; readonly score: number } | undefined;
   for (const rule of INTENT_FRAMES) {
-    const score = scoreIntentRule(rule, searchText, analysis);
-    if (score > 0 && (best === undefined || score > best.score)) {
-      best = { rule, score };
+    const result = scoreIntentRule(rule, searchText, analysis);
+    // A specialized frame must be grounded in a decisive phrase or multiple supporting cues.
+    // Task-class/domain compatibility can rank a frame but cannot activate it on its own.
+    const hasSufficientLexicalEvidence = result.strongHits > 0 || result.weakHits >= 2;
+    if (hasSufficientLexicalEvidence && (best === undefined || result.score > best.score)) {
+      best = { rule, score: result.score };
     }
   }
   return best?.rule;

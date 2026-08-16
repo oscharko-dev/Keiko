@@ -231,6 +231,23 @@ describe("generateEnhancedPrompt — no fabrication and segregated input (AC3)",
 });
 
 describe("generateEnhancedPrompt — intent-specific shaping", () => {
+  it("keeps the audited German KM-tool decision request out of the travel frame", () => {
+    const prompt = generateFor(
+      { taskClass: "factual-qa", domain: "general", recommendedProfile: "precise" },
+      {
+        text: "Bereite eine belastbare Entscheidung über die Einführung eines Wissensmanagement-Tools vor. Alternativen, Budget, Nutzerzahl, Entscheidungskriterien und Zeitrahmen sind noch unbekannt.",
+      },
+    );
+    const trusted = trustedText(prompt);
+
+    expect(trusted).not.toMatch(
+      /expert travel planner|travel itinerary planning|day-by-day route/i,
+    );
+    expect(prompt.role).toMatch(/analytical decision-support advisor|decision-support analyst/i);
+    expect(prompt.goal).toMatch(/reason through the decision|compare options/i);
+    expect(trusted).not.toMatch(/no clarifications? (are |is )?needed/i);
+  });
+
   it("changes trusted sections for unrelated user drafts instead of only changing the input JSON", () => {
     const codeReview = generateFor(
       {
