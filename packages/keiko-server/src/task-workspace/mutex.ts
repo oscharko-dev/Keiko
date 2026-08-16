@@ -16,6 +16,7 @@
 // process crash it simply vanishes — nothing it protected survives either, and the durable record is the
 // persisted advisory lock + visible lifecycle state (#447 reconciliation/repair resolve any stale lock).
 
+import { comparablePath } from "@oscharko-dev/keiko-git";
 import { compareStrings } from "@oscharko-dev/keiko-contracts";
 
 export interface WorkspaceMutexRegistry {
@@ -46,12 +47,49 @@ export function provisionKey(repositoryId: string, taskId: string): string {
   return `prov:${repositoryId}:${taskId}`;
 }
 
+// A single edited file. The plain file-save route's optimistic-concurrency check is a
+// check-then-act (KEIKO-0495): two saves carrying the same baseVersion could both pass
+// verification and the second silently overwrite the first. Lowest tier — every key a file write
+// takes sits in this one tier, so it can never participate in a multi-key deadlock.
+//
+// Keyed by the canonicalized PATH, deliberately not by dev+ino. The write replaces the target by
+// atomic rename, so the inode changes on every single save: an inode key would let a second request
+// that resolves mid-rename derive a different key and enter the "critical" section concurrently —
+// the exact race this lock exists to prevent, on the common path rather than an exotic one. The
+// path is stable across the replacement.
+//
+// comparablePath is the same rule containsPath uses to decide "same file", so the exact key agrees
+// with containment. But it is NFC + lowercase, not full Unicode case folding, and lowercasing
+// SPLITS alias classes a case-insensitive filesystem merges: "ς" and "Σ" lowercase to different
+// characters. Two saves spelled that way would take different keys and both enter the section.
+//
+// The second key closes that. Uppercasing collapses every class lowercasing splits ("ς"/"σ"/"Σ" all
+// uppercase to "Σ"), so it is a strictly coarser partition. For a lock key that asymmetry is exactly
+// the right direction: collapsing too much only serializes two saves that did not need it, while
+// collapsing too little lets a real race through. Both keys are taken together, so the lock is at
+// least as strong as either alone.
+//
+// The alias key is taken on EVERY platform, deliberately. `process.platform` describes the host,
+// not the semantics of the mounted filesystem: a Linux host can carry a casefolded ext4 directory,
+// a network mount, or a case-insensitive image, and on any of those a platform-gated alias key
+// would leave exactly the gap it exists to close. Gating on the host was the wrong question.
+//
+// Paying for it unconditionally is cheap by the same asymmetry: on a genuinely byte-exact
+// filesystem "a.txt" and "A.txt" then share the alias key and serialize when they need not, which
+// costs a little concurrency between two saves. Missing the alias costs a lost update.
+export function fileWriteKeys(realPath: string): readonly string[] {
+  const comparable = comparablePath(realPath);
+  return [`file:${comparable}`, `file-alias:${comparable.normalize("NFC").toUpperCase()}`];
+}
+
 function keyTier(key: string): number {
   if (key.startsWith("active:")) return 0;
   if (key.startsWith("ws:")) return 1;
   if (key.startsWith("repo:")) return 2;
   if (key.startsWith("prov:")) return 3;
-  return 4;
+  if (key.startsWith("file:")) return 4;
+  if (key.startsWith("file-alias:")) return 4;
+  return 5;
 }
 
 function compareKeys(a: string, b: string): number {

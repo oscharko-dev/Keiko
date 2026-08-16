@@ -422,7 +422,6 @@ describe("CodingRuntimeOrchestrator", () => {
     });
   });
 
-
   it("allows a new follow-up request at the unchanged revision after adapter refusal", async () => {
     const f = fixture();
     await f.orchestrator.start(start);

@@ -35,7 +35,20 @@ import {
   REALTIME_AUTH_MODES,
   VOICE_PROVIDER_LOCALITIES,
 } from "@oscharko-dev/keiko-model-gateway";
-import { gatewayFetch, readJsonCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import {
+  GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
+  validateGatewaySetupAuditRecord,
+} from "@oscharko-dev/keiko-contracts";
+import type {
+  GatewaySetupAuditRecord,
+  GatewaySetupOutcomeKind,
+  GatewaySetupTargetClass,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  classifyOutboundHost,
+  gatewayFetch,
+  readJsonCapped,
+} from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type {
   EnvSource,
   GatewayConfig,

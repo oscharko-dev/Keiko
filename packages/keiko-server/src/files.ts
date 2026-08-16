@@ -3,6 +3,11 @@
 // realpath resolution.
 
 import type { IncomingMessage } from "node:http";
+import { createWorkspaceMutexRegistry, fileWriteKeys } from "./task-workspace/mutex.js";
+
+// One registry per server process: same-process turn order for the verify→write region below
+// (KEIKO-0495). It composes with, never replaces, the persisted advisory WorkspaceLock.
+const fileWriteMutex = createWorkspaceMutexRegistry();
 import type { Dirent, Stats } from "node:fs";
 import { constants, createReadStream } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -1653,8 +1658,85 @@ async function resolvedIfPresent(path: string): Promise<string | undefined> {
   }
 }
 
+// Only DISAPPEARANCE is staleness. A revoked permission (EACCES/EPERM) or an I/O failure is not a
+// concurrent rename, and collapsing it into 409 STALE_PATH would hide a 403 DENIED or 500 IO_ERROR
+// behind a retryable-looking status for both the client and diagnostics. Exported so the mapping is
+// testable directly rather than by provoking a platform-specific errno.
+export function classifyInLockRefreshFailure(error: unknown): FilesError {
+  const code =
+    typeof error === "object" && error !== null ? (error as NodeJS.ErrnoException).code : undefined;
+  return code === "ENOENT" || code === "ENOTDIR" ? stalePathError() : mapNodeFsError(error);
+}
+
+/**
+ * Per-operation test hooks for the KEIKO-0495 critical section. Passed with the save it belongs to,
+ * never held in module state: a module-level slot survives a failed or timed-out test and can then
+ * stall or misroute an unrelated save in the same worker.
+ *
+ * `onQueued` fires immediately before the writer queues on its key; `afterConflictCheck` is awaited
+ * right after the conflict check and before the write, which is where a concurrency test needs to
+ * hold a writer. Both are undefined in production.
+ */
+export interface FileWriteTestControl {
+  readonly onQueued?: (() => void) | undefined;
+  readonly afterConflictCheck?: (() => Promise<void> | void) | undefined;
+}
+
+// The serialized verify->write critical section (KEIKO-0495). Extracted so
+// writeResolvedFilesContent stays within its function-length bound.
+async function verifyThenWrite(args: {
+  readonly target: ResolvedTarget;
+  readonly content: string;
+  readonly expectedModifiedAt?: number | undefined;
+  readonly baseVersion?: EditorDocumentVersion | undefined;
+  readonly beforeWrite?:
+    | ((content: string) => NonNullable<FilesContentWireResponse["localHistoryProtection"]>)
+    | undefined;
+  readonly testControl?: FileWriteTestControl | undefined;
+}): Promise<{
+  readonly localHistoryProtection: FilesContentWireResponse["localHistoryProtection"];
+  readonly updatedStats: Stats;
+}> {
+  // Re-stat INSIDE the lock. `args.target.stats` was captured before queuing, so a queued
+  // request would otherwise re-run the conflict check against its own pre-lock snapshot and
+  // never see the winner's write — surfacing an unrelated STALE_PATH from the rename guard
+  // instead of the STALE_SESSION / WRITE_CONFLICT this check exists to report.
+  // A delete or rename between resolveInsideRoot() and this in-lock stat rejects with a raw
+  // ENOENT. runFilesHandler only translates FilesError, so without this it would surface as an
+  // opaque 500 instead of the 409 STALE_PATH that writeExistingResolvedFile already produces
+  // for exactly this race.
+  let refreshedStats;
+  try {
+    refreshedStats = await stat(args.target.path);
+  } catch (error) {
+    throw classifyInLockRefreshFailure(error);
+  }
+  const refreshed: ResolvedTarget = { ...args.target, stats: refreshedStats };
+  // The refreshed stats feed the CONFLICT CHECK only. The write deliberately keeps guarding
+  // against the ORIGINAL resolved identity: assertResolvedTargetStillCurrent compares against
+  // `target.stats`, so handing it the refreshed snapshot would make it accept whatever inode now
+  // sits at the path — including a file an unrelated actor created there after a delete or rename,
+  // which this mutex does not cover — and a tokenless save would silently overwrite it.
+  // The cost is that the second of two chained forced saves fails with STALE_PATH. Fail-closed is
+  // the right side of that trade: a recoverable STALE_PATH beats a silent clobber. Telling
+  // "replaced by a previous holder of this key" apart from "replaced by a stranger" needs per-key
+  // identity tracking; tracked as follow-up on #2901.
+  await assertNoWriteConflict(refreshed, args.baseVersion, args.expectedModifiedAt);
+  await args.testControl?.afterConflictCheck?.();
+  let protection: FilesContentWireResponse["localHistoryProtection"];
+  if (args.beforeWrite !== undefined) {
+    const current = await readStableEditableContent(args.target);
+    protection = args.beforeWrite(current.content);
+  }
+  return {
+    localHistoryProtection: protection,
+    updatedStats: await writeExistingResolvedFile(args.target, args.content),
+  };
+}
+
 async function writeResolvedFilesContent(args: {
   readonly target: ResolvedTarget;
+  readonly testControl?: FileWriteTestControl | undefined;
   readonly content: string;
   readonly expectedModifiedAt?: number | undefined;
   readonly baseVersion?: EditorDocumentVersion | undefined;
@@ -1670,7 +1752,6 @@ async function writeResolvedFilesContent(args: {
   if (!isEditableUtf8File(base.extension, prefix.buffer)) {
     throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
   }
-  await assertNoWriteConflict(args.target, args.baseVersion, args.expectedModifiedAt);
   if (Buffer.byteLength(args.content, "utf8") > MAX_TEXT_PREVIEW_BYTES) {
     throw new FilesError(
       413,
@@ -1678,12 +1759,17 @@ async function writeResolvedFilesContent(args: {
       `This file is too large to edit here (limit ${String(MAX_TEXT_PREVIEW_BYTES)} bytes).`,
     );
   }
-  let localHistoryProtection: FilesContentWireResponse["localHistoryProtection"];
-  if (args.beforeWrite !== undefined) {
-    const current = await readStableEditableContent(args.target);
-    localHistoryProtection = args.beforeWrite(current.content);
-  }
-  const updatedStats = await writeExistingResolvedFile(args.target, args.content);
+  // KEIKO-0495: verify-then-write is a check-then-act. Two saves carrying the same baseVersion
+  // could both clear assertNoWriteConflict and the second would silently overwrite the first, with
+  // no STALE_SESSION for the loser. Serialising the whole verify→write region per file makes the
+  // loser re-verify against the winner's result and fail closed as it should. This REUSES the
+  // shared WorkspaceMutexRegistry rather than introducing a second locking mechanism; the existing
+  // conflict checks are untouched and still do the deciding.
+  args.testControl?.onQueued?.();
+  const { localHistoryProtection, updatedStats } = await fileWriteMutex.runExclusive(
+    fileWriteKeys(args.target.path),
+    () => verifyThenWrite(args),
+  );
   return {
     ...base,
     sizeBytes: updatedStats.size,
@@ -1697,6 +1783,7 @@ async function writeResolvedFilesContent(args: {
 
 export async function writeFilesContent(args: {
   readonly store: UiStore;
+  readonly testControl?: FileWriteTestControl | undefined;
   readonly rootInput: string | null;
   readonly pathInput: string | null;
   readonly content: string;
@@ -1717,6 +1804,7 @@ export async function writeFilesContent(args: {
     content: args.content,
     expectedModifiedAt: args.expectedModifiedAt,
     baseVersion: args.baseVersion,
+    testControl: args.testControl,
   });
 }
 

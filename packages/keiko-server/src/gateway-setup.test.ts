@@ -1,6 +1,7 @@
 import {
   existsSync,
   lstatSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -681,6 +682,80 @@ describe("handleGatewaySetup", () => {
         },
       },
     });
+  });
+
+  // KEIKO-0497 (#2901): pointing the product at an outbound endpoint — and possibly enabling the
+  // private-network override — is a governance-relevant act that left NO evidence. The route
+  // returned 200 and wrote nothing an operator could audit. Asserted against the real evidence
+  // store on disk rather than a spy, so the record's on-disk shape is what is pinned.
+  it("writes exactly one content-free audit record on a successful setup", async () => {
+    const uiDir = await tempDir("keiko-gw-audit-ui-");
+    const evidenceDir = await tempDir("keiko-gw-audit-ev-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model-large"]),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx(
+        { baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" },
+        "corr-gw-audit",
+      ),
+      deps,
+    );
+    expect(result.status).toBe(200);
+
+    const auditFiles = readdirSync(evidenceDir).filter((name) => name.startsWith("gateway-setup-"));
+    expect(auditFiles).toHaveLength(1);
+    const raw = readFileSync(join(evidenceDir, auditFiles[0] ?? ""), "utf8");
+    expect(JSON.parse(raw)).toEqual({
+      schemaVersion: "1",
+      outcome: "candidate-accepted",
+      timestamp: expect.any(String),
+      correlationId: "corr-gw-audit",
+      // A resolvable name is not a literal IP, so the gateway's classifier returns nothing for it
+      // and the record falls back to "public" rather than dropping the event.
+      targetClass: "public",
+      privateNetworkOverrideActive: false,
+      providerCount: 1,
+    });
+    // The point of the record is that it is provably content-free: no endpoint, no credential.
+    expect(raw).not.toContain("llm-gateway.example.com");
+    expect(raw).not.toContain("example-secret-token");
+    deps.store.close();
+  });
+
+  it("classifies a loopback target and records an active private-network override", async () => {
+    const uiDir = await tempDir("keiko-gw-audit-loopback-ui-");
+    const evidenceDir = await tempDir("keiko-gw-audit-loopback-ev-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV, KEIKO_ALLOW_PRIVATE_EGRESS: "true" },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["local-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve([modelIds[0] ?? "local-model"]),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "http://127.0.0.1:11434/v1", apiKey: "local-token" }, "corr-gw-loopback"),
+      deps,
+    );
+    expect(result.status).toBe(200);
+
+    const auditFiles = readdirSync(evidenceDir).filter((name) => name.startsWith("gateway-setup-"));
+    expect(auditFiles).toHaveLength(1);
+    const record = JSON.parse(
+      readFileSync(join(evidenceDir, auditFiles[0] ?? ""), "utf8"),
+    ) as Record<string, unknown>;
+    expect(record.targetClass).toBe("loopback");
+    expect(record.privateNetworkOverrideActive).toBe(true);
+    deps.store.close();
   });
 
   it("tests, stores, and activates a local gateway config without returning secrets", async () => {
