@@ -781,6 +781,13 @@ function booleanDataAttribute(value: boolean): "true" | undefined {
   return value ? "true" : undefined;
 }
 
+function delayedFocusStillTargetsWindow(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return true;
+  const activeElement = document.activeElement;
+  if (activeElement === null || activeElement === document.body) return true;
+  return target.closest(".window")?.contains(activeElement) === true;
+}
+
 // `linkRevision` only feeds the React.memo comparison and the linked-context
 // useMemo dependency below — it carries the "some other window's connection or
 // cfg changed" signal so this window refreshes its derived cross-window context
@@ -970,7 +977,11 @@ function WindowFrameImpl({
   const focusWindowForTarget = useCallback(
     (target: EventTarget | null): void => {
       if (isTextEntryTarget(target)) {
-        window.setTimeout(() => api.focus(win.id), 180);
+        window.setTimeout((): void => {
+          // The delay preserves text selection, but a later click may have moved focus to another
+          // window. Never let this stale callback raise the old window over the user's new target.
+          if (delayedFocusStillTargetsWindow(target)) api.focus(win.id);
+        }, 180);
         return;
       }
       if (isInteractiveControlTarget(target)) {
