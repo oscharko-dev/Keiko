@@ -1148,6 +1148,36 @@ test("still ignores JSX child template expressions that contain only interpolati
   ).toEqual([]);
 });
 
+// KEIKO-0299 (review-follow-up on 7c976f77): a ConditionalExpression like
+// `{busyKind === "index" ? "Indexing…" : "Index"}` is the other common JSX-child shape and
+// used to be invisible to both the AST helper (it is neither StringLiteral nor
+// NoSubstitutionTemplateLiteral nor TemplateExpression) and the per-line fallback (the braces
+// reject the expression). Emit each branch as its own ledger entry so an added untranslated
+// string in either branch fails the gate. Nested conditionals recurse.
+test("collects each literal branch of a JSX child conditional expression", () => {
+  const src = `<span>{cond ? "Indexing" : "Index"}</span>`;
+  const findings = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings;
+  const texts = findings.map((f) => f.text).sort();
+  expect(texts).toContain("Indexing");
+  expect(texts).toContain("Index");
+});
+
+test("recurses into nested conditionals and template branches", () => {
+  const src = '<span>{a ? (b ? "First one" : "Second one") : `Third ${x} one`}</span>';
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx")
+    .findings.map((f) => f.text)
+    .sort();
+  expect(texts).toContain("First one");
+  expect(texts).toContain("Second one");
+  expect(texts.some((t) => t.includes("Third") && t.includes("one"))).toBe(true);
+});
+
+test("still ignores JSX child conditionals whose branches are only expressions", () => {
+  expect(
+    untranslatedLiteralsInSource("<span>{cond ? a : b}</span>", "packages/x/y.tsx").findings,
+  ).toEqual([]);
+});
+
 // KEIKO-0299 (review-follow-up): multi-line JSX text now collapses intra-node whitespace so a
 // reformat or indentation change does not churn the ratcheted ledger. Same rendered copy, same
 // ledger entry, either shape.

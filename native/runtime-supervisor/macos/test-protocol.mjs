@@ -155,7 +155,12 @@ function stripDisabledPreprocessorBranches(source) {
 }
 
 function stripCCommentsPreservingLiterals(rawSource) {
-  const source = stripDisabledPreprocessorBranches(rawSource).replace(/\\\r?\n/gu, "");
+  // Order matters: C translation splices `\<newline>` pairs BEFORE preprocessing, so a directive
+  // like `#if \\\n0` becomes `#if 0` at compile time. Running `stripDisabledPreprocessorBranches`
+  // first would miss such continued directives and leave a genuinely-inactive branch visible to
+  // the byte scanner (codex 3792824427 on #3202). Splice first, then strip disabled branches,
+  // then comment-strip.
+  const source = stripDisabledPreprocessorBranches(rawSource.replace(/\\\r?\n/gu, ""));
   let out = "";
   let i = 0;
   while (i < source.length) {
@@ -270,6 +275,19 @@ assert.equal(
 assert.ok(
   nestedIfStripped.includes("keep") && nestedIfStripped.includes("live"),
   "code before/after the outer `#if 0 ... #endif` (with nesting) must survive the strip",
+);
+// KEIKO-0277 (review-follow-up on 7c976f77): a `\`-continued directive `#if \\\n0` splices to
+// `#if 0` at C translation phase 2, before preprocessing. Running the disabled-branch strip on
+// the raw text would miss this shape. Proves the line-splice pre-pass runs FIRST.
+const splicedDirectiveSample =
+  "int keep_before(void) { return 1; }\n" +
+  "#if \\\n0\nSHOULD_BE_STRIPPED_BY_SPLICED_IF();\n#endif\n" +
+  "int keep_after(void) { return 2; }\n";
+const splicedDirectiveStripped = stripCCommentsPreservingLiterals(splicedDirectiveSample);
+assert.equal(
+  splicedDirectiveStripped.match(/SHOULD_BE_STRIPPED_BY_SPLICED_IF/u),
+  null,
+  "line splicing must run BEFORE disabled-branch stripping so `#if \\\\\\n0` is recognised as `#if 0`",
 );
 
 // KEIKO-0277: Windows-sibling two-mode shape. `--helper <path>` qualifies an exact staged binary

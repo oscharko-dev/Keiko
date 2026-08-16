@@ -350,7 +350,12 @@ function skipStringLiteral(source, start) {
 //     exactly the regression the comment-stripping fix exists to prevent. This mode closes that
 //     hole while still letting the assertion observe the string literal.
 function scanCSource(rawSource, { stripStringLiterals }) {
-  const source = preprocessCLineSplices(stripDisabledPreprocessorBranches(rawSource));
+  // Order matters: C translation splices `\<newline>` pairs BEFORE preprocessing, so a directive
+  // like `#if \\\n0` becomes `#if 0` at compile time. Running `stripDisabledPreprocessorBranches`
+  // first would miss such continued directives and leave a genuinely-inactive branch visible to
+  // the byte scanner (codex 3792824427 on #3202). Splice first, then strip disabled branches,
+  // then run the comment/literal walker.
+  const source = stripDisabledPreprocessorBranches(preprocessCLineSplices(rawSource));
   let out = "";
   let i = 0;
   while (i < source.length) {
@@ -523,6 +528,18 @@ function assertDisabledPreprocessorBranchesAreStripped() {
     nestedIf.includes("keep") && nestedIf.includes("live"),
     "code before/after the outer `#if 0 ... #endif` must survive the strip",
   );
+  // KEIKO-0417 (review-follow-up on 7c976f77): a `\`-continued `#if \\\n0` splices to `#if 0`
+  // at C translation phase 2, before preprocessing. Proves the line-splice pre-pass runs FIRST.
+  const splicedDirective = stripCommentsAndStrings(
+    "int keep_before(void) { return 1; }\n" +
+      "#if \\\n0\nSHOULD_BE_STRIPPED_BY_SPLICED_IF();\n#endif\n" +
+      "int keep_after(void) { return 2; }\n",
+  );
+  assert.equal(
+    splicedDirective.match(/SHOULD_BE_STRIPPED_BY_SPLICED_IF/u),
+    null,
+    "line splicing must run BEFORE disabled-branch stripping so `#if \\\\\\n0` is recognised as `#if 0`",
+  );
 }
 
 // KEIKO-0417 (review-follow-up): the two assertions that observe a bytestring inside `"..."`
@@ -654,9 +671,15 @@ function frameLengthMismatchCases(fixture, rootBytes, pathBytes) {
       label: "declared pathLen exceeds supplied path bytes",
       frame: malformedRequest({ root: fixture, pathBytes, declaredPathLen: pathBytes.length + 1 }),
     },
-    // Zero-length root or path: no request the helper is meant to serve.
-    { label: "declared rootLen == 0", frame: malformedRequest({ root: "", pathBytes }) },
-    { label: "declared pathLen == 0", frame: malformedRequest({ root: fixture }) },
+    // Note: zero-length root and zero-length path used to be listed here as separate cases, but
+    // codex 3792824428 on #3202 correctly observed they cannot isolate the early `root_len == 0`
+    // / `path_len == 0` guards — removing either check leaves the request to be rejected by the
+    // downstream `valid_root("")` / `valid_path("")` at the same status 1, so the probes would
+    // pass with or without the guard they claim to pin. Coverage of "empty is rejected" is
+    // already provided by the interaction between the length fields and the downstream validators;
+    // dedicated zero-length probes would only document overlapping behaviour, not isolate a
+    // unique boundary. Kept out rather than reframed to avoid misleading a reader into believing
+    // the pre-check is what fires.
     // Size cap breaches: proves the constants are actually enforced, not just declared. Each
     // root retains its platform's valid absolute-root prefix (`/` on POSIX, `<letter>:\` on
     // Windows) so that `valid_root` would NOT reject it if the size cap were removed. A pre-

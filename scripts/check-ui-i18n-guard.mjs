@@ -650,11 +650,9 @@ function collectJsxTextAndExpressions(source, filename) {
       }
     } else if (ts.isJsxExpression(node) && node.expression && isJsxExpressionChildOfElement(node)) {
       const expr = node.expression;
-      const literalText = jsxChildExpressionLiteralText(expr);
-      if (literalText !== null && literalText.length > 0) {
-        const line =
-          ts.getLineAndCharacterOfPosition(sourceFile, expr.getStart(sourceFile)).line + 1;
-        results.push({ line, text: literalText });
+      const line = ts.getLineAndCharacterOfPosition(sourceFile, expr.getStart(sourceFile)).line + 1;
+      for (const literalText of jsxChildExpressionLiteralTexts(expr)) {
+        if (literalText.length > 0) results.push({ line, text: literalText });
       }
     }
     ts.forEachChild(node, visit);
@@ -663,22 +661,38 @@ function collectJsxTextAndExpressions(source, filename) {
   return results;
 }
 
-// KEIKO-0299 (review-follow-up): a template expression such as `` `Hello ${name}, welcome` ``
-// used as a JSX child slips past both the string-literal path (it is neither a StringLiteral nor
-// a NoSubstitutionTemplateLiteral) and the per-line fallback (the braces reject it). Extract the
-// literal spans (head + each span.literal) here so newly added user copy in that shape does not
-// go unmeasured. The interpolation is replaced by a single space so the two sides of an `${...}`
-// join into one ledger entry rather than two half-entries; a template made ONLY of interpolations
-// (`` `${a}${b}` ``) produces an empty combined string and is correctly ignored.
-function jsxChildExpressionLiteralText(expr) {
+// KEIKO-0299 (review-follow-up): a template expression `` `Hello ${name}, welcome` `` used as a
+// JSX child slips past both the string-literal path (it is neither a StringLiteral nor a
+// NoSubstitutionTemplateLiteral) and the per-line fallback (the braces reject it). Extract the
+// literal spans here so newly added user copy in that shape does not go unmeasured. Templates
+// made only of interpolations produce an empty combined string and are ignored.
+//
+// A ConditionalExpression (`{cond ? "Indexing…" : "Index"}`) is the other common JSX-child shape
+// (codex 3792824431 on #3202): both branches are user-visible bytes, one at a time, and the
+// ledger records exact strings — so we emit each branch as its own entry rather than joining
+// them. Recursion covers nested conditionals and templates inside branches.
+function jsxChildExpressionLiteralTexts(expr) {
   if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
-    return expr.text.trim();
+    const text = expr.text.trim();
+    return text.length > 0 ? [text] : [];
   }
   if (ts.isTemplateExpression(expr)) {
     const parts = [expr.head.text, ...expr.templateSpans.map((span) => span.literal.text)];
-    return parts.join(" ").trim().replace(/\s+/gu, " ");
+    const combined = parts.join(" ").trim().replace(/\s+/gu, " ");
+    return combined.length > 0 ? [combined] : [];
   }
-  return null;
+  if (ts.isConditionalExpression(expr)) {
+    return [
+      ...jsxChildExpressionLiteralTexts(expr.whenTrue),
+      ...jsxChildExpressionLiteralTexts(expr.whenFalse),
+    ];
+  }
+  // Unwrap `( ... )` so nested conditionals whose branches carry a parenthesised inner conditional
+  // — e.g. `{a ? (b ? "One" : "Two") : "Three"}` — still surface each literal branch.
+  if (ts.isParenthesizedExpression(expr)) {
+    return jsxChildExpressionLiteralTexts(expr.expression);
+  }
+  return [];
 }
 
 /**

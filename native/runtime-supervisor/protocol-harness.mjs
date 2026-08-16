@@ -206,8 +206,13 @@ export async function explained(stage, promise, exited, stderr) {
     );
   }
   if (raced && "error" in raced) {
+    // Preserve the stage prefix the pre-KEIKO-0304 Windows wrapper carried: a helper that returns
+    // a malformed frame without exiting rejects the response promise, and this branch used to
+    // rethrow the raw error (`bad magic`) with no indication of WHICH stage was in flight. Prefix
+    // the message in place so stack, cause, and error class survive (codex 3792824429 on #3202).
     const stderrBytes = Buffer.concat(stderr).length;
-    if (stderrBytes > 0) raced.error.message += ` (helper stderrBytes=${String(stderrBytes)})`;
+    const stderrSuffix = stderrBytes > 0 ? ` (helper stderrBytes=${String(stderrBytes)})` : "";
+    raced.error.message = `${stage}: ${raced.error.message}${stderrSuffix}`;
     throw raced.error;
   }
   return raced;
