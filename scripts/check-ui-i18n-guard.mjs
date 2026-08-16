@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
+import ts from "typescript";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 export const EN_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.en.ts";
@@ -590,6 +591,53 @@ function exemptReasonFor(lines, index) {
   return index > 0 ? i18nExemptReason(lines[index - 1] ?? "") : null;
 }
 
+// KEIKO-0299: JSX text was scanned per-line. `isDirectUserFacingText` rejected any text containing
+// `{` or `}`, and `userFacingJsxTexts` required the opening tag, text and closing tag to sit on
+// the same source line. Both multi-line JSX text (`<p>\n  Hello\n</p>`) and any
+// `{"literal"}`/`{'literal'}` expression-container child were invisible to the scan, so the
+// baseline ledger materially understated the untranslated surface. Now: parse .tsx with the
+// TypeScript compiler API and collect JsxText plus string-literal JsxExpression children directly.
+// The two non-JSX passes below (user-facing attributes, label/description fields) still run
+// per-line — they already work for the simple cases the baseline was calibrated against and are
+// out of scope for this widening. The exported shape stays `{findings, weakExemptions}` so
+// literalScanForFile's two call sites need no change.
+
+function collectJsxTextAndExpressions(source) {
+  const sourceFile = ts.createSourceFile(
+    "<ui-i18n>.tsx",
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  );
+  const results = [];
+  const visit = (node) => {
+    if (ts.isJsxText(node)) {
+      // JsxText carries the raw span, which is what a user sees; trim so pure whitespace between
+      // sibling tags is not flagged (the compiler emits it as one node per gap).
+      const text = node.text;
+      if (text.trim().length > 0) {
+        const line =
+          ts.getLineAndCharacterOfPosition(sourceFile, node.getStart(sourceFile)).line + 1;
+        results.push({ line, text: text.trim() });
+      }
+    } else if (ts.isJsxExpression(node) && node.expression) {
+      const expr = node.expression;
+      if (
+        (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) &&
+        expr.text.trim().length > 0
+      ) {
+        const line =
+          ts.getLineAndCharacterOfPosition(sourceFile, expr.getStart(sourceFile)).line + 1;
+        results.push({ line, text: expr.text.trim() });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return results;
+}
+
 /**
  * Whole-file scan. Returns the untranslated literals with their 1-based line numbers, plus the
  * opt-out markers that claimed an exemption without a usable reason.
@@ -598,18 +646,38 @@ export function untranslatedLiteralsInSource(source) {
   const lines = source.split(/\r?\n/);
   const findings = [];
   const weakExemptions = [];
-  lines.forEach((line, index) => {
-    const literals = untranslatedLiteralsInLine(line);
-    if (literals.length === 0) return;
+  const reportOnLine = (index, texts) => {
+    if (texts.length === 0) return;
     const reason = exemptReasonFor(lines, index);
     if (reason === null) {
-      for (const text of literals) findings.push({ line: index + 1, text });
+      for (const text of texts) findings.push({ line: index + 1, text });
       return;
     }
     if (reason.length < I18N_EXEMPT_MIN_REASON) {
       weakExemptions.push({ line: index + 1, reason });
     }
+  };
+
+  // AST pass: JSX text (multi-line included) and string-literal expression-container children.
+  for (const { line, text } of collectJsxTextAndExpressions(source)) {
+    const trimmed = text.trim();
+    if (isCommentLine(lines[line - 1] ?? "")) continue;
+    if (isTranslatableCopy(trimmed)) reportOnLine(line - 1, [trimmed]);
+  }
+
+  // Per-line pass for the two non-JSX positions the AST does not cover: user-facing attribute
+  // values on non-JSX call sites and label/description fields on option/command registries.
+  lines.forEach((line, index) => {
+    if (isCommentLine(line)) return;
+    const literals = [
+      ...quotedValuesAfter(line, USER_FACING_ATTRIBUTE_NAME_RE),
+      ...quotedValuesAfter(line, LABEL_FIELD_NAME_RE),
+    ]
+      .map((value) => value.trim())
+      .filter(isTranslatableCopy);
+    reportOnLine(index, literals);
   });
+
   return { findings, weakExemptions };
 }
 

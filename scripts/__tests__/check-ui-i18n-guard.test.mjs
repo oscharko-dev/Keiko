@@ -1049,6 +1049,27 @@ test("flags a user-facing literal in each of the three positions a user reads it
   expect(untranslatedLiteralsInLine('  // label: "Commented out copy"')).toEqual([]);
 });
 
+// KEIKO-0299: the line-scoped scanner was blind to two real positions. The AST rewrite catches
+// both, and these are the reproductions the finding requires.
+test("catches JSX text whose opening and closing tags are on different lines", () => {
+  const findings = untranslatedLiteralsInSource(`<div>\n  Hello there\n</div>`).findings;
+  expect(findings.length).toBeGreaterThan(0);
+  expect(findings[0].text).toContain("Hello there");
+});
+
+test("catches a string-literal JSX expression-container child in both quote styles", () => {
+  for (const src of [`<p>{"No chats"}</p>`, `<p>{'No chats'}</p>`]) {
+    const findings = untranslatedLiteralsInSource(src).findings;
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings[0].text).toContain("No chats");
+  }
+});
+
+test("still ignores dynamic JSX expressions and machine tokens", () => {
+  expect(untranslatedLiteralsInSource(`<span>{ready}</span>`).findings).toEqual([]);
+  expect(untranslatedLiteralsInSource(`<span>{"open-directory"}</span>`).findings).toEqual([]);
+});
+
 test("separates human copy from the machine tokens that share those positions", () => {
   for (const copy of ["Close", "New window", "Toggle light / dark theme", "Source file"]) {
     expect(isTranslatableCopy(copy)).toBe(true);

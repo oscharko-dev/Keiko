@@ -9,6 +9,9 @@
       "No branch selected",
       "Setup required"
     ],
+    "packages/keiko-ui/src/app/components/desktop/ChatWindow.tsx": [
+      "When muted, Keiko cannot hear your microphone until you unmute."
+    ],
     "packages/keiko-ui/src/app/components/desktop/ConnectedScopePill.tsx": [
       "Last grounded run: ${formatTokenCount(totalTokens)} tokens, ${String(usage.filesRead)} files"
     ],
@@ -19,6 +22,8 @@
       "src/** · docs/**",
       "test · build · lint"
     ],
+    "packages/keiko-ui/src/app/components/desktop/EditorMenu.tsx": ["Preferred editor for “"],
+    "packages/keiko-ui/src/app/components/desktop/Footer.tsx": ["Keiko |"],
     "packages/keiko-ui/src/app/components/desktop/GroundedAnswer.tsx": [
       "(opens in new tab)",
       "a malformed document",
@@ -41,6 +46,7 @@
       "larger than 2 MB",
       "Needs review",
       "Partial coverage",
+      "Searching connected sources and asking Keiko…",
       "Why these files were selected",
       "Why these files?"
     ],
@@ -56,11 +62,15 @@
     "packages/keiko-ui/src/app/components/desktop/modals/GatewaySetupDialog.tsx": [
       "API key header",
       "API token",
+      "Base URL",
+      "Cancel",
       "Configured models",
       "Customer-hosted",
       "Deployment names for Microsoft Foundry",
+      "Figma access token",
       "Figma Snapshot",
       "Gateway URL",
+      "Image-input models",
       "leave blank to keep",
       "Local-only",
       "Microsoft Foundry",
@@ -68,9 +78,13 @@
       "Optional connector credential.",
       "Paste deployment names, one per line",
       "Paste image-capable model names, one per line",
+      "Provider locality",
       "Replace model gateway settings",
+      "Request timeout (ms)",
       "Stored",
       "Stored model gateway credentials",
+      "Stored secrets stay local and are never returned to the browser. Supported API-key\n            headers: Authorization, X-Litellm-Key, X-Api-Key, api-key.",
+      "Testing credentials…",
       "Voice models"
     ],
     "packages/keiko-ui/src/app/components/desktop/modals/PermControl.tsx": [
@@ -79,14 +93,26 @@
       "Zero standing rights · Keiko governs"
     ],
     "packages/keiko-ui/src/app/components/desktop/modals/RelationshipCreateDialog.tsx": [
+      "Cancel",
       "Close",
+      "Create a new relationship between two workspace endpoints.",
+      "Create relationship",
+      "Dismiss",
       "endpoint id",
       "Relationship summary",
       "Source endpoint ID",
       "Source endpoint kind",
+      "Source ID",
+      "Source kind",
+      "Summary (optional, ≤240 chars)",
       "Target endpoint ID",
-      "Target endpoint kind"
+      "Target endpoint kind",
+      "Target ID",
+      "Target kind",
+      "Type",
+      "Validating…"
     ],
+    "packages/keiko-ui/src/app/components/desktop/ModeSwitch.tsx": ["Keiko"],
     "packages/keiko-ui/src/app/components/desktop/repositoryReferences.tsx": [
       "Select repository source"
     ],
@@ -94,19 +120,30 @@
     "packages/keiko-ui/src/app/components/desktop/VoiceDialogMode.tsx": [
       "Interrupt",
       "Interrupt the assistant",
+      "Leave voice dialogue",
+      "Stop",
       "Stop voice dialogue"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/AgentGateCard.tsx": [
+      "Approve",
       "Grant applies only to this queued action.",
-      "Permission scope"
+      "No extra BFF authority or autonomous follow-up",
+      "Permission scope",
+      "Reject"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/ConnectorPickerWidget.tsx": [
       "— choose a Knowledge Pod source —",
       "${set.displayName} (${String(set.capsuleCount)} pods)",
+      "Create a Knowledge Pod",
+      "Create or manage Knowledge Pods",
       "Knowledge Pod Sets",
+      "Knowledge Pod Sets could not be loaded.",
       "Knowledge Pods",
+      "Loading Knowledge Pods…",
       "Local Knowledge Pod",
-      "Select Knowledge Pod source"
+      "Manage",
+      "Select Knowledge Pod source",
+      "Try again"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorBreadcrumbBar.tsx": [
       "Editor breadcrumbs"
@@ -135,18 +172,37 @@
       "Current file symbols"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorRuntimeWidget.tsx": [
+      "Accept",
       "Accept agent patch and apply changes",
       "Agent changeset review",
+      "Agent generated a patch. Review the changes and accept to apply or reject to discard.",
+      "Cancel",
+      "Close compare",
+      "Compare",
+      "Discard and reload",
       "Discard unsaved changes?",
       "Editor",
+      "Format",
       "Hidden open documents",
+      "Keep local",
       "Loading file…",
       "Open documents",
+      "Refresh",
+      "Reject",
       "Reject agent patch and discard changes",
-      "Reload external changes"
+      "Reload",
+      "Reload external changes",
+      "Retry",
+      "Review every changed file before applying this agent changeset to disk.",
+      "Side-by-side comparison of the file on disk and the recovered unsaved changes. Keep\n              local restores the recovered changes; use disk keeps the file on disk.",
+      "Side-by-side comparison of the latest file on disk and the local editor buffer. Keep\n              local preserves your buffer; reload replaces it with the file on disk.",
+      "Tests",
+      "Use disk"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorWidget.tsx": [
+      "Cancel",
       "Choose how to handle these files before continuing.",
+      "Discard",
       "Editor files",
       "Editor split controls",
       "Hide project tree",
@@ -157,6 +213,7 @@
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/BranchSelector.tsx": [
       "Branches",
+      "New",
       "New branch",
       "No matching branches.",
       "Search branches"
@@ -165,20 +222,41 @@
       "Changed files",
       "Changes",
       "Changes and history",
+      "changes; the list is truncated.",
+      "Detached HEAD. Switch to an existing branch or create a branch before committing or\n          syncing.",
+      "files staged",
       "History",
+      "Loading changes…",
       "No changes",
-      "Select a repository to view its changes."
+      "Resolve conflicted files before committing or syncing.",
+      "Select a repository to view its changes.",
+      "Showing the first",
+      "Stage all",
+      "Unstage all"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/ConnectPanel.tsx": [
+      "Clone from URL",
+      "Connect a folder or repository to review changes, stage commits, and open pull requests —\n          all in one window.",
+      "Connect repository",
+      "Loading repositories…",
+      "No repositories yet. Connect or clone one to get started.",
       "No repository connected",
+      "Once a repository is connected, Keiko can summarize your working changes and draft\n            commit messages for you.",
       "Recent"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/DiffPane.tsx": [
+      "bytes or",
       "Diff",
       "Diff scope",
+      "Loading diff…",
+      "No diff content for this change.",
       "Select a change to view its diff.",
       "Staged",
+      "This diff is large and has been truncated at",
       "Worktree"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/git-client-ui.tsx": [
+      "Error"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/GitClientWindow.tsx": [
       "Diff",
@@ -190,17 +268,24 @@
       "Commit history",
       "Commit history appears after selecting a repository.",
       "History is unavailable for this repository.",
+      "Loading history…",
       "No commits yet. Make a commit to start history.",
       "Parents",
       "Refs",
       "Short SHA"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/NewBranchDialog.tsx": [
+      "Base branch",
       "Branch name",
-      "New branch"
+      "Cancel",
+      "Create branch",
+      "New branch",
+      "The branch starts from the selected base branch. Commit hashes stay internal."
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/RepositoryToolbar.tsx": [
       "No branch",
+      "Open Files",
+      "Open in Editor",
       "Repository toolbar",
       "Select a repository"
     ],
@@ -226,34 +311,69 @@
       "Switch to a branch or create a branch before syncing.",
       "Sync",
       "Sync unavailable",
-      "Up to date with ${summary.upstream.ref}. Fetch checks for remote updates."
+      "Sync:",
+      "Up to date with ${summary.upstream.ref}. Fetch checks for remote updates.",
+      "Use the Merge entry point after fetching to reconcile diverged branches."
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/GovernedMergeCard.tsx": [
+      "” is not eligible.",
       "Base branch",
       "Delete head branch after merge",
+      "Enter the numeric Pull Request number, for example 1499.",
+      "Final approval required:",
       "Head branch",
+      "High-risk confirmation",
       "High-risk merge confirmation",
       "I confirm this high-risk merge",
+      "Merge",
+      "Merge Pull Request",
       "Merge strategy",
       "Merge target",
+      "Mergeable:",
+      "Policy:",
+      "Preview",
       "Pull Request number",
       "Readiness",
-      "Run preview to load eligible strategies"
+      "Recommendation:",
+      "Repository (owner/repo)",
+      "Risk:",
+      "Run preview to load eligible strategies",
+      "Select a project to open a merge.",
+      "Strategy",
+      "The requested strategy “",
+      "This merge is policy-gated as high risk. Confirm explicitly before merging; the server still\n        enforces the approval token."
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/GovernedPullRequestCard.tsx": [
       "Action",
       "Base branch",
+      "Body",
       "Convert to draft",
+      "Create",
       "Draft state",
+      "Enter the numeric Pull Request number, for example 1499.",
       "Head branch",
+      "Linked issues:",
       "Mark ready",
+      "Metadata",
       "No change",
       "Open as draft",
+      "Policy:",
+      "Preview",
+      "Pull Request",
       "Pull Request body",
       "Pull Request metadata",
       "Pull Request number",
       "Pull Request title",
-      "Readiness"
+      "Readiness",
+      "Ready for review:",
+      "Recommendation:",
+      "Remote PR object:",
+      "Repository (owner/repo)",
+      "Risk:",
+      "Select a project to open a pull request.",
+      "Suggested labels:",
+      "Title",
+      "Update"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/IntegrationsWidget.tsx": [
       "Catch up on threads",
@@ -275,6 +395,7 @@
       "Preview unavailable"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/RuntimeHubWidget.tsx": [
+      "Add a project path to enable task and Git workflows.",
       "Commands",
       "Containers",
       "Files & Git diff",
@@ -299,22 +420,37 @@
       "Verification: starting…",
       "Verification: status unknown"
     ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/figma/FigmaImageSourceWindow.tsx": [
+      "Image preview is unavailable."
+    ],
     "packages/keiko-ui/src/app/components/desktop/widgets/figma/FigmaJsonSourceWindow.tsx": [
+      "Copy JSON",
       "Figma JSON",
-      "QI source"
+      "Loading JSON…",
+      "QI source",
+      "Retry"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/index.tsx": [
       "Open a run from the Quality Intelligence hub."
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/ChatHistoryPanel.tsx": [
+      "Active",
+      "Cancel",
       "Chat History",
       "Conversation state",
       "Conversations",
+      "Delete",
+      "Deleted",
+      "New",
       "No conversations",
+      "Rename",
+      "Restore",
+      "Save",
       "Search",
       "Search chat history"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/InspectorPanel.tsx": [
+      "Active window",
       "Authority",
       "Configuration",
       "Governance",
@@ -333,11 +469,14 @@
       "Email the customer",
       "Keiko — Digital Twin",
       "Keiko adapts behaviour &amp; tools to who is at the wheel.",
+      "mirroring ·",
       "Mock scenarios against your policy before going autonomous.",
       "Open pull request #142",
       "Overwrite prod/secrets.env",
+      "Rights an agent inherits when Keiko governs. Tap a decision to cycle through Allow → Ask →\n        Deny.",
       "Run `kubectl apply` → prod",
       "Run `npm test`",
+      "Run evaluation",
       "What your twin can reach on your behalf.",
       "Write src/windows.jsx"
     ],
@@ -357,8 +496,10 @@
       "Web search"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/ProjectPanel.tsx": [
+      "No chats",
       "No registered projects",
-      "Projects"
+      "Projects",
+      "Select project to load chats"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/RelationshipEdgeBadge.tsx": [
       "Active",
@@ -373,42 +514,69 @@
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/RelationshipInspectorPanel.tsx": [
       "Activity",
+      "Archive",
       "Archive — only available for active relationships",
       "Audit history",
       "Authority status",
       "Cardinality",
+      "Clear focus",
       "Current state",
       "Denial reason",
+      "Denied at",
+      "Dismiss",
       "Evidence references",
       "Evidence run",
       "Forward dependencies",
+      "If the list is empty, use “+ New relationship” in the toolbar to create one.",
       "Impact summary",
+      "It may have been deleted, retired by retention, or it never existed in this workspace.",
       "Jump to the evidence references section",
       "Kind",
       "Lifecycle status",
+      "Load more",
       "Load more audit events",
+      "No audit events for this relationship yet.",
+      "No evidence references for this relationship.",
+      "Recent transitions",
+      "Reconnect",
       "Reconnect — only available for blocked relationships",
       "Reference",
       "Relationship",
+      "Retry",
       "Reverse dependencies",
+      "Revoke",
       "Revoke relationship",
+      "Select a relationship from the list to inspect it.",
       "Semantics",
       "Source",
       "State",
+      "This relationship is no longer available.",
+      "View evidence",
       "View evidence references",
+      "View impact",
       "View impact analysis"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/RelationshipListPanel.tsx": [
       "e.g. reads-context",
+      "Filter by type (press / to focus)",
+      "Focus",
+      "Lifecycle",
+      "Loading…",
       "Relationship density",
       "Relationships",
+      "Retry",
       "Toggle focus mode (F)"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/panels/ResourcesPanel.tsx": [
+      "Shared assets &amp; references — coming soon."
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/SearchResultList.tsx": [
       "Workspace search results"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/TimelinePanel.tsx": [
-      "Activity timeline"
+      "Activity timeline",
+      "No activity yet.",
+      "Start an agent to see its actions stream here."
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/quality-intelligence/ExportBar.tsx": [
       "Jira (preview)",
@@ -434,7 +602,8 @@
       "Local Knowledge",
       "Paste text",
       "Regression (default)",
-      "Requirements"
+      "Requirements",
+      "test case"
     ],
     "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.tsx": [
       "Close",
@@ -443,14 +612,89 @@
       "Zoom content in",
       "Zoom content out"
     ],
-    "packages/keiko-ui/src/app/components/desktop/WorkflowHandoff.tsx": ["Workflow result actions"],
+    "packages/keiko-ui/src/app/components/desktop/WorkflowHandoff.tsx": [
+      "Evidence",
+      "Open result",
+      "Workflow result actions"
+    ],
     "packages/keiko-ui/src/app/layout.tsx": [
       "Keiko — a governed agentic workspace for knowledge work.",
       "Keiko | Ex experientia disco"
     ],
+    "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-actions.tsx": [
+      "src/app.ts\nREADME.md"
+    ],
     "packages/keiko-ui/src/app/local-knowledge/capsule/page.tsx": ["Knowledge Pod Detail — Keiko"],
+    "packages/keiko-ui/src/app/local-knowledge/connector-graph.tsx": [
+      "Attach a source before indexing.",
+      "Details",
+      "Knowledge Pod guidance:",
+      "Last refresh",
+      "Pods",
+      "Removed pages could not be detected this run (the crawl reached its page limit)."
+    ],
     "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": ["MemoriaViva"],
-    "packages/keiko-ui/src/app/memoriaviva/detail/MemoryDetailClient.tsx": ["No memory selected"],
+    "packages/keiko-ui/src/app/memoriaviva/detail/MemoryDetailClient.tsx": [
+      "Back to MemoriaViva",
+      "No memory selected",
+      "This link is missing a memory id. Open a memory from the list instead."
+    ],
+    "packages/keiko-ui/src/lib/coding-workbench-live-state.ts": [
+      ":\n      sourceReady && workspaceReady && authorityReady && runReady && mutationIdle && pairingReady,\n    canRetry:\n      sourceReady &&\n      workspaceReady &&\n      authorityReady &&\n      pairingReady &&\n      runState === \"recovery-required\" &&\n      state.run.value?.recoveryAcknowledged === true &&\n      mutationIdle,\n  };\n}\n\nfunction selectMode(\n  state: CodingWorkbenchRuntimeState,\n  mode: CodingWorkbenchMode,\n): CodingWorkbenchRuntimeState",
+      ": \"error\", error: action.error },\n    }),\n  \"events-received\": (state, action): CodingWorkbenchRuntimeState =>\n    acceptEvents(state, action.events),\n  \"events-reset\": (state) => (",
+      ": \"idle\",\n  kind: null,\n  requestId: null,\n  error: null,\n};\n\nexport function createInitialCodingWorkbenchRuntimeState(\n  requestedMode: CodingWorkbenchMode = \"supervised-coding\",\n  runtimePreference: CodingWorkbenchRuntimePreference = \"managed-gateway\",\n): CodingWorkbenchRuntimeState",
+      ": \"loading\", value: state.run.value, error: null },\n    });\n  }\n  return projectReadiness(",
+      ": \"pending\",\n        kind: action.mutation,\n        requestId: action.requestId,\n        error: null,\n      },\n    }),\n  \"mutation-complete\": (state) => projectReadiness(",
+      ": \"ready\", value, error: null };\n}\n\nconst STARTABLE_RUN_STATES: ReadonlySet",
+      ": \"resource-failed\" }>,\n): CodingWorkbenchRuntimeState",
+      ": (\n    state: CodingWorkbenchRuntimeState,\n    action: Extract",
+      ": (state, action) => selectMode(state, action.mode),\n  \"select-runtime-preference\": (state, action) => selectPreference(state, action.preference),\n  \"resource-loading\": (state, action) => resourceLoading(state, action.resource),\n  \"resource-failed\": (state, action) => resourceFailed(state, action),\n  \"profile-set\": (state, action) => (",
+      ": [], stream: emptyResource() } :",
+      ": [], stream: emptyResource() }),\n  \"pairing-set\": (state, action) =>\n    state.pairing === action.pairing\n      ? state\n      : projectReadiness(",
+      ": action.pairing }),\n} satisfies RuntimeActionHandlers;\n\nexport function codingWorkbenchRuntimeReducer(\n  state: CodingWorkbenchRuntimeState,\n  action: CodingWorkbenchRuntimeStateAction,\n): CodingWorkbenchRuntimeState",
+      ": action.status, value: null, error: action.error },\n  });\n}\n\nfunction acceptSnapshot(\n  state: CodingWorkbenchRuntimeState,\n  snapshot: CodingWorkbenchRuntimeSnapshot,\n): CodingWorkbenchRuntimeState",
+      ": action.status, value: state.run.value, error: action.error },\n    });\n  }\n  return projectReadiness(",
+      ": action.workspace ? ready(action.workspace) : emptyResource(\"empty\"),\n    }),\n  \"run-set\": (state, action) => acceptSnapshot(state, action.snapshot),\n  \"stream-set\": (state, action) => (",
+      ": emptyResource(\"empty\") }),\n  \"codex-setup-set\": (state, action) => (",
+      ": emptyResource(\"loading\") });\n}\n\nfunction resourceFailed(\n  state: CodingWorkbenchRuntimeState,\n  action: Extract",
+      ": emptyResource(),\n    codexSetup: emptyResource(),\n    source: emptyResource(),\n    runtime: emptyResource(),\n    workspace: emptyResource(),\n    run: emptyResource(),\n    stream: emptyResource(),\n    mutation: IDLE_MUTATION,\n    events: [],\n    pairing: \"unknown\",\n    canStart: false,\n    canRetry: false,\n  };\n}\n\nfunction ready",
+      ": emptyResource(),\n    codexSetup: emptyResource(),\n    source: emptyResource(),\n  });\n}\n\nfunction resourceLoading(\n  state: CodingWorkbenchRuntimeState,\n  resource: CodingWorkbenchResourceKey,\n): CodingWorkbenchRuntimeState",
+      ": IDLE_MUTATION }),\n  \"mutation-failed\": (state, action) =>\n    projectReadiness(",
+      ": latest.state,\n    revision: latest.revision,\n    updatedAt: latest.occurredAt,\n    runId: latest.runId,\n    failureCode: latest.failureCode,\n    pendingPermission: undefined,\n  };\n  delete terminal.recoveryAcknowledged;\n  return terminal;\n}\n\nfunction acceptEvents(\n  state: CodingWorkbenchRuntimeState,\n  incoming: readonly CodingWorkbenchRuntimeSseEvent[],\n): CodingWorkbenchRuntimeState",
+      ": mode, runtime: emptyResource() });\n}\n\nfunction selectPreference(\n  state: CodingWorkbenchRuntimeState,\n  runtimePreference: CodingWorkbenchRuntimePreference,\n): CodingWorkbenchRuntimeState",
+      ": null, error: null });\n\nconst IDLE_MUTATION: CodingWorkbenchMutationState =",
+      ": projectReadiness(",
+      ": ready(action.plan) }),\n  \"source-set\": (state, action) =>\n    action.source.runtimePreference !== state.runtimePreference\n      ? state\n      : projectReadiness(",
+      ": ready(action.profile) }),\n  \"profile-empty\": (state) => (",
+      ": ready(action.readiness) }),\n  \"workspace-set\": (state, action) =>\n    projectReadiness(",
+      ": ready(action.source) }),\n  \"runtime-set\": (state, action) =>\n    projectReadiness(",
+      ": ready(action.stream) }),\n  \"mutation-start\": (state, action) =>\n    projectReadiness(",
+      ": ready(current) });\n  }\n  if (\n    current !== null &&\n    current.runId === snapshot.runId &&\n    current.revision > snapshot.revision\n  )",
+      ": ready(snapshot),\n    ...(changedRun ?",
+      ": ready(terminal), events });\n}\n\ntype RuntimeActionHandlers =",
+      "(\n  status: CodingWorkbenchResourceStatus = \"idle\",\n): CodingWorkbenchResourceState",
+      "(value: T): CodingWorkbenchResourceState",
+      ") continue;\n    if (latest === undefined || event.revision >= latest.revision) latest = event;\n  }\n  if (latest === undefined) return null;\n  const terminal =",
+      "),\n  });\n}\n\nfunction terminalSnapshotFromEvents(\n  current: CodingWorkbenchRuntimeSnapshot | null,\n  events: readonly CodingWorkbenchRuntimeSseEvent[],\n): CodingWorkbenchRuntimeSnapshot | null",
+      "= new Set([\n  \"idle\",\n  \"succeeded\",\n  \"failed\",\n  \"cancelled\",\n  \"taken-over\",\n]);\n\nfunction isConcreteTerminalState(state: CodingWorkbenchRuntimeStateName): boolean",
+      "const current = state.run.value;\n  if (current !== null && isConcreteTerminalRun(current) && isUnboundIdle(snapshot))",
+      "const events = retainCodingWorkbenchRuntimeEvents(state.events, incoming);\n  const terminal = terminalSnapshotFromEvents(state.run.value, incoming);\n  return terminal === null\n    ?",
+      "const runtime = state.runtime.value;\n  // F-01: `available` is stored-config truth. A probe that ran and could not reach the gateway\n  // contradicts it, so the source stops counting as ready — starting a run against a source the\n  // product just failed to reach is the \"green claim not backed by a probe\" this closes. A source\n  // nobody has probed stays startable and is labelled unverified instead: withholding the start\n  // button on an absence of evidence would gate the whole product behind an optional check.\n  const sourceReady =\n    state.source.status === \"ready\" &&\n    state.source.value?.runtimePreference === state.runtimePreference &&\n    state.source.value.available === true &&\n    !gatewayVerificationContradictsReadiness(state.source.value.verification);\n  const workspaceReady =\n    state.workspace.status === \"ready\" &&\n    state.workspace.value?.health === \"healthy\" &&\n    state.workspace.value.switching !== true;\n  const authorityReady =\n    state.runtime.status === \"ready\" &&\n    runtime?.runtimeAvailable === true &&\n    runtime.requestedMode === state.requestedMode;\n  const runState = state.run.value?.state;\n  const runReady =\n    state.run.status === \"ready\" && runState !== undefined && STARTABLE_RUN_STATES.has(runState);\n  const mutationIdle = state.mutation.status !== \"pending\";\n  // Release-audit F-08/RG-12: a start (or retry — the same authority resolution) from an unpaired\n  // window is guaranteed to fail with 403 authority-resolution-failed (ADR-0141), so readiness is\n  // honest only once the paired app session is server-confirmed. Fail closed on \"unknown\".\n  const pairingReady = state.pairing === \"paired\";\n  return",
+      "if (action.resource === \"run\")",
+      "if (current?.runId === undefined) return null;\n  let latest: Extract",
+      "if (event.kind !== \"status\" || event.runId !== current.runId) continue;\n    if (!isConcreteTerminalState(event.state) || event.revision",
+      "if (resource === \"run\")",
+      "if (state.requestedMode === mode) return state;\n  return projectReadiness(",
+      "if (state.runtimePreference === runtimePreference) return state;\n  return projectReadiness(",
+      "kind: \"status\" }> | undefined;\n  for (const event of events)",
+      "kind: Kind }>,\n  ) => CodingWorkbenchRuntimeState;\n};\n\nconst runtimeActionHandlers =",
+      "return projectReadiness(",
+      "return runtimeActionHandlers[action.kind](state, action as never);\n}",
+      "return snapshot.runId !== undefined && isConcreteTerminalState(snapshot.state);\n}\n\nfunction isUnboundIdle(snapshot: CodingWorkbenchRuntimeSnapshot): boolean",
+      "return snapshot.runId === undefined && snapshot.state === \"idle\";\n}\n\nfunction projectReadiness(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState",
+      "return state !== \"idle\" && STARTABLE_RUN_STATES.has(state);\n}\n\nfunction isConcreteTerminalRun(snapshot: CodingWorkbenchRuntimeSnapshot): boolean",
+      "return state;\n  }\n  const changedRun = current?.runId !== snapshot.runId;\n  return projectReadiness("
+    ],
     "packages/keiko-ui/src/lib/local-knowledge-api.ts": [
       "Embedding mismatch",
       "Embedding opaque",
@@ -471,6 +715,14 @@
       "Reindex recommended",
       "Retrieval degraded",
       "Sealed local policy"
+    ],
+    "packages/keiko-ui/src/lib/ResourceLimitDecisionsTable.tsx": [
+      "Breached",
+      "Dimension",
+      "Enforced",
+      "Limit",
+      "Resource-limit decisions",
+      "Step"
     ]
   }
 }

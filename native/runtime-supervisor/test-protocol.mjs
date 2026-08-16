@@ -3,50 +3,40 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { resolveWindowsMsvcEnv, windowsToolFromPath } from "../../scripts/lib/windows-msvc.mjs";
+// KEIKO-0304: the codec and process helpers below used to live in a per-platform copy alongside a
+// second copy under `macos/test-protocol.mjs` that had drifted in six observable ways. Both now
+// import them from `./protocol-harness.mjs`, which reconciled each divergence deliberately (see
+// its header). Windows still owns its platform-specific bits: MSVC compile, hermetic env, the
+// two harness functions that carry the lifecycle guard, and the source contract.
+import {
+  explained,
+  fileURLToPath,
+  header,
+  launchPacket as sharedLaunchPacket,
+  readBytes,
+  response,
+  streamReader,
+  waitForExit,
+} from "./protocol-harness.mjs";
 
 const source = fileURLToPath(new URL("./windows/keiko_runtime_supervisor.c", import.meta.url));
 const fixtureSource = fileURLToPath(new URL("./windows/qualification_fixture.c", import.meta.url));
 const DEADLINE_MS = 10_000;
 
-function header(magic, kind, payloadLength) {
-  const bytes = Buffer.alloc(12);
-  bytes.write(magic, 0, "ascii");
-  bytes.writeUInt16LE(1, 4);
-  bytes.writeUInt16LE(kind, 6);
-  bytes.writeUInt32LE(payloadLength, 8);
-  return bytes;
-}
-
+// Windows-specific env pairs (the supervised child needs SystemRoot for Win32/CRT plumbing).
 function launchPacket(executable, cwd) {
-  const args = ["--qualified", "second-argument"];
-  const environment = [
-    ["KEIKO_ALPHA", "one"],
-    ["KEIKO_BETA", "two"],
-    // Win32/CRT plumbing in the supervised child needs SystemRoot; nothing else leaks through.
-    ["SystemRoot", process.env.SystemRoot ?? String.raw`C:\Windows`],
-  ];
-  const strings = [
-    "0123456789abcdef0123456789abcdef",
+  return sharedLaunchPacket(
     executable,
     cwd,
-    ...args,
-    ...environment.flat(),
-  ];
-  const prefix = Buffer.alloc(4);
-  prefix.writeUInt16LE(args.length, 0);
-  prefix.writeUInt16LE(environment.length, 2);
-  const parts = [prefix];
-  for (const value of strings) {
-    const bytes = Buffer.from(value, "utf8");
-    const length = Buffer.alloc(4);
-    length.writeUInt32LE(bytes.length);
-    parts.push(length, bytes, Buffer.alloc(1));
-  }
-  const payload = Buffer.concat(parts);
-  return Buffer.concat([header("KRP1", 1, payload.length), payload]);
+    [
+      ["KEIKO_ALPHA", "one"],
+      ["KEIKO_BETA", "two"],
+      ["SystemRoot", process.env.SystemRoot ?? String.raw`C:\Windows`],
+    ],
+    ["--qualified", "second-argument"],
+  );
 }
 
 async function compile(sourcePath, output) {
@@ -78,80 +68,9 @@ function runProcess(command, env, args) {
   });
 }
 
-/* Persistent per-stream accumulator: listeners attach once at spawn time, so bytes arriving
- * between protocol reads are buffered instead of being dropped by a flowing, listener-less
- * stream (the swap-listener pattern loses exactly the final pre-exit write on Windows). */
-function streamReader(stream) {
-  const reader = { buffered: [], size: 0, waiter: null, ended: false };
-  stream.on("data", (chunk) => {
-    reader.buffered.push(chunk);
-    reader.size += chunk.length;
-    reader.waiter?.();
-  });
-  stream.once("end", () => {
-    reader.ended = true;
-    reader.waiter?.();
-  });
-  return reader;
-}
-
-function readBytes(reader, length) {
-  return new Promise((resolveBytes, reject) => {
-    const check = () => {
-      if (reader.size >= length) {
-        reader.waiter = null;
-        const bytes = Buffer.concat(reader.buffered);
-        reader.buffered = [bytes.subarray(length)];
-        reader.size = bytes.length - length;
-        resolveBytes(bytes.subarray(0, length));
-        return;
-      }
-      if (reader.ended) {
-        reader.waiter = null;
-        reject(
-          new Error(
-            `native helper ended before producing bounded response (buffered=${String(reader.size)})`,
-          ),
-        );
-      }
-    };
-    reader.waiter = check;
-    check();
-  });
-}
-
-async function response(reader) {
-  const responseHeader = await readBytes(reader, 12);
-  assert.equal(responseHeader.subarray(0, 4).toString("ascii"), "KRS1");
-  assert.equal(responseHeader.readUInt16LE(4), 1);
-  const length = responseHeader.readUInt32LE(8);
-  assert.ok(length <= 64);
-  return {
-    kind: responseHeader.readUInt16LE(6),
-    payload: length === 0 ? Buffer.alloc(0) : await readBytes(reader, length),
-  };
-}
-
 /* Windows children need SystemRoot for Win32/CRT plumbing; everything else stays withheld. */
 function hermeticWindowsEnv() {
   return { SystemRoot: process.env.SystemRoot ?? String.raw`C:\Windows` };
-}
-
-/* Re-throw a stream failure with the child's exit code so CI logs pinpoint the stage. */
-async function explained(stage, pending, exited, stderr) {
-  try {
-    return await pending;
-  } catch (error) {
-    const settled = await Promise.race([
-      exited,
-      new Promise((resolveLate) => setTimeout(resolveLate, 2_000, "still-running")),
-    ]);
-    throw new Error(
-      `${stage}: ${error instanceof Error ? error.message : String(error)} ` +
-        `(exit=${String(settled)} stderrBytes=${String(Buffer.concat(stderr).length)})`,
-      { cause: error },
-    );
-  }
 }
 
 async function qualifyWindows(helper, runtime, root) {
@@ -266,19 +185,6 @@ async function assertControlEofFailsClosed(helper, runtime, root) {
     if (!completed) child.kill("SIGKILL");
     await exited.catch(() => undefined);
   }
-}
-
-async function waitForExit(pid) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      if (error?.code === "ESRCH") return;
-      throw error;
-    }
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
-  }
-  throw new Error("qualified process remained active after Job Object reap proof");
 }
 
 async function assertSourceContract() {

@@ -98,6 +98,49 @@ function request(root, path, { cap = 65_536, trailing = Buffer.alloc(0) } = {}) 
   return Buffer.concat([frame, trailing]);
 }
 
+// KEIKO-0382: the helper's frame parser has ten guards at its trust boundary (version, reserved,
+// declared vs supplied lengths, size caps, NUL and UTF-8 in the path) and zero of them were
+// exercised. `request()` above cannot express the malformed cases those guards exist for because
+// it derives every header field from the payload; this sibling builder decouples them so a frame
+// can carry a declared length that DIFFERS from the bytes actually appended, an out-of-domain
+// version, a non-zero reserved half-word, or arbitrary raw path bytes including NULs and invalid
+// UTF-8. Kept small and single-purpose: assertProtocolCases uses it, `request()` stays the
+// well-formed builder every other case still calls.
+const MALFORMED_DEFAULTS = {
+  root: "",
+  pathBytes: Buffer.alloc(0),
+  cap: 65_536,
+  version: 1,
+  reserved: 0,
+  trailing: Buffer.alloc(0),
+};
+
+function malformedRequest(overrides = {}) {
+  const options = { ...MALFORMED_DEFAULTS, ...overrides };
+  const rootBuf = Buffer.from(options.root, "utf8");
+  const pathBuf = Buffer.isBuffer(options.pathBytes)
+    ? options.pathBytes
+    : Buffer.from(options.pathBytes, "utf8");
+  const declaredRootLen = options.declaredRootLen ?? rootBuf.length;
+  const declaredPathLen = options.declaredPathLen ?? pathBuf.length;
+  const frame = Buffer.alloc(20 + rootBuf.length + pathBuf.length);
+  frame.write("KSR1", 0, "ascii");
+  frame.writeUInt16LE(options.version, 4);
+  frame.writeUInt16LE(options.reserved, 6);
+  frame.writeUInt32LE(declaredRootLen, 8);
+  frame.writeUInt32LE(declaredPathLen, 12);
+  frame.writeUInt32LE(options.cap, 16);
+  rootBuf.copy(frame, 20);
+  pathBuf.copy(frame, 20 + rootBuf.length);
+  return Buffer.concat([frame, options.trailing]);
+}
+
+// The helper's own limits (see native/secure-workspace-read/secure_workspace_read.c: KSR_MAX_ROOT
+// = 32 KiB, KSR_MAX_PATH = 4 KiB). Duplicated at the harness's trust boundary rather than
+// imported, because the point of pinning them here is to catch the C constant silently drifting.
+const HARNESS_KSR_MAX_ROOT = 32 * 1024;
+const HARNESS_KSR_MAX_PATH = 4 * 1024;
+
 function spawnHelper(binary, input, paused, mutate) {
   const started = performance.now();
   return new Promise((resolveResult, reject) => {
@@ -215,8 +258,68 @@ async function compile(binary, paused = false) {
   });
 }
 
+// KEIKO-0417: the 17 checks below used to run against RAW file text, so a security control that
+// survived only as a `/* ... */` comment still satisfied `assert.match` and the deleted-but-
+// documented behaviour passed as if it were live. Strip C block comments, line comments, and the
+// bodies of double-quoted string literals before matching. Character literals (single-quoted) are
+// preserved: they can hold at most a handful of bytes and cannot hide the multi-token security
+// controls the 17 assertions pin, and assertion #16 and #9 below embed them directly. Assertions
+// whose intent is to observe a specific bytestring INSIDE a `"..."` (the Windows reserved-stem
+// pass and the `ascii_name_equals(..., "GLOBALROOT")` check) explicitly read `nativeSourceRaw`;
+// every other check consumes the stripped text.
+// Skip a C string literal starting at the opening `"` (index i). Returns the index of the byte
+// AFTER the closing `"` (or the end of source on unterminated input).
+function skipStringLiteral(source, start) {
+  let i = start + 1;
+  while (i < source.length) {
+    const c = source[i];
+    if (c === "\\") {
+      i += 2;
+      continue;
+    }
+    if (c === '"') return i + 1;
+    i += 1;
+  }
+  return i;
+}
+
+function stripCommentsAndStrings(source) {
+  let out = "";
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    const next = source[i + 1];
+    if (ch === "/" && next === "*") {
+      const end = source.indexOf("*/", i + 2);
+      if (end === -1) return out;
+      out += "  ";
+      i = end + 2;
+      continue;
+    }
+    if (ch === "/" && next === "/") {
+      const end = source.indexOf("\n", i + 2);
+      if (end === -1) return out;
+      i = end;
+      continue;
+    }
+    if (ch === '"') {
+      out += '""';
+      i = skipStringLiteral(source, i);
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
 async function assertWindowsSourceContract() {
-  const nativeSource = await readFile(source, "utf8");
+  const nativeSource = stripCommentsAndStrings(await readFile(source, "utf8"));
+  // Windows reserved stems come from WINDOWS_RESERVED_STEMS, and the `"${stem}"` check below
+  // reads string literals — but those literals are ALSO in the raw source, not comments. Read
+  // the raw text again for that one check so comment-stripping does not blank the very literals
+  // this contract exists to pin.
+  const nativeSourceRaw = await readFile(source, "utf8");
   assert.match(nativeSource, /GetFinalPathNameByHandleW\(root,/u);
   assert.match(nativeSource, /GetFinalPathNameByHandleW\(file,/u);
   assert.match(
@@ -231,9 +334,9 @@ async function assertWindowsSourceContract() {
     /_setmode\(_fileno\(stdin\), _O_BINARY\).*_setmode\(_fileno\(stdout\), _O_BINARY\)/su,
   );
   assert.match(nativeSource, /if \(!binary_standard_io\(\)\) return 1;.*parse_request\(/su);
-  for (const stem of WINDOWS_RESERVED_STEMS) assert.ok(nativeSource.includes(`"${stem}"`));
+  for (const stem of WINDOWS_RESERVED_STEMS) assert.ok(nativeSourceRaw.includes(`"${stem}"`));
   assert.match(nativeSource, /while \(name_length < length && component\[name_length\] != '\.'\)/u);
-  assert.match(nativeSource, /ascii_name_equals\(component, name_length, "GLOBALROOT"\)/u);
+  assert.match(nativeSourceRaw, /ascii_name_equals\(component, name_length, "GLOBALROOT"\)/u);
   assert.match(nativeSource, /windows_reserved_port_name\(component, name_length\)/u);
   assert.match(nativeSource, /bytes\[3\] == 0xc2/u);
   assert.match(nativeSource, /bytes\[4\] == 0xb9 \|\| bytes\[4\] == 0xb2 \|\| bytes\[4\] == 0xb3/u);
@@ -241,6 +344,30 @@ async function assertWindowsSourceContract() {
   assert.doesNotMatch(nativeSource, /char name\[10\]/u);
   assert.match(nativeSource, /\*q == ':' \|\| \*q == '\?' \|\| \*q == '~'/u);
   assert.equal(nativeSource.match(/CreateFileW\(/gu)?.length, 1);
+
+  // KEIKO-0417 negative self-test: proves stripCommentsAndStrings is load-bearing rather than
+  // decorative. Take the real source, move `OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE`'s use site
+  // AND the single `CreateFileW(` call into `/* ... */` comments, and re-run the two matches
+  // those pinned. A raw scan would still find both tokens (they sit inside the comment); the
+  // stripped scan must not. If either check fails, the 17 assertions above are only pinning text
+  // that survived in a comment.
+  const mutated = nativeSourceRaw
+    .replace(
+      /OBJ_CASE_INSENSITIVE \| OBJ_DONT_REPARSE/u,
+      "/* OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE */ 0",
+    )
+    .replace(/CreateFileW\(/u, "/* CreateFileW( */ NopW(");
+  const mutatedStripped = stripCommentsAndStrings(mutated);
+  assert.equal(
+    mutatedStripped.match(/OBJ_CASE_INSENSITIVE \| OBJ_DONT_REPARSE/u),
+    null,
+    "stripCommentsAndStrings must remove OBJ_DONT_REPARSE hidden in a block comment",
+  );
+  assert.equal(
+    (mutatedStripped.match(/CreateFileW\(/gu) ?? []).length,
+    0,
+    "stripCommentsAndStrings must remove CreateFileW( hidden in a block comment",
+  );
 }
 
 async function setupFixture(fixture, outside) {
@@ -327,6 +454,72 @@ async function assertProtocolCases(binary, fixture, outside) {
   else {
     assert.equal(response(await run(binary, request("/", "dev/null"))).status, 4);
     assert.equal(response(await run(binary, request("/dev", "null"))).status, 5);
+  }
+
+  await assertMalformedFrameGuards(binary, fixture);
+}
+
+// KEIKO-0382: negative coverage for the ten frame-parser guards. Each case pins one guard by
+// constructing a frame the helper must reject with status 1 (KSR_MALFORMED_REQUEST). Kept
+// platform-agnostic and run for every configuration — the parser is the same on every platform
+// and its guards are part of the trust boundary at every stage.
+function buildMalformedFrameCases(fixture) {
+  const rootBytes = Buffer.from(fixture, "utf8");
+  const pathBytes = Buffer.from("nested/good.txt", "utf8");
+  const nulPath = Buffer.concat([
+    Buffer.from("a", "utf8"),
+    Buffer.of(0x00),
+    Buffer.from("b", "utf8"),
+  ]);
+  return [
+    // Header says more root/path bytes than actually appended: read overruns the frame.
+    {
+      label: "declared rootLen exceeds supplied root bytes",
+      frame: malformedRequest({ root: fixture, pathBytes, declaredRootLen: rootBytes.length + 1 }),
+    },
+    {
+      label: "declared pathLen exceeds supplied path bytes",
+      frame: malformedRequest({ root: fixture, pathBytes, declaredPathLen: pathBytes.length + 1 }),
+    },
+    // Zero-length root or path: no request the helper is meant to serve.
+    { label: "declared rootLen == 0", frame: malformedRequest({ root: "", pathBytes }) },
+    { label: "declared pathLen == 0", frame: malformedRequest({ root: fixture }) },
+    // Size cap breaches: proves the constants are actually enforced, not just declared.
+    {
+      label: "rootLen > KSR_MAX_ROOT",
+      frame: malformedRequest({ root: "x".repeat(HARNESS_KSR_MAX_ROOT + 1), pathBytes }),
+    },
+    {
+      label: "pathLen > KSR_MAX_PATH",
+      frame: malformedRequest({
+        root: fixture,
+        pathBytes: Buffer.from("x".repeat(HARNESS_KSR_MAX_PATH + 1), "utf8"),
+      }),
+    },
+    // Reserved half-word must be zero. Confirmed never set on any well-formed frame today; a
+    // non-zero value is a forward-compatibility violation and must fail closed.
+    {
+      label: "non-zero reserved u16",
+      frame: malformedRequest({ root: fixture, pathBytes, reserved: 1 }),
+    },
+    // Wrong protocol version.
+    { label: "version != 1", frame: malformedRequest({ root: fixture, pathBytes, version: 2 }) },
+    // Path payloads that violate the well-formedness rules (NUL byte, invalid UTF-8).
+    {
+      label: "path contains an interior NUL byte",
+      frame: malformedRequest({ root: fixture, pathBytes: nulPath }),
+    },
+    {
+      label: "path is invalid UTF-8",
+      frame: malformedRequest({ root: fixture, pathBytes: Buffer.of(0xc3, 0x28) }),
+    },
+  ];
+}
+
+async function assertMalformedFrameGuards(binary, fixture) {
+  for (const { label, frame } of buildMalformedFrameCases(fixture)) {
+    const status = response(await run(binary, frame)).status;
+    assert.equal(status, 1, `expected status 1 (malformed) for: ${label}, got ${String(status)}`);
   }
 }
 

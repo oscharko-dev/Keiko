@@ -4,86 +4,21 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// KEIKO-0304: shared with `../test-protocol.mjs` (Windows). Six known divergences reconciled at the
+// extraction; see the module's header for what and why. The macOS harness still owns its own
+// clang compile of the fixture and its two-mode qualification runner (KEIKO-0277).
+import {
+  header,
+  launchPacket,
+  readBytes,
+  response,
+  streamReader,
+  waitGone,
+} from "../protocol-harness.mjs";
+
 const DEADLINE_MS = 15_000;
 const source = new URL("./keiko_runtime_supervisor.c", import.meta.url);
 const fixtureSource = new URL("./qualification_fixture.c", import.meta.url);
-
-function frame(magic, kind, payloadLength) {
-  const value = Buffer.alloc(12);
-  value.write(magic, 0, "ascii");
-  value.writeUInt16LE(1, 4);
-  value.writeUInt16LE(kind, 6);
-  value.writeUInt32LE(payloadLength, 8);
-  return value;
-}
-
-function launchPacket(executable, cwd) {
-  const strings = [
-    "0123456789abcdef0123456789abcdef",
-    executable,
-    cwd,
-    "--qualified",
-    "second-argument",
-    "KEIKO_ALPHA",
-    "one",
-  ];
-  const prefix = Buffer.alloc(4);
-  prefix.writeUInt16LE(2, 0);
-  prefix.writeUInt16LE(1, 2);
-  const values = [prefix];
-  for (const value of strings) {
-    const bytes = Buffer.from(value, "utf8");
-    const length = Buffer.alloc(4);
-    length.writeUInt32LE(bytes.length);
-    values.push(length, bytes, Buffer.alloc(1));
-  }
-  const payload = Buffer.concat(values);
-  return Buffer.concat([frame("KRP1", 1, payload.length), payload]);
-}
-
-function streamReader(stream) {
-  const reader = { chunks: [], size: 0, wake: undefined, ended: false };
-  stream.on("data", (chunk) => {
-    reader.chunks.push(chunk);
-    reader.size += chunk.length;
-    reader.wake?.();
-  });
-  stream.once("end", () => {
-    reader.ended = true;
-    reader.wake?.();
-  });
-  return reader;
-}
-
-function readBytes(reader, length) {
-  return new Promise((resolve, reject) => {
-    const check = () => {
-      if (reader.size >= length) {
-        const bytes = Buffer.concat(reader.chunks);
-        reader.chunks = [bytes.subarray(length)];
-        reader.size = bytes.length - length;
-        reader.wake = undefined;
-        resolve(bytes.subarray(0, length));
-      } else if (reader.ended) {
-        reject(new Error("macOS supervisor response ended early"));
-      }
-    };
-    reader.wake = check;
-    check();
-  });
-}
-
-async function response(reader) {
-  const header = await readBytes(reader, 12);
-  assert.equal(header.subarray(0, 4).toString("ascii"), "KRS1");
-  assert.equal(header.readUInt16LE(4), 1);
-  const length = header.readUInt32LE(8);
-  assert.ok(length <= 64);
-  return {
-    kind: header.readUInt16LE(6),
-    payload: length === 0 ? Buffer.alloc(0) : await readBytes(reader, length),
-  };
-}
 
 async function compileFixture(path, architecture) {
   const child = spawn(
@@ -112,19 +47,6 @@ async function compileFixture(path, architecture) {
   assert.equal(status, 0, Buffer.concat(errors).toString("utf8"));
 }
 
-async function waitGone(pid) {
-  for (let attempt = 0; attempt < 200; ++attempt) {
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      if (error?.code === "ESRCH") return;
-      throw error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  throw new Error("Endpoint Security did not prove descendant exit");
-}
-
 async function qualify(helper, fixture, root) {
   const child = spawn(helper, [], {
     env: {},
@@ -146,7 +68,7 @@ async function qualify(helper, fixture, root) {
     const observation = await readBytes(output, 12);
     assert.equal(observation.subarray(0, 4).toString("ascii"), "KRQ1");
     const pids = [observation.readUInt32LE(4), observation.readUInt32LE(8)];
-    child.stdio[3].write(frame("KRC1", 3, 0));
+    child.stdio[3].write(header("KRC1", 3, 0));
     const proof = await response(responses);
     assert.equal(proof.kind, 2);
     assert.equal(proof.payload.readUInt32LE(4), 0);
@@ -180,16 +102,70 @@ assert.doesNotMatch(
   /setsid|setpgid|killpg|\/bin\/sh|system\(|posix_spawnp|execvp|execlp|execvP/u,
 );
 
+// KEIKO-0277: Windows-sibling two-mode shape. `--helper <path>` qualifies an exact staged binary
+// (release-qualification form the portable pipeline uses). Without `--helper`, compile the
+// supervisor from source into a scratch root and qualify THAT — same clang invocation as
+// scripts/check-macos-native-quality.sh, so the behavioural qualification runs on every PR from
+// that gate instead of being reachable only at release time. The source contract above is
+// deliberately placed BEFORE the platform guard so it runs on every host.
+async function compileSupervisor(path, architecture) {
+  const supervisorSource = new URL("./keiko_runtime_supervisor.c", import.meta.url);
+  const child = spawn(
+    "/usr/bin/xcrun",
+    [
+      "clang",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-O2",
+      "-D_DARWIN_C_SOURCE",
+      "-arch",
+      architecture,
+      "-o",
+      path,
+      supervisorSource.pathname,
+    ],
+    { env: {}, stdio: ["ignore", "ignore", "pipe"] },
+  );
+  const errors = [];
+  child.stderr.on("data", (chunk) => errors.push(chunk));
+  const status = await new Promise((resolve) => {
+    child.once("close", resolve);
+  });
+  if (status !== 0) {
+    throw new Error(
+      `compileSupervisor exited with ${String(status)}: ${Buffer.concat(errors).toString("utf8")}`,
+    );
+  }
+}
+
+// KEIKO-0277: behavioural qualification requires the installed Endpoint Security system extension
+// to be present and ACTIVE — the supervisor answers ERROR_MONITOR_UNAVAILABLE otherwise, and no
+// hosted runner has that setup. The finding's own fallback for that case is to keep the
+// platform-independent source contract (above) unconditionally in the quality lane and gate the
+// behavioural qualification on an explicit opt-in. `--helper` is the release form the portable
+// pipeline uses (scripts/qualify-macos-runtime-release.mjs); `--compile` is the developer form
+// that builds from source and qualifies THAT — usable on a workstation with the system extension
+// installed. Neither flag → source contract only, no behavioural attempt, no false-red on CI.
 if (process.platform === "darwin") {
   const helperIndex = process.argv.indexOf("--helper");
   const helper = helperIndex === -1 ? undefined : process.argv[helperIndex + 1];
-  assert.ok(helper, "pass --helper <exact staged supervisor>");
-  const root = await mkdtemp(join(tmpdir(), "keiko-macos-runtime-qualification-"));
-  try {
-    const fixture = join(root, "qualification-fixture");
-    await compileFixture(fixture, process.arch === "arm64" ? "arm64" : "x86_64");
-    await qualify(helper, fixture, root);
-  } finally {
-    await rm(root, { recursive: true, force: true });
+  const shouldCompile = process.argv.includes("--compile");
+  if (helper !== undefined || shouldCompile) {
+    const architecture = process.arch === "arm64" ? "arm64" : "x86_64";
+    const root = await mkdtemp(join(tmpdir(), "keiko-macos-runtime-qualification-"));
+    try {
+      const fixture = join(root, "qualification-fixture");
+      await compileFixture(fixture, architecture);
+      let staged = helper;
+      if (staged === undefined) {
+        staged = join(root, "keiko-runtime-supervisor");
+        await compileSupervisor(staged, architecture);
+      }
+      await qualify(staged, fixture, root);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   }
 }
