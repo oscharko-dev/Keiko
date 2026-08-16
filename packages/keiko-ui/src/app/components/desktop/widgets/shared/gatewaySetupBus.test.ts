@@ -4,9 +4,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
+  GATEWAY_MODEL_READINESS_UPDATED_EVENT,
   GATEWAY_SETUP_REQUEST_EVENT,
   consumePendingGatewaySetup,
   notifyGatewayConfigUpdated,
+  notifyGatewayModelReadinessUpdated,
   requestGatewaySetup,
 } from "./gatewaySetupBus";
 
@@ -50,6 +52,22 @@ describe("gatewaySetupBus", () => {
       expect(consumePendingGatewaySetup()).toBe(false);
     } finally {
       window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, handler);
+    }
+  });
+
+  it("announces a model-readiness update on its own catalog-refresh channel", () => {
+    const readinessHandler = vi.fn();
+    const configHandler = vi.fn();
+    window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, readinessHandler);
+    window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, configHandler);
+    try {
+      notifyGatewayModelReadinessUpdated();
+      expect(readinessHandler).toHaveBeenCalledTimes(1);
+      expect(configHandler).not.toHaveBeenCalled();
+      expect(consumePendingGatewaySetup()).toBe(false);
+    } finally {
+      window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, readinessHandler);
+      window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, configHandler);
     }
   });
 });

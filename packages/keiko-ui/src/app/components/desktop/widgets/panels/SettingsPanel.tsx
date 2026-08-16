@@ -61,6 +61,7 @@ import {
   GATEWAY_SETUP_REQUEST_EVENT,
   consumePendingGatewaySetup,
   notifyGatewayConfigUpdated,
+  notifyGatewayModelReadinessUpdated,
 } from "../shared/gatewaySetupBus";
 import {
   WALLPAPER_ENABLED_EVENT,
@@ -1370,6 +1371,7 @@ async function runModelReadinessCheck(
       deep ? { includeDeepProbes: true } : undefined,
     );
     record({ status: "done", report });
+    notifyGatewayModelReadinessUpdated();
   } catch (error) {
     record({ status: "error", message: readinessErrorMessage(error, t) });
   }
