@@ -1,0 +1,29 @@
+{
+  "issue": 3167,
+  "verdict": "PASS",
+  "captureMethod": "Google Chrome via Computer Use",
+  "captures": [
+    {
+      "file": "01-gateway-connected-light.jpeg",
+      "theme": "light",
+      "state": "gateway-connected",
+      "viewport": { "width": 1366, "height": 768 },
+      "conversationEligibleVisible": true
+    },
+    {
+      "file": "02-gateway-connected-dark.jpeg",
+      "theme": "dark",
+      "state": "gateway-connected",
+      "viewport": { "width": 1366, "height": 768 },
+      "conversationEligibleVisible": true
+    },
+    {
+      "file": "03-verified-model-chat.jpeg",
+      "theme": "light",
+      "state": "new-chat-with-verified-model",
+      "viewport": { "width": 1366, "height": 768 },
+      "verifiedModel": "gpt-4o-mini"
+    }
+  ],
+  "summary": "The real browser exposes only a currently verified chat model as conversation-eligible and successfully creates a chat bound to it."
+}

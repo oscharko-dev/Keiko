@@ -1,0 +1,30 @@
+{
+  "issue": 3167,
+  "verdict": "PASS",
+  "method": "Computer Use accessibility tree plus focused component tests",
+  "captures": [
+    {
+      "file": "01-gateway-connected-light.jpeg",
+      "observations": [
+        "Gateway status and eligibility are exposed as text",
+        "Readiness and deep-probe actions are exposed as buttons",
+        "Model identity and capability detail are available without color dependence"
+      ]
+    },
+    {
+      "file": "02-gateway-connected-dark.jpeg",
+      "observations": [
+        "The same status semantics remain available after the theme change",
+        "All changed actions remain operable"
+      ]
+    },
+    {
+      "file": "03-verified-model-chat.jpeg",
+      "observations": [
+        "The chat message area and model control are exposed",
+        "The active conversation announces the verified model identity"
+      ]
+    }
+  ],
+  "gate": "No serious or critical issue observed in the changed readiness and chat-selection surfaces; automated UI receipt remains a separate release gate."
+}
