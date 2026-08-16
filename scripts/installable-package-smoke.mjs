@@ -1282,7 +1282,10 @@ function platformListAllows(list, value) {
 // 3780586007).
 const lockfilePlatformScopes = new Map();
 
-/** The `os`/`cpu` `package-lock.json` records for a name, or `undefined` if it pins no such name. */
+/**
+ * The `os`/`cpu`/`libc` `package-lock.json` records for a name, or `undefined` if it pins no such
+ * name.
+ */
 function lockfilePlatformScope(name, lockfilePath) {
   let scopes = lockfilePlatformScopes.get(lockfilePath);
   if (scopes === undefined) {
@@ -1291,7 +1294,7 @@ function lockfilePlatformScope(name, lockfilePath) {
     for (const [path, entry] of Object.entries(raw.packages ?? {})) {
       const pinned = path.split("node_modules/").at(-1);
       if (pinned === undefined || pinned === "" || scopes.has(pinned)) continue;
-      scopes.set(pinned, { cpu: entry.cpu, os: entry.os });
+      scopes.set(pinned, { cpu: entry.cpu, libc: entry.libc, os: entry.os });
     }
     lockfilePlatformScopes.set(lockfilePath, scopes);
   }
@@ -1300,8 +1303,8 @@ function lockfilePlatformScope(name, lockfilePath) {
 
 /**
  * A stub is legitimate ONLY for a package this host would never link. `package-lock.json` is what
- * says which those are, and it is more than the platform-suffix heuristic knows: it covers `cpu` as
- * well as `os`, and it covers packages whose NAME carries no platform at all.
+ * says which those are, and it is more than the platform-suffix heuristic knows: it covers `cpu`
+ * and `libc` as well as `os`, and it covers packages whose NAME carries no platform at all.
  *
  * `@napi-rs/canvas` is exactly that case. `keiko-local-knowledge` declares the parent package
  * itself optional and the lockfile records no `os`/`cpu` for it, so it installs everywhere — yet an
@@ -1312,13 +1315,30 @@ function lockfilePlatformScope(name, lockfilePath) {
  * A name the lockfile does not pin is not judged here: that is a closure defect, which the missing
  * list and `assertRegistryOnlyDescriptors` already govern, not a platform question.
  */
-/** Whether the lockfile pins this name AND records no platform scope excluding the running host. */
-function installsOnThisHost(name, lockfilePath) {
+function currentHostPlatformScope() {
+  return { arch: process.arch, libc: linuxLibc(), platform: process.platform };
+}
+
+function scopeInstallsOnHost(scope, host) {
+  const libcAllows =
+    scope.libc === undefined ||
+    (host.libc !== undefined && platformListAllows(scope.libc, host.libc));
+  return (
+    platformListAllows(scope.os, host.platform) &&
+    platformListAllows(scope.cpu, host.arch) &&
+    libcAllows
+  );
+}
+
+/** Whether the lockfile pins this name AND records no platform scope excluding the supplied host. */
+export function lockfilePackageInstallsOnHost(
+  name,
+  lockfilePath,
+  host = currentHostPlatformScope(),
+) {
   const scope = lockfilePlatformScope(name, lockfilePath);
   if (scope === undefined) return false;
-  return (
-    platformListAllows(scope.os, process.platform) && platformListAllows(scope.cpu, process.arch)
-  );
+  return scopeInstallsOnHost(scope, host);
 }
 
 export function assertStubsAreForeignOnly(
@@ -1327,7 +1347,7 @@ export function assertStubsAreForeignOnly(
 ) {
   const offenders = [...seeded].flatMap(([name, versions]) =>
     [...versions.values()]
-      .filter((entry) => isStubEntry(entry) && installsOnThisHost(name, lockfilePath))
+      .filter((entry) => isStubEntry(entry) && lockfilePackageInstallsOnHost(name, lockfilePath))
       .map((entry) => `${name}@${entry.version}`),
   );
   if (offenders.length > 0) {
@@ -1440,7 +1460,7 @@ function isNonDurableStub(name, entry) {
   // the suffix answers for this host's own binding by name, whether pinned or not. Using only the
   // lockfile let an unpinned host-binding stub through, which the suffix rule had been catching.
   if (hostBindingSuffixes().some((suffix) => name.endsWith(suffix))) return true;
-  return installsOnThisHost(name, join(repoRoot, "package-lock.json"));
+  return lockfilePackageInstallsOnHost(name, join(repoRoot, "package-lock.json"));
 }
 
 export function writeSeedIndex(destination, seeded) {

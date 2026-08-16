@@ -79,8 +79,8 @@ only and reaches every governed capability through host-injected callbacks, so a
 embed it. A standalone host performs three steps — install the local Monaco runtime once, implement
 the host port, and render the controlled `KeikoCodeEditor`.
 
-The package declares `react` and `react-dom` (`^19.2.7`) as **peer** dependencies and pins
-`monaco-editor` (`0.55.1`) and `@monaco-editor/react` (`4.7.0`); the host installs all four. Monaco is
+The package declares `react` and `react-dom` (`^19.2.8`) as **peer** dependencies and pins
+`monaco-editor` (`0.56.0`) and `@monaco-editor/react` (`4.7.0`); the host installs all four. Monaco is
 a browser-only module that imports CSS, so the editor surface must be loaded behind a client-only
 boundary (for example `next/dynamic(..., { ssr: false })` or an equivalent lazy import) — never during
 a server render. There is no CDN fallback by design (ADR-0042 D3).
@@ -93,9 +93,14 @@ of truth (ADR-0042 D4).
 
 ```ts
 import { loader } from "@monaco-editor/react";
-import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
-import "monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js";
+import * as monaco from "monaco-editor/editor/editor.api.js";
+import "monaco-editor/features/hover/register.js";
+import "monaco-editor/features/inlineCompletions/register.js";
+import "monaco-editor/features/quickCommand/register.js";
+import "monaco-editor/features/quickHelp/register.js";
+import "monaco-editor/features/suggest/register.js";
+import "monaco-editor/languages/definitions/javascript/register.js";
+import "monaco-editor/languages/definitions/typescript/register.js";
 import {
   configureMonacoLoader,
   createMonacoEnvironment,
@@ -118,25 +123,9 @@ export function installKeikoMonacoRuntime(): boolean {
     createMonacoEnvironment(defaultMonacoWorkerFactories),
   );
   configureMonacoLoader(loader, monaco);
-  // Disable Monaco's in-browser TS/JS worker for governed features (completion, hover, diagnostics,
-  // symbols, formatting); it stays only for local tokenisation/bracket matching.
-  const off = {
-    completionItems: false,
-    hovers: false,
-    documentSymbols: false,
-    definitions: false,
-    references: false,
-    documentHighlights: false,
-    rename: false,
-    diagnostics: false,
-    documentRangeFormattingEdits: false,
-    signatureHelp: false,
-    onTypeFormattingEdits: false,
-    codeActions: false,
-    inlayHints: false,
-  } satisfies monaco.typescript.ModeConfiguration;
-  monaco.typescript.typescriptDefaults.setModeConfiguration(off);
-  monaco.typescript.javascriptDefaults.setModeConfiguration(off);
+  // Do not import `monaco-editor`'s package root, `features/register.all`, or rich language-service
+  // contributions. Keiko registers only standalone UX features and grammar/tokenisation definitions;
+  // completion, hover, diagnostics, symbols, and formatting stay host/server-owned.
   // Re-call resolveEditorThemeTokensFromDom + registerKeikoEditorTheme on theme/contrast switch.
   registerKeikoEditorTheme(
     monaco.editor,
@@ -265,7 +254,7 @@ npm --workspace @oscharko-dev/keiko-editor run build
 npm --workspace @oscharko-dev/keiko-editor run typecheck
 npm --workspace @oscharko-dev/keiko-editor test
 
-# Editor bundle-size budget: own-code gzip ceiling, the Monaco 0.55.1 pin, and first-load isolation
+# Editor bundle-size budget: own-code gzip ceiling, the Monaco 0.56.0 pin, and first-load isolation
 # (Monaco/editor value-imported only behind a client-only dynamic boundary). Add --require-static-export
 # after `npm run build:ui` to also scan the static export's first-load JavaScript.
 npm run check:editor-bundle-size
@@ -320,7 +309,7 @@ constructor module (`src/monaco/worker-entries.ts`).
 
 ```ts
 import { loader } from "@monaco-editor/react";
-import * as monaco from "monaco-editor";
+import * as monaco from "monaco-editor/editor/editor.api.js";
 import {
   configureMonacoLoader,
   createMonacoEnvironment,
@@ -343,8 +332,9 @@ registerKeikoEditorTheme(monaco.editor, "dark", tokens);
 
 **Worker setup, verified in build.** Monaco's worker module inventory
 (`editor`, `typescript`, `json`, `css`, `html`) resolves from the locally installed `monaco-editor`
-package (`monaco-editor/esm/vs/…/*.worker.js`), and the default governed v1 factory contains exactly
-one static `new Worker(new URL(...))` entry point: `editor.worker.js`. TypeScript/JavaScript
+package (`monaco-editor/editor/editor.worker.js`, via the package's public export map), and the
+default governed v1 factory contains exactly one static `new Worker(new URL(...))` entry point:
+`editor.worker.js`. TypeScript/JavaScript
 intelligence is supplied by Keiko's server-governed provider, JSON/CSS/HTML deterministic
 intelligence is deferred, and #1213 owns any future multi-language worker expansion. Tests assert the
 inventory resolution, the editor-only shipped default, and the no-CDN invariant; browser release
@@ -397,11 +387,11 @@ All dependencies are pinned and permissively licensed. The package manifest decl
 
 | Dependency                      | Version        | License    | Role                                                                                                                                      |
 | ------------------------------- | -------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `monaco-editor`                 | `0.55.1`       | MIT        | Editor + diff editor + bundled language workers. Runtime wiring lands in #1193 (served same-origin, no CDN).                              |
+| `monaco-editor`                 | `0.56.0`       | MIT        | Editor + diff editor + bundled language workers. Runtime wiring lands in #1193 (served same-origin, no CDN).                              |
 | `@monaco-editor/react`          | `4.7.0`        | MIT        | React lifecycle wrapper for Monaco. Its default loader fetches Monaco from a CDN unless configured.                                       |
 | `@monaco-editor/loader`         | `1.7.0`        | MIT        | Transitive loader used by `@monaco-editor/react`; pinned via a root `overrides` entry.                                                    |
 | `@oscharko-dev/keiko-contracts` | workspace      | Apache-2.0 | Shared contracts. Imported **type-only** (`WorkspaceLanguage`, `FileContent`); no value import.                                           |
-| `react`, `react-dom`            | `^19.2.7` peer | MIT        | Provided by the host (`keiko-ui` ships React 19.2.7). Declared as **peer** dependencies so React is never bundled as a duplicate runtime. |
+| `react`, `react-dom`            | `^19.2.8` peer | MIT        | Provided by the host (`keiko-ui` ships React 19.2.8). Declared as **peer** dependencies so React is never bundled as a duplicate runtime. |
 
 Notes:
 
@@ -410,23 +400,23 @@ Notes:
   local package before first mount so `@monaco-editor/react`'s default CDN loader is never used.
 - **Loader pin.** `@monaco-editor/loader` is pinned through a root `overrides` entry; `npm ci`
   enforces SHA-512 lockfile integrity for every Monaco artifact, and the resolved `monaco-editor`
-  version is `0.55.1`.
+  version is `0.56.0`.
 - **Maintenance / bus-factor.** `@monaco-editor/react` and `@monaco-editor/loader` are
   community-maintained packages with a small maintainer base. The pinned versions, the lockfile
   integrity hashes, the SBOM + license gate (`npm run check:workspace-supply-chain`), and the
   no-CDN policy are the controls that bound this supply-chain exposure (blueprint §12, risk R1).
 - **Known advisory — resolved for the host mount via a patched override (#1196); runtime sink stays
-  closed.** `monaco-editor@0.55.1` declares `dompurify@3.2.7` as an npm dependency, which carries a set
+  closed.** `monaco-editor@0.56.0` declares `dompurify@3.2.7` as an npm dependency, which carries a set
   of **moderate** DOMPurify advisories (`npm audit` reports several distinct XSS / mutation-XSS /
   prototype-pollution items affecting `<= 3.4.10`), all rated moderate (0 high/critical). #1193 deferred
   any change before the host runtime path existed because the only `npm audit fix` was a semver-major
   downgrade. #1196 mounts the editor in `keiko-ui`, so the chain
   `keiko-ui → keiko-editor → monaco-editor → dompurify` now enters keiko-ui's audit closure and the
   `ui` CI job's `npm audit --audit-level=moderate --workspace @oscharko-dev/keiko-ui` gate fails. The
-  resolution is a root `overrides: { dompurify: "3.4.12" }` entry:
-  - **Patched version, not a silencing pin.** `3.4.12` is the fixed DOMPurify line (the advisories
+  resolution is a root `overrides: { dompurify: "3.4.13" }` entry:
+  - **Patched version, not a silencing pin.** `3.4.13` is the fixed DOMPurify line (the advisories
     affect `<= 3.4.10`), so the override removes the vulnerable package from the installed npm tree
-    rather than masking the warning. `monaco-editor` stays pinned at the ADR-0042-mandated `0.55.1`;
+    rather than masking the warning. `monaco-editor` stays pinned at the ADR-0042-mandated `0.56.0`;
     `npm audit`'s own `fixAvailable` (a `0.53.0` downgrade) is still **not** taken.
   - **Runtime rendering independently constrained.** Monaco still bundles a **vendored** DOMPurify copy
     (`esm/vs/base/browser/dompurify/dompurify.js`) that the override does not replace; that copy is

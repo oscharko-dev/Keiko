@@ -19,6 +19,11 @@ function trackBasicLanguageImport(languageId: string): Record<string, never> {
   basicLanguageImports.add(languageId);
   return {};
 }
+const editorFeatureImports = new Set<string>();
+function trackEditorFeatureImport(featureId: string): Record<string, never> {
+  editorFeatureImports.add(featureId);
+  return {};
+}
 const optionalLanguageImports = new Set<string>();
 function trackOptionalLanguageImport(languageId: string): Record<string, never> {
   optionalLanguageImports.add(languageId);
@@ -26,41 +31,53 @@ function trackOptionalLanguageImport(languageId: string): Record<string, never> 
 }
 
 vi.mock("@monaco-editor/react", () => ({ loader: { config } }));
-vi.mock("monaco-editor/esm/vs/editor/editor.api.js", () => ({
+vi.mock("monaco-editor/editor/editor.api.js", () => ({
   editor: {},
   languages: {
     getLanguages,
     register: registerLanguage,
   },
 }));
-vi.mock("monaco-editor/esm/vs/basic-languages/go/go.contribution.js", () =>
+vi.mock("monaco-editor/features/find/register.js", () => trackEditorFeatureImport("find"));
+vi.mock("monaco-editor/features/hover/register.js", () => trackEditorFeatureImport("hover"));
+vi.mock("monaco-editor/features/inlineCompletions/register.js", () =>
+  trackEditorFeatureImport("inlineCompletions"),
+);
+vi.mock("monaco-editor/features/quickCommand/register.js", () =>
+  trackEditorFeatureImport("quickCommand"),
+);
+vi.mock("monaco-editor/features/quickHelp/register.js", () =>
+  trackEditorFeatureImport("quickHelp"),
+);
+vi.mock("monaco-editor/features/suggest/register.js", () => trackEditorFeatureImport("suggest"));
+vi.mock("monaco-editor/languages/definitions/go/register.js", () =>
   trackOptionalLanguageImport("go"),
 );
-vi.mock("monaco-editor/esm/vs/basic-languages/java/java.contribution.js", () =>
+vi.mock("monaco-editor/languages/definitions/java/register.js", () =>
   trackOptionalLanguageImport("java"),
 );
-vi.mock("monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js", () => ({}));
-vi.mock("monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution.js", () => ({}));
-vi.mock("monaco-editor/esm/vs/basic-languages/python/python.contribution.js", () => ({}));
-vi.mock("monaco-editor/esm/vs/basic-languages/rust/rust.contribution.js", () => ({}));
-vi.mock("monaco-editor/esm/vs/basic-languages/shell/shell.contribution.js", () =>
+vi.mock("monaco-editor/languages/definitions/javascript/register.js", () => ({}));
+vi.mock("monaco-editor/languages/definitions/markdown/register.js", () => ({}));
+vi.mock("monaco-editor/languages/definitions/python/register.js", () => ({}));
+vi.mock("monaco-editor/languages/definitions/rust/register.js", () => ({}));
+vi.mock("monaco-editor/languages/definitions/shell/register.js", () =>
   trackOptionalLanguageImport("shell"),
 );
-vi.mock("monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js", () =>
+vi.mock("monaco-editor/languages/definitions/sql/register.js", () =>
   trackOptionalLanguageImport("sql"),
 );
-vi.mock("monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js", () => ({}));
-vi.mock("monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js", () => ({}));
-vi.mock("monaco-editor/esm/vs/basic-languages/css/css.contribution.js", () =>
+vi.mock("monaco-editor/languages/definitions/typescript/register.js", () => ({}));
+vi.mock("monaco-editor/languages/definitions/yaml/register.js", () => ({}));
+vi.mock("monaco-editor/languages/definitions/css/register.js", () =>
   trackBasicLanguageImport("css"),
 );
-vi.mock("monaco-editor/esm/vs/basic-languages/scss/scss.contribution.js", () =>
+vi.mock("monaco-editor/languages/definitions/scss/register.js", () =>
   trackBasicLanguageImport("scss"),
 );
-vi.mock("monaco-editor/esm/vs/basic-languages/less/less.contribution.js", () =>
+vi.mock("monaco-editor/languages/definitions/less/register.js", () =>
   trackBasicLanguageImport("less"),
 );
-vi.mock("monaco-editor/esm/vs/basic-languages/html/html.contribution.js", () =>
+vi.mock("monaco-editor/languages/definitions/html/register.js", () =>
   trackBasicLanguageImport("html"),
 );
 vi.mock("monaco-editor/esm/vs/language/css/monaco.contribution.js", () => ({}));
@@ -135,6 +152,13 @@ describe("ensureMonacoRuntime", () => {
     expect(basicLanguageImports.has("scss")).toBe(true);
     expect(basicLanguageImports.has("less")).toBe(true);
     expect(basicLanguageImports.has("html")).toBe(true);
+  });
+
+  it("registers the standalone editor UX features used by smoke coverage", async () => {
+    await import("./editorMonacoRuntime");
+    expect(editorFeatureImports).toEqual(
+      new Set(["find", "hover", "inlineCompletions", "quickCommand", "quickHelp", "suggest"]),
+    );
   });
 
   it("keeps rare Monaco language contributions out of the eager editor runtime chunk", async () => {

@@ -190,10 +190,12 @@ describe("registerConflictBridge", () => {
 
     expect(harness.onChange).toHaveBeenCalledWith(1, false);
     harness.bridge.next();
-    expect(harness.editor.setPosition).toHaveBeenLastCalledWith({
-      lineNumber: firstPosition.lineNumber + 3,
-      column: 1,
-    });
+    expect(harness.editor.setPosition.mock.calls.at(-1)).toEqual([
+      {
+        lineNumber: firstPosition.lineNumber + 3,
+        column: 1,
+      },
+    ]);
     harness.bridge.dispose();
   });
 

@@ -15,20 +15,29 @@
  * the loader at the locally installed Monaco — the no-CDN invariant (ADR-0042 D3).
  */
 import { loader } from "@monaco-editor/react";
-import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
-import "monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/python/python.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/rust/rust.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js";
+import * as monaco from "monaco-editor/editor/editor.api.js";
+// Register only the standalone editor UX features Keiko exposes in smoke coverage. Avoid
+// Monaco's broad feature/language `register.all` entrypoints so rich language services stay out
+// of the static export under ADR-0042 D3.6.
+import "monaco-editor/features/find/register.js";
+import "monaco-editor/features/hover/register.js";
+import "monaco-editor/features/inlineCompletions/register.js";
+import "monaco-editor/features/quickCommand/register.js";
+import "monaco-editor/features/quickHelp/register.js";
+import "monaco-editor/features/suggest/register.js";
+import "monaco-editor/languages/definitions/javascript/register.js";
+import "monaco-editor/languages/definitions/markdown/register.js";
+import "monaco-editor/languages/definitions/python/register.js";
+import "monaco-editor/languages/definitions/rust/register.js";
+import "monaco-editor/languages/definitions/typescript/register.js";
+import "monaco-editor/languages/definitions/yaml/register.js";
 // Register language ids + Monarch grammars without importing Monaco's rich language-service
 // contributions. Those contributions pull TS/JSON/CSS/HTML worker chunks into the static export;
 // Keiko's governed language intelligence and formatting stay host/server-owned under ADR-0042 D3.6.
-import "monaco-editor/esm/vs/basic-languages/css/css.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/scss/scss.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/less/less.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/html/html.contribution.js";
+import "monaco-editor/languages/definitions/css/register.js";
+import "monaco-editor/languages/definitions/scss/register.js";
+import "monaco-editor/languages/definitions/less/register.js";
+import "monaco-editor/languages/definitions/html/register.js";
 import {
   configureMonacoLoader,
   createMonacoEnvironment,
@@ -43,10 +52,10 @@ import {
 let runtimeConfigured = false;
 
 const optionalLanguageLoaders = {
-  go: () => import("monaco-editor/esm/vs/basic-languages/go/go.contribution.js"),
-  java: () => import("monaco-editor/esm/vs/basic-languages/java/java.contribution.js"),
-  shell: () => import("monaco-editor/esm/vs/basic-languages/shell/shell.contribution.js"),
-  sql: () => import("monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js"),
+  go: () => import("monaco-editor/languages/definitions/go/register.js"),
+  java: () => import("monaco-editor/languages/definitions/java/register.js"),
+  shell: () => import("monaco-editor/languages/definitions/shell/register.js"),
+  sql: () => import("monaco-editor/languages/definitions/sql/register.js"),
 } as const;
 
 type OptionalMonacoLanguage = keyof typeof optionalLanguageLoaders;
