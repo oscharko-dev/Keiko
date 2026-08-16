@@ -42,13 +42,7 @@ import {
   searchFiles,
   writeFilesContent,
 } from "./index.js";
-import {
-  normalizeRelativePath,
-  resolveRoot,
-  setFileWriteCriticalSectionBarrierForTests,
-  setFileWriteQueueObserverForTests,
-  classifyInLockRefreshFailure,
-} from "./files.js";
+import { normalizeRelativePath, resolveRoot, classifyInLockRefreshFailure } from "./files.js";
 import type { RouteContext, UiHandlerDeps } from "./index.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { createBreakpointStore } from "./editor/dap/breakpointStore.js";
@@ -88,6 +82,17 @@ const PNG_1X1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/ax6XK0AAAAASUVORK5CYII=",
   "base64",
 );
+
+// Drives real filesystem round-trips on `path`, draining the event loop between them. A stat()
+// submitted before the first of these has certainly completed by the last — used to give an
+// unserialized contender every chance to reach its conflict check, so that the serialization
+// assertion below fails loudly when the lock is removed. Bounded work, no wall-clock threshold.
+async function settleFileSystemTurns(path: string, rounds = 5): Promise<void> {
+  for (let round = 0; round < rounds; round += 1) {
+    await stat(path);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
 
 describe("desktop files browser", () => {
   let root: string;
@@ -693,24 +698,27 @@ describe("desktop files browser", () => {
   // baseVersion could both clear assertNoWriteConflict before either wrote, and the second silently
   // overwrote the first with no STALE_SESSION for the loser — a lost update with no signal.
   //
-  // Deterministic by construction: the first writer is held inside the critical section at the
-  // barrier seam, the second is only started once that hold is observed, so it provably queues on
-  // the same key. No wall-clock, no scheduler assumptions.
-  it("lets exactly one of two concurrent same-baseVersion saves win", async () => {
+  // The assertion is serialization itself, not just its outcome: the first writer is parked AFTER its
+  // conflict check and BEFORE its write, and the contender must not be able to pass its own conflict
+  // check while that hold lasts. `runExclusive` installs its release gate synchronously, before its
+  // first await, so once `onQueued` has fired the contender is provably queued on the key — nothing
+  // here depends on the scheduler. `settleFileSystemTurns` then drives real filesystem round-trips on
+  // the same path so the contender's own earlier-submitted stat() has certainly completed; an
+  // unserialized contender would have reached its conflict check by then and tripped the flag.
+  //
+  // The outcome assertions below are a second, independent detector: with serialization removed both
+  // saves clear their checks against the pre-write snapshot and both succeed, which is the lost update.
+  it("holds a contending save out of the critical section until the holder's write completes", async () => {
     const initial = await readFilesContent(store, root, "src/app.ts");
-    let releaseHolder: (() => void) | undefined;
-    const holderInside = new Promise<void>((resolveInside) => {
-      const held = new Promise<void>((releaseIt) => {
-        releaseHolder = (): void => {
-          releaseIt();
-        };
-      });
-      setFileWriteCriticalSectionBarrierForTests(async () => {
-        // Only the first holder is gated; later holders pass straight through.
-        setFileWriteCriticalSectionBarrierForTests(undefined);
-        resolveInside();
-        await held;
-      });
+    let releaseHolder!: () => void;
+    const held = new Promise<void>((releaseIt) => {
+      releaseHolder = (): void => {
+        releaseIt();
+      };
+    });
+    let holderParked!: () => void;
+    const holderInside = new Promise<void>((parked) => {
+      holderParked = parked;
     });
 
     const first = writeFilesContent({
@@ -719,32 +727,43 @@ describe("desktop files browser", () => {
       pathInput: "src/app.ts",
       content: 'export const value = "first";\n',
       baseVersion: initial.session.version,
+      testControl: {
+        afterConflictCheck: async (): Promise<void> => {
+          holderParked();
+          await held;
+        },
+      },
     });
     await holderInside;
 
-    // Wait for the contender to actually REACH the lock, not merely for an event-loop turn: it
-    // still has async realpath/lstat/stat work to finish first, and releasing before it queues
-    // would let this test pass with serialization removed.
-    const secondQueued = new Promise<void>((queued) => {
-      setFileWriteQueueObserverForTests(() => {
-        setFileWriteQueueObserverForTests(undefined);
-        queued();
-      });
+    let contenderQueued!: () => void;
+    const queued = new Promise<void>((resolveQueued) => {
+      contenderQueued = resolveQueued;
     });
+    let contenderPassedCheckWhileHeld = false;
+    let holderStillParked = true;
     const second = writeFilesContent({
       store,
       rootInput: root,
       pathInput: "src/app.ts",
       content: 'export const value = "second";\n',
       baseVersion: initial.session.version,
+      testControl: {
+        onQueued: contenderQueued,
+        afterConflictCheck: (): void => {
+          if (holderStillParked) contenderPassedCheckWhileHeld = true;
+        },
+      },
     });
-    await secondQueued;
-    releaseHolder?.();
+    await queued;
+    await settleFileSystemTurns(join(root, "src/app.ts"));
+
+    expect(contenderPassedCheckWhileHeld).toBe(false);
+
+    holderStillParked = false;
+    releaseHolder();
 
     const results = await Promise.allSettled([first, second]);
-    setFileWriteCriticalSectionBarrierForTests(undefined);
-    setFileWriteQueueObserverForTests(undefined);
-
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     const rejected = results.filter((r) => r.status === "rejected");
     expect(rejected).toHaveLength(1);

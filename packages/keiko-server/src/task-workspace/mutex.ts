@@ -49,22 +49,35 @@ export function provisionKey(repositoryId: string, taskId: string): string {
 
 // A single edited file. The plain file-save route's optimistic-concurrency check is a
 // check-then-act (KEIKO-0495): two saves carrying the same baseVersion could both pass
-// verification and the second silently overwrite the first. Keyed by resolved real path so two
-// routes reaching the same inode serialize even via different request paths. Lowest tier — a
-// file write takes exactly one key, so it can never participate in a multi-key deadlock.
-export function fileWriteKey(realPath: string): string {
-  // Keyed by the canonicalized PATH, deliberately not by dev+ino. The write replaces the target by
-  // atomic rename, so the inode changes on every single save: an inode key would let a second
-  // request that resolves mid-rename derive a different key and enter the "critical" section
-  // concurrently — the exact race this lock exists to prevent, on the common path rather than an
-  // exotic one. The path is stable across the replacement.
-  //
-  // comparablePath is the same rule containsPath uses to decide "same file", so the lock agrees
-  // with containment. It is case- and NFC/NFD-insensitive on darwin and win32 and byte-exact
-  // elsewhere. It is not full Unicode case folding (Greek final sigma folds to itself), so a
-  // pathological alias pair can still split; that residual is tracked on #2901 and is strictly
-  // narrower than the every-write breakage an inode key would cause.
-  return `file:${comparablePath(realPath)}`;
+// verification and the second silently overwrite the first. Lowest tier — every key a file write
+// takes sits in this one tier, so it can never participate in a multi-key deadlock.
+//
+// Keyed by the canonicalized PATH, deliberately not by dev+ino. The write replaces the target by
+// atomic rename, so the inode changes on every single save: an inode key would let a second request
+// that resolves mid-rename derive a different key and enter the "critical" section concurrently —
+// the exact race this lock exists to prevent, on the common path rather than an exotic one. The
+// path is stable across the replacement.
+//
+// comparablePath is the same rule containsPath uses to decide "same file", so the exact key agrees
+// with containment. But it is NFC + lowercase, not full Unicode case folding, and lowercasing
+// SPLITS alias classes a case-insensitive filesystem merges: "ς" and "Σ" lowercase to different
+// characters. Two saves spelled that way would take different keys and both enter the section.
+//
+// The second key closes that. Uppercasing collapses every class lowercasing splits ("ς"/"σ"/"Σ" all
+// uppercase to "Σ"), so it is a strictly coarser partition. For a lock key that asymmetry is exactly
+// the right direction: collapsing too much only serializes two saves that did not need it, while
+// collapsing too little lets a real race through. Both keys are taken together, so the lock is at
+// least as strong as either alone.
+//
+// Case-insensitive platforms only. On a byte-exact filesystem "a.txt" and "A.txt" are genuinely
+// different files, and the alias net would merge their save queues for nothing.
+const CASE_INSENSITIVE_FILESYSTEM = process.platform === "darwin" || process.platform === "win32";
+
+export function fileWriteKeys(realPath: string): readonly string[] {
+  const comparable = comparablePath(realPath);
+  const exact = `file:${comparable}`;
+  if (!CASE_INSENSITIVE_FILESYSTEM) return [exact];
+  return [exact, `file-alias:${comparable.toUpperCase()}`];
 }
 
 function keyTier(key: string): number {
@@ -73,6 +86,7 @@ function keyTier(key: string): number {
   if (key.startsWith("repo:")) return 2;
   if (key.startsWith("prov:")) return 3;
   if (key.startsWith("file:")) return 4;
+  if (key.startsWith("file-alias:")) return 4;
   return 5;
 }
 

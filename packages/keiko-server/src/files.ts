@@ -3,7 +3,7 @@
 // realpath resolution.
 
 import type { IncomingMessage } from "node:http";
-import { createWorkspaceMutexRegistry, fileWriteKey } from "./task-workspace/mutex.js";
+import { createWorkspaceMutexRegistry, fileWriteKeys } from "./task-workspace/mutex.js";
 
 // One registry per server process: same-process turn order for the verify→write region below
 // (KEIKO-0495). It composes with, never replaces, the persisted advisory WorkspaceLock.
@@ -1668,28 +1668,18 @@ export function classifyInLockRefreshFailure(error: unknown): FilesError {
   return code === "ENOENT" || code === "ENOTDIR" ? stalePathError() : mapNodeFsError(error);
 }
 
-// Test seam for the KEIKO-0495 critical section. Awaited once per holder immediately after the
-// in-lock re-stat and before the conflict check, which is the exact point a concurrency test needs
-// to hold a writer while another queues behind it on the same key. Undefined in production, so the
-// region is byte-identical there; a hook that throws is the caller's own failure and propagates.
-let fileWriteCriticalSectionBarrier: (() => Promise<void>) | undefined;
-
-/** Installs (or clears with `undefined`) the critical-section barrier. Tests only. */
-export function setFileWriteCriticalSectionBarrierForTests(
-  barrier: (() => Promise<void>) | undefined,
-): void {
-  fileWriteCriticalSectionBarrier = barrier;
-}
-
-// Fires immediately BEFORE a writer calls runExclusive, i.e. the moment it is about to queue on
-// its key. A concurrency test needs this to know the contender has finished its async
-// realpath/lstat/stat work and actually reached the lock — yielding an event-loop turn does not
-// prove that, so a test relying on one can pass with serialization removed.
-let fileWriteQueueObserver: (() => void) | undefined;
-
-/** Installs (or clears with `undefined`) the queue-entry observer. Tests only. */
-export function setFileWriteQueueObserverForTests(observer: (() => void) | undefined): void {
-  fileWriteQueueObserver = observer;
+/**
+ * Per-operation test hooks for the KEIKO-0495 critical section. Passed with the save it belongs to,
+ * never held in module state: a module-level slot survives a failed or timed-out test and can then
+ * stall or misroute an unrelated save in the same worker.
+ *
+ * `onQueued` fires immediately before the writer queues on its key; `afterConflictCheck` is awaited
+ * right after the conflict check and before the write, which is where a concurrency test needs to
+ * hold a writer. Both are undefined in production.
+ */
+export interface FileWriteTestControl {
+  readonly onQueued?: (() => void) | undefined;
+  readonly afterConflictCheck?: (() => Promise<void> | void) | undefined;
 }
 
 // The serialized verify->write critical section (KEIKO-0495). Extracted so
@@ -1702,6 +1692,7 @@ async function verifyThenWrite(args: {
   readonly beforeWrite?:
     | ((content: string) => NonNullable<FilesContentWireResponse["localHistoryProtection"]>)
     | undefined;
+  readonly testControl?: FileWriteTestControl | undefined;
 }): Promise<{
   readonly localHistoryProtection: FilesContentWireResponse["localHistoryProtection"];
   readonly updatedStats: Stats;
@@ -1730,10 +1721,8 @@ async function verifyThenWrite(args: {
   // the right side of that trade: a recoverable STALE_PATH beats a silent clobber. Telling
   // "replaced by a previous holder of this key" apart from "replaced by a stranger" needs per-key
   // identity tracking; tracked as follow-up on #2901.
-  if (fileWriteCriticalSectionBarrier !== undefined) {
-    await fileWriteCriticalSectionBarrier();
-  }
   await assertNoWriteConflict(refreshed, args.baseVersion, args.expectedModifiedAt);
+  await args.testControl?.afterConflictCheck?.();
   let protection: FilesContentWireResponse["localHistoryProtection"];
   if (args.beforeWrite !== undefined) {
     const current = await readStableEditableContent(args.target);
@@ -1747,6 +1736,7 @@ async function verifyThenWrite(args: {
 
 async function writeResolvedFilesContent(args: {
   readonly target: ResolvedTarget;
+  readonly testControl?: FileWriteTestControl | undefined;
   readonly content: string;
   readonly expectedModifiedAt?: number | undefined;
   readonly baseVersion?: EditorDocumentVersion | undefined;
@@ -1775,9 +1765,9 @@ async function writeResolvedFilesContent(args: {
   // loser re-verify against the winner's result and fail closed as it should. This REUSES the
   // shared WorkspaceMutexRegistry rather than introducing a second locking mechanism; the existing
   // conflict checks are untouched and still do the deciding.
-  fileWriteQueueObserver?.();
+  args.testControl?.onQueued?.();
   const { localHistoryProtection, updatedStats } = await fileWriteMutex.runExclusive(
-    [fileWriteKey(args.target.path)],
+    fileWriteKeys(args.target.path),
     () => verifyThenWrite(args),
   );
   return {
@@ -1793,6 +1783,7 @@ async function writeResolvedFilesContent(args: {
 
 export async function writeFilesContent(args: {
   readonly store: UiStore;
+  readonly testControl?: FileWriteTestControl | undefined;
   readonly rootInput: string | null;
   readonly pathInput: string | null;
   readonly content: string;
@@ -1813,6 +1804,7 @@ export async function writeFilesContent(args: {
     content: args.content,
     expectedModifiedAt: args.expectedModifiedAt,
     baseVersion: args.baseVersion,
+    testControl: args.testControl,
   });
 }
 
