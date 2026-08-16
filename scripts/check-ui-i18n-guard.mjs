@@ -719,6 +719,33 @@ function jsxAttributeExpressionResults(node, sourceFile) {
   return [];
 }
 
+// KEIKO-0299 (review-follow-up on 23447289, codex 3793028208): a JSX spread attribute
+// `<button {...{ "aria-label": "Delete account" }} />` reaches the element as a
+// `JsxSpreadAttribute` node — the visitor never called `jsxAttributeExpressionResults` on it,
+// and the per-line fallback doesn't recognise the quoted-key colon syntax inside an object
+// literal. When the spread's expression is an inline object literal, inspect its properties
+// against the same user-facing name set so a spread rendering an accessible label enters the
+// ledger. Non-inline spreads (`<button {...restProps} />`) stay ignored.
+function jsxSpreadAttributeResults(node, sourceFile) {
+  if (!ts.isObjectLiteralExpression(node.expression)) return [];
+  const results = [];
+  for (const prop of node.expression.properties) {
+    if (!ts.isPropertyAssignment(prop)) continue;
+    const key = objectPropertyKey(prop.name);
+    if (key === null || !USER_FACING_ATTRIBUTE_NAMES.has(key)) continue;
+    for (const entry of jsxChildExpressionLiteralTexts(prop.initializer, sourceFile)) {
+      if (entry.text.length > 0) results.push(entry);
+    }
+  }
+  return results;
+}
+
+function objectPropertyKey(name) {
+  if (ts.isIdentifier(name)) return name.text;
+  if (ts.isStringLiteral(name) || ts.isNoSubstitutionTemplateLiteral(name)) return name.text;
+  return null;
+}
+
 function collectJsxTextAndExpressions(source, filename) {
   const kind = scriptKindForFile(filename);
   const syntheticExtension = kind === ts.ScriptKind.TSX ? "tsx" : "ts";
@@ -733,6 +760,8 @@ function collectJsxTextAndExpressions(source, filename) {
       results.push(...jsxChildExpressionResults(node, sourceFile));
     } else if (ts.isJsxAttribute(node)) {
       results.push(...jsxAttributeExpressionResults(node, sourceFile));
+    } else if (ts.isJsxSpreadAttribute(node)) {
+      results.push(...jsxSpreadAttributeResults(node, sourceFile));
     }
     ts.forEachChild(node, visit);
   };
@@ -768,9 +797,19 @@ function jsxChildExpressionLiteralTexts(expr, sourceFile) {
   if (ts.isBinaryExpression(expr) && isRenderingFallbackOperator(expr.operatorToken.kind)) {
     return binaryFallbackLiteralTexts(expr, sourceFile);
   }
-  // Unwrap `( ... )` so nested conditionals whose branches carry a parenthesised inner
-  // conditional — e.g. `{a ? (b ? "One" : "Two") : "Three"}` — still surface each literal.
-  if (ts.isParenthesizedExpression(expr)) {
+  // Unwrap transparent expression wrappers (codex 3793028199 on #3202): the following AST
+  // shapes wrap an inner expression WITHOUT affecting its runtime value, so a literal wrapped
+  // in any of them still renders as user copy but was invisible to the recursion.
+  //   ParenthesizedExpression: `(...)`  (e.g. `{a ? (b ? "One" : "Two") : "Three"}`)
+  //   AsExpression:            `x as T` (e.g. `<p>{"Delete account" as const}</p>`)
+  //   SatisfiesExpression:     `x satisfies T`
+  //   NonNullExpression:       `x!`
+  if (
+    ts.isParenthesizedExpression(expr) ||
+    ts.isAsExpression(expr) ||
+    ts.isSatisfiesExpression(expr) ||
+    ts.isNonNullExpression(expr)
+  ) {
     return jsxChildExpressionLiteralTexts(expr.expression, sourceFile);
   }
   // KEIKO-0299 (review-follow-up on 4d7d131a): a helper call that returns one of its arguments

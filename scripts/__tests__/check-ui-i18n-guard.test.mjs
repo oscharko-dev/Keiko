@@ -1360,6 +1360,65 @@ test("still ignores directly quoted values on non-user-facing camelCase props", 
   ).toEqual([]);
 });
 
+// KEIKO-0299 (review-follow-up on 23447289, codex 3793028199): transparent TypeScript
+// wrappers (AsExpression, SatisfiesExpression, NonNullExpression) don't change runtime value,
+// so a literal wrapped in them still renders as user copy. Recursion must unwrap them.
+test("unwraps `as const` / `as string` around a rendered literal", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{"Delete account" as const}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Delete account");
+});
+
+test("unwraps `satisfies` and `!` around a rendered literal", () => {
+  for (const src of [
+    '<p>{"Delete account" satisfies string}</p>',
+    '<p>{("Delete account" as string | undefined)!}</p>',
+  ]) {
+    const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+    expect(texts).toContain("Delete account");
+  }
+});
+
+test("unwraps `as` inside a user-facing attribute expression", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<button aria-label={"Copy code block" as const}>x</button>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Copy code block");
+});
+
+// KEIKO-0299 (review-follow-up on 23447289, codex 3793028208): a JSX spread attribute
+// `<button {...{ "aria-label": "…" }} />` reaches the element as JsxSpreadAttribute. When the
+// spread expression is an inline ObjectLiteral, inspect its properties against the same
+// user-facing name set so a spread rendering an accessible label enters the ledger.
+test("collects user-facing literals in inline JSX spread attributes", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<button {...{ "aria-label": "Delete account", label: "Delete" }} />',
+    "packages/x/y.tsx",
+  )
+    .findings.map((f) => f.text)
+    .sort();
+  expect(texts).toContain("Delete account");
+  expect(texts).toContain("Delete");
+});
+
+test("still ignores non-user-facing keys in JSX spread attributes", () => {
+  expect(
+    untranslatedLiteralsInSource(
+      '<button {...{ testId: "Test button", className: "Primary large" }} />',
+      "packages/x/y.tsx",
+    ).findings,
+  ).toEqual([]);
+});
+
+test("still ignores non-inline JSX spreads (dynamic props object)", () => {
+  expect(
+    untranslatedLiteralsInSource("<button {...restProps} />", "packages/x/y.tsx").findings,
+  ).toEqual([]);
+});
+
 // KEIKO-0299 (review-follow-up on af74e79b): a JSX child like `{"Welcome back, " + name}`
 // renders the concatenation as user copy — the literal on either operand IS user-visible and
 // must enter the ledger. Codex 3792890969.

@@ -141,9 +141,13 @@ function malformedRequest(overrides = {}) {
   return Buffer.concat([frame, options.trailing]);
 }
 
-// The helper's own limits (see native/secure-workspace-read/secure_workspace_read.c: KSR_MAX_ROOT
-// = 32 KiB, KSR_MAX_PATH = 4 KiB). Duplicated at the harness's trust boundary rather than
-// imported, because the point of pinning them here is to catch the C constant silently drifting.
+// The helper's own limits. Codex 3792928019/3793028202 on #3202: the earlier form only had
+// over-cap probes (`limit + 1` → status 1). If the C constant were lowered, an over-cap probe
+// stayed over-cap and the assertion still passed — silent drift. The at-boundary probes below
+// (in `assertBoundaryProbes`) send the exact `limit` value and expect a NON-malformed status;
+// if the C constant drops, the at-boundary case becomes over-cap and the assertion trips. So
+// the pair (`limit` accepted + `limit + 1` rejected) actually pins the boundary, not the
+// harness-side value in isolation.
 const HARNESS_KSR_MAX_ROOT = 32 * 1024;
 const HARNESS_KSR_MAX_PATH = 4 * 1024;
 
@@ -325,9 +329,21 @@ const PREPROCESSOR_PATTERNS = {
 // Codex 3792986617 on #3202: the previous single-flag model lost track of the outer ladder
 // after `#elif 1` set stripping=false, so the subsequent dead `#else` body was copied into the
 // scan and its tokens could satisfy positive pins.
-const STRIPPING_PRE_LIVE = "stripping_pre_live";
-const KEEPING_LIVE = "keeping_live";
-const STRIPPING_POST_LIVE = "stripping_post_live";
+// Frame mode: STRIPPING drops the branch body, KEEPING keeps it. Two flags per frame track
+// what the compiler MUST have picked so far (codex 3793028195 on #3202):
+//   `sawDefinitiveLive` — a preceding branch was DEFINITIVELY live (`#elif 1` or `#else`
+//     reached after only `#if 0` / `#elif 0` predecessors). Every subsequent branch is dead.
+//   `sawUnknownLive` — a preceding branch was POTENTIALLY live (`#elif FEATURE`). Subsequent
+//     branches may also be live (the ladder does not know which the compiler picked), so a
+//     later `#else` or `#elif 1` is treated as maybe-live, NOT as definitively live.
+// This replaces the earlier PRE_LIVE / KEEPING_LIVE / POST_LIVE enum, which incorrectly moved
+// an unknown `#elif` to KEEPING_LIVE and then stripped the following `#else` — the reviewer's
+// evidence was `#if 0 ... #elif FEATURE ... #else FORBIDDEN_CONTROL ... #endif`, where the
+// old scanner dropped `FORBIDDEN_CONTROL` on the floor because it thought `#elif FEATURE`
+// was the picked branch.
+const STRIPPING = "stripping";
+const KEEPING = "keeping";
+const DEFINITIVELY_TRUE_ELIF = /^#\s*elif\s+\(?\s*1[UuLl]{0,3}\s*\)?\s*$/u;
 
 // Stack-based ladder state (coderabbit 3793025299 on #3202): the previous single-frame model
 // only entered stripping mode on `#if 0` at the OUTSIDE level, so a nested `#if 0` inside a live
@@ -350,7 +366,7 @@ function processLadderLine(line, stack, kept) {
   const p = PREPROCESSOR_PATTERNS;
   const trimmed = line.trimStart();
   if (p.DISABLED_IF.test(trimmed)) {
-    stack.push({ mode: STRIPPING_PRE_LIVE, depth: 0 });
+    stack.push({ mode: STRIPPING, sawDefLive: false, sawUnkLive: false, depth: 0 });
     return;
   }
   if (stack.length === 0) {
@@ -368,7 +384,7 @@ function processLadderLine(line, stack, kept) {
     return;
   }
   if (frame.depth > 0) {
-    if (frame.mode === KEEPING_LIVE) kept.push(line);
+    if (frame.mode === KEEPING) kept.push(line);
     return;
   }
   handleOuterDirectiveOrLine(line, trimmed, frame, kept);
@@ -377,20 +393,49 @@ function processLadderLine(line, stack, kept) {
 function handleOuterDirectiveOrLine(line, trimmed, frame, kept) {
   const p = PREPROCESSOR_PATTERNS;
   if (p.ELSE_DIRECTIVE.test(trimmed)) {
-    frame.mode = frame.mode === STRIPPING_PRE_LIVE ? KEEPING_LIVE : STRIPPING_POST_LIVE;
+    applyElseTransition(frame);
     return;
   }
   if (p.ELIF_DIRECTIVE.test(trimmed)) {
-    frame.mode = elifTransition(frame.mode, p.DISABLED_ELIF.test(trimmed));
+    applyElifTransition(trimmed, frame);
     return;
   }
-  if (frame.mode === KEEPING_LIVE) kept.push(line);
+  if (frame.mode === KEEPING) kept.push(line);
 }
 
-function elifTransition(mode, isDisabled) {
-  if (mode !== STRIPPING_PRE_LIVE) return STRIPPING_POST_LIVE;
-  if (isDisabled) return STRIPPING_PRE_LIVE;
-  return KEEPING_LIVE;
+function applyElseTransition(frame) {
+  if (frame.sawDefLive) {
+    frame.mode = STRIPPING;
+    return;
+  }
+  // `#else` is the fallback; it is DEFINITIVELY live only if no potentially-live branch was
+  // seen before it. Otherwise it may or may not be live — keep it, but do NOT mark the ladder
+  // as having a definitive pick (so a later `#elif`/`#else` doesn't get stripped either).
+  frame.mode = KEEPING;
+  frame.sawDefLive = !frame.sawUnkLive;
+}
+
+function applyElifTransition(trimmed, frame) {
+  const p = PREPROCESSOR_PATTERNS;
+  if (frame.sawDefLive) {
+    frame.mode = STRIPPING;
+    return;
+  }
+  if (p.DISABLED_ELIF.test(trimmed)) {
+    // The branch itself is deterministically false. Its body is dead; the flags stay the same
+    // so subsequent branches still have the correct "potentially live" context.
+    frame.mode = STRIPPING;
+    return;
+  }
+  frame.mode = KEEPING;
+  if (DEFINITIVELY_TRUE_ELIF.test(trimmed)) {
+    // `#elif 1` — definitively live IFF no earlier branch was potentially live.
+    frame.sawDefLive = !frame.sawUnkLive;
+  } else {
+    // `#elif <unknown>` — treat this branch as potentially live; subsequent branches may
+    // ALSO be potentially live because we don't know which the preprocessor picks.
+    frame.sawUnkLive = true;
+  }
 }
 
 // Skip a C string literal starting at the opening `"` (index i). Returns the index of the byte
@@ -1014,6 +1059,37 @@ async function assertProtocolCases(binary, fixture, outside) {
   }
 
   await assertMalformedFrameGuards(binary, fixture);
+  await assertSizeCapBoundaryProbes(binary, fixture);
+}
+
+// Codex 3793028202 on #3202: the over-cap probes on their own let a smaller C constant pass
+// silently — an over-cap payload stays over-cap regardless of whether the cap is 4 KiB or
+// 2 KiB. Pair each over-cap probe with an at-cap probe that expects a NON-malformed status;
+// if the C constant drops, the at-cap payload becomes over-cap and the assertion trips. So the
+// pair (at-cap accepted + over-cap rejected) pins the boundary rather than the harness value.
+async function assertSizeCapBoundaryProbes(binary, fixture) {
+  const prefix = isWindows ? "C:\\" : "/";
+  const atCapRoot = Buffer.from(prefix + "x".repeat(HARNESS_KSR_MAX_ROOT - prefix.length), "utf8");
+  const atCapPath = Buffer.from("x".repeat(HARNESS_KSR_MAX_PATH), "utf8");
+  const cases = [
+    {
+      label: "rootLen == KSR_MAX_ROOT (at the boundary — must NOT reject as malformed)",
+      frame: malformedRequest({ rootBytes: atCapRoot, pathBytes: Buffer.from("safe.txt") }),
+    },
+    {
+      label: "pathLen == KSR_MAX_PATH (at the boundary — must NOT reject as malformed)",
+      frame: malformedRequest({ root: fixture, pathBytes: atCapPath }),
+    },
+  ];
+  for (const { label, frame } of cases) {
+    const status = response(await run(binary, frame)).status;
+    assert.notEqual(
+      status,
+      1,
+      `expected non-malformed status for at-boundary case: ${label} (got ${String(status)}). ` +
+        "If this trips after a change to KSR_MAX_ROOT/KSR_MAX_PATH, update HARNESS_KSR_MAX_ROOT/PATH to match.",
+    );
+  }
 }
 
 // KEIKO-0382: negative coverage for the frame-parser guards at the helper's trust boundary. Each

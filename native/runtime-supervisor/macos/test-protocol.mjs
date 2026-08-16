@@ -152,9 +152,13 @@ const PREPROCESSOR_PATTERNS = {
 // branch), STRIPPING_POST_LIVE (after the live branch — remaining branches are dead). The
 // previous single-flag model lost track of the outer ladder after `#elif 1` set stripping=false
 // and copied the subsequent dead `#else` body into the scan.
-const STRIPPING_PRE_LIVE = "stripping_pre_live";
-const KEEPING_LIVE = "keeping_live";
-const STRIPPING_POST_LIVE = "stripping_post_live";
+// Frame mode + flags (codex 3793028195 on #3202): `sawDefLive` marks that a DEFINITIVELY live
+// branch was already picked (all subsequent are dead). `sawUnkLive` marks that a POTENTIALLY
+// live branch was seen — subsequent branches may also be live, so `#else` after an unknown
+// `#elif FEATURE` is still kept (else could be picked if FEATURE turned out false).
+const STRIPPING = "stripping";
+const KEEPING = "keeping";
+const DEFINITIVELY_TRUE_ELIF = /^#\s*elif\s+\(?\s*1[UuLl]{0,3}\s*\)?\s*$/u;
 
 // Stack-based ladder state (coderabbit 3793025299 on #3202): every `#if 0` — top-level OR
 // nested inside a live `#elif`/`#else` branch — pushes a new `STRIPPING_PRE_LIVE` frame; every
@@ -174,7 +178,7 @@ function processLadderLine(line, stack, kept) {
   const p = PREPROCESSOR_PATTERNS;
   const trimmed = line.trimStart();
   if (p.DISABLED_IF.test(trimmed)) {
-    stack.push({ mode: STRIPPING_PRE_LIVE, depth: 0 });
+    stack.push({ mode: STRIPPING, sawDefLive: false, sawUnkLive: false, depth: 0 });
     return;
   }
   if (stack.length === 0) {
@@ -192,7 +196,7 @@ function processLadderLine(line, stack, kept) {
     return;
   }
   if (frame.depth > 0) {
-    if (frame.mode === KEEPING_LIVE) kept.push(line);
+    if (frame.mode === KEEPING) kept.push(line);
     return;
   }
   handleOuterDirectiveOrLine(line, trimmed, frame, kept);
@@ -201,20 +205,41 @@ function processLadderLine(line, stack, kept) {
 function handleOuterDirectiveOrLine(line, trimmed, frame, kept) {
   const p = PREPROCESSOR_PATTERNS;
   if (p.ELSE_DIRECTIVE.test(trimmed)) {
-    frame.mode = frame.mode === STRIPPING_PRE_LIVE ? KEEPING_LIVE : STRIPPING_POST_LIVE;
+    applyElseTransition(frame);
     return;
   }
   if (p.ELIF_DIRECTIVE.test(trimmed)) {
-    frame.mode = elifTransition(frame.mode, p.DISABLED_ELIF.test(trimmed));
+    applyElifTransition(trimmed, frame);
     return;
   }
-  if (frame.mode === KEEPING_LIVE) kept.push(line);
+  if (frame.mode === KEEPING) kept.push(line);
 }
 
-function elifTransition(mode, isDisabled) {
-  if (mode !== STRIPPING_PRE_LIVE) return STRIPPING_POST_LIVE;
-  if (isDisabled) return STRIPPING_PRE_LIVE;
-  return KEEPING_LIVE;
+function applyElseTransition(frame) {
+  if (frame.sawDefLive) {
+    frame.mode = STRIPPING;
+    return;
+  }
+  frame.mode = KEEPING;
+  frame.sawDefLive = !frame.sawUnkLive;
+}
+
+function applyElifTransition(trimmed, frame) {
+  const p = PREPROCESSOR_PATTERNS;
+  if (frame.sawDefLive) {
+    frame.mode = STRIPPING;
+    return;
+  }
+  if (p.DISABLED_ELIF.test(trimmed)) {
+    frame.mode = STRIPPING;
+    return;
+  }
+  frame.mode = KEEPING;
+  if (DEFINITIVELY_TRUE_ELIF.test(trimmed)) {
+    frame.sawDefLive = !frame.sawUnkLive;
+  } else {
+    frame.sawUnkLive = true;
+  }
 }
 
 // Strip C block and line comments in one pass, preserving string AND character literals
