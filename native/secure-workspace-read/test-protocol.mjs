@@ -563,10 +563,15 @@ function frameLengthMismatchCases(fixture, rootBytes, pathBytes) {
     // Zero-length root or path: no request the helper is meant to serve.
     { label: "declared rootLen == 0", frame: malformedRequest({ root: "", pathBytes }) },
     { label: "declared pathLen == 0", frame: malformedRequest({ root: fixture }) },
-    // Size cap breaches: proves the constants are actually enforced, not just declared.
+    // Size cap breaches: proves the constants are actually enforced, not just declared. Each
+    // root retains its platform's valid absolute-root prefix (`/` on POSIX, `<letter>:\` on
+    // Windows) so that `valid_root` would NOT reject it if the size cap were removed. A pre-
+    // fix version of this case used `"x".repeat(...)`, whose first byte `valid_root` rejects
+    // on both platforms — so the test tripped on the wrong guard and would still pass if the
+    // `root_len > KSR_MAX_ROOT` check were deleted (KEIKO-0382 review-follow-up).
     {
-      label: "rootLen > KSR_MAX_ROOT",
-      frame: malformedRequest({ root: "x".repeat(HARNESS_KSR_MAX_ROOT + 1), pathBytes }),
+      label: "rootLen > KSR_MAX_ROOT (with valid absolute prefix, so only the size cap can reject)",
+      frame: malformedRequest({ rootBytes: overCapRootBytes(), pathBytes }),
     },
     {
       label: "pathLen > KSR_MAX_PATH",
@@ -576,6 +581,16 @@ function frameLengthMismatchCases(fixture, rootBytes, pathBytes) {
       }),
     },
   ];
+}
+
+// The valid-root prefix for the over-cap root probe. Built at call time so `isWindows` is honoured
+// at run time, not module import time. Plain double-quoted string (not a template literal) — the
+// Windows prefix ends in `\`, which in a template literal `` `C:\` `` would escape the closing
+// backtick and swallow the rest of the file into an unterminated template.
+function overCapRootBytes() {
+  const prefix = isWindows ? "C:\\" : "/";
+  const padded = prefix + "x".repeat(HARNESS_KSR_MAX_ROOT + 1 - prefix.length);
+  return Buffer.from(padded, "utf8");
 }
 
 function frameHeaderShapeCases(fixture, pathBytes) {

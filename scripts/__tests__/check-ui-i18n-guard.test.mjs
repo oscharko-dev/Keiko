@@ -1129,6 +1129,25 @@ test("does not discard parsed JSX text whose source line looks like a comment", 
   expect(findings[0].text).toContain("Required fields");
 });
 
+// KEIKO-0299 (review-follow-up): a JSX child template expression (`` `Hello ${name}` ``) is
+// neither a StringLiteral nor a NoSubstitutionTemplateLiteral, so the initial ship silently
+// ignored the literal spans it carries. Extract them (head + each templateSpan.literal) so newly
+// added user copy in that shape lands in the ledger; templates that contain only interpolations
+// stay ignored because their combined literal text is empty.
+test("collects literal spans from JSX child template expressions", () => {
+  const src = "<p>{`Hello ${name}, welcome`}</p>";
+  const findings = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings;
+  expect(findings.length).toBeGreaterThan(0);
+  expect(findings[0].text).toContain("Hello");
+  expect(findings[0].text).toContain("welcome");
+});
+
+test("still ignores JSX child template expressions that contain only interpolations", () => {
+  expect(
+    untranslatedLiteralsInSource("<p>{`${prefix}${value}`}</p>", "packages/x/y.tsx").findings,
+  ).toEqual([]);
+});
+
 // KEIKO-0299 (review-follow-up): multi-line JSX text now collapses intra-node whitespace so a
 // reformat or indentation change does not churn the ratcheted ledger. Same rendered copy, same
 // ledger entry, either shape.

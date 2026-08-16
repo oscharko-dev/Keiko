@@ -654,19 +654,35 @@ function collectJsxTextAndExpressions(source, filename) {
       }
     } else if (ts.isJsxExpression(node) && node.expression && isJsxExpressionChildOfElement(node)) {
       const expr = node.expression;
-      if (
-        (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) &&
-        expr.text.trim().length > 0
-      ) {
+      const literalText = jsxChildExpressionLiteralText(expr);
+      if (literalText !== null && literalText.length > 0) {
         const line =
           ts.getLineAndCharacterOfPosition(sourceFile, expr.getStart(sourceFile)).line + 1;
-        results.push({ line, text: expr.text.trim() });
+        results.push({ line, text: literalText });
       }
     }
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
   return results;
+}
+
+// KEIKO-0299 (review-follow-up): a template expression such as `` `Hello ${name}, welcome` ``
+// used as a JSX child slips past both the string-literal path (it is neither a StringLiteral nor
+// a NoSubstitutionTemplateLiteral) and the per-line fallback (the braces reject it). Extract the
+// literal spans (head + each span.literal) here so newly added user copy in that shape does not
+// go unmeasured. The interpolation is replaced by a single space so the two sides of an `${...}`
+// join into one ledger entry rather than two half-entries; a template made ONLY of interpolations
+// (`` `${a}${b}` ``) produces an empty combined string and is correctly ignored.
+function jsxChildExpressionLiteralText(expr) {
+  if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
+    return expr.text.trim();
+  }
+  if (ts.isTemplateExpression(expr)) {
+    const parts = [expr.head.text, ...expr.templateSpans.map((span) => span.literal.text)];
+    return parts.join(" ").trim().replace(/\s+/gu, " ");
+  }
+  return null;
 }
 
 /**

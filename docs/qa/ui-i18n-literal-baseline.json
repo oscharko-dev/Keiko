@@ -10,6 +10,7 @@
       "Setup required"
     ],
     "packages/keiko-ui/src/app/components/desktop/ChatWindow.tsx": [
+      "Type FORGET to remove .",
       "When muted, Keiko cannot hear your microphone until you unmute."
     ],
     "packages/keiko-ui/src/app/components/desktop/ConnectedScopePill.tsx": [
@@ -33,20 +34,27 @@
       "binary or an unsupported format",
       "Context inspection summary",
       "document evidence extracted text",
+      "Ecosystems:",
       "Evidence",
       "Evidence citations",
       "Grounding evidence",
       "Hybrid source summary",
+      "Hybrid: folder source + Knowledge Pod source",
       "Knowledge citations",
       "Knowledge evidence",
       "Knowledge Pod activity",
       "Knowledge Pod activity details",
       "Knowledge Pod retrieval activity",
       "Knowledge scope summary",
+      "Knowledge scope:",
       "larger than 2 MB",
+      "Modes: · Reasons:",
       "Needs review",
+      "Not used: excerpt",
       "Partial coverage",
       "Searching connected sources and asking Keiko…",
+      "This answer reflects only the searchable files in the connected scope — not searched ( ). It does not cover the entire folder.",
+      "Uncertainty ( markers — )",
       "Why these files were selected",
       "Why these files?"
     ],
@@ -122,9 +130,11 @@
       "Interrupt the assistant",
       "Leave voice dialogue",
       "Stop",
-      "Stop voice dialogue"
+      "Stop voice dialogue",
+      "Voice profile:"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/AgentGateCard.tsx": [
+      "Allow action after review",
       "Approve",
       "Grant applies only to this queued action.",
       "No extra BFF authority or autonomous follow-up",
@@ -182,6 +192,7 @@
       "Discard and reload",
       "Discard unsaved changes?",
       "Editor",
+      "Editor failed to load:",
       "Format",
       "Hidden open documents",
       "Keep local",
@@ -192,6 +203,7 @@
       "Reject agent patch and discard changes",
       "Reload",
       "Reload external changes",
+      "Reloading from disk replaces this buffer with the saved file and discards your unsaved editor changes .",
       "Retry",
       "Review every changed file before applying this agent changeset to disk.",
       "Side-by-side comparison of the file on disk and the recovered unsaved changes. Keep local restores the recovered changes; use disk keeps the file on disk.",
@@ -592,6 +604,7 @@
       "ZIP bundle (all formats)"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/quality-intelligence/RunLauncher.tsx": [
+      "( pods)",
       "Banking",
       "Browse local",
       "File",
@@ -626,6 +639,8 @@
       "Attach a source before indexing.",
       "Details",
       "Knowledge Pod guidance:",
+      "Knowledge Pod Set readiness: .",
+      "Knowledge Pods",
       "Last refresh",
       "Pods",
       "Removed pages could not be detected this run (the crawl reached its page limit)."

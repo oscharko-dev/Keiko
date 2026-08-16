@@ -88,7 +88,64 @@ async function qualify(helper, fixture, root) {
   }
 }
 
-const sourceText = await readFile(supervisorSource, "utf8");
+// KEIKO-0277 (review-follow-up): the assertions below used to run against the RAW source, so a
+// deleted fd-close or non-PATH spawn call whose old form remained in a `//` or `/* ... */` block
+// would still satisfy `assert.match`. Since the behavioural qualification is deliberately skipped
+// on hosts without the Endpoint Security system extension (per KEIKO-0277's fallback), those
+// source pins were the only defence — and they silently accepted commented-out controls. Strip C
+// comments before matching. String literals are PRESERVED so a real `execve("/bin/sh", …)` still
+// trips the negative `\/bin\/sh` assertion below, but a `// old: execve("/bin/sh")` no longer
+// does. Line splicing (`\<newline>` pairs) runs first, so a `\`-continued line comment cannot
+// hide a control on its spliced-in tail either.
+// Copy a C string literal starting at the opening `"` (index i) verbatim to `out`. Returns the
+// index of the byte AFTER the closing `"` (or the end of source on unterminated input).
+function copyStringLiteralVerbatim(source, start, out) {
+  let i = start + 1;
+  let result = out + '"';
+  while (i < source.length) {
+    const c = source[i];
+    if (c === "\\") {
+      result += source.slice(i, i + 2);
+      i += 2;
+      continue;
+    }
+    result += c;
+    i += 1;
+    if (c === '"') return { out: result, next: i };
+  }
+  return { out: result, next: i };
+}
+
+function stripCCommentsPreservingLiterals(rawSource) {
+  const source = rawSource.replace(/\\\r?\n/gu, "");
+  let out = "";
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    const next = source[i + 1];
+    if (ch === "/" && next === "*") {
+      const end = source.indexOf("*/", i + 2);
+      if (end === -1) return out;
+      out += "  ";
+      i = end + 2;
+    } else if (ch === "/" && next === "/") {
+      const end = source.indexOf("\n", i + 2);
+      if (end === -1) return out;
+      i = end;
+    } else if (ch === '"') {
+      const copied = copyStringLiteralVerbatim(source, i, out);
+      out = copied.out;
+      i = copied.next;
+    } else {
+      out += ch;
+      i += 1;
+    }
+  }
+  return out;
+}
+
+const rawSource = await readFile(supervisorSource, "utf8");
+const sourceText = stripCCommentsPreservingLiterals(rawSource);
 assert.match(sourceText, /KEIKO_MONITOR_ARM/u);
 assert.match(sourceText, /KEIKO_MONITOR_STOP/u);
 assert.match(sourceText, /KEIKO_MONITOR_ZERO_LIVE/u);
@@ -105,6 +162,21 @@ assert.match(sourceText, /posix_spawn\(/u);
 assert.doesNotMatch(
   sourceText,
   /setsid|setpgid|killpg|\/bin\/sh|system\(|posix_spawnp|execvp|execlp|execvP/u,
+);
+
+// KEIKO-0277 (review-follow-up) negative self-test: proves stripCCommentsPreservingLiterals is
+// load-bearing. Mutate the real source to move `posix_spawn_file_actions_addclose(&actions, 3)`
+// into a `/* ... */` block, and prove the stripped scan no longer sees it. A raw-source scan of
+// the same mutated text would still find the token inside the comment.
+const mutatedSource = rawSource.replace(
+  /posix_spawn_file_actions_addclose\(&actions, 3\)/u,
+  "/* posix_spawn_file_actions_addclose(&actions, 3) */ (void)0",
+);
+const mutatedStripped = stripCCommentsPreservingLiterals(mutatedSource);
+assert.equal(
+  mutatedStripped.match(/posix_spawn_file_actions_addclose\(&actions, 3\)/u),
+  null,
+  "stripCCommentsPreservingLiterals must remove fd-close pin hidden in a block comment",
 );
 
 // KEIKO-0277: Windows-sibling two-mode shape. `--helper <path>` qualifies an exact staged binary
