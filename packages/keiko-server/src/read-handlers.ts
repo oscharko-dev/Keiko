@@ -68,7 +68,15 @@ export function handleConfig(_ctx: RouteContext, deps: UiHandlerDeps): RouteResu
 // model-backed run can start, so the endpoint returns an empty list.
 export function handleModels(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const config = currentGatewayConfig(deps);
-  const models = config === undefined ? [] : listSafeConfiguredCapabilities(config);
+  const models =
+    config === undefined
+      ? []
+      : listSafeConfiguredCapabilities(config).map((model) => ({
+          ...model,
+          // Configuration is catalog metadata, not live reachability evidence. The runtime holder
+          // clears these observations whenever its config generation changes.
+          conversationReady: deps.gatewayConfig?.verifiedCapability(model.id) !== undefined,
+        }));
   return { status: 200, body: { models } };
 }
 

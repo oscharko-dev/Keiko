@@ -27,6 +27,7 @@ import {
   InvalidRunIdError,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
+import { probeVerifiedGatewayConfig } from "./_support.js";
 
 function ctx(path: string, params: Record<string, string> = {}): RouteContext {
   return {
@@ -230,6 +231,62 @@ describe("GET /api/models", () => {
     const result = handleModels(ctx("/api/models"), depsWith({}));
     const body = result.body as { models: unknown[] };
     expect(body.models).toEqual([]);
+  });
+
+  it("keeps configured chat models in the catalog while projecting only current readiness as conversation-ready", () => {
+    const gatewayConfig = probeVerifiedGatewayConfig(SAMPLE_CONFIG);
+    const deps = depsWith({ config: SAMPLE_CONFIG, configPresent: true, gatewayConfig });
+    const models = (): readonly {
+      readonly id: string;
+      readonly kind: string;
+      readonly conversationReady: boolean;
+    }[] =>
+      (
+        handleModels(ctx("/api/models"), deps).body as {
+          readonly models: readonly {
+            readonly id: string;
+            readonly kind: string;
+            readonly conversationReady: boolean;
+          }[];
+        }
+      ).models;
+
+    // Configuration is catalog metadata, not evidence that this process has successfully reached
+    // the provider. The Settings/catalog consumer must still receive the configured model.
+    expect(models()).toEqual([
+      expect.objectContaining({
+        id: "example-chat-model",
+        kind: "chat",
+        conversationReady: false,
+      }),
+    ]);
+
+    // An empty fields object intentionally models a readiness run where basic chat passed but no
+    // optional capability probe yielded metadata. Presence is the per-model success fact.
+    gatewayConfig.recordVerifiedCapability(
+      "example-chat-model",
+      {},
+      "2026-08-15T10:00:00.000Z",
+      gatewayConfig.generation(),
+    );
+    expect(models()).toEqual([
+      expect.objectContaining({
+        id: "example-chat-model",
+        kind: "chat",
+        conversationReady: true,
+      }),
+    ]);
+
+    // A config replacement invalidates the observation; the same model remains visible but cannot
+    // be selected until the replacement generation passes readiness again.
+    gatewayConfig.set(SAMPLE_CONFIG, true);
+    expect(models()).toEqual([
+      expect.objectContaining({
+        id: "example-chat-model",
+        kind: "chat",
+        conversationReady: false,
+      }),
+    ]);
   });
 });
 

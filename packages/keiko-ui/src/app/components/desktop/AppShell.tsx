@@ -1415,7 +1415,7 @@ function AppShellInner(): ReactNode {
     [quickAccessRoot, quickAccessWorkspace.manifest],
   );
   const needsGatewaySetup =
-    !session.loading && session.error === undefined && session.models.length === 0;
+    !session.loading && session.error === undefined && session.gatewayConfigured === false;
   const projectName = projectNameOrFallback(session.activeProject?.name, session.loading);
   const hasProject = session.activeProject !== undefined;
   const projectAvailable = session.activeProject?.available === true;

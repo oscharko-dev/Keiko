@@ -1174,7 +1174,9 @@ function recordReadinessObservation(
     return;
   }
   const observation = verifiedCapabilityObservation(report.probes);
-  if (Object.keys(observation).length === 0) return;
+  // Presence is also the current-generation proof that the basic chat probe passed. Keep an empty
+  // observation when no optional capability probe produced metadata so conversation readiness is
+  // not accidentally coupled to streaming/tool/image support.
   deps.gatewayConfig?.recordVerifiedCapability(
     report.modelId,
     observation,

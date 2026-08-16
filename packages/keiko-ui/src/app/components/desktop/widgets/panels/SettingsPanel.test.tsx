@@ -414,6 +414,23 @@ describe("SettingsPanel gateway summary semantics", () => {
     expect(container.querySelector('.ml-status[title="gateway configured"]')).toBeNull();
   });
 
+  it("restores the server-confirmed gateway verdict after reopening Settings", async () => {
+    primeFetches([
+      Object.assign(chatCapability("test-chat-1"), {
+        conversationReady: true,
+      }),
+    ]);
+    render(<SettingsPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Gateway connected")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Not verified")).toBeNull();
+    expect(
+      screen.getByText(/at least one currently verified gateway model is available/i),
+    ).toBeInTheDocument();
+  });
+
   it("promotes the summary once a readiness check passes and demotes it when one fails", async () => {
     primeFetches([chatCapability("test-chat-1")]);
     runGatewayReadinessMock.mockResolvedValue({

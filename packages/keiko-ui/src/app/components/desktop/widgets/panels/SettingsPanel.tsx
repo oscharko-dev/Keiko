@@ -61,6 +61,7 @@ import {
   GATEWAY_SETUP_REQUEST_EVENT,
   consumePendingGatewaySetup,
   notifyGatewayConfigUpdated,
+  notifyGatewayReadinessUpdated,
 } from "../shared/gatewaySetupBus";
 import {
   WALLPAPER_ENABLED_EVENT,
@@ -1235,8 +1236,13 @@ const VERIFIED_GATEWAY: GatewayVerificationState = "verified";
  */
 function gatewayVerificationFromRuns(
   runs: Record<string, ReadinessRunState>,
+  serverConfirmed = false,
 ): GatewayVerificationState {
-  let best: GatewayVerificationState = UNVERIFIED_GATEWAY;
+  // `/api/models` projects current-generation basic-chat evidence. It survives a panel remount and
+  // is the same fail-closed fact used by Chat and QI. Without this baseline, reopening Settings
+  // contradicts those workflows by reverting its summary to "Not verified" until the operator
+  // spends another provider request. A run made in this panel still wins when it is worse.
+  let best: GatewayVerificationState = serverConfirmed ? VERIFIED_GATEWAY : UNVERIFIED_GATEWAY;
   for (const run of Object.values(runs)) {
     if (run.status === "error") return FAILED_VERIFICATION;
     if (run.status !== "done") continue;
@@ -1359,7 +1365,7 @@ async function runModelReadinessCheck(
   generation: number,
   setLedger: (updater: (current: ReadinessLedger) => ReadinessLedger) => void,
   t: I18nTranslate,
-): Promise<void> {
+): Promise<boolean> {
   const record = (state: ReadinessRunState): void => {
     setLedger((current) => recordReadinessRun(current, generation, modelId, state));
   };
@@ -1370,8 +1376,10 @@ async function runModelReadinessCheck(
       deep ? { includeDeepProbes: true } : undefined,
     );
     record({ status: "done", report });
+    return true;
   } catch (error) {
     record({ status: "error", message: readinessErrorMessage(error, t) });
+    return false;
   }
 }
 
@@ -1465,7 +1473,13 @@ function ModelsTabContent({
   // Issue #144: source of truth is the helper, not an inline kind check.
   const chatCount = models.filter(isConversationEligibleModel).length;
   const hasDiscoveredModels = models.length > 0;
-  const verification = gatewayVerificationFromRuns(readiness);
+  const serverConfirmed = models.some(
+    (model) =>
+      isConversationEligibleModel(model) &&
+      (model as ModelCapability & { readonly conversationReady?: boolean }).conversationReady ===
+        true,
+  );
+  const verification = gatewayVerificationFromRuns(readiness, serverConfirmed);
   const gatewayStatusLabel = computeGatewayStatusLabel(
     gatewayConfigured,
     hasDiscoveredModels,
@@ -1682,7 +1696,9 @@ export function SettingsPanel({
   const readiness = readinessRunsForGeneration(readinessLedger, configGeneration);
 
   async function handleRunReadiness(modelId: string, deep: boolean): Promise<void> {
-    await runModelReadinessCheck(modelId, deep, configGeneration, setReadinessLedger, t);
+    if (await runModelReadinessCheck(modelId, deep, configGeneration, setReadinessLedger, t)) {
+      notifyGatewayReadinessUpdated();
+    }
   }
 
   return (

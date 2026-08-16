@@ -39,6 +39,7 @@ interface TestSession {
   readonly activeChat: Chat | undefined;
   readonly activeProject: { readonly name: string; readonly available: boolean } | undefined;
   readonly models: readonly unknown[];
+  readonly gatewayConfigured: boolean;
   readonly loading: boolean;
   readonly error: string | undefined;
   readonly noEligibleModels: boolean;
@@ -457,6 +458,7 @@ describe("AppShell grounding connections", () => {
       activeChat,
       activeProject: { name: "Keiko", available: true },
       models: [{ id: "example-chat-model" }],
+      gatewayConfigured: true,
       loading: false,
       error: undefined,
       noEligibleModels: false,
@@ -1058,6 +1060,7 @@ describe("AppShell grounding connections", () => {
     mocks.state.session = {
       ...(mocks.state.session as TestSession),
       models: [],
+      gatewayConfigured: false,
       noEligibleModels: true,
       selectedModel: "",
     };
@@ -1075,6 +1078,22 @@ describe("AppShell grounding connections", () => {
     expect(screen.getByRole("dialog", { name: "Gateway setup" })).toBeInTheDocument();
     expect(screen.queryByTestId("left-rail")).toBeNull();
     expect(screen.queryByTestId("right-rail")).toBeNull();
+  });
+
+  it("keeps the workspace available when a configured gateway has no ready chat model", async () => {
+    mocks.state.session = {
+      ...(mocks.state.session as TestSession),
+      models: [],
+      gatewayConfigured: true,
+      noEligibleModels: true,
+      selectedModel: "",
+    };
+
+    await renderMounted();
+
+    expect(screen.queryByRole("dialog", { name: "Gateway setup" })).toBeNull();
+    expect(screen.getByTestId("left-rail")).toBeInTheDocument();
+    expect(screen.getByTestId("right-rail")).toBeInTheDocument();
   });
 
   it("keeps a redacted retry surface available when gateway setup loading fails", async (): Promise<void> => {
@@ -1365,6 +1384,7 @@ describe("AppShell grounding connections", () => {
     mocks.state.session = {
       ...(mocks.state.session as TestSession),
       models: [],
+      gatewayConfigured: false,
       noEligibleModels: true,
       selectedModel: "",
     };

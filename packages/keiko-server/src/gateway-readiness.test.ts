@@ -618,7 +618,7 @@ describe("gateway readiness route", () => {
     deps.store.close();
   });
 
-  it("does not persist a negative capability from an inconclusive semantic probe", async () => {
+  it("records basic chat readiness without persisting a negative inconclusive capability", async () => {
     const config = gatewayConfig();
     const recordVerifiedCapability = vi.fn();
     const fetchImpl = vi
@@ -648,7 +648,12 @@ describe("gateway readiness route", () => {
     expect(report.probes.find((probe) => probe.name === "streaming")).toMatchObject({
       status: "unsupported",
     });
-    expect(recordVerifiedCapability).not.toHaveBeenCalled();
+    expect(recordVerifiedCapability).toHaveBeenCalledWith(
+      "test-chat-model",
+      {},
+      expect.any(String),
+      0,
+    );
     deps.store.close();
   });
 
@@ -817,7 +822,7 @@ describe("gateway readiness route", () => {
     deps.store.close();
   });
 
-  it("does not record negative capabilities for probes the request did not execute", async () => {
+  it("records basic chat readiness without inventing capabilities for unexecuted probes", async () => {
     const config = gatewayConfig();
     const recordVerifiedCapability = vi.fn();
     const deps: UiHandlerDeps = {
@@ -838,7 +843,12 @@ describe("gateway readiness route", () => {
 
     await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
 
-    expect(recordVerifiedCapability).not.toHaveBeenCalled();
+    expect(recordVerifiedCapability).toHaveBeenCalledWith(
+      "test-chat-model",
+      {},
+      expect.any(String),
+      0,
+    );
     deps.store.close();
   });
 

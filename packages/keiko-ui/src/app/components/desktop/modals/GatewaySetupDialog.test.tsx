@@ -655,6 +655,36 @@ describe("GatewaySetupDialog", () => {
     );
   });
 
+  it("does not treat fresh-mode provider locality alone as an audio configuration", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "internal-chat",
+      testedModelIds: ["internal-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://models.example.com/v1");
+    await userEvent.type(screen.getByLabelText(/api token/i), "model-token");
+    await userEvent.click(screen.getByRole("combobox", { name: /provider locality/i }));
+    await userEvent.click(screen.getByRole("option", { name: "Microsoft Foundry" }));
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(screen.queryByText(/enter at least one explicit voice deployment/i)).toBeNull();
+    expect(setupGateway).toHaveBeenCalledWith({
+      baseUrl: "https://models.example.com/v1",
+      apiKey: "model-token",
+      apiKeyHeaderName: undefined,
+      deploymentNames: [],
+      preserveExisting: false,
+    });
+  });
+
   it("renders German preserve hints for the complete stored audio connection", async () => {
     await loadLocaleMessages("de");
     window.localStorage.setItem(I18N_STORAGE_KEY, "de");

@@ -25,6 +25,7 @@ export const GATEWAY_SETUP_REQUEST_EVENT = "keiko:gateway-setup-request";
  * invalidates its recorded verification for exactly the same reason.
  */
 export const GATEWAY_CONFIG_UPDATED_EVENT = "keiko:gateway-config-updated";
+export const GATEWAY_READINESS_UPDATED_EVENT = "keiko:gateway-readiness-updated";
 
 let pending = false;
 
@@ -57,4 +58,14 @@ export function consumePendingGatewaySetup(): boolean {
 export function notifyGatewayConfigUpdated(): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(GATEWAY_CONFIG_UPDATED_EVENT));
+}
+
+/**
+ * Announce that a readiness run changed which configured models may be used for conversation.
+ * Unlike a configuration replacement, this must not invalidate the Settings panel's current
+ * readiness report; it only asks model consumers to reload the safe catalog projection.
+ */
+export function notifyGatewayReadinessUpdated(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(GATEWAY_READINESS_UPDATED_EVENT));
 }

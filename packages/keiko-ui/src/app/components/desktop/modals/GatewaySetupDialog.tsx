@@ -347,6 +347,7 @@ function dropDatasetOpenCounter(root: HTMLElement, countKey: string, flagAttribu
 }
 
 interface VoiceCredentialInputFields {
+  readonly preserveExisting: boolean;
   readonly voiceBaseUrl: string;
   readonly voiceEndpointStyle: string;
   readonly voiceApiVersion: string;
@@ -386,9 +387,15 @@ function hasVoiceCredentialInput(fields: VoiceCredentialInputFields): boolean {
     fields.voiceSemanticTurnDetectionConfigured,
     fields.voiceSpeechSynthesisInstructionsConfigured,
     fields.voiceOutputVoiceIdConfigured,
-    fields.voiceProviderLocalityConfigured,
   ];
-  return textInputs.some((value) => value.trim() !== "") || configuredFlags.includes(true);
+  return (
+    textInputs.some((value) => value.trim() !== "") ||
+    configuredFlags.includes(true) ||
+    // Locality alone can update an existing audio provider, but it cannot create one. In fresh
+    // mode the select has a visible default; re-selecting it must not turn an otherwise untouched
+    // optional audio section into a deployment-required configuration.
+    (fields.preserveExisting && fields.voiceProviderLocalityConfigured)
+  );
 }
 
 function hasExplicitVoiceDeployment(fields: VoiceCredentialInputFields): boolean {
@@ -3053,6 +3060,7 @@ export function GatewaySetupDialog({
   const parsedImageInputModelIds = deploymentNamesFromInput(imageInputModelIds);
   const parsedWorkflowEligibleModelIds = deploymentNamesFromInput(workflowEligibleModelIds);
   const voiceCredentialInput = hasVoiceCredentialInput({
+    preserveExisting,
     voiceBaseUrl,
     voiceEndpointStyle,
     voiceApiVersion,

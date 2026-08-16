@@ -43,7 +43,10 @@ import {
   clearCanonicalVoiceHasherForTests,
   prepareCanonicalVoiceHasher,
 } from "./canonical-voice-hasher";
-import { notifyGatewayConfigUpdated } from "../widgets/shared/gatewaySetupBus";
+import {
+  notifyGatewayConfigUpdated,
+  notifyGatewayReadinessUpdated,
+} from "../widgets/shared/gatewaySetupBus";
 
 beforeAll(async () => {
   await prepareCanonicalVoiceHasher();
@@ -229,6 +232,37 @@ describe("useChatSession pure guards", () => {
 });
 
 describe("useChatSession bootstrap", () => {
+  it("does not expose an unready configured chat model to conversation selection", async () => {
+    const unready = Object.assign(model({ id: "configured-but-unready" }), {
+      conversationReady: false,
+    });
+    const ready = Object.assign(model({ id: "readiness-verified" }), { conversationReady: true });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [unready, ready] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.models.map((candidate) => candidate.id)).toEqual(["readiness-verified"]);
+    expect(result.current.selectedModel).toBe("readiness-verified");
+    expect(result.current.gatewayConfigured).toBe(true);
+  });
+
+  it("keeps a configured gateway distinct from first-run when no chat model is ready", async () => {
+    const unready = Object.assign(model({ id: "configured-but-unready" }), {
+      conversationReady: false,
+    });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [unready] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.models).toEqual([]);
+    expect(result.current.noEligibleModels).toBe(true);
+    expect(result.current.gatewayConfigured).toBe(true);
+  });
+
   it("loads the newest existing chat and falls back from a stale selected model", async () => {
     const latest = chat({ id: "chat-latest", selectedModel: "stale-model", updatedAt: 20 });
     vi.mocked(fetchModels).mockResolvedValue({
@@ -582,6 +616,32 @@ describe("useChatSession bootstrap", () => {
       expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-after"]),
     );
     expect(fetchModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes conversation models after a readiness result without replacing the gateway", async () => {
+    const unready = Object.assign(model({ id: "chat-after-readiness" }), {
+      conversationReady: false,
+    });
+    const ready = Object.assign(model({ id: "chat-after-readiness" }), {
+      conversationReady: true,
+    });
+    vi.mocked(fetchModels)
+      .mockResolvedValueOnce({ models: [unready] })
+      .mockResolvedValueOnce({ models: [ready] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.noEligibleModels).toBe(true));
+
+    act(() => {
+      notifyGatewayReadinessUpdated();
+    });
+
+    await waitFor(() =>
+      expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-after-readiness"]),
+    );
+    expect(result.current.gatewayConfigured).toBe(true);
   });
 
   it("ignores an older gateway model refresh that resolves after the latest one", async () => {

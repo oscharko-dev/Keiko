@@ -40,8 +40,8 @@
     "de": "Gateway verbunden, aber keines der gefundenen Modelle kann für Konversationen genutzt werden. Füge ein chatfähiges Deployment hinzu."
   },
   "settings.models.detailReady": {
-    "en": "Keiko can use the configured gateway models for chat and agent workflows.",
-    "de": "Keiko kann die konfigurierten Gateway-Modelle für Chat- und Agent-Workflows nutzen."
+    "en": "At least one currently verified gateway model is available for chat and agent workflows.",
+    "de": "Mindestens ein aktuell verifiziertes Gateway-Modell ist für Chat- und Agent-Workflows verfügbar."
   },
   "settings.models.probeFailed": {
     "en": "Gateway check failed",

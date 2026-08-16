@@ -49,7 +49,10 @@ import {
   loadMemoryAutonomyMode,
   rejectMemoryProposal,
 } from "@/lib/memory-api";
-import { GATEWAY_CONFIG_UPDATED_EVENT } from "../widgets/shared/gatewaySetupBus";
+import {
+  GATEWAY_CONFIG_UPDATED_EVENT,
+  GATEWAY_READINESS_UPDATED_EVENT,
+} from "../widgets/shared/gatewaySetupBus";
 import { sortProjects } from "@/lib/sidebar-sort";
 import {
   classifyRunReport,
@@ -1260,6 +1263,9 @@ export interface UseChatSessionResult {
   // so token deltas do not rewrite or scan the full conversation history.
   readonly streamingAssistantMessage?: ChatMessage | undefined;
   models: ModelCapability[];
+  // Configuration presence is independent from conversation readiness. A configured gateway may
+  // temporarily have zero verified chat models after restart and must not be mistaken for first-run.
+  readonly gatewayConfigured?: boolean | undefined;
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
   // undefined when no conversation-eligible model is configured (AC #1 / #4).
@@ -1355,6 +1361,7 @@ interface SessionState {
   chats: Chat[];
   messages: ChatMessage[];
   models: ModelCapability[];
+  configuredModelCount: number;
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
   selectedModel: string | undefined;
@@ -1379,6 +1386,7 @@ const INITIAL_STATE: SessionState = {
   chats: [],
   messages: [],
   models: [],
+  configuredModelCount: 0,
   activeProject: undefined,
   activeChat: undefined,
   selectedModel: undefined,
@@ -1651,7 +1659,8 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   const modelPayload = await fetchModels();
   // Issue #144: source of truth is the helper, not an inline kind check. Pin
   // ACs #1 / #2 — only chat-eligible models reach the conversation dropdown.
-  const chatModels = modelPayload.models.filter(isConversationEligibleModel);
+  const chatModels = modelPayload.models.filter(isConversationReadyModel);
+  const configuredModelCount = modelPayload.models.length;
   const defaultModel = pickChatModelId(chatModels);
 
   const projectPayload = await fetchProjects().catch(() => ({ projects: [] }));
@@ -1669,6 +1678,7 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
     const selectedModel = resolveSelectedModelId(latestChat.selectedModel, chatModels);
     return {
       models: chatModels,
+      configuredModelCount,
       selectedModel,
       projects: Array.from(projects),
       activeProject: project,
@@ -1686,6 +1696,7 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   if (defaultModel === undefined || !autoCreate) {
     return {
       models: chatModels,
+      configuredModelCount,
       selectedModel: defaultModel,
       projects: Array.from(projects),
       activeProject: project,
@@ -1703,6 +1714,7 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   notifyChatUpsert(created.chat);
   return {
     models: chatModels,
+    configuredModelCount,
     selectedModel: created.chat.selectedModel,
     projects: Array.from(created.projects),
     activeProject: created.project,
@@ -1744,12 +1756,23 @@ function refreshSessionModels(
   previous: SessionState,
   capabilities: readonly ModelCapability[],
 ): SessionState {
-  const models = capabilities.filter(isConversationEligibleModel);
+  const models = capabilities.filter(isConversationReadyModel);
   return {
     ...previous,
     models,
+    configuredModelCount: capabilities.length,
     selectedModel: resolveSelectedModelId(previous.selectedModel, models),
   };
+}
+
+function isConversationReadyModel(model: ModelCapability): boolean {
+  // The BFF always projects this boolean. Treat an explicit false as authoritative while keeping
+  // legacy/injected test catalogs compatible; the server independently gates forged POSTs.
+  return (
+    isConversationEligibleModel(model) &&
+    (model as ModelCapability & { readonly conversationReady?: boolean }).conversationReady !==
+      false
+  );
 }
 
 interface SessionModelRefreshContext {
@@ -2543,9 +2566,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       });
     };
     window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshModels);
+    window.addEventListener(GATEWAY_READINESS_UPDATED_EVENT, refreshModels);
     return () => {
       cancelled = true;
       window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshModels);
+      window.removeEventListener(GATEWAY_READINESS_UPDATED_EVENT, refreshModels);
     };
   }, []);
 
@@ -2752,6 +2777,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           chats: sortChats(created.chats),
           messages: Array.from(created.messages),
           models: state.models,
+          configuredModelCount: state.configuredModelCount,
           activeProject: created.project,
           activeChat: created.chat,
           selectedModel: created.chat.selectedModel,
@@ -2762,7 +2788,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return undefined;
       }
     },
-    [resetComposerForConversationSwitch, state.selectedModel, state.activeProject, state.models],
+    [
+      resetComposerForConversationSwitch,
+      state.selectedModel,
+      state.activeProject,
+      state.models,
+      state.configuredModelCount,
+    ],
   );
 
   const openProject = useCallback(
@@ -3930,6 +3962,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   const noEligibleModels =
     !loading && resolveSelectedModelId(state.selectedModel, state.models) === undefined;
+  const gatewayConfigured = state.configuredModelCount > 0;
 
   return useMemo<UseChatSessionResult>(
     () => ({
@@ -3938,6 +3971,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       messages: state.messages,
       streamingAssistantMessage,
       models: state.models,
+      gatewayConfigured,
       activeProject: state.activeProject,
       activeChat: state.activeChat,
       selectedModel: state.selectedModel,
@@ -3991,6 +4025,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.messages,
       streamingAssistantMessage,
       state.models,
+      gatewayConfigured,
       state.activeProject,
       state.activeChat,
       state.selectedModel,

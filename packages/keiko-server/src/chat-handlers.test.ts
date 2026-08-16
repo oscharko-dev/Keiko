@@ -174,9 +174,49 @@ async function sendBreakerChat(
 }
 
 describe("desktop chat production gateway reuse", () => {
+  it("rejects a forged direct request for an unverified configured chat model before provider egress", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    try {
+      const fetchSpy = vi.fn(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ error: { message: "should not reach provider" } }), {
+            status: 503,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+      );
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const result = await sendBreakerChat(fixture, "forged direct request");
+
+      expect(result).toEqual({
+        status: 400,
+        body: {
+          error: {
+            code: "BAD_REQUEST",
+            message: "modelId must be a configured and readiness-verified chat model id.",
+          },
+        },
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+      const serialized = JSON.stringify(result.body);
+      expect(serialized).not.toContain("provider.example.invalid");
+      expect(serialized).not.toContain("fake-test-key");
+    } finally {
+      vi.unstubAllGlobals();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
   it("opens one shared breaker across separate route requests", async () => {
     const fixture = await createGatewayBreakerFixture();
     try {
+      fixture.deps.gatewayConfig?.recordVerifiedCapability(
+        "breaker-chat",
+        {},
+        "2026-08-15T10:00:00.000Z",
+        fixture.deps.gatewayConfig.generation(),
+      );
       const fetchSpy = vi.fn(() =>
         Promise.resolve(
           new Response(JSON.stringify({ error: { message: "unavailable" } }), {

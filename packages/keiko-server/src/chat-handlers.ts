@@ -232,10 +232,16 @@ function modelFromBody(body: Record<string, unknown>, deps: UiHandlerDeps): stri
       ? body.modelId
       : defaultChatModelId(deps);
   const capability = chatCapability(deps, modelId);
-  if (capability?.kind !== "chat") {
+  const conversationReady =
+    deps.gatewayConfig === undefined ||
+    deps.gatewayConfig.verifiedCapability(modelId) !== undefined;
+  if (capability?.kind !== "chat" || !conversationReady) {
     return {
       status: 400,
-      body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id."),
+      body: errorBody(
+        "BAD_REQUEST",
+        "modelId must be a configured and readiness-verified chat model id.",
+      ),
     };
   }
   return modelId;
@@ -757,12 +763,18 @@ function regenerateRequestFromBody(
 
 function invalidChatModelResult(modelId: string, deps: UiHandlerDeps): RouteResult | undefined {
   const capability = chatCapability(deps, modelId);
-  if (capability?.kind === "chat") {
+  const conversationReady =
+    deps.gatewayConfig === undefined ||
+    deps.gatewayConfig.verifiedCapability(modelId) !== undefined;
+  if (capability?.kind === "chat" && conversationReady) {
     return undefined;
   }
   return {
     status: 400,
-    body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id."),
+    body: errorBody(
+      "BAD_REQUEST",
+      "modelId must be a configured and readiness-verified chat model id.",
+    ),
   };
 }
 
