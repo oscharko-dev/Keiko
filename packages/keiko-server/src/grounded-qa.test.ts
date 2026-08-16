@@ -12,6 +12,7 @@ import { basename, join } from "node:path";
 import type { IncomingMessage } from "node:http";
 
 import {
+  deriveContextProfileFromCapability,
   KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
   maxUtf8BytesForTokenBudget,
   standardPodModelUsePolicy,
@@ -278,7 +279,7 @@ function expectGroundedGatewayRequest(request: GatewayRequest): void {
   expect(userMessage.content).toContain("Repository evidence excerpts:");
   expect(userMessage.content).toContain("src/foo.ts");
   expect(userMessage.content).toContain("MyClass");
-  expect(userMessage.content).toContain("model input tokens 0/59904");
+  expect(userMessage.content).toContain("model input tokens 0/57904");
 }
 
 function emptyPack(): ConnectedContextPack {
@@ -559,9 +560,32 @@ async function runHandler(
 }
 
 describe("buildGroundedGatewayMessages", () => {
-  it("derives prompt input budget from chat model context window minus output reserve", () => {
+  it("derives prompt input budget from the shared capability→context profile (KEIKO-0461)", () => {
+    // 64_000 context - 4_096 output - 2_000 safety = 57_904, matching
+    // deriveContextProfileFromCapability so both the exploration and final-answer phases
+    // share one budget mechanism.
     const capability = customModelConfig(CHAT_MODEL).capabilities?.[0];
-    expect(groundedPromptInputTokensForCapability(capability)).toBe(59_904);
+    if (capability === undefined) throw new Error("expected capability");
+    expect(groundedPromptInputTokensForCapability(capability)).toBe(57_904);
+    expect(groundedPromptInputTokensForCapability(capability)).toBe(
+      deriveContextProfileFromCapability(capability).effectiveInputBudget,
+    );
+  });
+
+  it("falls back to the shared default-profile budget when contextWindow=0 (KEIKO-0461)", () => {
+    // A placeholder / not-yet-probed capability arrives with contextWindow=0 and
+    // maxOutputTokens=0. The final-answer budget must not silently return undefined and
+    // inherit the separately-derived exploration-phase default — it must reuse the shared
+    // deriveContextProfileFromCapability fallback so both phases share one budget mechanism.
+    const capability = customModelConfig(CHAT_MODEL, {
+      contextWindow: 0,
+      maxOutputTokens: 0,
+    }).capabilities?.[0];
+    if (capability === undefined) throw new Error("expected capability");
+    const budget = groundedPromptInputTokensForCapability(capability);
+    expect(budget).toBeDefined();
+    expect(budget).toBeGreaterThan(0);
+    expect(budget).toBe(deriveContextProfileFromCapability(capability).effectiveInputBudget);
   });
 
   it("accepts a model-derived prompt budget override without mutating the pack default", () => {

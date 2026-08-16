@@ -148,6 +148,55 @@ describe("defaultGitFileHistoryEvidenceProvider", () => {
     expect(logArgs).toEqual(expect.arrayContaining(["-c", "core.quotepath=false", "log"]));
     expect(logArgs).toEqual(expect.arrayContaining(["--no-renames", "--name-only"]));
     expect(logArgs.some((arg) => arg.startsWith("--max-count="))).toBe(true);
+    // KEIKO-0421: git log must be pathspec-scoped so GIT_HISTORY_COMMIT_LIMIT is spent
+    // inside the selected root, not repo-wide. Repo root == scope root here → "." pathspec.
+    const separatorIndex = logArgs.indexOf("--");
+    expect(separatorIndex).toBeGreaterThanOrEqual(0);
+    expect(logArgs.slice(separatorIndex + 1)).toEqual(["."]);
+    // KEIKO-0516: repository resolution goes through the shared resolveGitMembership
+    // primitive, which asks for --show-prefix in the same rev-parse call. The pre-fix
+    // hand-rolled rev-parse asked only for --show-toplevel; the new call must include
+    // both flags so the selectedRootPrefix is available without a second round-trip.
+    const revParseCalls = mutableCalls.filter((args) => args.includes("rev-parse"));
+    expect(revParseCalls).toHaveLength(1);
+    expect(revParseCalls[0]).toEqual(expect.arrayContaining(["--show-toplevel", "--show-prefix"]));
+  });
+
+  it("scopes git log by the selected subfolder so the commit cap is not spent repo-wide (KEIKO-0421)", async () => {
+    const subScopeRoot = join(ROOT, "src");
+    mkdirSync(subScopeRoot, { recursive: true });
+    // resolveGitMembership reads BOTH --show-toplevel AND --show-prefix from a single
+    // rev-parse call, so the mock must emit both lines — otherwise the returned prefix
+    // is empty and the log falls back to "." even when scope root != repo root. On macOS
+    // the /var → /private/var realpath fallback masked this via relative(), but Linux
+    // resolves the paths identically and needs the prefix directly. Trailing "/" mirrors
+    // git's own --show-prefix output; trimTrailingSlash in keiko-git strips it.
+    const mutableCalls: string[][] = [];
+    const runner: GitProcessRunner = (args) => {
+      mutableCalls.push([...args]);
+      if (args.includes("rev-parse")) {
+        return Promise.resolve(ok(`${ROOT}\nsrc/\n`));
+      }
+      return Promise.resolve(ok(""));
+    };
+    const scopedSearch: SearchScope = {
+      ...scope(),
+      workspace: { ...scope().workspace, root: subScopeRoot },
+    };
+    await defaultGitFileHistoryEvidenceProvider({
+      searchScope: scopedSearch,
+      query: query(),
+      fs: nodeFs(),
+      nowMs: () => NOW,
+      runner,
+      maxFiles: 10,
+    });
+    const logArgs = mutableCalls[1] ?? [];
+    const separatorIndex = logArgs.indexOf("--");
+    expect(separatorIndex).toBeGreaterThanOrEqual(0);
+    // Pathspec is literalised via :(literal) so a directory whose name looks like a git
+    // pathspec magic word (e.g. ":(exclude)docs") is treated as a literal folder name.
+    expect(logArgs.slice(separatorIndex + 1)).toEqual([":(literal)src"]);
   });
 
   it("respects selected relativePaths", async () => {

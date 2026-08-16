@@ -1,9 +1,17 @@
 // Voice session recap server handler (Epic #491, Issue #504, ADR-0109). Artifact B.
 //
+// Status: DORMANT. Per ADR-0109's amended Status section, the recap route has no current UI
+// caller (no recap hook, no VoiceRecap composer control, no ChatWindow integration). It is
+// deliberately retained rather than deleted so the audited server-side, contract-tested capture
+// path stays intact and can be re-activated without regressing governance. Do not remove the
+// route or its tests without a new ADR flipping that Status.
+//
 // A recap is the capture-side sibling of the live realtime memory recall: it turns the COMMITTED
 // spoken transcript of a full-realtime (or dictation) voice session into governed, reviewable memory
-// candidates. Full-realtime speech never enters `request.content` (it rides the WebRTC audio plane),
-// so per-turn chat capture cannot see it — this route closes that gap (ADR-0109 §Context).
+// candidates. Even though chat-handlers.ts's captureMemoryActions now runs
+// extractCandidatesFromUserText against every request.content, WebRTC audio still does not flow
+// through request.content in every profile path, so this route remains the intended long-running
+// coverage for spoken transcripts once the UI wires it back in.
 //
 // It reuses the EXISTING governed capture entry point (`extractCandidatesFromUserText`) unchanged —
 // same secret scanner, scope inference, sensitivity classification, and `buildProposal` as typed

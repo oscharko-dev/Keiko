@@ -98,8 +98,10 @@ import {
 } from "./grounded-answer.js";
 import {
   buildPackCitationIndex,
+  GROUNDED_NO_EVIDENCE_ANSWER,
   incompleteAnswerMarker,
   missingCitationMarker,
+  noEvidenceMarker,
   reconcileInlineCitations,
   reconcileNumericCitations,
   unsupportedCitationMarker,
@@ -741,7 +743,12 @@ async function retrieveOneConnector(
 
 // ─── Merged prompt ────────────────────────────────────────────────────────────
 
-const HYBRID_NO_EVIDENCE_ANSWER = "No evidence found in the selected connected sources.";
+// KEIKO-0196: keep the hybrid topology's no-evidence text identical to what the folder
+// and multi-source topologies already emit via GROUNDED_NO_EVIDENCE_ANSWER, so a
+// downstream consumer (evaluation harnesses, UI copy, notMovingWindow checks) sees the
+// same string regardless of which grounding topology answered. Prior to the fix the
+// hybrid path emitted its own shorter string, so grounded-faithfulness-eval's
+// "answerText === GROUNDED_NO_EVIDENCE_ANSWER" comparison never matched a hybrid answer.
 const HYBRID_SYSTEM_PROMPT =
   `${GROUNDED_SYSTEM_PROMPT} Connector excerpts are indexed-document citations: attribute every ` +
   "connector claim to its source label and the matching [n] marker in addition to any file reference.";
@@ -1401,12 +1408,17 @@ function buildHybridContextPack(
 function noEvidenceUncertainty(
   selected: readonly SelectedCandidate<HybridPayload>[],
   redactor: Redactor,
+  nowMs: number,
 ): readonly GroundedUncertainty[] {
+  // KEIKO-0196: share the marker with the folder/multi-source topologies via
+  // noEvidenceMarker, so the "no-evidence" claim text is the same in every grounding
+  // topology (and the UncertaintyMarker's emittedAtMs is honestly attributed rather than
+  // fabricated in-place).
   return selected.length === 0
     ? [
         {
-          kind: "no-evidence",
-          claim: redactString(redactor, HYBRID_NO_EVIDENCE_ANSWER),
+          ...noEvidenceMarker(nowMs),
+          claim: redactString(redactor, noEvidenceMarker(nowMs).claim),
         },
       ]
     : [];
@@ -1420,12 +1432,13 @@ function hybridAnswerUncertainty(
   selected: readonly SelectedCandidate<HybridPayload>[],
   assistant: GroundedAnswerResult,
   redactor: Redactor,
+  nowMs: number,
 ): readonly GroundedUncertainty[] {
   return [
     ...folderUncertainty(sources.folders, redactor),
     ...skippedUncertainty(sources.skippedFolders, redactor),
     ...skippedUncertainty(sources.skipped, redactor),
-    ...noEvidenceUncertainty(selected, redactor),
+    ...noEvidenceUncertainty(selected, redactor, nowMs),
     ...hybridReconciliationUncertainty(assistant, sources.folders, selected, redactor, true),
   ];
 }
@@ -1461,15 +1474,16 @@ function hybridUncertaintyForAnswer(
   assistant: GroundedAnswerResult,
   redactor: Redactor,
   sourceEvidenceAvailable: boolean,
+  nowMs: number,
 ): readonly GroundedUncertainty[] {
   if (sourceEvidenceAvailable) {
-    return hybridAnswerUncertainty(sources, selected, assistant, redactor);
+    return hybridAnswerUncertainty(sources, selected, assistant, redactor, nowMs);
   }
   return [
     ...folderUncertainty(sources.folders, redactor),
     ...skippedUncertainty(sources.skippedFolders, redactor),
     ...skippedUncertainty(sources.skipped, redactor),
-    ...noEvidenceUncertainty(selected, redactor),
+    ...noEvidenceUncertainty(selected, redactor, nowMs),
     ...hybridReconciliationUncertainty(
       assistant,
       sources.folders,
@@ -1526,6 +1540,7 @@ function projectHybridAnswer(
       assistant,
       ctx.deps.redactor,
       sourceEvidenceAvailable,
+      Date.now(),
     ),
   };
 }
@@ -1615,8 +1630,11 @@ async function noEvidenceAssistant(
 ): Promise<GroundedAnswerResult | RouteResult> {
   ensureNotCancelled(ctx.signal);
   if (ctx.answerOnlyContextAvailable !== true) {
+    // KEIKO-0196: emit the shared abstention text so hybrid answers match folder and
+    // multi-source; grounded-faithfulness-eval's answerText === GROUNDED_NO_EVIDENCE_ANSWER
+    // check depends on the exact string equality.
     return {
-      content: HYBRID_NO_EVIDENCE_ANSWER,
+      content: GROUNDED_NO_EVIDENCE_ANSWER,
       usage: { promptTokens: 0, completionTokens: 0 },
     };
   }

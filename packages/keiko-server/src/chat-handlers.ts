@@ -314,6 +314,11 @@ export function redactErrorMessage(message: string, deps: UiHandlerDeps): string
 
 function gatewayErrorStatus(error: GatewayError): number {
   if (error.code === "GATEWAY_AUTHENTICATION") return 401;
+  // KEIKO-0353: a circuit-open failure IS "temporarily unavailable" from the caller's
+  // point of view — the same 503 the transport-error branch below already emits. The
+  // breaker's own retryable=false signals internal auto-recovery, not that the client
+  // should treat the outage as permanent, so it must not fall through to 502.
+  if (error.code === "GATEWAY_CIRCUIT_OPEN") return 503;
   if (error.retryable) return 503;
   return 502;
 }

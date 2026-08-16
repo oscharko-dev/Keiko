@@ -560,10 +560,12 @@ export function groundedPromptInputTokensForCapability(
   capability: ModelCapability | undefined,
 ): number | undefined {
   if (capability?.kind !== "chat") return undefined;
-  const contextWindow = positiveInteger(capability.contextWindow);
-  if (contextWindow === undefined) return undefined;
-  const outputReserve = positiveInteger(capability.maxOutputTokens) ?? 0;
-  return outputReserve < contextWindow ? contextWindow - outputReserve : contextWindow;
+  // Reuse the shared capability→profile fallback (context-engineering.ts) so a
+  // placeholder capability (contextWindow=0 / maxOutputTokens=0) yields the same
+  // DEFAULT_CONTEXT_PROFILE-scaled budget the exploration phase already uses,
+  // instead of returning undefined and silently inheriting a second, independently
+  // derived default.
+  return deriveContextProfileFromCapability(capability).effectiveInputBudget;
 }
 
 export interface GroundedGatewayPromptOptions {

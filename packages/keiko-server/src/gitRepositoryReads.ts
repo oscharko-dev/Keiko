@@ -31,7 +31,7 @@ import {
   type NormalizedGitRouteOptions,
   type RepositoryContext,
 } from "./gitRoutes.js";
-import { containsPath } from "@oscharko-dev/keiko-git";
+import { containsPath, GIT_BASE_ARGS } from "@oscharko-dev/keiko-git";
 import { parsePorcelainV2Branch } from "./gitPorcelainStatus.js";
 import { FilesError, runFilesHandler } from "./files.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -197,7 +197,7 @@ function runGit(
   options: NormalizedGitRouteOptions,
   args: readonly string[],
 ): Promise<GitProcessResult> {
-  return options.runner(["--no-pager", "--no-optional-locks", "-C", repo.repositoryRoot, ...args], {
+  return options.runner([...GIT_BASE_ARGS, "-C", repo.repositoryRoot, ...args], {
     cwd: repo.repositoryRoot,
     maxBytes: options.maxStatusBytes,
     timeoutMs: options.timeoutMs,

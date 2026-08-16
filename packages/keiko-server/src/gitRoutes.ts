@@ -29,6 +29,7 @@ import {
   classifyGitFailure,
   containsPath,
   defaultGitProcessRunner,
+  GIT_BASE_ARGS,
   resolveGitMembership,
   type GitProcessOptions,
   type GitProcessResult,
@@ -691,8 +692,7 @@ export async function handleGitBranches(
     }
     const result = await options.runner(
       [
-        "--no-pager",
-        "--no-optional-locks",
+        ...GIT_BASE_ARGS,
         "-C",
         repo.repositoryRoot,
         "for-each-ref",
@@ -996,8 +996,7 @@ async function runSnapshotDiff(
     await chmod(snapshotPath, snapshot.mode);
     const result = await options.runner(
       [
-        "--no-pager",
-        "--no-optional-locks",
+        ...GIT_BASE_ARGS,
         "-C",
         snapshotRoot,
         "diff",
@@ -1032,8 +1031,7 @@ async function runUntrackedDiff(
 ): Promise<GitProcessResult> {
   const untracked = await options.runner(
     [
-      "--no-pager",
-      "--no-optional-locks",
+      ...GIT_BASE_ARGS,
       "-C",
       repo.repositoryRoot,
       "ls-files",
@@ -1065,8 +1063,7 @@ async function runDiff(
   maxBytes = options.maxDiffBytes,
 ): Promise<GitProcessResult> {
   const args = [
-    "--no-pager",
-    "--no-optional-locks",
+    ...GIT_BASE_ARGS,
     "-C",
     repo.repositoryRoot,
     "diff",
@@ -1115,8 +1112,7 @@ export async function handleGitStatus(
       const relativePath = gitPath(repo.selectedRootPrefix, path);
       const status = await options.runner(
         [
-          "--no-pager",
-          "--no-optional-locks",
+          ...GIT_BASE_ARGS,
           "-C",
           repo.repositoryRoot,
           "status",
@@ -1430,8 +1426,7 @@ async function runBlame(
   const path = gitPath(repo.selectedRootPrefix, request.path) ?? request.path;
   return options.runner(
     [
-      "--no-pager",
-      "--no-optional-locks",
+      ...GIT_BASE_ARGS,
       "-C",
       repo.repositoryRoot,
       "blame",
