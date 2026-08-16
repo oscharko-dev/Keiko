@@ -1405,6 +1405,39 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     expect(screen.getAllByRole("combobox", { name: "Grounding mode" })).toHaveLength(2);
   });
 
+  it("refreshes ready Knowledge Pod options when a mounted chat user reopens Grounding mode", async () => {
+    const user = userEvent.setup();
+    const capsuleId = makeCapsuleId("cap-created-after-chat-open");
+    renderWindow(makeSession({ activeChat: makeChat() }));
+
+    await openCombobox(user, "Grounding mode");
+    expect(screen.getByRole("option", { name: "Model only" })).toBeVisible();
+
+    // The chat stays mounted while the operator creates a ready pod elsewhere. Reopening the
+    // visible picker is the user-facing way to discover that newly available grounding source.
+    await user.click(screen.getByRole("combobox", { name: "Grounding mode" }));
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "Freshly created pod source",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 2,
+        },
+      ],
+      knowledgePods: [knowledgePodSummary(capsuleId, "pod", "Fresh knowledge")],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+
+    await openCombobox(user, "Grounding mode");
+
+    await waitFor(() => {
+      expect(fetchCapsulesMock).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("option", { name: "Knowledge Pod: Fresh knowledge" })).toBeVisible();
+    });
+  });
+
   it("uses redacted Knowledge Pod summaries for chat grounding options", async () => {
     const user = userEvent.setup();
     const capsuleId = makeCapsuleId("cap-private");

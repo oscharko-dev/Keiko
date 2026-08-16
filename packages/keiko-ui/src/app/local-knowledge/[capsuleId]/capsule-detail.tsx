@@ -403,14 +403,22 @@ function indexedDocumentsTone(data: CapsuleDetailData): StatusTone {
   return "ok";
 }
 
-function missingVectorsMetaLabel(missingVectors: number, t: I18nTranslate): string {
+function missingVectorsMetaLabel(
+  chunkCount: number,
+  missingVectors: number,
+  t: I18nTranslate,
+): string {
+  if (chunkCount <= 0) {
+    return t("localKnowledge.detail.index.noChunksAvailable");
+  }
   if (missingVectors > 0) {
     return t("localKnowledge.detail.index.chunksMissingVectors", { count: missingVectors });
   }
   return t("localKnowledge.detail.index.allChunksEmbedded");
 }
 
-function missingVectorsTone(missingVectors: number): "ok" | "danger" {
+function missingVectorsTone(chunkCount: number, missingVectors: number): StatusTone {
+  if (chunkCount <= 0) return "warn";
   if (missingVectors > 0) return "danger";
   return "ok";
 }
@@ -463,8 +471,8 @@ function IndexingStatusSection({ data }: { readonly data: CapsuleDetailData }): 
           label={t("localKnowledge.detail.index.vectors")}
           help={t("localKnowledge.detail.help.vectors")}
           value={`${data.health.vectorCount.toString()} / ${data.health.chunkCount.toString()}`}
-          meta={missingVectorsMetaLabel(missingVectors, t)}
-          tone={missingVectorsTone(missingVectors)}
+          meta={missingVectorsMetaLabel(data.health.chunkCount, missingVectors, t)}
+          tone={missingVectorsTone(data.health.chunkCount, missingVectors)}
         />
         <MetricCard
           label={t("localKnowledge.detail.index.latestJob")}
@@ -484,7 +492,7 @@ function IndexingStatusSection({ data }: { readonly data: CapsuleDetailData }): 
           label={t("localKnowledge.detail.index.retrievalCoverage")}
           value={indexedProgress}
           help={t("localKnowledge.detail.help.retrievalCoverage")}
-          tone={missingVectorsTone(missingVectors)}
+          tone={missingVectorsTone(data.health.chunkCount, missingVectors)}
         />
       </div>
       <Explainable as="div" block={true} description={t("localKnowledge.detail.help.indexMessage")}>

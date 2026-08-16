@@ -3617,6 +3617,7 @@ interface KnowledgeCatalog {
   readonly capsules: readonly CapsuleListEntry[];
   readonly capsuleSets: readonly CapsuleSetListEntry[];
   readonly loadError: string | null;
+  readonly refreshWhenReopened: () => void;
 }
 
 interface KnowledgeCatalogSnapshot {
@@ -3647,7 +3648,10 @@ function cachedKnowledgeCatalogSnapshot(now: number): KnowledgeCatalogSnapshot |
   return knowledgeCatalogCache.snapshot;
 }
 
-async function loadKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot> {
+async function loadKnowledgeCatalogSnapshot(
+  bypassCache = false,
+): Promise<KnowledgeCatalogSnapshot> {
+  if (bypassCache) knowledgeCatalogCache = undefined;
   const now = Date.now();
   const cached = cachedKnowledgeCatalogSnapshot(now);
   if (cached !== undefined) return cached;
@@ -3697,24 +3701,35 @@ export function clearKnowledgeCatalogCacheForTests(): void {
 
 function useKnowledgeCatalog(): KnowledgeCatalog {
   const t = useTranslate();
+  const hasOpenedRef = useRef(false);
+  const [refreshVersion, setRefreshVersion] = useState(0);
   const [snapshot, setSnapshot] = useState<KnowledgeCatalogSnapshot>(
     cachedKnowledgeCatalogSnapshot(Date.now()) ?? EMPTY_KNOWLEDGE_CATALOG,
   );
 
   useEffect(() => {
     let cancelled = false;
-    void loadKnowledgeCatalogSnapshot().then((next) => {
+    void loadKnowledgeCatalogSnapshot(refreshVersion > 0).then((next) => {
       if (!cancelled) setSnapshot(next);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshVersion]);
+
+  const refreshWhenReopened = (): void => {
+    if (!hasOpenedRef.current) {
+      hasOpenedRef.current = true;
+      return;
+    }
+    setRefreshVersion((current) => current + 1);
+  };
 
   return {
     capsules: snapshot.capsules,
     capsuleSets: snapshot.capsuleSets,
     loadError: snapshot.loadError === null ? null : formatScopeUpdateError(snapshot.loadError, t),
+    refreshWhenReopened,
   };
 }
 
@@ -3834,7 +3849,7 @@ function LocalKnowledgeScopeControl({
   readonly connected: boolean;
 }): ReactNode {
   const t = useTranslate();
-  const { capsules, capsuleSets, loadError } = catalog;
+  const { capsules, capsuleSets, loadError, refreshWhenReopened } = catalog;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -3904,6 +3919,7 @@ function LocalKnowledgeScopeControl({
         onValueChange={(next) => {
           void handleChange(next);
         }}
+        onOpen={refreshWhenReopened}
       />
       {displayedError !== null ? (
         <span role="alert" className="scope-connect-error">

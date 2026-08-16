@@ -401,6 +401,40 @@ describe("CapsuleDetail — overview section", () => {
 // ---------------------------------------------------------------------------
 
 describe("CapsuleDetail — index status section", () => {
+  it("does not claim all chunks are embedded when indexing produced no chunks", async () => {
+    const baseJob = FULL_DETAIL.indexingJobs[0];
+    if (baseJob === undefined) throw new Error("test fixture must include an indexing job");
+    const detail: CapsuleDetailData = {
+      ...FULL_DETAIL,
+      health: {
+        ...BASE_HEALTH,
+        documentCount: 2,
+        chunkCount: 0,
+        vectorCount: 0,
+        failedDocuments: 2,
+      },
+      indexingJobs: [
+        {
+          ...baseJob,
+          status: "failed",
+          totalDocuments: 2,
+          processedDocuments: 0,
+          failedDocuments: 2,
+          skippedDocuments: 0,
+          lastError: {
+            code: "EMBEDDING_ADAPTER_FAILED",
+            message: "Embedding setup failed.",
+          },
+        },
+      ],
+    };
+
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+
+    expect(await screen.findByText("No chunks available for embedding")).toBeInTheDocument();
+    expect(screen.queryByText("All chunks embedded")).not.toBeInTheDocument();
+  });
+
   it("renders indexed documents as successful documents over discovered documents", async () => {
     const baseJob = FULL_DETAIL.indexingJobs[0];
     if (baseJob === undefined) throw new Error("test fixture must include an indexing job");
