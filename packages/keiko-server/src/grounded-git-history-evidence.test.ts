@@ -148,6 +148,41 @@ describe("defaultGitFileHistoryEvidenceProvider", () => {
     expect(logArgs).toEqual(expect.arrayContaining(["-c", "core.quotepath=false", "log"]));
     expect(logArgs).toEqual(expect.arrayContaining(["--no-renames", "--name-only"]));
     expect(logArgs.some((arg) => arg.startsWith("--max-count="))).toBe(true);
+    // KEIKO-0421: git log must be pathspec-scoped so GIT_HISTORY_COMMIT_LIMIT is spent
+    // inside the selected root, not repo-wide. Repo root == scope root here → "." pathspec.
+    const separatorIndex = logArgs.indexOf("--");
+    expect(separatorIndex).toBeGreaterThanOrEqual(0);
+    expect(logArgs.slice(separatorIndex + 1)).toEqual(["."]);
+  });
+
+  it("scopes git log by the selected subfolder so the commit cap is not spent repo-wide (KEIKO-0421)", async () => {
+    const subScopeRoot = join(ROOT, "src");
+    // Make src a subfolder of a "real" repo root; runner reports ROOT as the repo root
+    // from `git rev-parse --show-toplevel`, so selectedRootPrefix resolves to "src".
+    const mutableCalls: string[][] = [];
+    const runner: GitProcessRunner = (args) => {
+      mutableCalls.push([...args]);
+      if (args.includes("rev-parse")) {
+        return Promise.resolve(ok(`${ROOT}\n`));
+      }
+      return Promise.resolve(ok(""));
+    };
+    const scopedSearch: SearchScope = {
+      ...scope(),
+      workspace: { ...scope().workspace, root: subScopeRoot },
+    };
+    await defaultGitFileHistoryEvidenceProvider({
+      searchScope: scopedSearch,
+      query: query(),
+      fs: nodeFs(),
+      nowMs: () => NOW,
+      runner,
+      maxFiles: 10,
+    });
+    const logArgs = mutableCalls[1] ?? [];
+    const separatorIndex = logArgs.indexOf("--");
+    expect(separatorIndex).toBeGreaterThanOrEqual(0);
+    expect(logArgs.slice(separatorIndex + 1)).toEqual(["src"]);
   });
 
   it("respects selected relativePaths", async () => {

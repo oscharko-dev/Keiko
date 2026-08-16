@@ -112,6 +112,46 @@ function postEditorContext(body: unknown): RouteContext {
   };
 }
 
+function delayedProvider(
+  sourceKind: NeutralKind,
+  order: number,
+  delayMs: number,
+  id: string,
+): RetrievalContextProvider<NeutralKind> {
+  return {
+    sourceKind,
+    order,
+    requiresEmbedding: false,
+    run: () =>
+      new Promise((resolve) => {
+        setTimeout(() => {
+          resolve({
+            excerpts: [
+              {
+                sourceKind,
+                id,
+                score: 1,
+                citationRef: id,
+                text: id,
+                truncated: false,
+              },
+            ],
+            omission: undefined,
+          });
+        }, delayMs);
+      }),
+  };
+}
+
+function throwingProvider(): RetrievalContextProvider<NeutralKind> {
+  return {
+    sourceKind: "entailment-evidence",
+    order: 5,
+    requiresEmbedding: false,
+    run: () => Promise.reject(new Error("provider blew up")),
+  };
+}
+
 describe("assembleRetrievalContext", () => {
   it("assembles a neutral purpose with deterministic ranks and auditable omissions", async () => {
     const providers = [graphProvider(), unavailableProvider()] as const;
@@ -129,6 +169,30 @@ describe("assembleRetrievalContext", () => {
     expect(forward.omissions).toEqual([
       { sourceKind: "entailment-evidence", reason: "unavailable" },
     ]);
+  });
+
+  it("degrades a throwing provider to an omission instead of aborting the pack (KEIKO-0491)", async () => {
+    const throwing = throwingProvider();
+    const succeeding = graphProvider();
+    const pack = await assemble([throwing, succeeding], Number.MAX_SAFE_INTEGER);
+    expect(pack.excerpts.map((entry) => entry.citation.id)).toEqual(["relation-a", "relation-b"]);
+    expect(pack.omissions).toEqual([{ sourceKind: "entailment-evidence", reason: "unavailable" }]);
+  });
+
+  it("runs providers concurrently so wall-clock is bounded by the slowest, not the sum (KEIKO-0307)", async () => {
+    // Three providers each sleeping 60ms. If they run sequentially the total exceeds
+    // ~3× that; if they run concurrently the total is ~1× that (plus scheduling slack).
+    const providers = [
+      delayedProvider("graph-relations", 1, 60, "p-1"),
+      delayedProvider("graph-relations", 2, 60, "p-2"),
+      delayedProvider("graph-relations", 3, 60, "p-3"),
+    ] as const;
+    const started = performance.now();
+    const pack = await assemble(providers, Number.MAX_SAFE_INTEGER);
+    const elapsedMs = performance.now() - started;
+    expect(pack.excerpts.map((entry) => entry.citation.id)).toEqual(["p-1", "p-2", "p-3"]);
+    // Sum-of-three would be ≥180ms. We assert well under, with headroom for CI noise.
+    expect(elapsedMs).toBeLessThan(150);
   });
 
   it("records embedding exclusions instead of invoking a forbidden provider", async () => {

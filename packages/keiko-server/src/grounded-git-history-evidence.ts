@@ -203,7 +203,12 @@ async function resolveGitRepositoryForHistory(
   };
 }
 
-function gitHistoryArgs(repositoryRoot: string): readonly string[] {
+// Path-scope the log so the GIT_HISTORY_COMMIT_LIMIT cap is spent inside the selected
+// root rather than repo-wide, which starved subfolder scopes in busy monorepos
+// (issue #2901 / KEIKO-0421). Empty prefix maps explicitly to "." — git treats an
+// empty-string pathspec differently from omitting one.
+function gitHistoryArgs(repositoryRoot: string, selectedRootPrefix: string): readonly string[] {
+  const pathspec = selectedRootPrefix.length > 0 ? selectedRootPrefix : ".";
   return [
     "--no-pager",
     "--no-optional-locks",
@@ -218,6 +223,7 @@ function gitHistoryArgs(repositoryRoot: string): readonly string[] {
     `--format=${GIT_HISTORY_RECORD_SEP}%ct`,
     "--name-only",
     "--",
+    pathspec,
   ];
 }
 
@@ -356,7 +362,7 @@ export const defaultGitFileHistoryEvidenceProvider: GitFileHistoryEvidenceProvid
     return [];
   }
   throwIfCancelled(inputs.signal);
-  const result = await runner(gitHistoryArgs(repo.repositoryRoot), {
+  const result = await runner(gitHistoryArgs(repo.repositoryRoot, repo.selectedRootPrefix), {
     cwd: repo.repositoryRoot,
     maxBytes: GIT_HISTORY_MAX_BYTES,
     timeoutMs: GIT_HISTORY_TIMEOUT_MS,

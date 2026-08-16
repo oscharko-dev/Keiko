@@ -260,7 +260,8 @@ function outcomeFromError(
     return { ...base, timedOut: false, failureReason: "cancelled", eventKind: "run-cancelled" };
   }
   if (error instanceof CommandTimeoutError) {
-    return { ...base, timedOut: true, failureReason: "timed-out", eventKind: "run-failed" };
+    // ADR-0018 D7 — a timeout is a "completed with timedOut=true" outcome, not an infra failure.
+    return { ...base, timedOut: true, failureReason: "timed-out", eventKind: "run-completed" };
   }
   return {
     ...base,

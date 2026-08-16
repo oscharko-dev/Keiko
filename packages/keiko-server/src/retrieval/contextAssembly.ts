@@ -95,7 +95,7 @@ function orderedProviders<SourceKind extends RetrievalContextSourceKind>(
   );
 }
 
-function collectOutcome<SourceKind extends RetrievalContextSourceKind>(
+function appendOutcome<SourceKind extends RetrievalContextSourceKind>(
   outcome: RetrievalContextProviderOutcome<SourceKind>,
   state: AssemblyState<SourceKind>,
 ): void {
@@ -103,22 +103,28 @@ function collectOutcome<SourceKind extends RetrievalContextSourceKind>(
   if (outcome.omission !== undefined) state.omissions.push(outcome.omission);
 }
 
-async function collectProvider<SourceKind extends RetrievalContextSourceKind>(
+// Pure per-provider collect: returns the outcome instead of mutating shared state, so
+// providers can run concurrently (Promise.allSettled) and the ordered walk in
+// assembleRetrievalContext appends their results deterministically. Guards provider.run
+// itself so one throwing provider degrades to an omission rather than aborting the whole
+// pack (issue #2901 / KEIKO-0491).
+async function collectProviderOutcome<SourceKind extends RetrievalContextSourceKind>(
   provider: RetrievalContextProvider<SourceKind>,
   budget: RetrievalContextBudget,
   input: AssembleRetrievalContextInput<SourceKind, RetrievalPurpose>,
-  state: AssemblyState<SourceKind>,
-): Promise<void> {
+): Promise<RetrievalContextProviderOutcome<SourceKind> | undefined> {
   if (provider.requiresEmbedding && !input.allowEmbeddingProviders) {
-    state.omissions.push({ sourceKind: provider.sourceKind, reason: "too-expensive" });
-    return;
+    return { excerpts: [], omission: { sourceKind: provider.sourceKind, reason: "too-expensive" } };
   }
   if (provider.run === undefined) {
-    state.omissions.push({ sourceKind: provider.sourceKind, reason: "unavailable" });
-    return;
+    return { excerpts: [], omission: { sourceKind: provider.sourceKind, reason: "unavailable" } };
   }
-  if (input.signal.aborted && provider.runWhenAborted !== true) return;
-  collectOutcome(await provider.run(budget), state);
+  if (input.signal.aborted && provider.runWhenAborted !== true) return undefined;
+  try {
+    return await provider.run(budget);
+  } catch {
+    return { excerpts: [], omission: { sourceKind: provider.sourceKind, reason: "unavailable" } };
+  }
 }
 
 function packCandidates<
@@ -166,8 +172,17 @@ export async function assembleRetrievalContext<
 ): Promise<RetrievalContextPack<SourceKind, Purpose, SourceTier>> {
   const budget = effectiveRetrievalContextBudget(input.budget, input.requestedBudgetBytes);
   const state: AssemblyState<SourceKind> = { candidates: [], omissions: [] };
-  for (const provider of orderedProviders(input.providers)) {
-    await collectProvider(provider, budget, input, state);
+  // Providers run concurrently (wall-clock ~= slowest, not sum-of-all) so a shared
+  // as-you-type deadline is not consumed serially by every new source kind
+  // (issue #2901 / KEIKO-0307). Iterate in deterministic provider order so that
+  // packCandidates's rank/score-ordered selection is unaffected by which provider
+  // resolves first.
+  const providers = orderedProviders(input.providers);
+  const outcomes = await Promise.all(
+    providers.map((provider) => collectProviderOutcome(provider, budget, input)),
+  );
+  for (const outcome of outcomes) {
+    if (outcome !== undefined) appendOutcome(outcome, state);
   }
   const packed = packCandidates(state.candidates, budget.budgetBytes, input.tierForSourceKind);
   return {
