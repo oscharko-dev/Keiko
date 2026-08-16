@@ -1,0 +1,26 @@
+{
+  "issue": 3166,
+  "verdict": "PASS",
+  "method": "Computer Use accessibility tree plus focused component tests",
+  "captures": [
+    {
+      "file": "01-health-scan-rate-limit-dark.jpeg",
+      "theme": "dark",
+      "observations": [
+        "Error text is exposed in the accessibility tree",
+        "Retry is exposed as an operable button",
+        "Stale findings count is absent"
+      ]
+    },
+    {
+      "file": "02-health-scan-rate-limit-light.jpeg",
+      "theme": "light",
+      "observations": [
+        "Error text remains exposed after theme change",
+        "Retry remains exposed as an operable button",
+        "Stale findings count remains absent"
+      ]
+    }
+  ],
+  "gate": "No serious or critical issue observed in the changed Health Scan error state; automated UI receipt remains a separate release gate."
+}
