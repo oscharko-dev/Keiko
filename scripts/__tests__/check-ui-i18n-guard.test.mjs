@@ -1419,6 +1419,30 @@ test("still ignores non-inline JSX spreads (dynamic props object)", () => {
   ).toEqual([]);
 });
 
+// KEIKO-0299 (review-follow-up on b5cb3f6c, codex 3793101250): `{items.map(() => "Delete
+// account")}` — the ArrowFunction body IS user-visible copy that gets rendered per item, but
+// the previous CallExpression recursion stopped at the function argument and never inspected
+// its body. Handle expression-bodied and block-bodied arrows/functions.
+test("collects literals from expression-bodied arrow callbacks", () => {
+  const src = '<p>{items.map(() => "Delete account")}</p>';
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("Delete account");
+});
+
+test("collects literals from block-bodied arrow callbacks via ReturnStatement", () => {
+  const src = '<p>{items.map(() => { return "Return delete"; })}</p>';
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("Return delete");
+});
+
+test("does not recurse into nested function scopes' return statements", () => {
+  const src =
+    '<p>{items.map(() => { const inner = () => "Inner return"; return "Outer return"; })}</p>';
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("Outer return");
+  expect(texts).not.toContain("Inner return");
+});
+
 // KEIKO-0299 (review-follow-up on af74e79b): a JSX child like `{"Welcome back, " + name}`
 // renders the concatenation as user copy — the literal on either operand IS user-visible and
 // must enter the ledger. Codex 3792890969.

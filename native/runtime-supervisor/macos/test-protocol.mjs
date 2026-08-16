@@ -191,6 +191,16 @@ function processLadderLine(line, stack, kept) {
     stack.push({ mode: KEEPING, sawDefLive: true, sawUnkLive: false, depth: 0 });
     return;
   }
+  // Known limitation (codex 3793101248 on #3202): `#ifdef X` / `#ifndef X` / `#if X` where X
+  // is a preprocessor MACRO cannot be evaluated without running the actual preprocessor with
+  // the build's `-D` flags and `#include` chain. This scanner deliberately checks the SOURCE
+  // shape (not the preprocessed output) so it can run on every host without a full clang
+  // toolchain, so a control moved under `#ifdef NEVER_DEFINED` is still visible to the source
+  // pins. A future iteration could preprocess the source with the same flags
+  // `scripts/check-macos-native-quality.sh` uses (`-D_DARWIN_C_SOURCE`) and rerun the
+  // assertions on the output — non-trivial change out of scope here. The source-contract's
+  // stated purpose remains "catch silent deletion of the token from the source" and does
+  // NOT claim "catch macro-gated deletion".
   if (stack.length === 0) {
     kept.push(line);
     return;

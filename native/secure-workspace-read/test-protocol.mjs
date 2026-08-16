@@ -379,6 +379,11 @@ function processLadderLine(line, stack, kept) {
     stack.push({ mode: KEEPING, sawDefLive: true, sawUnkLive: false, depth: 0 });
     return;
   }
+  // Known limitation (codex 3793101248 on #3202): macro-gated `#ifdef X` / `#ifndef X` / `#if
+  // X` cannot be evaluated without a preprocessor pass. This scanner intentionally checks the
+  // SOURCE shape, so a control moved under `#ifdef NEVER_DEFINED` is still visible to the
+  // source pins. Documented tradeoff — full preprocessing would require the actual build
+  // flags (`-D_UNICODE`, `-DUNICODE`, etc.) and is out of scope for a portable-host scanner.
   if (stack.length === 0) {
     kept.push(line);
     return;

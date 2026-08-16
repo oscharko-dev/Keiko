@@ -788,6 +788,13 @@ function collectJsxTextAndExpressions(source, filename) {
 function jsxChildExpressionLiteralTexts(expr, sourceFile) {
   const stringLike = stringLikeExpressionTexts(expr, sourceFile);
   if (stringLike !== null) return stringLike;
+  const compound = compoundExpressionTexts(expr, sourceFile);
+  return compound === null ? [] : compound;
+}
+
+// Compound expression shapes (extracted for complexity ceiling). Returns null when `expr` is
+// not one of these shapes, so the caller falls through to the empty default.
+function compoundExpressionTexts(expr, sourceFile) {
   if (ts.isConditionalExpression(expr)) {
     return [
       ...jsxChildExpressionLiteralTexts(expr.whenTrue, sourceFile),
@@ -797,31 +804,62 @@ function jsxChildExpressionLiteralTexts(expr, sourceFile) {
   if (ts.isBinaryExpression(expr) && isRenderingFallbackOperator(expr.operatorToken.kind)) {
     return binaryFallbackLiteralTexts(expr, sourceFile);
   }
-  // Unwrap transparent expression wrappers (codex 3793028199 on #3202): the following AST
-  // shapes wrap an inner expression WITHOUT affecting its runtime value, so a literal wrapped
-  // in any of them still renders as user copy but was invisible to the recursion.
-  //   ParenthesizedExpression: `(...)`  (e.g. `{a ? (b ? "One" : "Two") : "Three"}`)
-  //   AsExpression:            `x as T` (e.g. `<p>{"Delete account" as const}</p>`)
-  //   SatisfiesExpression:     `x satisfies T`
-  //   NonNullExpression:       `x!`
-  if (
+  if (isTransparentWrapper(expr)) {
+    return jsxChildExpressionLiteralTexts(expr.expression, sourceFile);
+  }
+  // CallExpression: a helper like `definedOr(x, "this file")` returns its literal argument
+  // verbatim (codex 3792986615). Traverse each argument via the same helper.
+  if (ts.isCallExpression(expr)) {
+    return expr.arguments.flatMap((arg) => jsxChildExpressionLiteralTexts(arg, sourceFile));
+  }
+  // ArrowFunction / FunctionExpression: `{items.map(() => "Delete account")}` — the body IS
+  // user copy that gets rendered per item (codex 3793101250).
+  if (ts.isArrowFunction(expr) || ts.isFunctionExpression(expr)) {
+    return functionLikeLiteralTexts(expr, sourceFile);
+  }
+  return null;
+}
+
+// Transparent expression wrappers (codex 3793028199): these AST shapes wrap an inner
+// expression WITHOUT affecting its runtime value, so a literal wrapped in any of them still
+// renders as user copy.
+//   ParenthesizedExpression: `(...)`
+//   AsExpression:            `x as T`
+//   SatisfiesExpression:     `x satisfies T`
+//   NonNullExpression:       `x!`
+function isTransparentWrapper(expr) {
+  return (
     ts.isParenthesizedExpression(expr) ||
     ts.isAsExpression(expr) ||
     ts.isSatisfiesExpression(expr) ||
     ts.isNonNullExpression(expr)
-  ) {
-    return jsxChildExpressionLiteralTexts(expr.expression, sourceFile);
-  }
-  // KEIKO-0299 (review-follow-up on 4d7d131a): a helper call that returns one of its arguments
-  // verbatim renders the literal argument as user copy — the concrete case is
-  // `definedOr(x, "this file")` in `EditorRuntimeWidget.tsx`. Codex 3792986615. Traverse each
-  // argument via the same helper; non-literal arguments produce empty results and
-  // `isTranslatableCopy` filters obvious machine tokens downstream. False positives (a `t("…")`
-  // key lookup, a `console.log(...)` diagnostic) can be marked `// i18n-exempt: <reason>`.
-  if (ts.isCallExpression(expr)) {
-    return expr.arguments.flatMap((arg) => jsxChildExpressionLiteralTexts(arg, sourceFile));
-  }
-  return [];
+  );
+}
+
+function functionLikeLiteralTexts(expr, sourceFile) {
+  const body = expr.body;
+  if (body === undefined) return [];
+  if (!ts.isBlock(body)) return jsxChildExpressionLiteralTexts(body, sourceFile);
+  const returns = [];
+  const walk = (node) => {
+    if (ts.isReturnStatement(node)) {
+      if (node.expression) {
+        returns.push(...jsxChildExpressionLiteralTexts(node.expression, sourceFile));
+      }
+      return;
+    }
+    if (
+      ts.isArrowFunction(node) ||
+      ts.isFunctionExpression(node) ||
+      ts.isFunctionDeclaration(node)
+    ) {
+      // Do not recurse into nested function scopes — their returns belong to those scopes.
+      return;
+    }
+    ts.forEachChild(node, walk);
+  };
+  walk(body);
+  return returns;
 }
 
 function lineOfNode(node, sourceFile) {
