@@ -3,6 +3,11 @@
 // realpath resolution.
 
 import type { IncomingMessage } from "node:http";
+import { createWorkspaceMutexRegistry, fileWriteKey } from "./task-workspace/mutex.js";
+
+// One registry per server process: same-process turn order for the verify→write region below
+// (KEIKO-0495). It composes with, never replaces, the persisted advisory WorkspaceLock.
+const fileWriteMutex = createWorkspaceMutexRegistry();
 import type { Dirent, Stats } from "node:fs";
 import { constants, createReadStream } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -1670,7 +1675,6 @@ async function writeResolvedFilesContent(args: {
   if (!isEditableUtf8File(base.extension, prefix.buffer)) {
     throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
   }
-  await assertNoWriteConflict(args.target, args.baseVersion, args.expectedModifiedAt);
   if (Buffer.byteLength(args.content, "utf8") > MAX_TEXT_PREVIEW_BYTES) {
     throw new FilesError(
       413,
@@ -1678,12 +1682,27 @@ async function writeResolvedFilesContent(args: {
       `This file is too large to edit here (limit ${String(MAX_TEXT_PREVIEW_BYTES)} bytes).`,
     );
   }
-  let localHistoryProtection: FilesContentWireResponse["localHistoryProtection"];
-  if (args.beforeWrite !== undefined) {
-    const current = await readStableEditableContent(args.target);
-    localHistoryProtection = args.beforeWrite(current.content);
-  }
-  const updatedStats = await writeExistingResolvedFile(args.target, args.content);
+  // KEIKO-0495: verify-then-write is a check-then-act. Two saves carrying the same baseVersion
+  // could both clear assertNoWriteConflict and the second would silently overwrite the first, with
+  // no STALE_SESSION for the loser. Serialising the whole verify→write region per file makes the
+  // loser re-verify against the winner's result and fail closed as it should. This REUSES the
+  // shared WorkspaceMutexRegistry rather than introducing a second locking mechanism; the existing
+  // conflict checks are untouched and still do the deciding.
+  const { localHistoryProtection, updatedStats } = await fileWriteMutex.runExclusive(
+    [fileWriteKey(args.target.path)],
+    async () => {
+      await assertNoWriteConflict(args.target, args.baseVersion, args.expectedModifiedAt);
+      let protection: FilesContentWireResponse["localHistoryProtection"];
+      if (args.beforeWrite !== undefined) {
+        const current = await readStableEditableContent(args.target);
+        protection = args.beforeWrite(current.content);
+      }
+      return {
+        localHistoryProtection: protection,
+        updatedStats: await writeExistingResolvedFile(args.target, args.content),
+      };
+    },
+  );
   return {
     ...base,
     sizeBytes: updatedStats.size,

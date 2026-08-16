@@ -46,12 +46,22 @@ export function provisionKey(repositoryId: string, taskId: string): string {
   return `prov:${repositoryId}:${taskId}`;
 }
 
+// A single edited file. The plain file-save route's optimistic-concurrency check is a
+// check-then-act (KEIKO-0495): two saves carrying the same baseVersion could both pass
+// verification and the second silently overwrite the first. Keyed by resolved real path so two
+// routes reaching the same inode serialize even via different request paths. Lowest tier — a
+// file write takes exactly one key, so it can never participate in a multi-key deadlock.
+export function fileWriteKey(realPath: string): string {
+  return `file:${realPath}`;
+}
+
 function keyTier(key: string): number {
   if (key.startsWith("active:")) return 0;
   if (key.startsWith("ws:")) return 1;
   if (key.startsWith("repo:")) return 2;
   if (key.startsWith("prov:")) return 3;
-  return 4;
+  if (key.startsWith("file:")) return 4;
+  return 5;
 }
 
 function compareKeys(a: string, b: string): number {

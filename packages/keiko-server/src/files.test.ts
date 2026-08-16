@@ -683,6 +683,45 @@ describe("desktop files browser", () => {
     expect(saved.content).toBe('export const value = "fresh";\n');
   });
 
+  // KEIKO-0495: the optimistic-concurrency check was a check-then-act. Two saves carrying the SAME
+  // baseVersion could both clear assertNoWriteConflict before either wrote, and the second silently
+  // overwrote the first with no STALE_SESSION for the loser — a lost update with no signal.
+  it("lets exactly one of two concurrent same-baseVersion saves win", async () => {
+    const initial = await readFilesContent(store, root, "src/app.ts");
+    const first = 'export const value = "first";\n';
+    const second = 'export const value = "second";\n';
+
+    const results = await Promise.allSettled([
+      writeFilesContent({
+        store,
+        rootInput: root,
+        pathInput: "src/app.ts",
+        content: first,
+        baseVersion: initial.session.version,
+      }),
+      writeFilesContent({
+        store,
+        rootInput: root,
+        pathInput: "src/app.ts",
+        content: second,
+        baseVersion: initial.session.version,
+      }),
+    ]);
+
+    const fulfilled = results.filter((r) => r.status === "fulfilled");
+    const rejected = results.filter((r) => r.status === "rejected");
+    // Exactly one winner, and the loser is told so rather than silently discarded.
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]).toMatchObject({
+      reason: { status: 409, code: "STALE_SESSION" },
+    });
+
+    // On-disk content is exactly one of the two payloads — never a mix, never the loser's.
+    const onDisk = await readFilesContent(store, root, "src/app.ts");
+    expect([first, second]).toContain(onDisk.content);
+  });
+
   it("prefers baseVersion over expectedModifiedAt for conflict detection", async () => {
     const initial = await readFilesContent(store, root, "src/app.ts");
 
