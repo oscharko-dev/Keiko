@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   QUALITY_INTELLIGENCE_RUN_STATUSES,
   QUALITY_INTELLIGENCE_ERROR_CODES,
+  deriveQualityIntelligenceTerminalDegradation,
   type QualityIntelligenceRunStatus,
   type QualityIntelligenceErrorCode,
   type QualityIntelligenceRunStreamEvent,
@@ -41,6 +42,26 @@ describe("Quality Intelligence run-status union (GEN-DUP-SEMANTIC-010)", () => {
       "failed",
       "cancelled",
     ]);
+  });
+});
+
+describe("Quality Intelligence degraded terminal projection (#3186)", () => {
+  const judgeFailure = [{ stage: "judge" as const, reasonSummary: "qi-judge-unavailable" }];
+
+  it("derives degradation from persisted model-stage failure evidence", () => {
+    expect(deriveQualityIntelligenceTerminalDegradation("succeeded", judgeFailure)).toEqual({
+      degraded: true,
+      reasonSummary: "qi-judge-unavailable",
+    });
+  });
+
+  it("keeps a clean inexpensive chat-only success unqualified", () => {
+    expect(deriveQualityIntelligenceTerminalDegradation("succeeded", undefined)).toBeUndefined();
+    expect(deriveQualityIntelligenceTerminalDegradation("succeeded", [])).toBeUndefined();
+  });
+
+  it("does not relabel a failed run as degraded", () => {
+    expect(deriveQualityIntelligenceTerminalDegradation("failed", judgeFailure)).toBeUndefined();
   });
 });
 

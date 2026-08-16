@@ -1,0 +1,18 @@
+{
+  "issue": 3186,
+  "verdict": "PASS",
+  "tool": "axe-core",
+  "gate": "zero serious or critical violations on degraded QI list, detail, and live launcher",
+  "captures": [
+    {
+      "theme": "dark",
+      "screenshot": "dark-qi-terminal.png",
+      "seriousOrCriticalAxeViolations": 0
+    },
+    {
+      "theme": "light",
+      "screenshot": "light-qi-terminal.png",
+      "seriousOrCriticalAxeViolations": 0
+    }
+  ]
+}

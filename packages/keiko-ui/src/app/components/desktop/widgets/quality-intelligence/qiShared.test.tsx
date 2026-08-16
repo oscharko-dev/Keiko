@@ -44,4 +44,11 @@ describe("qiShared run-status guard (GEN-DUP-SEMANTIC-010)", () => {
     const badge = screen.getByText("quantum-superposition");
     expect(badge).toHaveClass("qi-badge", "qi-badge-default");
   });
+
+  it("renders degraded succeeded terminal truth instead of a plain Succeeded badge", () => {
+    render(<StatusBadge status="succeeded" degraded />);
+    const badge = screen.getByText("Degraded");
+    expect(badge).toHaveClass("qi-badge", "qi-badge-default");
+    expect(screen.queryByText("Succeeded")).not.toBeInTheDocument();
+  });
 });

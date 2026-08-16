@@ -29,6 +29,7 @@ const QI_EN_MESSAGES = {
   "qi.review.announce": 'Candidate "{title}" marked {state}. ({nonce})',
   "qi.status.running": "Running",
   "qi.status.succeeded": "Succeeded",
+  "qi.status.degraded": "Degraded",
   "qi.status.failed": "Failed",
   "qi.status.cancelled": "Cancelled",
   "qi.severity.prefix": "Severity:",
@@ -66,6 +67,8 @@ const QI_EN_MESSAGES = {
   "qi.run.review": "Review",
   "qi.run.requested": "Requested",
   "qi.run.completed": "Completed",
+  "qi.run.degradedNotice":
+    "This run completed with degraded model processing. Persisted model-stage evidence: {reason}.",
   "qi.run.generatedTestCases": "Generated test cases",
   "qi.run.aria": "Quality Intelligence run {runId}",
   "qi.run.loading": "Loading run…",
@@ -264,6 +267,7 @@ const QI_DE_MESSAGES: QiMessageCatalog = {
   "qi.review.announce": "Kandidat „{title}“ wurde als „{state}“ markiert. ({nonce})",
   "qi.status.running": "Läuft",
   "qi.status.succeeded": "Erfolgreich",
+  "qi.status.degraded": "Eingeschränkt",
   "qi.status.failed": "Fehlgeschlagen",
   "qi.status.cancelled": "Abgebrochen",
   "qi.severity.prefix": "Schweregrad:",
@@ -301,6 +305,8 @@ const QI_DE_MESSAGES: QiMessageCatalog = {
   "qi.run.review": "Review",
   "qi.run.requested": "Angefordert",
   "qi.run.completed": "Abgeschlossen",
+  "qi.run.degradedNotice":
+    "Dieser Lauf wurde mit eingeschränkter Modellverarbeitung abgeschlossen. Persistierte Evidenz der Modellphase: {reason}.",
   "qi.run.generatedTestCases": "Generierte Testfälle",
   "qi.run.aria": "Quality-Intelligence-Lauf {runId}",
   "qi.run.loading": "Lauf wird geladen…",

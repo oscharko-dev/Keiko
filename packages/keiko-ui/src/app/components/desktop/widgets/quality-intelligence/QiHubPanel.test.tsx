@@ -11,6 +11,7 @@ function makeRun(
   id: string,
   status: QualityIntelligenceUiRunSummary["status"],
   reviewState: QualityIntelligenceUiRunSummary["reviewState"] = "open",
+  degraded = false,
 ): QualityIntelligenceUiRunSummary {
   return {
     id,
@@ -20,6 +21,7 @@ function makeRun(
     totals: { candidates: 3, findings: 0, exports: 0 },
     // Issue #282 A11y-2: reviewState is now required on the wire summary (backend contract update).
     reviewState,
+    ...(degraded ? { degraded: true, reasonSummary: "qi-judge-unavailable" } : {}),
   };
 }
 
@@ -46,6 +48,21 @@ describe("QiHubPanel", () => {
     render(<QiHubPanel openRun={vi.fn()} fetchRunsImpl={fakeFetch(runs)} />);
     expect(await screen.findByText(/qi-run-aaaa1111/)).toBeInTheDocument();
     expect(screen.getByText(/qi-run-bbbb2222/)).toBeInTheDocument();
+  });
+
+  it("labels a persisted stage-failure run as Degraded in visible and announced list status", async () => {
+    render(
+      <QiHubPanel
+        openRun={vi.fn()}
+        fetchRunsImpl={fakeFetch([makeRun("qi-run-degraded", "succeeded", "open", true)])}
+      />,
+    );
+
+    const row = await screen.findByRole("button", {
+      name: /open run qi-run-degraded — Degraded,/i,
+    });
+    expect(within(row).getByText("Degraded")).toBeInTheDocument();
+    expect(within(row).queryByText("Succeeded")).not.toBeInTheDocument();
   });
 
   it("calls openRun with an empty source handle set when a historical run row is clicked", async () => {

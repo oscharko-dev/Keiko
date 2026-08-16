@@ -1692,6 +1692,36 @@ describe("RunLauncher — terminal status gating (pr-reviewer M2)", () => {
     expect(onRunCompleted).toHaveBeenCalledWith("run-degraded", expect.anything());
   });
 
+  it("communicates judge-only degradation as a model-stage outcome, not a generation failure", async () => {
+    const user = userEvent.setup();
+    const { startImpl, done } = makeStreamingFake([
+      {
+        type: "accepted",
+        runId: "run-judge-degraded",
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        sourceCount: 1,
+        atomCount: 1,
+      },
+      {
+        type: "done",
+        runId: "run-judge-degraded",
+        status: "succeeded",
+        totals: { candidates: 2, findings: 0, exports: 0 },
+        reasonSummary: "qi-judge-unavailable",
+        degraded: true,
+      },
+    ]);
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={vi.fn()} />);
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Some requirements");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await done;
+
+    const notice = await screen.findByTestId("qi-launch-degraded");
+    expect(notice).toHaveTextContent(/Modellphase/i);
+    expect(notice).not.toHaveTextContent(/Modellgenerierung ist fehlgeschlagen/i);
+    expect(screen.queryByTestId("qi-launch-error")).not.toBeInTheDocument();
+  });
+
   it("does not splice raw English model errors into degraded-run notices", async () => {
     const user = userEvent.setup();
     const onRunCompleted = vi.fn();

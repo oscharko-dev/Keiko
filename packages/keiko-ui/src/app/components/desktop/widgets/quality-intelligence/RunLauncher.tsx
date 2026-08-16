@@ -133,27 +133,31 @@ const QI_MODEL_SCHEMA_VIOLATION_MESSAGE =
 const QI_UNKNOWN_TECHNICAL_DETAIL_MESSAGE =
   "Technische Fehlerdetails wurden nicht in die Nutzeransicht übernommen";
 
-// Shown on a SUCCEEDED-but-degraded run: model generation failed, so Keiko delivered deterministic
-// baseline test cases from the evidence. The user must be told the output is not model-backed so a
-// degraded run is never mistaken for an authoritative model result (regulated-delivery audit).
+// Shown on a SUCCEEDED-but-degraded run: persisted model-stage failure evidence qualifies the
+// result. The user must be told the output is not fully model-backed so it is never mistaken for an
+// authoritative model result (regulated-delivery audit).
 function degradedMessageFromReason(reasonSummary: string | null | undefined): string {
-  const base =
+  const generationBase =
     "Die Modellgenerierung ist fehlgeschlagen — Keiko hat deterministische Baseline-Testfälle aus der " +
     "Evidenz erstellt. Diese sind nicht modellgestützt; prüfe das Modell-Gateway und starte den Lauf für " +
     "modellgestützte Testfälle erneut.";
+  const stageBase =
+    "Mindestens eine Modellphase wurde eingeschränkt abgeschlossen. Das Ergebnis ist nicht vollständig " +
+    "modellgestützt; prüfe das Modell-Gateway und die Run-Evidenz, bevor du es verwendest.";
   if (reasonSummary === undefined || reasonSummary === null || reasonSummary.trim().length === 0) {
-    return base;
+    return stageBase;
   }
   if (reasonSummary === "qi-error: UnparseableModelOutputError") {
-    return `${base} (Modellausgabe nicht als JSON parsebar)`;
+    return `${generationBase} (Modellausgabe nicht als JSON parsebar)`;
   }
   if (reasonSummary === "qi-error: QI_PROMPT_TOO_LARGE") {
-    return `${base} (Quellkontext für das Modell zu groß)`;
+    return `${generationBase} (Quellkontext für das Modell zu groß)`;
   }
   if (reasonSummary === "qi-error: QI_MODEL_SCHEMA_VIOLATION") {
-    return `${base} (${QI_MODEL_SCHEMA_VIOLATION_MESSAGE})`;
+    return `${generationBase} (${QI_MODEL_SCHEMA_VIOLATION_MESSAGE})`;
   }
-  return `${base} (${QI_UNKNOWN_TECHNICAL_DETAIL_MESSAGE})`;
+  if (reasonSummary.startsWith("qi-judge-")) return stageBase;
+  return `${stageBase} (${QI_UNKNOWN_TECHNICAL_DETAIL_MESSAGE})`;
 }
 
 function failureMessageFromReason(reasonSummary: string | null | undefined): string {

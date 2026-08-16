@@ -71,6 +71,10 @@ export interface QualityIntelligenceUiRunSummary {
   readonly totals: QualityIntelligenceUiRunTotals;
   /** Overall human-review state for the run (Issue #282); "open" until a reviewer acts. */
   readonly reviewState: QualityIntelligenceReviewState;
+  /** Additive terminal truth for succeeded runs that persisted model-stage failure evidence. */
+  readonly degraded?: true;
+  /** First persisted, redaction-safe model-stage failure reason when `degraded` is true. */
+  readonly reasonSummary?: string;
 }
 
 /**
@@ -227,6 +231,10 @@ export interface QualityIntelligenceUiRunDetail {
   readonly qualityDiagnostics?: QualityIntelligenceQualityDiagnostics;
   /** Browser-safe Living Tests drift metadata; never contains raw source text, paths, or hashes. */
   readonly drift: QualityIntelligenceUiDriftMetadata;
+  /** Additive terminal truth for succeeded runs that persisted model-stage failure evidence. */
+  readonly degraded?: true;
+  /** First persisted, redaction-safe model-stage failure reason when `degraded` is true. */
+  readonly reasonSummary?: string;
 }
 
 export interface QualityIntelligenceQualityDiagnostics {
@@ -493,6 +501,25 @@ export interface QualityIntelligenceModelStageFailure {
   readonly reasonSummary: string;
 }
 
+export interface QualityIntelligenceTerminalDegradation {
+  readonly degraded: true;
+  readonly reasonSummary: string;
+}
+
+/**
+ * Derive the browser/live degraded terminal projection from model-stage failure evidence only.
+ * The persisted run status remains unchanged for compatibility; callers add these optional fields.
+ */
+export function deriveQualityIntelligenceTerminalDegradation(
+  status: QualityIntelligenceRunStatus,
+  stageFailures: readonly QualityIntelligenceModelStageFailure[] | undefined,
+): QualityIntelligenceTerminalDegradation | undefined {
+  if (status !== "succeeded") return undefined;
+  const firstFailure = stageFailures?.[0];
+  if (firstFailure === undefined) return undefined;
+  return { degraded: true, reasonSummary: firstFailure.reasonSummary };
+}
+
 export interface QualityIntelligenceModelRouting {
   readonly policyVersion: 1;
   readonly requested: QualityIntelligenceModelPolicy;
@@ -671,10 +698,8 @@ export interface QualityIntelligenceRunStreamDone {
    */
   readonly reasonSummary?: string;
   /**
-   * True when the run completed (status "succeeded") but model generation/judging fell back to the
-   * deterministic baseline because the provider or parser failed. The run still produced usable
-   * baseline test cases, but the model output is absent — clients MUST surface this so a degraded
-   * run is never presented as an authoritative model-backed result (regulated-delivery audit). The
+   * Present only when persisted model-stage failure evidence qualifies an otherwise succeeded run.
+   * Clients must show the completed result as degraded, not as an unqualified success. The
    * redacted cause is carried in `reasonSummary`. Additive on the wire.
    */
   readonly degraded?: boolean;
