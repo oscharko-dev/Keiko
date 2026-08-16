@@ -4442,6 +4442,62 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
   };
 }
 
+// KEIKO-0497 (#2901): configuring the gateway points the product at an outbound endpoint and can
+// enable the private-network override, and until now that act left no evidence — the route returned
+// 200 and wrote nothing an operator could audit afterwards. Both success paths now emit exactly one
+// content-free record.
+//
+// The base URL is deliberately NOT recorded, only its host classification: the evidence must answer
+// "did setup ever target a metadata or private-network address, and was the override on?" without
+// itself becoming a store of endpoints. `classifyOutboundHost` returns nothing for a name that is
+// not a literal IP, which is the ordinary public case, so an unclassified host records as `public`
+// rather than dropping the record — a successful setup must never be missing from the trail.
+function gatewaySetupTargetClass(baseUrl: string): GatewaySetupTargetClass {
+  let hostname: string;
+  try {
+    hostname = new URL(baseUrl).hostname;
+  } catch {
+    // An unparseable base URL cannot reach a real host, but the setup still completed; record it
+    // under the safest classification rather than losing the event.
+    return "public";
+  }
+  return classifyOutboundHost(hostname) ?? "public";
+}
+
+function recordGatewaySetupAudit(
+  deps: UiHandlerDeps,
+  request: SetupRequest,
+  config: GatewayConfig,
+  outcome: GatewaySetupOutcomeKind,
+): void {
+  const record: GatewaySetupAuditRecord = {
+    schemaVersion: GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
+    outcome,
+    timestamp: new Date().toISOString(),
+    correlationId: request.correlationId ?? randomUUID(),
+    targetClass: gatewaySetupTargetClass(request.baseUrl),
+    privateNetworkOverrideActive: config.egress?.allowPrivateNetwork === true,
+    providerCount: config.providers.length,
+  };
+  const validation = validateGatewaySetupAuditRecord(record);
+  if (!validation.ok) {
+    // Never a silent drop: a record this side built and cannot validate is a defect in this code,
+    // and swallowing it would leave the same evidence gap the record exists to close. The reason is
+    // a fixed validator string naming a field — it carries no value from the record.
+    emitServerDiagnostic(deps.diagnostics, {
+      correlationId: record.correlationId,
+      timestamp: record.timestamp,
+      operation: "POST /api/gateway/setup",
+      source: "gateway-setup.audit",
+      errorClass: "GatewaySetupAuditInvalid",
+      message: `Gateway setup audit record failed validation: ${validation.reason}`,
+      code: "GATEWAY_SETUP_AUDIT_INVALID",
+    });
+    return;
+  }
+  deps.evidenceStore.put(`gateway-setup-${randomUUID()}`, JSON.stringify(record));
+}
+
 function setupSuccessResult(
   config: GatewayConfig,
   testedModelIds: readonly string[],
@@ -4705,6 +4761,7 @@ async function trySetupCandidate(
     deps,
   );
   gatewayConfig.set(verified.config, true);
+  recordGatewaySetupAudit(deps, request, verified.config, "candidate-accepted");
   return setupSuccessResult(verified.config, verified.testedModelIds, verified.skippedModelIds);
 }
 
@@ -4964,6 +5021,7 @@ function saveExistingConfigUpdate(
   );
   persistGatewayConfig(persistedRawConfig, gatewayConfig.storagePath, deps);
   gatewayConfig.set(config, true);
+  recordGatewaySetupAudit(deps, request, config, "existing-config-updated");
   return setupSuccessResult(
     config,
     config.providers.map((provider) => provider.modelId),

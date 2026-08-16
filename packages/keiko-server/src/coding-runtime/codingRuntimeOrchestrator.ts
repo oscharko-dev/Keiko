@@ -40,6 +40,7 @@ import type {
   CodingRuntimeOrchestratorResult,
   CodingRuntimeQuestionOperationResult,
 } from "./codingRuntimeOrchestratorTypes.js";
+import { classifyLaunchRejection } from "./launchFailure.js";
 import type { CodingRuntimeTaskOutcome } from "./productionCodingRuntimeHost.js";
 
 function runtimePauseFailureCode(
@@ -789,8 +790,9 @@ export class CodingRuntimeOrchestrator {
     const principal = this.deps.serverPrincipal();
     if (!active || !principal) return this.fail("authority-resolution-failed");
     const runId = this.newRunId();
-    const launch = this.resolveLaunch(parsed.value, active, principal, runId);
-    if (launch === undefined) return this.fail("authority-resolution-failed");
+    const resolved = this.resolveLaunch(parsed.value, active, principal, runId);
+    if (!resolved.ok) return this.fail(resolved.failureCode);
+    const launch = resolved.launch;
     const snapshot = this.buildStartSnapshot(
       parsed.value,
       active,
@@ -831,9 +833,11 @@ export class CodingRuntimeOrchestrator {
     active: ActiveWorkspaceView,
     principal: string,
     runId: string,
-  ): ReturnType<CodingRuntimeLaunchResolver["resolve"]> | undefined {
+  ):
+    | { readonly ok: true; readonly launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]> }
+    | { readonly ok: false; readonly failureCode: CodingWorkbenchRuntimeFailureCode } {
     try {
-      return this.deps.launchResolver.resolve({
+      const launch = this.deps.launchResolver.resolve({
         runId,
         requestId: request.requestId,
         taskIntent: request.taskIntent,
@@ -843,8 +847,11 @@ export class CodingRuntimeOrchestrator {
         workspaceRoot: active.binding.activeRoot,
         serverPrincipal: principal,
       });
-    } catch {
-      return undefined;
+      return { ok: true, launch };
+    } catch (error) {
+      // Never a bare `catch {}`: a rejected launch used to lose its identity here and surface as
+      // `authority-resolution-failed` whatever the real cause was (KEIKO-0150).
+      return { ok: false, failureCode: classifyLaunchRejection(error) };
     }
   }
 
