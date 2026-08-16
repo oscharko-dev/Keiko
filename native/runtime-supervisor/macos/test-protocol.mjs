@@ -125,10 +125,18 @@ function stripCCommentsPreservingLiterals(rawSource) {
     const next = source[i + 1];
     if (ch === "/" && next === "*") {
       const end = source.indexOf("*/", i + 2);
-      if (end === -1) return out;
+      // Unterminated `/* ... */` never compiles. Returning the partial prefix here would let a
+      // truncated source silently satisfy the source-contract regexes (the tokens before the
+      // unclosed comment would still match). Throw so a malformed input fails the harness at a
+      // named stage instead of passing quietly.
+      if (end === -1) throw new Error("unterminated C block comment: no `*/` after opening `/*`");
       out += "  ";
       i = end + 2;
     } else if (ch === "/" && next === "/") {
+      // Line comment CAN end at EOF without a newline; this is valid C, so return the accumulated
+      // output (everything before the `//` is preserved). Unlike the block-comment case, no
+      // token can be silently hidden by a `//` at EOF because everything after is comment text
+      // that the scanner would drop anyway.
       const end = source.indexOf("\n", i + 2);
       if (end === -1) return out;
       i = end;
@@ -177,6 +185,18 @@ assert.equal(
   mutatedStripped.match(/posix_spawn_file_actions_addclose\(&actions, 3\)/u),
   null,
   "stripCCommentsPreservingLiterals must remove fd-close pin hidden in a block comment",
+);
+
+// KEIKO-0277 (review-follow-up): unterminated `/* ... */` must throw, not silently return the
+// partial prefix. A truncated or malformed source whose closing `*/` never arrives would
+// otherwise satisfy the source-contract regexes on the tokens BEFORE the unclosed comment.
+assert.throws(
+  () =>
+    stripCCommentsPreservingLiterals(
+      "posix_spawn_file_actions_addclose(&actions, 3);\n/* opened but never closed\n",
+    ),
+  /unterminated C block comment/u,
+  "stripCCommentsPreservingLiterals must throw on an unterminated /* ... */",
 );
 
 // KEIKO-0277: Windows-sibling two-mode shape. `--helper <path>` qualifies an exact staged binary

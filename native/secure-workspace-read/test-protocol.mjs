@@ -321,12 +321,19 @@ function scanCSource(rawSource, { stripStringLiterals }) {
     const next = source[i + 1];
     if (ch === "/" && next === "*") {
       const end = source.indexOf("*/", i + 2);
-      if (end === -1) return out;
+      // Unterminated `/* ... */` never compiles. Returning the partial prefix would let a
+      // truncated source silently satisfy the source-contract regexes on the tokens BEFORE the
+      // unclosed comment. Throw so a malformed input fails the harness at a named stage instead
+      // of passing quietly (KEIKO-0417 review-follow-up on #3202).
+      if (end === -1) throw new Error("unterminated C block comment: no `*/` after opening `/*`");
       out += "  ";
       i = end + 2;
       continue;
     }
     if (ch === "/" && next === "/") {
+      // Line comment CAN end at EOF without a trailing newline; return the accumulated output.
+      // Unlike the block-comment case, no token can be silently hidden by a `//` at EOF because
+      // everything after is comment text the scanner would drop anyway.
       const end = source.indexOf("\n", i + 2);
       if (end === -1) return out;
       i = end;
@@ -428,6 +435,23 @@ function assertCommentStrippingIsLoadBearing(rawSource) {
     spliceStripped.match(/OBJ_DONT_REPARSE_LEAKED/u),
     null,
     "stripCommentsAndStrings must respect C `\\`-continued // line comments (splicing)",
+  );
+  // KEIKO-0417 (review-follow-up): unterminated `/* ... */` must throw. Both scanner modes share
+  // the same walker, so exercising one covers both. A truncated source whose closing `*/` never
+  // arrives would otherwise silently satisfy the source-contract regexes on the tokens BEFORE
+  // the unclosed comment.
+  assert.throws(
+    () =>
+      stripCommentsAndStrings(
+        "CreateFileW(handle, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);\n/* opened but never closed\n",
+      ),
+    /unterminated C block comment/u,
+    "stripCommentsAndStrings must throw on an unterminated /* ... */",
+  );
+  assert.throws(
+    () => stripCommentsOnly("// prefix\n/* unclosed"),
+    /unterminated C block comment/u,
+    "stripCommentsOnly must throw on an unterminated /* ... */",
   );
 }
 
