@@ -692,7 +692,17 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
   {
     id: "decision-support",
     strong: ["should i", "soll ich", "pros and cons", "vor- und nachteile", "help me decide"],
-    weak: ["recommend", "empfehlung", "option", "tradeoff", "vergleich", "compare"],
+    weak: [
+      "recommend",
+      "empfehlung",
+      "option",
+      "tradeoff",
+      "vergleich",
+      "compare",
+      "entscheidung",
+      "alternativen",
+      "entscheidungskriterien",
+    ],
     taskClasses: ["decision-support"],
     role: "You are a decision-support analyst.",
     goal: "Compare options against explicit criteria, risks, constraints, and recommendation logic so the user can make a grounded decision.",
