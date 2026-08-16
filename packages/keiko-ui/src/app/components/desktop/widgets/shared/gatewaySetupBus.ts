@@ -27,6 +27,13 @@ export const GATEWAY_SETUP_REQUEST_EVENT = "keiko:gateway-setup-request";
 export const GATEWAY_CONFIG_UPDATED_EVENT = "keiko:gateway-config-updated";
 
 /**
+ * Announced after the server records a model readiness result. Unlike a configuration update, this
+ * refreshes model-catalog projections without invalidating Settings evidence about the current
+ * configuration generation.
+ */
+export const GATEWAY_MODEL_READINESS_UPDATED_EVENT = "keiko:gateway-model-readiness-updated";
+
+/**
  * Requested when a visible model picker is opened. This is deliberately separate from
  * GATEWAY_CONFIG_UPDATED_EVENT: opening a picker needs a current catalog, but must never
  * imply that credentials or the gateway configuration were replaced.
@@ -71,4 +78,10 @@ export function notifyGatewayConfigUpdated(): void {
 export function requestGatewayModelCatalogRefresh(): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT));
+}
+
+/** Announce that server-side model readiness changed without replacing gateway configuration. */
+export function notifyGatewayModelReadinessUpdated(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(GATEWAY_MODEL_READINESS_UPDATED_EVENT));
 }

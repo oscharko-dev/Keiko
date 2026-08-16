@@ -50,6 +50,7 @@ import {
 import {
   notifyGatewayConfigUpdated,
   requestGatewayModelCatalogRefresh,
+  notifyGatewayModelReadinessUpdated,
 } from "../widgets/shared/gatewaySetupBus";
 
 beforeAll(async () => {
@@ -125,6 +126,7 @@ function model(patch: Partial<ModelCapability> = {}): ModelCapability {
   return {
     id: "chat-a",
     kind: "chat",
+    conversationReady: true,
     contextWindow: 16_000,
     maxOutputTokens: 2_000,
     toolCalling: false,
@@ -224,13 +226,16 @@ function deferred<T>(): {
 
 describe("useChatSession pure guards", () => {
   it("resolves request state and model eligibility deterministically", () => {
+    const unready = { ...model({ id: "chat-unready" }), conversationReady: false };
     const eligible = model({ id: "chat-live" });
     const ineligible = model({ id: "embed", kind: "embedding" });
 
     expect(isInFlight("queued")).toBe(true);
     expect(isInFlight("completed")).toBe(false);
-    expect(pickChatModelId([ineligible, eligible])).toBe("chat-live");
-    expect(resolveSelectedModelId("missing", [ineligible, eligible])).toBe("chat-live");
+    expect(pickChatModelId([unready, ineligible, eligible])).toBe("chat-live");
+    expect(resolveSelectedModelId("chat-unready", [unready, ineligible, eligible])).toBe(
+      "chat-live",
+    );
     expect(resolveSelectedModelId("chat-live", [eligible])).toBe("chat-live");
   });
 });
@@ -255,6 +260,22 @@ function ImmediateChatBindingHarness({ target }: { readonly target: Chat }): Rea
 }
 
 describe("useChatSession bootstrap", () => {
+  it("keeps configured catalog presence distinct from conversation-ready selection", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [model({ id: "chat-unready", conversationReady: false })],
+    });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.configuredModelsAvailable).toBe(true);
+    expect(result.current.models).toEqual([]);
+    expect(result.current.selectedModel).toBeUndefined();
+    expect(result.current.noEligibleModels).toBe(true);
+  });
+
   it("honors a child window binding immediately after bootstrap", async () => {
     const bootstrapChat = chat({ id: "chat-bootstrap", updatedAt: 20 });
     const boundChat = chat({ id: "chat-bound", updatedAt: 10 });
@@ -731,6 +752,32 @@ describe("useChatSession bootstrap", () => {
     } finally {
       window.removeEventListener("keiko:gateway-config-updated", onConfigUpdated);
     }
+  });
+
+  it("refreshes conversation-ready models after a same-page readiness result", async () => {
+    vi.mocked(fetchModels)
+      .mockResolvedValueOnce({
+        models: [model({ id: "chat-live", conversationReady: false })],
+      })
+      .mockResolvedValueOnce({ models: [model({ id: "chat-live", conversationReady: true })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.configuredModelsAvailable).toBe(true);
+    expect(result.current.models).toEqual([]);
+
+    act(() => {
+      notifyGatewayModelReadinessUpdated();
+    });
+
+    await waitFor(() =>
+      expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-live"]),
+    );
+    expect(result.current.configuredModelsAvailable).toBe(true);
+    expect(resetModelRequestCache).toHaveBeenCalledOnce();
+    expect(fetchModels).toHaveBeenCalledTimes(2);
   });
 
   it("shares one gateway model refresh across concurrent chat sessions", async () => {

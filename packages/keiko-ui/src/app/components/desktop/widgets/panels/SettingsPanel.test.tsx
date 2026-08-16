@@ -12,6 +12,7 @@ import { I18nProvider } from "@/lib/i18n";
 import type { GatewayReadinessReport, ModelCapability, SafeGatewayConfig } from "@/lib/types";
 import { SettingsPanel, formatGatewayReadinessReport } from "./SettingsPanel";
 import {
+  GATEWAY_MODEL_READINESS_UPDATED_EVENT,
   consumePendingGatewaySetup,
   notifyGatewayConfigUpdated,
   requestGatewaySetup,
@@ -624,6 +625,8 @@ describe("SettingsPanel gateway readiness checks", () => {
       verifiedCapabilities: { streaming: true, toolCalling: true, structuredOutput: true },
     });
 
+    const catalogRefresh = vi.fn();
+    window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, catalogRefresh);
     render(<SettingsPanel />);
     fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
 
@@ -635,6 +638,8 @@ describe("SettingsPanel gateway readiness checks", () => {
     expect(screen.getByLabelText("Verified capabilities")).toHaveTextContent("Tools");
     expect(screen.getByLabelText("Verified capabilities")).toHaveTextContent("JSON");
     expect(runGatewayReadinessMock).toHaveBeenCalledWith("test-chat-1", undefined);
+    expect(catalogRefresh).toHaveBeenCalledTimes(1);
+    window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, catalogRefresh);
   });
 
   it("surfaces unsupported probe evidence for partial readiness", async () => {
