@@ -28,6 +28,9 @@ export {
 } from "./vector-index.js";
 
 export {
+  // Renamed at the boundary so the package surface says which subsystem the budgets belong to.
+  BUILD_TIMEOUT_MS as ANN_INDEX_BUILD_TIMEOUT_MS,
+  QUERY_TIMEOUT_MS as ANN_INDEX_QUERY_TIMEOUT_MS,
   searchUsearchAnnIndex,
   type UsearchAnnCandidate,
   type UsearchAnnPartition,

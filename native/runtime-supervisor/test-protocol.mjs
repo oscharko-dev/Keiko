@@ -167,31 +167,53 @@ async function qualifyWindows(helper, runtime, root) {
   child.stderr.on("data", (chunk) => stderr.push(chunk));
   const responses = streamReader(child.stdio[4]);
   const output = streamReader(child.stdout);
+  // KEIKO-0278: the same lifecycle guard the macOS `qualify` carries. Without the finally, a
+  // supervisor that never answers leaves this function awaiting forever and DEADLINE_MS's bare
+  // `child.kill()` only bounds the hang — the whole native-quality lane still waits out the job
+  // timeout instead of failing with a named stage.
   const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
-  child.stdio[3].write(launchPacket(runtime, root));
-  const acknowledgement = await explained(
-    "launch acknowledgement",
-    response(responses),
-    exited,
-    stderr,
-  );
-  assert.deepEqual(acknowledgement, { kind: 1, payload: Buffer.alloc(0) });
-  const observation = await explained("fixture observation", readBytes(output, 12), exited, stderr);
-  assert.equal(observation.subarray(0, 4).toString("ascii"), "KRQ1");
-  const rootProcess = processHandle(observation.readUInt32LE(4));
-  const descendant = processHandle(observation.readUInt32LE(8));
-  const control = header("KRC1", 3, 0);
-  child.stdio[3].write(control.subarray(0, 5));
+  let completed = false;
+  try {
+    child.stdio[3].write(launchPacket(runtime, root));
+    const acknowledgement = await explained(
+      "launch acknowledgement",
+      response(responses),
+      exited,
+      stderr,
+    );
+    assert.deepEqual(acknowledgement, { kind: 1, payload: Buffer.alloc(0) });
+    const observation = await explained(
+      "fixture observation",
+      readBytes(output, 12),
+      exited,
+      stderr,
+    );
+    assert.equal(observation.subarray(0, 4).toString("ascii"), "KRQ1");
+    const rootProcess = processHandle(observation.readUInt32LE(4));
+    const descendant = processHandle(observation.readUInt32LE(8));
+    await writeSplitControlFrame(child.stdio[3]);
+    const reap = await explained("reap response", response(responses), exited, stderr);
+    assert.equal(reap.kind, 2);
+    assert.equal(reap.payload.readUInt32LE(4), 0, "Job Object must report zero active processes");
+    await Promise.all([waitForExit(rootProcess), waitForExit(descendant)]);
+    const exitCode = await exited;
+    assert.equal(exitCode, 0);
+    assert.equal(Buffer.concat(stderr).length, 0, "helper diagnostics must remain content-free");
+    completed = true;
+  } finally {
+    clearTimeout(deadline);
+    if (!completed) child.kill("SIGKILL");
+    await exited.catch(() => undefined);
+  }
+}
+
+/** Writes a control frame in two chunks, so the supervisor's reader has to reassemble a header it
+ * received split across reads rather than one that happened to arrive whole. */
+async function writeSplitControlFrame(control) {
+  const frameBytes = header("KRC1", 3, 0);
+  control.write(frameBytes.subarray(0, 5));
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
-  child.stdio[3].write(control.subarray(5));
-  const reap = await explained("reap response", response(responses), exited, stderr);
-  assert.equal(reap.kind, 2);
-  assert.equal(reap.payload.readUInt32LE(4), 0, "Job Object must report zero active processes");
-  await Promise.all([waitForExit(rootProcess), waitForExit(descendant)]);
-  const exitCode = await exited;
-  clearTimeout(deadline);
-  assert.equal(exitCode, 0);
-  assert.equal(Buffer.concat(stderr).length, 0, "helper diagnostics must remain content-free");
+  control.write(frameBytes.subarray(5));
 }
 
 function processHandle(pid) {
@@ -211,27 +233,39 @@ async function assertControlEofFailsClosed(helper, runtime, root) {
   child.stderr.on("data", (chunk) => stderr.push(chunk));
   const responses = streamReader(child.stdio[4]);
   const output = streamReader(child.stdout);
-  child.stdio[3].write(launchPacket(runtime, root));
-  const acknowledgement = await explained(
-    "eof-probe acknowledgement",
-    response(responses),
-    exited,
-    stderr,
-  );
-  assert.equal(acknowledgement.kind, 1);
-  const observation = await explained(
-    "eof-probe observation",
-    readBytes(output, 12),
-    exited,
-    stderr,
-  );
-  const pids = [observation.readUInt32LE(4), observation.readUInt32LE(8)];
-  child.stdio[3].end();
-  const closure = await explained("eof-probe closure", response(responses), exited, stderr);
-  assert.equal(closure.kind, 3);
-  await Promise.all(pids.map(waitForExit));
-  // The supervisor must have fully exited before cleanup unlinks its executable (Windows lock).
-  await exited;
+  // KEIKO-0278: this probe had NO watchdog at all. It exists to prove the supervisor fails closed
+  // on control EOF, so the failure it is most likely to meet is precisely a supervisor that hangs
+  // instead — the one case that used to hang the lane rather than report it.
+  const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
+  let completed = false;
+  try {
+    child.stdio[3].write(launchPacket(runtime, root));
+    const acknowledgement = await explained(
+      "eof-probe acknowledgement",
+      response(responses),
+      exited,
+      stderr,
+    );
+    assert.equal(acknowledgement.kind, 1);
+    const observation = await explained(
+      "eof-probe observation",
+      readBytes(output, 12),
+      exited,
+      stderr,
+    );
+    const pids = [observation.readUInt32LE(4), observation.readUInt32LE(8)];
+    child.stdio[3].end();
+    const closure = await explained("eof-probe closure", response(responses), exited, stderr);
+    assert.equal(closure.kind, 3);
+    await Promise.all(pids.map(waitForExit));
+    // The supervisor must have fully exited before cleanup unlinks its executable (Windows lock).
+    await exited;
+    completed = true;
+  } finally {
+    clearTimeout(deadline);
+    if (!completed) child.kill("SIGKILL");
+    await exited.catch(() => undefined);
+  }
 }
 
 async function waitForExit(pid) {

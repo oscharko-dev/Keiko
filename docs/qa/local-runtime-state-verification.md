@@ -51,7 +51,9 @@ it is reproduced here as the closure snapshot.
 `node:sqlite`, requires no vault key (every encryption check reads the on-disk sealed markers the
 product itself writes), and never mutates the tree.
 
-- `npm run audit:local-state -- --state-dir <path>` — audit a real `.keiko` tree (maintainer).
+- `keiko audit local-state --state-dir <path>` — audit a real `.keiko` tree from a packaged install
+  (operator). Same module, same output, same exit codes; no checkout required (KEIKO-0230).
+- `npm run audit:local-state -- --state-dir <path>` — the same audit from a checkout (maintainer).
 - `npm run check:local-state` — maintainer self-test that generates a genuinely-encrypted healthy
   fixture and a deliberately drifted one, then asserts the auditor passes the former and detects the
   drift in the latter.

@@ -267,9 +267,13 @@ jobs:
       - run: npm run arch:check:negative
       - name: Quality Intelligence supply-chain gate
         run: npm run check:qi-supply-chain
-      - name: Retrieval latency gate (enterprise retrieval M3)
+      - name: Lexical workspace-search latency gate (enterprise retrieval M3)
         # Runs after `npm run typecheck` (which builds packages), so the compiled keiko-workspace
         # dist the gate imports is present. Deterministic fixture + generous p95 ceiling.
+        # KEIKO-0234: this covers the LEXICAL keiko-workspace searchText engine only. ANN semantic
+        # retrieval (ADR-0164) is gated separately by `check:knowledge-m2-closeout` in this same
+        # workflow, whose ann-active proof KEIKO-0362 gave absolute build/query ceilings against the
+        # production timeouts. A green run HERE says nothing about that path either way.
         run: npm run check:retrieval-latency
       - name: Retrieval quality gate (enterprise retrieval M4)
         # Same compiled workspace surface as the latency gate; evaluates top-k quality, line-level
@@ -908,6 +912,15 @@ jobs:
         run: npm sbom --sbom-format cyclonedx --omit dev > sbom.cdx.json
       - name: Workspace SBOM and license gate (Issue #169 AC4)
         run: npm run check:workspace-supply-chain
+      - name: Third-party install-script approvals (KEIKO-0314)
+        # Reads two local JSON files with Node builtins and makes no network call, so this bounds a
+        # stall rather than a download; without it the job's own limit is the only ceiling.
+        timeout-minutes: 1
+        # .npmrc's strict-allow-scripts already fails `npm ci` closed on an unapproved script, but
+        # only for what resolves on THIS runner, and npm 11.16.0 ignores a pinned name@version key
+        # for unrs-resolver so its approval has to be unpinned — which would bless any future
+        # version. This reads package-lock.json instead: every platform's tree, exact versions.
+        run: npm run check:install-script-approvals
       - name: Smoke - help exits 0
         run: node dist/cli/index.js --help
       - name: Smoke - version exits 0

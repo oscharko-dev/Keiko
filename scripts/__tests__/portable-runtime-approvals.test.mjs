@@ -677,8 +677,33 @@ describe("update portable runtime approvals", () => {
     expect(fetchCalled).toBe(false);
   });
 
-  it("updates node and opencode pins from fake verified sources", async () => {
+  // KEIKO-0157: executableTreeSha256 describes the EXTRACTED executable tree and this script has no
+  // extractor, so it can only carry the previous value forward. That is honest when the archive
+  // bytes are unchanged and a lie when they are not. These two cases pin both halves: unchanged
+  // bytes still carry the tree pin forward, changed bytes fail closed here instead of at tag time.
+  const OPENCODE_ZIPS = new Map([
+    ["opencode-darwin-arm64.zip", storeOnlyZip([["opencode", Buffer.from("m1")]])],
+    ["opencode-darwin-x64.zip", storeOnlyZip([["opencode", Buffer.from("m2")]])],
+    ["opencode-windows-x64.zip", storeOnlyZip([["opencode.exe", Buffer.from("w1")]])],
+  ]);
+  const ZIP_NAME_BY_TARGET = {
+    "macos-arm64": "opencode-darwin-arm64.zip",
+    "macos-x64": "opencode-darwin-x64.zip",
+    "windows-x64": "opencode-windows-x64.zip",
+  };
+
+  /** Fixture whose approved sha256 values match OPENCODE_ZIPS, i.e. a re-download of the same
+   * bytes. Without this the "updates pins" case below would be exercising the drift path. */
+  function fixtureMatchingFakeArchives() {
     const approvals = approvedFixture();
+    for (const [target, archive] of Object.entries(approvals.sidecarRuntimes[0].archives)) {
+      archive.sha256 = sha256Hex(OPENCODE_ZIPS.get(ZIP_NAME_BY_TARGET[target]));
+    }
+    return approvals;
+  }
+
+  it("updates node and opencode pins from fake verified sources", async () => {
+    const approvals = fixtureMatchingFakeArchives();
     const treePins = Object.fromEntries(
       Object.entries(approvals.sidecarRuntimes[0].archives).map(([target, archive]) => [
         target,
@@ -686,11 +711,7 @@ describe("update portable runtime approvals", () => {
       ]),
     );
     const fakeRepoRoot = fixtureRepoRoot(approvals);
-    const zipByName = new Map([
-      ["opencode-darwin-arm64.zip", storeOnlyZip([["opencode", Buffer.from("m1")]])],
-      ["opencode-darwin-x64.zip", storeOnlyZip([["opencode", Buffer.from("m2")]])],
-      ["opencode-windows-x64.zip", storeOnlyZip([["opencode.exe", Buffer.from("w1")]])],
-    ]);
+    const zipByName = OPENCODE_ZIPS;
     const license = Buffer.from("MIT License\n");
     const shasums = [
       `${"1".repeat(64)}  node-v23.1.0-win-x64.zip`,
@@ -735,5 +756,65 @@ describe("update portable runtime approvals", () => {
         ]),
       ),
     ).toEqual(treePins);
+  });
+
+  it("fails closed when the OpenCode archive bytes changed under an unchanged version", async () => {
+    // Same approved version 1.17.17, so the version-provenance guard does not short-circuit first;
+    // the archive contents differ from what is pinned. Before KEIKO-0157 this wrote a file pairing
+    // the NEW sha256 with the OLD executableTreeSha256 and reported success — check:portable-
+    // approvals validates JSON shape only, so review saw a clean diff and the mismatch surfaced at
+    // tag time in portable-assets.yml, mid-release.
+    const approvals = fixtureMatchingFakeArchives();
+    const fakeRepoRoot = fixtureRepoRoot(approvals);
+    const drifted = new Map([
+      [
+        "opencode-darwin-arm64.zip",
+        storeOnlyZip([["opencode", Buffer.from("materially-different-content")]]),
+      ],
+      [
+        "opencode-darwin-x64.zip",
+        storeOnlyZip([["opencode", Buffer.from("materially-different-content")]]),
+      ],
+      [
+        "opencode-windows-x64.zip",
+        storeOnlyZip([["opencode.exe", Buffer.from("materially-different-content")]]),
+      ],
+    ]);
+    const shasums = [
+      `${"1".repeat(64)}  node-v23.1.0-win-x64.zip`,
+      `${"2".repeat(64)}  node-v23.1.0-darwin-arm64.tar.gz`,
+      `${"3".repeat(64)}  node-v23.1.0-darwin-x64.tar.gz`,
+    ].join("\n");
+    const fetchFn = (url) => {
+      const name = String(url).split("/").pop() ?? "";
+      const body = String(url).includes("SHASUMS256")
+        ? Buffer.from(shasums)
+        : String(url).endsWith("LICENSE")
+          ? Buffer.from("MIT License\n")
+          : drifted.get(name);
+      if (body === undefined) return Promise.reject(new Error(`unexpected url ${String(url)}`));
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        url: String(url),
+        body: (async function* streamBody() {
+          yield body;
+        })(),
+        arrayBuffer: () => Promise.reject(new Error("response buffering is forbidden")),
+      });
+    };
+
+    const before = readFileSync(join(fakeRepoRoot, "portable-runtime-approvals.json"), "utf8");
+    await expect(
+      updatePortableRuntimeApprovals(
+        ["--node-version", "23.1.0", "--opencode-version", "1.17.17"],
+        { fetchFn },
+        fakeRepoRoot,
+      ),
+    ).rejects.toThrow(/executableTreeSha256 can no longer be carried forward/u);
+    // It must refuse BEFORE writing: a half-updated approvals file is the defect, not the warning.
+    expect(readFileSync(join(fakeRepoRoot, "portable-runtime-approvals.json"), "utf8")).toBe(
+      before,
+    );
   });
 });

@@ -401,7 +401,14 @@ static int process_control(HANDLE job) {
   return 1;
 }
 
-static int wait_for_zero_active(HANDLE job, HANDLE completion_port) {
+/*
+ * KEIKO-0270: reports the OBSERVED active-process count through `observed` so wmain can put it in
+ * the reap proof. It used to be discarded here and the proof hard-coded a literal 0, which made
+ * the harness's "Job Object must report zero active processes" assertion read a constant the
+ * producer wrote rather than anything the Job Object said — an assertion that could not fail.
+ */
+static int wait_for_zero_active(HANDLE job, HANDLE completion_port, uint32_t *observed) {
+  *observed = UINT32_MAX;
   for (;;) {
     DWORD bytes = 0;
     ULONG_PTR key = 0;
@@ -410,8 +417,12 @@ static int wait_for_zero_active(HANDLE job, HANDLE completion_port) {
     if (dequeued && key == (ULONG_PTR)job && bytes == JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO) {
       JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
       memset(&accounting, 0, sizeof(accounting));
-      return QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting,
-                                       sizeof(accounting), NULL) && accounting.ActiveProcesses == 0;
+      if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting,
+                                     sizeof(accounting), NULL)) {
+        return 0;
+      }
+      *observed = (uint32_t)accounting.ActiveProcesses;
+      return accounting.ActiveProcesses == 0;
     }
     if (!process_control(job)) return 0;
   }
@@ -470,6 +481,7 @@ int wmain(int argc, wchar_t **argv) {
   HANDLE job = NULL, completion_port = NULL;
   DWORD exit_code = 127;
   unsigned char proof[8];
+  uint32_t active_processes = UINT32_MAX;
   int result = 1;
   memset(&process, 0, sizeof(process));
   if (argc == 3 && wcscmp(argv[1], L"--reconcile") == 0) return reconcile_job(argv[2]);
@@ -491,13 +503,14 @@ int wmain(int argc, wchar_t **argv) {
     goto cleanup;
   }
   if (!send_response(RESPONSE_LAUNCHED, NULL, 0)) goto cleanup;
-  if (!wait_for_zero_active(job, completion_port)) {
+  if (!wait_for_zero_active(job, completion_port, &active_processes)) {
     send_error(ERROR_JOB_OBSERVE);
     goto cleanup;
   }
   if (!GetExitCodeProcess(process.hProcess, &exit_code)) exit_code = 127;
   write_u32(proof, exit_code);
-  write_u32(proof + 4, 0);
+  /* KEIKO-0270: the observed count, not a literal 0 — see wait_for_zero_active. */
+  write_u32(proof + 4, active_processes);
   result = send_response(RESPONSE_REAPED, proof, sizeof(proof)) ? 0 : 1;
 cleanup:
   if (result != 0 && job != NULL) TerminateJobObject(job, 137);

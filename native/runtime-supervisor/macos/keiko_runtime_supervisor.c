@@ -26,7 +26,10 @@ enum error_code {
   ERROR_PROTOCOL = 1,
   ERROR_MONITOR_UNAVAILABLE = 6,
   ERROR_PROCESS_CREATE = 3,
-  ERROR_TREE_OBSERVE = 5
+  ERROR_TREE_OBSERVE = 5,
+  // KEIKO-0433: reconcile found the handle, but a live connection already owns that session.
+  // Distinct from ERROR_TREE_OBSERVE (could not observe) and from the reaped success path.
+  ERROR_TREE_ALREADY_SUPERVISED = 7
 };
 
 struct launch_request {
@@ -316,6 +319,11 @@ static int supervise(int monitor, const char *handle, pid_t root) {
         unsigned char proof[8] = {0};
         (void)waitpid(root, &status, 0);
         write_u32(proof, WIFEXITED(status) ? (uint32_t)WEXITSTATUS(status) : 137u);
+        // KEIKO-0270: proof+4 is the containment count the harness asserts is zero. It was never
+        // written here, so those four bytes stayed at their initialiser and the assertion could
+        // not fail — it read a constant the producer hard-coded, not an observation. Carry the
+        // monitor's own live_processes so the check becomes load-bearing.
+        write_u32(proof + 4, reply.live_processes);
         return send_response(RESPONSE_REAPED, proof, sizeof(proof));
       } else {
         return 0;
@@ -340,6 +348,15 @@ static int reconcile(const char *handle) {
     return 1;
   }
   close(monitor);
+  // KEIKO-0433: an already-supervised tree now answers KEIKO_MONITOR_ALREADY_ACTIVE instead of
+  // borrowing ZERO_LIVE. Without this branch the new code would fall into the generic
+  // ERROR_TREE_OBSERVE below and be exactly as opaque as the collapse it was added to fix.
+  // "Someone else already owns this tree" is not an observation failure — it is a live monitor,
+  // and the caller must not go on to report the tree reaped.
+  if (reply.kind == KEIKO_MONITOR_ALREADY_ACTIVE) {
+    (void)send_error(ERROR_TREE_ALREADY_SUPERVISED);
+    return 1;
+  }
   if (reply.kind != KEIKO_MONITOR_ZERO_LIVE || reply.live_processes != 0) {
     (void)send_error(ERROR_TREE_OBSERVE);
     return 1;

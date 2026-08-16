@@ -60,7 +60,7 @@ Describe the goal of this issue and the user, developer, platform, or governance
 
 ## Expected Verification
 
-- [ ] Required GitHub check: `ci`.
+- [ ] Every required GitHub check is green on the current PR head. `ci` is one of them, not the whole set — CONTRIBUTING.md's "Pull requests" section is the authoritative list.
 - [ ] Reuse/extension/generalization evidence or gap rationale is documented in the issue or linked PR.
 - [ ] Studio browser quality gate when Studio UI or BFF browser behavior changes.
 - [ ] Studio performance and memory gates when editor performance, Monaco, rendering, or large-output behavior changes.
@@ -69,7 +69,7 @@ Describe the goal of this issue and the user, developer, platform, or governance
 - [ ] W0.2 release gate when W0.2 product-path semantics change.
 - [ ] W0.3 release gate when W0.3 workflow or Studio hardening semantics change.
 - [ ] Security review when trust boundaries, auth/session, secrets, CSP, model access, execution, patch application, or external calls change.
-- [ ] Qodana/static-analysis review when security-sensitive or shared control-plane code changes.
+- [ ] `Keiko for Quality` review settled and `npm run gates:sonar` run locally when security-sensitive or shared control-plane code changes.
 
 ## Review Settlement and Formal Issue Completion
 

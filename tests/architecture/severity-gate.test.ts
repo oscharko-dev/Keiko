@@ -63,9 +63,40 @@ const REQUIRED_TRUST_RULES = [
   "adr-0019-trust-8-no-do-not-follow-in-prod",
 ];
 
+// KEIKO-0289: the two lists above are ALLOW-lists — they can only assert what someone remembered
+// to enumerate. Re-deriving their own matching logic against the live config found 5 rules covered
+// by neither (adr-0128-connectors, adr-0043-sandbox, adr-0019-direction-6-domain-not-server,
+// adr-0019-direction-7-domain-not-cli, adr-0042-editor-not-node-domain-values); note
+// `adr-0019-direction-6a-…` does NOT satisfy startsWith("adr-0019-direction-6-"), so the pairs of
+// similarly-numbered rules were especially easy to miss. arch:check:negative would not have caught
+// a downgrade either: it counts a rule NAME's occurrences in stdout and never reads the severity
+// label, so a warn-only rule still fires, still prints, and silently stops blocking.
+//
+// The lists are kept — they pin that these specific boundaries EXIST, which a blanket severity
+// sweep cannot do — but severity is now enforced by exhaustion below, so a rule added tomorrow is
+// covered on the day it lands rather than on the day someone remembers to list it.
+const EXEMPT_FROM_ERROR_SEVERITY: readonly string[] = [
+  // Deliberately empty. An entry here makes a dependency-cruiser rule non-blocking, so it needs a
+  // reviewed reason on the line above it and belongs in the PR description, not just here.
+];
+
 function findRulesByPrefix(prefix: string): readonly DependencyCruiserRule[] {
   const rules = config.forbidden ?? [];
   return rules.filter((rule) => rule.name === prefix || rule.name.startsWith(`${prefix}-`));
+}
+
+/**
+ * Every forbidden rule must be at `severity: "error"` unless explicitly exempted. Returned as data
+ * rather than asserted inline so the test below can run it against a deliberately softened config
+ * and prove the check actually catches a downgrade — a check that has never been shown to fail is
+ * not yet a gate.
+ */
+export function findSofteningViolations(
+  rules: readonly DependencyCruiserRule[],
+): readonly string[] {
+  return rules
+    .filter((rule) => !EXEMPT_FROM_ERROR_SEVERITY.includes(rule.name) && rule.severity !== "error")
+    .map((rule) => `${rule.name} is at severity "${rule.severity ?? "(unset)"}"`);
 }
 
 describe("dependency-cruiser severity gate", () => {
@@ -101,4 +132,48 @@ describe("dependency-cruiser severity gate", () => {
       }
     });
   }
+});
+
+// KEIKO-0289: exhaustive severity coverage. This is the assertion the allow-lists above could not
+// make — it holds for rules nobody thought to enumerate, including ones that do not exist yet.
+describe("dependency-cruiser severity gate covers every forbidden rule (KEIKO-0289)", () => {
+  it("has no rule softened below error", () => {
+    expect(findSofteningViolations(config.forbidden ?? [])).toEqual([]);
+  });
+
+  it("leaves no rule outside the sweep", () => {
+    const swept = new Set(
+      (config.forbidden ?? [])
+        .filter((rule) => !EXEMPT_FROM_ERROR_SEVERITY.includes(rule.name))
+        .map((rule) => rule.name),
+    );
+    const names = (config.forbidden ?? []).map((rule) => rule.name);
+    expect(names.filter((name) => !swept.has(name))).toEqual([]);
+    // Guard the guard: an empty `forbidden` array would satisfy every assertion above.
+    expect(swept.size).toBeGreaterThan(30);
+  });
+
+  it("catches a downgrade on a rule neither allow-list matches", () => {
+    // adr-0128-connectors-only-contracts-security is one of the five rules the prefix matching
+    // missed. Softening it used to be invisible to this whole file; it must not be now.
+    const softened = (config.forbidden ?? []).map((rule) =>
+      rule.name === "adr-0128-connectors-only-contracts-security"
+        ? { ...rule, severity: "warn" }
+        : rule,
+    );
+    expect(findSofteningViolations(softened)).toEqual([
+      'adr-0128-connectors-only-contracts-security is at severity "warn"',
+    ]);
+  });
+
+  it("catches a rule that declares no severity at all", () => {
+    const rules = config.forbidden ?? [];
+    const first = rules[0];
+    // Narrowing, not ceremony: `noUncheckedIndexedAccess` types rules[0] as possibly undefined, and
+    // an empty `forbidden` array would make the assertion below vacuous anyway.
+    if (first === undefined) throw new Error("config.forbidden must not be empty");
+    expect(findSofteningViolations([{ name: first.name }, ...rules.slice(1)])).toEqual([
+      `${first.name} is at severity "(unset)"`,
+    ]);
+  });
 });

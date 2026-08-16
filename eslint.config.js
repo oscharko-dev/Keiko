@@ -17,10 +17,21 @@ const sonarCompatibilityPlugin = {
       create(context) {
         return {
           Literal(node) {
+            if (typeof node.value !== "number") return;
             const source = context.sourceCode.getText(node);
-            if (typeof node.value === "number" && source.includes(".") && source.includes("_")) {
-              context.report({ messageId: "forbidden", node });
-            }
+            // KEIKO-0381: the separator must be IN the fractional part. Testing the
+            // whole literal for "." and "_" independently also condemns `1_000_000.5`, where the
+            // underscores only group the integer part — a legitimate literal the message
+            // ("...in a fractional numeric literal") does not even describe.
+            const fractionStart = source.indexOf(".");
+            if (fractionStart === -1) return;
+            // The exponent is not the fractional part either: `1.0e1_0` groups digits in the
+            // EXPONENT and its fraction is a bare `0`. Flagging it repeated the original mistake
+            // one field over — the message would name a fractional separator that is not there
+            // (review finding on #3159). Cut at the exponent marker before testing.
+            const fraction = source.slice(fractionStart + 1).split(/[eE]/u)[0];
+            if (!fraction.includes("_")) return;
+            context.report({ messageId: "forbidden", node });
           },
         };
       },

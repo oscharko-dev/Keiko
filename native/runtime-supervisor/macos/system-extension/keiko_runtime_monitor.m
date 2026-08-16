@@ -6,6 +6,7 @@
 #include <bsm/libbsm.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <os/log.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
@@ -18,6 +19,10 @@
 
 #define KEIKO_MAX_SESSIONS 16u
 #define KEIKO_MAX_PROCESSES 4096u
+// KEIKO-0283: deadline for a newly accepted peer to deliver its handshake frame, after which the
+// connection is dropped and its slot released. Generous next to the client's own 1s connect
+// timeout, so only a peer that never writes at all is caught.
+#define KEIKO_HANDSHAKE_TIMEOUT_SECONDS 5
 #define KEIKO_MAX_CONNECTIONS 32u
 
 struct monitor_session {
@@ -81,10 +86,48 @@ static int reply_to(struct monitor_session *session, uint16_t kind) {
   return 0;
 }
 
+// KEIKO-0419: this daemon emitted no diagnostic output of any kind, so an Endpoint Security
+// client that failed to start, a Full-Disk-Access refusal, and a governance kill-switch fan-out
+// were all equally invisible — the operator saw only that the runtime "was not active". os_log is
+// the unified-logging mechanism for a System Extension; `log show --predicate 'subsystem ==
+// "com.oscharko.keiko.runtime-monitor"'` is the read side.
+//
+// Redaction (AGENTS.md §7, evidence is body-free): pids, counts, states and error codes only.
+// Never a process command line, argv, environment or file content. Deliberately NOT wired into
+// endpoint_event(), which runs per fork/exec/exit machine-wide — logging there would recreate the
+// hot-path cost the O(n)-scan finding warns about. Decision points only.
+static os_log_t keiko_monitor_log_handle;
+
+static void keiko_monitor_log_init(void) {
+  keiko_monitor_log_handle = os_log_create("com.oscharko.keiko.runtime-monitor", "daemon");
+}
+
+static os_log_t keiko_monitor_log(void) {
+  static pthread_once_t once = PTHREAD_ONCE_INIT;
+  pthread_once(&once, keiko_monitor_log_init);
+  return keiko_monitor_log_handle;
+}
+
+static const char *endpoint_state_name(enum endpoint_state state) {
+  switch (state) {
+    case ENDPOINT_STATE_STARTING:
+      return "starting";
+    case ENDPOINT_STATE_ACTIVE:
+      return "active";
+    case ENDPOINT_STATE_NEEDS_FULL_DISK_ACCESS:
+      return "needs-full-disk-access";
+    case ENDPOINT_STATE_FAILED:
+      return "failed";
+    default:
+      return "unknown";
+  }
+}
+
 static void set_endpoint_state(enum endpoint_state state) {
   pthread_mutex_lock(&endpoint_state_lock);
   endpoint_state = state;
   pthread_mutex_unlock(&endpoint_state_lock);
+  os_log(keiko_monitor_log(), "endpoint state -> %{public}s", endpoint_state_name(state));
 }
 
 static enum endpoint_state current_endpoint_state(void) {
@@ -154,6 +197,9 @@ static void release_connection(void *opaque) {
 static void session_add(struct monitor_session *session, pid_t pid) {
   if (session_contains(session, pid)) return;
   if (session->process_count >= KEIKO_MAX_PROCESSES) {
+    os_log_error(keiko_monitor_log(),
+                 "session process budget exhausted at %{public}u; killing the session",
+                 KEIKO_MAX_PROCESSES);
     session->stopping = 1;
     (void)kill(pid, SIGKILL);
     kill_session_processes(session);
@@ -214,6 +260,9 @@ static void stop_session(struct monitor_session *session) {
   if (count == 0 && session->descriptor >= 0)
     reply_to(session, KEIKO_MONITOR_ZERO_LIVE);
   pthread_mutex_unlock(&sessions_lock);
+  // The kill-switch fan-out is the single most consequential action this daemon takes; it was
+  // entirely unobservable. Count only, never the command lines of what was killed.
+  os_log(keiko_monitor_log(), "stop_session: SIGKILL fan-out to %{public}zu process(es)", count);
   for (index = 0; index < count; ++index) (void)kill(processes[index], SIGKILL);
 }
 
@@ -321,11 +370,21 @@ static int request_valid(const struct keiko_monitor_request *request, pid_t peer
          request->supervisor_pid == (uint32_t)peer;
 }
 
+// KEIKO-0433: the RECONCILE outcomes a caller must be able to tell apart. RECONCILE_ADOPTED is
+// implied by a non-NULL session on the way out; the other two both null the session and would
+// otherwise be indistinguishable at the reply site.
+enum reconcile_outcome {
+  RECONCILE_UNKNOWN_HANDLE = 0,
+  RECONCILE_ALREADY_LIVE = 1,
+  RECONCILE_ADOPTED = 2
+};
+
 static void *serve_client(void *opaque) {
   int descriptor = *(int *)opaque;
   struct keiko_monitor_request request;
   struct monitor_session transient;
   struct monitor_session *session = NULL;
+  enum reconcile_outcome reconcile_outcome = RECONCILE_UNKNOWN_HANDLE;
   uid_t uid;
   gid_t gid;
   pid_t peer = peer_pid(descriptor);
@@ -334,7 +393,22 @@ static void *serve_client(void *opaque) {
   transient.descriptor = descriptor;
   if (peer <= 0 || getpeereid(descriptor, &uid, &gid) != 0 || !same_team_process(peer) ||
       !read_exact(descriptor, &request, sizeof(request)) || !request_valid(&request, peer)) {
+    // KEIKO-0419: a rejected connection closed silently, so a same-team check failure, a short
+    // read and a malformed frame were all the same non-event. The pid is what the kernel already
+    // attributes to the socket; nothing further about the peer is logged.
+    os_log_error(keiko_monitor_log(),
+                 "rejected client connection from peer pid %{public}d "
+                 "(failed peer credentials, team check, framing or version)",
+                 (int)peer);
     goto complete;
+  }
+  // KEIKO-0283: the handshake arrived, so this peer is real. Restore blocking reads before the
+  // long-lived loop below — that read is the dead-man's switch for supervisor liveness and a
+  // timeout on it would tear down healthy sessions every few seconds.
+  {
+    struct timeval blocking = {.tv_sec = 0, .tv_usec = 0};
+    (void)setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &blocking, sizeof(blocking));
+    (void)setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &blocking, sizeof(blocking));
   }
   if (request.command == KEIKO_MONITOR_PING) {
     (void)reply_to(&transient, endpoint_status_reply());
@@ -353,16 +427,33 @@ static void *serve_client(void *opaque) {
     session = allocate_session(descriptor, uid, &request);
   } else if (request.command == KEIKO_MONITOR_RECONCILE) {
     session = session_for_handle(request.recovery_handle);
-    if (session != NULL && session->descriptor < 0 && session->uid == uid) {
-      session->descriptor = descriptor;
-    } else {
+    // KEIKO-0433: the three RECONCILE outcomes were collapsed into session/NULL, so "already
+    // owned by a live connection" was indistinguishable from "no such session". Carry the
+    // distinction out of the critical section instead of losing it here.
+    // Owner check FIRST. Ordering is the whole control here: testing `descriptor >= 0` before the
+    // uid let a same-team process under a DIFFERENT uid present a valid handle and receive
+    // ALREADY_ACTIVE, which confirms the handle exists — precisely the leak the comment below
+    // claims to prevent, defeated by the sequence (review finding on #3159). A non-owner must be
+    // unable to distinguish "live", "torn down" and "never existed".
+    if (session == NULL || session->uid != uid) {
+      // An owner mismatch stays indistinguishable from an unknown handle on purpose: telling a
+      // different uid that the handle exists is an information leak, not a diagnostic.
+      reconcile_outcome = RECONCILE_UNKNOWN_HANDLE;
       session = NULL;
+    } else if (session->descriptor >= 0) {
+      reconcile_outcome = RECONCILE_ALREADY_LIVE;
+      session = NULL;
+    } else {
+      session->descriptor = descriptor;
+      reconcile_outcome = RECONCILE_ADOPTED;
     }
   }
   pthread_mutex_unlock(&sessions_lock);
   if (session == NULL) {
     if (request.command == KEIKO_MONITOR_RECONCILE) {
-      (void)reply_to(&transient, KEIKO_MONITOR_ZERO_LIVE);
+      (void)reply_to(&transient, reconcile_outcome == RECONCILE_ALREADY_LIVE
+                                     ? KEIKO_MONITOR_ALREADY_ACTIVE
+                                     : KEIKO_MONITOR_ZERO_LIVE);
     } else {
       (void)reply_to(&transient, KEIKO_MONITOR_ERROR);
     }
@@ -414,16 +505,21 @@ static void *start_endpoint_security(void *opaque) {
           endpoint_event(client, message);
         });
     if (result == ES_NEW_CLIENT_RESULT_ERR_NOT_PERMITTED) {
+      os_log_error(keiko_monitor_log(),
+                   "es_new_client denied: Full Disk Access is not granted; retrying");
       set_endpoint_state(ENDPOINT_STATE_NEEDS_FULL_DISK_ACCESS);
       sleep(1);
       continue;
     }
     if (result != ES_NEW_CLIENT_RESULT_SUCCESS || candidate == NULL) {
+      os_log_error(keiko_monitor_log(), "es_new_client failed with result %{public}d", (int)result);
       set_endpoint_state(ENDPOINT_STATE_FAILED);
       return NULL;
     }
     if (es_subscribe(candidate, events, sizeof(events) / sizeof(events[0])) !=
         ES_RETURN_SUCCESS) {
+      os_log_error(keiko_monitor_log(), "es_subscribe failed for %{public}zu event type(s)",
+                   sizeof(events) / sizeof(events[0]));
       es_delete_client(candidate);
       set_endpoint_state(ENDPOINT_STATE_FAILED);
       return NULL;
@@ -432,6 +528,10 @@ static void *start_endpoint_security(void *opaque) {
     endpoint_client = candidate;
     endpoint_state = ENDPOINT_STATE_ACTIVE;
     pthread_mutex_unlock(&endpoint_state_lock);
+    // This assignment bypasses set_endpoint_state (it is already under the lock), so it needs its
+    // own log line or the one transition that matters most would be the only silent one.
+    os_log(keiko_monitor_log(), "endpoint state -> %{public}s",
+           endpoint_state_name(ENDPOINT_STATE_ACTIVE));
     return NULL;
   }
 }
@@ -453,6 +553,21 @@ int main(void) {
       continue;
     }
     (void)setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &(int){1}, sizeof(int));
+    // KEIKO-0283: an accepted connection that never wrote its handshake blocked serve_client's
+    // first read forever while holding one of the 32 connection slots. A same-team peer that
+    // stalls — a crashed supervisor, a debugger-suspended process — therefore exhausted the
+    // budget and locked out every legitimate ARM/RECONCILE, with the kill-switch among the
+    // casualties. Bound the PRE-handshake read only; serve_client lifts it once the handshake is
+    // valid, because the long-lived read after that is the deliberate dead-man's switch watching
+    // supervisor liveness and must stay blocking. Five seconds catches a peer that never writes at
+    // all, not one that is merely slow under load (the client's own timeout is 1s).
+    {
+      struct timeval handshake_timeout = {.tv_sec = KEIKO_HANDSHAKE_TIMEOUT_SECONDS, .tv_usec = 0};
+      (void)setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &handshake_timeout,
+                       sizeof(handshake_timeout));
+      (void)setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &handshake_timeout,
+                       sizeof(handshake_timeout));
+    }
     if (!reserve_connection()) {
       close(descriptor);
       continue;

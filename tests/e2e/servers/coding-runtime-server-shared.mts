@@ -434,20 +434,62 @@ function collectHtmlDocuments(dir: string): readonly string[] {
   return documents;
 }
 
+// A lingering SSE connection keeps `server.close()`'s callback from ever firing. Bounding the wait
+// turns "the harness eventually kills us" into a deterministic exit we control.
+const SERVER_CLOSE_TIMEOUT_MS = 5_000;
+
 function registerShutdown(server: Server, composition: JourneyComposition): void {
   let closing = false;
   const close = (): void => {
     if (closing) return;
     closing = true;
     void (async (): Promise<void> => {
-      await composition.deps.codingRuntimeOrchestrator?.shutdown();
-      await composition.scripted?.closeAll();
-      await composition.deps.dispose?.();
-      await new Promise<void>((resolve) => {
-        server.close(() => {
-          resolve();
-        });
-      });
+      // KEIKO-0429: this is the shared shutdown path for every Code-task journey server
+      // (#2385, #2386, #2387, #2483). Unhandled, a rejecting stage surfaced as a bare
+      // unhandled-rejection trace with nothing naming WHICH resource failed to dispose, and a
+      // never-resolving server.close() surfaced as a hang — both read as flake, and each costs a
+      // full CI cycle to re-diagnose. Naming the stage is the whole point: the exit code alone
+      // cannot distinguish an orchestrator that refused to stop from a socket that stayed open.
+      let stage = "codingRuntimeOrchestrator.shutdown";
+      try {
+        await composition.deps.codingRuntimeOrchestrator?.shutdown();
+        stage = "scripted.closeAll";
+        await composition.scripted?.closeAll();
+        stage = "deps.dispose";
+        await composition.deps.dispose?.();
+        stage = "server.close";
+        // The timeout REJECTS rather than resolves. Resolving would have let a socket that never
+        // closed fall through to the exit(0) below — turning the hang this bound exists to surface
+        // back into a silent clean shutdown, which is the defect KEIKO-0429 is about, one layer
+        // further down (review finding on #3159).
+        await Promise.race([
+          new Promise<void>((resolve) => {
+            server.close(() => {
+              resolve();
+            });
+          }),
+          new Promise<void>((_resolve, reject) => {
+            setTimeout(() => {
+              reject(
+                new Error(
+                  `server.close did not complete within ${String(SERVER_CLOSE_TIMEOUT_MS)}ms ` +
+                    "(a connection is still open)",
+                ),
+              );
+            }, SERVER_CLOSE_TIMEOUT_MS).unref();
+          }),
+        ]);
+      } catch (error) {
+        // The STAGE is the diagnostic; the error text can carry a path or payload the disposing
+        // resource was holding. Stage plus error type answers "which resource failed to dispose"
+        // without reproducing what it held (review finding on #3159).
+        process.stderr.write(
+          `[coding-runtime-server] shutdown failed during ${stage}: ${
+            error instanceof Error ? error.constructor.name : typeof error
+          }\n`,
+        );
+        process.exit(1);
+      }
       process.exit(0);
     })();
   };
