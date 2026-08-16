@@ -369,7 +369,7 @@ const TASK_CLASS_RULES: readonly TaskClassRule[] = [
       "hilf mir entscheiden",
       "entscheidung treffen",
       "entscheidung vorbereiten",
-      "entscheidung uber",
+      "bereite eine belastbare entscheidung uber",
       "entscheide zwischen",
       "plan a trip",
       "plane eine reise",

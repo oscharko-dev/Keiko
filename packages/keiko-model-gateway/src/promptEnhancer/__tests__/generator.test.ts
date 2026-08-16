@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  analyzePrompt,
+  asPromptEnhancementRequestId,
   GROUNDING_NEED_KINDS,
   PROMPT_ENHANCEMENT_PROFILE_IDS,
+  PROMPT_ENHANCER_SCHEMA_VERSION,
   PROMPT_TASK_CLASSES,
   validateEnhancedPrompt,
   type ClarificationOrAssumption,
@@ -90,6 +93,24 @@ function generateFor(
   const analysis = makeAnalysis(options);
   const plan = planPromptEnhancement(analysis, planOptions);
   return generateEnhancedPrompt({ promptId: testPromptId(), analysis, plan, input });
+}
+
+function generateForProductionInput(text: string): {
+  readonly analysis: ReturnType<typeof analyzePrompt>;
+  readonly prompt: EnhancedPrompt;
+} {
+  const input = { text };
+  const analysis = analyzePrompt({
+    schemaVersion: PROMPT_ENHANCER_SCHEMA_VERSION,
+    requestId: asPromptEnhancementRequestId("generator-production-pipeline"),
+    input,
+    missingInformationStrategy: "clarify",
+  });
+  const plan = planPromptEnhancement(analysis);
+  return {
+    analysis,
+    prompt: generateEnhancedPrompt({ promptId: testPromptId(), analysis, plan, input }),
+  };
 }
 
 function profileForTaskClass(taskClass: PromptTaskClass): PromptEnhancementProfileId {
@@ -231,6 +252,29 @@ describe("generateEnhancedPrompt — no fabrication and segregated input (AC3)",
 });
 
 describe("generateEnhancedPrompt — intent-specific shaping", () => {
+  it("keeps factual German questions about an introduction decision out of decision support", () => {
+    const { analysis, prompt } = generateForProductionInput(
+      "Was war die Entscheidung über die Einführung eines Wissensmanagement-Tools?",
+    );
+
+    expect(analysis.taskClass).toBe("factual-qa");
+    expect(trustedText(prompt)).not.toMatch(
+      /decision-support analyst|task lens: decision support/i,
+    );
+  });
+
+  it("routes the audited German knowledge-management request through the production pipeline", () => {
+    const { analysis, prompt } = generateForProductionInput(
+      "Bereite eine belastbare Entscheidung über die Einführung eines Wissensmanagement-Tools vor. Alternativen, Budget, Nutzerzahl, Entscheidungskriterien und Zeitrahmen sind noch unbekannt.",
+    );
+
+    expect(analysis.taskClass).toBe("decision-support");
+    expect(trustedText(prompt)).toMatch(/decision-support analyst|task lens: decision support/i);
+    expect(trustedText(prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
   it("keeps the audited German knowledge-management request out of the travel frame", () => {
     const prompt = generateFor(
       { taskClass: "factual-qa", domain: "general", recommendedProfile: "precise" },
