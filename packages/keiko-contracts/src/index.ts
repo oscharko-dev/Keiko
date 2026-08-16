@@ -4097,6 +4097,22 @@ export {
   validateVoiceSessionRecapAuditRecord,
 } from "./voice-session-recap.js";
 
+// Gateway Setup audit record (KEIKO-0497). Content-free evidence for a governance-relevant act:
+// host CLASSIFICATION and the override flag, never the configured base URL.
+export type {
+  GatewaySetupTargetClass,
+  GatewaySetupOutcomeKind,
+  GatewaySetupAuditRecord,
+} from "./gateway-setup-audit.js";
+export {
+  GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
+  GATEWAY_SETUP_TARGET_CLASSES,
+  GATEWAY_SETUP_OUTCOME_KINDS,
+  isGatewaySetupTargetClass,
+  isGatewaySetupOutcomeKind,
+  validateGatewaySetupAuditRecord,
+} from "./gateway-setup-audit.js";
+
 // ─── Editor M11 multi-root/trust/profile/history foundation (Issue #2520) ───────
 export type {
   WorkspaceBranded,

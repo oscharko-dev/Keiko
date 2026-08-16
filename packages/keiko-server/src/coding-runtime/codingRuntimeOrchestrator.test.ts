@@ -19,6 +19,7 @@ import {
   MAX_APPROVAL_CHALLENGE_TTL_MS,
   type CodingRuntimeOrchestratorResult,
 } from "./codingRuntimeOrchestrator.js";
+import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
 import { createPendingResearchApprovals } from "./researchApprovalIssuance.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { AuxiliaryResearchScopeV1 } from "@oscharko-dev/keiko-contracts";
@@ -393,6 +394,32 @@ describe("CodingRuntimeOrchestrator", () => {
         expectedRevision: 4,
       }),
     ).toEqual({ ok: false, failureCode: "invalid-intent" });
+  });
+
+  // KEIKO-0150 (#2901): every throw out of launchResolver.resolve was caught by a bare `catch {}`
+  // and reported as `authority-resolution-failed`, so a run refused because its runtime profile does
+  // not match the adapter looked identical to one refused for missing authority. Nothing downstream
+  // could tell the two apart, and the structured code the runtime manager already defines for the
+  // mismatch never reached the caller.
+  it("reports a rejected launch under its own cause instead of one generic code", async () => {
+    const f = fixture();
+    f.launchResolver.resolve.mockImplementationOnce(() => {
+      throw new CodingRuntimeLaunchRejectedError("adapter-profile-mismatch");
+    });
+
+    expect(await f.orchestrator.start(start)).toEqual({ ok: false, failureCode: "source-drift" });
+  });
+
+  it("keeps an unrecognized launch throw on the generic cause and never reports success", async () => {
+    const f = fixture();
+    f.launchResolver.resolve.mockImplementationOnce(() => {
+      throw new Error("opencode-backend-profile-mismatch");
+    });
+
+    expect(await f.orchestrator.start(start)).toEqual({
+      ok: false,
+      failureCode: "authority-resolution-failed",
+    });
   });
 
   it("allows a new follow-up request at the unchanged revision after adapter refusal", async () => {

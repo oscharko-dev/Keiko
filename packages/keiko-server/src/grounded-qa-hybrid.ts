@@ -73,6 +73,7 @@ import {
   mergeContextPackSummaries,
   sourceLabels,
   splitExplorationBudget,
+  splitExplorationBudgets,
   type GroundedRetriever,
 } from "./grounded-qa-multi-source.js";
 import {
@@ -110,7 +111,7 @@ import {
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { rerankSelection } from "./grounded-rerank-facade.js";
 import { buildLocalKnowledgeIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
-import { createEntailmentStage } from "./grounded-entailment-stage.js";
+import { createEntailmentStage, type EntailmentStage } from "./grounded-entailment-stage.js";
 import {
   appendGroundedAnswerEntailment,
   buildQuery,
@@ -154,6 +155,11 @@ export function connectorLabels(rawLabels: readonly string[]): readonly string[]
 
 // ─── Injected seams (tests) ───────────────────────────────────────────────────
 
+export type EntailmentStageFactory = (input: {
+  readonly capsules: readonly KnowledgeCapsule[];
+  readonly modelId: string;
+  readonly signal: AbortSignal;
+}) => EntailmentStage | undefined;
 export type FolderRetriever = GroundedRetriever;
 export type ConnectorRetrieve = (
   store: KnowledgeStore,
@@ -176,6 +182,9 @@ export interface HybridGroundedAskCtx {
   readonly folderRetriever?: FolderRetriever;
   readonly connectorRetrieve?: ConnectorRetrieve;
   readonly answer?: HybridAnswerer;
+  // Test seam (KEIKO-0237): supply the entailment stage instead of building it from `deps`. In
+  // production the factory is undefined and createEntailmentStage runs unchanged.
+  readonly entailmentStageFactory?: EntailmentStageFactory;
   // Upfront-skipped folder scopes (inaccessible/denied at canonicalization time). Merged into
   // `skippedFolders` uncertainty entries alongside retrieval-time folder skips.
   readonly preSkippedFolders?: readonly {
@@ -527,7 +536,11 @@ async function retrieveFolderPacks(
   retriever: FolderRetriever,
 ): Promise<FolderRetrieval> {
   const labels = sourceLabels(folderScopes);
-  const budget = splitExplorationBudget(DEFAULT_EXPLORATION_BUDGET, folderScopes.length);
+  // KEIKO-0174 (#2901): the singular form uniformly gives every folder the FIRST slice of an equal
+  // split, so with N folders every folder received the same rich share and the total N x work broke
+  // the documented "sum of every dimension equals the base cap" invariant. The plural form is
+  // query-weighted and per-folder, and re-uses the same allocation runMultiSourceAsk already uses.
+  const perFolderBudgets = splitExplorationBudgets(DEFAULT_EXPLORATION_BUDGET, folderScopes, query);
   // Index-addressed slots keep the emitted order identical to the scope order regardless of which
   // worker finishes first — evidence and labels stay deterministic (mirrors retrieveConnectors).
   const slots: FolderSlot[] = new Array<FolderSlot>(folderScopes.length).fill(undefined);
@@ -540,7 +553,9 @@ async function retrieveFolderPacks(
       const cs = folderScopes[i];
       const label = labels[i];
       if (cs === undefined || label === undefined) continue;
-      slots[i] = await retrieveFolderIntoSlot(ctx, retriever, query, budget, {
+      const folderBudget = perFolderBudgets[i] ?? perFolderBudgets.at(-1);
+      if (folderBudget === undefined) continue;
+      slots[i] = await retrieveFolderIntoSlot(ctx, retriever, query, folderBudget, {
         cs,
         label,
         index: i,
@@ -1143,13 +1158,16 @@ async function applyHybridEntailment(
   connectors: readonly RetrievedConnector[],
 ): Promise<HybridGroundedAnswer> {
   const capsules = connectors.flatMap((src) => src.selected.capsules);
-  const stage = createEntailmentStage(
-    ctx.deps,
-    capsules,
-    ctx.modelId,
-    { diagnostics: ctx.deps.diagnostics },
-    ctx.signal,
-  );
+  const stage =
+    ctx.entailmentStageFactory !== undefined
+      ? ctx.entailmentStageFactory({ capsules, modelId: ctx.modelId, signal: ctx.signal })
+      : createEntailmentStage(
+          ctx.deps,
+          capsules,
+          ctx.modelId,
+          { diagnostics: ctx.deps.diagnostics },
+          ctx.signal,
+        );
   if (stage === undefined) {
     return answer;
   }

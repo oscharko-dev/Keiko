@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  fileWriteKeys,
   activePointerKey,
   createWorkspaceMutexRegistry,
   provisionKey,
@@ -147,5 +148,65 @@ describe("createWorkspaceMutexRegistry", () => {
     expect(workspaceKey("ws-abc")).toBe("ws:ws-abc");
     expect(provisionKey("repo-1", "task-2")).toBe("prov:repo-1:task-2");
     expect(activePointerKey("repo-1")).toBe("active:repo-1");
+  });
+});
+
+// Two saves serialize iff their key SETS overlap — `runExclusive` queues on any shared key — so
+// every assertion here is about overlap, not about the arrays being equal.
+function serializesWith(a: readonly string[], b: readonly string[]): boolean {
+  const other = new Set(b);
+  return a.some((key) => other.has(key));
+}
+
+describe("fileWriteKeys identity (#3200 review)", () => {
+  it("stays stable across the atomic rename every save performs", () => {
+    // The key must not change when the write replaces the target: an inode-based key would shift
+    // on every save, letting a request that resolves mid-rename derive a different key and enter
+    // the critical section concurrently. The path does not move.
+    expect(fileWriteKeys("/tmp/project/app.ts")).toEqual(fileWriteKeys("/tmp/project/app.ts"));
+  });
+
+  it("folds case- and normalization-equivalent spellings on every platform", () => {
+    const upper = fileWriteKeys("/tmp/project/Foo.ts");
+    const lower = fileWriteKeys("/tmp/project/foo.ts");
+    const nfc = fileWriteKeys("/tmp/project/caf\u00e9.ts");
+    const nfd = fileWriteKeys("/tmp/project/cafe\u0301.ts");
+    // Portable: the alias key is taken on every platform, so this contract does not depend on the
+    // host. A byte-exact filesystem merely serializes two saves it did not have to.
+    expect(serializesWith(upper, lower)).toBe(true);
+    expect(serializesWith(nfc, nfd)).toBe(true);
+  });
+
+  // The residual the #3200 review named: comparablePath lowercases, and lowercasing SPLITS the
+  // Greek sigma alias class that a case-insensitive filesystem merges — "\u03c2".toLowerCase() and
+  // "\u03a3".toLowerCase() differ, so the exact key alone would let both saves into the section.
+  // The uppercase alias key exists for exactly this and must overlap.
+  it.each([
+    ["final sigma vs capital sigma", "\u03c2", "\u03a3"],
+    ["eszett vs capital eszett (JS toUpperCase splits this class)", "\u00df", "\u1e9e"],
+    ["eszett vs SS uppercase", "\u00df", "SS"],
+    ["capital eszett vs SS", "\u1e9e", "SS"],
+    ["ligature fi vs fi", "\ufb01", "fi"],
+
+    ["final sigma vs small sigma", "\u03c2", "\u03c3"],
+    ["dotless i vs capital I", "\u0131", "I"],
+  ])("serializes the %s alias class the exact key splits", (_label, left, right) => {
+    const a = fileWriteKeys(`/tmp/project/${left}.ts`);
+    const b = fileWriteKeys(`/tmp/project/${right}.ts`);
+    expect(serializesWith(a, b)).toBe(true);
+  });
+
+  it("separates genuinely different files", () => {
+    expect(serializesWith(fileWriteKeys("/tmp/a.ts"), fileWriteKeys("/tmp/b.ts"))).toBe(false);
+  });
+
+  it("keeps every key in one tier so a file save cannot deadlock", () => {
+    // All keys a save takes must sort into the same tier; the registry acquires them in one
+    // canonical order, so a multi-key save can never hold-and-wait against another save.
+    const keys = fileWriteKeys("/tmp/project/app.ts");
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.every((key) => key.startsWith("file:") || key.startsWith("file-alias:"))).toBe(
+      true,
+    );
   });
 });

@@ -42,7 +42,7 @@ import {
   searchFiles,
   writeFilesContent,
 } from "./index.js";
-import { normalizeRelativePath, resolveRoot } from "./files.js";
+import { normalizeRelativePath, resolveRoot, classifyInLockRefreshFailure } from "./files.js";
 import type { RouteContext, UiHandlerDeps } from "./index.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { createBreakpointStore } from "./editor/dap/breakpointStore.js";
@@ -82,6 +82,17 @@ const PNG_1X1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/ax6XK0AAAAASUVORK5CYII=",
   "base64",
 );
+
+// Drives real filesystem round-trips on `path`, draining the event loop between them. A stat()
+// submitted before the first of these has certainly completed by the last — used to give an
+// unserialized contender every chance to reach its conflict check, so that the serialization
+// assertion below fails loudly when the lock is removed. Bounded work, no wall-clock threshold.
+async function settleFileSystemTurns(path: string, rounds = 5): Promise<void> {
+  for (let round = 0; round < rounds; round += 1) {
+    await stat(path);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+}
 
 describe("desktop files browser", () => {
   let root: string;
@@ -681,6 +692,111 @@ describe("desktop files browser", () => {
     });
 
     expect(saved.content).toBe('export const value = "fresh";\n');
+  });
+
+  // KEIKO-0495: the optimistic-concurrency check was a check-then-act. Two saves carrying the SAME
+  // baseVersion could both clear assertNoWriteConflict before either wrote, and the second silently
+  // overwrote the first with no STALE_SESSION for the loser — a lost update with no signal.
+  //
+  // The assertion is serialization itself, not just its outcome: the first writer is parked AFTER its
+  // conflict check and BEFORE its write, and the contender must not be able to pass its own conflict
+  // check while that hold lasts. `runExclusive` installs its release gate synchronously, before its
+  // first await, so once `onQueued` has fired the contender is provably queued on the key — nothing
+  // here depends on the scheduler. `settleFileSystemTurns` then drives real filesystem round-trips on
+  // the same path so the contender's own earlier-submitted stat() has certainly completed; an
+  // unserialized contender would have reached its conflict check by then and tripped the flag.
+  //
+  // The outcome assertions below are a second, independent detector: with serialization removed both
+  // saves clear their checks against the pre-write snapshot and both succeed, which is the lost update.
+  it("holds a contending save out of the critical section until the holder's write completes", async () => {
+    const initial = await readFilesContent(store, root, "src/app.ts");
+    let releaseHolder!: () => void;
+    const held = new Promise<void>((releaseIt) => {
+      releaseHolder = (): void => {
+        releaseIt();
+      };
+    });
+    let holderParked!: () => void;
+    const holderInside = new Promise<void>((parked) => {
+      holderParked = parked;
+    });
+
+    const first = writeFilesContent({
+      store,
+      rootInput: root,
+      pathInput: "src/app.ts",
+      content: 'export const value = "first";\n',
+      baseVersion: initial.session.version,
+      testControl: {
+        afterConflictCheck: async (): Promise<void> => {
+          holderParked();
+          await held;
+        },
+      },
+    });
+    await holderInside;
+
+    let contenderQueued!: () => void;
+    const queued = new Promise<void>((resolveQueued) => {
+      contenderQueued = resolveQueued;
+    });
+    let contenderPassedCheckWhileHeld = false;
+    let holderStillParked = true;
+    const second = writeFilesContent({
+      store,
+      rootInput: root,
+      pathInput: "src/app.ts",
+      content: 'export const value = "second";\n',
+      baseVersion: initial.session.version,
+      testControl: {
+        onQueued: contenderQueued,
+        afterConflictCheck: (): void => {
+          if (holderStillParked) contenderPassedCheckWhileHeld = true;
+        },
+      },
+    });
+    await queued;
+    await settleFileSystemTurns(join(root, "src/app.ts"));
+
+    expect(contenderPassedCheckWhileHeld).toBe(false);
+
+    holderStillParked = false;
+    releaseHolder();
+
+    const results = await Promise.allSettled([first, second]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.filter((r) => r.status === "rejected");
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]).toMatchObject({ reason: { status: 409, code: "STALE_SESSION" } });
+
+    const onDisk = await readFilesContent(store, root, "src/app.ts");
+    expect(['export const value = "first";\n', 'export const value = "second";\n']).toContain(
+      onDisk.content,
+    );
+  });
+
+  // The in-lock re-stat can fail for reasons that are NOT a concurrent rename. Mapping all of them
+  // to 409 STALE_PATH would hide a 403 DENIED or a 500 IO_ERROR behind a retryable-looking status.
+  it.each([
+    { code: "ENOENT", status: 409, label: "vanished" },
+    { code: "ENOTDIR", status: 409, label: "parent replaced by a file" },
+  ])("maps $label to STALE_PATH", ({ code, status }) => {
+    const mapped = classifyInLockRefreshFailure(Object.assign(new Error("x"), { code }));
+    expect(mapped.status).toBe(status);
+    expect(mapped.code).toBe("STALE_PATH");
+  });
+
+  it("preserves permission and I/O failures from the in-lock refresh", () => {
+    const denied = classifyInLockRefreshFailure(Object.assign(new Error("x"), { code: "EACCES" }));
+    expect(denied.status).not.toBe(409);
+    expect(denied.code).not.toBe("STALE_PATH");
+
+    const io = classifyInLockRefreshFailure(Object.assign(new Error("x"), { code: "EIO" }));
+    expect(io.status).toBe(500);
+    expect(io.code).toBe("IO_ERROR");
+
+    // A thrown non-Error carries no errno and must not masquerade as staleness either.
+    expect(classifyInLockRefreshFailure("boom").code).not.toBe("STALE_PATH");
   });
 
   it("prefers baseVersion over expectedModifiedAt for conflict detection", async () => {
