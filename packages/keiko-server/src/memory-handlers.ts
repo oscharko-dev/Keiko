@@ -93,6 +93,32 @@ const MAX_TOMBSTONE_CURSOR_CHARS = 1_024;
 const MAX_TOMBSTONE_ID_CHARS = 200;
 const REVIEW_QUEUE_STATUSES: readonly MemoryStatus[] = ["proposed", "conflicted", "expired"];
 
+// KEIKO-0216 / KEIKO-0348: closed-vocabulary sanitisation for user-supplied 'reason'
+// fields on conflict-resolution, proposal-rejection, and explicit-archive routes.
+// Mirrors sanitizeMemoryTombstoneReason for the forget path (AUDIT-MEMSEC-001): any
+// out-of-enum value collapses to a safe default so raw memory bodies or PII from a
+// coerced client cannot end up written to staleReason (which is verbatim-persisted).
+const MEMORY_STATUS_MUTATION_REASONS = [
+  "conflict-resolved",
+  "rejected-by-user",
+  "archived-by-user",
+  "user-request",
+] as const;
+type MemoryStatusMutationReason = (typeof MEMORY_STATUS_MUTATION_REASONS)[number];
+const MEMORY_STATUS_MUTATION_REASON_SET = new Set<string>(MEMORY_STATUS_MUTATION_REASONS);
+
+function sanitizeMemoryStatusMutationReason(
+  reason: string | undefined,
+  fallback: MemoryStatusMutationReason,
+): MemoryStatusMutationReason {
+  if (reason === undefined) return fallback;
+  const trimmed = reason.trim();
+  if (trimmed.length === 0) return fallback;
+  return MEMORY_STATUS_MUTATION_REASON_SET.has(trimmed)
+    ? (trimmed as MemoryStatusMutationReason)
+    : fallback;
+}
+
 // ─── Type guards / helpers ─────────────────────────────────────────────────────
 
 // Sanitise GovernanceError into a code-keyed safe response body. GovernanceError.message
@@ -997,7 +1023,8 @@ export async function handleArchiveMemory(
   const body = await readJsonBody(ctx.req);
   if (isRouteResult(body)) return body;
 
-  const reason = typeof body.reason === "string" ? body.reason.trim() : undefined;
+  const rawReason = typeof body.reason === "string" ? body.reason : undefined;
+  const reason = sanitizeMemoryStatusMutationReason(rawReason, "archived-by-user");
 
   try {
     const record = vault.getMemory(id as MemoryId);
@@ -1009,7 +1036,14 @@ export async function handleArchiveMemory(
       { reviewerId: reviewerIdForMemoryMutation(deps), nowMs: Date.now() },
       reason,
     );
-    const updated = vault.updateMemory(id as MemoryId, { status: "archived" }, Date.now());
+    // KEIKO-0348: persist the (sanitised) archive reason on the record — before this
+    // wiring the field was validated and then discarded, leaving staleReason undefined
+    // and the archive event without operator context.
+    const updated = vault.updateMemory(
+      id as MemoryId,
+      { status: "archived", staleReason: reason },
+      Date.now(),
+    );
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
     if (err instanceof GovernanceError) {
@@ -1400,7 +1434,7 @@ export async function handleDeleteMemory(
 interface ConflictResolutionInput {
   readonly winner: MemoryId;
   readonly losers: readonly MemoryId[];
-  readonly reason: string;
+  readonly reason: MemoryStatusMutationReason;
 }
 
 function uniqueIds(ids: readonly MemoryId[]): readonly MemoryId[] {
@@ -1423,10 +1457,10 @@ function parseConflictResolutionInput(
       body: errorBody("BAD_REQUEST", "losers must be a non-empty string array."),
     };
   }
-  const reason =
-    typeof raw.reason === "string" && raw.reason.trim().length > 0
-      ? raw.reason.trim()
-      : "conflict resolved from MemoriaViva";
+  const reason = sanitizeMemoryStatusMutationReason(
+    typeof raw.reason === "string" ? raw.reason : undefined,
+    "conflict-resolved",
+  );
   const winner = raw.winner as MemoryId;
   const losers = raw.losers.map((id) => id as MemoryId);
   if (uniqueIds([winner, ...losers]).length !== 1 + losers.length) {
@@ -1989,11 +2023,11 @@ export async function handleAcceptMemoryProposal(
 
 // ─── Handler: POST /api/memory/proposals/:id/reject ───────────────────────────
 
-function parseRejectInput(raw: Record<string, unknown>): { reason: string } {
-  const reason =
-    typeof raw.reason === "string" && raw.reason.trim().length > 0
-      ? raw.reason.trim()
-      : "rejected by user";
+function parseRejectInput(raw: Record<string, unknown>): { reason: MemoryStatusMutationReason } {
+  const reason = sanitizeMemoryStatusMutationReason(
+    typeof raw.reason === "string" ? raw.reason : undefined,
+    "rejected-by-user",
+  );
   return { reason };
 }
 

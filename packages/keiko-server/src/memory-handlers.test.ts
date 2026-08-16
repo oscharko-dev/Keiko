@@ -734,7 +734,33 @@ describe("memory handlers", () => {
     );
 
     expect(result.status).toBe(200);
-    expect((asJson(result).memory as MemoryRecord).status).toBe("archived");
+    const archived = asJson(result).memory as MemoryRecord;
+    expect(archived.status).toBe("archived");
+    // KEIKO-0348: the archive route now threads the (sanitised) reason through to
+    // vault.updateMemory so it lands on the record. Before the fix, staleReason was
+    // undefined here — the reason was validated and then discarded.
+    expect(archived.staleReason).toBe("archived-by-user");
+    // KEIKO-0216: a persisted archived record confirms the raw client string never
+    // survives to disk verbatim; the closed-vocabulary sanitiser collapses out-of-enum
+    // strings (which may contain PII/secrets from a coerced client) to a safe default.
+    expect(archived.staleReason).not.toContain("archived conflicting memory");
+  });
+
+  it("persists a client-provided in-enum archive reason as-is (KEIKO-0348)", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("in-enum-1", "archive me", { status: "accepted" }));
+
+    const result = await handleArchiveMemory(
+      makeCtx(
+        "/api/memory/in-enum-1/archive",
+        { reason: "user-request" },
+        { id: "in-enum-1" },
+      ),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(200);
+    expect((asJson(result).memory as MemoryRecord).staleReason).toBe("user-request");
   });
 
   it("still rejects a proposed memory, the one legal source state", async () => {
@@ -753,7 +779,10 @@ describe("memory handlers", () => {
     expect(result.status).toBe(200);
     const memory = asJson(result).memory as MemoryRecord;
     expect(memory.status).toBe("rejected");
-    expect(memory.staleReason).toBe("rejected from review queue");
+    // KEIKO-0216: a free-form client-supplied reason is normalised to the closed enum;
+    // "rejected from review queue" is not in the allowed vocabulary, so it collapses
+    // to the safe "rejected-by-user" default instead of being persisted verbatim.
+    expect(memory.staleReason).toBe("rejected-by-user");
   });
 
   it.each(["accepted", "archived", "superseded", "expired"] as const)(
@@ -1330,9 +1359,10 @@ describe("memory handlers", () => {
 
     expect(result.status).toBe(200);
     expect(vault.getMemory(memoryId("conflict-loser"))?.status).toBe("conflicted");
-    expect(vault.getMemory(memoryId("conflict-loser"))?.staleReason).toBe(
-      "reviewed and winner selected",
-    );
+    // KEIKO-0216: the client-supplied free-form reason "reviewed and winner selected" is
+    // outside the closed vocabulary; sanitisation collapses it to the "conflict-resolved"
+    // default rather than persisting the raw string.
+    expect(vault.getMemory(memoryId("conflict-loser"))?.staleReason).toBe("conflict-resolved");
     const edges = vault.listOutgoingEdges(memoryId("conflict-loser"));
     expect(edges).toHaveLength(1);
     expect(edges[0]).toEqual(
