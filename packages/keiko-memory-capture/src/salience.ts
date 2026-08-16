@@ -336,6 +336,69 @@ export function normalizeForDedup(body: string): string {
     .trim();
 }
 
+const PROVENANCE_IGNORED_TERMS = new Set([
+  "a",
+  "an",
+  "and",
+  "assistant",
+  "for",
+  "i",
+  "in",
+  "is",
+  "of",
+  "said",
+  "the",
+  "to",
+  "user",
+]);
+
+const PROVENANCE_TERM_ALIASES: Readonly<Record<string, string>> = {
+  had: "have",
+  has: "have",
+  needs: "need",
+  preferred: "prefer",
+  prefers: "prefer",
+  relied: "use",
+  relies: "use",
+  relying: "use",
+  rely: "use",
+  used: "use",
+  uses: "use",
+  using: "use",
+  wants: "want",
+};
+
+function provenanceTerms(text: string): ReadonlySet<string> {
+  return new Set(
+    normalizeForDedup(text)
+      .split(" ")
+      .map((term) => PROVENANCE_TERM_ALIASES[term] ?? term)
+      .filter((term) => term.length > 1 && !PROVENANCE_IGNORED_TERMS.has(term)),
+  );
+}
+
+// A model's source label is untrusted. A candidate whose new substantive terms come only from the
+// assistant context must not be captured. Compare substantive terms rather than raw overlap counts:
+// an assistant may legitimately restate a user fact with more words, but it cannot supply new user
+// provenance.
+function isAssistantOnlyContent(
+  body: string,
+  userText: string,
+  assistantText: string | undefined,
+): boolean {
+  if (assistantText === undefined) {
+    return false;
+  }
+  const candidateTerms = provenanceTerms(body);
+  if (candidateTerms.size === 0) {
+    return false;
+  }
+  const userTerms = provenanceTerms(userText);
+  const assistantTerms = provenanceTerms(assistantText);
+  const unsupportedTerms = [...candidateTerms].filter((term) => !userTerms.has(term));
+  return unsupportedTerms.length > 0 && unsupportedTerms.every((term) => assistantTerms.has(term));
+}
+
 function charBigrams(normalized: string): ReadonlySet<string> {
   const bigrams = new Set<string>();
   for (let i = 0; i < normalized.length - 1; i += 1) {
@@ -465,12 +528,18 @@ function collectAcceptedCandidates(
   items: readonly RawSalienceItem[],
   context: CaptureContext,
   policy: CapturePolicyOptions,
+  userText: string,
+  assistantText: string | undefined,
   seen: ReadonlySet<string>[],
   onDrop: (reason: ModelDropReason) => void,
 ): CaptureOutcome[] {
   const accepted: CaptureOutcome[] = [];
   for (const item of items) {
     if (accepted.length >= MAX_CANDIDATES) break;
+    if (isAssistantOnlyContent(item.body, userText, assistantText)) {
+      onDrop("non-user-source");
+      continue;
+    }
     const candidate = buildCandidate(item, context, policy, onDrop);
     if (candidate === null) continue;
     const bigrams = charBigrams(normalizeForDedup(item.body));
@@ -521,7 +590,15 @@ export async function extractSalientMemories(
   const recordDrop = (reason: ModelDropReason): void => {
     droppedByReason.set(reason, (droppedByReason.get(reason) ?? 0) + 1);
   };
-  const accepted = collectAcceptedCandidates(items, context, policy, seen, recordDrop);
+  const accepted = collectAcceptedCandidates(
+    items,
+    context,
+    policy,
+    input.userText,
+    input.assistantText,
+    seen,
+    recordDrop,
+  );
   emitExtractionDiagnostics(deps, items, accepted.length, droppedByReason);
   return accepted;
 }

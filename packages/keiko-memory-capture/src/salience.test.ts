@@ -175,6 +175,119 @@ describe("extractSalientMemories", () => {
     expect(seen[0]?.[2]?.content).not.toContain("Redis");
   });
 
+  it("does not capture an assistant-only claim when the role-preserving model lies about its source", async () => {
+    const assistantOnlyClaim = "Atlas uses DynamoDB.";
+    const deceptiveModelOutput = JSON.stringify([
+      {
+        body: assistantOnlyClaim,
+        type: "fact",
+        confidence: 0.9,
+        scope: "project",
+        source: "user",
+        tags: ["atlas", "dynamodb"],
+      },
+    ]);
+    const seen: ReturnType<typeof buildSalienceMessages>[] = [];
+
+    const result = await extractSalientMemories(
+      input({
+        userText: "I am evaluating database options for Atlas.",
+        assistantText: assistantOnlyClaim,
+      }),
+      {
+        ...deps(deceptiveModelOutput),
+        callModelMessages: (messages): Promise<string> => {
+          seen.push(messages);
+          return Promise.resolve(deceptiveModelOutput);
+        },
+      },
+    );
+
+    expect(seen[0]?.map((message) => message.role)).toEqual(["system", "assistant", "user"]);
+    expect(result).toEqual([]);
+  });
+
+  it("does not capture an assistant-only claim when the legacy flattened model lies about its source", async () => {
+    const assistantOnlyClaim = "Atlas uses DynamoDB.";
+    const deceptiveModelOutput = JSON.stringify([
+      {
+        body: assistantOnlyClaim,
+        type: "fact",
+        confidence: 0.9,
+        scope: "project",
+        source: "user",
+        tags: ["atlas", "dynamodb"],
+      },
+    ]);
+    let legacyUserPrompt = "";
+
+    const result = await extractSalientMemories(
+      input({
+        userText: "I am evaluating database options for Atlas.",
+        assistantText: assistantOnlyClaim,
+      }),
+      {
+        ...deps(deceptiveModelOutput),
+        callModel: (_system, user): Promise<string> => {
+          legacyUserPrompt = user;
+          return Promise.resolve(deceptiveModelOutput);
+        },
+      },
+    );
+
+    expect(legacyUserPrompt).toContain(assistantOnlyClaim);
+    expect(legacyUserPrompt).toContain("User said:");
+    expect(result).toEqual([]);
+  });
+
+  it("keeps a user-origin fact when the assistant only restates it with more words", async () => {
+    const userFact = "We use PostgreSQL for Atlas.";
+    const modelOutput = JSON.stringify([
+      {
+        body: "Atlas uses PostgreSQL.",
+        type: "fact",
+        confidence: 0.9,
+        scope: "project",
+        source: "user",
+        tags: ["atlas", "postgresql"],
+      },
+    ]);
+
+    const result = await extractSalientMemories(
+      input({
+        userText: userFact,
+        assistantText: "Atlas uses PostgreSQL for transactional data and reporting.",
+      }),
+      deps(modelOutput),
+    );
+
+    expect(candidatesOnly(result)).toHaveLength(1);
+  });
+
+  it("does not turn user-mentioned entities into an assistant-only asserted relationship", async () => {
+    const assistantOnlyClaim = "Atlas uses DynamoDB.";
+    const modelOutput = JSON.stringify([
+      {
+        body: assistantOnlyClaim,
+        type: "fact",
+        confidence: 0.9,
+        scope: "project",
+        source: "user",
+        tags: ["atlas", "dynamodb"],
+      },
+    ]);
+
+    const result = await extractSalientMemories(
+      input({
+        userText: "I'm evaluating DynamoDB for Atlas.",
+        assistantText: assistantOnlyClaim,
+      }),
+      deps(modelOutput),
+    );
+
+    expect(result).toEqual([]);
+  });
+
   it("maps scope hints to the correct MemoryScope kinds", async () => {
     const result = await extractSalientMemories(input(), deps(ATLAS_FACTS));
     const candidates = candidatesOnly(result);
