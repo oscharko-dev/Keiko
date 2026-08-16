@@ -80,6 +80,60 @@ describe("formatUserError", () => {
     });
   });
 
+  // KEIKO-0353 (UI half). The server half — circuit-open -> HTTP 503 — landed in #3188. This was
+  // reverted from Wave 2 because the translator was never threaded from the component boundary,
+  // making the DE catalog entries unreachable at every locale.
+  it("names the circuit-open outage and points to its auto-retry", () => {
+    const notice = toUserErrorNotice(
+      new ApiError("GATEWAY_CIRCUIT_OPEN", "GATEWAY_CIRCUIT_OPEN", 503),
+      "Could not send message.",
+    );
+
+    expect(notice.title).toBe("Model gateway is temporarily unavailable");
+    expect(notice.title).not.toBe("Request failed");
+    expect(notice.code).toBe("GATEWAY_CIRCUIT_OPEN");
+    expect(notice.remediation).toContain("Retrying automatically");
+  });
+
+  it("resolves circuit-open copy through a supplied translator", () => {
+    const seen: string[] = [];
+    const translate = ((key: string) => {
+      seen.push(key);
+      return `[x] ${key}`;
+    }) as unknown as Parameters<typeof toUserErrorNotice>[2];
+
+    const notice = toUserErrorNotice(
+      new ApiError("GATEWAY_CIRCUIT_OPEN", "GATEWAY_CIRCUIT_OPEN", 503),
+      "Could not send message.",
+      translate,
+    );
+
+    expect(notice.title).toBe("[x] error.circuitOpen.title");
+    expect(notice.remediation).toBe("[x] error.circuitOpen.remediation");
+    expect(seen).toContain("error.circuitOpen.message");
+  });
+
+  it("renders the real German catalog values for circuit-open", async () => {
+    // Binds the REAL de catalog, not a fake translator: proves the DE entries exist, are wired to
+    // the keys the formatter asks for, and actually reach a rendered notice. ErrorNoticeFromError
+    // passes useTranslate() the same way, which is what makes this reachable in production.
+    const { loadLocaleMessages, translate } = await import("@/lib/i18n");
+    await loadLocaleMessages("de");
+    const germanTranslate = ((key: string) =>
+      translate("de", key as never)) as unknown as Parameters<typeof toUserErrorNotice>[2];
+
+    const notice = toUserErrorNotice(
+      new ApiError("GATEWAY_CIRCUIT_OPEN", "GATEWAY_CIRCUIT_OPEN", 503),
+      "Could not send message.",
+      germanTranslate,
+    );
+
+    expect(notice.title).toBe("Model-Gateway vorübergehend nicht verfügbar");
+    expect(notice.remediation).toBe("Wird automatisch wiederholt. Warte oder wechsle das Modell.");
+    // Guards the exact regression that got this reverted from Wave 2: English leaking at de.
+    expect(notice.title).not.toContain("temporarily unavailable");
+  });
+
   it("parses the trailing support code from formatted error strings", () => {
     expect(toUserErrorNotice("Gateway returned 502. (GATEWAY_UPSTREAM_FAILURE)", "Retry")).toEqual({
       title: "Request failed",

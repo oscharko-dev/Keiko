@@ -9,6 +9,8 @@
 // memoriaviva/components/format-error).
 
 import { ApiError } from "@/lib/api";
+import type { I18nTranslate } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n-messages.en";
 
 export interface UserErrorNotice {
   readonly title: string;
@@ -92,18 +94,35 @@ function isClarificationNeeded(code: string | undefined): boolean {
   return code === "CLARIFICATION_NEEDED";
 }
 
+// KEIKO-0353: circuit-open is auto-recovering, but it used to fall through titleForError to the
+// generic "Request failed" with no remediation — so a user hitting a down provider was told LESS
+// as the outage persisted. This module is not a component and cannot call useTranslate, so it
+// takes the translate function as an optional parameter (the non-hook i18n seam) and falls back to
+// the English literal when none is supplied.
+function translated(t: I18nTranslate | undefined, key: MessageKey, fallback: string): string {
+  return t === undefined ? fallback : t(key);
+}
+
 function friendlyMessageForCode(
   message: string,
   code: string | undefined,
   fallback: string,
+  t?: I18nTranslate,
 ): string {
   if (code === "GATEWAY_TIMEOUT" && (message.length === 0 || message === code)) {
     return "The model gateway timed out before the model returned a response.";
   }
+  if (code === "GATEWAY_CIRCUIT_OPEN" && (message.length === 0 || message === code)) {
+    return translated(
+      t,
+      "error.circuitOpen.message",
+      "The model gateway is temporarily unavailable.",
+    );
+  }
   return message.length > 0 ? message : fallback;
 }
 
-function titleForError(message: string, code: string | undefined): string {
+function titleForError(message: string, code: string | undefined, t?: I18nTranslate): string {
   if (isClarificationNeeded(code)) {
     return "Keiko braucht mehr Kontext";
   }
@@ -111,13 +130,20 @@ function titleForError(message: string, code: string | undefined): string {
     return "Narrow the connected-source question";
   }
   if (code === "GATEWAY_TIMEOUT") return "Model gateway timed out";
+  if (code === "GATEWAY_CIRCUIT_OPEN") {
+    return translated(t, "error.circuitOpen.title", "Model gateway is temporarily unavailable");
+  }
   if (code === "PAYLOAD_TOO_LARGE") return "Request is too large";
   if (code === "NO_MODEL") return "No model is available";
   if (code !== undefined) return "Request failed";
   return "Something went wrong";
 }
 
-function remediationForError(message: string, code: string | undefined): string | undefined {
+function remediationForError(
+  message: string,
+  code: string | undefined,
+  t?: I18nTranslate,
+): string | undefined {
   if (isClarificationNeeded(code)) {
     return "Nenne eine konkrete Datei, einen Identifier, eine Fehlermeldung oder eine exakte Phrase.";
   }
@@ -127,18 +153,26 @@ function remediationForError(message: string, code: string | undefined): string 
   if (code === "GATEWAY_TIMEOUT") {
     return "Retry. If it repeats, use a smaller prompt or another model, then check gateway URL, proxy, and deployment in Settings.";
   }
+  if (code === "GATEWAY_CIRCUIT_OPEN") {
+    return translated(
+      t,
+      "error.circuitOpen.remediation",
+      "Retrying automatically. Wait, or switch model.",
+    );
+  }
   if (code === "PAYLOAD_TOO_LARGE") {
     return "Reduce the selected scope or remove large attachments before retrying.";
   }
   return undefined;
 }
 
-export function formatUserError(error: unknown, fallback: string): string {
+export function formatUserError(error: unknown, fallback: string, t?: I18nTranslate): string {
   if (error instanceof ApiError) {
     const message = friendlyMessageForCode(
       sanitizeMessage(error.message.trim()),
       error.code,
       fallback,
+      t,
     );
     return `${message} (${error.code})`;
   }
@@ -155,26 +189,31 @@ function rawErrorMessage(error: unknown): string {
   return "";
 }
 
-export function toUserErrorNotice(error: unknown, fallback: string): UserErrorNotice {
+export function toUserErrorNotice(
+  error: unknown,
+  fallback: string,
+  t?: I18nTranslate,
+): UserErrorNotice {
   if (error instanceof ApiError) {
     const message = friendlyMessageForCode(
       sanitizeMessage(error.message.trim()),
       error.code,
       fallback,
+      t,
     );
     return {
-      title: titleForError(message, error.code),
+      title: titleForError(message, error.code, t),
       message,
       code: error.code,
-      remediation: remediationForError(message, error.code),
+      remediation: remediationForError(message, error.code, t),
     };
   }
   const rawMessage = rawErrorMessage(error);
   const formatted = parseFormattedMessage(sanitizeMessage(rawMessage || fallback));
   return {
-    title: titleForError(formatted.message, formatted.code),
+    title: titleForError(formatted.message, formatted.code, t),
     message: formatted.message,
     code: formatted.code,
-    remediation: remediationForError(formatted.message, formatted.code),
+    remediation: remediationForError(formatted.message, formatted.code, t),
   };
 }
