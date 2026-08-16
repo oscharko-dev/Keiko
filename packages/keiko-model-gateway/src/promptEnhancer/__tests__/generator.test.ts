@@ -245,6 +245,28 @@ describe("generateEnhancedPrompt — intent-specific shaping", () => {
     expect(prompt.goal).toMatch(/reason through the decision|compare options/i);
   });
 
+  it("does not activate decision support for unrelated German Entscheidung compounds", () => {
+    const prompt = generateFor(
+      { taskClass: "factual-qa", domain: "general", recommendedProfile: "precise" },
+      { text: "Die Entscheidungstabelle ist vollständig." },
+    );
+
+    expect(trustedText(prompt)).not.toMatch(
+      /decision-support analyst|task lens: decision support/i,
+    );
+  });
+
+  it("keeps German travel requests with decision vocabulary in the travel frame", () => {
+    const prompt = generateFor(
+      { taskClass: "decision-support", domain: "general", recommendedProfile: "precise" },
+      {
+        text: "Plane eine Reise nach Japan; berücksichtige Alternativen und eine Entscheidungstabelle für das Budget.",
+      },
+    );
+
+    expect(trustedText(prompt)).toMatch(/travel planner|travel itinerary planning/i);
+  });
+
   it("changes trusted sections for unrelated user drafts instead of only changing the input JSON", () => {
     const codeReview = generateFor(
       {

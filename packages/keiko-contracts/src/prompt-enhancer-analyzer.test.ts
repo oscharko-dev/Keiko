@@ -197,6 +197,20 @@ describe("analyzePrompt task classification (AC2)", () => {
     expect(analysis.taskClass).toBe("decision-support");
     expect(analysis.taskClassConfidence).not.toBe("weak");
   });
+
+  it("does not classify unrelated German Entscheidung compounds as decision support", () => {
+    const analysis = analyze("Die Entscheidungstabelle ist vollständig.");
+
+    expect(analysis.taskClass).not.toBe("decision-support");
+  });
+
+  it("keeps a German travel request in the travel-capable decision class", () => {
+    const analysis = analyze(
+      "Plane eine Reise nach Japan; berücksichtige Alternativen und eine Entscheidungstabelle für das Budget.",
+    );
+
+    expect(analysis.taskClass).toBe("decision-support");
+  });
 });
 
 // ─── AC1: full structured analysis ───────────────────────────────────────────────
