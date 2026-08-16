@@ -55,11 +55,41 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+// KEIKO-0341: distinguishable typed errors so createCloneRepositoryHandler can map
+// each parse/validation failure to its own operator-visible message instead of the
+// pre-fix single "The clone request is invalid." for all of malformed-JSON,
+// wrong-shape, missing-field, and wrong-type.
+class MalformedJsonBodyError extends Error {
+  constructor() {
+    super("Request body is not valid JSON.");
+  }
+}
+class NotAnObjectBodyError extends Error {
+  constructor() {
+    super("Request body must be a JSON object.");
+  }
+}
+class MissingFieldError extends Error {
+  constructor(readonly field: string) {
+    super(`${field} is required.`);
+  }
+}
+class InvalidFieldTypeError extends Error {
+  constructor(readonly field: string) {
+    super(`${field} must be a string.`);
+  }
+}
+
 async function readJsonObject(req: IncomingMessage): Promise<Record<string, unknown>> {
   const raw = await readBody(req);
-  const parsed = JSON.parse(raw) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    throw new MalformedJsonBodyError();
+  }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("Expected JSON object");
+    throw new NotAnObjectBodyError();
   }
   return parsed as Record<string, unknown>;
 }
@@ -67,14 +97,14 @@ async function readJsonObject(req: IncomingMessage): Promise<Record<string, unkn
 function optionalString(body: Record<string, unknown>, key: string): string | undefined {
   const value = body[key];
   if (value === undefined || value === null) return undefined;
-  if (typeof value !== "string") throw new Error(`${key} must be a string`);
+  if (typeof value !== "string") throw new InvalidFieldTypeError(key);
   const trimmed = value.trim();
   return trimmed.length === 0 ? undefined : trimmed;
 }
 
 function requireString(body: Record<string, unknown>, key: string): string {
   const value = optionalString(body, key);
-  if (value === undefined) throw new Error(`${key} is required`);
+  if (value === undefined) throw new MissingFieldError(key);
   return value;
 }
 
@@ -377,6 +407,22 @@ export function createCloneRepositoryHandler(
           status: error.status,
           body: errorBody(error.code, redactedErrorMessage(error.message, deps)),
         };
+      }
+      // KEIKO-0341: give parse/shape/missing-field/type validation failures pairwise
+      // distinguishable messages so an operator debugging a failed clone can tell
+      // "malformed JSON" from "missing repositoryUrl" from "wrong shape" without
+      // needing the redacted diagnostic correlation id every time.
+      if (error instanceof MalformedJsonBodyError) {
+        return { status: 400, body: errorBody("BAD_REQUEST", error.message) };
+      }
+      if (error instanceof NotAnObjectBodyError) {
+        return { status: 400, body: errorBody("BAD_REQUEST", error.message) };
+      }
+      if (error instanceof MissingFieldError) {
+        return { status: 400, body: errorBody("BAD_REQUEST", error.message) };
+      }
+      if (error instanceof InvalidFieldTypeError) {
+        return { status: 400, body: errorBody("BAD_REQUEST", error.message) };
       }
       const correlationId = reportCloneFailure(ctx, deps, error);
       return {
