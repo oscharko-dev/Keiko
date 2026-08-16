@@ -96,7 +96,9 @@ async function createProjectFixture(request: APIRequestContext): Promise<() => v
     data: { name: "Fresh Chat E2E", path: projectPath },
   });
   expect(response.status(), await response.text()).toBe(201);
-  return (): void => rmSync(projectPath, { force: true, recursive: true });
+  return (): void => {
+    rmSync(projectPath, { force: true, recursive: true });
+  };
 }
 
 async function expectTooltipOffsetFromOption(page: Page, optionName: string): Promise<void> {
