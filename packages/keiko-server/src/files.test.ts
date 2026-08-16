@@ -722,6 +722,33 @@ describe("desktop files browser", () => {
     expect([first, second]).toContain(onDisk.content);
   });
 
+  // Codex review of #3200: omitting both baseVersion and expectedModifiedAt is the documented
+  // forced-save path. Serializing the region must not turn the second forced save into a
+  // STALE_PATH — that would happen if the write still used the pre-lock target, because the
+  // winner's atomic rename changed the inode that snapshot points at.
+  it("allows both forced saves (no concurrency tokens) to complete under the mutex", async () => {
+    const results = await Promise.allSettled([
+      writeFilesContent({
+        store,
+        rootInput: root,
+        pathInput: "src/app.ts",
+        content: 'export const value = "forced-a";\n',
+      }),
+      writeFilesContent({
+        store,
+        rootInput: root,
+        pathInput: "src/app.ts",
+        content: 'export const value = "forced-b";\n',
+      }),
+    ]);
+
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(2);
+    const onDisk = await readFilesContent(store, root, "src/app.ts");
+    expect(['export const value = "forced-a";\n', 'export const value = "forced-b";\n']).toContain(
+      onDisk.content,
+    );
+  });
+
   it("prefers baseVersion over expectedModifiedAt for conflict detection", async () => {
     const initial = await readFilesContent(store, root, "src/app.ts");
 

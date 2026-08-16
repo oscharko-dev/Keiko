@@ -1690,12 +1690,12 @@ async function verifyThenWrite(args: {
   await assertNoWriteConflict(refreshed, args.baseVersion, args.expectedModifiedAt);
   let protection: FilesContentWireResponse["localHistoryProtection"];
   if (args.beforeWrite !== undefined) {
-    const current = await readStableEditableContent(args.target);
+    const current = await readStableEditableContent(refreshed);
     protection = args.beforeWrite(current.content);
   }
   return {
     localHistoryProtection: protection,
-    updatedStats: await writeExistingResolvedFile(args.target, args.content),
+    updatedStats: await writeExistingResolvedFile(refreshed, args.content),
   };
 }
 
