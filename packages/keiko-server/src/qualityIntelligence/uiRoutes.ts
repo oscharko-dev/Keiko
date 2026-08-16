@@ -85,7 +85,7 @@ function projectRunSummary(
       exports: manifest.totals.exports,
     },
     reviewState,
-    ...(degradation ?? {}),
+    ...degradation,
   };
 }
 
@@ -314,7 +314,7 @@ function projectRunDetail(inputs: RunDetailInputs): QualityIntelligenceUiRunDeta
       ? { qualityDiagnostics: manifest.qualityDiagnostics }
       : {}),
     drift: projectDriftMetadata(manifest, candidateRows),
-    ...(degradation ?? {}),
+    ...degradation,
   };
 }
 
