@@ -1070,6 +1070,53 @@ test("still ignores dynamic JSX expressions and machine tokens", () => {
   expect(untranslatedLiteralsInSource(`<span>{"open-directory"}</span>`).findings).toEqual([]);
 });
 
+// KEIKO-0299 (review-follow-up): the AST scanner used to collect ANY string-literal expression
+// container, including those inside JsxAttribute values. `className={"Internal label"}` is code,
+// not user-visible text, and the per-line attribute pass already inspects which attribute names
+// are user-facing — double-counting under different rules would generate false ledger entries.
+test("does not scan string literals inside JSX attribute expression containers", () => {
+  expect(
+    untranslatedLiteralsInSource(
+      `<Widget className={"Internal label"} data-test-id={'internal token'} />`,
+    ).findings,
+  ).toEqual([]);
+});
+
+// KEIKO-0299 (review-follow-up): the initial ship of the AST scanner parsed EVERY UI source as
+// TSX. That made TypeScript-generic syntax in ordinary `.ts` files (`<T>`, `ReadonlySet<...>`)
+// look like JSX opening tags — the parser then emitted their surrounding source as a stream of
+// JsxText nodes, generating dozens of false untranslated-copy entries for pure-code files. The
+// fix picks ScriptKind by extension; these two cases pin that choice: identical source, parsed
+// as TS, produces zero findings; parsed as TSX (via a `.tsx` filename), produces the JsxText
+// interpretation.
+test("parses .ts sources with the TypeScript grammar (no JSX interpretation)", () => {
+  const generic = `const asType = <T,>(value: T): T => value;\nconst set: ReadonlySet<string> = new Set();\n`;
+  expect(untranslatedLiteralsInSource(generic, "packages/x/y.ts").findings).toEqual([]);
+});
+
+test("still parses .tsx sources as TSX", () => {
+  const jsx = `<p>\n  Hello there\n</p>`;
+  const findings = untranslatedLiteralsInSource(jsx, "packages/x/y.tsx").findings;
+  expect(findings.length).toBeGreaterThan(0);
+});
+
+// KEIKO-0299 (review-follow-up): boundary inputs the scanner must not throw on. Empty source,
+// whitespace-only source, and a source with an unterminated JSX element (mid-edit state) all
+// need to produce a valid `{findings, weakExemptions}` shape instead of a parser exception.
+test("returns an empty result for empty and whitespace-only sources", () => {
+  expect(untranslatedLiteralsInSource("").findings).toEqual([]);
+  expect(untranslatedLiteralsInSource("").weakExemptions).toEqual([]);
+  expect(untranslatedLiteralsInSource("   \n\n  \n").findings).toEqual([]);
+});
+
+test("does not throw on malformed TSX and returns a valid shape", () => {
+  const malformed = `<div>{"Hello"`;
+  const result = untranslatedLiteralsInSource(malformed, "packages/x/y.tsx");
+  expect(result).toHaveProperty("findings");
+  expect(result).toHaveProperty("weakExemptions");
+  expect(Array.isArray(result.findings)).toBe(true);
+});
+
 test("separates human copy from the machine tokens that share those positions", () => {
   for (const copy of ["Close", "New window", "Toggle light / dark theme", "Source file"]) {
     expect(isTranslatableCopy(copy)).toBe(true);

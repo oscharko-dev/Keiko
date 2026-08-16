@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // KEIKO-0304: shared with `../test-protocol.mjs` (Windows). Six known divergences reconciled at the
 // extraction; see the module's header for what and why. The macOS harness still owns its own
@@ -17,8 +18,12 @@ import {
 } from "../protocol-harness.mjs";
 
 const DEADLINE_MS = 15_000;
-const source = new URL("./keiko_runtime_supervisor.c", import.meta.url);
-const fixtureSource = new URL("./qualification_fixture.c", import.meta.url);
+// `URL.pathname` retains percent encoding, so a checkout path containing spaces, `%`, `#` or `?`
+// would reach xcrun as a mangled filename and fail the compile with a confusing "file not found".
+// `fileURLToPath` decodes to a filesystem path xcrun can actually open (Windows keeps its own
+// resolution, which is why the Windows harness carries its own helper).
+const supervisorSource = fileURLToPath(new URL("./keiko_runtime_supervisor.c", import.meta.url));
+const fixtureSource = fileURLToPath(new URL("./qualification_fixture.c", import.meta.url));
 
 async function compileFixture(path, architecture) {
   const child = spawn(
@@ -34,7 +39,7 @@ async function compileFixture(path, architecture) {
       architecture,
       "-o",
       path,
-      fixtureSource.pathname,
+      fixtureSource,
     ],
     { env: {}, stdio: ["ignore", "ignore", "pipe"] },
   );
@@ -83,7 +88,7 @@ async function qualify(helper, fixture, root) {
   }
 }
 
-const sourceText = await readFile(source, "utf8");
+const sourceText = await readFile(supervisorSource, "utf8");
 assert.match(sourceText, /KEIKO_MONITOR_ARM/u);
 assert.match(sourceText, /KEIKO_MONITOR_STOP/u);
 assert.match(sourceText, /KEIKO_MONITOR_ZERO_LIVE/u);
@@ -109,7 +114,6 @@ assert.doesNotMatch(
 // that gate instead of being reachable only at release time. The source contract above is
 // deliberately placed BEFORE the platform guard so it runs on every host.
 async function compileSupervisor(path, architecture) {
-  const supervisorSource = new URL("./keiko_runtime_supervisor.c", import.meta.url);
   const child = spawn(
     "/usr/bin/xcrun",
     [
@@ -124,13 +128,17 @@ async function compileSupervisor(path, architecture) {
       architecture,
       "-o",
       path,
-      supervisorSource.pathname,
+      supervisorSource,
     ],
     { env: {}, stdio: ["ignore", "ignore", "pipe"] },
   );
   const errors = [];
   child.stderr.on("data", (chunk) => errors.push(chunk));
-  const status = await new Promise((resolve) => {
+  // Mirror `compileFixture`'s error handling: if xcrun cannot be spawned at all (missing binary,
+  // ENOENT, EPERM), Node emits an unhandled `error` event that terminates the entire qualification
+  // process. Listening for it and rejecting the promise turns that failure into a named stage.
+  const status = await new Promise((resolve, reject) => {
+    child.once("error", reject);
     child.once("close", resolve);
   });
   if (status !== 0) {
@@ -148,8 +156,19 @@ async function compileSupervisor(path, architecture) {
 // pipeline uses (scripts/qualify-macos-runtime-release.mjs); `--compile` is the developer form
 // that builds from source and qualifies THAT — usable on a workstation with the system extension
 // installed. Neither flag → source contract only, no behavioural attempt, no false-red on CI.
+// KEIKO-0277 (review-follow-up): validate `--helper`'s argument on every host (not only darwin) so
+// a malformed invocation from the release pipeline fails fast instead of silently downgrading to
+// the source-contract path and reporting success. `--helper` with no path, or with the empty
+// string, is the exact malformed shape the release pipeline would produce if its exact-staged-
+// binary lookup produced nothing.
+const helperIndex = process.argv.indexOf("--helper");
+if (helperIndex !== -1) {
+  const supplied = process.argv[helperIndex + 1];
+  if (supplied === undefined || supplied.length === 0) {
+    throw new Error("--helper requires a non-empty path to the staged supervisor binary");
+  }
+}
 if (process.platform === "darwin") {
-  const helperIndex = process.argv.indexOf("--helper");
   const helper = helperIndex === -1 ? undefined : process.argv[helperIndex + 1];
   const shouldCompile = process.argv.includes("--compile");
   if (helper !== undefined || shouldCompile) {

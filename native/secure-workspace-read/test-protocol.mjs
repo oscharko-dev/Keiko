@@ -115,9 +115,15 @@ const MALFORMED_DEFAULTS = {
   trailing: Buffer.alloc(0),
 };
 
+// KEIKO-0382 (review-follow-up): the builder now accepts raw `rootBytes` alongside the string
+// `root`, mirroring `pathBytes` — the helper's parser rejects NUL and invalid UTF-8 in BOTH
+// fields, and covering only `path` left the equivalent `root` guards untested. When `rootBytes`
+// is supplied, `root` is ignored.
 function malformedRequest(overrides = {}) {
   const options = { ...MALFORMED_DEFAULTS, ...overrides };
-  const rootBuf = Buffer.from(options.root, "utf8");
+  const rootBuf = Buffer.isBuffer(options.rootBytes)
+    ? options.rootBytes
+    : Buffer.from(options.root, "utf8");
   const pathBuf = Buffer.isBuffer(options.pathBytes)
     ? options.pathBytes
     : Buffer.from(options.pathBytes, "utf8");
@@ -267,6 +273,17 @@ async function compile(binary, paused = false) {
 // whose intent is to observe a specific bytestring INSIDE a `"..."` (the Windows reserved-stem
 // pass and the `ascii_name_equals(..., "GLOBALROOT")` check) explicitly read `nativeSourceRaw`;
 // every other check consumes the stripped text.
+//
+// KEIKO-0417 (review-follow-up): C removes `\<newline>` (and `\<CR><LF>`) pairs during translation
+// phase 2, BEFORE it recognises comments. Without that step here, a `//` comment ending in `\`
+// splices with the following line at compile time but is truncated at the physical newline by this
+// scanner, exposing a security control that lives only on the spliced-in line. Run splicing first
+// so the scanner sees what the compiler sees. The negative self-test at the end of
+// `assertWindowsSourceContract` also covers a spliced-comment mutation.
+function preprocessCLineSplices(source) {
+  return source.replace(/\\\r?\n/gu, "");
+}
+
 // Skip a C string literal starting at the opening `"` (index i). Returns the index of the byte
 // AFTER the closing `"` (or the end of source on unterminated input).
 function skipStringLiteral(source, start) {
@@ -283,7 +300,8 @@ function skipStringLiteral(source, start) {
   return i;
 }
 
-function stripCommentsAndStrings(source) {
+function stripCommentsAndStrings(rawSource) {
+  const source = preprocessCLineSplices(rawSource);
   let out = "";
   let i = 0;
   while (i < source.length) {
@@ -345,13 +363,22 @@ async function assertWindowsSourceContract() {
   assert.match(nativeSource, /\*q == ':' \|\| \*q == '\?' \|\| \*q == '~'/u);
   assert.equal(nativeSource.match(/CreateFileW\(/gu)?.length, 1);
 
-  // KEIKO-0417 negative self-test: proves stripCommentsAndStrings is load-bearing rather than
-  // decorative. Take the real source, move `OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE`'s use site
-  // AND the single `CreateFileW(` call into `/* ... */` comments, and re-run the two matches
-  // those pinned. A raw scan would still find both tokens (they sit inside the comment); the
-  // stripped scan must not. If either check fails, the 17 assertions above are only pinning text
-  // that survived in a comment.
-  const mutated = nativeSourceRaw
+  assertCommentStrippingIsLoadBearing(nativeSourceRaw);
+}
+
+// KEIKO-0417 negative self-test: proves stripCommentsAndStrings is load-bearing rather than
+// decorative. Three mutations of the real source, each hiding a pinned security control in a
+// different comment shape; every stripped scan must reject. A pre-fix scan of the same mutated
+// text would still find the tokens (they sit inside the comments), so a passing assertion below
+// is proof the stripping actively removed them.
+//
+// (a) `OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE`'s use site moved into a `/* ... */` block.
+// (b) The single `CreateFileW(` call moved into a `/* ... */` block.
+// (c) `OBJ_DONT_REPARSE_LEAKED` hidden after a `\`-continued `//` line comment — proves the C
+//     line-splicing preprocessor step. Without it, the physical newline terminates the `//` scan
+//     and the following line is exposed as live code.
+function assertCommentStrippingIsLoadBearing(rawSource) {
+  const mutated = rawSource
     .replace(
       /OBJ_CASE_INSENSITIVE \| OBJ_DONT_REPARSE/u,
       "/* OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE */ 0",
@@ -367,6 +394,13 @@ async function assertWindowsSourceContract() {
     (mutatedStripped.match(/CreateFileW\(/gu) ?? []).length,
     0,
     "stripCommentsAndStrings must remove CreateFileW( hidden in a block comment",
+  );
+  const spliceMutated = "// disabled \\\nOBJ_DONT_REPARSE_LEAKED\nother_line();\n";
+  const spliceStripped = stripCommentsAndStrings(spliceMutated);
+  assert.equal(
+    spliceStripped.match(/OBJ_DONT_REPARSE_LEAKED/u),
+    null,
+    "stripCommentsAndStrings must respect C `\\`-continued // line comments (splicing)",
   );
 }
 
@@ -459,18 +493,11 @@ async function assertProtocolCases(binary, fixture, outside) {
   await assertMalformedFrameGuards(binary, fixture);
 }
 
-// KEIKO-0382: negative coverage for the ten frame-parser guards. Each case pins one guard by
-// constructing a frame the helper must reject with status 1 (KSR_MALFORMED_REQUEST). Kept
-// platform-agnostic and run for every configuration — the parser is the same on every platform
-// and its guards are part of the trust boundary at every stage.
-function buildMalformedFrameCases(fixture) {
-  const rootBytes = Buffer.from(fixture, "utf8");
-  const pathBytes = Buffer.from("nested/good.txt", "utf8");
-  const nulPath = Buffer.concat([
-    Buffer.from("a", "utf8"),
-    Buffer.of(0x00),
-    Buffer.from("b", "utf8"),
-  ]);
+// KEIKO-0382: negative coverage for the frame-parser guards at the helper's trust boundary. Each
+// case pins one guard by constructing a frame the helper must reject with status 1
+// (KSR_MALFORMED_REQUEST). Kept platform-agnostic and run for every configuration — the parser is
+// the same on every platform. Split by axis so no one builder function crosses the 50-line ceiling.
+function frameLengthMismatchCases(fixture, rootBytes, pathBytes) {
   return [
     // Header says more root/path bytes than actually appended: read overruns the frame.
     {
@@ -496,6 +523,11 @@ function buildMalformedFrameCases(fixture) {
         pathBytes: Buffer.from("x".repeat(HARNESS_KSR_MAX_PATH + 1), "utf8"),
       }),
     },
+  ];
+}
+
+function frameHeaderShapeCases(fixture, pathBytes) {
+  return [
     // Reserved half-word must be zero. Confirmed never set on any well-formed frame today; a
     // non-zero value is a forward-compatibility violation and must fail closed.
     {
@@ -504,6 +536,16 @@ function buildMalformedFrameCases(fixture) {
     },
     // Wrong protocol version.
     { label: "version != 1", frame: malformedRequest({ root: fixture, pathBytes, version: 2 }) },
+  ];
+}
+
+function frameByteValidationCases(fixture, rootBytes, pathBytes) {
+  const nulPath = Buffer.concat([
+    Buffer.from("a", "utf8"),
+    Buffer.of(0x00),
+    Buffer.from("b", "utf8"),
+  ]);
+  return [
     // Path payloads that violate the well-formedness rules (NUL byte, invalid UTF-8).
     {
       label: "path contains an interior NUL byte",
@@ -513,6 +555,32 @@ function buildMalformedFrameCases(fixture) {
       label: "path is invalid UTF-8",
       frame: malformedRequest({ root: fixture, pathBytes: Buffer.of(0xc3, 0x28) }),
     },
+    // Root payloads that violate the same rules the path payloads do — the parser rejects both
+    // fields, but only the path side was covered before this pair landed.
+    {
+      label: "root contains an interior NUL byte",
+      frame: malformedRequest({
+        rootBytes: Buffer.concat([rootBytes, Buffer.of(0x00), Buffer.from("suffix", "utf8")]),
+        pathBytes,
+      }),
+    },
+    {
+      label: "root is invalid UTF-8",
+      frame: malformedRequest({
+        rootBytes: Buffer.concat([rootBytes, Buffer.of(0xc3, 0x28)]),
+        pathBytes,
+      }),
+    },
+  ];
+}
+
+function buildMalformedFrameCases(fixture) {
+  const rootBytes = Buffer.from(fixture, "utf8");
+  const pathBytes = Buffer.from("nested/good.txt", "utf8");
+  return [
+    ...frameLengthMismatchCases(fixture, rootBytes, pathBytes),
+    ...frameHeaderShapeCases(fixture, pathBytes),
+    ...frameByteValidationCases(fixture, rootBytes, pathBytes),
   ];
 }
 

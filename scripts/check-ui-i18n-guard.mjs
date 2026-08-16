@@ -595,20 +595,51 @@ function exemptReasonFor(lines, index) {
 // `{` or `}`, and `userFacingJsxTexts` required the opening tag, text and closing tag to sit on
 // the same source line. Both multi-line JSX text (`<p>\n  Hello\n</p>`) and any
 // `{"literal"}`/`{'literal'}` expression-container child were invisible to the scan, so the
-// baseline ledger materially understated the untranslated surface. Now: parse .tsx with the
-// TypeScript compiler API and collect JsxText plus string-literal JsxExpression children directly.
-// The two non-JSX passes below (user-facing attributes, label/description fields) still run
-// per-line — they already work for the simple cases the baseline was calibrated against and are
-// out of scope for this widening. The exported shape stays `{findings, weakExemptions}` so
-// literalScanForFile's two call sites need no change.
+// baseline ledger materially understated the untranslated surface. Now: parse with the TypeScript
+// compiler API and collect JsxText plus string-literal expression-container CHILDREN directly. The
+// two non-JSX passes below (user-facing attributes, label/description fields) still run per-line —
+// they already work for the simple cases the baseline was calibrated against and are out of scope
+// for this widening. The exported shape stays `{findings, weakExemptions}` so literalScanForFile's
+// two call sites need no change.
+//
+// Parser kind is chosen from the file extension: `.tsx` is parsed as TSX, everything else (`.ts`,
+// `.mts`, `.cts`) as TS. That distinction matters because TSX parses `<T>` as the opening tag of a
+// JSX element, which turns generic-heavy TypeScript source into a stream of "JsxText" nodes and
+// generates thousands of false untranslated-copy entries (the pre-fix regression that shipped in
+// #3202 flagged parts of `coding-workbench-live-state.ts` as untranslated copy for exactly this
+// reason).
+//
+// Expression-container children are collected only when their parent is a JsxElement or a
+// JsxFragment. A string literal inside a JsxAttribute value (`className={"Internal label"}`)
+// is code, not user-visible text, and the per-line attribute pass below already knows which
+// attribute names are user-facing — collecting them here would double-count with different rules.
 
-function collectJsxTextAndExpressions(source) {
+function isJsxExpressionChildOfElement(node) {
+  const parent = node.parent;
+  return parent !== undefined && (ts.isJsxElement(parent) || ts.isJsxFragment(parent));
+}
+
+// `.ts`/`.mts`/`.cts` are parsed as TypeScript so that generic syntax (`<T>`, `ReadonlySet<...>`)
+// is not misread as JSX. Everything else — including the no-filename call path used by the tests —
+// falls back to TSX so an unknown extension does not silently drop JSX text on the floor. The
+// production call site (`literalScanForFile`) always passes a real repo-relative path, so the
+// no-filename branch is only exercised by direct unit-test callers using ad-hoc JSX fragments.
+function scriptKindForFile(filename) {
+  if (typeof filename !== "string") return ts.ScriptKind.TSX;
+  if (/\.(ts|mts|cts)$/.test(filename)) return ts.ScriptKind.TS;
+  return ts.ScriptKind.TSX;
+}
+
+function collectJsxTextAndExpressions(source, filename) {
+  const kind = scriptKindForFile(filename);
   const sourceFile = ts.createSourceFile(
-    "<ui-i18n>.tsx",
+    typeof filename === "string"
+      ? filename
+      : `<ui-i18n>.${kind === ts.ScriptKind.TSX ? "tsx" : "ts"}`,
     source,
     ts.ScriptTarget.Latest,
     true,
-    ts.ScriptKind.TSX,
+    kind,
   );
   const results = [];
   const visit = (node) => {
@@ -621,7 +652,7 @@ function collectJsxTextAndExpressions(source) {
           ts.getLineAndCharacterOfPosition(sourceFile, node.getStart(sourceFile)).line + 1;
         results.push({ line, text: text.trim() });
       }
-    } else if (ts.isJsxExpression(node) && node.expression) {
+    } else if (ts.isJsxExpression(node) && node.expression && isJsxExpressionChildOfElement(node)) {
       const expr = node.expression;
       if (
         (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) &&
@@ -640,9 +671,11 @@ function collectJsxTextAndExpressions(source) {
 
 /**
  * Whole-file scan. Returns the untranslated literals with their 1-based line numbers, plus the
- * opt-out markers that claimed an exemption without a usable reason.
+ * opt-out markers that claimed an exemption without a usable reason. `filename` is optional and
+ * used only to pick the ScriptKind (TSX vs TS); the call sites in `literalScanForFile` pass the
+ * real repo-relative path so a `.ts` file is never parsed as TSX.
  */
-export function untranslatedLiteralsInSource(source) {
+export function untranslatedLiteralsInSource(source, filename) {
   const lines = source.split(/\r?\n/);
   const findings = [];
   const weakExemptions = [];
@@ -659,7 +692,7 @@ export function untranslatedLiteralsInSource(source) {
   };
 
   // AST pass: JSX text (multi-line included) and string-literal expression-container children.
-  for (const { line, text } of collectJsxTextAndExpressions(source)) {
+  for (const { line, text } of collectJsxTextAndExpressions(source, filename)) {
     const trimmed = text.trim();
     if (isCommentLine(lines[line - 1] ?? "")) continue;
     if (isTranslatableCopy(trimmed)) reportOnLine(line - 1, [trimmed]);
@@ -969,7 +1002,7 @@ function readTextOrNull(repoRoot, file) {
 
 export function literalScanForFile(repoRoot, file) {
   const source = readTextOrNull(repoRoot, file);
-  return source === null ? null : untranslatedLiteralsInSource(source);
+  return source === null ? null : untranslatedLiteralsInSource(source, file);
 }
 
 function weakExemptionProblems(file, weakExemptions) {

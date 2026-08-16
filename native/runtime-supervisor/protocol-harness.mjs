@@ -63,17 +63,33 @@ export function launchPacket(
 
 /**
  * Wrap a Node stream into a bounded-read queue. Chunks accumulate until `readBytes` consumes the
- * requested prefix. `wake` is invoked once per data/end event; a stream that ends before the
- * requested bytes arrive rejects the pending read rather than deadlocking.
+ * requested prefix. `wake` is invoked once per data/end/close/error event; a stream that ends or
+ * errors before the requested bytes arrive rejects the pending read rather than deadlocking.
+ *
+ * `error` and `close` are BOTH observed alongside `end`:
+ *  - `error`: stream emitted a failure (broken pipe, ECONNRESET). Saved on `reader.error` so the
+ *    next `readBytes` check rejects with that error instead of a generic "ended before …" —
+ *    otherwise the error goes to the unhandled-error path and terminates the harness.
+ *  - `close`: on Windows the child's stdio can `close` without an `end` (Readable in flowing mode,
+ *    or an aborted pipe), and readers relying on `end` alone would then never wake. Treating
+ *    `close` as ended-when-not-errored makes the pending read settle.
  */
 export function streamReader(stream) {
-  const reader = { chunks: [], size: 0, wake: undefined, ended: false };
+  const reader = { chunks: [], size: 0, wake: undefined, ended: false, error: undefined };
   stream.on("data", (chunk) => {
     reader.chunks.push(chunk);
     reader.size += chunk.length;
     reader.wake?.();
   });
   stream.once("end", () => {
+    reader.ended = true;
+    reader.wake?.();
+  });
+  stream.once("error", (error) => {
+    reader.error = error;
+    reader.wake?.();
+  });
+  stream.once("close", () => {
     reader.ended = true;
     reader.wake?.();
   });
@@ -84,6 +100,9 @@ export function streamReader(stream) {
  * Wait for `length` bytes on `reader` and return them, splicing the remainder back into the queue.
  * Windows waiter-clear-before-reject behaviour kept per the finding: the wake callback is nulled
  * BEFORE the promise resolves or rejects, so a late data event cannot re-enter it after settlement.
+ *
+ * Rejection ordering: an `error` observed on the stream takes precedence over a natural `end`,
+ * because the actual cause of the read failing is the pipe error, not the missing-bytes symptom.
  */
 export function readBytes(reader, length) {
   return new Promise((resolveBytes, reject) => {
@@ -94,6 +113,11 @@ export function readBytes(reader, length) {
         reader.chunks = [bytes.subarray(length)];
         reader.size = bytes.length - length;
         resolveBytes(bytes.subarray(0, length));
+        return;
+      }
+      if (reader.error !== undefined) {
+        reader.wake = undefined;
+        reject(reader.error);
         return;
       }
       if (reader.ended) {
