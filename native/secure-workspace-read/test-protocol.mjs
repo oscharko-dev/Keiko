@@ -325,67 +325,79 @@ const PREPROCESSOR_PATTERNS = {
 // Codex 3792986617 on #3202: the previous single-flag model lost track of the outer ladder
 // after `#elif 1` set stripping=false, so the subsequent dead `#else` body was copied into the
 // scan and its tokens could satisfy positive pins.
-const OUTSIDE = "outside";
 const STRIPPING_PRE_LIVE = "stripping_pre_live";
 const KEEPING_LIVE = "keeping_live";
 const STRIPPING_POST_LIVE = "stripping_post_live";
 
-function advanceLadderState(trimmed, state) {
-  const p = PREPROCESSOR_PATTERNS;
-  if (state.mode === OUTSIDE) {
-    if (p.DISABLED_IF.test(trimmed)) return { mode: STRIPPING_PRE_LIVE, depth: 0 };
-    return state;
-  }
-  return advanceInsideLadder(trimmed, state);
-}
-
-function advanceInsideLadder(trimmed, state) {
-  const p = PREPROCESSOR_PATTERNS;
-  if (p.OPEN_IF.test(trimmed)) return { ...state, depth: state.depth + 1 };
-  if (p.CLOSE_ENDIF.test(trimmed)) {
-    if (state.depth === 0) return { mode: OUTSIDE, depth: 0 };
-    return { ...state, depth: state.depth - 1 };
-  }
-  if (state.depth > 0) return state;
-  if (p.ELSE_DIRECTIVE.test(trimmed)) {
-    const mode = state.mode === STRIPPING_PRE_LIVE ? KEEPING_LIVE : STRIPPING_POST_LIVE;
-    return { mode, depth: 0 };
-  }
-  if (p.ELIF_DIRECTIVE.test(trimmed)) return advanceOnElif(trimmed, state);
-  return state;
-}
-
-function advanceOnElif(trimmed, state) {
-  if (state.mode !== STRIPPING_PRE_LIVE) return { mode: STRIPPING_POST_LIVE, depth: 0 };
-  if (PREPROCESSOR_PATTERNS.DISABLED_ELIF.test(trimmed)) return state;
-  return { mode: KEEPING_LIVE, depth: 0 };
-}
-
-function shouldKeepLine(before, next) {
-  if (before.mode === STRIPPING_PRE_LIVE || before.mode === STRIPPING_POST_LIVE) return false;
-  // Directive lines that consumed to change state are dropped — they're preprocessor
-  // artifacts, never assertion targets. `#include` and other non-ladder directives don't
-  // change ladder state (advanceLadderState is a no-op for them) and are kept.
-  if (next.mode !== before.mode || next.depth !== before.depth) return false;
-  return true;
-}
-
+// Stack-based ladder state (coderabbit 3793025299 on #3202): the previous single-frame model
+// only entered stripping mode on `#if 0` at the OUTSIDE level, so a nested `#if 0` inside a live
+// `#elif`/`#else` branch was treated as ordinary depth-tracking (its body remained visible to
+// the positive source-contract assertions). The stack of frames handles that correctly:
+// every `#if 0` — top-level OR nested — pushes a new `STRIPPING_PRE_LIVE` frame; every
+// non-disabled `#if` inside a tracked frame increments that frame's depth; `#endif` pops the
+// nested frame or decrements depth. Top of stack determines the current mode.
 function stripDisabledPreprocessorBranches(source) {
   const lines = source.split("\n");
   const kept = [];
-  let state = { mode: OUTSIDE, depth: 0 };
+  const stack = [];
   for (const line of lines) {
-    const trimmed = line.trimStart();
-    const before = state;
-    const next = advanceLadderState(trimmed, state);
-    if (shouldKeepLine(before, next)) kept.push(line);
-    state = next;
+    processLadderLine(line, stack, kept);
   }
   return kept.join("\n");
 }
 
+function processLadderLine(line, stack, kept) {
+  const p = PREPROCESSOR_PATTERNS;
+  const trimmed = line.trimStart();
+  if (p.DISABLED_IF.test(trimmed)) {
+    stack.push({ mode: STRIPPING_PRE_LIVE, depth: 0 });
+    return;
+  }
+  if (stack.length === 0) {
+    kept.push(line);
+    return;
+  }
+  const frame = stack[stack.length - 1];
+  if (p.OPEN_IF.test(trimmed)) {
+    frame.depth += 1;
+    return;
+  }
+  if (p.CLOSE_ENDIF.test(trimmed)) {
+    if (frame.depth === 0) stack.pop();
+    else frame.depth -= 1;
+    return;
+  }
+  if (frame.depth > 0) {
+    if (frame.mode === KEEPING_LIVE) kept.push(line);
+    return;
+  }
+  handleOuterDirectiveOrLine(line, trimmed, frame, kept);
+}
+
+function handleOuterDirectiveOrLine(line, trimmed, frame, kept) {
+  const p = PREPROCESSOR_PATTERNS;
+  if (p.ELSE_DIRECTIVE.test(trimmed)) {
+    frame.mode = frame.mode === STRIPPING_PRE_LIVE ? KEEPING_LIVE : STRIPPING_POST_LIVE;
+    return;
+  }
+  if (p.ELIF_DIRECTIVE.test(trimmed)) {
+    frame.mode = elifTransition(frame.mode, p.DISABLED_ELIF.test(trimmed));
+    return;
+  }
+  if (frame.mode === KEEPING_LIVE) kept.push(line);
+}
+
+function elifTransition(mode, isDisabled) {
+  if (mode !== STRIPPING_PRE_LIVE) return STRIPPING_POST_LIVE;
+  if (isDisabled) return STRIPPING_PRE_LIVE;
+  return KEEPING_LIVE;
+}
+
 // Skip a C string literal starting at the opening `"` (index i). Returns the index of the byte
-// AFTER the closing `"` (or the end of source on unterminated input).
+// AFTER the closing `"`. Throws on an unterminated string (coderabbit 3793025301 on #3202):
+// silently accepting an unterminated `"..."` would let every token after the stray quote fall
+// off the scan, so a deleted control sitting after the unclosed string would escape the source
+// contract. Same reasoning as `stripCComments`'s unterminated-block-comment throw.
 function skipStringLiteral(source, start) {
   let i = start + 1;
   while (i < source.length) {
@@ -397,15 +409,14 @@ function skipStringLiteral(source, start) {
     if (c === '"') return i + 1;
     i += 1;
   }
-  return i;
+  throw new Error('unterminated C string literal: no closing `"`');
 }
 
 // KEIKO-0417 (review-follow-up on a0ee79ae): C character constants can be multi-character
 // (`'CreateFileW('`, implementation-defined `int` value) and can contain sequences that would
 // otherwise look like comment starts (`'//'`, `'/*'`). Coderabbit 3792888545. Without skipping
 // them, `stripCComments` would treat those sequences as real comments and drop the following
-// bytes, and `stripStringLiteralBodies` would leave the char literal's body visible as if it
-// were code. Skip the char literal the same way `skipStringLiteral` handles `"..."`.
+// bytes. Same fail-closed rule as the string-literal case (coderabbit 3793025301).
 function skipCharLiteral(source, start) {
   let i = start + 1;
   while (i < source.length) {
@@ -417,7 +428,7 @@ function skipCharLiteral(source, start) {
     if (c === "'") return i + 1;
     i += 1;
   }
-  return i;
+  throw new Error("unterminated C character constant: no closing `'`");
 }
 
 // KEIKO-0417 (review-follow-up on 44b9ef9b): C translation phase 3 removes comments BEFORE
@@ -614,6 +625,19 @@ function assertCommentStrippingIsLoadBearing(rawSource) {
     /unterminated C block comment/u,
     "stripCommentsOnly must throw on an unterminated /* ... */",
   );
+  // Coderabbit 3793025301: unterminated char/string literals must throw for the same reason
+  // block comments do — silently accepting them lets every token after the stray quote fall
+  // off the scan, so a deleted control after the unclosed literal escapes the source contract.
+  assert.throws(
+    () => stripCommentsAndStrings("int f(void) { return '"),
+    /unterminated C character constant/u,
+    "unterminated char literal must throw",
+  );
+  assert.throws(
+    () => stripCommentsAndStrings('int f(void) { return "'),
+    /unterminated C string literal/u,
+    "unterminated string literal must throw",
+  );
   assertDisabledPreprocessorBranchesAreStripped();
 }
 
@@ -706,6 +730,42 @@ function assertLaterElifAfterLiveStripped() {
     stripped.match(/DEAD_ELIF_TOKEN/u),
     null,
     "any `#elif` after a live branch must be stripped",
+  );
+  // Coderabbit 3793025299: nested `#if 0` inside a live `#elif`/`#else` branch must strip
+  // its body too. The single-frame model treated it as ordinary depth-tracking and let the
+  // dead nested body reach the source-contract assertions.
+  const nestedInsideLive = stripCommentsAndStrings(
+    "int keep_before(void) { return 1; }\n" +
+      "#if 0\n" +
+      "OUTER_DEAD();\n" +
+      "#else\n" +
+      "LIVE_BEFORE_NESTED();\n" +
+      "#if 0\n" +
+      "NESTED_DEAD_TOKEN();\n" +
+      "#endif\n" +
+      "LIVE_AFTER_NESTED();\n" +
+      "#endif\n" +
+      "int keep_after(void) { return 2; }\n",
+  );
+  assert.match(
+    nestedInsideLive,
+    /LIVE_BEFORE_NESTED/u,
+    "live outer content BEFORE the nested `#if 0` must be visible",
+  );
+  assert.match(
+    nestedInsideLive,
+    /LIVE_AFTER_NESTED/u,
+    "live outer content AFTER the nested `#if 0` must be visible",
+  );
+  assert.equal(
+    nestedInsideLive.match(/NESTED_DEAD_TOKEN/u),
+    null,
+    "nested `#if 0` inside a live `#else` branch must have its body stripped",
+  );
+  assert.equal(
+    nestedInsideLive.match(/OUTER_DEAD/u),
+    null,
+    "the dead `#if 0` half of the outer ladder must still be stripped",
   );
 }
 

@@ -707,9 +707,7 @@ function jsxAttributeExpressionResults(node, sourceFile) {
   if (ts.isStringLiteral(initializer)) {
     const text = initializer.text.trim();
     if (text.length === 0) return [];
-    const line =
-      ts.getLineAndCharacterOfPosition(sourceFile, initializer.getStart(sourceFile)).line + 1;
-    return [{ line, text }];
+    return [{ line: lineOfNode(initializer, sourceFile), text }];
   }
   // Expression-valued: `ariaLabel={cond ? "a" : "b"}`. Reuse the JSX-child recursion so all the
   // conditional/template/logical shapes work the same way in attribute values as in children.

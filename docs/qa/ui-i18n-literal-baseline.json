@@ -786,9 +786,6 @@
       "Removed pages could not be detected this run (the crawl reached its page limit).",
       "Start indexing Knowledge Pod"
     ],
-    "packages/keiko-ui/src/app/memoriaviva/components/MemoryAutonomyControl.tsx": [
-      "memoria.settings.mode. Error"
-    ],
     "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": ["MemoriaViva"],
     "packages/keiko-ui/src/app/memoriaviva/detail/MemoryDetailClient.tsx": [
       "Back to MemoriaViva",

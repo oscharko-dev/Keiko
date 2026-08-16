@@ -110,6 +110,7 @@ export function MemoryAutonomyControl({
       )}
       {error === null ? null : (
         <p className={styles.error} role="alert">
+          {/* i18n-exempt: `memoria.settings.mode.${error}Error` is the translation KEY the ratcheted i18n scanner picks up when it recurses into `t(...)` template arguments; the actual user-visible copy is what `t()` returns from the catalog. */}
           {t(`memoria.settings.mode.${error}Error`)}
         </p>
       )}

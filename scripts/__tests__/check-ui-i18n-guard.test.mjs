@@ -1346,10 +1346,15 @@ test("collects directly quoted camelCase prop literals", () => {
   expect(texts).toContain("Source");
 });
 
+// Values here MUST pass `isTranslatableCopy` (multi-word letter phrases) so that if `testId` or
+// `className` were mistakenly added to `USER_FACING_ATTRIBUTE_NAMES`, the assertion would fail.
+// Single lowercase tokens (`"primary"`, `"relationship-picker"`) are rejected by
+// `isTranslatableCopy` regardless of the attribute name, so they can't pin the name gate.
+// Coderabbit 3793025303.
 test("still ignores directly quoted values on non-user-facing camelCase props", () => {
   expect(
     untranslatedLiteralsInSource(
-      '<KeikoSelect testId="relationship-picker" className="primary" />',
+      '<KeikoSelect testId="Relationship picker" className="Primary button" />',
       "packages/x/y.tsx",
     ).findings,
   ).toEqual([]);

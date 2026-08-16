@@ -99,8 +99,10 @@ async function qualify(helper, fixture, root) {
 // hide a control on its spliced-in tail either.
 // Copy a C string OR character literal starting at the opening quote (index i) verbatim to
 // `out`. `quote` is `"` for string literals and `'` for char literals. Returns the index of the
-// byte AFTER the matching closing quote (or the end of source on unterminated input). Backslash
-// escape handling is identical for both.
+// byte AFTER the matching closing quote. Throws on unterminated input (coderabbit 3793025301
+// on #3202): same fail-closed rule as unterminated `/* ... */` — silently accepting an
+// unclosed quote would drop every token after it from the scan and let a deleted control
+// escape the source contract.
 function copyQuotedVerbatim(source, start, out, quote) {
   let i = start + 1;
   let result = out + quote;
@@ -115,7 +117,8 @@ function copyQuotedVerbatim(source, start, out, quote) {
     i += 1;
     if (c === quote) return { out: result, next: i };
   }
-  return { out: result, next: i };
+  const kind = quote === '"' ? "string literal" : "character constant";
+  throw new Error(`unterminated C ${kind}: no closing ${JSON.stringify(quote)}`);
 }
 
 // KEIKO-0277 (review-follow-up): a control retained only inside a `#if 0 ... #endif` block
@@ -149,63 +152,69 @@ const PREPROCESSOR_PATTERNS = {
 // branch), STRIPPING_POST_LIVE (after the live branch — remaining branches are dead). The
 // previous single-flag model lost track of the outer ladder after `#elif 1` set stripping=false
 // and copied the subsequent dead `#else` body into the scan.
-const OUTSIDE = "outside";
 const STRIPPING_PRE_LIVE = "stripping_pre_live";
 const KEEPING_LIVE = "keeping_live";
 const STRIPPING_POST_LIVE = "stripping_post_live";
 
-function advanceLadderState(trimmed, state) {
-  const p = PREPROCESSOR_PATTERNS;
-  if (state.mode === OUTSIDE) {
-    if (p.DISABLED_IF.test(trimmed)) return { mode: STRIPPING_PRE_LIVE, depth: 0 };
-    return state;
-  }
-  return advanceInsideLadder(trimmed, state);
-}
-
-function advanceInsideLadder(trimmed, state) {
-  const p = PREPROCESSOR_PATTERNS;
-  if (p.OPEN_IF.test(trimmed)) return { ...state, depth: state.depth + 1 };
-  if (p.CLOSE_ENDIF.test(trimmed)) {
-    if (state.depth === 0) return { mode: OUTSIDE, depth: 0 };
-    return { ...state, depth: state.depth - 1 };
-  }
-  if (state.depth > 0) return state;
-  if (p.ELSE_DIRECTIVE.test(trimmed)) {
-    const mode = state.mode === STRIPPING_PRE_LIVE ? KEEPING_LIVE : STRIPPING_POST_LIVE;
-    return { mode, depth: 0 };
-  }
-  if (p.ELIF_DIRECTIVE.test(trimmed)) return advanceOnElif(trimmed, state);
-  return state;
-}
-
-function advanceOnElif(trimmed, state) {
-  if (state.mode !== STRIPPING_PRE_LIVE) return { mode: STRIPPING_POST_LIVE, depth: 0 };
-  if (PREPROCESSOR_PATTERNS.DISABLED_ELIF.test(trimmed)) return state;
-  return { mode: KEEPING_LIVE, depth: 0 };
-}
-
-function shouldKeepLine(before, next) {
-  if (before.mode === STRIPPING_PRE_LIVE || before.mode === STRIPPING_POST_LIVE) return false;
-  // Directive lines that consumed to change state are dropped (preprocessor artifacts, never
-  // assertion targets). `#include` and other non-ladder directives don't change ladder state
-  // (advanceLadderState is a no-op for them) and are kept.
-  if (next.mode !== before.mode || next.depth !== before.depth) return false;
-  return true;
-}
-
+// Stack-based ladder state (coderabbit 3793025299 on #3202): every `#if 0` — top-level OR
+// nested inside a live `#elif`/`#else` branch — pushes a new `STRIPPING_PRE_LIVE` frame; every
+// non-disabled `#if` inside a tracked frame increments that frame's depth; `#endif` pops the
+// nested frame or decrements depth. Top of stack determines the current mode.
 function stripDisabledPreprocessorBranches(source) {
   const lines = source.split("\n");
   const kept = [];
-  let state = { mode: OUTSIDE, depth: 0 };
+  const stack = [];
   for (const line of lines) {
-    const trimmed = line.trimStart();
-    const before = state;
-    const next = advanceLadderState(trimmed, state);
-    if (shouldKeepLine(before, next)) kept.push(line);
-    state = next;
+    processLadderLine(line, stack, kept);
   }
   return kept.join("\n");
+}
+
+function processLadderLine(line, stack, kept) {
+  const p = PREPROCESSOR_PATTERNS;
+  const trimmed = line.trimStart();
+  if (p.DISABLED_IF.test(trimmed)) {
+    stack.push({ mode: STRIPPING_PRE_LIVE, depth: 0 });
+    return;
+  }
+  if (stack.length === 0) {
+    kept.push(line);
+    return;
+  }
+  const frame = stack[stack.length - 1];
+  if (p.OPEN_IF.test(trimmed)) {
+    frame.depth += 1;
+    return;
+  }
+  if (p.CLOSE_ENDIF.test(trimmed)) {
+    if (frame.depth === 0) stack.pop();
+    else frame.depth -= 1;
+    return;
+  }
+  if (frame.depth > 0) {
+    if (frame.mode === KEEPING_LIVE) kept.push(line);
+    return;
+  }
+  handleOuterDirectiveOrLine(line, trimmed, frame, kept);
+}
+
+function handleOuterDirectiveOrLine(line, trimmed, frame, kept) {
+  const p = PREPROCESSOR_PATTERNS;
+  if (p.ELSE_DIRECTIVE.test(trimmed)) {
+    frame.mode = frame.mode === STRIPPING_PRE_LIVE ? KEEPING_LIVE : STRIPPING_POST_LIVE;
+    return;
+  }
+  if (p.ELIF_DIRECTIVE.test(trimmed)) {
+    frame.mode = elifTransition(frame.mode, p.DISABLED_ELIF.test(trimmed));
+    return;
+  }
+  if (frame.mode === KEEPING_LIVE) kept.push(line);
+}
+
+function elifTransition(mode, isDisabled) {
+  if (mode !== STRIPPING_PRE_LIVE) return STRIPPING_POST_LIVE;
+  if (isDisabled) return STRIPPING_PRE_LIVE;
+  return KEEPING_LIVE;
 }
 
 // Strip C block and line comments in one pass, preserving string AND character literals
@@ -307,7 +316,8 @@ function skipQuoted(source, start, quote) {
     if (c === quote) return i + 1;
     i += 1;
   }
-  return i;
+  const kind = quote === '"' ? "string literal" : "character constant";
+  throw new Error(`unterminated C ${kind}: no closing ${JSON.stringify(quote)}`);
 }
 
 const rawSource = await readFile(supervisorSource, "utf8");
@@ -571,6 +581,49 @@ assert.equal(
   elifThenDeadElifSample.match(/DEAD_ELIF_TOKEN/u),
   null,
   "any `#elif` after a live branch must be stripped",
+);
+// Coderabbit 3793025299 (nested `#if 0` inside live branch): the single-frame state machine
+// treated it as ordinary depth-tracking and let the dead body reach the source contract.
+const nestedInsideLiveSample =
+  "int keep_before(void) { return 1; }\n" +
+  "#if 0\n" +
+  "OUTER_DEAD();\n" +
+  "#else\n" +
+  "LIVE_BEFORE_NESTED();\n" +
+  "#if 0\n" +
+  "NESTED_DEAD_TOKEN();\n" +
+  "#endif\n" +
+  "LIVE_AFTER_NESTED();\n" +
+  "#endif\n" +
+  "int keep_after(void) { return 2; }\n";
+const nestedInsideLiveStripped = stripCCommentsPreservingLiterals(nestedInsideLiveSample);
+assert.match(
+  nestedInsideLiveStripped,
+  /LIVE_BEFORE_NESTED/u,
+  "live outer content BEFORE the nested `#if 0` must be visible",
+);
+assert.match(
+  nestedInsideLiveStripped,
+  /LIVE_AFTER_NESTED/u,
+  "live outer content AFTER the nested `#if 0` must be visible",
+);
+assert.equal(
+  nestedInsideLiveStripped.match(/NESTED_DEAD_TOKEN/u),
+  null,
+  "nested `#if 0` inside a live `#else` branch must have its body stripped",
+);
+// Coderabbit 3793025301: unterminated `'...'` and `"..."` must throw for the same reason
+// unterminated `/* ... */` throws — silently accepting them drops every token after the stray
+// quote from the scan.
+assert.throws(
+  () => stripCCommentsPreservingLiterals("int f(void) { return '"),
+  /unterminated C character constant/u,
+  "unterminated char literal must throw",
+);
+assert.throws(
+  () => stripCCommentsPreservingLiterals('int f(void) { return "'),
+  /unterminated C string literal/u,
+  "unterminated string literal must throw",
 );
 
 // KEIKO-0277: Windows-sibling two-mode shape. `--helper <path>` qualifies an exact staged binary
