@@ -75,7 +75,7 @@ import type {
 import { isConversationEligibleModel } from "@/lib/types";
 import { formatUserError } from "../format-error";
 import { canonicalVoiceSha256Hex } from "./canonical-voice-hasher";
-import { extractDocumentContext, type PendingDocument } from "./documentContext";
+import type { PendingDocument } from "./documentContext";
 import {
   currentConversationMemoryModeRevision,
   removeConversationMemorySettings,
@@ -2463,7 +2463,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       const extracted =
         documents.length === 0
           ? { entries: [] as readonly ConversationDocumentContextWire[], failures: [] }
-          : await extractDocumentContext(documents, t);
+          : await import("./documentContext").then(({ extractDocumentContext }) =>
+              extractDocumentContext(documents, t),
+            );
       const notices = extracted.failures;
       if (notices.length > 0) setError(notices.join(" "));
       const disclosures = extracted.entries.map((e) => ({

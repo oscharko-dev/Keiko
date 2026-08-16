@@ -31,6 +31,14 @@ const PROVIDER_CANONICAL_TURN_ID_PATTERN = /^client-turn-[0-9a-f]{32}-[0-9a-f]{6
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 const tempProjects: string[] = [];
 
+async function verifyChatModel(request: APIRequestContext): Promise<void> {
+  const response = await request.post("/api/gateway/readiness", {
+    headers: MUTATION_HEADERS,
+    data: { modelId: CHAT_MODEL_ID, options: { probes: ["chat"] } },
+  });
+  expect(response.ok(), await response.text().catch(() => "")).toBe(true);
+}
+
 declare global {
   interface Window {
     readonly __micStats?: Readonly<Record<string, number>>;
@@ -823,6 +831,7 @@ async function dialogueTurnFlow(page: Page, request: APIRequestContext): Promise
 
 async function voiceMemoryCaptureFlow(page: Page, request: APIRequestContext): Promise<void> {
   const since = Date.now() - 1_000;
+  await verifyChatModel(request);
   await page.addInitScript(
     fakeRealtimeInit({ emitTranscript: true, transcript: MEMORY_CAPTURE_TRANSCRIPT }),
   );
