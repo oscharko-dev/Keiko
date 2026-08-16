@@ -713,10 +713,10 @@ describe("handleGatewaySetup", () => {
     const auditFiles = readdirSync(evidenceDir).filter((name) => name.startsWith("gateway-setup-"));
     expect(auditFiles).toHaveLength(1);
     const raw = readFileSync(join(evidenceDir, auditFiles[0] ?? ""), "utf8");
-    expect(JSON.parse(raw)).toEqual({
+    expect(JSON.parse(raw) as unknown).toEqual({
       schemaVersion: "1",
       outcome: "candidate-accepted",
-      timestamp: expect.any(String),
+      timestamp: expect.any(String) as unknown,
       correlationId: "corr-gw-audit",
       // A resolvable name is not a literal IP, so the gateway's classifier returns nothing for it
       // and the record falls back to "public" rather than dropping the event.

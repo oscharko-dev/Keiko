@@ -13,6 +13,7 @@ import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
   type ConnectedContextPack,
+  type ExplorationBudget,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type {
   ChatConnectedScope,
@@ -3202,9 +3203,9 @@ describe("hybrid folder budgets stay within the base cap (KEIKO-0174)", () => {
     }));
     const chatId = makeHybridChat(folders, [{ kind: "capsule", capsuleId, connectedAtMs: NOW }]);
 
-    const observedBudgets: (typeof DEFAULT_EXPLORATION_BUDGET)[] = [];
+    const observedBudgets: ExplorationBudget[] = [];
     const retriever: GroundedRetriever = (input): Promise<RetrievalOnlyOutput> => {
-      observedBudgets.push({ ...input.budget });
+      if (input.budget !== undefined) observedBudgets.push(input.budget);
       const key = input.scope.relativePaths[0] ?? "";
       return Promise.resolve({
         pack: folderPack(key, 0.5, `atom-${key}`),
@@ -3226,10 +3227,15 @@ describe("hybrid folder budgets stay within the base cap (KEIKO-0174)", () => {
     );
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     expect(observedBudgets).toHaveLength(3);
-    for (const key of Object.keys(DEFAULT_EXPLORATION_BUDGET) as (keyof typeof DEFAULT_EXPLORATION_BUDGET)[]) {
+    for (const key of Object.keys(
+      DEFAULT_EXPLORATION_BUDGET,
+    ) as (keyof typeof DEFAULT_EXPLORATION_BUDGET)[]) {
       const sum = observedBudgets.reduce((total, budget) => total + budget[key], 0);
       const cap = DEFAULT_EXPLORATION_BUDGET[key];
-      expect(sum, `dimension ${key} exceeded cap ${String(cap)} (sum=${String(sum)})`).toBeLessThanOrEqual(cap);
+      expect(
+        sum,
+        `dimension ${key} exceeded cap ${String(cap)} (sum=${String(sum)})`,
+      ).toBeLessThanOrEqual(cap);
     }
   });
 });

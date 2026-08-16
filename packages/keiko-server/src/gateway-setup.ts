@@ -4726,6 +4726,25 @@ function gatewayUnavailableResult(): RouteResult {
   };
 }
 
+function finalizeVerifiedCandidate(
+  verified: VerifiedSetup,
+  current: GatewayConfig | undefined,
+  deps: UiHandlerDeps,
+  gatewayConfig: RuntimeGatewayConfig,
+  request: SetupRequest,
+): RouteResult {
+  persistGatewayConfig(
+    current === undefined
+      ? verified.rawConfig
+      : withDiskGatewayEgress(verified.rawConfig, gatewayConfig.storagePath, deps),
+    gatewayConfig.storagePath,
+    deps,
+  );
+  gatewayConfig.set(verified.config, true);
+  recordGatewaySetupAudit(deps, request, verified.config, "candidate-accepted");
+  return setupSuccessResult(verified.config, verified.testedModelIds, verified.skippedModelIds);
+}
+
 async function trySetupCandidate(
   baseUrl: string,
   request: SetupRequest,
@@ -4766,16 +4785,7 @@ async function trySetupCandidate(
   });
   const workflowEligibilityError = validateWorkflowEligibleModelIds(request, verified.config);
   if (workflowEligibilityError !== undefined) return workflowEligibilityError;
-  persistGatewayConfig(
-    current === undefined
-      ? verified.rawConfig
-      : withDiskGatewayEgress(verified.rawConfig, gatewayConfig.storagePath, deps),
-    gatewayConfig.storagePath,
-    deps,
-  );
-  gatewayConfig.set(verified.config, true);
-  recordGatewaySetupAudit(deps, request, verified.config, "candidate-accepted");
-  return setupSuccessResult(verified.config, verified.testedModelIds, verified.skippedModelIds);
+  return finalizeVerifiedCandidate(verified, current, deps, gatewayConfig, request);
 }
 
 // The runtime aggregate in `current.egress` can carry ENVIRONMENT-derived egress (proxy, CA

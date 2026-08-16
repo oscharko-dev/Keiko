@@ -83,10 +83,11 @@ function isIsoTimestamp(value: unknown): boolean {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
 }
 
-export function validateGatewaySetupAuditRecord(
-  value: unknown,
-): { ok: true } | { ok: false; reason: string } {
-  if (!isRecord(value)) return { ok: false, reason: "audit: must be an object" };
+type ValidationResult = { ok: true } | { ok: false; reason: string };
+
+// Split from validateGatewaySetupAuditRecord to keep both under the complexity cap. Every check
+// still runs in a fixed order and reports the first failing field it sees.
+function validateGatewaySetupAuditFields(value: Record<string, unknown>): ValidationResult {
   if (value.schemaVersion !== GATEWAY_SETUP_AUDIT_SCHEMA_VERSION) {
     return { ok: false, reason: "schemaVersion: unsupported" };
   }
@@ -108,19 +109,27 @@ export function validateGatewaySetupAuditRecord(
   if (!isNonNegativeInteger(value.providerCount)) {
     return { ok: false, reason: "providerCount: must be a non-negative integer" };
   }
-  // Fail closed on anything that could carry an endpoint or credential into the evidence store: the
-  // record's value is that it is provably content-free, so an unknown field is a rejection, not a
-  // passthrough. Without this an added `baseUrl` would validate and persist.
-  const allowed = new Set([
-    "schemaVersion",
-    "outcome",
-    "timestamp",
-    "correlationId",
-    "targetClass",
-    "privateNetworkOverrideActive",
-    "providerCount",
-  ]);
-  const unexpected = Object.keys(value).find((key) => !allowed.has(key));
+  return { ok: true };
+}
+
+// Fail closed on anything that could carry an endpoint or credential into the evidence store: the
+// record's value is that it is provably content-free, so an unknown field is a rejection, not a
+// passthrough. Without this an added `baseUrl` would validate and persist.
+const AUDIT_ALLOWED_FIELDS: ReadonlySet<string> = new Set([
+  "schemaVersion",
+  "outcome",
+  "timestamp",
+  "correlationId",
+  "targetClass",
+  "privateNetworkOverrideActive",
+  "providerCount",
+]);
+
+export function validateGatewaySetupAuditRecord(value: unknown): ValidationResult {
+  if (!isRecord(value)) return { ok: false, reason: "audit: must be an object" };
+  const fields = validateGatewaySetupAuditFields(value);
+  if (!fields.ok) return fields;
+  const unexpected = Object.keys(value).find((key) => !AUDIT_ALLOWED_FIELDS.has(key));
   if (unexpected !== undefined) {
     return { ok: false, reason: `${unexpected}: unexpected field in a content-free audit record` };
   }

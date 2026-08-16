@@ -553,7 +553,7 @@ async function retrieveFolderPacks(
       const cs = folderScopes[i];
       const label = labels[i];
       if (cs === undefined || label === undefined) continue;
-      const folderBudget = perFolderBudgets[i] ?? perFolderBudgets[perFolderBudgets.length - 1];
+      const folderBudget = perFolderBudgets[i] ?? perFolderBudgets.at(-1);
       if (folderBudget === undefined) continue;
       slots[i] = await retrieveFolderIntoSlot(ctx, retriever, query, folderBudget, {
         cs,

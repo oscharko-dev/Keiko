@@ -13,7 +13,7 @@ import {
   type GatewaySetupAuditRecord,
 } from "./gateway-setup-audit.js";
 
-function record(overrides: Record<string, unknown> = {}): unknown {
+function record(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const base: GatewaySetupAuditRecord = {
     schemaVersion: GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
     outcome: "candidate-accepted",
@@ -37,7 +37,7 @@ describe("validateGatewaySetupAuditRecord", () => {
     const result = validateGatewaySetupAuditRecord(
       record({ baseUrl: "https://llm-gateway.example.com" }),
     );
-    expect(result).toEqual({ ok: false, reason: expect.stringContaining("baseUrl") });
+    expect(result).toEqual({ ok: false, reason: expect.stringContaining("baseUrl") as unknown });
   });
 
   it.each([
@@ -52,7 +52,7 @@ describe("validateGatewaySetupAuditRecord", () => {
   ])("rejects %s", (_label, value, field) => {
     const result = validateGatewaySetupAuditRecord(value);
     expect(result.ok).toBe(false);
-    expect(result.ok ? "" : result.reason).toContain(field);
+    if (!result.ok) expect(result.reason).toContain(field);
   });
 
   it.each([
@@ -65,7 +65,7 @@ describe("validateGatewaySetupAuditRecord", () => {
     // `Date.parse` accepts far more than ISO-8601; requiring the canonical round-trip keeps every
     // record directly comparable without a parsing convention on the reading side.
     const result = validateGatewaySetupAuditRecord(record({ timestamp }));
-    expect(result).toEqual({ ok: false, reason: expect.stringContaining("timestamp") });
+    expect(result).toEqual({ ok: false, reason: expect.stringContaining("timestamp") as unknown });
   });
 
   it("keeps its guards aligned with the exported enums", () => {
