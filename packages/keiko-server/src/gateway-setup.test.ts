@@ -758,6 +758,79 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("records the link-local/metadata override, not only the private-network one (Codex, #3201)", async () => {
+    const uiDir = await tempDir("keiko-gw-audit-linklocal-ui-");
+    const evidenceDir = await tempDir("keiko-gw-audit-linklocal-ev-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {
+        ...VAULT_ENV,
+        KEIKO_ALLOW_LINK_LOCAL_GATEWAY: "1",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["metadata-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve([modelIds[0] ?? "metadata-model"]),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx(
+        { baseUrl: "https://169.254.169.254/latest", apiKey: "metadata-token" },
+        "corr-gw-linklocal",
+      ),
+      deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const auditFiles = readdirSync(evidenceDir).filter((name) => name.startsWith("gateway-setup-"));
+    expect(auditFiles).toHaveLength(1);
+    const record = JSON.parse(
+      readFileSync(join(evidenceDir, auditFiles[0] ?? ""), "utf8"),
+    ) as Record<string, unknown>;
+    expect(record.targetClass).toBe("metadata");
+    // The audit must not say "override off" while a link-local/metadata override was active — that
+    // is the exact evidence gap Codex flagged. Either override, when active, records as true.
+    expect(record.privateNetworkOverrideActive).toBe(true);
+    deps.store.close();
+  });
+
+  it("does not turn a failed audit write into a 502 for a gateway that is already live (#3201)", async () => {
+    const uiDir = await tempDir("keiko-gw-audit-failstore-ui-");
+    const evidenceDir = await tempDir("keiko-gw-audit-failstore-ev-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["model-a"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve([modelIds[0] ?? "model-a"]),
+    });
+    // Simulate an unavailable evidence directory AFTER buildUiHandlerDeps has captured the store.
+    const originalPut = deps.evidenceStore.put.bind(deps.evidenceStore);
+    let putCalls = 0;
+    (deps.evidenceStore as { put: typeof deps.evidenceStore.put }).put = (
+      _runId: string,
+      _json: string,
+    ): string => {
+      putCalls += 1;
+      throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+    };
+
+    const result = await handleGatewaySetup(
+      ctx(
+        { baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" },
+        "corr-fail",
+      ),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    // The gateway is live regardless — do not paper over that with a spurious 502.
+    expect(deps.gatewayConfig?.present()).toBe(true);
+    expect(putCalls).toBe(1);
+    // Restore for the deps teardown to run cleanly.
+    (deps.evidenceStore as { put: typeof deps.evidenceStore.put }).put = originalPut;
+    deps.store.close();
+  });
+
   it("tests, stores, and activates a local gateway config without returning secrets", async () => {
     const uiDir = await tempDir("keiko-gw-ui-");
     const evidenceDir = await tempDir("keiko-gw-ev-");

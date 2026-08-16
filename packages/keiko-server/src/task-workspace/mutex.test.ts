@@ -183,6 +183,11 @@ describe("fileWriteKeys identity (#3200 review)", () => {
   // The uppercase alias key exists for exactly this and must overlap.
   it.each([
     ["final sigma vs capital sigma", "\u03c2", "\u03a3"],
+    ["eszett vs capital eszett (JS toUpperCase splits this class)", "\u00df", "\u1e9e"],
+    ["eszett vs SS uppercase", "\u00df", "SS"],
+    ["capital eszett vs SS", "\u1e9e", "SS"],
+    ["ligature fi vs fi", "\ufb01", "fi"],
+
     ["final sigma vs small sigma", "\u03c2", "\u03c3"],
     ["dotless i vs capital I", "\u0131", "I"],
   ])("serializes the %s alias class the exact key splits", (_label, left, right) => {

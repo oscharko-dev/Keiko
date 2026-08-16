@@ -79,7 +79,20 @@ export function provisionKey(repositoryId: string, taskId: string): string {
 // costs a little concurrency between two saves. Missing the alias costs a lost update.
 export function fileWriteKeys(realPath: string): readonly string[] {
   const comparable = comparablePath(realPath);
-  return [`file:${comparable}`, `file-alias:${comparable.normalize("NFC").toUpperCase()}`];
+  return [`file:${comparable}`, `file-alias:${aliasFold(comparable)}`];
+}
+
+// Fold to a form that collapses the four alias classes JavaScript's built-in casing splits:
+//   - Greek final sigma "ς" vs "Σ"/"σ" (lowercasing splits, uppercasing collapses)
+//   - dotless "ı" vs "I" (same)
+//   - ligatures "ﬁ" vs "fi" (NFKC collapses)
+//   - eszett "ß"/"ẞ" — toUpperCase alone splits ("ß"→"SS", "ẞ"→"ẞ"). Chaining lowerCase→upperCase
+//     via ß collapses both to "SS".
+// This is not full Unicode case folding — a real casefolding library would be more correct — but
+// it closes the four classes actual filesystems collapse, and it fails only in the safe direction
+// (over-serialising two saves that did not need to lock together).
+function aliasFold(comparable: string): string {
+  return comparable.normalize("NFKC").toLowerCase().toUpperCase();
 }
 
 function keyTier(key: string): number {

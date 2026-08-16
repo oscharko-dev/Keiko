@@ -4489,7 +4489,12 @@ function recordGatewaySetupAudit(
     timestamp: new Date().toISOString(),
     correlationId: request.correlationId ?? randomUUID(),
     targetClass: gatewaySetupTargetClass(request.baseUrl),
-    privateNetworkOverrideActive: config.egress?.allowPrivateNetwork === true,
+    // Any active outbound-egress override counts, not just the private-network one: a
+    // link-local/metadata override under KEIKO_ALLOW_LINK_LOCAL_GATEWAY is exactly the more
+    // sensitive case an operator needs to see (KEIKO-0497 review, Codex).
+    privateNetworkOverrideActive:
+      config.egress?.allowPrivateNetwork === true ||
+      config.egress?.allowLinkLocalAndMetadata === true,
     providerCount: config.providers.length,
   };
   const validation = validateGatewaySetupAuditRecord(record);
@@ -4508,7 +4513,24 @@ function recordGatewaySetupAudit(
     });
     return;
   }
-  deps.evidenceStore.put(`gateway-setup-${randomUUID()}`, JSON.stringify(record));
+  // KEIKO-0497 review (Codex): the setup response has already been decided by the time this
+  // runs — the gateway is persisted and activated. A failing evidenceStore.put must NOT escape
+  // to the outer catch, or verifyAndSaveGatewaySetup would treat a full/read-only evidence
+  // directory as a provider failure and hand the caller a 502 for a gateway that is already
+  // live. Absorbed and surfaced as its own diagnostic (never body-free-swallowed).
+  try {
+    deps.evidenceStore.put(`gateway-setup-${randomUUID()}`, JSON.stringify(record));
+  } catch (error) {
+    emitServerDiagnostic(deps.diagnostics, {
+      correlationId: record.correlationId,
+      timestamp: record.timestamp,
+      operation: "POST /api/gateway/setup",
+      source: "gateway-setup.audit",
+      errorClass: "GatewaySetupAuditStoreFailure",
+      message: `Gateway setup audit persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+      code: "GATEWAY_SETUP_AUDIT_STORE_FAILED",
+    });
+  }
 }
 
 function setupSuccessResult(
