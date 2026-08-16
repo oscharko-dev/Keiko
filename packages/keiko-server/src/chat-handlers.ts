@@ -88,6 +88,7 @@ import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
 import {
   currentAuditRedactString,
+  currentConversationReady,
   currentContextProfileForModel,
   currentGatewayConfig,
   currentRedactionSecrets,
@@ -237,6 +238,9 @@ function modelFromBody(body: Record<string, unknown>, deps: UiHandlerDeps): stri
       status: 400,
       body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id."),
     };
+  }
+  if (deps.gatewayConfig !== undefined && !currentConversationReady(deps, modelId)) {
+    return unreadyChatModelResult();
   }
   return modelId;
 }
@@ -763,11 +767,20 @@ function regenerateRequestFromBody(
 function invalidChatModelResult(modelId: string, deps: UiHandlerDeps): RouteResult | undefined {
   const capability = chatCapability(deps, modelId);
   if (capability?.kind === "chat") {
-    return undefined;
+    return deps.gatewayConfig === undefined || currentConversationReady(deps, modelId)
+      ? undefined
+      : unreadyChatModelResult();
   }
   return {
     status: 400,
     body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id."),
+  };
+}
+
+function unreadyChatModelResult(): RouteResult {
+  return {
+    status: 400,
+    body: errorBody("BAD_REQUEST", "The selected model is not ready for conversations."),
   };
 }
 

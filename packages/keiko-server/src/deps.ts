@@ -368,6 +368,7 @@ export type VerifiedModelCapabilityFields = Partial<
     | "structuredOutput"
     | "supportsImageInput"
     | "supportsDocumentInput"
+    | "conversationReady"
   >
 >;
 
@@ -1110,6 +1111,19 @@ export function currentGatewayVerification(
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
 ): GatewayVerificationState {
   return deps.gatewayConfig?.verification() ?? UNVERIFIED_GATEWAY;
+}
+
+/** Returns true only for a basic-chat observation bound to the holder's current generation. */
+export function currentConversationReady(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  modelId: string,
+): boolean {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return false;
+  const observation = holder.verifiedCapability(modelId);
+  return (
+    observation?.generation === holder.generation() && observation.fields.conversationReady === true
+  );
 }
 
 function configuredChatContextProfile(

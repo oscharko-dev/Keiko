@@ -27,6 +27,7 @@ import {
   InvalidRunIdError,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
+import { probeVerifiedGatewayConfig } from "./_support.js";
 
 function ctx(path: string, params: Record<string, string> = {}): RouteContext {
   return {
@@ -185,6 +186,29 @@ describe("GET /api/config", () => {
 });
 
 describe("GET /api/models", () => {
+  it("projects false, true, then false as conversation readiness becomes current and stale", () => {
+    const gatewayConfig = probeVerifiedGatewayConfig(SAMPLE_CONFIG);
+    gatewayConfig.clearVerifiedCapability("example-chat-model");
+    const deps = depsWith({ gatewayConfig });
+    const projectedReady = (): boolean | undefined => {
+      const result = handleModels(ctx("/api/models"), deps);
+      const body = result.body as { models: { conversationReady?: boolean }[] };
+      return body.models[0]?.conversationReady;
+    };
+
+    expect(projectedReady()).toBe(false);
+    gatewayConfig.recordVerifiedCapability(
+      "example-chat-model",
+      { conversationReady: true },
+      "2026-08-16T00:00:00.000Z",
+      gatewayConfig.generation(),
+    );
+    expect(projectedReady()).toBe(true);
+
+    gatewayConfig.set(SAMPLE_CONFIG, true);
+    expect(projectedReady()).toBe(false);
+  });
+
   it("returns only configured models", () => {
     const result = handleModels(
       ctx("/api/models"),
