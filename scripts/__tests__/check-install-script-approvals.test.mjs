@@ -63,6 +63,24 @@ describe("findInstallScriptApprovalProblems", () => {
     );
   });
 
+  it("accepts multiple exact reviewed versions for the same package", () => {
+    const multiVersionReview = new Map([["pkg", { versions: ["1.0.0", "1.0.1"] }]]);
+    const lock = lockWith([
+      ["node_modules/pkg", { hasInstallScript: true, version: "1.0.0" }],
+      ["node_modules/other/node_modules/pkg", { hasInstallScript: true, version: "1.0.1" }],
+    ]);
+    const approvals = { allowScripts: { "pkg@1.0.0": true, "pkg@1.0.1": true } };
+    expect(findInstallScriptApprovalProblems(lock, approvals, multiVersionReview).problems).toEqual(
+      [],
+    );
+  });
+
+  it("fails a stale exact version inside a multi-version review record", () => {
+    const multiVersionReview = new Map([["pkg", { versions: ["1.0.0", "1.0.1"] }]]);
+    const { problems } = findInstallScriptApprovalProblems(ok, manifest, multiVersionReview);
+    expect(problems.join("\n")).toContain("pkg@1.0.1 is recorded");
+  });
+
   it("fails when the reviewed record exists but npm would refuse the install", () => {
     const { problems } = findInstallScriptApprovalProblems(ok, { allowScripts: {} }, reviewed);
     expect(problems.join("\n")).toContain("is not in package.json allowScripts");
@@ -93,10 +111,27 @@ describe("the repository's own reviewed set", () => {
   it("records a reason for every approved package, not just a version", () => {
     expect(REVIEWED_INSTALL_SCRIPTS.size).toBeGreaterThan(0);
     for (const [name, record] of REVIEWED_INSTALL_SCRIPTS) {
-      expect(record.version, `${name} must record the exact reviewed version`).toMatch(
-        /^\d+\.\d+\.\d+/u,
-      );
+      const versions = record.versions ?? [record.version];
+      expect(
+        versions.length,
+        `${name} must record at least one exact reviewed version`,
+      ).toBeGreaterThan(0);
+      for (const version of versions) {
+        expect(version, `${name} must record exact reviewed versions`).toMatch(/^\d+\.\d+\.\d+$/u);
+      }
       expect(record.reason.length, `${name} must say what its script does`).toBeGreaterThan(60);
+    }
+  });
+
+  it("rejects malformed reviewed versions with trailing text", () => {
+    const malformedReview = new Map([["pkg", { versions: ["1.0.0junk"] }]]);
+    for (const [name, record] of malformedReview) {
+      const versions = record.versions ?? [record.version];
+      for (const version of versions) {
+        expect(version, `${name} must record exact reviewed versions`).not.toMatch(
+          /^\d+\.\d+\.\d+$/u,
+        );
+      }
     }
   });
 

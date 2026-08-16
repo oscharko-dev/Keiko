@@ -14,11 +14,11 @@
 // bundle to the committed JSON evidence so source-only or stale static-export inference cannot pass.
 // Use `--json` after a real `build:ui` run to update the committed evidence.
 //
-// Worker-loading nuance (D4): the keiko-ui host disables every built-in Monaco TypeScript/JavaScript
-// language-service feature (`editorMonacoRuntime.ts` `setModeConfiguration(GOVERNED_LANGUAGE_SERVICE
-// _MODE)`) and the governed v1 worker factory ships only Monaco's editor worker. This script enforces
-// B2/B3 against what SHIPS in the production static export. Loaded-worker diagnostics are kept as
-// runtime evidence, but they cannot turn an oversized shipped export into a pass.
+// Worker-loading nuance (D4): the keiko-ui host imports Monaco's public, feature-scoped
+// registrations and deliberately avoids the rich TypeScript/JavaScript language-service
+// contributions, while the governed v1 worker factory ships only Monaco's editor worker. This script
+// enforces B2/B3 against what SHIPS in the production static export. Loaded-worker diagnostics are
+// kept as runtime evidence, but they cannot turn an oversized shipped export into a pass.
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -67,7 +67,7 @@ export const EDITOR_RUNTIME_MARKERS = [
 ];
 
 /**
- * Discriminators for each Monaco worker, verified against the monaco-editor 0.55.1 production chunks
+ * Discriminators for each Monaco worker, verified against the monaco-editor 0.56.0 production chunks
  * in this static export. Each language worker has a top-level identifier that survives minification
  * and appears in exactly that worker's chunk; the editor worker carries the diff/link/colour
  * computers (`DiffComputer` + `computeLinks`) but, unlike the main-thread editor chunk, never
@@ -111,6 +111,14 @@ export function isEditorRuntimeChunk(source) {
     EDITOR_RUNTIME_MARKERS.some((marker) => source.includes(marker)) ||
     classifyWorkerLabel(source) !== null
   );
+}
+
+function classifyWorkerAssetPath(path) {
+  return /\/_next\/static\/media\/(?:editor\.worker\.[A-Za-z0-9_-]+|editorWebWorkerMain\.[A-Za-z0-9_-]+)\.js$/u.test(
+    path,
+  )
+    ? "editor"
+    : null;
 }
 
 /**
@@ -217,14 +225,23 @@ function measureChunkInventory(repoRoot, chunkDir) {
   return walkJsFiles(chunkDir).map((path) => {
     const buffer = readFileSync(path);
     const source = buffer.toString("utf8");
+    const relativePath = relative(repoRoot, path).split(sep).join("/");
+    const workerLabel = classifyWorkerLabel(source) ?? classifyWorkerAssetPath(relativePath);
     return {
-      path: relative(repoRoot, path).split(sep).join("/"),
+      path: relativePath,
       rawBytes: buffer.length,
       gzipBytes: gzipSizeBytes(buffer),
-      isEditorRuntime: isEditorRuntimeChunk(source),
-      workerLabel: classifyWorkerLabel(source),
+      isEditorRuntime: isEditorRuntimeChunk(source) || workerLabel !== null,
+      workerLabel,
     };
   });
+}
+
+function measureStaticJavaScriptInventory(repoRoot, assetDirs) {
+  return assetDirs
+    .filter((dir) => existsSync(dir))
+    .flatMap((dir) => measureChunkInventory(repoRoot, dir))
+    .sort((left, right) => left.path.localeCompare(right.path));
 }
 
 function measurementFingerprint(record) {
@@ -281,7 +298,10 @@ export function measureReleaseEvidence(repoRoot) {
       `Static export chunks ${relative(repoRoot, chunkDir)} not found. Run \`npm run build:ui\` first.`,
     );
   }
-  const chunks = measureChunkInventory(repoRoot, chunkDir);
+  const chunks = measureStaticJavaScriptInventory(repoRoot, [
+    chunkDir,
+    join(outDir, "_next", "static", "media"),
+  ]);
 
   const firstLoad = measureFirstLoad(repoRoot, outDir);
   const budgets = evaluateBundleBudgets(chunks);
@@ -319,44 +339,34 @@ function verdict(ok) {
 }
 
 function printReport(record) {
-  const lines = [];
-  lines.push("Keiko Editor release-evidence bundle measurement (Issue #1209, ADR-0042 D3.6)");
-  lines.push(
+  const workerLines = [...record.workers]
+    .sort((a, b) => b.gzipBytes - a.gzipBytes)
+    .map((w) => `  ${w.label.padEnd(7)} ${fmtKiB(w.gzipBytes).padStart(11)}  ${w.path}`);
+  const runtimeLines = record.editorRuntimeChunks.map((c) => {
+    const tag = c.workerLabel ? `[worker:${c.workerLabel}]` : "[runtime]";
+    return `  ${fmtKiB(c.gzipBytes).padStart(11)}  ${tag.padEnd(16)} ${c.path}`;
+  });
+  return [
+    "Keiko Editor release-evidence bundle measurement (Issue #1209, ADR-0042 D3.6)",
     `Static export: ${record.staticExport.root} (${String(record.staticExport.fileCount)} files; measurement ${record.measurementSha256})`,
-  );
-  lines.push("");
-  lines.push(
+    "",
     `B1  first-load Monaco/editor bytes: ${verdict(record.b1.ok)} ` +
       `(${String(record.b1.monacoMarkersInFirstLoad)} markers across ${String(record.b1.firstLoadScriptCount)} first-load scripts; budget 0)`,
-  );
-  lines.push(
     `B2  shipped lazy editor + Monaco runtime: ${verdict(record.b2.ok)} ` +
       `${fmtKiB(record.b2.shipsTotalBytes)} / ${fmtKiB(record.b2.budgetBytes)}`,
-  );
-  lines.push(
     `    (loaded editor-session diagnostic: ${verdict(record.b2.loadedOk)} ` +
       `${fmtKiB(record.b2.loadedTotalBytes)} / ${fmtKiB(record.b2.budgetBytes)})`,
-  );
-  lines.push(
     `B3  largest shipped Monaco worker (${record.b3.largestWorkerLabel ?? "none"}): ` +
       `${verdict(record.b3.ok)} ${fmtKiB(record.b3.largestWorkerBytes)} / ${fmtKiB(record.b3.budgetBytes)}`,
-  );
-  lines.push(
     `    (loaded editor-worker diagnostic: ${verdict(record.b3.loadedOk)} ` +
       `${record.b3.largestLoadedWorkerLabel ?? "none"} ${fmtKiB(record.b3.largestLoadedWorkerBytes)} / ${fmtKiB(record.b3.budgetBytes)})`,
-  );
-  lines.push("");
-  lines.push("Monaco worker chunks (gzip):");
-  for (const w of record.workers.sort((a, b) => b.gzipBytes - a.gzipBytes)) {
-    lines.push(`  ${w.label.padEnd(7)} ${fmtKiB(w.gzipBytes).padStart(11)}  ${w.path}`);
-  }
-  lines.push("");
-  lines.push("Editor + Monaco runtime chunks (gzip, descending):");
-  for (const c of record.editorRuntimeChunks) {
-    const tag = c.workerLabel ? `[worker:${c.workerLabel}]` : "[runtime]";
-    lines.push(`  ${fmtKiB(c.gzipBytes).padStart(11)}  ${tag.padEnd(16)} ${c.path}`);
-  }
-  return lines.join("\n");
+    "",
+    "Monaco worker assets (gzip):",
+    ...workerLines,
+    "",
+    "Editor + Monaco runtime assets (gzip, descending):",
+    ...runtimeLines,
+  ].join("\n");
 }
 
 function evidenceDiffMessage(expected, actual) {
@@ -400,7 +410,7 @@ function assertCommittedEvidenceFresh(repoRoot, record) {
   }
 }
 
-if (process.argv[1] && process.argv[1].endsWith("editor-release-evidence.mjs")) {
+if (process.argv[1]?.endsWith("editor-release-evidence.mjs")) {
   const repoRoot = process.cwd();
   const record = measureReleaseEvidence(repoRoot);
   const writeJson = process.argv.includes("--json");

@@ -34,6 +34,8 @@ import { isMainModule } from "./lib/is-main-module.mjs";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const WORKSPACE_EVIDENCE = join(repoRoot, "docs", "release", "1580-workspace-perf-evidence.json");
 const EDITOR_EVIDENCE = join(repoRoot, "docs", "release", "1209-perf-evidence.json");
+export const D12_PINNED_BASELINE_SOURCE_TREE_SHA256 =
+  "0dd8c879889c3449157e6527c651f30b6481422a0ade0bfed36e354ec5ba1664";
 
 export function readEvidence(path) {
   if (!existsSync(path)) return { error: `missing evidence file: ${path}` };
@@ -121,6 +123,7 @@ export function freshnessOptionsFor(enforceSourceFreshness) {
   // and regeneration lanes — the toolchain digest is evaluated unconditionally anyway.
   const baseRef = process.env.KEIKO_PERF_EVIDENCE_BASE_REF ?? "";
   return {
+    computeBaselineSourceTreeSha256: () => D12_PINNED_BASELINE_SOURCE_TREE_SHA256,
     dirtySubjectPaths: enforceSourceFreshness ? listDirtyPerformanceSubjectPaths() : [],
     enforceSourceFreshness,
     toolchainTouched: enforceSourceFreshness || baseRef === "" || toolchainTouchedAgainst(baseRef),

@@ -2,6 +2,7 @@ import { expect, test, type CDPSession, type Page, type Response } from "@playwr
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { arch, cpus, platform, release, tmpdir, totalmem } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +26,22 @@ if (D12_REVISION !== undefined && D12_REVISION !== "baseline" && D12_REVISION !=
 }
 const D12_COMPARISON = D12_REVISION !== undefined;
 const SHA_256 = /^[0-9a-f]{64}$/u;
+const requireFromSpec = createRequire(import.meta.url);
+// D12 measures both checkout apps through this spec's Playwright harness, not the checkout cwd.
+const PLAYWRIGHT_TEST_VERSION = packageVersionFromSpec("@playwright/test");
+
+function packageVersionFromSpec(packageName: string): string {
+  const packageJson = requireFromSpec(`${packageName}/package.json`) as unknown;
+  if (
+    typeof packageJson !== "object" ||
+    packageJson === null ||
+    !("version" in packageJson) ||
+    typeof packageJson.version !== "string"
+  ) {
+    throw new Error(`${packageName} package.json must expose a version string`);
+  }
+  return packageJson.version;
+}
 
 function resolveD12Digest(name: string): string | undefined {
   if (D12_REVISION === undefined) return undefined;
@@ -78,10 +95,7 @@ function resolveD12RunProvenance(page: Page): D12RunProvenance | null {
     npmVersion: commandVersion("npm", ["--version"]),
     osRelease: release(),
     platform: platform(),
-    playwrightVersion: commandVersion(process.execPath, [
-      "-p",
-      "require('@playwright/test/package.json').version",
-    ]),
+    playwrightVersion: PLAYWRIGHT_TEST_VERSION,
     zlibVersion: process.versions.zlib,
   };
 }

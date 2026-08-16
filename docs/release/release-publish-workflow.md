@@ -349,10 +349,10 @@ The `publish` job authenticates to the npm registry with [npm Trusted Publishing
   bundle a new-enough npm.
 - **One-time setup on npmjs.com is required before the first trusted publish**, and is outside
   this repository: on the package's Settings → Trusted Publishers page, add a GitHub Actions
-  publisher naming this exact repository and the exact workflow filename
-  `.github/workflows/release.yml` (case-sensitive, extension included, no `workflow_call`
-  indirection). Nothing in CI can perform or verify this step; a maintainer with npm publish
-  rights on the package must do it by hand.
+  publisher naming this exact repository, the exact workflow filename `release.yml`, and the
+  `npm-publish` environment (case-sensitive, basename only, extension included, no
+  `workflow_call` indirection). Nothing in CI can perform or verify this step; a maintainer with
+  npm publish rights on the package must do it by hand.
 - **Scope limitation**: trusted publishing authorizes `npm publish` only, not `npm dist-tag add`.
   A fresh publish is unaffected, because `npm publish --tag <tag>` sets the dist-tag atomically as
   part of that same authenticated call; `ensurePackageDistTag` in `scripts/release-publish.mjs`

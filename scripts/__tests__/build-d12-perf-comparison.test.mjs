@@ -1012,12 +1012,44 @@ describe("D12 performance comparison builder", () => {
     expect(() => run(second)).toThrow(/sourceTreeSha256 does not match its execution record/u);
   });
 
-  it("rejects generation when the pinned baseline is not an ancestor of candidate HEAD", () => {
+  it("allows the pinned baseline to be a squash-only foreign commit", () => {
     const { root } = createFixture();
-    expect(() => run(root, { isAncestor: () => false })).toThrow(
-      /pinned baseline commit is not an ancestor/u,
-    );
-    expect(existsSync(join(root, "d12-overlay.json"))).toBe(false);
+    const output = run(root, { isAncestor: () => false, selfCheck: true });
+
+    expect(output.d12Comparison.baselineCommit).toBe(BASELINE_COMMIT);
+    expect(output.d12Comparison.baselineSourceTreeSha256).toBe(BASELINE_SOURCE_TREE_SHA_256);
+    expect(output.sourceTreeSha256).toBe(SOURCE_TREE_SHA_256);
+    expect(existsSync(join(root, "d12-overlay.json"))).toBe(true);
+  });
+
+  it("recomputes the pinned baseline digest from the baseline checkout", () => {
+    const { root } = createFixture();
+    const baselineRoot = join(root, "baseline-checkout");
+    const candidateRoot = join(root, "candidate-checkout");
+    mkdirSync(baselineRoot);
+    mkdirSync(candidateRoot);
+    const args = invocation(root, true);
+    args[args.indexOf("--baseline-root") + 1] = baselineRoot;
+    args[args.indexOf("--candidate-root") + 1] = candidateRoot;
+    const baselineDigestRoots = [];
+
+    const output = runD12Builder(args, {
+      computeBaselineDigest: ({ root: digestRoot }) => {
+        baselineDigestRoots.push(digestRoot);
+        return BASELINE_SOURCE_TREE_SHA_256;
+      },
+      computeDigest: ({ root: digestRoot }) =>
+        digestRoot === baselineRoot ? BASELINE_SOURCE_TREE_SHA_256 : SOURCE_TREE_SHA_256,
+      computeLockfileSha256: (digestRoot) =>
+        digestRoot === baselineRoot ? BASELINE_LOCKFILE_SHA_256 : LOCKFILE_SHA_256,
+      computeMeasurementHarnessSha256: () => MEASUREMENT_HARNESS_SHA_256,
+      getHead: (digestRoot) => (digestRoot === baselineRoot ? BASELINE_COMMIT : CANDIDATE_COMMIT),
+      isAncestor: () => false,
+      listDirtyPaths: () => [],
+    });
+
+    expect(output.d12Comparison.baselineSourceTreeSha256).toBe(BASELINE_SOURCE_TREE_SHA_256);
+    expect(baselineDigestRoots).toEqual([baselineRoot, baselineRoot]);
   });
 
   it.each([

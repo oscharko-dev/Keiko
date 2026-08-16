@@ -262,7 +262,7 @@ and omission reasons. A compile-time content-free guard (`content-free-guard.ts`
 ### No CDN, no direct browser provider egress, CSP unchanged
 
 Monaco core and the governed v1 editor worker are served same-origin from the locally installed
-`monaco-editor` (pinned `0.55.1`); no editor asset is fetched from a CDN. The default v1 factory does
+`monaco-editor` (pinned `0.56.0`); no editor asset is fetched from a CDN. The default v1 factory does
 not ship the TypeScript/JSON/CSS/HTML worker chunks because server-governed providers own TS/JS
 language intelligence and #1213 owns any future multi-language worker expansion. The editor issues no
 direct browser network calls to model/retrieval/analytics/provider endpoints. The server CSP
@@ -273,15 +273,15 @@ Monaco's runtime style injection satisfy this with no relaxation (ADR-0042 D3.4)
 
 ### Supply chain
 
-`monaco-editor@0.55.1` declares `dompurify@3.2.7` (moderate advisories affecting `<= 3.4.10`). The
-control is a root `overrides: { dompurify: "3.4.12" }` that installs the patched line — not a silencing
-pin — while Monaco stays at `0.55.1`. Monaco also bundles a vendored DOMPurify copy reachable only
-through Markdown-rendering sinks. Governed bridges may enable parameter hints, the code-action
-lightbulb, and inlay hints, but project primitive strings only; completion has no documentation field,
-and non-string completion/signature metadata is discarded at runtime. Suggest documentation, code
-lens, links, and the inline-suggest toolbar remain disabled. Hover quick-info is wrapped in an inert,
-escaped code fence, so the vendored sanitiser never processes active markup. The lockfile integrity
-hashes, the SBOM
+`monaco-editor@0.56.0` declares `dompurify@3.4.8` (moderate advisories affecting `<= 3.4.10`). The
+control is a root `overrides: { dompurify: "3.4.13" }` that installs the patched line — not a
+silencing pin — while Monaco stays at `0.56.0`. Monaco also bundles a vendored DOMPurify 3.4.8 copy
+reachable only through Markdown-rendering sinks. Governed bridges may enable parameter hints, the
+code-action lightbulb, and inlay hints, but project primitive strings only; completion has no
+documentation field, and non-string completion/signature metadata is discarded at runtime. Suggest
+documentation, code lens, links, and the inline-suggest toolbar remain disabled. Hover quick-info is
+wrapped in an inert, escaped code fence, so the vendored sanitiser never processes active markup. The
+lockfile integrity hashes, the SBOM
 
 - license gate (`npm run check:workspace-supply-chain`), and the no-CDN policy bound the supply-chain
   exposure.

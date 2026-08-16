@@ -1346,6 +1346,59 @@
         "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.8",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.8",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-16-keiko-0.3.8-publish-cleanup",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "normal",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 0.3.8 is a cleanup and bugfix release after the 0.3.7 npm recovery. The npm README no longer displays the paused Keiko for Quality review card while active reviews are disabled, the npm Trusted Publisher runbook now names the verified release.yml plus npm-publish environment binding, direct and transitive third-party packages were refreshed within their supported release bands with a clean audit, and the release carries the post-0.3.7 reliability, governance, contract, package, and audit fixes already merged on dev.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "The npm README no longer shows the paused Keiko for Quality review card, so package pages avoid empty review metrics while active reviews are disabled.",
+        "Release publishing docs now name the verified npm Trusted Publisher binding: workflow file `release.yml` with the `npm-publish` environment.",
+        "Third-party packages were refreshed within their supported release bands, including React, Monaco, editor/test tooling, transitive lockfile updates, and the reviewed `fsevents@2.3.3` install-script approval; npm audit and supply-chain checks are clean while Next.js 16.3, Vite 8.2, axe-core 4.13, ESLint 10, and TypeScript 7 remain separate migrations because the current dependency-review license and major-version gates intentionally block them.",
+        "0.3.8 carries the post-0.3.7 bugfix set already merged on dev, including chat handoff hardening, debug breakpoint reconciliation retries, contract/gateway validation fixes, and package/release hardening with libc-aware offline install-smoke native optional seeding."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-16",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5306381384",
+        "rationale": "The release owner directed this 0.3.8 release in the 2026-08-16 working session after trusted publishing was configured on npm. The release bundles the merged bugfixes since 0.3.7, hides the paused Keiko for Quality card, refreshes third-party package versions within their supported release bands, and corrects the npm Trusted Publisher runbook before publishing with the latest dist-tag."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
     }
   ]
 }
