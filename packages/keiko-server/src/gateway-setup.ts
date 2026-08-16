@@ -4469,7 +4469,7 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
 // itself becoming a store of endpoints. `classifyOutboundHost` returns nothing for a name that is
 // not a literal IP, which is the ordinary public case, so an unclassified host records as `public`
 // rather than dropping the record — a successful setup must never be missing from the trail.
-function gatewaySetupTargetClass(baseUrl: string): GatewaySetupTargetClass {
+export function gatewaySetupTargetClass(baseUrl: string): GatewaySetupTargetClass {
   let hostname: string;
   try {
     hostname = new URL(baseUrl).hostname;
@@ -4478,7 +4478,20 @@ function gatewaySetupTargetClass(baseUrl: string): GatewaySetupTargetClass {
     // under the safest classification rather than losing the event.
     return "public";
   }
-  return classifyOutboundHost(hostname) ?? "public";
+  // Strip a trailing FQDN dot: "localhost." resolves to loopback but classifyOutboundHost's
+  // literal-string equality otherwise misses it, and the same applies to a dotted IPv4 literal
+  // like "127.0.0.1." (Codex #3201). The trailing dot is a DNS root marker, not part of the
+  // resolvable host identity.
+  const normalized = hostname.endsWith(".") ? hostname.slice(0, -1) : hostname;
+  // Non-literal names ("internal.example", "example.com") still record as `public`: this
+  // classifier deliberately does NOT DNS-resolve the host — that would add a synchronous DNS
+  // round-trip to the success path and duplicate the check gatewayFetch already runs against
+  // the resolved address inside its egress policy. The record's `targetClass` documents the
+  // classification of the submitted URL as a literal address; a hostname-only entry records
+  // "was not a literal private/loopback/metadata address at submission time", not
+  // "attests to a public destination". Operators reading a name-based `public` should
+  // cross-reference the egress-policy diagnostics for the resolved-address vetting.
+  return classifyOutboundHost(normalized) ?? "public";
 }
 
 function recordGatewaySetupAudit(

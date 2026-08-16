@@ -18,6 +18,7 @@ import type { IncomingMessage } from "node:http";
 import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
 import { currentGatewayConfig } from "./deps.js";
 import { buildUiHandlerDeps } from "./deps.js";
+import { gatewaySetupTargetClass } from "./gateway-setup.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
   ERROR_CODES,
@@ -829,6 +830,21 @@ describe("handleGatewaySetup", () => {
     // Restore for the deps teardown to run cleanly.
     (deps.evidenceStore as { put: typeof deps.evidenceStore.put }).put = originalPut;
     deps.store.close();
+  });
+
+  it.each([
+    ["localhost.", "loopback"],
+    ["127.0.0.1.", "loopback"],
+    ["https://internal.example/v1", "public"],
+    ["not a url", "public"],
+    ["https://169.254.169.254/", "metadata"],
+    ["https://10.0.0.5/", "private"],
+  ])("classifies %s as %s (KEIKO-0497 / #3201)", (input, expected) => {
+    // Direct test of the classifier: the URL validator strips no trailing dot, so it rejects
+    // "localhost." earlier in the request path — but a valid record still needs the right class
+    // for edge cases like an IP-with-dot or a name that happens to match a literal address.
+    const url = input.includes(":") ? input : `http://${input}:11434/v1`;
+    expect(gatewaySetupTargetClass(url)).toBe(expected);
   });
 
   it("tests, stores, and activates a local gateway config without returning secrets", async () => {
