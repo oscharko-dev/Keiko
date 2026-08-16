@@ -1658,6 +1658,19 @@ async function resolvedIfPresent(path: string): Promise<string | undefined> {
   }
 }
 
+// Test seam for the KEIKO-0495 critical section. Awaited once per holder immediately after the
+// in-lock re-stat and before the conflict check, which is the exact point a concurrency test needs
+// to hold a writer while another queues behind it on the same key. Undefined in production, so the
+// region is byte-identical there; a hook that throws is the caller's own failure and propagates.
+let fileWriteCriticalSectionBarrier: (() => Promise<void>) | undefined;
+
+/** Installs (or clears with `undefined`) the critical-section barrier. Tests only. */
+export function setFileWriteCriticalSectionBarrierForTests(
+  barrier: (() => Promise<void>) | undefined,
+): void {
+  fileWriteCriticalSectionBarrier = barrier;
+}
+
 // The serialized verify->write critical section (KEIKO-0495). Extracted so
 // writeResolvedFilesContent stays within its function-length bound.
 async function verifyThenWrite(args: {
@@ -1696,6 +1709,9 @@ async function verifyThenWrite(args: {
   // the right side of that trade: a recoverable STALE_PATH beats a silent clobber. Telling
   // "replaced by a previous holder of this key" apart from "replaced by a stranger" needs per-key
   // identity tracking; tracked as follow-up on #2901.
+  if (fileWriteCriticalSectionBarrier !== undefined) {
+    await fileWriteCriticalSectionBarrier();
+  }
   await assertNoWriteConflict(refreshed, args.baseVersion, args.expectedModifiedAt);
   let protection: FilesContentWireResponse["localHistoryProtection"];
   if (args.beforeWrite !== undefined) {
@@ -1739,7 +1755,7 @@ async function writeResolvedFilesContent(args: {
   // shared WorkspaceMutexRegistry rather than introducing a second locking mechanism; the existing
   // conflict checks are untouched and still do the deciding.
   const { localHistoryProtection, updatedStats } = await fileWriteMutex.runExclusive(
-    [fileWriteKey(args.target.path)],
+    [fileWriteKey(args.target.stats)],
     () => verifyThenWrite(args),
   );
   return {

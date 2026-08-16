@@ -16,7 +16,6 @@
 // process crash it simply vanishes — nothing it protected survives either, and the durable record is the
 // persisted advisory lock + visible lifecycle state (#447 reconciliation/repair resolve any stale lock).
 
-import { comparablePath } from "@oscharko-dev/keiko-git";
 import { compareStrings } from "@oscharko-dev/keiko-contracts";
 
 export interface WorkspaceMutexRegistry {
@@ -52,13 +51,13 @@ export function provisionKey(repositoryId: string, taskId: string): string {
 // verification and the second silently overwrite the first. Keyed by resolved real path so two
 // routes reaching the same inode serialize even via different request paths. Lowest tier — a
 // file write takes exactly one key, so it can never participate in a multi-key deadlock.
-export function fileWriteKey(realPath: string): string {
-  // Keyed by filesystem IDENTITY, not by the path string. realpath() does not settle this: on
-  // macOS it preserves the caller's casing, so realpath("Foo.ts") and realpath("foo.ts") return
-  // different strings for the same inode — which would put two saves of one file in two mutex
-  // queues and reopen the very lost-update race this key exists to close. comparablePath is the
-  // same rule containsPath uses to decide "same file", so the lock agrees with containment.
-  return `file:${comparablePath(realPath)}`;
+export function fileWriteKey(identity: { readonly dev: number; readonly ino: number }): string {
+  // Keyed by the filesystem's OWN identity, not by a path string. Path normalization cannot get
+  // this right: realpath() preserves the caller's casing on macOS, and toLowerCase() is not full
+  // Unicode case folding (Greek final sigma folds to itself while capital sigma folds to small
+  // sigma), so alias spellings of one file would land in separate queues and reopen the
+  // lost-update race this key exists to close. dev+ino covers the whole alias class exactly.
+  return `file:${String(identity.dev)}:${String(identity.ino)}`;
 }
 
 function keyTier(key: string): number {

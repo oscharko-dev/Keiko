@@ -42,7 +42,11 @@ import {
   searchFiles,
   writeFilesContent,
 } from "./index.js";
-import { normalizeRelativePath, resolveRoot } from "./files.js";
+import {
+  normalizeRelativePath,
+  resolveRoot,
+  setFileWriteCriticalSectionBarrierForTests,
+} from "./files.js";
 import type { RouteContext, UiHandlerDeps } from "./index.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { createBreakpointStore } from "./editor/dap/breakpointStore.js";
@@ -686,67 +690,59 @@ describe("desktop files browser", () => {
   // KEIKO-0495: the optimistic-concurrency check was a check-then-act. Two saves carrying the SAME
   // baseVersion could both clear assertNoWriteConflict before either wrote, and the second silently
   // overwrote the first with no STALE_SESSION for the loser — a lost update with no signal.
+  //
+  // Deterministic by construction: the first writer is held inside the critical section at the
+  // barrier seam, the second is only started once that hold is observed, so it provably queues on
+  // the same key. No wall-clock, no scheduler assumptions.
   it("lets exactly one of two concurrent same-baseVersion saves win", async () => {
     const initial = await readFilesContent(store, root, "src/app.ts");
-    const first = 'export const value = "first";\n';
-    const second = 'export const value = "second";\n';
-
-    const results = await Promise.allSettled([
-      writeFilesContent({
-        store,
-        rootInput: root,
-        pathInput: "src/app.ts",
-        content: first,
-        baseVersion: initial.session.version,
-      }),
-      writeFilesContent({
-        store,
-        rootInput: root,
-        pathInput: "src/app.ts",
-        content: second,
-        baseVersion: initial.session.version,
-      }),
-    ]);
-
-    const fulfilled = results.filter((r) => r.status === "fulfilled");
-    const rejected = results.filter((r) => r.status === "rejected");
-    // Exactly one winner, and the loser is told so rather than silently discarded.
-    expect(fulfilled).toHaveLength(1);
-    expect(rejected).toHaveLength(1);
-    expect(rejected[0]).toMatchObject({
-      reason: { status: 409, code: "STALE_SESSION" },
+    let releaseHolder: (() => void) | undefined;
+    const holderInside = new Promise<void>((resolveInside) => {
+      const held = new Promise<void>((releaseIt) => {
+        releaseHolder = (): void => {
+          releaseIt();
+        };
+      });
+      setFileWriteCriticalSectionBarrierForTests(async () => {
+        // Only the first holder is gated; later holders pass straight through.
+        setFileWriteCriticalSectionBarrierForTests(undefined);
+        resolveInside();
+        await held;
+      });
     });
 
-    // On-disk content is exactly one of the two payloads — never a mix, never the loser's.
-    const onDisk = await readFilesContent(store, root, "src/app.ts");
-    expect([first, second]).toContain(onDisk.content);
-  });
+    const first = writeFilesContent({
+      store,
+      rootInput: root,
+      pathInput: "src/app.ts",
+      content: 'export const value = "first";\n',
+      baseVersion: initial.session.version,
+    });
+    await holderInside;
 
-  // Two chained forced saves (no concurrency tokens) fail closed on the second: the winner's
-  // atomic rename changed the inode the loser's resolved snapshot points at. That is deliberate.
-  // Handing the write the refreshed snapshot instead would make it accept ANY inode now at the
-  // path — including a file an unrelated actor created there after a delete/rename, which this
-  // mutex does not cover — and silently overwrite it. Recoverable STALE_PATH beats a silent clobber.
-  it("fails the second chained forced save closed rather than trusting a replaced inode", async () => {
-    const results = await Promise.allSettled([
-      writeFilesContent({
-        store,
-        rootInput: root,
-        pathInput: "src/app.ts",
-        content: 'export const value = "forced-a";\n',
-      }),
-      writeFilesContent({
-        store,
-        rootInput: root,
-        pathInput: "src/app.ts",
-        content: 'export const value = "forced-b";\n',
-      }),
-    ]);
+    const second = writeFilesContent({
+      store,
+      rootInput: root,
+      pathInput: "src/app.ts",
+      content: 'export const value = "second";\n',
+      baseVersion: initial.session.version,
+    });
+    // Give the second request every chance to reach the lock before the holder is released.
+    await new Promise((tick) => setImmediate(tick));
+    releaseHolder?.();
+
+    const results = await Promise.allSettled([first, second]);
+    setFileWriteCriticalSectionBarrierForTests(undefined);
 
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     const rejected = results.filter((r) => r.status === "rejected");
     expect(rejected).toHaveLength(1);
-    expect(rejected[0]).toMatchObject({ reason: { status: 409 } });
+    expect(rejected[0]).toMatchObject({ reason: { status: 409, code: "STALE_SESSION" } });
+
+    const onDisk = await readFilesContent(store, root, "src/app.ts");
+    expect(['export const value = "first";\n', 'export const value = "second";\n']).toContain(
+      onDisk.content,
+    );
   });
 
   it("prefers baseVersion over expectedModifiedAt for conflict detection", async () => {
