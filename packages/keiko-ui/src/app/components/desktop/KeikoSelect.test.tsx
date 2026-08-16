@@ -335,6 +335,30 @@ describe("KeikoSelect interactions", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("notifies callers for each deliberate opening, including keyboard operation", async () => {
+    const onOpen = vi.fn();
+    render(
+      <KeikoSelect
+        ariaLabel="Strategy"
+        menuTitle="Strategy"
+        onOpen={onOpen}
+        onValueChange={vi.fn()}
+        sections={sections}
+        value="model"
+      />,
+    );
+
+    const trigger = screen.getByRole("combobox", { name: "Strategy" });
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    await screen.findByRole("option", { name: "Model only" });
+    expect(onOpen).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(screen.getByRole("option", { name: "Model only" }), { key: "Escape" });
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    await screen.findByRole("option", { name: "Model only" });
+    expect(onOpen).toHaveBeenCalledTimes(2);
+  });
+
   it("supports typeahead, Home, End, Tab, and Escape without entering disabled options", async () => {
     const user = userEvent.setup();
     render(

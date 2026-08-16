@@ -39,6 +39,10 @@ import type {
 import { fetchFilesSearch, updateChat } from "@/lib/api";
 import { queueChatEditorApply } from "@/lib/chat-editor-apply";
 import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
+import {
+  GATEWAY_CONFIG_UPDATED_EVENT,
+  GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
+} from "./widgets/shared/gatewaySetupBus";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -2083,6 +2087,33 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
     await openCombobox(user, "Models");
     expect(screen.getByRole("option", { name: "test-chat-1" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "test-chat-2" })).toBeInTheDocument();
+  });
+
+  it("refreshes the eligible-model catalog whenever the visible picker is reopened", async () => {
+    const user = userEvent.setup();
+    const onCatalogRefresh = vi.fn();
+    window.addEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, onCatalogRefresh);
+    const onConfigUpdated = vi.fn();
+    window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
+    try {
+      renderWindow(
+        makeSession({
+          models: [chatModelCapability("test-chat-1")],
+          selectedModel: "test-chat-1",
+          activeChat: makeChat(),
+        }),
+      );
+
+      await openCombobox(user, "Models");
+      await user.keyboard("{Escape}");
+      await openCombobox(user, "Models");
+
+      expect(onCatalogRefresh).toHaveBeenCalledTimes(2);
+      expect(onConfigUpdated).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, onCatalogRefresh);
+      window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
+    }
   });
 
   it("does not render a non-chat model id in the dropdown when session.models is pre-filtered (AC #2)", async () => {

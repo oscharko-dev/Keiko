@@ -223,12 +223,15 @@ interface ActiveChatCreation {
   readonly projectPath: string | null;
   readonly promise: Promise<Chat | undefined>;
   reconciliation: Promise<ChatCreationResult> | null;
-  settledChat: Chat | undefined;
   titleRevision: number;
 }
 
 function sameCreationOwner(left: ChatCreationOwner, right: ChatCreationOwner): boolean {
   return left.kind === right.kind && left.id === right.id;
+}
+
+function chatCreationOwnerKey(owner: ChatCreationOwner): string {
+  return `${owner.kind}\u0000${owner.id}`;
 }
 
 const CHAT_CREATION_REQUEST_DIAGNOSTIC = "Chat creation request failed.";
@@ -305,14 +308,11 @@ async function reconcileActiveChatCreation(
 
 function activeCreationResult(
   active: ActiveChatCreation,
-  currentRef: { current: ActiveChatCreation | null },
   replaceChat: ChatSessionApi["replaceChat"],
 ): Promise<ChatCreationResult> {
   if (active.reconciliation !== null) return active.reconciliation;
-  const reconciliation = reconcileActiveChatCreation(
-    active,
-    replaceChat,
-    (): boolean => currentRef.current === active && active.isOwnerCurrent(),
+  const reconciliation = reconcileActiveChatCreation(active, replaceChat, (): boolean =>
+    active.isOwnerCurrent(),
   );
   const tracked = reconciliation.finally((): void => {
     if (active.reconciliation === tracked) active.reconciliation = null;
@@ -325,12 +325,12 @@ function useChatCreationCoordinator(
   openNewChat: ChatSessionApi["openNewChat"],
   replaceChat: ChatSessionApi["replaceChat"],
 ): ChatCreationCoordinator {
-  const activeByProjectRef = useRef(new Map<string | null, ActiveChatCreation>());
-  const currentRef = useRef<ActiveChatCreation | null>(null);
+  const activeByOwnerRef = useRef(new Map<string, ActiveChatCreation>());
   const request = useCallback<ChatCreationCoordinator["request"]>(
     (owner, project, title, isOwnerCurrent = (): boolean => true): Promise<ChatCreationResult> => {
       const projectPath = project?.path ?? null;
-      let active = activeByProjectRef.current.get(projectPath);
+      const ownerKey = chatCreationOwnerKey(owner);
+      let active = activeByOwnerRef.current.get(ownerKey);
       if (active === undefined) {
         const promise = openNewChat(project, title);
         const created: ActiveChatCreation = {
@@ -341,19 +341,10 @@ function useChatCreationCoordinator(
           projectPath,
           promise,
           reconciliation: null,
-          settledChat: undefined,
           titleRevision: 0,
         };
         active = created;
-        activeByProjectRef.current.set(projectPath, created);
-        void promise.then(
-          (chat): void => {
-            created.settledChat = chat;
-          },
-          (): void => {
-            created.settledChat = undefined;
-          },
-        );
+        activeByOwnerRef.current.set(ownerKey, created);
       } else {
         active.isOwnerCurrent = isOwnerCurrent;
         active.owner = owner;
@@ -362,18 +353,15 @@ function useChatCreationCoordinator(
           active.titleRevision += 1;
         }
       }
-      currentRef.current = active;
-      return activeCreationResult(active, currentRef, replaceChat);
+      return activeCreationResult(active, replaceChat);
     },
     [openNewChat, replaceChat],
   );
   const release = useCallback<ChatCreationCoordinator["release"]>((owner): void => {
-    for (const [projectPath, active] of activeByProjectRef.current) {
-      if (!sameCreationOwner(active.owner, owner)) continue;
-      if (active.settledChat !== undefined && !active.isOwnerCurrent()) return;
-      activeByProjectRef.current.delete(projectPath);
-      if (currentRef.current === active) currentRef.current = null;
-      return;
+    const ownerKey = chatCreationOwnerKey(owner);
+    const active = activeByOwnerRef.current.get(ownerKey);
+    if (active !== undefined && sameCreationOwner(active.owner, owner)) {
+      activeByOwnerRef.current.delete(ownerKey);
     }
   }, []);
   return useMemo((): ChatCreationCoordinator => ({ release, request }), [release, request]);
@@ -660,7 +648,10 @@ function useChatCreationControl(args: ChatCreationControlArgs): ChatCreationCont
     }
     if (loading || attemptStateRef.current.attemptedRequestKey === requestKey) return;
     const attempt = attemptStateRef.current.sequence + 1;
-    const owner = { kind: "window", id: `${requestKey}\u0000${String(attempt)}` } as const;
+    // A request identity and project are the ownership boundary. The attempt only guards a
+    // particular render generation; including it here would make navigating away and back to the
+    // same still-pending request start a duplicate creation.
+    const owner = { kind: "window", id: requestKey } as const;
     attemptStateRef.current.sequence = attempt;
     attemptStateRef.current.latestAttempt = attempt;
     attemptStateRef.current.attemptedRequestKey = requestKey;

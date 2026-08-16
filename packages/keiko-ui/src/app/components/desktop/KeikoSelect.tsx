@@ -37,6 +37,8 @@ export interface KeikoSelectProps {
   readonly value: string;
   readonly sections: readonly KeikoSelectSection[];
   readonly onValueChange: (next: string) => void;
+  /** Called after a deliberate pointer or keyboard opening is accepted. */
+  readonly onOpen?: (() => void) | undefined;
   readonly disabled?: boolean;
   readonly placeholder?: string | undefined;
   readonly ariaLabel?: string | undefined;
@@ -436,6 +438,7 @@ export default function KeikoSelect({
   value,
   sections,
   onValueChange,
+  onOpen,
   disabled = false,
   placeholder,
   ariaLabel,
@@ -493,6 +496,7 @@ export default function KeikoSelect({
     const fallbackIndex = resolveOpenMenuIndex(flatOptions, preferredIndex, selectedIndex);
     setOpen(true);
     setActiveIndex(fallbackIndex);
+    onOpen?.();
   };
 
   useEffect(() => {

@@ -4,9 +4,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
+  GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
   GATEWAY_SETUP_REQUEST_EVENT,
   consumePendingGatewaySetup,
   notifyGatewayConfigUpdated,
+  requestGatewayModelCatalogRefresh,
   requestGatewaySetup,
 } from "./gatewaySetupBus";
 
@@ -50,6 +52,21 @@ describe("gatewaySetupBus", () => {
       expect(consumePendingGatewaySetup()).toBe(false);
     } finally {
       window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, handler);
+    }
+  });
+
+  it("announces a catalog refresh without claiming that configuration changed", () => {
+    const onCatalogRefresh = vi.fn();
+    const onConfigUpdated = vi.fn();
+    window.addEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, onCatalogRefresh);
+    window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
+    try {
+      requestGatewayModelCatalogRefresh();
+      expect(onCatalogRefresh).toHaveBeenCalledOnce();
+      expect(onConfigUpdated).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, onCatalogRefresh);
+      window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
     }
   });
 });

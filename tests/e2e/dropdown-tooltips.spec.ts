@@ -1,4 +1,9 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 
 function collectPageErrors(page: Page): () => void {
   const errors: string[] = [];
@@ -62,6 +67,25 @@ async function openChatModelDropdown(page: Page): Promise<void> {
   await modelPicker.click();
 }
 
+async function createFreshChatWindow(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "New chat" }).click();
+  await page
+    .getByRole("dialog", { name: "New Chat window" })
+    .getByRole("button", { name: "Open Chat" })
+    .click();
+}
+
+async function createProjectFixture(request: APIRequestContext): Promise<() => void> {
+  const projectPath = mkdtempSync(join(tmpdir(), "keiko-e2e-fresh-chat-"));
+  mkdirSync(join(projectPath, "src"));
+  const response = await request.post("/api/projects", {
+    headers: MUTATION_HEADERS,
+    data: { name: "Fresh Chat E2E", path: projectPath },
+  });
+  expect(response.status(), await response.text()).toBe(201);
+  return (): void => rmSync(projectPath, { force: true, recursive: true });
+}
+
 async function expectTooltipOffsetFromOption(page: Page, optionName: string): Promise<void> {
   const longOption = page.getByRole("option", { name: optionName });
   await expect(longOption).toBeVisible();
@@ -97,4 +121,44 @@ test("model dropdown overflow tooltips appear from row hover and clear consisten
   await page.mouse.move(1, 1);
   await expect(page.getByRole("tooltip")).toBeHidden();
   assertNoPageErrors();
+});
+
+test("fresh chats remain distinct and reopening a model picker refetches its catalog", async ({
+  page,
+  request,
+}) => {
+  const assertNoPageErrors = collectPageErrors(page);
+  const removeProjectFixture = await createProjectFixture(request);
+  let modelRequestCount = 0;
+  await page.route("**/api/models", async (route) => {
+    modelRequestCount += 1;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ models: [chatModel("e2e-chat-model")] }),
+    });
+  });
+
+  try {
+    await page.goto("/");
+    await expect.poll(() => modelRequestCount).toBeGreaterThan(0);
+    await createFreshChatWindow(page);
+    await createFreshChatWindow(page);
+
+    const chatWindows = page.getByRole("region", { name: /Chat/u });
+    await expect(chatWindows).toHaveCount(2);
+    const modelPicker = chatWindows.last().getByRole("combobox", { name: "Models" });
+
+    const requestsBeforeFirstOpen = modelRequestCount;
+    await modelPicker.click();
+    await expect.poll(() => modelRequestCount).toBeGreaterThan(requestsBeforeFirstOpen);
+    await modelPicker.press("Escape");
+
+    const requestsBeforeReopen = modelRequestCount;
+    await modelPicker.click();
+    await expect.poll(() => modelRequestCount).toBeGreaterThan(requestsBeforeReopen);
+    await expect(page.getByRole("option", { name: "e2e-chat-model" })).toBeVisible();
+    assertNoPageErrors();
+  } finally {
+    removeProjectFixture();
+  }
 });
