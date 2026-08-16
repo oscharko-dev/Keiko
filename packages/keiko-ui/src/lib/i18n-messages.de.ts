@@ -601,6 +601,11 @@ export const DE_MESSAGES = {
   "chat.error.send": "Nachricht konnte nicht gesendet werden.",
   "chat.error.load": "Chat konnte nicht geladen werden.",
   "chat.error.scopeUpdate": "Wissensbereich konnte nicht aktualisiert werden.",
+  "error.gatewayCircuitOpen.title": "Model-Gateway vorübergehend nicht verfügbar",
+  "error.gatewayCircuitOpen.message":
+    "Das Model-Gateway ist vorübergehend nicht verfügbar, solange der Circuit Breaker offen ist.",
+  "error.gatewayCircuitOpen.remediation":
+    "Das System versucht es automatisch erneut. Warte einen Moment oder wechsle zu einem anderen konfigurierten Modell.",
   "chat.error.memoryUpdate": "Speicher konnte nicht aktualisiert werden.",
   "chat.grounding.label": "Grounding",
   "chat.grounding.mode": "Grounding-Modus",

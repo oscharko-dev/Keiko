@@ -80,6 +80,42 @@ describe("formatUserError", () => {
     });
   });
 
+  // KEIKO-0353: GATEWAY_CIRCUIT_OPEN used to fall through to the generic "Request failed" title
+  // with no remediation, so a user hitting a down provider was told LESS as the outage persisted.
+  // The server half (HTTP 503) landed in #3188; this is the UI half, routed through the i18n
+  // catalogs the check:ui-i18n guard requires.
+  it("names the circuit-open outage and points to its auto-retry (KEIKO-0353)", () => {
+    const notice = toUserErrorNotice(
+      new ApiError("GATEWAY_CIRCUIT_OPEN", "GATEWAY_CIRCUIT_OPEN", 503),
+      "Could not send message.",
+    );
+
+    expect(notice.title).toBe("Model gateway is temporarily unavailable");
+    expect(notice.title).not.toBe("Request failed");
+    expect(notice.code).toBe("GATEWAY_CIRCUIT_OPEN");
+    expect(notice.remediation).toContain("automatically retrying");
+  });
+
+  it("prefers translated circuit-open copy when a translator is supplied (KEIKO-0353)", () => {
+    // The module is not a component, so it takes the translate function as a parameter (the
+    // non-hook i18n seam). Existing callers pass none and keep the English literals.
+    const seen: string[] = [];
+    const translate = ((key: string) => {
+      seen.push(key);
+      return `[de] ${key}`;
+    }) as unknown as Parameters<typeof toUserErrorNotice>[2];
+
+    const notice = toUserErrorNotice(
+      new ApiError("GATEWAY_CIRCUIT_OPEN", "GATEWAY_CIRCUIT_OPEN", 503),
+      "Could not send message.",
+      translate,
+    );
+
+    expect(notice.title).toBe("[de] error.gatewayCircuitOpen.title");
+    expect(notice.remediation).toBe("[de] error.gatewayCircuitOpen.remediation");
+    expect(seen).toContain("error.gatewayCircuitOpen.message");
+  });
+
   it("parses the trailing support code from formatted error strings", () => {
     expect(toUserErrorNotice("Gateway returned 502. (GATEWAY_UPSTREAM_FAILURE)", "Retry")).toEqual({
       title: "Request failed",
