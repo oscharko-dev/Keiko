@@ -26,6 +26,7 @@ function chatModel(id: string): ModelCapability {
   return {
     id,
     kind: "chat",
+    conversationReady: true,
     contextWindow: 4096,
     maxOutputTokens: 1024,
     toolCalling: true,
@@ -46,6 +47,7 @@ function embeddingModel(id: string): ModelCapability {
   return {
     id,
     kind: "embedding",
+    conversationReady: false,
     contextWindow: 0,
     maxOutputTokens: 0,
     toolCalling: false,

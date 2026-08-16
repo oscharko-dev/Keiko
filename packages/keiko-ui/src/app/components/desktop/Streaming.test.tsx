@@ -109,6 +109,7 @@ function chatModelCapability(id: string): ModelCapability {
   return {
     id,
     kind: "chat",
+    conversationReady: true,
     contextWindow: 0,
     maxOutputTokens: 0,
     toolCalling: true,
@@ -129,6 +130,7 @@ function embeddingCapability(id: string): ModelCapability {
   return {
     id,
     kind: "embedding",
+    conversationReady: false,
     contextWindow: 0,
     maxOutputTokens: 0,
     toolCalling: false,
@@ -149,6 +151,7 @@ function ocrVisionCapability(id: string): ModelCapability {
   return {
     id,
     kind: "ocr-vision",
+    conversationReady: false,
     contextWindow: 0,
     maxOutputTokens: 0,
     toolCalling: false,
@@ -210,9 +213,10 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
     // uiux-fix F041 (C170, WCAG 4.1.3) — the live region must stay permanently in
     // the DOM (regions inserted together with their first message are unreliably
     // announced by VoiceOver/Safari and NVDA); while idle it says nothing.
-    // The bootstrap loading status is gated on session.loading=false, so the
-    // only role="status" in the tree is the lifecycle indicator.
-    const status = screen.getByRole("status");
+    // Other independently loading knowledge-work surfaces may also expose
+    // status regions, so select the persistent send lifecycle contract.
+    const status = document.querySelector('[data-send-status="idle"]');
+    expect(status).toHaveAttribute("role", "status");
     expect(status).toBeEmptyDOMElement();
   });
 
