@@ -84,15 +84,23 @@ describe("formatUserError", () => {
   // reverted from Wave 2 because the translator was never threaded from the component boundary,
   // making the DE catalog entries unreachable at every locale.
   it("names the circuit-open outage and points to its auto-retry", () => {
+    // Uses the PRODUCTION payload shape: resilience.ts throws CircuitOpenError with
+    // `circuit open for model '<id>'`, never the bare code. An earlier version of this test
+    // passed the code as the message, which made the guard look correct while it could never
+    // fire in production.
     const notice = toUserErrorNotice(
-      new ApiError("GATEWAY_CIRCUIT_OPEN", "GATEWAY_CIRCUIT_OPEN", 503),
+      new ApiError("GATEWAY_CIRCUIT_OPEN", "circuit open for model 'test-chat-model'", 503),
       "Could not send message.",
     );
 
     expect(notice.title).toBe("Model gateway is temporarily unavailable");
     expect(notice.title).not.toBe("Request failed");
     expect(notice.code).toBe("GATEWAY_CIRCUIT_OPEN");
-    expect(notice.remediation).toContain("Retrying automatically");
+    // The internal breaker string must not reach the user.
+    expect(notice.message).not.toContain("circuit open for model");
+    // Accurate: the gateway self-heals, but nothing resubmits the failed turn — the user must.
+    expect(notice.remediation).toContain("Retry in a moment");
+    expect(notice.remediation).not.toContain("Retrying automatically");
   });
 
   it("resolves circuit-open copy through a supplied translator", () => {
@@ -103,7 +111,7 @@ describe("formatUserError", () => {
     }) as unknown as Parameters<typeof toUserErrorNotice>[2];
 
     const notice = toUserErrorNotice(
-      new ApiError("GATEWAY_CIRCUIT_OPEN", "GATEWAY_CIRCUIT_OPEN", 503),
+      new ApiError("GATEWAY_CIRCUIT_OPEN", "circuit open for model 'test-chat-model'", 503),
       "Could not send message.",
       translate,
     );
@@ -123,13 +131,15 @@ describe("formatUserError", () => {
       translate("de", key as never)) as unknown as Parameters<typeof toUserErrorNotice>[2];
 
     const notice = toUserErrorNotice(
-      new ApiError("GATEWAY_CIRCUIT_OPEN", "GATEWAY_CIRCUIT_OPEN", 503),
+      new ApiError("GATEWAY_CIRCUIT_OPEN", "circuit open for model 'test-chat-model'", 503),
       "Could not send message.",
       germanTranslate,
     );
 
     expect(notice.title).toBe("Model-Gateway vorübergehend nicht verfügbar");
-    expect(notice.remediation).toBe("Wird automatisch wiederholt. Warte oder wechsle das Modell.");
+    expect(notice.remediation).toBe(
+      "Das Gateway erholt sich selbst. Versuche es gleich erneut oder wechsle das Modell.",
+    );
     // Guards the exact regression that got this reverted from Wave 2: English leaking at de.
     expect(notice.title).not.toContain("temporarily unavailable");
   });

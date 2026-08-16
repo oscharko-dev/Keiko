@@ -603,7 +603,8 @@ export const DE_MESSAGES = {
   "chat.error.scopeUpdate": "Wissensbereich konnte nicht aktualisiert werden.",
   "error.circuitOpen.title": "Model-Gateway vorübergehend nicht verfügbar",
   "error.circuitOpen.message": "Das Model-Gateway ist vorübergehend nicht verfügbar.",
-  "error.circuitOpen.remediation": "Wird automatisch wiederholt. Warte oder wechsle das Modell.",
+  "error.circuitOpen.remediation":
+    "Das Gateway erholt sich selbst. Versuche es gleich erneut oder wechsle das Modell.",
   "chat.error.memoryUpdate": "Speicher konnte nicht aktualisiert werden.",
   "chat.grounding.label": "Grounding",
   "chat.grounding.mode": "Grounding-Modus",

@@ -112,7 +112,10 @@ function friendlyMessageForCode(
   if (code === "GATEWAY_TIMEOUT" && (message.length === 0 || message === code)) {
     return "The model gateway timed out before the model returned a response.";
   }
-  if (code === "GATEWAY_CIRCUIT_OPEN" && (message.length === 0 || message === code)) {
+  // Unconditional for this code: the breaker's real payload is `circuit open for model '<id>'`
+  // (resilience.ts), so a message-shape guard like the GATEWAY_TIMEOUT one above would never fire
+  // in production — and that internal string is not something to show a user anyway.
+  if (code === "GATEWAY_CIRCUIT_OPEN") {
     return translated(
       t,
       "error.circuitOpen.message",
@@ -157,7 +160,7 @@ function remediationForError(
     return translated(
       t,
       "error.circuitOpen.remediation",
-      "Retrying automatically. Wait, or switch model.",
+      "The gateway recovers on its own. Retry in a moment, or switch model.",
     );
   }
   if (code === "PAYLOAD_TOO_LARGE") {

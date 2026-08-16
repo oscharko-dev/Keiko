@@ -588,7 +588,8 @@ export const EN_MESSAGES = {
   "chat.error.scopeUpdate": "Unable to update knowledge scope.",
   "error.circuitOpen.title": "Model gateway is temporarily unavailable",
   "error.circuitOpen.message": "The model gateway is temporarily unavailable.",
-  "error.circuitOpen.remediation": "Retrying automatically. Wait, or switch model.",
+  "error.circuitOpen.remediation":
+    "The gateway recovers on its own. Retry in a moment, or switch model.",
   "chat.error.memoryUpdate": "Unable to update memory.",
   "chat.grounding.label": "Grounding",
   "chat.grounding.mode": "Grounding mode",
