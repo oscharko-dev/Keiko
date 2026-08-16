@@ -116,8 +116,46 @@ function copyStringLiteralVerbatim(source, start, out) {
   return { out: result, next: i };
 }
 
+// KEIKO-0277 (review-follow-up): a control retained only inside a `#if 0 ... #endif` block
+// never compiles, but the byte scanner used to copy those bytes verbatim, so a deleted fd-close
+// whose old form was wrapped in `#if 0` still satisfied `assert.match`. This pre-pass strips
+// definitely-inactive preprocessor regions before the comment/literal scan runs. Nested
+// `#if`/`#ifdef`/`#ifndef` are counted so `#if 0 ... #if X ... #endif ... #endif` closes the
+// outer block on the OUTER `#endif`, not the inner one. On `#else` at the outer `#if 0`'s depth
+// stripping stops — the else branch IS the live code. Non-literal `#if <expr>` and general
+// preprocessor constants are intentionally out of scope: this is not a preprocessor, it targets
+// the specific "disabled code" marker (`#if 0`) that hides tokens from the compiler.
+function stripDisabledPreprocessorBranches(source) {
+  const OPEN_IF = /^#\s*(?:if|ifdef|ifndef)\b/u;
+  const CLOSE_ENDIF = /^#\s*endif\b/u;
+  const ELSE_DIRECTIVE = /^#\s*else\b/u;
+  const DISABLED_IF = /^#\s*if\s+0\b/u;
+  const lines = source.split("\n");
+  const kept = [];
+  let stripping = false;
+  let depth = 0;
+  for (const line of lines) {
+    const trimmed = line.trimStart();
+    if (stripping) {
+      if (OPEN_IF.test(trimmed)) depth += 1;
+      else if (CLOSE_ENDIF.test(trimmed)) {
+        if (depth === 0) stripping = false;
+        else depth -= 1;
+      } else if (depth === 0 && ELSE_DIRECTIVE.test(trimmed)) stripping = false;
+      continue;
+    }
+    if (DISABLED_IF.test(trimmed)) {
+      stripping = true;
+      depth = 0;
+      continue;
+    }
+    kept.push(line);
+  }
+  return kept.join("\n");
+}
+
 function stripCCommentsPreservingLiterals(rawSource) {
-  const source = rawSource.replace(/\\\r?\n/gu, "");
+  const source = stripDisabledPreprocessorBranches(rawSource).replace(/\\\r?\n/gu, "");
   let out = "";
   let i = 0;
   while (i < source.length) {
@@ -197,6 +235,41 @@ assert.throws(
     ),
   /unterminated C block comment/u,
   "stripCCommentsPreservingLiterals must throw on an unterminated /* ... */",
+);
+
+// KEIKO-0277 (review-follow-up): `#if 0 ... #endif` blocks must be stripped before the byte
+// scan. Test on a synthetic fixture so `#if 0` appears at line start (C preprocessor requires
+// directives to be first on the line; the real source's fd-close call is prefixed with `(void)`
+// which would prevent line-start recognition if we tried to wrap it in place). Nesting covered
+// too: a `#if 0 { #if 1 { X } #endif } #endif` must fully strip X, and code after the outer
+// `#endif` must survive.
+const disabledIfSample =
+  "int keep_before(void) { return 1; }\n" +
+  "#if 0\nposix_spawn_file_actions_addclose(&actions, 3);\n#endif\n" +
+  "int keep_after(void) { return 2; }\n";
+const disabledIfStripped = stripCCommentsPreservingLiterals(disabledIfSample);
+assert.equal(
+  disabledIfStripped.match(/posix_spawn_file_actions_addclose\(&actions, 3\)/u),
+  null,
+  "stripCCommentsPreservingLiterals must strip tokens inside `#if 0 ... #endif`",
+);
+assert.ok(
+  disabledIfStripped.includes("keep_before") && disabledIfStripped.includes("keep_after"),
+  "code before/after the outer `#if 0 ... #endif` must survive the strip",
+);
+const nestedIfSample =
+  "int keep(void) { return 0; }\n" +
+  "#if 0\n#if 1\nSHOULD_BE_STRIPPED();\n#endif\n#endif\n" +
+  "int live(void) { return 1; }\n";
+const nestedIfStripped = stripCCommentsPreservingLiterals(nestedIfSample);
+assert.equal(
+  nestedIfStripped.match(/SHOULD_BE_STRIPPED/u),
+  null,
+  "stripCCommentsPreservingLiterals must count nested `#if` inside a `#if 0` block",
+);
+assert.ok(
+  nestedIfStripped.includes("keep") && nestedIfStripped.includes("live"),
+  "code before/after the outer `#if 0 ... #endif` (with nesting) must survive the strip",
 );
 
 // KEIKO-0277: Windows-sibling two-mode shape. `--helper <path>` qualifies an exact staged binary

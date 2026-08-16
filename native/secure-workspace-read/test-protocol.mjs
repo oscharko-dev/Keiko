@@ -287,6 +287,43 @@ function preprocessCLineSplices(source) {
   return source.replace(/\\\r?\n/gu, "");
 }
 
+// KEIKO-0417 (review-follow-up): a control retained only inside a `#if 0 ... #endif` block
+// never compiles, but the byte scanner used to copy those bytes verbatim, so a deleted control
+// whose old form was wrapped in `#if 0` still satisfied the source-contract regexes. This
+// pre-pass strips definitely-inactive preprocessor regions. Nested `#if`/`#ifdef`/`#ifndef`
+// are counted so `#if 0 ... #if X ... #endif ... #endif` closes on the OUTER `#endif`. On
+// `#else` at the outer `#if 0`'s depth stripping stops — the else branch IS the live code.
+// Non-literal `#if <expr>` is intentionally out of scope: this is not a preprocessor, it
+// targets the specific "disabled code" marker that hides tokens from the compiler.
+function stripDisabledPreprocessorBranches(source) {
+  const OPEN_IF = /^#\s*(?:if|ifdef|ifndef)\b/u;
+  const CLOSE_ENDIF = /^#\s*endif\b/u;
+  const ELSE_DIRECTIVE = /^#\s*else\b/u;
+  const DISABLED_IF = /^#\s*if\s+0\b/u;
+  const lines = source.split("\n");
+  const kept = [];
+  let stripping = false;
+  let depth = 0;
+  for (const line of lines) {
+    const trimmed = line.trimStart();
+    if (stripping) {
+      if (OPEN_IF.test(trimmed)) depth += 1;
+      else if (CLOSE_ENDIF.test(trimmed)) {
+        if (depth === 0) stripping = false;
+        else depth -= 1;
+      } else if (depth === 0 && ELSE_DIRECTIVE.test(trimmed)) stripping = false;
+      continue;
+    }
+    if (DISABLED_IF.test(trimmed)) {
+      stripping = true;
+      depth = 0;
+      continue;
+    }
+    kept.push(line);
+  }
+  return kept.join("\n");
+}
+
 // Skip a C string literal starting at the opening `"` (index i). Returns the index of the byte
 // AFTER the closing `"` (or the end of source on unterminated input).
 function skipStringLiteral(source, start) {
@@ -313,7 +350,7 @@ function skipStringLiteral(source, start) {
 //     exactly the regression the comment-stripping fix exists to prevent. This mode closes that
 //     hole while still letting the assertion observe the string literal.
 function scanCSource(rawSource, { stripStringLiterals }) {
-  const source = preprocessCLineSplices(rawSource);
+  const source = preprocessCLineSplices(stripDisabledPreprocessorBranches(rawSource));
   let out = "";
   let i = 0;
   while (i < source.length) {
@@ -452,6 +489,39 @@ function assertCommentStrippingIsLoadBearing(rawSource) {
     () => stripCommentsOnly("// prefix\n/* unclosed"),
     /unterminated C block comment/u,
     "stripCommentsOnly must throw on an unterminated /* ... */",
+  );
+  assertDisabledPreprocessorBranchesAreStripped();
+}
+
+// KEIKO-0417 (review-follow-up): a control retained only inside `#if 0 ... #endif` never
+// compiles. The pre-pass strips those regions before comment/literal scanning so a deleted
+// control wrapped in `#if 0` no longer satisfies the source-contract regexes. Nested
+// `#if X ... #endif` inside the disabled block must count toward the balance; code after
+// the outer `#endif` must survive.
+function assertDisabledPreprocessorBranchesAreStripped() {
+  const disabledIf = stripCommentsAndStrings(
+    "int keep_before(void) { return 1; }\n" +
+      "#if 0\nCreateFileW(bogus);\n#endif\n" +
+      "int keep_after(void) { return 2; }\n",
+  );
+  assert.equal(
+    disabledIf.match(/CreateFileW/u),
+    null,
+    "scanCSource must strip tokens inside `#if 0 ... #endif`",
+  );
+  const nestedIf = stripCommentsAndStrings(
+    "int keep(void) { return 0; }\n" +
+      "#if 0\n#if 1\nSHOULD_BE_STRIPPED();\n#endif\n#endif\n" +
+      "int live(void) { return 1; }\n",
+  );
+  assert.equal(
+    nestedIf.match(/SHOULD_BE_STRIPPED/u),
+    null,
+    "scanCSource must count nested `#if` inside a `#if 0` block",
+  );
+  assert.ok(
+    nestedIf.includes("keep") && nestedIf.includes("live"),
+    "code before/after the outer `#if 0 ... #endif` must survive the strip",
   );
 }
 
