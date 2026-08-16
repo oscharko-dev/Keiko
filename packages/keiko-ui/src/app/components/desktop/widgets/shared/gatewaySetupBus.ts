@@ -26,6 +26,13 @@ export const GATEWAY_SETUP_REQUEST_EVENT = "keiko:gateway-setup-request";
  */
 export const GATEWAY_CONFIG_UPDATED_EVENT = "keiko:gateway-config-updated";
 
+/**
+ * Announced after the server records a model readiness result. Unlike a configuration update, this
+ * refreshes model-catalog projections without invalidating Settings evidence about the current
+ * configuration generation.
+ */
+export const GATEWAY_MODEL_READINESS_UPDATED_EVENT = "keiko:gateway-model-readiness-updated";
+
 let pending = false;
 
 /**
@@ -57,4 +64,9 @@ export function consumePendingGatewaySetup(): boolean {
 export function notifyGatewayConfigUpdated(): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(GATEWAY_CONFIG_UPDATED_EVENT));
+}
+
+export function notifyGatewayModelReadinessUpdated(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(GATEWAY_MODEL_READINESS_UPDATED_EVENT));
 }

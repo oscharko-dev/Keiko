@@ -49,7 +49,10 @@ import {
   loadMemoryAutonomyMode,
   rejectMemoryProposal,
 } from "@/lib/memory-api";
-import { GATEWAY_CONFIG_UPDATED_EVENT } from "../widgets/shared/gatewaySetupBus";
+import {
+  GATEWAY_CONFIG_UPDATED_EVENT,
+  GATEWAY_MODEL_READINESS_UPDATED_EVENT,
+} from "../widgets/shared/gatewaySetupBus";
 import { sortProjects } from "@/lib/sidebar-sort";
 import {
   classifyRunReport,
@@ -1529,12 +1532,14 @@ function subscribeGatewayModelRefresh(
 ): () => void {
   if (gatewayModelRefreshSubscribers.size === 0) {
     window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
+    window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, refreshGatewayModels);
   }
   gatewayModelRefreshSubscribers.add(subscriber);
   return (): void => {
     gatewayModelRefreshSubscribers.delete(subscriber);
     if (gatewayModelRefreshSubscribers.size === 0) {
       window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
+      window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, refreshGatewayModels);
     }
   };
 }

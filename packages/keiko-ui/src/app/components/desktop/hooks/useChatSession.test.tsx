@@ -47,7 +47,10 @@ import {
   clearCanonicalVoiceHasherForTests,
   prepareCanonicalVoiceHasher,
 } from "./canonical-voice-hasher";
-import { notifyGatewayConfigUpdated } from "../widgets/shared/gatewaySetupBus";
+import {
+  notifyGatewayConfigUpdated,
+  notifyGatewayModelReadinessUpdated,
+} from "../widgets/shared/gatewaySetupBus";
 
 beforeAll(async () => {
   await prepareCanonicalVoiceHasher();
@@ -718,6 +721,32 @@ describe("useChatSession bootstrap", () => {
     await waitFor(() =>
       expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-after"]),
     );
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes conversation-ready models after a same-page readiness result", async () => {
+    vi.mocked(fetchModels)
+      .mockResolvedValueOnce({
+        models: [model({ id: "chat-live", conversationReady: false })],
+      })
+      .mockResolvedValueOnce({ models: [model({ id: "chat-live", conversationReady: true })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.configuredModelsAvailable).toBe(true);
+    expect(result.current.models).toEqual([]);
+
+    act(() => {
+      notifyGatewayModelReadinessUpdated();
+    });
+
+    await waitFor(() =>
+      expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-live"]),
+    );
+    expect(result.current.configuredModelsAvailable).toBe(true);
+    expect(resetModelRequestCache).toHaveBeenCalledOnce();
     expect(fetchModels).toHaveBeenCalledTimes(2);
   });
 
