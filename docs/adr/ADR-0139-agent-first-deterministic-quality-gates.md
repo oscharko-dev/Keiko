@@ -154,6 +154,12 @@ baseline. Requiring both commits to have an identical lockfile would deadlock th
 change after a baseline was pinned; substituting either lockfile into the other checkout would no
 longer measure an exact commit. Both failure modes are therefore rejected.
 
+The pinned baseline is identified by exact commit and by the source-tree and lockfile digests the
+evidence independently re-derives; it does not need to be a Git ancestor of the candidate. This keeps
+the same D12 reference usable after squash-only integrations without weakening the trust boundary:
+the producer still refuses a dirty baseline checkout, a baseline checkout at any commit other than
+the pin, or a document whose pinned-baseline digest no longer matches the checked-out baseline.
+
 ### D10 — The pull-request lane checks evidence integrity; the regeneration lane owns source freshness
 
 D2 narrowed the performance subject; in practice the subject still spans surfaces broad enough

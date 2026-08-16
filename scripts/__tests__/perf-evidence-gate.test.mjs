@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  D12_PINNED_BASELINE_SOURCE_TREE_SHA256,
   evaluateGateTarget,
   executePerfEvidenceCli,
   freshnessOptionsFor,
@@ -87,6 +88,7 @@ describe("freshness options", () => {
     expect(options.toolchainTouched).toBe(true);
     expect(options.enforceSourceFreshness).toBe(false);
     expect(options.dirtySubjectPaths).toEqual([]);
+    expect(options.computeBaselineSourceTreeSha256()).toBe(D12_PINNED_BASELINE_SOURCE_TREE_SHA256);
     if (previous !== undefined) process.env.KEIKO_PERF_EVIDENCE_BASE_REF = previous;
   });
 
