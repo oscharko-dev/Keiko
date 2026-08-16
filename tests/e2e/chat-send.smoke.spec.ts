@@ -45,6 +45,23 @@ async function ensureProject(request: APIRequestContext, projectPath: string): P
   }
 }
 
+async function runVisibleReadiness(page: Page, request: APIRequestContext): Promise<void> {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  const settings = page.getByRole("region", { name: /^Settings/u });
+  await settings.getByRole("button", { name: "Run readiness check" }).click();
+  await expect(settings.getByText("Working today", { exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
+
+  const catalog = await request.get("/api/models");
+  expect(catalog.status(), await catalog.text().catch(() => "")).toBe(200);
+  const body = (await catalog.json()) as {
+    readonly models: readonly { readonly id: string; readonly conversationReady: boolean }[];
+  };
+  expect(body.models.find((model) => model.id === CHAT_MODEL_ID)?.conversationReady).toBe(true);
+}
+
 async function createChat(
   request: APIRequestContext,
 ): Promise<{ chat: ChatResponse["chat"]; projectPath: string }> {
@@ -94,6 +111,7 @@ test("sends a chat message and streams a persisted assistant reply @smoke", asyn
   page,
   request,
 }) => {
+  await runVisibleReadiness(page, request);
   const { chat, projectPath } = await createChat(request);
   await seedChatWindow(page, chat);
 

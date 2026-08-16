@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import {
+  handleCreateDesktopChat,
   handleSendDesktopChat,
   parseClientTurnId,
   parseExpectedGroundingScopeIdentity,
@@ -122,6 +123,12 @@ function configureBreakerGateway(deps: UiHandlerDeps): void {
     }),
     true,
   );
+  runtimeConfig.recordVerifiedCapability(
+    "breaker-chat",
+    { conversationReady: true },
+    "2026-08-16T00:00:00.000Z",
+    runtimeConfig.generation(),
+  );
 }
 
 async function createGatewayBreakerFixture(): Promise<GatewayBreakerFixture> {
@@ -174,6 +181,49 @@ async function sendBreakerChat(
 }
 
 describe("desktop chat production gateway reuse", () => {
+  it("rejects an unready configured model before provider fetch", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    try {
+      fixture.deps.gatewayConfig?.clearVerifiedCapability("breaker-chat");
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const createRejected = await handleCreateDesktopChat(
+        requestContext({
+          modelId: "breaker-chat",
+          projectPath: fixture.projectPath,
+          title: "must not be created",
+        }),
+        fixture.deps,
+      );
+      const rejected = await sendBreakerChat(fixture, "must not leave the server");
+
+      expect(createRejected).toEqual({
+        status: 400,
+        body: {
+          error: {
+            code: "BAD_REQUEST",
+            message: "The selected model is not ready for conversations.",
+          },
+        },
+      });
+      expect(rejected).toEqual({
+        status: 400,
+        body: {
+          error: {
+            code: "BAD_REQUEST",
+            message: "The selected model is not ready for conversations.",
+          },
+        },
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(JSON.stringify(rejected.body)).not.toContain("must not leave the server");
+    } finally {
+      vi.unstubAllGlobals();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
   it("opens one shared breaker across separate route requests", async () => {
     const fixture = await createGatewayBreakerFixture();
     try {

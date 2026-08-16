@@ -547,15 +547,15 @@ async function probeChat(
     if (!response.ok) {
       return result("chat", "failed", start, unsuccessfulEvidence("Basic chat", response));
     }
-    const text = assistantText(await readProviderJson(response)).toLowerCase();
-    const passed = text.includes("ok");
+    const message = firstMessage(await readProviderJson(response));
+    const passed = message !== undefined && typeof message.content === "string";
     return result(
       "chat",
       passed ? "passed" : "failed",
       start,
       passed
-        ? "Working today: basic chat returned the expected readiness token."
-        : "Basic chat answered, but did not return the expected readiness token.",
+        ? "Working today: basic chat returned a valid assistant response."
+        : "Basic chat did not return a valid assistant response.",
     );
   } catch (probeError) {
     return probeFailure(
@@ -1151,6 +1151,7 @@ function verifiedCapabilityObservation(
   probes: readonly GatewayReadinessProbeResult[],
 ): VerifiedModelCapabilityFields {
   const values = [
+    ["conversationReady", categoricalProbeValue(probes, "chat")],
     ["streaming", categoricalProbeValue(probes, "streaming")],
     ["toolCalling", categoricalProbeValue(probes, "tool_calling")],
     ["structuredOutput", categoricalProbeValue(probes, "json_schema")],
@@ -1175,9 +1176,19 @@ function recordReadinessObservation(
   }
   const observation = verifiedCapabilityObservation(report.probes);
   if (Object.keys(observation).length === 0) return;
+  const previous = deps.gatewayConfig?.verifiedCapability(report.modelId);
+  const onlyConversationReadiness = Object.keys(observation).every(
+    (field) => field === "conversationReady",
+  );
+  const fields =
+    onlyConversationReadiness &&
+    previous !== undefined &&
+    previous.generation === observedGeneration
+      ? { ...previous.fields, ...observation }
+      : observation;
   deps.gatewayConfig?.recordVerifiedCapability(
     report.modelId,
-    observation,
+    fields,
     report.checkedAt,
     observedGeneration,
   );

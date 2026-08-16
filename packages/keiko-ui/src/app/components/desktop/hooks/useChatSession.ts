@@ -655,7 +655,11 @@ export function notifyChatDeleted(chatId: string): void {
 // available. Callers must NOT fall back to a placeholder id — downstream
 // surfaces branch on undefined to show a clear "no model" error (AC #1 / #4).
 export function pickChatModelId(models: readonly ModelCapability[]): string | undefined {
-  return models.find(isConversationEligibleModel)?.id;
+  return models.find(isConversationReadyModel)?.id;
+}
+
+function isConversationReadyModel(model: ModelCapability): boolean {
+  return isConversationEligibleModel(model) && model.conversationReady === true;
 }
 
 // Reopened chats can persist a model id that is no longer present in the
@@ -667,7 +671,7 @@ export function resolveSelectedModelId(
 ): string | undefined {
   if (
     current !== undefined &&
-    models.some((model) => model.id === current && isConversationEligibleModel(model))
+    models.some((model) => model.id === current && isConversationReadyModel(model))
   ) {
     return current;
   }
@@ -1323,6 +1327,8 @@ export interface UseChatSessionResult {
   // so token deltas do not rewrite or scan the full conversation history.
   readonly streamingAssistantMessage?: ChatMessage | undefined;
   models: ModelCapability[];
+  /** True when the server catalog contains configured models, even if none is conversation-ready. */
+  readonly configuredModelsAvailable?: boolean | undefined;
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
   // undefined when no conversation-eligible model is configured (AC #1 / #4).
@@ -1418,6 +1424,7 @@ interface SessionState {
   chats: Chat[];
   messages: ChatMessage[];
   models: ModelCapability[];
+  configuredModelsAvailable: boolean;
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
   selectedModel: string | undefined;
@@ -1463,6 +1470,7 @@ const INITIAL_STATE: SessionState = {
   chats: [],
   messages: [],
   models: [],
+  configuredModelsAvailable: false,
   activeProject: undefined,
   activeChat: undefined,
   selectedModel: undefined,
@@ -1828,7 +1836,8 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   const modelPayload = await fetchModels();
   // Issue #144: source of truth is the helper, not an inline kind check. Pin
   // ACs #1 / #2 — only chat-eligible models reach the conversation dropdown.
-  const chatModels = modelPayload.models.filter(isConversationEligibleModel);
+  const chatModels = modelPayload.models.filter(isConversationReadyModel);
+  const configuredModelsAvailable = modelPayload.models.length > 0;
   const defaultModel = pickChatModelId(chatModels);
 
   const projectPayload = await fetchProjects();
@@ -1844,6 +1853,7 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
     const selectedModel = resolveSelectedModelId(latestChat.selectedModel, chatModels);
     return {
       models: chatModels,
+      configuredModelsAvailable,
       selectedModel,
       projects: Array.from(projects),
       activeProject: project,
@@ -1861,6 +1871,7 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   if (defaultModel === undefined || !autoCreate) {
     return {
       models: chatModels,
+      configuredModelsAvailable,
       selectedModel: defaultModel,
       projects: Array.from(projects),
       activeProject: project,
@@ -1878,6 +1889,7 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   notifyChatUpsert(created.chat);
   return {
     models: chatModels,
+    configuredModelsAvailable,
     selectedModel: created.chat.selectedModel,
     projects: Array.from(created.projects),
     activeProject: created.project,
@@ -1919,10 +1931,11 @@ function refreshSessionModels(
   previous: SessionState,
   capabilities: readonly ModelCapability[],
 ): SessionState {
-  const models = capabilities.filter(isConversationEligibleModel);
+  const models = capabilities.filter(isConversationReadyModel);
   return {
     ...previous,
     models,
+    configuredModelsAvailable: capabilities.length > 0,
     selectedModel: resolveSelectedModelId(previous.selectedModel, models),
   };
 }
@@ -2927,6 +2940,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           chats: sortChats(created.chats),
           messages: Array.from(created.messages),
           models: state.models,
+          configuredModelsAvailable: state.configuredModelsAvailable,
           activeProject: created.project,
           activeChat: created.chat,
           selectedModel: created.chat.selectedModel,
@@ -2937,7 +2951,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return undefined;
       }
     },
-    [resetComposerForConversationSwitch, state.selectedModel, state.activeProject, state.models],
+    [
+      resetComposerForConversationSwitch,
+      state.selectedModel,
+      state.activeProject,
+      state.models,
+      state.configuredModelsAvailable,
+    ],
   );
 
   const openProject = useCallback(
@@ -4196,6 +4216,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       messages: state.messages,
       streamingAssistantMessage,
       models: state.models,
+      configuredModelsAvailable: state.configuredModelsAvailable,
       activeProject: state.activeProject,
       activeChat: state.activeChat,
       selectedModel: state.selectedModel,
@@ -4249,6 +4270,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.messages,
       streamingAssistantMessage,
       state.models,
+      state.configuredModelsAvailable,
       state.activeProject,
       state.activeChat,
       state.selectedModel,
