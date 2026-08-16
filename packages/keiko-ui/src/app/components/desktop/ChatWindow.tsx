@@ -45,6 +45,7 @@ import { GroundedAnswer } from "./GroundedAnswer";
 import { ContextStatusPanel } from "./ContextStatusPanel";
 import { Icons } from "./Icons";
 import KeikoSelect from "./KeikoSelect";
+import { requestGatewayModelCatalogRefresh } from "./widgets/shared/gatewaySetupBus";
 import {
   NATIVE_BLOCK_STYLE,
   NATIVE_LIST_KEEP_PADDING_STYLE,
@@ -2095,6 +2096,9 @@ function ComposerContextControls({
           menuClassName="cmp-model-menu"
           menuMinWidth={controlsNarrow ? 118 : 280}
           mono
+          onOpen={() => {
+            requestGatewayModelCatalogRefresh();
+          }}
           sections={[
             {
               options: composerModelOptions(loading, noEligibleModels, models, t),

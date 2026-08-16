@@ -625,8 +625,13 @@ function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
       const list = ws ?? [];
       const existing = list.find((w) => w.type === type);
       if (existing?.minimized === true) {
+        const maxZ = list.reduce(
+          (best, window) => Math.max(best, window.z),
+          Number.NEGATIVE_INFINITY,
+        );
+        zc.current = Math.max(zc.current + 1, maxZ + 1);
         return list.map((w) =>
-          w.id === existing.id ? { ...w, minimized: false, z: ++zc.current } : w,
+          w.id === existing.id ? { ...w, minimized: false, z: zc.current } : w,
         );
       }
       if (existing !== undefined) {

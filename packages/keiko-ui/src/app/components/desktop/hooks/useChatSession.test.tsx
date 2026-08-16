@@ -49,6 +49,7 @@ import {
 } from "./canonical-voice-hasher";
 import {
   notifyGatewayConfigUpdated,
+  requestGatewayModelCatalogRefresh,
   notifyGatewayModelReadinessUpdated,
 } from "../widgets/shared/gatewaySetupBus";
 
@@ -748,6 +749,35 @@ describe("useChatSession bootstrap", () => {
     expect(result.current.configuredModelsAvailable).toBe(true);
     expect(resetModelRequestCache).toHaveBeenCalledOnce();
     expect(fetchModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes the eligible model catalog without emitting a configuration replacement", async () => {
+    vi.mocked(fetchModels)
+      .mockResolvedValueOnce({ models: [model({ id: "chat-before" })] })
+      .mockResolvedValueOnce({ models: [model({ id: "chat-after" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    const onConfigUpdated = vi.fn();
+    window.addEventListener("keiko:gateway-config-updated", onConfigUpdated);
+    try {
+      const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+      await waitFor(() =>
+        expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-before"]),
+      );
+
+      act(() => {
+        requestGatewayModelCatalogRefresh();
+      });
+
+      await waitFor(() =>
+        expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-after"]),
+      );
+      expect(resetModelRequestCache).toHaveBeenCalledOnce();
+      expect(fetchModels).toHaveBeenCalledTimes(2);
+      expect(onConfigUpdated).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keiko:gateway-config-updated", onConfigUpdated);
+    }
   });
 
   it("shares one gateway model refresh across concurrent chat sessions", async () => {
