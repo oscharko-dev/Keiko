@@ -57,6 +57,7 @@ async function mockModelList(page: Page): Promise<void> {
 
 async function openChatModelDropdown(page: Page): Promise<void> {
   await page.goto("/");
+  await runVisibleReadiness(page);
   await page.getByRole("button", { name: "New chat" }).click();
   await page
     .getByRole("dialog", { name: "New Chat window" })
@@ -81,8 +82,8 @@ async function createFreshChatWindow(page: Page): Promise<void> {
 async function runVisibleReadiness(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Settings" }).click();
   const settings = page.getByRole("region", { name: /^Settings/u });
-  await settings.getByRole("button", { name: "Run readiness check" }).click();
-  await expect(settings.getByText("Working today", { exact: true })).toBeVisible({
+  await settings.getByRole("button", { name: "Run readiness check" }).first().click();
+  await expect(settings.getByText("Working today", { exact: true }).first()).toBeVisible({
     timeout: 30_000,
   });
   await settings.getByRole("button", { name: "Close Settings window" }).click();
