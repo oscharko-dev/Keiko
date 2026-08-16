@@ -38,6 +38,7 @@ import {
   createRuntimeProcessSupervisor,
   type RuntimeProcessSupervisor,
 } from "./runtimeProcessSupervisor.js";
+import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
 
 /**
  * Functional-evidence stand-in for a platform-qualified portable OpenCode runtime. It is reachable
@@ -362,7 +363,10 @@ function assertOpenCodeRun(run: ProductionRuntimeBackendInput): void {
     run.context.runtimeSource !== "keiko-sidecar" ||
     run.context.modelProfile.source !== "keiko-model-gateway"
   ) {
-    throw new Error("opencode-backend-profile-mismatch");
+    // Structured, not a bare Error: this is exactly the manager's `adapter-profile-mismatch`, and
+    // throwing it typed lets the orchestrator report the real cause instead of collapsing every
+    // launch rejection into one generic code (KEIKO-0150).
+    throw new CodingRuntimeLaunchRejectedError("adapter-profile-mismatch");
   }
 }
 

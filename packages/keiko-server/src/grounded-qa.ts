@@ -94,6 +94,7 @@ import {
   buildLocalKnowledgeScopes,
   runHybridGroundedAsk,
   type ConnectorRetrieve,
+  type EntailmentStageFactory,
   type FolderRetriever,
   type HybridAnswerer,
 } from "./grounded-qa-hybrid.js";
@@ -1462,6 +1463,8 @@ function resolveGroundedRunner(
 export interface MultiSourceSeam {
   readonly retriever: GroundedRetriever;
   readonly answerer: MultiSourceAnswerer;
+  /** Test-only: hand the entailment stage in instead of building one from `deps` (KEIKO-0237). */
+  readonly entailmentStageFactory?: EntailmentStageFactory;
 }
 
 function resolveMultiSourceSeam(
@@ -1523,6 +1526,9 @@ async function dispatchMultiSourceAsk(
     retriever: seam.retriever,
     answerer: seam.answerer,
     signal,
+    ...(seam.entailmentStageFactory !== undefined
+      ? { entailmentStageFactory: seam.entailmentStageFactory }
+      : {}),
     preSkipped: skippedFolders.map((s) => ({ label: s.label, message: s.message })),
   });
 }
@@ -1624,18 +1630,24 @@ export interface HybridSeam {
   readonly folderRetriever?: FolderRetriever;
   readonly connectorRetrieve?: ConnectorRetrieve;
   readonly answer?: HybridAnswerer;
+  /** Test-only: hand the entailment stage in instead of building one from `deps` (KEIKO-0237). */
+  readonly entailmentStageFactory?: EntailmentStageFactory;
 }
 
 function hybridSeamFields(seam: HybridSeam | undefined): Partial<{
   folderRetriever: FolderRetriever;
   connectorRetrieve: ConnectorRetrieve;
   answer: HybridAnswerer;
+  entailmentStageFactory: EntailmentStageFactory;
 }> {
   if (seam === undefined) return {};
   return {
     ...(seam.folderRetriever !== undefined ? { folderRetriever: seam.folderRetriever } : {}),
     ...(seam.connectorRetrieve !== undefined ? { connectorRetrieve: seam.connectorRetrieve } : {}),
     ...(seam.answer !== undefined ? { answer: seam.answer } : {}),
+    ...(seam.entailmentStageFactory !== undefined
+      ? { entailmentStageFactory: seam.entailmentStageFactory }
+      : {}),
   };
 }
 

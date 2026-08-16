@@ -35,7 +35,20 @@ import {
   REALTIME_AUTH_MODES,
   VOICE_PROVIDER_LOCALITIES,
 } from "@oscharko-dev/keiko-model-gateway";
-import { gatewayFetch, readJsonCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
+import {
+  GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
+  validateGatewaySetupAuditRecord,
+} from "@oscharko-dev/keiko-contracts";
+import type {
+  GatewaySetupAuditRecord,
+  GatewaySetupOutcomeKind,
+  GatewaySetupTargetClass,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  classifyOutboundHost,
+  gatewayFetch,
+  readJsonCapped,
+} from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type {
   EnvSource,
   GatewayConfig,
@@ -3893,6 +3906,10 @@ function readSetupRequest(
   });
 }
 
+function bodyFreeAuditStoreFailure(): string {
+  return "Gateway setup audit could not be persisted.";
+}
+
 function bodyFreeVerificationFailure(): string {
   // Provider exceptions are outside Keiko's trust boundary and may embed response bodies, request
   // fragments, endpoints, or customer content. Secret-string replacement cannot make such an
@@ -4442,6 +4459,103 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
   };
 }
 
+// KEIKO-0497 (#2901): configuring the gateway points the product at an outbound endpoint and can
+// enable the private-network override, and until now that act left no evidence — the route returned
+// 200 and wrote nothing an operator could audit afterwards. Both success paths now emit exactly one
+// content-free record.
+//
+// The base URL is deliberately NOT recorded, only its host classification: the evidence must answer
+// "did setup ever target a metadata or private-network address, and was the override on?" without
+// itself becoming a store of endpoints. `classifyOutboundHost` returns nothing for a name that is
+// not a literal IP, which is the ordinary public case, so an unclassified host records as `public`
+// rather than dropping the record — a successful setup must never be missing from the trail.
+export function gatewaySetupTargetClass(baseUrl: string): GatewaySetupTargetClass {
+  let hostname: string;
+  try {
+    hostname = new URL(baseUrl).hostname;
+  } catch {
+    // An unparseable base URL cannot reach a real host, but the setup still completed; record it
+    // under the safest classification rather than losing the event.
+    return "public";
+  }
+  // Strip a trailing FQDN dot: "localhost." resolves to loopback but classifyOutboundHost's
+  // literal-string equality otherwise misses it, and the same applies to a dotted IPv4 literal
+  // like "127.0.0.1." (Codex #3201). The trailing dot is a DNS root marker, not part of the
+  // resolvable host identity.
+  const normalized = hostname.endsWith(".") ? hostname.slice(0, -1) : hostname;
+  // Non-literal names ("internal.example", "example.com") still record as `public`: this
+  // classifier deliberately does NOT DNS-resolve the host — that would add a synchronous DNS
+  // round-trip to the success path and duplicate the check gatewayFetch already runs against
+  // the resolved address inside its egress policy. The record's `targetClass` documents the
+  // classification of the submitted URL as a literal address; a hostname-only entry records
+  // "was not a literal private/loopback/metadata address at submission time", not
+  // "attests to a public destination". Operators reading a name-based `public` should
+  // cross-reference the egress-policy diagnostics for the resolved-address vetting.
+  return classifyOutboundHost(normalized) ?? "public";
+}
+
+function recordGatewaySetupAudit(
+  deps: UiHandlerDeps,
+  request: SetupRequest,
+  config: GatewayConfig,
+  outcome: GatewaySetupOutcomeKind,
+): void {
+  const record: GatewaySetupAuditRecord = {
+    schemaVersion: GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
+    outcome,
+    timestamp: new Date().toISOString(),
+    correlationId: request.correlationId ?? randomUUID(),
+    targetClass: gatewaySetupTargetClass(request.baseUrl),
+    // Any active outbound-egress override counts, not just the private-network one: a
+    // link-local/metadata override under KEIKO_ALLOW_LINK_LOCAL_GATEWAY is exactly the more
+    // sensitive case an operator needs to see (KEIKO-0497 review, Codex).
+    privateNetworkOverrideActive:
+      config.egress?.allowPrivateNetwork === true ||
+      config.egress?.allowLinkLocalAndMetadata === true,
+    providerCount: config.providers.length,
+  };
+  const validation = validateGatewaySetupAuditRecord(record);
+  if (!validation.ok) {
+    // Never a silent drop: a record this side built and cannot validate is a defect in this code,
+    // and swallowing it would leave the same evidence gap the record exists to close. The reason is
+    // a fixed validator string naming a field — it carries no value from the record.
+    emitServerDiagnostic(deps.diagnostics, {
+      correlationId: record.correlationId,
+      timestamp: record.timestamp,
+      operation: "POST /api/gateway/setup",
+      source: "gateway-setup.audit",
+      errorClass: "GatewaySetupAuditInvalid",
+      message: `Gateway setup audit record failed validation: ${validation.reason}`,
+      code: "GATEWAY_SETUP_AUDIT_INVALID",
+    });
+    return;
+  }
+  // KEIKO-0497 review (Codex): the setup response has already been decided by the time this
+  // runs — the gateway is persisted and activated. A failing evidenceStore.put must NOT escape
+  // to the outer catch, or verifyAndSaveGatewaySetup would treat a full/read-only evidence
+  // directory as a provider failure and hand the caller a 502 for a gateway that is already
+  // live. Absorbed and surfaced as its own diagnostic (never body-free-swallowed).
+  try {
+    deps.evidenceStore.put(`gateway-setup-${randomUUID()}`, JSON.stringify(record));
+  } catch (error) {
+    // Body-free by construction (KEIKO-0497 review, Codex P1): a failing evidence store can throw
+    // Errors whose message carries the absolute evidence path, injected store text, or PII —
+    // interpolating error.message into a diagnostic would leak all of that. serverDiagnosticFromError
+    // classifies the error content-free; the summary is a fixed allowlisted string, never derived
+    // from the error.
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: record.correlationId,
+        operation: "POST /api/gateway/setup",
+        source: "gateway-setup.audit",
+        error,
+        redact: bodyFreeAuditStoreFailure,
+      }),
+    );
+  }
+}
+
 function setupSuccessResult(
   config: GatewayConfig,
   testedModelIds: readonly string[],
@@ -4657,6 +4771,25 @@ function gatewayUnavailableResult(): RouteResult {
   };
 }
 
+function finalizeVerifiedCandidate(
+  verified: VerifiedSetup,
+  current: GatewayConfig | undefined,
+  deps: UiHandlerDeps,
+  gatewayConfig: RuntimeGatewayConfig,
+  request: SetupRequest,
+): RouteResult {
+  persistGatewayConfig(
+    current === undefined
+      ? verified.rawConfig
+      : withDiskGatewayEgress(verified.rawConfig, gatewayConfig.storagePath, deps),
+    gatewayConfig.storagePath,
+    deps,
+  );
+  gatewayConfig.set(verified.config, true);
+  recordGatewaySetupAudit(deps, request, verified.config, "candidate-accepted");
+  return setupSuccessResult(verified.config, verified.testedModelIds, verified.skippedModelIds);
+}
+
 async function trySetupCandidate(
   baseUrl: string,
   request: SetupRequest,
@@ -4697,15 +4830,7 @@ async function trySetupCandidate(
   });
   const workflowEligibilityError = validateWorkflowEligibleModelIds(request, verified.config);
   if (workflowEligibilityError !== undefined) return workflowEligibilityError;
-  persistGatewayConfig(
-    current === undefined
-      ? verified.rawConfig
-      : withDiskGatewayEgress(verified.rawConfig, gatewayConfig.storagePath, deps),
-    gatewayConfig.storagePath,
-    deps,
-  );
-  gatewayConfig.set(verified.config, true);
-  return setupSuccessResult(verified.config, verified.testedModelIds, verified.skippedModelIds);
+  return finalizeVerifiedCandidate(verified, current, deps, gatewayConfig, request);
 }
 
 // The runtime aggregate in `current.egress` can carry ENVIRONMENT-derived egress (proxy, CA
@@ -4964,6 +5089,7 @@ function saveExistingConfigUpdate(
   );
   persistGatewayConfig(persistedRawConfig, gatewayConfig.storagePath, deps);
   gatewayConfig.set(config, true);
+  recordGatewaySetupAudit(deps, request, config, "existing-config-updated");
   return setupSuccessResult(
     config,
     config.providers.map((provider) => provider.modelId),

@@ -55,6 +55,7 @@ import {
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-semantic-search.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
+import type { EntailmentStageFactory } from "./grounded-qa-hybrid.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 import { evidenceRetentionDiagnosticObserver } from "./diagnostics-log.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
@@ -623,6 +624,8 @@ export interface MultiSourceAskInput {
   // Upfront-skipped sources (inaccessible/denied at canonicalization time). Merged into the
   // `source-skipped` uncertainty entries so the caller sees which folders were omitted.
   readonly preSkipped?: readonly { readonly label: string; readonly message: string }[];
+  /** Test seam (KEIKO-0237): supply the entailment stage instead of building it from `deps`. */
+  readonly entailmentStageFactory?: EntailmentStageFactory;
 }
 
 // GRD-006: classify a thrown per-source retrieve error. A recoverable workspace error becomes a
@@ -959,13 +962,16 @@ async function applyMultiSourceEntailment(
   if (!modelInvoked) {
     return assembled;
   }
-  const stage = createEntailmentStage(
-    ctx.deps,
-    [],
-    ctx.modelId,
-    { diagnostics: ctx.deps.diagnostics },
-    ctx.signal,
-  );
+  const stage =
+    ctx.entailmentStageFactory !== undefined
+      ? ctx.entailmentStageFactory({ capsules: [], modelId: ctx.modelId, signal: ctx.signal })
+      : createEntailmentStage(
+          ctx.deps,
+          [],
+          ctx.modelId,
+          { diagnostics: ctx.deps.diagnostics },
+          ctx.signal,
+        );
   if (stage === undefined) {
     return assembled;
   }

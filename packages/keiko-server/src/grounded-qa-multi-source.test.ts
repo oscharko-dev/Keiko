@@ -1570,3 +1570,68 @@ describe("handleGroundedAsk folder ask-path source cap (Release 0.2.0)", () => {
     expect(answer.uncertainty.some((u) => u.kind === "source-skipped")).toBe(false);
   });
 });
+
+// ─── KEIKO-0237 (#2901) ─────────────────────────────────────────────────────
+// Pin the second call site the hybrid-side test does not cover: multi-source entailment
+// forwards `retrieved.map(source => source.pack)` to the judge. Without an assertion here,
+// a regression that passed `[]` or the wrong pack set to the multi-source stage would still
+// leave the finding's coverage bar green through the hybrid test alone (Codex, #3201).
+describe("multi-source entailment forwards the retrieved packs (KEIKO-0237)", () => {
+  it("hands the judge the pack set the retriever returned, in scope order", async () => {
+    const scopes: readonly ChatConnectedScope[] = [
+      {
+        kind: "directory",
+        relativePaths: ["src/alpha.ts"],
+        connectedAtMs: NOW,
+        root: tempRoot("ms-a"),
+      },
+      {
+        kind: "directory",
+        relativePaths: ["src/beta.ts"],
+        connectedAtMs: NOW,
+        root: tempRoot("ms-b"),
+      },
+    ];
+    const chatId = makeChat(scopes);
+    const byPath = new Map<string, ConnectedContextPack>([
+      ["src/alpha.ts", scopePack("src/alpha.ts", 0.6, "atom-alpha")],
+      ["src/beta.ts", scopePack("src/beta.ts", 0.6, "atom-beta")],
+    ]);
+
+    const observedPacks: (readonly ConnectedContextPack[])[] = [];
+    const observedCapsulesPerCall: number[] = [];
+    const seenAnswerer = { count: 0 };
+
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "trace packs" })),
+      recordingDeps([]),
+      undefined,
+      {
+        retriever: packPerScope(byPath),
+        answerer: constAnswerer("multi-source sentinel", seenAnswerer),
+        entailmentStageFactory: (input) => {
+          observedCapsulesPerCall.push(input.capsules.length);
+          return {
+            evaluate: (
+              _answer: string,
+              packs: readonly ConnectedContextPack[],
+              _now: number,
+            ): Promise<readonly never[]> => {
+              observedPacks.push(packs);
+              return Promise.resolve([]);
+            },
+          };
+        },
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(observedPacks).toHaveLength(1);
+    const forwardedIds = (observedPacks[0] ?? []).map((pack) => pack.stableId);
+    expect(forwardedIds).toEqual(["pack-atom-alpha", "pack-atom-beta"]);
+    // Multi-source is folder-only; the stage always sees an empty capsule list here (folder scopes
+    // carry no capsule). Pin that explicitly so a regression that starts forwarding capsules
+    // through the multi-source branch is visible.
+    expect(observedCapsulesPerCall).toEqual([0]);
+  });
+});

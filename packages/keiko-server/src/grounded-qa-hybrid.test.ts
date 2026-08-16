@@ -13,6 +13,7 @@ import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
   type ConnectedContextPack,
+  type ExplorationBudget,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type {
   ChatConnectedScope,
@@ -47,6 +48,7 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge/testing";
 
 import { handleGroundedAsk, type GroundedRunner, type HybridSeam } from "./grounded-qa.js";
+import type { EntailmentStage } from "./grounded-entailment-stage.js";
 import { ClarificationNeededError } from "./grounded-orchestrator.js";
 import { GROUNDED_NO_EVIDENCE_ANSWER } from "./grounded-faithfulness.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
@@ -3174,5 +3176,125 @@ describe("estimateConnectorExcerptBytes", () => {
 
   it("never returns a negative estimate for a malformed (end < start) span", () => {
     expect(estimateConnectorExcerptBytes(referenceWithOffsets(500, 100), 900)).toBe(0);
+  });
+});
+
+// ─── KEIKO-0174 + KEIKO-0237 (#2901) ─────────────────────────────────────────
+//
+// Two integration-level assertions the hybrid path was missing:
+//
+// - KEIKO-0174: retrieveFolderPacks called `splitExplorationBudget(base, n)` (singular), which
+//   returned the FIRST slice of an equal split and reused it for every folder — every folder got
+//   the same rich share, breaking the documented "sum of every budget dimension equals the base
+//   cap" invariant. The fix uses the plural, per-folder form.
+//
+// - KEIKO-0237: hybrid entailment forwards folder packs to the judge. The wiring test covers the
+//   helper in isolation; that says nothing about which packs the real hybrid call site hands over.
+//   The entailmentStageFactory seam lets a test capture the actual argument.
+
+describe("hybrid folder budgets stay within the base cap (KEIKO-0174)", () => {
+  it("sums each dimension across folders to at most DEFAULT_EXPLORATION_BUDGET", async () => {
+    const { capsuleId } = await seedReadyCapsule("Budget-Sum Connector");
+    const folders: ChatConnectedScope[] = Array.from({ length: 3 }, (_unused, i) => ({
+      kind: "directory" as const,
+      relativePaths: [`src/budget-${String(i)}.ts`],
+      connectedAtMs: NOW,
+      root: tempRoot(`budget-folder-${String(i)}`),
+    }));
+    const chatId = makeHybridChat(folders, [{ kind: "capsule", capsuleId, connectedAtMs: NOW }]);
+
+    const observedBudgets: ExplorationBudget[] = [];
+    const retriever: GroundedRetriever = (input): Promise<RetrievalOnlyOutput> => {
+      if (input.budget !== undefined) observedBudgets.push(input.budget);
+      const key = input.scope.relativePaths[0] ?? "";
+      return Promise.resolve({
+        pack: folderPack(key, 0.5, `atom-${key}`),
+        elapsedMs: 5,
+        plan: { state: "ready" } as never,
+      });
+    };
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "answer within cap" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: retriever,
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: sentinelAnswerer(),
+      },
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(observedBudgets).toHaveLength(3);
+    for (const key of Object.keys(
+      DEFAULT_EXPLORATION_BUDGET,
+    ) as (keyof typeof DEFAULT_EXPLORATION_BUDGET)[]) {
+      const sum = observedBudgets.reduce((total, budget) => total + budget[key], 0);
+      const cap = DEFAULT_EXPLORATION_BUDGET[key];
+      expect(
+        sum,
+        `dimension ${key} exceeded cap ${String(cap)} (sum=${String(sum)})`,
+      ).toBeLessThanOrEqual(cap);
+    }
+  });
+});
+
+describe("hybrid entailment forwards the retrieved folder packs (KEIKO-0237)", () => {
+  it("hands the judge exactly the folder packs the retriever returned", async () => {
+    const { capsuleId } = await seedReadyCapsule("Entailment Forwarding Connector");
+    const folderA: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/pack-a.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("entail-a"),
+    };
+    const folderB: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/pack-b.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("entail-b"),
+    };
+    const packMap = new Map<string, ConnectedContextPack>([
+      ["src/pack-a.ts", folderPack("src/pack-a.ts", 0.6, "atom-a")],
+      ["src/pack-b.ts", folderPack("src/pack-b.ts", 0.6, "atom-b")],
+    ]);
+    const chatId = makeHybridChat(
+      [folderA, folderB],
+      [{ kind: "capsule", capsuleId, connectedAtMs: NOW }],
+    );
+
+    const observedPacksPerCall: (readonly ConnectedContextPack[])[] = [];
+    const observedCapsulesPerCall: number[] = [];
+    const stage: EntailmentStage = {
+      evaluate: (_answer, packs, _now) => {
+        observedPacksPerCall.push(packs);
+        return Promise.resolve([]);
+      },
+    };
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "trace the packs" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(packMap),
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: sentinelAnswerer(),
+        entailmentStageFactory: (input): EntailmentStage => {
+          observedCapsulesPerCall.push(input.capsules.length);
+          return stage;
+        },
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(observedPacksPerCall).toHaveLength(1);
+    const forwardedIds = (observedPacksPerCall[0] ?? []).map((pack) => pack.stableId).sort();
+    expect(forwardedIds).toEqual(["pack-atom-a", "pack-atom-b"]);
+    // A hybrid ask with one connector capsule enters createEntailmentStage with its capsule list;
+    // capsule policy is evaluated inside the factory. Pin the count so ADD-01's connector-pack
+    // forwarding stays visible if it changes.
+    expect(observedCapsulesPerCall).toEqual([1]);
   });
 });
