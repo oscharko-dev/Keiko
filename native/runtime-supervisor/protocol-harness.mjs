@@ -180,9 +180,17 @@ export const waitGone = waitForExit;
 
 /**
  * Diagnostic wrapper: race `promise` against the child's `exited` promise so a stream failure is
- * re-thrown labelled with which stage it happened in and what stderr the child collected. Kept
- * from the Windows harness (the audit's SUPERVISOR-DIAGNOSTIC-001 preference) and exported so
- * both harnesses attribute failures the same way.
+ * re-thrown labelled with which stage it happened in. Kept from the Windows harness (the audit's
+ * SUPERVISOR-DIAGNOSTIC-001 preference) and exported so both harnesses attribute failures the
+ * same way.
+ *
+ * Only the stderr BYTE COUNT is embedded in the thrown error, not the body. A broken or untrusted
+ * helper could otherwise write arbitrary text (including secrets, path fragments, or attacker-
+ * controlled diagnostic strings) that would end up in qualification and CI logs verbatim. The
+ * count is enough to tell a "silent" failure apart from a diagnostic one; the actual bytes are
+ * still on the child's stderr stream for a developer to inspect directly if needed, and the
+ * success-path assertion `Buffer.concat(stderr).length === 0` still catches any non-empty stderr
+ * on a well-formed run.
  */
 export async function explained(stage, promise, exited, stderr) {
   const exitCode = Symbol("exited");
@@ -191,15 +199,15 @@ export async function explained(stage, promise, exited, stderr) {
     exited.then((code) => ({ [exitCode]: code })),
   ]);
   if (raced && exitCode in raced) {
-    const collected = Buffer.concat(stderr).toString("utf8");
+    const stderrBytes = Buffer.concat(stderr).length;
     throw new Error(
       `${stage}: helper exited with ${String(raced[exitCode])} before responding` +
-        (collected.length > 0 ? `\nstderr: ${collected}` : ""),
+        (stderrBytes > 0 ? ` (stderrBytes=${String(stderrBytes)})` : ""),
     );
   }
   if (raced && "error" in raced) {
-    const collected = Buffer.concat(stderr).toString("utf8");
-    if (collected.length > 0) raced.error.message += `\nhelper stderr: ${collected}`;
+    const stderrBytes = Buffer.concat(stderr).length;
+    if (stderrBytes > 0) raced.error.message += ` (helper stderrBytes=${String(stderrBytes)})`;
     throw raced.error;
   }
   return raced;

@@ -692,10 +692,16 @@ export function untranslatedLiteralsInSource(source, filename) {
   };
 
   // AST pass: JSX text (multi-line included) and string-literal expression-container children.
+  // `isCommentLine` intentionally does NOT run here: the parser has already excluded C-style
+  // comments from JsxText / JsxExpression nodes, and applying it would reclassify legitimate
+  // user copy that happens to start with `*`, `//`, or `/*` on its own indented line (for
+  // example `* Required fields` inside a multi-line `<p>...</p>`) as a source comment and
+  // silently drop it. Whitespace inside the trimmed text is collapsed to single spaces so that
+  // reindenting or rewrapping multi-line JSX copy does not churn the baseline ledger — the copy
+  // renders identically to the user with any run of intra-node whitespace.
   for (const { line, text } of collectJsxTextAndExpressions(source, filename)) {
-    const trimmed = text.trim();
-    if (isCommentLine(lines[line - 1] ?? "")) continue;
-    if (isTranslatableCopy(trimmed)) reportOnLine(line - 1, [trimmed]);
+    const normalized = text.trim().replace(/\s+/gu, " ");
+    if (isTranslatableCopy(normalized)) reportOnLine(line - 1, [normalized]);
   }
 
   // Per-line pass for the two non-JSX positions the AST does not cover: user-facing attribute

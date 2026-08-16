@@ -1117,6 +1117,35 @@ test("does not throw on malformed TSX and returns a valid shape", () => {
   expect(Array.isArray(result.findings)).toBe(true);
 });
 
+// KEIKO-0299 (review-follow-up): the initial ship reclassified parsed JSX text via
+// `isCommentLine(lines[line - 1])`, which discarded legitimate user copy whose source line
+// happened to start with `*`, `//`, or `/*` (an indented `* Required fields` inside a multi-line
+// paragraph is the canonical example). The parser already strips C-style comments from JsxText
+// nodes, so no line-level reclassification is correct here.
+test("does not discard parsed JSX text whose source line looks like a comment", () => {
+  const src = `<p>\n  * Required fields\n</p>`;
+  const findings = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings;
+  expect(findings.length).toBeGreaterThan(0);
+  expect(findings[0].text).toContain("Required fields");
+});
+
+// KEIKO-0299 (review-follow-up): multi-line JSX text now collapses intra-node whitespace so a
+// reformat or indentation change does not churn the ratcheted ledger. Same rendered copy, same
+// ledger entry, either shape.
+test("normalizes intra-node whitespace in multi-line JSX text", () => {
+  const compact = untranslatedLiteralsInSource(
+    `<p>Hello there friend</p>`,
+    "packages/x/y.tsx",
+  ).findings;
+  const wrapped = untranslatedLiteralsInSource(
+    `<p>\n  Hello\n  there\n  friend\n</p>`,
+    "packages/x/y.tsx",
+  ).findings;
+  expect(compact.length).toBeGreaterThan(0);
+  expect(wrapped.length).toBeGreaterThan(0);
+  expect(wrapped[0].text).toBe(compact[0].text);
+});
+
 test("separates human copy from the machine tokens that share those positions", () => {
   for (const copy of ["Close", "New window", "Toggle light / dark theme", "Source file"]) {
     expect(isTranslatableCopy(copy)).toBe(true);

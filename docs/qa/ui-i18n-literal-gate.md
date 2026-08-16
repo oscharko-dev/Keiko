@@ -67,8 +67,15 @@ failure, so the escape hatch cannot be used wordlessly.
 
 ## Known limits
 
-- The rule reads lines, not an AST. A user-facing literal split across lines by the formatter, or
-  assembled from variables, is not seen.
+- The two non-JSX positions (user-facing attribute values, and `label`/`description`/`title` fields
+  on option/command registries) are scanned per line, not through an AST. A literal split across
+  lines in one of those positions, or assembled from variables, is not seen. The JSX-text and
+  string-literal-child positions ARE scanned via the TypeScript AST, so multi-line JSX text
+  (`<p>\n  Hello there\n</p>`) and `<p>{"No chats"}</p>` are both visible; intra-node whitespace
+  is normalized so a reindent does not churn the ledger.
+- `.ts` files are parsed as TypeScript, `.tsx` files as TSX. This prevents generic syntax in
+  ordinary `.ts` files (`<T>`, `ReadonlySet<...>`) from being misread as JSX — which would flood
+  the ledger with code fragments — and keeps the JSX passes accurate for real UI components.
 - The ledger keys on literal text, not line number, so moving a known literal within its file is
   invisible (correctly) — but so is swapping a listed literal for a different string that happens to
   match another listed entry in the same file.

@@ -266,13 +266,16 @@ async function compile(binary, paused = false) {
 
 // KEIKO-0417: the 17 checks below used to run against RAW file text, so a security control that
 // survived only as a `/* ... */` comment still satisfied `assert.match` and the deleted-but-
-// documented behaviour passed as if it were live. Strip C block comments, line comments, and the
-// bodies of double-quoted string literals before matching. Character literals (single-quoted) are
-// preserved: they can hold at most a handful of bytes and cannot hide the multi-token security
-// controls the 17 assertions pin, and assertion #16 and #9 below embed them directly. Assertions
-// whose intent is to observe a specific bytestring INSIDE a `"..."` (the Windows reserved-stem
-// pass and the `ascii_name_equals(..., "GLOBALROOT")` check) explicitly read `nativeSourceRaw`;
-// every other check consumes the stripped text.
+// documented behaviour passed as if it were live. Strip C block comments and line comments before
+// matching. Two modes over the same walker:
+//   - `stripCommentsAndStrings` blanks string literal bodies too — every assertion whose subject
+//     is a code identifier uses this. Character literals (single-quoted) are preserved: they can
+//     hold at most a handful of bytes and cannot hide the multi-token security controls the 17
+//     assertions pin, and assertion #16 and #9 below embed them directly.
+//   - `stripCommentsOnly` preserves string literals verbatim — the two assertions that observe
+//     bytestrings inside `"..."` (WINDOWS_RESERVED_STEMS pass and `ascii_name_equals(...,
+//     "GLOBALROOT")`) use this. Reading the raw source for those left commented-out copies of
+//     those exact literals visible to the assertions.
 //
 // KEIKO-0417 (review-follow-up): C removes `\<newline>` (and `\<CR><LF>`) pairs during translation
 // phase 2, BEFORE it recognises comments. Without that step here, a `//` comment ending in `\`
@@ -300,7 +303,16 @@ function skipStringLiteral(source, start) {
   return i;
 }
 
-function stripCommentsAndStrings(rawSource) {
+// Two scan modes over the same walker:
+//   `stripCommentsAndStrings` — comments blanked, string literal BODIES blanked (both mode both).
+//     Used for every assertion whose subject is a code identifier.
+//   `stripCommentsOnly` — comments blanked, string literals PRESERVED. Used for the two
+//     assertions that observe bytestrings inside `"..."` (WINDOWS_RESERVED_STEMS pass and the
+//     `ascii_name_equals(..., "GLOBALROOT")` check). Reading `nativeSourceRaw` for those
+//     leaves a commented-out `ascii_name_equals(..., "GLOBALROOT")` visible to the assertion —
+//     exactly the regression the comment-stripping fix exists to prevent. This mode closes that
+//     hole while still letting the assertion observe the string literal.
+function scanCSource(rawSource, { stripStringLiterals }) {
   const source = preprocessCLineSplices(rawSource);
   let out = "";
   let i = 0;
@@ -321,8 +333,9 @@ function stripCommentsAndStrings(rawSource) {
       continue;
     }
     if (ch === '"') {
-      out += '""';
-      i = skipStringLiteral(source, i);
+      const after = skipStringLiteral(source, i);
+      out += stripStringLiterals ? '""' : source.slice(i, after);
+      i = after;
       continue;
     }
     out += ch;
@@ -331,13 +344,22 @@ function stripCommentsAndStrings(rawSource) {
   return out;
 }
 
+function stripCommentsAndStrings(rawSource) {
+  return scanCSource(rawSource, { stripStringLiterals: true });
+}
+
+function stripCommentsOnly(rawSource) {
+  return scanCSource(rawSource, { stripStringLiterals: false });
+}
+
 async function assertWindowsSourceContract() {
-  const nativeSource = stripCommentsAndStrings(await readFile(source, "utf8"));
-  // Windows reserved stems come from WINDOWS_RESERVED_STEMS, and the `"${stem}"` check below
-  // reads string literals — but those literals are ALSO in the raw source, not comments. Read
-  // the raw text again for that one check so comment-stripping does not blank the very literals
-  // this contract exists to pin.
-  const nativeSourceRaw = await readFile(source, "utf8");
+  const rawSource = await readFile(source, "utf8");
+  const nativeSource = stripCommentsAndStrings(rawSource);
+  // Comments-only strip for the two assertions whose subject is a string-literal body inside
+  // `"..."`. Reading the RAW source for those left a commented-out reserved-stem list or a
+  // commented-out `ascii_name_equals(..., "GLOBALROOT")` invocation visible to the assertion,
+  // which is precisely the regression the KEIKO-0417 rewrite exists to catch.
+  const nativeSourceCommentsStripped = stripCommentsOnly(rawSource);
   assert.match(nativeSource, /GetFinalPathNameByHandleW\(root,/u);
   assert.match(nativeSource, /GetFinalPathNameByHandleW\(file,/u);
   assert.match(
@@ -352,9 +374,13 @@ async function assertWindowsSourceContract() {
     /_setmode\(_fileno\(stdin\), _O_BINARY\).*_setmode\(_fileno\(stdout\), _O_BINARY\)/su,
   );
   assert.match(nativeSource, /if \(!binary_standard_io\(\)\) return 1;.*parse_request\(/su);
-  for (const stem of WINDOWS_RESERVED_STEMS) assert.ok(nativeSourceRaw.includes(`"${stem}"`));
+  for (const stem of WINDOWS_RESERVED_STEMS)
+    assert.ok(nativeSourceCommentsStripped.includes(`"${stem}"`));
   assert.match(nativeSource, /while \(name_length < length && component\[name_length\] != '\.'\)/u);
-  assert.match(nativeSourceRaw, /ascii_name_equals\(component, name_length, "GLOBALROOT"\)/u);
+  assert.match(
+    nativeSourceCommentsStripped,
+    /ascii_name_equals\(component, name_length, "GLOBALROOT"\)/u,
+  );
   assert.match(nativeSource, /windows_reserved_port_name\(component, name_length\)/u);
   assert.match(nativeSource, /bytes\[3\] == 0xc2/u);
   assert.match(nativeSource, /bytes\[4\] == 0xb9 \|\| bytes\[4\] == 0xb2 \|\| bytes\[4\] == 0xb3/u);
@@ -363,7 +389,8 @@ async function assertWindowsSourceContract() {
   assert.match(nativeSource, /\*q == ':' \|\| \*q == '\?' \|\| \*q == '~'/u);
   assert.equal(nativeSource.match(/CreateFileW\(/gu)?.length, 1);
 
-  assertCommentStrippingIsLoadBearing(nativeSourceRaw);
+  assertCommentStrippingIsLoadBearing(rawSource);
+  assertCommentsOnlyLeavesStringLiteralsIntact(rawSource);
 }
 
 // KEIKO-0417 negative self-test: proves stripCommentsAndStrings is load-bearing rather than
@@ -401,6 +428,31 @@ function assertCommentStrippingIsLoadBearing(rawSource) {
     spliceStripped.match(/OBJ_DONT_REPARSE_LEAKED/u),
     null,
     "stripCommentsAndStrings must respect C `\\`-continued // line comments (splicing)",
+  );
+}
+
+// KEIKO-0417 (review-follow-up): the two assertions that observe a bytestring inside `"..."`
+// used to read the raw source, so a commented-out reserved-stem list or
+// `ascii_name_equals(..., "GLOBALROOT")` invocation still satisfied them. `stripCommentsOnly`
+// closes that gap without blanking the string literals they need to observe. This self-test
+// proves it: mutate the real source to move `"GLOBALROOT"` inside a `/* ... */` block, run
+// stripCommentsOnly, and assert both:
+//   (1) the "GLOBALROOT" string literal that STILL lives outside comments is preserved (so
+//       the reserved-stems assertion still works when the code is correct); and
+//   (2) the extra commented-out `ascii_name_equals(..., "GLOBALROOT")` invocation we added is
+//       NOT visible to the scan (so the ratchet has actually been strengthened).
+function assertCommentsOnlyLeavesStringLiteralsIntact(rawSource) {
+  const mutated =
+    rawSource + '\n/* disabled: ascii_name_equals(component, name_length, "COMMENTED_STEM"); */\n';
+  const scanned = stripCommentsOnly(mutated);
+  assert.ok(
+    scanned.includes('"GLOBALROOT"'),
+    "stripCommentsOnly must preserve string literals so the reserved-stems check can see them",
+  );
+  assert.equal(
+    scanned.match(/COMMENTED_STEM/u),
+    null,
+    'stripCommentsOnly must remove commented-out `ascii_name_equals(..., "…")` invocations',
   );
 }
 

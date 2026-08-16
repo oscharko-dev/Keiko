@@ -83,7 +83,7 @@
       "Request timeout (ms)",
       "Stored",
       "Stored model gateway credentials",
-      "Stored secrets stay local and are never returned to the browser. Supported API-key\n            headers: Authorization, X-Litellm-Key, X-Api-Key, api-key.",
+      "Stored secrets stay local and are never returned to the browser. Supported API-key headers: Authorization, X-Litellm-Key, X-Api-Key, api-key.",
       "Testing credentials…",
       "Voice models"
     ],
@@ -194,8 +194,8 @@
       "Reload external changes",
       "Retry",
       "Review every changed file before applying this agent changeset to disk.",
-      "Side-by-side comparison of the file on disk and the recovered unsaved changes. Keep\n              local restores the recovered changes; use disk keeps the file on disk.",
-      "Side-by-side comparison of the latest file on disk and the local editor buffer. Keep\n              local preserves your buffer; reload replaces it with the file on disk.",
+      "Side-by-side comparison of the file on disk and the recovered unsaved changes. Keep local restores the recovered changes; use disk keeps the file on disk.",
+      "Side-by-side comparison of the latest file on disk and the local editor buffer. Keep local preserves your buffer; reload replaces it with the file on disk.",
       "Tests",
       "Use disk"
     ],
@@ -223,7 +223,7 @@
       "Changes",
       "Changes and history",
       "changes; the list is truncated.",
-      "Detached HEAD. Switch to an existing branch or create a branch before committing or\n          syncing.",
+      "Detached HEAD. Switch to an existing branch or create a branch before committing or syncing.",
       "files staged",
       "History",
       "Loading changes…",
@@ -236,12 +236,12 @@
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/ConnectPanel.tsx": [
       "Clone from URL",
-      "Connect a folder or repository to review changes, stage commits, and open pull requests —\n          all in one window.",
+      "Connect a folder or repository to review changes, stage commits, and open pull requests — all in one window.",
       "Connect repository",
       "Loading repositories…",
       "No repositories yet. Connect or clone one to get started.",
       "No repository connected",
-      "Once a repository is connected, Keiko can summarize your working changes and draft\n            commit messages for you.",
+      "Once a repository is connected, Keiko can summarize your working changes and draft commit messages for you.",
       "Recent"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/DiffPane.tsx": [
@@ -341,7 +341,7 @@
       "Select a project to open a merge.",
       "Strategy",
       "The requested strategy “",
-      "This merge is policy-gated as high risk. Confirm explicitly before merging; the server still\n        enforces the approval token."
+      "This merge is policy-gated as high risk. Confirm explicitly before merging; the server still enforces the approval token."
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/GovernedPullRequestCard.tsx": [
       "Action",
@@ -473,7 +473,7 @@
       "Mock scenarios against your policy before going autonomous.",
       "Open pull request #142",
       "Overwrite prod/secrets.env",
-      "Rights an agent inherits when Keiko governs. Tap a decision to cycle through Allow → Ask →\n        Deny.",
+      "Rights an agent inherits when Keiko governs. Tap a decision to cycle through Allow → Ask → Deny.",
       "Run `kubectl apply` → prod",
       "Run `npm test`",
       "Run evaluation",
