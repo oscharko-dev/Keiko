@@ -89,6 +89,26 @@ describe("QiRunCard", () => {
     expect(screen.getByText("Rejected login")).toBeInTheDocument();
   });
 
+  it("presents a persisted degraded success distinctly and keeps model quality unavailable", async () => {
+    const detail = { ...makeDetail("qi-run-degraded", [], [], 0, null), degraded: true };
+    render(<QiRunCard runId="qi-run-degraded" fetchDetailImpl={fetchOk(detail)} />);
+
+    const status = await screen.findByTestId("qi-run-terminal-status");
+    expect(status).toHaveTextContent("Degraded");
+    expect(status).not.toHaveTextContent("Succeeded");
+    expect(status).toHaveClass("qi-badge", "qi-quality-mid");
+    expect(screen.getByTestId("qi-quality-badge")).toHaveTextContent("Unavailable");
+  });
+
+  it("continues to present a clean succeeded result as Succeeded", async () => {
+    render(
+      <QiRunCard runId="qi-run-clean" fetchDetailImpl={fetchOk(makeDetail("qi-run-clean", []))} />,
+    );
+
+    expect(await screen.findByText("Succeeded")).toHaveClass("qi-badge-succeeded");
+    expect(screen.queryByTestId("qi-run-terminal-status")).not.toBeInTheDocument();
+  });
+
   it("requests detail for the runId passed in", async () => {
     const impl = fetchOk(makeDetail("qi-run-zzzz9999", []));
     render(<QiRunCard runId="qi-run-zzzz9999" fetchDetailImpl={impl} />);

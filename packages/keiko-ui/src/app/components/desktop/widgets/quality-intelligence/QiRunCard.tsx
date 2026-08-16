@@ -19,7 +19,7 @@ import { DriftPanel } from "./DriftPanel";
 import type { DriftPanelProps } from "./DriftPanel";
 import { ExportBar } from "./ExportBar";
 import {
-  StatusBadge,
+  RunStatusBadge,
   SeverityBadge,
   QualityScoreBadge,
   LoadingSkeleton,
@@ -95,7 +95,7 @@ function SummaryStrip({
       <div className="qi-run-summary-item">
         <dt>{t("common.status")}</dt>
         <dd>
-          <StatusBadge status={detail.status} />
+          <RunStatusBadge status={detail.status} degraded={detail.degraded} />
         </dd>
       </div>
       <div className="qi-run-summary-item">

@@ -1685,6 +1685,13 @@ describe("RunLauncher — terminal status gating (pr-reviewer M2)", () => {
     await waitFor(() => {
       expect(screen.getByTestId("qi-launch-degraded")).toHaveTextContent(/Baseline-Testfälle/i);
     });
+    // A terminal fallback must have an explicit status, not merely explanatory copy next to an
+    // otherwise-successful result. This makes the non-model-backed outcome distinguishable from a
+    // normal Succeeded badge at a glance.
+    const terminalStatus = screen.getByTestId("qi-launch-terminal-status");
+    expect(terminalStatus).toHaveTextContent(/Degraded/i);
+    expect(terminalStatus).not.toHaveTextContent(/^Succeeded$/i);
+    expect(terminalStatus).toHaveClass("qi-badge", "qi-quality-mid");
     // The reason is named, but it is a degraded notice — NOT a hard error banner.
     expect(screen.getByTestId("qi-launch-degraded")).toHaveTextContent(/JSON parsebar/i);
     expect(screen.queryByTestId("qi-launch-error")).not.toBeInTheDocument();

@@ -11,6 +11,7 @@ function makeRun(
   id: string,
   status: QualityIntelligenceUiRunSummary["status"],
   reviewState: QualityIntelligenceUiRunSummary["reviewState"] = "open",
+  degraded = false,
 ): QualityIntelligenceUiRunSummary {
   return {
     id,
@@ -20,6 +21,7 @@ function makeRun(
     totals: { candidates: 3, findings: 0, exports: 0 },
     // Issue #282 A11y-2: reviewState is now required on the wire summary (backend contract update).
     reviewState,
+    ...(degraded ? { degraded: true } : {}),
   };
 }
 
@@ -81,6 +83,21 @@ describe("QiHubPanel", () => {
         name: /open run qi-run-aaaa1111 — Failed, .*3 test cases/i,
       }),
     ).toBeInTheDocument();
+  });
+
+  it("shows a degraded persisted run consistently in the list badge and accessible name", async () => {
+    render(
+      <QiHubPanel
+        openRun={vi.fn()}
+        fetchRunsImpl={fakeFetch([makeRun("qi-run-degraded", "succeeded", "open", true)])}
+      />,
+    );
+
+    const row = await screen.findByRole("button", {
+      name: /open run qi-run-degraded — Degraded, .*3 test cases/i,
+    });
+    expect(within(row).getByTestId("qi-run-terminal-status")).toHaveTextContent("Degraded");
+    expect(within(row).queryByText("Succeeded")).not.toBeInTheDocument();
   });
 
   it("leads with the run date and truncates the opaque id with an ellipsis (F038 C145)", async () => {

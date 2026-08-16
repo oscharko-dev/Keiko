@@ -199,6 +199,19 @@ describe("QI_TEST_DESIGN_RESPONSE_SCHEMA", () => {
     expect(items.additionalProperties).toBe(false);
   });
 
+  it("requires every declared test-case field for strict Structured Outputs compatibility", () => {
+    const props = QualityIntelligenceGeneration.QI_TEST_DESIGN_RESPONSE_SCHEMA.properties as Record<
+      string,
+      unknown
+    >;
+    const testCases = props.testCases as Record<string, unknown>;
+    const items = testCases.items as Record<string, unknown>;
+    const itemProps = items.properties as Record<string, unknown>;
+    const required = items.required as readonly string[];
+
+    expect([...required].sort()).toEqual(Object.keys(itemProps).sort());
+  });
+
   it("priority enum contains exactly P0, P1, P2, P3", () => {
     const props = QualityIntelligenceGeneration.QI_TEST_DESIGN_RESPONSE_SCHEMA.properties as Record<
       string,

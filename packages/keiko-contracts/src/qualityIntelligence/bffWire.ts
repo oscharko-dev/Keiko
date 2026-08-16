@@ -59,6 +59,8 @@ export interface QualityIntelligenceUiRunTotals {
 export interface QualityIntelligenceUiRunSummary {
   readonly id: string;
   readonly status: QualityIntelligenceRunStatus;
+  /** True when the run completed through a deterministic fallback after a model-stage failure. */
+  readonly degraded?: boolean;
   /** ISO 8601 timestamp. */
   readonly requestedAt: string;
   /** ISO 8601 timestamp, or null when the run has not yet completed. */
@@ -185,6 +187,12 @@ export interface QualityIntelligenceUiDriftMetadata {
 export interface QualityIntelligenceUiRunDetail {
   readonly id: string;
   readonly status: QualityIntelligenceRunStatus;
+  /**
+   * True when a succeeded run persisted one or more model-routing stage failures and completed
+   * with deterministic fallback output. Additive and orthogonal to `status`: lifecycle consumers
+   * continue to see `succeeded`, while presentation clients must qualify the result as degraded.
+   */
+  readonly degraded?: boolean;
   /** ISO 8601 timestamp. */
   readonly requestedAt: string;
   /** ISO 8601 timestamp, or null when the run has not yet completed. */

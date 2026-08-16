@@ -109,6 +109,23 @@ export function StatusBadge({ status }: { readonly status: string }): ReactNode 
   return <span className={`qi-badge ${cls}`}>{label}</span>;
 }
 
+/** Preserve a successful lifecycle while making model-stage fallback visible to users. */
+export function RunStatusBadge({
+  status,
+  degraded,
+}: {
+  readonly status: string;
+  readonly degraded: boolean | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  if (degraded !== true) return <StatusBadge status={status} />;
+  return (
+    <span className="qi-badge qi-quality-mid" data-testid="qi-run-terminal-status">
+      {t("qi.status.degraded")}
+    </span>
+  );
+}
+
 type FindingSeverity = "critical" | "high" | "medium" | "low";
 
 const SEVERITY_CLASS: Readonly<Record<FindingSeverity, string>> = {

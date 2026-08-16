@@ -170,6 +170,25 @@ describe("handleListQiRuns", () => {
     expect(loadMock).not.toHaveBeenCalled();
   });
 
+  it("projects persisted model-stage fallback as degraded in run summaries", () => {
+    listMock.mockReturnValue(["run-degraded"]);
+    loadMock.mockReturnValue({
+      ...(manifest("run-degraded") as Record<string, unknown>),
+      modelRouting: {
+        stageFailures: [
+          { stage: "generate", reasonSummary: "qi-error: UnparseableModelOutputError" },
+        ],
+      },
+    });
+
+    const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs"), deps()));
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      runs: [{ id: "run-degraded", status: "succeeded", degraded: true }],
+    });
+  });
+
   // Issue #646 — bound manifest loading so very large evidence stores do not block the BFF.
   describe("bounded list (issue #646)", () => {
     function ids(n: number): readonly string[] {
@@ -308,6 +327,65 @@ describe("handleGetQiRun", () => {
     expect(body.id).toBe("run-x");
     expect(body.status).toBe("succeeded");
     expect(body.manifestSchemaVersion).toBe(1);
+  });
+
+  it("projects persisted model stage failures as an orthogonal degraded detail", () => {
+    loadMock.mockReturnValue({
+      ...(manifest("run-degraded") as Record<string, unknown>),
+      modelRouting: {
+        stageFailures: [
+          { stage: "generate", reasonSummary: "qi-error: UnparseableModelOutputError" },
+        ],
+      },
+    });
+
+    const result = asResult(
+      handleGetQiRun(
+        ctx("/api/quality-intelligence/runs/run-degraded", { id: "run-degraded" }),
+        deps(),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      id: "run-degraded",
+      status: "succeeded",
+      degraded: true,
+      qualityScore: null,
+    });
+  });
+
+  it("keeps clean succeeded run details unqualified", () => {
+    loadMock.mockReturnValue(manifest("run-clean"));
+
+    const result = asResult(
+      handleGetQiRun(ctx("/api/quality-intelligence/runs/run-clean", { id: "run-clean" }), deps()),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ id: "run-clean", status: "succeeded" });
+    expect(result.body).not.toHaveProperty("degraded");
+  });
+
+  it("does not replace a failed lifecycle status with degradation", () => {
+    loadMock.mockReturnValue({
+      ...(manifest("run-failed") as Record<string, unknown>),
+      status: "failed",
+      modelRouting: {
+        stageFailures: [{ stage: "generate", reasonSummary: "qi-run-error" }],
+      },
+    });
+
+    const result = asResult(
+      handleGetQiRun(
+        ctx("/api/quality-intelligence/runs/run-failed", { id: "run-failed" }),
+        deps(),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ id: "run-failed", status: "failed" });
+    expect(result.body).not.toHaveProperty("degraded");
   });
 
   it("projects requirement excerpts onto coverageByAtom and tolerates legacy rows (#790)", () => {

@@ -66,6 +66,7 @@ function projectRunSummary(
   return {
     id: manifest.runId,
     status: manifest.status,
+    ...(isPersistedDegradedRun(manifest) ? { degraded: true } : {}),
     requestedAt: manifest.planAt,
     completedAt: manifest.completedAt ?? null,
     totals: {
@@ -256,6 +257,12 @@ function projectDriftMetadata(
   };
 }
 
+function isPersistedDegradedRun(
+  manifest: NonNullable<ReturnType<typeof loadQualityIntelligenceRun>>,
+): boolean {
+  return manifest.status === "succeeded" && (manifest.modelRouting?.stageFailures?.length ?? 0) > 0;
+}
+
 function projectRunDetail(inputs: RunDetailInputs): QualityIntelligenceUiRunDetail {
   const { manifest, candidateRows, reviewArtifact } = inputs;
   const findingRefs: QualityIntelligenceUiFindingSummary[] = manifest.findings.map((f) => ({
@@ -281,6 +288,7 @@ function projectRunDetail(inputs: RunDetailInputs): QualityIntelligenceUiRunDeta
   return {
     id: manifest.runId,
     status: manifest.status,
+    ...(isPersistedDegradedRun(manifest) ? { degraded: true } : {}),
     requestedAt: manifest.planAt,
     completedAt: manifest.completedAt ?? null,
     totals: {

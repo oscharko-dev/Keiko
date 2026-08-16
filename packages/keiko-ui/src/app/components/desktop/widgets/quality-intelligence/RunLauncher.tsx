@@ -1535,6 +1535,9 @@ export function RunLauncher({
             style={NATIVE_BLOCK_STYLE}
             data-testid="qi-launch-degraded"
           >
+            <span className="qi-badge qi-quality-mid" data-testid="qi-launch-terminal-status">
+              Degraded
+            </span>{" "}
             {degradedNotice}
           </output>
         ) : null}

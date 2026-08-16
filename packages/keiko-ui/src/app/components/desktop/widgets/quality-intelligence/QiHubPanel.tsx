@@ -22,7 +22,7 @@ import { RunLauncher } from "./RunLauncher";
 import { useQualityIntelligenceRetentionSettings } from "@/app/components/desktop/hooks/qualityIntelligenceRetentionSettings";
 import { NATIVE_FIELDSET_RESET_STYLE } from "@/app/components/desktop/native-element-styles";
 import {
-  StatusBadge,
+  RunStatusBadge,
   ReviewBadge,
   LoadingSkeleton,
   ErrorState,
@@ -154,7 +154,7 @@ function RunRow({
         // artifact lifecycle state (AC1 — run-as-artifact has a visible + announced review state).
         aria-label={t("qi.hub.openRunAria", {
           runId: run.id,
-          status: runStatusLabel(run.status, t),
+          status: run.degraded === true ? t("qi.status.degraded") : runStatusLabel(run.status, t),
           requestedAt: formatDate(run.requestedAt),
           count: cases,
           review: reviewLabel(run.reviewState, t),
@@ -167,7 +167,7 @@ function RunRow({
             primary line and demote the id to truncated meta WITH an ellipsis (the bare 16-char
             slice looked like a complete id). Full id stays in title + aria-label. */}
         <span className="qi-run-title">{formatDate(run.requestedAt)}</span>
-        <StatusBadge status={run.status} />
+        <RunStatusBadge status={run.status} degraded={run.degraded} />
         {/* Issue #282 A11y-2: review badge surfaces the run-as-artifact lifecycle state in the
             primary scanning view (AC1). Reuses ReviewBadge from qiShared — same CSS tokens,
             same sr-only prefix, no duplication of the class map. */}
