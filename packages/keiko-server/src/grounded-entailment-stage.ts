@@ -35,7 +35,10 @@ import {
   type EntailmentOptions,
   type EntailmentReconciliation,
 } from "./grounded-faithfulness.js";
-import { createGatewayEntailmentJudge } from "./grounded-entailment-judge.js";
+import {
+  createGatewayEntailmentJudge,
+  entailmentJudgeUnavailableReason,
+} from "./grounded-entailment-judge.js";
 import { contentFreeErrorClass, type ServerDiagnosticSink } from "./diagnostics-log.js";
 import type { UiHandlerDeps } from "./deps.js";
 
@@ -158,10 +161,6 @@ export function createEntailmentStage(
   if (capsules.length > 0 && !isScopeModelUseOperationAllowed(capsules, "answerSynthesis")) {
     return undefined;
   }
-  const judge = createGatewayEntailmentJudge(deps, modelId);
-  if (judge === undefined) {
-    return undefined;
-  }
   // Every production call site hands down a diagnostics sink but has no upstream correlation token
   // to pair with it (the folder orchestrator never sees an answer id), which silently disabled the
   // operator diagnostic this stage promises. Mint one per stage — the stage's lifetime is exactly
@@ -170,6 +169,18 @@ export function createEntailmentStage(
     ...observability,
     correlationId: observability.correlationId ?? randomUUID(),
   };
+  const judge = createGatewayEntailmentJudge(deps, modelId);
+  if (judge === undefined) {
+    // KEIKO-0359: report WHY the stage is inert. Going inert used to be completely silent, so a
+    // model whose capability metadata Gateway Setup never enriched looked identical to a model
+    // that genuinely cannot do structured output — and the stage stayed off indefinitely with
+    // nothing an operator could act on. Body-free: the reason code only, no capability payload.
+    const reason = entailmentJudgeUnavailableReason(deps, modelId);
+    if (reason !== undefined) {
+      recordDiagnostic(correlated, Date.now(), "EntailmentStageInert", reason);
+    }
+    return undefined;
+  }
   // The request signal is baked in here (the stage's lifetime is the grounded ask's): a client
   // cancellation stops the remaining sequential judge calls early, and the per-answer wall-clock
   // budget in reconcileClaimEntailment bounds the worst case even when the request never cancels.

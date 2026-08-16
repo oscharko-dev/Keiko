@@ -188,4 +188,38 @@ describe("detectContainerEngines — kill-switch + never-throws", () => {
     });
     expect(response.engines.map((entry) => entry.engine)).toEqual(["docker", "podman"]);
   });
+
+  // KEIKO-0312: `deadlineMs` used to be echoed metadata, never a bound. Probes ran one engine
+  // after another, each costing up to 2 × PER_CALL_TIMEOUT_MS, so worst-case latency was
+  // roughly `engines ×` the deadline the response reported back to its caller. Deterministic
+  // barrier — no wall-clock threshold: every engine's probe blocks until the test releases it,
+  // so a sequential implementation cannot have started the second engine when we probe.
+  it("probes engines concurrently so latency is bounded by one engine, not their sum (KEIKO-0312)", async () => {
+    const started: string[] = [];
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const run: FakeRun = async (input) => {
+      started.push(input.command);
+      await gate;
+      throw new CommandDeniedError("not found on PATH", input.command);
+    };
+
+    const pending = detectContainerEngines({
+      runCommand: run,
+      processEnv: {},
+      now: () => 1,
+    });
+    // One macrotask boundary is enough for both engines' first call to reach its suspension
+    // point. Sequentially only "docker" would have started here.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(started).toEqual(["docker", "podman"]);
+
+    release?.();
+    const response = await pending;
+    // Concurrency changes latency, not the reported order or completeness of the results.
+    expect(response.engines.map((entry) => entry.engine)).toEqual(["docker", "podman"]);
+    expect(response.deadlineMs).toBe(4_000);
+  });
 });
