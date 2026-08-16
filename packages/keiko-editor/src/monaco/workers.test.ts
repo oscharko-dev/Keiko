@@ -44,7 +44,7 @@ describe("MONACO_WORKER_MODULES", () => {
   it("names a local same-origin module for every worker entry", () => {
     expect(Object.keys(MONACO_WORKER_MODULES).sort()).toEqual([...MONACO_WORKER_ENTRIES].sort());
     for (const specifier of Object.values(MONACO_WORKER_MODULES)) {
-      expect(specifier).toMatch(/^monaco-editor\/esm\/vs\/.*\.worker\.js$/);
+      expect(specifier).toMatch(/^monaco-editor\/editor\/.*\.worker\.js$/);
     }
   });
 

@@ -2,7 +2,7 @@
   "releaseEvidenceVersion": 1,
   "staticExport": {
     "root": "dist/ui/static",
-    "fileCount": 290
+    "fileCount": 289
   },
   "b1": {
     "firstLoadScriptCount": 18,
@@ -11,17 +11,17 @@
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 1186020,
-    "loadedTotalBytes": 1186020,
+    "shipsTotalBytes": 1383019,
+    "loadedTotalBytes": 1383019,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
   },
   "b3": {
     "budgetBytes": 768000,
-    "largestWorkerBytes": 106160,
+    "largestWorkerBytes": 111593,
     "largestWorkerLabel": "editor",
-    "largestLoadedWorkerBytes": 106160,
+    "largestLoadedWorkerBytes": 111593,
     "largestLoadedWorkerLabel": "editor",
     "ok": true,
     "shipsOk": true,
@@ -30,48 +30,70 @@
   "workers": [
     {
       "label": "editor",
-      "gzipBytes": 105525,
-      "path": "dist/ui/static/_next/static/chunks/0n73dz2_v1il1.js"
+      "gzipBytes": 111593,
+      "path": "dist/ui/static/_next/static/chunks/3nzj1g_suy_cs.js"
     },
     {
       "label": "editor",
-      "gzipBytes": 106160,
-      "path": "dist/ui/static/_next/static/chunks/10oufba3tpp4h.js"
+      "gzipBytes": 110748,
+      "path": "dist/ui/static/_next/static/chunks/3tftoas-byv_b.js"
+    },
+    {
+      "label": "editor",
+      "gzipBytes": 151,
+      "path": "dist/ui/static/_next/static/media/editor.worker.1duyl2hr9iop5.js"
+    },
+    {
+      "label": "editor",
+      "gzipBytes": 123,
+      "path": "dist/ui/static/_next/static/media/editorWebWorkerMain.15kgt-h8_tuhi.js"
     }
   ],
   "disabledLanguageWorkers": [],
-  "editorRuntimeChunkCount": 5,
+  "editorRuntimeChunkCount": 7,
   "editorRuntimeChunks": [
     {
-      "path": "dist/ui/static/_next/static/chunks/2tklwylfuzj8q.js",
-      "gzipBytes": 922728,
-      "rawBytes": 3764223,
+      "path": "dist/ui/static/_next/static/chunks/0gwlcf76fla6w.js",
+      "gzipBytes": 605255,
+      "rawBytes": 2459619,
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/10oufba3tpp4h.js",
-      "gzipBytes": 106160,
-      "rawBytes": 349877,
+      "path": "dist/ui/static/_next/static/chunks/1wzq3xvm5uhkx.js",
+      "gzipBytes": 277894,
+      "rawBytes": 1166236,
+      "workerLabel": null
+    },
+    {
+      "path": "dist/ui/static/_next/static/chunks/13nmm0ns09i4-.js",
+      "gzipBytes": 277255,
+      "rawBytes": 1166236,
+      "workerLabel": null
+    },
+    {
+      "path": "dist/ui/static/_next/static/chunks/3nzj1g_suy_cs.js",
+      "gzipBytes": 111593,
+      "rawBytes": 366819,
       "workerLabel": "editor"
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/0n73dz2_v1il1.js",
-      "gzipBytes": 105525,
-      "rawBytes": 349877,
+      "path": "dist/ui/static/_next/static/chunks/3tftoas-byv_b.js",
+      "gzipBytes": 110748,
+      "rawBytes": 366819,
       "workerLabel": "editor"
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/2_tk5whz4oap9.js",
-      "gzipBytes": 26051,
-      "rawBytes": 87619,
-      "workerLabel": null
+      "path": "dist/ui/static/_next/static/media/editor.worker.1duyl2hr9iop5.js",
+      "gzipBytes": 151,
+      "rawBytes": 240,
+      "workerLabel": "editor"
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/0dpkkh2e69c09.js",
-      "gzipBytes": 25556,
-      "rawBytes": 87619,
-      "workerLabel": null
+      "path": "dist/ui/static/_next/static/media/editorWebWorkerMain.15kgt-h8_tuhi.js",
+      "gzipBytes": 123,
+      "rawBytes": 176,
+      "workerLabel": "editor"
     }
   ],
-  "measurementSha256": "f0d0e986f9d547ce206682fc0ced3c0eddd2d49f568ddd472f937c4868a37207"
+  "measurementSha256": "b3f8f6971df1e46864de754bccb43bc85db9a298499c2adf5c6f71a163c192ef"
 }

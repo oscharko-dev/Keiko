@@ -30,11 +30,11 @@ export const REVIEWED_INSTALL_SCRIPTS = new Map([
   [
     "fsevents",
     {
-      version: "2.3.2",
+      versions: ["2.3.2", "2.3.3"],
       reason:
-        "Transitive devDependency of playwright/vite for macOS file watching. Ships a binding.gyp, " +
-        "so npm treats it as an implicit `install: node-gyp rebuild`; its package.json declares no " +
-        "install or postinstall script of its own. darwin-only and optional.",
+        "Transitive devDependency of playwright/vite for macOS file watching. npm registry " +
+        "metadata marks its install action as `node-gyp rebuild`; the reviewed tarballs are " +
+        "darwin-only optional native watcher packages and do not run a postinstall downloader.",
     },
   ],
   [
@@ -56,6 +56,10 @@ export function packageNameFromLockPath(lockPath) {
   return at === -1 ? lockPath : lockPath.slice(at + "node_modules/".length);
 }
 
+function reviewedVersionsFor(record) {
+  return record.versions ?? [record.version];
+}
+
 /** The three ways one locked install-script package can be wrong. Split out of the loop below so
  * neither function carries the whole decision tree. */
 function problemsForLockedPackage(name, version, record, allowScripts) {
@@ -67,9 +71,11 @@ function problemsForLockedPackage(name, version, record, allowScripts) {
     ];
   }
   const problems = [];
-  if (record.version !== version) {
+  const reviewedVersions = new Set(reviewedVersionsFor(record));
+  if (!reviewedVersions.has(version)) {
     problems.push(
-      `${name} was reviewed at ${record.version} but the lockfile now resolves ${version}. ` +
+      `${name} was reviewed at ${[...reviewedVersions].join(", ")} but the lockfile now ` +
+        `resolves ${version}. ` +
         "Re-read the install script at the new version before updating the recorded version.",
     );
   }
@@ -100,6 +106,24 @@ function unreviewedApprovals(allowScripts, reviewed) {
   return problems;
 }
 
+function staleReviewedVersionProblems(reviewed, locked) {
+  const lockedPairs = new Set(
+    [...locked.values()].map(({ name, version }) => `${name}@${version}`),
+  );
+  const problems = [];
+  for (const [name, record] of reviewed) {
+    for (const version of reviewedVersionsFor(record)) {
+      if (lockedPairs.has(`${name}@${version}`)) continue;
+      problems.push(
+        `${name}@${version} is recorded as a reviewed install-script package but no longer ` +
+          "appears in the lockfile with an install script. Remove that exact version so the " +
+          "record stays honest.",
+      );
+    }
+  }
+  return problems;
+}
+
 /**
  * @param {{packages?: Record<string, {hasInstallScript?: boolean, version?: string}>}} lock
  * @param {{allowScripts?: Record<string, boolean>}} manifest
@@ -123,7 +147,6 @@ export function findInstallScriptApprovalProblems(
     const name = packageNameFromLockPath(lockPath);
     locked.set(`${name}@${entry.version}`, { name, version: entry.version });
   }
-  const lockedNames = new Set([...locked.values()].map((entry) => entry.name));
 
   const problems = [];
   for (const { name, version } of locked.values()) {
@@ -131,15 +154,7 @@ export function findInstallScriptApprovalProblems(
   }
 
   problems.push(...unreviewedApprovals(allowScripts, reviewed));
-
-  for (const name of reviewed.keys()) {
-    if (!lockedNames.has(name)) {
-      problems.push(
-        `${name} is recorded as a reviewed install-script package but no longer appears in the ` +
-          "lockfile with an install script. Remove its entry so the record stays honest.",
-      );
-    }
-  }
+  problems.push(...staleReviewedVersionProblems(reviewed, locked));
 
   return { problems, lockedCount: locked.size };
 }

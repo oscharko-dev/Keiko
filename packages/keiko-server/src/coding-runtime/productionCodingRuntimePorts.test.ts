@@ -364,8 +364,8 @@ describe("production runtime singleton manager", () => {
     });
     expect(stopped.dispose).toHaveBeenCalledOnce();
     expect(runs.has("run-1")).toBe(false);
-    expect(next.start).toHaveBeenCalledWith(launch("run-2"));
-    expect(authority.abandonUnlaunched).not.toHaveBeenCalled();
+    expect(next.start.mock.calls).toEqual([[launch("run-2")]]);
+    expect(authority.abandonUnlaunched.mock.calls).toEqual([]);
   });
 
   it("routes stop, takeover and reconcile only to the live run and cleans it up", async () => {

@@ -112,15 +112,15 @@ describe("theme token contract", () => {
   });
 
   it("does not map the diff-gutter tokens to Monaco theme colours (handled by decorations in #1195)", () => {
-    // Their natural targets are VS Code SCM colours monaco-editor 0.55.1 standalone never registers,
+    // Their natural targets are VS Code SCM colours monaco-editor 0.56.0 standalone never registers,
     // so a theme mapping would be an inert no-op. They stay surfaced in globals.css for the diff editor.
     expect(CHROME_TOKEN_COLOR_IDS["--ed-diff-ins-gutter"]).toBeUndefined();
     expect(CHROME_TOKEN_COLOR_IDS["--ed-diff-rem-gutter"]).toBeUndefined();
     expect(CHROME_TOKEN_COLOR_IDS["--ed-diff-chg-gutter"]).toBeUndefined();
   });
 
-  it("maps only Monaco 0.55 registered colour ids", () => {
-    const monacoRoot = dirname(require.resolve("monaco-editor/package.json"));
+  it("maps only Monaco 0.56 registered colour ids", () => {
+    const monacoRoot = resolve(dirname(require.resolve("monaco-editor")), "..", "..");
     const registered = new Set<string>();
     const scan = (dir: string): void => {
       const stat = statSync(dir);

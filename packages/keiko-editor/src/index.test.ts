@@ -297,7 +297,7 @@ describe("@oscharko-dev/keiko-editor dependency boundary (Issue #1191 acceptance
   it("treats React as a peer dependency, never a bundled runtime dependency", () => {
     const manifest = readManifest();
     for (const packageName of ["react", "react-dom"]) {
-      expect(manifest.peerDependencies?.[packageName]).toBe("^19.2.7");
+      expect(manifest.peerDependencies?.[packageName]).toBe("^19.2.8");
       expect(manifest.dependencies?.[packageName]).toBeUndefined();
       expect(manifest.devDependencies?.[packageName]).toBeUndefined();
     }
@@ -307,7 +307,7 @@ describe("@oscharko-dev/keiko-editor dependency boundary (Issue #1191 acceptance
     const manifest = readManifest();
     const rootManifest = readRootManifest();
 
-    expect(manifest.dependencies?.["monaco-editor"]).toBe("0.55.1");
+    expect(manifest.dependencies?.["monaco-editor"]).toBe("0.56.0");
     expect(manifest.dependencies?.["@monaco-editor/react"]).toBe("4.7.0");
     expect(rootManifest.overrides?.["@monaco-editor/loader"]).toBe("1.7.0");
   });

@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -5,6 +8,7 @@ import {
   classifyWorkerLabel,
   evaluateBundleBudgets,
   isEditorRuntimeChunk,
+  measureReleaseEvidence,
 } from "../editor-release-evidence.mjs";
 
 describe("classifyWorkerLabel", () => {
@@ -117,5 +121,36 @@ describe("evaluateBundleBudgets", () => {
   it("uses the ADR-0042 D3.6 budgets by default", () => {
     expect(RELEASE_EVIDENCE_BUDGETS.lazyEditorPlusMonacoRuntimeGzipBytesBudget).toBe(2_621_440);
     expect(RELEASE_EVIDENCE_BUDGETS.perWorkerChunkGzipBytesBudget).toBe(768_000);
+  });
+});
+
+describe("measureReleaseEvidence", () => {
+  it("includes Monaco worker JavaScript emitted under static media", () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "keiko-release-evidence-"));
+    const staticRoot = join(repoRoot, "dist", "ui", "static");
+    const chunkDir = join(staticRoot, "_next", "static", "chunks");
+    const mediaDir = join(staticRoot, "_next", "static", "media");
+    const mediaWorker = join(mediaDir, "editorWebWorkerMain.abc123.js");
+    try {
+      mkdirSync(chunkDir, { recursive: true });
+      mkdirSync(mediaDir, { recursive: true });
+      writeFileSync(
+        join(staticRoot, "index.html"),
+        '<script src="/_next/static/chunks/app.js"></script>',
+        "utf8",
+      );
+      writeFileSync(join(chunkDir, "app.js"), "console.log('app shell');", "utf8");
+      writeFileSync(join(chunkDir, "runtime.js"), "self.MonacoEnvironment = {};", "utf8");
+      writeFileSync(mediaWorker, "import './editor-runtime-proxy.js';", "utf8");
+
+      const record = measureReleaseEvidence(repoRoot);
+      const mediaWorkerPath = "dist/ui/static/_next/static/media/editorWebWorkerMain.abc123.js";
+      expect(record.editorRuntimeChunks.map((chunk) => chunk.path)).toContain(mediaWorkerPath);
+      expect(record.workers).toContainEqual(
+        expect.objectContaining({ label: "editor", path: mediaWorkerPath }),
+      );
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
   });
 });

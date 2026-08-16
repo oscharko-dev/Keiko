@@ -113,6 +113,14 @@ export function isEditorRuntimeChunk(source) {
   );
 }
 
+function classifyWorkerAssetPath(path) {
+  return /\/_next\/static\/media\/(?:editor\.worker\.[A-Za-z0-9_-]+|editorWebWorkerMain\.[A-Za-z0-9_-]+)\.js$/u.test(
+    path,
+  )
+    ? "editor"
+    : null;
+}
+
 /**
  * Evaluate B2/B3 from a classified chunk inventory. `chunks` is a list of
  * `{ path, gzipBytes, isEditorRuntime, workerLabel }`. The authoritative #1209/ADR-0042 budget
@@ -217,14 +225,23 @@ function measureChunkInventory(repoRoot, chunkDir) {
   return walkJsFiles(chunkDir).map((path) => {
     const buffer = readFileSync(path);
     const source = buffer.toString("utf8");
+    const relativePath = relative(repoRoot, path).split(sep).join("/");
+    const workerLabel = classifyWorkerLabel(source) ?? classifyWorkerAssetPath(relativePath);
     return {
-      path: relative(repoRoot, path).split(sep).join("/"),
+      path: relativePath,
       rawBytes: buffer.length,
       gzipBytes: gzipSizeBytes(buffer),
-      isEditorRuntime: isEditorRuntimeChunk(source),
-      workerLabel: classifyWorkerLabel(source),
+      isEditorRuntime: isEditorRuntimeChunk(source) || workerLabel !== null,
+      workerLabel,
     };
   });
+}
+
+function measureStaticJavaScriptInventory(repoRoot, assetDirs) {
+  return assetDirs
+    .filter((dir) => existsSync(dir))
+    .flatMap((dir) => measureChunkInventory(repoRoot, dir))
+    .sort((left, right) => left.path.localeCompare(right.path));
 }
 
 function measurementFingerprint(record) {
@@ -281,7 +298,10 @@ export function measureReleaseEvidence(repoRoot) {
       `Static export chunks ${relative(repoRoot, chunkDir)} not found. Run \`npm run build:ui\` first.`,
     );
   }
-  const chunks = measureChunkInventory(repoRoot, chunkDir);
+  const chunks = measureStaticJavaScriptInventory(repoRoot, [
+    chunkDir,
+    join(outDir, "_next", "static", "media"),
+  ]);
 
   const firstLoad = measureFirstLoad(repoRoot, outDir);
   const budgets = evaluateBundleBudgets(chunks);
@@ -346,12 +366,12 @@ function printReport(record) {
       `${record.b3.largestLoadedWorkerLabel ?? "none"} ${fmtKiB(record.b3.largestLoadedWorkerBytes)} / ${fmtKiB(record.b3.budgetBytes)})`,
   );
   lines.push("");
-  lines.push("Monaco worker chunks (gzip):");
+  lines.push("Monaco worker assets (gzip):");
   for (const w of record.workers.sort((a, b) => b.gzipBytes - a.gzipBytes)) {
     lines.push(`  ${w.label.padEnd(7)} ${fmtKiB(w.gzipBytes).padStart(11)}  ${w.path}`);
   }
   lines.push("");
-  lines.push("Editor + Monaco runtime chunks (gzip, descending):");
+  lines.push("Editor + Monaco runtime assets (gzip, descending):");
   for (const c of record.editorRuntimeChunks) {
     const tag = c.workerLabel ? `[worker:${c.workerLabel}]` : "[runtime]";
     lines.push(`  ${fmtKiB(c.gzipBytes).padStart(11)}  ${tag.padEnd(16)} ${c.path}`);
