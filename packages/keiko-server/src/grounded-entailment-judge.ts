@@ -71,6 +71,38 @@ function capabilityFor(deps: UiHandlerDeps, modelId: string): ModelCapability | 
     : findConfiguredCapability(deps.config, modelId);
 }
 
+// KEIKO-0359: why no judge could be built. Previously every one of these collapsed into a bare
+// `undefined`, so the ADR-0144 entailment stage went permanently inert for a model with no
+// operator-visible difference between "Gateway Setup never enriched this model's capability
+// metadata" (a configuration gap, fixable by re-running setup) and "this model genuinely cannot
+// do structured output" (a real incompatibility). The stage classifies and reports these.
+export type EntailmentJudgeUnavailableReason =
+  "capability-unenriched" | "model-incompatible" | "model-port-unavailable";
+
+// True when the capability came from an explicit source — a `config.capabilities` entry written
+// by Gateway Setup, or the built-in registry — rather than `defaultCapabilityForConfiguredModel`'s
+// placeholder. `findConfiguredCapability` resolves those three in that order, so an id absent from
+// both explicit sources can only have been served by the placeholder.
+function hasEnrichedCapability(deps: UiHandlerDeps, modelId: string): boolean {
+  if (findCapability(modelId) !== undefined) return true;
+  return deps.config?.capabilities?.some((capability) => capability.id === modelId) === true;
+}
+
+// Classifies an unavailable judge. Returns `undefined` when a judge CAN be built, so a caller can
+// use it as the single explanation seam without re-deriving the checks createGatewayEntailmentJudge
+// already performs. Deliberately does not widen compatibility: an unenriched model's structured
+// output support is genuinely unknown, and ADR-0144 D4 requires fail-closed degradation.
+export function entailmentJudgeUnavailableReason(
+  deps: UiHandlerDeps,
+  modelId: string,
+): EntailmentJudgeUnavailableReason | undefined {
+  if (!isModelCompatible(capabilityFor(deps, modelId))) {
+    return hasEnrichedCapability(deps, modelId) ? "model-incompatible" : "capability-unenriched";
+  }
+  if (deps.modelPortFactory(modelId) === undefined) return "model-port-unavailable";
+  return undefined;
+}
+
 function buildEntailmentResponseFormat(): Extract<
   GatewayRequest["responseFormat"],
   { readonly type: "json_schema" }

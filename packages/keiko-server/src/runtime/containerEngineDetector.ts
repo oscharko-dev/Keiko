@@ -279,11 +279,23 @@ export async function detectContainerEngines(
     };
   }
   const runDeps = buildProbeDeps(deps);
-  const statuses: ContainerEngineStatus[] = [];
-  for (const engine of engines) {
-    const resolution = await probeEngine(engine, deps, runDeps);
-    statuses.push(statusFromResolution(engine, resolution));
-  }
+  // KEIKO-0312: probe every engine concurrently. Sequentially, worst-case latency was
+  // `engines × 2 × PER_CALL_TIMEOUT_MS` (two calls per engine: `version` then `info`), i.e.
+  // roughly double the deadlineMs this response reports back to its caller — the field was
+  // echoed metadata, never a bound. Concurrently the worst case is one engine's own cost,
+  // `2 × PER_CALL_TIMEOUT_MS` = 4_000ms, which is exactly DEFAULT_CONTAINER_PROBE_DEADLINE_MS,
+  // so the reported deadline becomes structurally true instead of aspirational.
+  //
+  // Parallelising rather than short-circuiting on expiry (the sibling capabilityDetector.ts
+  // approach) is deliberate: every engine still gets a real probe, so a caller never sees an
+  // engine reported unavailable merely because an earlier engine was slow. Each probe keeps
+  // its own AbortController and PER_CALL_TIMEOUT_MS, and runCommand enforces its own resource
+  // limits, so concurrency here is bounded by the (small, fixed) engine list.
+  const statuses: readonly ContainerEngineStatus[] = await Promise.all(
+    engines.map(async (engine) =>
+      statusFromResolution(engine, await probeEngine(engine, deps, runDeps)),
+    ),
+  );
   return {
     schemaVersion: CONTAINER_RUNTIME_SCHEMA_VERSION,
     generatedAtMs,

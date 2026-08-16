@@ -11,7 +11,9 @@
 // via its own signal). Destroying the socket fires "close" on res, which the caller's existing
 // res.on("close", …) listener picks up for any additional cleanup (e.g. registry deregistration).
 
+import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
+import { emitServerDiagnostic, type ServerDiagnosticSink } from "./diagnostics-log.js";
 
 /**
  * Backpressure signal (GEN-PERF-CHAT-006). Emitted exactly once when a write is rejected because the
@@ -54,4 +56,29 @@ export function writeOrDestroy(
     res.destroy();
   }
   return accepted;
+}
+
+/**
+ * Builds the production `onBackpressure` observer for an SSE route: a body-free operator diagnostic
+ * naming the stream that was killed for not draining. Without this, a slow-client termination is
+ * indistinguishable from an intentional cancel in the operator trail — the protective abort+destroy
+ * happens either way, but nothing records WHY the stream ended.
+ *
+ * Carries only the frame byte count (never body bytes), so it cannot leak model tokens if logged.
+ */
+export function sseBackpressureReporter(
+  deps: { readonly diagnostics?: ServerDiagnosticSink | undefined },
+  stream: string,
+): (signal: SseBackpressureSignal) => void {
+  return (signal: SseBackpressureSignal): void => {
+    emitServerDiagnostic(deps.diagnostics, {
+      correlationId: randomUUID(),
+      timestamp: new Date().toISOString(),
+      operation: `sse.${stream}`,
+      source: `sse.${stream}.backpressure`,
+      errorClass: "SseBackpressureKill",
+      message: "SSE stream destroyed because the client stopped draining.",
+      frameBytes: signal.frameBytes,
+    });
+  };
 }

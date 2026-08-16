@@ -70,10 +70,16 @@ function assertAbort(signal: AbortSignal | undefined): void {
   }
 }
 
-function requestRelaunch(layout: PortableActivationLayout, spawnFn: SpawnFn): void {
+// Returns the spawned child so the rollback path can terminate it (KEIKO-0493). The process is
+// still unref'd — this server must never keep the event loop alive for the relaunch — but a
+// cancellation landing between here and the relaunch's own version-verification poll would
+// otherwise roll back the promoted layout underneath a live process that is starting up against
+// exactly those files.
+function requestRelaunch(layout: PortableActivationLayout, spawnFn: SpawnFn): ChildProcess {
   try {
     const child = spawnFn(layout.launcherPath, [], { detached: true, stdio: "ignore" });
     child.unref();
+    return child;
   } catch {
     throw new PortableUpdateActivationError(
       "portable-relaunch-failed",
@@ -277,6 +283,9 @@ interface ActivationContext {
 interface ActivationProgress {
   promoted?: PortablePromotionResult | undefined;
   recoveryPhase?: PortableActivationRecovery["phase"] | undefined;
+  // The relaunch child, once spawned, so a rollback can terminate it before reverting the
+  // layout it was launched against (KEIKO-0493).
+  relaunchChild?: ChildProcess | undefined;
 }
 
 function recoveryRecord(
@@ -337,7 +346,7 @@ async function verifyAndCommitPromotion(
     readonly promotion: PortablePromotionResult;
   },
 ): Promise<void> {
-  requestRelaunch(prepared.layout, context.options.spawnFn ?? spawn);
+  progress.relaunchChild = requestRelaunch(prepared.layout, context.options.spawnFn ?? spawn);
   await verifyRelaunch(context.options, context.request);
   writePortableActivationRecovery({
     stateDir: context.stateDir,
@@ -356,6 +365,17 @@ async function verifyAndCommitPromotion(
 function restoreFailedPromotion(context: ActivationContext, progress: ActivationProgress): void {
   if (progress.recoveryPhase === undefined || progress.recoveryPhase === "verified") return;
   try {
+    // KEIKO-0493: terminate a relaunch that was already spawned before reverting the layout it
+    // was launched against, so a cancelled activation cannot leave a live process running on
+    // files that are about to be rolled back — or race its own startup reads against those
+    // writes. Best-effort and non-blocking by design: this function is documented to stay
+    // best-effort so the recovery marker remains authoritative even if cleanup partly fails,
+    // and waiting for the child to fully exit would break that contract.
+    try {
+      progress.relaunchChild?.kill();
+    } catch {
+      // A child that already exited (or cannot be signalled) needs no rollback action.
+    }
     const paths =
       progress.promoted?.paths ??
       recoveryPaths({
