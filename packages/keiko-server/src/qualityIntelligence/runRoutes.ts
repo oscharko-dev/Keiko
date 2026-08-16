@@ -17,6 +17,7 @@ import type {
   QualityIntelligenceCapsuleSetSource,
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
+  QualityIntelligenceRunStreamDone,
   QualityIntelligenceRunStreamMessage,
   QualityIntelligenceSkippedSource,
   QualityIntelligenceSourceSummary,
@@ -25,7 +26,10 @@ import type {
   QualityIntelligenceModelRouting,
   QualityIntelligence as QI,
 } from "@oscharko-dev/keiko-contracts";
-import { resolveQualityIntelligenceRetentionPolicyId } from "@oscharko-dev/keiko-contracts";
+import {
+  deriveQualityIntelligenceTerminalDegradation,
+  resolveQualityIntelligenceRetentionPolicyId,
+} from "@oscharko-dev/keiko-contracts";
 import { QualityIntelligenceHardening } from "@oscharko-dev/keiko-quality-intelligence";
 import { SSE_HEADERS } from "../sse.js";
 import { writeOrDestroy } from "../sse-write.js";
@@ -503,6 +507,25 @@ function writeAcceptedFrame(write: WriteFn, accepted: QiRunAccepted): void {
   });
 }
 
+function terminalReasonFields(
+  deps: UiHandlerDeps,
+  summary: QiExecutionSummary,
+): Pick<QualityIntelligenceRunStreamDone, "degraded" | "reasonSummary"> {
+  const persistedDegradation = deriveQualityIntelligenceTerminalDegradation(
+    summary.status,
+    summary.evidence?.manifest.modelRouting?.stageFailures,
+  );
+  // Failed-run summaries and persisted degraded reasons are already bounded/redacted server-side;
+  // redact once more at the final browser boundary without inferring degradation from free text.
+  const reason = persistedDegradation?.reasonSummary ?? summary.reasonSummary;
+  const reasonSummary = reason !== undefined ? applyRedactor(deps.redactor, reason) : undefined;
+  if (persistedDegradation !== undefined && reasonSummary !== undefined) {
+    return { degraded: true, reasonSummary };
+  }
+  if (summary.status === "failed" && reasonSummary !== undefined) return { reasonSummary };
+  return {};
+}
+
 export function doneFrameForSummary(
   deps: UiHandlerDeps,
   runId: string,
@@ -510,14 +533,6 @@ export function doneFrameForSummary(
   totals: StreamTotals,
   modelRouting?: QualityIntelligenceModelRouting,
 ): QualityIntelligenceRunStreamMessage {
-  // Surface the bounded reasonSummary for BOTH a terminal failed run and a succeeded-but-degraded run
-  // (model/parser fell back to the deterministic baseline). The reason is already safeReasonSummary-
-  // bounded server-side; re-redact defensively before it reaches the wire.
-  const reasonSummary =
-    summary.reasonSummary !== undefined
-      ? applyRedactor(deps.redactor, summary.reasonSummary)
-      : undefined;
-  const degraded = summary.status === "succeeded" && reasonSummary !== undefined ? true : undefined;
   return {
     type: "done",
     runId,
@@ -526,8 +541,7 @@ export function doneFrameForSummary(
     ...(modelRouting !== undefined
       ? { modelRouting: { resolved: modelRouting.resolved, preflight: modelRouting.preflight } }
       : {}),
-    ...(reasonSummary !== undefined ? { reasonSummary } : {}),
-    ...(degraded !== undefined ? { degraded } : {}),
+    ...terminalReasonFields(deps, summary),
   };
 }
 

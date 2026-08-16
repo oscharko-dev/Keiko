@@ -1014,14 +1014,26 @@ describe("doneFrameForSummary — degraded vs failed reasonSummary surfacing (QI
   const summaryWith = (
     status: "succeeded" | "failed",
     reasonSummary: string | undefined,
+    stageFailures?: readonly {
+      readonly stage: "generate" | "judge";
+      readonly reasonSummary: string;
+    }[],
   ): Parameters<typeof doneFrameForSummary>[2] =>
-    ({ status, reasonSummary }) as unknown as Parameters<typeof doneFrameForSummary>[2];
+    ({
+      status,
+      reasonSummary,
+      ...(stageFailures !== undefined
+        ? { evidence: { manifest: { modelRouting: { stageFailures } } } }
+        : {}),
+    }) as unknown as Parameters<typeof doneFrameForSummary>[2];
 
-  it("flags a succeeded run that carries a reason as degraded and surfaces the reason", () => {
+  it("flags persisted generation-stage failure evidence and surfaces its safe reason", () => {
     const frame = doneFrameForSummary(
       deps,
       "run-1",
-      summaryWith("succeeded", "qi-run-error"),
+      summaryWith("succeeded", "qi-run-error", [
+        { stage: "generate", reasonSummary: "qi-run-error" },
+      ]),
       totals,
     ) as {
       status: string;
@@ -1031,6 +1043,32 @@ describe("doneFrameForSummary — degraded vs failed reasonSummary surfacing (QI
     expect(frame.status).toBe("succeeded");
     expect(frame.reasonSummary).toBe("qi-run-error");
     expect(frame.degraded).toBe(true);
+  });
+
+  it("flags a judge-only persisted stage failure even when the summary has no generation reason", () => {
+    const frame = doneFrameForSummary(
+      deps,
+      "run-judge-degraded",
+      summaryWith("succeeded", undefined, [
+        { stage: "judge", reasonSummary: "qi-judge-unavailable" },
+      ]),
+      totals,
+    ) as { degraded?: boolean; reasonSummary?: string };
+
+    expect(frame.degraded).toBe(true);
+    expect(frame.reasonSummary).toBe("qi-judge-unavailable");
+  });
+
+  it("does not infer degradation from a succeeded summary reason without persisted stage evidence", () => {
+    const frame = doneFrameForSummary(
+      deps,
+      "run-unqualified-reason",
+      summaryWith("succeeded", "qi-run-error"),
+      totals,
+    ) as { degraded?: boolean; reasonSummary?: string };
+
+    expect(frame.degraded).toBeUndefined();
+    expect(frame.reasonSummary).toBeUndefined();
   });
 
   it("surfaces a failed run's reason but does NOT mark it degraded", () => {

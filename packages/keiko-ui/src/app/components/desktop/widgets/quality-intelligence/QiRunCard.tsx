@@ -95,7 +95,7 @@ function SummaryStrip({
       <div className="qi-run-summary-item">
         <dt>{t("common.status")}</dt>
         <dd>
-          <StatusBadge status={detail.status} />
+          <StatusBadge status={detail.status} degraded={detail.degraded === true} />
         </dd>
       </div>
       <div className="qi-run-summary-item">
@@ -127,6 +127,21 @@ function SummaryStrip({
         </div>
       ) : null}
     </dl>
+  );
+}
+
+function DegradedRunNotice({
+  detail,
+  t,
+}: {
+  readonly detail: QualityIntelligenceUiRunDetail;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (detail.degraded !== true) return null;
+  return (
+    <p className="qi-degraded-notice" data-testid="qi-run-degraded">
+      {t("qi.run.degradedNotice", { reason: detail.reasonSummary ?? "qi-model-stage-failed" })}
+    </p>
   );
 }
 
@@ -678,6 +693,7 @@ function RunCardContent({
         reviewerWarningId={reviewerWarningId}
       />
       <SummaryStrip detail={detail} t={t} />
+      <DegradedRunNotice detail={detail} t={t} />
       <FindingsList detail={detail} t={t} />
       <CoveragePanel detail={detail} t={t} />
       <DriftSection

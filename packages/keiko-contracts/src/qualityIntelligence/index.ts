@@ -260,6 +260,7 @@ export type {
   QualityIntelligenceModelPreflightStageResult,
   QualityIntelligenceModelPreflightSummary,
   QualityIntelligenceModelStageFailure,
+  QualityIntelligenceTerminalDegradation,
   QualityIntelligenceModelRouting,
   QualityIntelligenceModelPolicyResponse,
   QualityIntelligenceModelPolicyPreflightRequest,
@@ -274,4 +275,8 @@ export type {
   QualityIntelligenceRunStreamError,
   QualityIntelligenceRunStreamMessage,
 } from "./bffWire.js";
-export { QUALITY_INTELLIGENCE_RUN_STATUSES, QUALITY_INTELLIGENCE_ERROR_CODES } from "./bffWire.js";
+export {
+  QUALITY_INTELLIGENCE_RUN_STATUSES,
+  QUALITY_INTELLIGENCE_ERROR_CODES,
+  deriveQualityIntelligenceTerminalDegradation,
+} from "./bffWire.js";
