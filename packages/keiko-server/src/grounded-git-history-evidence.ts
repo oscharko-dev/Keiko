@@ -22,6 +22,7 @@ import {
 import {
   containsPath,
   defaultGitProcessRunner,
+  GIT_BASE_ARGS,
   type GitProcessRunner,
 } from "@oscharko-dev/keiko-git";
 
@@ -175,7 +176,7 @@ async function resolveGitRepositoryForHistory(
     return undefined;
   }
   const revParse = await runner(
-    ["--no-pager", "--no-optional-locks", "-C", selectedRoot, "rev-parse", "--show-toplevel"],
+    [...GIT_BASE_ARGS, "-C", selectedRoot, "rev-parse", "--show-toplevel"],
     { cwd: selectedRoot, maxBytes: 16 * 1024, timeoutMs: GIT_HISTORY_TIMEOUT_MS },
   );
   if (revParse.exitCode !== 0) {
@@ -210,8 +211,7 @@ async function resolveGitRepositoryForHistory(
 function gitHistoryArgs(repositoryRoot: string, selectedRootPrefix: string): readonly string[] {
   const pathspec = selectedRootPrefix.length > 0 ? selectedRootPrefix : ".";
   return [
-    "--no-pager",
-    "--no-optional-locks",
+    ...GIT_BASE_ARGS,
     "-C",
     repositoryRoot,
     "-c",

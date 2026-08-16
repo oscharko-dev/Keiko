@@ -30,24 +30,47 @@ export interface SseWriter {
 }
 
 const DEFAULT_BUFFER_CAPACITY = 512;
+// 1 MiB parity with CODING_RUNTIME_EVENT_HUB_MAX_BYTES. Small enough that one large
+// patch:proposed diff cannot pin megabytes of buffered replay per active run, big
+// enough that a normal SSE burst never trips it.
+const DEFAULT_MAX_BUFFER_BYTES = 1024 * 1024;
 
 export interface QueueEventSinkOptions {
   // Max events retained for replay. Oldest are dropped once the cap is exceeded (bounded memory).
   readonly bufferCapacity?: number | undefined;
+  // Max aggregate serialized bytes retained for replay. Oldest are dropped once exceeded.
+  readonly maxBytes?: number | undefined;
+}
+
+interface BufferedEntry {
+  readonly event: StreamEvent;
+  readonly bytes: number;
+}
+
+const utf8Encoder = new TextEncoder();
+
+function measureEventBytes(event: StreamEvent): number {
+  return utf8Encoder.encode(JSON.stringify(event)).length;
 }
 
 export class QueueEventSink {
   // retainsRawContent is intentionally absent (never true): the harness must redact before emit.
-  private readonly buffer: StreamEvent[] = [];
+  private readonly buffer: BufferedEntry[] = [];
+  private bufferedBytes = 0;
   private readonly capacity: number;
+  private readonly maxBytes: number;
   private readonly writers = new Set<SseWriter>();
   private terminated = false;
 
   // Bound so the sink can be passed directly as an `EventSink`/`WorkflowEventSink`/`BugWorkflowEventSink`.
   readonly emit = (event: StreamEvent): void => {
-    this.buffer.push(event);
-    if (this.buffer.length > this.capacity) {
-      this.buffer.shift();
+    const bytes = measureEventBytes(event);
+    this.buffer.push({ event, bytes });
+    this.bufferedBytes += bytes;
+    while (this.buffer.length > this.capacity || this.bufferedBytes > this.maxBytes) {
+      const dropped = this.buffer.shift();
+      if (dropped === undefined) break;
+      this.bufferedBytes -= dropped.bytes;
     }
     const failed: SseWriter[] = [];
     for (const writer of this.writers) {
@@ -69,13 +92,14 @@ export class QueueEventSink {
 
   constructor(options: QueueEventSinkOptions = {}) {
     this.capacity = options.bufferCapacity ?? DEFAULT_BUFFER_CAPACITY;
+    this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BUFFER_BYTES;
   }
 
   // Attaches an SSE writer: replays the buffered events with `seq` strictly greater than
   // `afterSeq` (Last-Event-ID resume), then keeps the writer attached for live fan-out. Returns a
   // detach function the caller invokes on client disconnect to stop fan-out and avoid leaks.
   attach(writer: SseWriter, afterSeq: number): () => void {
-    for (const event of this.buffer) {
+    for (const { event } of this.buffer) {
       if (event.seq > afterSeq) {
         const accepted = writer.write(event);
         if (accepted === false) {
@@ -109,6 +133,12 @@ export class QueueEventSink {
 
   // Snapshot of buffered events with `seq` strictly greater than `afterSeq` (inspection/replay aid).
   buffered(afterSeq = -1): readonly StreamEvent[] {
-    return this.buffer.filter((event) => event.seq > afterSeq);
+    return this.buffer.filter(({ event }) => event.seq > afterSeq).map(({ event }) => event);
+  }
+
+  // Aggregate serialized-bytes retained across all buffered events. Exposed for tests and
+  // observability; the sink evicts internally so callers do not have to poll this.
+  bufferedByteSize(): number {
+    return this.bufferedBytes;
   }
 }

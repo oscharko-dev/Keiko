@@ -3,10 +3,11 @@
 // Realtime Voice persists final transcripts through the normal chat lifecycle.
 //
 // Tagged @smoke so the Studio browser quality gate exercises it. The required `ci` check does not run
-// Playwright; the executable AC coverage that runs in `ci` lives in the keiko-contracts + keiko-server +
-// keiko-ui suites (voice-session-recap contract, voice-recap route, the recap hook, the VoiceRecap
-// component, and the ChatWindow voice integration) and the keiko-evaluations voice-recap suite, which
-// prove governed candidate creation, dormancy, content-free audit, and secret redaction (AC1–AC6).
+// Playwright; the executable AC coverage that runs in `ci` is server-route-level only — the
+// voice-session-recap contract tests (packages/keiko-contracts/src/voice-session-recap.test.ts) and
+// the voice-recap route tests (packages/keiko-server/src/voice-recap.test.ts). There is no
+// client-side integration in the current tree (ADR-0109 keeps the route dormant pending
+// re-activation), so this smoke asserts only what the browser can actually observe today.
 
 import { expect, test, type Page } from "@playwright/test";
 
