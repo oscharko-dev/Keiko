@@ -267,6 +267,43 @@ describe("portable update activation", () => {
     );
   });
 
+  // KEIKO-0493: a cancellation landing between requestRelaunch() and the relaunch's own
+  // version-verification poll used to roll back the promoted layout while a live process,
+  // spawned against exactly those files, was starting up. `kill` appeared nowhere in the
+  // module before this fix, so the spawned child simply outlived the rollback.
+  it("terminates an already-spawned relaunch before rolling the promotion back (KEIKO-0493)", async () => {
+    const install = await makeInstall();
+    mkdirSync(install.stateDir, { recursive: true });
+    const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
+    const kill = vi.fn();
+    const activator = createPortableUpdateActivator({
+      env: {
+        KEIKO_STATE_DIR: install.stateDir,
+        APPDATA: join(install.home, "AppData", "Roaming"),
+        LOCALAPPDATA: join(install.home, "AppData", "Local"),
+      },
+      homedir: () => install.home,
+      localState,
+      spawnFn: () => ({ unref: vi.fn(), kill }) as unknown as ChildProcess,
+      // Fails verification AFTER the relaunch has been spawned — exactly the window the
+      // finding describes.
+      versionVerifier: () => Promise.resolve(false),
+    });
+
+    await expect(
+      activator.activate({
+        sessionId: "session-relaunch-rollback",
+        targetVersion: TARGET_VERSION,
+        stage: stageSummary(),
+        runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
+      }),
+    ).rejects.toMatchObject({ reason: "portable-version-verification-failed" });
+
+    expect(kill).toHaveBeenCalledTimes(1);
+    // The rollback itself still completed — terminating the child must not replace it.
+    expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
+  });
+
   it("refreshes a quoted Windows shortcut when the managed launcher path contains spaces", async () => {
     const base = await mkdtemp(join(tmpdir(), "keiko-portable-activation-"));
     tempRoots.push(base);
