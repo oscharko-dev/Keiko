@@ -2192,6 +2192,21 @@ describe("makeMutations.minimize/restore", () => {
 });
 
 describe("makeMutations.toggleTool — Local Knowledge singleton", () => {
+  it("opens a new tool above a persisted window when the z counter is stale", () => {
+    let wins: AppWindow[] | null = [{ ...win("chat", { chatId: "chat-1" }, "chat-1"), z: 10 }];
+    const { toggleTool } = makeMutations({
+      setWins: (update) => {
+        wins = typeof update === "function" ? update(wins) : update;
+      },
+      zc: { current: 0 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    toggleTool("settings");
+
+    expect(wins?.find((window) => window.id === "settings")).toMatchObject({ z: 11 });
+  });
+
   it("restores an existing navigation window above a later chat window", () => {
     let wins: AppWindow[] | null = [
       { ...win("settings", {}, "settings"), minimized: true, z: 2 },
