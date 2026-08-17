@@ -65,6 +65,15 @@ if [[ "$invalid_supervisor_status" -eq 0 ]]; then
   exit 1
 fi
 
+# KEIKO-0277: run the darwin protocol harness. Without arguments it runs the platform-independent
+# source contract only (fd-3/fd-4 close pins, non-PATH spawn, no shell exec) — that alone catches
+# a silent deletion of the trust boundary and is worth running on every PR. Behavioural
+# qualification needs the installed Endpoint Security system extension to be ACTIVE (no hosted
+# runner has that), so it is opt-in: `--helper` in the release pipeline, `--compile` on a
+# workstation with the extension installed. Neither is set here; the release path in
+# scripts/qualify-macos-runtime-release.mjs continues to pass `--helper <exact staged binary>`.
+node "$runtime_root/test-protocol.mjs"
+
 extension_root="$runtime_root/system-extension"
 objective_c_flags=(-fobjc-arc -fblocks -Wall -Wextra -Werror -O2 -arch "$architecture")
 extension="$extension_root/keiko_runtime_monitor.m"

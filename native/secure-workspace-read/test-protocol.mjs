@@ -16,6 +16,12 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { resolveWindowsMsvcEnv, windowsToolFromPath } from "../../scripts/lib/windows-msvc.mjs";
+import {
+  foldAdjacentStringLiterals,
+  prepareCSource,
+  stripCComments,
+  stripStringLiteralBodies,
+} from "../lib/c-source-scanner.mjs";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 
@@ -97,6 +103,74 @@ function request(root, path, { cap = 65_536, trailing = Buffer.alloc(0) } = {}) 
   pathBytes.copy(frame, 20 + rootBytes.length);
   return Buffer.concat([frame, trailing]);
 }
+
+// KEIKO-0382: the helper's frame parser has ten guards at its trust boundary (version, reserved,
+// declared vs supplied lengths, size caps, NUL and UTF-8 in the path) and zero of them were
+// exercised. `request()` above cannot express the malformed cases those guards exist for because
+// it derives every header field from the payload; this sibling builder decouples them so a frame
+// can carry a declared length that DIFFERS from the bytes actually appended, an out-of-domain
+// version, a non-zero reserved half-word, or arbitrary raw path bytes including NULs and invalid
+// UTF-8. Kept small and single-purpose: assertProtocolCases uses it, `request()` stays the
+// well-formed builder every other case still calls.
+const MALFORMED_DEFAULTS = {
+  root: "",
+  pathBytes: Buffer.alloc(0),
+  cap: 65_536,
+  version: 1,
+  reserved: 0,
+  trailing: Buffer.alloc(0),
+  // Codex 3793830395 on #3202: default magic is `KSR1` so existing malformed-shape probes
+  // keep exercising the OTHER guards (version, reserved, size cap, UTF-8, NUL). The magic
+  // guard itself is pinned by a dedicated case that overrides this to a non-`KSR1` value.
+  magic: "KSR1",
+};
+
+// KEIKO-0382 (review-follow-up): the builder now accepts raw `rootBytes` alongside the string
+// `root`, mirroring `pathBytes` — the helper's parser rejects NUL and invalid UTF-8 in BOTH
+// fields, and covering only `path` left the equivalent `root` guards untested. When `rootBytes`
+// is supplied, `root` is ignored.
+function malformedRequest(overrides = {}) {
+  const options = { ...MALFORMED_DEFAULTS, ...overrides };
+  const rootBuf = Buffer.isBuffer(options.rootBytes)
+    ? options.rootBytes
+    : Buffer.from(options.root, "utf8");
+  const pathBuf = Buffer.isBuffer(options.pathBytes)
+    ? options.pathBytes
+    : Buffer.from(options.pathBytes, "utf8");
+  const declaredRootLen = options.declaredRootLen ?? rootBuf.length;
+  const declaredPathLen = options.declaredPathLen ?? pathBuf.length;
+  const frame = Buffer.alloc(20 + rootBuf.length + pathBuf.length);
+  // Codex 3793830395 on #3202: allow overriding the request magic so a non-`KSR1` case can
+  // pin the `memcmp(header, "KSR1", 4)` guard in `secure_workspace_read.c:117`. Without
+  // this override the entire malformed-frame suite always sent `KSR1`, so if the helper's
+  // magic check were deleted the suite would stay green even though the helper now accepts
+  // arbitrary frames.
+  const magicBuf = Buffer.isBuffer(options.magicBytes)
+    ? options.magicBytes
+    : Buffer.from(options.magic, "ascii");
+  if (magicBuf.length !== 4) {
+    throw new Error("magic must be exactly 4 bytes; got " + magicBuf.length);
+  }
+  magicBuf.copy(frame, 0);
+  frame.writeUInt16LE(options.version, 4);
+  frame.writeUInt16LE(options.reserved, 6);
+  frame.writeUInt32LE(declaredRootLen, 8);
+  frame.writeUInt32LE(declaredPathLen, 12);
+  frame.writeUInt32LE(options.cap, 16);
+  rootBuf.copy(frame, 20);
+  pathBuf.copy(frame, 20 + rootBuf.length);
+  return Buffer.concat([frame, options.trailing]);
+}
+
+// The helper's own limits. Codex 3792928019/3793028202 on #3202: the earlier form only had
+// over-cap probes (`limit + 1` → status 1). If the C constant were lowered, an over-cap probe
+// stayed over-cap and the assertion still passed — silent drift. The at-boundary probes below
+// (in `assertBoundaryProbes`) send the exact `limit` value and expect a NON-malformed status;
+// if the C constant drops, the at-boundary case becomes over-cap and the assertion trips. So
+// the pair (`limit` accepted + `limit + 1` rejected) actually pins the boundary, not the
+// harness-side value in isolation.
+const HARNESS_KSR_MAX_ROOT = 32 * 1024;
+const HARNESS_KSR_MAX_PATH = 4 * 1024;
 
 function spawnHelper(binary, input, paused, mutate) {
   const started = performance.now();
@@ -215,8 +289,46 @@ async function compile(binary, paused = false) {
   });
 }
 
+// KEIKO-0417: the 17 checks below used to run against RAW file text, so a security control that
+// survived only as a `/* ... */` comment still satisfied `assert.match` and the deleted-but-
+// documented behaviour passed as if it were live. Strip C block comments and line comments before
+// matching. Two composition modes over the shared primitives in `../lib/c-source-scanner.mjs`:
+//   - `stripCommentsAndStrings` blanks string literal bodies too — every assertion whose subject
+//     is a code identifier uses this.
+//   - `stripCommentsOnly` preserves string literals verbatim — the two assertions that observe
+//     bytestrings inside `"..."` (WINDOWS_RESERVED_STEMS pass and `ascii_name_equals(...,
+//     "GLOBALROOT")`) use this.
+//
+// Coderabbit 3793145636 on #3202: the earlier form duplicated the scanner primitives verbatim
+// across this file and `native/runtime-supervisor/macos/test-protocol.mjs`, so a fix to one
+// had to be applied to both in lockstep. Consolidated behind the shared module; only the
+// composition helpers and the pin configuration stay local.
+function stripCommentsAndStrings(rawSource) {
+  return stripStringLiteralBodies(preparedSource(rawSource));
+}
+
+function stripCommentsOnly(rawSource) {
+  return preparedSource(rawSource);
+}
+
+// Coderabbit 3793711083 on #3202: the six-stage translation-phase composition (line splices →
+// comment strip → preprocessor branch strip → escape decode → adjacent-literal fold → path
+// normalization) lives in `prepareCSource` in the shared scanner. Both harnesses call it so a
+// change to the ordering lands in both gates in lockstep — earlier the same composition was
+// duplicated here and in `native/runtime-supervisor/macos/test-protocol.mjs`, so any
+// correction had to be applied twice. See `prepareCSource` for the phase-by-phase rationale.
+function preparedSource(rawSource) {
+  return prepareCSource(rawSource);
+}
+
 async function assertWindowsSourceContract() {
-  const nativeSource = await readFile(source, "utf8");
+  const rawSource = await readFile(source, "utf8");
+  const nativeSource = stripCommentsAndStrings(rawSource);
+  // Comments-only strip for the two assertions whose subject is a string-literal body inside
+  // `"..."`. Reading the RAW source for those left a commented-out reserved-stem list or a
+  // commented-out `ascii_name_equals(..., "GLOBALROOT")` invocation visible to the assertion,
+  // which is precisely the regression the KEIKO-0417 rewrite exists to catch.
+  const nativeSourceCommentsStripped = stripCommentsOnly(rawSource);
   assert.match(nativeSource, /GetFinalPathNameByHandleW\(root,/u);
   assert.match(nativeSource, /GetFinalPathNameByHandleW\(file,/u);
   assert.match(
@@ -231,16 +343,1392 @@ async function assertWindowsSourceContract() {
     /_setmode\(_fileno\(stdin\), _O_BINARY\).*_setmode\(_fileno\(stdout\), _O_BINARY\)/su,
   );
   assert.match(nativeSource, /if \(!binary_standard_io\(\)\) return 1;.*parse_request\(/su);
-  for (const stem of WINDOWS_RESERVED_STEMS) assert.ok(nativeSource.includes(`"${stem}"`));
-  assert.match(nativeSource, /while \(name_length < length && component\[name_length\] != '\.'\)/u);
-  assert.match(nativeSource, /ascii_name_equals\(component, name_length, "GLOBALROOT"\)/u);
+  for (const stem of WINDOWS_RESERVED_STEMS)
+    assert.ok(nativeSourceCommentsStripped.includes(`"${stem}"`));
+  // Assertions that embed CHARACTER literals (`'.'`, `':'`, `'?'`, `'~'`) must consume the
+  // comments-only scan output: `stripCommentsAndStrings` blanks char literal bodies (so a
+  // multi-character constant like `'CreateFileW('` cannot satisfy an assertion), which would
+  // also blank the very literals these checks want to observe. Coderabbit 3792888545.
+  assert.match(
+    nativeSourceCommentsStripped,
+    /while \(name_length < length && component\[name_length\] != '\.'\)/u,
+  );
+  assert.match(
+    nativeSourceCommentsStripped,
+    /ascii_name_equals\(component, name_length, "GLOBALROOT"\)/u,
+  );
   assert.match(nativeSource, /windows_reserved_port_name\(component, name_length\)/u);
   assert.match(nativeSource, /bytes\[3\] == 0xc2/u);
   assert.match(nativeSource, /bytes\[4\] == 0xb9 \|\| bytes\[4\] == 0xb2 \|\| bytes\[4\] == 0xb3/u);
   assert.match(nativeSource, /_Static_assert\(sizeof\(KSR_SUPERSCRIPT_ONE_UTF8\) == 3/u);
   assert.doesNotMatch(nativeSource, /char name\[10\]/u);
-  assert.match(nativeSource, /\*q == ':' \|\| \*q == '\?' \|\| \*q == '~'/u);
+  assert.match(nativeSourceCommentsStripped, /\*q == ':' \|\| \*q == '\?' \|\| \*q == '~'/u);
   assert.equal(nativeSource.match(/CreateFileW\(/gu)?.length, 1);
+
+  assertCommentStrippingIsLoadBearing(rawSource);
+  assertCommentsOnlyLeavesStringLiteralsIntact(rawSource);
+}
+
+// KEIKO-0417 negative self-test: proves stripCommentsAndStrings is load-bearing rather than
+// decorative. Three mutations of the real source, each hiding a pinned security control in a
+// different comment shape; every stripped scan must reject. A pre-fix scan of the same mutated
+// text would still find the tokens (they sit inside the comments), so a passing assertion below
+// is proof the stripping actively removed them.
+//
+// (a) `OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE`'s use site moved into a `/* ... */` block.
+// (b) The single `CreateFileW(` call moved into a `/* ... */` block.
+// (c) `OBJ_DONT_REPARSE_LEAKED` hidden after a `\`-continued `//` line comment — proves the C
+//     line-splicing preprocessor step. Without it, the physical newline terminates the `//` scan
+//     and the following line is exposed as live code.
+function assertCommentStrippingIsLoadBearing(rawSource) {
+  const mutated = rawSource
+    .replace(
+      /OBJ_CASE_INSENSITIVE \| OBJ_DONT_REPARSE/u,
+      "/* OBJ_CASE_INSENSITIVE | OBJ_DONT_REPARSE */ 0",
+    )
+    .replace(/CreateFileW\(/u, "/* CreateFileW( */ NopW(");
+  const mutatedStripped = stripCommentsAndStrings(mutated);
+  assert.equal(
+    mutatedStripped.match(/OBJ_CASE_INSENSITIVE \| OBJ_DONT_REPARSE/u),
+    null,
+    "stripCommentsAndStrings must remove OBJ_DONT_REPARSE hidden in a block comment",
+  );
+  assert.equal(
+    (mutatedStripped.match(/CreateFileW\(/gu) ?? []).length,
+    0,
+    "stripCommentsAndStrings must remove CreateFileW( hidden in a block comment",
+  );
+  const spliceMutated = "// disabled \\\nOBJ_DONT_REPARSE_LEAKED\nother_line();\n";
+  const spliceStripped = stripCommentsAndStrings(spliceMutated);
+  assert.equal(
+    spliceStripped.match(/OBJ_DONT_REPARSE_LEAKED/u),
+    null,
+    "stripCommentsAndStrings must respect C `\\`-continued // line comments (splicing)",
+  );
+  // KEIKO-0417 (review-follow-up): unterminated `/* ... */` must throw. Both scanner modes share
+  // the same walker, so exercising one covers both. A truncated source whose closing `*/` never
+  // arrives would otherwise silently satisfy the source-contract regexes on the tokens BEFORE
+  // the unclosed comment.
+  assert.throws(
+    () =>
+      stripCommentsAndStrings(
+        "CreateFileW(handle, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);\n/* opened but never closed\n",
+      ),
+    /unterminated C block comment/u,
+    "stripCommentsAndStrings must throw on an unterminated /* ... */",
+  );
+  assert.throws(
+    () => stripCommentsOnly("// prefix\n/* unclosed"),
+    /unterminated C block comment/u,
+    "stripCommentsOnly must throw on an unterminated /* ... */",
+  );
+  // Coderabbit 3793025301: unterminated char/string literals must throw for the same reason
+  // block comments do — silently accepting them lets every token after the stray quote fall
+  // off the scan, so a deleted control after the unclosed literal escapes the source contract.
+  assert.throws(
+    () => stripCommentsAndStrings("int f(void) { return '"),
+    /unterminated C character constant/u,
+    "unterminated char literal must throw",
+  );
+  assert.throws(
+    () => stripCommentsAndStrings('int f(void) { return "'),
+    /unterminated C string literal/u,
+    "unterminated string literal must throw",
+  );
+  assertDisabledPreprocessorBranchesAreStripped();
+}
+
+// KEIKO-0417 (review-follow-up): a control retained only inside `#if 0 ... #endif` never
+// compiles. The pre-pass strips those regions before comment/literal scanning so a deleted
+// control wrapped in `#if 0` no longer satisfies the source-contract regexes. Nested
+// `#if X ... #endif` inside the disabled block must count toward the balance; code after
+// the outer `#endif` must survive. Scanner-behaviour self-tests (constant-condition variants,
+// escape decoding, fold ordering) live in `assertScannerBehaviours`; the elif ladder tests
+// stay under `assertElifBranchHandling` (coderabbit outside-diff review on #3202: keep each
+// helper's assertions to what its name describes so a failure stack points at the right
+// invariant).
+function assertDisabledPreprocessorBranchesAreStripped() {
+  assertBasicDisabledIfStrip();
+  assertSplicedDisabledIfStrip();
+  assertCommentedElseIsIgnored();
+  assertMultilineCommentBeforeIfPreservesLines();
+  assertDisabledIfVariants();
+  assertCharLiteralHandling();
+  assertElifBranchHandling();
+  assertScannerBehaviours();
+}
+
+// Grouped scanner-behaviour self-tests — each one asserts an independent constant-condition,
+// escape, or fold invariant. Keeping them under a shared top-level helper lets a failure stack
+// name what actually broke (e.g. `assertTrigraphIfZero`) instead of a distant elif assertion.
+function assertScannerBehaviours() {
+  assertNestedIfZeroInsideLiveElseStripped();
+  assertNestedElseInsideDeadParentStripped();
+  assertElifOneAfterUnknownExhausts();
+  assertCompoundConstantTrueIf();
+  assertParenthesizedConstantConditions();
+  assertNestedUnknownLadderStripsConstantDeadSibling();
+  assertAdjacentStringLiteralsFold();
+  assertHexAndOctalZeroFormsStripped();
+  assertHexAndOctalOneFormsRecognised();
+  assertArbitraryNonzeroFormsRecognised();
+  assertBigIntPrecisionSafeArithmetic();
+  assertUnaryConstantConditionsRecognised();
+  assertNegatedConstantConditionsRecognised();
+  assertParenthesizedShortCircuitRhsRecognised();
+  assertUnknownConditionsKeepBothBranches();
+  assertCEscapesDecodedInsideLiterals();
+  assertEscapedQuotesPreservedThroughDecode();
+  assertTrailingBackslashPreservedThroughDecode();
+  assertNumericQuoteEscapesPreservedThroughDecode();
+  assertDecodeThenFoldOrder();
+  assertPathNormalizationCollapsesCurrentDir();
+  assertPathNormalizationCollapsesRepeatedSlashes();
+  assertPathNormalizationCollapsesParentDir();
+  assertPathNormalizationScopedToLiterals();
+  assertArithmeticConstantConditionsRecognised();
+  assertJsIncompatibleArithmeticStaysUnknown();
+  assertMaskedByteSpellingPreservesDelimiters();
+  assertTrigraphIfZero();
+}
+
+// Coderabbit 3793711080 on #3202: JS-vs-C `intmax_t` divergence for `/`, `%`, `<<`, `>>`, `~`.
+// The evaluator must FAIL CLOSED on these — leave the condition unknown, both branches
+// survive — rather than misclassify. Concrete cases the reviewer flagged: `1/2*2` (C=0, JS=1),
+// `(1<<32)-1` (C=nonzero, JS=0). Verify each rejected-operator form keeps both branches.
+function assertJsIncompatibleArithmeticStaysUnknown() {
+  const rejectVariants = [
+    "#if 1/2*2",
+    "#if 10 % 3",
+    "#if 1 << 3",
+    "#if 8 >> 1",
+    "#if ~0",
+    "#if (1<<32)-1",
+    "#if 0x100000000 | 0",
+    "#if 1 & 3",
+    "#if 5 ^ 3",
+    // Codex 3793874116: `&&`/`||` return operand values in JS (not `int` 0/1). Safe for
+    // outermost use but wrong when nested — `(2 && 3) == 1` diverges (JS false, C true).
+    // The evaluator conservatively rejects the whole family; regex-based `_falseExpr` /
+    // `_trueExpr` still recognise `0 && FEATURE` / `1 || FEATURE` short-circuit shapes.
+    "#if (2 && 3) == 1",
+    "#if (0 || 5) == 5",
+    "#if 2 && 3",
+    "#if 0 || 5",
+    // Coderabbit 3793899394: unsigned suffixes trigger C's unsigned-conversion semantics that
+    // JS does not model. `-1U` = 0xFFFFFFFF; `-1U < 0` is FALSE in C (unsigned comparison)
+    // but TRUE in JS after suffix-stripping. `0U - 1 > 0` is TRUE in C (wraps to UINT_MAX)
+    // but FALSE in JS. Both stay unknown; both branches survive.
+    "#if -1U < 0",
+    "#if 0U - 1 > 0",
+    "#if 1uLL + 0",
+  ];
+  for (const variant of rejectVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nUNKNOWN_ARITH_IF();\n#else\nUNKNOWN_ARITH_ELSE();\n#endif\n",
+    );
+    assert.match(
+      stripped,
+      /UNKNOWN_ARITH_IF/u,
+      "JS-incompatible arithmetic must stay unknown (keep if-body): " + variant,
+    );
+    assert.match(
+      stripped,
+      /UNKNOWN_ARITH_ELSE/u,
+      "JS-incompatible arithmetic must stay unknown (keep else-body): " + variant,
+    );
+  }
+}
+
+// Codex 3793944193 on #3202: intermediates that exceed safe-integer precision must not
+// silently misclassify. `(2^53-1 + 2 - (2^53-1)) == 2` — C: 2 (true). JS Number: intermediate
+// rounds to 2^53, then 2^53 - (2^53-1) = 1, `1 == 2` = false. With the BigInt eval, this
+// evaluates correctly (2n == 2n → true). Verify LIVE body kept, `#else` stripped.
+function assertBigIntPrecisionSafeArithmetic() {
+  const stripped = stripCommentsAndStrings(
+    "#if (9007199254740991 + 2 - 9007199254740991) == 2\n" +
+      "LIVE_BIGINT();\n" +
+      "#else\n" +
+      "DEAD_BIGINT();\n" +
+      "#endif\n",
+  );
+  assert.match(
+    stripped,
+    /LIVE_BIGINT/u,
+    "BigInt evaluator must keep the live body when intermediates exceed 2^53",
+  );
+  assert.equal(
+    stripped.match(/DEAD_BIGINT/u),
+    null,
+    "BigInt evaluator must strip the compiler-dead `#else` when intermediates exceed 2^53",
+  );
+}
+
+// Coderabbit 3793711072 on #3202: `preservedByteSpelling` must MASK the byte before comparing
+// with the delimiter constants. Hex escapes accept an unbounded hex run (`\x122` → value 290)
+// and octal escapes accept up to three digits (`\442` → 290); without masking, the unmasked
+// comparison would miss those cases and fall through to `String.fromCharCode(value & 0xff)`,
+// producing a bare `"` and reintroducing the boundary-corruption bug. Verify with the
+// specific byte values the reviewer flagged.
+function assertMaskedByteSpellingPreservesDelimiters() {
+  // 290 & 0xff = 34 = 0x22 = `"`. `\x122` and `\442` both hit that. The load-bearing check:
+  // after `stripStringLiteralBodies` (blanks string bodies), the enclosed `posix_spawn`
+  // identifier MUST NOT appear as raw code — the escaped-quote spelling keeps it inside the
+  // literal body so blanking wipes it. If the byte were emitted unmasked as a bare `"` the
+  // blanker would treat it as a string boundary and leave `posix_spawn` visible as CODE.
+  for (const escape of ["\\x122", "\\442"]) {
+    const blanked = stripCommentsAndStrings(
+      'const char *q = "a' + escape + 'posix_spawn(&pid)b";\n',
+    );
+    assert.equal(
+      blanked.match(/posix_spawn/u),
+      null,
+      escape +
+        " must decode via masked byte spelling so `posix_spawn` stays inside the blanked literal body; got: " +
+        blanked,
+    );
+  }
+  // 295 & 0xff = 39 = 0x27 = `'`. Same reasoning — the single-quote preservation path prevents
+  // a spurious char-literal boundary from forming.
+  for (const escape of ["\\x127", "\\447"]) {
+    const blanked = stripCommentsAndStrings(
+      'const char *q = "a' + escape + 'posix_spawn(&pid)b";\n',
+    );
+    assert.equal(
+      blanked.match(/posix_spawn/u),
+      null,
+      escape +
+        " must decode 0x27 with masked byte spelling; posix_spawn must stay inside the blanked body; got: " +
+        blanked,
+    );
+  }
+  // 348 & 0xff = 92 = 0x5c = `\` — the backslash preservation path (`\534` = 348,
+  // `\x15c` = 348). Coderabbit 3793899400 on #3202: use the same code-visibility pin as the
+  // `"` and `'` cases — assert `posix_spawn` inside the escape-hidden literal stays inside
+  // the blanked body. If `\` weren't preserved through the mask, downstream would misread
+  // the trailing quote as escaped, corrupt the literal boundary, and let `posix_spawn`
+  // surface as raw code.
+  for (const escape of ["\\x15c", "\\534"]) {
+    const blanked = stripCommentsAndStrings(
+      'const char *q = "a' + escape + 'posix_spawn(&pid)b";\n',
+    );
+    assert.equal(
+      blanked.match(/posix_spawn/u),
+      null,
+      escape +
+        " must decode 0x5c with masked byte spelling so the closing quote is not escaped; got: " +
+        blanked,
+    );
+  }
+}
+
+// Codex 3793642858 on #3202: `"a\42posix_spawn(...)\42b"` — `\42` octal = 34 = `"`. Decoding
+// the escape to a bare `"` corrupts string-literal boundaries, so `stripStringLiteralBodies`
+// would treat the middle bytes as CODE and leave a pinned call visible even though it exists
+// only inside a compiled diagnostic string. Verify hex + octal numeric escapes that decode to
+// `"`, `\`, or `'` are emitted as escaped spellings.
+function assertNumericQuoteEscapesPreservedThroughDecode() {
+  // Hex 0x22 = `"`. Octal 42 = `"`. Both must NOT collapse the string.
+  //
+  // The hex form uses `z` (not a hex digit) as the trailing byte so `\x22` closes at exactly
+  // 2 digits — C's `\x…` reads hex digits until a non-hex char, so `\x22b` (where `b` IS a
+  // hex digit) would be one escape for 0x22b truncated to 0x2b (`+`), which is the CORRECT
+  // C semantics and NOT the "quote-hiding" case this test aims to pin. Octal `\NNN` reads at
+  // most 3 digits, so `\42b` cleanly separates the escape from the trailing `b`.
+  const hex = stripCommentsOnly('const char *q = "a\\x22posix_spawn(&pid)\\x22z";\n');
+  assert.ok(
+    hex.includes('"a\\"posix_spawn(&pid)\\"z"'),
+    "hex `\\x22` decoding must preserve the escape spelling; got: " + hex,
+  );
+  const oct = stripCommentsOnly('const char *o = "a\\42posix_spawn(&pid)\\42b";\n');
+  assert.ok(
+    oct.includes('"a\\"posix_spawn(&pid)\\"b"'),
+    "octal `\\42` decoding must preserve the escape spelling; got: " + oct,
+  );
+  // Sanity: hex 0x43 (`C`) stays a plain char — the preservation only applies to delimiters.
+  const plain = stripCommentsOnly('const char *p = "\\x43ON";\n');
+  assert.ok(plain.includes('"CON"'), "hex escape to a non-delimiter byte must decode normally");
+}
+
+// Codex 3793642847 on #3202: the OS resolves `/bin//sh` to `/bin/sh` before executing —
+// repeated `/` separators are collapsed. The pin regex expects a contiguous path.
+// URL schemes (`://`) are preserved (negative lookbehind on `:`) so `https://example.com`
+// stays intact.
+// Codex 3793874121 + 3793982006 on #3202: the OS resolves `/usr/../bin/sh` and root-leading
+// `/../bin/sh` both to `/bin/sh`. Parent-directory components must be normalised too; the
+// earlier version only handled `/./` and `//`.
+function assertPathNormalizationCollapsesParentDir() {
+  const forms = [
+    { src: 'const char *p = "/usr/../bin/sh";', expect: '"/bin/sh"', label: "single .." },
+    {
+      src: 'const char *p = "/usr/local/../bin/sh";',
+      expect: '"/usr/bin/sh"',
+      label: "mid-path ..",
+    },
+    {
+      src: 'const char *p = "/usr/local/../../bin/sh";',
+      expect: '"/bin/sh"',
+      label: "double .. (iterative)",
+    },
+    {
+      src: 'const char *p = "/usr/../";',
+      expect: '"/"',
+      label: ".. cancels the only component",
+    },
+    // Codex 3793982006: root-leading `/../` has no parent above root; POSIX resolves to `/`.
+    { src: 'const char *p = "/../bin/sh";', expect: '"/bin/sh"', label: "leading /.." },
+    {
+      src: 'const char *p = "/../../bin/sh";',
+      expect: '"/bin/sh"',
+      label: "leading /../../ chain",
+    },
+  ];
+  for (const { src, expect, label } of forms) {
+    const prepared = stripCommentsOnly(src + "\n");
+    assert.ok(prepared.includes(expect), `${label} must normalise to ${expect}; got: ${prepared}`);
+  }
+}
+
+function assertPathNormalizationCollapsesRepeatedSlashes() {
+  const forms = [
+    { src: 'const char *p = "/bin//sh";', expect: '"/bin/sh"', label: "double //" },
+    { src: 'const char *p = "/bin////sh";', expect: '"/bin/sh"', label: "quadruple ////" },
+    { src: 'const char *p = "/usr//bin//sh";', expect: '"/usr/bin/sh"', label: "chained //" },
+    {
+      src: 'const char *u = "https://example.com";',
+      expect: '"https://example.com"',
+      label: "URL scheme :// preserved",
+    },
+  ];
+  for (const { src, expect, label } of forms) {
+    const prepared = stripCommentsOnly(src + "\n");
+    assert.ok(prepared.includes(expect), `${label} must resolve to ${expect}; got: ${prepared}`);
+  }
+}
+
+// Codex 3793642853 on #3202: constant arithmetic conditions like `#if 1 + 1` are evaluated by
+// the C preprocessor. The earlier scanner treated them as unknown and kept BOTH branches, so a
+// required control retained only in the compiler-dead `#else` would still satisfy the source
+// pin. Verify the arithmetic evaluator recognises truth values for arithmetic, comparison,
+// bitwise, and logical constant expressions.
+function assertArithmeticConstantConditionsRecognised() {
+  // Coderabbit 3793711080 + codex 3793772894 + 3793874116: `<<`, `>>`, `~`, `/`, `%`, `&`,
+  // `|`, `^`, `&&`, `||` are ALL REJECTED (fall through to unknown). Bitwise: JS coerces
+  // to 32-bit signed int, C uses intmax_t. Logical: JS returns operand values while C returns
+  // int 0/1 — safe for OUTERMOST use but wrong when the result feeds into another op like
+  // `(2 && 3) == 1` (JS: 3 == 1 = false; C: 1 == 1 = true). The trueExprs / falseExprs
+  // tables here only include operators whose JS and C results agree at every intermediate:
+  // arithmetic `+ - *`, comparison, unary `!`, and parens.
+  const trueExprs = ["1 + 1", "2 * 3", "3 - 1", "1 == 1", "!(1 - 1)"];
+  for (const cond of trueExprs) {
+    const stripped = stripCommentsAndStrings(
+      "#if " + cond + "\nLIVE_ARITH_TRUE();\n#else\nDEAD_ARITH_TRUE_ELSE();\n#endif\n",
+    );
+    assert.match(stripped, /LIVE_ARITH_TRUE/u, "arithmetic true must keep its body: " + cond);
+    assert.equal(
+      stripped.match(/DEAD_ARITH_TRUE_ELSE/u),
+      null,
+      "`#else` after arithmetic true must be stripped: " + cond,
+    );
+  }
+  const falseExprs = ["1 - 1", "0 * 5", "1 == 0", "2 - 2", "(1 - 1)"];
+  for (const cond of falseExprs) {
+    const stripped = stripCommentsAndStrings(
+      "#if " + cond + "\nDEAD_ARITH_FALSE();\n#else\nLIVE_ARITH_FALSE_ELSE();\n#endif\n",
+    );
+    assert.equal(
+      stripped.match(/DEAD_ARITH_FALSE/u),
+      null,
+      "arithmetic false must strip its body: " + cond,
+    );
+    assert.match(
+      stripped,
+      /LIVE_ARITH_FALSE_ELSE/u,
+      "`#else` after arithmetic false must survive: " + cond,
+    );
+  }
+  // Elif form too.
+  const elifStripped = stripCommentsAndStrings(
+    "#if 0\nDEAD_IF();\n#elif 1 + 1\nLIVE_ARITH_ELIF();\n#else\nDEAD_ELIF_ELSE();\n#endif\n",
+  );
+  assert.match(elifStripped, /LIVE_ARITH_ELIF/u, "`#elif 1 + 1` must keep the live body");
+  assert.equal(
+    elifStripped.match(/DEAD_ELIF_ELSE/u),
+    null,
+    "`#else` after `#elif 1 + 1` must be stripped",
+  );
+  // Unknown identifier still falls through to unknown (both branches kept).
+  const unknown = stripCommentsAndStrings(
+    "#if FEATURE + 1\nUNKNOWN_IF();\n#else\nUNKNOWN_ELSE();\n#endif\n",
+  );
+  assert.match(unknown, /UNKNOWN_IF/u, "arithmetic with an identifier must stay unknown (if)");
+  assert.match(unknown, /UNKNOWN_ELSE/u, "arithmetic with an identifier must stay unknown (else)");
+}
+
+// Codex 3793578610 on #3202: `\\` inside a literal must be preserved through decoding.
+// Decoding a trailing `\\` to a bare `\` places that byte immediately before the reconstructed
+// closing quote — downstream `stripStringLiteralBodies` then treats the closing `"` as
+// escaped, hunts for a real closer that doesn't exist, and throws. Any Windows-path literal
+// like `"C:\\"` (value `C:\`) would fail the harness even though the source compiles.
+function assertTrailingBackslashPreservedThroughDecode() {
+  // Whole-file scan through the exported composition: if `\\` were decoded, this call would
+  // throw `unterminated C string literal` on the trailing-backslash Windows path.
+  const raw = 'const char *win = "C:\\\\";\nint keep(void) { return 0; }\n';
+  const prepared = stripCommentsOnly(raw);
+  assert.ok(
+    prepared.includes('"C:\\\\"'),
+    "`\\\\` inside a literal must be preserved through decode so downstream parsing sees the closing quote unescaped",
+  );
+  assert.match(prepared, /int keep\(void\)/u, "code after the literal must still be present");
+}
+
+// Codex 3793578605 on #3202: `/bin/./sh` resolves to `/bin/sh` at OS level, but a regex that
+// expects a contiguous path would miss it. Normalise `./` current-directory components
+// GLOBALLY in the prepared source so the pin sees the resolved path. Handles chained forms
+// (`/./././`), a `./` in the middle of a longer path, and post-fold spellings like
+// `"/bin" "/./sh"` → `"/bin/./sh"` → `"/bin/sh"`.
+// Codex 3793944188 on #3202: path normalisation must NOT cross C token / literal boundaries.
+// A global sweep would let the `..` regex jump across the source (`const char *a="/prefix";
+// system("cmd"); const char *b="/../tail";` would collapse to `const char *a="/tail";` and
+// silently delete the forbidden call before the negative pin runs). Verify with the
+// reviewer's exact reproducer: a `..` in a later literal must NOT eat code between.
+function assertPathNormalizationScopedToLiterals() {
+  const source =
+    'const char *a = "/prefix";\n' + 'system("cmd");\n' + 'const char *b = "/../tail";\n';
+  const prepared = stripCommentsOnly(source);
+  assert.match(prepared, /system\("cmd"\)/u, "code between literals must survive normalisation");
+  assert.match(prepared, /"\/prefix"/u, "the earlier literal must stay intact");
+  // Coderabbit 3794185705 on #3202: pin the trailing literal too. Leading `/../` at root
+  // resolves to `/` (matches `assertPathNormalizationCollapsesParentDir`'s single `/../`
+  // form), so `/../tail` normalises to `/tail`. Pinning the exact expected output prevents
+  // the scoped-normalisation case from silently drifting.
+  assert.match(prepared, /"\/tail"/u, "the later literal must normalise within its own bounds");
+}
+
+function assertPathNormalizationCollapsesCurrentDir() {
+  const forms = [
+    { src: 'const char *p = "/bin/./sh";', expect: '"/bin/sh"', label: "single ./" },
+    { src: 'const char *p = "/bin/././sh";', expect: '"/bin/sh"', label: "chained ./" },
+    { src: 'const char *p = "/usr/./bin/sh";', expect: '"/usr/bin/sh"', label: "mid-path ./" },
+    { src: 'const char *p = "/bin" "/./sh";', expect: '"/bin/sh"', label: "fold + ./" },
+  ];
+  for (const { src, expect, label } of forms) {
+    const prepared = stripCommentsOnly(src + "\n");
+    assert.ok(prepared.includes(expect), `${label} must normalise to ${expect}; got: ${prepared}`);
+  }
+}
+
+// Codex 3792964066 + 3792986617 (#elif handling): the compiler picks exactly one branch of a
+// `#if / #elif / #else / #endif` ladder. `#if 0` + `#elif 1` gives the elif branch as live;
+// EVERY branch after the live one is dead. Broken up into helpers to stay under the
+// max-lines-per-function ceiling.
+function assertElifBranchHandling() {
+  assertElifLiveBranchVisible();
+  assertElifDisabledBranchStripped();
+  assertBranchesAfterLiveElifStripped();
+  assertLaterElifAfterLiveStripped();
+}
+
+function assertElifLiveBranchVisible() {
+  const stripped = stripCommentsAndStrings(
+    "int keep_before(void) { return 1; }\n" +
+      "#if 0\nDEAD_BRANCH();\n#elif 1\nLIVE_BRANCH_TOKEN();\n#endif\n" +
+      "int keep_after(void) { return 2; }\n",
+  );
+  assert.match(
+    stripped,
+    /LIVE_BRANCH_TOKEN/u,
+    "outer-depth `#elif <non-zero>` must stop stripping so the live branch is visible to the scan",
+  );
+  assert.equal(
+    stripped.match(/DEAD_BRANCH/u),
+    null,
+    "the disabled `#if 0` half before `#elif` must still be stripped",
+  );
+}
+
+function assertElifDisabledBranchStripped() {
+  const stripped = stripCommentsAndStrings(
+    "#if 0\nA();\n#elif 0\nSHOULD_BE_STRIPPED_BY_ELIF_ZERO();\n#endif\nint live(void) { return 1; }\n",
+  );
+  assert.equal(
+    stripped.match(/SHOULD_BE_STRIPPED_BY_ELIF_ZERO/u),
+    null,
+    "`#elif 0` at outer depth must keep stripping (its branch is deterministically dead)",
+  );
+}
+
+function assertBranchesAfterLiveElifStripped() {
+  const stripped = stripCommentsAndStrings(
+    "int keep_before(void) { return 1; }\n" +
+      "#if 0\nDEAD_A();\n" +
+      "#elif 1\nLIVE_TOKEN();\n" +
+      "#else\nDEAD_ELSE_TOKEN();\n" +
+      "#endif\n" +
+      "int keep_after(void) { return 2; }\n",
+  );
+  assert.match(stripped, /LIVE_TOKEN/u, "live `#elif 1` branch must be visible");
+  assert.equal(
+    stripped.match(/DEAD_A/u),
+    null,
+    "`#if 0` branch before a live `#elif` must be stripped",
+  );
+  assert.equal(
+    stripped.match(/DEAD_ELSE_TOKEN/u),
+    null,
+    "`#else` after a live `#elif` must be stripped (the compiler picks exactly one branch)",
+  );
+}
+
+function assertLaterElifAfterLiveStripped() {
+  const stripped = stripCommentsAndStrings(
+    "#if 0\nDEAD_A();\n" +
+      "#elif 1\nLIVE_TOKEN2();\n" +
+      "#elif SOMETHING\nDEAD_ELIF_TOKEN();\n" +
+      "#endif\n",
+  );
+  assert.match(stripped, /LIVE_TOKEN2/u, "the first live `#elif` branch must be visible");
+  assert.equal(
+    stripped.match(/DEAD_ELIF_TOKEN/u),
+    null,
+    "any `#elif` after a live branch must be stripped",
+  );
+}
+
+// Codex 3793469154 on #3202: order matters — DECODE FIRST, THEN FOLD. If the pipeline folded
+// first, `"\x2f" "bin/sh"` would collapse to `"\x2fbin/sh"` where the variable-length hex
+// decoder greedily consumes `2fb` (all valid hex digits) as one escape → 0x2fb & 0xff = 0xfb
+// → `"ûin/sh"`, and the reserved-path pin would miss `/bin/sh`. Decoding each token first
+// yields `"/" "bin/sh"` which then folds correctly to `"/bin/sh"`. Verify with a control-
+// character-free path so ASCII assertions stay legible.
+function assertDecodeThenFoldOrder() {
+  const source = 'const char *p = "\\x2f" "bin/sh";\n';
+  const prepared = stripCommentsOnly(source);
+  assert.ok(
+    prepared.includes('"/bin/sh"'),
+    'decode must run BEFORE fold: `"\\x2f" "bin/sh"` must resolve to `"/bin/sh"`, not `"ûin/sh"`',
+  );
+  // Coderabbit 3793501285 on #3202: also pin the FAILURE MODE. Without the negative assertion
+  // a future regression that emitted BOTH the correct AND the corrupted spelling would keep
+  // the positive check green while shipping the fold-first bug.
+  assert.equal(
+    prepared.includes("ûin/sh"),
+    false,
+    'fold-first corruption `"ûin/sh"` must NOT appear in the normalized source',
+  );
+}
+
+// Codex 3793436218 on #3202: `#if -1` is unconditionally true (the C preprocessor evaluates
+// `-<nonzero>` as nonzero). The earlier pattern missed the unary form; both live body and
+// compiler-dead `#else` survived. Cover unary `-` and `+` on both zero and nonzero literals.
+function assertUnaryConstantConditionsRecognised() {
+  // Unary on nonzero: `-1`, `-42`, `+1` → true, so `#else` stripped.
+  const trueVariants = ["#if -1", "#if -42", "#if +1", "#if - 1", "#if (-1)", "#if -0x1"];
+  for (const variant of trueVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nLIVE_UNARY_TRUE_BODY();\n#else\nDEAD_UNARY_TRUE_ELSE();\n#endif\n",
+    );
+    assert.match(
+      stripped,
+      /LIVE_UNARY_TRUE_BODY/u,
+      "unary nonzero must keep its live body: " + variant,
+    );
+    assert.equal(
+      stripped.match(/DEAD_UNARY_TRUE_ELSE/u),
+      null,
+      "`#else` after unary nonzero must be stripped: " + variant,
+    );
+  }
+  // Unary on zero: `-0`, `+0` → still zero (false), so if-body stripped and `#else` kept.
+  const falseVariants = ["#if -0", "#if +0", "#if -0x0", "#if +00"];
+  for (const variant of falseVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nDEAD_UNARY_FALSE_BODY();\n#else\nLIVE_UNARY_FALSE_ELSE();\n#endif\n",
+    );
+    assert.equal(
+      stripped.match(/DEAD_UNARY_FALSE_BODY/u),
+      null,
+      "unary zero must strip its body: " + variant,
+    );
+    assert.match(
+      stripped,
+      /LIVE_UNARY_FALSE_ELSE/u,
+      "`#else` after unary zero must survive: " + variant,
+    );
+  }
+}
+
+// Codex 3793501034 on #3202: `#if !0` is unconditionally true, `#if !1` is unconditionally
+// false. Cover logical NOT of recognised constants across the same literal shapes the ladder
+// already handles (bare, parenthesized, hex, octal), plus the `!(0)` outer-paren form.
+function assertNegatedConstantConditionsRecognised() {
+  const trueVariants = ["#if !0", "#if ! 0", "#if !(0)", "#if !0x0", "#if !00"];
+  for (const variant of trueVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nLIVE_NEG_ZERO_BODY();\n#else\nDEAD_NEG_ZERO_ELSE();\n#endif\n",
+    );
+    assert.match(
+      stripped,
+      /LIVE_NEG_ZERO_BODY/u,
+      "`!<zero>` must keep its live body (evaluates to nonzero): " + variant,
+    );
+    assert.equal(
+      stripped.match(/DEAD_NEG_ZERO_ELSE/u),
+      null,
+      "`#else` after `!<zero>` must be stripped: " + variant,
+    );
+  }
+  const falseVariants = ["#if !1", "#if ! 42", "#if !(1)", "#if !0x1", "#if !01"];
+  for (const variant of falseVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nDEAD_NEG_NONZERO_BODY();\n#else\nLIVE_NEG_NONZERO_ELSE();\n#endif\n",
+    );
+    assert.equal(
+      stripped.match(/DEAD_NEG_NONZERO_BODY/u),
+      null,
+      "`!<nonzero>` must strip its body (evaluates to zero): " + variant,
+    );
+    assert.match(
+      stripped,
+      /LIVE_NEG_NONZERO_ELSE/u,
+      "`#else` after `!<nonzero>` must survive: " + variant,
+    );
+  }
+}
+
+// Coderabbit 3793501284 on #3202: extend the RHS after a constant-short-circuit operand to
+// accept parenthesized sub-expressions like `(FEATURE || OTHER)`. `0 && anything` is
+// deterministically false and `1 || anything` is deterministically true regardless of the
+// RHS's internal structure, so recognising the SHAPE is enough — we don't need to evaluate it.
+function assertParenthesizedShortCircuitRhsRecognised() {
+  const falseVariants = [
+    "#if 0 && (FEATURE || OTHER)",
+    "#if 0 && (FEATURE && OTHER)",
+    "#if 0 && (defined(FLAG) || FEATURE)",
+    "#if (0 && (FEATURE || OTHER))",
+  ];
+  for (const variant of falseVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nDEAD_PAREN_RHS_BODY();\n#else\nLIVE_PAREN_RHS_ELSE();\n#endif\n",
+    );
+    assert.equal(
+      stripped.match(/DEAD_PAREN_RHS_BODY/u),
+      null,
+      "`0 && (…)` must strip its body regardless of paren RHS shape: " + variant,
+    );
+    assert.match(
+      stripped,
+      /LIVE_PAREN_RHS_ELSE/u,
+      "`#else` after `0 && (…)` must survive: " + variant,
+    );
+  }
+  const trueVariants = [
+    "#if 1 || (FEATURE || OTHER)",
+    "#if 1 || (FEATURE && OTHER)",
+    "#if 1 || (defined(FLAG) || FEATURE)",
+    "#if (1 || (FEATURE || OTHER))",
+  ];
+  for (const variant of trueVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nLIVE_PAREN_RHS_TRUE_BODY();\n#else\nDEAD_PAREN_RHS_TRUE_ELSE();\n#endif\n",
+    );
+    assert.match(
+      stripped,
+      /LIVE_PAREN_RHS_TRUE_BODY/u,
+      "`1 || (…)` must keep its live body regardless of paren RHS shape: " + variant,
+    );
+    assert.equal(
+      stripped.match(/DEAD_PAREN_RHS_TRUE_ELSE/u),
+      null,
+      "`#else` after `1 || (…)` must be stripped: " + variant,
+    );
+  }
+}
+
+// Coderabbit 3793501292 on #3202: prove that non-constant conditions STAY unknown — both
+// branches must survive. Without this, a regression that classified every `#if` as true or
+// false would strip live source before the contract pins run and every constant-classification
+// test above would still pass.
+function assertUnknownConditionsKeepBothBranches() {
+  const unknownVariants = [
+    "#if FEATURE",
+    "#if 1 && FEATURE",
+    "#if defined(FLAG)",
+    "#if !defined(FLAG)",
+    "#if X == 1",
+    "#ifdef FEATURE",
+    "#ifndef FEATURE",
+  ];
+  for (const variant of unknownVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nUNKNOWN_IF_BODY();\n#else\nUNKNOWN_ELSE_BODY();\n#endif\n",
+    );
+    assert.match(
+      stripped,
+      /UNKNOWN_IF_BODY/u,
+      "unknown condition must keep the if-body: " + variant,
+    );
+    assert.match(
+      stripped,
+      /UNKNOWN_ELSE_BODY/u,
+      "unknown condition must keep the else-body: " + variant,
+    );
+  }
+}
+
+// Coderabbit 3793501296 on #3202: preserve `\"` verbatim through the decode. Decoding it to a
+// bare `"` would create a spurious string-boundary in the middle of a compiled literal, letting
+// a naive reserved-stem pin (`.includes('"CON"')`) fire on `"a\"CON\"b"` and mask deletion of
+// the real `"CON"` source token.
+function assertEscapedQuotesPreservedThroughDecode() {
+  const decoded = stripCommentsOnly('const char *q = "a\\"CON\\"b";\n');
+  assert.ok(
+    decoded.includes('"a\\"CON\\"b"'),
+    "escaped-quote spelling must survive the decode; got: " + decoded,
+  );
+  assert.equal(
+    decoded.match(/"CON"/u),
+    null,
+    'the middle `\\"CON\\"` bytes must NOT form a spurious `"CON"` string boundary',
+  );
+  // Sanity: the octal-boundary form still decodes fine (`"\1011"` → `"A1"`).
+  const octal = stripCommentsOnly('const char *o = "\\1011";\n');
+  assert.ok(octal.includes('"A1"'), 'octal-then-digit boundary must decode to `"A1"`');
+}
+
+// Codex 3793436216 on #3202: C string literals accept escape sequences that clang decodes.
+// A control retained as `"\x43ON"` still compiles to the reserved stem `"CON"`, so the string-
+// preserving scan (used by WINDOWS_RESERVED_STEMS / GLOBALROOT pins) must decode escapes
+// before pin evaluation. Verify a hex-escape, an octal-escape, and a simple escape all decode.
+function assertCEscapesDecodedInsideLiterals() {
+  const raw =
+    'const char *hex_form = "\\x43\\x4fN";\n' +
+    'const char *oct_form = "\\103\\117N";\n' +
+    'const char *plain    = "CON";\n' +
+    'const char *literal_backslash = "keep\\\\this";\n';
+  const decoded = stripCommentsOnly(raw);
+  assert.ok(decoded.includes('"CON"'), "hex-escaped `\\x43\\x4fN` must decode to `CON`");
+  // Coderabbit outside-diff on #3202: `String.prototype.match(g)` returns null when nothing
+  // matches, and `null.length` throws a TypeError before the assertion message can be seen.
+  // Use `matchAll` so the count is always defined and the failure surfaces the intended text.
+  assert.ok(
+    [...decoded.matchAll(/"CON"/gu)].length >= 3,
+    'hex, octal, and plain spellings must all reach the pin as `"CON"`',
+  );
+  // Codex 3793578610: `\\` must stay `\\` in the decoded output so downstream `strip…Bodies`
+  // still recognises the enclosing string as terminated. The token shape `"keep\\this"` is
+  // preserved verbatim — the pin still sees the double-backslash spelling that survives from
+  // the raw source.
+  assert.ok(
+    decoded.includes('"keep\\\\this"'),
+    "double-backslash escape must be PRESERVED so the closing quote is not treated as escaped",
+  );
+}
+
+// Codex 3793398789 on #3202: C's `#if` treats every nonzero integer as true, not just 1. The
+// earlier `_NONZERO_LITERAL` predecessor only matched the value 1; `#if 2 ... #else PIN ...
+// #endif` was treated as unknown and both branches survived the strip, letting a required
+// control retained only in the compiler-dead `#else` satisfy the source pin. Cover a range
+// of nonzero decimal/octal/hex integers plus `||` composites and outer parens.
+function assertArbitraryNonzeroFormsRecognised() {
+  const nonzeroVariants = [
+    "#if 2",
+    "#if 42",
+    "#if 1000UL",
+    "#if 010",
+    "#if 077",
+    "#if 0x10",
+    "#if 0xff",
+    "#if 0XFF",
+    "#if 0x0F",
+    "#if 2 || FEATURE",
+    "#if (42)",
+    "#if (0xff || defined(FLAG))",
+  ];
+  for (const variant of nonzeroVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nLIVE_NONZERO_BODY();\n#else\nDEAD_NONZERO_ELSE();\n#endif\n",
+    );
+    assert.match(
+      stripped,
+      /LIVE_NONZERO_BODY/u,
+      "nonzero integer literal must keep its live body: " + variant,
+    );
+    assert.equal(
+      stripped.match(/DEAD_NONZERO_ELSE/u),
+      null,
+      "`#else` after a nonzero constant must be stripped (branch is compiler-dead): " + variant,
+    );
+  }
+  // Elif form too — same regex family, same reasoning.
+  const stripped = stripCommentsAndStrings(
+    "#if 0\nDEAD_IF();\n#elif 42\nLIVE_NONZERO_ELIF();\n#else\nDEAD_ELSE_AFTER_NONZERO();\n#endif\n",
+  );
+  assert.match(stripped, /LIVE_NONZERO_ELIF/u, "`#elif 42` must keep its live body");
+  assert.equal(
+    stripped.match(/DEAD_ELSE_AFTER_NONZERO/u),
+    null,
+    "`#else` after `#elif 42` must be stripped",
+  );
+}
+
+// Codex 3793356684 on #3202: `#if 0x1` and `#if 01` are true just like `#if 1`. The earlier
+// bare-decimal-only regex left them as unknown, so both their live body AND their compiler-
+// dead `#else` body survived — a required control retained only in that dead `#else` would
+// slip past the source contract after the live copy was deleted. Cover the equivalent hex
+// and octal one spellings plus `||` composites and outer parens.
+function assertHexAndOctalOneFormsRecognised() {
+  const oneVariants = [
+    "#if 0x1",
+    "#if 0X1",
+    "#if 0x01",
+    "#if 0X0001UL",
+    "#if 01",
+    "#if 001",
+    "#if 001UL",
+    "#if 0x1 || FEATURE",
+    "#if 01 || defined(FLAG)",
+    "#if (0x1)",
+    "#if (01 || FEATURE)",
+  ];
+  for (const variant of oneVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nLIVE_BASE_ONE_BODY();\n#else\nDEAD_BASE_ONE_ELSE();\n#endif\n",
+    );
+    assert.match(
+      stripped,
+      /LIVE_BASE_ONE_BODY/u,
+      "one-valued literal in any C base must keep its live body: " + variant,
+    );
+    assert.equal(
+      stripped.match(/DEAD_BASE_ONE_ELSE/u),
+      null,
+      "`#else` after a base-variant one must be stripped (the branch is compiler-dead): " + variant,
+    );
+  }
+  // Elif form too — same regex family, same reasoning.
+  const stripped = stripCommentsAndStrings(
+    "#if 0\nDEAD_IF();\n#elif 0x1\nLIVE_HEX_ELIF();\n#else\nDEAD_ELSE_AFTER_HEX_ONE();\n#endif\n",
+  );
+  assert.match(stripped, /LIVE_HEX_ELIF/u, "`#elif 0x1` must keep its live body");
+  assert.equal(
+    stripped.match(/DEAD_ELSE_AFTER_HEX_ONE/u),
+    null,
+    "`#else` after `#elif 0x1` must be stripped",
+  );
+}
+
+// Coderabbit 3793329577 on #3202: C spells zero in three bases — decimal `0`, octal (a leading
+// `0` starts an octal literal, so `00`/`000` are also octal zero), and hex `0x0`/`0X00`. The
+// earlier `_ZERO_LITERAL` regex matched only the bare decimal form; a required control retained
+// in `#if 0x0` or `#if 00` would slip past the deterministically-false pin. Cover the equivalent
+// forms alongside a `&&` composite and outer parens so no new spelling silently escapes.
+function assertHexAndOctalZeroFormsStripped() {
+  const zeroVariants = [
+    "#if 0x0",
+    "#if 0X0",
+    "#if 0x00",
+    "#if 0X00UL",
+    "#if 00",
+    "#if 000",
+    "#if 000UL",
+    "#if 0x0 && FEATURE",
+    "#if 00 && defined(FLAG)",
+    "#if (0x0)",
+    "#if (00 && FEATURE)",
+  ];
+  for (const variant of zeroVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nDEAD_BASE_VARIANT_BODY();\n#else\nLIVE_BASE_VARIANT_ELSE();\n#endif\n",
+    );
+    assert.equal(
+      stripped.match(/DEAD_BASE_VARIANT_BODY/u),
+      null,
+      "zero-valued literal in any C base must strip its body: " + variant,
+    );
+    assert.match(
+      stripped,
+      /LIVE_BASE_VARIANT_ELSE/u,
+      "`#else` after a base-variant zero must survive: " + variant,
+    );
+  }
+  // Elif form too — same regex family, same reasoning.
+  const stripped = stripCommentsAndStrings(
+    "#if 1\nLIVE_IF();\n#elif 0x0\nDEAD_HEX_ELIF();\n#endif\n",
+  );
+  assert.equal(
+    stripped.match(/DEAD_HEX_ELIF/u),
+    null,
+    "`#elif 0x0` must strip its body just like `#elif 0`",
+  );
+}
+
+// Codex 3793282541: a constant-dead sibling (`#elif 0`, `#elif (0)`, `#if 0`) INSIDE an
+// unknown macro-gated ladder used to leak its body because the untracked `#if X` bumped a depth
+// counter on the OUTER frame — so `#elif` inside was treated as a plain line, not a directive.
+// Every `#if` now pushes its own frame; that routes the elif to the correct frame and strips
+// the constant-dead sibling regardless of what the compiler picks for the outer condition.
+function assertNestedUnknownLadderStripsConstantDeadSibling() {
+  assertElifZeroInsideUnknownStripped();
+  assertIfZeroInsideUnknownStripped();
+}
+
+// Reviewer's scenario: an outer TRACKED `#if 1` wraps an untracked `#if FEATURE`; the
+// inner `#elif 0` was previously kept because the untracked opener didn't push a frame.
+function assertElifZeroInsideUnknownStripped() {
+  const stripped = stripCommentsAndStrings(
+    "int keep_before(void) { return 1; }\n" +
+      "#if 1\n" +
+      "OUTER_LIVE_BEFORE_INNER();\n" +
+      "#if FEATURE\n" +
+      "MAYBE_LIVE_IF_BRANCH();\n" +
+      "#elif 0\n" +
+      "REQUIRED_PIN_INSIDE_DEAD_ELIF();\n" +
+      "#endif\n" +
+      "OUTER_LIVE_AFTER_INNER();\n" +
+      "#endif\n" +
+      "int keep_after(void) { return 2; }\n",
+  );
+  assert.equal(
+    stripped.match(/REQUIRED_PIN_INSIDE_DEAD_ELIF/u),
+    null,
+    "constant-dead `#elif 0` INSIDE an unknown macro-gated ladder must strip its body regardless of the outer condition",
+  );
+  assert.match(
+    stripped,
+    /OUTER_LIVE_BEFORE_INNER/u,
+    "outer live content before the nested unknown ladder must survive",
+  );
+  assert.match(
+    stripped,
+    /OUTER_LIVE_AFTER_INNER/u,
+    "outer live content after the nested unknown ladder must survive",
+  );
+  assert.match(
+    stripped,
+    /MAYBE_LIVE_IF_BRANCH/u,
+    "the initial branch of the unknown ladder may be picked and must be kept",
+  );
+}
+
+// A CONSTANT-DEAD `#if 0` nested inside an unknown ladder still strips too — same reasoning:
+// its body is dead regardless of what the outer condition evaluates to.
+function assertIfZeroInsideUnknownStripped() {
+  const stripped = stripCommentsAndStrings(
+    "#if FEATURE\n" +
+      "MAYBE_LIVE_ROOT_BRANCH();\n" +
+      "#if 0\n" +
+      "DEAD_NESTED_IN_UNKNOWN();\n" +
+      "#endif\n" +
+      "#endif\n",
+  );
+  assert.equal(
+    stripped.match(/DEAD_NESTED_IN_UNKNOWN/u),
+    null,
+    "`#if 0` inside an unknown macro-gated parent must strip regardless of parent's condition",
+  );
+  assert.match(
+    stripped,
+    /MAYBE_LIVE_ROOT_BRANCH/u,
+    "the unknown parent's initial branch may still be live and must be kept",
+  );
+}
+
+// Codex 3793282534: adjacent string literals concatenate at compile time (C11 §6.4.5), so
+// `"/bin/" "sh"` and `"/bin/sh"` describe the same runtime path. A negative pin that expects
+// a contiguous shell-path literal would miss the split form. Fold before pin evaluation.
+function assertAdjacentStringLiteralsFold() {
+  const folded = foldAdjacentStringLiterals('const char *x = "/bin/" "sh";');
+  assert.match(folded, /"\/bin\/sh"/u, "adjacent literal pair must fold to a single literal");
+  const chain = foldAdjacentStringLiterals('const char *y = "a" "b" "c" "d";');
+  assert.match(chain, /"abcd"/u, "chained adjacent literals must fold repeatedly");
+  const withNewline = foldAdjacentStringLiterals('const char *z = "hello "\n"world";');
+  assert.match(withNewline, /"hello world"/u, "adjacent literals separated by a newline must fold");
+  // Codex 3793744722 on #3202: C allows adjacent literals WITHOUT intervening whitespace
+  // (`"/bin/""sh"`). Fold must not require `\s+` between them.
+  const noWhitespace = foldAdjacentStringLiterals('const char *w = "/bin/""sh";');
+  assert.match(
+    noWhitespace,
+    /"\/bin\/sh"/u,
+    'adjacent literals with NO intervening whitespace must fold: `"/bin/""sh"` → `"/bin/sh"`',
+  );
+  const noWhitespaceChain = foldAdjacentStringLiterals('"a""b""c""d";');
+  assert.match(
+    noWhitespaceChain,
+    /"abcd"/u,
+    "chained no-whitespace adjacent literals must fold repeatedly",
+  );
+  // Codex 3793905517 on #3202: C -std=c11 allows string-literal PREFIXES (`L"…"`, `u8"…"`,
+  // `u"…"`, `U"…"`) on either side of an adjacent pair; compatible prefixes concatenate. The
+  // fold must not leave the prefix as a separator between literals.
+  const mixedPrefix = foldAdjacentStringLiterals('const char *m = "/bin/" u8"sh";');
+  assert.match(
+    mixedPrefix,
+    /"\/bin\/sh"/u,
+    'prefixed-adjacent literal pair must fold (`"/bin/" u8"sh"` → `"/bin/sh"`)',
+  );
+  const doublePrefix = foldAdjacentStringLiterals('const char *m = L"/bin/" u"sh";');
+  assert.match(doublePrefix, /"\/bin\/sh"/u, "double-prefixed pair must fold too");
+  // Non-adjacent (comma-separated arguments) must NOT fold — a comma is not whitespace.
+  const nonAdjacent = foldAdjacentStringLiterals('foo("a", "b");');
+  assert.doesNotMatch(nonAdjacent, /"ab"/u, "separator like `,` must prevent folding");
+  // Escape handling: `\\"` inside a literal body must not be treated as a closing quote.
+  const withEscape = foldAdjacentStringLiterals('const char *e = "a\\"b" "c";');
+  assert.match(withEscape, /"a\\"bc"/u, "embedded escaped-quote must survive the fold");
+}
+
+// Codex 3793229696: `#if (0 && FEATURE)` and `#if 0 && defined(FEATURE)` are deterministically
+// false but the per-directive regex used to stop at bare identifiers on the RHS and at a bare-
+// zero paren pair (`(0)`). The scanner would retain those dead bodies, so a required control
+// moved into one of these variants would still satisfy the positive assertion after the live
+// control was deleted. Cover both new shapes plus the mirror TRUE forms so any future
+// contributor sees the intent.
+function assertParenthesizedConstantConditions() {
+  const falseVariants = [
+    "#if (0 && FEATURE)",
+    "#if 0 && defined(FEATURE)",
+    "#if (0 && defined(FEATURE))",
+    "#if 0 && !defined(FEATURE)",
+    "#if (0)",
+  ];
+  for (const variant of falseVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nDEAD_PAREN_FALSE_BODY();\n#else\nLIVE_PAREN_FALSE_ELSE();\n#endif\n",
+    );
+    assert.equal(
+      stripped.match(/DEAD_PAREN_FALSE_BODY/u),
+      null,
+      "parenthesized/`defined()` false form must strip its body: " + variant,
+    );
+    assert.match(
+      stripped,
+      /LIVE_PAREN_FALSE_ELSE/u,
+      "`#else` after a false compound must survive: " + variant,
+    );
+  }
+  const trueVariants = [
+    "#if (1 || FEATURE)",
+    "#if 1 || defined(FEATURE)",
+    "#if (1 || defined(FEATURE))",
+  ];
+  for (const variant of trueVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nLIVE_PAREN_TRUE_BODY();\n#else\nDEAD_PAREN_TRUE_ELSE();\n#endif\n",
+    );
+    assert.match(
+      stripped,
+      /LIVE_PAREN_TRUE_BODY/u,
+      "parenthesized/`defined()` true form's body must survive: " + variant,
+    );
+    assert.equal(
+      stripped.match(/DEAD_PAREN_TRUE_ELSE/u),
+      null,
+      "`#else` after a true compound must be stripped: " + variant,
+    );
+  }
+}
+
+// Codex 3793198453: `#if 1 || FEATURE` is deterministically true (C's `||` short-circuits on
+// left=1). Track the ladder so the `#else` gets stripped.
+function assertCompoundConstantTrueIf() {
+  const stripped = stripCommentsAndStrings(
+    "int keep_before(void) { return 1; }\n" +
+      "#if 1 || FEATURE\n" +
+      "LIVE_COMPOUND_TRUE_BODY();\n" +
+      "#else\n" +
+      "DEAD_ELSE_AFTER_COMPOUND_TRUE();\n" +
+      "#endif\n" +
+      "int keep_after(void) { return 2; }\n",
+  );
+  assert.match(stripped, /LIVE_COMPOUND_TRUE_BODY/u, "`#if 1 || FEATURE` body must survive");
+  assert.equal(
+    stripped.match(/DEAD_ELSE_AFTER_COMPOUND_TRUE/u),
+    null,
+    "`#else` after `#if 1 || FEATURE` must be stripped (compound is deterministically true)",
+  );
+  for (const variant of ["#if 1||FEATURE", "#if (1)||FEATURE", "#if 1L||!FLAG"]) {
+    const s = stripCommentsAndStrings(variant + "\nLIVE();\n#else\nDEAD_VARIANT_ELSE();\n#endif\n");
+    assert.equal(
+      s.match(/DEAD_VARIANT_ELSE/u),
+      null,
+      "compound-true variant must strip the else-body: " + variant,
+    );
+  }
+}
+
+// Coderabbit 3793183804: `#elif 1` guarantees the ladder terminates before `#else` regardless
+// of preceding `#elif <unknown>` branches. Either the unknown was true (its branch is picked)
+// or false (this `#elif 1` is picked); in both cases the `#else` is dead.
+function assertElifOneAfterUnknownExhausts() {
+  const stripped = stripCommentsAndStrings(
+    "#if 0\nDEAD_IF();\n" +
+      "#elif FEATURE\nMAYBE_LIVE_ELIF_FEATURE();\n" +
+      "#elif 1\nMAYBE_LIVE_ELIF_ONE();\n" +
+      "#else\nDEAD_ELSE_AFTER_ELIF_ONE();\n" +
+      "#endif\n",
+  );
+  assert.match(stripped, /MAYBE_LIVE_ELIF_FEATURE/u, "unknown `#elif` branch may still be live");
+  assert.match(stripped, /MAYBE_LIVE_ELIF_ONE/u, "`#elif 1` branch may still be live");
+  assert.equal(
+    stripped.match(/DEAD_ELSE_AFTER_ELIF_ONE/u),
+    null,
+    "`#else` after `#elif 1` must be stripped — `#elif 1` exhausts the ladder even after an unknown predecessor",
+  );
+  assert.equal(stripped.match(/DEAD_IF/u), null, "the initial `#if 0` half must still be stripped");
+}
+
+// Coderabbit 3793183799: C11 trigraphs run in translation phase 1, before `\<newline>`
+// splicing and preprocessing. `??=if 0` becomes `#if 0` after trigraph replacement. Ensure
+// the scanner recognises that too.
+function assertTrigraphIfZero() {
+  const stripped = stripCommentsAndStrings(
+    "int keep_before(void) { return 1; }\n" +
+      "??=if 0\nDEAD_INSIDE_TRIGRAPH_IF();\n??=endif\n" +
+      "int keep_after(void) { return 2; }\n",
+  );
+  assert.equal(
+    stripped.match(/DEAD_INSIDE_TRIGRAPH_IF/u),
+    null,
+    "trigraph `??=if 0 ... ??=endif` must be stripped (`??=` converts to `#`)",
+  );
+  // `??/` converts to `\`, enabling line splicing on trigraph-continued lines.
+  const spliceStripped = stripCommentsAndStrings(
+    "// disabled ??/\nSHOULD_BE_STRIPPED_BY_TRIGRAPH_SPLICE();\n",
+  );
+  assert.equal(
+    spliceStripped.match(/SHOULD_BE_STRIPPED_BY_TRIGRAPH_SPLICE/u),
+    null,
+    "trigraph `??/` at end of line must act as `\\` for line splicing",
+  );
+}
+
+// Coderabbit 3793025299: nested `#if 0` inside a live `#elif`/`#else` branch must strip its
+// body too. The single-frame model treated it as ordinary depth-tracking and let the dead
+// nested body reach the source-contract assertions.
+function assertNestedIfZeroInsideLiveElseStripped() {
+  const stripped = stripCommentsAndStrings(
+    "int keep_before(void) { return 1; }\n" +
+      "#if 0\n" +
+      "OUTER_DEAD();\n" +
+      "#else\n" +
+      "LIVE_BEFORE_NESTED();\n" +
+      "#if 0\n" +
+      "NESTED_DEAD_TOKEN();\n" +
+      "#endif\n" +
+      "LIVE_AFTER_NESTED();\n" +
+      "#endif\n" +
+      "int keep_after(void) { return 2; }\n",
+  );
+  assert.match(
+    stripped,
+    /LIVE_BEFORE_NESTED/u,
+    "live outer content BEFORE the nested `#if 0` must be visible",
+  );
+  assert.match(
+    stripped,
+    /LIVE_AFTER_NESTED/u,
+    "live outer content AFTER the nested `#if 0` must be visible",
+  );
+  assert.equal(
+    stripped.match(/NESTED_DEAD_TOKEN/u),
+    null,
+    "nested `#if 0` inside a live `#else` branch must have its body stripped",
+  );
+  assert.equal(
+    stripped.match(/OUTER_DEAD/u),
+    null,
+    "the dead `#if 0` half of the outer ladder must still be stripped",
+  );
+}
+
+// Codex 3793050405: the INVERSE nesting — a nested `#if 0` inside a STRIPPING parent's dead
+// branch. Its own `#else` locally transitions to KEEPING mode, but the outer frame is still
+// STRIPPING, so clang omits the whole outer branch including the inner `#else` body. Every
+// frame on the stack must be KEEPING for a line to survive.
+function assertNestedElseInsideDeadParentStripped() {
+  const stripped = stripCommentsAndStrings(
+    "int keep_before(void) { return 1; }\n" +
+      "#if 0\n" +
+      "#if 0\n" +
+      "OUTER_DEAD_INNER_STRIPPING();\n" +
+      "#else\n" +
+      "NESTED_ELSE_INSIDE_DEAD_PIN();\n" +
+      "#endif\n" +
+      "#endif\n" +
+      "int keep_after(void) { return 2; }\n",
+  );
+  assert.equal(
+    stripped.match(/NESTED_ELSE_INSIDE_DEAD_PIN/u),
+    null,
+    "a nested `#else` INSIDE a dead outer `#if 0` branch must still be stripped (parent frame is STRIPPING)",
+  );
+  assert.equal(
+    stripped.match(/OUTER_DEAD_INNER_STRIPPING/u),
+    null,
+    "the outer dead branch's own body must still be stripped",
+  );
+}
+
+function assertBasicDisabledIfStrip() {
+  const disabledIf = stripCommentsAndStrings(
+    "int keep_before(void) { return 1; }\n" +
+      "#if 0\nCreateFileW(bogus);\n#endif\n" +
+      "int keep_after(void) { return 2; }\n",
+  );
+  assert.equal(
+    disabledIf.match(/CreateFileW/u),
+    null,
+    "scanCSource must strip tokens inside `#if 0 ... #endif`",
+  );
+  const nestedIf = stripCommentsAndStrings(
+    "int keep(void) { return 0; }\n" +
+      "#if 0\n#if 1\nSHOULD_BE_STRIPPED();\n#endif\n#endif\n" +
+      "int live(void) { return 1; }\n",
+  );
+  assert.equal(
+    nestedIf.match(/SHOULD_BE_STRIPPED/u),
+    null,
+    "scanCSource must count nested `#if` inside a `#if 0` block",
+  );
+  assert.ok(
+    nestedIf.includes("keep"),
+    "code BEFORE the outer `#if 0 ... #endif` must survive the strip",
+  );
+  assert.ok(
+    nestedIf.includes("live"),
+    "code AFTER the outer `#if 0 ... #endif` must survive the strip",
+  );
+}
+
+// KEIKO-0417 (review-follow-up on 7c976f77): a `\`-continued `#if \\\n0` splices to `#if 0`
+// at C translation phase 2, before preprocessing. Proves the line-splice pre-pass runs FIRST.
+function assertSplicedDisabledIfStrip() {
+  const splicedDirective = stripCommentsAndStrings(
+    "int keep_before(void) { return 1; }\n" +
+      "#if \\\n0\nSHOULD_BE_STRIPPED_BY_SPLICED_IF();\n#endif\n" +
+      "int keep_after(void) { return 2; }\n",
+  );
+  assert.equal(
+    splicedDirective.match(/SHOULD_BE_STRIPPED_BY_SPLICED_IF/u),
+    null,
+    "line splicing must run BEFORE disabled-branch stripping so `#if \\\\\\n0` is recognised as `#if 0`",
+  );
+}
+
+// KEIKO-0417 (review-follow-up on 44b9ef9b): a `#else` that lives ONLY inside a `/* */` block
+// is invisible to the C preprocessor (translation phase 3 removes comments before phase 4
+// interprets directives). Proves comment stripping runs BEFORE disabled-branch stripping.
+function assertCommentedElseIsIgnored() {
+  const commentedElse = stripCommentsAndStrings(
+    "int keep(void) { return 1; }\n" +
+      "#if 0\n" +
+      "/* #else */\n" +
+      "STILL_INSIDE_DISABLED_BRANCH();\n" +
+      "#endif\n" +
+      "int live(void) { return 2; }\n",
+  );
+  assert.equal(
+    commentedElse.match(/STILL_INSIDE_DISABLED_BRANCH/u),
+    null,
+    "comment stripping must run BEFORE disabled-branch stripping so a `#else` inside `/* */` is not seen as a directive",
+  );
+}
+
+// Coderabbit 3792888538: a multi-line block comment must be replaced with a same-length span of
+// spaces AND newlines, so a `#if 0` directive on a line following the comment stays at
+// line-start in the output.
+function assertMultilineCommentBeforeIfPreservesLines() {
+  const stripped = stripCommentsAndStrings(
+    "int keep(void) { return 1; }\n" +
+      "/* multi\n line \n block */\n" +
+      "#if 0\n" +
+      "SHOULD_BE_STRIPPED_AFTER_MULTILINE_COMMENT();\n" +
+      "#endif\n",
+  );
+  assert.equal(
+    stripped.match(/SHOULD_BE_STRIPPED_AFTER_MULTILINE_COMMENT/u),
+    null,
+    "block-comment stripping must preserve newlines so a following `#if 0` stays at line-start",
+  );
+}
+
+// Coderabbit 3792888543: `#if (0)`, `#if 0L`, `#if (0U)` and integer-suffix variants are all
+// constant-zero conditions the C preprocessor treats identically to `#if 0`.
+// Codex 3792928022: `#if 0 && FEATURE` also short-circuits to 0 (C left-to-right `&&`), so a
+// control wrapped in that composite form is likewise disabled and must be stripped.
+// Coderabbit 3793183803: `#if 0&&FEATURE` (no whitespace around `&&`) is equally valid C.
+function assertDisabledIfVariants() {
+  const variants = [
+    "#if (0)",
+    "#if 0L",
+    "#if 0U",
+    "#if 0LL",
+    "#if (0UL)",
+    "#if  0",
+    "#if 0 && FEATURE",
+    "#if 0 && FEATURE_NAME",
+    "#if (0) && FLAG",
+    "#if 0L && !DISABLED_MACRO",
+    "#if 0&&FEATURE",
+    "#if 0&&!FLAG",
+    "#if (0)&&FEATURE",
+  ];
+  for (const variant of variants) {
+    const stripped = stripCommentsAndStrings(
+      `${variant}\nSHOULD_BE_STRIPPED_BY_DISABLED_IF_VARIANT();\n#endif\nint live(void) { return 1; }\n`,
+    );
+    assert.equal(
+      stripped.match(/SHOULD_BE_STRIPPED_BY_DISABLED_IF_VARIANT/u),
+      null,
+      `disabled-if strip must recognise the constant-zero variant: ${variant}`,
+    );
+  }
+}
+
+// Coderabbit 3792888545: a multi-character constant `'CreateFileW('` must not satisfy the
+// source-contract regex for `CreateFileW(`, and a `//` inside a char constant must not start a
+// false line comment.
+function assertCharLiteralHandling() {
+  const charLiteralMultiChar = stripCommentsAndStrings(
+    "int f(void) { return 'CreateFileW('; }\nint g(void) { return 1; }\n",
+  );
+  assert.equal(
+    charLiteralMultiChar.match(/CreateFileW\(/u),
+    null,
+    "stripCommentsAndStrings must blank multi-character char-literal bodies",
+  );
+  const charLiteralWithSlashSlash = stripCComments(
+    "int f(void) { return '//'; }\nOBJ_DONT_REPARSE_LIVE;\n",
+  );
+  assert.ok(
+    charLiteralWithSlashSlash.includes("OBJ_DONT_REPARSE_LIVE"),
+    "stripCComments must not treat `'//'` inside a char literal as a line-comment start",
+  );
+}
+
+// KEIKO-0417 (review-follow-up): the two assertions that observe a bytestring inside `"..."`
+// used to read the raw source, so a commented-out reserved-stem list or
+// `ascii_name_equals(..., "GLOBALROOT")` invocation still satisfied them. `stripCommentsOnly`
+// closes that gap without blanking the string literals they need to observe. This self-test
+// proves it: mutate the real source to move `"GLOBALROOT"` inside a `/* ... */` block, run
+// stripCommentsOnly, and assert both:
+//   (1) the "GLOBALROOT" string literal that STILL lives outside comments is preserved (so
+//       the reserved-stems assertion still works when the code is correct); and
+//   (2) the extra commented-out `ascii_name_equals(..., "GLOBALROOT")` invocation we added is
+//       NOT visible to the scan (so the ratchet has actually been strengthened).
+function assertCommentsOnlyLeavesStringLiteralsIntact(rawSource) {
+  const mutated =
+    rawSource + '\n/* disabled: ascii_name_equals(component, name_length, "COMMENTED_STEM"); */\n';
+  const scanned = stripCommentsOnly(mutated);
+  assert.ok(
+    scanned.includes('"GLOBALROOT"'),
+    "stripCommentsOnly must preserve string literals so the reserved-stems check can see them",
+  );
+  assert.equal(
+    scanned.match(/COMMENTED_STEM/u),
+    null,
+    'stripCommentsOnly must remove commented-out `ascii_name_equals(..., "…")` invocations',
+  );
 }
 
 async function setupFixture(fixture, outside) {
@@ -327,6 +1815,157 @@ async function assertProtocolCases(binary, fixture, outside) {
   else {
     assert.equal(response(await run(binary, request("/", "dev/null"))).status, 4);
     assert.equal(response(await run(binary, request("/dev", "null"))).status, 5);
+  }
+
+  await assertMalformedFrameGuards(binary, fixture);
+  await assertSizeCapBoundaryProbes(binary, fixture);
+}
+
+// Codex 3793028202 on #3202: the over-cap probes on their own let a smaller C constant pass
+// silently — an over-cap payload stays over-cap regardless of whether the cap is 4 KiB or
+// 2 KiB. Pair each over-cap probe with an at-cap probe that expects a NON-malformed status;
+// if the C constant drops, the at-cap payload becomes over-cap and the assertion trips. So the
+// pair (at-cap accepted + over-cap rejected) pins the boundary rather than the harness value.
+async function assertSizeCapBoundaryProbes(binary, fixture) {
+  const prefix = isWindows ? "C:\\" : "/";
+  const atCapRoot = Buffer.from(prefix + "x".repeat(HARNESS_KSR_MAX_ROOT - prefix.length), "utf8");
+  const atCapPath = Buffer.from("x".repeat(HARNESS_KSR_MAX_PATH), "utf8");
+  const cases = [
+    {
+      label: "rootLen == KSR_MAX_ROOT (at the boundary — must NOT reject as malformed)",
+      frame: malformedRequest({ rootBytes: atCapRoot, pathBytes: Buffer.from("safe.txt") }),
+    },
+    {
+      label: "pathLen == KSR_MAX_PATH (at the boundary — must NOT reject as malformed)",
+      frame: malformedRequest({ root: fixture, pathBytes: atCapPath }),
+    },
+  ];
+  for (const { label, frame } of cases) {
+    const status = response(await run(binary, frame)).status;
+    assert.notEqual(
+      status,
+      1,
+      `expected non-malformed status for at-boundary case: ${label} (got ${String(status)}). ` +
+        "If this trips after a change to KSR_MAX_ROOT/KSR_MAX_PATH, update HARNESS_KSR_MAX_ROOT/PATH to match.",
+    );
+  }
+}
+
+// KEIKO-0382: negative coverage for the frame-parser guards at the helper's trust boundary. Each
+// case pins one guard by constructing a frame the helper must reject with status 1
+// (KSR_MALFORMED_REQUEST). Kept platform-agnostic and run for every configuration — the parser is
+// the same on every platform. Split by axis so no one builder function crosses the 50-line ceiling.
+function frameLengthMismatchCases(fixture, pathBytes) {
+  // Note: dedicated "declared rootLen/pathLen exceeds supplied bytes" probes used to sit here too,
+  // but codex 3792928019 on #3202 correctly observed they cannot isolate the two
+  // `fread(...) != declared_length` guards. Overstating rootLen by 1 consumes the first byte of
+  // pathBytes; the subsequent path fread returns pathBytes.length - 1 bytes; the trailing byte
+  // of the calloc'd path buffer is `\0`; and `memchr(out->path, 0, declaredPathLen)` rejects at
+  // the same status 1. Overstating pathLen has the mirror effect: calloc leaves a trailing `\0`
+  // that memchr catches. Both probes therefore pass with or without the fread-length guards.
+  // Not reframed because inputs that TRULY isolate those guards would need instrumented builds
+  // (or a distinguishable status enum); left out rather than misleadingly claiming to pin them.
+  //
+  // Note: zero-length root and zero-length path used to be listed here as separate cases, but
+  // codex 3792824428 on #3202 correctly observed they cannot isolate the early `root_len == 0`
+  // / `path_len == 0` guards — removing either check leaves the request to be rejected by the
+  // downstream `valid_root("")` / `valid_path("")` at the same status 1, so the probes would
+  // pass with or without the guard they claim to pin. Coverage of "empty is rejected" is
+  // already provided by the interaction between the length fields and the downstream validators;
+  // dedicated zero-length probes would only document overlapping behaviour, not isolate a
+  // unique boundary. Kept out rather than reframed to avoid misleading a reader into believing
+  // the pre-check is what fires.
+  return [
+    // Size cap breaches: proves the constants are actually enforced, not just declared. Each
+    // root retains its platform's valid absolute-root prefix (`/` on POSIX, `<letter>:\` on
+    // Windows) so that `valid_root` would NOT reject it if the size cap were removed. A pre-
+    // fix version of this case used `"x".repeat(...)`, whose first byte `valid_root` rejects
+    // on both platforms — so the test tripped on the wrong guard and would still pass if the
+    // `root_len > KSR_MAX_ROOT` check were deleted (KEIKO-0382 review-follow-up).
+    {
+      label: "rootLen > KSR_MAX_ROOT (with valid absolute prefix, so only the size cap can reject)",
+      frame: malformedRequest({ rootBytes: overCapRootBytes(), pathBytes }),
+    },
+    {
+      label: "pathLen > KSR_MAX_PATH",
+      frame: malformedRequest({
+        root: fixture,
+        pathBytes: Buffer.from("x".repeat(HARNESS_KSR_MAX_PATH + 1), "utf8"),
+      }),
+    },
+  ];
+}
+
+// The valid-root prefix for the over-cap root probe. Built at call time so `isWindows` is honoured
+// at run time, not module import time. Plain double-quoted string (not a template literal) — the
+// Windows prefix ends in `\`, which in a template literal `` `C:\` `` would escape the closing
+// backtick and swallow the rest of the file into an unterminated template.
+function overCapRootBytes() {
+  const prefix = isWindows ? "C:\\" : "/";
+  const padded = prefix + "x".repeat(HARNESS_KSR_MAX_ROOT + 1 - prefix.length);
+  return Buffer.from(padded, "utf8");
+}
+
+function frameHeaderShapeCases(fixture, pathBytes) {
+  return [
+    // Reserved half-word must be zero. Confirmed never set on any well-formed frame today; a
+    // non-zero value is a forward-compatibility violation and must fail closed.
+    {
+      label: "non-zero reserved u16",
+      frame: malformedRequest({ root: fixture, pathBytes, reserved: 1 }),
+    },
+    // Wrong protocol version.
+    { label: "version != 1", frame: malformedRequest({ root: fixture, pathBytes, version: 2 }) },
+    // Codex 3793830395 on #3202: pin the `memcmp(header, "KSR1", 4)` guard in
+    // `secure_workspace_read.c:117`. Every other malformed-frame probe uses the default
+    // `KSR1` magic, so if the helper's magic check were deleted the suite would stay green.
+    // Send an alternative 4-byte magic and expect status 1 (malformed).
+    {
+      label: "wrong magic (`ZZZZ`)",
+      frame: malformedRequest({ root: fixture, pathBytes, magic: "ZZZZ" }),
+    },
+  ];
+}
+
+function frameByteValidationCases(fixture, rootBytes, pathBytes) {
+  // Note: dedicated NUL-byte probes for both root and path used to sit here, but codex 3792855835
+  // on #3202 observed they cannot isolate the `memchr(..., 0, ...)` guards — `valid_utf8`
+  // (secure_workspace_read.c line 48: `if (cp == 0 || ...) return 0`) independently rejects code
+  // point zero, so removing either `memchr` check leaves the request rejected by the UTF-8 check
+  // at the same status 1. Coverage of "NUL is rejected" is already provided by that downstream
+  // interaction; keeping dedicated probes would only misleadingly document a pin they do not
+  // actually isolate. The invalid-UTF-8 cases below DO isolate `valid_utf8` (the sequence
+  // `0xc3, 0x28` contains no NUL, so `memchr` would not reject it — only the UTF-8 continuation
+  // check does). Note preserved so a future contributor does not re-add the false pins.
+  return [
+    {
+      label: "path is invalid UTF-8 (isolates valid_utf8; no NUL, so memchr would pass)",
+      frame: malformedRequest({ root: fixture, pathBytes: Buffer.of(0xc3, 0x28) }),
+    },
+    {
+      label: "root is invalid UTF-8 (isolates valid_utf8; no NUL, so memchr would pass)",
+      frame: malformedRequest({
+        rootBytes: Buffer.concat([rootBytes, Buffer.of(0xc3, 0x28)]),
+        pathBytes,
+      }),
+    },
+  ];
+}
+
+function buildMalformedFrameCases(fixture) {
+  const rootBytes = Buffer.from(fixture, "utf8");
+  const pathBytes = Buffer.from("nested/good.txt", "utf8");
+  return [
+    ...frameLengthMismatchCases(fixture, pathBytes),
+    ...frameHeaderShapeCases(fixture, pathBytes),
+    ...frameByteValidationCases(fixture, rootBytes, pathBytes),
+  ];
+}
+
+async function assertMalformedFrameGuards(binary, fixture) {
+  for (const { label, frame } of buildMalformedFrameCases(fixture)) {
+    const status = response(await run(binary, frame)).status;
+    assert.equal(status, 1, `expected status 1 (malformed) for: ${label}, got ${String(status)}`);
   }
 }
 
