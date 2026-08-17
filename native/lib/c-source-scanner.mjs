@@ -348,13 +348,19 @@ function decodeOctalEscape(body, i, emit) {
 // = 34 = `"`) decoded to a bare `"` reconstructs scanner text like `"a"posix_spawn(...)"b"`;
 // `stripStringLiteralBodies` then treats the middle bytes as code and leaves a pinned call
 // visible even though it exists only inside a compiled diagnostic string, letting a deleted
-// live control keep satisfying the positive source pin. Same reasoning for `\` and `'` —
-// emitting them as escapes preserves the source-token shape downstream expects.
+// live control keep satisfying the positive source pin. Same reasoning for `\` and `'`.
+//
+// Coderabbit 3793711072 on #3202: MASK before comparing. Hex escapes accept an unbounded hex
+// run (`\x122` → value 290) and octal escapes accept up to three digits (`\442` → 290); the
+// unmasked comparison would miss those cases and fall through to `String.fromCharCode(value &
+// 0xff)`, producing a bare `"` and reintroducing the exact bug the delimiter preservation
+// closes. Compare the low byte only.
 function preservedByteSpelling(value) {
-  if (value === 0x22) return '\\"';
-  if (value === 0x27) return "\\'";
-  if (value === 0x5c) return "\\\\";
-  return String.fromCharCode(value & 0xff);
+  const byte = value & 0xff;
+  if (byte === 0x22) return '\\"';
+  if (byte === 0x27) return "\\'";
+  if (byte === 0x5c) return "\\\\";
+  return String.fromCharCode(byte);
 }
 
 // ---------------------------------------------------------------------------
@@ -384,6 +390,31 @@ export function normalizeCurrentDirComponents(source) {
     current = previous.replace(/\/\.(?=\/)/gu, "").replace(/(?<!:)\/{2,}/gu, "/");
   } while (current !== previous);
   return current;
+}
+
+// ---------------------------------------------------------------------------
+// Full C translation-phase-ordered normalization for source-contract pins
+// ---------------------------------------------------------------------------
+// Coderabbit 3793711083 on #3202: the macOS supervisor harness and the secure-workspace-read
+// harness each duplicated the same six-stage composition — line splices → comment strip →
+// preprocessor branch strip → escape decode → adjacent-literal fold → `/./` and `//` path
+// normalization. The ORDERING is security-relevant: decoding must precede folding (codex
+// 3793469154); path normalization must run last so post-fold `"/bin" "/./sh"` also
+// canonicalises. If one harness gained a stage or reordered one, the other harness silently
+// accepted source spellings the compiler resolves differently and negative pins would stop
+// matching. Now both harnesses call this single primitive; a change here lands in both gates
+// in lockstep.
+//
+// String LITERAL bodies stay verbatim (each harness applies `stripStringLiteralBodies` after
+// its own decisions about which pins observe the raw literal shape).
+export function prepareCSource(rawSource) {
+  return normalizeCurrentDirComponents(
+    foldAdjacentStringLiterals(
+      decodeCStringEscapes(
+        stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource))),
+      ),
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -639,9 +670,18 @@ function applyElifTransition(trimmed, frame) {
 function evaluateConstantArithmetic(exprText) {
   const trimmed = exprText.trim();
   if (trimmed.length === 0) return null;
-  if (!/^[\s0-9xXa-fA-FUuLl+\-*/%()<>=!&|^~]+$/u.test(trimmed)) return null;
-  // Reject `**` — JS treats it as exponentiation, C treats a bare `*` sequence as syntax error.
-  if (trimmed.includes("**")) return null;
+  if (!/^[\s0-9xXa-fA-FUuLl+\-*()<>=!&|^]+$/u.test(trimmed)) return null;
+  // Coderabbit 3793711080 on #3202: fail-closed on operators whose JS semantics diverge from
+  // C's `intmax_t` preprocessor arithmetic. `#if 1/2*2` — C: (1/2)*2 = 0*2 = 0 (strip);
+  // JS: 0.5*2 = 1 (keep). `#if (1<<32)-1` — C: nonzero (keep); JS: 32-bit wrap = 0 (strip).
+  // Either misclassification breaks the source-contract guarantee. Reject `/`, `%`, `<<`,
+  // `>>`, `~`; the ladder then falls through to the conservative unknown-condition path
+  // (both branches survive).
+  //
+  // Also reject `**` — JS treats it as exponentiation, C treats a bare `*` sequence as a
+  // syntax error. The char-set validator already excludes `~`, `/`, `%` above, so the runtime
+  // guard here catches the composite `**`, `<<`, `>>` that pass through the char set.
+  if (/\*\*|<<|>>/u.test(trimmed)) return null;
   let js = trimmed.replace(/([0-9a-fA-F])[UuLl]{1,3}\b/gu, "$1");
   // C octal: `0<octal-digits>`. Convert to JS `0o<digits>`. Bare `0` and `0x…` stay as-is.
   js = js.replace(/\b0([0-7]+)(?![0-9a-fA-F])/gu, "0o$1");

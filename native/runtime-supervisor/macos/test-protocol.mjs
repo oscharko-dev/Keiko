@@ -20,15 +20,7 @@ import {
 // handling, disabled-preprocessor-branch state machine) used to be duplicated in this file
 // AND `native/secure-workspace-read/test-protocol.mjs`. Consolidated behind the shared module
 // so a fix lands in one place.
-import {
-  decodeCStringEscapes,
-  foldAdjacentStringLiterals,
-  normalizeCurrentDirComponents,
-  preprocessCLineSplices,
-  stripCComments,
-  stripDisabledPreprocessorBranches,
-  stripStringLiteralBodies,
-} from "../../lib/c-source-scanner.mjs";
+import { prepareCSource, stripStringLiteralBodies } from "../../lib/c-source-scanner.mjs";
 
 const DEADLINE_MS = 15_000;
 // `URL.pathname` retains percent encoding, so a checkout path containing spaces, `%`, `#` or `?`
@@ -118,33 +110,12 @@ function stripCCommentsAndStrings(rawSource) {
   return stripStringLiteralBodies(stripCCommentsPreservingLiterals(rawSource));
 }
 
+// Coderabbit 3793711083 on #3202: the six-stage translation-phase composition (line splices
+// → comment strip → preprocessor branch strip → escape decode → adjacent-literal fold → path
+// normalization) lives in `prepareCSource` in the shared scanner so both harnesses run the
+// same ordering. Changes to the pipeline land in both gates in lockstep.
 function stripCCommentsPreservingLiterals(rawSource) {
-  // Codex 3793282534: adjacent string literals concatenate at compile time (C11 §6.4.5). Fold
-  // them BEFORE the negative shell-path pin runs so `"/bin/" "sh"` cannot evade the regex that
-  // expects a contiguous `"/bin/…sh"` literal.
-  //
-  // Codex 3793436216: also decode escape sequences inside string literals (C11 §6.4.4.4).
-  // `"/bin/\x73h"` reaches clang as `/bin/sh`; without decoding, the negative shell-path
-  // regex would miss the escape-hidden form.
-  //
-  // Codex 3793469154: order matters — DECODE FIRST, THEN FOLD. C11 §6.4.4.4 (escape decoding
-  // in phase 5) precedes §6.4.5 (string concatenation in phase 6). If we fold first, an
-  // adjacent-pair like `"\x2f" "bin/sh"` collapses to `"\x2fbin/sh"`; the variable-length hex
-  // escape decoder then greedily consumes `2fb` as hex and produces `"ûin/sh"`, which does
-  // not match the shell-path regex. Decoding each token first yields `"/" "bin/sh"`, which
-  // then folds correctly to `"/bin/sh"`.
-  //
-  // Codex 3793578605: LAST, collapse `./` current-directory components — the OS resolves
-  // `/bin/./sh` to `/bin/sh` before execution, and the shell-path regex expects a contiguous
-  // path. Runs AFTER fold so a split spelling like `"/bin" "/./sh"` (folds to
-  // `"/bin/./sh"`) also normalises.
-  return normalizeCurrentDirComponents(
-    foldAdjacentStringLiterals(
-      decodeCStringEscapes(
-        stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource))),
-      ),
-    ),
-  );
+  return prepareCSource(rawSource);
 }
 
 const rawSource = await readFile(supervisorSource, "utf8");

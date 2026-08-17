@@ -17,12 +17,9 @@ import { fileURLToPath } from "node:url";
 
 import { resolveWindowsMsvcEnv, windowsToolFromPath } from "../../scripts/lib/windows-msvc.mjs";
 import {
-  decodeCStringEscapes,
   foldAdjacentStringLiterals,
-  normalizeCurrentDirComponents,
-  preprocessCLineSplices,
+  prepareCSource,
   stripCComments,
-  stripDisabledPreprocessorBranches,
   stripStringLiteralBodies,
 } from "../lib/c-source-scanner.mjs";
 import { performance } from "node:perf_hooks";
@@ -299,31 +296,14 @@ function stripCommentsOnly(rawSource) {
   return preparedSource(rawSource);
 }
 
-// Codex 3793282534 on #3202: adjacent string literals concatenate at compile time (C11 §6.4.5).
-// `"\\??\\" "GLOBALROOT"` would produce the same object as `"\\??\\GLOBALROOT"` for the reserved
-// stems / GLOBALROOT pins, and any negative pin that expects a contiguous literal would miss the
-// split form. Fold after comment / disabled-branch stripping so the pins see what the compiler
-// will emit.
-//
-// Codex 3793436216: also decode escape sequences inside string literal BODIES (C11 §6.4.4.4).
-// The Windows reserved-stem and GLOBALROOT pins compare against exact strings; if a control
-// were rewritten to use `"\x43ON"` instead of `"CON"` it would evade the source contract.
-//
-// Codex 3793469154: order matters — DECODE FIRST, THEN FOLD. C11 §6.4.4.4 (phase 5) precedes
-// §6.4.5 (phase 6). Fold-first would let `"\x2f" "bin/sh"` collapse to `"\x2fbin/sh"` where
-// the variable-length hex decoder greedily consumes `2fb` and yields `"ûin/sh"`, missing the
-// path. Decoding each preprocessing token independently yields `"/" "bin/sh"` → `"/bin/sh"`.
+// Coderabbit 3793711083 on #3202: the six-stage translation-phase composition (line splices →
+// comment strip → preprocessor branch strip → escape decode → adjacent-literal fold → path
+// normalization) lives in `prepareCSource` in the shared scanner. Both harnesses call it so a
+// change to the ordering lands in both gates in lockstep — earlier the same composition was
+// duplicated here and in `native/runtime-supervisor/macos/test-protocol.mjs`, so any
+// correction had to be applied twice. See `prepareCSource` for the phase-by-phase rationale.
 function preparedSource(rawSource) {
-  // Codex 3793578605: normalise `/./` current-directory components AFTER decode+fold so a
-  // spelling like `"/bin/./sh"` (or the folded form of `"/bin" "/./sh"`) resolves to `/bin/sh`
-  // for any path-boundary pin that expects a contiguous absolute path.
-  return normalizeCurrentDirComponents(
-    foldAdjacentStringLiterals(
-      decodeCStringEscapes(
-        stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource))),
-      ),
-    ),
-  );
+  return prepareCSource(rawSource);
 }
 
 async function assertWindowsSourceContract() {
@@ -489,7 +469,88 @@ function assertScannerBehaviours() {
   assertPathNormalizationCollapsesCurrentDir();
   assertPathNormalizationCollapsesRepeatedSlashes();
   assertArithmeticConstantConditionsRecognised();
+  assertJsIncompatibleArithmeticStaysUnknown();
+  assertMaskedByteSpellingPreservesDelimiters();
   assertTrigraphIfZero();
+}
+
+// Coderabbit 3793711080 on #3202: JS-vs-C `intmax_t` divergence for `/`, `%`, `<<`, `>>`, `~`.
+// The evaluator must FAIL CLOSED on these — leave the condition unknown, both branches
+// survive — rather than misclassify. Concrete cases the reviewer flagged: `1/2*2` (C=0, JS=1),
+// `(1<<32)-1` (C=nonzero, JS=0). Verify each rejected-operator form keeps both branches.
+function assertJsIncompatibleArithmeticStaysUnknown() {
+  const rejectVariants = [
+    "#if 1/2*2",
+    "#if 10 % 3",
+    "#if 1 << 3",
+    "#if 8 >> 1",
+    "#if ~0",
+    "#if (1<<32)-1",
+  ];
+  for (const variant of rejectVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nUNKNOWN_ARITH_IF();\n#else\nUNKNOWN_ARITH_ELSE();\n#endif\n",
+    );
+    assert.match(
+      stripped,
+      /UNKNOWN_ARITH_IF/u,
+      "JS-incompatible arithmetic must stay unknown (keep if-body): " + variant,
+    );
+    assert.match(
+      stripped,
+      /UNKNOWN_ARITH_ELSE/u,
+      "JS-incompatible arithmetic must stay unknown (keep else-body): " + variant,
+    );
+  }
+}
+
+// Coderabbit 3793711072 on #3202: `preservedByteSpelling` must MASK the byte before comparing
+// with the delimiter constants. Hex escapes accept an unbounded hex run (`\x122` → value 290)
+// and octal escapes accept up to three digits (`\442` → 290); without masking, the unmasked
+// comparison would miss those cases and fall through to `String.fromCharCode(value & 0xff)`,
+// producing a bare `"` and reintroducing the boundary-corruption bug. Verify with the
+// specific byte values the reviewer flagged.
+function assertMaskedByteSpellingPreservesDelimiters() {
+  // 290 & 0xff = 34 = 0x22 = `"`. `\x122` and `\442` both hit that. The load-bearing check:
+  // after `stripStringLiteralBodies` (blanks string bodies), the enclosed `posix_spawn`
+  // identifier MUST NOT appear as raw code — the escaped-quote spelling keeps it inside the
+  // literal body so blanking wipes it. If the byte were emitted unmasked as a bare `"` the
+  // blanker would treat it as a string boundary and leave `posix_spawn` visible as CODE.
+  for (const escape of ["\\x122", "\\442"]) {
+    const blanked = stripCommentsAndStrings(
+      'const char *q = "a' + escape + 'posix_spawn(&pid)b";\n',
+    );
+    assert.equal(
+      blanked.match(/posix_spawn/u),
+      null,
+      escape +
+        " must decode via masked byte spelling so `posix_spawn` stays inside the blanked literal body; got: " +
+        blanked,
+    );
+  }
+  // 295 & 0xff = 39 = 0x27 = `'`. Same reasoning — the single-quote preservation path prevents
+  // a spurious char-literal boundary from forming.
+  for (const escape of ["\\x127", "\\447"]) {
+    const blanked = stripCommentsAndStrings(
+      'const char *q = "a' + escape + 'posix_spawn(&pid)b";\n',
+    );
+    assert.equal(
+      blanked.match(/posix_spawn/u),
+      null,
+      escape +
+        " must decode 0x27 with masked byte spelling; posix_spawn must stay inside the blanked body; got: " +
+        blanked,
+    );
+  }
+  // 348 & 0xff = 92 = 0x5c = `\` — the backslash preservation path (`\534` = 348, `\x15c` = 348).
+  // Sanity: the pipeline should not throw on trailing-backslash forms even for these escapes.
+  for (const escape of ["\\x15c", "\\534"]) {
+    const blanked = stripCommentsAndStrings('const char *q = "a' + escape + 'b";\n');
+    assert.ok(
+      blanked.includes('""'),
+      escape + " must decode 0x5c with masked byte spelling and blank cleanly; got: " + blanked,
+    );
+  }
 }
 
 // Codex 3793642858 on #3202: `"a\42posix_spawn(...)\42b"` — `\42` octal = 34 = `"`. Decoding
@@ -547,7 +608,11 @@ function assertPathNormalizationCollapsesRepeatedSlashes() {
 // pin. Verify the arithmetic evaluator recognises truth values for arithmetic, comparison,
 // bitwise, and logical constant expressions.
 function assertArithmeticConstantConditionsRecognised() {
-  const trueExprs = ["1 + 1", "2 * 3", "3 - 1", "1 << 3", "1 | 0", "1 == 1", "0 || 1", "!(1 - 1)"];
+  // Coderabbit 3793711080: `<<`, `>>`, `~`, `/`, `%` are REJECTED (fall through to unknown)
+  // because JS `intmax_t` semantics diverge (`1/2*2` → C: 0, JS: 1; `1<<32` → C: 2^32, JS: 0).
+  // The trueExprs / falseExprs tables here only include operators whose JS and C truth-values
+  // agree (arithmetic +/-*, comparison, logical, bitwise-and/or/xor without shift/negate).
+  const trueExprs = ["1 + 1", "2 * 3", "3 - 1", "1 | 0", "1 == 1", "0 || 1", "!(1 - 1)"];
   for (const cond of trueExprs) {
     const stripped = stripCommentsAndStrings(
       "#if " + cond + "\nLIVE_ARITH_TRUE();\n#else\nDEAD_ARITH_TRUE_ELSE();\n#endif\n",
@@ -918,8 +983,11 @@ function assertCEscapesDecodedInsideLiterals() {
     'const char *literal_backslash = "keep\\\\this";\n';
   const decoded = stripCommentsOnly(raw);
   assert.ok(decoded.includes('"CON"'), "hex-escaped `\\x43\\x4fN` must decode to `CON`");
+  // Coderabbit outside-diff on #3202: `String.prototype.match(g)` returns null when nothing
+  // matches, and `null.length` throws a TypeError before the assertion message can be seen.
+  // Use `matchAll` so the count is always defined and the failure surfaces the intended text.
   assert.ok(
-    decoded.match(/"CON"/gu).length >= 3,
+    [...decoded.matchAll(/"CON"/gu)].length >= 3,
     'hex, octal, and plain spellings must all reach the pin as `"CON"`',
   );
   // Codex 3793578610: `\\` must stay `\\` in the decoded output so downstream `strip…Bodies`
