@@ -16,6 +16,16 @@ import {
   streamReader,
   waitGone,
 } from "../protocol-harness.mjs";
+// Coderabbit 3793145636 on #3202: the C source scanner (line splicing, comment/literal
+// handling, disabled-preprocessor-branch state machine) used to be duplicated in this file
+// AND `native/secure-workspace-read/test-protocol.mjs`. Consolidated behind the shared module
+// so a fix lands in one place.
+import {
+  preprocessCLineSplices,
+  stripCComments,
+  stripDisabledPreprocessorBranches,
+  stripStringLiteralBodies,
+} from "../../lib/c-source-scanner.mjs";
 
 const DEADLINE_MS = 15_000;
 // `URL.pathname` retains percent encoding, so a checkout path containing spaces, `%`, `#` or `?`
@@ -92,286 +102,21 @@ async function qualify(helper, fixture, root) {
 // deleted fd-close or non-PATH spawn call whose old form remained in a `//` or `/* ... */` block
 // would still satisfy `assert.match`. Since the behavioural qualification is deliberately skipped
 // on hosts without the Endpoint Security system extension (per KEIKO-0277's fallback), those
-// source pins were the only defence — and they silently accepted commented-out controls. Strip C
-// comments before matching. String literals are PRESERVED so a real `execve("/bin/sh", …)` still
-// trips the negative `\/bin\/sh` assertion below, but a `// old: execve("/bin/sh")` no longer
-// does. Line splicing (`\<newline>` pairs) runs first, so a `\`-continued line comment cannot
-// hide a control on its spliced-in tail either.
-// Copy a C string OR character literal starting at the opening quote (index i) verbatim to
-// `out`. `quote` is `"` for string literals and `'` for char literals. Returns the index of the
-// byte AFTER the matching closing quote. Throws on unterminated input (coderabbit 3793025301
-// on #3202): same fail-closed rule as unterminated `/* ... */` — silently accepting an
-// unclosed quote would drop every token after it from the scan and let a deleted control
-// escape the source contract.
-function copyQuotedVerbatim(source, start, out, quote) {
-  let i = start + 1;
-  let result = out + quote;
-  while (i < source.length) {
-    const c = source[i];
-    if (c === "\\") {
-      result += source.slice(i, i + 2);
-      i += 2;
-      continue;
-    }
-    result += c;
-    i += 1;
-    if (c === quote) return { out: result, next: i };
-  }
-  const kind = quote === '"' ? "string literal" : "character constant";
-  throw new Error(`unterminated C ${kind}: no closing ${JSON.stringify(quote)}`);
-}
-
-// KEIKO-0277 (review-follow-up): a control retained only inside a `#if 0 ... #endif` block
-// never compiles, but the byte scanner used to copy those bytes verbatim, so a deleted fd-close
-// whose old form was wrapped in `#if 0` still satisfied `assert.match`. This pre-pass strips
-// definitely-inactive preprocessor regions before the comment/literal scan runs. Nested
-// `#if`/`#ifdef`/`#ifndef` are counted so `#if 0 ... #if X ... #endif ... #endif` closes the
-// outer block on the OUTER `#endif`, not the inner one. On `#else` at the outer `#if 0`'s depth
-// stripping stops — the else branch IS the live code. Non-literal `#if <expr>` and general
-// preprocessor constants are intentionally out of scope: this is not a preprocessor, it targets
-// the specific "disabled code" marker (`#if 0`) that hides tokens from the compiler.
-const PREPROCESSOR_PATTERNS = {
-  OPEN_IF: /^#\s*(?:if|ifdef|ifndef)\b/u,
-  CLOSE_ENDIF: /^#\s*endif\b/u,
-  ELSE_DIRECTIVE: /^#\s*else\b/u,
-  ELIF_DIRECTIVE: /^#\s*elif\b/u,
-  // DISABLED_IF (codex 3792928022 on #3202): `#if 0`, `#if (0)`, `#if 0L` (integer suffixes),
-  // or `#if 0 && FEATURE` (C left-to-right `&&` short-circuits regardless of FEATURE, single
-  // trailing identifier optionally `!`-prefixed).
-  DISABLED_IF: /^#\s*if\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*(?:&&\s+!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u,
-  // `#elif <constant-false>` shares the same pattern with `elif` in place of `if` (codex
-  // 3792964066). Without this, an outer `#elif 1` in a `#if 0 ... #elif 1 ... #endif` ladder was
-  // treated as "still stripping" and the compiler-included branch was dropped from the scan.
-  DISABLED_ELIF:
-    /^#\s*elif\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*(?:&&\s+!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u,
-};
-
-// Ladder state modes (codex 3792986617 on #3202): the compiler picks EXACTLY ONE branch of a
-// `#if / #elif / #else / #endif` ladder, so the scanner tracks three positions within a tracked
-// `#if 0` ladder — STRIPPING_PRE_LIVE (before the live branch), KEEPING_LIVE (in the live
-// branch), STRIPPING_POST_LIVE (after the live branch — remaining branches are dead). The
-// previous single-flag model lost track of the outer ladder after `#elif 1` set stripping=false
-// and copied the subsequent dead `#else` body into the scan.
-// Frame mode + flags (codex 3793028195 on #3202): `sawDefLive` marks that a DEFINITIVELY live
-// branch was already picked (all subsequent are dead). `sawUnkLive` marks that a POTENTIALLY
-// live branch was seen — subsequent branches may also be live, so `#else` after an unknown
-// `#elif FEATURE` is still kept (else could be picked if FEATURE turned out false).
-const STRIPPING = "stripping";
-const KEEPING = "keeping";
-// Codex 3793074555 on #3202: `#if 1 ... #else DEAD ... #endif` — the `#else` is compiler-dead.
-// Track constant-true `#if` so the else-body gets stripped. Composite conditions like `#if 1
-// && FEATURE` intentionally NOT recognised (they short-circuit to FEATURE).
-const DEFINITIVELY_TRUE_IF = /^#\s*if\s+\(?\s*1[UuLl]{0,3}\s*\)?\s*$/u;
-const DEFINITIVELY_TRUE_ELIF = /^#\s*elif\s+\(?\s*1[UuLl]{0,3}\s*\)?\s*$/u;
-
-// Stack-based ladder state (coderabbit 3793025299 on #3202): every `#if 0` — top-level OR
-// nested inside a live `#elif`/`#else` branch — pushes a new `STRIPPING_PRE_LIVE` frame; every
-// non-disabled `#if` inside a tracked frame increments that frame's depth; `#endif` pops the
-// nested frame or decrements depth. Top of stack determines the current mode.
-function stripDisabledPreprocessorBranches(source) {
-  const lines = source.split("\n");
-  const kept = [];
-  const stack = [];
-  for (const line of lines) {
-    processLadderLine(line, stack, kept);
-  }
-  return kept.join("\n");
-}
-
-function processLadderLine(line, stack, kept) {
-  const p = PREPROCESSOR_PATTERNS;
-  const trimmed = line.trimStart();
-  if (p.DISABLED_IF.test(trimmed)) {
-    stack.push({ mode: STRIPPING, sawDefLive: false, sawUnkLive: false, depth: 0 });
-    return;
-  }
-  // Codex 3793074555: `#if 1 ... #else DEAD ... #endif`. The if-body is definitively live,
-  // subsequent `#elif`/`#else` are dead.
-  if (DEFINITIVELY_TRUE_IF.test(trimmed)) {
-    stack.push({ mode: KEEPING, sawDefLive: true, sawUnkLive: false, depth: 0 });
-    return;
-  }
-  // Known limitation (codex 3793101248 on #3202): `#ifdef X` / `#ifndef X` / `#if X` where X
-  // is a preprocessor MACRO cannot be evaluated without running the actual preprocessor with
-  // the build's `-D` flags and `#include` chain. This scanner deliberately checks the SOURCE
-  // shape (not the preprocessed output) so it can run on every host without a full clang
-  // toolchain, so a control moved under `#ifdef NEVER_DEFINED` is still visible to the source
-  // pins. A future iteration could preprocess the source with the same flags
-  // `scripts/check-macos-native-quality.sh` uses (`-D_DARWIN_C_SOURCE`) and rerun the
-  // assertions on the output — non-trivial change out of scope here. The source-contract's
-  // stated purpose remains "catch silent deletion of the token from the source" and does
-  // NOT claim "catch macro-gated deletion".
-  if (stack.length === 0) {
-    kept.push(line);
-    return;
-  }
-  const frame = stack[stack.length - 1];
-  if (p.OPEN_IF.test(trimmed)) {
-    frame.depth += 1;
-    return;
-  }
-  if (p.CLOSE_ENDIF.test(trimmed)) {
-    if (frame.depth === 0) stack.pop();
-    else frame.depth -= 1;
-    return;
-  }
-  if (frame.depth > 0) {
-    if (allFramesKeeping(stack)) kept.push(line);
-    return;
-  }
-  handleOuterDirectiveOrLine(line, trimmed, frame, stack, kept);
-}
-
-// Codex 3793050405 on #3202: the compiler emits a line only if EVERY enclosing `#if 0` ladder
-// picks the branch that contains it. A nested `#if 0 ... #else PIN` inside a stripping parent
-// still has its own KEEPING frame at the top, but the parent's STRIPPING means clang drops the
-// whole outer branch — including that inner `#else`.
-function allFramesKeeping(stack) {
-  for (const frame of stack) if (frame.mode !== KEEPING) return false;
-  return true;
-}
-
-function handleOuterDirectiveOrLine(line, trimmed, frame, stack, kept) {
-  const p = PREPROCESSOR_PATTERNS;
-  if (p.ELSE_DIRECTIVE.test(trimmed)) {
-    applyElseTransition(frame);
-    return;
-  }
-  if (p.ELIF_DIRECTIVE.test(trimmed)) {
-    applyElifTransition(trimmed, frame);
-    return;
-  }
-  if (allFramesKeeping(stack)) kept.push(line);
-}
-
-function applyElseTransition(frame) {
-  if (frame.sawDefLive) {
-    frame.mode = STRIPPING;
-    return;
-  }
-  frame.mode = KEEPING;
-  frame.sawDefLive = !frame.sawUnkLive;
-}
-
-function applyElifTransition(trimmed, frame) {
-  const p = PREPROCESSOR_PATTERNS;
-  if (frame.sawDefLive) {
-    frame.mode = STRIPPING;
-    return;
-  }
-  if (p.DISABLED_ELIF.test(trimmed)) {
-    frame.mode = STRIPPING;
-    return;
-  }
-  frame.mode = KEEPING;
-  if (DEFINITIVELY_TRUE_ELIF.test(trimmed)) {
-    frame.sawDefLive = !frame.sawUnkLive;
-  } else {
-    frame.sawUnkLive = true;
-  }
-}
-
-// Strip C block and line comments in one pass, preserving string AND character literals
-// verbatim (no interpretation). Throws on unterminated `/* ... */`.
-// - Block comments: replaced with a same-length span of spaces AND newlines preserved
-//   (coderabbit 3792888538) so subsequent line-based scans see directives at their original
-//   physical line positions.
-// - Char literals (`'...'`): skipped verbatim so a `'//'` or `'/*'` inside a multi-character
-//   constant cannot start a false comment (coderabbit 3792888545).
-function stripCCommentsOnly(rawSource) {
-  let out = "";
-  let i = 0;
-  while (i < rawSource.length) {
-    const ch = rawSource[i];
-    const next = rawSource[i + 1];
-    if (ch === "/" && next === "*") {
-      const end = rawSource.indexOf("*/", i + 2);
-      if (end === -1) throw new Error("unterminated C block comment: no `*/` after opening `/*`");
-      out += rawSource.slice(i, end + 2).replace(/[^\n]/gu, " ");
-      i = end + 2;
-    } else if (ch === "/" && next === "/") {
-      // Line comment CAN end at EOF without a newline; that is valid C, and no token can be
-      // hidden by a `//` at EOF because everything after is comment text.
-      const end = rawSource.indexOf("\n", i + 2);
-      if (end === -1) return out;
-      i = end;
-    } else if (ch === '"') {
-      const copied = copyQuotedVerbatim(rawSource, i, out, '"');
-      out = copied.out;
-      i = copied.next;
-    } else if (ch === "'") {
-      const copied = copyQuotedVerbatim(rawSource, i, out, "'");
-      out = copied.out;
-      i = copied.next;
-    } else {
-      out += ch;
-      i += 1;
-    }
-  }
-  return out;
-}
-
-// KEIKO-0277 (review-follow-up on 44b9ef9b): C translation phase 3 removes comments BEFORE
-// phase 4 executes preprocessor directives. Running `stripDisabledPreprocessorBranches` on text
-// that still contains comments would interpret a `#else` or `#endif` inside a `/* */` block as
-// a real directive, exposing a following disabled control to the byte scanner. Correct chain:
-//   phase 2 (line splice) → phase 3 (comment strip) → phase 4 (#if 0 strip)
+// source pins were the only defence — and they silently accepted commented-out controls.
 //
-// Two modes over the same pipeline (codex 3792964064 on #3202):
-//  - `stripCCommentsAndStrings` blanks string literal bodies too, so the positive
-//    identifier/call pins (`assert.match`) below cannot be satisfied by an identifier that
-//    happens to appear inside a compiled diagnostic string. Without this, a deleted
-//    `posix_spawn_file_actions_addclose(&actions, 3)` control whose old text remained in a
-//    diagnostic like `"posix_spawn_file_actions_addclose(&actions, 3)"` would still satisfy
-//    the pin — the exact regression the source-only qualification exists to catch.
+// Two composition modes over the shared C source scanner (coderabbit 3793145636 on #3202
+// consolidated the previously duplicated primitives into `native/lib/c-source-scanner.mjs`):
+//  - `stripCCommentsAndStrings` blanks string literal bodies too, so positive `assert.match`
+//    pins can't be satisfied by an identifier that happens to appear inside a compiled
+//    diagnostic string (codex 3792964064).
 //  - `stripCCommentsPreservingLiterals` keeps string bodies verbatim; used ONLY for the
-//    negative shell-string check (`\/bin\/sh` etc.), where a real `execve("/bin/sh", …)`
-//    should still trip. Comment/preprocessor stripping still applies to both modes, so a
-//    commented-out `execve("/bin/sh")` cannot trigger the negative pin either.
+//    negative shell-path check where a real `execve("/bin/sh", …)` should still trip.
 function stripCCommentsAndStrings(rawSource) {
   return stripStringLiteralBodies(stripCCommentsPreservingLiterals(rawSource));
 }
 
 function stripCCommentsPreservingLiterals(rawSource) {
-  return stripDisabledPreprocessorBranches(stripCCommentsOnly(rawSource.replace(/\\\r?\n/gu, "")));
-}
-
-// Blanks `"..."` and `'...'` bodies (leaves the quotes so length is preserved and later
-// scanners still see distinct tokens). `skipCharLiteral`/`skipStringLiteral` are inline below.
-function stripStringLiteralBodies(source) {
-  let out = "";
-  let i = 0;
-  while (i < source.length) {
-    const ch = source[i];
-    if (ch === '"') {
-      out += '""';
-      i = skipQuoted(source, i, '"');
-      continue;
-    }
-    if (ch === "'") {
-      out += "''";
-      i = skipQuoted(source, i, "'");
-      continue;
-    }
-    out += ch;
-    i += 1;
-  }
-  return out;
-}
-
-function skipQuoted(source, start, quote) {
-  let i = start + 1;
-  while (i < source.length) {
-    const c = source[i];
-    if (c === "\\") {
-      i += 2;
-      continue;
-    }
-    if (c === quote) return i + 1;
-    i += 1;
-  }
-  const kind = quote === '"' ? "string literal" : "character constant";
-  throw new Error(`unterminated C ${kind}: no closing ${JSON.stringify(quote)}`);
+  return stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource)));
 }
 
 const rawSource = await readFile(supervisorSource, "utf8");
@@ -776,12 +521,16 @@ assert.throws(
   "unterminated string literal must throw",
 );
 
-// KEIKO-0277: Windows-sibling two-mode shape. `--helper <path>` qualifies an exact staged binary
-// (release-qualification form the portable pipeline uses). Without `--helper`, compile the
-// supervisor from source into a scratch root and qualify THAT — same clang invocation as
-// scripts/check-macos-native-quality.sh, so the behavioural qualification runs on every PR from
-// that gate instead of being reachable only at release time. The source contract above is
-// deliberately placed BEFORE the platform guard so it runs on every host.
+// KEIKO-0277 (codex 3793145634 corrected the stale form of this comment on #3202):
+// Behavioural qualification is OPT-IN via `--helper <path>` (release form: the exact staged
+// binary the portable pipeline just built) or `--compile` (developer form: compile the
+// supervisor from source, then qualify THAT). WITHOUT either flag, only the source contract
+// above runs — that is what `scripts/check-macos-native-quality.sh` does on every PR, because
+// the behavioural qualification needs an installed Endpoint Security system extension that no
+// hosted runner carries. The earlier comment implied the source-only lane also compiled and
+// qualified, which could cause contributors to report ES behaviour as verified when in fact
+// only source assertions ran. The source contract above is deliberately placed BEFORE the
+// platform guard so it runs on every host.
 async function compileSupervisor(path, architecture) {
   const child = spawn(
     "/usr/bin/xcrun",

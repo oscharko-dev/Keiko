@@ -817,6 +817,12 @@ function compoundExpressionTexts(expr, sourceFile) {
   if (ts.isArrowFunction(expr) || ts.isFunctionExpression(expr)) {
     return functionLikeLiteralTexts(expr, sourceFile);
   }
+  // ArrayLiteralExpression: `<p>{["Delete account", "Cancel operation"]}</p>` — React renders
+  // each element. Codex 3793145626. Recurse through each element the same way we recurse for
+  // call arguments and conditional branches.
+  if (ts.isArrayLiteralExpression(expr)) {
+    return expr.elements.flatMap((element) => jsxChildExpressionLiteralTexts(element, sourceFile));
+  }
   return null;
 }
 
@@ -879,9 +885,15 @@ function stringLikeExpressionTexts(expr, sourceFile) {
 }
 
 function templateExpressionLiteralTexts(expr, sourceFile) {
-  // Head + trailing spans are the template's LITERAL parts.
+  // Head + trailing spans are the template's LITERAL parts. Codex 3793145631: joining spans
+  // with a separator character INSERTED bytes that don't exist in the runtime value —
+  // `` `memoria.settings.mode.${x}Error` `` was becoming `"memoria.settings.mode. Error"` and
+  // `isTranslatableCopy` treated the injected space as word boundaries, flagging dotted keys
+  // as prose. Concatenate spans DIRECTLY so an interpolated key/path stays a machine token.
+  // Whitespace inside the LITERAL spans (`Hello ` + ` World`) still collapses via the
+  // trim + `\s+` normalisation below, so real prose stays prose.
   const parts = [expr.head.text, ...expr.templateSpans.map((span) => span.literal.text)];
-  const combined = parts.join(" ").trim().replace(/\s+/gu, " ");
+  const combined = parts.join("").trim().replace(/\s+/gu, " ");
   const templateEntry =
     combined.length > 0 ? [{ line: lineOfNode(expr, sourceFile), text: combined }] : [];
   // Each `${…}` substitution can itself contain literals — a common case is

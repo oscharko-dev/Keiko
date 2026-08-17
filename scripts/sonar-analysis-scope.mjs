@@ -109,13 +109,13 @@ const nativeSonarExclusions = Object.freeze([
 const approvedScopeValueDigests = new Map([
   ["sonar.sources", "cdb4ee2aea69cc6a83331bbe96dc2caa9a299d21329efb0336fc02a82e1839a8"],
   ["sonar.tests", "cdb4ee2aea69cc6a83331bbe96dc2caa9a299d21329efb0336fc02a82e1839a8"],
-  // Digest re-pinned after appending `native/runtime-supervisor/protocol-harness.mjs` to both the
-  // exclusions and the test inclusions (KEIKO-0304 review-follow-up on #3202): the harness is
-  // shared test infrastructure that the three test-protocol.mjs files it was extracted from
-  // already sit in, so it carries their same Sonar disposition. Re-computed the SHA-256 of the
+  // Digest re-pinned after appending shared test-infrastructure modules under `native/`
+  // (protocol-harness.mjs + c-source-scanner.mjs) to both the exclusions and the test
+  // inclusions. Both are imported ONLY by the three test-protocol.mjs files that already sit
+  // in those lists, so they carry the same Sonar disposition. Re-computed the SHA-256 of the
   // raw value after `=` via `createHash("sha256").update(value).digest("hex")`.
-  ["sonar.exclusions", "473671c476a93c9c40317beb305325b728ebcb31e102d9390ef37749a2f63724"],
-  ["sonar.test.inclusions", "4045d38d83836d62b3648b1d56de44a45a059673afb4d20f4d2b49a18c4490fc"],
+  ["sonar.exclusions", "28dbb80db07631cfe6f0a3a35633ea19d2fa152cdf60a67ecfb77ec1249122f4"],
+  ["sonar.test.inclusions", "fc189ed7f62a535e41c6175c2893fe3bd3d690ce4bd85c65683db13cb8c2ec58"],
   ["sonar.test.exclusions", "5a01270e497c669e4f0abd5cef680f9eb0139bb8b82da51719b443b076fcd638"],
   [
     "sonar.typescript.tsconfigPaths",
@@ -164,6 +164,10 @@ const testScopeRules = Object.freeze([
     "native/runtime-supervisor/protocol-harness.mjs",
     (path) => path === "native/runtime-supervisor/protocol-harness.mjs",
   ],
+  // Coderabbit 3793145636: shared C source scanner (line splicing, comment/literal handling,
+  // disabled-preprocessor-branch state machine) imported ONLY by the three test-protocol.mjs
+  // harnesses. Same disposition as `protocol-harness.mjs` above.
+  ["native/lib/c-source-scanner.mjs", (path) => path === "native/lib/c-source-scanner.mjs"],
 ]);
 export const SONAR_TEST_INCLUSION_PATTERNS = Object.freeze(
   testScopeRules.map(([pattern]) => pattern),

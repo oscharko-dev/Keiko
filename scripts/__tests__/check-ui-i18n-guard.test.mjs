@@ -1443,6 +1443,35 @@ test("does not recurse into nested function scopes' return statements", () => {
   expect(texts).not.toContain("Inner return");
 });
 
+// KEIKO-0299 (review-follow-up on 889eff53, codex 3793145626): `{["Delete account",
+// "Cancel"]}` — React renders each element as user copy but ArrayLiteralExpression was
+// invisible to the recursion. Now traverses each element.
+test("collects literals from array elements rendered as JSX children", () => {
+  const src = '<p>{["Delete account", "Cancel operation"]}</p>';
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx")
+    .findings.map((f) => f.text)
+    .sort();
+  expect(texts).toContain("Delete account");
+  expect(texts).toContain("Cancel operation");
+});
+
+// KEIKO-0299 (review-follow-up on 889eff53, codex 3793145631): template spans must be joined
+// WITHOUT an inserted separator. `` `memoria.settings.mode.${x}Error` `` used to become
+// `"memoria.settings.mode. Error"` (injected space made isTranslatableCopy see it as prose);
+// now it becomes `"memoria.settings.mode.Error"` — a dotted machine token, correctly rejected.
+test("does not flag dotted-key templates with interpolated tail", () => {
+  const src = "<p>{t(`memoria.settings.mode.${errorKind}Error`)}</p>";
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).not.toContain("memoria.settings.mode. Error");
+  expect(texts).not.toContain("memoria.settings.mode.Error");
+});
+
+test("still flags real prose across template spans", () => {
+  const src = "<p>{`Hello ${user} World`}</p>";
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("Hello World");
+});
+
 // KEIKO-0299 (review-follow-up on af74e79b): a JSX child like `{"Welcome back, " + name}`
 // renders the concatenation as user copy — the literal on either operand IS user-visible and
 // must enter the ledger. Codex 3792890969.
