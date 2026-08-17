@@ -1370,32 +1370,24 @@ test("still ignores directly quoted values on non-user-facing camelCase props", 
 
 // KEIKO-0299 (review-follow-up on 23447289, codex 3793028199): transparent TypeScript
 // wrappers (AsExpression, SatisfiesExpression, NonNullExpression) don't change runtime value,
-// so a literal wrapped in them still renders as user copy. Recursion must unwrap them.
-test("unwraps `as const` / `as string` around a rendered literal", () => {
-  const texts = untranslatedLiteralsInSource(
-    '<p>{"Delete account" as const}</p>',
-    "packages/x/y.tsx",
-  ).findings.map((f) => f.text);
-  expect(texts).toContain("Delete account");
-});
-
-test("unwraps `satisfies` and `!` around a rendered literal", () => {
-  for (const src of [
-    '<p>{"Delete account" satisfies string}</p>',
-    '<p>{("Delete account" as string | undefined)!}</p>',
-  ]) {
+// so a literal wrapped in them still renders as user copy. Recursion must unwrap them. All
+// wrapper shapes and both JSX-child and JSX-attribute positions live in the same parameterised
+// case so a fifth wrapper is one row, not one new test (SonarCloud S5976).
+test.each([
+  { src: '<p>{"Delete account" as const}</p>', expected: "Delete account" },
+  { src: '<p>{"Delete account" satisfies string}</p>', expected: "Delete account" },
+  { src: '<p>{("Delete account" as string | undefined)!}</p>', expected: "Delete account" },
+  {
+    src: '<button aria-label={"Copy code block" as const}>x</button>',
+    expected: "Copy code block",
+  },
+])(
+  "unwraps transparent TypeScript wrappers around a rendered literal ($src)",
+  ({ src, expected }) => {
     const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
-    expect(texts).toContain("Delete account");
-  }
-});
-
-test("unwraps `as` inside a user-facing attribute expression", () => {
-  const texts = untranslatedLiteralsInSource(
-    '<button aria-label={"Copy code block" as const}>x</button>',
-    "packages/x/y.tsx",
-  ).findings.map((f) => f.text);
-  expect(texts).toContain("Copy code block");
-});
+    expect(texts).toContain(expected);
+  },
+);
 
 // KEIKO-0299 (review-follow-up on 23447289, codex 3793028208): a JSX spread attribute
 // `<button {...{ "aria-label": "…" }} />` reaches the element as JsxSpreadAttribute. When the
@@ -1430,25 +1422,32 @@ test("still ignores non-inline JSX spreads (dynamic props object)", () => {
 // KEIKO-0299 (review-follow-up on b5cb3f6c, codex 3793101250): `{items.map(() => "Delete
 // account")}` — the ArrowFunction body IS user-visible copy that gets rendered per item, but
 // the previous CallExpression recursion stopped at the function argument and never inspected
-// its body. Handle expression-bodied and block-bodied arrows/functions.
-test("collects literals from expression-bodied arrow callbacks", () => {
-  const src = '<p>{items.map(() => "Delete account")}</p>';
+// its body. Handle expression-bodied AND block-bodied arrows/functions, and stop at nested
+// function scopes so their returns don't leak into the outer copy set. All three cases share
+// one parameterised case (SonarCloud S5976).
+test.each([
+  {
+    label: "expression-bodied arrow",
+    src: '<p>{items.map(() => "Delete account")}</p>',
+    include: ["Delete account"],
+    exclude: [],
+  },
+  {
+    label: "block-bodied arrow with ReturnStatement",
+    src: '<p>{items.map(() => { return "Return delete"; })}</p>',
+    include: ["Return delete"],
+    exclude: [],
+  },
+  {
+    label: "nested function scope's returns are not leaked",
+    src: '<p>{items.map(() => { const inner = () => "Inner return"; return "Outer return"; })}</p>',
+    include: ["Outer return"],
+    exclude: ["Inner return"],
+  },
+])("collects rendered copy from callback bodies ($label)", ({ src, include, exclude }) => {
   const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
-  expect(texts).toContain("Delete account");
-});
-
-test("collects literals from block-bodied arrow callbacks via ReturnStatement", () => {
-  const src = '<p>{items.map(() => { return "Return delete"; })}</p>';
-  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
-  expect(texts).toContain("Return delete");
-});
-
-test("does not recurse into nested function scopes' return statements", () => {
-  const src =
-    '<p>{items.map(() => { const inner = () => "Inner return"; return "Outer return"; })}</p>';
-  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
-  expect(texts).toContain("Outer return");
-  expect(texts).not.toContain("Inner return");
+  for (const text of include) expect(texts).toContain(text);
+  for (const text of exclude) expect(texts).not.toContain(text);
 });
 
 // KEIKO-0299 (review-follow-up on 889eff53, codex 3793145626): `{["Delete account",
