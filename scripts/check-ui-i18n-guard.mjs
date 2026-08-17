@@ -1094,11 +1094,7 @@ function jsxSpreadObjectLiteralResults(objectExpression, sourceFile) {
   const results = [];
   for (const prop of objectExpression.properties) {
     if (ts.isPropertyAssignment(prop)) {
-      const key = objectPropertyKey(prop.name);
-      if (key === null || !USER_FACING_ATTRIBUTE_NAMES.has(key)) continue;
-      for (const entry of jsxChildExpressionLiteralTexts(prop.initializer, sourceFile)) {
-        if (entry.text.length > 0) results.push(entry);
-      }
+      results.push(...spreadPropertyAssignmentResults(prop, sourceFile));
       continue;
     }
     // Codex 3793642840 on #3202: nested spread inside a spread object — `<button {...{ ...{
@@ -1111,6 +1107,20 @@ function jsxSpreadObjectLiteralResults(objectExpression, sourceFile) {
         results.push(...jsxSpreadObjectLiteralResults(nested, sourceFile));
       }
     }
+  }
+  return results;
+}
+
+// Extracted for SonarCloud S3776 — the previous inline body pushed
+// `jsxSpreadObjectLiteralResults` past the cognitive-complexity ceiling. Returns the
+// user-facing property values for a single PropertyAssignment (or empty if the key is not in
+// the user-facing set / non-literal).
+function spreadPropertyAssignmentResults(prop, sourceFile) {
+  const key = objectPropertyKey(prop.name);
+  if (key === null || !USER_FACING_ATTRIBUTE_NAMES.has(key)) return [];
+  const results = [];
+  for (const entry of jsxChildExpressionLiteralTexts(prop.initializer, sourceFile)) {
+    if (entry.text.length > 0) results.push(entry);
   }
   return results;
 }

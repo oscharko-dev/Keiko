@@ -1685,28 +1685,29 @@ test("does not double-emit when an inline formatting element wraps the phrase in
   expect(matches).toHaveLength(1);
 });
 
-// Codex 3793642835 on cea4bfde: `<code>memoria.settings.{"mode"}</code>` — parts are
-// `memoria.settings.` (no trailing whitespace in source) and `mode` (from the literal).
-// Trimming each and joining with a space would produce `memoria.settings. mode` — a space
-// after the dot that `isTranslatableCopy` mistakes for prose and reports as untranslated. The
-// join must preserve source adjacency: no space inserted when the source had none.
-test("preserves adjacency when JSX text has no trailing whitespace before a literal expression", () => {
-  const texts = untranslatedLiteralsInSource(
-    '<code>memoria.settings.{"mode"}</code>',
-    "packages/x/y.tsx",
-  ).findings.map((f) => f.text);
-  expect(texts).not.toContain("memoria.settings. mode");
-  expect(texts).not.toContain("memoria.settings.mode");
-});
-
-test("keeps a real whitespace boundary when JSX text has trailing whitespace before a literal expression", () => {
-  // `open ` HAS a trailing space; the join must keep it as `open settings`. This test pins
-  // the previously-verified case still works after the raw-adjacency refactor.
-  const texts = untranslatedLiteralsInSource(
-    '<p>open {"settings"}</p>',
-    "packages/x/y.tsx",
-  ).findings.map((f) => f.text);
-  expect(texts).toContain("open settings");
+// Parameterised JSX-text ↔ literal-expression adjacency table (SonarCloud S5976).
+//   - codex 3793642835 (cea4bfde): NO trailing whitespace before `{"mode"}` — join must NOT
+//     insert a space (`memoria.settings.mode`, not `memoria.settings. mode`). Neither variant
+//     is prose-classifiable, so both must be absent from the ledger.
+//   - `open ` HAS a trailing space in source — the join keeps it as `open settings`
+//     (previously-verified case, re-pinned after the raw-adjacency refactor).
+test.each([
+  {
+    label: "no trailing whitespace before literal expression",
+    src: '<code>memoria.settings.{"mode"}</code>',
+    include: [],
+    exclude: ["memoria.settings. mode", "memoria.settings.mode"],
+  },
+  {
+    label: "trailing whitespace before literal expression",
+    src: '<p>open {"settings"}</p>',
+    include: ["open settings"],
+    exclude: [],
+  },
+])("JSX-text/literal adjacency ($label)", ({ src, include, exclude }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  for (const t of include) expect(texts).toContain(t);
+  for (const t of exclude) expect(texts).not.toContain(t);
 });
 
 // Codex 3793744727 on ab2c8bcd: `<p>open {"settings" as const}</p>` — the JsxExpression wraps
