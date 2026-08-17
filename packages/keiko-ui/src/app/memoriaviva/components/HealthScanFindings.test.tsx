@@ -101,7 +101,7 @@ describe("HealthScanFindings — load error", () => {
       .mockResolvedValueOnce(resultWith([makeFinding()]));
     const { rerender } = render(<HealthScanFindings fetchImpl={initialFetch} />);
 
-    await waitFor(() => expect(screen.getByText("No issues found")).toBeInTheDocument());
+    await screen.findByText("No issues found");
     rerender(<HealthScanFindings fetchImpl={rateLimitedRefresh} />);
 
     await waitFor(() =>
@@ -111,7 +111,7 @@ describe("HealthScanFindings — load error", () => {
     expect(screen.queryByText("No issues found")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    await waitFor(() => expect(screen.getByText("Orphan memory")).toBeInTheDocument());
+    await screen.findByText("Orphan memory");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByText("1 findings")).toBeInTheDocument();
   });
