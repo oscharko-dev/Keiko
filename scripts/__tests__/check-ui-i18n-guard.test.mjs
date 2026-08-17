@@ -1709,6 +1709,36 @@ test("keeps a real whitespace boundary when JSX text has trailing whitespace bef
   expect(texts).toContain("open settings");
 });
 
+// Codex 3793744727 on ab2c8bcd: `<p>open {"settings" as const}</p>` — the JsxExpression wraps
+// a StringLiteral in a transparent AsExpression. Without unwrapping, the aggregator's direct-
+// node check treats the expression as a segment boundary and each JsxText fragment (`open`,
+// then nothing more in this segment) is rejected as a machine token. Unwrap transparent
+// wrappers before deciding the expression participates in the phrase.
+test.each([
+  {
+    label: "as const wrapper around literal",
+    src: '<p>open {"settings" as const}</p>',
+  },
+  {
+    label: "satisfies wrapper around literal",
+    src: '<p>open {"settings" satisfies string}</p>',
+  },
+  {
+    label: "non-null assertion around literal",
+    src: '<p>open {("settings" as string | undefined)!}</p>',
+  },
+  {
+    label: "parenthesised literal",
+    src: '<p>open {("settings")}</p>',
+  },
+])(
+  "unwraps transparent wrappers around a literal JSX expression in aggregation ($label)",
+  ({ src }) => {
+    const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+    expect(texts).toContain("open settings");
+  },
+);
+
 // Codex 3793356672 on af9f5ede: line-break phrasing elements (`<br/>`, `<wbr/>`) split copy at
 // whitespace boundaries. `<p>open<br/>settings</p>` renders "open settings" but the aggregator
 // used to break the segment at `<br/>` (a non-inline non-formatting element), so each half was

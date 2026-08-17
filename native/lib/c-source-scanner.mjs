@@ -206,11 +206,15 @@ export function stripStringLiteralBodies(source) {
 // the earlier phases already threw on those. Char literals (`'…'`) are unaffected — they don't
 // concatenate.
 export function foldAdjacentStringLiterals(source) {
+  // Codex 3793744722 on #3202: C allows adjacent literals WITHOUT intervening whitespace
+  // (`"/bin/""sh"`). The earlier `\s+` requirement missed those spellings and let a
+  // supervisor evade the negative shell-path pin. `\s*` allows zero-or-more whitespace so
+  // adjacent-without-whitespace, single-space, multi-space, and newline forms all fold.
   let previous;
   let current = source;
   do {
     previous = current;
-    current = previous.replace(/"((?:[^"\\]|\\.)*)"(\s+)"((?:[^"\\]|\\.)*)"/gu, '"$1$3"');
+    current = previous.replace(/"((?:[^"\\]|\\.)*)"\s*"((?:[^"\\]|\\.)*)"/gu, '"$1$2"');
   } while (current !== previous);
   return current;
 }

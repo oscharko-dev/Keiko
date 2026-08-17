@@ -1219,6 +1219,20 @@ function assertAdjacentStringLiteralsFold() {
   assert.match(chain, /"abcd"/u, "chained adjacent literals must fold repeatedly");
   const withNewline = foldAdjacentStringLiterals('const char *z = "hello "\n"world";');
   assert.match(withNewline, /"hello world"/u, "adjacent literals separated by a newline must fold");
+  // Codex 3793744722 on #3202: C allows adjacent literals WITHOUT intervening whitespace
+  // (`"/bin/""sh"`). Fold must not require `\s+` between them.
+  const noWhitespace = foldAdjacentStringLiterals('const char *w = "/bin/""sh";');
+  assert.match(
+    noWhitespace,
+    /"\/bin\/sh"/u,
+    'adjacent literals with NO intervening whitespace must fold: `"/bin/""sh"` → `"/bin/sh"`',
+  );
+  const noWhitespaceChain = foldAdjacentStringLiterals('"a""b""c""d";');
+  assert.match(
+    noWhitespaceChain,
+    /"abcd"/u,
+    "chained no-whitespace adjacent literals must fold repeatedly",
+  );
   // Non-adjacent (comma-separated arguments) must NOT fold — a comma is not whitespace.
   const nonAdjacent = foldAdjacentStringLiterals('foo("a", "b");');
   assert.doesNotMatch(nonAdjacent, /"ab"/u, "separator like `,` must prevent folding");

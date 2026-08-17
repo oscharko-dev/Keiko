@@ -829,11 +829,17 @@ function isLineBreakPhrasingChild(child) {
 function absorbJsxExpressionIntoSegments(node, sourceFile, appendPart, startNewSegment) {
   const expression = node.expression;
   if (expression === undefined) return;
-  if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
+  // Codex 3793744727 on #3202: `<p>open {"settings" as const}</p>` — the expression is a
+  // transparent wrapper (`as` / `satisfies` / parens / `!` / `await`) around a StringLiteral.
+  // Unwrap before deciding whether the expression participates in the containing phrase;
+  // without this, the direct-node check would break the segment and lose the aggregate
+  // (`open settings`) that the reader actually sees.
+  const inner = unwrapTransparent(expression);
+  if (ts.isStringLiteral(inner) || ts.isNoSubstitutionTemplateLiteral(inner)) {
     // Codex 3793642835 on #3202: keep the literal RAW (no trim/collapse here). The final
     // aggregate normaliser handles whitespace; splitting up front loses adjacency information
     // with the surrounding JsxText siblings.
-    if (expression.text.length > 0) appendPart(expression.text, lineOfNode(expression, sourceFile));
+    if (inner.text.length > 0) appendPart(inner.text, lineOfNode(inner, sourceFile));
     return;
   }
   startNewSegment();
