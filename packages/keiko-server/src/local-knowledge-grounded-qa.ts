@@ -186,7 +186,10 @@ export function openStoreForDeps(deps: UiHandlerDeps): {
 function hashString32(value: string): string {
   let hash = 0x811c9dc5;
   for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i);
+    // FNV-1a over UTF-16 code units. codePointAt(i) at a unit index yields the unit value for
+    // everything below the astral plane and never undefined for i < length; the ?? 0 arm is
+    // unreachable and only satisfies the checked index access.
+    hash ^= value.codePointAt(i) ?? 0;
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");

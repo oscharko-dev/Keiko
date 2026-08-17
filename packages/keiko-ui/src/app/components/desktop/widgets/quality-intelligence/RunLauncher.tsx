@@ -1396,15 +1396,11 @@ export function RunLauncher({
     // Visible-only progress block (aria-hidden): the announcement is owned by the persistent
     // sr-only region below (a11y M-01), so this block must not also be a live region or it would
     // double-announce. Kept conditional for layout.
-    const findingsText =
-      progress.findings > 0
-        ? t(
-            progress.findings === 1
-              ? "qi.launcher.progress.findingsOne"
-              : "qi.launcher.progress.findingsMany",
-            { count: progress.findings },
-          )
-        : "";
+    const findingsKey =
+      progress.findings === 1
+        ? "qi.launcher.progress.findingsOne"
+        : "qi.launcher.progress.findingsMany";
+    const findingsText = progress.findings > 0 ? t(findingsKey, { count: progress.findings }) : "";
     return (
       <div className="qi-progress" data-testid="qi-launch-progress" aria-hidden="true">
         <span className="qi-progress-spinner" aria-hidden="true" />
