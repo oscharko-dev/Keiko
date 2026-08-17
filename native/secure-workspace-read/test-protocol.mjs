@@ -507,6 +507,54 @@ function assertLaterElifAfterLiveStripped() {
   );
   assertNestedIfZeroInsideLiveElseStripped();
   assertNestedElseInsideDeadParentStripped();
+  assertElifOneAfterUnknownExhausts();
+  assertTrigraphIfZero();
+}
+
+// Coderabbit 3793183804: `#elif 1` guarantees the ladder terminates before `#else` regardless
+// of preceding `#elif <unknown>` branches. Either the unknown was true (its branch is picked)
+// or false (this `#elif 1` is picked); in both cases the `#else` is dead.
+function assertElifOneAfterUnknownExhausts() {
+  const stripped = stripCommentsAndStrings(
+    "#if 0\nDEAD_IF();\n" +
+      "#elif FEATURE\nMAYBE_LIVE_ELIF_FEATURE();\n" +
+      "#elif 1\nMAYBE_LIVE_ELIF_ONE();\n" +
+      "#else\nDEAD_ELSE_AFTER_ELIF_ONE();\n" +
+      "#endif\n",
+  );
+  assert.match(stripped, /MAYBE_LIVE_ELIF_FEATURE/u, "unknown `#elif` branch may still be live");
+  assert.match(stripped, /MAYBE_LIVE_ELIF_ONE/u, "`#elif 1` branch may still be live");
+  assert.equal(
+    stripped.match(/DEAD_ELSE_AFTER_ELIF_ONE/u),
+    null,
+    "`#else` after `#elif 1` must be stripped — `#elif 1` exhausts the ladder even after an unknown predecessor",
+  );
+  assert.equal(stripped.match(/DEAD_IF/u), null, "the initial `#if 0` half must still be stripped");
+}
+
+// Coderabbit 3793183799: C11 trigraphs run in translation phase 1, before `\<newline>`
+// splicing and preprocessing. `??=if 0` becomes `#if 0` after trigraph replacement. Ensure
+// the scanner recognises that too.
+function assertTrigraphIfZero() {
+  const stripped = stripCommentsAndStrings(
+    "int keep_before(void) { return 1; }\n" +
+      "??=if 0\nDEAD_INSIDE_TRIGRAPH_IF();\n??=endif\n" +
+      "int keep_after(void) { return 2; }\n",
+  );
+  assert.equal(
+    stripped.match(/DEAD_INSIDE_TRIGRAPH_IF/u),
+    null,
+    "trigraph `??=if 0 ... ??=endif` must be stripped (`??=` converts to `#`)",
+  );
+  // `??/` converts to `\`, enabling line splicing on trigraph-continued lines.
+  const spliceStripped = stripCommentsAndStrings(
+    "// disabled ??/\nSHOULD_BE_STRIPPED_BY_TRIGRAPH_SPLICE();\n",
+  );
+  assert.equal(
+    spliceStripped.match(/SHOULD_BE_STRIPPED_BY_TRIGRAPH_SPLICE/u),
+    null,
+    "trigraph `??/` at end of line must act as `\\` for line splicing",
+  );
 }
 
 // Coderabbit 3793025299: nested `#if 0` inside a live `#elif`/`#else` branch must strip its
@@ -663,6 +711,7 @@ function assertMultilineCommentBeforeIfPreservesLines() {
 // constant-zero conditions the C preprocessor treats identically to `#if 0`.
 // Codex 3792928022: `#if 0 && FEATURE` also short-circuits to 0 (C left-to-right `&&`), so a
 // control wrapped in that composite form is likewise disabled and must be stripped.
+// Coderabbit 3793183803: `#if 0&&FEATURE` (no whitespace around `&&`) is equally valid C.
 function assertDisabledIfVariants() {
   const variants = [
     "#if (0)",
@@ -675,6 +724,9 @@ function assertDisabledIfVariants() {
     "#if 0 && FEATURE_NAME",
     "#if (0) && FLAG",
     "#if 0L && !DISABLED_MACRO",
+    "#if 0&&FEATURE",
+    "#if 0&&!FLAG",
+    "#if (0)&&FEATURE",
   ];
   for (const variant of variants) {
     const stripped = stripCommentsAndStrings(

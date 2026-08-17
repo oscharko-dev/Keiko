@@ -751,6 +751,19 @@ function collectJsxTextAndExpressions(source, filename) {
   const syntheticExtension = kind === ts.ScriptKind.TSX ? "tsx" : "ts";
   const sourceName = typeof filename === "string" ? filename : `<ui-i18n>.${syntheticExtension}`;
   const sourceFile = ts.createSourceFile(sourceName, source, ts.ScriptTarget.Latest, true, kind);
+  // Coderabbit outside-diff on #3202: `ts.createSourceFile` recovers from malformed input and
+  // returns a PARTIAL AST — the JSX visitor then only sees a subset of nodes and the gate can
+  // silently pass on a syntactically broken file. Fail-closed on any parse diagnostic when
+  // scanning a REAL file (production `literalScanForFile` call site always passes `filename`).
+  // Test fragments that pass raw JSX snippets without a filename still get graceful degradation
+  // (top-level JSX like `<span>x</span>` reports `parseDiagnostics` even though the fragment is
+  // meaningful to the AST visitor); the fragment path is unit-test-only and cannot ship code.
+  if (typeof filename === "string" && sourceFile.parseDiagnostics.length > 0) {
+    throw new Error(
+      `Cannot scan ${sourceName}: TypeScript reported ${String(sourceFile.parseDiagnostics.length)} parse diagnostic(s). ` +
+        "The AST is incomplete and the i18n scan would only see a subset of nodes; fix the syntax error and re-run.",
+    );
+  }
   const results = [];
   const visit = (node) => {
     if (ts.isJsxText(node)) {

@@ -1109,11 +1109,24 @@ test("returns an empty result for empty and whitespace-only sources", () => {
   expect(untranslatedLiteralsInSource("   \n\n  \n").findings).toEqual([]);
 });
 
-test("does not throw on malformed TSX and returns a valid shape", () => {
-  const malformed = `<div>{"Hello"`;
-  const result = untranslatedLiteralsInSource(malformed, "packages/x/y.tsx");
+// Coderabbit outside-diff on 889eff53: `ts.createSourceFile` returns a partial AST on
+// malformed input, so the JSX visitor sees a subset of nodes and the gate can silently pass
+// on a syntactically broken file. The scanner now fails-closed on any parse diagnostic when
+// a REAL filename is passed (production `literalScanForFile` call site always does). Test
+// fragments without a filename still get graceful degradation (top-level JSX reports parse
+// diagnostics even though the fragment is meaningful to the AST visitor) — the fragment
+// path is unit-test-only and cannot ship code.
+test("throws on malformed source when a real filename is passed", () => {
+  expect(() => untranslatedLiteralsInSource(`<div>{"Hello"`, "packages/x/y.tsx")).toThrow(
+    /parse diagnostic/u,
+  );
+});
+
+test("still allows test fragments without a filename to scan gracefully", () => {
+  // Top-level JSX like this reports parse diagnostics under TSX ScriptKind, but the AST
+  // visitor still walks JsxText/JsxExpression meaningfully. Fragment path only, no filename.
+  const result = untranslatedLiteralsInSource(`<div>{"Hello"`);
   expect(result).toHaveProperty("findings");
-  expect(result).toHaveProperty("weakExemptions");
   expect(Array.isArray(result.findings)).toBe(true);
 });
 

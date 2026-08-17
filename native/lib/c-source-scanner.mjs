@@ -22,6 +22,31 @@
 // reference is the PR-#3202 review comment that motivated the choice.
 
 // ---------------------------------------------------------------------------
+// Phase 1: trigraph replacement (C11 §5.1.1.2)
+// ---------------------------------------------------------------------------
+// C11 phase 1 replaces the nine trigraph sequences with their single-character equivalents
+// BEFORE line splicing runs. Most modern compilers disable trigraphs by default (Clang and
+// GCC require `-trigraphs`), but a source that uses them still compiles under those flags —
+// and `??=include <sched.h>` / `??=if 0` would then appear in the source as directives that
+// this scanner would miss. Coderabbit 3793183799: apply trigraph replacement first so
+// `??=if 0` reaches `stripDisabledPreprocessorBranches` as `#if 0` and gets stripped.
+// See C11 §5.2.1.1 for the full table.
+function convertTrigraphs(source) {
+  return source.replace(/\?\?([=/'()!<>-])/gu, (_, second) => TRIGRAPH_MAP[second]);
+}
+const TRIGRAPH_MAP = {
+  "=": "#",
+  "/": "\\",
+  "'": "^",
+  "(": "[",
+  ")": "]",
+  "!": "|",
+  "<": "{",
+  ">": "}",
+  "-": "~",
+};
+
+// ---------------------------------------------------------------------------
 // Phase 2: line splicing
 // ---------------------------------------------------------------------------
 // C translation phase 2 collapses `\<newline>` pairs BEFORE any subsequent processing. Codex
@@ -29,8 +54,11 @@
 // but is invisible to the disabled-branch strip. Codex 3792855831: comments then run in
 // phase 3 (see `stripCComments`), and preprocessor directives in phase 4 — that ordering is
 // what `stripDisabledPreprocessorBranches` documents.
+//
+// Coderabbit 3793183799: apply trigraph conversion (phase 1) first so a `??/` in the source
+// becomes a real `\` before we look for `\<newline>` pairs.
 export function preprocessCLineSplices(source) {
-  return source.replace(/\\\r?\n/gu, "");
+  return convertTrigraphs(source).replace(/\\\r?\n/gu, "");
 }
 
 // ---------------------------------------------------------------------------
@@ -199,14 +227,17 @@ export function stripStringLiteralBodies(source) {
 //       `#endif` reaches this frame, not the outer one.
 
 // Module-internal (not exported: the composition helpers below wrap all directive matching).
+// Coderabbit 3793183803: allow zero whitespace after `&&` (`#if 0&&FEATURE`) — it's valid C
+// and evaluates to false. Whitespace before the identifier is also `\s*` (was `\s+`) so both
+// `0 && FEATURE` and `0&&FEATURE` match.
 const PREPROCESSOR_PATTERNS = {
   OPEN_IF: /^#\s*(?:if|ifdef|ifndef)\b/u,
   CLOSE_ENDIF: /^#\s*endif\b/u,
   ELSE_DIRECTIVE: /^#\s*else\b/u,
   ELIF_DIRECTIVE: /^#\s*elif\b/u,
-  DISABLED_IF: /^#\s*if\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*(?:&&\s+!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u,
+  DISABLED_IF: /^#\s*if\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*(?:&&\s*!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u,
   DISABLED_ELIF:
-    /^#\s*elif\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*(?:&&\s+!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u,
+    /^#\s*elif\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*(?:&&\s*!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u,
 };
 
 // Extracted so the outer regex object is not polluted with the `1`-shape variants and so a
@@ -298,7 +329,12 @@ function applyElifTransition(trimmed, frame) {
   }
   frame.mode = KEEPING;
   if (DEFINITIVELY_TRUE_ELIF.test(trimmed)) {
-    frame.sawDefLive = !frame.sawUnkLive;
+    // Coderabbit 3793183804: `#elif 1` is unconditionally exhaustive — if we reach it, all
+    // preceding branches must have been false, so this branch is picked; and `#elif 1` cannot
+    // itself be skipped (its condition is always true). Either way the compiler picks EXACTLY
+    // this branch OR a preceding one, so every subsequent `#elif`/`#else` is dead — regardless
+    // of whether a prior `#elif <unknown>` was seen. Set sawDefLive unconditionally.
+    frame.sawDefLive = true;
   } else {
     frame.sawUnkLive = true;
   }
