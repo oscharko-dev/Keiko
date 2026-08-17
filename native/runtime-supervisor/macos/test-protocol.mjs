@@ -21,6 +21,7 @@ import {
 // AND `native/secure-workspace-read/test-protocol.mjs`. Consolidated behind the shared module
 // so a fix lands in one place.
 import {
+  foldAdjacentStringLiterals,
   preprocessCLineSplices,
   stripCComments,
   stripDisabledPreprocessorBranches,
@@ -116,7 +117,12 @@ function stripCCommentsAndStrings(rawSource) {
 }
 
 function stripCCommentsPreservingLiterals(rawSource) {
-  return stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource)));
+  // Codex 3793282534: adjacent string literals concatenate at compile time (C11 §6.4.5). Fold
+  // them BEFORE the negative shell-path pin runs so `"/bin/" "sh"` cannot evade the regex that
+  // expects a contiguous `"/bin/…sh"` literal.
+  return foldAdjacentStringLiterals(
+    stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource))),
+  );
 }
 
 const rawSource = await readFile(supervisorSource, "utf8");

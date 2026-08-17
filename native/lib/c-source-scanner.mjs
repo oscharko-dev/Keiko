@@ -189,6 +189,33 @@ export function stripStringLiteralBodies(source) {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 6: adjacent string-literal concatenation (C11 §5.1.1.2 phase 6, §6.4.5)
+// ---------------------------------------------------------------------------
+// C concatenates adjacent string literals of the same encoding at compile time. `"/bin/" "sh"`
+// produces the same object as `"/bin/sh"` — same runtime path, same shell launched. Codex
+// 3793282534 on #3202: the negative shell-path pin used a regex that expects a single
+// contiguous `"/bin/…sh"` literal, so a supervisor rewritten to `"/bin/" "sh"` would evade the
+// check while still launching a shell. Fold adjacent literals here (after comment / disabled-
+// branch stripping) so the pin sees what the compiler will emit. Repeat the pass until no more
+// adjacent pairs remain to fold, so chains like `"a" "b" "c"` collapse fully.
+//
+// Only PLAIN string literals (unprefixed) are folded — modelling wide (`L"…"`), UTF-8 (`u8"…"`),
+// UTF-16 (`u"…"`), or UTF-32 (`U"…"`) prefixes correctly requires per-encoding rules and none of
+// the source-contract pins reach into those literals. The regex matches a body of ordinary
+// chars and escape pairs; unterminated literals cannot appear here because `stripCComments` and
+// the earlier phases already threw on those. Char literals (`'…'`) are unaffected — they don't
+// concatenate.
+export function foldAdjacentStringLiterals(source) {
+  let previous;
+  let current = source;
+  do {
+    previous = current;
+    current = previous.replace(/"((?:[^"\\]|\\.)*)"(\s+)"((?:[^"\\]|\\.)*)"/gu, '"$1$3"');
+  } while (current !== previous);
+  return current;
+}
+
+// ---------------------------------------------------------------------------
 // Phase 4: preprocessor ladder handling
 // ---------------------------------------------------------------------------
 // KEIKO-0417 (extended across many review rounds on #3202): a control retained only inside a
@@ -213,18 +240,20 @@ export function stripStringLiteralBodies(source) {
 // token from the source" and does NOT claim "catch macro-gated deletion".
 //
 // State machine:
-//   Stack of frames (codex 3793025299, 3793050405). Every tracked directive pushes a new
-//   frame. `#endif` pops. Top-of-stack determines the current "should this line be kept"
-//   answer. A line is kept only if EVERY frame is in KEEPING mode — the compiler emits a
-//   line only if every enclosing conditional picks the branch containing it.
+//   Stack of frames (codex 3793025299, 3793050405, 3793282541). EVERY `#if` / `#ifdef` /
+//   `#ifndef` pushes a new frame; `#endif` pops. Tracked (constant) forms push with the
+//   deterministic mode; untracked (macro-gated) forms push a conservative KEEPING frame with
+//   `sawDefLive=false` — so a constant-dead sibling branch such as `#elif 0` inside a macro-
+//   gated ladder can still be recognised and stripped (its body is dead regardless of what the
+//   compiler picked for the outer condition). Top-of-stack determines the current "should this
+//   line be kept" answer. A line is kept only if EVERY frame is in KEEPING mode — the compiler
+//   emits a line only if every enclosing conditional picks the branch containing it.
 //   Per-frame flags:
 //     mode: STRIPPING | KEEPING
 //     sawDefLive: a preceding branch was DEFINITIVELY live (`#elif 1` after only-zero
 //       predecessors, or `#else` in the same context). Subsequent branches are dead.
 //     sawUnkLive: a preceding branch was POTENTIALLY live (`#elif FEATURE`). Subsequent
 //       branches may ALSO be live; the ladder does not know which the compiler picked.
-//     depth: nested `#if X` (untracked) inside this frame — plain counter so the matching
-//       `#endif` reaches this frame, not the outer one.
 
 // Module-internal (not exported: the composition helpers below wrap all directive matching).
 //
@@ -292,11 +321,25 @@ function processLadderLine(line, stack, kept) {
   const p = PREPROCESSOR_PATTERNS;
   const trimmed = line.trimStart();
   if (p.DISABLED_IF.test(trimmed)) {
-    stack.push({ mode: STRIPPING, sawDefLive: false, sawUnkLive: false, depth: 0 });
+    stack.push({ mode: STRIPPING, sawDefLive: false, sawUnkLive: false });
     return;
   }
   if (DEFINITIVELY_TRUE_IF.test(trimmed)) {
-    stack.push({ mode: KEEPING, sawDefLive: true, sawUnkLive: false, depth: 0 });
+    stack.push({ mode: KEEPING, sawDefLive: true, sawUnkLive: false });
+    return;
+  }
+  // Untracked (macro-gated) `#if X` / `#ifdef X` / `#ifndef X`: push a conservative KEEPING
+  // frame instead of bumping a depth counter on the parent (codex 3793282541). The reason is
+  // subtle — the parent-depth model treated `#elif`/`#else` inside the untracked ladder as
+  // ordinary lines, so `#elif 0` in `#if FEATURE ... #elif 0 REQUIRED_PIN ... #endif` never
+  // flipped anything to STRIPPING and `REQUIRED_PIN` leaked into the effective source
+  // (satisfying pin assertions the compiler would have never seen). By pushing a real frame
+  // we route `#elif`/`#else` to `applyElif/ElseTransition` on the correct frame, so a
+  // constant-dead sibling branch is stripped even when the containing condition is unknown.
+  // Initial state: mode KEEPING (unknown branch may be picked), sawDefLive false, sawUnkLive
+  // false — matches the semantics of an untracked `#if X` opening branch.
+  if (p.OPEN_IF.test(trimmed)) {
+    stack.push({ mode: KEEPING, sawDefLive: false, sawUnkLive: false });
     return;
   }
   if (stack.length === 0) {
@@ -304,17 +347,8 @@ function processLadderLine(line, stack, kept) {
     return;
   }
   const frame = stack[stack.length - 1];
-  if (p.OPEN_IF.test(trimmed)) {
-    frame.depth += 1;
-    return;
-  }
   if (p.CLOSE_ENDIF.test(trimmed)) {
-    if (frame.depth === 0) stack.pop();
-    else frame.depth -= 1;
-    return;
-  }
-  if (frame.depth > 0) {
-    if (allFramesKeeping(stack)) kept.push(line);
+    stack.pop();
     return;
   }
   handleOuterDirectiveOrLine(line, trimmed, frame, stack, kept);

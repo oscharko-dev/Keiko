@@ -733,31 +733,79 @@ function isInlineTextFormattingChild(child) {
   return INLINE_TEXT_FORMATTING_ELEMENTS.has(tagName.text);
 }
 
-function collectAggregatedJsxTextParts(container) {
-  const parts = [];
+// Split the container's children into consecutive "phrase segments". A boundary is anything that
+// interrupts the rendered text stream: a non-inline element (block container / custom
+// component), a non-literal expression brace (`{maybeVar}` — runtime value unknown), or any
+// other non-textual child. Each returned segment is a list of adjacent text-like parts that DO
+// render together and can be classified as one phrase.
+function collectAggregatedJsxTextSegments(container) {
+  const segments = [[]];
+  const startNewSegment = () => {
+    if (segments[segments.length - 1].length > 0) segments.push([]);
+  };
+  const appendPart = (text) => segments[segments.length - 1].push(text);
   for (const child of container.children) {
-    if (ts.isJsxText(child)) {
-      const trimmed = child.text.trim().replace(/\s+/gu, " ");
-      if (trimmed.length > 0) parts.push(trimmed);
-    } else if (isInlineTextFormattingChild(child)) {
-      parts.push(...collectAggregatedJsxTextParts(child));
-    }
-    // Non-inline elements (block containers, custom components) and expression braces
-    // terminate the aggregate — their contents form a separate phrase.
+    absorbChildIntoSegments(child, appendPart, startNewSegment);
   }
-  return parts;
+  return segments.filter((seg) => seg.length > 0);
 }
 
-function jsxAggregatedTextResult(node, sourceFile) {
-  const parts = collectAggregatedJsxTextParts(node);
-  if (parts.length < 2) return null;
-  const aggregate = parts.join(" ");
-  if (!isTranslatableCopy(aggregate)) return null;
-  // If any individual fragment is already translatable on its own, the per-JsxText path already
-  // recorded it — do not double-count with a synthetic aggregate entry.
-  if (parts.some(isTranslatableCopy)) return null;
+function absorbChildIntoSegments(child, appendPart, startNewSegment) {
+  if (ts.isJsxText(child)) {
+    const trimmed = child.text.trim().replace(/\s+/gu, " ");
+    if (trimmed.length > 0) appendPart(trimmed);
+    return;
+  }
+  if (isInlineTextFormattingChild(child)) {
+    // Inline formatting elements render adjacent to surrounding text; flatten their segments
+    // into the parent's current segment. A boundary INSIDE the inline element (rare) still
+    // breaks the parent aggregate.
+    const inner = collectAggregatedJsxTextSegments(child);
+    for (let i = 0; i < inner.length; i += 1) {
+      for (const part of inner[i]) appendPart(part);
+      if (i < inner.length - 1) startNewSegment();
+    }
+    return;
+  }
+  if (ts.isJsxExpression(child)) {
+    absorbJsxExpressionIntoSegments(child, appendPart, startNewSegment);
+    return;
+  }
+  // Non-inline element (block container, custom component) or any other kind of child.
+  startNewSegment();
+}
+
+// Codex 3793282537 on #3202: `<p>open {"settings"}</p>` renders the literal inside the
+// expression brace as part of the containing phrase; the reader sees "open settings". Only
+// DIRECT string literals participate — non-literal expressions (`{maybeVar}`,
+// `{cond ? "a" : "b"}`) have runtime-unknowable values, so including them would fabricate a
+// phrase that never actually renders; those get their own individual entries via the
+// JsxExpression visitor path. A non-literal expression BREAKS the aggregate so we don't weld
+// "open" and "settings" across `{maybe}`.
+function absorbJsxExpressionIntoSegments(node, appendPart, startNewSegment) {
+  const expression = node.expression;
+  if (expression === undefined) return;
+  if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
+    const text = expression.text.trim().replace(/\s+/gu, " ");
+    if (text.length > 0) appendPart(text);
+    return;
+  }
+  startNewSegment();
+}
+
+function jsxAggregatedTextResults(node, sourceFile) {
   const line = ts.getLineAndCharacterOfPosition(sourceFile, node.getStart(sourceFile)).line + 1;
-  return { line, text: aggregate };
+  const emitted = [];
+  for (const parts of collectAggregatedJsxTextSegments(node)) {
+    if (parts.length < 2) continue;
+    const aggregate = parts.join(" ");
+    if (!isTranslatableCopy(aggregate)) continue;
+    // If any individual fragment is already translatable on its own, the per-JsxText path
+    // already recorded it — do not double-count with a synthetic aggregate entry.
+    if (parts.some(isTranslatableCopy)) continue;
+    emitted.push({ line, text: aggregate });
+  }
+  return emitted;
 }
 
 function jsxChildExpressionResults(node, sourceFile) {
@@ -850,8 +898,7 @@ function collectJsxTextAndExpressions(source, filename) {
     } else if (ts.isJsxSpreadAttribute(node)) {
       results.push(...jsxSpreadAttributeResults(node, sourceFile));
     } else if (ts.isJsxElement(node) || ts.isJsxFragment(node)) {
-      const aggregate = jsxAggregatedTextResult(node, sourceFile);
-      if (aggregate !== null) results.push(aggregate);
+      results.push(...jsxAggregatedTextResults(node, sourceFile));
     }
     ts.forEachChild(node, visit);
   };

@@ -1566,6 +1566,37 @@ test("aggregation does not cross block-level element boundaries", () => {
   expect(texts).not.toContain("open settings");
 });
 
+// Codex 3793282537 on 86ecd7a3: `<p>open {"settings"}</p>` renders "open settings" — the
+// string literal INSIDE the expression brace belongs to the containing phrase. The earlier
+// aggregation stopped at any expression brace, so this bypass reappeared even after the
+// inline-formatting-element fix. Aggregate direct string literals inside JsxExpressions too.
+test("aggregates JsxText across a literal-valued JSX expression", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>open {"settings"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("open settings");
+});
+
+test("aggregates JsxText across a template-literal-valued JSX expression", () => {
+  const texts = untranslatedLiteralsInSource(
+    "<p>open {`settings`}</p>",
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("open settings");
+});
+
+test("aggregation with a non-literal expression does not fabricate a phrase", () => {
+  // `{maybe}` runtime value is unknown, so we must NOT weld "open" and "settings" across it as
+  // if it rendered blank — that would be a fictional phrase. Skip non-literal expressions in
+  // the aggregate.
+  const texts = untranslatedLiteralsInSource(
+    "<p>open {maybe} settings</p>",
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).not.toContain("open settings");
+});
+
 // KEIKO-0299 (review-follow-up on af74e79b): a JSX child like `{"Welcome back, " + name}`
 // renders the concatenation as user copy — the literal on either operand IS user-visible and
 // must enter the ledger. Codex 3792890969.

@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 
 import { resolveWindowsMsvcEnv, windowsToolFromPath } from "../../scripts/lib/windows-msvc.mjs";
 import {
+  foldAdjacentStringLiterals,
   preprocessCLineSplices,
   stripCComments,
   stripDisabledPreprocessorBranches,
@@ -289,13 +290,22 @@ async function compile(binary, paused = false) {
 // had to be applied to both in lockstep. Consolidated behind the shared module; only the
 // composition helpers and the pin configuration stay local.
 function stripCommentsAndStrings(rawSource) {
-  return stripStringLiteralBodies(
-    stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource))),
-  );
+  return stripStringLiteralBodies(preparedSource(rawSource));
 }
 
 function stripCommentsOnly(rawSource) {
-  return stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource)));
+  return preparedSource(rawSource);
+}
+
+// Codex 3793282534 on #3202: adjacent string literals concatenate at compile time (C11 §6.4.5).
+// `"\\??\\" "GLOBALROOT"` would produce the same object as `"\\??\\GLOBALROOT"` for the reserved
+// stems / GLOBALROOT pins, and any negative pin that expects a contiguous literal would miss the
+// split form. Fold after comment / disabled-branch stripping so the pins see what the compiler
+// will emit.
+function preparedSource(rawSource) {
+  return foldAdjacentStringLiterals(
+    stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource))),
+  );
 }
 
 async function assertWindowsSourceContract() {
@@ -510,7 +520,98 @@ function assertLaterElifAfterLiveStripped() {
   assertElifOneAfterUnknownExhausts();
   assertCompoundConstantTrueIf();
   assertParenthesizedConstantConditions();
+  assertNestedUnknownLadderStripsConstantDeadSibling();
+  assertAdjacentStringLiteralsFold();
   assertTrigraphIfZero();
+}
+
+// Codex 3793282541: a constant-dead sibling (`#elif 0`, `#elif (0)`, `#if 0`) INSIDE an
+// unknown macro-gated ladder used to leak its body because the untracked `#if X` bumped a depth
+// counter on the OUTER frame — so `#elif` inside was treated as a plain line, not a directive.
+// Every `#if` now pushes its own frame; that routes the elif to the correct frame and strips
+// the constant-dead sibling regardless of what the compiler picks for the outer condition.
+function assertNestedUnknownLadderStripsConstantDeadSibling() {
+  assertElifZeroInsideUnknownStripped();
+  assertIfZeroInsideUnknownStripped();
+}
+
+// Reviewer's scenario: an outer TRACKED `#if 1` wraps an untracked `#if FEATURE`; the
+// inner `#elif 0` was previously kept because the untracked opener didn't push a frame.
+function assertElifZeroInsideUnknownStripped() {
+  const stripped = stripCommentsAndStrings(
+    "int keep_before(void) { return 1; }\n" +
+      "#if 1\n" +
+      "OUTER_LIVE_BEFORE_INNER();\n" +
+      "#if FEATURE\n" +
+      "MAYBE_LIVE_IF_BRANCH();\n" +
+      "#elif 0\n" +
+      "REQUIRED_PIN_INSIDE_DEAD_ELIF();\n" +
+      "#endif\n" +
+      "OUTER_LIVE_AFTER_INNER();\n" +
+      "#endif\n" +
+      "int keep_after(void) { return 2; }\n",
+  );
+  assert.equal(
+    stripped.match(/REQUIRED_PIN_INSIDE_DEAD_ELIF/u),
+    null,
+    "constant-dead `#elif 0` INSIDE an unknown macro-gated ladder must strip its body regardless of the outer condition",
+  );
+  assert.match(
+    stripped,
+    /OUTER_LIVE_BEFORE_INNER/u,
+    "outer live content before the nested unknown ladder must survive",
+  );
+  assert.match(
+    stripped,
+    /OUTER_LIVE_AFTER_INNER/u,
+    "outer live content after the nested unknown ladder must survive",
+  );
+  assert.match(
+    stripped,
+    /MAYBE_LIVE_IF_BRANCH/u,
+    "the initial branch of the unknown ladder may be picked and must be kept",
+  );
+}
+
+// A CONSTANT-DEAD `#if 0` nested inside an unknown ladder still strips too — same reasoning:
+// its body is dead regardless of what the outer condition evaluates to.
+function assertIfZeroInsideUnknownStripped() {
+  const stripped = stripCommentsAndStrings(
+    "#if FEATURE\n" +
+      "MAYBE_LIVE_ROOT_BRANCH();\n" +
+      "#if 0\n" +
+      "DEAD_NESTED_IN_UNKNOWN();\n" +
+      "#endif\n" +
+      "#endif\n",
+  );
+  assert.equal(
+    stripped.match(/DEAD_NESTED_IN_UNKNOWN/u),
+    null,
+    "`#if 0` inside an unknown macro-gated parent must strip regardless of parent's condition",
+  );
+  assert.match(
+    stripped,
+    /MAYBE_LIVE_ROOT_BRANCH/u,
+    "the unknown parent's initial branch may still be live and must be kept",
+  );
+}
+
+// Codex 3793282534: adjacent string literals concatenate at compile time (C11 §6.4.5), so
+// `"/bin/" "sh"` and `"/bin/sh"` describe the same runtime path. A negative pin that expects
+// a contiguous shell-path literal would miss the split form. Fold before pin evaluation.
+function assertAdjacentStringLiteralsFold() {
+  const folded = foldAdjacentStringLiterals('const char *x = "/bin/" "sh";');
+  assert.match(folded, /"\/bin\/sh"/u, "adjacent literal pair must fold to a single literal");
+  const chain = foldAdjacentStringLiterals('const char *y = "a" "b" "c" "d";');
+  assert.match(chain, /"abcd"/u, "chained adjacent literals must fold repeatedly");
+  const withNewline = foldAdjacentStringLiterals('const char *z = "hello "\n"world";');
+  assert.match(withNewline, /"hello world"/u, "adjacent literals separated by a newline must fold");
+  // Non-adjacent (comma-separated arguments) must NOT fold — a comma is not whitespace.
+  const nonAdjacent = foldAdjacentStringLiterals('foo("a", "b");');
+  assert.doesNotMatch(nonAdjacent, /"ab"/u, "separator like `,` must prevent folding");
+  // Escape handling: `\\"` inside a literal body must not be treated as a closing quote.
+  const withEscape = foldAdjacentStringLiterals('const char *e = "a\\"b" "c";');
+  assert.match(withEscape, /"a\\"bc"/u, "embedded escaped-quote must survive the fold");
 }
 
 // Codex 3793229696: `#if (0 && FEATURE)` and `#if 0 && defined(FEATURE)` are deterministically
