@@ -40,7 +40,9 @@ export function preprocessCLineSplices(source) {
 // byte AFTER the closing `"`. Throws on unterminated input — coderabbit 3793025301: silently
 // accepting an unterminated `"..."` would let every token after the stray quote fall off the
 // scan, so a deleted control after the unclosed string would escape the source contract.
-export function skipStringLiteral(source, start) {
+// Module-internal helper (not exported: consumers get comment/literal handling via
+// `stripCComments` and `stripStringLiteralBodies`).
+function skipStringLiteral(source, start) {
   let i = start + 1;
   while (i < source.length) {
     const c = source[i];
@@ -57,8 +59,8 @@ export function skipStringLiteral(source, start) {
 // Coderabbit 3792888545: C character constants can be multi-character (`'CreateFileW('`,
 // implementation-defined `int` value) and can contain sequences that would otherwise look
 // like comment starts (`'//'`, `'/*'`). Skip them the same way as string literals; same
-// fail-closed rule as the string-literal case (coderabbit 3793025301).
-export function skipCharLiteral(source, start) {
+// fail-closed rule as the string-literal case (coderabbit 3793025301). Module-internal.
+function skipCharLiteral(source, start) {
   let i = start + 1;
   while (i < source.length) {
     const c = source[i];
@@ -196,7 +198,8 @@ export function stripStringLiteralBodies(source) {
 //     depth: nested `#if X` (untracked) inside this frame — plain counter so the matching
 //       `#endif` reaches this frame, not the outer one.
 
-export const PREPROCESSOR_PATTERNS = {
+// Module-internal (not exported: the composition helpers below wrap all directive matching).
+const PREPROCESSOR_PATTERNS = {
   OPEN_IF: /^#\s*(?:if|ifdef|ifndef)\b/u,
   CLOSE_ENDIF: /^#\s*endif\b/u,
   ELSE_DIRECTIVE: /^#\s*else\b/u,
@@ -208,8 +211,8 @@ export const PREPROCESSOR_PATTERNS = {
 
 // Extracted so the outer regex object is not polluted with the `1`-shape variants and so a
 // future contributor can extend them independently. Codex 3793074555 added constant-true.
-export const DEFINITIVELY_TRUE_IF = /^#\s*if\s+\(?\s*1[UuLl]{0,3}\s*\)?\s*$/u;
-export const DEFINITIVELY_TRUE_ELIF = /^#\s*elif\s+\(?\s*1[UuLl]{0,3}\s*\)?\s*$/u;
+const DEFINITIVELY_TRUE_IF = /^#\s*if\s+\(?\s*1[UuLl]{0,3}\s*\)?\s*$/u;
+const DEFINITIVELY_TRUE_ELIF = /^#\s*elif\s+\(?\s*1[UuLl]{0,3}\s*\)?\s*$/u;
 
 const STRIPPING = "stripping";
 const KEEPING = "keeping";
