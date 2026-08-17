@@ -342,6 +342,116 @@ describe("Issue #1580 — visibility-gated server poll", () => {
     expect(putCalls()).toHaveLength(1);
   });
 
+  it("re-sends a dirty snapshot after a 412 with the adopted revision", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    let putAttempts = 0;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        putAttempts += 1;
+        if (putAttempts === 1) {
+          return {
+            ok: false,
+            status: 412,
+            headers: new Headers({ ETag: '"workspace-state-7"' }),
+            json: async () => Promise.resolve({}),
+          } as unknown as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ ETag: '"workspace-state-8"' }),
+          json: async () =>
+            Promise.resolve({ workspace: { revision: 8, windows: [], connections: [] } }),
+        } as unknown as Response;
+      }
+      return { status: 304, ok: true, headers: new Headers() } as unknown as Response;
+    });
+
+    render(<Harness />);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+    expect(putCalls()).toHaveLength(1);
+
+    // The conflict must schedule ONE retry of the still-dirty snapshot with the adopted
+    // revision — previously the snapshot was parked until the next local mutation, losing
+    // e.g. a window close made before revision convergence (zombie window).
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+    expect(putCalls()).toHaveLength(2);
+    expect((putCalls()[1]?.[1]?.headers as Record<string, string>)["If-Match"]).toBe(
+      '"workspace-state-7"',
+    );
+    expect(String(putCalls()[1]?.[1]?.body)).toContain("agents-1");
+
+    // Converged: no further retry loop.
+    act(() => {
+      vi.advanceTimersByTime(1200);
+    });
+    await flushAsyncEffects();
+    expect(putCalls()).toHaveLength(2);
+  });
+
+  it("adopts the polled server revision while dirty so the first PUT is not stale", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ ETag: '"workspace-state-8"' }),
+          json: async () =>
+            Promise.resolve({ workspace: { revision: 8, windows: [], connections: [] } }),
+        } as unknown as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ ETag: '"workspace-state-7"' }),
+        json: async () =>
+          Promise.resolve({
+            workspace: {
+              revision: 7,
+              windows: [
+                {
+                  id: "foreign-1",
+                  type: "files",
+                  x: 1,
+                  y: 2,
+                  w: 320,
+                  h: 240,
+                  z: 9,
+                  cfg: {},
+                  max: false,
+                },
+              ],
+              connections: [],
+            },
+          }),
+      } as unknown as Response;
+    });
+
+    const { getByTestId } = render(<Harness />);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+
+    // Local windows stay authoritative, but the first debounced PUT must already carry the
+    // adopted server revision instead of the guaranteed-stale revision 0 (the deterministic
+    // 412 the customer saw in the console on every reload with restored windows).
+    expect(getByTestId("wins")).toHaveTextContent("agents-1");
+    expect(putCalls().length).toBeGreaterThanOrEqual(1);
+    expect((putCalls()[0]?.[1]?.headers as Record<string, string>)["If-Match"]).toBe(
+      '"workspace-state-7"',
+    );
+  });
+
   it("does not apply a polled server snapshot over a locally dirty workspace", async () => {
     window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
     fetchMock.mockResolvedValue({

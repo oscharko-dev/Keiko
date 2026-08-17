@@ -27,6 +27,7 @@ import {
   readSseStream,
   streamingResponseFromNode,
 } from "./http.js";
+import { requestOpenAIEmbedding } from "./openai-embedding-adapter.js";
 
 const TEST_TLS_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDAT3UYX+IFphaO
@@ -349,6 +350,35 @@ describe("gatewayFetch", () => {
       expect(received !== undefined && Array.from(received)).toEqual(Array.from(payload));
     } finally {
       for (const s of originSockets) s.destroy();
+      await close(origin);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("engages the custom-CA fallback for the embedding adapter exactly like chat transports", async () => {
+    // CA-parity pin: an embedding path that fails on a corporate-CA gateway the chat path talks
+    // to happily is indistinguishable from an outage in the product UI. requestOpenAIEmbedding
+    // runs over the REAL gatewayFetch here (no fetchImpl), so the recoverable-TLS fallback with
+    // the configured bundle must carry it end to end.
+    const dir = mkdtempSync(join(tmpdir(), "keiko-embed-ca-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
+      res.writeHead(200, { "content-type": "application/json", connection: "close" });
+      res.end(JSON.stringify({ data: [{ embedding: [0.6, 0.8] }], model: "probe-model" }));
+    });
+    const originPort = await listen(origin);
+    try {
+      const outcome = await requestOpenAIEmbedding({
+        endpoint: `https://127.0.0.1:${String(originPort)}/v1`,
+        apiKey: "sk-test",
+        modelId: "probe-model",
+        input: "ping",
+        egress: { caBundlePath },
+      });
+      expect(outcome.ok).toBe(true);
+      if (outcome.ok) expect(outcome.value.modelId).toBe("probe-model");
+    } finally {
       await close(origin);
       rmSync(dir, { recursive: true, force: true });
     }

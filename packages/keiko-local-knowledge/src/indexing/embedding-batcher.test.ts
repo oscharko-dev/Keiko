@@ -578,6 +578,48 @@ describe("embedChunkBatch — transient-failure retry", () => {
     expect(calls).toBe(1);
     expect(result.vectors).toEqual([]);
   });
+
+  it("retries an answered 5xx like a transient failure but never a 4xx", async () => {
+    let serverErrorCalls = 0;
+    const serverError = scriptedAdapter({
+      responder: () => {
+        serverErrorCalls += 1;
+        return { ok: false, kind: "http-error", status: 503 };
+      },
+    });
+    await embedChunkBatch([firstChunk()], {
+      adapter: serverError,
+      store: fixture.store,
+      pinnedIdentity: DEFAULT_EMBEDDING,
+      concurrency: 1,
+      now: fixedClock(),
+      idSource: fixedIds("storage"),
+      retry: instantRetry,
+    });
+    // A 5xx answer stays retry-worthy exactly like the torn-connection "transport" kind.
+    expect(serverErrorCalls).toBe(3);
+
+    let badRequestCalls = 0;
+    const badRequest = scriptedAdapter({
+      responder: () => {
+        badRequestCalls += 1;
+        return { ok: false, kind: "http-error", status: 400 };
+      },
+    });
+    const result = await embedChunkBatch([firstChunk()], {
+      adapter: badRequest,
+      store: fixture.store,
+      pinnedIdentity: DEFAULT_EMBEDDING,
+      concurrency: 1,
+      now: fixedClock(),
+      idSource: fixedIds("storage"),
+      retry: instantRetry,
+    });
+    // A 4xx answer is deterministic: exactly one attempt, no backoff burn (under the old
+    // everything-is-transport classification this looped through the full retry schedule).
+    expect(badRequestCalls).toBe(1);
+    expect(result.errors.some((e) => e.code === "EMBEDDING_ADAPTER_FAILED")).toBe(true);
+  });
 });
 
 // ─── #189 GRD-004: array-batch embedding port ────────────────────────────────

@@ -113,8 +113,16 @@ const DEFAULT_EMBED_MAX_RETRIES = 6;
 const DEFAULT_EMBED_BASE_DELAY_MS = 500;
 const MAX_EMBED_BACKOFF_MS = 30_000;
 
+// A 5xx answer is as transient as a torn connection; a 4xx answer is deterministic and
+// retrying it only burns the budget (under the old everything-is-transport classification a
+// 400 was retried through the full backoff schedule).
+function isTransientFailure(kind: OpenAIEmbeddingErrorKind, status: number | undefined): boolean {
+  if (TRANSIENT_EMBED_KINDS.has(kind)) return true;
+  return kind === "http-error" && status !== undefined && status >= 500;
+}
+
 function isTransientOutcome(outcome: OpenAIEmbeddingOutcome): boolean {
-  return !outcome.ok && TRANSIENT_EMBED_KINDS.has(outcome.kind);
+  return !outcome.ok && isTransientFailure(outcome.kind, outcome.status);
 }
 
 function backoffMs(attempt: number, base: number): number {
@@ -237,7 +245,7 @@ function tokenBudgetErrorOutcomes(
 }
 
 function isTransientBatchOutcome(outcome: OpenAIEmbeddingBatchOutcome): boolean {
-  return !outcome.ok && TRANSIENT_EMBED_KINDS.has(outcome.kind);
+  return !outcome.ok && isTransientFailure(outcome.kind, outcome.status);
 }
 
 function errorFromKind(kind: OpenAIEmbeddingErrorKind): IndexingJobError {

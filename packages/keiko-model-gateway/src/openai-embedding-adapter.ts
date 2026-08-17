@@ -60,11 +60,11 @@ export interface OpenAIEmbeddingBatchRequest {
 export type OpenAIEmbeddingBatchOutcome =
   // `value` is index-aligned to `inputs`: value[i] is the embedding for inputs[i].
   | { readonly ok: true; readonly value: readonly OpenAIEmbeddingSuccess[] }
-  | { readonly ok: false; readonly kind: OpenAIEmbeddingErrorKind };
+  | { readonly ok: false; readonly kind: OpenAIEmbeddingErrorKind; readonly status?: number };
 
 export type OpenAIEmbeddingOutcome =
   | { readonly ok: true; readonly value: OpenAIEmbeddingSuccess }
-  | { readonly ok: false; readonly kind: OpenAIEmbeddingErrorKind };
+  | { readonly ok: false; readonly kind: OpenAIEmbeddingErrorKind; readonly status?: number };
 
 export type OpenAIEmbeddingErrorKind =
   | "wrong-header"
@@ -73,6 +73,10 @@ export type OpenAIEmbeddingErrorKind =
   | "timeout"
   | "cancelled"
   | "transport"
+  // The gateway ANSWERED — with an HTTP error status (carried in `status`). Deliberately
+  // distinct from "transport" (no HTTP response at all): collapsing a 400/500 answer into
+  // "not reachable" once misdirected a whole connectivity investigation.
+  | "http-error"
   | "proxy-unreachable"
   | "proxy-auth-required"
   | "proxy-egress-failed"
@@ -180,7 +184,7 @@ function classifyStatus(status: number): OpenAIEmbeddingErrorKind | null {
   if (status === 401 || status === 403) return "wrong-header";
   if (status === 429) return "rate-limited";
   if (status === 404) return "unsupported-model";
-  if (status >= 400) return "transport";
+  if (status >= 400) return "http-error";
   return null;
 }
 
@@ -302,7 +306,7 @@ export async function requestOpenAIEmbedding(
   if (!dispatched.ok) {
     const kind = classifyStatus(dispatched.status) ?? "transport";
     await discardBody(dispatched);
-    return { ok: false, kind };
+    return { ok: false, kind, status: dispatched.status };
   }
   return decodeSuccess(dispatched, request);
 }
@@ -443,7 +447,7 @@ export async function requestOpenAIEmbeddingBatch(
   if (!dispatched.ok) {
     const kind = classifyStatus(dispatched.status) ?? "transport";
     await discardBody(dispatched);
-    return { ok: false, kind };
+    return { ok: false, kind, status: dispatched.status };
   }
   return decodeBatchSuccess(dispatched, request);
 }

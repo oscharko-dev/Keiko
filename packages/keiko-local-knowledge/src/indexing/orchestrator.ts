@@ -106,6 +106,7 @@ import {
 } from "./job-persist.js";
 import { embedChunkBatch } from "./embedding-batcher.js";
 import {
+  countVectorsForCapsule,
   countVectorsForDocument,
   deleteVectorsForDocument,
   invalidateVectorIndexStateForCapsules,
@@ -2079,8 +2080,7 @@ function buildResult(
 
 function embeddingPreflightOptions(state: RunState): EmbeddingProbeOptions {
   const identity = state.capsule.embeddingModelIdentity;
-  const provisional =
-    state.capsule.lifecycleState === "draft" && identity.embeddingSpaceFingerprint === undefined;
+  const provisional = hasProvisionalIdentity(state);
   return {
     modelId: identity.modelId,
     provider: identity.provider,
@@ -2098,11 +2098,18 @@ function embeddingPreflightOptions(state: RunState): EmbeddingProbeOptions {
   };
 }
 
-function isProvisionalDraft(state: RunState): boolean {
-  return (
-    state.capsule.lifecycleState === "draft" &&
-    state.capsule.embeddingModelIdentity.embeddingSpaceFingerprint === undefined
-  );
+// An identity is provisional while it has never been verified against the live gateway (no
+// embedding-space fingerprint) and the capsule owns no vectors an adopted identity could
+// invalidate. `lifecycleState === "draft"` alone is not enough: a failed FIRST run moves the
+// capsule to "error" while the identity still holds the creation-time dimension guess, and
+// freezing that guess would wedge the capsule on INCOMPATIBLE_EMBEDDING_IDENTITY forever once
+// the gateway becomes reachable. Re-verifying stays forbidden the moment vectors exist —
+// adopting a changed identity then would silently mix embedding spaces.
+function hasProvisionalIdentity(state: RunState): boolean {
+  const identity = state.capsule.embeddingModelIdentity;
+  if (identity.embeddingSpaceFingerprint !== undefined) return false;
+  if (state.capsule.lifecycleState === "draft") return true;
+  return countVectorsForCapsule(state.options.store._internal.db, state.capsule.id) === 0;
 }
 
 interface EmbeddingPreflightCacheEntry {
@@ -2176,7 +2183,7 @@ function embeddingPreflightFailure(
   result: EmbeddingCapabilityCheck,
 ): IndexingJobError | undefined {
   if (result.ok) {
-    if (isProvisionalDraft(state)) {
+    if (hasProvisionalIdentity(state)) {
       state.capsule = updateCapsuleEmbeddingModelIdentity(
         state.options.store,
         state.capsule.id,

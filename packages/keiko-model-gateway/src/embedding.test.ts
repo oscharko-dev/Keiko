@@ -195,6 +195,11 @@ describe("verifyEmbeddingCapability", () => {
       expectedReason: "unavailable",
     },
     {
+      title: "maps http-error adapter outcomes to http-error",
+      kind: "http-error",
+      expectedReason: "http-error",
+    },
+    {
       title: "maps invalid-response adapter outcomes to invalid-response",
       kind: "invalid-response",
       expectedReason: "invalid-response",
@@ -379,6 +384,7 @@ describe("verifyEmbeddingCapability", () => {
       "unsupported-model",
       "timeout",
       "transport",
+      "http-error",
       "proxy-unreachable",
       "proxy-auth-required",
       "proxy-egress-failed",
@@ -744,14 +750,18 @@ describe("requestOpenAIEmbedding (direct transport)", () => {
     expect(capturedHeaderValue).toBe("raw-key");
   });
 
-  it("classifies status codes deterministically (401→wrong-header, 429→rate-limited, 404→unsupported-model, 500→transport)", async () => {
+  it("classifies status codes deterministically (401→wrong-header, 429→rate-limited, 404→unsupported-model, 400/500→http-error)", async () => {
+    // An answered HTTP error is `http-error` (status carried), never `transport`: collapsing a
+    // 400/500 answer into "not reachable" once misdirected a connectivity investigation while
+    // the gateway was reachable the whole time and rejecting the request shape.
     const cases: [number, string][] = [
       [401, "wrong-header"],
       [403, "wrong-header"],
       [429, "rate-limited"],
       [404, "unsupported-model"],
-      [500, "transport"],
-      [502, "transport"],
+      [400, "http-error"],
+      [500, "http-error"],
+      [502, "http-error"],
     ];
     for (const [status, expectedKind] of cases) {
       const fetchImpl = mockFetch(() => new Response("error body — never read", { status }));
@@ -763,7 +773,27 @@ describe("requestOpenAIEmbedding (direct transport)", () => {
         fetchImpl,
       });
       expect(outcome.ok).toBe(false);
-      if (!outcome.ok) expect(outcome.kind).toBe(expectedKind);
+      if (!outcome.ok) {
+        expect(outcome.kind).toBe(expectedKind);
+        expect(outcome.status).toBe(status);
+      }
+    }
+  });
+
+  it("carries the HTTP status into the verification safeMessage for answered errors", async () => {
+    const fetchImpl = mockFetch(() => new Response("rejected", { status: 400 }));
+    const result = await verifyEmbeddingCapability(
+      {
+        endpoint: "https://example.test/v1",
+        apiKey: "k",
+        request: (input) => requestOpenAIEmbedding({ ...input, fetchImpl }),
+      },
+      { modelId: "m", provider: "openai-compatible", vectorMetric: "cosine" },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("http-error");
+      expect(result.safeMessage).toBe("model gateway answered the embedding request with HTTP 400");
     }
   });
 
@@ -1117,7 +1147,7 @@ describe("requestOpenAIEmbeddingBatch — branch coverage (#189 GRD-004)", () =>
     }
   });
 
-  it("maps a transport failure and a 500 status to error kinds", async () => {
+  it("maps a transport failure and a 500 status to distinct error kinds", async () => {
     const thrown = await requestOpenAIEmbeddingBatch({
       endpoint: "https://e/v1",
       apiKey: "k",
@@ -1137,6 +1167,9 @@ describe("requestOpenAIEmbeddingBatch — branch coverage (#189 GRD-004)", () =>
       fetchImpl: mockFetch(() => new Response("", { status: 500 })),
     });
     expect(server.ok).toBe(false);
-    if (!server.ok) expect(server.kind).toBe("transport");
+    if (!server.ok) {
+      expect(server.kind).toBe("http-error");
+      expect(server.status).toBe(500);
+    }
   });
 });

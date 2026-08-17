@@ -31,6 +31,7 @@ export type EmbeddingFailureReason =
   | "timeout"
   | "cancelled"
   | "unsupported-model"
+  | "http-error"
   | "proxy-unreachable"
   | "proxy-auth-required"
   | "proxy-egress-failed"
@@ -106,6 +107,11 @@ const SAFE_MESSAGES: Readonly<Record<EmbeddingFailureReason, string>> = Object.f
   unavailable: "model gateway is not reachable",
   "wrong-header": "model gateway rejected the request — check API key configuration",
   "rate-limited": "model gateway is rate-limited — retry after the configured backoff",
+  // Deliberately distinct from `unavailable` ("not reachable"): the gateway ANSWERED, with an
+  // HTTP error status. Collapsing the two once misdirected a connectivity investigation while
+  // the true failure was a rejected request. The status-carrying variant is built in
+  // `failureMessage` below.
+  "http-error": "model gateway answered the embedding request with an HTTP error status",
   "dimension-mismatch": "embedding vector dimensions do not match the expected value",
   timeout: "embedding probe timed out",
   cancelled: "embedding probe was cancelled by the caller",
@@ -133,15 +139,29 @@ const ADAPTER_FAILURE_REASONS: Readonly<Record<OpenAIEmbeddingErrorKind, Embeddi
     "proxy-egress-failed": "proxy-egress-failed",
     "proxy-blocked-by-policy": "proxy-blocked-by-policy",
     "tls-ca-failure": "tls-ca-failure",
+    "http-error": "http-error",
     transport: "unavailable",
   });
 
-function fail(reason: EmbeddingFailureReason): EmbeddingCapabilityCheck {
-  return { ok: false, reason, safeMessage: SAFE_MESSAGES[reason] };
+// An HTTP status code is content-free operator telemetry (no body, no endpoint, no key material),
+// so it may ride along in the redacted safe message — it is the one number that separates "the
+// gateway rejected this request shape" from every other failure in this taxonomy.
+function failureMessage(reason: EmbeddingFailureReason, status: number | undefined): string {
+  if (reason === "http-error" && status !== undefined) {
+    return `model gateway answered the embedding request with HTTP ${String(status)}`;
+  }
+  return SAFE_MESSAGES[reason];
 }
 
-function failFingerprint(reason: EmbeddingFailureReason): EmbeddingFingerprintCheck {
-  return { ok: false, reason, safeMessage: SAFE_MESSAGES[reason] };
+function fail(reason: EmbeddingFailureReason, status?: number): EmbeddingCapabilityCheck {
+  return { ok: false, reason, safeMessage: failureMessage(reason, status) };
+}
+
+function failFingerprint(
+  reason: EmbeddingFailureReason,
+  status?: number,
+): EmbeddingFingerprintCheck {
+  return { ok: false, reason, safeMessage: failureMessage(reason, status) };
 }
 
 function reasonFromAdapter(kind: OpenAIEmbeddingErrorKind): EmbeddingFailureReason {
@@ -280,7 +300,7 @@ function capabilityFromBatch(
   options: EmbeddingProbeOptions,
   outcome: OpenAIEmbeddingBatchOutcome,
 ): EmbeddingCapabilityCheck {
-  if (!outcome.ok) return fail(reasonFromAdapter(outcome.kind));
+  if (!outcome.ok) return fail(reasonFromAdapter(outcome.kind), outcome.status);
   const primary = outcome.value[0];
   if (primary === undefined || primary.vector.length === 0) return fail("invalid-response");
   const detected = primary.vector.length;
@@ -310,7 +330,7 @@ async function computeEmbeddingSpaceFingerprint(
   for (const input of EMBEDDING_SPACE_PROBE_INPUTS) {
     const outcome = await requestProbeEmbedding(adapter, options, input);
     if (!outcome.ok) {
-      return failFingerprint(reasonFromAdapter(outcome.kind));
+      return failFingerprint(reasonFromAdapter(outcome.kind), outcome.status);
     }
     if (outcome.value.vector.length !== expectedDimensions) {
       return failFingerprint("dimension-mismatch");
@@ -356,7 +376,7 @@ export async function verifyEmbeddingCapability(
   }
   const outcome = await requestProbeEmbedding(adapter, options, PROBE_INPUT);
   if (!outcome.ok) {
-    return fail(reasonFromAdapter(outcome.kind));
+    return fail(reasonFromAdapter(outcome.kind), outcome.status);
   }
 
   const detected = outcome.value.vector.length;

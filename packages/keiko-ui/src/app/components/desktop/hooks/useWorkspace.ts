@@ -1115,6 +1115,9 @@ function useWorkspaceServerSync({
   connsRef.current = conns;
   const putDebounceRef = useRef<TrailingDebounce | null>(null);
   putDebounceRef.current ??= createTrailingDebounce(PERSIST_DEBOUNCE_MS);
+  // Latest runServerPut for the conflict-retry below — a ref (mirroring winsRef) so the
+  // debounced retry closure never captures a stale callback and the useCallback deps stay [].
+  const runServerPutRef = useRef<(keepalive: boolean) => void>(() => undefined);
   const putAbortRef = useRef<AbortController | null>(null);
   const localDirtyRef = useRef(false);
   const lastAcknowledgedSnapshotRef = useRef<string | null>(null);
@@ -1147,6 +1150,16 @@ function useWorkspaceServerSync({
       if (result?.kind === "conflict") {
         if (result.revision !== null && result.revision > revisionRef.current) {
           revisionRef.current = result.revision;
+          // The rejected snapshot is still unacknowledged: re-send it once through the
+          // debounce with the adopted revision instead of parking it until the next local
+          // mutation. Without this, a window closed before revision convergence was lost
+          // server-side and resurrected by the next poll (zombie window). Bounded: the
+          // retry is scheduled only when the revision strictly advanced.
+          if (localDirtyRef.current) {
+            putDebounceRef.current?.schedule(() => {
+              runServerPutRef.current(false);
+            });
+          }
         }
         return;
       }
@@ -1156,6 +1169,7 @@ function useWorkspaceServerSync({
       if (result.revision > revisionRef.current) revisionRef.current = result.revision;
     });
   }, []);
+  runServerPutRef.current = runServerPut;
 
   const applyServerSnapshot = useCallback(
     (serverSnapshot: ServerWorkspaceSnapshot): void => {
@@ -1189,7 +1203,13 @@ function useWorkspaceServerSync({
       ) {
         return;
       }
-      if (localDirtyRef.current) return;
+      if (localDirtyRef.current) {
+        // Keep the payload local-authoritative, but adopt the server revision so the pending
+        // debounced PUT carries a current If-Match instead of the guaranteed-stale revision 0
+        // that every reload with restored windows previously produced (one 412 per boot).
+        revisionRef.current = serverSnapshot.revision;
+        return;
+      }
       applyServerSnapshot(serverSnapshot);
     };
     const startPolling = (): void => {

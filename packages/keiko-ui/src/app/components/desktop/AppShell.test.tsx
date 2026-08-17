@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { persistedChatProjectPath, prepareNewWindowCfg } from "./AppShell";
+import {
+  applyBackgroundModalLock,
+  persistedChatProjectPath,
+  prepareNewWindowCfg,
+} from "./AppShell";
 import type { AppWindow } from "./windows/types";
 
 function chatWindow(projectPath: string): AppWindow {
@@ -16,6 +20,44 @@ function chatWindow(projectPath: string): AppWindow {
     zoom: 1,
   };
 }
+
+describe("applyBackgroundModalLock", (): void => {
+  it("moves focus out of the background before hiding it from assistive technology", (): void => {
+    const background = document.createElement("div");
+    const trigger = document.createElement("button");
+    background.appendChild(trigger);
+    document.body.appendChild(background);
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+
+    applyBackgroundModalLock(background, true);
+
+    // The Chrome violation this pins: aria-hidden landing on an ancestor of the focused
+    // element (the FAB that opened the dialog). Focus must be gone before both attributes.
+    expect(document.activeElement).not.toBe(trigger);
+    expect(background.getAttribute("aria-hidden")).toBe("true");
+    expect(background.hasAttribute("inert")).toBe(true);
+    background.remove();
+  });
+
+  it("unlocks both attributes and never touches focus outside the background", (): void => {
+    const background = document.createElement("div");
+    const outside = document.createElement("button");
+    document.body.appendChild(background);
+    document.body.appendChild(outside);
+    outside.focus();
+
+    applyBackgroundModalLock(background, true);
+    expect(document.activeElement).toBe(outside);
+
+    applyBackgroundModalLock(background, false);
+    expect(background.hasAttribute("aria-hidden")).toBe(false);
+    expect(background.hasAttribute("inert")).toBe(false);
+    expect(document.activeElement).toBe(outside);
+    background.remove();
+    outside.remove();
+  });
+});
 
 describe("persistedChatProjectPath", (): void => {
   it("preserves valid path identity and rejects whitespace-only values", (): void => {
