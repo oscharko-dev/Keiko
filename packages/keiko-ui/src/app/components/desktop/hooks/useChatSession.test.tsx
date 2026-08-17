@@ -276,6 +276,30 @@ describe("useChatSession bootstrap", () => {
     expect(result.current.noEligibleModels).toBe(true);
   });
 
+  it("keeps configured gateway presence while a catalog refresh is pending", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.configuredModelsAvailable).toBe(true);
+
+    // The refresh hangs: the synchronous pending publish empties the picker (no stale model
+    // selectable mid-refresh) but must NOT flip configuredModelsAvailable — AppShell reads
+    // (loading=false, error=undefined, available=false) as "gateway missing" and would mount
+    // the modal setup dialog over a fully configured workspace for the whole catalog read.
+    vi.mocked(fetchModels).mockImplementation(
+      () => new Promise(() => undefined) as ReturnType<typeof fetchModels>,
+    );
+    act(() => {
+      requestGatewayModelCatalogRefresh();
+    });
+
+    expect(result.current.models).toEqual([]);
+    expect(result.current.configuredModelsAvailable).toBe(true);
+  });
+
   it("honors a child window binding immediately after bootstrap", async () => {
     const bootstrapChat = chat({ id: "chat-bootstrap", updatedAt: 20 });
     const boundChat = chat({ id: "chat-bound", updatedAt: 10 });

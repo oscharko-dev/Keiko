@@ -530,13 +530,20 @@ function preflightDesktopChatStreamExecution(
   if (legacyExecutionAdmission !== undefined && "status" in legacyExecutionAdmission) {
     return legacyExecutionAdmission;
   }
-  const legacyCall =
-    deps.gatewayConfig === undefined && legacyExecutionAdmission !== undefined
-      ? resolveDesktopChatStreamCall(prepared, legacyExecutionAdmission, deps)
-      : undefined;
-  return legacyCall === undefined || typeof legacyCall === "function"
-    ? { legacyExecutionAdmission, legacyCall }
-    : legacyCall;
+  // Probe stream support for EVERY legacy request while nothing is persisted yet: a legacy
+  // rejection after admission cannot settle the turn (failDesktopChatTurn is a no-op without
+  // a clientTurnId) and would orphan the user message — the pre-#3182 invariant.
+  const probed =
+    legacyExecutionAdmission === undefined
+      ? undefined
+      : resolveDesktopChatStreamCall(prepared, legacyExecutionAdmission, deps);
+  if (probed !== undefined && typeof probed !== "function") return probed;
+  return {
+    legacyExecutionAdmission,
+    // The gateway arm re-resolves after the memory await (#3182 provider-boundary freshness);
+    // the probe above already rejected unstreamable models before persistence.
+    legacyCall: deps.gatewayConfig === undefined ? probed : undefined,
+  };
 }
 
 async function prepareDesktopChatProviderStream(
@@ -546,10 +553,23 @@ async function prepareDesktopChatProviderStream(
   legacyCall: StreamCall | undefined,
   controller: AbortController,
 ): Promise<Pick<AdmittedDesktopChatStream, "callStream" | "memory"> | RouteResult> {
-  const memory =
-    deps.gatewayConfig === undefined
-      ? undefined
-      : await resolveMemory(deps, prepared.request, prepared.memoryContext);
+  let memory: AdmittedDesktopChatStream["memory"];
+  try {
+    memory =
+      deps.gatewayConfig === undefined
+        ? undefined
+        : await resolveMemory(deps, prepared.request, prepared.memoryContext);
+  } catch (error) {
+    // The turn is already admitted: a memory failure here MUST settle it, or the
+    // clientTurnId stays "pending" forever and every retry gets CHAT_TURN_IN_PROGRESS
+    // (the buffered path settles the same class in its catch).
+    const cancelled = requestIsAborted(controller.signal);
+    failDesktopChatTurn(deps, prepared.request, cancelled ? "cancelled" : "failed");
+    if (cancelled) {
+      return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
+    }
+    return desktopChatErrorResult(error, deps);
+  }
   if (requestIsAborted(controller.signal)) {
     failDesktopChatTurn(deps, prepared.request, "cancelled");
     return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };

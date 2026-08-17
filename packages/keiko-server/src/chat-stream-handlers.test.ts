@@ -692,6 +692,32 @@ describe("desktop chat SSE streaming handler", () => {
     ]);
   });
 
+  it("rejects a legacy buffered send without a provider before persisting", async () => {
+    const chatId = seedChat();
+    const sharedDeps = deps(
+      { call: () => Promise.resolve(normalizedResponse("unused")) },
+      { modelPortFactory: () => undefined },
+    );
+
+    const result = await handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          content: "legacy buffered without provider",
+        }),
+        captureRes().res,
+      ),
+      sharedDeps,
+    );
+
+    // NO_MODEL for a legacy request cannot settle a turn (no clientTurnId), so it must be
+    // rejected BEFORE admission persists the user message — no orphan in the conversation.
+    expect(result).toMatchObject({ status: 400, body: { error: { code: "NO_MODEL" } } });
+    expect(store.listMessages(chatId)).toEqual([]);
+  });
+
   it("shares one canonical turn identity across SSE fallback and buffered replay", async () => {
     const chatId = seedChat();
     let bufferedCalls = 0;
@@ -1385,6 +1411,108 @@ describe("desktop chat SSE streaming handler", () => {
     expect(factoryCalls).toBe(0);
     expect(providerCalls).toBe(0);
     memoryVault.close();
+  });
+
+  it("settles the admitted turn when pre-stream memory resolution rejects", async () => {
+    const chatId = seedChat();
+    const memoryDir = join(tmp, "streamed-memory-rejection-settles");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const remembered = insertAcceptedMemory(memoryVault, "memory rejection settle candidate");
+    memoryVault.upsertEmbedding(remembered.id, {
+      provider: "test-provider",
+      modelId: "text-embedding-3-small",
+      metric: "cosine",
+      vector: Float32Array.from([1, 0]),
+    });
+    const holder = readyRuntimeGatewayConfig(chatAndEmbeddingConfig());
+    let providerCalls = 0;
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("unused")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        providerCalls += 1;
+        await Promise.resolve();
+        yield { type: "done", response: normalizedResponse("retry succeeded") };
+      },
+    };
+    // Retrieval-time vault failure (index/SQLite class): every vault operation throws. The
+    // embedding seam is deliberately self-contained, so the vault is the uncontained boundary
+    // this regression pins.
+    const explodingVault = new Proxy(memoryVault, {
+      get(target, prop, receiver): unknown {
+        if (prop === "close") return Reflect.get(target, prop, receiver);
+        return (): never => {
+          throw new Error("vault exploded");
+        };
+      },
+    });
+    const embeddingOk = (): Promise<OpenAIEmbeddingOutcome> =>
+      Promise.resolve({
+        ok: true,
+        value: { vector: Float32Array.from([1, 0]), modelId: "text-embedding-3-small" },
+      });
+    const failingDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      gatewayConfig: holder,
+      memoryVault: explodingVault,
+      localKnowledgeEmbeddingRequest: embeddingOk,
+    });
+    const healthyDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      gatewayConfig: holder,
+      memoryVault,
+      localKnowledgeEmbeddingRequest: embeddingOk,
+    });
+    const request = {
+      chatId,
+      projectPath: projectDir,
+      content: "memory rejection must settle the turn",
+      clientTurnId: "memory-rejection-settles",
+      memory: { enabled: true, budgetTokens: 900, context: {} },
+    };
+
+    // First attempt: memory retrieval throws AFTER admission. The turn MUST be settled —
+    // an unsettled "pending" turn would answer every retry with CHAT_TURN_IN_PROGRESS forever.
+    await expect(
+      handleSendDesktopChatStream(routeContext(makeReq(request), captureRes().res), failingDeps),
+    ).rejects.toThrow("vault exploded");
+    expect(providerCalls).toBe(0);
+
+    const retry = await handleSendDesktopChatStream(
+      routeContext(makeReq(request), captureRes().res),
+      healthyDeps,
+    );
+    expect(retry).toBe(STREAMING);
+    expect(providerCalls).toBe(1);
+    memoryVault.close();
+  });
+
+  it("rejects a legacy stream on a call-only port before persisting, with a ready gateway", async () => {
+    const chatId = seedChat();
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("buffered only")),
+    };
+    const holder = readyRuntimeGatewayConfig(chatAndEmbeddingConfig());
+    const sharedDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      gatewayConfig: holder,
+    });
+    const request = {
+      chatId,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content: "legacy stream with a configured gateway",
+    };
+
+    const streamResult = await handleSendDesktopChatStream(
+      routeContext(makeReq(request), captureRes().res),
+      sharedDeps,
+    );
+
+    // A legacy rejection cannot settle a turn (no clientTurnId), so it must happen BEFORE
+    // admission persists the user message — otherwise the buffered fallback duplicates it.
+    expect(streamResult).toMatchObject({ status: 400 });
+    expect(store.listMessages(chatId)).toEqual([]);
   });
 
   it("rejects a streamed turn when the gateway generation changes during memory retrieval", async () => {

@@ -1359,9 +1359,26 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
       ingestedAtoms,
       provenanceRefs: JUDGE_PROVENANCE,
     };
-    const deps = makeDepsWithJudge(store, (_input) =>
-      Promise.reject(new Error("gateway 503 unavailable")),
-    );
+    const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
+      ...makeDepsWithJudge(store, (_input) => Promise.reject(new Error("gateway 503 unavailable"))),
+      modelRouting: {
+        policyVersion: 1,
+        requested: {
+          policyVersion: 1,
+          testDesignModelId: "test-model",
+          judgeModelId: "test-model",
+        },
+        resolved: {
+          testDesignModelId: "test-model",
+          judgeModelId: "test-model",
+        },
+        preflight: {
+          status: "passed",
+          generation: { stage: "generate", status: "passed", modelId: "test-model" },
+          judge: { stage: "judge", status: "passed", modelId: "test-model" },
+        },
+      },
+    };
     const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
     expect(summary.status).toBe("succeeded");
     expect(summary.qualityScore).toBeNull();
@@ -1379,6 +1396,15 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
       expect.arrayContaining([expect.stringContaining("konnte diesen Kandidaten nicht bewerten")]),
     );
     expect(qualityFindings.map((f) => f.summaryRedacted).join("\n")).not.toContain("gateway 503");
+    // QI-DEG-01: a run whose candidates were never judged must persist a judge stage failure —
+    // the terminal frame and both projections derive "degraded" exclusively from stageFailures,
+    // so without this entry the run is presented as an unqualified success.
+    const judgeFailures = (manifest?.modelRouting?.stageFailures ?? []).filter(
+      (failure) => failure.stage === "judge",
+    );
+    expect(judgeFailures).toHaveLength(1);
+    expect(judgeFailures[0]?.reasonSummary).toContain("qi-judge-runtime: 2");
+    expect(qualityFindings.map((f) => f.summaryRedacted).join("\n")).not.toContain("503");
   });
 
   it("bounds gateway calls by maxJudgeCallsPerRun and marks overflow candidates unjudged", async () => {

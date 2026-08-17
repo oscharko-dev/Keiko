@@ -1,7 +1,9 @@
 {
   "$comment": "Ratcheted ledger of pre-existing untranslated user-facing literals in the Keiko UI, one entry per file (see scripts/check-ui-i18n-guard.mjs). A literal listed here is known debt the check:ui-i18n gate tolerates; ANY literal not listed fails the gate. The ledger only shrinks - regenerate it with `npm run check:ui-i18n -- --write-baseline` after removing literals, and never add an entry to silence a new one. For a literal that is genuinely not user-facing, mark the source line `// i18n-exempt: <reason>` instead, so the claim is visible in the diff.",
   "files": {
-    "packages/keiko-ui/src/app/atlassian-connectors/page.tsx": ["Keiko | Atlassian connectors"],
+    "packages/keiko-ui/src/app/atlassian-connectors/page.tsx": [
+      "Keiko | Atlassian connectors"
+    ],
     "packages/keiko-ui/src/app/components/desktop/AppShell.tsx": [
       "Connected",
       "Connecting",
@@ -16,7 +18,9 @@
     "packages/keiko-ui/src/app/components/desktop/ConnectedScopePill.tsx": [
       "Last grounded run: ${formatTokenCount(totalTokens)} tokens, ${String(usage.filesRead)} files"
     ],
-    "packages/keiko-ui/src/app/components/desktop/ConnectorScopePill.tsx": ["Disconnect from chat"],
+    "packages/keiko-ui/src/app/components/desktop/ConnectorScopePill.tsx": [
+      "Disconnect from chat"
+    ],
     "packages/keiko-ui/src/app/components/desktop/context/TwinContext.tsx": [
       "deploy · rm · db",
       "feature branches",
@@ -24,8 +28,12 @@
       "src/** · docs/**",
       "test · build · lint"
     ],
-    "packages/keiko-ui/src/app/components/desktop/EditorMenu.tsx": ["Preferred editor for “"],
-    "packages/keiko-ui/src/app/components/desktop/Footer.tsx": ["Keiko |"],
+    "packages/keiko-ui/src/app/components/desktop/EditorMenu.tsx": [
+      "Preferred editor for “"
+    ],
+    "packages/keiko-ui/src/app/components/desktop/Footer.tsx": [
+      "Keiko |"
+    ],
     "packages/keiko-ui/src/app/components/desktop/GroundedAnswer.tsx": [
       "(opens in new tab)",
       "a malformed document",
@@ -83,7 +91,9 @@
       "Why these files were selected",
       "Why these files?"
     ],
-    "packages/keiko-ui/src/app/components/desktop/Header.tsx": ["Keiko"],
+    "packages/keiko-ui/src/app/components/desktop/Header.tsx": [
+      "Keiko"
+    ],
     "packages/keiko-ui/src/app/components/desktop/hooks/voice-dialogue-evaluation/index.ts": [
       "Deprecated STT+TTS fallback deployment (full-realtime without browser WebRTC media)",
       "No-voice deployment (no voice model configured)",
@@ -91,10 +101,15 @@
       "Speech-output-only deployment (spoken answer, no capture)",
       "Speech-to-text-only deployment (dictation, no spoken answer)"
     ],
-    "packages/keiko-ui/src/app/components/desktop/LeftRail.tsx": ["Git"],
+    "packages/keiko-ui/src/app/components/desktop/LeftRail.tsx": [
+      "Git"
+    ],
     "packages/keiko-ui/src/app/components/desktop/modals/GatewaySetupDialog.tsx": [
       "API key header",
+      "API key header authorization",
+      "API key header optional",
       "API token",
+      "API token ••••••••••••",
       "Authorization",
       "Base URL",
       "Base URL and API token are required.",
@@ -104,9 +119,12 @@
       "Customer-hosted",
       "Deployment names for Microsoft Foundry",
       "Figma access token",
+      "Figma access token optional",
       "Figma Snapshot",
       "Gateway URL",
+      "Gateway URL Stored",
       "Image-input models",
+      "Image-input models optional",
       "leave blank to keep",
       "Leave blank to keep stored header",
       "Leave blank to keep stored timeout",
@@ -122,8 +140,10 @@
       "Paste image-capable model names, one per line",
       "Paste your API token",
       "Provider locality",
+      "Provider locality optional",
       "Replace model gateway settings",
       "Request timeout (ms)",
+      "Request timeout (ms) optional",
       "Stored",
       "Stored Figma token is kept when blank",
       "Stored model gateway credentials",
@@ -134,6 +154,7 @@
     ],
     "packages/keiko-ui/src/app/components/desktop/modals/PermControl.tsx": [
       "Keiko-Mode",
+      "Keiko-Mode Zero standing rights · Keiko governs",
       "Legacy access mode",
       "Zero standing rights · Keiko governs"
     ],
@@ -143,6 +164,7 @@
       "Create",
       "Create a new relationship between two workspace endpoints.",
       "Create relationship",
+      "Create relationship Create a new relationship between two workspace endpoints.",
       "Creating…",
       "Dismiss",
       "endpoint id",
@@ -160,7 +182,9 @@
       "Type",
       "Validating…"
     ],
-    "packages/keiko-ui/src/app/components/desktop/ModeSwitch.tsx": ["Keiko"],
+    "packages/keiko-ui/src/app/components/desktop/ModeSwitch.tsx": [
+      "Keiko"
+    ],
     "packages/keiko-ui/src/app/components/desktop/repositoryReferences.tsx": [
       "Open in editor",
       "Select repository source"
@@ -182,6 +206,7 @@
       "Voice profile:"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/AgentGateCard.tsx": [
+      "✗ No extra BFF authority or autonomous follow-up",
       "Allow action after review",
       "Approval required",
       "Approve",
@@ -328,6 +353,7 @@
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/DiffPane.tsx": [
       "bytes or",
+      "committed ·",
       "Diff",
       "Diff scope",
       "file changed",
@@ -411,6 +437,8 @@
       "Delete head branch after merge",
       "Enter the numeric Pull Request number, for example 1499.",
       "Final approval required:",
+      "Final approval required: no",
+      "Final approval required: yes",
       "Head branch",
       "High-risk confirmation",
       "High-risk merge confirmation",
@@ -420,6 +448,8 @@
       "Merge strategy",
       "Merge target",
       "Mergeable:",
+      "Mergeable: no",
+      "Mergeable: yes",
       "Policy:",
       "Preview",
       "Pull Request number",
@@ -458,8 +488,12 @@
       "Pull Request title",
       "Readiness",
       "Ready for review:",
+      "Ready for review: no",
+      "Ready for review: yes",
       "Recommendation:",
       "Remote PR object:",
+      "Remote PR object: exists",
+      "Remote PR object: not created yet",
       "Repository (owner/repo)",
       "Risk:",
       "Select a project to open a pull request.",
@@ -490,9 +524,12 @@
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/RuntimeHubWidget.tsx": [
       "Add a project path to enable task and Git workflows.",
       "Commands",
+      "Commands runId / taskId / exit status",
       "Containers",
+      "Containers runId / taskId / engine / exit status",
       "Files & Git diff",
       "Git",
+      "Git policy / approval / evidence ledger",
       "Merge",
       "policy / approval / evidence ledger",
       "Project path",
@@ -553,6 +590,9 @@
       "Search",
       "Search chat history"
     ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/panels/EditorProfilesPanel.tsx": [
+      "Default"
+    ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/InspectorPanel.tsx": [
       "Active window",
       "Authority",
@@ -565,6 +605,7 @@
       "Position",
       "Size",
       "State",
+      "State maximized",
       "Trust",
       "Workspace"
     ],
@@ -573,6 +614,7 @@
       "Digital twin sections",
       "Email the customer",
       "Keiko — Digital Twin",
+      "Keiko — Digital Twin mirroring ·",
       "Keiko adapts behaviour &amp; tools to who is at the wheel.",
       "Manual",
       "mirroring ·",
@@ -704,7 +746,9 @@
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/TimelinePanel.tsx": [
       "Activity timeline",
       "No activity yet.",
-      "Start an agent to see its actions stream here."
+      "No activity yet. Start an agent to see its actions stream here.",
+      "Start an agent to see its actions stream here.",
+      "workspace ·"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/quality-intelligence/ExportBar.tsx": [
       "Jira (preview)",
@@ -731,9 +775,7 @@
       "Local Knowledge",
       "Paste text",
       "Regression (default)",
-      "Requirements",
-      "Stage: ·",
-      "test case"
+      "Requirements"
     ],
     "packages/keiko-ui/src/app/components/desktop/windows/ConnectionsLayer.tsx": [
       "Click again to remove:",
@@ -762,8 +804,12 @@
     "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-actions.tsx": [
       "src/app.ts README.md"
     ],
-    "packages/keiko-ui/src/app/local-knowledge/capsule-set-compose.tsx": ["Creating..."],
-    "packages/keiko-ui/src/app/local-knowledge/capsule/page.tsx": ["Knowledge Pod Detail — Keiko"],
+    "packages/keiko-ui/src/app/local-knowledge/capsule-set-compose.tsx": [
+      "Creating..."
+    ],
+    "packages/keiko-ui/src/app/local-knowledge/capsule/page.tsx": [
+      "Knowledge Pod Detail — Keiko"
+    ],
     "packages/keiko-ui/src/app/local-knowledge/connector-graph.tsx": [
       "Actions for Knowledge Pod",
       "Add Knowledge Pod to workspace",
@@ -786,7 +832,9 @@
       "Removed pages could not be detected this run (the crawl reached its page limit).",
       "Start indexing Knowledge Pod"
     ],
-    "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": ["MemoriaViva"],
+    "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": [
+      "MemoriaViva"
+    ],
     "packages/keiko-ui/src/app/memoriaviva/detail/MemoryDetailClient.tsx": [
       "Back to MemoriaViva",
       "No memory selected",

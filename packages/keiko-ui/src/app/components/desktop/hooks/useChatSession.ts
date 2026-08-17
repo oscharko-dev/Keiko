@@ -1956,6 +1956,18 @@ function refreshSessionModels(
   };
 }
 
+// Pending-refresh variant: empties the picker so a stale model cannot be selected mid-refresh,
+// but PRESERVES configuredModelsAvailable — AppShell reads (loading=false, error=undefined,
+// configuredModelsAvailable=false) as "gateway missing" and would mount the modal setup dialog
+// over a fully configured workspace for the duration of every catalog read.
+function clearSessionModelsForPendingRefresh(previous: SessionState): SessionState {
+  return {
+    ...previous,
+    models: [],
+    selectedModel: resolveSelectedModelId(previous.selectedModel, []),
+  };
+}
+
 // Sonar S2004 — extracted out of streamUngrounded's `.catch` handler (itself already nested
 // inside a `new Promise` executor inside the useCallback body) so this setState updater is not
 // a fifth level of nested function. Takes the specific dispatchers/values it needs rather than
@@ -2758,7 +2770,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     return subscribeGatewayModelRefresh((result): void => {
       if (result.kind === "pending") {
         setError(undefined);
-        setState((previous) => refreshSessionModels(previous, []));
+        setState((previous) => clearSessionModelsForPendingRefresh(previous));
         return;
       }
       if (result.kind === "failure") {

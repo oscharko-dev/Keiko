@@ -73,7 +73,10 @@ export function withConversationReadinessAdmission(
     return model.call(request, signal);
   };
   if (model.callStream === undefined) return { call };
-  const callStream = model.callStream;
+  // Bind the receiver: GatewayModelPort.callStream is a prototype method reading
+  // this.gateway — extracting it bare would throw a TypeError on the first next() of any
+  // streaming consumer (same rule chat-stream-handlers already follows with .bind).
+  const callStream = model.callStream.bind(model);
   return {
     call,
     callStream: async function* (request, signal): AsyncIterable<GatewayStreamChunk> {

@@ -458,17 +458,36 @@ function mergeModelParameters(
   };
 }
 
+// Counts-only, redaction-safe judge runtime failure summary. Judge calls that fail or return
+// unparseable output after a successful preflight are persisted as quality diagnostics; without
+// a matching stage failure the terminal frame and both run projections would label an unjudged
+// run as an unqualified success (QI-DEG-01: degradation MUST stay visible).
+function judgeRuntimeFailureReason(
+  diagnostics: QI.QualityIntelligenceQualityDiagnostics | undefined,
+): string | undefined {
+  if (diagnostics === undefined) return undefined;
+  const failed = diagnostics.judgeErrorCandidates + diagnostics.judgeParseFailedCandidates;
+  if (failed <= 0) return undefined;
+  return `qi-judge-runtime: ${String(failed)} candidate judgement(s) failed or were unparseable`;
+}
+
 function modelRoutingForPersist(
   modelRouting: QI.QualityIntelligenceModelRouting | undefined,
   degradedReason: string | undefined,
+  judgeFailureReason?: string,
 ): QI.QualityIntelligenceModelRouting | undefined {
   if (modelRouting === undefined) return undefined;
-  if (degradedReason === undefined) return modelRouting;
+  if (degradedReason === undefined && judgeFailureReason === undefined) return modelRouting;
   return {
     ...modelRouting,
     stageFailures: [
       ...(modelRouting.stageFailures ?? []),
-      { stage: "generate" as const, reasonSummary: degradedReason },
+      ...(degradedReason !== undefined
+        ? [{ stage: "generate" as const, reasonSummary: degradedReason }]
+        : []),
+      ...(judgeFailureReason !== undefined
+        ? [{ stage: "judge" as const, reasonSummary: judgeFailureReason }]
+        : []),
     ],
   };
 }
@@ -1187,7 +1206,11 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
         integrityHashSha256Hex: e.provenance.integrityHashSha256Hex,
       }));
       const atomFingerprints = atomFingerprintsFor(input.ingestedAtoms);
-      const modelRouting = modelRoutingForPersist(deps.modelRouting, degradedReason);
+      const modelRouting = modelRoutingForPersist(
+        deps.modelRouting,
+        degradedReason,
+        judgeRuntimeFailureReason(judgeResult.qualityDiagnostics),
+      );
       const modelParameters = mergeModelParameters(
         generation.modelParameters,
         generation.skipJudge === true ? undefined : judgeResult.modelParameters,

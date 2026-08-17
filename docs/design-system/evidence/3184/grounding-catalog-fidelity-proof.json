@@ -2,7 +2,7 @@
   "issue": 3184,
   "verdict": "PASS",
   "proofType": "browser-capture-plus-axe-core",
-  "sourceSha256": "4d57588773cfdc67befd44e2ca261e09cead1765b0e40392170eeee77dc15d49",
+  "sourceSha256": "c31bd5b0dcb84c8e07ba6cf1cc5c7c2ef0929b6d942417c1dc3a7988fdaed570",
   "captures": [
     {
       "file": "01-dark.png",

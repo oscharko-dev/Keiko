@@ -1727,6 +1727,14 @@ function admitBufferedModelTurn(
       ? captureDesktopChatExecutionAdmission(request, chat, modelId, deps)
       : undefined;
   if (isRouteResult(legacyAdmission)) return legacyAdmission;
+  // Probe the provider for EVERY legacy request while nothing is persisted yet: a NO_MODEL
+  // rejection after admission cannot settle the turn (failDesktopChatTurn is a no-op without
+  // a clientTurnId) and would orphan the user message — the pre-#3182 invariant. The
+  // clientTurnId path keeps resolving after the memory await for provider freshness.
+  if (legacyAdmission !== undefined) {
+    const probe = bufferedModelAtProviderBoundary(deps, modelId, legacyAdmission);
+    if (isRouteResult(probe)) return probe;
+  }
   const admission = admitDesktopChatTurn(deps, prepared);
   if (admission.kind === "replay") return { status: 200, body: admission.response };
   if (admission.kind === "rejected") return admission.result;

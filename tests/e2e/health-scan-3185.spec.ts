@@ -357,6 +357,7 @@ function writeFidelityProof(
   ledgers: readonly HealthScanRouteLedger[],
   generatedAt: string,
   globalsCssSha256: string,
+  laterSuccessReplacesError: boolean,
 ): void {
   writeJsonArtifact("health-scan-refresh-fidelity-proof.json", {
     issue: 3185,
@@ -372,7 +373,9 @@ function writeFidelityProof(
       refreshClearsPreviousFindingsCount: true,
       rateLimitedErrorIsRecoverable: true,
       retryIsKeyboardOperable: true,
-      laterSuccessReplacesError: true,
+      // Derived from an OBSERVED recovery transition in this run (never hard-coded): the
+      // route ledger of at least one capture context must record recoverySuccess >= 1.
+      laterSuccessReplacesError,
       darkLightHighContrastForcedColorsAndResponsiveCoverage: true,
       routeHandlerIsStrictModeTolerant: true,
     },
@@ -420,10 +423,11 @@ function writeManifest(generatedAt: string): void {
 function writeEvidence(
   captures: readonly CaptureRecord[],
   ledgers: readonly HealthScanRouteLedger[],
+  laterSuccessReplacesError: boolean,
 ): void {
   const generatedAt = new Date().toISOString();
   const globalsCssSha256 = cssSha256();
-  writeFidelityProof(captures, ledgers, generatedAt, globalsCssSha256);
+  writeFidelityProof(captures, ledgers, generatedAt, globalsCssSha256, laterSuccessReplacesError);
   writeA11yProof(captures, globalsCssSha256);
   writeManifest(generatedAt);
 }
@@ -447,6 +451,25 @@ test("Issue #3185 clears stale Health Scan truth, retries by keyboard, and recov
   expect(route.ledger.recoverySuccess).toBeGreaterThanOrEqual(1);
 });
 
+// Drives the Retry recovery on an already-captured rate-limited page and reports whether the
+// route ledger recorded the transition — the fidelity proof derives laterSuccessReplacesError
+// from THIS observation instead of hard-coding it.
+async function observeRecoverySuccess(
+  window: Locator,
+  route: {
+    readonly ledger: HealthScanRouteLedger;
+    readonly setPhase: (next: RoutePhase) => void;
+  },
+): Promise<boolean> {
+  const retry = await expectRateLimitedError(window);
+  route.setPhase("recovery-success");
+  await retry.focus();
+  await retry.press("Enter");
+  await expect(window.getByText("Dangling review item", { exact: true })).toBeVisible();
+  await expect(window.getByRole("alert")).toHaveCount(0);
+  return route.ledger.recoverySuccess >= 1;
+}
+
 test("records Issue #3185 Health Scan refresh design-system and axe evidence", async ({
   browser,
 }) => {
@@ -454,6 +477,7 @@ test("records Issue #3185 Health Scan refresh design-system and axe evidence", a
   ensureEvidenceDir();
   const captures: CaptureRecord[] = [];
   const ledgers: HealthScanRouteLedger[] = [];
+  let recoveryObserved = false;
   for (const mode of EVIDENCE_MODES) {
     const evidence = await openEvidencePage(browser, mode);
     try {
@@ -465,6 +489,9 @@ test("records Issue #3185 Health Scan refresh design-system and axe evidence", a
         window = await enterRefreshError(evidence.page, evidence.route);
       }
       captures.push(await captureRecord(evidence.page, window, mode));
+      if (mode.expectedPhase !== "initial-success" && !recoveryObserved) {
+        recoveryObserved = await observeRecoverySuccess(window, evidence.route);
+      }
       ledgers.push(evidence.route.ledger);
     } finally {
       await evidence.close();
@@ -478,5 +505,9 @@ test("records Issue #3185 Health Scan refresh design-system and axe evidence", a
   expect(captures.some((capture) => capture.forcedColors)).toBe(true);
   expect(captures.some((capture) => capture.mode === "responsive-mobile")).toBe(true);
   expect(ledgers.every((ledger) => ledger.initialSuccess >= 1)).toBe(true);
-  writeEvidence(captures, ledgers);
+  // The proof may not claim a recovery it did not observe: fail evidence generation outright
+  // when no capture context demonstrated the rate-limited -> recovery-success transition.
+  expect(recoveryObserved).toBe(true);
+  expect(ledgers.some((ledger) => ledger.recoverySuccess >= 1)).toBe(true);
+  writeEvidence(captures, ledgers, recoveryObserved);
 });

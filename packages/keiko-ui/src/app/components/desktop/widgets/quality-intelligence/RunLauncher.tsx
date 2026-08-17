@@ -1396,17 +1396,30 @@ export function RunLauncher({
     // Visible-only progress block (aria-hidden): the announcement is owned by the persistent
     // sr-only region below (a11y M-01), so this block must not also be a live region or it would
     // double-announce. Kept conditional for layout.
-    const findingsSuffix = progress.findings !== 1 ? "s" : "";
     const findingsText =
-      progress.findings > 0 ? ` · ${progress.findings.toString()} finding${findingsSuffix}` : "";
+      progress.findings > 0
+        ? t(
+            progress.findings === 1
+              ? "qi.launcher.progress.findingsOne"
+              : "qi.launcher.progress.findingsMany",
+            { count: progress.findings },
+          )
+        : "";
     return (
       <div className="qi-progress" data-testid="qi-launch-progress" aria-hidden="true">
         <span className="qi-progress-spinner" aria-hidden="true" />
         <span className="qi-progress-text">
-          {progress.stageName !== null ? `Stage: ${progress.stageName} · ` : ""}
-          {progress.candidates.toString()} test case{progress.candidates !== 1 ? "s" : ""}
-          {/* "1 finding", not "1 findings" — same singular/plural care as the test-case count two
-              tokens earlier (uiux-fix F047 C276). */}
+          {progress.stageName !== null
+            ? t("qi.launcher.progress.stage", { stage: progress.stageName })
+            : ""}
+          {t(
+            progress.candidates === 1
+              ? "qi.launcher.progress.candidatesOne"
+              : "qi.launcher.progress.candidatesMany",
+            { count: progress.candidates },
+          )}
+          {/* "1 finding", not "1 findings" — same singular/plural care as the test-case count
+              (uiux-fix F047 C276), now via the locale catalogs. */}
           {findingsText}
         </span>
       </div>

@@ -5360,10 +5360,25 @@ function persistVerifiedCapabilityUpdate(
   // Persistence is synchronous, so no configuration mutation can interleave between the
   // generation check in the handler and this consumption. Keep the live observation available
   // when durable storage fails, allowing the operator to retry the exact verified update.
+  const observation = gatewayConfig.verifiedCapability(modelId);
   if (!gatewayConfig.clearVerifiedCapability(modelId, generation)) {
     return staleCapabilityObservationResult();
   }
   gatewayConfig.set(updated, true);
+  // set() wipes every verified-capability observation and bumps the generation — correct for a
+  // credential/endpoint change, but THIS set applies values derived from the very observation
+  // just consumed against an unchanged connection. Config cannot carry conversationReady (it is
+  // probe-only evidence), so re-record JUST the readiness under the new generation — otherwise
+  // the just-verified model vanishes from every chat picker until the operator re-runs the
+  // identical probe. Field-level apply stays consume-once: the capability fields are NOT
+  // re-recorded, so a replayed apply still answers 409.
+  if (observation?.fields.conversationReady === true) {
+    gatewayConfig.recordVerifiedCapability(
+      modelId,
+      { conversationReady: true },
+      observation.checkedAt,
+    );
+  }
   return { status: 200, body: { ok: true, model: findConfiguredCapability(updated, modelId) } };
 }
 
