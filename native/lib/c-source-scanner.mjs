@@ -57,7 +57,7 @@ const TRIGRAPH_MAP = {
 //
 // Coderabbit 3793183799: apply trigraph conversion (phase 1) first so a `??/` in the source
 // becomes a real `\` before we look for `\<newline>` pairs.
-export function preprocessCLineSplices(source) {
+function preprocessCLineSplices(source) {
   return convertTrigraphs(source).replace(/\\\r?\n/gu, "");
 }
 
@@ -242,7 +242,7 @@ export function foldAdjacentStringLiterals(source) {
 // Unknown / malformed escapes are left verbatim — same fail-open policy as the C compiler,
 // which keeps a `\z` in the compiled string. Universal character names (`\uHHHH`, `\UHHHHHHHH`)
 // are out of scope for the source-contract pins today; extending later is a single case.
-export function decodeCStringEscapes(source) {
+function decodeCStringEscapes(source) {
   let out = "";
   let i = 0;
   while (i < source.length) {
@@ -386,7 +386,7 @@ function preservedByteSpelling(value) {
 // URL schemes are preserved: `://` stays intact via a negative lookbehind on `:`. Repeats
 // until fixpoint per literal to handle chains (`/./././`, `////`, nested `../../`). `..`
 // removes the preceding non-`..` component and itself.
-export function normalizeCurrentDirComponents(source) {
+function normalizeCurrentDirComponents(source) {
   let out = "";
   let i = 0;
   while (i < source.length) {
@@ -594,7 +594,7 @@ const DEFINITIVELY_TRUE_ELIF = new RegExp(`^#\\s*elif\\s+${_trueCond}\\s*$`, "u"
 const STRIPPING = "stripping";
 const KEEPING = "keeping";
 
-export function stripDisabledPreprocessorBranches(source) {
+function stripDisabledPreprocessorBranches(source) {
   const lines = source.split("\n");
   const kept = [];
   const stack = [];
