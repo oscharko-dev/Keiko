@@ -1838,31 +1838,33 @@ test("aggregation does not cross block-level element boundaries", () => {
 // string literal INSIDE the expression brace belongs to the containing phrase. The earlier
 // aggregation stopped at any expression brace, so this bypass reappeared even after the
 // inline-formatting-element fix. Aggregate direct string literals inside JsxExpressions too.
-test("aggregates JsxText across a literal-valued JSX expression", () => {
-  const texts = untranslatedLiteralsInSource(
-    '<p>open {"settings"}</p>',
-    "packages/x/y.tsx",
-  ).findings.map((f) => f.text);
-  expect(texts).toContain("open settings");
-});
-
-test("aggregates JsxText across a template-literal-valued JSX expression", () => {
-  const texts = untranslatedLiteralsInSource(
-    "<p>open {`settings`}</p>",
-    "packages/x/y.tsx",
-  ).findings.map((f) => f.text);
-  expect(texts).toContain("open settings");
-});
-
-test("aggregation with a non-literal expression does not fabricate a phrase", () => {
-  // `{maybe}` runtime value is unknown, so we must NOT weld "open" and "settings" across it as
-  // if it rendered blank — that would be a fictional phrase. Skip non-literal expressions in
-  // the aggregate.
-  const texts = untranslatedLiteralsInSource(
-    "<p>open {maybe} settings</p>",
-    "packages/x/y.tsx",
-  ).findings.map((f) => f.text);
-  expect(texts).not.toContain("open settings");
+// Parameterised aggregation-across-expression table (SonarCloud S5976). Every row asserts
+// whether a specific `{…}` shape inside a phrase does or does not weld the surrounding
+// JsxText into an aggregate. Direct string / template literals contribute their text; a
+// non-literal expression (`{maybe}`) breaks the segment so no fictional phrase is fabricated.
+test.each([
+  {
+    label: "string-literal expression joins the phrase",
+    src: '<p>open {"settings"}</p>',
+    include: ["open settings"],
+    exclude: [],
+  },
+  {
+    label: "template-literal expression joins the phrase",
+    src: "<p>open {`settings`}</p>",
+    include: ["open settings"],
+    exclude: [],
+  },
+  {
+    label: "non-literal expression breaks the segment (no fabrication)",
+    src: "<p>open {maybe} settings</p>",
+    include: [],
+    exclude: ["open settings"],
+  },
+])("aggregation-across-expression recall ($label)", ({ src, include, exclude }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  for (const t of include) expect(texts).toContain(t);
+  for (const t of exclude) expect(texts).not.toContain(t);
 });
 
 // KEIKO-0299 (review-follow-up on af74e79b): a JSX child like `{"Welcome back, " + name}`
