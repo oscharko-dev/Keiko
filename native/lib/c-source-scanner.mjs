@@ -674,18 +674,22 @@ function applyElifTransition(trimmed, frame) {
 function evaluateConstantArithmetic(exprText) {
   const trimmed = exprText.trim();
   if (trimmed.length === 0) return null;
-  if (!/^[\s0-9xXa-fA-FUuLl+\-*()<>=!&|^]+$/u.test(trimmed)) return null;
-  // Coderabbit 3793711080 on #3202: fail-closed on operators whose JS semantics diverge from
-  // C's `intmax_t` preprocessor arithmetic. `#if 1/2*2` — C: (1/2)*2 = 0*2 = 0 (strip);
-  // JS: 0.5*2 = 1 (keep). `#if (1<<32)-1` — C: nonzero (keep); JS: 32-bit wrap = 0 (strip).
-  // Either misclassification breaks the source-contract guarantee. Reject `/`, `%`, `<<`,
-  // `>>`, `~`; the ladder then falls through to the conservative unknown-condition path
-  // (both branches survive).
-  //
-  // Also reject `**` — JS treats it as exponentiation, C treats a bare `*` sequence as a
-  // syntax error. The char-set validator already excludes `~`, `/`, `%` above, so the runtime
-  // guard here catches the composite `**`, `<<`, `>>` that pass through the char set.
-  if (/\*\*|<<|>>/u.test(trimmed)) return null;
+  if (!/^[\s0-9xXa-fA-FUuLl+\-*()<>=!&|]+$/u.test(trimmed)) return null;
+  // Coderabbit 3793711080 + codex 3793772894 on #3202: fail-closed on operators whose JS
+  // semantics diverge from C's `intmax_t` preprocessor arithmetic. Concrete divergences:
+  //   - `#if 1/2*2` — C: (1/2)*2 = 0*2 = 0 (strip); JS: 0.5*2 = 1 (keep).
+  //   - `#if (1<<32)-1` — C: nonzero (keep); JS: 32-bit wrap = 0 (strip).
+  //   - `#if 0x100000000 | 0` — C: nonzero (keep); JS bitwise coerces to 32-bit signed int,
+  //     the high bit is dropped, result 0 (strip).
+  // Reject `/`, `%`, `<<`, `>>`, `~`, `&`, `|`, `^`; the ladder falls through to the
+  // conservative unknown-condition path (both branches survive). The char-set validator
+  // above excludes `/`, `%`, `~`, `^` outright. `&` and `|` are allowed there so `&&`/`||`
+  // pass (logical operators — truthiness in JS agrees with C), but the composite guard
+  // below rejects any SINGLE `&`/`|` (bitwise) that remains after stripping the double forms.
+  // Also reject `**` (JS exponentiation vs C syntax error) and `<<`/`>>` (32-bit truncation
+  // divergence).
+  const withoutLogicalOps = trimmed.replaceAll("||", "").replaceAll("&&", "");
+  if (/[|&]|\*\*|<<|>>/u.test(withoutLogicalOps)) return null;
   let js = trimmed.replace(/([0-9a-fA-F])[UuLl]{1,3}\b/gu, "$1");
   // C octal: `0<octal-digits>`. Convert to JS `0o<digits>`. Bare `0` and `0x…` stay as-is.
   js = js.replace(/\b0([0-7]+)(?![0-9a-fA-F])/gu, "0o$1");

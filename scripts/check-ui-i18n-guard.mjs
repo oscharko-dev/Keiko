@@ -741,28 +741,56 @@ function isInlineTextFormattingChild(child) {
 // aggregate finding is attributed to that line, not to the container's opening tag, so an
 // `// i18n-exempt` marker adjacent to the phrase's own text can exempt it.
 function collectAggregatedJsxTextSegments(container, sourceFile) {
-  const segments = [{ parts: [], firstLine: null }];
-  const startNewSegment = () => {
-    const current = segments.at(-1);
-    if (current.parts.length > 0) segments.push({ parts: [], firstLine: null });
-  };
-  const appendPart = (text, line) => {
-    const current = segments.at(-1);
-    current.parts.push(text);
-    // Codex 3793398796 + 3793642835 on #3202: attribute the aggregate to the first CONTENT
-    // line, not a leading whitespace-only fragment. `<p>\n  {}\n  open <code>settings</code>
-    // </p>` — the JsxText `\n  ` between `<p>` and `{}` is whitespace-only and lives on the
-    // container line; the first real content ("open") is on a later line where the exemption
-    // marker would sit. Skip the firstLine update when the part is whitespace-only.
-    if (current.firstLine === null && text.trim().length > 0) current.firstLine = line;
-  };
+  const collector = createSegmentCollector();
   for (const child of container.children) {
-    absorbChildIntoSegments(child, sourceFile, appendPart, startNewSegment);
+    absorbChildIntoSegments(child, sourceFile, collector);
   }
-  return segments.filter((seg) => seg.parts.length > 0);
+  return collector.finalize();
 }
 
-function absorbChildIntoSegments(child, sourceFile, appendPart, startNewSegment) {
+// Codex 3793772901 on #3202: a conditional literal like `<p>open {cond ? "settings" :
+// "account"}</p>` renders as EITHER "open settings" OR "open account". The aggregator must
+// emit BOTH aggregates so the ledger records every phrase the reader could see. The collector
+// supports forking on encountering a conditional literal: from that point onwards the ACTIVE
+// segments split into N copies (one per alternative). Subsequent parts append to all active
+// copies. `startNewSegment` finalises whichever segments have content and resets to one fresh
+// active segment. `finalize` finalises whatever is still active.
+function createSegmentCollector() {
+  const finalized = [];
+  let active = [{ parts: [], firstLine: null }];
+  return {
+    appendPart(text, line) {
+      for (const segment of active) {
+        segment.parts.push(text);
+        // Codex 3793398796 + 3793642835 on #3202: attribute the aggregate to the first
+        // CONTENT line, not a leading whitespace-only fragment. Skip the update for
+        // whitespace-only parts (`\n  ` between `<p>` and its first content).
+        if (segment.firstLine === null && text.trim().length > 0) segment.firstLine = line;
+      }
+    },
+    startNewSegment() {
+      for (const segment of active) if (segment.parts.length > 0) finalized.push(segment);
+      active = [{ parts: [], firstLine: null }];
+    },
+    forkAlternatives(alternatives, line) {
+      const next = [];
+      for (const segment of active) {
+        for (const alternative of alternatives) {
+          const clone = { parts: [...segment.parts, alternative], firstLine: segment.firstLine };
+          if (clone.firstLine === null && alternative.trim().length > 0) clone.firstLine = line;
+          next.push(clone);
+        }
+      }
+      active = next;
+    },
+    finalize() {
+      for (const segment of active) if (segment.parts.length > 0) finalized.push(segment);
+      return finalized;
+    },
+  };
+}
+
+function absorbChildIntoSegments(child, sourceFile, collector) {
   if (ts.isJsxText(child)) {
     // Codex 3793642835 on #3202: keep the RAW JsxText so adjacency information reaches the
     // join. `<code>memoria.settings.{"mode"}</code>` — the JsxText `memoria.settings.` has no
@@ -772,7 +800,7 @@ function absorbChildIntoSegments(child, sourceFile, appendPart, startNewSegment)
     // JsxText (zero raw chars) is skipped. Normalisation (trim+collapse) happens once at the
     // final aggregate.
     if (child.text.length === 0) return;
-    appendPart(child.text, lineOfNode(child, sourceFile));
+    collector.appendPart(child.text, lineOfNode(child, sourceFile));
     return;
   }
   // Codex 3793356672 on #3202: line-break phrasing elements (`<br/>`, `<wbr/>`) split copy at
@@ -780,7 +808,7 @@ function absorbChildIntoSegments(child, sourceFile, appendPart, startNewSegment)
   // adjacency refactor (codex 3793642835) the join no longer inserts a space between parts, so
   // `br`/`wbr` must APPEND an explicit space to preserve the boundary the reader sees.
   if (isLineBreakPhrasingChild(child)) {
-    appendPart(" ", lineOfNode(child, sourceFile));
+    collector.appendPart(" ", lineOfNode(child, sourceFile));
     return;
   }
   if (isInlineTextFormattingChild(child)) {
@@ -791,18 +819,18 @@ function absorbChildIntoSegments(child, sourceFile, appendPart, startNewSegment)
     const inner = collectAggregatedJsxTextSegments(child, sourceFile);
     for (let i = 0; i < inner.length; i += 1) {
       for (const part of inner[i].parts) {
-        appendPart(part, inner[i].firstLine ?? lineOfNode(child, sourceFile));
+        collector.appendPart(part, inner[i].firstLine ?? lineOfNode(child, sourceFile));
       }
-      if (i < inner.length - 1) startNewSegment();
+      if (i < inner.length - 1) collector.startNewSegment();
     }
     return;
   }
   if (ts.isJsxExpression(child)) {
-    absorbJsxExpressionIntoSegments(child, sourceFile, appendPart, startNewSegment);
+    absorbJsxExpressionIntoSegments(child, sourceFile, collector);
     return;
   }
   // Non-inline element (block container, custom component) or any other kind of child.
-  startNewSegment();
+  collector.startNewSegment();
 }
 
 const LINE_BREAK_PHRASING_ELEMENTS = new Set(["br", "wbr"]);
@@ -826,7 +854,7 @@ function isLineBreakPhrasingChild(child) {
 // phrase that never actually renders; those get their own individual entries via the
 // JsxExpression visitor path. A non-literal expression BREAKS the aggregate so we don't weld
 // "open" and "settings" across `{maybe}`.
-function absorbJsxExpressionIntoSegments(node, sourceFile, appendPart, startNewSegment) {
+function absorbJsxExpressionIntoSegments(node, sourceFile, collector) {
   const expression = node.expression;
   if (expression === undefined) return;
   // Codex 3793744727 on #3202: `<p>open {"settings" as const}</p>` — the expression is a
@@ -839,10 +867,29 @@ function absorbJsxExpressionIntoSegments(node, sourceFile, appendPart, startNewS
     // Codex 3793642835 on #3202: keep the literal RAW (no trim/collapse here). The final
     // aggregate normaliser handles whitespace; splitting up front loses adjacency information
     // with the surrounding JsxText siblings.
-    if (inner.text.length > 0) appendPart(inner.text, lineOfNode(inner, sourceFile));
+    if (inner.text.length > 0) collector.appendPart(inner.text, lineOfNode(inner, sourceFile));
     return;
   }
-  startNewSegment();
+  // Codex 3793772901 on #3202: `<p>open {cond ? "settings" : "account"}</p>` renders as EITHER
+  // "open settings" OR "open account". Fork the active segments so both aggregates land in
+  // the ledger. Only handled when BOTH branches unwrap to literals; partial-literal shapes
+  // (`cond ? "x" : maybeVar`) fall through to segment-break — one runtime branch has an
+  // unknown value and fabricating a phrase across it would be wrong.
+  if (ts.isConditionalExpression(inner)) {
+    const trueText = literalTextOfExpression(inner.whenTrue);
+    const falseText = literalTextOfExpression(inner.whenFalse);
+    if (trueText !== null && falseText !== null) {
+      collector.forkAlternatives([trueText, falseText], lineOfNode(inner, sourceFile));
+      return;
+    }
+  }
+  collector.startNewSegment();
+}
+
+function literalTextOfExpression(expr) {
+  const inner = unwrapTransparent(expr);
+  if (ts.isStringLiteral(inner) || ts.isNoSubstitutionTemplateLiteral(inner)) return inner.text;
+  return null;
 }
 
 function jsxAggregatedTextResults(node, sourceFile) {

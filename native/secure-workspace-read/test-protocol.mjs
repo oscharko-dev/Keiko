@@ -486,6 +486,9 @@ function assertJsIncompatibleArithmeticStaysUnknown() {
     "#if 8 >> 1",
     "#if ~0",
     "#if (1<<32)-1",
+    "#if 0x100000000 | 0",
+    "#if 1 & 3",
+    "#if 5 ^ 3",
   ];
   for (const variant of rejectVariants) {
     const stripped = stripCommentsAndStrings(
@@ -608,11 +611,12 @@ function assertPathNormalizationCollapsesRepeatedSlashes() {
 // pin. Verify the arithmetic evaluator recognises truth values for arithmetic, comparison,
 // bitwise, and logical constant expressions.
 function assertArithmeticConstantConditionsRecognised() {
-  // Coderabbit 3793711080: `<<`, `>>`, `~`, `/`, `%` are REJECTED (fall through to unknown)
-  // because JS `intmax_t` semantics diverge (`1/2*2` → C: 0, JS: 1; `1<<32` → C: 2^32, JS: 0).
-  // The trueExprs / falseExprs tables here only include operators whose JS and C truth-values
-  // agree (arithmetic +/-*, comparison, logical, bitwise-and/or/xor without shift/negate).
-  const trueExprs = ["1 + 1", "2 * 3", "3 - 1", "1 | 0", "1 == 1", "0 || 1", "!(1 - 1)"];
+  // Coderabbit 3793711080 + codex 3793772894: `<<`, `>>`, `~`, `/`, `%`, `&`, `|`, `^` are
+  // REJECTED (fall through to unknown) because JS `intmax_t` semantics diverge (`1/2*2` →
+  // C: 0, JS: 1; `1<<32` → C: 2^32, JS: 0; `0x100000000 | 0` → C: nonzero, JS: 0). The
+  // trueExprs / falseExprs tables here only include operators whose JS and C truth-values
+  // agree: arithmetic `+ - *`, comparison, logical `&& || !`, and parens.
+  const trueExprs = ["1 + 1", "2 * 3", "3 - 1", "1 == 1", "0 || 1", "!(1 - 1)"];
   for (const cond of trueExprs) {
     const stripped = stripCommentsAndStrings(
       "#if " + cond + "\nLIVE_ARITH_TRUE();\n#else\nDEAD_ARITH_TRUE_ELSE();\n#endif\n",

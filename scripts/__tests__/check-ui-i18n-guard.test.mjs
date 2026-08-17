@@ -1739,6 +1739,37 @@ test.each([
   },
 );
 
+// Codex 3793772901 on 79b516b2: `<p>open {cond ? "settings" : "account"}</p>` renders as
+// EITHER "open settings" OR "open account". The aggregator forks the active segment on a
+// literal-branch conditional, so BOTH aggregates enter the ledger. Partial-literal shapes
+// (`cond ? "x" : maybeVar`) fall through to segment-break because one branch is dynamic and
+// fabricating a phrase across it would be wrong.
+test("emits an aggregate for each branch of a literal-branch conditional", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>open {cond ? "settings" : "account"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("open settings");
+  expect(texts).toContain("open account");
+});
+
+test("partial-literal conditional does not fabricate an aggregate", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>open {cond ? "settings" : maybeVar}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).not.toContain("open settings");
+});
+
+test("literal-branch conditional at the end of a phrase forks both aggregates", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>Save {cond ? "changes" : "draft"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Save changes");
+  expect(texts).toContain("Save draft");
+});
+
 // Codex 3793356672 on af9f5ede: line-break phrasing elements (`<br/>`, `<wbr/>`) split copy at
 // whitespace boundaries. `<p>open<br/>settings</p>` renders "open settings" but the aggregator
 // used to break the segment at `<br/>` (a non-inline non-formatting element), so each half was
