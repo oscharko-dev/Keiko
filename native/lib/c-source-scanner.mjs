@@ -422,6 +422,12 @@ function normalizePathBody(body) {
       // by `/` or end of body. The lookbehind on `/` anchors the component start; the
       // negative lookahead prevents matching `../..` (which needs iteration).
       .replace(/(?<=\/)(?!\.\.\/)[^/]+\/\.\.(?=\/|$)/gu, "")
+      // Codex 3793982006 on #3202: POSIX resolves leading `/../` at the filesystem ROOT to
+      // `/` — there's no parent above root, so the `..` is a no-op. `"/../bin/sh"` and
+      // `"/usr/../../bin/sh"` (after the earlier `usr/..` collapse becomes `/../bin/sh`)
+      // must both resolve to `/bin/sh`. The `(?:...)+` quantifier consumes chains of
+      // leading `../` at the root.
+      .replace(/^\/(?:\.\.\/)+/gu, "/")
       .replace(/\/\.(?=\/)/gu, "")
       .replace(/(?<!:)\/{2,}/gu, "/");
   } while (current !== previous);

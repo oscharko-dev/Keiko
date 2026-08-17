@@ -654,8 +654,9 @@ function assertNumericQuoteEscapesPreservedThroughDecode() {
 // repeated `/` separators are collapsed. The pin regex expects a contiguous path.
 // URL schemes (`://`) are preserved (negative lookbehind on `:`) so `https://example.com`
 // stays intact.
-// Codex 3793874121 on #3202: the OS resolves `/usr/../bin/sh` to `/bin/sh`. Parent-directory
-// components must be normalised too; the earlier version only handled `/./` and `//`.
+// Codex 3793874121 + 3793982006 on #3202: the OS resolves `/usr/../bin/sh` and root-leading
+// `/../bin/sh` both to `/bin/sh`. Parent-directory components must be normalised too; the
+// earlier version only handled `/./` and `//`.
 function assertPathNormalizationCollapsesParentDir() {
   const forms = [
     { src: 'const char *p = "/usr/../bin/sh";', expect: '"/bin/sh"', label: "single .." },
@@ -673,6 +674,13 @@ function assertPathNormalizationCollapsesParentDir() {
       src: 'const char *p = "/usr/../";',
       expect: '"/"',
       label: ".. cancels the only component",
+    },
+    // Codex 3793982006: root-leading `/../` has no parent above root; POSIX resolves to `/`.
+    { src: 'const char *p = "/../bin/sh";', expect: '"/bin/sh"', label: "leading /.." },
+    {
+      src: 'const char *p = "/../../bin/sh";',
+      expect: '"/bin/sh"',
+      label: "leading /../../ chain",
     },
   ];
   for (const { src, expect, label } of forms) {

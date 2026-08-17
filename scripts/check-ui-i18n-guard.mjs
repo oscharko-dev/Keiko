@@ -935,6 +935,15 @@ function collectConditionalLiteralAlternatives(expr) {
   if (ts.isStringLiteral(inner) || ts.isNoSubstitutionTemplateLiteral(inner)) {
     return [inner.text];
   }
+  // Codex 3793982007 on #3202: React drops `null`, `undefined`, `false`, and `true` — they
+  // render NOTHING. `<p>open {cond ? "settings" : null}</p>` renders EITHER "open settings"
+  // OR "open ". Treat these as an empty-string alternative so the aggregate still emits
+  // ("open settings" enters the ledger) while the empty alternative degrades to a single-
+  // content-part segment the ≥2 gate skips. `0` is NOT included — React renders `{0}` as
+  // "0".
+  if (isReactNonRenderingLiteral(inner)) {
+    return [""];
+  }
   if (ts.isConditionalExpression(inner)) {
     const trueAlts = collectConditionalLiteralAlternatives(inner.whenTrue);
     if (trueAlts === null) return null;
@@ -943,6 +952,16 @@ function collectConditionalLiteralAlternatives(expr) {
     return [...trueAlts, ...falseAlts];
   }
   return null;
+}
+
+function isReactNonRenderingLiteral(expr) {
+  if (expr.kind === ts.SyntaxKind.NullKeyword) return true;
+  if (expr.kind === ts.SyntaxKind.TrueKeyword) return true;
+  if (expr.kind === ts.SyntaxKind.FalseKeyword) return true;
+  if (ts.isIdentifier(expr) && expr.text === "undefined") return true;
+  // `void 0` / `void anything` yields undefined.
+  if (ts.isVoidExpression(expr)) return true;
+  return false;
 }
 
 // Codex 3793830382 on #3202: `<p>open {cond && "settings"}</p>` renders EITHER "open

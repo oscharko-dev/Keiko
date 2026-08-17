@@ -1793,6 +1793,22 @@ test("nested conditional with a dynamic leaf falls through (no fabricated phrase
   expect(texts).not.toContain("open profile");
 });
 
+// Codex 3793982007 on 626a3de1: React drops `null` / `undefined` / `false` / `true` — they
+// render NOTHING. `<p>open {cond ? "settings" : null}</p>` renders EITHER "open settings"
+// OR "open ". Treat these as an empty-string alternative so the aggregate still emits.
+test.each([
+  { label: "null branch", src: '<p>open {cond ? "settings" : null}</p>' },
+  { label: "undefined branch", src: '<p>open {cond ? "settings" : undefined}</p>' },
+  { label: "false branch", src: '<p>open {cond ? "settings" : false}</p>' },
+  { label: "reversed literal / null", src: '<p>open {cond ? null : "settings"}</p>' },
+])(
+  "aggregates literal branch when the other branch is a React non-rendering literal ($label)",
+  ({ src }) => {
+    const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+    expect(texts).toContain("open settings");
+  },
+);
+
 // Codex 3793795574 on 6d137202: `aria-valuetext` is the human-readable text assistive tech
 // announces for `<progress>`, `<meter>`, and range widgets whose numeric value doesn't map
 // cleanly to speech. Both kebab-case (intrinsic elements) and camelCase (custom components)
