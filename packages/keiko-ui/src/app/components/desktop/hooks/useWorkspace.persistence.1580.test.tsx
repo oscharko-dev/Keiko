@@ -449,6 +449,13 @@ describe("Issue #1580 — visibility-gated server poll", () => {
     });
     await flushAsyncEffects();
     expect(puts).toBe(1);
+    // Pin the race setup itself: the first PUT went out with the pristine revision 0 and the
+    // mount poll is genuinely in flight — otherwise the retry would fire under `>` too and
+    // this test would stop discriminating the equal-revision branch.
+    expect((putCalls()[0]?.[1]?.headers as Record<string, string>)["If-Match"]).toBe(
+      '"workspace-state-0"',
+    );
+    expect(resolveFirstPoll).toBeDefined();
 
     // The poll lands while the PUT is in flight and adopts revision 7 (dirty branch).
     resolveFirstPoll?.({
@@ -493,6 +500,76 @@ describe("Issue #1580 — visibility-gated server poll", () => {
     });
     await flushAsyncEffects();
 
+    expect(puts).toBe(2);
+    expect((putCalls()[1]?.[1]?.headers as Record<string, string>)["If-Match"]).toBe(
+      '"workspace-state-7"',
+    );
+  });
+
+  it("retries a conflict whose ETag a proxy stripped, using the poll-adopted revision", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    let puts = 0;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        puts += 1;
+        if (puts === 1) {
+          // A 412 with NO ETag header — an intermediary stripped it.
+          return {
+            ok: false,
+            status: 412,
+            headers: new Headers(),
+            json: async () => Promise.resolve({}),
+          } as unknown as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ ETag: '"workspace-state-8"' }),
+          json: async () =>
+            Promise.resolve({ workspace: { revision: 8, windows: [], connections: [] } }),
+        } as unknown as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ ETag: '"workspace-state-7"' }),
+        json: async () =>
+          Promise.resolve({
+            workspace: {
+              revision: 7,
+              windows: [
+                {
+                  id: "foreign-1",
+                  type: "files",
+                  x: 1,
+                  y: 2,
+                  w: 320,
+                  h: 240,
+                  z: 9,
+                  cfg: {},
+                  max: false,
+                },
+              ],
+              connections: [],
+            },
+          }),
+      } as unknown as Response;
+    });
+
+    render(<Harness />);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+
+    // The ETag-less conflict still gets its bounded retry, and the retry carries the revision
+    // the dirty poll branch adopted in the meantime — without it the snapshot stays parked
+    // until the next local mutation.
     expect(puts).toBe(2);
     expect((putCalls()[1]?.[1]?.headers as Record<string, string>)["If-Match"]).toBe(
       '"workspace-state-7"',

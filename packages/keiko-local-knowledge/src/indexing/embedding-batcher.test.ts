@@ -619,6 +619,26 @@ describe("embedChunkBatch — transient-failure retry", () => {
     });
     expect(requestTimeoutCalls).toBe(3);
 
+    // 425 (Too Early) is the second answered-timeout status the transient set names; without
+    // its own pin, dropping the 425 condition would pass the suite.
+    let tooEarlyCalls = 0;
+    const tooEarly = scriptedAdapter({
+      responder: () => {
+        tooEarlyCalls += 1;
+        return { ok: false, kind: "http-error", status: 425 };
+      },
+    });
+    await embedChunkBatch([firstChunk()], {
+      adapter: tooEarly,
+      store: fixture.store,
+      pinnedIdentity: DEFAULT_EMBEDDING,
+      concurrency: 1,
+      now: fixedClock(),
+      idSource: fixedIds("storage"),
+      retry: instantRetry,
+    });
+    expect(tooEarlyCalls).toBe(3);
+
     let badRequestCalls = 0;
     const badRequest = scriptedAdapter({
       responder: () => {
