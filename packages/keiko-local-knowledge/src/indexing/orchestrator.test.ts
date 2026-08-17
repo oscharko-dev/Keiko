@@ -31,6 +31,7 @@ import {
   getCapsule,
   updateCapsuleDetails,
   updateCapsuleEmbeddingModelIdentity,
+  updateCapsuleState,
 } from "../capsule-lifecycle.js";
 import {
   createDefaultParserRegistry,
@@ -1845,6 +1846,39 @@ describe("runIndexingJob — embedding capability preflight", () => {
     expect(capsule?.embeddingModelIdentity.vectorDimensions).toBe(
       DEFAULT_EMBEDDING.vectorDimensions,
     );
+  });
+
+  it("never rebinds an unverified identity while vectors exist, even in draft lifecycle", async () => {
+    // The vector guard must be unconditional: a fingerprint-less capsule that somehow owns
+    // vectors keeps the strict incompatibility gate regardless of lifecycle state — a draft
+    // shortcut bypassing it would silently mix embedding spaces.
+    fixture.cleanup();
+    fixture = buildFixture(
+      { "alpha.txt": "Provisional source text. ".repeat(8) },
+      provisionalDefaultEmbedding(),
+    );
+    const first = await drain(runIndexingJob(buildOptions(fixture)));
+    expect(first.at(-1)?.kind).toBe("job-completed");
+    expect(countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId)).toBeGreaterThan(
+      0,
+    );
+
+    const staleDims = DEFAULT_EMBEDDING.vectorDimensions + 1;
+    updateCapsuleEmbeddingModelIdentity(fixture.store, fixture.capsuleId, {
+      ...provisionalDefaultEmbedding(),
+      vectorDimensions: staleDims,
+    });
+    updateCapsuleState(fixture.store, fixture.capsuleId, "draft");
+
+    const second = await drain(runIndexingJob(buildOptions(fixture)));
+    const terminal = second.at(-1);
+    expect(terminal?.kind).toBe("job-failed");
+    if (terminal?.kind === "job-failed") {
+      expect(terminal.error.code).toBe("INCOMPATIBLE_EMBEDDING_IDENTITY");
+    }
+    expect(
+      getCapsule(fixture.store, fixture.capsuleId)?.embeddingModelIdentity.vectorDimensions,
+    ).toBe(staleDims);
   });
 
   it("keeps enforcing an unverified identity once the capsule owns vectors", async () => {

@@ -144,13 +144,14 @@ const ADAPTER_FAILURE_REASONS: Readonly<Record<OpenAIEmbeddingErrorKind, Embeddi
   });
 
 // An HTTP status code is content-free operator telemetry (no body, no endpoint, no key material),
-// so it may ride along in the redacted safe message — it is the one number that separates "the
-// gateway rejected this request shape" from every other failure in this taxonomy.
+// so it rides along in the redacted safe message of EVERY answered failure — 401/404/429 name
+// their cause, but the exact status is the one number an operator can grep in the gateway logs.
 function failureMessage(reason: EmbeddingFailureReason, status: number | undefined): string {
-  if (reason === "http-error" && status !== undefined) {
+  if (status === undefined) return SAFE_MESSAGES[reason];
+  if (reason === "http-error") {
     return `model gateway answered the embedding request with HTTP ${String(status)}`;
   }
-  return SAFE_MESSAGES[reason];
+  return `${SAFE_MESSAGES[reason]} (HTTP ${String(status)})`;
 }
 
 function fail(reason: EmbeddingFailureReason, status?: number): EmbeddingCapabilityCheck {

@@ -113,12 +113,14 @@ const DEFAULT_EMBED_MAX_RETRIES = 6;
 const DEFAULT_EMBED_BASE_DELAY_MS = 500;
 const MAX_EMBED_BACKOFF_MS = 30_000;
 
-// A 5xx answer is as transient as a torn connection; a 4xx answer is deterministic and
-// retrying it only burns the budget (under the old everything-is-transport classification a
-// 400 was retried through the full backoff schedule).
+// A 5xx answer — and the two answered-timeout statuses 408/425 — is as transient as a torn
+// connection; every other 4xx is a deterministic rejection of this request shape and retrying
+// it only burns the budget (under the old everything-is-transport classification a 400 was
+// retried through the full backoff schedule).
 function isTransientFailure(kind: OpenAIEmbeddingErrorKind, status: number | undefined): boolean {
   if (TRANSIENT_EMBED_KINDS.has(kind)) return true;
-  return kind === "http-error" && status !== undefined && status >= 500;
+  if (kind !== "http-error" || status === undefined) return false;
+  return status >= 500 || status === 408 || status === 425;
 }
 
 function isTransientOutcome(outcome: OpenAIEmbeddingOutcome): boolean {

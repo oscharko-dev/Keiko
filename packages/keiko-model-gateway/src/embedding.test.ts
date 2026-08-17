@@ -780,22 +780,42 @@ describe("requestOpenAIEmbedding (direct transport)", () => {
     }
   });
 
-  it("carries the HTTP status into the verification safeMessage for answered errors", async () => {
-    const fetchImpl = mockFetch(() => new Response("rejected", { status: 400 }));
-    const result = await verifyEmbeddingCapability(
-      {
-        endpoint: "https://example.test/v1",
-        apiKey: "k",
-        request: (input) => requestOpenAIEmbedding({ ...input, fetchImpl }),
-      },
-      { modelId: "m", provider: "openai-compatible", vectorMetric: "cosine" },
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toBe("http-error");
-      expect(result.safeMessage).toBe("model gateway answered the embedding request with HTTP 400");
-    }
-  });
+  it.each([
+    [400, "http-error", "model gateway answered the embedding request with HTTP 400"],
+    [
+      401,
+      "wrong-header",
+      "model gateway rejected the request — check API key configuration (HTTP 401)",
+    ],
+    [
+      404,
+      "unsupported-model",
+      "embedding model is not available on the configured gateway (HTTP 404)",
+    ],
+    [
+      429,
+      "rate-limited",
+      "model gateway is rate-limited — retry after the configured backoff (HTTP 429)",
+    ],
+  ] as const)(
+    "carries the HTTP status into the verification safeMessage for an answered %d",
+    async (status, expectedReason, expectedMessage) => {
+      const fetchImpl = mockFetch(() => new Response("rejected", { status }));
+      const result = await verifyEmbeddingCapability(
+        {
+          endpoint: "https://example.test/v1",
+          apiKey: "k",
+          request: (input) => requestOpenAIEmbedding({ ...input, fetchImpl }),
+        },
+        { modelId: "m", provider: "openai-compatible", vectorMetric: "cosine" },
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe(expectedReason);
+        expect(result.safeMessage).toBe(expectedMessage);
+      }
+    },
+  );
 
   it("returns invalid-response when the JSON shape is missing data[0].embedding", async () => {
     const fetchImpl = mockFetch(

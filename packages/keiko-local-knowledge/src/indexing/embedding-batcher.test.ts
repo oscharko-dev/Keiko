@@ -599,6 +599,26 @@ describe("embedChunkBatch — transient-failure retry", () => {
     // A 5xx answer stays retry-worthy exactly like the torn-connection "transport" kind.
     expect(serverErrorCalls).toBe(3);
 
+    // 408 (answered request timeout) is equally transient — it was retried under the old
+    // everything-is-transport classification and must stay retried.
+    let requestTimeoutCalls = 0;
+    const requestTimeout = scriptedAdapter({
+      responder: () => {
+        requestTimeoutCalls += 1;
+        return { ok: false, kind: "http-error", status: 408 };
+      },
+    });
+    await embedChunkBatch([firstChunk()], {
+      adapter: requestTimeout,
+      store: fixture.store,
+      pinnedIdentity: DEFAULT_EMBEDDING,
+      concurrency: 1,
+      now: fixedClock(),
+      idSource: fixedIds("storage"),
+      retry: instantRetry,
+    });
+    expect(requestTimeoutCalls).toBe(3);
+
     let badRequestCalls = 0;
     const badRequest = scriptedAdapter({
       responder: () => {

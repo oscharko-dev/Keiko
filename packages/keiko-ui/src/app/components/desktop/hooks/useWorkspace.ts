@@ -978,6 +978,36 @@ async function putServerWorkspaceSnapshot(
   }
 }
 
+// Conflict half of the PUT continuation, extracted from the `.then` arrow to keep its
+// complexity within the lint ceiling. Adopts a strictly newer revision from the 412's ETag,
+// then re-sends the still-dirty snapshot ONCE through the debounce — bounded per serialized
+// snapshot, suppressed after the sync hook unmounted (a late PUT would overwrite the next
+// shell's state).
+interface WorkspacePutConflictContext {
+  readonly revisionRef: CurrentRef<number>;
+  readonly localDirtyRef: CurrentRef<boolean>;
+  readonly serverSyncStoppedRef: CurrentRef<boolean>;
+  readonly conflictRetriedSnapshotRef: CurrentRef<string | null>;
+  readonly putDebounceRef: CurrentRef<TrailingDebounce | null>;
+  readonly runServerPutRef: CurrentRef<(keepalive: boolean) => void>;
+}
+
+function handleWorkspacePutConflict(
+  ctx: WorkspacePutConflictContext,
+  revision: number | null,
+  serializedSnapshot: string,
+): void {
+  if (revision === null || revision <= ctx.revisionRef.current) return;
+  ctx.revisionRef.current = revision;
+  if (!ctx.localDirtyRef.current) return;
+  if (ctx.serverSyncStoppedRef.current) return;
+  if (ctx.conflictRetriedSnapshotRef.current === serializedSnapshot) return;
+  ctx.conflictRetriedSnapshotRef.current = serializedSnapshot;
+  ctx.putDebounceRef.current?.schedule(() => {
+    ctx.runServerPutRef.current(false);
+  });
+}
+
 function buildServerWorkspaceSnapshot(
   wins: readonly AppWindow[],
   conns: readonly Connection[],
@@ -1118,6 +1148,14 @@ function useWorkspaceServerSync({
   // Latest runServerPut for the conflict-retry below — a ref (mirroring winsRef) so the
   // debounced retry closure never captures a stale callback and the useCallback deps stay [].
   const runServerPutRef = useRef<(keepalive: boolean) => void>(() => undefined);
+  // One conflict retry PER serialized snapshot: a second concurrent writer advancing the
+  // revision on every attempt must not chain unbounded retries — the poll and the next local
+  // mutation provide further convergence. A NEW snapshot (different serialization) re-arms it.
+  const conflictRetriedSnapshotRef = useRef<string | null>(null);
+  // True after the sync effect's cleanup ran: a conflict resolving AFTER unmount must not
+  // re-arm the debounce, or an SPA navigation could late-PUT the unmounted shell's stale
+  // windows over the newly mounted shell's state.
+  const serverSyncStoppedRef = useRef(false);
   const putAbortRef = useRef<AbortController | null>(null);
   const localDirtyRef = useRef(false);
   const lastAcknowledgedSnapshotRef = useRef<string | null>(null);
@@ -1148,19 +1186,20 @@ function useWorkspaceServerSync({
       keepalive,
     }).then((result) => {
       if (result?.kind === "conflict") {
-        if (result.revision !== null && result.revision > revisionRef.current) {
-          revisionRef.current = result.revision;
-          // The rejected snapshot is still unacknowledged: re-send it once through the
-          // debounce with the adopted revision instead of parking it until the next local
-          // mutation. Without this, a window closed before revision convergence was lost
-          // server-side and resurrected by the next poll (zombie window). Bounded: the
-          // retry is scheduled only when the revision strictly advanced.
-          if (localDirtyRef.current) {
-            putDebounceRef.current?.schedule(() => {
-              runServerPutRef.current(false);
-            });
-          }
-        }
+        // A 412 is a handled concurrency signal: adopt the newer revision and re-send the
+        // still-dirty snapshot once (zombie-window fix) — see handleWorkspacePutConflict.
+        handleWorkspacePutConflict(
+          {
+            revisionRef,
+            localDirtyRef,
+            serverSyncStoppedRef,
+            conflictRetriedSnapshotRef,
+            putDebounceRef,
+            runServerPutRef,
+          },
+          result.revision,
+          snapshot.serialized,
+        );
         return;
       }
       if (result?.kind !== "ok") return;
@@ -1277,6 +1316,7 @@ function useWorkspaceServerSync({
   // flush any pending PUT on unmount.
   useEffect(() => {
     if (!serverSyncEnabled) return;
+    serverSyncStoppedRef.current = false;
     const debounce = putDebounceRef.current;
     const flushKeepalive = (): void => {
       debounce?.cancel();
@@ -1289,6 +1329,10 @@ function useWorkspaceServerSync({
     window.addEventListener("pagehide", flushKeepalive);
     document.addEventListener("visibilitychange", onHide);
     return () => {
+      // Stop BEFORE the final flush: the flush itself is the deliberate last write, but a
+      // conflict resolving after this cleanup must not re-arm the debounce (see
+      // serverSyncStoppedRef above).
+      serverSyncStoppedRef.current = true;
       window.removeEventListener("pagehide", flushKeepalive);
       document.removeEventListener("visibilitychange", onHide);
       debounce?.flush();

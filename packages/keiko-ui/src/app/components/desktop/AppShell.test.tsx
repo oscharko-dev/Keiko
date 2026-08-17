@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   applyBackgroundModalLock,
   persistedChatProjectPath,
@@ -30,10 +30,24 @@ describe("applyBackgroundModalLock", (): void => {
     trigger.focus();
     expect(document.activeElement).toBe(trigger);
 
-    applyBackgroundModalLock(background, true);
+    // The Chrome violation this pins fires AT THE MOMENT aria-hidden lands on an ancestor of
+    // the focused element, so the assertion must observe focus at each attribute WRITE — a
+    // final-state check would also pass for the broken hide-then-blur order.
+    const writes: { attribute: string; triggerStillFocused: boolean }[] = [];
+    const spy = vi.spyOn(background, "setAttribute").mockImplementation(function (
+      this: HTMLElement,
+      name: string,
+      value: string,
+    ) {
+      writes.push({ attribute: name, triggerStillFocused: document.activeElement === trigger });
+      Element.prototype.setAttribute.call(this, name, value);
+    });
 
-    // The Chrome violation this pins: aria-hidden landing on an ancestor of the focused
-    // element (the FAB that opened the dialog). Focus must be gone before both attributes.
+    applyBackgroundModalLock(background, true);
+    spy.mockRestore();
+
+    expect(writes.map((write) => write.attribute).sort()).toEqual(["aria-hidden", "inert"]);
+    expect(writes.every((write) => !write.triggerStillFocused)).toBe(true);
     expect(document.activeElement).not.toBe(trigger);
     expect(background.getAttribute("aria-hidden")).toBe("true");
     expect(background.hasAttribute("inert")).toBe(true);

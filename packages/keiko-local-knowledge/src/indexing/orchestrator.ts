@@ -2099,16 +2099,15 @@ function embeddingPreflightOptions(state: RunState): EmbeddingProbeOptions {
 }
 
 // An identity is provisional while it has never been verified against the live gateway (no
-// embedding-space fingerprint) and the capsule owns no vectors an adopted identity could
-// invalidate. `lifecycleState === "draft"` alone is not enough: a failed FIRST run moves the
-// capsule to "error" while the identity still holds the creation-time dimension guess, and
-// freezing that guess would wedge the capsule on INCOMPATIBLE_EMBEDDING_IDENTITY forever once
-// the gateway becomes reachable. Re-verifying stays forbidden the moment vectors exist —
-// adopting a changed identity then would silently mix embedding spaces.
+// embedding-space fingerprint) AND the capsule owns no vectors an adopted identity could
+// invalidate. Lifecycle state is deliberately not consulted: `"draft"` alone was not enough
+// (a failed FIRST run moves the capsule to "error" while the identity still holds the
+// creation-time dimension guess, wedging it on INCOMPATIBLE_EMBEDDING_IDENTITY forever), and
+// conversely a draft shortcut must never bypass the vector guard — the moment vectors exist,
+// adopting a changed identity would silently mix embedding spaces, whatever the lifecycle says.
 function hasProvisionalIdentity(state: RunState): boolean {
   const identity = state.capsule.embeddingModelIdentity;
   if (identity.embeddingSpaceFingerprint !== undefined) return false;
-  if (state.capsule.lifecycleState === "draft") return true;
   return countVectorsForCapsule(state.options.store._internal.db, state.capsule.id) === 0;
 }
 

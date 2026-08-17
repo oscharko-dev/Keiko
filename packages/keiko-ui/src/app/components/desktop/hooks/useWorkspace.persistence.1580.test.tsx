@@ -396,6 +396,76 @@ describe("Issue #1580 — visibility-gated server poll", () => {
     expect(putCalls()).toHaveLength(2);
   });
 
+  it("caps the conflict retry at one attempt per dirty snapshot", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    let revision = 7;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        // A concurrent writer keeps advancing the revision: every PUT conflicts with a
+        // strictly higher ETag. Without the per-snapshot cap this chains retries forever.
+        revision += 1;
+        return {
+          ok: false,
+          status: 412,
+          headers: new Headers({ ETag: `"workspace-state-${String(revision)}"` }),
+          json: async () => Promise.resolve({}),
+        } as unknown as Response;
+      }
+      return { status: 304, ok: true, headers: new Headers() } as unknown as Response;
+    });
+
+    render(<Harness />);
+    await flushAsyncEffects();
+    for (let i = 0; i < 5; i += 1) {
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      await flushAsyncEffects();
+    }
+
+    // Initial PUT + exactly ONE conflict retry for this snapshot — never a chain.
+    expect(putCalls()).toHaveLength(2);
+  });
+
+  it("suppresses the conflict retry after the sync hook unmounted", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    let resolvePut: ((response: Response) => void) | undefined;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Promise<Response>((resolve) => {
+          resolvePut = resolve;
+        });
+      }
+      return { status: 304, ok: true, headers: new Headers() } as unknown as Response;
+    });
+
+    const { unmount } = render(<Harness />);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+    expect(putCalls()).toHaveLength(1);
+    expect(resolvePut).toBeDefined();
+
+    // Unmount with the PUT still in flight, THEN let it resolve as a conflict: the retry
+    // must not re-arm the debounce — a late PUT would overwrite the next shell's state.
+    unmount();
+    resolvePut?.({
+      ok: false,
+      status: 412,
+      headers: new Headers({ ETag: '"workspace-state-9"' }),
+      json: async () => Promise.resolve({}),
+    } as unknown as Response);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(1200);
+    });
+    await flushAsyncEffects();
+
+    expect(putCalls()).toHaveLength(1);
+  });
+
   it("adopts the polled server revision while dirty so the first PUT is not stale", async () => {
     window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
     fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
