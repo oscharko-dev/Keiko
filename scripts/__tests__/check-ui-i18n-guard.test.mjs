@@ -1770,6 +1770,29 @@ test("literal-branch conditional at the end of a phrase forks both aggregates", 
   expect(texts).toContain("Save draft");
 });
 
+// Codex 3793944197 on 680205f9: nested conditional with all-literal leaves —
+// `<p>open {cond ? (nested ? "settings" : "account") : "profile"}</p>` renders one of three
+// possible phrases. Recurse through nested ConditionalExpression + transparent wrappers so
+// every statically-known leaf contributes.
+test("emits aggregates for every leaf of a nested literal-only conditional", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>open {cond ? (nested ? "settings" : "account") : "profile"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("open settings");
+  expect(texts).toContain("open account");
+  expect(texts).toContain("open profile");
+});
+
+test("nested conditional with a dynamic leaf falls through (no fabricated phrase)", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>open {cond ? (nested ? "settings" : maybe) : "profile"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).not.toContain("open settings");
+  expect(texts).not.toContain("open profile");
+});
+
 // Codex 3793795574 on 6d137202: `aria-valuetext` is the human-readable text assistive tech
 // announces for `<progress>`, `<meter>`, and range widgets whose numeric value doesn't map
 // cleanly to speech. Both kebab-case (intrinsic elements) and camelCase (custom components)
@@ -1816,6 +1839,31 @@ test("scans literal `children` prop copy on intrinsic and custom elements", () =
     const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
     expect(texts).toContain("Delete account");
   }
+});
+
+// Codex 3793944206 on 680205f9: `React.createElement("button", null, "Delete account")` — the
+// non-JSX form. The third and later arguments are CHILDREN and render as ordinary text.
+// Recognise both `createElement(...)` (unqualified) and `React.createElement(...)`.
+test.each([
+  {
+    label: "unqualified createElement",
+    src: 'const el = createElement("button", null, "Delete account");',
+  },
+  {
+    label: "React.createElement",
+    src: 'const el = React.createElement("button", null, "Delete account");',
+  },
+])("scans createElement child argument copy ($label)", ({ src }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("Delete account");
+});
+
+test("scans multiple createElement child arguments", () => {
+  const texts = untranslatedLiteralsInSource(
+    'const el = createElement("p", null, "Save changes", " immediately now");',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Save changes");
 });
 
 // Codex 3793905529 on 6aa0eb82: bilingual UI copy like `Übernehmen` and `Löschen` — the old

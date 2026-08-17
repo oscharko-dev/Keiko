@@ -915,18 +915,34 @@ function absorbJsxExpressionIntoSegments(node, sourceFile, collector) {
   collector.startNewSegment();
 }
 
-// Codex 3793772901 on #3202: `<p>open {cond ? "settings" : "account"}</p>` renders as EITHER
-// "open settings" OR "open account". Fork the active segments so both aggregates land in the
-// ledger. Only handled when BOTH branches unwrap to literals; partial-literal shapes
-// (`cond ? "x" : maybeVar`) fall through — one runtime branch has an unknown value and
-// fabricating a phrase across it would be wrong.
+// Codex 3793772901 + 3793944197 on #3202: `<p>open {cond ? "settings" : "account"}</p>`
+// renders as EITHER "open settings" OR "open account". Fork the active segments so both
+// aggregates land in the ledger. Nested conditionals (`cond ? (nested ? "settings" :
+// "account") : "profile"`) flatten to N alternatives — recurse through conditional branches
+// (and transparent wrappers) so every statically-known leaf contributes. If ANY leaf is
+// dynamic, fall through — one runtime branch has an unknown value and fabricating a phrase
+// across it would be wrong.
 function tryForkConditionalAggregate(inner, sourceFile, collector) {
   if (!ts.isConditionalExpression(inner)) return false;
-  const trueText = literalTextOfExpression(inner.whenTrue);
-  const falseText = literalTextOfExpression(inner.whenFalse);
-  if (trueText === null || falseText === null) return false;
-  collector.forkAlternatives([trueText, falseText], lineOfNode(inner, sourceFile));
+  const alternatives = collectConditionalLiteralAlternatives(inner);
+  if (alternatives === null) return false;
+  collector.forkAlternatives(alternatives, lineOfNode(inner, sourceFile));
   return true;
+}
+
+function collectConditionalLiteralAlternatives(expr) {
+  const inner = unwrapTransparent(expr);
+  if (ts.isStringLiteral(inner) || ts.isNoSubstitutionTemplateLiteral(inner)) {
+    return [inner.text];
+  }
+  if (ts.isConditionalExpression(inner)) {
+    const trueAlts = collectConditionalLiteralAlternatives(inner.whenTrue);
+    if (trueAlts === null) return null;
+    const falseAlts = collectConditionalLiteralAlternatives(inner.whenFalse);
+    if (falseAlts === null) return null;
+    return [...trueAlts, ...falseAlts];
+  }
+  return null;
 }
 
 // Codex 3793830382 on #3202: `<p>open {cond && "settings"}</p>` renders EITHER "open
@@ -1156,10 +1172,39 @@ function collectJsxTextAndExpressions(source, filename) {
       results.push(...jsxSpreadAttributeResults(node, sourceFile));
     } else if (ts.isJsxElement(node) || ts.isJsxFragment(node)) {
       results.push(...jsxAggregatedTextResults(node, sourceFile));
+    } else if (ts.isCallExpression(node) && isReactCreateElementCall(node)) {
+      results.push(...reactCreateElementChildResults(node, sourceFile));
     }
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
+  return results;
+}
+
+// Codex 3793944206 on #3202: `React.createElement("button", null, "Delete account")` — the
+// non-JSX form used by build outputs, dynamic-tag code, or React APIs that predate JSX. The
+// third and later arguments are CHILDREN and render as ordinary text. Recognise both the
+// unqualified `createElement(...)` and the `React.createElement(...)` PropertyAccess form.
+function isReactCreateElementCall(node) {
+  const callee = node.expression;
+  if (ts.isIdentifier(callee)) return callee.text === "createElement";
+  if (ts.isPropertyAccessExpression(callee)) {
+    const object = callee.expression;
+    if (!ts.isIdentifier(object)) return false;
+    if (object.text !== "React") return false;
+    return callee.name.text === "createElement";
+  }
+  return false;
+}
+
+function reactCreateElementChildResults(node, sourceFile) {
+  const results = [];
+  // Args 0 = tag, arg 1 = props, args 2+ = children.
+  for (let i = 2; i < node.arguments.length; i += 1) {
+    for (const entry of jsxChildExpressionLiteralTexts(node.arguments[i], sourceFile)) {
+      if (entry.text.length > 0) results.push(entry);
+    }
+  }
   return results;
 }
 

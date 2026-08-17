@@ -152,9 +152,12 @@ assert.match(codeText, /posix_spawn\(/u);
 // launch behind an ostensibly-neutral path. The supervisor should launch the requested runtime
 // directly with a fixed absolute path (KEIKO-0304's no-shell contract); if a future need for
 // `env` appears it should surface here so the reviewer weighs it, not slide past silently.
+// Codex 3793944200 on #3202: every forbidden-CALL pattern needs `\s*` before `(` — valid C
+// permits whitespace (`system ("cmd")` compiles identically). Word boundaries anchor the
+// identifier so `filesystem`, `foposix_spawnp`, etc. don't accidentally match.
 assert.doesNotMatch(
   codeAndLiteralsText,
-  /setsid|setpgid|killpg|\/(?:s?bin|usr\/(?:local\/)?bin)\/(?:[a-z]*sh|env)\b|system\(|posix_spawnp|execvp|execlp|execvP/u,
+  /\bsetsid\s*\(|\bsetpgid\s*\(|\bkillpg\s*\(|\/(?:s?bin|usr\/(?:local\/)?bin)\/(?:[a-z]*sh|env)\b|\bsystem\s*\(|\bposix_spawnp\s*\(|\bexecvp\s*\(|\bexeclp\s*\(|\bexecvP\s*\(/u,
 );
 
 // Codex 3792964064 negative self-test: a deleted control retained only as text inside a compiled
@@ -604,6 +607,21 @@ if (helperIndex !== -1) {
   const supplied = process.argv[helperIndex + 1];
   if (supplied === undefined || supplied.length === 0) {
     throw new Error("--helper requires a non-empty path to the staged supervisor binary");
+  }
+}
+// Codex 3793944203 on #3202: a behavioural-qualification flag (`--helper` / `--compile`) on
+// a non-Darwin host silently downgrades to source-only mode. A release or workstation
+// invocation that explicitly requested one and got no behavioural run would be reported as
+// successful qualification. Fail closed: if either flag is supplied off Darwin, throw.
+// Argument-free source-only execution stays supported everywhere (no flag → skip the block).
+if (process.platform !== "darwin") {
+  const requested = process.argv.filter((arg) => arg === "--helper" || arg === "--compile");
+  if (requested.length > 0) {
+    throw new Error(
+      "behavioural qualification flags (--helper / --compile) require darwin; got " +
+        JSON.stringify(process.platform) +
+        ". Run the source-contract lane without flags on this host.",
+    );
   }
 }
 if (process.platform === "darwin") {

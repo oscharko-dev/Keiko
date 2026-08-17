@@ -373,38 +373,55 @@ function preservedByteSpelling(value) {
 }
 
 // ---------------------------------------------------------------------------
-// Path-normalisation: collapse `./`, `../`, and `//` runs
+// Path-normalisation: collapse `./`, `../`, and `//` runs INSIDE string literals
 // ---------------------------------------------------------------------------
-// Codex 3793578605 + 3793642847 + 3793874121 on #3202: the OS resolves `/bin/./sh`,
-// `/bin//sh`, AND `/usr/../bin/sh` all to `/bin/sh` before executing. The negative shell-
-// path pin's regex expects a contiguous `/bin/sh`. Collapse all three forms in the whole
-// prepared source so the pin sees the resolved path. Applies globally rather than per-literal
-// so a token boundary between literal and adjacent code (`"/bin" "/./sh"` after fold) still
-// normalises. Repeats until fixpoint to handle chains (`/./././`, `////`, nested `../../`).
+// Codex 3793578605 + 3793642847 + 3793874121 + 3793944188 on #3202: the OS resolves
+// `/bin/./sh`, `/bin//sh`, AND `/usr/../bin/sh` all to `/bin/sh` before executing. The
+// negative shell-path pin's regex expects a contiguous `/bin/sh`. Normalise each string
+// literal body INDEPENDENTLY — a global sweep would let the `..` regex jump across C token
+// boundaries (`const char *a="/prefix"; system("cmd"); const char *b="/../tail";` would
+// collapse to `const char *a="/tail";`, deleting the live forbidden call before the negative
+// assertion runs).
 //
-// URL schemes are preserved: the `://` after `http`/`https`/`file`/etc. is meaningful, so
-// the `//` collapse uses a negative lookbehind to skip when preceded by `:`. This lets
-// `https://example.com` stay intact while `/bin//sh` still collapses.
-//
-// `..` semantics: match `<component>/..` and remove BOTH tokens (drop the component and the
-// `..`). Requires a non-empty preceding component that isn't itself `..` (nested `../../`
-// consumes one level at a time via iteration). `/../` at path root has no preceding
-// component; POSIX resolves it to `/`, which our regex mimics by collapsing the leading
-// `/../` into a single `/`.
+// URL schemes are preserved: `://` stays intact via a negative lookbehind on `:`. Repeats
+// until fixpoint per literal to handle chains (`/./././`, `////`, nested `../../`). `..`
+// removes the preceding non-`..` component and itself.
 export function normalizeCurrentDirComponents(source) {
+  let out = "";
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '"') {
+      const end = skipStringLiteral(source, i);
+      const body = source.slice(i + 1, end - 1);
+      out += '"' + normalizePathBody(body) + '"';
+      i = end;
+      continue;
+    }
+    if (ch === "'") {
+      const end = skipCharLiteral(source, i);
+      out += source.slice(i, end);
+      i = end;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+function normalizePathBody(body) {
   let previous;
-  let current = source;
+  let current = body;
   do {
     previous = current;
     current = previous
       .replace(/\/\.(?=\/)/gu, "")
       .replace(/(?<!:)\/{2,}/gu, "/")
       // `<component>/..` where <component> is a single path segment that isn't `..`. Followed
-      // by `/` or end of string. The lookbehind on `/` anchors the component start; the
-      // negative lookahead prevents matching `../..` (which needs iteration, not greedy
-      // one-shot). Removes BOTH the component AND the `..` so `usr/../bin` becomes `bin`.
+      // by `/` or end of body. The lookbehind on `/` anchors the component start; the
+      // negative lookahead prevents matching `../..` (which needs iteration).
       .replace(/(?<=\/)(?!\.\.\/)[^/]+\/\.\.(?=\/|$)/gu, "")
-      // Any residual `/./` from the collapse above, or `//` produced by removing a component.
       .replace(/\/\.(?=\/)/gu, "")
       .replace(/(?<!:)\/{2,}/gu, "/");
   } while (current !== previous);
@@ -722,44 +739,30 @@ function evaluateConstantArithmetic(exprText) {
   let js = trimmed.replace(/([0-9a-fA-F])[UuLl]{1,3}\b/gu, "$1");
   // C octal: `0<octal-digits>`. Convert to JS `0o<digits>`. Bare `0` and `0x…` stay as-is.
   js = js.replace(/\b0([0-7]+)(?![0-9a-fA-F])/gu, "0o$1");
-  // Codex 3793795565 on #3202: reject expressions containing an integer literal outside JS's
-  // safe-integer range (|value| > 2^53). C evaluates `#if 9007199254740993 == 9007199254740992`
-  // as false, but JS rounds both operands to 9007199254740992.0 and returns true — the ladder
-  // would then classify the branch wrong and strip a live body. Parse each literal in the
-  // expression (decimal, hex, octal) and bail if any exceeds `Number.MAX_SAFE_INTEGER`.
-  if (!allLiteralsWithinSafeIntRange(js)) return null;
-  return runArithmeticEvalAndNormalise(js);
+  return runArithmeticEvalAsBigInt(js);
 }
 
-function runArithmeticEvalAndNormalise(js) {
+// Codex 3793795565 + 3793944193 on #3202: use BigInt so intermediate results cannot lose
+// precision. The earlier "check every literal fits in safe-integer range" guard only
+// covered INPUT literals; an expression like `(9007199254740991 + 2 - 9007199254740991) ==
+// 2` has every literal in range but a JS Number intermediate (9007199254740993) that rounds
+// down to 9007199254740992, flipping the comparison. BigInt is exact for arbitrary-precision
+// integer arithmetic — the same operators the caller-accepted subset uses (`+ - * = != < >
+// <= >=`, unary `!` for logical NOT, parens) all behave correctly.
+//
+// The result normalisation stays simple: return 1 for nonzero / true, 0 for zero / false —
+// the ladder callers only use truthiness, so we don't need to preserve the actual value.
+function runArithmeticEvalAsBigInt(js) {
+  // Append `n` to every integer literal so JS `Function` evaluates them as BigInt.
+  const bigintJs = js.replace(/0[xX][0-9a-fA-F]+|0[oO][0-7]+|\d+/gu, "$&n");
   try {
-    const result = new Function('"use strict"; return (' + js + ");")();
-    // C comparison and logical operators return `int` (0 or 1); JavaScript returns `boolean`.
-    // Normalise so `1 == 1` → 1 and `1 < 0` → 0 land in the caller as usable truth values.
+    const result = new Function('"use strict"; return (' + bigintJs + ");")();
     if (typeof result === "boolean") return result ? 1 : 0;
-    if (typeof result !== "number" || !Number.isFinite(result)) return null;
-    // Also reject the final result if it lost precision (any intermediate op could have
-    // pushed us past 2^53 even when all input literals were safe).
-    if (Math.abs(result) > Number.MAX_SAFE_INTEGER) return null;
-    return Math.trunc(result);
+    if (typeof result === "bigint") return result === 0n ? 0 : 1;
+    return null;
   } catch {
     return null;
   }
-}
-
-// Extract every integer literal from a JS-compatible arithmetic expression and check that
-// each is within JS's safe-integer range. `js` has already had C integer suffixes stripped
-// and C octal converted to JS `0o…` form, so the literal regex only needs to handle the JS
-// shapes: decimal, hex (`0x…`), octal (`0o…`).
-function allLiteralsWithinSafeIntRange(js) {
-  const literals = js.match(/0[xX][0-9a-fA-F]+|0[oO]?[0-7]+|\d+/gu);
-  if (literals === null) return true;
-  for (const literal of literals) {
-    // `Number(literal)` handles decimal, `0x…`, and `0o…` uniformly.
-    const value = Number(literal);
-    if (!Number.isFinite(value) || Math.abs(value) > Number.MAX_SAFE_INTEGER) return false;
-  }
-  return true;
 }
 
 function tryConstantArithmeticIf(trimmed, stack) {

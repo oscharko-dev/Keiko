@@ -484,6 +484,7 @@ function assertScannerBehaviours() {
   assertPathNormalizationCollapsesCurrentDir();
   assertPathNormalizationCollapsesRepeatedSlashes();
   assertPathNormalizationCollapsesParentDir();
+  assertPathNormalizationScopedToLiterals();
   assertArithmeticConstantConditionsRecognised();
   assertJsIncompatibleArithmeticStaysUnknown();
   assertMaskedByteSpellingPreservesDelimiters();
@@ -521,6 +522,7 @@ function assertJsIncompatibleArithmeticStaysUnknown() {
     "#if 0U - 1 > 0",
     "#if 1uLL + 0",
   ];
+  assertBigIntPrecisionSafeArithmetic();
   for (const variant of rejectVariants) {
     const stripped = stripCommentsAndStrings(
       variant + "\nUNKNOWN_ARITH_IF();\n#else\nUNKNOWN_ARITH_ELSE();\n#endif\n",
@@ -536,6 +538,30 @@ function assertJsIncompatibleArithmeticStaysUnknown() {
       "JS-incompatible arithmetic must stay unknown (keep else-body): " + variant,
     );
   }
+}
+
+// Codex 3793944193 on #3202: intermediates that exceed safe-integer precision must not
+// silently misclassify. `(2^53-1 + 2 - (2^53-1)) == 2` — C: 2 (true). JS Number: intermediate
+// rounds to 2^53, then 2^53 - (2^53-1) = 1, `1 == 2` = false. With the BigInt eval, this
+// evaluates correctly (2n == 2n → true). Verify LIVE body kept, `#else` stripped.
+function assertBigIntPrecisionSafeArithmetic() {
+  const stripped = stripCommentsAndStrings(
+    "#if (9007199254740991 + 2 - 9007199254740991) == 2\n" +
+      "LIVE_BIGINT();\n" +
+      "#else\n" +
+      "DEAD_BIGINT();\n" +
+      "#endif\n",
+  );
+  assert.match(
+    stripped,
+    /LIVE_BIGINT/u,
+    "BigInt evaluator must keep the live body when intermediates exceed 2^53",
+  );
+  assert.equal(
+    stripped.match(/DEAD_BIGINT/u),
+    null,
+    "BigInt evaluator must strip the compiler-dead `#else` when intermediates exceed 2^53",
+  );
 }
 
 // Coderabbit 3793711072 on #3202: `preservedByteSpelling` must MASK the byte before comparing
@@ -753,6 +779,22 @@ function assertTrailingBackslashPreservedThroughDecode() {
 // GLOBALLY in the prepared source so the pin sees the resolved path. Handles chained forms
 // (`/./././`), a `./` in the middle of a longer path, and post-fold spellings like
 // `"/bin" "/./sh"` → `"/bin/./sh"` → `"/bin/sh"`.
+// Codex 3793944188 on #3202: path normalisation must NOT cross C token / literal boundaries.
+// A global sweep would let the `..` regex jump across the source (`const char *a="/prefix";
+// system("cmd"); const char *b="/../tail";` would collapse to `const char *a="/tail";` and
+// silently delete the forbidden call before the negative pin runs). Verify with the
+// reviewer's exact reproducer: a `..` in a later literal must NOT eat code between.
+function assertPathNormalizationScopedToLiterals() {
+  const source =
+    'const char *a = "/prefix";\n' + 'system("cmd");\n' + 'const char *b = "/../tail";\n';
+  const prepared = stripCommentsOnly(source);
+  assert.match(prepared, /system\("cmd"\)/u, "code between literals must survive normalisation");
+  assert.match(prepared, /"\/prefix"/u, "the earlier literal must stay intact");
+  // The trailing `/../tail` literal — `..` at root has no preceding component; POSIX leaves
+  // it (or collapses to `/tail`). Either behaviour is fine for this test; what matters is
+  // that the code BETWEEN the two literals stays.
+}
+
 function assertPathNormalizationCollapsesCurrentDir() {
   const forms = [
     { src: 'const char *p = "/bin/./sh";', expect: '"/bin/sh"', label: "single ./" },
