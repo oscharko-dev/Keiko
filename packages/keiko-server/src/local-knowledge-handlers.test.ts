@@ -3039,22 +3039,24 @@ describe("local-knowledge handlers", () => {
     });
     store.close();
 
-    let calls = 0;
+    // Preflight probes succeed; every DOCUMENT chunk embedding fails. Discriminating on the
+    // chunk content (not a call counter) keeps this fixture pinned to its intent — an
+    // unverified identity now runs the full fingerprint preflight (several probe calls)
+    // before discovery, and a count-based fixture would trip in the preflight instead.
     const deps: UiHandlerDeps = {
       ...depsFor(tmp),
       localKnowledgeEmbeddingRequest: vi.fn(
         (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
-          calls += 1;
-          if (calls === 1) {
-            return Promise.resolve({
-              ok: true,
-              value: {
-                vector: Float32Array.from({ length: 1536 }, (_, index) => index / 1000),
-                modelId: request.modelId,
-              },
-            });
+          if (request.input.includes("Alpha") || request.input.includes("Beta")) {
+            return Promise.resolve({ ok: false, kind: "invalid-response" });
           }
-          return Promise.resolve({ ok: false, kind: "invalid-response" });
+          return Promise.resolve({
+            ok: true,
+            value: {
+              vector: Float32Array.from({ length: 1536 }, (_, index) => index / 1000),
+              modelId: request.modelId,
+            },
+          });
         },
       ),
     };

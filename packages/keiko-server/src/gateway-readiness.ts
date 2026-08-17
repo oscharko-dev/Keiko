@@ -249,6 +249,16 @@ function chooseEmbeddingProvider(config: GatewayConfig): ModelProviderConfig | u
   );
 }
 
+// Surfaces the HTTP status when the gateway answered: "(http-error 400)" points at the request
+// shape, "(transport)" at connectivity — collapsing the two once misdirected a whole
+// connectivity investigation.
+function embeddingFailureDetail(outcome: {
+  readonly kind: string;
+  readonly status?: number;
+}): string {
+  return outcome.status !== undefined ? `${outcome.kind} ${String(outcome.status)}` : outcome.kind;
+}
+
 function roundedNorm(value: number): number {
   return Math.round(value * 10_000) / 10_000;
 }
@@ -284,7 +294,7 @@ async function probeEmbedding(
         "embedding",
         outcome.kind === "unsupported-model" ? "unsupported" : "failed",
         start,
-        `Embedding endpoint could not be verified (${outcome.kind}).`,
+        `Embedding endpoint could not be verified (${embeddingFailureDetail(outcome)}).`,
       );
     }
     const dimensions = outcome.value.vector.length;

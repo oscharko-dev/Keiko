@@ -440,6 +440,25 @@ function connectedScopeKey(scope: ChatConnectedScope | null): string | null {
 
 // S3358 — prefer the bind-time snapshot on the Connection; fall back to whichever
 // endpoint is the chat window. Mirrors connectionChatWindowId in useWorkspace.ts.
+// GEN-UI-A11Y-003 — applies/removes the background modal lock on `.app`. Exported for the direct
+// unit test: the ORDER is load-bearing. Focus must leave the background before aria-hidden lands,
+// because Chrome refuses (and logs a violation for) aria-hidden on an ancestor of the focused
+// element — exactly the state right after clicking the FAB that opened the dialog. The dialog's
+// own mount focus then takes over; blurring here never steals focus from outside the background.
+export function applyBackgroundModalLock(background: HTMLElement, locked: boolean): void {
+  if (!locked) {
+    background.removeAttribute("inert");
+    background.removeAttribute("aria-hidden");
+    return;
+  }
+  const active = background.ownerDocument.activeElement;
+  if (active instanceof HTMLElement && background.contains(active)) {
+    active.blur();
+  }
+  background.setAttribute("inert", "");
+  background.setAttribute("aria-hidden", "true");
+}
+
 export function chatWindowIdOf(conn: Connection, a: AppWindow, b: AppWindow): string | null {
   if (conn.boundChatWindowId !== undefined) return conn.boundChatWindowId;
   if (a.type === "chat") return a.id;
@@ -1601,15 +1620,15 @@ function AppShellInner(): ReactNode {
   const nestedModalOpen = useModalInteractionLockState();
   const modalOpen =
     pending !== null || quickAccessMode !== null || needsGatewaySetup || nestedModalOpen;
-  // GEN-UI-A11Y-003 — toggle `inert` imperatively so the modal lifecycle owns the exact presence of
-  // the boolean attribute across supported renderers: set it while a modal dialog is open and remove
-  // it otherwise. `aria-hidden` pairs with `inert` for older assistive technology.
+  // GEN-UI-A11Y-003 — toggle `inert` AND `aria-hidden` imperatively so the modal lifecycle owns
+  // the exact presence of both attributes across supported renderers. aria-hidden must not live in
+  // JSX: React would commit it while the dialog's trigger (e.g. the workspace FAB) still holds
+  // focus inside `.app`, and Chrome blocks aria-hidden on an ancestor of the focused element.
   const backgroundRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const background = backgroundRef.current;
     if (background === null) return;
-    if (modalOpen) background.setAttribute("inert", "");
-    else background.removeAttribute("inert");
+    applyBackgroundModalLock(background, modalOpen);
   }, [modalOpen]);
 
   return (
@@ -1623,11 +1642,7 @@ function AppShellInner(): ReactNode {
             renders its role="status"/role="alert" regions as siblings of `.app`, OUTSIDE the window
             layer, so they never unmount and any surface can post an outcome via useAnnouncer(). */}
                 <AnnouncerProvider>
-                  <div
-                    ref={backgroundRef}
-                    className="app"
-                    aria-hidden={modalOpen ? true : undefined}
-                  >
+                  <div ref={backgroundRef} className="app">
                     {/* WCAG 2.4.1 — bypass blocks: the first focusable element jumps keyboard
               users past the header/rail straight to the workspace (design/accessibility.html §04). */}
                     <a className="skip-link" href="#main">
