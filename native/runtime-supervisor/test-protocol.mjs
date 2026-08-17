@@ -253,12 +253,32 @@ function assertMutationRejected(rawSource) {
 }
 
 await assertSourceContract();
+// Codex on #3202: validate the ENTIRE argv on Windows too — parallel to the macOS harness's
+// KNOWN_FLAGS check. A typo like `--helpr <path>` or a bare `--helper` (no value) previously
+// slid past silently and compiled the repo source instead of qualifying the staged binary,
+// so a release invocation could report success against the wrong artifact.
+const WINDOWS_KNOWN_FLAGS = new Set(["--helper"]);
+for (let i = 2; i < process.argv.length; i += 1) {
+  const arg = process.argv[i];
+  if (!WINDOWS_KNOWN_FLAGS.has(arg)) {
+    throw new Error(
+      `unknown Windows qualification flag: ${JSON.stringify(arg)}. Supported: --helper <path>`,
+    );
+  }
+  if (arg === "--helper") i += 1; // consume path value; validity checked below.
+}
 if (process.platform === "win32") {
   const root = await mkdtemp(join(tmpdir(), "keiko-runtime-supervisor-"));
   try {
     const helperArgumentIndex = process.argv.indexOf("--helper");
     const suppliedHelper =
       helperArgumentIndex === -1 ? undefined : process.argv[helperArgumentIndex + 1];
+    if (
+      helperArgumentIndex !== -1 &&
+      (suppliedHelper === undefined || suppliedHelper.length === 0)
+    ) {
+      throw new Error("--helper requires a non-empty path to the staged supervisor binary");
+    }
     const helper = suppliedHelper ?? join(root, "keiko-runtime-supervisor.exe");
     const runtime = join(root, "qualification-fixture.exe");
     if (suppliedHelper === undefined) await compile(source, helper);
