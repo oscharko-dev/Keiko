@@ -978,33 +978,26 @@ async function putServerWorkspaceSnapshot(
   }
 }
 
-// Conflict half of the PUT continuation, extracted from the `.then` arrow to keep its
-// complexity within the lint ceiling. Adopts a strictly newer revision from the 412's ETag,
-// then re-sends the still-dirty snapshot ONCE through the debounce — bounded per serialized
-// snapshot, suppressed after the sync hook unmounted (a late PUT would overwrite the next
-// shell's state).
-interface WorkspacePutConflictContext {
-  readonly revisionRef: CurrentRef<number>;
-  readonly localDirtyRef: CurrentRef<boolean>;
-  readonly serverSyncStoppedRef: CurrentRef<boolean>;
-  readonly conflictRetriedSnapshotRef: CurrentRef<string | null>;
-  readonly putDebounceRef: CurrentRef<TrailingDebounce | null>;
-  readonly runServerPutRef: CurrentRef<(keepalive: boolean) => void>;
-}
-
-function handleWorkspacePutConflict(
-  ctx: WorkspacePutConflictContext,
-  revision: number | null,
+// Retry half of the PUT conflict continuation, extracted from the `.then` arrow to keep its
+// complexity within the lint ceiling. Re-sends the still-dirty snapshot ONCE through the
+// debounce — bounded per serialized snapshot, suppressed after the sync hook unmounted (a late
+// PUT would overwrite the next shell's state). Positional ref parameters on purpose: an options
+// object would ship its property names un-minified in the first-load bundle, and this exact
+// spot once tipped the editor-bundle-size budget by a few dozen gzip bytes.
+function scheduleWorkspaceConflictRetry(
   serializedSnapshot: string,
+  localDirtyRef: CurrentRef<boolean>,
+  serverSyncStoppedRef: CurrentRef<boolean>,
+  conflictRetriedSnapshotRef: CurrentRef<string | null>,
+  putDebounceRef: CurrentRef<TrailingDebounce | null>,
+  runServerPutRef: CurrentRef<(keepalive: boolean) => void>,
 ): void {
-  if (revision === null || revision <= ctx.revisionRef.current) return;
-  ctx.revisionRef.current = revision;
-  if (!ctx.localDirtyRef.current) return;
-  if (ctx.serverSyncStoppedRef.current) return;
-  if (ctx.conflictRetriedSnapshotRef.current === serializedSnapshot) return;
-  ctx.conflictRetriedSnapshotRef.current = serializedSnapshot;
-  ctx.putDebounceRef.current?.schedule(() => {
-    ctx.runServerPutRef.current(false);
+  if (!localDirtyRef.current) return;
+  if (serverSyncStoppedRef.current) return;
+  if (conflictRetriedSnapshotRef.current === serializedSnapshot) return;
+  conflictRetriedSnapshotRef.current = serializedSnapshot;
+  putDebounceRef.current?.schedule(() => {
+    runServerPutRef.current(false);
   });
 }
 
@@ -1186,20 +1179,19 @@ function useWorkspaceServerSync({
       keepalive,
     }).then((result) => {
       if (result?.kind === "conflict") {
-        // A 412 is a handled concurrency signal: adopt the newer revision and re-send the
-        // still-dirty snapshot once (zombie-window fix) — see handleWorkspacePutConflict.
-        handleWorkspacePutConflict(
-          {
-            revisionRef,
+        // A 412 is a handled concurrency signal: adopt the newer revision, then re-send the
+        // still-dirty snapshot once (zombie-window fix) — see scheduleWorkspaceConflictRetry.
+        if (result.revision !== null && result.revision > revisionRef.current) {
+          revisionRef.current = result.revision;
+          scheduleWorkspaceConflictRetry(
+            snapshot.serialized,
             localDirtyRef,
             serverSyncStoppedRef,
             conflictRetriedSnapshotRef,
             putDebounceRef,
             runServerPutRef,
-          },
-          result.revision,
-          snapshot.serialized,
-        );
+          );
+        }
         return;
       }
       if (result?.kind !== "ok") return;
