@@ -281,7 +281,14 @@ const _RHS_ATOM = `!?\\s*(?:${_IDENT}|${_DEFINED_CALL})`;
 // slipped past the deterministically-false pin and a required control retained only in that
 // branch would still satisfy the source contract after the live copy was deleted.
 const _ZERO_LITERAL = "(?:0[0]*|0[xX]0+)[UuLl]{0,3}";
-const _ONE_LITERAL = "1[UuLl]{0,3}";
+// One-valued integer literal across every C spelling that evaluates to one: bare decimal `1`,
+// octal `01`/`001` (leading `0` starts an octal literal, any leading-zero-then-1 chain equals
+// one), and hexadecimal `0x1`/`0X01` (leading zeros between the `x` and the `1` still evaluate
+// to one). Any spelling may carry the usual U/L suffix combinations. Codex 3793356684 on #3202:
+// the earlier `1[UuLl]{0,3}` matched only the bare decimal form, so `#if 0x1` and `#if 01` were
+// treated as unknown — their live body AND their compiler-dead `#else` body both survived, and
+// a required control retained only in that dead `#else` would still satisfy the source pin.
+const _ONE_LITERAL = "(?:0*1|0[xX]0*1)[UuLl]{0,3}";
 // The literal itself may be parenthesized (`(0)`, `(1)`) — preserved from the original spelling
 // so `#if (0)` still matches. `\(?` and `\)?` are BOTH optional but always paired in practice.
 const _parenZero = `\\(?\\s*${_ZERO_LITERAL}\\s*\\)?`;

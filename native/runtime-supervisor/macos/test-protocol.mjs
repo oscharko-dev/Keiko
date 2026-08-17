@@ -153,9 +153,15 @@ assert.match(codeText, /posix_spawn\(/u);
 // `/sbin/` whose executable name ends in `sh` — that covers `sh`, `bash`, `zsh`, `ksh`,
 // `dash`, `ash`, `csh`, `tcsh`, and `fish` on any of the standard system paths, without
 // tripping on unrelated tokens containing "sh".
+//
+// Codex 3793356678 on #3202: also reject `env`-mediated launches. `posix_spawn(..., "/usr/bin/
+// env", ...)` with args like `sh -c ...` satisfies the positive spawn pin and hides a shell
+// launch behind an ostensibly-neutral path. The supervisor should launch the requested runtime
+// directly with a fixed absolute path (KEIKO-0304's no-shell contract); if a future need for
+// `env` appears it should surface here so the reviewer weighs it, not slide past silently.
 assert.doesNotMatch(
   codeAndLiteralsText,
-  /setsid|setpgid|killpg|\/(?:s?bin|usr\/(?:local\/)?bin)\/[a-z]*sh\b|system\(|posix_spawnp|execvp|execlp|execvP/u,
+  /setsid|setpgid|killpg|\/(?:s?bin|usr\/(?:local\/)?bin)\/(?:[a-z]*sh|env)\b|system\(|posix_spawnp|execvp|execlp|execvP/u,
 );
 
 // Codex 3792964064 negative self-test: a deleted control retained only as text inside a compiled

@@ -1568,6 +1568,65 @@ test("does not double-emit when an inline formatting element wraps the phrase in
   expect(matches).toHaveLength(1);
 });
 
+// Codex 3793356672 on af9f5ede: line-break phrasing elements (`<br/>`, `<wbr/>`) split copy at
+// whitespace boundaries. `<p>open<br/>settings</p>` renders "open settings" but the aggregator
+// used to break the segment at `<br/>` (a non-inline non-formatting element), so each half was
+// rejected as a machine-token. Treat `<br/>` and `<wbr/>` as pure whitespace: don't break, don't
+// contribute a part — the joiner supplies the space.
+test.each([
+  { label: "self-closing br", src: "<p>open<br/>settings</p>" },
+  { label: "explicit br element", src: "<p>open<br></br>settings</p>" },
+  { label: "self-closing wbr", src: "<p>open<wbr/>settings</p>" },
+])("treats line-break phrasing elements as whitespace separators ($label)", ({ src }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("open settings");
+});
+
+// Codex 3793356675 on af9f5ede: `{({ idle: "Open settings", done: "Close settings" })[state]}`
+// — the values of an inline object map reached via element-access render as user copy but the
+// expression collector had no ObjectLiteralExpression case. Recurse through property values
+// (keys are code, analogous to element-access argument policy).
+test("collects literals from inline object-literal values via element-access lookup", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{({ idle: "Open settings", done: "Close settings" })[state]}</p>',
+    "packages/x/y.tsx",
+  )
+    .findings.map((f) => f.text)
+    .sort();
+  expect(texts).toContain("Open settings");
+  expect(texts).toContain("Close settings");
+});
+
+// Codex 3793356682 on af9f5ede: `{"open " + "settings"}` renders "open settings" but the
+// per-operand recursion emitted "open" and "settings" separately — each is a lowercase
+// machine-token the classifier rejects. Fold literal-only `+` chains into the whole phrase
+// before classification. Retain per-operand emission when at least one operand is dynamic.
+test("combines literal `+` operands into a single phrase before classification", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{"open " + "settings"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("open settings");
+});
+
+test("chained literal `+` operands fold across three or more segments", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{"press " + "Ctrl " + "K" + " now"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("press Ctrl K now");
+});
+
+test("dynamic `+` operands still fall through to per-operand recursion", () => {
+  // "Welcome back," should still be reported even though the chain contains a dynamic operand.
+  const texts = untranslatedLiteralsInSource(
+    '<p>{"Welcome back, " + user + " to Keiko"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Welcome back,");
+  expect(texts).toContain("to Keiko");
+});
+
 test("aggregation does not cross block-level element boundaries", () => {
   // `<div>` is a block container, not text-level inline formatting; the two `<p>` phrases render
   // as separate paragraphs and each is its own aggregate context. `open` and `settings` remain

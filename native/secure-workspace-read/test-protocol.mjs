@@ -523,7 +523,54 @@ function assertLaterElifAfterLiveStripped() {
   assertNestedUnknownLadderStripsConstantDeadSibling();
   assertAdjacentStringLiteralsFold();
   assertHexAndOctalZeroFormsStripped();
+  assertHexAndOctalOneFormsRecognised();
   assertTrigraphIfZero();
+}
+
+// Codex 3793356684 on #3202: `#if 0x1` and `#if 01` are true just like `#if 1`. The earlier
+// bare-decimal-only regex left them as unknown, so both their live body AND their compiler-
+// dead `#else` body survived — a required control retained only in that dead `#else` would
+// slip past the source contract after the live copy was deleted. Cover the equivalent hex
+// and octal one spellings plus `||` composites and outer parens.
+function assertHexAndOctalOneFormsRecognised() {
+  const oneVariants = [
+    "#if 0x1",
+    "#if 0X1",
+    "#if 0x01",
+    "#if 0X0001UL",
+    "#if 01",
+    "#if 001",
+    "#if 001UL",
+    "#if 0x1 || FEATURE",
+    "#if 01 || defined(FLAG)",
+    "#if (0x1)",
+    "#if (01 || FEATURE)",
+  ];
+  for (const variant of oneVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nLIVE_BASE_ONE_BODY();\n#else\nDEAD_BASE_ONE_ELSE();\n#endif\n",
+    );
+    assert.match(
+      stripped,
+      /LIVE_BASE_ONE_BODY/u,
+      "one-valued literal in any C base must keep its live body: " + variant,
+    );
+    assert.equal(
+      stripped.match(/DEAD_BASE_ONE_ELSE/u),
+      null,
+      "`#else` after a base-variant one must be stripped (the branch is compiler-dead): " + variant,
+    );
+  }
+  // Elif form too — same regex family, same reasoning.
+  const stripped = stripCommentsAndStrings(
+    "#if 0\nDEAD_IF();\n#elif 0x1\nLIVE_HEX_ELIF();\n#else\nDEAD_ELSE_AFTER_HEX_ONE();\n#endif\n",
+  );
+  assert.match(stripped, /LIVE_HEX_ELIF/u, "`#elif 0x1` must keep its live body");
+  assert.equal(
+    stripped.match(/DEAD_ELSE_AFTER_HEX_ONE/u),
+    null,
+    "`#else` after `#elif 0x1` must be stripped",
+  );
 }
 
 // Coderabbit 3793329577 on #3202: C spells zero in three bases — decimal `0`, octal (a leading

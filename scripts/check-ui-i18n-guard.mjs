@@ -756,6 +756,11 @@ function absorbChildIntoSegments(child, appendPart, startNewSegment) {
     if (trimmed.length > 0) appendPart(trimmed);
     return;
   }
+  // Codex 3793356672 on #3202: line-break phrasing elements (`<br/>`, `<wbr/>`) split copy at
+  // whitespace boundaries — `<p>open<br/>settings</p>` renders "open settings". Treat them as
+  // pure whitespace: don't start a new segment, don't add a part. The joiner in
+  // `jsxAggregatedTextResults` supplies the space when the resulting parts are joined.
+  if (isLineBreakPhrasingChild(child)) return;
   if (isInlineTextFormattingChild(child)) {
     // Inline formatting elements render adjacent to surrounding text; flatten their segments
     // into the parent's current segment. A boundary INSIDE the inline element (rare) still
@@ -773,6 +778,20 @@ function absorbChildIntoSegments(child, appendPart, startNewSegment) {
   }
   // Non-inline element (block container, custom component) or any other kind of child.
   startNewSegment();
+}
+
+const LINE_BREAK_PHRASING_ELEMENTS = new Set(["br", "wbr"]);
+
+function isLineBreakPhrasingChild(child) {
+  let tagName;
+  if (ts.isJsxSelfClosingElement(child)) {
+    tagName = child.tagName;
+  } else if (ts.isJsxElement(child)) {
+    tagName = child.openingElement.tagName;
+  } else {
+    return false;
+  }
+  return ts.isIdentifier(tagName) && LINE_BREAK_PHRASING_ELEMENTS.has(tagName.text);
 }
 
 // Codex 3793282537 on #3202: `<p>open {"settings"}</p>` renders the literal inside the
@@ -997,6 +1016,13 @@ function containerExpressionTexts(expr, sourceFile) {
   if (ts.isArrayLiteralExpression(expr)) {
     return expr.elements.flatMap((element) => jsxChildExpressionLiteralTexts(element, sourceFile));
   }
+  // ObjectLiteralExpression: `{({ idle: "Open settings", done: "Close settings" })[state]}` —
+  // an inline object map whose values are user copy the receiver traversal reaches through
+  // element-access. Codex 3793356675. Recurse through each property VALUE (keys are code, not
+  // rendered copy — analogous to the element-access argument policy).
+  if (ts.isObjectLiteralExpression(expr)) {
+    return objectLiteralPropertyLiteralTexts(expr, sourceFile);
+  }
   // TaggedTemplateExpression: ``<p>{String.raw`Delete account`}</p>`` — a tag like
   // `String.raw` returns the template literal verbatim, so the rendered text is the template
   // body. Codex 3793198455. Traverse `.template` (which is a NoSubstitutionTemplateLiteral or
@@ -1024,6 +1050,20 @@ function isTransparentWrapper(expr) {
     ts.isSatisfiesExpression(expr) ||
     ts.isNonNullExpression(expr)
   );
+}
+
+function objectLiteralPropertyLiteralTexts(expr, sourceFile) {
+  const results = [];
+  for (const prop of expr.properties) {
+    if (ts.isPropertyAssignment(prop)) {
+      results.push(...jsxChildExpressionLiteralTexts(prop.initializer, sourceFile));
+    } else if (ts.isShorthandPropertyAssignment(prop)) {
+      results.push(...jsxChildExpressionLiteralTexts(prop.name, sourceFile));
+    } else if (ts.isSpreadAssignment(prop)) {
+      results.push(...jsxChildExpressionLiteralTexts(prop.expression, sourceFile));
+    }
+  }
+  return results;
 }
 
 function functionLikeLiteralTexts(expr, sourceFile) {
@@ -1103,10 +1143,54 @@ function binaryFallbackLiteralTexts(expr, sourceFile) {
   if (expr.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
     return jsxChildExpressionLiteralTexts(expr.right, sourceFile);
   }
+  // Codex 3793356682 on #3202: `{"open " + "settings"}` renders "open settings" but the
+  // operand-only recursion emitted two lowercase tokens the classifier dropped. When BOTH sides
+  // of a `+` are directly literal (or nested literal `+` chains), fold them into the whole
+  // rendered phrase and classify that first so the aggregate enters the ledger. Falls through
+  // to the operand-recursion when either side is dynamic — the existing recursion handles
+  // literal-plus-variable and variable-plus-literal shapes.
+  if (expr.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    const combined = combinedLiteralPlusChain(expr);
+    if (combined !== null) return [{ line: lineOfNode(expr, sourceFile), text: combined }];
+  }
   return [
     ...jsxChildExpressionLiteralTexts(expr.left, sourceFile),
     ...jsxChildExpressionLiteralTexts(expr.right, sourceFile),
   ];
+}
+
+// Return the concatenated text if EVERY operand in a `+` chain is a direct string literal (or a
+// parenthesised / `as`-wrapped one). Returns null if any operand is dynamic — the caller then
+// emits per-operand as before, which is still correct for literal-plus-variable shapes.
+function combinedLiteralPlusChain(expr) {
+  const parts = [];
+  if (!collectLiteralPlusOperands(expr, parts)) return null;
+  const joined = parts.join("").trim().replace(/\s+/gu, " ");
+  return joined.length > 0 ? joined : null;
+}
+
+function collectLiteralPlusOperands(node, parts) {
+  const unwrapped = unwrapTransparent(node);
+  if (
+    ts.isBinaryExpression(unwrapped) &&
+    unwrapped.operatorToken.kind === ts.SyntaxKind.PlusToken
+  ) {
+    return (
+      collectLiteralPlusOperands(unwrapped.left, parts) &&
+      collectLiteralPlusOperands(unwrapped.right, parts)
+    );
+  }
+  if (ts.isStringLiteral(unwrapped) || ts.isNoSubstitutionTemplateLiteral(unwrapped)) {
+    parts.push(unwrapped.text);
+    return true;
+  }
+  return false;
+}
+
+function unwrapTransparent(node) {
+  let current = node;
+  while (isTransparentWrapper(current)) current = current.expression;
+  return current;
 }
 
 function isRenderingFallbackOperator(kind) {
