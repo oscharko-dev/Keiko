@@ -441,7 +441,11 @@ function assertCommentStrippingIsLoadBearing(rawSource) {
 // compiles. The pre-pass strips those regions before comment/literal scanning so a deleted
 // control wrapped in `#if 0` no longer satisfies the source-contract regexes. Nested
 // `#if X ... #endif` inside the disabled block must count toward the balance; code after
-// the outer `#endif` must survive.
+// the outer `#endif` must survive. Scanner-behaviour self-tests (constant-condition variants,
+// escape decoding, fold ordering) live in `assertScannerBehaviours`; the elif ladder tests
+// stay under `assertElifBranchHandling` (coderabbit outside-diff review on #3202: keep each
+// helper's assertions to what its name describes so a failure stack points at the right
+// invariant).
 function assertDisabledPreprocessorBranchesAreStripped() {
   assertBasicDisabledIfStrip();
   assertSplicedDisabledIfStrip();
@@ -450,6 +454,31 @@ function assertDisabledPreprocessorBranchesAreStripped() {
   assertDisabledIfVariants();
   assertCharLiteralHandling();
   assertElifBranchHandling();
+  assertScannerBehaviours();
+}
+
+// Grouped scanner-behaviour self-tests — each one asserts an independent constant-condition,
+// escape, or fold invariant. Keeping them under a shared top-level helper lets a failure stack
+// name what actually broke (e.g. `assertTrigraphIfZero`) instead of a distant elif assertion.
+function assertScannerBehaviours() {
+  assertNestedIfZeroInsideLiveElseStripped();
+  assertNestedElseInsideDeadParentStripped();
+  assertElifOneAfterUnknownExhausts();
+  assertCompoundConstantTrueIf();
+  assertParenthesizedConstantConditions();
+  assertNestedUnknownLadderStripsConstantDeadSibling();
+  assertAdjacentStringLiteralsFold();
+  assertHexAndOctalZeroFormsStripped();
+  assertHexAndOctalOneFormsRecognised();
+  assertArbitraryNonzeroFormsRecognised();
+  assertUnaryConstantConditionsRecognised();
+  assertNegatedConstantConditionsRecognised();
+  assertParenthesizedShortCircuitRhsRecognised();
+  assertUnknownConditionsKeepBothBranches();
+  assertCEscapesDecodedInsideLiterals();
+  assertEscapedQuotesPreservedThroughDecode();
+  assertDecodeThenFoldOrder();
+  assertTrigraphIfZero();
 }
 
 // Codex 3792964066 + 3792986617 (#elif handling): the compiler picks exactly one branch of a
@@ -527,20 +556,6 @@ function assertLaterElifAfterLiveStripped() {
     null,
     "any `#elif` after a live branch must be stripped",
   );
-  assertNestedIfZeroInsideLiveElseStripped();
-  assertNestedElseInsideDeadParentStripped();
-  assertElifOneAfterUnknownExhausts();
-  assertCompoundConstantTrueIf();
-  assertParenthesizedConstantConditions();
-  assertNestedUnknownLadderStripsConstantDeadSibling();
-  assertAdjacentStringLiteralsFold();
-  assertHexAndOctalZeroFormsStripped();
-  assertHexAndOctalOneFormsRecognised();
-  assertArbitraryNonzeroFormsRecognised();
-  assertUnaryConstantConditionsRecognised();
-  assertCEscapesDecodedInsideLiterals();
-  assertDecodeThenFoldOrder();
-  assertTrigraphIfZero();
 }
 
 // Codex 3793469154 on #3202: order matters — DECODE FIRST, THEN FOLD. If the pipeline folded
@@ -555,6 +570,14 @@ function assertDecodeThenFoldOrder() {
   assert.ok(
     prepared.includes('"/bin/sh"'),
     'decode must run BEFORE fold: `"\\x2f" "bin/sh"` must resolve to `"/bin/sh"`, not `"ûin/sh"`',
+  );
+  // Coderabbit 3793501285 on #3202: also pin the FAILURE MODE. Without the negative assertion
+  // a future regression that emitted BOTH the correct AND the corrupted spelling would keep
+  // the positive check green while shipping the fold-first bug.
+  assert.equal(
+    prepared.includes("ûin/sh"),
+    false,
+    'fold-first corruption `"ûin/sh"` must NOT appear in the normalized source',
   );
 }
 
@@ -596,6 +619,144 @@ function assertUnaryConstantConditionsRecognised() {
       "`#else` after unary zero must survive: " + variant,
     );
   }
+}
+
+// Codex 3793501034 on #3202: `#if !0` is unconditionally true, `#if !1` is unconditionally
+// false. Cover logical NOT of recognised constants across the same literal shapes the ladder
+// already handles (bare, parenthesized, hex, octal), plus the `!(0)` outer-paren form.
+function assertNegatedConstantConditionsRecognised() {
+  const trueVariants = ["#if !0", "#if ! 0", "#if !(0)", "#if !0x0", "#if !00"];
+  for (const variant of trueVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nLIVE_NEG_ZERO_BODY();\n#else\nDEAD_NEG_ZERO_ELSE();\n#endif\n",
+    );
+    assert.match(
+      stripped,
+      /LIVE_NEG_ZERO_BODY/u,
+      "`!<zero>` must keep its live body (evaluates to nonzero): " + variant,
+    );
+    assert.equal(
+      stripped.match(/DEAD_NEG_ZERO_ELSE/u),
+      null,
+      "`#else` after `!<zero>` must be stripped: " + variant,
+    );
+  }
+  const falseVariants = ["#if !1", "#if ! 42", "#if !(1)", "#if !0x1", "#if !01"];
+  for (const variant of falseVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nDEAD_NEG_NONZERO_BODY();\n#else\nLIVE_NEG_NONZERO_ELSE();\n#endif\n",
+    );
+    assert.equal(
+      stripped.match(/DEAD_NEG_NONZERO_BODY/u),
+      null,
+      "`!<nonzero>` must strip its body (evaluates to zero): " + variant,
+    );
+    assert.match(
+      stripped,
+      /LIVE_NEG_NONZERO_ELSE/u,
+      "`#else` after `!<nonzero>` must survive: " + variant,
+    );
+  }
+}
+
+// Coderabbit 3793501284 on #3202: extend the RHS after a constant-short-circuit operand to
+// accept parenthesized sub-expressions like `(FEATURE || OTHER)`. `0 && anything` is
+// deterministically false and `1 || anything` is deterministically true regardless of the
+// RHS's internal structure, so recognising the SHAPE is enough — we don't need to evaluate it.
+function assertParenthesizedShortCircuitRhsRecognised() {
+  const falseVariants = [
+    "#if 0 && (FEATURE || OTHER)",
+    "#if 0 && (FEATURE && OTHER)",
+    "#if 0 && (defined(FLAG) || FEATURE)",
+    "#if (0 && (FEATURE || OTHER))",
+  ];
+  for (const variant of falseVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nDEAD_PAREN_RHS_BODY();\n#else\nLIVE_PAREN_RHS_ELSE();\n#endif\n",
+    );
+    assert.equal(
+      stripped.match(/DEAD_PAREN_RHS_BODY/u),
+      null,
+      "`0 && (…)` must strip its body regardless of paren RHS shape: " + variant,
+    );
+    assert.match(
+      stripped,
+      /LIVE_PAREN_RHS_ELSE/u,
+      "`#else` after `0 && (…)` must survive: " + variant,
+    );
+  }
+  const trueVariants = [
+    "#if 1 || (FEATURE || OTHER)",
+    "#if 1 || (FEATURE && OTHER)",
+    "#if 1 || (defined(FLAG) || FEATURE)",
+    "#if (1 || (FEATURE || OTHER))",
+  ];
+  for (const variant of trueVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nLIVE_PAREN_RHS_TRUE_BODY();\n#else\nDEAD_PAREN_RHS_TRUE_ELSE();\n#endif\n",
+    );
+    assert.match(
+      stripped,
+      /LIVE_PAREN_RHS_TRUE_BODY/u,
+      "`1 || (…)` must keep its live body regardless of paren RHS shape: " + variant,
+    );
+    assert.equal(
+      stripped.match(/DEAD_PAREN_RHS_TRUE_ELSE/u),
+      null,
+      "`#else` after `1 || (…)` must be stripped: " + variant,
+    );
+  }
+}
+
+// Coderabbit 3793501292 on #3202: prove that non-constant conditions STAY unknown — both
+// branches must survive. Without this, a regression that classified every `#if` as true or
+// false would strip live source before the contract pins run and every constant-classification
+// test above would still pass.
+function assertUnknownConditionsKeepBothBranches() {
+  const unknownVariants = [
+    "#if FEATURE",
+    "#if 1 && FEATURE",
+    "#if defined(FLAG)",
+    "#if !defined(FLAG)",
+    "#if X == 1",
+    "#ifdef FEATURE",
+    "#ifndef FEATURE",
+  ];
+  for (const variant of unknownVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nUNKNOWN_IF_BODY();\n#else\nUNKNOWN_ELSE_BODY();\n#endif\n",
+    );
+    assert.match(
+      stripped,
+      /UNKNOWN_IF_BODY/u,
+      "unknown condition must keep the if-body: " + variant,
+    );
+    assert.match(
+      stripped,
+      /UNKNOWN_ELSE_BODY/u,
+      "unknown condition must keep the else-body: " + variant,
+    );
+  }
+}
+
+// Coderabbit 3793501296 on #3202: preserve `\"` verbatim through the decode. Decoding it to a
+// bare `"` would create a spurious string-boundary in the middle of a compiled literal, letting
+// a naive reserved-stem pin (`.includes('"CON"')`) fire on `"a\"CON\"b"` and mask deletion of
+// the real `"CON"` source token.
+function assertEscapedQuotesPreservedThroughDecode() {
+  const decoded = stripCommentsOnly('const char *q = "a\\"CON\\"b";\n');
+  assert.ok(
+    decoded.includes('"a\\"CON\\"b"'),
+    "escaped-quote spelling must survive the decode; got: " + decoded,
+  );
+  assert.equal(
+    decoded.match(/"CON"/u),
+    null,
+    'the middle `\\"CON\\"` bytes must NOT form a spurious `"CON"` string boundary',
+  );
+  // Sanity: the octal-boundary form still decodes fine (`"\1011"` → `"A1"`).
+  const octal = stripCommentsOnly('const char *o = "\\1011";\n');
+  assert.ok(octal.includes('"A1"'), 'octal-then-digit boundary must decode to `"A1"`');
 }
 
 // Codex 3793436216 on #3202: C string literals accept escape sequences that clang decodes.

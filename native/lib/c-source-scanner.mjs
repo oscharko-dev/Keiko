@@ -256,6 +256,16 @@ export function decodeCStringEscapes(source) {
   return out;
 }
 
+// Coderabbit 3793501296 on #3202: PRESERVE the escaped-double-quote spelling verbatim. Decoding
+// `\"` to a bare `"` corrupts string-literal boundaries — `"a\"CON\"b"` (a single literal whose
+// value is `a"CON"b`) would become `"a"CON"b"` in the scanned output, and a naive `.includes(
+// '"CON"')` check on the reserved-stem pin would then fire on the spurious middle boundary,
+// masking the deletion of the real `"CON"` literal. Keeping `\"` as `\"` in the output preserves
+// the string-literal token shape downstream pins expect. `\\` stays decoded to a single `\`
+// because the source-contract pins observe raw path substrings (`\\\\?\\`, `GLOBALROOT`) that
+// need the compile-time byte sequence, and the octal boundary regression (`"\1011"` → `"A1"`)
+// pins that shape. Character-level escapes (`\n`, `\t`, …) still decode because they don't
+// affect string-boundary reading.
 const SIMPLE_ESCAPE_MAP = {
   n: "\n",
   t: "\t",
@@ -266,7 +276,7 @@ const SIMPLE_ESCAPE_MAP = {
   v: "\v",
   "?": "?",
   "'": "'",
-  '"': '"',
+  '"': '\\"',
   "\\": "\\",
 };
 
@@ -415,15 +425,28 @@ const _NONZERO_LITERAL =
 // spelling so `#if (0)` still matches. `\(?` and `\)?` are BOTH optional but always paired in
 // practice. Codex 3793436218 on #3202: also accept a leading unary `+` or `-` so `#if -1`,
 // `#if +42`, `#if -0` are handled — the C preprocessor evaluates `-<zero>` to zero and
-// `-<nonzero>` / `+<nonzero>` to nonzero. Semantic mapping stays consistent: `-`/`+` in front
-// of a `_ZERO_LITERAL` is still zero (false), same-sign in front of a `_NONZERO_LITERAL` is
-// still nonzero (true). Whitespace between the sign and the literal is allowed (`- 1`).
+// `-<nonzero>` / `+<nonzero>` to nonzero. Whitespace between the sign and the literal is
+// allowed (`- 1`).
 const _parenZero = `\\(?\\s*[-+]?\\s*${_ZERO_LITERAL}\\s*\\)?`;
 const _parenNonzero = `\\(?\\s*[-+]?\\s*${_NONZERO_LITERAL}\\s*\\)?`;
-// `<literal>` alone or `<literal> <op> <RHS atom>`. `<op>` is `&&` for FALSE (short-circuits on
-// left=0), `||` for TRUE (short-circuits on left=nonzero).
-const _falseExpr = `${_parenZero}(?:\\s*&&\\s*${_RHS_ATOM})?`;
-const _trueExpr = `${_parenNonzero}(?:\\s*\\|\\|\\s*${_RHS_ATOM})?`;
+// Codex 3793501034 on #3202: `!0` is unconditionally true and `!1` is unconditionally false —
+// logical NOT of a recognised constant. Pair each side with the negation of the opposite: a
+// TRUE literal form is either a nonzero literal OR the negation of a zero literal; a FALSE
+// literal form is either a zero literal OR the negation of a nonzero literal. Whitespace
+// between `!` and the value is allowed (`! 0`, `!(0)`, `! ( 0 )`).
+const _parenTrueLiteral = `(?:${_parenNonzero}|!\\s*${_parenZero})`;
+const _parenFalseLiteral = `(?:${_parenZero}|!\\s*${_parenNonzero})`;
+// Coderabbit 3793501284 on #3202: extend the RHS after a constant-short-circuit to accept
+// parenthesised sub-expressions like `(FEATURE || OTHER)`. Because C's `&&` and `||` short-
+// circuit on a constant left operand, the WHOLE expression's truth value is determined by the
+// literal alone — we don't need to evaluate the RHS's structure, only recognise its SHAPE so
+// the directive line parses fully. One level of parenthesised atoms joined by short-circuit
+// operators is enough for the real-world forms; nested paren depths >1 fall back to unknown.
+const _rhsAtomOrPareneChain = `(?:${_RHS_ATOM}|\\(\\s*${_RHS_ATOM}(?:\\s*(?:&&|\\|\\|)\\s*${_RHS_ATOM})*\\s*\\))`;
+// `<literal>` alone or `<literal> <op> <RHS-atom-or-parened>`. `<op>` is `&&` for FALSE (short-
+// circuits on left=0), `||` for TRUE (short-circuits on left=nonzero).
+const _falseExpr = `${_parenFalseLiteral}(?:\\s*&&\\s*${_rhsAtomOrPareneChain})?`;
+const _trueExpr = `${_parenTrueLiteral}(?:\\s*\\|\\|\\s*${_rhsAtomOrPareneChain})?`;
 // Optional outer parens wrapping the WHOLE constant expression, e.g. `(0 && FEATURE)`. Note the
 // two alternatives are needed together so both `(0) && FEATURE` (inner-only) and
 // `(0 && FEATURE)` (outer-whole) work.

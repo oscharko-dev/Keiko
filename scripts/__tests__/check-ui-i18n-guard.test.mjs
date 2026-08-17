@@ -1459,6 +1459,45 @@ test.each([
   expect(texts).toContain("Delete account");
 });
 
+// Coderabbit 3793501299 on 9dd3bf78: pin that the user-facing-attribute-name gate STILL fires
+// for computed keys. Without a negative case, dropping the `USER_FACING_ATTRIBUTE_NAMES` check
+// on the computed-key path would keep every positive test above green while silently ingesting
+// values under keys like `data-testid` that are not user copy.
+test("ignores computed keys that are not user-facing attribute names", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<button {...{ ["data-testid"]: "Delete account" }} />',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).not.toContain("Delete account");
+});
+
+// Codex 3793501037 on 9dd3bf78: conditional / logical spread compositions such as
+// `<button {...(danger ? { "aria-label": "…" } : {})} />` used to return no results because
+// the direct-object check saw only the ConditionalExpression. Recurse through `?:`, `&&`,
+// `||`, `??` to reach every inline ObjectLiteralExpression that could reach the spread at
+// runtime.
+test.each([
+  {
+    label: "conditional whenTrue branch",
+    src: '<button {...(danger ? { "aria-label": "Delete account" } : {})} />',
+  },
+  {
+    label: "conditional whenFalse branch",
+    src: '<button {...(danger ? {} : { "aria-label": "Delete account" })} />',
+  },
+  {
+    label: "logical && short-circuit",
+    src: '<button {...(active && { "aria-label": "Delete account" })} />',
+  },
+  {
+    label: "nullish ?? fallback",
+    src: '<button {...(props ?? { "aria-label": "Delete account" })} />',
+  },
+])("traverses conditional/logical spread compositions ($label)", ({ src }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("Delete account");
+});
+
 // KEIKO-0299 (review-follow-up on b5cb3f6c, codex 3793101250): `{items.map(() => "Delete
 // account")}` — the ArrowFunction body IS user-visible copy that gets rendered per item, but
 // the previous CallExpression recursion stopped at the function argument and never inspected

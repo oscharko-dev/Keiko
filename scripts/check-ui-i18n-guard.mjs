@@ -900,12 +900,19 @@ function jsxAttributeExpressionResults(node, sourceFile) {
 // against the same user-facing name set so a spread rendering an accessible label enters the
 // ledger. Non-inline spreads (`<button {...restProps} />`) stay ignored.
 function jsxSpreadAttributeResults(node, sourceFile) {
-  // Codex 3793436213 on #3202: `<button {...({ "aria-label": "..." } as const)} />` — the
-  // spread expression is an AsExpression wrapping the ObjectLiteral, so the direct-type check
-  // used to miss it. Unwrap transparent wrappers (parentheses, `as`, `satisfies`, `!`) the
-  // same way JSX-child expressions do so wrapped object literals reach the property scan.
-  const objectExpression = unwrapTransparent(node.expression);
-  if (!ts.isObjectLiteralExpression(objectExpression)) return [];
+  // Codex 3793436213 + 3793501037 on #3202: the spread expression may be wrapped by transparent
+  // TypeScript (`{...(obj as const)}`) or composed with `?:` / `&&` / `||` / `??`
+  // (`{...(danger ? { "aria-label": "…" } : {})}`). Collect every inline ObjectLiteralExpression
+  // reachable through those shapes and scan each — otherwise newly-added accessible copy in the
+  // wrapped / conditional form would silently bypass the ledger.
+  const results = [];
+  for (const objectExpression of collectSpreadObjectLiterals(node.expression)) {
+    results.push(...jsxSpreadObjectLiteralResults(objectExpression, sourceFile));
+  }
+  return results;
+}
+
+function jsxSpreadObjectLiteralResults(objectExpression, sourceFile) {
   const results = [];
   for (const prop of objectExpression.properties) {
     if (!ts.isPropertyAssignment(prop)) continue;
@@ -916,6 +923,36 @@ function jsxSpreadAttributeResults(node, sourceFile) {
     }
   }
   return results;
+}
+
+// Walk through transparent wrappers, conditional (`?:`) branches, and short-circuit binary
+// operators (`&&`, `||`, `??`) to gather every inline ObjectLiteralExpression that could reach
+// the spread at runtime. Codex 3793501037 on #3202: this is the analogue of `binaryFallback…`
+// for spreads, so the same "either operand could be picked" logic applies. Non-object leaves
+// (identifiers, calls, `{}` empty literal, etc.) contribute nothing.
+function collectSpreadObjectLiterals(expr) {
+  const unwrapped = unwrapTransparent(expr);
+  if (ts.isObjectLiteralExpression(unwrapped)) return [unwrapped];
+  if (ts.isConditionalExpression(unwrapped)) {
+    return [
+      ...collectSpreadObjectLiterals(unwrapped.whenTrue),
+      ...collectSpreadObjectLiterals(unwrapped.whenFalse),
+    ];
+  }
+  if (ts.isBinaryExpression(unwrapped)) {
+    const kind = unwrapped.operatorToken.kind;
+    if (
+      kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+      kind === ts.SyntaxKind.BarBarToken ||
+      kind === ts.SyntaxKind.QuestionQuestionToken
+    ) {
+      return [
+        ...collectSpreadObjectLiterals(unwrapped.left),
+        ...collectSpreadObjectLiterals(unwrapped.right),
+      ];
+    }
+  }
+  return [];
 }
 
 function objectPropertyKey(name) {
