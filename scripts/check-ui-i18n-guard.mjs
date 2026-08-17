@@ -896,9 +896,14 @@ function jsxAttributeExpressionResults(node, sourceFile) {
 // against the same user-facing name set so a spread rendering an accessible label enters the
 // ledger. Non-inline spreads (`<button {...restProps} />`) stay ignored.
 function jsxSpreadAttributeResults(node, sourceFile) {
-  if (!ts.isObjectLiteralExpression(node.expression)) return [];
+  // Codex 3793436213 on #3202: `<button {...({ "aria-label": "..." } as const)} />` — the
+  // spread expression is an AsExpression wrapping the ObjectLiteral, so the direct-type check
+  // used to miss it. Unwrap transparent wrappers (parentheses, `as`, `satisfies`, `!`) the
+  // same way JSX-child expressions do so wrapped object literals reach the property scan.
+  const objectExpression = unwrapTransparent(node.expression);
+  if (!ts.isObjectLiteralExpression(objectExpression)) return [];
   const results = [];
-  for (const prop of node.expression.properties) {
+  for (const prop of objectExpression.properties) {
     if (!ts.isPropertyAssignment(prop)) continue;
     const key = objectPropertyKey(prop.name);
     if (key === null || !USER_FACING_ATTRIBUTE_NAMES.has(key)) continue;

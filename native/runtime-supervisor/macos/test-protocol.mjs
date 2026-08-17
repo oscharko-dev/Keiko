@@ -21,6 +21,7 @@ import {
 // AND `native/secure-workspace-read/test-protocol.mjs`. Consolidated behind the shared module
 // so a fix lands in one place.
 import {
+  decodeCStringEscapes,
   foldAdjacentStringLiterals,
   preprocessCLineSplices,
   stripCComments,
@@ -120,8 +121,15 @@ function stripCCommentsPreservingLiterals(rawSource) {
   // Codex 3793282534: adjacent string literals concatenate at compile time (C11 §6.4.5). Fold
   // them BEFORE the negative shell-path pin runs so `"/bin/" "sh"` cannot evade the regex that
   // expects a contiguous `"/bin/…sh"` literal.
-  return foldAdjacentStringLiterals(
-    stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource))),
+  //
+  // Codex 3793436216: also decode escape sequences inside string literals (C11 §6.4.4.4).
+  // `"/bin/\x73h"` reaches clang as `/bin/sh`; without decoding, the negative shell-path
+  // regex would miss the escape-hidden form. Decode runs AFTER folding so `"\x2f" "bin/sh"`
+  // (fold-first → `"\x2f/bin/sh"`) still resolves to `/bin/sh`.
+  return decodeCStringEscapes(
+    foldAdjacentStringLiterals(
+      stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource))),
+    ),
   );
 }
 

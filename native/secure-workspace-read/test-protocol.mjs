@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 
 import { resolveWindowsMsvcEnv, windowsToolFromPath } from "../../scripts/lib/windows-msvc.mjs";
 import {
+  decodeCStringEscapes,
   foldAdjacentStringLiterals,
   preprocessCLineSplices,
   stripCComments,
@@ -302,9 +303,16 @@ function stripCommentsOnly(rawSource) {
 // stems / GLOBALROOT pins, and any negative pin that expects a contiguous literal would miss the
 // split form. Fold after comment / disabled-branch stripping so the pins see what the compiler
 // will emit.
+//
+// Codex 3793436216: also decode escape sequences inside string literal BODIES (C11 §6.4.4.4).
+// The Windows reserved-stem and GLOBALROOT pins compare against exact strings; if a control
+// were rewritten to use `"\x43ON"` instead of `"CON"` it would evade the source contract. Decode
+// runs AFTER folding.
 function preparedSource(rawSource) {
-  return foldAdjacentStringLiterals(
-    stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource))),
+  return decodeCStringEscapes(
+    foldAdjacentStringLiterals(
+      stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource))),
+    ),
   );
 }
 
@@ -525,7 +533,71 @@ function assertLaterElifAfterLiveStripped() {
   assertHexAndOctalZeroFormsStripped();
   assertHexAndOctalOneFormsRecognised();
   assertArbitraryNonzeroFormsRecognised();
+  assertUnaryConstantConditionsRecognised();
+  assertCEscapesDecodedInsideLiterals();
   assertTrigraphIfZero();
+}
+
+// Codex 3793436218 on #3202: `#if -1` is unconditionally true (the C preprocessor evaluates
+// `-<nonzero>` as nonzero). The earlier pattern missed the unary form; both live body and
+// compiler-dead `#else` survived. Cover unary `-` and `+` on both zero and nonzero literals.
+function assertUnaryConstantConditionsRecognised() {
+  // Unary on nonzero: `-1`, `-42`, `+1` → true, so `#else` stripped.
+  const trueVariants = ["#if -1", "#if -42", "#if +1", "#if - 1", "#if (-1)", "#if -0x1"];
+  for (const variant of trueVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nLIVE_UNARY_TRUE_BODY();\n#else\nDEAD_UNARY_TRUE_ELSE();\n#endif\n",
+    );
+    assert.match(
+      stripped,
+      /LIVE_UNARY_TRUE_BODY/u,
+      "unary nonzero must keep its live body: " + variant,
+    );
+    assert.equal(
+      stripped.match(/DEAD_UNARY_TRUE_ELSE/u),
+      null,
+      "`#else` after unary nonzero must be stripped: " + variant,
+    );
+  }
+  // Unary on zero: `-0`, `+0` → still zero (false), so if-body stripped and `#else` kept.
+  const falseVariants = ["#if -0", "#if +0", "#if -0x0", "#if +00"];
+  for (const variant of falseVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nDEAD_UNARY_FALSE_BODY();\n#else\nLIVE_UNARY_FALSE_ELSE();\n#endif\n",
+    );
+    assert.equal(
+      stripped.match(/DEAD_UNARY_FALSE_BODY/u),
+      null,
+      "unary zero must strip its body: " + variant,
+    );
+    assert.match(
+      stripped,
+      /LIVE_UNARY_FALSE_ELSE/u,
+      "`#else` after unary zero must survive: " + variant,
+    );
+  }
+}
+
+// Codex 3793436216 on #3202: C string literals accept escape sequences that clang decodes.
+// A control retained as `"\x43ON"` still compiles to the reserved stem `"CON"`, so the string-
+// preserving scan (used by WINDOWS_RESERVED_STEMS / GLOBALROOT pins) must decode escapes
+// before pin evaluation. Verify a hex-escape, an octal-escape, and a simple escape all decode.
+function assertCEscapesDecodedInsideLiterals() {
+  const raw =
+    'const char *hex_form = "\\x43\\x4fN";\n' +
+    'const char *oct_form = "\\103\\117N";\n' +
+    'const char *plain    = "CON";\n' +
+    'const char *literal_backslash = "keep\\\\this";\n';
+  const decoded = stripCommentsOnly(raw);
+  assert.ok(decoded.includes('"CON"'), "hex-escaped `\\x43\\x4fN` must decode to `CON`");
+  assert.ok(
+    decoded.match(/"CON"/gu).length >= 3,
+    'hex, octal, and plain spellings must all reach the pin as `"CON"`',
+  );
+  assert.ok(
+    decoded.includes('"keep\\this"'),
+    "double-backslash escape must decode to a single backslash inside the literal",
+  );
 }
 
 // Codex 3793398789 on #3202: C's `#if` treats every nonzero integer as true, not just 1. The

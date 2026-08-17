@@ -216,6 +216,118 @@ export function foldAdjacentStringLiterals(source) {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 5: character-escape decoding inside string literals (C11 §6.4.4.4)
+// ---------------------------------------------------------------------------
+// C string literals accept escape sequences that the compiler decodes at translation phase 5.
+// `"/bin/\x73h"` reaches the compiled binary as `/bin/sh`; the negative shell-path pin that
+// looks for `\/bin\/[a-z]*sh\b` on the raw literal source would miss it. Codex 3793436216 on
+// #3202: decode escapes inside string literal BODIES so pins observe what the compiler will
+// emit. Only string literals get the decoding — character literals stay untouched; their
+// escape spellings are semantically meaningful to the pins that observe them (e.g. `'\?'`,
+// `'\"'`) and the source contract doesn't currently make a string/char decoding claim.
+//
+// Escapes handled (§6.4.4.4):
+//   simple:  \n \t \r \b \f \a \v \? \' \" \\ \0
+//   octal:   \0…\777 (1–3 octal digits)
+//   hex:     \xHH…   (variable-length hex digits)
+// Unknown / malformed escapes are left verbatim — same fail-open policy as the C compiler,
+// which keeps a `\z` in the compiled string. Universal character names (`\uHHHH`, `\UHHHHHHHH`)
+// are out of scope for the source-contract pins today; extending later is a single case.
+export function decodeCStringEscapes(source) {
+  let out = "";
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '"') {
+      const end = skipStringLiteral(source, i);
+      out += '"' + decodeCStringLiteralBody(source.slice(i + 1, end - 1)) + '"';
+      i = end;
+      continue;
+    }
+    if (ch === "'") {
+      const end = skipCharLiteral(source, i);
+      out += source.slice(i, end);
+      i = end;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+const SIMPLE_ESCAPE_MAP = {
+  n: "\n",
+  t: "\t",
+  r: "\r",
+  b: "\b",
+  f: "\f",
+  a: "\x07",
+  v: "\v",
+  "?": "?",
+  "'": "'",
+  '"': '"',
+  "\\": "\\",
+};
+
+function decodeCStringLiteralBody(body) {
+  let out = "";
+  let i = 0;
+  while (i < body.length) {
+    if (body[i] !== "\\") {
+      out += body[i];
+      i += 1;
+      continue;
+    }
+    const next = body[i + 1];
+    if (next === undefined) {
+      out += "\\";
+      i += 1;
+      continue;
+    }
+    const consumed = decodeCEscapeAt(body, i, (decoded) => {
+      out += decoded;
+    });
+    i += consumed;
+  }
+  return out;
+}
+
+function decodeCEscapeAt(body, i, emit) {
+  const next = body[i + 1];
+  if (next === "x") return decodeHexEscape(body, i, emit);
+  if (/[0-7]/u.test(next)) return decodeOctalEscape(body, i, emit);
+  if (Object.prototype.hasOwnProperty.call(SIMPLE_ESCAPE_MAP, next)) {
+    emit(SIMPLE_ESCAPE_MAP[next]);
+    return 2;
+  }
+  // Unknown escape: leave verbatim (matches compiler behaviour of preserving `\z`).
+  emit("\\" + next);
+  return 2;
+}
+
+function decodeHexEscape(body, i, emit) {
+  let j = i + 2;
+  while (j < body.length && /[0-9a-fA-F]/u.test(body[j])) j += 1;
+  if (j === i + 2) {
+    emit("\\x");
+    return 2;
+  }
+  const value = parseInt(body.slice(i + 2, j), 16);
+  emit(String.fromCharCode(value & 0xff));
+  return j - i;
+}
+
+function decodeOctalEscape(body, i, emit) {
+  let j = i + 1;
+  const limit = Math.min(body.length, i + 4);
+  while (j < limit && /[0-7]/u.test(body[j])) j += 1;
+  const value = parseInt(body.slice(i + 1, j), 8);
+  emit(String.fromCharCode(value & 0xff));
+  return j - i;
+}
+
+// ---------------------------------------------------------------------------
 // Phase 4: preprocessor ladder handling
 // ---------------------------------------------------------------------------
 // KEIKO-0417 (extended across many review rounds on #3202): a control retained only inside a
@@ -301,9 +413,13 @@ const _NONZERO_LITERAL =
   "(?:[1-9]\\d*|0[0-7]*[1-7][0-7]*|0[xX][0-9a-fA-F]*[1-9a-fA-F][0-9a-fA-F]*)[UuLl]{0,3}";
 // The literal itself may be parenthesized (`(0)`, `(1)`, `(2)`) — preserved from the original
 // spelling so `#if (0)` still matches. `\(?` and `\)?` are BOTH optional but always paired in
-// practice.
-const _parenZero = `\\(?\\s*${_ZERO_LITERAL}\\s*\\)?`;
-const _parenNonzero = `\\(?\\s*${_NONZERO_LITERAL}\\s*\\)?`;
+// practice. Codex 3793436218 on #3202: also accept a leading unary `+` or `-` so `#if -1`,
+// `#if +42`, `#if -0` are handled — the C preprocessor evaluates `-<zero>` to zero and
+// `-<nonzero>` / `+<nonzero>` to nonzero. Semantic mapping stays consistent: `-`/`+` in front
+// of a `_ZERO_LITERAL` is still zero (false), same-sign in front of a `_NONZERO_LITERAL` is
+// still nonzero (true). Whitespace between the sign and the literal is allowed (`- 1`).
+const _parenZero = `\\(?\\s*[-+]?\\s*${_ZERO_LITERAL}\\s*\\)?`;
+const _parenNonzero = `\\(?\\s*[-+]?\\s*${_NONZERO_LITERAL}\\s*\\)?`;
 // `<literal>` alone or `<literal> <op> <RHS atom>`. `<op>` is `&&` for FALSE (short-circuits on
 // left=0), `||` for TRUE (short-circuits on left=nonzero).
 const _falseExpr = `${_parenZero}(?:\\s*&&\\s*${_RHS_ATOM})?`;

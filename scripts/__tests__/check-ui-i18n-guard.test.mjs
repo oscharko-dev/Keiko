@@ -1419,6 +1419,28 @@ test("still ignores non-inline JSX spreads (dynamic props object)", () => {
   ).toEqual([]);
 });
 
+// Codex 3793436213 on 85fae083: `<button {...({ "aria-label": "Delete account" } as const)}`
+// — the spread expression is an AsExpression wrapping the ObjectLiteral, so the direct-type
+// check used to miss it. Unwrap transparent wrappers (parens, `as`, `satisfies`, `!`) before
+// inspecting the object properties, matching the JSX-child recursion policy.
+test.each([
+  {
+    label: "as const wrapper",
+    src: '<button {...({ "aria-label": "Delete account" } as const)} />',
+  },
+  {
+    label: "satisfies wrapper",
+    src: '<button {...({ "aria-label": "Delete account" } satisfies Record<string, string>)} />',
+  },
+  {
+    label: "parenthesised object",
+    src: '<button {...({ "aria-label": "Delete account" })} />',
+  },
+])("unwraps transparent wrappers around a JSX spread object literal ($label)", ({ src }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("Delete account");
+});
+
 // KEIKO-0299 (review-follow-up on b5cb3f6c, codex 3793101250): `{items.map(() => "Delete
 // account")}` — the ArrowFunction body IS user-visible copy that gets rendered per item, but
 // the previous CallExpression recursion stopped at the function argument and never inspected
