@@ -396,6 +396,93 @@ describe("Issue #1580 — visibility-gated server poll", () => {
     expect(putCalls()).toHaveLength(2);
   });
 
+  it("retries when the poll adopted the conflict's revision while the PUT was in flight", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    let resolveFirstPoll: ((response: Response) => void) | undefined;
+    let resolveFirstPut: ((response: Response) => void) | undefined;
+    let puts = 0;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        puts += 1;
+        if (puts === 1) {
+          return new Promise<Response>((resolve) => {
+            resolveFirstPut = resolve;
+          });
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ ETag: '"workspace-state-8"' }),
+          json: async () =>
+            Promise.resolve({ workspace: { revision: 8, windows: [], connections: [] } }),
+        } as unknown as Response;
+      }
+      if (resolveFirstPoll === undefined) {
+        return new Promise<Response>((resolve) => {
+          resolveFirstPoll = resolve;
+        });
+      }
+      return { status: 304, ok: true, headers: new Headers() } as unknown as Response;
+    });
+
+    render(<Harness />);
+    await flushAsyncEffects();
+    // The debounced PUT fires FIRST (poll still pending) and carries revision 0.
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+    expect(puts).toBe(1);
+
+    // The poll lands while the PUT is in flight and adopts revision 7 (dirty branch).
+    resolveFirstPoll?.({
+      ok: true,
+      status: 200,
+      headers: new Headers({ ETag: '"workspace-state-7"' }),
+      json: async () =>
+        Promise.resolve({
+          workspace: {
+            revision: 7,
+            windows: [
+              {
+                id: "foreign-1",
+                type: "files",
+                x: 1,
+                y: 2,
+                w: 320,
+                h: 240,
+                z: 9,
+                cfg: {},
+                max: false,
+              },
+            ],
+            connections: [],
+          },
+        }),
+    } as unknown as Response);
+    await flushAsyncEffects();
+
+    // NOW the stale PUT resolves as a conflict carrying the SAME revision 7: the retry must
+    // still fire — an equal revision means "current If-Match would succeed", and parking the
+    // dirty snapshot here recreates the zombie-window loss in the race window.
+    resolveFirstPut?.({
+      ok: false,
+      status: 412,
+      headers: new Headers({ ETag: '"workspace-state-7"' }),
+      json: async () => Promise.resolve({}),
+    } as unknown as Response);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+
+    expect(puts).toBe(2);
+    expect((putCalls()[1]?.[1]?.headers as Record<string, string>)["If-Match"]).toBe(
+      '"workspace-state-7"',
+    );
+  });
+
   it("caps the conflict retry at one attempt per dirty snapshot", async () => {
     window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
     let revision = 7;

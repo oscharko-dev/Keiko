@@ -1179,10 +1179,12 @@ function useWorkspaceServerSync({
       keepalive,
     }).then((result) => {
       if (result?.kind === "conflict") {
-        // A 412 is a handled concurrency signal: adopt the newer revision, then re-send the
-        // still-dirty snapshot once (zombie-window fix) — see scheduleWorkspaceConflictRetry.
-        if (result.revision !== null && result.revision > revisionRef.current) {
-          revisionRef.current = result.revision;
+        // A 412 is a handled concurrency signal: adopt a strictly newer revision, and retry
+        // when the conflict's revision is current-or-newer — the poll may have adopted the
+        // SAME revision while this PUT was in flight, and skipping the retry then would park
+        // the dirty snapshot exactly like the original zombie-window bug.
+        if (result.revision !== null && result.revision >= revisionRef.current) {
+          if (result.revision > revisionRef.current) revisionRef.current = result.revision;
           scheduleWorkspaceConflictRetry(
             snapshot.serialized,
             localDirtyRef,

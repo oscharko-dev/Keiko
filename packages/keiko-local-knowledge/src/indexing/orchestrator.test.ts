@@ -1808,17 +1808,17 @@ describe("runIndexingJob — embedding capability preflight", () => {
     fixture.cleanup();
     fixture = buildFixture(
       {
-        "handbuch/index.htm":
-          "<!doctype html><html><head><title>Handbuch</title></head><body><nav>Navigation</nav>" +
-          "<main><h1>Wertpapier-Depot</h1><p>Fachliche Beschreibung der Funktion DEPOT_LESEN." +
+        "manual/index.htm":
+          "<!doctype html><html><head><title>Manual</title></head><body><nav>Navigation</nav>" +
+          "<main><h1>Securities Deposit</h1><p>Functional description of the READ_DEPOSIT function." +
           " ".repeat(4) +
-          "</p></main><footer>Impressum</footer></body></html>",
-        "handbuch/DEPOT_LESEN_fachlich.htm":
+          "</p></main><footer>Imprint</footer></body></html>",
+        "manual/READ_DEPOSIT_functional.htm":
           "<html><body><script>var ignored = 1;</script>" +
-          "<p>DEPOT_LESEN liest ein Depot fachlich und liefert Stammdaten.</p></body></html>",
-        "handbuch/DEPOT_LESEN_parameter.htm":
+          "<p>READ_DEPOSIT reads a deposit and returns its master data.</p></body></html>",
+        "manual/READ_DEPOSIT_parameters.htm":
           "<html><body><style>.x{color:red}</style>" +
-          "<table><tr><td>Parameter</td><td>depotId</td></tr></table></body></html>",
+          "<table><tr><td>Parameter</td><td>depositId</td></tr></table></body></html>",
       },
       {
         ...provisionalDefaultEmbedding(),
