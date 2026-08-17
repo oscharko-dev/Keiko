@@ -836,6 +836,16 @@ function compoundExpressionTexts(expr, sourceFile) {
   if (ts.isArrayLiteralExpression(expr)) {
     return expr.elements.flatMap((element) => jsxChildExpressionLiteralTexts(element, sourceFile));
   }
+  // TaggedTemplateExpression: ``<p>{String.raw`Delete account`}</p>`` — a tag like
+  // `String.raw` returns the template literal verbatim, so the rendered text is the template
+  // body. Codex 3793198455. Traverse `.template` (which is a NoSubstitutionTemplateLiteral or
+  // TemplateExpression, both handled by `stringLikeExpressionTexts`). This over-approximates
+  // for tags that transform the template (e.g. a stripping tag), but the ledger's
+  // `// i18n-exempt` escape hatch handles false positives — a false negative on a live user
+  // string would be worse.
+  if (ts.isTaggedTemplateExpression(expr)) {
+    return jsxChildExpressionLiteralTexts(expr.template, sourceFile);
+  }
   return null;
 }
 

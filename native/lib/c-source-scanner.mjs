@@ -242,8 +242,14 @@ const PREPROCESSOR_PATTERNS = {
 
 // Extracted so the outer regex object is not polluted with the `1`-shape variants and so a
 // future contributor can extend them independently. Codex 3793074555 added constant-true.
-const DEFINITIVELY_TRUE_IF = /^#\s*if\s+\(?\s*1[UuLl]{0,3}\s*\)?\s*$/u;
-const DEFINITIVELY_TRUE_ELIF = /^#\s*elif\s+\(?\s*1[UuLl]{0,3}\s*\)?\s*$/u;
+// Codex 3793198453: also recognise the mirror-composite form `#if 1 || FEATURE` — C's `||`
+// short-circuits on left=1, so the whole condition is deterministically true regardless of
+// FEATURE. Single trailing identifier (optionally `!`-prefixed); same policy as the
+// `0 && FEATURE` variant of DISABLED_IF.
+const DEFINITIVELY_TRUE_IF =
+  /^#\s*if\s+\(?\s*1[UuLl]{0,3}\s*\)?\s*(?:\|\|\s*!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u;
+const DEFINITIVELY_TRUE_ELIF =
+  /^#\s*elif\s+\(?\s*1[UuLl]{0,3}\s*\)?\s*(?:\|\|\s*!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u;
 
 const STRIPPING = "stripping";
 const KEEPING = "keeping";

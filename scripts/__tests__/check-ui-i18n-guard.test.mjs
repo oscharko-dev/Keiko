@@ -1480,6 +1480,25 @@ test("still flags real prose across template spans", () => {
   expect(texts).toContain("Hello World");
 });
 
+// KEIKO-0299 (review-follow-up on d753717d, codex 3793198455): `String.raw\`Delete account\``
+// as a JSX child renders the template body verbatim (the `String.raw` tag returns spans
+// unchanged). Recurse into `.template` so newly added tagged-template copy enters the ledger.
+test("collects literals from tagged template expressions", () => {
+  const texts = untranslatedLiteralsInSource(
+    "<p>{String.raw`Delete account`}</p>",
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Delete account");
+});
+
+test("collects tagged-template spans with an interpolation", () => {
+  const texts = untranslatedLiteralsInSource(
+    "<p>{String.raw`Welcome back, ${user}!`}</p>",
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts.some((t) => t.includes("Welcome back,"))).toBe(true);
+});
+
 // KEIKO-0299 (review-follow-up on af74e79b): a JSX child like `{"Welcome back, " + name}`
 // renders the concatenation as user copy — the literal on either operand IS user-visible and
 // must enter the ledger. Codex 3792890969.

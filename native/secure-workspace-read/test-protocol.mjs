@@ -508,7 +508,36 @@ function assertLaterElifAfterLiveStripped() {
   assertNestedIfZeroInsideLiveElseStripped();
   assertNestedElseInsideDeadParentStripped();
   assertElifOneAfterUnknownExhausts();
+  assertCompoundConstantTrueIf();
   assertTrigraphIfZero();
+}
+
+// Codex 3793198453: `#if 1 || FEATURE` is deterministically true (C's `||` short-circuits on
+// left=1). Track the ladder so the `#else` gets stripped.
+function assertCompoundConstantTrueIf() {
+  const stripped = stripCommentsAndStrings(
+    "int keep_before(void) { return 1; }\n" +
+      "#if 1 || FEATURE\n" +
+      "LIVE_COMPOUND_TRUE_BODY();\n" +
+      "#else\n" +
+      "DEAD_ELSE_AFTER_COMPOUND_TRUE();\n" +
+      "#endif\n" +
+      "int keep_after(void) { return 2; }\n",
+  );
+  assert.match(stripped, /LIVE_COMPOUND_TRUE_BODY/u, "`#if 1 || FEATURE` body must survive");
+  assert.equal(
+    stripped.match(/DEAD_ELSE_AFTER_COMPOUND_TRUE/u),
+    null,
+    "`#else` after `#if 1 || FEATURE` must be stripped (compound is deterministically true)",
+  );
+  for (const variant of ["#if 1||FEATURE", "#if (1)||FEATURE", "#if 1L||!FLAG"]) {
+    const s = stripCommentsAndStrings(variant + "\nLIVE();\n#else\nDEAD_VARIANT_ELSE();\n#endif\n");
+    assert.equal(
+      s.match(/DEAD_VARIANT_ELSE/u),
+      null,
+      "compound-true variant must strip the else-body: " + variant,
+    );
+  }
 }
 
 // Coderabbit 3793183804: `#elif 1` guarantees the ladder terminates before `#else` regardless
