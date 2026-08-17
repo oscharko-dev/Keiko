@@ -273,7 +273,14 @@ const _IDENT = "[A-Za-z_][A-Za-z0-9_]*";
 const _DEFINED_CALL = `defined\\s*\\(\\s*${_IDENT}\\s*\\)`;
 // RHS of a short-circuiting operator: bare identifier or `defined(IDENT)`, optionally `!`.
 const _RHS_ATOM = `!?\\s*(?:${_IDENT}|${_DEFINED_CALL})`;
-const _ZERO_LITERAL = "0[UuLl]{0,3}";
+// Zero-valued integer literal across every C spelling that evaluates to zero: bare `0`, an
+// octal chain of zeros (`00`, `000`, …) — leading `0` starts an octal literal so every all-
+// zero digit sequence is also zero — and hexadecimal zero (`0x0`, `0X00`, …). Any of them
+// may carry the usual U/L integer suffix combinations. Coderabbit 3793329577 on #3202: the
+// earlier `0[UuLl]{0,3}` spelling matched only the bare decimal form, so `#if 0x0` or `#if 00`
+// slipped past the deterministically-false pin and a required control retained only in that
+// branch would still satisfy the source contract after the live copy was deleted.
+const _ZERO_LITERAL = "(?:0[0]*|0[xX]0+)[UuLl]{0,3}";
 const _ONE_LITERAL = "1[UuLl]{0,3}";
 // The literal itself may be parenthesized (`(0)`, `(1)`) — preserved from the original spelling
 // so `#if (0)` still matches. `\(?` and `\)?` are BOTH optional but always paired in practice.

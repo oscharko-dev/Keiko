@@ -794,6 +794,13 @@ function absorbJsxExpressionIntoSegments(node, appendPart, startNewSegment) {
 }
 
 function jsxAggregatedTextResults(node, sourceFile) {
+  // Coderabbit 3793329579 on #3202: `<p><span>open <code>settings</code></span></p>` — the
+  // visitor runs jsxAggregatedTextResults at BOTH `<p>` and `<span>`, and `absorbChild…`
+  // flattens the inner `<span>`'s parts into the parent. Both emit "open settings" — the
+  // ledger double-counts. Emit only from the OUTERMOST eligible container: if this node is an
+  // inline formatting element whose parent is itself a JsxElement or JsxFragment, the parent
+  // will absorb our segments and emit — skip here to avoid the duplicate.
+  if (isInlineFormattingChildOfContainer(node)) return [];
   const line = ts.getLineAndCharacterOfPosition(sourceFile, node.getStart(sourceFile)).line + 1;
   const emitted = [];
   for (const parts of collectAggregatedJsxTextSegments(node)) {
@@ -806,6 +813,12 @@ function jsxAggregatedTextResults(node, sourceFile) {
     emitted.push({ line, text: aggregate });
   }
   return emitted;
+}
+
+function isInlineFormattingChildOfContainer(node) {
+  if (!isInlineTextFormattingChild(node)) return false;
+  const parent = node.parent;
+  return parent !== undefined && (ts.isJsxElement(parent) || ts.isJsxFragment(parent));
 }
 
 function jsxChildExpressionResults(node, sourceFile) {

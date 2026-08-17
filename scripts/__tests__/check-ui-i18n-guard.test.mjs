@@ -1554,6 +1554,20 @@ test("aggregation does not double-count when an individual fragment is already t
   expect(savePhrase).toHaveLength(1);
 });
 
+// Coderabbit 3793329579 on 53d22f73: `<p><span>open <code>settings</code></span></p>` — the
+// visitor runs the aggregator at BOTH `<p>` and `<span>`, and the inner `<span>` (an inline
+// formatting element) flattens the same "open settings" parts as its parent. Without the outer-
+// only guard, both containers would emit — the aggregate lands in the ledger twice from
+// otherwise-identical source. Emit only from the outermost eligible container.
+test("does not double-emit when an inline formatting element wraps the phrase inside a container", () => {
+  const findings = untranslatedLiteralsInSource(
+    "<p><span>open <code>settings</code></span></p>",
+    "packages/x/y.tsx",
+  ).findings;
+  const matches = findings.filter((f) => f.text === "open settings");
+  expect(matches).toHaveLength(1);
+});
+
 test("aggregation does not cross block-level element boundaries", () => {
   // `<div>` is a block container, not text-level inline formatting; the two `<p>` phrases render
   // as separate paragraphs and each is its own aggregate context. `open` and `settings` remain

@@ -522,7 +522,53 @@ function assertLaterElifAfterLiveStripped() {
   assertParenthesizedConstantConditions();
   assertNestedUnknownLadderStripsConstantDeadSibling();
   assertAdjacentStringLiteralsFold();
+  assertHexAndOctalZeroFormsStripped();
   assertTrigraphIfZero();
+}
+
+// Coderabbit 3793329577 on #3202: C spells zero in three bases — decimal `0`, octal (a leading
+// `0` starts an octal literal, so `00`/`000` are also octal zero), and hex `0x0`/`0X00`. The
+// earlier `_ZERO_LITERAL` regex matched only the bare decimal form; a required control retained
+// in `#if 0x0` or `#if 00` would slip past the deterministically-false pin. Cover the equivalent
+// forms alongside a `&&` composite and outer parens so no new spelling silently escapes.
+function assertHexAndOctalZeroFormsStripped() {
+  const zeroVariants = [
+    "#if 0x0",
+    "#if 0X0",
+    "#if 0x00",
+    "#if 0X00UL",
+    "#if 00",
+    "#if 000",
+    "#if 000UL",
+    "#if 0x0 && FEATURE",
+    "#if 00 && defined(FLAG)",
+    "#if (0x0)",
+    "#if (00 && FEATURE)",
+  ];
+  for (const variant of zeroVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nDEAD_BASE_VARIANT_BODY();\n#else\nLIVE_BASE_VARIANT_ELSE();\n#endif\n",
+    );
+    assert.equal(
+      stripped.match(/DEAD_BASE_VARIANT_BODY/u),
+      null,
+      "zero-valued literal in any C base must strip its body: " + variant,
+    );
+    assert.match(
+      stripped,
+      /LIVE_BASE_VARIANT_ELSE/u,
+      "`#else` after a base-variant zero must survive: " + variant,
+    );
+  }
+  // Elif form too — same regex family, same reasoning.
+  const stripped = stripCommentsAndStrings(
+    "#if 1\nLIVE_IF();\n#elif 0x0\nDEAD_HEX_ELIF();\n#endif\n",
+  );
+  assert.equal(
+    stripped.match(/DEAD_HEX_ELIF/u),
+    null,
+    "`#elif 0x0` must strip its body just like `#elif 0`",
+  );
 }
 
 // Codex 3793282541: a constant-dead sibling (`#elif 0`, `#elif (0)`, `#if 0`) INSIDE an
