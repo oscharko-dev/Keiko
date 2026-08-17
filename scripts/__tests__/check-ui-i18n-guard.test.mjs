@@ -1688,6 +1688,30 @@ test("chained literal `+` operands fold across three or more segments", () => {
   expect(texts).toContain("press Ctrl K now");
 });
 
+// Codex 3793578608 on 5436cf04: `(track(), "Delete account")` — the comma operator returns
+// the RIGHT operand's value; the left is executed for side effects. Recurse into `.right` so
+// newly added user copy in this shape enters the ledger. The left operand's literals (if any)
+// are side-effect arguments, not rendered copy, so we skip them.
+test("recurses into the right operand of a comma expression", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{(track(), "Delete account")}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Delete account");
+});
+
+test("does not surface the left operand of a comma expression", () => {
+  // The left operand `"internal debug"` is discarded at runtime and belongs to the side-effect
+  // sequence, not the rendered value. Recursing into both operands would fabricate a finding
+  // for internal tracking strings.
+  const texts = untranslatedLiteralsInSource(
+    '<p>{("internal debug", "Rendered copy here")}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Rendered copy here");
+  expect(texts).not.toContain("internal debug");
+});
+
 test("dynamic `+` operands still fall through to per-operand recursion", () => {
   // "Welcome back," should still be reported even though the chain contains a dynamic operand.
   const texts = untranslatedLiteralsInSource(

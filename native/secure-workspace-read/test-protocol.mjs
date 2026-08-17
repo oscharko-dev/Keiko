@@ -19,6 +19,7 @@ import { resolveWindowsMsvcEnv, windowsToolFromPath } from "../../scripts/lib/wi
 import {
   decodeCStringEscapes,
   foldAdjacentStringLiterals,
+  normalizeCurrentDirComponents,
   preprocessCLineSplices,
   stripCComments,
   stripDisabledPreprocessorBranches,
@@ -313,9 +314,14 @@ function stripCommentsOnly(rawSource) {
 // the variable-length hex decoder greedily consumes `2fb` and yields `"ûin/sh"`, missing the
 // path. Decoding each preprocessing token independently yields `"/" "bin/sh"` → `"/bin/sh"`.
 function preparedSource(rawSource) {
-  return foldAdjacentStringLiterals(
-    decodeCStringEscapes(
-      stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource))),
+  // Codex 3793578605: normalise `/./` current-directory components AFTER decode+fold so a
+  // spelling like `"/bin/./sh"` (or the folded form of `"/bin" "/./sh"`) resolves to `/bin/sh`
+  // for any path-boundary pin that expects a contiguous absolute path.
+  return normalizeCurrentDirComponents(
+    foldAdjacentStringLiterals(
+      decodeCStringEscapes(
+        stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource))),
+      ),
     ),
   );
 }
@@ -477,8 +483,45 @@ function assertScannerBehaviours() {
   assertUnknownConditionsKeepBothBranches();
   assertCEscapesDecodedInsideLiterals();
   assertEscapedQuotesPreservedThroughDecode();
+  assertTrailingBackslashPreservedThroughDecode();
   assertDecodeThenFoldOrder();
+  assertPathNormalizationCollapsesCurrentDir();
   assertTrigraphIfZero();
+}
+
+// Codex 3793578610 on #3202: `\\` inside a literal must be preserved through decoding.
+// Decoding a trailing `\\` to a bare `\` places that byte immediately before the reconstructed
+// closing quote — downstream `stripStringLiteralBodies` then treats the closing `"` as
+// escaped, hunts for a real closer that doesn't exist, and throws. Any Windows-path literal
+// like `"C:\\"` (value `C:\`) would fail the harness even though the source compiles.
+function assertTrailingBackslashPreservedThroughDecode() {
+  // Whole-file scan through the exported composition: if `\\` were decoded, this call would
+  // throw `unterminated C string literal` on the trailing-backslash Windows path.
+  const raw = 'const char *win = "C:\\\\";\nint keep(void) { return 0; }\n';
+  const prepared = stripCommentsOnly(raw);
+  assert.ok(
+    prepared.includes('"C:\\\\"'),
+    "`\\\\` inside a literal must be preserved through decode so downstream parsing sees the closing quote unescaped",
+  );
+  assert.match(prepared, /int keep\(void\)/u, "code after the literal must still be present");
+}
+
+// Codex 3793578605 on #3202: `/bin/./sh` resolves to `/bin/sh` at OS level, but a regex that
+// expects a contiguous path would miss it. Normalise `./` current-directory components
+// GLOBALLY in the prepared source so the pin sees the resolved path. Handles chained forms
+// (`/./././`), a `./` in the middle of a longer path, and post-fold spellings like
+// `"/bin" "/./sh"` → `"/bin/./sh"` → `"/bin/sh"`.
+function assertPathNormalizationCollapsesCurrentDir() {
+  const forms = [
+    { src: 'const char *p = "/bin/./sh";', expect: '"/bin/sh"', label: "single ./" },
+    { src: 'const char *p = "/bin/././sh";', expect: '"/bin/sh"', label: "chained ./" },
+    { src: 'const char *p = "/usr/./bin/sh";', expect: '"/usr/bin/sh"', label: "mid-path ./" },
+    { src: 'const char *p = "/bin" "/./sh";', expect: '"/bin/sh"', label: "fold + ./" },
+  ];
+  for (const { src, expect, label } of forms) {
+    const prepared = stripCommentsOnly(src + "\n");
+    assert.ok(prepared.includes(expect), `${label} must normalise to ${expect}; got: ${prepared}`);
+  }
 }
 
 // Codex 3792964066 + 3792986617 (#elif handling): the compiler picks exactly one branch of a
@@ -775,9 +818,13 @@ function assertCEscapesDecodedInsideLiterals() {
     decoded.match(/"CON"/gu).length >= 3,
     'hex, octal, and plain spellings must all reach the pin as `"CON"`',
   );
+  // Codex 3793578610: `\\` must stay `\\` in the decoded output so downstream `strip…Bodies`
+  // still recognises the enclosing string as terminated. The token shape `"keep\\this"` is
+  // preserved verbatim — the pin still sees the double-backslash spelling that survives from
+  // the raw source.
   assert.ok(
-    decoded.includes('"keep\\this"'),
-    "double-backslash escape must decode to a single backslash inside the literal",
+    decoded.includes('"keep\\\\this"'),
+    "double-backslash escape must be PRESERVED so the closing quote is not treated as escaped",
   );
 }
 

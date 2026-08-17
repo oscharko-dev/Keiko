@@ -1213,6 +1213,13 @@ function binaryFallbackLiteralTexts(expr, sourceFile) {
   if (expr.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
     return jsxChildExpressionLiteralTexts(expr.right, sourceFile);
   }
+  // Codex 3793578608 on #3202: `(track(), "Delete account")` — the comma operator evaluates
+  // BOTH operands but the RIGHT one's value is what the enclosing expression sees. Recurse
+  // into the right operand only; the left is discarded at runtime and any literal there is a
+  // side-effect argument, not rendered copy.
+  if (expr.operatorToken.kind === ts.SyntaxKind.CommaToken) {
+    return jsxChildExpressionLiteralTexts(expr.right, sourceFile);
+  }
   // Codex 3793356682 on #3202: `{"open " + "settings"}` renders "open settings" but the
   // operand-only recursion emitted two lowercase tokens the classifier dropped. When BOTH sides
   // of a `+` are directly literal (or nested literal `+` chains), fold them into the whole
@@ -1312,7 +1319,8 @@ function isRenderingFallbackOperator(kind) {
     kind === ts.SyntaxKind.QuestionQuestionToken ||
     kind === ts.SyntaxKind.BarBarToken ||
     kind === ts.SyntaxKind.AmpersandAmpersandToken ||
-    kind === ts.SyntaxKind.PlusToken
+    kind === ts.SyntaxKind.PlusToken ||
+    kind === ts.SyntaxKind.CommaToken
   );
 }
 

@@ -256,16 +256,22 @@ export function decodeCStringEscapes(source) {
   return out;
 }
 
-// Coderabbit 3793501296 on #3202: PRESERVE the escaped-double-quote spelling verbatim. Decoding
-// `\"` to a bare `"` corrupts string-literal boundaries — `"a\"CON\"b"` (a single literal whose
-// value is `a"CON"b`) would become `"a"CON"b"` in the scanned output, and a naive `.includes(
-// '"CON"')` check on the reserved-stem pin would then fire on the spurious middle boundary,
-// masking the deletion of the real `"CON"` literal. Keeping `\"` as `\"` in the output preserves
-// the string-literal token shape downstream pins expect. `\\` stays decoded to a single `\`
-// because the source-contract pins observe raw path substrings (`\\\\?\\`, `GLOBALROOT`) that
-// need the compile-time byte sequence, and the octal boundary regression (`"\1011"` → `"A1"`)
-// pins that shape. Character-level escapes (`\n`, `\t`, …) still decode because they don't
-// affect string-boundary reading.
+// Coderabbit 3793501296 + codex 3793578610 on #3202: PRESERVE both the escaped-double-quote
+// (`\"`) AND the escaped-backslash (`\\`) spellings verbatim. Decoding either would corrupt
+// string-literal boundaries downstream:
+//   - `\"` decoded to `"` would create a spurious boundary in the middle of a compiled literal.
+//     `"a\"CON\"b"` (value `a"CON"b`) would become `"a"CON"b"` and a naive `.includes('"CON"')`
+//     reserved-stem pin would fire on the spurious middle boundary, masking deletion of the
+//     real `"CON"` source token.
+//   - `\\` decoded to `\` at the end of a literal (`"foo\\"` — value `foo\`) would emit the
+//     scanner text `"foo\"`; downstream `stripStringLiteralBodies` would then treat the closing
+//     quote as escaped, hunt for a real closer that doesn't exist, and throw
+//     `unterminated C string literal`. Any source that added a trailing-backslash path literal
+//     (Windows paths like `"C:\\"`) would fail the source-contract harness even though the
+//     compile is valid.
+// Both preservations keep the string-literal token shape downstream pins parse. Character-level
+// escapes (`\n`, `\t`, `\r`, `\b`, `\f`, `\a`, `\v`) still decode because they don't affect
+// string-boundary reading and don't reintroduce escape-sequence starts.
 const SIMPLE_ESCAPE_MAP = {
   n: "\n",
   t: "\t",
@@ -277,7 +283,7 @@ const SIMPLE_ESCAPE_MAP = {
   "?": "?",
   "'": "'",
   '"': '\\"',
-  "\\": "\\",
+  "\\": "\\\\",
 };
 
 function decodeCStringLiteralBody(body) {
@@ -335,6 +341,32 @@ function decodeOctalEscape(body, i, emit) {
   const value = parseInt(body.slice(i + 1, j), 8);
   emit(String.fromCharCode(value & 0xff));
   return j - i;
+}
+
+// ---------------------------------------------------------------------------
+// Path-normalisation: collapse `./` current-directory components
+// ---------------------------------------------------------------------------
+// Codex 3793578605 on #3202: the OS resolves `/bin/./sh` to `/bin/sh` before executing, so a
+// supervisor rewritten to that spelling would still launch a shell — but the negative shell-
+// path pin's regex expects a contiguous `/bin/sh`. Collapse `./` current-directory components
+// in the whole prepared source so the pin sees the resolved path. Applies globally rather than
+// per-literal so a token boundary between literal and adjacent code (`"/bin" "/./sh"` after
+// fold) still normalises. Repeats until fixpoint to handle chains (`/./././`).
+//
+// `..` (parent) is NOT normalised — resolving it requires the preceding component. That
+// omission is documented (`#if 0 && FEATURE` similar recognition-only policy) and leaves a
+// theoretical `/bin/../bin/sh` bypass; the shell-path regex could still be widened later, but
+// the source-contract call site for this scanner does not host `..` in any real supervisor
+// path today. Duplicate `//` slashes are also NOT normalised — POSIX collapses them but the
+// current pins already fail before this decision matters.
+export function normalizeCurrentDirComponents(source) {
+  let previous;
+  let current = source;
+  do {
+    previous = current;
+    current = previous.replace(/\/\.(?=\/)/gu, "");
+  } while (current !== previous);
+  return current;
 }
 
 // ---------------------------------------------------------------------------

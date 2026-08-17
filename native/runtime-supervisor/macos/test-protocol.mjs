@@ -23,6 +23,7 @@ import {
 import {
   decodeCStringEscapes,
   foldAdjacentStringLiterals,
+  normalizeCurrentDirComponents,
   preprocessCLineSplices,
   stripCComments,
   stripDisabledPreprocessorBranches,
@@ -132,9 +133,16 @@ function stripCCommentsPreservingLiterals(rawSource) {
   // escape decoder then greedily consumes `2fb` as hex and produces `"ûin/sh"`, which does
   // not match the shell-path regex. Decoding each token first yields `"/" "bin/sh"`, which
   // then folds correctly to `"/bin/sh"`.
-  return foldAdjacentStringLiterals(
-    decodeCStringEscapes(
-      stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource))),
+  //
+  // Codex 3793578605: LAST, collapse `./` current-directory components — the OS resolves
+  // `/bin/./sh` to `/bin/sh` before execution, and the shell-path regex expects a contiguous
+  // path. Runs AFTER fold so a split spelling like `"/bin" "/./sh"` (folds to
+  // `"/bin/./sh"`) also normalises.
+  return normalizeCurrentDirComponents(
+    foldAdjacentStringLiterals(
+      decodeCStringEscapes(
+        stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource))),
+      ),
     ),
   );
 }
