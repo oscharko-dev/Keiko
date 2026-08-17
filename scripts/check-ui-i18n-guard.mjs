@@ -736,24 +736,31 @@ function isInlineTextFormattingChild(child) {
 // Split the container's children into consecutive "phrase segments". A boundary is anything that
 // interrupts the rendered text stream: a non-inline element (block container / custom
 // component), a non-literal expression brace (`{maybeVar}` — runtime value unknown), or any
-// other non-textual child. Each returned segment is a list of adjacent text-like parts that DO
-// render together and can be classified as one phrase.
-function collectAggregatedJsxTextSegments(container) {
-  const segments = [[]];
+// other non-textual child. Each returned segment carries adjacent text-like parts that DO
+// render together AND the source line of its first contributing part (codex 3793398796): the
+// aggregate finding is attributed to that line, not to the container's opening tag, so an
+// `// i18n-exempt` marker adjacent to the phrase's own text can exempt it.
+function collectAggregatedJsxTextSegments(container, sourceFile) {
+  const segments = [{ parts: [], firstLine: null }];
   const startNewSegment = () => {
-    if (segments[segments.length - 1].length > 0) segments.push([]);
+    const current = segments[segments.length - 1];
+    if (current.parts.length > 0) segments.push({ parts: [], firstLine: null });
   };
-  const appendPart = (text) => segments[segments.length - 1].push(text);
+  const appendPart = (text, line) => {
+    const current = segments[segments.length - 1];
+    current.parts.push(text);
+    if (current.firstLine === null) current.firstLine = line;
+  };
   for (const child of container.children) {
-    absorbChildIntoSegments(child, appendPart, startNewSegment);
+    absorbChildIntoSegments(child, sourceFile, appendPart, startNewSegment);
   }
-  return segments.filter((seg) => seg.length > 0);
+  return segments.filter((seg) => seg.parts.length > 0);
 }
 
-function absorbChildIntoSegments(child, appendPart, startNewSegment) {
+function absorbChildIntoSegments(child, sourceFile, appendPart, startNewSegment) {
   if (ts.isJsxText(child)) {
     const trimmed = child.text.trim().replace(/\s+/gu, " ");
-    if (trimmed.length > 0) appendPart(trimmed);
+    if (trimmed.length > 0) appendPart(trimmed, lineOfNode(child, sourceFile));
     return;
   }
   // Codex 3793356672 on #3202: line-break phrasing elements (`<br/>`, `<wbr/>`) split copy at
@@ -764,16 +771,19 @@ function absorbChildIntoSegments(child, appendPart, startNewSegment) {
   if (isInlineTextFormattingChild(child)) {
     // Inline formatting elements render adjacent to surrounding text; flatten their segments
     // into the parent's current segment. A boundary INSIDE the inline element (rare) still
-    // breaks the parent aggregate.
-    const inner = collectAggregatedJsxTextSegments(child);
+    // breaks the parent aggregate. Preserve each inner part's firstLine so exemption markers
+    // adjacent to the inline element's own text still apply to the aggregate.
+    const inner = collectAggregatedJsxTextSegments(child, sourceFile);
     for (let i = 0; i < inner.length; i += 1) {
-      for (const part of inner[i]) appendPart(part);
+      for (const part of inner[i].parts) {
+        appendPart(part, inner[i].firstLine ?? lineOfNode(child, sourceFile));
+      }
       if (i < inner.length - 1) startNewSegment();
     }
     return;
   }
   if (ts.isJsxExpression(child)) {
-    absorbJsxExpressionIntoSegments(child, appendPart, startNewSegment);
+    absorbJsxExpressionIntoSegments(child, sourceFile, appendPart, startNewSegment);
     return;
   }
   // Non-inline element (block container, custom component) or any other kind of child.
@@ -801,12 +811,12 @@ function isLineBreakPhrasingChild(child) {
 // phrase that never actually renders; those get their own individual entries via the
 // JsxExpression visitor path. A non-literal expression BREAKS the aggregate so we don't weld
 // "open" and "settings" across `{maybe}`.
-function absorbJsxExpressionIntoSegments(node, appendPart, startNewSegment) {
+function absorbJsxExpressionIntoSegments(node, sourceFile, appendPart, startNewSegment) {
   const expression = node.expression;
   if (expression === undefined) return;
   if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
     const text = expression.text.trim().replace(/\s+/gu, " ");
-    if (text.length > 0) appendPart(text);
+    if (text.length > 0) appendPart(text, lineOfNode(expression, sourceFile));
     return;
   }
   startNewSegment();
@@ -820,16 +830,21 @@ function jsxAggregatedTextResults(node, sourceFile) {
   // inline formatting element whose parent is itself a JsxElement or JsxFragment, the parent
   // will absorb our segments and emit — skip here to avoid the duplicate.
   if (isInlineFormattingChildOfContainer(node)) return [];
-  const line = ts.getLineAndCharacterOfPosition(sourceFile, node.getStart(sourceFile)).line + 1;
+  const containerLine =
+    ts.getLineAndCharacterOfPosition(sourceFile, node.getStart(sourceFile)).line + 1;
   const emitted = [];
-  for (const parts of collectAggregatedJsxTextSegments(node)) {
-    if (parts.length < 2) continue;
-    const aggregate = parts.join(" ");
+  for (const segment of collectAggregatedJsxTextSegments(node, sourceFile)) {
+    if (segment.parts.length < 2) continue;
+    const aggregate = segment.parts.join(" ");
     if (!isTranslatableCopy(aggregate)) continue;
     // If any individual fragment is already translatable on its own, the per-JsxText path
     // already recorded it — do not double-count with a synthetic aggregate entry.
-    if (parts.some(isTranslatableCopy)) continue;
-    emitted.push({ line, text: aggregate });
+    if (segment.parts.some(isTranslatableCopy)) continue;
+    // Codex 3793398796 on #3202: attribute the finding to the first text fragment's line, not
+    // the container's opening tag — so an `// i18n-exempt` marker adjacent to the phrase's
+    // own text can exempt it. Fall back to the container line only if the segment somehow
+    // recorded no source line (defensive; should not happen for a non-empty parts list).
+    emitted.push({ line: segment.firstLine ?? containerLine, text: aggregate });
   }
   return emitted;
 }
@@ -1146,17 +1161,61 @@ function binaryFallbackLiteralTexts(expr, sourceFile) {
   // Codex 3793356682 on #3202: `{"open " + "settings"}` renders "open settings" but the
   // operand-only recursion emitted two lowercase tokens the classifier dropped. When BOTH sides
   // of a `+` are directly literal (or nested literal `+` chains), fold them into the whole
-  // rendered phrase and classify that first so the aggregate enters the ledger. Falls through
-  // to the operand-recursion when either side is dynamic — the existing recursion handles
-  // literal-plus-variable and variable-plus-literal shapes.
+  // rendered phrase and classify that first so the aggregate enters the ledger.
+  //
+  // Codex 3793398793 on #3202: `{"open " + section + " settings"}` — one dynamic operand made
+  // the fold above return null, and per-operand emission left each fragment as a machine
+  // token the classifier drops. Also aggregate the LITERAL fragments alone (skipping dynamic
+  // operands) — the reader still sees the literal frame around the interpolation. Emit that
+  // aggregate on top of per-operand entries only when it would be translatable AND no
+  // individual operand is; same anti-double-count policy as the JsxText aggregator.
   if (expr.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-    const combined = combinedLiteralPlusChain(expr);
-    if (combined !== null) return [{ line: lineOfNode(expr, sourceFile), text: combined }];
+    return plusChainLiteralTexts(expr, sourceFile);
   }
   return [
     ...jsxChildExpressionLiteralTexts(expr.left, sourceFile),
     ...jsxChildExpressionLiteralTexts(expr.right, sourceFile),
   ];
+}
+
+function plusChainLiteralTexts(expr, sourceFile) {
+  const combined = combinedLiteralPlusChain(expr);
+  if (combined !== null) return [{ line: lineOfNode(expr, sourceFile), text: combined }];
+  const perOperand = [
+    ...jsxChildExpressionLiteralTexts(expr.left, sourceFile),
+    ...jsxChildExpressionLiteralTexts(expr.right, sourceFile),
+  ];
+  const literalOnly = combinedLiteralFragmentsOnly(expr);
+  if (literalOnly === null) return perOperand;
+  if (!isTranslatableCopy(literalOnly)) return perOperand;
+  if (perOperand.some((entry) => isTranslatableCopy(entry.text))) return perOperand;
+  return [...perOperand, { line: lineOfNode(expr, sourceFile), text: literalOnly }];
+}
+
+// Concatenate every literal operand across a `+` chain, silently skipping dynamic ones. Returns
+// null when the chain contains no literal at all. The result is trimmed and inner whitespace
+// runs are collapsed, matching the JsxText aggregation policy.
+function combinedLiteralFragmentsOnly(expr) {
+  const parts = [];
+  collectPlusLiteralFragmentsOnly(expr, parts);
+  if (parts.length === 0) return null;
+  const joined = parts.join("").trim().replace(/\s+/gu, " ");
+  return joined.length > 0 ? joined : null;
+}
+
+function collectPlusLiteralFragmentsOnly(node, parts) {
+  const unwrapped = unwrapTransparent(node);
+  if (
+    ts.isBinaryExpression(unwrapped) &&
+    unwrapped.operatorToken.kind === ts.SyntaxKind.PlusToken
+  ) {
+    collectPlusLiteralFragmentsOnly(unwrapped.left, parts);
+    collectPlusLiteralFragmentsOnly(unwrapped.right, parts);
+    return;
+  }
+  if (ts.isStringLiteral(unwrapped) || ts.isNoSubstitutionTemplateLiteral(unwrapped)) {
+    parts.push(unwrapped.text);
+  }
 }
 
 // Return the concatenated text if EVERY operand in a `+` chain is a direct string literal (or a

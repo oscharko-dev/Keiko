@@ -281,21 +281,33 @@ const _RHS_ATOM = `!?\\s*(?:${_IDENT}|${_DEFINED_CALL})`;
 // slipped past the deterministically-false pin and a required control retained only in that
 // branch would still satisfy the source contract after the live copy was deleted.
 const _ZERO_LITERAL = "(?:0[0]*|0[xX]0+)[UuLl]{0,3}";
-// One-valued integer literal across every C spelling that evaluates to one: bare decimal `1`,
-// octal `01`/`001` (leading `0` starts an octal literal, any leading-zero-then-1 chain equals
-// one), and hexadecimal `0x1`/`0X01` (leading zeros between the `x` and the `1` still evaluate
-// to one). Any spelling may carry the usual U/L suffix combinations. Codex 3793356684 on #3202:
-// the earlier `1[UuLl]{0,3}` matched only the bare decimal form, so `#if 0x1` and `#if 01` were
-// treated as unknown — their live body AND their compiler-dead `#else` body both survived, and
-// a required control retained only in that dead `#else` would still satisfy the source pin.
-const _ONE_LITERAL = "(?:0*1|0[xX]0*1)[UuLl]{0,3}";
-// The literal itself may be parenthesized (`(0)`, `(1)`) — preserved from the original spelling
-// so `#if (0)` still matches. `\(?` and `\)?` are BOTH optional but always paired in practice.
+// ANY nonzero integer literal — C's `#if` treats every nonzero integer as true, not just one.
+// Widened from the previous one-only form (codex 3793398789 on #3202) so `#if 2`, `#if 42`,
+// `#if 0x10`, `#if 077` are all recognised as deterministically-true. The earlier constant-one
+// spelling missed these; `#if 2 ... #else REQUIRED_PIN ... #endif` was treated as unknown and
+// both branches survived the strip, letting a required control retained only in the compiler-
+// dead `#else` satisfy the source pin after the live copy was deleted. The three alternatives
+// cover:
+//   - decimal nonzero: `[1-9]\d*`               → `1`, `2`, `42`, `1000`
+//   - octal   nonzero: `0[0-7]*[1-7][0-7]*`     → any leading-zero chain with at least one
+//                                                  nonzero octal digit (`01`, `010`, `077`)
+//   - hex     nonzero: `0[xX][0-9a-fA-F]*[1-9a-fA-F][0-9a-fA-F]*`
+//                                                → `0x1`, `0xff`, `0X10`, `0x0F` (any hex
+//                                                  value with at least one nonzero digit)
+// The USUAL zero forms (`0`, `00`, `0x0`, `0X00`) are excluded by construction — each
+// alternative requires at least one nonzero digit — so `_ZERO_LITERAL` and this pattern remain
+// mutually exclusive.
+const _NONZERO_LITERAL =
+  "(?:[1-9]\\d*|0[0-7]*[1-7][0-7]*|0[xX][0-9a-fA-F]*[1-9a-fA-F][0-9a-fA-F]*)[UuLl]{0,3}";
+// The literal itself may be parenthesized (`(0)`, `(1)`, `(2)`) — preserved from the original
+// spelling so `#if (0)` still matches. `\(?` and `\)?` are BOTH optional but always paired in
+// practice.
 const _parenZero = `\\(?\\s*${_ZERO_LITERAL}\\s*\\)?`;
-const _parenOne = `\\(?\\s*${_ONE_LITERAL}\\s*\\)?`;
-// `<literal>` alone or `<literal> <op> <RHS atom>`. `<op>` is `&&` for FALSE, `||` for TRUE.
+const _parenNonzero = `\\(?\\s*${_NONZERO_LITERAL}\\s*\\)?`;
+// `<literal>` alone or `<literal> <op> <RHS atom>`. `<op>` is `&&` for FALSE (short-circuits on
+// left=0), `||` for TRUE (short-circuits on left=nonzero).
 const _falseExpr = `${_parenZero}(?:\\s*&&\\s*${_RHS_ATOM})?`;
-const _trueExpr = `${_parenOne}(?:\\s*\\|\\|\\s*${_RHS_ATOM})?`;
+const _trueExpr = `${_parenNonzero}(?:\\s*\\|\\|\\s*${_RHS_ATOM})?`;
 // Optional outer parens wrapping the WHOLE constant expression, e.g. `(0 && FEATURE)`. Note the
 // two alternatives are needed together so both `(0) && FEATURE` (inner-only) and
 // `(0 && FEATURE)` (outer-whole) work.

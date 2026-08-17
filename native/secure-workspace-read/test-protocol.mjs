@@ -524,7 +524,55 @@ function assertLaterElifAfterLiveStripped() {
   assertAdjacentStringLiteralsFold();
   assertHexAndOctalZeroFormsStripped();
   assertHexAndOctalOneFormsRecognised();
+  assertArbitraryNonzeroFormsRecognised();
   assertTrigraphIfZero();
+}
+
+// Codex 3793398789 on #3202: C's `#if` treats every nonzero integer as true, not just 1. The
+// earlier `_NONZERO_LITERAL` predecessor only matched the value 1; `#if 2 ... #else PIN ...
+// #endif` was treated as unknown and both branches survived the strip, letting a required
+// control retained only in the compiler-dead `#else` satisfy the source pin. Cover a range
+// of nonzero decimal/octal/hex integers plus `||` composites and outer parens.
+function assertArbitraryNonzeroFormsRecognised() {
+  const nonzeroVariants = [
+    "#if 2",
+    "#if 42",
+    "#if 1000UL",
+    "#if 010",
+    "#if 077",
+    "#if 0x10",
+    "#if 0xff",
+    "#if 0XFF",
+    "#if 0x0F",
+    "#if 2 || FEATURE",
+    "#if (42)",
+    "#if (0xff || defined(FLAG))",
+  ];
+  for (const variant of nonzeroVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nLIVE_NONZERO_BODY();\n#else\nDEAD_NONZERO_ELSE();\n#endif\n",
+    );
+    assert.match(
+      stripped,
+      /LIVE_NONZERO_BODY/u,
+      "nonzero integer literal must keep its live body: " + variant,
+    );
+    assert.equal(
+      stripped.match(/DEAD_NONZERO_ELSE/u),
+      null,
+      "`#else` after a nonzero constant must be stripped (branch is compiler-dead): " + variant,
+    );
+  }
+  // Elif form too — same regex family, same reasoning.
+  const stripped = stripCommentsAndStrings(
+    "#if 0\nDEAD_IF();\n#elif 42\nLIVE_NONZERO_ELIF();\n#else\nDEAD_ELSE_AFTER_NONZERO();\n#endif\n",
+  );
+  assert.match(stripped, /LIVE_NONZERO_ELIF/u, "`#elif 42` must keep its live body");
+  assert.equal(
+    stripped.match(/DEAD_ELSE_AFTER_NONZERO/u),
+    null,
+    "`#else` after `#elif 42` must be stripped",
+  );
 }
 
 // Codex 3793356684 on #3202: `#if 0x1` and `#if 01` are true just like `#if 1`. The earlier

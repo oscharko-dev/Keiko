@@ -1627,6 +1627,45 @@ test("dynamic `+` operands still fall through to per-operand recursion", () => {
   expect(texts).toContain("to Keiko");
 });
 
+// Codex 3793398793 on 8ce536db: `{"open " + section + " settings"}` — the fold above returns
+// null because one operand is dynamic, and per-operand emission leaves "open" and "settings"
+// as machine tokens the classifier rejects. Aggregate the literal fragments alone (skipping
+// the dynamic operand) and emit as a phrase when translatable and no individual operand
+// already tripped.
+test("aggregates literal fragments around a dynamic `+` operand", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{"open " + section + " settings"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("open settings");
+});
+
+test("literal-fragment aggregation does not double-count when an operand already trips the classifier", () => {
+  // "Welcome back," is translatable on its own; the aggregate "Welcome back, to Keiko" would
+  // OVERLAP with it and add noise without new signal. Bail out of the aggregate for this case
+  // so the baseline stays stable — same anti-double-count policy as the JsxText aggregator.
+  const findings = untranslatedLiteralsInSource(
+    '<p>{"Welcome back, " + user + " to Keiko"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(findings).not.toContain("Welcome back, to Keiko");
+});
+
+// Codex 3793398796 on 8ce536db: the aggregated phrase used to be attributed to the container's
+// opening tag; `reportOnLine` only checks that line and the previous one, so an
+// `// i18n-exempt` marker adjacent to the phrase's own text could not exempt the aggregate.
+// Attribute to the FIRST text fragment's line so documented markers apply.
+test("aggregated phrase is reported on the first text fragment's line, not the container line", () => {
+  // The `<p>` opens on line 1; the phrase parts start on line 3. The aggregate must land on
+  // line 3 so a marker on line 2 or 3 can exempt it.
+  const src = "<p>\n  {}\n  open <code>settings</code>\n</p>";
+  const finding = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.find(
+    (f) => f.text === "open settings",
+  );
+  expect(finding).toBeDefined();
+  expect(finding.line).toBe(3);
+});
+
 test("aggregation does not cross block-level element boundaries", () => {
   // `<div>` is a block container, not text-level inline formatting; the two `<p>` phrases render
   // as separate paragraphs and each is its own aggregate context. `open` and `settings` remain
