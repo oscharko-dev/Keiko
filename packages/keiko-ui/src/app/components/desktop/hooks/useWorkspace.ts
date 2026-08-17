@@ -1001,6 +1001,57 @@ function scheduleWorkspaceConflictRetry(
   });
 }
 
+// Issue #1580 — poll only while the document is visible; the old fixed interval kept
+// fetching/parsing forever in background tabs. Returning to visible does an immediate
+// catch-up pull so multi-tab convergence is unchanged. Extracted from the sync effect to
+// keep it inside the per-function line ceiling; `sync` is a stable reference so the effect
+// can add and remove the same visibilitychange listener.
+function createVisibilityPoller(
+  pull: () => void,
+  intervalMs: number,
+): { readonly sync: () => void; readonly stop: () => void } {
+  let interval: number | null = null;
+  const start = (): void => {
+    if (interval !== null) return;
+    interval = window.setInterval(pull, intervalMs);
+  };
+  const stop = (): void => {
+    if (interval === null) return;
+    window.clearInterval(interval);
+    interval = null;
+  };
+  const sync = (): void => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      stop();
+    } else {
+      pull();
+      start();
+    }
+  };
+  return { sync, stop };
+}
+
+// Dirty-poll branch of the server pull: the payload stays local-authoritative, but the
+// strictly newer server revision is adopted so the pending PUT carries a current If-Match
+// (instead of the guaranteed-stale revision 0 every reload with restored windows once
+// produced). Newer revision information also RE-ARMS the bounded conflict retry and schedules
+// the dirty write — if the PUT and its single retry both conflicted before this poll landed
+// (e.g. an intermediary strips ETags), the snapshot would otherwise stay parked until the
+// next local mutation. Bounded by the poll: each re-arm requires the revision to advance.
+function adoptPolledRevisionWhileDirty(
+  revision: number,
+  revisionRef: CurrentRef<number>,
+  conflictRetriedSnapshotRef: CurrentRef<string | null>,
+  putDebounceRef: CurrentRef<TrailingDebounce | null>,
+  runServerPutRef: CurrentRef<(keepalive: boolean) => void>,
+): void {
+  revisionRef.current = revision;
+  conflictRetriedSnapshotRef.current = null;
+  putDebounceRef.current?.schedule(() => {
+    runServerPutRef.current(false);
+  });
+}
+
 function buildServerWorkspaceSnapshot(
   wins: readonly AppWindow[],
   conns: readonly Connection[],
@@ -1230,7 +1281,6 @@ function useWorkspaceServerSync({
   useEffect(() => {
     if (!serverSyncEnabled) return;
     let stopped = false;
-    let interval: number | null = null;
     const pull = async (): Promise<void> => {
       const serverSnapshot = await fetchServerWorkspaceSnapshot(revisionRef.current);
       if (stopped || serverSnapshot === null) return;
@@ -1243,42 +1293,26 @@ function useWorkspaceServerSync({
         return;
       }
       if (localDirtyRef.current) {
-        // Keep the payload local-authoritative, but adopt the server revision so the pending
-        // debounced PUT carries a current If-Match instead of the guaranteed-stale revision 0
-        // that every reload with restored windows previously produced (one 412 per boot).
-        revisionRef.current = serverSnapshot.revision;
+        adoptPolledRevisionWhileDirty(
+          serverSnapshot.revision,
+          revisionRef,
+          conflictRetriedSnapshotRef,
+          putDebounceRef,
+          runServerPutRef,
+        );
         return;
       }
       applyServerSnapshot(serverSnapshot);
     };
-    const startPolling = (): void => {
-      if (interval !== null) return;
-      interval = window.setInterval(() => {
-        void pull();
-      }, WORKSPACE_STATE_POLL_MS);
-    };
-    const stopPolling = (): void => {
-      if (interval === null) return;
-      window.clearInterval(interval);
-      interval = null;
-    };
-    // Issue #1580 — only poll while the document is visible; the old fixed interval
-    // kept fetching/parsing forever in background tabs. Returning to visible does an
-    // immediate catch-up pull so multi-tab convergence is unchanged.
-    const sync = (): void => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-        stopPolling();
-      } else {
-        void pull();
-        startPolling();
-      }
-    };
-    sync();
-    document.addEventListener("visibilitychange", sync);
+    const poller = createVisibilityPoller(() => {
+      void pull();
+    }, WORKSPACE_STATE_POLL_MS);
+    poller.sync();
+    document.addEventListener("visibilitychange", poller.sync);
     return () => {
       stopped = true;
-      stopPolling();
-      document.removeEventListener("visibilitychange", sync);
+      poller.stop();
+      document.removeEventListener("visibilitychange", poller.sync);
     };
   }, [applyServerSnapshot, serverSyncEnabled]);
 

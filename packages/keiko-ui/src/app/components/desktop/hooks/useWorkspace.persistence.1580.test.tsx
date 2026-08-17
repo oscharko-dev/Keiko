@@ -663,6 +663,93 @@ describe("Issue #1580 — visibility-gated server poll", () => {
     );
   });
 
+  it("re-arms the parked retry when the poll advances the revision after two ETag-less 412s", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    let puts = 0;
+    let pollRevision: number | null = null;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        puts += 1;
+        if (puts <= 2) {
+          // Both the PUT and its single retry conflict WITHOUT a usable ETag.
+          return {
+            ok: false,
+            status: 412,
+            headers: new Headers(),
+            json: async () => Promise.resolve({}),
+          } as unknown as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ ETag: '"workspace-state-8"' }),
+          json: async () =>
+            Promise.resolve({ workspace: { revision: 8, windows: [], connections: [] } }),
+        } as unknown as Response;
+      }
+      if (pollRevision === null) {
+        return { status: 304, ok: true, headers: new Headers() } as unknown as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ ETag: `"workspace-state-${String(pollRevision)}"` }),
+        json: async () =>
+          Promise.resolve({
+            workspace: {
+              revision: pollRevision,
+              windows: [
+                {
+                  id: "foreign-1",
+                  type: "files",
+                  x: 1,
+                  y: 2,
+                  w: 320,
+                  h: 240,
+                  z: 9,
+                  cfg: {},
+                  max: false,
+                },
+              ],
+              connections: [],
+            },
+          }),
+      } as unknown as Response;
+    });
+
+    render(<Harness />);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+    // PUT and its one retry both conflicted; the marker is consumed, revision still 0.
+    expect(puts).toBe(2);
+
+    // The next poll delivers a strictly newer revision: the dirty branch must adopt it,
+    // re-arm the retry, and schedule the write — otherwise the close stays unsaved until
+    // another local mutation.
+    pollRevision = 7;
+    act(() => {
+      vi.advanceTimersByTime(POLL_MS);
+    });
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+
+    expect(puts).toBe(3);
+    expect((putCalls()[2]?.[1]?.headers as Record<string, string>)["If-Match"]).toBe(
+      '"workspace-state-7"',
+    );
+    expect(String(putCalls()[2]?.[1]?.body)).toContain("agents-1");
+  });
+
   it("caps the conflict retry at one attempt per dirty snapshot", async () => {
     window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
     let revision = 7;
