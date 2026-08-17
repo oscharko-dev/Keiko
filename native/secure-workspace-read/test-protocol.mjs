@@ -509,7 +509,59 @@ function assertLaterElifAfterLiveStripped() {
   assertNestedElseInsideDeadParentStripped();
   assertElifOneAfterUnknownExhausts();
   assertCompoundConstantTrueIf();
+  assertParenthesizedConstantConditions();
   assertTrigraphIfZero();
+}
+
+// Codex 3793229696: `#if (0 && FEATURE)` and `#if 0 && defined(FEATURE)` are deterministically
+// false but the per-directive regex used to stop at bare identifiers on the RHS and at a bare-
+// zero paren pair (`(0)`). The scanner would retain those dead bodies, so a required control
+// moved into one of these variants would still satisfy the positive assertion after the live
+// control was deleted. Cover both new shapes plus the mirror TRUE forms so any future
+// contributor sees the intent.
+function assertParenthesizedConstantConditions() {
+  const falseVariants = [
+    "#if (0 && FEATURE)",
+    "#if 0 && defined(FEATURE)",
+    "#if (0 && defined(FEATURE))",
+    "#if 0 && !defined(FEATURE)",
+    "#if (0)",
+  ];
+  for (const variant of falseVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nDEAD_PAREN_FALSE_BODY();\n#else\nLIVE_PAREN_FALSE_ELSE();\n#endif\n",
+    );
+    assert.equal(
+      stripped.match(/DEAD_PAREN_FALSE_BODY/u),
+      null,
+      "parenthesized/`defined()` false form must strip its body: " + variant,
+    );
+    assert.match(
+      stripped,
+      /LIVE_PAREN_FALSE_ELSE/u,
+      "`#else` after a false compound must survive: " + variant,
+    );
+  }
+  const trueVariants = [
+    "#if (1 || FEATURE)",
+    "#if 1 || defined(FEATURE)",
+    "#if (1 || defined(FEATURE))",
+  ];
+  for (const variant of trueVariants) {
+    const stripped = stripCommentsAndStrings(
+      variant + "\nLIVE_PAREN_TRUE_BODY();\n#else\nDEAD_PAREN_TRUE_ELSE();\n#endif\n",
+    );
+    assert.match(
+      stripped,
+      /LIVE_PAREN_TRUE_BODY/u,
+      "parenthesized/`defined()` true form's body must survive: " + variant,
+    );
+    assert.equal(
+      stripped.match(/DEAD_PAREN_TRUE_ELSE/u),
+      null,
+      "`#else` after a true compound must be stripped: " + variant,
+    );
+  }
 }
 
 // Codex 3793198453: `#if 1 || FEATURE` is deterministically true (C's `||` short-circuits on

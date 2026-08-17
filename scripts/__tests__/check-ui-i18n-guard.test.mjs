@@ -1499,6 +1499,73 @@ test("collects tagged-template spans with an interpolation", () => {
   expect(texts.some((t) => t.includes("Welcome back,"))).toBe(true);
 });
 
+// Codex 3793229700 on d753717d: `{["Delete account"].map(l => <span>{l}</span>)}` renders the
+// array elements as JSX children. The literal lives in the CallExpression's RECEIVER
+// (`["Delete account"].map`), not in `.map`'s arguments. The receiver traversal falls through
+// PropertyAccessExpression to reach the ArrayLiteralExpression.
+test("collects literals from a call receiver's array literal", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{["Delete account"].map((l) => <span>{l}</span>)}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Delete account");
+});
+
+test("collects literals from a call receiver via element access", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{["Save changes"]["map"]((l) => <span>{l}</span>)}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Save changes");
+});
+
+// Codex 3793229704 on d753717d: `<p>open <code>settings</code></p>` splits the phrase "open
+// settings" into two `JsxText` fragments. Each is a single lowercase word the classifier
+// rejects as a machine token, so the aggregate phrase was invisible to the ledger. Aggregate
+// JsxText across text-level inline formatting elements so the classifier sees what the reader
+// sees.
+test("aggregates JsxText split across an inline formatting element", () => {
+  const texts = untranslatedLiteralsInSource(
+    "<p>open <code>settings</code></p>",
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("open settings");
+});
+
+test("aggregates JsxText across multiple inline formatting elements", () => {
+  // Every individual fragment (`this`, `is`, `a`, `phrase`) is a single lowercase token the
+  // classifier rejects on its own. The aggregate "this is a phrase" spans across three inline
+  // formatting elements and IS translatable — it must reach the ledger. Codex 3793229704.
+  const texts = untranslatedLiteralsInSource(
+    "<p>this <em>is</em> <strong>a</strong> <code>phrase</code></p>",
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("this is a phrase");
+});
+
+test("aggregation does not double-count when an individual fragment is already translatable", () => {
+  // "Save your changes" already trips the classifier as a single fragment, so we must NOT ALSO
+  // emit a synthetic aggregate entry that overlaps it. Otherwise the baseline ledger doubles
+  // every phrase that survives the per-fragment path — pure churn without new signal.
+  const findings = untranslatedLiteralsInSource(
+    "<p>Save your changes <code>now</code></p>",
+    "packages/x/y.tsx",
+  ).findings;
+  const savePhrase = findings.filter((f) => f.text.includes("Save your changes"));
+  expect(savePhrase).toHaveLength(1);
+});
+
+test("aggregation does not cross block-level element boundaries", () => {
+  // `<div>` is a block container, not text-level inline formatting; the two `<p>` phrases render
+  // as separate paragraphs and each is its own aggregate context. `open` and `settings` remain
+  // per-fragment tokens (rejected as machine tokens), so no aggregate is emitted.
+  const texts = untranslatedLiteralsInSource(
+    "<div><p>open</p><p>settings</p></div>",
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).not.toContain("open settings");
+});
+
 // KEIKO-0299 (review-follow-up on af74e79b): a JSX child like `{"Welcome back, " + name}`
 // renders the concatenation as user copy — the literal on either operand IS user-visible and
 // must enter the ledger. Codex 3792890969.

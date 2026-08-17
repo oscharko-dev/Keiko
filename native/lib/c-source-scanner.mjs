@@ -227,29 +227,53 @@ export function stripStringLiteralBodies(source) {
 //       `#endif` reaches this frame, not the outer one.
 
 // Module-internal (not exported: the composition helpers below wrap all directive matching).
+//
+// Constant-condition regex building blocks (codex 3793229696 on #3202). The DISABLED and
+// DEFINITIVELY_TRUE patterns share the same three shapes: bare literal (`0`/`1`), literal +
+// short-circuiting operator + one RHS atom (`0 && FEATURE`, `1 || FEATURE`), and either of
+// those wrapped in a single outer paren pair (`(0 && FEATURE)`). The RHS atom accepts both a
+// plain identifier and a `defined(IDENT)` call, optionally negated with `!`; the reviewer
+// called out `#if 0 && defined(FEATURE)` and `#if (0 && FEATURE)` as valid deterministically-
+// false shapes the earlier per-regex spelling missed. Compose from parts so any future
+// extension (e.g. `defined X` without parens, multi-atom AND chains) is a single edit.
+//
 // Coderabbit 3793183803: allow zero whitespace after `&&` (`#if 0&&FEATURE`) — it's valid C
-// and evaluates to false. Whitespace before the identifier is also `\s*` (was `\s+`) so both
+// and evaluates to false. Whitespace before the identifier is `\s*` (was `\s+`) so both
 // `0 && FEATURE` and `0&&FEATURE` match.
+const _IDENT = "[A-Za-z_][A-Za-z0-9_]*";
+const _DEFINED_CALL = `defined\\s*\\(\\s*${_IDENT}\\s*\\)`;
+// RHS of a short-circuiting operator: bare identifier or `defined(IDENT)`, optionally `!`.
+const _RHS_ATOM = `!?\\s*(?:${_IDENT}|${_DEFINED_CALL})`;
+const _ZERO_LITERAL = "0[UuLl]{0,3}";
+const _ONE_LITERAL = "1[UuLl]{0,3}";
+// The literal itself may be parenthesized (`(0)`, `(1)`) — preserved from the original spelling
+// so `#if (0)` still matches. `\(?` and `\)?` are BOTH optional but always paired in practice.
+const _parenZero = `\\(?\\s*${_ZERO_LITERAL}\\s*\\)?`;
+const _parenOne = `\\(?\\s*${_ONE_LITERAL}\\s*\\)?`;
+// `<literal>` alone or `<literal> <op> <RHS atom>`. `<op>` is `&&` for FALSE, `||` for TRUE.
+const _falseExpr = `${_parenZero}(?:\\s*&&\\s*${_RHS_ATOM})?`;
+const _trueExpr = `${_parenOne}(?:\\s*\\|\\|\\s*${_RHS_ATOM})?`;
+// Optional outer parens wrapping the WHOLE constant expression, e.g. `(0 && FEATURE)`. Note the
+// two alternatives are needed together so both `(0) && FEATURE` (inner-only) and
+// `(0 && FEATURE)` (outer-whole) work.
+const _falseCond = `(?:\\(\\s*${_falseExpr}\\s*\\)|${_falseExpr})`;
+const _trueCond = `(?:\\(\\s*${_trueExpr}\\s*\\)|${_trueExpr})`;
+
 const PREPROCESSOR_PATTERNS = {
   OPEN_IF: /^#\s*(?:if|ifdef|ifndef)\b/u,
   CLOSE_ENDIF: /^#\s*endif\b/u,
   ELSE_DIRECTIVE: /^#\s*else\b/u,
   ELIF_DIRECTIVE: /^#\s*elif\b/u,
-  DISABLED_IF: /^#\s*if\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*(?:&&\s*!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u,
-  DISABLED_ELIF:
-    /^#\s*elif\s+\(?\s*0[UuLl]{0,3}\s*\)?\s*(?:&&\s*!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u,
+  DISABLED_IF: new RegExp(`^#\\s*if\\s+${_falseCond}\\s*$`, "u"),
+  DISABLED_ELIF: new RegExp(`^#\\s*elif\\s+${_falseCond}\\s*$`, "u"),
 };
 
-// Extracted so the outer regex object is not polluted with the `1`-shape variants and so a
-// future contributor can extend them independently. Codex 3793074555 added constant-true.
-// Codex 3793198453: also recognise the mirror-composite form `#if 1 || FEATURE` — C's `||`
-// short-circuits on left=1, so the whole condition is deterministically true regardless of
-// FEATURE. Single trailing identifier (optionally `!`-prefixed); same policy as the
-// `0 && FEATURE` variant of DISABLED_IF.
-const DEFINITIVELY_TRUE_IF =
-  /^#\s*if\s+\(?\s*1[UuLl]{0,3}\s*\)?\s*(?:\|\|\s*!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u;
-const DEFINITIVELY_TRUE_ELIF =
-  /^#\s*elif\s+\(?\s*1[UuLl]{0,3}\s*\)?\s*(?:\|\|\s*!?[A-Za-z_][A-Za-z0-9_]*\s*)?\s*$/u;
+// Constant-true forms — extracted so the outer regex object is not polluted with the `1`-shape
+// variants and so a future contributor can extend them independently. Codex 3793074555 added
+// constant-true; codex 3793198453 added `#if 1 || FEATURE` (mirror of `#if 0 && FEATURE`);
+// codex 3793229696 added outer parens (`#if (1 || FEATURE)`) and `defined()` on the RHS.
+const DEFINITIVELY_TRUE_IF = new RegExp(`^#\\s*if\\s+${_trueCond}\\s*$`, "u");
+const DEFINITIVELY_TRUE_ELIF = new RegExp(`^#\\s*elif\\s+${_trueCond}\\s*$`, "u");
 
 const STRIPPING = "stripping";
 const KEEPING = "keeping";

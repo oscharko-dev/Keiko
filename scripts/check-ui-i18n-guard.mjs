@@ -686,6 +686,80 @@ function jsxTextResult(node, sourceFile) {
   return { line, text: text.trim() };
 }
 
+// Codex 3793229704: `<p>open <code>settings</code></p>` splits the phrase "open settings" into
+// two `JsxText` fragments the classifier sees independently. Each fragment is one lowercase
+// token, which `isTranslatableCopy` treats as a machine token and drops — the aggregate phrase
+// never enters the ledger, letting newly added copy bypass the gate whenever a designer wraps a
+// word in `<code>`/`<em>`/`<strong>`/etc. Aggregate JsxText that appear directly under a
+// container OR under one of these text-level inline formatting elements, so the classifier can
+// see the phrase the reader actually sees. Emit only when (a) the container spans multiple
+// fragments and (b) no individual fragment already tripped the classifier — that keeps the
+// baseline ledger stable for the shapes the per-fragment path already caught.
+//
+// The set follows the HTML spec's "phrasing content" that renders inline text without semantic
+// structure; block-level elements (`<p>`, `<div>`, `<li>`, …) and interactive elements
+// (`<a>`, `<button>`) terminate the aggregate because their contents form a separate phrase.
+const INLINE_TEXT_FORMATTING_ELEMENTS = new Set([
+  "span",
+  "code",
+  "em",
+  "strong",
+  "b",
+  "i",
+  "u",
+  "small",
+  "mark",
+  "sub",
+  "sup",
+  "ins",
+  "del",
+  "kbd",
+  "var",
+  "cite",
+  "abbr",
+  "dfn",
+  "samp",
+  "s",
+  "q",
+  "bdo",
+  "bdi",
+  "time",
+]);
+
+function isInlineTextFormattingChild(child) {
+  if (!ts.isJsxElement(child)) return false;
+  const tagName = child.openingElement.tagName;
+  if (!ts.isIdentifier(tagName)) return false;
+  return INLINE_TEXT_FORMATTING_ELEMENTS.has(tagName.text);
+}
+
+function collectAggregatedJsxTextParts(container) {
+  const parts = [];
+  for (const child of container.children) {
+    if (ts.isJsxText(child)) {
+      const trimmed = child.text.trim().replace(/\s+/gu, " ");
+      if (trimmed.length > 0) parts.push(trimmed);
+    } else if (isInlineTextFormattingChild(child)) {
+      parts.push(...collectAggregatedJsxTextParts(child));
+    }
+    // Non-inline elements (block containers, custom components) and expression braces
+    // terminate the aggregate — their contents form a separate phrase.
+  }
+  return parts;
+}
+
+function jsxAggregatedTextResult(node, sourceFile) {
+  const parts = collectAggregatedJsxTextParts(node);
+  if (parts.length < 2) return null;
+  const aggregate = parts.join(" ");
+  if (!isTranslatableCopy(aggregate)) return null;
+  // If any individual fragment is already translatable on its own, the per-JsxText path already
+  // recorded it — do not double-count with a synthetic aggregate entry.
+  if (parts.some(isTranslatableCopy)) return null;
+  const line = ts.getLineAndCharacterOfPosition(sourceFile, node.getStart(sourceFile)).line + 1;
+  return { line, text: aggregate };
+}
+
 function jsxChildExpressionResults(node, sourceFile) {
   if (!node.expression || !isJsxExpressionChildOfElement(node)) return [];
   return jsxChildExpressionLiteralTexts(node.expression, sourceFile).filter(
@@ -775,6 +849,9 @@ function collectJsxTextAndExpressions(source, filename) {
       results.push(...jsxAttributeExpressionResults(node, sourceFile));
     } else if (ts.isJsxSpreadAttribute(node)) {
       results.push(...jsxSpreadAttributeResults(node, sourceFile));
+    } else if (ts.isJsxElement(node) || ts.isJsxFragment(node)) {
+      const aggregate = jsxAggregatedTextResult(node, sourceFile);
+      if (aggregate !== null) results.push(aggregate);
     }
     ts.forEachChild(node, visit);
   };
@@ -806,7 +883,9 @@ function jsxChildExpressionLiteralTexts(expr, sourceFile) {
 }
 
 // Compound expression shapes (extracted for complexity ceiling). Returns null when `expr` is
-// not one of these shapes, so the caller falls through to the empty default.
+// not one of these shapes, so the caller falls through to the empty default. Split into two
+// helpers so no single function exceeds the complexity ceiling: control-flow shapes here,
+// container/receiver/function shapes in `containerExpressionTexts`.
 function compoundExpressionTexts(expr, sourceFile) {
   if (ts.isConditionalExpression(expr)) {
     return [
@@ -820,10 +899,32 @@ function compoundExpressionTexts(expr, sourceFile) {
   if (isTransparentWrapper(expr)) {
     return jsxChildExpressionLiteralTexts(expr.expression, sourceFile);
   }
+  return containerExpressionTexts(expr, sourceFile);
+}
+
+// Container-like shapes: calls, accessors, functions, arrays, tagged templates. Each returns
+// the literals that live in its child positions; the surrounding rules for user copy still apply
+// via the recursive helper. Returns null when `expr` matches none of these shapes.
+function containerExpressionTexts(expr, sourceFile) {
   // CallExpression: a helper like `definedOr(x, "this file")` returns its literal argument
-  // verbatim (codex 3792986615). Traverse each argument via the same helper.
+  // verbatim (codex 3792986615). Traverse each argument via the same helper. Codex 3793229700:
+  // ALSO traverse the receiver chain — `{["Delete account"].map(l => <span>{l}</span>)}` renders
+  // the array elements as JSX children (the callback returns each element wrapped in a `<span>`);
+  // the literal lives in the receiver `["Delete account"]`, not in `.map`'s arguments. The
+  // recursion falls through PropertyAccessExpression / ElementAccessExpression handled below.
   if (ts.isCallExpression(expr)) {
-    return expr.arguments.flatMap((arg) => jsxChildExpressionLiteralTexts(arg, sourceFile));
+    return [
+      ...expr.arguments.flatMap((arg) => jsxChildExpressionLiteralTexts(arg, sourceFile)),
+      ...jsxChildExpressionLiteralTexts(expr.expression, sourceFile),
+    ];
+  }
+  // PropertyAccessExpression / ElementAccessExpression: pass-through to `.expression` (the LHS).
+  // `["Delete account"].map` and `["Delete account"]["map"]` both put the literal on the LHS of
+  // the accessor, so recursing there surfaces the ArrayLiteralExpression handled below. Codex
+  // 3793229700. Element-access argument (`obj["some key"]`) is a code key, not user copy, so it
+  // is intentionally not traversed.
+  if (ts.isPropertyAccessExpression(expr) || ts.isElementAccessExpression(expr)) {
+    return jsxChildExpressionLiteralTexts(expr.expression, sourceFile);
   }
   // ArrowFunction / FunctionExpression: `{items.map(() => "Delete account")}` — the body IS
   // user copy that gets rendered per item (codex 3793101250).
