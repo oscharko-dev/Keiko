@@ -643,6 +643,11 @@ const USER_FACING_ATTRIBUTE_NAMES = new Set([
   // cleanly to speech ("Half complete", "About five minutes remaining"). Same policy as
   // `aria-label` — the AST scan MUST see it or new accessible copy bypasses the ledger.
   "aria-valuetext",
+  // Codex 3793874125 on #3202: `aria-roledescription` is the author-supplied role text
+  // assistive tech announces in place of the intrinsic role (`<section
+  // aria-roledescription="Slide deck">` → "Slide deck" instead of "region"). Human-readable
+  // by definition; same policy as `aria-label`.
+  "aria-roledescription",
   "alt",
   "placeholder",
   "title",
@@ -653,6 +658,7 @@ const USER_FACING_ATTRIBUTE_NAMES = new Set([
   "ariaDescription",
   "ariaPlaceholder",
   "ariaValueText",
+  "ariaRoleDescription",
   "label",
   "labelText",
   "description",

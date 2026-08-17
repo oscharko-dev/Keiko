@@ -483,6 +483,7 @@ function assertScannerBehaviours() {
   assertDecodeThenFoldOrder();
   assertPathNormalizationCollapsesCurrentDir();
   assertPathNormalizationCollapsesRepeatedSlashes();
+  assertPathNormalizationCollapsesParentDir();
   assertArithmeticConstantConditionsRecognised();
   assertJsIncompatibleArithmeticStaysUnknown();
   assertMaskedByteSpellingPreservesDelimiters();
@@ -504,6 +505,14 @@ function assertJsIncompatibleArithmeticStaysUnknown() {
     "#if 0x100000000 | 0",
     "#if 1 & 3",
     "#if 5 ^ 3",
+    // Codex 3793874116: `&&`/`||` return operand values in JS (not `int` 0/1). Safe for
+    // outermost use but wrong when nested — `(2 && 3) == 1` diverges (JS false, C true).
+    // The evaluator conservatively rejects the whole family; regex-based `_falseExpr` /
+    // `_trueExpr` still recognise `0 && FEATURE` / `1 || FEATURE` short-circuit shapes.
+    "#if (2 && 3) == 1",
+    "#if (0 || 5) == 5",
+    "#if 2 && 3",
+    "#if 0 || 5",
   ];
   for (const variant of rejectVariants) {
     const stripped = stripCommentsAndStrings(
@@ -603,6 +612,33 @@ function assertNumericQuoteEscapesPreservedThroughDecode() {
 // repeated `/` separators are collapsed. The pin regex expects a contiguous path.
 // URL schemes (`://`) are preserved (negative lookbehind on `:`) so `https://example.com`
 // stays intact.
+// Codex 3793874121 on #3202: the OS resolves `/usr/../bin/sh` to `/bin/sh`. Parent-directory
+// components must be normalised too; the earlier version only handled `/./` and `//`.
+function assertPathNormalizationCollapsesParentDir() {
+  const forms = [
+    { src: 'const char *p = "/usr/../bin/sh";', expect: '"/bin/sh"', label: "single .." },
+    {
+      src: 'const char *p = "/usr/local/../bin/sh";',
+      expect: '"/usr/bin/sh"',
+      label: "mid-path ..",
+    },
+    {
+      src: 'const char *p = "/usr/local/../../bin/sh";',
+      expect: '"/bin/sh"',
+      label: "double .. (iterative)",
+    },
+    {
+      src: 'const char *p = "/usr/../";',
+      expect: '"/"',
+      label: ".. cancels the only component",
+    },
+  ];
+  for (const { src, expect, label } of forms) {
+    const prepared = stripCommentsOnly(src + "\n");
+    assert.ok(prepared.includes(expect), `${label} must normalise to ${expect}; got: ${prepared}`);
+  }
+}
+
 function assertPathNormalizationCollapsesRepeatedSlashes() {
   const forms = [
     { src: 'const char *p = "/bin//sh";', expect: '"/bin/sh"', label: "double //" },
@@ -626,12 +662,14 @@ function assertPathNormalizationCollapsesRepeatedSlashes() {
 // pin. Verify the arithmetic evaluator recognises truth values for arithmetic, comparison,
 // bitwise, and logical constant expressions.
 function assertArithmeticConstantConditionsRecognised() {
-  // Coderabbit 3793711080 + codex 3793772894: `<<`, `>>`, `~`, `/`, `%`, `&`, `|`, `^` are
-  // REJECTED (fall through to unknown) because JS `intmax_t` semantics diverge (`1/2*2` →
-  // C: 0, JS: 1; `1<<32` → C: 2^32, JS: 0; `0x100000000 | 0` → C: nonzero, JS: 0). The
-  // trueExprs / falseExprs tables here only include operators whose JS and C truth-values
-  // agree: arithmetic `+ - *`, comparison, logical `&& || !`, and parens.
-  const trueExprs = ["1 + 1", "2 * 3", "3 - 1", "1 == 1", "0 || 1", "!(1 - 1)"];
+  // Coderabbit 3793711080 + codex 3793772894 + 3793874116: `<<`, `>>`, `~`, `/`, `%`, `&`,
+  // `|`, `^`, `&&`, `||` are ALL REJECTED (fall through to unknown). Bitwise: JS coerces
+  // to 32-bit signed int, C uses intmax_t. Logical: JS returns operand values while C returns
+  // int 0/1 — safe for OUTERMOST use but wrong when the result feeds into another op like
+  // `(2 && 3) == 1` (JS: 3 == 1 = false; C: 1 == 1 = true). The trueExprs / falseExprs
+  // tables here only include operators whose JS and C results agree at every intermediate:
+  // arithmetic `+ - *`, comparison, unary `!`, and parens.
+  const trueExprs = ["1 + 1", "2 * 3", "3 - 1", "1 == 1", "!(1 - 1)"];
   for (const cond of trueExprs) {
     const stripped = stripCommentsAndStrings(
       "#if " + cond + "\nLIVE_ARITH_TRUE();\n#else\nDEAD_ARITH_TRUE_ELSE();\n#endif\n",
@@ -643,7 +681,7 @@ function assertArithmeticConstantConditionsRecognised() {
       "`#else` after arithmetic true must be stripped: " + cond,
     );
   }
-  const falseExprs = ["1 - 1", "0 * 5", "0 && 1", "1 == 0", "2 - 2", "(1 - 1)"];
+  const falseExprs = ["1 - 1", "0 * 5", "1 == 0", "2 - 2", "(1 - 1)"];
   for (const cond of falseExprs) {
     const stripped = stripCommentsAndStrings(
       "#if " + cond + "\nDEAD_ARITH_FALSE();\n#else\nLIVE_ARITH_FALSE_ELSE();\n#endif\n",

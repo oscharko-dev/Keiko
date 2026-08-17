@@ -368,30 +368,40 @@ function preservedByteSpelling(value) {
 }
 
 // ---------------------------------------------------------------------------
-// Path-normalisation: collapse `./` current-directory components and `//` runs
+// Path-normalisation: collapse `./`, `../`, and `//` runs
 // ---------------------------------------------------------------------------
-// Codex 3793578605 + 3793642847 on #3202: the OS resolves both `/bin/./sh` AND `/bin//sh`
-// to `/bin/sh` before executing. The negative shell-path pin's regex expects a contiguous
-// `/bin/sh`. Collapse both forms in the whole prepared source so the pin sees the resolved
-// path. Applies globally rather than per-literal so a token boundary between literal and
-// adjacent code (`"/bin" "/./sh"` after fold) still normalises. Repeats until fixpoint to
-// handle chains (`/./././`, `////`).
+// Codex 3793578605 + 3793642847 + 3793874121 on #3202: the OS resolves `/bin/./sh`,
+// `/bin//sh`, AND `/usr/../bin/sh` all to `/bin/sh` before executing. The negative shell-
+// path pin's regex expects a contiguous `/bin/sh`. Collapse all three forms in the whole
+// prepared source so the pin sees the resolved path. Applies globally rather than per-literal
+// so a token boundary between literal and adjacent code (`"/bin" "/./sh"` after fold) still
+// normalises. Repeats until fixpoint to handle chains (`/./././`, `////`, nested `../../`).
 //
-// URL schemes are preserved: the `://` after `http`/`https`/`file`/etc. is meaningful, so the
-// `//` collapse uses a negative lookbehind to skip when preceded by `:`. This lets
+// URL schemes are preserved: the `://` after `http`/`https`/`file`/etc. is meaningful, so
+// the `//` collapse uses a negative lookbehind to skip when preceded by `:`. This lets
 // `https://example.com` stay intact while `/bin//sh` still collapses.
 //
-// `..` (parent) is NOT normalised — resolving it requires the preceding component. That
-// omission is documented (`#if 0 && FEATURE` similar recognition-only policy) and leaves a
-// theoretical `/bin/../bin/sh` bypass; the shell-path regex could still be widened later, but
-// the source-contract call site for this scanner does not host `..` in any real supervisor
-// path today.
+// `..` semantics: match `<component>/..` and remove BOTH tokens (drop the component and the
+// `..`). Requires a non-empty preceding component that isn't itself `..` (nested `../../`
+// consumes one level at a time via iteration). `/../` at path root has no preceding
+// component; POSIX resolves it to `/`, which our regex mimics by collapsing the leading
+// `/../` into a single `/`.
 export function normalizeCurrentDirComponents(source) {
   let previous;
   let current = source;
   do {
     previous = current;
-    current = previous.replace(/\/\.(?=\/)/gu, "").replace(/(?<!:)\/{2,}/gu, "/");
+    current = previous
+      .replace(/\/\.(?=\/)/gu, "")
+      .replace(/(?<!:)\/{2,}/gu, "/")
+      // `<component>/..` where <component> is a single path segment that isn't `..`. Followed
+      // by `/` or end of string. The lookbehind on `/` anchors the component start; the
+      // negative lookahead prevents matching `../..` (which needs iteration, not greedy
+      // one-shot). Removes BOTH the component AND the `..` so `usr/../bin` becomes `bin`.
+      .replace(/(?<=\/)(?!\.\.\/)[^/]+\/\.\.(?=\/|$)/gu, "")
+      // Any residual `/./` from the collapse above, or `//` produced by removing a component.
+      .replace(/\/\.(?=\/)/gu, "")
+      .replace(/(?<!:)\/{2,}/gu, "/");
   } while (current !== previous);
   return current;
 }
@@ -675,21 +685,25 @@ function evaluateConstantArithmetic(exprText) {
   const trimmed = exprText.trim();
   if (trimmed.length === 0) return null;
   if (!/^[\s0-9xXa-fA-FUuLl+\-*()<>=!&|]+$/u.test(trimmed)) return null;
-  // Coderabbit 3793711080 + codex 3793772894 on #3202: fail-closed on operators whose JS
-  // semantics diverge from C's `intmax_t` preprocessor arithmetic. Concrete divergences:
+  // Coderabbit 3793711080 + codex 3793772894 + 3793874116 on #3202: fail-closed on operators
+  // whose JS semantics diverge from C's `intmax_t` preprocessor arithmetic. Concrete
+  // divergences:
   //   - `#if 1/2*2` — C: (1/2)*2 = 0*2 = 0 (strip); JS: 0.5*2 = 1 (keep).
   //   - `#if (1<<32)-1` — C: nonzero (keep); JS: 32-bit wrap = 0 (strip).
   //   - `#if 0x100000000 | 0` — C: nonzero (keep); JS bitwise coerces to 32-bit signed int,
   //     the high bit is dropped, result 0 (strip).
-  // Reject `/`, `%`, `<<`, `>>`, `~`, `&`, `|`, `^`; the ladder falls through to the
-  // conservative unknown-condition path (both branches survive). The char-set validator
-  // above excludes `/`, `%`, `~`, `^` outright. `&` and `|` are allowed there so `&&`/`||`
-  // pass (logical operators — truthiness in JS agrees with C), but the composite guard
-  // below rejects any SINGLE `&`/`|` (bitwise) that remains after stripping the double forms.
-  // Also reject `**` (JS exponentiation vs C syntax error) and `<<`/`>>` (32-bit truncation
-  // divergence).
-  const withoutLogicalOps = trimmed.replaceAll("||", "").replaceAll("&&", "");
-  if (/[|&]|\*\*|<<|>>/u.test(withoutLogicalOps)) return null;
+  //   - `#if (2 && 3) == 1` — C: (2 && 3) is `int` 1 → true (keep); JS: (2 && 3) is `3` →
+  //     `3 == 1` is false (strip).
+  // Reject `/`, `%`, `<<`, `>>`, `~`, `&`, `|`, `^`, `&&`, `||`; the ladder falls through to
+  // the conservative unknown-condition path (both branches survive). The char-set validator
+  // above excludes `/`, `%`, `~`, `^` outright. `&`/`|` are allowed in the char set for
+  // parenthesis-and-comparison-heavy expressions but the composite guard here rejects any
+  // `&`/`|` (whether single bitwise or paired logical) — the arithmetic evaluator does NOT
+  // model C's logical-op result normalisation. Simple constant `&&`/`||` conditions such as
+  // `#if 1 && 0`, `#if 0 || 1` fall through to unknown; the regex-based `_falseExpr` /
+  // `_trueExpr` already recognise the constant-left-short-circuit shapes without going
+  // through this evaluator, so common `#if 0 && FEATURE` / `#if 1 || FEATURE` still work.
+  if (/[|&]|\*\*|<<|>>/u.test(trimmed)) return null;
   let js = trimmed.replace(/([0-9a-fA-F])[UuLl]{1,3}\b/gu, "$1");
   // C octal: `0<octal-digits>`. Convert to JS `0o<digits>`. Bare `0` and `0x…` stay as-is.
   js = js.replace(/\b0([0-7]+)(?![0-9a-fA-F])/gu, "0o$1");

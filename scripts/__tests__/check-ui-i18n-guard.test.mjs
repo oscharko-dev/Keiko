@@ -1788,6 +1788,24 @@ test.each([
   expect(texts).toContain("Half complete");
 });
 
+// Codex 3793874125 on 4a2e8002: `aria-roledescription` is the author-supplied role text
+// assistive tech announces in place of the intrinsic role (`<section aria-roledescription=
+// "Slide deck">` → "Slide deck" instead of "region"). Same policy as `aria-label`. Both
+// kebab-case and camelCase spellings enter the ledger.
+test.each([
+  {
+    label: "aria-roledescription on intrinsic element",
+    src: '<section aria-roledescription="Slide deck" />',
+  },
+  {
+    label: "ariaRoleDescription on custom component",
+    src: '<KeikoSlide ariaRoleDescription="Slide deck" />',
+  },
+])("scans `aria-roledescription` accessible copy ($label)", ({ src }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("Slide deck");
+});
+
 // Codex 3793795566 on 6d137202: `<p>{["open ", "settings"]}</p>` renders "open settings" but
 // per-element emission alone drops both fragments as machine tokens. When EVERY element is a
 // string literal, ALSO emit the concatenated form as one aggregate. Dynamic elements disable
