@@ -1668,58 +1668,50 @@ test("collects literals from inline object-literal values via element-access loo
   expect(texts).toContain("Close settings");
 });
 
-// Codex 3793356682 on af9f5ede: `{"open " + "settings"}` renders "open settings" but the
-// per-operand recursion emitted "open" and "settings" separately — each is a lowercase
-// machine-token the classifier rejects. Fold literal-only `+` chains into the whole phrase
-// before classification. Retain per-operand emission when at least one operand is dynamic.
-test("combines literal `+` operands into a single phrase before classification", () => {
-  const texts = untranslatedLiteralsInSource(
-    '<p>{"open " + "settings"}</p>',
-    "packages/x/y.tsx",
-  ).findings.map((f) => f.text);
-  expect(texts).toContain("open settings");
-});
-
-test("chained literal `+` operands fold across three or more segments", () => {
-  const texts = untranslatedLiteralsInSource(
-    '<p>{"press " + "Ctrl " + "K" + " now"}</p>',
-    "packages/x/y.tsx",
-  ).findings.map((f) => f.text);
-  expect(texts).toContain("press Ctrl K now");
-});
-
-// Codex 3793578608 on 5436cf04: `(track(), "Delete account")` — the comma operator returns
-// the RIGHT operand's value; the left is executed for side effects. Recurse into `.right` so
-// newly added user copy in this shape enters the ledger. The left operand's literals (if any)
-// are side-effect arguments, not rendered copy, so we skip them.
-test("recurses into the right operand of a comma expression", () => {
-  const texts = untranslatedLiteralsInSource(
-    '<p>{(track(), "Delete account")}</p>',
-    "packages/x/y.tsx",
-  ).findings.map((f) => f.text);
-  expect(texts).toContain("Delete account");
-});
-
-test("does not surface the left operand of a comma expression", () => {
-  // The left operand `"internal debug"` is discarded at runtime and belongs to the side-effect
-  // sequence, not the rendered value. Recursing into both operands would fabricate a finding
-  // for internal tracking strings.
-  const texts = untranslatedLiteralsInSource(
-    '<p>{("internal debug", "Rendered copy here")}</p>',
-    "packages/x/y.tsx",
-  ).findings.map((f) => f.text);
-  expect(texts).toContain("Rendered copy here");
-  expect(texts).not.toContain("internal debug");
-});
-
-test("dynamic `+` operands still fall through to per-operand recursion", () => {
-  // "Welcome back," should still be reported even though the chain contains a dynamic operand.
-  const texts = untranslatedLiteralsInSource(
-    '<p>{"Welcome back, " + user + " to Keiko"}</p>',
-    "packages/x/y.tsx",
-  ).findings.map((f) => f.text);
-  expect(texts).toContain("Welcome back,");
-  expect(texts).toContain("to Keiko");
+// Parameterised binary-operator recall table (SonarCloud S5976). Every row asserts one JSX
+// expression shape surfaces (or hides) specific rendered phrases — one row per recall path so
+// adding a sixth is one row, not one new test.
+//   - codex 3793356682 (af9f5ede): pure-literal `+` chains fold to one phrase before
+//     classification.
+//   - codex 3793578608 (5436cf04): comma operator returns its RIGHT operand's value; the
+//     left is a side-effect sequence and must NOT enter the ledger.
+//   - existing behaviour: literal-plus-variable-plus-literal `+` chains keep per-operand
+//     emission so both surviving literals are pinned.
+test.each([
+  {
+    label: "literal `+` two-operand fold",
+    src: '<p>{"open " + "settings"}</p>',
+    include: ["open settings"],
+    exclude: [],
+  },
+  {
+    label: "literal `+` chained fold",
+    src: '<p>{"press " + "Ctrl " + "K" + " now"}</p>',
+    include: ["press Ctrl K now"],
+    exclude: [],
+  },
+  {
+    label: "comma expression right operand",
+    src: '<p>{(track(), "Delete account")}</p>',
+    include: ["Delete account"],
+    exclude: [],
+  },
+  {
+    label: "comma expression left operand is a side-effect sequence",
+    src: '<p>{("internal debug", "Rendered copy here")}</p>',
+    include: ["Rendered copy here"],
+    exclude: ["internal debug"],
+  },
+  {
+    label: "literal-plus-variable-plus-literal per-operand",
+    src: '<p>{"Welcome back, " + user + " to Keiko"}</p>',
+    include: ["Welcome back,", "to Keiko"],
+    exclude: [],
+  },
+])("binary-operator recall ($label)", ({ src, include, exclude }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  for (const t of include) expect(texts).toContain(t);
+  for (const t of exclude) expect(texts).not.toContain(t);
 });
 
 // Codex 3793398793 on 8ce536db: `{"open " + section + " settings"}` — the fold above returns
