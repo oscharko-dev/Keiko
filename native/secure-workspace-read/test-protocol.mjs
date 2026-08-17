@@ -499,9 +499,15 @@ function assertScannerBehaviours() {
 // `"`, `\`, or `'` are emitted as escaped spellings.
 function assertNumericQuoteEscapesPreservedThroughDecode() {
   // Hex 0x22 = `"`. Octal 42 = `"`. Both must NOT collapse the string.
-  const hex = stripCommentsOnly('const char *q = "a\\x22posix_spawn(&pid)\\x22b";\n');
+  //
+  // The hex form uses `z` (not a hex digit) as the trailing byte so `\x22` closes at exactly
+  // 2 digits — C's `\x…` reads hex digits until a non-hex char, so `\x22b` (where `b` IS a
+  // hex digit) would be one escape for 0x22b truncated to 0x2b (`+`), which is the CORRECT
+  // C semantics and NOT the "quote-hiding" case this test aims to pin. Octal `\NNN` reads at
+  // most 3 digits, so `\42b` cleanly separates the escape from the trailing `b`.
+  const hex = stripCommentsOnly('const char *q = "a\\x22posix_spawn(&pid)\\x22z";\n');
   assert.ok(
-    hex.includes('"a\\"posix_spawn(&pid)\\"b"'),
+    hex.includes('"a\\"posix_spawn(&pid)\\"z"'),
     "hex `\\x22` decoding must preserve the escape spelling; got: " + hex,
   );
   const oct = stripCommentsOnly('const char *o = "a\\42posix_spawn(&pid)\\42b";\n');

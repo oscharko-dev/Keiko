@@ -647,6 +647,9 @@ function evaluateConstantArithmetic(exprText) {
   js = js.replace(/\b0([0-7]+)(?![0-9a-fA-F])/gu, "0o$1");
   try {
     const result = new Function('"use strict"; return (' + js + ");")();
+    // C comparison and logical operators return `int` (0 or 1); JavaScript returns `boolean`.
+    // Normalise so `1 == 1` → 1 and `1 < 0` → 0 land in the caller as usable truth values.
+    if (typeof result === "boolean") return result ? 1 : 0;
     if (typeof result !== "number" || !Number.isFinite(result)) return null;
     return Math.trunc(result);
   } catch {
