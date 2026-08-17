@@ -1875,11 +1875,17 @@ test.each([
 });
 
 test("scans multiple createElement child arguments", () => {
+  // Coderabbit 3794185711 on #3202: assert BOTH child arguments so the loop bound stays
+  // pinned. If `reactCreateElementChildResults` stopped after the first child the earlier
+  // form (`expect(texts).toContain("Save changes")` only) would stay green while missing
+  // the second child. The scanner trims and collapses whitespace, so ` immediately now`
+  // records as `immediately now`.
   const texts = untranslatedLiteralsInSource(
     'const el = createElement("p", null, "Save changes", " immediately now");',
     "packages/x/y.tsx",
   ).findings.map((f) => f.text);
   expect(texts).toContain("Save changes");
+  expect(texts).toContain("immediately now");
 });
 
 // Codex 3793905529 on 6aa0eb82: bilingual UI copy like `Übernehmen` and `Löschen` — the old

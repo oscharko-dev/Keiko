@@ -472,6 +472,7 @@ function assertScannerBehaviours() {
   assertHexAndOctalZeroFormsStripped();
   assertHexAndOctalOneFormsRecognised();
   assertArbitraryNonzeroFormsRecognised();
+  assertBigIntPrecisionSafeArithmetic();
   assertUnaryConstantConditionsRecognised();
   assertNegatedConstantConditionsRecognised();
   assertParenthesizedShortCircuitRhsRecognised();
@@ -522,7 +523,6 @@ function assertJsIncompatibleArithmeticStaysUnknown() {
     "#if 0U - 1 > 0",
     "#if 1uLL + 0",
   ];
-  assertBigIntPrecisionSafeArithmetic();
   for (const variant of rejectVariants) {
     const stripped = stripCommentsAndStrings(
       variant + "\nUNKNOWN_ARITH_IF();\n#else\nUNKNOWN_ARITH_ELSE();\n#endif\n",
@@ -798,9 +798,11 @@ function assertPathNormalizationScopedToLiterals() {
   const prepared = stripCommentsOnly(source);
   assert.match(prepared, /system\("cmd"\)/u, "code between literals must survive normalisation");
   assert.match(prepared, /"\/prefix"/u, "the earlier literal must stay intact");
-  // The trailing `/../tail` literal — `..` at root has no preceding component; POSIX leaves
-  // it (or collapses to `/tail`). Either behaviour is fine for this test; what matters is
-  // that the code BETWEEN the two literals stays.
+  // Coderabbit 3794185705 on #3202: pin the trailing literal too. Leading `/../` at root
+  // resolves to `/` (matches `assertPathNormalizationCollapsesParentDir`'s single `/../`
+  // form), so `/../tail` normalises to `/tail`. Pinning the exact expected output prevents
+  // the scoped-normalisation case from silently drifting.
+  assert.match(prepared, /"\/tail"/u, "the later literal must normalise within its own bounds");
 }
 
 function assertPathNormalizationCollapsesCurrentDir() {

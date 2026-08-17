@@ -231,7 +231,7 @@ function runSourceContractOn(rawSource) {
 // source would still satisfy the raw-text match, so this test is what pins the trust-boundary
 // remediation instead of hoping the future author remembers to run through the shared code.
 function assertMutationRejected(rawSource) {
-  const commentedOut = rawSource.replace(/CREATE_SUSPENDED/, "/* CREATE_SUSPENDED */ (void)0");
+  const commentedOut = rawSource.replace(/CREATE_SUSPENDED/gu, "/* CREATE_SUSPENDED */ (void)0");
   assert.notEqual(commentedOut, rawSource, "mutation must have changed the source");
   assert.throws(
     () => runSourceContractOn(commentedOut),
@@ -239,7 +239,11 @@ function assertMutationRejected(rawSource) {
     "assertSourceContract must reject a mutation that hides CREATE_SUSPENDED in a comment " +
       "— pins that the shared scanner strips comments before running the identifier pin",
   );
-  const diagnosticSource = rawSource.replace(/CREATE_SUSPENDED/, '(void)"CREATE_SUSPENDED"');
+  // Coderabbit 3794185693 on #3202: use global regexes so EVERY occurrence is mutated. If
+  // `CREATE_SUSPENDED` appears twice, a non-global replace leaves the second occurrence
+  // satisfying the pin and `assert.throws` sees no error — meta-test would pass against a
+  // correct implementation.
+  const diagnosticSource = rawSource.replace(/CREATE_SUSPENDED/gu, '(void)"CREATE_SUSPENDED"');
   assert.throws(
     () => runSourceContractOn(diagnosticSource),
     /CREATE_SUSPENDED/,
