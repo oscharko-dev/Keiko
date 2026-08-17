@@ -1826,6 +1826,40 @@ test("array with a dynamic element does not fabricate an aggregate", () => {
   expect(texts).not.toContain("open settings");
 });
 
+// Codex 3793830382 on ebd2fabc: `<p>open {cond && "settings"}</p>` renders EITHER "open
+// settings" OR "open" (React drops falsy `cond &&`). Same for `??` and `||` when the LEFT
+// operand is unknown and the RIGHT is a literal. Fork with `[literalText, ""]` so the
+// literal-present aggregate lands in the ledger; the empty alternative degrades to a
+// single-content-part segment the ≥2 gate skips.
+test.each([
+  {
+    label: "&& short-circuit",
+    src: '<p>open {cond && "settings"}</p>',
+  },
+  {
+    label: "?? nullish fallback",
+    src: '<p>open {cond ?? "settings"}</p>',
+  },
+  {
+    label: "|| fallback",
+    src: '<p>open {cond || "settings"}</p>',
+  },
+])("forks a segment for a literal-right-operand JSX logical expression ($label)", ({ src }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("open settings");
+});
+
+// Codex 3793830385 on ebd2fabc: `<p>open <>settings</></p>` — a JsxFragment is purely
+// syntactic grouping. Flatten it like an inline formatting element so surrounding JsxText
+// still aggregates into one phrase.
+test("flattens JSX fragments the same way as inline formatting elements", () => {
+  const texts = untranslatedLiteralsInSource(
+    "<p>open <>settings</></p>",
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("open settings");
+});
+
 // Codex 3793356672 on af9f5ede: line-break phrasing elements (`<br/>`, `<wbr/>`) split copy at
 // whitespace boundaries. `<p>open<br/>settings</p>` renders "open settings" but the aggregator
 // used to break the segment at `<br/>` (a non-inline non-formatting element), so each half was

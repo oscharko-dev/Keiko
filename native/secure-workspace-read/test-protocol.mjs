@@ -119,6 +119,10 @@ const MALFORMED_DEFAULTS = {
   version: 1,
   reserved: 0,
   trailing: Buffer.alloc(0),
+  // Codex 3793830395 on #3202: default magic is `KSR1` so existing malformed-shape probes
+  // keep exercising the OTHER guards (version, reserved, size cap, UTF-8, NUL). The magic
+  // guard itself is pinned by a dedicated case that overrides this to a non-`KSR1` value.
+  magic: "KSR1",
 };
 
 // KEIKO-0382 (review-follow-up): the builder now accepts raw `rootBytes` alongside the string
@@ -136,7 +140,18 @@ function malformedRequest(overrides = {}) {
   const declaredRootLen = options.declaredRootLen ?? rootBuf.length;
   const declaredPathLen = options.declaredPathLen ?? pathBuf.length;
   const frame = Buffer.alloc(20 + rootBuf.length + pathBuf.length);
-  frame.write("KSR1", 0, "ascii");
+  // Codex 3793830395 on #3202: allow overriding the request magic so a non-`KSR1` case can
+  // pin the `memcmp(header, "KSR1", 4)` guard in `secure_workspace_read.c:117`. Without
+  // this override the entire malformed-frame suite always sent `KSR1`, so if the helper's
+  // magic check were deleted the suite would stay green even though the helper now accepts
+  // arbitrary frames.
+  const magicBuf = Buffer.isBuffer(options.magicBytes)
+    ? options.magicBytes
+    : Buffer.from(options.magic, "ascii");
+  if (magicBuf.length !== 4) {
+    throw new Error("magic must be exactly 4 bytes; got " + magicBuf.length);
+  }
+  magicBuf.copy(frame, 0);
   frame.writeUInt16LE(options.version, 4);
   frame.writeUInt16LE(options.reserved, 6);
   frame.writeUInt32LE(declaredRootLen, 8);
@@ -1784,6 +1799,14 @@ function frameHeaderShapeCases(fixture, pathBytes) {
     },
     // Wrong protocol version.
     { label: "version != 1", frame: malformedRequest({ root: fixture, pathBytes, version: 2 }) },
+    // Codex 3793830395 on #3202: pin the `memcmp(header, "KSR1", 4)` guard in
+    // `secure_workspace_read.c:117`. Every other malformed-frame probe uses the default
+    // `KSR1` magic, so if the helper's magic check were deleted the suite would stay green.
+    // Send an alternative 4-byte magic and expect status 1 (malformed).
+    {
+      label: "wrong magic (`ZZZZ`)",
+      frame: malformedRequest({ root: fixture, pathBytes, magic: "ZZZZ" }),
+    },
   ];
 }
 

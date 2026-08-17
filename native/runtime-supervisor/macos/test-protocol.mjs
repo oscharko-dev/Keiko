@@ -584,6 +584,21 @@ async function compileSupervisor(path, architecture) {
 // the source-contract path and reporting success. `--helper` with no path, or with the empty
 // string, is the exact malformed shape the release pipeline would produce if its exact-staged-
 // binary lookup produced nothing.
+// Codex 3793830389 on #3202: validate the ENTIRE argv so a misspelled flag
+// (`--comiple` instead of `--compile`) fails fast instead of silently downgrading to source-
+// only mode. `argv[0]` is `node`, `argv[1]` is the script path; real args start at index 2.
+// `--helper` consumes the next token as its value; `--compile` is standalone.
+const KNOWN_FLAGS = new Set(["--helper", "--compile"]);
+for (let i = 2; i < process.argv.length; i += 1) {
+  const arg = process.argv[i];
+  if (!KNOWN_FLAGS.has(arg)) {
+    throw new Error(
+      `unknown macOS qualification flag: ${JSON.stringify(arg)}. ` +
+        "Supported flags: --helper <path>, --compile",
+    );
+  }
+  if (arg === "--helper") i += 1; // consume path value; --helper validity checked below.
+}
 const helperIndex = process.argv.indexOf("--helper");
 if (helperIndex !== -1) {
   const supplied = process.argv[helperIndex + 1];

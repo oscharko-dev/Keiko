@@ -733,6 +733,11 @@ const INLINE_TEXT_FORMATTING_ELEMENTS = new Set([
 ]);
 
 function isInlineTextFormattingChild(child) {
+  // Codex 3793830385 on #3202: JsxFragment (`<>...</>`) is a purely syntactic grouping — the
+  // reader sees a contiguous phrase and any exemption logic works the same as inline text-
+  // level formatting elements. Flatten fragments here so `<p>open <>settings</></p>` yields
+  // "open settings" as one aggregate instead of two rejected lowercase tokens.
+  if (ts.isJsxFragment(child)) return true;
   if (!ts.isJsxElement(child)) return false;
   const tagName = child.openingElement.tagName;
   if (!ts.isIdentifier(tagName)) return false;
@@ -876,21 +881,45 @@ function absorbJsxExpressionIntoSegments(node, sourceFile, collector) {
     if (inner.text.length > 0) collector.appendPart(inner.text, lineOfNode(inner, sourceFile));
     return;
   }
-  // Codex 3793772901 on #3202: `<p>open {cond ? "settings" : "account"}</p>` renders as EITHER
-  // "open settings" OR "open account". Fork the active segments so both aggregates land in
-  // the ledger. Only handled when BOTH branches unwrap to literals; partial-literal shapes
-  // (`cond ? "x" : maybeVar`) fall through to segment-break — one runtime branch has an
-  // unknown value and fabricating a phrase across it would be wrong.
-  if (ts.isConditionalExpression(inner)) {
-    const trueText = literalTextOfExpression(inner.whenTrue);
-    const falseText = literalTextOfExpression(inner.whenFalse);
-    if (trueText !== null && falseText !== null) {
-      collector.forkAlternatives([trueText, falseText], lineOfNode(inner, sourceFile));
-      return;
-    }
-  }
+  if (tryForkConditionalAggregate(inner, sourceFile, collector)) return;
+  if (tryForkLogicalAggregate(inner, sourceFile, collector)) return;
   collector.startNewSegment();
 }
+
+// Codex 3793772901 on #3202: `<p>open {cond ? "settings" : "account"}</p>` renders as EITHER
+// "open settings" OR "open account". Fork the active segments so both aggregates land in the
+// ledger. Only handled when BOTH branches unwrap to literals; partial-literal shapes
+// (`cond ? "x" : maybeVar`) fall through — one runtime branch has an unknown value and
+// fabricating a phrase across it would be wrong.
+function tryForkConditionalAggregate(inner, sourceFile, collector) {
+  if (!ts.isConditionalExpression(inner)) return false;
+  const trueText = literalTextOfExpression(inner.whenTrue);
+  const falseText = literalTextOfExpression(inner.whenFalse);
+  if (trueText === null || falseText === null) return false;
+  collector.forkAlternatives([trueText, falseText], lineOfNode(inner, sourceFile));
+  return true;
+}
+
+// Codex 3793830382 on #3202: `<p>open {cond && "settings"}</p>` renders EITHER "open
+// settings" (cond truthy) OR "open" (cond falsy — React drops the falsy value). Same for
+// `??` (renders literal on null/undefined left) and `||` (renders literal on falsy left).
+// Fork with `[literalText, ""]`: the literal alternative surfaces "open settings" as an
+// aggregate; the empty alternative degrades to a single-content-part segment the ≥2 gate
+// skips.
+function tryForkLogicalAggregate(inner, sourceFile, collector) {
+  if (!ts.isBinaryExpression(inner)) return false;
+  if (!rightSideLiteralLogicalOps.has(inner.operatorToken.kind)) return false;
+  const rightText = literalTextOfExpression(inner.right);
+  if (rightText === null) return false;
+  collector.forkAlternatives([rightText, ""], lineOfNode(inner, sourceFile));
+  return true;
+}
+
+const rightSideLiteralLogicalOps = new Set([
+  ts.SyntaxKind.AmpersandAmpersandToken,
+  ts.SyntaxKind.BarBarToken,
+  ts.SyntaxKind.QuestionQuestionToken,
+]);
 
 function literalTextOfExpression(expr) {
   const inner = unwrapTransparent(expr);
