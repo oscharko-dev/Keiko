@@ -109,8 +109,13 @@ const nativeSonarExclusions = Object.freeze([
 const approvedScopeValueDigests = new Map([
   ["sonar.sources", "cdb4ee2aea69cc6a83331bbe96dc2caa9a299d21329efb0336fc02a82e1839a8"],
   ["sonar.tests", "cdb4ee2aea69cc6a83331bbe96dc2caa9a299d21329efb0336fc02a82e1839a8"],
-  ["sonar.exclusions", "e235a0d62060feb08934e07faebf1e1073b8870ba2d0bb69c191f54efa98d51d"],
-  ["sonar.test.inclusions", "0f68df73cf871d30aa6e012f1dc7876aab13ccdbb717c1f997ecc1f08dbdef6f"],
+  // Digest re-pinned after appending shared test-infrastructure modules under `native/`
+  // (protocol-harness.mjs + c-source-scanner.mjs) to both the exclusions and the test
+  // inclusions. Both are imported ONLY by the three test-protocol.mjs files that already sit
+  // in those lists, so they carry the same Sonar disposition. Re-computed the SHA-256 of the
+  // raw value after `=` via `createHash("sha256").update(value).digest("hex")`.
+  ["sonar.exclusions", "28dbb80db07631cfe6f0a3a35633ea19d2fa152cdf60a67ecfb77ec1249122f4"],
+  ["sonar.test.inclusions", "fc189ed7f62a535e41c6175c2893fe3bd3d690ce4bd85c65683db13cb8c2ec58"],
   ["sonar.test.exclusions", "5a01270e497c669e4f0abd5cef680f9eb0139bb8b82da51719b443b076fcd638"],
   [
     "sonar.typescript.tsconfigPaths",
@@ -151,6 +156,18 @@ const testScopeRules = Object.freeze([
     "native/runtime-supervisor/macos/test-protocol.mjs",
     (path) => path === "native/runtime-supervisor/macos/test-protocol.mjs",
   ],
+  // KEIKO-0304 (review-follow-up on #3202): shared codec/process helpers imported ONLY by the
+  // three test-protocol.mjs files above. It carries their Sonar disposition — test infrastructure,
+  // not main-code — so an exact-path classifier here matches the sibling entries rather than
+  // introducing a broader wildcard that could pick up other native `.mjs` in the future.
+  [
+    "native/runtime-supervisor/protocol-harness.mjs",
+    (path) => path === "native/runtime-supervisor/protocol-harness.mjs",
+  ],
+  // Coderabbit 3793145636: shared C source scanner (line splicing, comment/literal handling,
+  // disabled-preprocessor-branch state machine) imported ONLY by the three test-protocol.mjs
+  // harnesses. Same disposition as `protocol-harness.mjs` above.
+  ["native/lib/c-source-scanner.mjs", (path) => path === "native/lib/c-source-scanner.mjs"],
 ]);
 export const SONAR_TEST_INCLUSION_PATTERNS = Object.freeze(
   testScopeRules.map(([pattern]) => pattern),

@@ -140,7 +140,23 @@ describe("macOS system-extension activation manager", () => {
         new RegExp(`posix_spawn_file_actions_addclose\\\\\\(&actions, ${String(descriptor)}`, "u"),
       );
     }
-    expect(macosProtocolHarness).toMatch(/posix_spawnp\|execvp\|execlp\|execvP/u);
+    // Codex 3793944200 on #3202 split the assertion regex from
+    // `posix_spawnp|execvp|execlp|execvP` to `\bposix_spawnp\s*\(|\bexecvp\s*\(|\bexeclp\s*\(|
+    // \bexecvP\s*\(` (word boundary + optional whitespace before `(`).
+    //
+    // Coderabbit 3794185716 + codex 3794202587 on #3202: anchor the pin to the
+    // `assert.doesNotMatch(...)` block — a bare identifier in a nearby COMMENT would
+    // otherwise satisfy the check and let the identifier be deleted from the assertion
+    // itself. `[\s\S]*?` captures the full call including any trailing error-message
+    // arguments (up to the closing `);`), so the extract remains robust if the harness
+    // later grows a message parameter.
+    const forbiddenCallAssertion = macosProtocolHarness.match(
+      /assert\.doesNotMatch\(\s*codeAndLiteralsText,[\s\S]*?\);/u,
+    );
+    expect(forbiddenCallAssertion, "the assert.doesNotMatch block must be present").not.toBeNull();
+    for (const name of ["posix_spawnp", "execvp", "execlp", "execvP"]) {
+      expect(forbiddenCallAssertion[0]).toContain(name);
+    }
     // The pins must sit ABOVE the darwin guard or they only run on macOS, which is where they are
     // least needed — the source contract is platform-independent by design.
     const guardAt = macosProtocolHarness.indexOf('process.platform === "darwin"');

@@ -1049,6 +1049,1139 @@ test("flags a user-facing literal in each of the three positions a user reads it
   expect(untranslatedLiteralsInLine('  // label: "Commented out copy"')).toEqual([]);
 });
 
+// KEIKO-0299: the line-scoped scanner was blind to two real positions. The AST rewrite catches
+// both, and these are the reproductions the finding requires.
+test("catches JSX text whose opening and closing tags are on different lines", () => {
+  const findings = untranslatedLiteralsInSource(`<div>\n  Hello there\n</div>`).findings;
+  expect(findings.length).toBeGreaterThan(0);
+  expect(findings[0].text).toContain("Hello there");
+});
+
+test("catches a string-literal JSX expression-container child in both quote styles", () => {
+  for (const src of [`<p>{"No chats"}</p>`, `<p>{'No chats'}</p>`]) {
+    const findings = untranslatedLiteralsInSource(src).findings;
+    expect(findings.length).toBeGreaterThan(0);
+    expect(findings[0].text).toContain("No chats");
+  }
+});
+
+test("still ignores dynamic JSX expressions and machine tokens", () => {
+  expect(untranslatedLiteralsInSource(`<span>{ready}</span>`).findings).toEqual([]);
+  expect(untranslatedLiteralsInSource(`<span>{"open-directory"}</span>`).findings).toEqual([]);
+});
+
+// KEIKO-0299 (review-follow-up): the AST scanner used to collect ANY string-literal expression
+// container, including those inside JsxAttribute values. `className={"Internal label"}` is code,
+// not user-visible text, and the per-line attribute pass already inspects which attribute names
+// are user-facing — double-counting under different rules would generate false ledger entries.
+test("does not scan string literals inside JSX attribute expression containers", () => {
+  expect(
+    untranslatedLiteralsInSource(
+      `<Widget className={"Internal label"} data-test-id={'internal token'} />`,
+    ).findings,
+  ).toEqual([]);
+});
+
+// KEIKO-0299 (review-follow-up): the initial ship of the AST scanner parsed EVERY UI source as
+// TSX. That made TypeScript-generic syntax in ordinary `.ts` files (`<T>`, `ReadonlySet<...>`)
+// look like JSX opening tags — the parser then emitted their surrounding source as a stream of
+// JsxText nodes, generating dozens of false untranslated-copy entries for pure-code files. The
+// fix picks ScriptKind by extension; these two cases pin that choice: identical source, parsed
+// as TS, produces zero findings; parsed as TSX (via a `.tsx` filename), produces the JsxText
+// interpretation.
+test("parses .ts sources with the TypeScript grammar (no JSX interpretation)", () => {
+  const generic = `const asType = <T,>(value: T): T => value;\nconst set: ReadonlySet<string> = new Set();\n`;
+  expect(untranslatedLiteralsInSource(generic, "packages/x/y.ts").findings).toEqual([]);
+});
+
+test("still parses .tsx sources as TSX", () => {
+  const jsx = `<p>\n  Hello there\n</p>`;
+  const findings = untranslatedLiteralsInSource(jsx, "packages/x/y.tsx").findings;
+  expect(findings.length).toBeGreaterThan(0);
+});
+
+// KEIKO-0299 (review-follow-up): boundary inputs the scanner must not throw on. Empty source,
+// whitespace-only source, and a source with an unterminated JSX element (mid-edit state) all
+// need to produce a valid `{findings, weakExemptions}` shape instead of a parser exception.
+test("returns an empty result for empty and whitespace-only sources", () => {
+  expect(untranslatedLiteralsInSource("").findings).toEqual([]);
+  expect(untranslatedLiteralsInSource("").weakExemptions).toEqual([]);
+  expect(untranslatedLiteralsInSource("   \n\n  \n").findings).toEqual([]);
+});
+
+// Coderabbit outside-diff on 889eff53: `ts.createSourceFile` returns a partial AST on
+// malformed input, so the JSX visitor sees a subset of nodes and the gate can silently pass
+// on a syntactically broken file. The scanner now fails-closed on any parse diagnostic when
+// a REAL filename is passed (production `literalScanForFile` call site always does). Test
+// fragments without a filename still get graceful degradation (top-level JSX reports parse
+// diagnostics even though the fragment is meaningful to the AST visitor) — the fragment
+// path is unit-test-only and cannot ship code.
+test("throws on malformed source when a real filename is passed", () => {
+  expect(() => untranslatedLiteralsInSource(`<div>{"Hello"`, "packages/x/y.tsx")).toThrow(
+    /parse diagnostic/u,
+  );
+});
+
+test("still allows test fragments without a filename to scan gracefully", () => {
+  // Top-level JSX like this reports parse diagnostics under TSX ScriptKind, but the AST
+  // visitor still walks JsxText/JsxExpression meaningfully. Fragment path only, no filename.
+  const result = untranslatedLiteralsInSource(`<div>{"Hello"`);
+  expect(result).toHaveProperty("findings");
+  expect(Array.isArray(result.findings)).toBe(true);
+});
+
+// KEIKO-0299 (review-follow-up): the initial ship reclassified parsed JSX text via
+// `isCommentLine(lines[line - 1])`, which discarded legitimate user copy whose source line
+// happened to start with `*`, `//`, or `/*` (an indented `* Required fields` inside a multi-line
+// paragraph is the canonical example). The parser already strips C-style comments from JsxText
+// nodes, so no line-level reclassification is correct here.
+test("does not discard parsed JSX text whose source line looks like a comment", () => {
+  const src = `<p>\n  * Required fields\n</p>`;
+  const findings = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings;
+  expect(findings.length).toBeGreaterThan(0);
+  expect(findings[0].text).toContain("Required fields");
+});
+
+// KEIKO-0299 (review-follow-up): a JSX child template expression (`` `Hello ${name}` ``) is
+// neither a StringLiteral nor a NoSubstitutionTemplateLiteral, so the initial ship silently
+// ignored the literal spans it carries. Extract them (head + each templateSpan.literal) so newly
+// added user copy in that shape lands in the ledger; templates that contain only interpolations
+// stay ignored because their combined literal text is empty.
+test("collects literal spans from JSX child template expressions", () => {
+  const src = "<p>{`Hello ${name}, welcome`}</p>";
+  const findings = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings;
+  expect(findings.length).toBeGreaterThan(0);
+  expect(findings[0].text).toContain("Hello");
+  expect(findings[0].text).toContain("welcome");
+});
+
+test("still ignores JSX child template expressions that contain only interpolations", () => {
+  expect(
+    untranslatedLiteralsInSource("<p>{`${prefix}${value}`}</p>", "packages/x/y.tsx").findings,
+  ).toEqual([]);
+});
+
+// KEIKO-0299 (review-follow-up on 4b557d96): a template expression whose SUBSTITUTIONS contain
+// literals (`` `${expanded ? "Collapse" : "Expand"} ${project.name}` ``) had its branch strings
+// invisible to the ledger — the template-part scan sees only whitespace between the spans. Codex
+// 3792964062. Recurse into each `span.expression` using the same helper so conditionals,
+// templates, and logical fallbacks inside substitutions all surface.
+test("collects literals inside template substitutions", () => {
+  const src = '<span>{`${expanded ? "Collapse" : "Expand"} ${project.name}`}</span>';
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx")
+    .findings.map((f) => f.text)
+    .sort();
+  expect(texts).toContain("Collapse");
+  expect(texts).toContain("Expand");
+});
+
+test("collects a `??` fallback inside a template substitution", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{`Prefix ${label ?? "Fallback label"} suffix`}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Fallback label");
+});
+
+// KEIKO-0299 (review-follow-up rollup, codex 3792986615 + 3792824431): positive JSX-child
+// recursion cases share the same shape (define a source string, extract literals, assert
+// containment). SonarCloud S5976 flagged the earlier per-test spelling as unnecessary
+// duplication; consolidated via `test.each` while preserving each case's semantic intent in
+// its `name`. Recursion covers: call arguments (`definedOr(x, "this file")` — returns fallback
+// verbatim), simple conditionals, and nested conditionals + template branches.
+test.each([
+  {
+    name: "a call-expression argument",
+    src: '<p>{`Agent patch review for ${definedOr(name, "this file")}`}</p>',
+    expected: ["this file"],
+  },
+  {
+    name: "each branch of a conditional expression",
+    src: '<span>{cond ? "Indexing" : "Index"}</span>',
+    expected: ["Indexing", "Index"],
+  },
+  {
+    name: "nested conditionals and template branches",
+    src: '<span>{a ? (b ? "First one" : "Second one") : `Third ${x} one`}</span>',
+    expected: ["First one", "Second one"],
+  },
+])("collects rendered literals from $name", ({ src, expected }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  for (const literal of expected) expect(texts).toContain(literal);
+});
+
+// Negative complements for the same set: shapes whose only "literals" are machine tokens or
+// non-literal expressions must not enter the ledger.
+test.each([
+  {
+    name: "call whose only literal is a machine token",
+    src: '<p>{translate("feature.title")}</p>',
+  },
+  {
+    name: "conditional whose branches are only expressions",
+    src: "<span>{cond ? a : b}</span>",
+  },
+])("does not flag $name", ({ src }) => {
+  expect(untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings).toEqual([]);
+});
+
+// KEIKO-0299 (review-follow-up on 44b9ef9b): `{label ?? "Default"}`, `{a || "Fallback"}`,
+// `{ready && "Ready now"}` — the logical-fallback shapes that used to be invisible to both
+// the AST scanner and the per-line fallback.
+test("collects literal operands of `??`, `||`, and `&&` in JSX children", () => {
+  for (const src of [
+    '<span>{label ?? "Default label"}</span>',
+    '<span>{label || "Fallback label"}</span>',
+    '<span>{ready && "Ready now"}</span>',
+  ]) {
+    const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx")
+      .findings.map((f) => f.text)
+      .join(" | ");
+    expect(texts.length).toBeGreaterThan(0);
+  }
+});
+
+// KEIKO-0299 (review-follow-up on 44b9ef9b): user-facing attribute EXPRESSIONS. The per-line
+// pass only sees `aria-label="Copy"`; an `aria-label={cond ? "Copied" : "Copy code block"}` or
+// `title={hasSources ? undefined : "Attach a source…"}` used to be invisible. The AST pass now
+// restricts to the same attribute-name set the per-line policy targets.
+test("collects literals from user-facing attribute value expressions", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<button aria-label={copied ? "Copied" : "Copy code block"}>x</button>',
+    "packages/x/y.tsx",
+  )
+    .findings.map((f) => f.text)
+    .sort();
+  expect(texts).toContain("Copied");
+  expect(texts).toContain("Copy code block");
+});
+
+test("collects a `??` fallback in a user-facing attribute expression", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<div title={label ?? "Attach a source"} />',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Attach a source");
+});
+
+test("still ignores expression values on non-user-facing attributes", () => {
+  expect(
+    untranslatedLiteralsInSource(
+      '<div className={cond ? "primary" : "secondary"} />',
+      "packages/x/y.tsx",
+    ).findings,
+  ).toEqual([]);
+});
+
+// KEIKO-0299 (review-follow-up on a0ee79ae): `&&` short-circuits. The LEFT operand only
+// controls evaluation and is NEVER rendered as user copy; only the right operand is. A
+// literal on the left (`{"Feature enabled" && value}`) is code, not rendered text, and must
+// not enter the ledger. Coderabbit 3792888551.
+test("does not collect the left operand of `&&` in JSX children", () => {
+  expect(
+    untranslatedLiteralsInSource('<span>{"Feature enabled" && value}</span>', "packages/x/y.tsx")
+      .findings,
+  ).toEqual([]);
+});
+
+test("still collects the right operand of `&&` in JSX children", () => {
+  const findings = untranslatedLiteralsInSource(
+    '<span>{ready && "Ready now"}</span>',
+    "packages/x/y.tsx",
+  ).findings;
+  expect(findings.map((f) => f.text)).toContain("Ready now");
+});
+
+// KEIKO-0299 (review-follow-up on a0ee79ae): each recursively-extracted literal must carry its
+// own source position, not the outer expression's start line. A multi-line conditional whose
+// branches sit on different lines has to report those lines exactly so an exemption on one
+// branch does not silently cover the other and the ledger diff points reviewers at the right
+// spot. Coderabbit 3792888549.
+test("assigns each conditional branch its own source line", () => {
+  const src = '<span>{\n  cond\n    ? "First branch"\n    : "Second branch"\n}</span>';
+  const byText = new Map(
+    untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => [f.text, f.line]),
+  );
+  expect(byText.get("First branch")).toBe(3);
+  expect(byText.get("Second branch")).toBe(4);
+});
+
+test("assigns each attribute-expression branch its own source line", () => {
+  const src = '<button aria-label={\n  cond\n    ? "Copied"\n    : "Copy code block"\n}>x</button>';
+  const byText = new Map(
+    untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => [f.text, f.line]),
+  );
+  expect(byText.get("Copied")).toBe(3);
+  expect(byText.get("Copy code block")).toBe(4);
+});
+
+// KEIKO-0299 (review-follow-up on af74e79b): custom components spell accessible-name props in
+// camelCase (`<KeikoSelect ariaLabel="…">`), so the AST attribute pass now recognises both
+// kebab-case ARIA names AND their camelCase equivalents plus the label-field set custom
+// components use for the same role. Codex 3792890962.
+test("collects literals from camelCase user-facing attribute expressions", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<KeikoSelect ariaLabel={busy ? "Working now" : "Select source"} />',
+    "packages/x/y.tsx",
+  )
+    .findings.map((f) => f.text)
+    .sort();
+  expect(texts).toContain("Working now");
+  expect(texts).toContain("Select source");
+});
+
+test("collects literals from `label` and `description` prop expressions on custom components", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<Item label={cond ? "Enabled" : "Disabled"} description={fallback ?? "Long description"} />',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Enabled");
+  expect(texts).toContain("Disabled");
+  expect(texts).toContain("Long description");
+});
+
+// KEIKO-0299 (review-follow-up on 9547abd1): a directly-quoted camelCase prop like
+// `<KeikoSelect ariaLabel="Relationship type" />` has a StringLiteral initializer (not a
+// JsxExpression), so the AST attribute pass silently dropped it. The per-line fallback only
+// recognises kebab-case attribute names before `=`, and LABEL_FIELD_NAME_RE expects `:`, so
+// nothing caught it. Codex 3792941801.
+test("collects directly quoted camelCase prop literals", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<KeikoSelect ariaLabel="Relationship type" label="Source" />',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Relationship type");
+  expect(texts).toContain("Source");
+});
+
+// Values here MUST pass `isTranslatableCopy` (multi-word letter phrases) so that if `testId` or
+// `className` were mistakenly added to `USER_FACING_ATTRIBUTE_NAMES`, the assertion would fail.
+// Single lowercase tokens (`"primary"`, `"relationship-picker"`) are rejected by
+// `isTranslatableCopy` regardless of the attribute name, so they can't pin the name gate.
+// Coderabbit 3793025303.
+test("still ignores directly quoted values on non-user-facing camelCase props", () => {
+  expect(
+    untranslatedLiteralsInSource(
+      '<KeikoSelect testId="Relationship picker" className="Primary button" />',
+      "packages/x/y.tsx",
+    ).findings,
+  ).toEqual([]);
+});
+
+// KEIKO-0299 (review-follow-up on 23447289, codex 3793028199): transparent TypeScript
+// wrappers (AsExpression, SatisfiesExpression, NonNullExpression) don't change runtime value,
+// so a literal wrapped in them still renders as user copy. Recursion must unwrap them. All
+// wrapper shapes and both JSX-child and JSX-attribute positions live in the same parameterised
+// case so a fifth wrapper is one row, not one new test (SonarCloud S5976).
+test.each([
+  { src: '<p>{"Delete account" as const}</p>', expected: "Delete account" },
+  { src: '<p>{"Delete account" satisfies string}</p>', expected: "Delete account" },
+  { src: '<p>{("Delete account" as string | undefined)!}</p>', expected: "Delete account" },
+  {
+    src: '<button aria-label={"Copy code block" as const}>x</button>',
+    expected: "Copy code block",
+  },
+])(
+  "unwraps transparent TypeScript wrappers around a rendered literal ($src)",
+  ({ src, expected }) => {
+    const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+    expect(texts).toContain(expected);
+  },
+);
+
+// KEIKO-0299 (review-follow-up on 23447289, codex 3793028208): a JSX spread attribute
+// `<button {...{ "aria-label": "…" }} />` reaches the element as JsxSpreadAttribute. When the
+// spread expression is an inline ObjectLiteral, inspect its properties against the same
+// user-facing name set so a spread rendering an accessible label enters the ledger.
+test("collects user-facing literals in inline JSX spread attributes", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<button {...{ "aria-label": "Delete account", label: "Delete" }} />',
+    "packages/x/y.tsx",
+  )
+    .findings.map((f) => f.text)
+    .sort();
+  expect(texts).toContain("Delete account");
+  expect(texts).toContain("Delete");
+});
+
+test("still ignores non-user-facing keys in JSX spread attributes", () => {
+  expect(
+    untranslatedLiteralsInSource(
+      '<button {...{ testId: "Test button", className: "Primary large" }} />',
+      "packages/x/y.tsx",
+    ).findings,
+  ).toEqual([]);
+});
+
+test("still ignores non-inline JSX spreads (dynamic props object)", () => {
+  expect(
+    untranslatedLiteralsInSource("<button {...restProps} />", "packages/x/y.tsx").findings,
+  ).toEqual([]);
+});
+
+// Codex 3793436213 on 85fae083: `<button {...({ "aria-label": "Delete account" } as const)}`
+// — the spread expression is an AsExpression wrapping the ObjectLiteral, so the direct-type
+// check used to miss it. Unwrap transparent wrappers (parens, `as`, `satisfies`, `!`) before
+// inspecting the object properties, matching the JSX-child recursion policy.
+test.each([
+  {
+    label: "as const wrapper",
+    src: '<button {...({ "aria-label": "Delete account" } as const)} />',
+  },
+  {
+    label: "satisfies wrapper",
+    src: '<button {...({ "aria-label": "Delete account" } satisfies Record<string, string>)} />',
+  },
+  {
+    label: "parenthesised object",
+    src: '<button {...({ "aria-label": "Delete account" })} />',
+  },
+])("unwraps transparent wrappers around a JSX spread object literal ($label)", ({ src }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("Delete account");
+});
+
+// Codex 3793469155 on 15310097: `<button {...{ ["aria-label"]: "Delete account" }} />` — TS
+// represents the key as a ComputedPropertyName wrapping a StringLiteral. The earlier
+// `objectPropertyKey` returned null for it and the value was never scanned. Unwrap constant
+// computed keys (StringLiteral / NoSubstitutionTemplateLiteral) so the value reaches the ledger.
+test.each([
+  {
+    label: "string-literal computed key",
+    src: '<button {...{ ["aria-label"]: "Delete account" }} />',
+  },
+  {
+    label: "template-literal computed key",
+    src: "<button {...{ [`aria-label`]: 'Delete account' }} />",
+  },
+])("unwraps constant computed property keys in JSX spread objects ($label)", ({ src }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("Delete account");
+});
+
+// Coderabbit 3793501299 on 9dd3bf78: pin that the user-facing-attribute-name gate STILL fires
+// for computed keys. Without a negative case, dropping the `USER_FACING_ATTRIBUTE_NAMES` check
+// on the computed-key path would keep every positive test above green while silently ingesting
+// values under keys like `data-testid` that are not user copy.
+test("ignores computed keys that are not user-facing attribute names", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<button {...{ ["data-testid"]: "Delete account" }} />',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).not.toContain("Delete account");
+});
+
+// Codex 3793501037 on 9dd3bf78: conditional / logical spread compositions such as
+// `<button {...(danger ? { "aria-label": "…" } : {})} />` used to return no results because
+// the direct-object check saw only the ConditionalExpression. Recurse through `?:`, `&&`,
+// `||`, `??` to reach every inline ObjectLiteralExpression that could reach the spread at
+// runtime.
+test.each([
+  {
+    label: "conditional whenTrue branch",
+    src: '<button {...(danger ? { "aria-label": "Delete account" } : {})} />',
+  },
+  {
+    label: "conditional whenFalse branch",
+    src: '<button {...(danger ? {} : { "aria-label": "Delete account" })} />',
+  },
+  {
+    label: "logical && short-circuit",
+    src: '<button {...(active && { "aria-label": "Delete account" })} />',
+  },
+  {
+    label: "nullish ?? fallback",
+    src: '<button {...(props ?? { "aria-label": "Delete account" })} />',
+  },
+])("traverses conditional/logical spread compositions ($label)", ({ src }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("Delete account");
+});
+
+// Codex 3793642840 on cea4bfde: nested spread inside a spread object — `<button {...{ ...{
+// "aria-label": "Delete account" }} } />`. The outer object was collected, but the
+// SpreadAssignment used to be skipped, so accessible copy in the inner object never reached
+// the ledger. Recurse through SpreadAssignment using the same object-literal collector.
+test("recurses into nested spread assignments inside a spread object", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<button {...{ ...{ "aria-label": "Delete account" } }} />',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Delete account");
+});
+
+// Codex 3793642864 on cea4bfde: `<p>{await Promise.resolve("Delete account")}</p>` — an async
+// component with an awaited literal-producing expression. AwaitExpression is value-preserving
+// (the resolved value renders), so recurse into `.expression` via the transparent-wrapper set.
+test("recurses through await expressions", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{await Promise.resolve("Delete account")}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Delete account");
+});
+
+// Codex 3793642869 on cea4bfde: every nested function-like scope terminates the return walk.
+// The earlier list only covered plain function forms, so a callback with an object method or
+// class method leaked ITS return as rendered copy.
+test.each([
+  {
+    label: "object method",
+    src: '<p>{items.map(() => { const helper = { label() { return "Internal diagnostic"; } }; return null; })}</p>',
+  },
+  {
+    label: "getter",
+    src: '<p>{items.map(() => { const helper = { get label() { return "Internal getter"; } }; return null; })}</p>',
+  },
+  {
+    label: "class method",
+    src: '<p>{items.map(() => { class H { label() { return "Internal method"; } }; return null; })}</p>',
+  },
+])("does not surface returns from nested $label scopes inside a callback", ({ src }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).not.toContain("Internal diagnostic");
+  expect(texts).not.toContain("Internal getter");
+  expect(texts).not.toContain("Internal method");
+});
+
+// KEIKO-0299 (review-follow-up on b5cb3f6c, codex 3793101250): `{items.map(() => "Delete
+// account")}` — the ArrowFunction body IS user-visible copy that gets rendered per item, but
+// the previous CallExpression recursion stopped at the function argument and never inspected
+// its body. Handle expression-bodied AND block-bodied arrows/functions, and stop at nested
+// function scopes so their returns don't leak into the outer copy set. All three cases share
+// one parameterised case (SonarCloud S5976).
+test.each([
+  {
+    label: "expression-bodied arrow",
+    src: '<p>{items.map(() => "Delete account")}</p>',
+    include: ["Delete account"],
+    exclude: [],
+  },
+  {
+    label: "block-bodied arrow with ReturnStatement",
+    src: '<p>{items.map(() => { return "Return delete"; })}</p>',
+    include: ["Return delete"],
+    exclude: [],
+  },
+  {
+    label: "nested function scope's returns are not leaked",
+    src: '<p>{items.map(() => { const inner = () => "Inner return"; return "Outer return"; })}</p>',
+    include: ["Outer return"],
+    exclude: ["Inner return"],
+  },
+])("collects rendered copy from callback bodies ($label)", ({ src, include, exclude }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  for (const text of include) expect(texts).toContain(text);
+  for (const text of exclude) expect(texts).not.toContain(text);
+});
+
+// KEIKO-0299 (review-follow-up on 889eff53, codex 3793145626): `{["Delete account",
+// "Cancel"]}` — React renders each element as user copy but ArrayLiteralExpression was
+// invisible to the recursion. Now traverses each element.
+test("collects literals from array elements rendered as JSX children", () => {
+  const src = '<p>{["Delete account", "Cancel operation"]}</p>';
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx")
+    .findings.map((f) => f.text)
+    .sort();
+  expect(texts).toContain("Delete account");
+  expect(texts).toContain("Cancel operation");
+});
+
+// KEIKO-0299 (review-follow-up on 889eff53, codex 3793145631): template spans must be joined
+// WITHOUT an inserted separator. `` `memoria.settings.mode.${x}Error` `` used to become
+// `"memoria.settings.mode. Error"` (injected space made isTranslatableCopy see it as prose);
+// now it becomes `"memoria.settings.mode.Error"` — a dotted machine token, correctly rejected.
+test("does not flag dotted-key templates with interpolated tail", () => {
+  const src = "<p>{t(`memoria.settings.mode.${errorKind}Error`)}</p>";
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).not.toContain("memoria.settings.mode. Error");
+  expect(texts).not.toContain("memoria.settings.mode.Error");
+});
+
+test("still flags real prose across template spans", () => {
+  const src = "<p>{`Hello ${user} World`}</p>";
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("Hello World");
+});
+
+// Parameterised JSX-child recall table (SonarCloud S5976). Every row asserts one JSX shape
+// surfaces a specific rendered phrase — adding a sixth row is one line, not one new test. Each
+// row cites the review that motivated its recall path.
+//   - codex 3793198455 (d753717d): `String.raw\`…\`` tagged-template recurses into `.template`.
+//   - codex 3793229700 (d753717d): CallExpression receiver traversal picks up array literals on
+//     the LHS of `.map` / `["map"]` — element-access receiver form covered too.
+//   - codex 3793229704 (d753717d): JsxText fragments split by inline formatting elements
+//     (`<code>`, `<em>`, `<strong>`, …) aggregate into one phrase.
+test.each([
+  {
+    label: "tagged template",
+    src: "<p>{String.raw`Delete account`}</p>",
+    expected: "Delete account",
+  },
+  {
+    label: "call receiver via property access",
+    src: '<p>{["Delete account"].map((l) => <span>{l}</span>)}</p>',
+    expected: "Delete account",
+  },
+  {
+    label: "call receiver via element access",
+    src: '<p>{["Save changes"]["map"]((l) => <span>{l}</span>)}</p>',
+    expected: "Save changes",
+  },
+  {
+    label: "phrase split across one inline formatting element",
+    src: "<p>open <code>settings</code></p>",
+    expected: "open settings",
+  },
+  {
+    label: "phrase split across multiple inline formatting elements",
+    src: "<p>this <em>is</em> <strong>a</strong> <code>phrase</code></p>",
+    expected: "this is a phrase",
+  },
+])("surfaces $expected from the JSX shape ($label)", ({ src, expected }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain(expected);
+});
+
+// Kept separate because it uses a `.some(…includes…)` assertion instead of `toContain` — the
+// tagged template with an interpolation returns spans that include but do not exactly equal
+// the expected substring.
+test("collects tagged-template spans with an interpolation", () => {
+  const texts = untranslatedLiteralsInSource(
+    "<p>{String.raw`Welcome back, ${user}!`}</p>",
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts.some((t) => t.includes("Welcome back,"))).toBe(true);
+});
+
+// Codex 3793469157 on 15310097: appending a non-translatable tail ("now") to an ALREADY
+// translatable phrase ("Save your changes") extends the phrase the reader sees. The earlier
+// anti-double-count check ("skip aggregate if any part is translatable") silently suppressed
+// the widened aggregate, so `<p>Save your changes <code>now</code></p>` shipped without
+// entering "Save your changes now" into the ledger — new untranslated copy bypassed the gate.
+// Now: DEDUPE against IDENTICAL parts (aggregate == some part is pure duplication), but ALWAYS
+// emit when the aggregate text differs from every part.
+test("emits both the translatable individual and the widened aggregate", () => {
+  const findings = untranslatedLiteralsInSource(
+    "<p>Save your changes <code>now</code></p>",
+    "packages/x/y.tsx",
+  ).findings;
+  const savePhraseTexts = findings.map((f) => f.text);
+  expect(savePhraseTexts).toContain("Save your changes");
+  expect(savePhraseTexts).toContain("Save your changes now");
+});
+
+// Coderabbit 3793329579 on 53d22f73: `<p><span>open <code>settings</code></span></p>` — the
+// visitor runs the aggregator at BOTH `<p>` and `<span>`, and the inner `<span>` (an inline
+// formatting element) flattens the same "open settings" parts as its parent. Without the outer-
+// only guard, both containers would emit — the aggregate lands in the ledger twice from
+// otherwise-identical source. Emit only from the outermost eligible container.
+test("does not double-emit when an inline formatting element wraps the phrase inside a container", () => {
+  const findings = untranslatedLiteralsInSource(
+    "<p><span>open <code>settings</code></span></p>",
+    "packages/x/y.tsx",
+  ).findings;
+  const matches = findings.filter((f) => f.text === "open settings");
+  expect(matches).toHaveLength(1);
+});
+
+// Parameterised JSX-text ↔ literal-expression adjacency table (SonarCloud S5976).
+//   - codex 3793642835 (cea4bfde): NO trailing whitespace before `{"mode"}` — join must NOT
+//     insert a space (`memoria.settings.mode`, not `memoria.settings. mode`). Neither variant
+//     is prose-classifiable, so both must be absent from the ledger.
+//   - `open ` HAS a trailing space in source — the join keeps it as `open settings`
+//     (previously-verified case, re-pinned after the raw-adjacency refactor).
+test.each([
+  {
+    label: "no trailing whitespace before literal expression",
+    src: '<code>memoria.settings.{"mode"}</code>',
+    include: [],
+    exclude: ["memoria.settings. mode", "memoria.settings.mode"],
+  },
+  {
+    label: "trailing whitespace before literal expression",
+    src: '<p>open {"settings"}</p>',
+    include: ["open settings"],
+    exclude: [],
+  },
+])("JSX-text/literal adjacency ($label)", ({ src, include, exclude }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  for (const t of include) expect(texts).toContain(t);
+  for (const t of exclude) expect(texts).not.toContain(t);
+});
+
+// Codex 3793744727 on ab2c8bcd: `<p>open {"settings" as const}</p>` — the JsxExpression wraps
+// a StringLiteral in a transparent AsExpression. Without unwrapping, the aggregator's direct-
+// node check treats the expression as a segment boundary and each JsxText fragment (`open`,
+// then nothing more in this segment) is rejected as a machine token. Unwrap transparent
+// wrappers before deciding the expression participates in the phrase.
+test.each([
+  {
+    label: "as const wrapper around literal",
+    src: '<p>open {"settings" as const}</p>',
+  },
+  {
+    label: "satisfies wrapper around literal",
+    src: '<p>open {"settings" satisfies string}</p>',
+  },
+  {
+    label: "non-null assertion around literal",
+    src: '<p>open {("settings" as string | undefined)!}</p>',
+  },
+  {
+    label: "parenthesised literal",
+    src: '<p>open {("settings")}</p>',
+  },
+])(
+  "unwraps transparent wrappers around a literal JSX expression in aggregation ($label)",
+  ({ src }) => {
+    const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+    expect(texts).toContain("open settings");
+  },
+);
+
+// Codex 3793772901 on 79b516b2: `<p>open {cond ? "settings" : "account"}</p>` renders as
+// EITHER "open settings" OR "open account". The aggregator forks the active segment on a
+// literal-branch conditional, so BOTH aggregates enter the ledger. Partial-literal shapes
+// (`cond ? "x" : maybeVar`) fall through to segment-break because one branch is dynamic and
+// fabricating a phrase across it would be wrong.
+test("emits an aggregate for each branch of a literal-branch conditional", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>open {cond ? "settings" : "account"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("open settings");
+  expect(texts).toContain("open account");
+});
+
+test("partial-literal conditional does not fabricate an aggregate", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>open {cond ? "settings" : maybeVar}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).not.toContain("open settings");
+});
+
+test("literal-branch conditional at the end of a phrase forks both aggregates", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>Save {cond ? "changes" : "draft"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Save changes");
+  expect(texts).toContain("Save draft");
+});
+
+// Codex 3793944197 on 680205f9: nested conditional with all-literal leaves —
+// `<p>open {cond ? (nested ? "settings" : "account") : "profile"}</p>` renders one of three
+// possible phrases. Recurse through nested ConditionalExpression + transparent wrappers so
+// every statically-known leaf contributes.
+test("emits aggregates for every leaf of a nested literal-only conditional", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>open {cond ? (nested ? "settings" : "account") : "profile"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("open settings");
+  expect(texts).toContain("open account");
+  expect(texts).toContain("open profile");
+});
+
+test("nested conditional with a dynamic leaf falls through (no fabricated phrase)", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>open {cond ? (nested ? "settings" : maybe) : "profile"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).not.toContain("open settings");
+  expect(texts).not.toContain("open profile");
+});
+
+// Codex 3793982007 on 626a3de1: React drops `null` / `undefined` / `false` / `true` — they
+// render NOTHING. `<p>open {cond ? "settings" : null}</p>` renders EITHER "open settings"
+// OR "open ". Treat these as an empty-string alternative so the aggregate still emits.
+test.each([
+  { label: "null branch", src: '<p>open {cond ? "settings" : null}</p>' },
+  { label: "undefined branch", src: '<p>open {cond ? "settings" : undefined}</p>' },
+  { label: "false branch", src: '<p>open {cond ? "settings" : false}</p>' },
+  { label: "reversed literal / null", src: '<p>open {cond ? null : "settings"}</p>' },
+])(
+  "aggregates literal branch when the other branch is a React non-rendering literal ($label)",
+  ({ src }) => {
+    const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+    expect(texts).toContain("open settings");
+  },
+);
+
+// Codex 3793795574 on 6d137202: `aria-valuetext` is the human-readable text assistive tech
+// announces for `<progress>`, `<meter>`, and range widgets whose numeric value doesn't map
+// cleanly to speech. Both kebab-case (intrinsic elements) and camelCase (custom components)
+// spellings enter the ledger.
+test.each([
+  {
+    label: "aria-valuetext on intrinsic element",
+    src: '<progress aria-valuetext="Half complete" />',
+  },
+  {
+    label: "ariaValueText on custom component",
+    src: '<KeikoProgress ariaValueText="Half complete" />',
+  },
+])("scans `aria-valuetext` accessible copy ($label)", ({ src }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("Half complete");
+});
+
+// Codex 3793874125 on 4a2e8002: `aria-roledescription` is the author-supplied role text
+// assistive tech announces in place of the intrinsic role (`<section aria-roledescription=
+// "Slide deck">` → "Slide deck" instead of "region"). Same policy as `aria-label`. Both
+// kebab-case and camelCase spellings enter the ledger.
+test.each([
+  {
+    label: "aria-roledescription on intrinsic element",
+    src: '<section aria-roledescription="Slide deck" />',
+  },
+  {
+    label: "ariaRoleDescription on custom component",
+    src: '<KeikoSlide ariaRoleDescription="Slide deck" />',
+  },
+])("scans `aria-roledescription` accessible copy ($label)", ({ src }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("Slide deck");
+});
+
+// Codex 3793905521 on 6aa0eb82: `<div children="Delete account" />` — `children` as a JSX
+// prop renders the literal as ordinary child text. Same policy as `label`; enter the ledger.
+test("scans literal `children` prop copy on intrinsic and custom elements", () => {
+  for (const src of [
+    '<div children="Delete account" />',
+    '<KeikoDialog children="Delete account" />',
+  ]) {
+    const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+    expect(texts).toContain("Delete account");
+  }
+});
+
+// Codex 3793944206 on 680205f9: `React.createElement("button", null, "Delete account")` — the
+// non-JSX form. The third and later arguments are CHILDREN and render as ordinary text.
+// Recognise both `createElement(...)` (unqualified) and `React.createElement(...)`.
+test.each([
+  {
+    label: "unqualified createElement",
+    src: 'const el = createElement("button", null, "Delete account");',
+  },
+  {
+    label: "React.createElement",
+    src: 'const el = React.createElement("button", null, "Delete account");',
+  },
+])("scans createElement child argument copy ($label)", ({ src }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("Delete account");
+});
+
+test("scans multiple createElement child arguments", () => {
+  // Coderabbit 3794185711 on #3202: assert BOTH child arguments so the loop bound stays
+  // pinned. If `reactCreateElementChildResults` stopped after the first child the earlier
+  // form (`expect(texts).toContain("Save changes")` only) would stay green while missing
+  // the second child. The scanner trims and collapses whitespace, so ` immediately now`
+  // records as `immediately now`.
+  const texts = untranslatedLiteralsInSource(
+    'const el = createElement("p", null, "Save changes", " immediately now");',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Save changes");
+  expect(texts).toContain("immediately now");
+});
+
+// Codex 3793905529 on 6aa0eb82: bilingual UI copy like `Übernehmen` and `Löschen` — the old
+// `[A-Z][a-z]` sentence-start requirement rejected both (uppercase `Ü` isn't ASCII;
+// `Löschen`'s second letter `ö` isn't ASCII). The Unicode `\p{Lu}\p{Ll}` pattern now
+// accepts them, letting hardcoded German copy enter the ledger.
+test.each([
+  {
+    label: "Übernehmen (Unicode uppercase start)",
+    src: '<p>{"Übernehmen"}</p>',
+    expected: "Übernehmen",
+  },
+  {
+    label: "Löschen (Unicode lowercase second char)",
+    src: '<p>{"Löschen"}</p>',
+    expected: "Löschen",
+  },
+  { label: "Ändern (Unicode uppercase A-umlaut)", src: '<p>{"Ändern"}</p>', expected: "Ändern" },
+])("classifies non-ASCII single-word copy ($label)", ({ src, expected }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain(expected);
+});
+
+// Codex 3793795566 on 6d137202: `<p>{["open ", "settings"]}</p>` renders "open settings" but
+// per-element emission alone drops both fragments as machine tokens. When EVERY element is a
+// string literal, ALSO emit the concatenated form as one aggregate. Dynamic elements disable
+// the aggregate (per-element emission still runs so existing recall stays intact).
+test("aggregates all-literal array element renders into one phrase", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{["open ", "settings"]}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("open settings");
+});
+
+test("array-literal aggregation preserves per-element findings for translatable elements", () => {
+  // Both "Delete account" and "Cancel operation" pass the classifier individually. The
+  // aggregate "Delete accountCancel operation" is not translatable prose. Per-element
+  // findings must still land.
+  const texts = untranslatedLiteralsInSource(
+    '<p>{["Delete account", "Cancel operation"]}</p>',
+    "packages/x/y.tsx",
+  )
+    .findings.map((f) => f.text)
+    .sort();
+  expect(texts).toContain("Delete account");
+  expect(texts).toContain("Cancel operation");
+});
+
+test("array with a dynamic element does not fabricate an aggregate", () => {
+  // `["open ", maybeVar]` — one element is dynamic; the aggregator can't know its rendered
+  // value, so fabricating "open " alone as a phrase would be wrong. Fall through to per-
+  // element emission (which drops the lowercase "open" token).
+  const texts = untranslatedLiteralsInSource(
+    '<p>{["open ", maybeVar]}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).not.toContain("open");
+  expect(texts).not.toContain("open settings");
+});
+
+// Codex 3793830382 on ebd2fabc: `<p>open {cond && "settings"}</p>` renders EITHER "open
+// settings" OR "open" (React drops falsy `cond &&`). Same for `??` and `||` when the LEFT
+// operand is unknown and the RIGHT is a literal. Fork with `[literalText, ""]` so the
+// literal-present aggregate lands in the ledger; the empty alternative degrades to a
+// single-content-part segment the ≥2 gate skips.
+test.each([
+  {
+    label: "&& short-circuit",
+    src: '<p>open {cond && "settings"}</p>',
+  },
+  {
+    label: "?? nullish fallback",
+    src: '<p>open {cond ?? "settings"}</p>',
+  },
+  {
+    label: "|| fallback",
+    src: '<p>open {cond || "settings"}</p>',
+  },
+])("forks a segment for a literal-right-operand JSX logical expression ($label)", ({ src }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("open settings");
+});
+
+// Codex 3793830385 on ebd2fabc: `<p>open <>settings</></p>` — a JsxFragment is purely
+// syntactic grouping. Flatten it like an inline formatting element so surrounding JsxText
+// still aggregates into one phrase.
+//
+// Coderabbit 3793899412 on 680205f9: `toContain` would silently accept duplicate emission
+// (both the parent and the fragment). Pin exactly one — the outer-only guard in
+// `jsxAggregatedTextResults` treats the fragment as an inline formatting child of its
+// container and skips its own aggregate.
+test("flattens JSX fragments the same way as inline formatting elements (single emission)", () => {
+  const texts = untranslatedLiteralsInSource(
+    "<p>open <>settings</></p>",
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts.filter((t) => t === "open settings")).toHaveLength(1);
+});
+
+// Codex 3793356672 on af9f5ede: line-break phrasing elements (`<br/>`, `<wbr/>`) split copy at
+// whitespace boundaries. `<p>open<br/>settings</p>` renders "open settings" but the aggregator
+// used to break the segment at `<br/>` (a non-inline non-formatting element), so each half was
+// rejected as a machine-token. Treat `<br/>` and `<wbr/>` as pure whitespace: don't break, don't
+// contribute a part — the joiner supplies the space.
+test.each([
+  { label: "self-closing br", src: "<p>open<br/>settings</p>" },
+  { label: "explicit br element", src: "<p>open<br></br>settings</p>" },
+  { label: "self-closing wbr", src: "<p>open<wbr/>settings</p>" },
+])("treats line-break phrasing elements as whitespace separators ($label)", ({ src }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("open settings");
+});
+
+// Codex 3793356675 on af9f5ede: `{({ idle: "Open settings", done: "Close settings" })[state]}`
+// — the values of an inline object map reached via element-access render as user copy but the
+// expression collector had no ObjectLiteralExpression case. Recurse through property values
+// (keys are code, analogous to element-access argument policy).
+test("collects literals from inline object-literal values via element-access lookup", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{({ idle: "Open settings", done: "Close settings" })[state]}</p>',
+    "packages/x/y.tsx",
+  )
+    .findings.map((f) => f.text)
+    .sort();
+  expect(texts).toContain("Open settings");
+  expect(texts).toContain("Close settings");
+});
+
+// Parameterised binary-operator recall table (SonarCloud S5976). Every row asserts one JSX
+// expression shape surfaces (or hides) specific rendered phrases — one row per recall path so
+// adding a sixth is one row, not one new test.
+//   - codex 3793356682 (af9f5ede): pure-literal `+` chains fold to one phrase before
+//     classification.
+//   - codex 3793578608 (5436cf04): comma operator returns its RIGHT operand's value; the
+//     left is a side-effect sequence and must NOT enter the ledger.
+//   - existing behaviour: literal-plus-variable-plus-literal `+` chains keep per-operand
+//     emission so both surviving literals are pinned.
+test.each([
+  {
+    label: "literal `+` two-operand fold",
+    src: '<p>{"open " + "settings"}</p>',
+    include: ["open settings"],
+    exclude: [],
+  },
+  {
+    label: "literal `+` chained fold",
+    src: '<p>{"press " + "Ctrl " + "K" + " now"}</p>',
+    include: ["press Ctrl K now"],
+    exclude: [],
+  },
+  {
+    label: "comma expression right operand",
+    src: '<p>{(track(), "Delete account")}</p>',
+    include: ["Delete account"],
+    exclude: [],
+  },
+  {
+    label: "comma expression left operand is a side-effect sequence",
+    src: '<p>{("internal debug", "Rendered copy here")}</p>',
+    include: ["Rendered copy here"],
+    exclude: ["internal debug"],
+  },
+  {
+    label: "literal-plus-variable-plus-literal per-operand",
+    src: '<p>{"Welcome back, " + user + " to Keiko"}</p>',
+    include: ["Welcome back,", "to Keiko"],
+    exclude: [],
+  },
+])("binary-operator recall ($label)", ({ src, include, exclude }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  for (const t of include) expect(texts).toContain(t);
+  for (const t of exclude) expect(texts).not.toContain(t);
+});
+
+// Codex 3793398793 on 8ce536db: `{"open " + section + " settings"}` — the fold above returns
+// null because one operand is dynamic, and per-operand emission leaves "open" and "settings"
+// as machine tokens the classifier rejects. Aggregate the literal fragments alone (skipping
+// the dynamic operand) and emit as a phrase when translatable and no individual operand
+// already tripped.
+test("aggregates literal fragments around a dynamic `+` operand", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{"open " + section + " settings"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("open settings");
+});
+
+test("literal-fragment aggregation does not double-count when an operand already trips the classifier", () => {
+  // "Welcome back," is translatable on its own; the aggregate "Welcome back, to Keiko" would
+  // OVERLAP with it and add noise without new signal. Bail out of the aggregate for this case
+  // so the baseline stays stable — same anti-double-count policy as the JsxText aggregator.
+  const findings = untranslatedLiteralsInSource(
+    '<p>{"Welcome back, " + user + " to Keiko"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(findings).not.toContain("Welcome back, to Keiko");
+});
+
+// Codex 3793398796 on 8ce536db: the aggregated phrase used to be attributed to the container's
+// opening tag; `reportOnLine` only checks that line and the previous one, so an
+// `// i18n-exempt` marker adjacent to the phrase's own text could not exempt the aggregate.
+// Attribute to the FIRST text fragment's line so documented markers apply.
+test("aggregated phrase is reported on the first text fragment's line, not the container line", () => {
+  // The `<p>` opens on line 1; the phrase parts start on line 3. The aggregate must land on
+  // line 3 so a marker on line 2 or 3 can exempt it.
+  const src = "<p>\n  {}\n  open <code>settings</code>\n</p>";
+  const finding = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.find(
+    (f) => f.text === "open settings",
+  );
+  expect(finding).toBeDefined();
+  expect(finding.line).toBe(3);
+});
+
+test("aggregation does not cross block-level element boundaries", () => {
+  // `<div>` is a block container, not text-level inline formatting; the two `<p>` phrases render
+  // as separate paragraphs and each is its own aggregate context. `open` and `settings` remain
+  // per-fragment tokens (rejected as machine tokens), so no aggregate is emitted.
+  const texts = untranslatedLiteralsInSource(
+    "<div><p>open</p><p>settings</p></div>",
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).not.toContain("open settings");
+});
+
+// Codex 3793282537 on 86ecd7a3: `<p>open {"settings"}</p>` renders "open settings" — the
+// string literal INSIDE the expression brace belongs to the containing phrase. The earlier
+// aggregation stopped at any expression brace, so this bypass reappeared even after the
+// inline-formatting-element fix. Aggregate direct string literals inside JsxExpressions too.
+// Parameterised aggregation-across-expression table (SonarCloud S5976). Every row asserts
+// whether a specific `{…}` shape inside a phrase does or does not weld the surrounding
+// JsxText into an aggregate. Direct string / template literals contribute their text; a
+// non-literal expression (`{maybe}`) breaks the segment so no fictional phrase is fabricated.
+test.each([
+  {
+    label: "string-literal expression joins the phrase",
+    src: '<p>open {"settings"}</p>',
+    include: ["open settings"],
+    exclude: [],
+  },
+  {
+    label: "template-literal expression joins the phrase",
+    src: "<p>open {`settings`}</p>",
+    include: ["open settings"],
+    exclude: [],
+  },
+  {
+    label: "non-literal expression breaks the segment (no fabrication)",
+    src: "<p>open {maybe} settings</p>",
+    include: [],
+    exclude: ["open settings"],
+  },
+])("aggregation-across-expression recall ($label)", ({ src, include, exclude }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  for (const t of include) expect(texts).toContain(t);
+  for (const t of exclude) expect(texts).not.toContain(t);
+});
+
+// KEIKO-0299 (review-follow-up on af74e79b): a JSX child like `{"Welcome back, " + name}`
+// renders the concatenation as user copy — the literal on either operand IS user-visible and
+// must enter the ledger. Codex 3792890969.
+test("collects literals from `+` string concatenation in JSX children", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{"Welcome back, " + name}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Welcome back,");
+});
+
+test("collects literals on both sides of a JSX child `+`", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{"Hello, " + name + " your account"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Hello,");
+  expect(texts).toContain("your account");
+});
+
+// KEIKO-0299 (review-follow-up): multi-line JSX text now collapses intra-node whitespace so a
+// reformat or indentation change does not churn the ratcheted ledger. Same rendered copy, same
+// ledger entry, either shape.
+test("normalizes intra-node whitespace in multi-line JSX text", () => {
+  const compact = untranslatedLiteralsInSource(
+    `<p>Hello there friend</p>`,
+    "packages/x/y.tsx",
+  ).findings;
+  const wrapped = untranslatedLiteralsInSource(
+    `<p>\n  Hello\n  there\n  friend\n</p>`,
+    "packages/x/y.tsx",
+  ).findings;
+  expect(compact.length).toBeGreaterThan(0);
+  expect(wrapped.length).toBeGreaterThan(0);
+  expect(wrapped[0].text).toBe(compact[0].text);
+});
+
 test("separates human copy from the machine tokens that share those positions", () => {
   for (const copy of ["Close", "New window", "Toggle light / dark theme", "Source file"]) {
     expect(isTranslatableCopy(copy)).toBe(true);

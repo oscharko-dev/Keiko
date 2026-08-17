@@ -67,8 +67,23 @@ failure, so the escape hatch cannot be used wordlessly.
 
 ## Known limits
 
-- The rule reads lines, not an AST. A user-facing literal split across lines by the formatter, or
-  assembled from variables, is not seen.
+- The JSX-text and JSX-attribute positions are scanned via the TypeScript AST. That covers
+  multi-line JSX text (`<p>\n  Hello there\n</p>`), string-literal expression containers
+  (`<p>{"No chats"}</p>`), and both directly-quoted and expression-valued user-facing
+  attributes (`ariaLabel="Foo"`, `aria-label={cond ? "A" : "B"}`, `title={label ?? "Fallback"}`).
+  Recursion also covers template substitutions (`` `${cond ? "A" : "B"}` ``), conditional and
+  logical operators (`??` / `||` / `&&`), string concatenations (`"A" + name`), transparent
+  wrappers (`as const`, `satisfies T`, `!`), and call arguments (`definedOr(x, "fallback")`).
+  Intra-node whitespace is normalized so a reindent or rewrap does not churn the ledger.
+- Registry-field positions (`label`/`description`/`title`/`cta`/`scope`/`group`/`menuTitle`/
+  `tip`/`hint`/`summary` values on option/command objects — the `LABEL_FIELD_NAME_RE` set)
+  are still scanned per line, not through an AST. A literal split across lines in one of those
+  positions, or assembled from variables, is not seen at THAT position — but the same field
+  name spelled as a JSX prop on a custom component (`<Item label={cond ? "A" : "B"} />`) IS
+  covered by the AST attribute scan above.
+- `.ts` files are parsed as TypeScript, `.tsx` files as TSX. This prevents generic syntax in
+  ordinary `.ts` files (`<T>`, `ReadonlySet<...>`) from being misread as JSX — which would flood
+  the ledger with code fragments — and keeps the JSX passes accurate for real UI components.
 - The ledger keys on literal text, not line number, so moving a known literal within its file is
   invisible (correctly) — but so is swapping a listed literal for a different string that happens to
   match another listed entry in the same file.
