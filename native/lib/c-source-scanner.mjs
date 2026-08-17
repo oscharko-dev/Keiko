@@ -693,16 +693,44 @@ function evaluateConstantArithmetic(exprText) {
   let js = trimmed.replace(/([0-9a-fA-F])[UuLl]{1,3}\b/gu, "$1");
   // C octal: `0<octal-digits>`. Convert to JS `0o<digits>`. Bare `0` and `0x…` stay as-is.
   js = js.replace(/\b0([0-7]+)(?![0-9a-fA-F])/gu, "0o$1");
+  // Codex 3793795565 on #3202: reject expressions containing an integer literal outside JS's
+  // safe-integer range (|value| > 2^53). C evaluates `#if 9007199254740993 == 9007199254740992`
+  // as false, but JS rounds both operands to 9007199254740992.0 and returns true — the ladder
+  // would then classify the branch wrong and strip a live body. Parse each literal in the
+  // expression (decimal, hex, octal) and bail if any exceeds `Number.MAX_SAFE_INTEGER`.
+  if (!allLiteralsWithinSafeIntRange(js)) return null;
+  return runArithmeticEvalAndNormalise(js);
+}
+
+function runArithmeticEvalAndNormalise(js) {
   try {
     const result = new Function('"use strict"; return (' + js + ");")();
     // C comparison and logical operators return `int` (0 or 1); JavaScript returns `boolean`.
     // Normalise so `1 == 1` → 1 and `1 < 0` → 0 land in the caller as usable truth values.
     if (typeof result === "boolean") return result ? 1 : 0;
     if (typeof result !== "number" || !Number.isFinite(result)) return null;
+    // Also reject the final result if it lost precision (any intermediate op could have
+    // pushed us past 2^53 even when all input literals were safe).
+    if (Math.abs(result) > Number.MAX_SAFE_INTEGER) return null;
     return Math.trunc(result);
   } catch {
     return null;
   }
+}
+
+// Extract every integer literal from a JS-compatible arithmetic expression and check that
+// each is within JS's safe-integer range. `js` has already had C integer suffixes stripped
+// and C octal converted to JS `0o…` form, so the literal regex only needs to handle the JS
+// shapes: decimal, hex (`0x…`), octal (`0o…`).
+function allLiteralsWithinSafeIntRange(js) {
+  const literals = js.match(/0[xX][0-9a-fA-F]+|0[oO]?[0-7]+|\d+/gu);
+  if (literals === null) return true;
+  for (const literal of literals) {
+    // `Number(literal)` handles decimal, `0x…`, and `0o…` uniformly.
+    const value = Number(literal);
+    if (!Number.isFinite(value) || Math.abs(value) > Number.MAX_SAFE_INTEGER) return false;
+  }
+  return true;
 }
 
 function tryConstantArithmeticIf(trimmed, stack) {

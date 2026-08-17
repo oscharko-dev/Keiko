@@ -20,6 +20,16 @@ import {
   streamReader,
   waitForExit,
 } from "./protocol-harness.mjs";
+// Codex 3793795571 on #3202: the Windows source-contract assertions used to run against the
+// raw file text, so a control retained only inside `/* ... */`, a diagnostic `"..."`, or a
+// compiler-dead `#if 0` branch still satisfied the pin — the source-only lane runs on non-
+// Windows hosts where behavioural qualification is skipped, so those pins were the only
+// defence. Route through the shared scanner: `prepareCSource` for the negative shell-launch
+// check (needs to see actual string bytes so `"cmd.exe"` inside a diagnostic string doesn't
+// evade it) and `stripStringLiteralBodies(prepareCSource(...))` for positive identifier /
+// call pins (blanks string bodies so a diagnostic `"CREATE_SUSPENDED"` cannot satisfy an
+// assertion on the identifier).
+import { prepareCSource, stripStringLiteralBodies } from "../lib/c-source-scanner.mjs";
 
 const source = fileURLToPath(new URL("./windows/keiko_runtime_supervisor.c", import.meta.url));
 const fixtureSource = fileURLToPath(new URL("./windows/qualification_fixture.c", import.meta.url));
@@ -188,15 +198,21 @@ async function assertControlEofFailsClosed(helper, runtime, root) {
 }
 
 async function assertSourceContract() {
-  const text = await readFile(source, "utf8");
-  assert.match(text, /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE/u);
-  assert.match(text, /CREATE_SUSPENDED/u);
-  assert.match(text, /AssignProcessToJobObject\(job, process->hProcess\)/u);
-  assert.match(text, /ResumeThread\(process->hThread\)/u);
-  assert.match(text, /JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO/u);
-  assert.match(text, /accounting\.ActiveProcesses == 0/u);
-  assert.match(text, /PROC_THREAD_ATTRIBUTE_HANDLE_LIST/u);
-  assert.doesNotMatch(text, /system\(|ShellExecute|cmd\.exe|powershell/iu);
+  const rawSource = await readFile(source, "utf8");
+  // Two composition modes over the shared scanner (codex 3793795571 on #3202): positive
+  // identifier / call pins consume the string-blanked scan (so a diagnostic `"CREATE_SUSPENDED"`
+  // cannot satisfy an assertion on the identifier); the negative shell-launch pin consumes
+  // the literal-preserving scan (so a real `system("cmd.exe")` still trips it).
+  const preparedText = prepareCSource(rawSource);
+  const codeText = stripStringLiteralBodies(preparedText);
+  assert.match(codeText, /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE/u);
+  assert.match(codeText, /CREATE_SUSPENDED/u);
+  assert.match(codeText, /AssignProcessToJobObject\(job, process->hProcess\)/u);
+  assert.match(codeText, /ResumeThread\(process->hThread\)/u);
+  assert.match(codeText, /JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO/u);
+  assert.match(codeText, /accounting\.ActiveProcesses == 0/u);
+  assert.match(codeText, /PROC_THREAD_ATTRIBUTE_HANDLE_LIST/u);
+  assert.doesNotMatch(preparedText, /system\(|ShellExecute|cmd\.exe|powershell/iu);
 }
 
 await assertSourceContract();

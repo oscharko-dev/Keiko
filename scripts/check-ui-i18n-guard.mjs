@@ -638,6 +638,11 @@ const USER_FACING_ATTRIBUTE_NAMES = new Set([
   "aria-label",
   "aria-description",
   "aria-placeholder",
+  // Codex 3793795574 on #3202: `aria-valuetext` is the human-readable text assistive tech
+  // announces for `<progress>`, `<meter>`, and range widgets whose numeric value doesn't map
+  // cleanly to speech ("Half complete", "About five minutes remaining"). Same policy as
+  // `aria-label` — the AST scan MUST see it or new accessible copy bypasses the ledger.
+  "aria-valuetext",
   "alt",
   "placeholder",
   "title",
@@ -647,6 +652,7 @@ const USER_FACING_ATTRIBUTE_NAMES = new Set([
   "ariaLabel",
   "ariaDescription",
   "ariaPlaceholder",
+  "ariaValueText",
   "label",
   "labelText",
   "description",
@@ -1172,10 +1178,15 @@ function containerExpressionTexts(expr, sourceFile) {
     return functionLikeLiteralTexts(expr, sourceFile);
   }
   // ArrayLiteralExpression: `<p>{["Delete account", "Cancel operation"]}</p>` — React renders
-  // each element. Codex 3793145626. Recurse through each element the same way we recurse for
-  // call arguments and conditional branches.
+  // each element. Codex 3793145626. Recurse through each element (same policy as call
+  // arguments and conditional branches). Codex 3793795566 on #3202: ALSO emit the concatenated
+  // form when every element is a string literal — `<p>{["open ", "settings"]}</p>` renders
+  // "open settings" but per-element emission alone drops both fragments as machine tokens.
+  // The combined form joins raw texts (adjacency preserved) then trims+collapses; if it's
+  // translatable, add ONE aggregate on top of the per-element entries. Dynamic elements
+  // disable the aggregate (only per-element emission runs).
   if (ts.isArrayLiteralExpression(expr)) {
-    return expr.elements.flatMap((element) => jsxChildExpressionLiteralTexts(element, sourceFile));
+    return arrayLiteralLiteralTexts(expr, sourceFile);
   }
   // ObjectLiteralExpression: `{({ idle: "Open settings", done: "Close settings" })[state]}` —
   // an inline object map whose values are user copy the receiver traversal reaches through
@@ -1232,6 +1243,29 @@ function isNestedFunctionScope(node) {
     ts.isSetAccessorDeclaration(node) ||
     ts.isConstructorDeclaration(node)
   );
+}
+
+function arrayLiteralLiteralTexts(expr, sourceFile) {
+  const perElement = expr.elements.flatMap((element) =>
+    jsxChildExpressionLiteralTexts(element, sourceFile),
+  );
+  const rawElementTexts = [];
+  let allLiteral = true;
+  for (const element of expr.elements) {
+    const raw = literalTextOfExpression(element);
+    if (raw === null) {
+      allLiteral = false;
+      break;
+    }
+    rawElementTexts.push(raw);
+  }
+  if (!allLiteral || rawElementTexts.length < 2) return perElement;
+  const combined = rawElementTexts.join("").trim().replace(/\s+/gu, " ");
+  if (combined.length === 0) return perElement;
+  // Only add the aggregate when it introduces new signal — i.e. when no per-element already
+  // matches (same anti-double-count as the JsxText / `+`-chain aggregators).
+  if (perElement.some((entry) => entry.text === combined)) return perElement;
+  return [...perElement, { line: lineOfNode(expr, sourceFile), text: combined }];
 }
 
 function objectLiteralPropertyLiteralTexts(expr, sourceFile) {

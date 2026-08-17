@@ -1770,6 +1770,62 @@ test("literal-branch conditional at the end of a phrase forks both aggregates", 
   expect(texts).toContain("Save draft");
 });
 
+// Codex 3793795574 on 6d137202: `aria-valuetext` is the human-readable text assistive tech
+// announces for `<progress>`, `<meter>`, and range widgets whose numeric value doesn't map
+// cleanly to speech. Both kebab-case (intrinsic elements) and camelCase (custom components)
+// spellings enter the ledger.
+test.each([
+  {
+    label: "aria-valuetext on intrinsic element",
+    src: '<progress aria-valuetext="Half complete" />',
+  },
+  {
+    label: "ariaValueText on custom component",
+    src: '<KeikoProgress ariaValueText="Half complete" />',
+  },
+])("scans `aria-valuetext` accessible copy ($label)", ({ src }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("Half complete");
+});
+
+// Codex 3793795566 on 6d137202: `<p>{["open ", "settings"]}</p>` renders "open settings" but
+// per-element emission alone drops both fragments as machine tokens. When EVERY element is a
+// string literal, ALSO emit the concatenated form as one aggregate. Dynamic elements disable
+// the aggregate (per-element emission still runs so existing recall stays intact).
+test("aggregates all-literal array element renders into one phrase", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{["open ", "settings"]}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("open settings");
+});
+
+test("array-literal aggregation preserves per-element findings for translatable elements", () => {
+  // Both "Delete account" and "Cancel operation" pass the classifier individually. The
+  // aggregate "Delete accountCancel operation" is not translatable prose. Per-element
+  // findings must still land.
+  const texts = untranslatedLiteralsInSource(
+    '<p>{["Delete account", "Cancel operation"]}</p>',
+    "packages/x/y.tsx",
+  )
+    .findings.map((f) => f.text)
+    .sort();
+  expect(texts).toContain("Delete account");
+  expect(texts).toContain("Cancel operation");
+});
+
+test("array with a dynamic element does not fabricate an aggregate", () => {
+  // `["open ", maybeVar]` — one element is dynamic; the aggregator can't know its rendered
+  // value, so fabricating "open " alone as a phrase would be wrong. Fall through to per-
+  // element emission (which drops the lowercase "open" token).
+  const texts = untranslatedLiteralsInSource(
+    '<p>{["open ", maybeVar]}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).not.toContain("open");
+  expect(texts).not.toContain("open settings");
+});
+
 // Codex 3793356672 on af9f5ede: line-break phrasing elements (`<br/>`, `<wbr/>`) split copy at
 // whitespace boundaries. `<p>open<br/>settings</p>` renders "open settings" but the aggregator
 // used to break the segment at `<br/>` (a non-inline non-formatting element), so each half was
