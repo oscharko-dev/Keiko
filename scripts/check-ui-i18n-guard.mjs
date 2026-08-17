@@ -837,9 +837,13 @@ function jsxAggregatedTextResults(node, sourceFile) {
     if (segment.parts.length < 2) continue;
     const aggregate = segment.parts.join(" ");
     if (!isTranslatableCopy(aggregate)) continue;
-    // If any individual fragment is already translatable on its own, the per-JsxText path
-    // already recorded it — do not double-count with a synthetic aggregate entry.
-    if (segment.parts.some(isTranslatableCopy)) continue;
+    // Codex 3793469157 on #3202: dedupe against IDENTICAL individually-translatable parts, but
+    // do NOT suppress the aggregate merely because SOME part is independently translatable —
+    // otherwise appending untranslated copy (`<p>Open settings <code>now</code></p>`) would
+    // silently pass because "Open settings" is already an allowed finding and the widened
+    // aggregate "Open settings now" gets skipped. Only skip when the aggregate is exactly the
+    // same text as one of the parts (i.e., the parts add no new phrase content).
+    if (segment.parts.some((part) => part === aggregate)) continue;
     // Codex 3793398796 on #3202: attribute the finding to the first text fragment's line, not
     // the container's opening tag — so an `// i18n-exempt` marker adjacent to the phrase's
     // own text can exempt it. Fall back to the container line only if the segment somehow
@@ -917,6 +921,15 @@ function jsxSpreadAttributeResults(node, sourceFile) {
 function objectPropertyKey(name) {
   if (ts.isIdentifier(name)) return name.text;
   if (ts.isStringLiteral(name) || ts.isNoSubstitutionTemplateLiteral(name)) return name.text;
+  // Codex 3793469155 on #3202: `{ ["aria-label"]: "..." }` uses a ComputedPropertyName wrapping
+  // the actual key expression. When the inner expression is a compile-time constant string, the
+  // rendered attribute name is that string — same policy as the quoted-key form above. Only
+  // string-literal constants participate; complex computed keys (e.g. `[Symbol.for(x)]`) stay
+  // unrecognised and their values remain unscanned (same policy as element-access argument).
+  if (ts.isComputedPropertyName(name)) {
+    const inner = name.expression;
+    if (ts.isStringLiteral(inner) || ts.isNoSubstitutionTemplateLiteral(inner)) return inner.text;
+  }
   return null;
 }
 

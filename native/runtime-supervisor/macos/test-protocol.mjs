@@ -124,10 +124,16 @@ function stripCCommentsPreservingLiterals(rawSource) {
   //
   // Codex 3793436216: also decode escape sequences inside string literals (C11 §6.4.4.4).
   // `"/bin/\x73h"` reaches clang as `/bin/sh`; without decoding, the negative shell-path
-  // regex would miss the escape-hidden form. Decode runs AFTER folding so `"\x2f" "bin/sh"`
-  // (fold-first → `"\x2f/bin/sh"`) still resolves to `/bin/sh`.
-  return decodeCStringEscapes(
-    foldAdjacentStringLiterals(
+  // regex would miss the escape-hidden form.
+  //
+  // Codex 3793469154: order matters — DECODE FIRST, THEN FOLD. C11 §6.4.4.4 (escape decoding
+  // in phase 5) precedes §6.4.5 (string concatenation in phase 6). If we fold first, an
+  // adjacent-pair like `"\x2f" "bin/sh"` collapses to `"\x2fbin/sh"`; the variable-length hex
+  // escape decoder then greedily consumes `2fb` as hex and produces `"ûin/sh"`, which does
+  // not match the shell-path regex. Decoding each token first yields `"/" "bin/sh"`, which
+  // then folds correctly to `"/bin/sh"`.
+  return foldAdjacentStringLiterals(
+    decodeCStringEscapes(
       stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource))),
     ),
   );

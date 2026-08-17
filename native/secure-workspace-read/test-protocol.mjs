@@ -306,11 +306,15 @@ function stripCommentsOnly(rawSource) {
 //
 // Codex 3793436216: also decode escape sequences inside string literal BODIES (C11 §6.4.4.4).
 // The Windows reserved-stem and GLOBALROOT pins compare against exact strings; if a control
-// were rewritten to use `"\x43ON"` instead of `"CON"` it would evade the source contract. Decode
-// runs AFTER folding.
+// were rewritten to use `"\x43ON"` instead of `"CON"` it would evade the source contract.
+//
+// Codex 3793469154: order matters — DECODE FIRST, THEN FOLD. C11 §6.4.4.4 (phase 5) precedes
+// §6.4.5 (phase 6). Fold-first would let `"\x2f" "bin/sh"` collapse to `"\x2fbin/sh"` where
+// the variable-length hex decoder greedily consumes `2fb` and yields `"ûin/sh"`, missing the
+// path. Decoding each preprocessing token independently yields `"/" "bin/sh"` → `"/bin/sh"`.
 function preparedSource(rawSource) {
-  return decodeCStringEscapes(
-    foldAdjacentStringLiterals(
+  return foldAdjacentStringLiterals(
+    decodeCStringEscapes(
       stripDisabledPreprocessorBranches(stripCComments(preprocessCLineSplices(rawSource))),
     ),
   );
@@ -535,7 +539,23 @@ function assertLaterElifAfterLiveStripped() {
   assertArbitraryNonzeroFormsRecognised();
   assertUnaryConstantConditionsRecognised();
   assertCEscapesDecodedInsideLiterals();
+  assertDecodeThenFoldOrder();
   assertTrigraphIfZero();
+}
+
+// Codex 3793469154 on #3202: order matters — DECODE FIRST, THEN FOLD. If the pipeline folded
+// first, `"\x2f" "bin/sh"` would collapse to `"\x2fbin/sh"` where the variable-length hex
+// decoder greedily consumes `2fb` (all valid hex digits) as one escape → 0x2fb & 0xff = 0xfb
+// → `"ûin/sh"`, and the reserved-path pin would miss `/bin/sh`. Decoding each token first
+// yields `"/" "bin/sh"` which then folds correctly to `"/bin/sh"`. Verify with a control-
+// character-free path so ASCII assertions stay legible.
+function assertDecodeThenFoldOrder() {
+  const source = 'const char *p = "\\x2f" "bin/sh";\n';
+  const prepared = stripCommentsOnly(source);
+  assert.ok(
+    prepared.includes('"/bin/sh"'),
+    'decode must run BEFORE fold: `"\\x2f" "bin/sh"` must resolve to `"/bin/sh"`, not `"ûin/sh"`',
+  );
 }
 
 // Codex 3793436218 on #3202: `#if -1` is unconditionally true (the C preprocessor evaluates

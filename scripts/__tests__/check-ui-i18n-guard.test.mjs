@@ -1441,6 +1441,24 @@ test.each([
   expect(texts).toContain("Delete account");
 });
 
+// Codex 3793469155 on 15310097: `<button {...{ ["aria-label"]: "Delete account" }} />` — TS
+// represents the key as a ComputedPropertyName wrapping a StringLiteral. The earlier
+// `objectPropertyKey` returned null for it and the value was never scanned. Unwrap constant
+// computed keys (StringLiteral / NoSubstitutionTemplateLiteral) so the value reaches the ledger.
+test.each([
+  {
+    label: "string-literal computed key",
+    src: '<button {...{ ["aria-label"]: "Delete account" }} />',
+  },
+  {
+    label: "template-literal computed key",
+    src: "<button {...{ [`aria-label`]: 'Delete account' }} />",
+  },
+])("unwraps constant computed property keys in JSX spread objects ($label)", ({ src }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain("Delete account");
+});
+
 // KEIKO-0299 (review-follow-up on b5cb3f6c, codex 3793101250): `{items.map(() => "Delete
 // account")}` — the ArrowFunction body IS user-visible copy that gets rendered per item, but
 // the previous CallExpression recursion stopped at the function argument and never inspected
@@ -1564,16 +1582,21 @@ test("aggregates JsxText across multiple inline formatting elements", () => {
   expect(texts).toContain("this is a phrase");
 });
 
-test("aggregation does not double-count when an individual fragment is already translatable", () => {
-  // "Save your changes" already trips the classifier as a single fragment, so we must NOT ALSO
-  // emit a synthetic aggregate entry that overlaps it. Otherwise the baseline ledger doubles
-  // every phrase that survives the per-fragment path — pure churn without new signal.
+// Codex 3793469157 on 15310097: appending a non-translatable tail ("now") to an ALREADY
+// translatable phrase ("Save your changes") extends the phrase the reader sees. The earlier
+// anti-double-count check ("skip aggregate if any part is translatable") silently suppressed
+// the widened aggregate, so `<p>Save your changes <code>now</code></p>` shipped without
+// entering "Save your changes now" into the ledger — new untranslated copy bypassed the gate.
+// Now: DEDUPE against IDENTICAL parts (aggregate == some part is pure duplication), but ALWAYS
+// emit when the aggregate text differs from every part.
+test("emits both the translatable individual and the widened aggregate", () => {
   const findings = untranslatedLiteralsInSource(
     "<p>Save your changes <code>now</code></p>",
     "packages/x/y.tsx",
   ).findings;
-  const savePhrase = findings.filter((f) => f.text.includes("Save your changes"));
-  expect(savePhrase).toHaveLength(1);
+  const savePhraseTexts = findings.map((f) => f.text);
+  expect(savePhraseTexts).toContain("Save your changes");
+  expect(savePhraseTexts).toContain("Save your changes now");
 });
 
 // Coderabbit 3793329579 on 53d22f73: `<p><span>open <code>settings</code></span></p>` — the
