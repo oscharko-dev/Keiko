@@ -978,6 +978,80 @@ async function putServerWorkspaceSnapshot(
   }
 }
 
+// Retry half of the PUT conflict continuation, extracted from the `.then` arrow to keep its
+// complexity within the lint ceiling. Re-sends the still-dirty snapshot ONCE through the
+// debounce — bounded per serialized snapshot, suppressed after the sync hook unmounted (a late
+// PUT would overwrite the next shell's state). Positional ref parameters on purpose: an options
+// object would ship its property names un-minified in the first-load bundle, and this exact
+// spot once tipped the editor-bundle-size budget by a few dozen gzip bytes.
+function scheduleWorkspaceConflictRetry(
+  serializedSnapshot: string,
+  localDirtyRef: CurrentRef<boolean>,
+  serverSyncStoppedRef: CurrentRef<boolean>,
+  conflictRetriedSnapshotRef: CurrentRef<string | null>,
+  putDebounceRef: CurrentRef<TrailingDebounce | null>,
+  runServerPutRef: CurrentRef<(keepalive: boolean) => void>,
+): void {
+  if (!localDirtyRef.current) return;
+  if (serverSyncStoppedRef.current) return;
+  if (conflictRetriedSnapshotRef.current === serializedSnapshot) return;
+  conflictRetriedSnapshotRef.current = serializedSnapshot;
+  putDebounceRef.current?.schedule(() => {
+    runServerPutRef.current(false);
+  });
+}
+
+// Issue #1580 — poll only while the document is visible; the old fixed interval kept
+// fetching/parsing forever in background tabs. Returning to visible does an immediate
+// catch-up pull so multi-tab convergence is unchanged. Extracted from the sync effect to
+// keep it inside the per-function line ceiling; `sync` is a stable reference so the effect
+// can add and remove the same visibilitychange listener.
+function createVisibilityPoller(
+  pull: () => void,
+  intervalMs: number,
+): { readonly sync: () => void; readonly stop: () => void } {
+  let interval: number | null = null;
+  const start = (): void => {
+    if (interval !== null) return;
+    interval = window.setInterval(pull, intervalMs);
+  };
+  const stop = (): void => {
+    if (interval === null) return;
+    window.clearInterval(interval);
+    interval = null;
+  };
+  const sync = (): void => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      stop();
+    } else {
+      pull();
+      start();
+    }
+  };
+  return { sync, stop };
+}
+
+// Dirty-poll branch of the server pull: the payload stays local-authoritative, but the
+// strictly newer server revision is adopted so the pending PUT carries a current If-Match
+// (instead of the guaranteed-stale revision 0 every reload with restored windows once
+// produced). Newer revision information also RE-ARMS the bounded conflict retry and schedules
+// the dirty write — if the PUT and its single retry both conflicted before this poll landed
+// (e.g. an intermediary strips ETags), the snapshot would otherwise stay parked until the
+// next local mutation. Bounded by the poll: each re-arm requires the revision to advance.
+function adoptPolledRevisionWhileDirty(
+  revision: number,
+  revisionRef: CurrentRef<number>,
+  conflictRetriedSnapshotRef: CurrentRef<string | null>,
+  putDebounceRef: CurrentRef<TrailingDebounce | null>,
+  runServerPutRef: CurrentRef<(keepalive: boolean) => void>,
+): void {
+  revisionRef.current = revision;
+  conflictRetriedSnapshotRef.current = null;
+  putDebounceRef.current?.schedule(() => {
+    runServerPutRef.current(false);
+  });
+}
+
 function buildServerWorkspaceSnapshot(
   wins: readonly AppWindow[],
   conns: readonly Connection[],
@@ -1115,6 +1189,17 @@ function useWorkspaceServerSync({
   connsRef.current = conns;
   const putDebounceRef = useRef<TrailingDebounce | null>(null);
   putDebounceRef.current ??= createTrailingDebounce(PERSIST_DEBOUNCE_MS);
+  // Latest runServerPut for the conflict-retry below — a ref (mirroring winsRef) so the
+  // debounced retry closure never captures a stale callback and the useCallback deps stay [].
+  const runServerPutRef = useRef<(keepalive: boolean) => void>(() => undefined);
+  // One conflict retry PER serialized snapshot: a second concurrent writer advancing the
+  // revision on every attempt must not chain unbounded retries — the poll and the next local
+  // mutation provide further convergence. A NEW snapshot (different serialization) re-arms it.
+  const conflictRetriedSnapshotRef = useRef<string | null>(null);
+  // True after the sync effect's cleanup ran: a conflict resolving AFTER unmount must not
+  // re-arm the debounce, or an SPA navigation could late-PUT the unmounted shell's stale
+  // windows over the newly mounted shell's state.
+  const serverSyncStoppedRef = useRef(false);
   const putAbortRef = useRef<AbortController | null>(null);
   const localDirtyRef = useRef(false);
   const lastAcknowledgedSnapshotRef = useRef<string | null>(null);
@@ -1145,17 +1230,36 @@ function useWorkspaceServerSync({
       keepalive,
     }).then((result) => {
       if (result?.kind === "conflict") {
+        // A 412 is a handled concurrency signal: adopt a strictly newer revision when the
+        // response carries one, and ALWAYS schedule the bounded retry — the send uses the
+        // freshest adopted revision at fire time, so a stale, equal, or missing conflict
+        // ETag (delayed response, proxy-stripped header) never parks the dirty snapshot.
+        // The per-snapshot marker and the unmount guard inside the scheduler bound the
+        // attempt; no revision comparison is needed for loop safety.
         if (result.revision !== null && result.revision > revisionRef.current) {
           revisionRef.current = result.revision;
         }
+        scheduleWorkspaceConflictRetry(
+          snapshot.serialized,
+          localDirtyRef,
+          serverSyncStoppedRef,
+          conflictRetriedSnapshotRef,
+          putDebounceRef,
+          runServerPutRef,
+        );
         return;
       }
       if (result?.kind !== "ok") return;
       lastAcknowledgedSnapshotRef.current = snapshot.serialized;
       localDirtyRef.current = false;
+      // An acknowledged save ends the conflict sequence: re-arm the one-retry cap so a LATER
+      // conflict of the same serialization (state B, then back to byte-identical A) gets its
+      // retry instead of being parked by a marker from a long-finished sequence.
+      conflictRetriedSnapshotRef.current = null;
       if (result.revision > revisionRef.current) revisionRef.current = result.revision;
     });
   }, []);
+  runServerPutRef.current = runServerPut;
 
   const applyServerSnapshot = useCallback(
     (serverSnapshot: ServerWorkspaceSnapshot): void => {
@@ -1177,7 +1281,6 @@ function useWorkspaceServerSync({
   useEffect(() => {
     if (!serverSyncEnabled) return;
     let stopped = false;
-    let interval: number | null = null;
     const pull = async (): Promise<void> => {
       const serverSnapshot = await fetchServerWorkspaceSnapshot(revisionRef.current);
       if (stopped || serverSnapshot === null) return;
@@ -1189,37 +1292,27 @@ function useWorkspaceServerSync({
       ) {
         return;
       }
-      if (localDirtyRef.current) return;
+      if (localDirtyRef.current) {
+        adoptPolledRevisionWhileDirty(
+          serverSnapshot.revision,
+          revisionRef,
+          conflictRetriedSnapshotRef,
+          putDebounceRef,
+          runServerPutRef,
+        );
+        return;
+      }
       applyServerSnapshot(serverSnapshot);
     };
-    const startPolling = (): void => {
-      if (interval !== null) return;
-      interval = window.setInterval(() => {
-        void pull();
-      }, WORKSPACE_STATE_POLL_MS);
-    };
-    const stopPolling = (): void => {
-      if (interval === null) return;
-      window.clearInterval(interval);
-      interval = null;
-    };
-    // Issue #1580 — only poll while the document is visible; the old fixed interval
-    // kept fetching/parsing forever in background tabs. Returning to visible does an
-    // immediate catch-up pull so multi-tab convergence is unchanged.
-    const sync = (): void => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-        stopPolling();
-      } else {
-        void pull();
-        startPolling();
-      }
-    };
-    sync();
-    document.addEventListener("visibilitychange", sync);
+    const poller = createVisibilityPoller(() => {
+      void pull();
+    }, WORKSPACE_STATE_POLL_MS);
+    poller.sync();
+    document.addEventListener("visibilitychange", poller.sync);
     return () => {
       stopped = true;
-      stopPolling();
-      document.removeEventListener("visibilitychange", sync);
+      poller.stop();
+      document.removeEventListener("visibilitychange", poller.sync);
     };
   }, [applyServerSnapshot, serverSyncEnabled]);
 
@@ -1257,6 +1350,7 @@ function useWorkspaceServerSync({
   // flush any pending PUT on unmount.
   useEffect(() => {
     if (!serverSyncEnabled) return;
+    serverSyncStoppedRef.current = false;
     const debounce = putDebounceRef.current;
     const flushKeepalive = (): void => {
       debounce?.cancel();
@@ -1269,6 +1363,10 @@ function useWorkspaceServerSync({
     window.addEventListener("pagehide", flushKeepalive);
     document.addEventListener("visibilitychange", onHide);
     return () => {
+      // Stop BEFORE the final flush: the flush itself is the deliberate last write, but a
+      // conflict resolving after this cleanup must not re-arm the debounce (see
+      // serverSyncStoppedRef above).
+      serverSyncStoppedRef.current = true;
       window.removeEventListener("pagehide", flushKeepalive);
       document.removeEventListener("visibilitychange", onHide);
       debounce?.flush();

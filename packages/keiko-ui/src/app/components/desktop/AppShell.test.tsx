@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { persistedChatProjectPath, prepareNewWindowCfg } from "./AppShell";
+import { describe, expect, it, vi } from "vitest";
+import {
+  applyBackgroundModalLock,
+  persistedChatProjectPath,
+  prepareNewWindowCfg,
+} from "./AppShell";
 import type { AppWindow } from "./windows/types";
 
 function chatWindow(projectPath: string): AppWindow {
@@ -16,6 +20,58 @@ function chatWindow(projectPath: string): AppWindow {
     zoom: 1,
   };
 }
+
+describe("applyBackgroundModalLock", (): void => {
+  it("moves focus out of the background before hiding it from assistive technology", (): void => {
+    const background = document.createElement("div");
+    const trigger = document.createElement("button");
+    background.appendChild(trigger);
+    document.body.appendChild(background);
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+
+    // The Chrome violation this pins fires AT THE MOMENT aria-hidden lands on an ancestor of
+    // the focused element, so the assertion must observe focus at each attribute WRITE — a
+    // final-state check would also pass for the broken hide-then-blur order.
+    const writes: { attribute: string; triggerStillFocused: boolean }[] = [];
+    const spy = vi.spyOn(background, "setAttribute").mockImplementation(function (
+      this: HTMLElement,
+      name: string,
+      value: string,
+    ) {
+      writes.push({ attribute: name, triggerStillFocused: document.activeElement === trigger });
+      Element.prototype.setAttribute.call(this, name, value);
+    });
+
+    applyBackgroundModalLock(background, true);
+    spy.mockRestore();
+
+    expect(writes.map((write) => write.attribute).sort()).toEqual(["aria-hidden", "inert"]);
+    expect(writes.every((write) => !write.triggerStillFocused)).toBe(true);
+    expect(document.activeElement).not.toBe(trigger);
+    expect(background.getAttribute("aria-hidden")).toBe("true");
+    expect(background.hasAttribute("inert")).toBe(true);
+    background.remove();
+  });
+
+  it("unlocks both attributes and never touches focus outside the background", (): void => {
+    const background = document.createElement("div");
+    const outside = document.createElement("button");
+    document.body.appendChild(background);
+    document.body.appendChild(outside);
+    outside.focus();
+
+    applyBackgroundModalLock(background, true);
+    expect(document.activeElement).toBe(outside);
+
+    applyBackgroundModalLock(background, false);
+    expect(background.hasAttribute("aria-hidden")).toBe(false);
+    expect(background.hasAttribute("inert")).toBe(false);
+    expect(document.activeElement).toBe(outside);
+    background.remove();
+    outside.remove();
+  });
+});
 
 describe("persistedChatProjectPath", (): void => {
   it("preserves valid path identity and rejects whitespace-only values", (): void => {

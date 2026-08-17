@@ -44,6 +44,22 @@ function Harness(): ReactElement {
       <button type="button" data-testid="minimize" onClick={() => ws.api.minimize("agents-1")}>
         minimize
       </button>
+      <button type="button" data-testid="restore" onClick={() => ws.api.restore("agents-1")}>
+        restore
+      </button>
+      <button type="button" data-testid="add" onClick={() => ws.api.add("agents")}>
+        add
+      </button>
+      <button
+        type="button"
+        data-testid="close-last"
+        onClick={() => {
+          const last = ws.wins?.at(-1);
+          if (last !== undefined) ws.api.close(last.id);
+        }}
+      >
+        close last
+      </button>
       <button type="button" data-testid="pan" onClick={() => ws.api.panBy(10, 20)}>
         pan
       </button>
@@ -340,6 +356,592 @@ describe("Issue #1580 — visibility-gated server poll", () => {
     });
     await flushAsyncEffects();
     expect(putCalls()).toHaveLength(1);
+  });
+
+  it("re-sends a dirty snapshot after a 412 with the adopted revision", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    let putAttempts = 0;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        putAttempts += 1;
+        if (putAttempts === 1) {
+          return {
+            ok: false,
+            status: 412,
+            headers: new Headers({ ETag: '"workspace-state-7"' }),
+            json: async () => Promise.resolve({}),
+          } as unknown as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ ETag: '"workspace-state-8"' }),
+          json: async () =>
+            Promise.resolve({ workspace: { revision: 8, windows: [], connections: [] } }),
+        } as unknown as Response;
+      }
+      return { status: 304, ok: true, headers: new Headers() } as unknown as Response;
+    });
+
+    render(<Harness />);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+    expect(putCalls()).toHaveLength(1);
+
+    // The conflict must schedule ONE retry of the still-dirty snapshot with the adopted
+    // revision — previously the snapshot was parked until the next local mutation, losing
+    // e.g. a window close made before revision convergence (zombie window).
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+    expect(putCalls()).toHaveLength(2);
+    expect((putCalls()[1]?.[1]?.headers as Record<string, string>)["If-Match"]).toBe(
+      '"workspace-state-7"',
+    );
+    expect(String(putCalls()[1]?.[1]?.body)).toContain("agents-1");
+
+    // Converged: no further retry loop.
+    act(() => {
+      vi.advanceTimersByTime(1200);
+    });
+    await flushAsyncEffects();
+    expect(putCalls()).toHaveLength(2);
+  });
+
+  it("retries when the poll adopted the conflict's revision while the PUT was in flight", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    let resolveFirstPoll: ((response: Response) => void) | undefined;
+    let resolveFirstPut: ((response: Response) => void) | undefined;
+    let puts = 0;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        puts += 1;
+        if (puts === 1) {
+          return new Promise<Response>((resolve) => {
+            resolveFirstPut = resolve;
+          });
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ ETag: '"workspace-state-8"' }),
+          json: async () =>
+            Promise.resolve({ workspace: { revision: 8, windows: [], connections: [] } }),
+        } as unknown as Response;
+      }
+      if (resolveFirstPoll === undefined) {
+        return new Promise<Response>((resolve) => {
+          resolveFirstPoll = resolve;
+        });
+      }
+      return { status: 304, ok: true, headers: new Headers() } as unknown as Response;
+    });
+
+    render(<Harness />);
+    await flushAsyncEffects();
+    // The debounced PUT fires FIRST (poll still pending) and carries revision 0.
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+    expect(puts).toBe(1);
+    // Pin the race setup itself: the first PUT went out with the pristine revision 0 and the
+    // mount poll is genuinely in flight — otherwise the retry would fire under `>` too and
+    // this test would stop discriminating the equal-revision branch.
+    expect((putCalls()[0]?.[1]?.headers as Record<string, string>)["If-Match"]).toBe(
+      '"workspace-state-0"',
+    );
+    expect(resolveFirstPoll).toBeDefined();
+
+    // The poll lands while the PUT is in flight and adopts revision 7 (dirty branch).
+    resolveFirstPoll?.({
+      ok: true,
+      status: 200,
+      headers: new Headers({ ETag: '"workspace-state-7"' }),
+      json: async () =>
+        Promise.resolve({
+          workspace: {
+            revision: 7,
+            windows: [
+              {
+                id: "foreign-1",
+                type: "files",
+                x: 1,
+                y: 2,
+                w: 320,
+                h: 240,
+                z: 9,
+                cfg: {},
+                max: false,
+              },
+            ],
+            connections: [],
+          },
+        }),
+    } as unknown as Response);
+    await flushAsyncEffects();
+
+    // NOW the stale PUT resolves as a conflict carrying the SAME revision 7: the retry must
+    // still fire — an equal revision means "current If-Match would succeed", and parking the
+    // dirty snapshot here recreates the zombie-window loss in the race window.
+    resolveFirstPut?.({
+      ok: false,
+      status: 412,
+      headers: new Headers({ ETag: '"workspace-state-7"' }),
+      json: async () => Promise.resolve({}),
+    } as unknown as Response);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+
+    expect(puts).toBe(2);
+    expect((putCalls()[1]?.[1]?.headers as Record<string, string>)["If-Match"]).toBe(
+      '"workspace-state-7"',
+    );
+  });
+
+  it("retries a conflict whose ETag is STALER than the poll-adopted revision", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    let resolveFirstPoll: ((response: Response) => void) | undefined;
+    let resolveFirstPut: ((response: Response) => void) | undefined;
+    let puts = 0;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        puts += 1;
+        if (puts === 1) {
+          return new Promise<Response>((resolve) => {
+            resolveFirstPut = resolve;
+          });
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ ETag: '"workspace-state-9"' }),
+          json: async () =>
+            Promise.resolve({ workspace: { revision: 9, windows: [], connections: [] } }),
+        } as unknown as Response;
+      }
+      if (resolveFirstPoll === undefined) {
+        return new Promise<Response>((resolve) => {
+          resolveFirstPoll = resolve;
+        });
+      }
+      return { status: 304, ok: true, headers: new Headers() } as unknown as Response;
+    });
+
+    render(<Harness />);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+    expect(puts).toBe(1);
+    expect(resolveFirstPoll).toBeDefined();
+
+    // The poll advances PAST the conflict's revision while the PUT is in flight.
+    resolveFirstPoll?.({
+      ok: true,
+      status: 200,
+      headers: new Headers({ ETag: '"workspace-state-8"' }),
+      json: async () =>
+        Promise.resolve({
+          workspace: {
+            revision: 8,
+            windows: [
+              {
+                id: "foreign-1",
+                type: "files",
+                x: 1,
+                y: 2,
+                w: 320,
+                h: 240,
+                z: 9,
+                cfg: {},
+                max: false,
+              },
+            ],
+            connections: [],
+          },
+        }),
+    } as unknown as Response);
+    await flushAsyncEffects();
+
+    // The delayed conflict carries the OLDER revision 7: the bounded retry must still fire,
+    // sending with the freshest adopted revision — otherwise the dirty close is parked and
+    // resurrected on reload (the zombie window through the delayed-response window).
+    resolveFirstPut?.({
+      ok: false,
+      status: 412,
+      headers: new Headers({ ETag: '"workspace-state-7"' }),
+      json: async () => Promise.resolve({}),
+    } as unknown as Response);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+
+    expect(puts).toBe(2);
+    expect((putCalls()[1]?.[1]?.headers as Record<string, string>)["If-Match"]).toBe(
+      '"workspace-state-8"',
+    );
+  });
+
+  it("retries a conflict whose ETag a proxy stripped, using the poll-adopted revision", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    let puts = 0;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        puts += 1;
+        if (puts === 1) {
+          // A 412 with NO ETag header — an intermediary stripped it.
+          return {
+            ok: false,
+            status: 412,
+            headers: new Headers(),
+            json: async () => Promise.resolve({}),
+          } as unknown as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ ETag: '"workspace-state-8"' }),
+          json: async () =>
+            Promise.resolve({ workspace: { revision: 8, windows: [], connections: [] } }),
+        } as unknown as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ ETag: '"workspace-state-7"' }),
+        json: async () =>
+          Promise.resolve({
+            workspace: {
+              revision: 7,
+              windows: [
+                {
+                  id: "foreign-1",
+                  type: "files",
+                  x: 1,
+                  y: 2,
+                  w: 320,
+                  h: 240,
+                  z: 9,
+                  cfg: {},
+                  max: false,
+                },
+              ],
+              connections: [],
+            },
+          }),
+      } as unknown as Response;
+    });
+
+    render(<Harness />);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+
+    // The ETag-less conflict still gets its bounded retry, and the retry carries the revision
+    // the dirty poll branch adopted in the meantime — without it the snapshot stays parked
+    // until the next local mutation.
+    expect(puts).toBe(2);
+    expect((putCalls()[1]?.[1]?.headers as Record<string, string>)["If-Match"]).toBe(
+      '"workspace-state-7"',
+    );
+  });
+
+  it("re-arms the parked retry when the poll advances the revision after two ETag-less 412s", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    let puts = 0;
+    let pollRevision: number | null = null;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        puts += 1;
+        if (puts <= 2) {
+          // Both the PUT and its single retry conflict WITHOUT a usable ETag.
+          return {
+            ok: false,
+            status: 412,
+            headers: new Headers(),
+            json: async () => Promise.resolve({}),
+          } as unknown as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ ETag: '"workspace-state-8"' }),
+          json: async () =>
+            Promise.resolve({ workspace: { revision: 8, windows: [], connections: [] } }),
+        } as unknown as Response;
+      }
+      if (pollRevision === null) {
+        return { status: 304, ok: true, headers: new Headers() } as unknown as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ ETag: `"workspace-state-${String(pollRevision)}"` }),
+        json: async () =>
+          Promise.resolve({
+            workspace: {
+              revision: pollRevision,
+              windows: [
+                {
+                  id: "foreign-1",
+                  type: "files",
+                  x: 1,
+                  y: 2,
+                  w: 320,
+                  h: 240,
+                  z: 9,
+                  cfg: {},
+                  max: false,
+                },
+              ],
+              connections: [],
+            },
+          }),
+      } as unknown as Response;
+    });
+
+    render(<Harness />);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+    // PUT and its one retry both conflicted; the marker is consumed, revision still 0.
+    expect(puts).toBe(2);
+
+    // The next poll delivers a strictly newer revision: the dirty branch must adopt it,
+    // re-arm the retry, and schedule the write — otherwise the close stays unsaved until
+    // another local mutation.
+    pollRevision = 7;
+    act(() => {
+      vi.advanceTimersByTime(POLL_MS);
+    });
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+
+    expect(puts).toBe(3);
+    expect((putCalls()[2]?.[1]?.headers as Record<string, string>)["If-Match"]).toBe(
+      '"workspace-state-7"',
+    );
+    expect(String(putCalls()[2]?.[1]?.body)).toContain("agents-1");
+  });
+
+  it("caps the conflict retry at one attempt per dirty snapshot", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    let revision = 7;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        // A concurrent writer keeps advancing the revision: every PUT conflicts with a
+        // strictly higher ETag. Without the per-snapshot cap this chains retries forever.
+        revision += 1;
+        return {
+          ok: false,
+          status: 412,
+          headers: new Headers({ ETag: `"workspace-state-${String(revision)}"` }),
+          json: async () => Promise.resolve({}),
+        } as unknown as Response;
+      }
+      return { status: 304, ok: true, headers: new Headers() } as unknown as Response;
+    });
+
+    render(<Harness />);
+    await flushAsyncEffects();
+    for (let i = 0; i < 5; i += 1) {
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      await flushAsyncEffects();
+    }
+
+    // Initial PUT + exactly ONE conflict retry for this snapshot — never a chain.
+    expect(putCalls()).toHaveLength(2);
+  });
+
+  it("suppresses the conflict retry after the sync hook unmounted", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    let resolvePut: ((response: Response) => void) | undefined;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return new Promise<Response>((resolve) => {
+          resolvePut = resolve;
+        });
+      }
+      return { status: 304, ok: true, headers: new Headers() } as unknown as Response;
+    });
+
+    const { unmount } = render(<Harness />);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+    expect(putCalls()).toHaveLength(1);
+    expect(resolvePut).toBeDefined();
+
+    // Unmount with the PUT still in flight, THEN let it resolve as a conflict: the retry
+    // must not re-arm the debounce — a late PUT would overwrite the next shell's state.
+    unmount();
+    resolvePut?.({
+      ok: false,
+      status: 412,
+      headers: new Headers({ ETag: '"workspace-state-9"' }),
+      json: async () => Promise.resolve({}),
+    } as unknown as Response);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(1200);
+    });
+    await flushAsyncEffects();
+
+    expect(putCalls()).toHaveLength(1);
+  });
+
+  it("re-arms the conflict retry after an acknowledged save of the same serialization", async () => {
+    // The EMPTY workspace is the serialization that genuinely recurs in production: it comes
+    // back byte-identical every time the last window closes. A retry marker that survives an
+    // acknowledged save would park exactly that close — the customer-visible zombie window.
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    let revision = 7;
+    let puts = 0;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        puts += 1;
+        revision += 1;
+        if (puts === 2 || puts === 5) {
+          return {
+            ok: false,
+            status: 412,
+            headers: new Headers({ ETag: `"workspace-state-${String(revision)}"` }),
+            json: async () => Promise.resolve({}),
+          } as unknown as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ ETag: `"workspace-state-${String(revision)}"` }),
+          json: async () =>
+            Promise.resolve({ workspace: { revision, windows: [], connections: [] } }),
+        } as unknown as Response;
+      }
+      return { status: 304, ok: true, headers: new Headers() } as unknown as Response;
+    });
+
+    const { getByTestId } = render(<Harness />);
+    await flushAsyncEffects();
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 3; i += 1) {
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        await flushAsyncEffects();
+      }
+    };
+
+    // PUT 1: the hydrated window is acknowledged.
+    await settle();
+    expect(putCalls()).toHaveLength(1);
+
+    // Close the only window: PUT 2 (empty) conflicts, PUT 3 retries it and is acknowledged —
+    // the acknowledged save must re-arm the one-retry cap for the empty serialization.
+    act(() => {
+      getByTestId("close-last").click();
+    });
+    await settle();
+    expect(putCalls()).toHaveLength(3);
+
+    // Open another window (PUT 4 acknowledged), then close it again: the byte-identical
+    // empty serialization conflicts a second time (PUT 5) — its retry (PUT 6) must fire.
+    act(() => {
+      getByTestId("add").click();
+    });
+    await settle();
+    act(() => {
+      getByTestId("close-last").click();
+    });
+    await settle();
+
+    expect(putCalls()).toHaveLength(6);
+    expect(String(putCalls().at(-1)?.[1]?.body)).toContain('"windows":[]');
+  });
+
+  it("adopts the polled server revision while dirty so the first PUT is not stale", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ ETag: '"workspace-state-8"' }),
+          json: async () =>
+            Promise.resolve({ workspace: { revision: 8, windows: [], connections: [] } }),
+        } as unknown as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ ETag: '"workspace-state-7"' }),
+        json: async () =>
+          Promise.resolve({
+            workspace: {
+              revision: 7,
+              windows: [
+                {
+                  id: "foreign-1",
+                  type: "files",
+                  x: 1,
+                  y: 2,
+                  w: 320,
+                  h: 240,
+                  z: 9,
+                  cfg: {},
+                  max: false,
+                },
+              ],
+              connections: [],
+            },
+          }),
+      } as unknown as Response;
+    });
+
+    const { getByTestId } = render(<Harness />);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+
+    // Local windows stay authoritative, but the first debounced PUT must already carry the
+    // adopted server revision instead of the guaranteed-stale revision 0 (the deterministic
+    // 412 the customer saw in the console on every reload with restored windows).
+    expect(getByTestId("wins")).toHaveTextContent("agents-1");
+    expect(putCalls().length).toBeGreaterThanOrEqual(1);
+    expect((putCalls()[0]?.[1]?.headers as Record<string, string>)["If-Match"]).toBe(
+      '"workspace-state-7"',
+    );
   });
 
   it("does not apply a polled server snapshot over a locally dirty workspace", async () => {

@@ -31,6 +31,7 @@ import {
   getCapsule,
   updateCapsuleDetails,
   updateCapsuleEmbeddingModelIdentity,
+  updateCapsuleState,
 } from "../capsule-lifecycle.js";
 import {
   createDefaultParserRegistry,
@@ -1769,6 +1770,146 @@ describe("runIndexingJob — embedding capability preflight", () => {
     } finally {
       provisionalFixture.cleanup();
     }
+  });
+
+  it("re-verifies an unverified identity after a failed first run instead of freezing the guess", async () => {
+    fixture.cleanup();
+    fixture = buildFixture(
+      { "alpha.txt": "Provisional source text. ".repeat(8) },
+      {
+        ...provisionalDefaultEmbedding(),
+        // Creation-time dimension GUESS (derived from the model name, never verified).
+        vectorDimensions: DEFAULT_EMBEDDING.vectorDimensions + 1,
+      },
+    );
+    const unreachable = scriptedAdapter({
+      responder: () => ({ ok: false, kind: "transport" }),
+    });
+    const first = await drain(
+      runIndexingJob(buildOptions(fixture, { embeddingAdapter: unreachable })),
+    );
+    expect(first.at(-1)?.kind).toBe("job-failed");
+    expect(getCapsule(fixture.store, fixture.capsuleId)?.lifecycleState).toBe("error");
+
+    // Gateway repaired: the next plain run must adopt the VERIFIED identity (real dimensions
+    // plus fingerprint) instead of failing INCOMPATIBLE_EMBEDDING_IDENTITY on the stale guess.
+    const second = await drain(runIndexingJob(buildOptions(fixture)));
+    expect(second.at(-1)?.kind).toBe("job-completed");
+    const identity = getCapsule(fixture.store, fixture.capsuleId)?.embeddingModelIdentity;
+    expect(identity?.vectorDimensions).toBe(DEFAULT_EMBEDDING.vectorDimensions);
+    expect(identity?.embeddingSpaceFingerprint).toBeDefined();
+  });
+
+  it("indexes an HTML-manual folder end to end after the gateway recovers", async () => {
+    // The full customer flow in one pin: a fresh pod bound to a non-OpenAI embedding model
+    // (creation-time dimension guess WRONG), a folder source of .htm manual pages, a first run
+    // against an unreachable gateway, then a repaired gateway. The pod must recover on its own
+    // and index the complete corpus — no delete/recreate, no force re-embed.
+    fixture.cleanup();
+    fixture = buildFixture(
+      {
+        "manual/index.htm":
+          "<!doctype html><html><head><title>Manual</title></head><body><nav>Navigation</nav>" +
+          "<main><h1>Securities Deposit</h1><p>Functional description of the READ_DEPOSIT function." +
+          " ".repeat(4) +
+          "</p></main><footer>Imprint</footer></body></html>",
+        "manual/READ_DEPOSIT_functional.htm":
+          "<html><body><script>var ignored = 1;</script>" +
+          "<p>READ_DEPOSIT reads a deposit and returns its master data.</p></body></html>",
+        "manual/READ_DEPOSIT_parameters.htm":
+          "<html><body><style>.x{color:red}</style>" +
+          "<table><tr><td>Parameter</td><td>depositId</td></tr></table></body></html>",
+      },
+      {
+        ...provisionalDefaultEmbedding(),
+        vectorDimensions: DEFAULT_EMBEDDING.vectorDimensions + 1,
+      },
+    );
+    const unreachable = scriptedAdapter({
+      responder: () => ({ ok: false, kind: "transport" }),
+    });
+    const first = await drain(
+      runIndexingJob(buildOptions(fixture, { embeddingAdapter: unreachable })),
+    );
+    expect(first.at(-1)?.kind).toBe("job-failed");
+
+    const second = await drain(runIndexingJob(buildOptions(fixture)));
+    const terminal = second.at(-1);
+    expect(terminal?.kind).toBe("job-completed");
+    if (terminal?.kind === "job-completed") {
+      expect(terminal.result.processedDocuments).toBe(3);
+      expect(terminal.result.failedDocuments).toBe(0);
+      expect(terminal.result.vectorsPersisted).toBeGreaterThan(0);
+    }
+    const capsule = getCapsule(fixture.store, fixture.capsuleId);
+    expect(capsule?.lifecycleState).toBe("ready");
+    expect(capsule?.embeddingModelIdentity.vectorDimensions).toBe(
+      DEFAULT_EMBEDDING.vectorDimensions,
+    );
+  });
+
+  it("never rebinds an unverified identity while vectors exist, even in draft lifecycle", async () => {
+    // The vector guard must be unconditional: a fingerprint-less capsule that somehow owns
+    // vectors keeps the strict incompatibility gate regardless of lifecycle state — a draft
+    // shortcut bypassing it would silently mix embedding spaces.
+    fixture.cleanup();
+    fixture = buildFixture(
+      { "alpha.txt": "Provisional source text. ".repeat(8) },
+      provisionalDefaultEmbedding(),
+    );
+    const first = await drain(runIndexingJob(buildOptions(fixture)));
+    expect(first.at(-1)?.kind).toBe("job-completed");
+    expect(countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId)).toBeGreaterThan(
+      0,
+    );
+
+    const staleDims = DEFAULT_EMBEDDING.vectorDimensions + 1;
+    updateCapsuleEmbeddingModelIdentity(fixture.store, fixture.capsuleId, {
+      ...provisionalDefaultEmbedding(),
+      vectorDimensions: staleDims,
+    });
+    updateCapsuleState(fixture.store, fixture.capsuleId, "draft");
+
+    const second = await drain(runIndexingJob(buildOptions(fixture)));
+    const terminal = second.at(-1);
+    expect(terminal?.kind).toBe("job-failed");
+    if (terminal?.kind === "job-failed") {
+      expect(terminal.error.code).toBe("INCOMPATIBLE_EMBEDDING_IDENTITY");
+    }
+    expect(
+      getCapsule(fixture.store, fixture.capsuleId)?.embeddingModelIdentity.vectorDimensions,
+    ).toBe(staleDims);
+  });
+
+  it("keeps enforcing an unverified identity once the capsule owns vectors", async () => {
+    fixture.cleanup();
+    fixture = buildFixture(
+      { "alpha.txt": "Provisional source text. ".repeat(8) },
+      provisionalDefaultEmbedding(),
+    );
+    const first = await drain(runIndexingJob(buildOptions(fixture)));
+    expect(first.at(-1)?.kind).toBe("job-completed");
+    expect(countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId)).toBeGreaterThan(
+      0,
+    );
+
+    // A legacy capsule: vectors exist, the identity carries no fingerprint, and the stored
+    // dimensions no longer match the live model. Adopting the live identity here would
+    // silently mix embedding spaces — the run must fail incompatible instead.
+    const staleDims = DEFAULT_EMBEDDING.vectorDimensions + 1;
+    updateCapsuleEmbeddingModelIdentity(fixture.store, fixture.capsuleId, {
+      ...provisionalDefaultEmbedding(),
+      vectorDimensions: staleDims,
+    });
+    const second = await drain(runIndexingJob(buildOptions(fixture)));
+    const terminal = second.at(-1);
+    expect(terminal?.kind).toBe("job-failed");
+    if (terminal?.kind === "job-failed") {
+      expect(terminal.error.code).toBe("INCOMPATIBLE_EMBEDDING_IDENTITY");
+    }
+    expect(
+      getCapsule(fixture.store, fixture.capsuleId)?.embeddingModelIdentity.vectorDimensions,
+    ).toBe(staleDims);
   });
 
   it("persists a fixed safe message when embedding preflight throws", async () => {

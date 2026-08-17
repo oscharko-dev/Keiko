@@ -113,8 +113,18 @@ const DEFAULT_EMBED_MAX_RETRIES = 6;
 const DEFAULT_EMBED_BASE_DELAY_MS = 500;
 const MAX_EMBED_BACKOFF_MS = 30_000;
 
+// A 5xx answer — and the two answered-timeout statuses 408/425 — is as transient as a torn
+// connection; every other 4xx is a deterministic rejection of this request shape and retrying
+// it only burns the budget (under the old everything-is-transport classification a 400 was
+// retried through the full backoff schedule).
+function isTransientFailure(kind: OpenAIEmbeddingErrorKind, status: number | undefined): boolean {
+  if (TRANSIENT_EMBED_KINDS.has(kind)) return true;
+  if (kind !== "http-error" || status === undefined) return false;
+  return status >= 500 || status === 408 || status === 425;
+}
+
 function isTransientOutcome(outcome: OpenAIEmbeddingOutcome): boolean {
-  return !outcome.ok && TRANSIENT_EMBED_KINDS.has(outcome.kind);
+  return !outcome.ok && isTransientFailure(outcome.kind, outcome.status);
 }
 
 function backoffMs(attempt: number, base: number): number {
@@ -237,11 +247,16 @@ function tokenBudgetErrorOutcomes(
 }
 
 function isTransientBatchOutcome(outcome: OpenAIEmbeddingBatchOutcome): boolean {
-  return !outcome.ok && TRANSIENT_EMBED_KINDS.has(outcome.kind);
+  return !outcome.ok && isTransientFailure(outcome.kind, outcome.status);
 }
 
-function errorFromKind(kind: OpenAIEmbeddingErrorKind): IndexingJobError {
-  return { code: "EMBEDDING_ADAPTER_FAILED", message: `embedding adapter returned ${kind}` };
+// The HTTP status is content-free operator telemetry and the one number that separates "the
+// gateway rejected this request shape" (e.g. an oversized batch → 400) from every other
+// failure, so it survives into the persisted document/job error exactly like it does in the
+// preflight and readiness safe messages.
+function errorFromKind(kind: OpenAIEmbeddingErrorKind, status?: number): IndexingJobError {
+  const detail = status !== undefined ? `${kind} (HTTP ${String(status)})` : kind;
+  return { code: "EMBEDDING_ADAPTER_FAILED", message: `embedding adapter returned ${detail}` };
 }
 
 async function embedArrayBatchWithRetry(
@@ -324,7 +339,7 @@ async function embedUniqueBatch(
     batch.map((r) => r.representative.text),
   );
   if (!outcome.ok) {
-    const error = errorFromKind(outcome.kind);
+    const error = errorFromKind(outcome.kind, outcome.status);
     return batch.map((r) => ({ ok: false as const, chunk: r.representative, error }));
   }
   return batch.map((request, i) => {
@@ -426,10 +441,7 @@ function outcomeForChunk(outcome: ChunkOutcome, chunk: ChunkToEmbed): ChunkOutco
 function errorFromOutcome(
   outcome: Extract<OpenAIEmbeddingOutcome, { ok: false }>,
 ): IndexingJobError {
-  return {
-    code: "EMBEDDING_ADAPTER_FAILED",
-    message: `embedding adapter returned ${outcome.kind}`,
-  };
+  return errorFromKind(outcome.kind, outcome.status);
 }
 
 function checkAbort(signal: AbortSignal | undefined): IndexingJobError | undefined {
