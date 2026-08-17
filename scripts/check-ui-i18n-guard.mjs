@@ -749,7 +749,12 @@ function collectAggregatedJsxTextSegments(container, sourceFile) {
   const appendPart = (text, line) => {
     const current = segments.at(-1);
     current.parts.push(text);
-    if (current.firstLine === null) current.firstLine = line;
+    // Codex 3793398796 + 3793642835 on #3202: attribute the aggregate to the first CONTENT
+    // line, not a leading whitespace-only fragment. `<p>\n  {}\n  open <code>settings</code>
+    // </p>` — the JsxText `\n  ` between `<p>` and `{}` is whitespace-only and lives on the
+    // container line; the first real content ("open") is on a later line where the exemption
+    // marker would sit. Skip the firstLine update when the part is whitespace-only.
+    if (current.firstLine === null && text.trim().length > 0) current.firstLine = line;
   };
   for (const child of container.children) {
     absorbChildIntoSegments(child, sourceFile, appendPart, startNewSegment);
@@ -759,15 +764,25 @@ function collectAggregatedJsxTextSegments(container, sourceFile) {
 
 function absorbChildIntoSegments(child, sourceFile, appendPart, startNewSegment) {
   if (ts.isJsxText(child)) {
-    const trimmed = child.text.trim().replace(/\s+/gu, " ");
-    if (trimmed.length > 0) appendPart(trimmed, lineOfNode(child, sourceFile));
+    // Codex 3793642835 on #3202: keep the RAW JsxText so adjacency information reaches the
+    // join. `<code>memoria.settings.{"mode"}</code>` — the JsxText `memoria.settings.` has no
+    // trailing whitespace, so joining with the following `{"mode"}` literal must NOT insert a
+    // space. Whitespace-only JsxText between inline elements (`<em>is</em> <strong>a</strong>`)
+    // IS the space that separates the phrase words, so it must survive too — only empty
+    // JsxText (zero raw chars) is skipped. Normalisation (trim+collapse) happens once at the
+    // final aggregate.
+    if (child.text.length === 0) return;
+    appendPart(child.text, lineOfNode(child, sourceFile));
     return;
   }
   // Codex 3793356672 on #3202: line-break phrasing elements (`<br/>`, `<wbr/>`) split copy at
-  // whitespace boundaries — `<p>open<br/>settings</p>` renders "open settings". Treat them as
-  // pure whitespace: don't start a new segment, don't add a part. The joiner in
-  // `jsxAggregatedTextResults` supplies the space when the resulting parts are joined.
-  if (isLineBreakPhrasingChild(child)) return;
+  // whitespace boundaries — `<p>open<br/>settings</p>` renders "open settings". After the raw-
+  // adjacency refactor (codex 3793642835) the join no longer inserts a space between parts, so
+  // `br`/`wbr` must APPEND an explicit space to preserve the boundary the reader sees.
+  if (isLineBreakPhrasingChild(child)) {
+    appendPart(" ", lineOfNode(child, sourceFile));
+    return;
+  }
   if (isInlineTextFormattingChild(child)) {
     // Inline formatting elements render adjacent to surrounding text; flatten their segments
     // into the parent's current segment. A boundary INSIDE the inline element (rare) still
@@ -815,8 +830,10 @@ function absorbJsxExpressionIntoSegments(node, sourceFile, appendPart, startNewS
   const expression = node.expression;
   if (expression === undefined) return;
   if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
-    const text = expression.text.trim().replace(/\s+/gu, " ");
-    if (text.length > 0) appendPart(text, lineOfNode(expression, sourceFile));
+    // Codex 3793642835 on #3202: keep the literal RAW (no trim/collapse here). The final
+    // aggregate normaliser handles whitespace; splitting up front loses adjacency information
+    // with the surrounding JsxText siblings.
+    if (expression.text.length > 0) appendPart(expression.text, lineOfNode(expression, sourceFile));
     return;
   }
   startNewSegment();
@@ -834,16 +851,25 @@ function jsxAggregatedTextResults(node, sourceFile) {
     ts.getLineAndCharacterOfPosition(sourceFile, node.getStart(sourceFile)).line + 1;
   const emitted = [];
   for (const segment of collectAggregatedJsxTextSegments(node, sourceFile)) {
-    if (segment.parts.length < 2) continue;
-    const aggregate = segment.parts.join(" ");
+    // Codex 3793642835 on #3202: parts arrive RAW so their in-source adjacency is preserved.
+    // Whitespace-only parts (JsxText between inline elements, injected `<br/>` boundary) count
+    // as separators, not phrase fragments — filter them out of the ≥2 content-parts check
+    // (single-fragment cases still stay non-emitting).
+    const contentParts = segment.parts.filter((part) => part.trim().length > 0);
+    if (contentParts.length < 2) continue;
+    // Concatenate without a separator, then trim+collapse once — this way `memoria.settings.`
+    // + `mode` yields `memoria.settings.mode` (adjacent) while `Hello ` + `World` yields
+    // `Hello World` (the space came from the first part's trailing whitespace, not an injected
+    // separator).
+    const aggregate = segment.parts.join("").trim().replace(/\s+/gu, " ");
+    if (aggregate.length === 0) continue;
     if (!isTranslatableCopy(aggregate)) continue;
     // Codex 3793469157 on #3202: dedupe against IDENTICAL individually-translatable parts, but
     // do NOT suppress the aggregate merely because SOME part is independently translatable —
     // otherwise appending untranslated copy (`<p>Open settings <code>now</code></p>`) would
-    // silently pass because "Open settings" is already an allowed finding and the widened
-    // aggregate "Open settings now" gets skipped. Only skip when the aggregate is exactly the
-    // same text as one of the parts (i.e., the parts add no new phrase content).
-    if (segment.parts.includes(aggregate)) continue;
+    // silently pass. Compare normalised part text to the normalised aggregate.
+    const normalisedParts = contentParts.map((part) => part.trim().replace(/\s+/gu, " "));
+    if (normalisedParts.includes(aggregate)) continue;
     // Codex 3793398796 on #3202: attribute the finding to the first text fragment's line, not
     // the container's opening tag — so an `// i18n-exempt` marker adjacent to the phrase's
     // own text can exempt it. Fall back to the container line only if the segment somehow
@@ -915,11 +941,23 @@ function jsxSpreadAttributeResults(node, sourceFile) {
 function jsxSpreadObjectLiteralResults(objectExpression, sourceFile) {
   const results = [];
   for (const prop of objectExpression.properties) {
-    if (!ts.isPropertyAssignment(prop)) continue;
-    const key = objectPropertyKey(prop.name);
-    if (key === null || !USER_FACING_ATTRIBUTE_NAMES.has(key)) continue;
-    for (const entry of jsxChildExpressionLiteralTexts(prop.initializer, sourceFile)) {
-      if (entry.text.length > 0) results.push(entry);
+    if (ts.isPropertyAssignment(prop)) {
+      const key = objectPropertyKey(prop.name);
+      if (key === null || !USER_FACING_ATTRIBUTE_NAMES.has(key)) continue;
+      for (const entry of jsxChildExpressionLiteralTexts(prop.initializer, sourceFile)) {
+        if (entry.text.length > 0) results.push(entry);
+      }
+      continue;
+    }
+    // Codex 3793642840 on #3202: nested spread inside a spread object — `<button {...{ ...{
+    // "aria-label": "Delete account" }} } />`. The outer object is collected, but the
+    // SpreadAssignment used to be skipped, so accessible copy in the inner object never
+    // reached the ledger. Recurse through the spread expression using the same object-literal
+    // collector that handles the outer spread (`?:`/`&&`/`||`/`??`/transparent-wrapper).
+    if (ts.isSpreadAssignment(prop)) {
+      for (const nested of collectSpreadObjectLiterals(prop.expression)) {
+        results.push(...jsxSpreadObjectLiteralResults(nested, sourceFile));
+      }
     }
   }
   return results;
@@ -1113,12 +1151,33 @@ function containerExpressionTexts(expr, sourceFile) {
 //   AsExpression:            `x as T`
 //   SatisfiesExpression:     `x satisfies T`
 //   NonNullExpression:       `x!`
+//   AwaitExpression:         `await x`   (codex 3793642864 on #3202 — the resolved value IS
+//                                          rendered; `<p>{await Promise.resolve("…")}</p>`.)
 function isTransparentWrapper(expr) {
   return (
     ts.isParenthesizedExpression(expr) ||
     ts.isAsExpression(expr) ||
     ts.isSatisfiesExpression(expr) ||
-    ts.isNonNullExpression(expr)
+    ts.isNonNullExpression(expr) ||
+    ts.isAwaitExpression(expr)
+  );
+}
+
+// Codex 3793642869 on #3202: every nested function-like scope terminates the return walk. The
+// earlier list only covered plain function forms, so a callback like
+// `items.map(() => { const helper = { label() { return "Internal diagnostic"; } }; return null; })`
+// descended into the object-method `label()` and reported ITS return as rendered copy — a
+// false ledger failure. Method declarations, accessors, and the constructor all define new
+// scopes whose returns belong to those scopes, not the enclosing callback.
+function isNestedFunctionScope(node) {
+  return (
+    ts.isArrowFunction(node) ||
+    ts.isFunctionExpression(node) ||
+    ts.isFunctionDeclaration(node) ||
+    ts.isMethodDeclaration(node) ||
+    ts.isGetAccessorDeclaration(node) ||
+    ts.isSetAccessorDeclaration(node) ||
+    ts.isConstructorDeclaration(node)
   );
 }
 
@@ -1148,11 +1207,7 @@ function functionLikeLiteralTexts(expr, sourceFile) {
       }
       return;
     }
-    if (
-      ts.isArrowFunction(node) ||
-      ts.isFunctionExpression(node) ||
-      ts.isFunctionDeclaration(node)
-    ) {
+    if (isNestedFunctionScope(node)) {
       // Do not recurse into nested function scopes — their returns belong to those scopes.
       return;
     }

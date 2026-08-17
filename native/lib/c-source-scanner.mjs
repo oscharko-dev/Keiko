@@ -330,7 +330,7 @@ function decodeHexEscape(body, i, emit) {
     return 2;
   }
   const value = parseInt(body.slice(i + 2, j), 16);
-  emit(String.fromCharCode(value & 0xff));
+  emit(preservedByteSpelling(value));
   return j - i;
 }
 
@@ -339,32 +339,49 @@ function decodeOctalEscape(body, i, emit) {
   const limit = Math.min(body.length, i + 4);
   while (j < limit && /[0-7]/u.test(body[j])) j += 1;
   const value = parseInt(body.slice(i + 1, j), 8);
-  emit(String.fromCharCode(value & 0xff));
+  emit(preservedByteSpelling(value));
   return j - i;
 }
 
+// Codex 3793642858 on #3202: a numeric escape whose byte value is a string/char delimiter or
+// backslash MUST be emitted as an escaped spelling, not as the raw byte. `"\42..."` (octal 42
+// = 34 = `"`) decoded to a bare `"` reconstructs scanner text like `"a"posix_spawn(...)"b"`;
+// `stripStringLiteralBodies` then treats the middle bytes as code and leaves a pinned call
+// visible even though it exists only inside a compiled diagnostic string, letting a deleted
+// live control keep satisfying the positive source pin. Same reasoning for `\` and `'` —
+// emitting them as escapes preserves the source-token shape downstream expects.
+function preservedByteSpelling(value) {
+  if (value === 0x22) return '\\"';
+  if (value === 0x27) return "\\'";
+  if (value === 0x5c) return "\\\\";
+  return String.fromCharCode(value & 0xff);
+}
+
 // ---------------------------------------------------------------------------
-// Path-normalisation: collapse `./` current-directory components
+// Path-normalisation: collapse `./` current-directory components and `//` runs
 // ---------------------------------------------------------------------------
-// Codex 3793578605 on #3202: the OS resolves `/bin/./sh` to `/bin/sh` before executing, so a
-// supervisor rewritten to that spelling would still launch a shell — but the negative shell-
-// path pin's regex expects a contiguous `/bin/sh`. Collapse `./` current-directory components
-// in the whole prepared source so the pin sees the resolved path. Applies globally rather than
-// per-literal so a token boundary between literal and adjacent code (`"/bin" "/./sh"` after
-// fold) still normalises. Repeats until fixpoint to handle chains (`/./././`).
+// Codex 3793578605 + 3793642847 on #3202: the OS resolves both `/bin/./sh` AND `/bin//sh`
+// to `/bin/sh` before executing. The negative shell-path pin's regex expects a contiguous
+// `/bin/sh`. Collapse both forms in the whole prepared source so the pin sees the resolved
+// path. Applies globally rather than per-literal so a token boundary between literal and
+// adjacent code (`"/bin" "/./sh"` after fold) still normalises. Repeats until fixpoint to
+// handle chains (`/./././`, `////`).
+//
+// URL schemes are preserved: the `://` after `http`/`https`/`file`/etc. is meaningful, so the
+// `//` collapse uses a negative lookbehind to skip when preceded by `:`. This lets
+// `https://example.com` stay intact while `/bin//sh` still collapses.
 //
 // `..` (parent) is NOT normalised — resolving it requires the preceding component. That
 // omission is documented (`#if 0 && FEATURE` similar recognition-only policy) and leaves a
 // theoretical `/bin/../bin/sh` bypass; the shell-path regex could still be widened later, but
 // the source-contract call site for this scanner does not host `..` in any real supervisor
-// path today. Duplicate `//` slashes are also NOT normalised — POSIX collapses them but the
-// current pins already fail before this decision matters.
+// path today.
 export function normalizeCurrentDirComponents(source) {
   let previous;
   let current = source;
   do {
     previous = current;
-    current = previous.replace(/\/\.(?=\/)/gu, "");
+    current = previous.replace(/\/\.(?=\/)/gu, "").replace(/(?<!:)\/{2,}/gu, "/");
   } while (current !== previous);
   return current;
 }
@@ -525,6 +542,13 @@ function processLadderLine(line, stack, kept) {
     stack.push({ mode: KEEPING, sawDefLive: true, sawUnkLive: false });
     return;
   }
+  // Codex 3793642853 on #3202: constant arithmetic like `#if 1 + 1` matches neither of the
+  // regex patterns above but the C preprocessor evaluates it (to 2 → nonzero → true here).
+  // Any spawn / fd-close pin retained only in a `#else` after such a condition would satisfy
+  // the source-only native contract despite being compiler-dead. Evaluate constant arithmetic
+  // conditions with a strict-char-set-validated JS `Function` fallback; unknown / macro-gated
+  // conditions still fall through to the untracked-frame path below.
+  if (tryConstantArithmeticIf(trimmed, stack)) return;
   // Untracked (macro-gated) `#if X` / `#ifdef X` / `#ifndef X`: push a conservative KEEPING
   // frame instead of bumping a depth counter on the parent (codex 3793282541). The reason is
   // subtle — the parent-depth model treated `#elif`/`#else` inside the untracked ladder as
@@ -588,15 +612,71 @@ function applyElifTransition(trimmed, frame) {
     frame.mode = STRIPPING;
     return;
   }
-  frame.mode = KEEPING;
   if (DEFINITIVELY_TRUE_ELIF.test(trimmed)) {
     // Coderabbit 3793183804: `#elif 1` is unconditionally exhaustive — if we reach it, all
     // preceding branches must have been false, so this branch is picked; and `#elif 1` cannot
     // itself be skipped (its condition is always true). Either way the compiler picks EXACTLY
     // this branch OR a preceding one, so every subsequent `#elif`/`#else` is dead — regardless
     // of whether a prior `#elif <unknown>` was seen. Set sawDefLive unconditionally.
+    frame.mode = KEEPING;
     frame.sawDefLive = true;
-  } else {
-    frame.sawUnkLive = true;
+    return;
   }
+  // Codex 3793642853 on #3202: constant arithmetic elif (`#elif 1 + 1`, `#elif 1 - 1`, …)
+  // evaluated via the JS-Function fallback with strict char-set validation.
+  if (tryConstantArithmeticElif(trimmed, frame)) return;
+  // Fallback: unknown condition. Potentially live — this branch survives.
+  frame.mode = KEEPING;
+  frame.sawUnkLive = true;
+}
+
+// Codex 3793642853 on #3202: constant-arithmetic evaluator for preprocessor conditions the
+// regex fallbacks don't already cover. Strict char-set validation rejects any identifier or
+// call so the JS `Function` eval only ever sees a pure integer expression (digits + hex prefix
+// + U/L suffixes + unary/binary +-*/% + comparison + logical/bitwise + parens + whitespace).
+// C integer suffixes are stripped and C octal literals are converted to JS `0o…` form before
+// eval. Returns the numeric result or null if the expression is not a pure integer constant.
+function evaluateConstantArithmetic(exprText) {
+  const trimmed = exprText.trim();
+  if (trimmed.length === 0) return null;
+  if (!/^[\s0-9xXa-fA-FUuLl+\-*/%()<>=!&|^~]+$/u.test(trimmed)) return null;
+  // Reject `**` — JS treats it as exponentiation, C treats a bare `*` sequence as syntax error.
+  if (trimmed.includes("**")) return null;
+  let js = trimmed.replace(/([0-9a-fA-F])[UuLl]{1,3}\b/gu, "$1");
+  // C octal: `0<octal-digits>`. Convert to JS `0o<digits>`. Bare `0` and `0x…` stay as-is.
+  js = js.replace(/\b0([0-7]+)(?![0-9a-fA-F])/gu, "0o$1");
+  try {
+    const result = new Function('"use strict"; return (' + js + ");")();
+    if (typeof result !== "number" || !Number.isFinite(result)) return null;
+    return Math.trunc(result);
+  } catch {
+    return null;
+  }
+}
+
+function tryConstantArithmeticIf(trimmed, stack) {
+  const match = /^#\s*if\s+(.+?)\s*$/u.exec(trimmed);
+  if (match === null) return false;
+  const value = evaluateConstantArithmetic(match[1]);
+  if (value === null) return false;
+  stack.push(
+    value === 0
+      ? { mode: STRIPPING, sawDefLive: false, sawUnkLive: false }
+      : { mode: KEEPING, sawDefLive: true, sawUnkLive: false },
+  );
+  return true;
+}
+
+function tryConstantArithmeticElif(trimmed, frame) {
+  const match = /^#\s*elif\s+(.+?)\s*$/u.exec(trimmed);
+  if (match === null) return false;
+  const value = evaluateConstantArithmetic(match[1]);
+  if (value === null) return false;
+  if (value === 0) {
+    frame.mode = STRIPPING;
+  } else {
+    frame.mode = KEEPING;
+    frame.sawDefLive = true;
+  }
+  return true;
 }

@@ -484,9 +484,107 @@ function assertScannerBehaviours() {
   assertCEscapesDecodedInsideLiterals();
   assertEscapedQuotesPreservedThroughDecode();
   assertTrailingBackslashPreservedThroughDecode();
+  assertNumericQuoteEscapesPreservedThroughDecode();
   assertDecodeThenFoldOrder();
   assertPathNormalizationCollapsesCurrentDir();
+  assertPathNormalizationCollapsesRepeatedSlashes();
+  assertArithmeticConstantConditionsRecognised();
   assertTrigraphIfZero();
+}
+
+// Codex 3793642858 on #3202: `"a\42posix_spawn(...)\42b"` — `\42` octal = 34 = `"`. Decoding
+// the escape to a bare `"` corrupts string-literal boundaries, so `stripStringLiteralBodies`
+// would treat the middle bytes as CODE and leave a pinned call visible even though it exists
+// only inside a compiled diagnostic string. Verify hex + octal numeric escapes that decode to
+// `"`, `\`, or `'` are emitted as escaped spellings.
+function assertNumericQuoteEscapesPreservedThroughDecode() {
+  // Hex 0x22 = `"`. Octal 42 = `"`. Both must NOT collapse the string.
+  const hex = stripCommentsOnly('const char *q = "a\\x22posix_spawn(&pid)\\x22b";\n');
+  assert.ok(
+    hex.includes('"a\\"posix_spawn(&pid)\\"b"'),
+    "hex `\\x22` decoding must preserve the escape spelling; got: " + hex,
+  );
+  const oct = stripCommentsOnly('const char *o = "a\\42posix_spawn(&pid)\\42b";\n');
+  assert.ok(
+    oct.includes('"a\\"posix_spawn(&pid)\\"b"'),
+    "octal `\\42` decoding must preserve the escape spelling; got: " + oct,
+  );
+  // Sanity: hex 0x43 (`C`) stays a plain char — the preservation only applies to delimiters.
+  const plain = stripCommentsOnly('const char *p = "\\x43ON";\n');
+  assert.ok(plain.includes('"CON"'), "hex escape to a non-delimiter byte must decode normally");
+}
+
+// Codex 3793642847 on #3202: the OS resolves `/bin//sh` to `/bin/sh` before executing —
+// repeated `/` separators are collapsed. The pin regex expects a contiguous path.
+// URL schemes (`://`) are preserved (negative lookbehind on `:`) so `https://example.com`
+// stays intact.
+function assertPathNormalizationCollapsesRepeatedSlashes() {
+  const forms = [
+    { src: 'const char *p = "/bin//sh";', expect: '"/bin/sh"', label: "double //" },
+    { src: 'const char *p = "/bin////sh";', expect: '"/bin/sh"', label: "quadruple ////" },
+    { src: 'const char *p = "/usr//bin//sh";', expect: '"/usr/bin/sh"', label: "chained //" },
+    {
+      src: 'const char *u = "https://example.com";',
+      expect: '"https://example.com"',
+      label: "URL scheme :// preserved",
+    },
+  ];
+  for (const { src, expect, label } of forms) {
+    const prepared = stripCommentsOnly(src + "\n");
+    assert.ok(prepared.includes(expect), `${label} must resolve to ${expect}; got: ${prepared}`);
+  }
+}
+
+// Codex 3793642853 on #3202: constant arithmetic conditions like `#if 1 + 1` are evaluated by
+// the C preprocessor. The earlier scanner treated them as unknown and kept BOTH branches, so a
+// required control retained only in the compiler-dead `#else` would still satisfy the source
+// pin. Verify the arithmetic evaluator recognises truth values for arithmetic, comparison,
+// bitwise, and logical constant expressions.
+function assertArithmeticConstantConditionsRecognised() {
+  const trueExprs = ["1 + 1", "2 * 3", "3 - 1", "1 << 3", "1 | 0", "1 == 1", "0 || 1", "!(1 - 1)"];
+  for (const cond of trueExprs) {
+    const stripped = stripCommentsAndStrings(
+      "#if " + cond + "\nLIVE_ARITH_TRUE();\n#else\nDEAD_ARITH_TRUE_ELSE();\n#endif\n",
+    );
+    assert.match(stripped, /LIVE_ARITH_TRUE/u, "arithmetic true must keep its body: " + cond);
+    assert.equal(
+      stripped.match(/DEAD_ARITH_TRUE_ELSE/u),
+      null,
+      "`#else` after arithmetic true must be stripped: " + cond,
+    );
+  }
+  const falseExprs = ["1 - 1", "0 * 5", "0 && 1", "1 == 0", "2 - 2", "(1 - 1)"];
+  for (const cond of falseExprs) {
+    const stripped = stripCommentsAndStrings(
+      "#if " + cond + "\nDEAD_ARITH_FALSE();\n#else\nLIVE_ARITH_FALSE_ELSE();\n#endif\n",
+    );
+    assert.equal(
+      stripped.match(/DEAD_ARITH_FALSE/u),
+      null,
+      "arithmetic false must strip its body: " + cond,
+    );
+    assert.match(
+      stripped,
+      /LIVE_ARITH_FALSE_ELSE/u,
+      "`#else` after arithmetic false must survive: " + cond,
+    );
+  }
+  // Elif form too.
+  const elifStripped = stripCommentsAndStrings(
+    "#if 0\nDEAD_IF();\n#elif 1 + 1\nLIVE_ARITH_ELIF();\n#else\nDEAD_ELIF_ELSE();\n#endif\n",
+  );
+  assert.match(elifStripped, /LIVE_ARITH_ELIF/u, "`#elif 1 + 1` must keep the live body");
+  assert.equal(
+    elifStripped.match(/DEAD_ELIF_ELSE/u),
+    null,
+    "`#else` after `#elif 1 + 1` must be stripped",
+  );
+  // Unknown identifier still falls through to unknown (both branches kept).
+  const unknown = stripCommentsAndStrings(
+    "#if FEATURE + 1\nUNKNOWN_IF();\n#else\nUNKNOWN_ELSE();\n#endif\n",
+  );
+  assert.match(unknown, /UNKNOWN_IF/u, "arithmetic with an identifier must stay unknown (if)");
+  assert.match(unknown, /UNKNOWN_ELSE/u, "arithmetic with an identifier must stay unknown (else)");
 }
 
 // Codex 3793578610 on #3202: `\\` inside a literal must be preserved through decoding.

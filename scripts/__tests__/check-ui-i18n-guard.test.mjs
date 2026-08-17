@@ -1498,6 +1498,52 @@ test.each([
   expect(texts).toContain("Delete account");
 });
 
+// Codex 3793642840 on cea4bfde: nested spread inside a spread object — `<button {...{ ...{
+// "aria-label": "Delete account" }} } />`. The outer object was collected, but the
+// SpreadAssignment used to be skipped, so accessible copy in the inner object never reached
+// the ledger. Recurse through SpreadAssignment using the same object-literal collector.
+test("recurses into nested spread assignments inside a spread object", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<button {...{ ...{ "aria-label": "Delete account" } }} />',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Delete account");
+});
+
+// Codex 3793642864 on cea4bfde: `<p>{await Promise.resolve("Delete account")}</p>` — an async
+// component with an awaited literal-producing expression. AwaitExpression is value-preserving
+// (the resolved value renders), so recurse into `.expression` via the transparent-wrapper set.
+test("recurses through await expressions", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<p>{await Promise.resolve("Delete account")}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("Delete account");
+});
+
+// Codex 3793642869 on cea4bfde: every nested function-like scope terminates the return walk.
+// The earlier list only covered plain function forms, so a callback with an object method or
+// class method leaked ITS return as rendered copy.
+test.each([
+  {
+    label: "object method",
+    src: '<p>{items.map(() => { const helper = { label() { return "Internal diagnostic"; } }; return null; })}</p>',
+  },
+  {
+    label: "getter",
+    src: '<p>{items.map(() => { const helper = { get label() { return "Internal getter"; } }; return null; })}</p>',
+  },
+  {
+    label: "class method",
+    src: '<p>{items.map(() => { class H { label() { return "Internal method"; } }; return null; })}</p>',
+  },
+])("does not surface returns from nested $label scopes inside a callback", ({ src }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).not.toContain("Internal diagnostic");
+  expect(texts).not.toContain("Internal getter");
+  expect(texts).not.toContain("Internal method");
+});
+
 // KEIKO-0299 (review-follow-up on b5cb3f6c, codex 3793101250): `{items.map(() => "Delete
 // account")}` — the ArrowFunction body IS user-visible copy that gets rendered per item, but
 // the previous CallExpression recursion stopped at the function argument and never inspected
@@ -1637,6 +1683,30 @@ test("does not double-emit when an inline formatting element wraps the phrase in
   ).findings;
   const matches = findings.filter((f) => f.text === "open settings");
   expect(matches).toHaveLength(1);
+});
+
+// Codex 3793642835 on cea4bfde: `<code>memoria.settings.{"mode"}</code>` — parts are
+// `memoria.settings.` (no trailing whitespace in source) and `mode` (from the literal).
+// Trimming each and joining with a space would produce `memoria.settings. mode` — a space
+// after the dot that `isTranslatableCopy` mistakes for prose and reports as untranslated. The
+// join must preserve source adjacency: no space inserted when the source had none.
+test("preserves adjacency when JSX text has no trailing whitespace before a literal expression", () => {
+  const texts = untranslatedLiteralsInSource(
+    '<code>memoria.settings.{"mode"}</code>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).not.toContain("memoria.settings. mode");
+  expect(texts).not.toContain("memoria.settings.mode");
+});
+
+test("keeps a real whitespace boundary when JSX text has trailing whitespace before a literal expression", () => {
+  // `open ` HAS a trailing space; the join must keep it as `open settings`. This test pins
+  // the previously-verified case still works after the raw-adjacency refactor.
+  const texts = untranslatedLiteralsInSource(
+    '<p>open {"settings"}</p>',
+    "packages/x/y.tsx",
+  ).findings.map((f) => f.text);
+  expect(texts).toContain("open settings");
 });
 
 // Codex 3793356672 on af9f5ede: line-break phrasing elements (`<br/>`, `<wbr/>`) split copy at
