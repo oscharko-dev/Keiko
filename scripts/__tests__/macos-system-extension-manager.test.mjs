@@ -144,14 +144,14 @@ describe("macOS system-extension activation manager", () => {
     // `posix_spawnp|execvp|execlp|execvP` to `\bposix_spawnp\s*\(|\bexecvp\s*\(|\bexeclp\s*\(|
     // \bexecvP\s*\(` (word boundary + optional whitespace before `(`).
     //
-    // Coderabbit 3794185716 on #3202: anchor the pin to the `assert.doesNotMatch(...)` block
-    // rather than the whole harness — a bare identifier in a nearby COMMENT (of which there
-    // are several documenting the review-follow-up rationale) would otherwise satisfy the
-    // check and let the identifier be deleted from the assertion itself. Extract the block
-    // via a leading-`\b<name>\s*\(` regex on the harness, then require every name to sit
-    // inside it.
+    // Coderabbit 3794185716 + codex 3794202587 on #3202: anchor the pin to the
+    // `assert.doesNotMatch(...)` block — a bare identifier in a nearby COMMENT would
+    // otherwise satisfy the check and let the identifier be deleted from the assertion
+    // itself. `[\s\S]*?` captures the full call including any trailing error-message
+    // arguments (up to the closing `);`), so the extract remains robust if the harness
+    // later grows a message parameter.
     const forbiddenCallAssertion = macosProtocolHarness.match(
-      /assert\.doesNotMatch\(\s*codeAndLiteralsText,\s*\/[^\n]*\/[a-z]*,?\s*\)/u,
+      /assert\.doesNotMatch\(\s*codeAndLiteralsText,[\s\S]*?\);/u,
     );
     expect(forbiddenCallAssertion, "the assert.doesNotMatch block must be present").not.toBeNull();
     for (const name of ["posix_spawnp", "execvp", "execlp", "execvP"]) {
