@@ -743,11 +743,11 @@ function isInlineTextFormattingChild(child) {
 function collectAggregatedJsxTextSegments(container, sourceFile) {
   const segments = [{ parts: [], firstLine: null }];
   const startNewSegment = () => {
-    const current = segments[segments.length - 1];
+    const current = segments.at(-1);
     if (current.parts.length > 0) segments.push({ parts: [], firstLine: null });
   };
   const appendPart = (text, line) => {
-    const current = segments[segments.length - 1];
+    const current = segments.at(-1);
     current.parts.push(text);
     if (current.firstLine === null) current.firstLine = line;
   };
@@ -843,7 +843,7 @@ function jsxAggregatedTextResults(node, sourceFile) {
     // silently pass because "Open settings" is already an allowed finding and the widened
     // aggregate "Open settings now" gets skipped. Only skip when the aggregate is exactly the
     // same text as one of the parts (i.e., the parts add no new phrase content).
-    if (segment.parts.some((part) => part === aggregate)) continue;
+    if (segment.parts.includes(aggregate)) continue;
     // Codex 3793398796 on #3202: attribute the finding to the first text fragment's line, not
     // the container's opening tag — so an `// i18n-exempt` marker adjacent to the phrase's
     // own text can exempt it. Fall back to the container line only if the segment somehow

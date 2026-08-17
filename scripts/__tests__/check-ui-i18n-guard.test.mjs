@@ -1558,67 +1558,54 @@ test("still flags real prose across template spans", () => {
   expect(texts).toContain("Hello World");
 });
 
-// KEIKO-0299 (review-follow-up on d753717d, codex 3793198455): `String.raw\`Delete account\``
-// as a JSX child renders the template body verbatim (the `String.raw` tag returns spans
-// unchanged). Recurse into `.template` so newly added tagged-template copy enters the ledger.
-test("collects literals from tagged template expressions", () => {
-  const texts = untranslatedLiteralsInSource(
-    "<p>{String.raw`Delete account`}</p>",
-    "packages/x/y.tsx",
-  ).findings.map((f) => f.text);
-  expect(texts).toContain("Delete account");
+// Parameterised JSX-child recall table (SonarCloud S5976). Every row asserts one JSX shape
+// surfaces a specific rendered phrase — adding a sixth row is one line, not one new test. Each
+// row cites the review that motivated its recall path.
+//   - codex 3793198455 (d753717d): `String.raw\`…\`` tagged-template recurses into `.template`.
+//   - codex 3793229700 (d753717d): CallExpression receiver traversal picks up array literals on
+//     the LHS of `.map` / `["map"]` — element-access receiver form covered too.
+//   - codex 3793229704 (d753717d): JsxText fragments split by inline formatting elements
+//     (`<code>`, `<em>`, `<strong>`, …) aggregate into one phrase.
+test.each([
+  {
+    label: "tagged template",
+    src: "<p>{String.raw`Delete account`}</p>",
+    expected: "Delete account",
+  },
+  {
+    label: "call receiver via property access",
+    src: '<p>{["Delete account"].map((l) => <span>{l}</span>)}</p>',
+    expected: "Delete account",
+  },
+  {
+    label: "call receiver via element access",
+    src: '<p>{["Save changes"]["map"]((l) => <span>{l}</span>)}</p>',
+    expected: "Save changes",
+  },
+  {
+    label: "phrase split across one inline formatting element",
+    src: "<p>open <code>settings</code></p>",
+    expected: "open settings",
+  },
+  {
+    label: "phrase split across multiple inline formatting elements",
+    src: "<p>this <em>is</em> <strong>a</strong> <code>phrase</code></p>",
+    expected: "this is a phrase",
+  },
+])("surfaces $expected from the JSX shape ($label)", ({ src, expected }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain(expected);
 });
 
+// Kept separate because it uses a `.some(…includes…)` assertion instead of `toContain` — the
+// tagged template with an interpolation returns spans that include but do not exactly equal
+// the expected substring.
 test("collects tagged-template spans with an interpolation", () => {
   const texts = untranslatedLiteralsInSource(
     "<p>{String.raw`Welcome back, ${user}!`}</p>",
     "packages/x/y.tsx",
   ).findings.map((f) => f.text);
   expect(texts.some((t) => t.includes("Welcome back,"))).toBe(true);
-});
-
-// Codex 3793229700 on d753717d: `{["Delete account"].map(l => <span>{l}</span>)}` renders the
-// array elements as JSX children. The literal lives in the CallExpression's RECEIVER
-// (`["Delete account"].map`), not in `.map`'s arguments. The receiver traversal falls through
-// PropertyAccessExpression to reach the ArrayLiteralExpression.
-test("collects literals from a call receiver's array literal", () => {
-  const texts = untranslatedLiteralsInSource(
-    '<p>{["Delete account"].map((l) => <span>{l}</span>)}</p>',
-    "packages/x/y.tsx",
-  ).findings.map((f) => f.text);
-  expect(texts).toContain("Delete account");
-});
-
-test("collects literals from a call receiver via element access", () => {
-  const texts = untranslatedLiteralsInSource(
-    '<p>{["Save changes"]["map"]((l) => <span>{l}</span>)}</p>',
-    "packages/x/y.tsx",
-  ).findings.map((f) => f.text);
-  expect(texts).toContain("Save changes");
-});
-
-// Codex 3793229704 on d753717d: `<p>open <code>settings</code></p>` splits the phrase "open
-// settings" into two `JsxText` fragments. Each is a single lowercase word the classifier
-// rejects as a machine token, so the aggregate phrase was invisible to the ledger. Aggregate
-// JsxText across text-level inline formatting elements so the classifier sees what the reader
-// sees.
-test("aggregates JsxText split across an inline formatting element", () => {
-  const texts = untranslatedLiteralsInSource(
-    "<p>open <code>settings</code></p>",
-    "packages/x/y.tsx",
-  ).findings.map((f) => f.text);
-  expect(texts).toContain("open settings");
-});
-
-test("aggregates JsxText across multiple inline formatting elements", () => {
-  // Every individual fragment (`this`, `is`, `a`, `phrase`) is a single lowercase token the
-  // classifier rejects on its own. The aggregate "this is a phrase" spans across three inline
-  // formatting elements and IS translatable — it must reach the ledger. Codex 3793229704.
-  const texts = untranslatedLiteralsInSource(
-    "<p>this <em>is</em> <strong>a</strong> <code>phrase</code></p>",
-    "packages/x/y.tsx",
-  ).findings.map((f) => f.text);
-  expect(texts).toContain("this is a phrase");
 });
 
 // Codex 3793469157 on 15310097: appending a non-translatable tail ("now") to an ALREADY
