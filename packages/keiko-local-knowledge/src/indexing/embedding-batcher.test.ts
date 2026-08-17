@@ -639,6 +639,9 @@ describe("embedChunkBatch — transient-failure retry", () => {
     // everything-is-transport classification this looped through the full retry schedule).
     expect(badRequestCalls).toBe(1);
     expect(result.errors.some((e) => e.code === "EMBEDDING_ADAPTER_FAILED")).toBe(true);
+    // The persisted document error names the status — indexing-time failures carry the same
+    // diagnostic precision as the preflight and readiness safe messages.
+    expect(result.errors.some((e) => e.message.includes("http-error (HTTP 400)"))).toBe(true);
   });
 });
 

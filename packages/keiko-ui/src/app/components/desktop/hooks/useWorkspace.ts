@@ -1199,6 +1199,10 @@ function useWorkspaceServerSync({
       if (result?.kind !== "ok") return;
       lastAcknowledgedSnapshotRef.current = snapshot.serialized;
       localDirtyRef.current = false;
+      // An acknowledged save ends the conflict sequence: re-arm the one-retry cap so a LATER
+      // conflict of the same serialization (state B, then back to byte-identical A) gets its
+      // retry instead of being parked by a marker from a long-finished sequence.
+      conflictRetriedSnapshotRef.current = null;
       if (result.revision > revisionRef.current) revisionRef.current = result.revision;
     });
   }, []);

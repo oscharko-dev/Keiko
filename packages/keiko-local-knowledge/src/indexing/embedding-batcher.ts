@@ -250,8 +250,13 @@ function isTransientBatchOutcome(outcome: OpenAIEmbeddingBatchOutcome): boolean 
   return !outcome.ok && isTransientFailure(outcome.kind, outcome.status);
 }
 
-function errorFromKind(kind: OpenAIEmbeddingErrorKind): IndexingJobError {
-  return { code: "EMBEDDING_ADAPTER_FAILED", message: `embedding adapter returned ${kind}` };
+// The HTTP status is content-free operator telemetry and the one number that separates "the
+// gateway rejected this request shape" (e.g. an oversized batch → 400) from every other
+// failure, so it survives into the persisted document/job error exactly like it does in the
+// preflight and readiness safe messages.
+function errorFromKind(kind: OpenAIEmbeddingErrorKind, status?: number): IndexingJobError {
+  const detail = status !== undefined ? `${kind} (HTTP ${String(status)})` : kind;
+  return { code: "EMBEDDING_ADAPTER_FAILED", message: `embedding adapter returned ${detail}` };
 }
 
 async function embedArrayBatchWithRetry(
@@ -334,7 +339,7 @@ async function embedUniqueBatch(
     batch.map((r) => r.representative.text),
   );
   if (!outcome.ok) {
-    const error = errorFromKind(outcome.kind);
+    const error = errorFromKind(outcome.kind, outcome.status);
     return batch.map((r) => ({ ok: false as const, chunk: r.representative, error }));
   }
   return batch.map((request, i) => {
@@ -436,10 +441,7 @@ function outcomeForChunk(outcome: ChunkOutcome, chunk: ChunkToEmbed): ChunkOutco
 function errorFromOutcome(
   outcome: Extract<OpenAIEmbeddingOutcome, { ok: false }>,
 ): IndexingJobError {
-  return {
-    code: "EMBEDDING_ADAPTER_FAILED",
-    message: `embedding adapter returned ${outcome.kind}`,
-  };
+  return errorFromKind(outcome.kind, outcome.status);
 }
 
 function checkAbort(signal: AbortSignal | undefined): IndexingJobError | undefined {

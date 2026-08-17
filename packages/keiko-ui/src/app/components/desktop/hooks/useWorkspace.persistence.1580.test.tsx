@@ -44,6 +44,22 @@ function Harness(): ReactElement {
       <button type="button" data-testid="minimize" onClick={() => ws.api.minimize("agents-1")}>
         minimize
       </button>
+      <button type="button" data-testid="restore" onClick={() => ws.api.restore("agents-1")}>
+        restore
+      </button>
+      <button type="button" data-testid="add" onClick={() => ws.api.add("agents")}>
+        add
+      </button>
+      <button
+        type="button"
+        data-testid="close-last"
+        onClick={() => {
+          const last = ws.wins?.at(-1);
+          if (last !== undefined) ws.api.close(last.id);
+        }}
+      >
+        close last
+      </button>
       <button type="button" data-testid="pan" onClick={() => ws.api.panBy(10, 20)}>
         pan
       </button>
@@ -551,6 +567,74 @@ describe("Issue #1580 — visibility-gated server poll", () => {
     await flushAsyncEffects();
 
     expect(putCalls()).toHaveLength(1);
+  });
+
+  it("re-arms the conflict retry after an acknowledged save of the same serialization", async () => {
+    // The EMPTY workspace is the serialization that genuinely recurs in production: it comes
+    // back byte-identical every time the last window closes. A retry marker that survives an
+    // acknowledged save would park exactly that close — the customer-visible zombie window.
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    let revision = 7;
+    let puts = 0;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        puts += 1;
+        revision += 1;
+        if (puts === 2 || puts === 5) {
+          return {
+            ok: false,
+            status: 412,
+            headers: new Headers({ ETag: `"workspace-state-${String(revision)}"` }),
+            json: async () => Promise.resolve({}),
+          } as unknown as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ ETag: `"workspace-state-${String(revision)}"` }),
+          json: async () =>
+            Promise.resolve({ workspace: { revision, windows: [], connections: [] } }),
+        } as unknown as Response;
+      }
+      return { status: 304, ok: true, headers: new Headers() } as unknown as Response;
+    });
+
+    const { getByTestId } = render(<Harness />);
+    await flushAsyncEffects();
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 3; i += 1) {
+        act(() => {
+          vi.advanceTimersByTime(400);
+        });
+        await flushAsyncEffects();
+      }
+    };
+
+    // PUT 1: the hydrated window is acknowledged.
+    await settle();
+    expect(putCalls()).toHaveLength(1);
+
+    // Close the only window: PUT 2 (empty) conflicts, PUT 3 retries it and is acknowledged —
+    // the acknowledged save must re-arm the one-retry cap for the empty serialization.
+    act(() => {
+      getByTestId("close-last").click();
+    });
+    await settle();
+    expect(putCalls()).toHaveLength(3);
+
+    // Open another window (PUT 4 acknowledged), then close it again: the byte-identical
+    // empty serialization conflicts a second time (PUT 5) — its retry (PUT 6) must fire.
+    act(() => {
+      getByTestId("add").click();
+    });
+    await settle();
+    act(() => {
+      getByTestId("close-last").click();
+    });
+    await settle();
+
+    expect(putCalls()).toHaveLength(6);
+    expect(String(putCalls().at(-1)?.[1]?.body)).toContain('"windows":[]');
   });
 
   it("adopts the polled server revision while dirty so the first PUT is not stale", async () => {
