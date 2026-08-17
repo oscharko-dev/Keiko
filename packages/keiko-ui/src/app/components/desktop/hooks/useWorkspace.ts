@@ -1179,25 +1179,23 @@ function useWorkspaceServerSync({
       keepalive,
     }).then((result) => {
       if (result?.kind === "conflict") {
-        // A 412 is a handled concurrency signal: adopt a strictly newer revision, and retry
-        // when the conflict's revision is current-or-newer — the poll may have adopted the
-        // SAME revision while this PUT was in flight, and skipping the retry then would park
-        // the dirty snapshot exactly like the original zombie-window bug. A conflict WITHOUT
-        // a parsable ETag (proxy stripped it) also retries: the send uses the freshest
-        // adopted revision, and the one-retry marker bounds the attempt either way.
-        if (result.revision === null || result.revision >= revisionRef.current) {
-          if (result.revision !== null && result.revision > revisionRef.current) {
-            revisionRef.current = result.revision;
-          }
-          scheduleWorkspaceConflictRetry(
-            snapshot.serialized,
-            localDirtyRef,
-            serverSyncStoppedRef,
-            conflictRetriedSnapshotRef,
-            putDebounceRef,
-            runServerPutRef,
-          );
+        // A 412 is a handled concurrency signal: adopt a strictly newer revision when the
+        // response carries one, and ALWAYS schedule the bounded retry — the send uses the
+        // freshest adopted revision at fire time, so a stale, equal, or missing conflict
+        // ETag (delayed response, proxy-stripped header) never parks the dirty snapshot.
+        // The per-snapshot marker and the unmount guard inside the scheduler bound the
+        // attempt; no revision comparison is needed for loop safety.
+        if (result.revision !== null && result.revision > revisionRef.current) {
+          revisionRef.current = result.revision;
         }
+        scheduleWorkspaceConflictRetry(
+          snapshot.serialized,
+          localDirtyRef,
+          serverSyncStoppedRef,
+          conflictRetriedSnapshotRef,
+          putDebounceRef,
+          runServerPutRef,
+        );
         return;
       }
       if (result?.kind !== "ok") return;

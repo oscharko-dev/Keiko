@@ -506,6 +506,93 @@ describe("Issue #1580 — visibility-gated server poll", () => {
     );
   });
 
+  it("retries a conflict whose ETag is STALER than the poll-adopted revision", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    let resolveFirstPoll: ((response: Response) => void) | undefined;
+    let resolveFirstPut: ((response: Response) => void) | undefined;
+    let puts = 0;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        puts += 1;
+        if (puts === 1) {
+          return new Promise<Response>((resolve) => {
+            resolveFirstPut = resolve;
+          });
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ ETag: '"workspace-state-9"' }),
+          json: async () =>
+            Promise.resolve({ workspace: { revision: 9, windows: [], connections: [] } }),
+        } as unknown as Response;
+      }
+      if (resolveFirstPoll === undefined) {
+        return new Promise<Response>((resolve) => {
+          resolveFirstPoll = resolve;
+        });
+      }
+      return { status: 304, ok: true, headers: new Headers() } as unknown as Response;
+    });
+
+    render(<Harness />);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+    expect(puts).toBe(1);
+    expect(resolveFirstPoll).toBeDefined();
+
+    // The poll advances PAST the conflict's revision while the PUT is in flight.
+    resolveFirstPoll?.({
+      ok: true,
+      status: 200,
+      headers: new Headers({ ETag: '"workspace-state-8"' }),
+      json: async () =>
+        Promise.resolve({
+          workspace: {
+            revision: 8,
+            windows: [
+              {
+                id: "foreign-1",
+                type: "files",
+                x: 1,
+                y: 2,
+                w: 320,
+                h: 240,
+                z: 9,
+                cfg: {},
+                max: false,
+              },
+            ],
+            connections: [],
+          },
+        }),
+    } as unknown as Response);
+    await flushAsyncEffects();
+
+    // The delayed conflict carries the OLDER revision 7: the bounded retry must still fire,
+    // sending with the freshest adopted revision — otherwise the dirty close is parked and
+    // resurrected on reload (the zombie window through the delayed-response window).
+    resolveFirstPut?.({
+      ok: false,
+      status: 412,
+      headers: new Headers({ ETag: '"workspace-state-7"' }),
+      json: async () => Promise.resolve({}),
+    } as unknown as Response);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+
+    expect(puts).toBe(2);
+    expect((putCalls()[1]?.[1]?.headers as Record<string, string>)["If-Match"]).toBe(
+      '"workspace-state-8"',
+    );
+  });
+
   it("retries a conflict whose ETag a proxy stripped, using the poll-adopted revision", async () => {
     window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
     let puts = 0;
