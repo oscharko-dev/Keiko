@@ -1170,51 +1170,46 @@ test("collects a `??` fallback inside a template substitution", () => {
   expect(texts).toContain("Fallback label");
 });
 
-// KEIKO-0299 (review-follow-up on 4d7d131a): a call expression like `definedOr(x, "this file")`
-// returns its second argument verbatim when the first is undefined — the string IS user-visible
-// copy. Codex 3792986615. Traverse call arguments too. Non-literal args produce empty results;
-// obvious non-copy strings are filtered by `isTranslatableCopy` downstream.
-test("collects literal arguments passed to a rendered call expression", () => {
-  const src = '<p>{`Agent patch review for ${definedOr(name, "this file")}`}</p>';
+// KEIKO-0299 (review-follow-up rollup, codex 3792986615 + 3792824431): positive JSX-child
+// recursion cases share the same shape (define a source string, extract literals, assert
+// containment). SonarCloud S5976 flagged the earlier per-test spelling as unnecessary
+// duplication; consolidated via `test.each` while preserving each case's semantic intent in
+// its `name`. Recursion covers: call arguments (`definedOr(x, "this file")` — returns fallback
+// verbatim), simple conditionals, and nested conditionals + template branches.
+test.each([
+  {
+    name: "a call-expression argument",
+    src: '<p>{`Agent patch review for ${definedOr(name, "this file")}`}</p>',
+    expected: ["this file"],
+  },
+  {
+    name: "each branch of a conditional expression",
+    src: '<span>{cond ? "Indexing" : "Index"}</span>',
+    expected: ["Indexing", "Index"],
+  },
+  {
+    name: "nested conditionals and template branches",
+    src: '<span>{a ? (b ? "First one" : "Second one") : `Third ${x} one`}</span>',
+    expected: ["First one", "Second one"],
+  },
+])("collects rendered literals from $name", ({ src, expected }) => {
   const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
-  expect(texts).toContain("this file");
+  for (const literal of expected) expect(texts).toContain(literal);
 });
 
-test("still ignores calls whose only literal arguments are machine tokens", () => {
-  expect(
-    untranslatedLiteralsInSource('<p>{translate("feature.title")}</p>', "packages/x/y.tsx")
-      .findings,
-  ).toEqual([]);
-});
-
-// KEIKO-0299 (review-follow-up on 7c976f77): a ConditionalExpression like
-// `{busyKind === "index" ? "Indexing…" : "Index"}` is the other common JSX-child shape and
-// used to be invisible to both the AST helper (it is neither StringLiteral nor
-// NoSubstitutionTemplateLiteral nor TemplateExpression) and the per-line fallback (the braces
-// reject the expression). Emit each branch as its own ledger entry so an added untranslated
-// string in either branch fails the gate. Nested conditionals recurse.
-test("collects each literal branch of a JSX child conditional expression", () => {
-  const src = `<span>{cond ? "Indexing" : "Index"}</span>`;
-  const findings = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings;
-  const texts = findings.map((f) => f.text).sort();
-  expect(texts).toContain("Indexing");
-  expect(texts).toContain("Index");
-});
-
-test("recurses into nested conditionals and template branches", () => {
-  const src = '<span>{a ? (b ? "First one" : "Second one") : `Third ${x} one`}</span>';
-  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx")
-    .findings.map((f) => f.text)
-    .sort();
-  expect(texts).toContain("First one");
-  expect(texts).toContain("Second one");
-  expect(texts.some((t) => t.includes("Third") && t.includes("one"))).toBe(true);
-});
-
-test("still ignores JSX child conditionals whose branches are only expressions", () => {
-  expect(
-    untranslatedLiteralsInSource("<span>{cond ? a : b}</span>", "packages/x/y.tsx").findings,
-  ).toEqual([]);
+// Negative complements for the same set: shapes whose only "literals" are machine tokens or
+// non-literal expressions must not enter the ledger.
+test.each([
+  {
+    name: "call whose only literal is a machine token",
+    src: '<p>{translate("feature.title")}</p>',
+  },
+  {
+    name: "conditional whose branches are only expressions",
+    src: "<span>{cond ? a : b}</span>",
+  },
+])("does not flag $name", ({ src }) => {
+  expect(untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings).toEqual([]);
 });
 
 // KEIKO-0299 (review-follow-up on 44b9ef9b): `{label ?? "Default"}`, `{a || "Fallback"}`,
