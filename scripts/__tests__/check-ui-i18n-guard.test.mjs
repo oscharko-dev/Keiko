@@ -1806,6 +1806,39 @@ test.each([
   expect(texts).toContain("Slide deck");
 });
 
+// Codex 3793905521 on 6aa0eb82: `<div children="Delete account" />` — `children` as a JSX
+// prop renders the literal as ordinary child text. Same policy as `label`; enter the ledger.
+test("scans literal `children` prop copy on intrinsic and custom elements", () => {
+  for (const src of [
+    '<div children="Delete account" />',
+    '<KeikoDialog children="Delete account" />',
+  ]) {
+    const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+    expect(texts).toContain("Delete account");
+  }
+});
+
+// Codex 3793905529 on 6aa0eb82: bilingual UI copy like `Übernehmen` and `Löschen` — the old
+// `[A-Z][a-z]` sentence-start requirement rejected both (uppercase `Ü` isn't ASCII;
+// `Löschen`'s second letter `ö` isn't ASCII). The Unicode `\p{Lu}\p{Ll}` pattern now
+// accepts them, letting hardcoded German copy enter the ledger.
+test.each([
+  {
+    label: "Übernehmen (Unicode uppercase start)",
+    src: '<p>{"Übernehmen"}</p>',
+    expected: "Übernehmen",
+  },
+  {
+    label: "Löschen (Unicode lowercase second char)",
+    src: '<p>{"Löschen"}</p>',
+    expected: "Löschen",
+  },
+  { label: "Ändern (Unicode uppercase A-umlaut)", src: '<p>{"Ändern"}</p>', expected: "Ändern" },
+])("classifies non-ASCII single-word copy ($label)", ({ src, expected }) => {
+  const texts = untranslatedLiteralsInSource(src, "packages/x/y.tsx").findings.map((f) => f.text);
+  expect(texts).toContain(expected);
+});
+
 // Codex 3793795566 on 6d137202: `<p>{["open ", "settings"]}</p>` renders "open settings" but
 // per-element emission alone drops both fragments as machine tokens. When EVERY element is a
 // string literal, ALSO emit the concatenated form as one aggregate. Dynamic elements disable
@@ -1870,12 +1903,17 @@ test.each([
 // Codex 3793830385 on ebd2fabc: `<p>open <>settings</></p>` — a JsxFragment is purely
 // syntactic grouping. Flatten it like an inline formatting element so surrounding JsxText
 // still aggregates into one phrase.
-test("flattens JSX fragments the same way as inline formatting elements", () => {
+//
+// Coderabbit 3793899412 on 680205f9: `toContain` would silently accept duplicate emission
+// (both the parent and the fragment). Pin exactly one — the outer-only guard in
+// `jsxAggregatedTextResults` treats the fragment as an inline formatting child of its
+// container and skips its own aggregate.
+test("flattens JSX fragments the same way as inline formatting elements (single emission)", () => {
   const texts = untranslatedLiteralsInSource(
     "<p>open <>settings</></p>",
     "packages/x/y.tsx",
   ).findings.map((f) => f.text);
-  expect(texts).toContain("open settings");
+  expect(texts.filter((t) => t === "open settings")).toHaveLength(1);
 });
 
 // Codex 3793356672 on af9f5ede: line-break phrasing elements (`<br/>`, `<wbr/>`) split copy at

@@ -199,6 +199,11 @@ async function assertControlEofFailsClosed(helper, runtime, root) {
 
 async function assertSourceContract() {
   const rawSource = await readFile(source, "utf8");
+  runSourceContractOn(rawSource);
+  assertMutationRejected(rawSource);
+}
+
+function runSourceContractOn(rawSource) {
   // Two composition modes over the shared scanner (codex 3793795571 on #3202): positive
   // identifier / call pins consume the string-blanked scan (so a diagnostic `"CREATE_SUSPENDED"`
   // cannot satisfy an assertion on the identifier); the negative shell-launch pin consumes
@@ -212,7 +217,35 @@ async function assertSourceContract() {
   assert.match(codeText, /JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO/u);
   assert.match(codeText, /accounting\.ActiveProcesses == 0/u);
   assert.match(codeText, /PROC_THREAD_ATTRIBUTE_HANDLE_LIST/u);
-  assert.doesNotMatch(preparedText, /system\(|ShellExecute|cmd\.exe|powershell/iu);
+  // Coderabbit 3793899396 on #3202: the negative shell-launch regex must accept `system` /
+  // `ShellExecute` calls with OPTIONAL whitespace before the opening parenthesis (`system
+  // ("cmd")` and `ShellExecute (…)` both compile identically). Word boundary on `system`
+  // avoids matching identifiers that merely CONTAIN "system" (`filesystem`, `MyShellExecute
+  // Handler`).
+  assert.doesNotMatch(preparedText, /\bsystem\s*\(|\bShellExecute\w*\s*\(|cmd\.exe|powershell/iu);
+}
+
+// Codex 3793905525 on #3202: fail-before-fix proof for the shared-scanner wiring. Move a
+// required control (`CREATE_SUSPENDED`) into a `/* ... */` comment, then verify that
+// `runSourceContractOn` rejects the mutated source. Without the scanner wiring the mutated
+// source would still satisfy the raw-text match, so this test is what pins the trust-boundary
+// remediation instead of hoping the future author remembers to run through the shared code.
+function assertMutationRejected(rawSource) {
+  const commentedOut = rawSource.replace(/CREATE_SUSPENDED/, "/* CREATE_SUSPENDED */ (void)0");
+  assert.notEqual(commentedOut, rawSource, "mutation must have changed the source");
+  assert.throws(
+    () => runSourceContractOn(commentedOut),
+    /CREATE_SUSPENDED/,
+    "assertSourceContract must reject a mutation that hides CREATE_SUSPENDED in a comment " +
+      "— pins that the shared scanner strips comments before running the identifier pin",
+  );
+  const diagnosticSource = rawSource.replace(/CREATE_SUSPENDED/, '(void)"CREATE_SUSPENDED"');
+  assert.throws(
+    () => runSourceContractOn(diagnosticSource),
+    /CREATE_SUSPENDED/,
+    "assertSourceContract must reject a mutation that hides CREATE_SUSPENDED inside a " +
+      "diagnostic string — pins that `stripStringLiteralBodies` runs on the identifier pin",
+  );
 }
 
 await assertSourceContract();

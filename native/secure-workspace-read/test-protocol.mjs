@@ -513,6 +513,13 @@ function assertJsIncompatibleArithmeticStaysUnknown() {
     "#if (0 || 5) == 5",
     "#if 2 && 3",
     "#if 0 || 5",
+    // Coderabbit 3793899394: unsigned suffixes trigger C's unsigned-conversion semantics that
+    // JS does not model. `-1U` = 0xFFFFFFFF; `-1U < 0` is FALSE in C (unsigned comparison)
+    // but TRUE in JS after suffix-stripping. `0U - 1 > 0` is TRUE in C (wraps to UINT_MAX)
+    // but FALSE in JS. Both stay unknown; both branches survive.
+    "#if -1U < 0",
+    "#if 0U - 1 > 0",
+    "#if 1uLL + 0",
   ];
   for (const variant of rejectVariants) {
     const stripped = stripCommentsAndStrings(
@@ -569,13 +576,22 @@ function assertMaskedByteSpellingPreservesDelimiters() {
         blanked,
     );
   }
-  // 348 & 0xff = 92 = 0x5c = `\` — the backslash preservation path (`\534` = 348, `\x15c` = 348).
-  // Sanity: the pipeline should not throw on trailing-backslash forms even for these escapes.
+  // 348 & 0xff = 92 = 0x5c = `\` — the backslash preservation path (`\534` = 348,
+  // `\x15c` = 348). Coderabbit 3793899400 on #3202: use the same code-visibility pin as the
+  // `"` and `'` cases — assert `posix_spawn` inside the escape-hidden literal stays inside
+  // the blanked body. If `\` weren't preserved through the mask, downstream would misread
+  // the trailing quote as escaped, corrupt the literal boundary, and let `posix_spawn`
+  // surface as raw code.
   for (const escape of ["\\x15c", "\\534"]) {
-    const blanked = stripCommentsAndStrings('const char *q = "a' + escape + 'b";\n');
-    assert.ok(
-      blanked.includes('""'),
-      escape + " must decode 0x5c with masked byte spelling and blank cleanly; got: " + blanked,
+    const blanked = stripCommentsAndStrings(
+      'const char *q = "a' + escape + 'posix_spawn(&pid)b";\n',
+    );
+    assert.equal(
+      blanked.match(/posix_spawn/u),
+      null,
+      escape +
+        " must decode 0x5c with masked byte spelling so the closing quote is not escaped; got: " +
+        blanked,
     );
   }
 }
@@ -1290,6 +1306,17 @@ function assertAdjacentStringLiteralsFold() {
     /"abcd"/u,
     "chained no-whitespace adjacent literals must fold repeatedly",
   );
+  // Codex 3793905517 on #3202: C -std=c11 allows string-literal PREFIXES (`L"…"`, `u8"…"`,
+  // `u"…"`, `U"…"`) on either side of an adjacent pair; compatible prefixes concatenate. The
+  // fold must not leave the prefix as a separator between literals.
+  const mixedPrefix = foldAdjacentStringLiterals('const char *m = "/bin/" u8"sh";');
+  assert.match(
+    mixedPrefix,
+    /"\/bin\/sh"/u,
+    'prefixed-adjacent literal pair must fold (`"/bin/" u8"sh"` → `"/bin/sh"`)',
+  );
+  const doublePrefix = foldAdjacentStringLiterals('const char *m = L"/bin/" u"sh";');
+  assert.match(doublePrefix, /"\/bin\/sh"/u, "double-prefixed pair must fold too");
   // Non-adjacent (comma-separated arguments) must NOT fold — a comma is not whitespace.
   const nonAdjacent = foldAdjacentStringLiterals('foo("a", "b");');
   assert.doesNotMatch(nonAdjacent, /"ab"/u, "separator like `,` must prevent folding");

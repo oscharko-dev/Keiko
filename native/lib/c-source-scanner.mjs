@@ -207,14 +207,19 @@ export function stripStringLiteralBodies(source) {
 // concatenate.
 export function foldAdjacentStringLiterals(source) {
   // Codex 3793744722 on #3202: C allows adjacent literals WITHOUT intervening whitespace
-  // (`"/bin/""sh"`). The earlier `\s+` requirement missed those spellings and let a
-  // supervisor evade the negative shell-path pin. `\s*` allows zero-or-more whitespace so
-  // adjacent-without-whitespace, single-space, multi-space, and newline forms all fold.
+  // (`"/bin/""sh"`). `\s*` (zero-or-more) folds every whitespace variant. Codex 3793905517:
+  // ALSO allow C string-literal PREFIXES on each side (`L"…"`, `u8"…"`, `u"…"`, `U"…"`).
+  // `-std=c11` compatible prefix pairs concatenate; incompatible pairs are undefined
+  // behaviour that the compiler would either error on or accept unpredictably — either way,
+  // the source-scan pins observe the concatenated BYTES the compiler would emit if it
+  // accepted the source, so dropping the prefix in the folded output is safe.
+  const literal = '(?:L|u8|u|U)?"((?:[^"\\\\]|\\\\.)*)"';
+  const pattern = new RegExp(literal + "\\s*" + literal, "gu");
   let previous;
   let current = source;
   do {
     previous = current;
-    current = previous.replace(/"((?:[^"\\]|\\.)*)"\s*"((?:[^"\\]|\\.)*)"/gu, '"$1$2"');
+    current = previous.replace(pattern, '"$1$2"');
   } while (current !== previous);
   return current;
 }
@@ -704,6 +709,16 @@ function evaluateConstantArithmetic(exprText) {
   // `_trueExpr` already recognise the constant-left-short-circuit shapes without going
   // through this evaluator, so common `#if 0 && FEATURE` / `#if 1 || FEATURE` still work.
   if (/[|&]|\*\*|<<|>>/u.test(trimmed)) return null;
+  // Coderabbit 3793899394 on #3202: reject any `U`/`u`-suffixed integer literal BEFORE
+  // stripping suffixes. C's unsigned conversion diverges from JS's Number arithmetic:
+  //   - `#if -1U < 0` — C: `-1U` = 0xFFFFFFFF, `> 0` → false; JS after suffix strip: `-1`,
+  //     `-1 < 0` → true. Ladder would strip the compiler-live branch.
+  //   - `#if 0U - 1 > 0` — C: `0U - 1` wraps to `UINT_MAX` (nonzero, > 0) → true;
+  //     JS: `0 - 1 = -1`, `> 0` → false. Ladder would strip the wrong branch.
+  // The evaluator does not model unsigned wrap; the char-set validator above already excludes
+  // most non-integer syntax, so a bare `U` or `u` in the accepted subset can only be a
+  // literal suffix. Fail closed.
+  if (/[Uu]/u.test(trimmed)) return null;
   let js = trimmed.replace(/([0-9a-fA-F])[UuLl]{1,3}\b/gu, "$1");
   // C octal: `0<octal-digits>`. Convert to JS `0o<digits>`. Bare `0` and `0x…` stay as-is.
   js = js.replace(/\b0([0-7]+)(?![0-9a-fA-F])/gu, "0o$1");

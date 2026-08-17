@@ -544,14 +544,20 @@ const COPY_URL_LIKE = /^(?:https?:|file:|mailto:|data:|tel:|\/|\.{1,2}\/|[A-Za-z
 const COPY_LOWER_TOKEN = /^[a-z0-9]+(?:[-_.:][a-z0-9]+)*$/u;
 const COPY_UPPER_CONST = /^[A-Z][A-Z0-9_]*$/u;
 const COPY_NUMERIC_UNIT = /^\d+(?:[.,]\d+)?\s*[A-Za-z%]{0,6}$/u;
-const COPY_SENTENCE_START = /^[A-Z][a-z]/u;
+// Codex 3793905529 on #3202: sentence-start recognition MUST accept Unicode letters — the
+// bilingual UI has German copy such as `Übernehmen` (starts with `Ü`) and `Löschen` (second
+// letter `ö` is non-ASCII); the old `[A-Z][a-z]` pattern rejected both. `\p{Lu}\p{Ll}`
+// matches Unicode uppercase-followed-by-lowercase across scripts (Latin, Greek, Cyrillic,
+// etc.). Machine-token slugs stay rejected by `COPY_LOWER_TOKEN` (ASCII-only by design so
+// enum members and CSS tokens still slip through).
+const COPY_SENTENCE_START = /^\p{Lu}\p{Ll}/u;
 
 function letterCount(text) {
-  let count = 0;
-  for (const character of text) {
-    if (isAsciiLetter(character)) count += 1;
-  }
-  return count;
+  // Unicode letter count (matches every `\p{L}` character). Codex 3793905529: previously
+  // ASCII-only, so a German word `Übernehmen` counted only 8 letters (missing `Ü` and `ö`);
+  // for a 2-letter minimum that's still fine, but the semantics matter for future extensions.
+  const matches = text.match(/\p{L}/gu);
+  return matches === null ? 0 : matches.length;
 }
 
 // `${…}` segments are code, not copy. A template literal that is NOTHING but interpolations plus
@@ -648,6 +654,9 @@ const USER_FACING_ATTRIBUTE_NAMES = new Set([
   // aria-roledescription="Slide deck">` → "Slide deck" instead of "region"). Human-readable
   // by definition; same policy as `aria-label`.
   "aria-roledescription",
+  // Codex 3793905521 on #3202: `children` as a JSX prop (`<div children="Delete account" />`)
+  // is the universal React child-passing shape. Same rendered-copy semantics as `label`.
+  "children",
   "alt",
   "placeholder",
   "title",
@@ -772,6 +781,15 @@ function collectAggregatedJsxTextSegments(container, sourceFile) {
 // segments split into N copies (one per alternative). Subsequent parts append to all active
 // copies. `startNewSegment` finalises whichever segments have content and resets to one fresh
 // active segment. `finalize` finalises whatever is still active.
+// Coderabbit 3793899420 on #3202: cap the active-segment fan-out. `forkAlternatives`
+// multiplies active × alternatives; N conditionals in one container yield 2^N active
+// segments, and every later `appendPart` copies text into all of them. A single dense
+// container could then dominate the CI-wide UI scan. When the next fork would exceed the
+// cap, finalise whatever is collected so far and BREAK the phrase (start a fresh single-
+// segment active list). The cap is generous enough to cover realistic UIs (5 conditionals
+// / 32 combinations) while keeping the worst case linear in container size.
+const MAX_ACTIVE_SEGMENTS = 32;
+
 function createSegmentCollector() {
   const finalized = [];
   let active = [{ parts: [], firstLine: null }];
@@ -790,6 +808,11 @@ function createSegmentCollector() {
       active = [{ parts: [], firstLine: null }];
     },
     forkAlternatives(alternatives, line) {
+      if (active.length * alternatives.length > MAX_ACTIVE_SEGMENTS) {
+        for (const segment of active) if (segment.parts.length > 0) finalized.push(segment);
+        active = [{ parts: [], firstLine: null }];
+        return;
+      }
       const next = [];
       for (const segment of active) {
         for (const alternative of alternatives) {
