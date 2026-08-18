@@ -298,6 +298,9 @@ describe("useChatSession bootstrap", () => {
 
     expect(result.current.models).toEqual([]);
     expect(result.current.configuredModelsAvailable).toBe(true);
+    // The user's selection must survive the pending clear: resetting it here silently changed
+    // which model the next message used, merely because the picker was opened.
+    expect(result.current.selectedModel).toBe("chat-live");
   });
 
   it("honors a child window binding immediately after bootstrap", async () => {

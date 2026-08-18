@@ -1964,7 +1964,10 @@ function clearSessionModelsForPendingRefresh(previous: SessionState): SessionSta
   return {
     ...previous,
     models: [],
-    selectedModel: resolveSelectedModelId(previous.selectedModel, []),
+    // selectedModel is deliberately KEPT: the emptied list already hides stale options while
+    // the request runs, and the success path re-validates the id against the refreshed
+    // catalog — resolving it against [] here silently reset a non-default selection every
+    // time the picker was merely opened.
   };
 }
 
