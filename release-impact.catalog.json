@@ -1453,6 +1453,57 @@
         "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.10",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.10",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-18-keiko-0.3.10-indexing-provider-divergence",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 0.3.10 is a focused patch release fixing the Knowledge Pod indexing dead end that survived 0.3.9 on self-hosted OpenAI-compatible gateways: a pod pinned to the second of two gateway entries sharing one model id (a common LiteLLM configuration shape after endpoint debugging) failed every \"Index now\" click with a generic conflict, zero recorded jobs, and zero diagnostics. Indexing now uses exactly the provider the request resolved (including alias-repaired pods), and the silent failure branch is gone.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Knowledge Pod indexing no longer dies silently when the pod is pinned to one of several gateway entries sharing a model id: the indexing job now runs with exactly the provider the request resolved (including alias-repaired pods), instead of re-deriving it with a strict first-match lookup that could miss and fail with an empty job id, no job history, and no diagnostics.",
+        "The same repair unblocks full re-embed maintenance runs whose embedding model had rotated \u2014 the previous silent branch made exactly those runs fail without a trace."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-18",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3214#5332975259",
+        "rationale": "The release owner directed this immediate patch release in the 2026-08-18 working session after the customer's Knowledge Pod indexing remained blocked on 0.3.9; the root cause (divergent provider resolution with a silent failure branch) is fixed and red-proven in #3214, and the customer deployment needs the repair the next morning."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
     }
   ]
 }
