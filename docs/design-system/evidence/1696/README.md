@@ -34,12 +34,6 @@ Rerunnable browser harness:
 npm run test:e2e:update-ui-1696
 ```
 
-Receipt command for the user-facing child gate:
-
-```bash
-.keiko-scripts/ui-verify-receipt.sh 1696 -- npx playwright test --config tests/e2e/config/playwright.issue-1696-update-ui.config.ts --project=chromium
-```
-
 The Playwright harness writes these artifacts in this directory:
 
 - `01-update-window-dark.png`

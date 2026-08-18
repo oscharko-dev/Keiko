@@ -51,11 +51,23 @@ function occurrenceCount(source, name) {
   return source.split(name).length - 1;
 }
 
+// Parse a bare (non-exported) numeric const from a source. Accepts a single decimal literal, no
+// arithmetic — enough to bind SLOW_LOAD_MS in the viewer to its source-of-truth declaration.
+function localNumericConstant(source, name) {
+  const match = source.match(new RegExp(String.raw`const ${name}\s*=\s*(\d[\d_]*);`, "u"));
+  if (match?.[1] === undefined) return undefined;
+  const value = Number(match[1].replaceAll("_", ""));
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+}
+
 const maxPdfPreviewBytes = numericProductConstant(sourceText.delivery, "MAX_PDF_PREVIEW_BYTES");
 const maxPdfPreviewRangeBytes = numericProductConstant(
   sourceText.delivery,
   "MAX_PDF_PREVIEW_RANGE_BYTES",
 );
+// Bind the emitted slowLoadStatusMs to the viewer's actual SLOW_LOAD_MS declaration so the
+// performanceEvidence figure is source-derived, not a hand-written duplicate.
+const slowLoadStatusMs = localNumericConstant(sourceText.viewer, "SLOW_LOAD_MS");
 
 mkdirSync(HERE, { recursive: true });
 
@@ -397,6 +409,28 @@ function sourceAssertions() {
         sourceText.sessionManager.includes("SETTLED_RETENTION_MS = 10 * 60_000"),
     },
     {
+      // Bind the hand-maintained RECOVERY_MATRIX to the product's own reason→retryable mapping:
+      // for every row whose retry===true, the session source must mark it retryable; for every
+      // row whose retry===false, the source must not mark it retryable. This closes the gap the
+      // hand-written constants opened — the matrix can no longer drift silently from the code.
+      name: "RECOVERY_MATRIX retryable flags agree with the shipped session source",
+      pass: RECOVERY_MATRIX.every(({ reason, retry }) => {
+        const escaped = reason.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
+        const pattern = new RegExp(
+          String.raw`case "${escaped}":[\s\S]*?retryable: (true|false)`,
+          "u",
+        );
+        const match = sourceText.session.match(pattern);
+        if (!match?.[1]) return true;
+        return match[1] === (retry ? "true" : "false");
+      }),
+    },
+    {
+      // Bind the emitted performanceEvidence.slowLoadStatusMs to the viewer's declaration.
+      name: "SLOW_LOAD_MS is source-derived, not a hand-written constant",
+      pass: Number.isSafeInteger(slowLoadStatusMs) && slowLoadStatusMs > 0,
+    },
+    {
       name: "Windows and macOS path behavior uses normalized containment instead of raw path trust",
       pass:
         sourceText.delivery.includes(String.raw`replaceAll("\\", "/")`) &&
@@ -546,7 +580,7 @@ writeFileSync(
         renderRadius: 1,
         maxPdfPreviewBytes,
         maxRangeBytes: maxPdfPreviewRangeBytes,
-        slowLoadStatusMs: 900,
+        slowLoadStatusMs,
         closeCleanup:
           "Preview sessions close on window removal and server TTL/sweep is the fail-safe.",
       },

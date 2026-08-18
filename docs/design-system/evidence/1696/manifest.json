@@ -3,7 +3,6 @@
   "epic": "#1687",
   "generatedAt": "2026-06-30T17:11:30.507Z",
   "command": "npm run test:e2e:update-ui-1696",
-  "receiptCommand": ".keiko-scripts/ui-verify-receipt.sh 1696 -- npx playwright test --config tests/e2e/config/playwright.issue-1696-update-ui.config.ts --project=chromium",
   "artifacts": [
     "01-update-window-dark.png",
     "02-update-window-light.png",

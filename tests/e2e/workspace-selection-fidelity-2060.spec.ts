@@ -12,7 +12,6 @@ const REPO_ROOT = resolve(process.cwd());
 const EVIDENCE_DIR = resolve(REPO_ROOT, "docs", "design-system", "evidence", "2060");
 const PLAYWRIGHT_PLAN_COMMAND =
   "npx playwright test --config tests/e2e/config/playwright.issue-2060-workspace-selection.config.ts --project=chromium";
-const UI_RECEIPT_COMMAND = `.keiko-scripts/ui-verify-receipt.sh 2060 -- ${PLAYWRIGHT_PLAN_COMMAND}`;
 
 const WINDOW_IDS = ["issue-2060-project", "issue-2060-plugins", "issue-2060-automations"] as const;
 const SELECTION_VISUAL_SETTLE_TIMEOUT_MS = 500;
@@ -399,7 +398,6 @@ function manifest(captures: readonly CaptureRecord[], generatedAt: string): Json
     epic: "#2055",
     generatedAt,
     command: "KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:workspace-selection-2060",
-    receiptCommand: UI_RECEIPT_COMMAND,
     playwrightCommand: PLAYWRIGHT_PLAN_COMMAND,
     artifacts: [...SCREENSHOT_ARTIFACTS, ...JSON_ARTIFACTS],
     notes: [

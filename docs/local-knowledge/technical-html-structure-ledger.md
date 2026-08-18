@@ -30,7 +30,7 @@ ingestion continues to execute no JavaScript and trusts no DOM.
 | On-disk schema           | `packages/keiko-contracts/src/local-knowledge-schema.ts` migration manifest                  | Additive `parsed_units.anchor_id` column via forward-only migration v25 (DB schema version 24 → 25)                                         |
 | Chunker                  | `packages/keiko-local-knowledge/src/chunking/chunker.ts` boundary ladder                     | Line/row boundary probe before the hard cut, checked ahead of mid-line sentence punctuation; strategy version `boundary-v3` → `boundary-v5` |
 | Citation mapper          | `packages/keiko-local-knowledge/src/chunking/citation-mapper.ts` `mapChunkToCitation`        | Projects the sealed `anchor_id` onto the citation, alongside the existing heading `sectionPath` hop                                         |
-| Retrieval evaluation     | `packages/keiko-local-knowledge/src/evaluations/fixtures.ts` `ALL_FIXTURES` + scoring        | New `html-manual-structure` fixture scored by the existing Recall@K / MRR / nDCG / citation dimensions                                      |
+| Retrieval evaluation     | `packages/keiko-evaluations/src/local-knowledge/fixtures.ts` `ALL_FIXTURES` + scoring        | New `html-manual-structure` fixture scored by the existing Recall@K / MRR / nDCG / citation dimensions                                      |
 
 ## Supported HTML structures
 

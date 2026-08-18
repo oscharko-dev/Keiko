@@ -41,11 +41,15 @@ code `unsupported-version`; emitting it is the transport's responsibility (#497)
 | **Control / signaling** | Session lifecycle, capability negotiation, provider selection, SDP/ICE signaling, cancellation, transcript lifecycle, policy decisions | Capability-gated loopback WebSocket (`VOICE_REALTIME_CONTROL_TRANSPORT`) | none     |
 | **Media**               | Real-time audio only; optional low-latency `RTCDataChannel` mirroring a control subset                                                 | Native browser WebRTC (DTLS-SRTP)                                        | none     |
 
-**WebSocket is the authoritative control role.** The BFF accepts upgrades only on
-`/api/voice/control`, only from the approved loopback origin, and only when a complete Realtime
-deployment is available. Every other upgrade remains hard-rejected. `loopback-http-sse` stays in the
-transport union for historical records. `VOICE_CONTROL_TRANSPORT_V1` preserves that immutable
-HTTP/SSE baseline; productive sessions use `VOICE_REALTIME_CONTROL_TRANSPORT = "loopback-websocket"`.
+**WebSocket is the authoritative control role.** The BFF accepts upgrades on exactly two
+capability-gated paths, only from the approved loopback origin: `/api/voice/control` (accepted only
+when a complete Realtime deployment is available) and `/api/voice/transcribe/live` (accepted only
+when the live-dictation transcription capability is provisioned). Every other upgrade remains
+hard-rejected. `loopback-http-sse` stays in the transport union for historical records.
+`VOICE_CONTROL_TRANSPORT_V1` preserves that immutable HTTP/SSE baseline; productive sessions use
+`VOICE_REALTIME_CONTROL_TRANSPORT = "loopback-websocket"`. The live-dictation upgrade is a separate,
+capability-gated media-adjacent transcript channel — not a variant of the control plane — governed
+by `VOICE_LIVE_TRANSCRIBE_PATH` in `packages/keiko-server/src/voice-live-dictation.ts`.
 
 **Raw audio is never a control message.** The immutable v1 `VOICE_MEDIA_PLANE` descriptor remains
 decodable, while productive Realtime authority is narrowed by `VOICE_REALTIME_INPUT_MEDIA_PLANE` to
@@ -270,9 +274,11 @@ the contract:
   local. The honest limitation that no positive destination host allowlist exists yet (ADR-0100 D4) is
   unchanged by this protocol.
 - **Controls remain narrow.** Issue #497 re-opened only the capability-gated loopback
-  `/api/voice/control` upgrade and scoped microphone permission to self. Any browser-direct credential,
-  custom STUN/TURN relay, or wider origin/permission posture remains a future explicit decision under the
-  security gate (ADR-0100 D6, privacy-contract §4).
+  `/api/voice/control` upgrade and scoped microphone permission to self. A separate capability-gated
+  `/api/voice/transcribe/live` upgrade was subsequently added for the live-dictation transcript
+  channel and is bounded by the same loopback-origin and hard-reject-by-default posture. Any
+  browser-direct credential, custom STUN/TURN relay, or wider origin/permission posture remains a
+  future explicit decision under the security gate (ADR-0100 D6, privacy-contract §4).
 
 ## 11. No new runtime media packages (AC4)
 

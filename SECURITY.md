@@ -39,10 +39,17 @@ Expected handling:
 
 The current security and audit boundary model is documented in
 [`docs/security-and-audit-boundaries.md`](docs/security-and-audit-boundaries.md)
-and [ADR-0030](docs/adr/ADR-0030-workspace-security-evidence.md). Those documents
-are the source of truth for the loopback-only UI, Model Gateway-only model access,
-workspace containment, allowlisted command execution, patch/evidence protections,
-and workspace durable-state restrictions.
+and [ADR-0030](docs/adr/ADR-0030-workspace-security-evidence.md). Later trust-boundary-bearing
+subsystems are governed by [ADR-0128](docs/adr/ADR-0128-atlassian-connector-authority-and-security-design.md)
+(Atlassian connector authority and encrypted credential custody),
+[ADR-0141](docs/adr/ADR-0141-authority-envelope-and-coding-task-runtime.md) (coding-task
+Authority Envelope), [ADR-0154](docs/adr/ADR-0154-canonical-twin-voice-pipeline-and-media-only-realtime-authority.md)
+(media-only Realtime WebRTC posture for voice capture), and
+[ADR-0163](docs/adr/ADR-0163-self-contained-release-qualified-coding-runtime.md)
+(self-contained release-qualified coding runtime). Those documents are the source
+of truth for the loopback-only UI, Model Gateway-only model access, workspace
+containment, allowlisted command execution, patch/evidence protections, and
+workspace durable-state restrictions.
 
 ## Secret-Scanning Triage for Maintainers
 
