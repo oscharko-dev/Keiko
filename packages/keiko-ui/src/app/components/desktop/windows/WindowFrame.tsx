@@ -784,13 +784,19 @@ function booleanDataAttribute(value: boolean): "true" | undefined {
 // Raise counter across ALL frames: a pending delayed focus yields to any later interaction.
 let windowInteractionCount = 0;
 
-// EVERY direct user-interaction raise that bypasses focusWindowForTarget (resize grips, the
-// maximize control) must advance the counter through this helper. Those handlers suppress or
+// EVERY direct window-raising interaction that bypasses focusWindowForTarget (resize grips,
+// the maximize control) must advance the counter AT PRESS TIME. Those handlers suppress or
 // bypass the browser's default focus move, so DOM focus can stay inside a previously armed
-// text-entry target — the counter is then the only thing stopping that pending delayed raise
-// from re-raising the old window over the one the user is now interacting with (PR #3212).
-function raiseWindowForInteraction(api: WorkspaceApi, id: string): void {
+// text-entry target — the token advance is then the only thing stopping that pending delayed
+// raise from re-raising the old window over the one the user is interacting with (PR #3212).
+function noteWindowInteraction(): void {
   windowInteractionCount += 1;
+}
+
+// Direct user-interaction raises outside focusWindowForTarget (resize grips) count the
+// interaction and raise in one step, at the press that starts the gesture.
+function raiseWindowForInteraction(api: WorkspaceApi, id: string): void {
+  noteWindowInteraction();
   api.focus(id);
 }
 
@@ -1405,18 +1411,20 @@ function WindowFrameImpl({
                     ? t("window.restore", { label: windowTitle })
                     : t("window.fullscreen", { label: windowTitle })
                 }
-                onPointerDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  // Maximize IS a raise (makeMaximize bumps z), and this stopPropagation()
+                  // keeps focusWindowForTarget from counting the interaction — so invalidate
+                  // at PRESS time. Click time is too late: a press-and-hold across the 180ms
+                  // delay would let a pending delayed text-entry raise fire mid-hold, covering
+                  // this window and even retargeting the release. The raise itself stays on
+                  // click (traffic-button presses never reorder windows before the action).
+                  if (isPrimaryActivationPointer(e)) noteWindowInteraction();
+                }}
                 onDoubleClick={(e) => {
                   e.stopPropagation();
                 }}
-                onClick={() => {
-                  // Maximize IS a raise (makeMaximize bumps z), and this button's pointerdown
-                  // stops propagation before focusWindowForTarget can count the interaction —
-                  // WebKit also never moves DOM focus onto a clicked button, so without the
-                  // counter a pending delayed text-entry raise would cover the maximized window.
-                  raiseWindowForInteraction(api, win.id);
-                  api.maximize(win.id);
-                }}
+                onClick={() => api.maximize(win.id)}
               >
                 {win.max ? <RestoreIcon size={17} /> : <MaximizeIcon size={17} />}
               </button>

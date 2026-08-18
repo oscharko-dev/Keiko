@@ -809,7 +809,11 @@ export function createUserMessage(
 }
 
 export type DesktopChatTurnAdmission =
-  | { readonly kind: "admitted"; readonly userMessage: ChatMessage }
+  | {
+      readonly kind: "admitted";
+      readonly userMessage: ChatMessage;
+      readonly legacyTouchedUpdatedAt?: number | undefined;
+    }
   | { readonly kind: "replay"; readonly response: DesktopChatSendResponse }
   | { readonly kind: "rejected"; readonly result: RouteResult };
 
@@ -906,7 +910,12 @@ export function admitDesktopChatTurn(
 ): DesktopChatTurnAdmission {
   const { request, chat, turnIdentityContent } = prepared;
   if (request.clientTurnId === undefined) {
-    return { kind: "admitted", userMessage: createUserMessage(deps, request) };
+    const userMessage = createUserMessage(deps, request);
+    // Captured synchronously right after the insert (SQLite calls cannot interleave here):
+    // the exact updated_at value our createMessage touch wrote. The rejection-path restore
+    // compare-and-sets against it so a concurrent accepted update keeps its newer recency.
+    const legacyTouchedUpdatedAt = deps.store.findChatById(request.chatId)?.updatedAt;
+    return { kind: "admitted", userMessage, legacyTouchedUpdatedAt };
   }
   const admission = deps.store.admitChatTurn(
     request.clientTurnId,
@@ -970,10 +979,15 @@ export function failDesktopChatTurn(
 // ledger no-ops, so the just-admitted user row is discarded — restoring the pre-#3182
 // invariant that a rejected legacy request has no side effect. Post-provider failures keep
 // the row on purpose: the send was attempted and history stays honest.
+export interface AdmittedTurnHandle {
+  readonly userMessage: ChatMessage;
+  readonly legacyTouchedUpdatedAt?: number | undefined;
+}
+
 export function settleRejectedDesktopChatTurn(
   deps: UiHandlerDeps,
   prepared: Pick<PreparedDesktopChatSend, "request" | "chat">,
-  userMessage: ChatMessage,
+  admitted: AdmittedTurnHandle,
   terminalState: "failed" | "cancelled" = "failed",
 ): void {
   const { request } = prepared;
@@ -982,8 +996,14 @@ export function settleRejectedDesktopChatTurn(
     return;
   }
   // The pre-admission updatedAt undoes the createMessage touch so a rejected legacy request
-  // cannot promote its chat in the recency-ordered history.
-  deps.store.discardLegacyTurnUserMessage(request.chatId, userMessage.id, prepared.chat.updatedAt);
+  // cannot promote its chat in the recency-ordered history; the admission-time touch value
+  // makes that rollback a compare-and-set, so a concurrent accepted update survives.
+  deps.store.discardLegacyTurnUserMessage(
+    request.chatId,
+    admitted.userMessage.id,
+    prepared.chat.updatedAt,
+    admitted.legacyTouchedUpdatedAt,
+  );
 }
 
 export function createAssistantMessage(
@@ -1736,13 +1756,13 @@ function bufferedTurnCancellationResult(
   deps: UiHandlerDeps,
   prepared: Pick<PreparedDesktopChatSend, "request" | "chat">,
   signal: AbortSignal,
-  preProviderUserMessage?: ChatMessage,
+  preProviderAdmitted?: AdmittedTurnHandle,
 ): RouteResult | undefined {
   if (!requestSignalAborted(signal)) return undefined;
   // Before any provider output the settle may still discard a legacy row; after the
   // provider ran, history keeps the user message and only the ledger settles.
-  if (preProviderUserMessage !== undefined) {
-    settleRejectedDesktopChatTurn(deps, prepared, preProviderUserMessage, "cancelled");
+  if (preProviderAdmitted !== undefined) {
+    settleRejectedDesktopChatTurn(deps, prepared, preProviderAdmitted, "cancelled");
   } else {
     failDesktopChatTurn(deps, prepared.request, "cancelled");
   }
@@ -1755,7 +1775,7 @@ function bufferedTurnCancellationResult(
 async function resolveBufferedMemory(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatSend,
-  userMessage: ChatMessage,
+  admitted: AdmittedTurnHandle,
   abortSignal: AbortSignal,
 ): Promise<ConversationMemoryResultWire | RouteResult> {
   const { request, memoryContext } = prepared;
@@ -1767,13 +1787,13 @@ async function resolveBufferedMemory(
         : await buildMemoryResult(request, deps, memoryContext);
   } catch (error) {
     const cancelled = requestSignalAborted(abortSignal);
-    settleRejectedDesktopChatTurn(deps, prepared, userMessage, cancelled ? "cancelled" : "failed");
+    settleRejectedDesktopChatTurn(deps, prepared, admitted, cancelled ? "cancelled" : "failed");
     return cancelled ? requestCancelledResult() : desktopChatErrorResult(error, deps);
   }
   // Cancellation that lands during retrieval must be settled HERE, before assembly and the
   // provider call — this is still pre-provider, so a legacy row is discarded rather than
   // left behind by the ledger no-op.
-  return bufferedTurnCancellationResult(deps, prepared, abortSignal, userMessage) ?? memory;
+  return bufferedTurnCancellationResult(deps, prepared, abortSignal, admitted) ?? memory;
 }
 
 function admitBufferedModelTurn(
@@ -1781,7 +1801,7 @@ function admitBufferedModelTurn(
   prepared: PreparedDesktopChatSend,
 ):
   | {
-      readonly userMessage: ChatMessage;
+      readonly admitted: AdmittedTurnHandle;
       readonly executionAdmission: DesktopChatExecutionAdmission;
     }
   | RouteResult {
@@ -1805,10 +1825,10 @@ function admitBufferedModelTurn(
   const executionAdmission =
     legacyAdmission ?? captureDesktopChatExecutionAdmission(request, chat, modelId, deps);
   if (isRouteResult(executionAdmission)) {
-    failDesktopChatTurn(deps, request);
+    settleRejectedDesktopChatTurn(deps, prepared, admission);
     return executionAdmission;
   }
-  return { userMessage: admission.userMessage, executionAdmission };
+  return { admitted: admission, executionAdmission };
 }
 
 async function persistModelChatTurn(
@@ -1844,11 +1864,12 @@ async function executeBufferedModelTurn(
   startedAt: number,
 ): Promise<RouteResult> {
   const { request, modelId } = prepared;
-  const admitted = admitBufferedModelTurn(deps, prepared);
-  if (isRouteResult(admitted)) return admitted;
-  const { userMessage, executionAdmission } = admitted;
+  const outcome = admitBufferedModelTurn(deps, prepared);
+  if (isRouteResult(outcome)) return outcome;
+  const { admitted, executionAdmission } = outcome;
+  const { userMessage } = admitted;
   const gatewayTurn = captureGatewayTurnSnapshot(deps, request, userMessage);
-  const memory = await resolveBufferedMemory(deps, prepared, userMessage, abortSignal);
+  const memory = await resolveBufferedMemory(deps, prepared, admitted, abortSignal);
   if (isRouteResult(memory)) return memory;
   const assembly = assemblyWithConversationImages(
     deps,
@@ -1858,7 +1879,7 @@ async function executeBufferedModelTurn(
   );
   const model = bufferedModelAtProviderBoundary(deps, modelId, executionAdmission);
   if (isRouteResult(model)) {
-    settleRejectedDesktopChatTurn(deps, prepared, userMessage);
+    settleRejectedDesktopChatTurn(deps, prepared, admitted);
     return model;
   }
   const response = await model.call(

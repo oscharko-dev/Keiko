@@ -553,15 +553,14 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
       "flug",
     ],
     weak: [
-      // Standalone "Reise" scores travel only with planning intent nearby — a possessive
-      // ("meine/unsere Reise") or a planning verb (plan/plane/planen, organisiere(n), buche(n))
-      // within a 40-char window on either side — so vocabulary or translation prompts that merely
-      // mention the word (e.g. "Was bedeutet das Wort Reise?") stay out of the expert travel
-      // frame, while "Plane meine Reise durch Europa" keeps scoring. Embeddings such as "Preise"
-      // or "Reisepass" must not revive the substring false positive that removed the plain
+      // Standalone "Reise" scores travel only with a planning verb (plan/plane/planen,
+      // organisiere(n), buche(n)) within a 40-char window on either side. A bare or merely
+      // possessive mention is not planning intent — "Was bedeutet das Wort Reise?" and a
+      // translation request quoting "meine Reise" must stay out of the expert travel frame,
+      // while "Plane meine Reise durch Europa" keeps scoring. Embeddings such as "Preise" or
+      // "Reisepass" must not revive the substring false positive that removed the plain
       // "reise" needle. The folded search text is lowercase and diacritic-free, but \b is
       // ASCII-only, so Unicode letter/number lookarounds are the word boundary.
-      /(?<![\p{L}\p{N}])(?:meine|unsere)\s+reise(?![\p{L}\p{N}])/u,
       /(?<![\p{L}\p{N}])(?:plan(?:e|en)?|organisieren?|buchen?)(?![\p{L}\p{N}]).{0,40}(?<![\p{L}\p{N}])reise(?![\p{L}\p{N}])/su,
       /(?<![\p{L}\p{N}])reise(?![\p{L}\p{N}]).{0,40}(?<![\p{L}\p{N}])(?:plan(?:e|en)?|organisieren?|buchen?)(?![\p{L}\p{N}])/su,
       "oktober",

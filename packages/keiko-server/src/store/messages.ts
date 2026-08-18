@@ -778,12 +778,15 @@ WHERE id = ? AND chat_id = ? AND role = 'user' AND client_turn_id IS NULL
 // createMessage touched chats.updated_at, and listChatsLimited orders by it — without this
 // restore a REJECTED legacy request still promotes its chat to the top of history and can
 // become the session-resume candidate. The restored value is the pre-admission updatedAt or
-// any newer surviving message activity, whichever is later, and only when the delete actually
-// removed the admitted row.
+// any newer surviving message activity, whichever is later. The compare-and-set on the
+// admission-time touch value makes the rollback OWNED: a concurrent accepted update (for
+// example a rename while retrieval was in flight) advanced updated_at past our touch, the
+// CAS misses, and that newer recency survives. Runs only when the delete actually removed
+// the admitted row.
 const SQL_RESTORE_CHAT_RECENCY = `
 UPDATE chats
 SET updated_at = MAX(?, COALESCE((SELECT MAX(timestamp) FROM chat_messages WHERE chat_id = ?), 0))
-WHERE id = ?
+WHERE id = ? AND updated_at = ?
 `;
 
 export function discardLegacyTurnUserMessage(
@@ -791,10 +794,16 @@ export function discardLegacyTurnUserMessage(
   chatId: string,
   id: string,
   restoreUpdatedAtMs: number,
+  expectedTouchedUpdatedAtMs: number | undefined,
 ): void {
   const info = db.prepare(SQL_DISCARD_LEGACY_TURN_USER).run(id, chatId);
-  if (info.changes === 0) return;
-  db.prepare(SQL_RESTORE_CHAT_RECENCY).run(restoreUpdatedAtMs, chatId, chatId);
+  if (info.changes === 0 || expectedTouchedUpdatedAtMs === undefined) return;
+  db.prepare(SQL_RESTORE_CHAT_RECENCY).run(
+    restoreUpdatedAtMs,
+    chatId,
+    chatId,
+    expectedTouchedUpdatedAtMs,
+  );
 }
 
 export function updateMessage(

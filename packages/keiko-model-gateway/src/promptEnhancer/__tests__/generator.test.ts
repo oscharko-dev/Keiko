@@ -308,6 +308,22 @@ describe("generateEnhancedPrompt — intent-specific shaping", () => {
     );
   });
 
+  it("keeps possessive Reise phrases without a planning verb out of the travel frame", () => {
+    // A possessive alone is not planning intent: a translation request quoting "meine Reise"
+    // (or a narrated past trip) must not receive the expert travel-planner frame.
+    const quoted = generateForProductionInput(
+      "\u00dcbersetze \u201emeine Reise\u201c ins Englische.",
+    );
+    expect(trustedText(quoted.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+
+    const narrative = generateForProductionInput("Meine Reise war sch\u00f6n.");
+    expect(trustedText(narrative.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
   it("classifies empty and control-only drafts deterministically without a travel frame", () => {
     const empty = generateForProductionInput("");
     expect(empty.analysis.taskClass).toBe("factual-qa");

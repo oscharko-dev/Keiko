@@ -260,8 +260,9 @@ describe("discardLegacyTurnUserMessage", () => {
     const admitted = store.createMessage(legacyUserMessage("rejected legacy turn", 500));
     // createMessage touches chats.updated_at — without the restore a REJECTED request still
     // promotes this chat in the recency-ordered history (the session-resume candidate).
-    expect(chatUpdatedAt()).toBeGreaterThan(before);
-    store.discardLegacyTurnUserMessage(chatId, admitted.id, before);
+    const touched = chatUpdatedAt();
+    expect(touched).toBeGreaterThan(before);
+    store.discardLegacyTurnUserMessage(chatId, admitted.id, before, touched);
     expect(store.listMessages(chatId)).toEqual([]);
     expect(chatUpdatedAt()).toBe(before);
   });
@@ -270,16 +271,32 @@ describe("discardLegacyTurnUserMessage", () => {
     const before = chatUpdatedAt();
     const admitted = store.createMessage(legacyUserMessage("rejected legacy turn", 500));
     const survivor = store.createMessage(legacyUserMessage("later surviving turn", 900));
-    store.discardLegacyTurnUserMessage(chatId, admitted.id, before);
+    const touched = chatUpdatedAt();
+    store.discardLegacyTurnUserMessage(chatId, admitted.id, before, touched);
     expect(store.listMessages(chatId)).toMatchObject([{ id: survivor.id }]);
     expect(chatUpdatedAt()).toBe(900);
+  });
+
+  it("leaves a concurrent accepted update's newer recency untouched", () => {
+    const before = chatUpdatedAt();
+    const admitted = store.createMessage(legacyUserMessage("rejected legacy turn", 500));
+    const touched = chatUpdatedAt();
+    // A rename lands while retrieval is in flight: updateChat advances updated_at past our
+    // admission touch. The rollback owns only its own touch — the compare-and-set must miss
+    // and the rename's newer recency must survive.
+    store.updateChat(chatId, { title: "renamed while retrieval was in flight" });
+    const renamed = chatUpdatedAt();
+    expect(renamed).toBeGreaterThan(touched);
+    store.discardLegacyTurnUserMessage(chatId, admitted.id, before, touched);
+    expect(store.listMessages(chatId)).toEqual([]);
+    expect(chatUpdatedAt()).toBe(renamed);
   });
 
   it("never deletes a ledger-owned or non-user row and leaves recency untouched", () => {
     const admission = store.admitChatTurn("turn-ledger-1", legacyUserMessage("ledger turn", 700));
     if (admission.kind !== "admitted") throw new Error("expected admitted ledger turn");
     const touched = chatUpdatedAt();
-    store.discardLegacyTurnUserMessage(chatId, admission.userMessage.id, 1);
+    store.discardLegacyTurnUserMessage(chatId, admission.userMessage.id, 1, touched);
     expect(store.listMessages(chatId)).toMatchObject([{ id: admission.userMessage.id }]);
     expect(chatUpdatedAt()).toBe(touched);
   });

@@ -139,6 +139,7 @@ export interface UiStore {
     chatId: string,
     id: string,
     restoreUpdatedAtMs: number,
+    expectedTouchedUpdatedAtMs: number | undefined,
   ) => void;
   readonly updateMessage: (id: string, patch: UpdateChatMessagePatch) => ChatMessage;
   readonly attachGroundedAnswer: (

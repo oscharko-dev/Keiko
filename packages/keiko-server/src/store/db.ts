@@ -691,8 +691,15 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
       chatId: string,
       id: string,
       restoreUpdatedAtMs: number,
+      expectedTouchedUpdatedAtMs: number | undefined,
     ): void => {
-      sqlDiscardLegacyTurnUserMessage(db, chatId, id, restoreUpdatedAtMs);
+      sqlDiscardLegacyTurnUserMessage(
+        db,
+        chatId,
+        id,
+        restoreUpdatedAtMs,
+        expectedTouchedUpdatedAtMs,
+      );
     },
     updateMessage: (id: string, patch: UpdateChatMessagePatch): ChatMessage =>
       sqlUpdateMessage(db, id, patch, options.redactString),

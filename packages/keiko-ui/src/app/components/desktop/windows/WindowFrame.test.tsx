@@ -685,6 +685,63 @@ describe("WindowFrame content zoom controls", () => {
     vi.useRealTimers();
   });
 
+  it("invalidates delayed text-entry focus when the maximize control is pressed and held", () => {
+    vi.useFakeTimers();
+    registerWindowRender("promptEnhancer", () => <textarea aria-label="Prompt" />);
+    const focus = vi.fn();
+    const maximize = vi.fn();
+    const sharedApi = api({ focus, maximize });
+
+    const { container } = render(
+      <>
+        <WindowFrame
+          win={appWindow({ id: "prompt-enhancer-1", type: "promptEnhancer", w: 860, h: 680 })}
+          top
+          connState={null}
+          linkRevision={0}
+          api={sharedApi}
+          wsRef={workspaceRef(domRect())}
+        />
+        <WindowFrame
+          win={appWindow({ id: "agents-1", type: "agents" })}
+          top={false}
+          connState={null}
+          linkRevision={0}
+          api={sharedApi}
+          wsRef={workspaceRef(domRect())}
+        />
+      </>,
+    );
+
+    const prompt = screen.getByRole("textbox", { name: "Prompt" });
+    prompt.focus();
+    fireEvent.pointerDown(prompt, { button: 0 });
+
+    // Within the 180ms delay, PRESS — and hold, no click yet — the OTHER window's maximize
+    // control: its pointerdown stops propagation before focusWindowForTarget can count the
+    // interaction, so only a press-time token advance keeps the stale timer from raising
+    // prompt-enhancer-1 mid-hold (which could even retarget the pointer release).
+    const maximizeButton = container.querySelector<HTMLElement>(
+      '[data-window-id="agents-1"] .win-traffic-maximize',
+    );
+    expect(maximizeButton).not.toBeNull();
+    fireEvent.pointerDown(maximizeButton as HTMLElement, { button: 0 });
+
+    vi.advanceTimersByTime(180);
+
+    // The stale timer must NOT re-raise the text-entry window while the button is held.
+    expect(focus).not.toHaveBeenCalled();
+    expect(maximize).not.toHaveBeenCalled();
+
+    // The release still lands the maximize, raising through makeMaximize's own z bump —
+    // the click path performs no separate focus call and no second token advance.
+    fireEvent.click(maximizeButton as HTMLElement);
+    expect(maximize).toHaveBeenCalledTimes(1);
+    expect(maximize).toHaveBeenCalledWith("agents-1");
+    expect(focus).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
   it("ignores header double clicks in the right-side control gutter", () => {
     const maximize = vi.fn();
     const { container } = render(
