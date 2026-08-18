@@ -1679,7 +1679,20 @@ describe("local-knowledge handlers", () => {
       circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000, halfOpenProbes: 1 },
       capabilities: [embeddingCapability(sharedModelId)],
     };
-    const deps = depsFor(tmp, config);
+    const embeddingEndpoints: string[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsFor(tmp, config),
+      localKnowledgeEmbeddingRequest: vi.fn((request: OpenAIEmbeddingRequest) => {
+        embeddingEndpoints.push(request.endpoint);
+        return Promise.resolve({
+          ok: true as const,
+          value: {
+            vector: Float32Array.from({ length: 1536 }, (_, index) => index / 1000),
+            modelId: request.modelId,
+          },
+        });
+      }),
+    };
 
     const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: tmp });
     const store = openKnowledgeStore({ dbPath });
@@ -1693,7 +1706,10 @@ describe("local-knowledge handlers", () => {
       answerGroundingPolicy: "require-citations",
       modelUsePolicy: standardPodModelUsePolicy(),
       embeddingModelIdentity: {
-        provider: embeddingProviderIdentityForTest("https://active.llm.test/v1"),
+        // Frozen fingerprint of https://active.llm.test/v1, generated ONCE outside this test
+        // (sha256 of the normalized URL, first 16 hex chars) — deliberately NOT computed with
+        // the production formula so the fixture cannot drift in lockstep with it.
+        provider: "openai-compatible:edabf9f4b4ce11dd",
         modelId: sharedModelId,
         vectorDimensions: 1536,
         vectorMetric: "cosine",
@@ -1721,6 +1737,12 @@ describe("local-knowledge handlers", () => {
     after.close();
     expect(result.status).toBe(200);
     expect(jobs.n).toBeGreaterThanOrEqual(1);
+    // The job must run against the ACTIVE endpoint the handler resolved — a runner that fell
+    // back to the stale first-match entry would still satisfy the counts above.
+    expect(embeddingEndpoints.length).toBeGreaterThan(0);
+    for (const endpoint of embeddingEndpoints) {
+      expect(endpoint.startsWith("https://active.llm.test/v1")).toBe(true);
+    }
   });
 
   it("blocks capsule creation when no embedding-capable model is configured", async () => {
