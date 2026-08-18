@@ -466,9 +466,14 @@ function judgeRuntimeFailureReason(
   diagnostics: QI.QualityIntelligenceQualityDiagnostics | undefined,
 ): string | undefined {
   if (diagnostics === undefined) return undefined;
-  const failed = diagnostics.judgeErrorCandidates + diagnostics.judgeParseFailedCandidates;
+  // prompt-too-large candidates are equally unjudged: a run where every judge prompt exceeds
+  // the model budget must not persist as an unqualified success (QI-DEG-01).
+  const failed =
+    diagnostics.judgeErrorCandidates +
+    diagnostics.judgeParseFailedCandidates +
+    diagnostics.judgePromptTooLargeCandidates;
   if (failed <= 0) return undefined;
-  return `qi-judge-runtime: ${String(failed)} candidate judgement(s) failed or were unparseable`;
+  return `qi-judge-runtime: ${String(failed)} candidate judgement(s) failed, were unparseable, or exceeded the judge prompt budget`;
 }
 
 function modelRoutingForPersist(

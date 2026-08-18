@@ -1407,6 +1407,62 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     expect(qualityFindings.map((f) => f.summaryRedacted).join("\n")).not.toContain("503");
   });
 
+  it("persists a judge stage failure when every judge prompt exceeds the model budget", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-toolarge"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
+      ...makeDepsWithJudge(store, (_input) =>
+        Promise.resolve({ ...WEAK_VERDICT, judgeStatus: "prompt-too-large" as const }),
+      ),
+      modelRouting: {
+        policyVersion: 1,
+        requested: {
+          policyVersion: 1,
+          testDesignModelId: "test-model",
+          judgeModelId: "test-model",
+        },
+        resolved: {
+          testDesignModelId: "test-model",
+          judgeModelId: "test-model",
+        },
+        preflight: {
+          status: "passed",
+          generation: { stage: "generate", status: "passed", modelId: "test-model" },
+          judge: { stage: "judge", status: "passed", modelId: "test-model" },
+        },
+      },
+    };
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+    expect(summary.status).toBe("succeeded");
+    expect(summary.qualityDiagnostics).toMatchObject({
+      judgedCandidates: 0,
+      judgeErrorCandidates: 0,
+      judgeParseFailedCandidates: 0,
+      judgePromptTooLargeCandidates: 2,
+    });
+    // QI-DEG-01: oversized judge prompts leave every candidate unjudged exactly like thrown or
+    // unparseable judge calls — without a judge stage failure the terminal frame and both run
+    // projections would present this run as an unqualified success.
+    const manifest = store.load(String(input.plan.id));
+    const judgeFailures = (manifest?.modelRouting?.stageFailures ?? []).filter(
+      (failure) => failure.stage === "judge",
+    );
+    expect(judgeFailures).toHaveLength(1);
+    expect(judgeFailures[0]?.reasonSummary).toContain("qi-judge-runtime: 2");
+  });
+
   it("bounds gateway calls by maxJudgeCallsPerRun and marks overflow candidates unjudged", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const ingestedAtoms = [

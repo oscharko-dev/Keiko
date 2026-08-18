@@ -298,9 +298,34 @@ describe("useChatSession bootstrap", () => {
 
     expect(result.current.models).toEqual([]);
     expect(result.current.configuredModelsAvailable).toBe(true);
-    // The user's selection must survive the pending clear: resetting it here silently changed
-    // which model the next message used, merely because the picker was opened.
-    expect(result.current.selectedModel).toBe("chat-live");
+    // Pinned invalidation: no stale id is sendable mid-refresh — restoration is the success
+    // path's job (see the restore pin below).
+    expect(result.current.selectedModel).toBeUndefined();
+  });
+
+  it("restores a non-default model selection once the refreshed catalog confirms it", async () => {
+    const catalog = [model({ id: "chat-live" }), model({ id: "chat-alt" })];
+    vi.mocked(fetchModels).mockResolvedValue({ models: catalog });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.models).toHaveLength(2));
+    act(() => {
+      result.current.setSelectedModel("chat-alt");
+    });
+    expect(result.current.selectedModel).toBe("chat-alt");
+
+    act(() => {
+      requestGatewayModelCatalogRefresh();
+    });
+    // The pending clear invalidates the selection (pinned above) …
+    expect(result.current.selectedModel).toBeUndefined();
+
+    await waitFor(() => expect(result.current.models).toHaveLength(2));
+    // … but the success path must restore the user's choice instead of silently falling
+    // back to the first ready model just because the picker was opened.
+    expect(result.current.selectedModel).toBe("chat-alt");
   });
 
   it("honors a child window binding immediately after bootstrap", async () => {

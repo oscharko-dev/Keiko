@@ -219,11 +219,20 @@ function defaultChatModelId(deps: UiHandlerDeps): string {
   if (config === undefined) {
     return DEFAULT_CHAT_MODEL;
   }
-  const configured = listConfiguredCapabilities(config);
+  const chatModels = listConfiguredCapabilities(config).filter((model) => model.kind === "chat");
+  const conversationReady = (model: ModelCapability): boolean =>
+    currentConversationReady(deps, model.id);
+  // The public create contract makes modelId optional, so the default must not hand
+  // modelFromBody an unready model while another configured chat model has a current
+  // successful probe — that turned an otherwise valid request into a 400. Readiness only
+  // reorders the preference; when nothing is ready the unready default still flows into
+  // the guard so the caller keeps the precise "not ready" error.
   return (
     (
-      configured.find((model) => model.id === DEFAULT_CHAT_MODEL && model.kind === "chat") ??
-      configured.find((model) => model.kind === "chat")
+      chatModels.find((model) => model.id === DEFAULT_CHAT_MODEL && conversationReady(model)) ??
+      chatModels.find(conversationReady) ??
+      chatModels.find((model) => model.id === DEFAULT_CHAT_MODEL) ??
+      chatModels.at(0)
     )?.id ?? DEFAULT_CHAT_MODEL
   );
 }
