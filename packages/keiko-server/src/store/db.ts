@@ -687,8 +687,12 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
         if (pending.clientTurnId === storedTurnId) stagedTurnAssistants.delete(id);
       }
     },
-    discardLegacyTurnUserMessage: (chatId: string, id: string): void => {
-      sqlDiscardLegacyTurnUserMessage(db, chatId, id);
+    discardLegacyTurnUserMessage: (
+      chatId: string,
+      id: string,
+      restoreUpdatedAtMs: number,
+    ): void => {
+      sqlDiscardLegacyTurnUserMessage(db, chatId, id, restoreUpdatedAtMs);
     },
     updateMessage: (id: string, patch: UpdateChatMessagePatch): ChatMessage =>
       sqlUpdateMessage(db, id, patch, options.redactString),

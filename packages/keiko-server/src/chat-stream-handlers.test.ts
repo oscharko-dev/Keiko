@@ -1709,6 +1709,71 @@ describe("desktop chat SSE streaming handler", () => {
     memoryVault.close();
   });
 
+  it("discards the legacy user row when cancellation lands during buffered memory retrieval", async () => {
+    const chatId = seedChat();
+    const memoryDir = join(tmp, "legacy-buffered-cancel-during-memory");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const remembered = insertAcceptedMemory(memoryVault, "legacy buffered cancel candidate");
+    memoryVault.upsertEmbedding(remembered.id, {
+      provider: "test-provider",
+      modelId: "text-embedding-3-small",
+      metric: "cosine",
+      vector: Float32Array.from([1, 0]),
+    });
+    let providerCalls = 0;
+    const model: ModelPort = {
+      call: () => {
+        providerCalls += 1;
+        return Promise.resolve(normalizedResponse("must not run"));
+      },
+    };
+    const captured = captureResWithEvents();
+    // The client disconnects DURING retrieval, and retrieval then completes NORMALLY: the
+    // vault read itself fires the close event and continues, so the abort is guaranteed to
+    // land inside the memory window regardless of the semantic-gate embedding path.
+    const abortingVault = new Proxy(memoryVault, {
+      get(target, property, receiver): unknown {
+        const original = Reflect.get(target, property, receiver) as unknown;
+        if (property === "listMemoriesByScope" && typeof original === "function") {
+          return (...args: unknown[]): unknown => {
+            captured.emitClose();
+            return (original as (...inner: unknown[]) => unknown).apply(target, args);
+          };
+        }
+        return original;
+      },
+    });
+    const sharedDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      gatewayConfig: readyRuntimeGatewayConfig(chatAndEmbeddingConfig()),
+      memoryVault: abortingVault,
+      modelPortFactory: () => model,
+      localKnowledgeEmbeddingRequest: () =>
+        Promise.resolve({
+          ok: true,
+          value: { vector: Float32Array.from([1, 0]), modelId: "text-embedding-3-small" },
+        }),
+    });
+    const messagesBefore = sharedDeps.store.countMessages(chatId);
+    const result = await handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: "legacy cancel during memory must discard the row",
+          memory: { enabled: true, budgetTokens: 900, context: {} },
+        }),
+        captured.res,
+      ),
+      sharedDeps,
+    );
+    expect(result.status).toBe(499);
+    expect(providerCalls).toBe(0);
+    expect(sharedDeps.store.countMessages(chatId)).toBe(messagesBefore);
+    memoryVault.close();
+  });
+
   it("rejects regeneration when the gateway generation changes during memory retrieval", async () => {
     const chatId = seedChat();
     seedMessage(chatId, "user", "original regeneration question");

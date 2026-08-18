@@ -972,15 +972,18 @@ export function failDesktopChatTurn(
 // the row on purpose: the send was attempted and history stays honest.
 export function settleRejectedDesktopChatTurn(
   deps: UiHandlerDeps,
-  request: SendDesktopChatRequest,
+  prepared: Pick<PreparedDesktopChatSend, "request" | "chat">,
   userMessage: ChatMessage,
   terminalState: "failed" | "cancelled" = "failed",
 ): void {
+  const { request } = prepared;
   if (request.clientTurnId !== undefined) {
     deps.store.failChatTurn(request.chatId, request.clientTurnId, terminalState);
     return;
   }
-  deps.store.discardLegacyTurnUserMessage(request.chatId, userMessage.id);
+  // The pre-admission updatedAt undoes the createMessage touch so a rejected legacy request
+  // cannot promote its chat in the recency-ordered history.
+  deps.store.discardLegacyTurnUserMessage(request.chatId, userMessage.id, prepared.chat.updatedAt);
 }
 
 export function createAssistantMessage(
@@ -1731,7 +1734,7 @@ function bufferedModelAtProviderBoundary(
 
 function bufferedTurnCancellationResult(
   deps: UiHandlerDeps,
-  request: SendDesktopChatRequest,
+  prepared: Pick<PreparedDesktopChatSend, "request" | "chat">,
   signal: AbortSignal,
   preProviderUserMessage?: ChatMessage,
 ): RouteResult | undefined {
@@ -1739,9 +1742,9 @@ function bufferedTurnCancellationResult(
   // Before any provider output the settle may still discard a legacy row; after the
   // provider ran, history keeps the user message and only the ledger settles.
   if (preProviderUserMessage !== undefined) {
-    settleRejectedDesktopChatTurn(deps, request, preProviderUserMessage, "cancelled");
+    settleRejectedDesktopChatTurn(deps, prepared, preProviderUserMessage, "cancelled");
   } else {
-    failDesktopChatTurn(deps, request, "cancelled");
+    failDesktopChatTurn(deps, prepared.request, "cancelled");
   }
   return requestCancelledResult();
 }
@@ -1756,14 +1759,21 @@ async function resolveBufferedMemory(
   abortSignal: AbortSignal,
 ): Promise<ConversationMemoryResultWire | RouteResult> {
   const { request, memoryContext } = prepared;
-  if (memoryContext === undefined) return emptyMemoryResult(false);
+  let memory: ConversationMemoryResultWire;
   try {
-    return await buildMemoryResult(request, deps, memoryContext);
+    memory =
+      memoryContext === undefined
+        ? emptyMemoryResult(false)
+        : await buildMemoryResult(request, deps, memoryContext);
   } catch (error) {
     const cancelled = requestSignalAborted(abortSignal);
-    settleRejectedDesktopChatTurn(deps, request, userMessage, cancelled ? "cancelled" : "failed");
+    settleRejectedDesktopChatTurn(deps, prepared, userMessage, cancelled ? "cancelled" : "failed");
     return cancelled ? requestCancelledResult() : desktopChatErrorResult(error, deps);
   }
+  // Cancellation that lands during retrieval must be settled HERE, before assembly and the
+  // provider call — this is still pre-provider, so a legacy row is discarded rather than
+  // left behind by the ledger no-op.
+  return bufferedTurnCancellationResult(deps, prepared, abortSignal, userMessage) ?? memory;
 }
 
 function admitBufferedModelTurn(
@@ -1848,14 +1858,14 @@ async function executeBufferedModelTurn(
   );
   const model = bufferedModelAtProviderBoundary(deps, modelId, executionAdmission);
   if (isRouteResult(model)) {
-    settleRejectedDesktopChatTurn(deps, request, userMessage);
+    settleRejectedDesktopChatTurn(deps, prepared, userMessage);
     return model;
   }
   const response = await model.call(
     { modelId, messages: assembly.messages, stream: false },
     abortSignal,
   );
-  const cancelledAfterCall = bufferedTurnCancellationResult(deps, request, abortSignal);
+  const cancelledAfterCall = bufferedTurnCancellationResult(deps, prepared, abortSignal);
   if (cancelledAfterCall !== undefined) return cancelledAfterCall;
   return finalizeAndRecordBufferedTurn(
     deps,

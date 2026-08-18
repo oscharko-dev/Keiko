@@ -1641,10 +1641,18 @@ describe("desktop chat routes", () => {
     const memoryDir = join(tmp, "failing-buffered-memory-vault");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    // Strengthened relocation: the persist-BEFORE-retrieval ordering is asserted inside the
+    // failing callback itself — the user row must already exist when retrieval runs, and the
+    // final assertion proves the rejection then discards it. Both halves red-prove their arm.
+    let userRowsSeenAtRetrieval = -1;
+    let lastCreatedChatId = "";
     const failingMemoryVault = new Proxy(memoryVault, {
       get(target, property, receiver): unknown {
         if (property === "listMemoriesByScope") {
           return (): never => {
+            userRowsSeenAtRetrieval = store
+              .listMessages(lastCreatedChatId)
+              .filter((message) => message.role === "user").length;
             throw new Error("memory retrieval failed");
           };
         }
@@ -1658,6 +1666,7 @@ describe("desktop chat routes", () => {
       body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
     });
     const created = (await createRes.json()) as { chat: { id: string } };
+    lastCreatedChatId = created.chat.id;
 
     const sendRes = await fetch(`${base()}/api/desktop/chat`, {
       method: "POST",
@@ -1673,6 +1682,7 @@ describe("desktop chat routes", () => {
 
     expect(sendRes.status).toBe(500);
     expect(seenRequests).toEqual([]);
+    expect(userRowsSeenAtRetrieval).toBe(1);
     expect(store.listMessages(created.chat.id)).toEqual([]);
     memoryVault.close();
   });

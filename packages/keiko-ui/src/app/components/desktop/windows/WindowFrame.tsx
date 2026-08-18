@@ -784,6 +784,16 @@ function booleanDataAttribute(value: boolean): "true" | undefined {
 // Raise counter across ALL frames: a pending delayed focus yields to any later interaction.
 let windowInteractionCount = 0;
 
+// EVERY direct user-interaction raise that bypasses focusWindowForTarget (resize grips, the
+// maximize control) must advance the counter through this helper. Those handlers suppress or
+// bypass the browser's default focus move, so DOM focus can stay inside a previously armed
+// text-entry target — the counter is then the only thing stopping that pending delayed raise
+// from re-raising the old window over the one the user is now interacting with (PR #3212).
+function raiseWindowForInteraction(api: WorkspaceApi, id: string): void {
+  windowInteractionCount += 1;
+  api.focus(id);
+}
+
 function delayedFocusStillTargetsWindow(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return true;
   const activeElement = document.activeElement;
@@ -1062,7 +1072,7 @@ function WindowFrameImpl({
         e.stopPropagation();
         resizeCleanupRef.current?.();
         resizeCleanupRef.current = null;
-        api.focus(win.id);
+        raiseWindowForInteraction(api, win.id);
         attachResizeListeners(
           api,
           {
@@ -1399,7 +1409,14 @@ function WindowFrameImpl({
                 onDoubleClick={(e) => {
                   e.stopPropagation();
                 }}
-                onClick={() => api.maximize(win.id)}
+                onClick={() => {
+                  // Maximize IS a raise (makeMaximize bumps z), and this button's pointerdown
+                  // stops propagation before focusWindowForTarget can count the interaction —
+                  // WebKit also never moves DOM focus onto a clicked button, so without the
+                  // counter a pending delayed text-entry raise would cover the maximized window.
+                  raiseWindowForInteraction(api, win.id);
+                  api.maximize(win.id);
+                }}
               >
                 {win.max ? <RestoreIcon size={17} /> : <MaximizeIcon size={17} />}
               </button>

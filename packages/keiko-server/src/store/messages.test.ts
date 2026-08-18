@@ -231,6 +231,60 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
+describe("discardLegacyTurnUserMessage", () => {
+  function legacyUserMessage(
+    content: string,
+    timestamp: number,
+  ): Parameters<UiStore["createMessage"]>[0] {
+    return {
+      chatId,
+      role: "user",
+      content,
+      timestamp,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    };
+  }
+
+  function chatUpdatedAt(): number {
+    const chat = store.listChats(proj).find((candidate) => candidate.id === chatId);
+    if (chat === undefined) throw new Error("expected chat");
+    return chat.updatedAt;
+  }
+
+  it("restores the pre-admission chat recency when the discarded row was the only activity", () => {
+    const before = chatUpdatedAt();
+    const admitted = store.createMessage(legacyUserMessage("rejected legacy turn", 500));
+    // createMessage touches chats.updated_at — without the restore a REJECTED request still
+    // promotes this chat in the recency-ordered history (the session-resume candidate).
+    expect(chatUpdatedAt()).toBeGreaterThan(before);
+    store.discardLegacyTurnUserMessage(chatId, admitted.id, before);
+    expect(store.listMessages(chatId)).toEqual([]);
+    expect(chatUpdatedAt()).toBe(before);
+  });
+
+  it("keeps newer surviving message activity instead of rewinding past it", () => {
+    const before = chatUpdatedAt();
+    const admitted = store.createMessage(legacyUserMessage("rejected legacy turn", 500));
+    const survivor = store.createMessage(legacyUserMessage("later surviving turn", 900));
+    store.discardLegacyTurnUserMessage(chatId, admitted.id, before);
+    expect(store.listMessages(chatId)).toMatchObject([{ id: survivor.id }]);
+    expect(chatUpdatedAt()).toBe(900);
+  });
+
+  it("never deletes a ledger-owned or non-user row and leaves recency untouched", () => {
+    const admission = store.admitChatTurn("turn-ledger-1", legacyUserMessage("ledger turn", 700));
+    if (admission.kind !== "admitted") throw new Error("expected admitted ledger turn");
+    const touched = chatUpdatedAt();
+    store.discardLegacyTurnUserMessage(chatId, admission.userMessage.id, 1);
+    expect(store.listMessages(chatId)).toMatchObject([{ id: admission.userMessage.id }]);
+    expect(chatUpdatedAt()).toBe(touched);
+  });
+});
+
 describe("createMessage", () => {
   it("persists a minimal message with all optional fields undefined", () => {
     const m = store.createMessage({
