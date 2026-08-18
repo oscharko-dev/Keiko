@@ -9,6 +9,10 @@ import { resolveHostExecutable } from "./lib/host-executable.mjs";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SHA = /^[0-9a-f]{40}$/u;
 const ZERO_SHA = "0".repeat(40);
+// Plain ref names only: a leading dash would be parsed by git as an OPTION (e.g.
+// --fork-point) instead of a ref, and whitespace/control characters have no place in a
+// workflow-provided ref — fail closed on anything but a boring ref shape.
+const SAFE_REF = /^[A-Za-z0-9](?:[A-Za-z0-9._/-]*[A-Za-z0-9])?$/u;
 
 function repositoryGit(args) {
   return execFileSync(resolveHostExecutable("git"), args, {
@@ -40,6 +44,9 @@ function candidateBase(base, head, eventName, git, fallbackBaseRef) {
       throw new Error(
         "a branch-creating push needs QUALITY_FALLBACK_BASE_REF to bound its scan range",
       );
+    }
+    if (!SAFE_REF.test(fallbackBaseRef)) {
+      throw new Error("QUALITY_FALLBACK_BASE_REF must be a plain ref name");
     }
     return requireImmutableSha(
       git(["merge-base", fallbackBaseRef, head]).split("\n")[0],
