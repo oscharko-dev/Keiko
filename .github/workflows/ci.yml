@@ -142,7 +142,13 @@ jobs:
         env:
           QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           QUALITY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: node scripts/resolve-quality-range.mjs >> "$GITHUB_OUTPUT"
+          # A branch-creating push delivers the zero SHA as its before-pointer; the fallback ref
+          # bounds the range at the merge-base with dev so EVERY commit introduced by the branch
+          # creation is scanned (fetch-depth 0 clones only the triggering ref, hence the fetch).
+          QUALITY_FALLBACK_BASE_REF: origin/dev
+        run: |
+          git fetch --no-tags --quiet origin dev
+          node scripts/resolve-quality-range.mjs >> "$GITHUB_OUTPUT"
       - name: Reject semantic clone groups introduced by this change
         env:
           QUALITY_BASE_SHA: ${{ steps.quality-range.outputs.base }}
@@ -188,7 +194,13 @@ jobs:
         env:
           QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           QUALITY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: node scripts/resolve-quality-range.mjs >> "$GITHUB_OUTPUT"
+          # A branch-creating push delivers the zero SHA as its before-pointer; the fallback ref
+          # bounds the range at the merge-base with dev so EVERY commit introduced by the branch
+          # creation is scanned (fetch-depth 0 clones only the triggering ref, hence the fetch).
+          QUALITY_FALLBACK_BASE_REF: origin/dev
+        run: |
+          git fetch --no-tags --quiet origin dev
+          node scripts/resolve-quality-range.mjs >> "$GITHUB_OUTPUT"
       - name: Reject secrets introduced anywhere in the pull-request history
         env:
           QUALITY_BASE_SHA: ${{ steps.quality-range.outputs.base }}
