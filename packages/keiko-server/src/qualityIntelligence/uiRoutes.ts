@@ -34,6 +34,7 @@ import type {
   QualityIntelligenceUiDriftMetadata,
   TestQualityRubricDimension,
 } from "@oscharko-dev/keiko-contracts";
+import { deriveQualityIntelligenceTerminalDegradation } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { loadRunReviewState, candidateReviewStateOf, runReviewStateOf } from "./reviewStore.js";
@@ -53,6 +54,15 @@ function resolveEvidenceDir(deps: UiHandlerDeps): string | undefined {
   return deps.evidenceDir;
 }
 
+function terminalDegradationOf(
+  manifest: NonNullable<ReturnType<typeof loadQualityIntelligenceRun>>,
+): ReturnType<typeof deriveQualityIntelligenceTerminalDegradation> {
+  return deriveQualityIntelligenceTerminalDegradation(
+    manifest.status,
+    manifest.modelRouting?.stageFailures,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Projection helpers — build browser-safe wire shapes from manifest data.
 // NEVER include raw prompt, raw source content, credentials, or unsafe markdown.
@@ -63,6 +73,7 @@ function projectRunSummary(
   reviewState: QualityIntelligenceUiRunSummary["reviewState"],
 ): QualityIntelligenceUiRunSummary | null {
   if (manifest === undefined) return null;
+  const degradation = terminalDegradationOf(manifest);
   return {
     id: manifest.runId,
     status: manifest.status,
@@ -74,6 +85,7 @@ function projectRunSummary(
       exports: manifest.totals.exports,
     },
     reviewState,
+    ...degradation,
   };
 }
 
@@ -278,6 +290,7 @@ function projectRunDetail(inputs: RunDetailInputs): QualityIntelligenceUiRunDeta
     atomId: r.atomId,
   }));
   const coverageByAtom = projectCoverageByAtom(manifest);
+  const degradation = terminalDegradationOf(manifest);
   return {
     id: manifest.runId,
     status: manifest.status,
@@ -301,6 +314,7 @@ function projectRunDetail(inputs: RunDetailInputs): QualityIntelligenceUiRunDeta
       ? { qualityDiagnostics: manifest.qualityDiagnostics }
       : {}),
     drift: projectDriftMetadata(manifest, candidateRows),
+    ...degradation,
   };
 }
 

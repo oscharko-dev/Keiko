@@ -104,7 +104,7 @@ function scriptedOliverProfileMemoryModel(): ModelPort {
         ? JSON.stringify([
             {
               source: "user",
-              body: "The user's name is Oliver.",
+              body: "Ich heiße Oliver.",
               type: "identity",
               confidence: 0.96,
               scope: "user",
@@ -112,7 +112,7 @@ function scriptedOliverProfileMemoryModel(): ModelPort {
             },
             {
               source: "user",
-              body: "The user is 35 years old.",
+              body: "Ich bin 35 Jahre alt.",
               type: "fact",
               confidence: 0.9,
               scope: "user",
@@ -120,7 +120,7 @@ function scriptedOliverProfileMemoryModel(): ModelPort {
             },
             {
               source: "user",
-              body: "The user is a software developer.",
+              body: "Ich bin Softwareentwickler.",
               type: "fact",
               confidence: 0.9,
               scope: "user",
@@ -1925,7 +1925,7 @@ describe("desktop chat routes", () => {
         chatId: created.chat.id,
         projectPath: projectDir,
         modelId: CHAT_MODEL,
-        content: "Ich heiße Oliver, bin 35 Jahre alt und bin Softwareentwickler.",
+        content: "Ich heiße Oliver. Ich bin 35 Jahre alt. Ich bin Softwareentwickler.",
         memory: { enabled: true, context: {} },
       }),
     });
@@ -1944,9 +1944,9 @@ describe("desktop chat routes", () => {
       const records = listAllMemories(memoryVault, { includeExpired: true });
       expect(records.map((record) => record.body)).toEqual(
         expect.arrayContaining([
-          "The user's name is Oliver.",
-          "The user is 35 years old.",
-          "The user is a software developer.",
+          "Ich heiße Oliver.",
+          "Ich bin 35 Jahre alt.",
+          "Ich bin Softwareentwickler.",
         ]),
       );
       expect(records.every((record) => record.status === "proposed")).toBe(true);

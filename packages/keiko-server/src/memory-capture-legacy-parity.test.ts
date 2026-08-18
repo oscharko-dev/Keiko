@@ -46,7 +46,12 @@ const TWO_PUBLIC_FACTS = JSON.stringify([
   },
 ]);
 
-const USER_TEXT = "We reviewed the deployment configuration for the platform team today.";
+// Each accepted model body is an exact complete line from this user turn, as required by the
+// user-provenance boundary in the real salience extractor.
+const USER_TEXT = [
+  "The platform team ships releases on a fortnightly cadence.",
+  "The build pipeline runs on self-hosted runners.",
+].join("\n");
 
 function fakeModel(content: string): ModelPort {
   return {

@@ -411,9 +411,7 @@ describe("gateway readiness route", () => {
   });
 
   it("skips requested feature probes when basic chat is not verified", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse(chatPayload("unexpected-answer"))) as typeof fetch;
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse({ choices: [] })) as typeof fetch;
     const config = gatewayConfig();
     const clearVerifiedCapability = vi.fn(() => true);
     const deps: UiHandlerDeps = {
@@ -619,7 +617,7 @@ describe("gateway readiness route", () => {
     deps.store.close();
   });
 
-  it("does not persist a negative capability from an inconclusive semantic probe", async () => {
+  it("records only chat readiness from an inconclusive semantic probe", async () => {
     const config = gatewayConfig();
     const recordVerifiedCapability = vi.fn();
     const fetchImpl = vi
@@ -649,7 +647,12 @@ describe("gateway readiness route", () => {
     expect(report.probes.find((probe) => probe.name === "streaming")).toMatchObject({
       status: "unsupported",
     });
-    expect(recordVerifiedCapability).not.toHaveBeenCalled();
+    expect(recordVerifiedCapability).toHaveBeenCalledWith(
+      "test-chat-model",
+      { conversationReady: true },
+      expect.any(String),
+      0,
+    );
     deps.store.close();
   });
 
@@ -818,7 +821,117 @@ describe("gateway readiness route", () => {
     deps.store.close();
   });
 
-  it("does not record negative capabilities for probes the request did not execute", async () => {
+  it("fails the basic-chat probe on an empty assistant response like the production adapter", async () => {
+    const config = gatewayConfig();
+    const recordVerifiedCapability = vi.fn();
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(chatPayload(""))) as typeof fetch;
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        verification: () => UNVERIFIED_GATEWAY,
+        generation: () => 7,
+        recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability,
+        clearVerifiedCapability: () => false,
+      },
+    };
+
+    const report = await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    // The production adapter rejects empty assistant responses (assertUsableAssistantResponse),
+    // so readiness must too — a probe looser than the adapter exposes models whose every real
+    // turn fails.
+    expect(report.probes).toEqual([expect.objectContaining({ name: "chat", status: "failed" })]);
+    expect(recordVerifiedCapability).not.toHaveBeenCalled();
+    deps.store.close();
+  });
+
+  it("passes the basic-chat probe for content-part arrays production normalization accepts", async () => {
+    const config = gatewayConfig();
+    const recordVerifiedCapability = vi.fn();
+    const arrayPayload = {
+      choices: [{ message: { role: "assistant", content: [{ type: "text", text: "OK" }] } }],
+    };
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(arrayPayload)) as typeof fetch;
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        verification: () => UNVERIFIED_GATEWAY,
+        generation: () => 7,
+        recordVerification: () => undefined,
+        verifiedCapability: () => undefined,
+        recordVerifiedCapability,
+        clearVerifiedCapability: () => false,
+      },
+    };
+
+    const report = await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    expect(report.probes).toEqual([expect.objectContaining({ name: "chat", status: "passed" })]);
+    expect(recordVerifiedCapability).toHaveBeenCalledWith(
+      "test-chat-model",
+      expect.objectContaining({ conversationReady: true }),
+      report.checkedAt,
+      7,
+    );
+    deps.store.close();
+  });
+
+  it("drops stale feature observations when the feature probe executed and failed", async () => {
+    const config = gatewayConfig();
+    const recordVerifiedCapability = vi.fn();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
+      .mockResolvedValueOnce(jsonResponse({ error: "boom" }, 500)) as typeof fetch;
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        verification: () => UNVERIFIED_GATEWAY,
+        generation: () => 4,
+        recordVerification: () => undefined,
+        verifiedCapability: () => ({
+          modelId: "test-chat-model",
+          generation: 4,
+          checkedAt: "2026-08-15T00:00:00.000Z",
+          fields: { streaming: true },
+        }),
+        recordVerifiedCapability,
+        clearVerifiedCapability: () => false,
+      },
+    };
+
+    await runGatewayReadiness({ options: { probes: ["chat", "streaming"] } }, deps);
+
+    // The streaming probe RAN and failed: this is not a chat-only refresh, so the stale
+    // streaming: true from the previous observation must not be re-stamped as current.
+    expect(recordVerifiedCapability).toHaveBeenCalledWith(
+      "test-chat-model",
+      { conversationReady: true },
+      expect.any(String),
+      4,
+    );
+    deps.store.close();
+  });
+
+  it("records only conversation readiness when feature probes did not execute", async () => {
     const config = gatewayConfig();
     const recordVerifiedCapability = vi.fn();
     const deps: UiHandlerDeps = {
@@ -839,16 +952,54 @@ describe("gateway readiness route", () => {
 
     await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
 
-    expect(recordVerifiedCapability).not.toHaveBeenCalled();
+    expect(recordVerifiedCapability).toHaveBeenCalledWith(
+      "test-chat-model",
+      { conversationReady: true },
+      expect.any(String),
+      0,
+    );
+    deps.store.close();
+  });
+
+  it("preserves same-generation feature observations during a chat-only refresh", async () => {
+    const config = gatewayConfig();
+    const recordVerifiedCapability = vi.fn();
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchForDefaultSuccess()),
+      gatewayConfig: {
+        storagePath: "/dev/null",
+        current: () => config,
+        present: () => true,
+        set: () => undefined,
+        verification: () => UNVERIFIED_GATEWAY,
+        generation: () => 4,
+        recordVerification: () => undefined,
+        verifiedCapability: () => ({
+          modelId: "test-chat-model",
+          generation: 4,
+          checkedAt: "2026-08-15T00:00:00.000Z",
+          fields: { streaming: true },
+        }),
+        recordVerifiedCapability,
+        clearVerifiedCapability: () => false,
+      },
+    };
+
+    await runGatewayReadiness({ options: { probes: ["chat"] } }, deps);
+
+    expect(recordVerifiedCapability).toHaveBeenCalledWith(
+      "test-chat-model",
+      { streaming: true, conversationReady: true },
+      expect.any(String),
+      4,
+    );
     deps.store.close();
   });
 
   it("records a failed chat probe as a failed verification, never as unverified", async () => {
     const recorded: string[] = [];
     const config = gatewayConfig();
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(jsonResponse(chatPayload("unexpected-answer"))) as typeof fetch;
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse({ choices: [] })) as typeof fetch;
     const deps: UiHandlerDeps = {
       ...depsWith(config, fetchImpl),
       gatewayConfig: {

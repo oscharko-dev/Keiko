@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MAX_DESKTOP_CHAT_CLIENT_TURN_ID_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import {
+  handleCreateDesktopChat,
   handleSendDesktopChat,
   parseClientTurnId,
   parseExpectedGroundingScopeIdentity,
@@ -122,6 +123,12 @@ function configureBreakerGateway(deps: UiHandlerDeps): void {
     }),
     true,
   );
+  runtimeConfig.recordVerifiedCapability(
+    "breaker-chat",
+    { conversationReady: true },
+    "2026-08-16T00:00:00.000Z",
+    runtimeConfig.generation(),
+  );
 }
 
 async function createGatewayBreakerFixture(): Promise<GatewayBreakerFixture> {
@@ -174,6 +181,100 @@ async function sendBreakerChat(
 }
 
 describe("desktop chat production gateway reuse", () => {
+  it("rejects an unready configured model before provider fetch", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    try {
+      fixture.deps.gatewayConfig?.clearVerifiedCapability("breaker-chat");
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const createRejected = await handleCreateDesktopChat(
+        requestContext({
+          modelId: "breaker-chat",
+          projectPath: fixture.projectPath,
+          title: "must not be created",
+        }),
+        fixture.deps,
+      );
+      const rejected = await sendBreakerChat(fixture, "must not leave the server");
+
+      expect(createRejected).toEqual({
+        status: 400,
+        body: {
+          error: {
+            code: "BAD_REQUEST",
+            message: "The selected model is not ready for conversations.",
+          },
+        },
+      });
+      expect(rejected).toEqual({
+        status: 400,
+        body: {
+          error: {
+            code: "BAD_REQUEST",
+            message: "The selected model is not ready for conversations.",
+          },
+        },
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(JSON.stringify(rejected.body)).not.toContain("must not leave the server");
+    } finally {
+      vi.unstubAllGlobals();
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
+  it("defaults an omitted modelId to a conversation-ready chat model", async () => {
+    const fixture = await createGatewayBreakerFixture();
+    try {
+      const runtimeConfig = fixture.deps.gatewayConfig;
+      if (runtimeConfig === undefined) throw new Error("expected runtime gateway config");
+      runtimeConfig.set(
+        parseGatewayConfig({
+          providers: [
+            {
+              modelId: "breaker-chat",
+              baseUrl: "https://provider.example.invalid/v1",
+              apiKey: "fake-test-key",
+              timeoutMs: 5_000,
+              maxRetries: 0,
+              retryBaseDelayMs: 1,
+            },
+            {
+              modelId: "ready-chat",
+              baseUrl: "https://provider.example.invalid/v1",
+              apiKey: "fake-test-key",
+              timeoutMs: 5_000,
+              maxRetries: 0,
+              retryBaseDelayMs: 1,
+            },
+          ],
+        }),
+        true,
+      );
+      // Only the SECOND configured chat model has a current successful probe: the optional
+      // public modelId must not funnel the request into the unready first model's 400 while
+      // a usable model exists.
+      runtimeConfig.recordVerifiedCapability(
+        "ready-chat",
+        { conversationReady: true },
+        "2026-08-16T00:00:00.000Z",
+        runtimeConfig.generation(),
+      );
+
+      const created = await handleCreateDesktopChat(
+        requestContext({ projectPath: fixture.projectPath, title: "defaulted model" }),
+        fixture.deps,
+      );
+
+      expect(created.status).toBe(201);
+      const body = created.body as { readonly chat?: { readonly selectedModel?: unknown } };
+      expect(body.chat?.selectedModel).toBe("ready-chat");
+    } finally {
+      await disposeGatewayBreakerFixture(fixture);
+    }
+  });
+
   it("opens one shared breaker across separate route requests", async () => {
     const fixture = await createGatewayBreakerFixture();
     try {

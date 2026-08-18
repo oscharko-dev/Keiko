@@ -10,7 +10,7 @@
 // (Epic #491 Voice Digital Twin): ModelKind gained the "voice" member — a STRUCTURAL change
 // that adds a new literal discriminant. A structural break adds a new literal member (and bumps
 // this constant); additive OPTIONAL flags (Epic #761 determinism, Issue #1210 infilling, the
-// #493 voice sub-capability flags) never bump it.
+// #493 voice sub-capability flags and #3182 transient conversation readiness) never bump it.
 export const CONVERSATION_CAPABILITY_CONTRACT_VERSION = 3 as const;
 
 // ─── Modality discriminant ────────────────────────────────────────────────────
@@ -126,6 +126,12 @@ export const VOICE_PERSONAS: readonly VoicePersona[] = ["male", "female", "neutr
 export interface ModelCapability {
   readonly id: string;
   readonly kind: ModelKind;
+  /**
+   * Transient server observation that this configured chat model passed a basic-chat probe for the
+   * current runtime configuration generation. This is never persisted as provider capability
+   * metadata.
+   */
+  readonly conversationReady?: boolean | undefined;
   readonly contextWindow: number;
   readonly maxOutputTokens: number;
   readonly toolCalling: boolean;
@@ -631,13 +637,10 @@ export type StreamEvent =
 
 // ─── Conversation eligibility (Issue #144 / Epic #142) ────────────────────────
 // Why: the chat-completions dropdown must only show models that can actually
-// hold a conversation. Eligibility derives from the `kind` discriminant alone
-// because chat-kind capabilities that reach persistence are smoke-tested by
-// construction at `defaultGatewaySetupTester` in `keiko-server` (non-chat
-// `kind`s are filtered earlier by the discovery normaliser before any model
-// id reaches the smoke loop). This is a derived discriminant, not a new wire
-// field — `CONVERSATION_CAPABILITY_CONTRACT_VERSION` is intentionally not
-// bumped. The pure helpers live in contracts (not in keiko-model-gateway) so
+// hold a conversation by modality. This configured eligibility derives from the `kind`
+// discriminant alone; the separate optional `conversationReady` field is a transient live
+// observation that consumers must additionally require before productive chat. The pure helpers
+// live in contracts (not in keiko-model-gateway) so
 // the browser-tier `keiko-ui` package can value-import them without violating
 // ADR-0019 trust rule 3 (UI → model-gateway/src is forbidden at error severity).
 // Pinned by keiko-model-gateway/src/capabilities.test.ts (re-exported there).

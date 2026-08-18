@@ -188,6 +188,29 @@ describe("analyzePrompt task classification (AC2)", () => {
     expect(regressionTests.taskClass).toBe("code-generation");
     expect(regressionTests.domain).toBe("software");
   });
+
+  it("classifies the audited German knowledge-management request as decision support", () => {
+    const analysis = analyze(
+      "Bereite eine belastbare Entscheidung über die Einführung eines Wissensmanagement-Tools vor. Alternativen, Budget, Nutzerzahl, Entscheidungskriterien und Zeitrahmen sind noch unbekannt.",
+    );
+
+    expect(analysis.taskClass).toBe("decision-support");
+    expect(analysis.taskClassConfidence).not.toBe("weak");
+  });
+
+  it("does not classify unrelated German Entscheidung compounds as decision support", () => {
+    const analysis = analyze("Die Entscheidungstabelle ist vollständig.");
+
+    expect(analysis.taskClass).not.toBe("decision-support");
+  });
+
+  it("keeps a German travel request in the travel-capable decision class", () => {
+    const analysis = analyze(
+      "Plane eine Reise nach Japan; berücksichtige Alternativen und eine Entscheidungstabelle für das Budget.",
+    );
+
+    expect(analysis.taskClass).toBe("decision-support");
+  });
 });
 
 // ─── AC1: full structured analysis ───────────────────────────────────────────────

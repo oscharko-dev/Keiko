@@ -147,6 +147,13 @@ import {
 } from "./grounded-citation-projection.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
+import {
+  captureConversationReadinessAdmission,
+  mappedConversationReadinessError,
+  validateConversationReadinessAdmission,
+  withConversationReadinessAdmission,
+  type ConversationReadinessAdmission,
+} from "./conversation-readiness-admission.js";
 
 export { persistGroundedExchange } from "./grounded-message-persistence.js";
 
@@ -203,7 +210,10 @@ function gatewayErrorResult(error: GatewayError, deps: UiHandlerDeps): RouteResu
 }
 
 export function mappedGatewayError(error: unknown, deps: UiHandlerDeps): RouteResult | undefined {
-  return error instanceof GatewayError ? gatewayErrorResult(error, deps) : undefined;
+  return (
+    mappedConversationReadinessError(error) ??
+    (error instanceof GatewayError ? gatewayErrorResult(error, deps) : undefined)
+  );
 }
 
 export function mappedWorkspaceError(error: unknown): RouteResult | undefined {
@@ -882,16 +892,27 @@ function createGatewayAnswerer(
   };
 }
 
+function resolveGroundedAnswerModel(
+  deps: UiHandlerDeps,
+  modelId: string,
+  readinessAdmission: ConversationReadinessAdmission,
+): ModelPort | RouteResult {
+  const resolvedModel = deps.modelPortFactory(modelId);
+  if (resolvedModel === undefined) {
+    return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
+  }
+  return withConversationReadinessAdmission(resolvedModel, modelId, readinessAdmission, deps);
+}
+
 function defaultRunner(
   deps: UiHandlerDeps,
   modelId: string,
+  readinessAdmission: ConversationReadinessAdmission,
   signal: AbortSignal,
   contextProfile: UiHandlerDeps["contextProfile"],
 ): GroundedRunner | RouteResult {
-  const model = deps.modelPortFactory(modelId);
-  if (model === undefined) {
-    return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
-  }
+  const model = resolveGroundedAnswerModel(deps, modelId, readinessAdmission);
+  if ("status" in model) return model;
   const modelInputTokensMax = groundedPromptInputTokensForCapability(chatCapability(deps, modelId));
   // Knowledge M1.2 (#2563): the folder grounded-ask has no knowledge capsule, so entailment is
   // governed only by whether a compatible judge model is configured (empty capsules ⇒ no policy to
@@ -1043,6 +1064,8 @@ interface PreparedGroundedAsk {
   readonly memoryContext?: ConversationMemoryRuntimeContext | undefined;
   readonly userMessage?: ChatMessage | undefined;
   readonly memory?: GroundedMemoryPreparation | undefined;
+  readonly modelId?: string | undefined;
+  readonly readinessAdmission?: ConversationReadinessAdmission | undefined;
 }
 
 interface GroundedMemoryPreparation {
@@ -1067,6 +1090,20 @@ function groundedCommitTurnId(prepared: PreparedGroundedAsk): string {
     throw new Error("grounded ask was dispatched before its turn commit was admitted");
   }
   return prepared.commitTurnId;
+}
+
+function groundedReadinessAdmission(prepared: PreparedGroundedAsk): ConversationReadinessAdmission {
+  if (prepared.readinessAdmission === undefined) {
+    throw new Error("grounded ask was dispatched before model readiness admission");
+  }
+  return prepared.readinessAdmission;
+}
+
+function groundedModelId(prepared: PreparedGroundedAsk): string {
+  if (prepared.modelId === undefined) {
+    throw new Error("grounded ask was dispatched before model admission");
+  }
+  return prepared.modelId;
 }
 
 function groundedTurnIdentityContent(
@@ -1395,8 +1432,8 @@ async function prepareGroundedAsk(
 
 function resolveGroundedRunner(
   deps: UiHandlerDeps,
-  chat: Chat,
-  requestedModelId: string | undefined,
+  modelId: string,
+  readinessAdmission: ConversationReadinessAdmission,
   signal: AbortSignal,
   runner: GroundedRunner | undefined,
 ):
@@ -1407,19 +1444,16 @@ function resolveGroundedRunner(
     }
   | RouteResult {
   if (runner !== undefined) {
-    const modelId = requestedModelId ?? chat.selectedModel;
     return {
       modelId,
       contextProfile: currentContextProfileForModel(deps, modelId),
       runner,
     };
   }
-  const resolvedModelId = resolveGroundedModelId(deps, chat, requestedModelId);
-  if (typeof resolvedModelId !== "string") return resolvedModelId;
-  const contextProfile = currentContextProfileForModel(deps, resolvedModelId);
-  const builtRunner = defaultRunner(deps, resolvedModelId, signal, contextProfile);
+  const contextProfile = currentContextProfileForModel(deps, modelId);
+  const builtRunner = defaultRunner(deps, modelId, readinessAdmission, signal, contextProfile);
   if (typeof builtRunner !== "function") return builtRunner;
-  return { modelId: resolvedModelId, contextProfile, runner: builtRunner };
+  return { modelId, contextProfile, runner: builtRunner };
 }
 
 // ─── Multi-source seam (test injection) ───────────────────────────────────────
@@ -1436,14 +1470,21 @@ export interface MultiSourceSeam {
 function resolveMultiSourceSeam(
   deps: UiHandlerDeps,
   modelId: string,
+  readinessAdmission: ConversationReadinessAdmission,
   signal: AbortSignal,
   override: MultiSourceSeam | undefined,
 ): MultiSourceSeam | RouteResult {
   if (override !== undefined) return override;
-  const model = deps.modelPortFactory(modelId);
-  if (model === undefined) {
+  const resolvedModel = deps.modelPortFactory(modelId);
+  if (resolvedModel === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
+  const model = withConversationReadinessAdmission(
+    resolvedModel,
+    modelId,
+    readinessAdmission,
+    deps,
+  );
   return {
     retriever: defaultRetriever(signal, deps),
     answerer: createMultiSourceAnswerer(model, modelId, deps.redactor, signal),
@@ -1461,12 +1502,14 @@ async function dispatchMultiSourceAsk(
   // An injected seam (tests) bypasses model-capability resolution exactly as the single-source path
   // does for an injected runner: there is no real model port to validate against. Production (no
   // override) resolves the chat-model guardrails once, shared with the single path.
-  const modelId =
-    seamOverride !== undefined
-      ? (input.modelId ?? chat.selectedModel)
-      : resolveGroundedModelId(deps, chat, input.modelId);
-  if (typeof modelId !== "string") return modelId;
-  const seam = resolveMultiSourceSeam(deps, modelId, signal, seamOverride);
+  const modelId = groundedModelId(args);
+  const seam = resolveMultiSourceSeam(
+    deps,
+    modelId,
+    groundedReadinessAdmission(args),
+    signal,
+    seamOverride,
+  );
   if ("status" in seam) return seam;
   return runMultiSourceAsk({
     chat,
@@ -1554,7 +1597,13 @@ async function dispatchFolderAsk(
   if (pathIsDenied(scope.workspaceRoot)) {
     return badRequest("Connected scope is excluded from Keiko's safe read surface.");
   }
-  const resolved = resolveGroundedRunner(deps, chat, input.modelId, signal, runner);
+  const resolved = resolveGroundedRunner(
+    deps,
+    groundedModelId(prepared),
+    groundedReadinessAdmission(prepared),
+    signal,
+    runner,
+  );
   if ("status" in resolved) return resolved;
   return runAsk({
     chat,
@@ -1611,11 +1660,7 @@ async function dispatchHybridAsk(
   const { chat, input, signal } = prepared;
   // An injected answerer (tests) bypasses model-capability resolution exactly as the multi-source
   // path does: there is no real model port to validate. Production resolves the guardrails once.
-  const modelId =
-    seam?.answer !== undefined
-      ? (input.modelId ?? chat.selectedModel)
-      : resolveGroundedModelId(deps, chat, input.modelId);
-  if (typeof modelId !== "string") return modelId;
+  const modelId = groundedModelId(prepared);
   return runHybridGroundedAsk({
     chat,
     content: input.content,
@@ -1627,6 +1672,7 @@ async function dispatchHybridAsk(
     contextProfile: currentContextProfileForModel(deps, modelId),
     deps,
     signal,
+    readinessAdmission: groundedReadinessAdmission(prepared),
     preSkippedFolders: skippedFolders.map((s) => ({
       label: s.label,
       reason: "not-accessible",
@@ -1686,6 +1732,7 @@ async function dispatchPreparedGroundedAsk(
       },
       deps,
       prepared.signal,
+      groundedReadinessAdmission(prepared),
     );
   }
   return dispatchHybridAsk(preparedWithCanonicalFolders, deps, skippedFolders, hybrid);
@@ -1722,6 +1769,30 @@ function admitGroundedUser(
   return groundedTurnConflict(
     admission.kind === "in-progress" ? "CHAT_TURN_IN_PROGRESS" : "CHAT_TURN_IDEMPOTENCY_CONFLICT",
   );
+}
+
+function admitGroundedModel(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+  allowInjectedModelSeam: boolean,
+): PreparedGroundedAsk | RouteResult {
+  const requestedModelId = prepared.input.modelId ?? prepared.chat.selectedModel;
+  const resolvedModelId = resolveGroundedModelId(deps, prepared.chat, prepared.input.modelId);
+  if (typeof resolvedModelId !== "string") {
+    if (!allowInjectedModelSeam) return resolvedModelId;
+    // Deterministic injected answer ports do not perform provider egress. Preserve those test
+    // seams without weakening production model validation.
+    return {
+      ...prepared,
+      modelId: requestedModelId,
+      readinessAdmission: { modelId: requestedModelId },
+    };
+  }
+  const modelId = resolvedModelId;
+  const readinessAdmission = captureConversationReadinessAdmission(deps, modelId);
+  return "status" in readinessAdmission
+    ? readinessAdmission
+    : { ...prepared, modelId, readinessAdmission };
 }
 
 function groundedTurnConflict(
@@ -1855,6 +1926,14 @@ async function runAdmittedGroundedAsk(
     if (isRouteResult(memoryPrepared)) {
       return settleGroundedChatTurn(admitted, deps, memoryPrepared);
     }
+    const staleReadiness = validateConversationReadinessAdmission(
+      deps,
+      groundedReadinessAdmission(memoryPrepared),
+      groundedModelId(memoryPrepared),
+    );
+    if (staleReadiness !== undefined) {
+      return settleGroundedChatTurn(memoryPrepared, deps, staleReadiness);
+    }
     const result = await dispatchPreparedGroundedAsk(
       memoryPrepared,
       deps,
@@ -1884,7 +1963,13 @@ async function executeGroundedAskInTurn(
   multiSource?: MultiSourceSeam,
   hybrid?: HybridSeam,
 ): Promise<RouteResult> {
-  const admitted = admitGroundedUser(prepared, deps);
+  const modelAdmitted = admitGroundedModel(
+    prepared,
+    deps,
+    runner !== undefined || multiSource !== undefined || hybrid?.answer !== undefined,
+  );
+  if (isRouteResult(modelAdmitted)) return modelAdmitted;
+  const admitted = admitGroundedUser(modelAdmitted, deps);
   if (isRouteResult(admitted)) return admitted;
   const scopeFailure = admittedGroundingScopeFailure(admitted, deps);
   return scopeFailure ?? runAdmittedGroundedAsk(admitted, deps, runner, multiSource, hybrid);

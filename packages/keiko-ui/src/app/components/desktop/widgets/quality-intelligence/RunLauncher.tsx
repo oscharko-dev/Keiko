@@ -133,27 +133,31 @@ const QI_MODEL_SCHEMA_VIOLATION_MESSAGE =
 const QI_UNKNOWN_TECHNICAL_DETAIL_MESSAGE =
   "Technische Fehlerdetails wurden nicht in die Nutzeransicht übernommen";
 
-// Shown on a SUCCEEDED-but-degraded run: model generation failed, so Keiko delivered deterministic
-// baseline test cases from the evidence. The user must be told the output is not model-backed so a
-// degraded run is never mistaken for an authoritative model result (regulated-delivery audit).
+// Shown on a SUCCEEDED-but-degraded run: persisted model-stage failure evidence qualifies the
+// result. The user must be told the output is not fully model-backed so it is never mistaken for an
+// authoritative model result (regulated-delivery audit).
 function degradedMessageFromReason(reasonSummary: string | null | undefined): string {
-  const base =
+  const generationBase =
     "Die Modellgenerierung ist fehlgeschlagen — Keiko hat deterministische Baseline-Testfälle aus der " +
     "Evidenz erstellt. Diese sind nicht modellgestützt; prüfe das Modell-Gateway und starte den Lauf für " +
     "modellgestützte Testfälle erneut.";
+  const stageBase =
+    "Mindestens eine Modellphase wurde eingeschränkt abgeschlossen. Das Ergebnis ist nicht vollständig " +
+    "modellgestützt; prüfe das Modell-Gateway und die Run-Evidenz, bevor du es verwendest.";
   if (reasonSummary === undefined || reasonSummary === null || reasonSummary.trim().length === 0) {
-    return base;
+    return stageBase;
   }
   if (reasonSummary === "qi-error: UnparseableModelOutputError") {
-    return `${base} (Modellausgabe nicht als JSON parsebar)`;
+    return `${generationBase} (Modellausgabe nicht als JSON parsebar)`;
   }
   if (reasonSummary === "qi-error: QI_PROMPT_TOO_LARGE") {
-    return `${base} (Quellkontext für das Modell zu groß)`;
+    return `${generationBase} (Quellkontext für das Modell zu groß)`;
   }
   if (reasonSummary === "qi-error: QI_MODEL_SCHEMA_VIOLATION") {
-    return `${base} (${QI_MODEL_SCHEMA_VIOLATION_MESSAGE})`;
+    return `${generationBase} (${QI_MODEL_SCHEMA_VIOLATION_MESSAGE})`;
   }
-  return `${base} (${QI_UNKNOWN_TECHNICAL_DETAIL_MESSAGE})`;
+  if (reasonSummary.startsWith("qi-judge-")) return stageBase;
+  return `${stageBase} (${QI_UNKNOWN_TECHNICAL_DETAIL_MESSAGE})`;
 }
 
 function failureMessageFromReason(reasonSummary: string | null | undefined): string {
@@ -1392,17 +1396,26 @@ export function RunLauncher({
     // Visible-only progress block (aria-hidden): the announcement is owned by the persistent
     // sr-only region below (a11y M-01), so this block must not also be a live region or it would
     // double-announce. Kept conditional for layout.
-    const findingsSuffix = progress.findings !== 1 ? "s" : "";
-    const findingsText =
-      progress.findings > 0 ? ` · ${progress.findings.toString()} finding${findingsSuffix}` : "";
+    const findingsKey =
+      progress.findings === 1
+        ? "qi.launcher.progress.findingsOne"
+        : "qi.launcher.progress.findingsMany";
+    const findingsText = progress.findings > 0 ? t(findingsKey, { count: progress.findings }) : "";
     return (
       <div className="qi-progress" data-testid="qi-launch-progress" aria-hidden="true">
         <span className="qi-progress-spinner" aria-hidden="true" />
         <span className="qi-progress-text">
-          {progress.stageName !== null ? `Stage: ${progress.stageName} · ` : ""}
-          {progress.candidates.toString()} test case{progress.candidates !== 1 ? "s" : ""}
-          {/* "1 finding", not "1 findings" — same singular/plural care as the test-case count two
-              tokens earlier (uiux-fix F047 C276). */}
+          {progress.stageName !== null
+            ? t("qi.launcher.progress.stage", { stage: progress.stageName })
+            : ""}
+          {t(
+            progress.candidates === 1
+              ? "qi.launcher.progress.candidatesOne"
+              : "qi.launcher.progress.candidatesMany",
+            { count: progress.candidates },
+          )}
+          {/* "1 finding", not "1 findings" — same singular/plural care as the test-case count
+              (uiux-fix F047 C276), now via the locale catalogs. */}
           {findingsText}
         </span>
       </div>

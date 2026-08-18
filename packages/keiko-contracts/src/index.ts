@@ -3256,6 +3256,7 @@ export type {
   QualityIntelligenceModelPreflightStageResult,
   QualityIntelligenceModelPreflightSummary,
   QualityIntelligenceModelStageFailure,
+  QualityIntelligenceTerminalDegradation,
   QualityIntelligenceModelRouting,
   QualityIntelligenceModelPolicyResponse,
   QualityIntelligenceModelPolicyPreflightRequest,
@@ -3269,7 +3270,10 @@ export type {
   QualityIntelligenceRunStreamError,
   QualityIntelligenceRunStreamMessage,
 } from "./qualityIntelligence/bffWire.js";
-export { isQualityIntelligenceJudgeEligible } from "./qualityIntelligence/bffWire.js";
+export {
+  deriveQualityIntelligenceTerminalDegradation,
+  isQualityIntelligenceJudgeEligible,
+} from "./qualityIntelligence/bffWire.js";
 // Issue #283 added flat export-adapter consumers.
 export type {
   QualityIntelligenceExportAdapter,

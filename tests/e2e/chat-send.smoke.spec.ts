@@ -45,6 +45,23 @@ async function ensureProject(request: APIRequestContext, projectPath: string): P
   }
 }
 
+async function runVisibleReadiness(page: Page, request: APIRequestContext): Promise<void> {
+  await page.getByRole("button", { name: "Settings" }).click();
+  const settings = page.getByRole("region", { name: /^Settings/u });
+  await settings.getByRole("button", { name: "Run readiness check" }).click();
+  await expect(settings.getByText("Working today", { exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
+
+  const catalog = await request.get("/api/models");
+  expect(catalog.status(), await catalog.text().catch(() => "")).toBe(200);
+  const body = (await catalog.json()) as {
+    readonly models: readonly { readonly id: string; readonly conversationReady: boolean }[];
+  };
+  expect(body.models.find((model) => model.id === CHAT_MODEL_ID)?.conversationReady).toBe(true);
+  await settings.getByRole("button", { name: "Close Settings window" }).click();
+}
+
 async function createChat(
   request: APIRequestContext,
 ): Promise<{ chat: ChatResponse["chat"]; projectPath: string }> {
@@ -100,13 +117,19 @@ test("sends a chat message and streams a persisted assistant reply @smoke", asyn
   await page.goto("/");
   const chatWindow = page.getByRole("region", { name: "Chat — E2E chat send" });
   await expect(chatWindow).toBeVisible();
-
   const composer = chatWindow.getByRole("textbox", { name: "Chat message" });
   await expect(composer).toBeVisible();
   await composer.click();
   await composer.fill("Ping the deterministic provider");
+  const sendButton = chatWindow.getByRole("button", { name: "Send message" });
+  await expect(sendButton).toBeDisabled();
 
-  await chatWindow.getByRole("button", { name: "Send message" }).click();
+  // The readiness result must refresh the already-mounted chat catalog. There is deliberately no
+  // navigation or reload between this visible Settings action and the enabled chat composer.
+  await runVisibleReadiness(page, request);
+  await expect(sendButton).toBeEnabled();
+
+  await sendButton.click();
 
   // The user's message echoes into the transcript immediately, and the assistant reply arrives as
   // streamed SSE deltas. Asserting the deterministic marker renders proves the WHOLE path worked:

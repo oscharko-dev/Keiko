@@ -39,6 +39,10 @@ import type {
 import { fetchFilesSearch, updateChat } from "@/lib/api";
 import { queueChatEditorApply } from "@/lib/chat-editor-apply";
 import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
+import {
+  GATEWAY_CONFIG_UPDATED_EVENT,
+  GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
+} from "./widgets/shared/gatewaySetupBus";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -1406,6 +1410,135 @@ describe("ChatWindow repository file focus picker", () => {
 });
 
 describe("ChatWindow local knowledge scope disclosure", () => {
+  it("refreshes the mounted grounding catalog on each reopen and keeps a removed selection unavailable", async () => {
+    const user = userEvent.setup();
+    const staleCapsuleId = makeCapsuleId("cap-stale");
+    const freshCapsuleId = makeCapsuleId("cap-fresh");
+    fetchCapsulesMock
+      .mockResolvedValueOnce({
+        capsules: [
+          {
+            id: staleCapsuleId,
+            displayName: "Stale knowledge",
+            lifecycleState: "ready",
+            sourceCount: 1,
+            updatedAt: 1,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        capsules: [
+          {
+            id: freshCapsuleId,
+            displayName: "Fresh knowledge",
+            lifecycleState: "ready",
+            sourceCount: 1,
+            updatedAt: 2,
+          },
+          {
+            id: staleCapsuleId,
+            displayName: "Stale knowledge",
+            lifecycleState: "indexing",
+            sourceCount: 1,
+            updatedAt: 2,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ capsules: [] });
+    fetchCapsuleSetsMock.mockResolvedValue({ capsuleSets: [] });
+
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          localKnowledgeScope: {
+            kind: "capsule",
+            capsuleId: staleCapsuleId,
+            connectedAtMs: 1,
+          },
+        }),
+      }),
+    );
+
+    await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(1));
+    await openCombobox(user, "Grounding mode");
+    expect(screen.getByRole("option", { name: "Knowledge Pod: Stale knowledge" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    await openCombobox(user, "Grounding mode");
+    await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("option", { name: "Knowledge Pod: Fresh knowledge" })).toBeVisible();
+    expect(screen.queryByRole("option", { name: "Knowledge Pod: Stale knowledge" })).toBeNull();
+    expect(screen.getByRole("option", { name: "Knowledge Pod (unavailable)" })).toBeDisabled();
+
+    await user.keyboard("{Escape}");
+    await openCombobox(user, "Grounding mode");
+    await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(3));
+    expect(screen.queryByRole("option", { name: "Knowledge Pod: Fresh knowledge" })).toBeNull();
+    expect(screen.getByRole("option", { name: "Knowledge Pod (unavailable)" })).toBeVisible();
+  });
+
+  it("clears stale options on a reopen failure and recovers on the next reopen", async () => {
+    const user = userEvent.setup();
+    const staleCapsuleId = makeCapsuleId("cap-failed-refresh");
+    const recoveredCapsuleId = makeCapsuleId("cap-recovered-refresh");
+    fetchCapsulesMock
+      .mockResolvedValueOnce({
+        capsules: [
+          {
+            id: staleCapsuleId,
+            displayName: "Previously available",
+            lifecycleState: "ready",
+            sourceCount: 1,
+            updatedAt: 1,
+          },
+        ],
+      })
+      .mockRejectedValueOnce(new Error("knowledge catalog unavailable"))
+      .mockResolvedValueOnce({
+        capsules: [
+          {
+            id: recoveredCapsuleId,
+            displayName: "Recovered knowledge",
+            lifecycleState: "ready",
+            sourceCount: 1,
+            updatedAt: 2,
+          },
+        ],
+      });
+    fetchCapsuleSetsMock.mockResolvedValue({ capsuleSets: [] });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          localKnowledgeScope: {
+            kind: "capsule",
+            capsuleId: staleCapsuleId,
+            connectedAtMs: 1,
+          },
+        }),
+      }),
+    );
+
+    await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(1));
+    await openCombobox(user, "Grounding mode");
+    await user.keyboard("{Escape}");
+    await openCombobox(user, "Grounding mode");
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("knowledge catalog unavailable");
+    });
+    expect(
+      screen.queryByRole("option", { name: "Knowledge Pod: Previously available" }),
+    ).toBeNull();
+    expect(screen.getByRole("option", { name: "Knowledge Pod (unavailable)" })).toBeDisabled();
+
+    await user.keyboard("{Escape}");
+    await openCombobox(user, "Grounding mode");
+    await waitFor(() => {
+      expect(
+        screen.getByRole("option", { name: "Knowledge Pod: Recovered knowledge" }),
+      ).toBeVisible();
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("shares the capsule catalog request across mounted chat windows", async () => {
     fetchCapsulesMock.mockResolvedValueOnce({
       capsules: [
@@ -2083,6 +2216,33 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
     await openCombobox(user, "Models");
     expect(screen.getByRole("option", { name: "test-chat-1" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "test-chat-2" })).toBeInTheDocument();
+  });
+
+  it("refreshes the eligible-model catalog whenever the visible picker is reopened", async () => {
+    const user = userEvent.setup();
+    const onCatalogRefresh = vi.fn();
+    window.addEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, onCatalogRefresh);
+    const onConfigUpdated = vi.fn();
+    window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
+    try {
+      renderWindow(
+        makeSession({
+          models: [chatModelCapability("test-chat-1")],
+          selectedModel: "test-chat-1",
+          activeChat: makeChat(),
+        }),
+      );
+
+      await openCombobox(user, "Models");
+      await user.keyboard("{Escape}");
+      await openCombobox(user, "Models");
+
+      expect(onCatalogRefresh).toHaveBeenCalledTimes(2);
+      expect(onConfigUpdated).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, onCatalogRefresh);
+      window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
+    }
   });
 
   it("does not render a non-chat model id in the dropdown when session.models is pre-filtered (AC #2)", async () => {

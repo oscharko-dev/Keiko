@@ -10,7 +10,13 @@
 
 import { SSE_HEADERS, startSseHeartbeat } from "./sse.js";
 import { writeOrDestroy } from "./sse-write.js";
-import { STREAMING, errorBody, type HandlerOutcome, type RouteContext } from "./routes.js";
+import {
+  STREAMING,
+  errorBody,
+  type HandlerOutcome,
+  type RouteContext,
+  type RouteResult,
+} from "./routes.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatMessage } from "./store/index.js";
@@ -27,6 +33,7 @@ import {
   assemblyWithConversationImages,
   conversationImageDeliveries,
   buildMemoryResult,
+  captureDesktopChatExecutionAdmission,
   captureGatewayTurnSnapshot,
   collectMemoryActions,
   completeDesktopChatTurn,
@@ -40,13 +47,14 @@ import {
   parseDesktopChatSend,
   recordChatCompaction,
   validateDesktopChatSend,
-  validateDesktopChatExecution,
+  validateDesktopChatProviderBoundary,
   validateCurrentDesktopChatSend,
   runPostCommitConversationMemorySideEffects,
   type ParsedDesktopChatSend,
   type PreparedDesktopChatSend,
   type SendDesktopChatRequest,
   type GatewayTurnSnapshot,
+  type DesktopChatExecutionAdmission,
 } from "./chat-handlers.js";
 import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
 import { createRequestCancellation } from "./request-cancellation.js";
@@ -306,7 +314,7 @@ async function streamAndPersist(
   const { prepared, callStream, userMessage, gatewayTurn, messageCountBeforeTurn } = admitted;
   const { request, modelId, memoryContext } = prepared;
   const startedAt = Date.now();
-  const memory = await resolveMemory(deps, request, memoryContext);
+  const memory = admitted.memory ?? (await resolveMemory(deps, request, memoryContext));
   if (requestIsAborted(controller.signal)) {
     failCancelledStreamTurn(ctx, deps, request, true);
     return;
@@ -386,7 +394,7 @@ type DesktopChatStreamPreparation =
   | { readonly kind: "outcome"; readonly outcome: HandlerOutcome }
   | { readonly kind: "replay"; readonly response: DesktopChatSendResponse };
 
-function streamingUnsupportedOutcome(): HandlerOutcome {
+function streamingUnsupportedOutcome(): RouteResult {
   return {
     status: 400,
     body: errorBody("STREAMING_UNSUPPORTED", "Streaming is not available for this model."),
@@ -440,12 +448,12 @@ async function prepareDesktopChatStream(
 
 function resolveDesktopChatStreamCall(
   prepared: PreparedDesktopChatSend,
+  executionAdmission: DesktopChatExecutionAdmission,
   deps: UiHandlerDeps,
-): StreamCall | HandlerOutcome {
-  const invalidExecution = validateDesktopChatExecution(
-    prepared.request,
-    prepared.chat,
+): StreamCall | RouteResult {
+  const invalidExecution = validateDesktopChatProviderBoundary(
     prepared.modelId,
+    executionAdmission,
     deps,
   );
   if (invalidExecution !== undefined) return invalidExecution;
@@ -458,6 +466,7 @@ function resolveDesktopChatStreamCall(
 interface AdmittedDesktopChatStream {
   readonly prepared: PreparedDesktopChatSend;
   readonly callStream: StreamCall;
+  readonly memory: ConversationMemoryResultWire | undefined;
   readonly userMessage: ChatMessage;
   readonly gatewayTurn: GatewayTurnSnapshot;
   readonly messageCountBeforeTurn: number;
@@ -500,6 +509,77 @@ async function executeAdmittedDesktopChatStream(
   return STREAMING;
 }
 
+interface DesktopChatStreamExecutionPreflight {
+  readonly legacyExecutionAdmission: DesktopChatExecutionAdmission | undefined;
+  readonly legacyCall: StreamCall | undefined;
+}
+
+function preflightDesktopChatStreamExecution(
+  prepared: PreparedDesktopChatSend,
+  deps: UiHandlerDeps,
+): DesktopChatStreamExecutionPreflight | RouteResult {
+  const legacyExecutionAdmission =
+    prepared.request.clientTurnId === undefined
+      ? captureDesktopChatExecutionAdmission(
+          prepared.request,
+          prepared.chat,
+          prepared.modelId,
+          deps,
+        )
+      : undefined;
+  if (legacyExecutionAdmission !== undefined && "status" in legacyExecutionAdmission) {
+    return legacyExecutionAdmission;
+  }
+  // Probe stream support for EVERY legacy request while nothing is persisted yet: a legacy
+  // rejection after admission cannot settle the turn (failDesktopChatTurn is a no-op without
+  // a clientTurnId) and would orphan the user message — the pre-#3182 invariant.
+  const probed =
+    legacyExecutionAdmission === undefined
+      ? undefined
+      : resolveDesktopChatStreamCall(prepared, legacyExecutionAdmission, deps);
+  if (probed !== undefined && typeof probed !== "function") return probed;
+  return {
+    legacyExecutionAdmission,
+    // The gateway arm re-resolves after the memory await (#3182 provider-boundary freshness);
+    // the probe above already rejected unstreamable models before persistence.
+    legacyCall: deps.gatewayConfig === undefined ? probed : undefined,
+  };
+}
+
+async function prepareDesktopChatProviderStream(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  executionAdmission: DesktopChatExecutionAdmission,
+  legacyCall: StreamCall | undefined,
+  controller: AbortController,
+): Promise<Pick<AdmittedDesktopChatStream, "callStream" | "memory"> | RouteResult> {
+  let memory: AdmittedDesktopChatStream["memory"];
+  try {
+    memory =
+      deps.gatewayConfig === undefined
+        ? undefined
+        : await resolveMemory(deps, prepared.request, prepared.memoryContext);
+  } catch (error) {
+    // The turn is already admitted: a memory failure here MUST settle it, or the
+    // clientTurnId stays "pending" forever and every retry gets CHAT_TURN_IN_PROGRESS
+    // (the buffered path settles the same class in its catch).
+    const cancelled = requestIsAborted(controller.signal);
+    failDesktopChatTurn(deps, prepared.request, cancelled ? "cancelled" : "failed");
+    if (cancelled) {
+      return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
+    }
+    return desktopChatErrorResult(error, deps);
+  }
+  if (requestIsAborted(controller.signal)) {
+    failDesktopChatTurn(deps, prepared.request, "cancelled");
+    return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
+  }
+  const callStream = legacyCall ?? resolveDesktopChatStreamCall(prepared, executionAdmission, deps);
+  if (typeof callStream === "function") return { callStream, memory };
+  failDesktopChatTurn(deps, prepared.request);
+  return callStream;
+}
+
 async function runAdmittedDesktopChatStream(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -509,26 +589,34 @@ async function runAdmittedDesktopChatStream(
 ): Promise<HandlerOutcome> {
   const prepared = validateCurrentDesktopChatSend(start.parsed, deps);
   if ("status" in prepared) return prepared;
-  const legacyCall =
-    prepared.request.clientTurnId === undefined
-      ? resolveDesktopChatStreamCall(prepared, deps)
-      : undefined;
-  if (legacyCall !== undefined && typeof legacyCall !== "function") return legacyCall;
+  const preflight = preflightDesktopChatStreamExecution(prepared, deps);
+  if ("status" in preflight) return preflight;
   const messageCountBeforeTurn = deps.store.countMessages(prepared.request.chatId);
   const admission = admitDesktopChatTurn(deps, prepared);
   if (admission.kind !== "admitted") return nonAdmittedStreamOutcome(ctx, admission);
-  const callStream = legacyCall ?? resolveDesktopChatStreamCall(prepared, deps);
-  if (typeof callStream !== "function") {
+  const executionAdmission =
+    preflight.legacyExecutionAdmission ??
+    captureDesktopChatExecutionAdmission(prepared.request, prepared.chat, prepared.modelId, deps);
+  if ("status" in executionAdmission) {
     failDesktopChatTurn(deps, prepared.request);
-    return callStream;
+    return executionAdmission;
   }
+  const provider = await prepareDesktopChatProviderStream(
+    deps,
+    prepared,
+    executionAdmission,
+    preflight.legacyCall,
+    controller,
+  );
+  if ("status" in provider) return provider;
   const gatewayTurn = captureGatewayTurnSnapshot(deps, prepared.request, admission.userMessage);
   return executeAdmittedDesktopChatStream(
     ctx,
     deps,
     {
       prepared,
-      callStream,
+      callStream: provider.callStream,
+      memory: provider.memory,
       userMessage: admission.userMessage,
       gatewayTurn,
       messageCountBeforeTurn,

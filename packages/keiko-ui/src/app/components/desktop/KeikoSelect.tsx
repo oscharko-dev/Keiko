@@ -37,6 +37,8 @@ export interface KeikoSelectProps {
   readonly value: string;
   readonly sections: readonly KeikoSelectSection[];
   readonly onValueChange: (next: string) => void;
+  /** Called after a deliberate pointer or keyboard opening is accepted. */
+  readonly onOpen?: (() => void) | undefined;
   readonly disabled?: boolean;
   readonly placeholder?: string | undefined;
   readonly ariaLabel?: string | undefined;
@@ -101,9 +103,8 @@ function nextEnabledIndex(
   direction: -1 | 1,
 ): number {
   if (options.length === 0) return -1;
-  let index = start;
-  for (let i = 0; i < options.length; i += 1) {
-    index = (index + direction + options.length) % options.length;
+  for (const offset of options.keys()) {
+    const index = (start + (offset + 1) * direction + options.length) % options.length;
     if (options[index]?.disabled !== true) return index;
   }
   return -1;
@@ -176,6 +177,7 @@ function OverflowOptionButton({
   onCommit,
   onOptionKeyDown,
   option,
+  selected,
   setOptionRef,
 }: {
   readonly active: boolean;
@@ -183,6 +185,7 @@ function OverflowOptionButton({
   readonly onCommit: (option: FlatOption) => void;
   readonly onOptionKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => void;
   readonly option: FlatOption;
+  readonly selected: boolean;
   readonly setOptionRef: (index: number, element: HTMLButtonElement | null) => void;
 }): ReactNode {
   const optionRef = useRef<HTMLButtonElement | null>(null);
@@ -234,7 +237,7 @@ function OverflowOptionButton({
         optionRef.current = element;
         setOptionRef(index, element);
       }}
-      aria-selected={active}
+      aria-selected={selected}
       className={`ksel-option${active ? " ksel-option-active" : ""}`}
       data-disabled={option.disabled === true ? "true" : undefined}
       disabled={option.disabled}
@@ -286,6 +289,7 @@ function KeikoSelectMenuSection({
   onOptionKeyDown,
   section,
   sectionIndex,
+  selectedIndex,
   setOptionRef,
 }: {
   readonly activeIndex: number;
@@ -295,6 +299,7 @@ function KeikoSelectMenuSection({
   readonly onOptionKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => void;
   readonly section: KeikoSelectSection;
   readonly sectionIndex: number;
+  readonly selectedIndex: number;
   readonly setOptionRef: (index: number, element: HTMLButtonElement | null) => void;
 }): ReactNode {
   // A labelled section is a real listbox group so its options stay
@@ -318,9 +323,6 @@ function KeikoSelectMenuSection({
         const index = flatOptions.findIndex(
           (entry) => entry.value === option.value && entry.sectionLabel === section.label,
         );
-        // aria-selected tracks the roving focus (activeIndex) so
-        // assistive tech reports the option keyboard focus is on,
-        // not the last committed value.
         const active = index === activeIndex;
         const flatOption = flatOptions[index];
         if (flatOption === undefined) return null;
@@ -332,6 +334,7 @@ function KeikoSelectMenuSection({
             onCommit={onCommit}
             onOptionKeyDown={onOptionKeyDown}
             option={flatOption}
+            selected={index === selectedIndex}
             setOptionRef={setOptionRef}
           />
         );
@@ -354,6 +357,7 @@ function KeikoSelectMenu({
   onOptionKeyDown,
   placeholder,
   position,
+  selectedIndex,
   sections,
   setOptionRef,
   showMenuHeader,
@@ -371,6 +375,7 @@ function KeikoSelectMenu({
   readonly onOptionKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => void;
   readonly placeholder: string | undefined;
   readonly position: MenuPosition;
+  readonly selectedIndex: number;
   readonly sections: readonly KeikoSelectSection[];
   readonly setOptionRef: (index: number, element: HTMLButtonElement | null) => void;
   readonly showMenuHeader: boolean;
@@ -423,6 +428,7 @@ function KeikoSelectMenu({
             onOptionKeyDown={onOptionKeyDown}
             section={section}
             sectionIndex={sectionIndex}
+            selectedIndex={selectedIndex}
             setOptionRef={setOptionRef}
           />
         ))}
@@ -436,6 +442,7 @@ export default function KeikoSelect({
   value,
   sections,
   onValueChange,
+  onOpen,
   disabled = false,
   placeholder,
   ariaLabel,
@@ -493,6 +500,7 @@ export default function KeikoSelect({
     const fallbackIndex = resolveOpenMenuIndex(flatOptions, preferredIndex, selectedIndex);
     setOpen(true);
     setActiveIndex(fallbackIndex);
+    onOpen?.();
   };
 
   useEffect(() => {
@@ -715,6 +723,7 @@ export default function KeikoSelect({
         onOptionKeyDown={onOptionKeyDown}
         placeholder={placeholder}
         position={position}
+        selectedIndex={selectedIndex}
         sections={sections}
         setOptionRef={(optionIndex, element) => {
           optionRefs.current[optionIndex] = element;

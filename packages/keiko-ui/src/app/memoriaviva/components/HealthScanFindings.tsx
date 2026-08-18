@@ -178,11 +178,13 @@ function RecordsInspectedNote({ result, t }: RecordsInspectedNoteProps): ReactNo
   );
 }
 
+type HealthScanLoadState =
+  | { readonly status: "loading" }
+  | { readonly status: "success"; readonly result: MemoryHealthScanResultWire }
+  | { readonly status: "error"; readonly message: string };
+
 interface HealthScanSectionBodyProps {
-  readonly loading: boolean;
-  readonly error: string | null;
-  readonly findings: readonly MemoryHealthScanFindingWire[];
-  readonly result: MemoryHealthScanResultWire | null;
+  readonly state: HealthScanLoadState;
   readonly onOpenDetail?: ((id: string) => void) | undefined;
   readonly onRetry: () => void;
   readonly t: I18nTranslate;
@@ -192,15 +194,12 @@ interface HealthScanSectionBodyProps {
 // decision tree, previously a 4-way nested ternary. Early returns keep each branch at the same
 // nesting level instead of nesting inside the previous branch's "else".
 function HealthScanSectionBody({
-  loading,
-  error,
-  findings,
-  result,
+  state,
   onOpenDetail,
   onRetry,
   t,
 }: HealthScanSectionBodyProps): ReactNode {
-  if (loading) {
+  if (state.status === "loading") {
     return (
       <p role="status" aria-live="polite" className="lk-loading">
         {t("memoria.healthScan.loading")}
@@ -208,16 +207,19 @@ function HealthScanSectionBody({
     );
   }
 
-  if (error !== null) {
+  if (state.status === "error") {
     return (
       <div role="alert" aria-live="assertive" className="lk-alert">
-        {error}
+        {state.message}
         <button type="button" className="lk-alert-retry" onClick={onRetry}>
           {t("memoria.retry")}
         </button>
       </div>
     );
   }
+
+  const result = state.result;
+  const { findings } = result;
 
   if (findings.length === 0) {
     return (
@@ -232,7 +234,7 @@ function HealthScanSectionBody({
 
   return (
     <>
-      {result !== null ? <RecordsInspectedNote result={result} t={t} /> : null}
+      <RecordsInspectedNote result={result} t={t} />
       <ul
         style={{
           listStyle: "none",
@@ -263,20 +265,15 @@ export function HealthScanFindings({
   onOpenDetail,
 }: HealthScanFindingsProps): ReactNode {
   const t = useTranslate();
-  const [result, setResult] = useState<MemoryHealthScanResultWire | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [state, setState] = useState<HealthScanLoadState>({ status: "loading" });
 
   const load = useCallback(async (): Promise<void> => {
-    setLoading(true);
-    setError(null);
+    setState({ status: "loading" });
     try {
       const res = await fetchImpl();
-      setResult(res);
+      setState({ status: "success", result: res });
     } catch (err) {
-      setError(formatError(err));
-    } finally {
-      setLoading(false);
+      setState({ status: "error", message: formatError(err) });
     }
   }, [fetchImpl]);
 
@@ -284,15 +281,15 @@ export function HealthScanFindings({
     void load();
   }, [load]);
 
-  const findings = result?.findings ?? [];
-
   return (
     <>
       <header className="lk-header mc-review-header">
         <h1 className="lk-title">{t("memoria.healthScan")}</h1>
-        <span role="status" aria-live="polite" className="mc-badge-count">
-          {t("memoria.healthScan.findingsCount", { count: findings.length })}
-        </span>
+        {state.status === "success" ? (
+          <span role="status" aria-live="polite" className="mc-badge-count">
+            {t("memoria.healthScan.findingsCount", { count: state.result.findings.length })}
+          </span>
+        ) : null}
         {onBack !== undefined ? (
           <button
             type="button"
@@ -315,14 +312,11 @@ export function HealthScanFindings({
 
       <section
         aria-label={t("memoria.healthScan.region")}
-        aria-busy={loading}
+        aria-busy={state.status === "loading"}
         style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
       >
         <HealthScanSectionBody
-          loading={loading}
-          error={error}
-          findings={findings}
-          result={result}
+          state={state}
           onOpenDetail={onOpenDetail}
           onRetry={() => {
             void load();

@@ -557,15 +557,19 @@ async function probeChat(
     if (!response.ok) {
       return result("chat", "failed", start, unsuccessfulEvidence("Basic chat", response));
     }
-    const text = assistantText(await readProviderJson(response)).toLowerCase();
-    const passed = text.includes("ok");
+    // Mirror the production floor exactly (openai-adapter assertUsableAssistantResponse +
+    // normalize textFromContent): the extracted assistant text must be non-empty, and
+    // content-part arrays count like plain strings. A probe stricter OR looser than the
+    // adapter turns readiness into a lie in one direction or the other.
+    const payload = await readProviderJson(response);
+    const passed = firstMessage(payload) !== undefined && assistantText(payload).trim().length > 0;
     return result(
       "chat",
       passed ? "passed" : "failed",
       start,
       passed
-        ? "Working today: basic chat returned the expected readiness token."
-        : "Basic chat answered, but did not return the expected readiness token.",
+        ? "Working today: basic chat returned a valid assistant response."
+        : "Basic chat did not return a valid assistant response.",
     );
   } catch (probeError) {
     return probeFailure(
@@ -1155,6 +1159,20 @@ function verifiedCapabilities(
   };
 }
 
+const CATEGORICAL_OBSERVATION_PROBES: ReadonlySet<GatewayReadinessProbeName> = new Set([
+  "streaming",
+  "tool_calling",
+  "json_schema",
+  "image_input",
+  "document_input",
+]);
+
+function executedCategoricalFeatureProbe(probes: readonly GatewayReadinessProbeResult[]): boolean {
+  return probes.some(
+    (probe) => CATEGORICAL_OBSERVATION_PROBES.has(probe.name) && probe.status !== "skipped",
+  );
+}
+
 function categoricalProbeValue(
   probes: readonly GatewayReadinessProbeResult[],
   name: GatewayReadinessProbeName,
@@ -1169,6 +1187,7 @@ function verifiedCapabilityObservation(
   probes: readonly GatewayReadinessProbeResult[],
 ): VerifiedModelCapabilityFields {
   const values = [
+    ["conversationReady", categoricalProbeValue(probes, "chat")],
     ["streaming", categoricalProbeValue(probes, "streaming")],
     ["toolCalling", categoricalProbeValue(probes, "tool_calling")],
     ["structuredOutput", categoricalProbeValue(probes, "json_schema")],
@@ -1193,9 +1212,19 @@ function recordReadinessObservation(
   }
   const observation = verifiedCapabilityObservation(report.probes);
   if (Object.keys(observation).length === 0) return;
+  const previous = deps.gatewayConfig?.verifiedCapability(report.modelId);
+  // Chat-only means no categorical feature probe EXECUTED. Keying this on observation keys
+  // let a run whose only feature probe FAILED (yielding no observation) masquerade as a
+  // chat-only refresh and re-stamp stale previous fields with a fresh checkedAt — verified
+  // evidence contradicted by the very run recording it.
+  const chatOnlyRun = !executedCategoricalFeatureProbe(report.probes);
+  const fields =
+    chatOnlyRun && previous !== undefined && previous.generation === observedGeneration
+      ? { ...previous.fields, ...observation }
+      : observation;
   deps.gatewayConfig?.recordVerifiedCapability(
     report.modelId,
-    observation,
+    fields,
     report.checkedAt,
     observedGeneration,
   );

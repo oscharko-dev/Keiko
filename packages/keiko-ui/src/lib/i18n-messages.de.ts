@@ -617,6 +617,8 @@ export const DE_MESSAGES = {
   "chat.grounding.capsule": "Knowledge Pod: {name}",
   "chat.grounding.capsuleSet": "Knowledge Pod Set: {name}",
   "chat.grounding.unavailable": "{label} (nicht verfügbar)",
+  "chat.grounding.catalogLoading": "Verfügbare Knowledge Pods werden aktualisiert…",
+  "chat.grounding.catalogEmpty": "Keine bereiten Knowledge Pods oder Pod Sets sind verfügbar.",
   "chat.grounding.sourceLimit":
     "Quellenlimit erreicht — dieser Chat hat bereits {connectedCount} von {cap} verbundenen Quellen. Trenne eine Quelle, bevor du eine weitere verbindest.",
   "chat.grounding.readyChatRequired":

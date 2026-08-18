@@ -77,8 +77,12 @@ const SECRET_ONLY = JSON.stringify([
 ]);
 
 // User text is clean: no secret (egress guard passes → model is consulted) and no regex-capture
-// trigger (deterministic path stays empty).
-const USER_TEXT = "We reviewed the deployment configuration for the platform team today.";
+// trigger (deterministic path stays empty). Each accepted model body is an exact complete line from
+// this user turn, preserving the user-provenance boundary in the real salience extractor.
+const USER_TEXT = [
+  "The platform team ships releases on a fortnightly cadence.",
+  "The escalation contact address is oncall@example.com.",
+].join("\n");
 
 const ALL_MODES: readonly CodingWorkbenchMode[] = [
   "governed-assist",

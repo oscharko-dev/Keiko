@@ -1128,15 +1128,17 @@ describe("ChatWindowSessionHost target missing", () => {
     });
   });
 
-  it("adopts a replacement request and binds only its latest title", async (): Promise<void> => {
+  it("does not adopt a settled creation into a later fresh request", async (): Promise<void> => {
     const creation = deferred<Chat | undefined>();
+    const replacement = deferred<Chat | undefined>();
     const created = chatFixture("chat-created", "First title", 2);
-    const latest = chatFixture(created.id, "Second title", 3);
+    const latest = chatFixture("chat-created-latest", "Second title", 3);
     chatSessionState.activeChat = undefined;
     chatSessionState.activeProject = undefined;
     chatSessionState.chats = [];
-    chatSessionState.openNewChat.mockReturnValueOnce(creation.promise);
-    updateChatMock.mockResolvedValueOnce({ chat: latest });
+    chatSessionState.openNewChat
+      .mockReturnValueOnce(creation.promise)
+      .mockReturnValueOnce(replacement.promise);
     const ctx = context();
     const view = render(
       <I18nProvider>
@@ -1158,20 +1160,18 @@ describe("ChatWindowSessionHost target missing", () => {
         />
       </I18nProvider>,
     );
-    expect(chatSessionState.openNewChat).toHaveBeenCalledTimes(1);
+    await waitFor((): void => expect(chatSessionState.openNewChat).toHaveBeenCalledTimes(2));
     await act(async (): Promise<void> => {
       creation.resolve(created);
       await creation.promise;
     });
-    await waitFor((): void => {
-      expect(ctx.updateCfg).toHaveBeenCalledOnce();
-    });
+    expect(ctx.updateCfg).not.toHaveBeenCalled();
 
-    expect(chatSessionState.openNewChat).toHaveBeenCalledOnce();
-    expect(updateChatMock).toHaveBeenCalledOnce();
-    expect(updateChatMock).toHaveBeenCalledWith(created.id, { title: latest.title });
-    expect(chatSessionState.replaceChat).toHaveBeenCalledOnce();
-    expect(chatSessionState.replaceChat).toHaveBeenCalledWith(latest);
+    await act(async (): Promise<void> => {
+      replacement.resolve(latest);
+      await replacement.promise;
+    });
+    await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledOnce());
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       chatId: latest.id,
       projectPath: latest.projectPath,
@@ -1214,7 +1214,7 @@ describe("ChatWindowSessionHost target missing", () => {
     expect(updateChatMock).not.toHaveBeenCalled();
   });
 
-  it("adopts a persisted project creation when navigation returns after it settles", async (): Promise<void> => {
+  it("does not redeliver a settled project creation when navigation returns", async (): Promise<void> => {
     const projectA: ProjectWithAvailability = {
       path: "/repo-a",
       name: "Repo A",
@@ -1233,6 +1233,7 @@ describe("ChatWindowSessionHost target missing", () => {
     };
     const creationA = deferred<Chat | undefined>();
     const creationB = deferred<Chat | undefined>();
+    const creationAAgain = deferred<Chat | undefined>();
     const chatA = { ...chatFixture("chat-a", "Project A", 1), projectPath: projectA.path };
     const chatB = { ...chatFixture("chat-b", "Project B", 2), projectPath: projectB.path };
     chatSessionState.activeChat = undefined;
@@ -1240,7 +1241,8 @@ describe("ChatWindowSessionHost target missing", () => {
     chatSessionState.chats = [];
     chatSessionState.openNewChat
       .mockReturnValueOnce(creationA.promise)
-      .mockReturnValueOnce(creationB.promise);
+      .mockReturnValueOnce(creationB.promise)
+      .mockReturnValueOnce(creationAAgain.promise);
     const ctx = context();
     const view = render(
       <I18nProvider>
@@ -1292,8 +1294,12 @@ describe("ChatWindowSessionHost target missing", () => {
         />
       </I18nProvider>,
     );
+    await waitFor((): void => expect(chatSessionState.openNewChat).toHaveBeenCalledTimes(3));
+    await act(async (): Promise<void> => {
+      creationAAgain.resolve(chatA);
+      await creationAAgain.promise;
+    });
     await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledTimes(2));
-    expect(chatSessionState.openNewChat).toHaveBeenCalledTimes(2);
     expect(ctx.updateCfg).toHaveBeenLastCalledWith({
       chatId: chatA.id,
       projectPath: chatA.projectPath,
@@ -1375,77 +1381,6 @@ describe("ChatWindowSessionHost target missing", () => {
       chatId: chatA.id,
       projectPath: chatA.projectPath,
       title: chatA.title,
-      newChatRequestId: undefined,
-    });
-  });
-
-  it("serializes adopted title updates so only the latest response reaches the session", async (): Promise<void> => {
-    const creation = deferred<Chat | undefined>();
-    const secondUpdate = deferred<{ readonly chat: Chat }>();
-    const thirdUpdate = deferred<{ readonly chat: Chat }>();
-    const created = chatFixture("chat-created", "Original", 1);
-    const second = chatFixture(created.id, "Second", 2);
-    const third = chatFixture(created.id, "Third", 3);
-    chatSessionState.activeChat = undefined;
-    chatSessionState.activeProject = undefined;
-    chatSessionState.chats = [];
-    chatSessionState.openNewChat.mockReturnValueOnce(creation.promise);
-    updateChatMock
-      .mockReturnValueOnce(secondUpdate.promise)
-      .mockReturnValueOnce(thirdUpdate.promise);
-    const ctx = context();
-    const view = render(
-      <I18nProvider>
-        <ChatWindowSessionHost cfg={{ title: "First", newChatRequestId: "request-1" }} ctx={ctx} />
-      </I18nProvider>,
-    );
-    await waitFor((): void => expect(chatSessionState.openNewChat).toHaveBeenCalledOnce());
-
-    view.rerender(
-      <I18nProvider>
-        <ChatWindowSessionHost
-          cfg={{ title: second.title, newChatRequestId: "request-2" }}
-          ctx={ctx}
-        />
-      </I18nProvider>,
-    );
-    await act(async (): Promise<void> => {
-      creation.resolve(created);
-      await creation.promise;
-    });
-    await waitFor((): void => {
-      expect(updateChatMock).toHaveBeenCalledWith(created.id, { title: second.title });
-    });
-
-    view.rerender(
-      <I18nProvider>
-        <ChatWindowSessionHost
-          cfg={{ title: third.title, newChatRequestId: "request-3" }}
-          ctx={ctx}
-        />
-      </I18nProvider>,
-    );
-    await act(async (): Promise<void> => {
-      secondUpdate.resolve({ chat: second });
-      await secondUpdate.promise;
-    });
-    await waitFor((): void => {
-      expect(updateChatMock).toHaveBeenNthCalledWith(2, created.id, { title: third.title });
-    });
-    expect(chatSessionState.replaceChat).not.toHaveBeenCalled();
-    expect(ctx.updateCfg).not.toHaveBeenCalled();
-
-    await act(async (): Promise<void> => {
-      thirdUpdate.resolve({ chat: third });
-      await thirdUpdate.promise;
-    });
-    await waitFor((): void => expect(ctx.updateCfg).toHaveBeenCalledOnce());
-    expect(chatSessionState.replaceChat).toHaveBeenCalledOnce();
-    expect(chatSessionState.replaceChat).toHaveBeenCalledWith(third);
-    expect(ctx.updateCfg).toHaveBeenCalledWith({
-      chatId: third.id,
-      projectPath: third.projectPath,
-      title: third.title,
       newChatRequestId: undefined,
     });
   });
@@ -1734,6 +1669,33 @@ describe("ChatWindowSessionHost target missing", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not open chat.");
     expect(screen.queryByText("Chat not found")).not.toBeInTheDocument();
+  });
+
+  it("attempts a bound chat restoration once while the logical session remains unchanged", async () => {
+    const current = chatFixture("chat-current", "Current", 1);
+    const target = chatFixture("chat-target", "Target", 2);
+    chatSessionState.activeChat = current;
+    chatSessionState.chats = [current, target];
+    chatSessionState.loading = false;
+    useChatSessionMock.mockImplementation(() => ({ ...chatSessionState }));
+    const ctx = context();
+    const view = render(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: target.id }} ctx={ctx} />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void =>
+      expect(chatSessionState.openChat).toHaveBeenCalledExactlyOnceWith(target),
+    );
+
+    view.rerender(
+      <I18nProvider>
+        <ChatWindowSessionHost cfg={{ chatId: target.id }} ctx={ctx} />
+      </I18nProvider>,
+    );
+
+    await waitFor((): void => expect(chatSessionState.openChat).toHaveBeenCalledTimes(1));
   });
 
   // The honest case stays honest: a conversation trashed from Chat History remains in the list

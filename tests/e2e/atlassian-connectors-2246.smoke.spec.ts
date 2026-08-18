@@ -146,6 +146,7 @@ const CONNECTOR_PAGE_TITLE = "Deployment Runbook";
 const GROUNDED_MODEL = {
   id: GROUNDED_MODEL_ID,
   kind: "chat",
+  conversationReady: true,
   contextWindow: 128_000,
   maxOutputTokens: 4_096,
   toolCalling: false,

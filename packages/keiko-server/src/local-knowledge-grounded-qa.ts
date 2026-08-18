@@ -91,6 +91,13 @@ import {
   unsupportedNumericCitationMarker,
 } from "./grounded-faithfulness.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
+import {
+  assertConversationReadinessAdmission,
+  captureConversationReadinessAdmission,
+  mappedConversationReadinessError,
+  withConversationReadinessAdmission,
+  type ConversationReadinessAdmission,
+} from "./conversation-readiness-admission.js";
 
 export const DEFAULT_REFERENCE_BUDGET = DEFAULT_GROUNDING_LIMITS.referenceBudget;
 export const MAX_EXCERPT_CHARS = DEFAULT_GROUNDING_LIMITS.maxExcerptChars;
@@ -178,8 +185,12 @@ export function openStoreForDeps(deps: UiHandlerDeps): {
 
 function hashString32(value: string): string {
   let hash = 0x811c9dc5;
-  for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i);
+  // FNV-1a over Unicode code points: for...of iterates by code point, so an astral character
+  // contributes exactly once (indexing with codePointAt(i) would consume the pair at the high
+  // surrogate and then hash the low surrogate AGAIN on the next index). Ids derived here are
+  // ephemeral wire scope identifiers, so the point-based stream is safe to standardize on.
+  for (const ch of value) {
+    hash ^= ch.codePointAt(0) ?? 0;
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
@@ -1276,7 +1287,12 @@ function buildStateFailureAnswer(input: {
   } satisfies GroundedAnswer;
 }
 
-function resolveModel(deps: UiHandlerDeps, modelId: string): ModelPort | RouteResult {
+function resolveModel(
+  deps: UiHandlerDeps,
+  modelId: string,
+  readinessAdmission: ConversationReadinessAdmission,
+): ModelPort | RouteResult {
+  assertConversationReadinessAdmission(deps, readinessAdmission, modelId);
   const config = currentGatewayConfig(deps);
   const capability =
     config === undefined ? findCapability(modelId) : findConfiguredCapability(config, modelId);
@@ -1286,11 +1302,11 @@ function resolveModel(deps: UiHandlerDeps, modelId: string): ModelPort | RouteRe
       body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id."),
     };
   }
-  const model = deps.modelPortFactory(modelId);
-  if (model === undefined) {
+  const resolvedModel = deps.modelPortFactory(modelId);
+  if (resolvedModel === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
-  return model;
+  return withConversationReadinessAdmission(resolvedModel, modelId, readinessAdmission, deps);
 }
 
 function redactText(deps: UiHandlerDeps, value: string): string {
@@ -2212,11 +2228,12 @@ async function runScopedGroundedAnswer(
   env: Pick<ReturnType<typeof openStoreForDeps>, "store" | "vectorIndex">,
   selected: SelectedLocalKnowledgeScope,
   signal: AbortSignal,
+  readinessAdmission: ConversationReadinessAdmission,
 ): Promise<GroundedAnswer | RouteResult> {
   const embeddingAdapter = createEmbeddingAdapter(deps);
   if ("status" in embeddingAdapter) return embeddingAdapter;
   const modelId = input.modelId ?? chat.selectedModel;
-  const model = resolveModel(deps, modelId);
+  const model = resolveModel(deps, modelId, readinessAdmission);
   if ("status" in model) return model;
   const limits = currentGroundingLimits(deps);
   const generator = createScopedAnswerGenerator(model, modelId, deps, env, limits);
@@ -2310,12 +2327,24 @@ export function mapGroundedAskError(error: unknown, deps: UiHandlerDeps): RouteR
   return internalError(message);
 }
 
+function localKnowledgeReadinessAdmission(
+  deps: UiHandlerDeps,
+  modelId: string,
+  readinessAdmission: ConversationReadinessAdmission | undefined,
+): ConversationReadinessAdmission | RouteResult {
+  return readinessAdmission ?? captureConversationReadinessAdmission(deps, modelId);
+}
+
 export async function handleLocalKnowledgeGroundedAsk(
   chat: Chat,
   input: AskInput,
   deps: UiHandlerDeps,
   signal: AbortSignal,
+  readinessAdmission?: ConversationReadinessAdmission,
 ): Promise<RouteResult> {
+  const modelId = input.modelId ?? chat.selectedModel;
+  const effectiveAdmission = localKnowledgeReadinessAdmission(deps, modelId, readinessAdmission);
+  if ("status" in effectiveAdmission) return effectiveAdmission;
   const env = openStoreForDeps(deps);
   try {
     const selected = selectedCapsules(chat, env.store);
@@ -2325,14 +2354,22 @@ export async function handleLocalKnowledgeGroundedAsk(
       if (signal.aborted) throw new CancelledError("grounded request cancelled");
       return stateFailureRoute(chat, input, deps, env, selected, stateFailure);
     }
-    const answer = await runScopedGroundedAnswer(chat, input, deps, env, selected, signal);
+    const answer = await runScopedGroundedAnswer(
+      chat,
+      input,
+      deps,
+      env,
+      selected,
+      signal,
+      effectiveAdmission,
+    );
     if ("status" in answer) return answer;
     return { status: 200, body: answer };
   } catch (error) {
     if (signal.aborted) {
       return { status: 499, body: errorBody("CANCELLED", "Grounded request was cancelled.") };
     }
-    return mapGroundedAskError(error, deps);
+    return mappedConversationReadinessError(error) ?? mapGroundedAskError(error, deps);
   } finally {
     env.close();
   }

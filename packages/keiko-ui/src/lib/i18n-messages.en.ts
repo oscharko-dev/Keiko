@@ -602,6 +602,8 @@ export const EN_MESSAGES = {
   "chat.grounding.capsule": "Knowledge Pod: {name}",
   "chat.grounding.capsuleSet": "Knowledge Pod Set: {name}",
   "chat.grounding.unavailable": "{label} (unavailable)",
+  "chat.grounding.catalogLoading": "Refreshing available Knowledge Pods…",
+  "chat.grounding.catalogEmpty": "No ready Knowledge Pods or Pod Sets are available.",
   "chat.grounding.sourceLimit":
     "Source limit reached — this chat already has {connectedCount} of {cap} connected sources. Disconnect a source before connecting another.",
   "chat.grounding.readyChatRequired": "Open a ready chat window before connecting a source.",

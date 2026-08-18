@@ -88,12 +88,14 @@ import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
 import {
   currentAuditRedactString,
+  currentConversationReady,
   currentContextProfileForModel,
   currentGatewayConfig,
   currentRedactionSecrets,
 } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
+import { conversationModelNotReadyResult } from "./conversation-readiness-admission.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
 import {
   FORGOTTEN_MEMORY_SUPPRESSION_REASON,
@@ -217,11 +219,20 @@ function defaultChatModelId(deps: UiHandlerDeps): string {
   if (config === undefined) {
     return DEFAULT_CHAT_MODEL;
   }
-  const configured = listConfiguredCapabilities(config);
+  const chatModels = listConfiguredCapabilities(config).filter((model) => model.kind === "chat");
+  const conversationReady = (model: ModelCapability): boolean =>
+    currentConversationReady(deps, model.id);
+  // The public create contract makes modelId optional, so the default must not hand
+  // modelFromBody an unready model while another configured chat model has a current
+  // successful probe — that turned an otherwise valid request into a 400. Readiness only
+  // reorders the preference; when nothing is ready the unready default still flows into
+  // the guard so the caller keeps the precise "not ready" error.
   return (
     (
-      configured.find((model) => model.id === DEFAULT_CHAT_MODEL && model.kind === "chat") ??
-      configured.find((model) => model.kind === "chat")
+      chatModels.find((model) => model.id === DEFAULT_CHAT_MODEL && conversationReady(model)) ??
+      chatModels.find(conversationReady) ??
+      chatModels.find((model) => model.id === DEFAULT_CHAT_MODEL) ??
+      chatModels.at(0)
     )?.id ?? DEFAULT_CHAT_MODEL
   );
 }
@@ -237,6 +248,9 @@ function modelFromBody(body: Record<string, unknown>, deps: UiHandlerDeps): stri
       status: 400,
       body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id."),
     };
+  }
+  if (deps.gatewayConfig !== undefined && !currentConversationReady(deps, modelId)) {
+    return unreadyChatModelResult();
   }
   return modelId;
 }
@@ -763,12 +777,18 @@ function regenerateRequestFromBody(
 function invalidChatModelResult(modelId: string, deps: UiHandlerDeps): RouteResult | undefined {
   const capability = chatCapability(deps, modelId);
   if (capability?.kind === "chat") {
-    return undefined;
+    return deps.gatewayConfig === undefined || currentConversationReady(deps, modelId)
+      ? undefined
+      : unreadyChatModelResult();
   }
   return {
     status: 400,
     body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id."),
   };
+}
+
+function unreadyChatModelResult(): RouteResult {
+  return conversationModelNotReadyResult();
 }
 
 export function createUserMessage(
@@ -1672,22 +1692,33 @@ function requestSignalAborted(signal: AbortSignal): boolean {
 
 type BufferedModelPort = NonNullable<ReturnType<UiHandlerDeps["modelPortFactory"]>>;
 
-interface BufferedModelPreflight {
-  readonly legacyModel: BufferedModelPort | undefined;
+function bufferedModelAtProviderBoundary(
+  deps: UiHandlerDeps,
+  modelId: string,
+  executionAdmission: DesktopChatExecutionAdmission,
+): BufferedModelPort | RouteResult {
+  const invalidProviderBoundary = validateDesktopChatProviderBoundary(
+    modelId,
+    executionAdmission,
+    deps,
+  );
+  if (invalidProviderBoundary !== undefined) return invalidProviderBoundary;
+  return (
+    deps.modelPortFactory(modelId) ?? {
+      status: 400,
+      body: errorBody("NO_MODEL", "No model provider is configured."),
+    }
+  );
 }
 
-function preflightBufferedModelTurn(
+function bufferedTurnCancellationResult(
   deps: UiHandlerDeps,
-  prepared: PreparedDesktopChatSend,
-): BufferedModelPreflight | RouteResult {
-  const { request, chat, modelId } = prepared;
-  if (request.clientTurnId !== undefined) return { legacyModel: undefined };
-  const invalidExecution = validateDesktopChatExecution(request, chat, modelId, deps);
-  if (invalidExecution !== undefined) return invalidExecution;
-  const legacyModel = deps.modelPortFactory(modelId);
-  return legacyModel === undefined
-    ? { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") }
-    : { legacyModel };
+  request: SendDesktopChatRequest,
+  signal: AbortSignal,
+): RouteResult | undefined {
+  if (!requestSignalAborted(signal)) return undefined;
+  failDesktopChatTurn(deps, request, "cancelled");
+  return requestCancelledResult();
 }
 
 function admitBufferedModelTurn(
@@ -1696,27 +1727,33 @@ function admitBufferedModelTurn(
 ):
   | {
       readonly userMessage: ChatMessage;
-      readonly model: BufferedModelPort;
+      readonly executionAdmission: DesktopChatExecutionAdmission;
     }
   | RouteResult {
   const { request, chat, modelId } = prepared;
-  const preflight = preflightBufferedModelTurn(deps, prepared);
-  if (isRouteResult(preflight)) return preflight;
+  const legacyAdmission =
+    request.clientTurnId === undefined
+      ? captureDesktopChatExecutionAdmission(request, chat, modelId, deps)
+      : undefined;
+  if (isRouteResult(legacyAdmission)) return legacyAdmission;
+  // Probe the provider for EVERY legacy request while nothing is persisted yet: a NO_MODEL
+  // rejection after admission cannot settle the turn (failDesktopChatTurn is a no-op without
+  // a clientTurnId) and would orphan the user message — the pre-#3182 invariant. The
+  // clientTurnId path keeps resolving after the memory await for provider freshness.
+  if (legacyAdmission !== undefined) {
+    const probe = bufferedModelAtProviderBoundary(deps, modelId, legacyAdmission);
+    if (isRouteResult(probe)) return probe;
+  }
   const admission = admitDesktopChatTurn(deps, prepared);
   if (admission.kind === "replay") return { status: 200, body: admission.response };
   if (admission.kind === "rejected") return admission.result;
-  const invalidExecution =
-    request.clientTurnId === undefined
-      ? undefined
-      : validateDesktopChatExecution(request, chat, modelId, deps);
-  if (invalidExecution !== undefined) {
+  const executionAdmission =
+    legacyAdmission ?? captureDesktopChatExecutionAdmission(request, chat, modelId, deps);
+  if (isRouteResult(executionAdmission)) {
     failDesktopChatTurn(deps, request);
-    return invalidExecution;
+    return executionAdmission;
   }
-  const model = preflight.legacyModel ?? deps.modelPortFactory(modelId);
-  if (model !== undefined) return { userMessage: admission.userMessage, model };
-  failDesktopChatTurn(deps, request);
-  return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
+  return { userMessage: admission.userMessage, executionAdmission };
 }
 
 async function persistModelChatTurn(
@@ -1754,30 +1791,31 @@ async function executeBufferedModelTurn(
   const { request, modelId, memoryContext } = prepared;
   const admitted = admitBufferedModelTurn(deps, prepared);
   if (isRouteResult(admitted)) return admitted;
-  const { userMessage, model } = admitted;
+  const { userMessage, executionAdmission } = admitted;
   const gatewayTurn = captureGatewayTurnSnapshot(deps, request, userMessage);
   const memory =
     memoryContext === undefined
       ? emptyMemoryResult(false)
       : await buildMemoryResult(request, deps, memoryContext);
-  if (requestSignalAborted(abortSignal)) {
-    failDesktopChatTurn(deps, request, "cancelled");
-    return requestCancelledResult();
-  }
+  const cancelledAfterMemory = bufferedTurnCancellationResult(deps, request, abortSignal);
+  if (cancelledAfterMemory !== undefined) return cancelledAfterMemory;
   const assembly = assemblyWithConversationImages(
     deps,
     request,
     modelId,
     buildGatewayAssembly(deps, request, memory, modelId, gatewayTurn),
   );
+  const model = bufferedModelAtProviderBoundary(deps, modelId, executionAdmission);
+  if (isRouteResult(model)) {
+    failDesktopChatTurn(deps, request);
+    return model;
+  }
   const response = await model.call(
     { modelId, messages: assembly.messages, stream: false },
     abortSignal,
   );
-  if (requestSignalAborted(abortSignal)) {
-    failDesktopChatTurn(deps, request, "cancelled");
-    return requestCancelledResult();
-  }
+  const cancelledAfterCall = bufferedTurnCancellationResult(deps, request, abortSignal);
+  if (cancelledAfterCall !== undefined) return cancelledAfterCall;
   return finalizeAndRecordBufferedTurn(
     deps,
     prepared,
@@ -1962,6 +2000,10 @@ export interface PreparedDesktopChatSend {
   readonly turnIdentityContent: string;
 }
 
+export interface DesktopChatExecutionAdmission {
+  readonly gatewayConfigGeneration: number | undefined;
+}
+
 export interface ParsedDesktopChatSend {
   readonly request: SendDesktopChatRequest;
   readonly chat: Chat;
@@ -1979,6 +2021,7 @@ interface PreparedDesktopChatRegenerate {
   };
   readonly memoryRequest: SendDesktopChatRequest;
   readonly memoryContext: ConversationMemoryRuntimeContext | undefined;
+  readonly executionAdmission: DesktopChatExecutionAdmission;
 }
 
 interface ParsedDesktopChatRegenerate {
@@ -2088,6 +2131,29 @@ export function validateDesktopChatExecution(
   return validation.ok
     ? undefined
     : { status: 400, body: errorBody(validation.code, validation.message) };
+}
+
+export function captureDesktopChatExecutionAdmission(
+  request: SendDesktopChatRequest,
+  chat: Chat,
+  modelId: string,
+  deps: UiHandlerDeps,
+): DesktopChatExecutionAdmission | RouteResult {
+  const invalidExecution = validateDesktopChatExecution(request, chat, modelId, deps);
+  return invalidExecution ?? { gatewayConfigGeneration: deps.gatewayConfig?.generation() };
+}
+
+export function validateDesktopChatProviderBoundary(
+  modelId: string,
+  admission: DesktopChatExecutionAdmission,
+  deps: UiHandlerDeps,
+): RouteResult | undefined {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return undefined;
+  return holder.generation() === admission.gatewayConfigGeneration &&
+    currentConversationReady(deps, modelId)
+    ? undefined
+    : unreadyChatModelResult();
 }
 
 export function validateCurrentDesktopChatSend(
@@ -2441,6 +2507,7 @@ function prepareDesktopChatRegenerateRequest(
   const modelId = request.modelId ?? chat.selectedModel;
   const invalidModel = invalidChatModelResult(modelId, deps);
   if (invalidModel !== undefined) return invalidModel;
+  const executionAdmission = captureGatewayGeneration(deps);
   const visibleTurn = latestRegenerableTurn(
     deps.store.listMessages(chat.id),
     request.assistantMessageId,
@@ -2454,7 +2521,11 @@ function prepareDesktopChatRegenerateRequest(
   const memoryRequest = regenerateMemoryRequest(request, turn);
   const memoryContext = resolveDesktopMemoryContext(deps, memoryRequest, normalizedProjectPath);
   if (isRouteResult(memoryContext)) return memoryContext;
-  return { request, chat, modelId, turn, memoryRequest, memoryContext };
+  return { request, chat, modelId, turn, memoryRequest, memoryContext, executionAdmission };
+}
+
+function captureGatewayGeneration(deps: UiHandlerDeps): DesktopChatExecutionAdmission {
+  return { gatewayConfigGeneration: deps.gatewayConfig?.generation() };
 }
 
 async function buildRegenerateMemoryAndMessages(
@@ -2508,14 +2579,20 @@ async function persistRegeneratedChatTurn(
   prepared: PreparedDesktopChatRegenerate,
   signal: AbortSignal,
 ): Promise<RouteResult> {
-  const { chat, modelId, memoryRequest } = prepared;
-  const model = deps.modelPortFactory(modelId);
-  if (model === undefined) {
-    return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
-  }
+  const { chat, modelId, memoryRequest, executionAdmission } = prepared;
   try {
     const { memory, messages } = await buildRegenerateMemoryAndMessages(deps, prepared);
     if (requestSignalAborted(signal)) return requestCancelledResult();
+    const invalidProviderBoundary = validateDesktopChatProviderBoundary(
+      modelId,
+      executionAdmission,
+      deps,
+    );
+    if (invalidProviderBoundary !== undefined) return invalidProviderBoundary;
+    const model = deps.modelPortFactory(modelId);
+    if (model === undefined) {
+      return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
+    }
     const response = await model.call({ modelId, messages, stream: false }, signal);
     if (requestSignalAborted(signal)) return requestCancelledResult();
     const redactedContent = deps.redactor(response.content) as string;

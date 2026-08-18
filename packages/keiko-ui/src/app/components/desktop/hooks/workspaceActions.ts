@@ -605,6 +605,12 @@ function makeOpenEditorFile(args: MutateArgs): WorkspaceApi["openEditorFile"] {
   };
 }
 
+function nextWorkspaceZ(list: readonly AppWindow[], zc: MutateArgs["zc"]): number {
+  const maxZ = list.reduce((best, window) => Math.max(best, window.z), zc.current);
+  zc.current = maxZ + 1;
+  return zc.current;
+}
+
 function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
   const { setWins, zc, worldVP } = args;
   return (type) => {
@@ -625,9 +631,8 @@ function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
       const list = ws ?? [];
       const existing = list.find((w) => w.type === type);
       if (existing?.minimized === true) {
-        return list.map((w) =>
-          w.id === existing.id ? { ...w, minimized: false, z: ++zc.current } : w,
-        );
+        const nextZ = nextWorkspaceZ(list, zc);
+        return list.map((w) => (w.id === existing.id ? { ...w, minimized: false, z: nextZ } : w));
       }
       if (existing !== undefined) {
         return list.filter((w) => w.type !== type);
@@ -637,9 +642,10 @@ function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
         return list;
       }
       const { x, y } = addPosition(vp, t.w, t.h, list.length, 28);
+      const geometry = { x, y, w: t.w, h: t.h };
       return [
         ...list,
-        { id: type, type, x, y, w: t.w, h: t.h, z: ++zc.current, cfg: {}, max: false, zoom: 1 },
+        { id: type, type, ...geometry, z: nextWorkspaceZ(list, zc), cfg: {}, max: false, zoom: 1 },
       ];
     });
     if (windowLimitReached) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);

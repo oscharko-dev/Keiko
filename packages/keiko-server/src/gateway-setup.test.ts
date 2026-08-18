@@ -391,6 +391,56 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("preserves conversation readiness across an applied capability update", async () => {
+    const uiDir = await tempDir("keiko-gw-capability-readiness-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-capability-readiness-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    const rawConfig = {
+      providers: [
+        {
+          modelId: "model/ready",
+          baseUrl: "https://llm-gateway.example.com/v1",
+          apiKey: "example-secret-token",
+          capability: {
+            kind: "chat",
+            contextWindow: 8_192,
+            toolCalling: true,
+            structuredOutput: true,
+          },
+        },
+      ],
+    };
+    gatewayConfig.set(parseGatewayConfig(rawConfig), true);
+    writeFileSync(gatewayConfig.storagePath, JSON.stringify(rawConfig), "utf8");
+    gatewayConfig.recordVerifiedCapability(
+      "model/ready",
+      { conversationReady: true, toolCalling: false },
+      "2026-08-17T08:00:00.000Z",
+      gatewayConfig.generation(),
+    );
+
+    const result = await handleApplyGatewayVerifiedCapabilities(
+      { ...ctx({ fields: { toolCalling: false } }), params: { modelId: "model%2Fready" } },
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    // The capability FIELD is consumed into config (consume-once apply), but the probe-only
+    // readiness evidence survives at the NEW generation — without it the just-verified model
+    // disappears from every chat picker until the operator re-runs the identical probe.
+    const observation = gatewayConfig.verifiedCapability("model/ready");
+    expect(observation).toMatchObject({ fields: { conversationReady: true } });
+    expect(observation?.fields.toolCalling).toBeUndefined();
+    expect(observation?.generation).toBe(gatewayConfig.generation());
+    deps.store.close();
+  });
+
   it("replaces an older partial capability observation instead of refreshing its fields", async () => {
     const uiDir = await tempDir("keiko-gw-capability-replace-observation-ui-");
     const deps = buildUiHandlerDeps({

@@ -203,14 +203,14 @@ describe("recent memory capture journey", () => {
 
     await captureSalientFromTurn(
       governed,
-      makeRequest("We reviewed the release cadence."),
+      makeRequest("The release train follows a two-week cadence."),
       ctx,
       "gpt-test",
       "ok",
     );
     await captureSalientFromTurn(
       autonomous,
-      makeRequest("We reviewed deployment scheduling."),
+      makeRequest("The platform team uses deterministic deployment windows."),
       ctx,
       "gpt-test",
       "ok",
@@ -271,7 +271,7 @@ describe("recent memory capture journey", () => {
 
     await captureSalientFromTurn(
       governed,
-      makeRequest("We reviewed the release notes."),
+      makeRequest("The user reviews release notes every Friday."),
       ctx,
       "gpt-test",
       "ok",
@@ -328,7 +328,7 @@ describe("voice-passive-capture journey", () => {
 
     await captureSalientFromTurn(
       governed,
-      makeRequest("Let's keep doing morning stand-ups."),
+      makeRequest("The user prefers stand-ups at 9am."),
       ctx,
       "gpt-test",
       "ok",
@@ -336,7 +336,7 @@ describe("voice-passive-capture journey", () => {
     );
     await captureSalientFromTurn(
       autonomous,
-      makeRequest("I'm on UTC+1 this week."),
+      makeRequest("The user's timezone is UTC+1."),
       ctx,
       "gpt-test",
       "ok",
@@ -366,7 +366,7 @@ describe("voice-passive-capture journey", () => {
     // autonomous-delivery fact does not double.
     await captureSalientFromTurn(
       autonomous,
-      makeRequest("I'm on UTC+1 this week."),
+      makeRequest("The user's timezone is UTC+1."),
       ctx,
       "gpt-test",
       "ok",

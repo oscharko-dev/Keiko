@@ -49,6 +49,14 @@ async function createChat(
   return { chat: created.chat, projectPath };
 }
 
+async function verifyChatModel(request: APIRequestContext): Promise<void> {
+  const response = await request.post("/api/gateway/readiness", {
+    headers: MUTATION_HEADERS,
+    data: { modelId: CHAT_MODEL_ID, options: { probes: ["chat"] } },
+  });
+  expect(response.ok(), await response.text().catch(() => "")).toBe(true);
+}
+
 async function seedChatWindow(page: Page, chat: ChatResponse["chat"]): Promise<void> {
   await page.addInitScript(
     ({ chatId, title }) => {
@@ -280,6 +288,7 @@ test("disabled capture stays empty; secret input stays absent; a captured propos
 }) => {
   const since = Date.now() - 1_000;
   const { chat, projectPath } = await createChat(request);
+  await verifyChatModel(request);
   await seedChatWindow(page, chat);
   await page.goto("/");
   const chatWindow = page.getByRole("region", { name: "Chat — Memory Journal E2E" });

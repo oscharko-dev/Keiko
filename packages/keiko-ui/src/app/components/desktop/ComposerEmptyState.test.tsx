@@ -57,6 +57,7 @@ function chatModelCapability(id: string): ModelCapability {
   const cap: ModelCapability = {
     id,
     kind: "chat",
+    conversationReady: true,
     contextWindow: 0,
     maxOutputTokens: 0,
     toolCalling: true,
@@ -310,9 +311,9 @@ describe("AC #3 — loading state", () => {
     // uiux-fix F041 (C170) — the persistent send-lifecycle live region remains in
     // the DOM but must be empty; the loading indicator itself must be gone.
     expect(screen.queryByText(/connecting to your gateway/i)).toBeNull();
-    for (const statusEl of screen.queryAllByRole("status")) {
-      expect(statusEl).toBeEmptyDOMElement();
-    }
+    const lifecycleStatus = document.querySelector('[data-send-status="idle"]');
+    expect(lifecycleStatus).toHaveAttribute("role", "status");
+    expect(lifecycleStatus).toBeEmptyDOMElement();
   });
 });
 

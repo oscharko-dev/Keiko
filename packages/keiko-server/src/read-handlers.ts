@@ -43,6 +43,7 @@ import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import {
+  currentConversationReady,
   currentGatewayConfig,
   currentGatewayConfigPresent,
   currentGroundingLimits,
@@ -68,7 +69,13 @@ export function handleConfig(_ctx: RouteContext, deps: UiHandlerDeps): RouteResu
 // model-backed run can start, so the endpoint returns an empty list.
 export function handleModels(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const config = currentGatewayConfig(deps);
-  const models = config === undefined ? [] : listSafeConfiguredCapabilities(config);
+  const models =
+    config === undefined
+      ? []
+      : listSafeConfiguredCapabilities(config).map((model) => ({
+          ...model,
+          conversationReady: currentConversationReady(deps, model.id),
+        }));
   return { status: 200, body: { models } };
 }
 

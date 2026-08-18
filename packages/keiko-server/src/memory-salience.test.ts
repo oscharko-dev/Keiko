@@ -28,7 +28,7 @@ import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 const ATLAS_FACTS = JSON.stringify([
   {
     source: "user",
-    body: "The user is building a fintech app called Atlas.",
+    body: "I'm building a fintech app called Atlas.",
     type: "fact",
     confidence: 0.7,
     scope: "project",
@@ -44,7 +44,7 @@ const ATLAS_FACTS = JSON.stringify([
   },
   {
     source: "user",
-    body: "The user's team is in Berlin.",
+    body: "My team is in Berlin.",
     type: "fact",
     confidence: 0.6,
     scope: "user",
@@ -174,7 +174,8 @@ function context(): ConversationMemoryRuntimeContext {
   };
 }
 
-const USER_TEXT = "I'm building a fintech app called Atlas in Rust, my team is in Berlin";
+const USER_TEXT =
+  "I'm building a fintech app called Atlas. Atlas is written in Rust. My team is in Berlin.";
 
 function salienceConfig(
   modelId: string,
@@ -399,7 +400,7 @@ describe("captureSalientFromTurn", () => {
           JSON.stringify([
             {
               source: "user",
-              body: "Der Nutzer heißt Oliver.",
+              body: "Hallo Keiko, ich bin Oliver.",
               type: "identity",
               confidence: 0.9,
               scope: "user",
@@ -418,7 +419,7 @@ describe("captureSalientFromTurn", () => {
     );
     expect(actions).toHaveLength(1);
     const records = readMemories(vault, ctx);
-    expect(records[0]?.body).toBe("Der Nutzer heißt Oliver.");
+    expect(records[0]?.body).toBe("Hallo Keiko, ich bin Oliver.");
   });
 
   it("uses json_schema responseFormat only when the configured model supports it", async () => {
@@ -756,7 +757,7 @@ describe("captureSalientFromTurn", () => {
       schemaVersion: "1",
       scope: { kind: "project", projectId: ctx.projectId },
       type: "semantic-fact",
-      body: "The user is building a fintech app called Atlas.",
+      body: "I'm building a fintech app called Atlas.",
       tags: [],
       provenance: {
         sourceKind: "system-default",
@@ -790,7 +791,7 @@ describe("captureSalientFromTurn", () => {
       schemaVersion: "1",
       scope: { kind: "project", projectId: ctx.projectId },
       type: "semantic-fact",
-      body: "The user is building a fintech app called Atlas.",
+      body: "I'm building a fintech app called Atlas.",
       tags: [],
       provenance: {
         sourceKind: "system-default",
@@ -823,7 +824,7 @@ describe("captureSalientFromTurn", () => {
           JSON.stringify([
             {
               source: "user",
-              body: "The user's private support email is developer@example.com.",
+              body: "My private support email is developer@example.com.",
               type: "fact",
               confidence: 0.8,
               scope: "user",
@@ -835,7 +836,7 @@ describe("captureSalientFromTurn", () => {
     const ctx = context();
     const actions = await captureSalientFromTurn(
       deps,
-      { content: "I prefer issue triage on Monday mornings.", memory: { enabled: true } },
+      { content: "My private support email is developer@example.com.", memory: { enabled: true } },
       ctx,
       "gpt-test",
       "ok",
@@ -850,7 +851,7 @@ describe("captureSalientFromTurn", () => {
     expect(records).toHaveLength(1);
     expect(records[0]?.status).toBe("proposed");
     expect(records[0]?.provenance.sensitivity).toBe("confidential");
-    expect(records[0]?.body).toBe("The user's private support email is developer@example.com.");
+    expect(records[0]?.body).toBe("My private support email is developer@example.com.");
   });
 
   it("isPersistableMemoryCandidate guard persists non-restricted sensitive and public candidates", async () => {
@@ -865,7 +866,7 @@ describe("captureSalientFromTurn", () => {
           JSON.stringify([
             {
               source: "user",
-              body: "The user's contact email is private@example.com.",
+              body: "My contact email is private@example.com.",
               type: "fact",
               confidence: 0.7,
               scope: "user",
@@ -873,7 +874,7 @@ describe("captureSalientFromTurn", () => {
             },
             {
               source: "user",
-              body: "The user works in the payments domain.",
+              body: "I work in the payments domain.",
               type: "fact",
               confidence: 0.7,
               scope: "user",
@@ -885,10 +886,8 @@ describe("captureSalientFromTurn", () => {
     const ctx = context();
     const actions = await captureSalientFromTurn(
       deps,
-      // User text is safe (no email/secret) so the egress guard passes; the model response
-      // contains one sensitive item (email → confidential) and one public item.
       {
-        content: "I work in the payments domain and have a contact address.",
+        content: "My contact email is private@example.com. I work in the payments domain.",
         memory: { enabled: true },
       },
       ctx,
@@ -905,7 +904,7 @@ describe("captureSalientFromTurn", () => {
     });
     expect(candidates[1]).toMatchObject({
       kind: "candidate",
-      body: "The user works in the payments domain.",
+      body: "I work in the payments domain.",
       requiresApproval: false,
     });
     expect(countMemories(vault, ctx)).toBe(2);
@@ -920,7 +919,7 @@ describe("captureSalientFromTurn", () => {
           JSON.stringify([
             {
               source: "user",
-              body: "Die Telefonnummer des Nutzers ist +49 30 1234567.",
+              body: "Meine Telefonnummer ist +49 30 1234567.",
               type: "fact",
               confidence: 0.7,
               scope: "user",
@@ -928,7 +927,7 @@ describe("captureSalientFromTurn", () => {
             },
             {
               source: "user",
-              body: "Der Nutzer bevorzugt Vitest.",
+              body: "Ich bevorzuge Vitest.",
               type: "preference",
               confidence: 0.8,
               scope: "user",
@@ -941,7 +940,7 @@ describe("captureSalientFromTurn", () => {
     const actions = await captureSalientFromTurn(
       deps,
       {
-        content: "Meine Telefonnummer ist +49 30 1234567 und ich bevorzuge Vitest.",
+        content: "Meine Telefonnummer ist +49 30 1234567. Ich bevorzuge Vitest.",
         memory: { enabled: true },
       },
       ctx,
@@ -956,7 +955,7 @@ describe("captureSalientFromTurn", () => {
     });
     expect(actions[1]).toMatchObject({
       kind: "candidate",
-      body: "Der Nutzer bevorzugt Vitest.",
+      body: "Ich bevorzuge Vitest.",
       requiresApproval: false,
     });
     expect(countMemories(vault, ctx)).toBe(2);

@@ -1,0 +1,39 @@
+{
+  "issue": 3185,
+  "verdict": "PASS",
+  "tool": "axe-core",
+  "globalsCssSha256": "a1866c44bf9be1a967cbf43e40be3c410668322157acdc0d4e2bc7db2645e7df",
+  "gate": "zero serious/critical axe violations on the Health Scan rate-limited error and Retry state",
+  "captures": [
+    {
+      "file": "01-dark-success.png",
+      "mode": "dark",
+      "violations": []
+    },
+    {
+      "file": "02-light-rate-limited.png",
+      "mode": "light",
+      "violations": []
+    },
+    {
+      "file": "03-dark-high-contrast-rate-limited.png",
+      "mode": "dark-high-contrast",
+      "violations": []
+    },
+    {
+      "file": "04-forced-colors-rate-limited.png",
+      "mode": "forced-colors",
+      "violations": []
+    },
+    {
+      "file": "05-responsive-rate-limited.png",
+      "mode": "responsive-mobile",
+      "violations": []
+    }
+  ],
+  "deterministicChecks": {
+    "alertCarriesPlainLanguageAndRateLimitCode": true,
+    "retryIsKeyboardOperable": true,
+    "staleFindingsCountIsAbsent": true
+  }
+}

@@ -90,8 +90,10 @@ function isRunStatus(s: string): s is RunStatus {
 export function runStatusLabel(
   status: string,
   t: I18nTranslate = (key, values) => translateQi("en", key, values),
+  degraded = false,
 ): string {
   if (!isRunStatus(status)) return status;
+  if (status === "succeeded" && degraded) return t("qi.status.degraded");
   if (status === "running") return t("qi.status.running");
   if (status === "succeeded") return t("qi.status.succeeded");
   if (status === "failed") return t("qi.status.failed");
@@ -102,10 +104,17 @@ export function runStatusLabel(
 // reserved for the container regions that actually receive async updates). No aria-label either:
 // naming is prohibited on a generic <span> (ARIA 1.2) and assistive tech ignores it — the visible
 // label is the accessible content.
-export function StatusBadge({ status }: { readonly status: string }): ReactNode {
+export function StatusBadge({
+  status,
+  degraded = false,
+}: {
+  readonly status: string;
+  readonly degraded?: boolean;
+}): ReactNode {
   const t = useTranslate();
-  const label = runStatusLabel(status, t);
-  const cls = isRunStatus(status) ? STATUS_CLASS[status] : "qi-badge-default";
+  const isDegradedSuccess = status === "succeeded" && degraded;
+  const label = runStatusLabel(status, t, isDegradedSuccess);
+  const cls = isRunStatus(status) && !isDegradedSuccess ? STATUS_CLASS[status] : "qi-badge-default";
   return <span className={`qi-badge ${cls}`}>{label}</span>;
 }
 

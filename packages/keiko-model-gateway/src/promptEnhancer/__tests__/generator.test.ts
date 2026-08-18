@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  analyzePrompt,
+  asPromptEnhancementRequestId,
   GROUNDING_NEED_KINDS,
   PROMPT_ENHANCEMENT_PROFILE_IDS,
+  PROMPT_ENHANCER_SCHEMA_VERSION,
   PROMPT_TASK_CLASSES,
   validateEnhancedPrompt,
   type ClarificationOrAssumption,
@@ -90,6 +93,24 @@ function generateFor(
   const analysis = makeAnalysis(options);
   const plan = planPromptEnhancement(analysis, planOptions);
   return generateEnhancedPrompt({ promptId: testPromptId(), analysis, plan, input });
+}
+
+function generateForProductionInput(text: string): {
+  readonly analysis: ReturnType<typeof analyzePrompt>;
+  readonly prompt: EnhancedPrompt;
+} {
+  const input = { text };
+  const analysis = analyzePrompt({
+    schemaVersion: PROMPT_ENHANCER_SCHEMA_VERSION,
+    requestId: asPromptEnhancementRequestId("generator-production-pipeline"),
+    input,
+    missingInformationStrategy: "clarify",
+  });
+  const plan = planPromptEnhancement(analysis);
+  return {
+    analysis,
+    prompt: generateEnhancedPrompt({ promptId: testPromptId(), analysis, plan, input }),
+  };
 }
 
 function profileForTaskClass(taskClass: PromptTaskClass): PromptEnhancementProfileId {
@@ -231,6 +252,77 @@ describe("generateEnhancedPrompt — no fabrication and segregated input (AC3)",
 });
 
 describe("generateEnhancedPrompt — intent-specific shaping", () => {
+  it("keeps factual German questions about an introduction decision out of decision support", () => {
+    const { analysis, prompt } = generateForProductionInput(
+      "Was war die Entscheidung über die Einführung eines Wissensmanagement-Tools?",
+    );
+
+    expect(analysis.taskClass).toBe("factual-qa");
+    expect(trustedText(prompt)).not.toMatch(
+      /decision-support analyst|task lens: decision support/i,
+    );
+  });
+
+  it("routes the audited German knowledge-management request through the production pipeline", () => {
+    const { analysis, prompt } = generateForProductionInput(
+      "Bereite eine belastbare Entscheidung über die Einführung eines Wissensmanagement-Tools vor. Alternativen, Budget, Nutzerzahl, Entscheidungskriterien und Zeitrahmen sind noch unbekannt.",
+    );
+
+    expect(analysis.taskClass).toBe("decision-support");
+    expect(trustedText(prompt)).toMatch(/decision-support analyst|task lens: decision support/i);
+    expect(trustedText(prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
+  it("does not treat German prices as a travel cue", () => {
+    const { analysis, prompt } = generateForProductionInput(
+      "Bereite eine belastbare Entscheidung über die Einführung eines Wissensmanagement-Tools vor. Vergleiche Preise, Alternativen und Budget.",
+    );
+
+    expect(analysis.taskClass).toBe("decision-support");
+    expect(trustedText(prompt)).toMatch(/decision-support analyst|task lens: decision support/i);
+    expect(trustedText(prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
+  it("keeps the audited German knowledge-management request out of the travel frame", () => {
+    const prompt = generateFor(
+      { taskClass: "factual-qa", domain: "general", recommendedProfile: "precise" },
+      {
+        text: "Bereite eine belastbare Entscheidung über die Einführung eines Wissensmanagement-Tools vor. Alternativen, Budget, Nutzerzahl, Entscheidungskriterien und Zeitrahmen sind noch unbekannt.",
+      },
+    );
+    const trusted = trustedText(prompt);
+
+    expect(trusted).not.toMatch(/travel planner|itinerary|route|lodging|visa|destination/i);
+    expect(prompt.role).toMatch(/decision-support advisor|decision-support analyst/i);
+    expect(prompt.goal).toMatch(/reason through the decision|compare options/i);
+  });
+
+  it("does not activate decision support for unrelated German Entscheidung compounds", () => {
+    const prompt = generateFor(
+      { taskClass: "factual-qa", domain: "general", recommendedProfile: "precise" },
+      { text: "Die Entscheidungstabelle ist vollständig." },
+    );
+
+    expect(trustedText(prompt)).not.toMatch(
+      /decision-support analyst|task lens: decision support/i,
+    );
+  });
+
+  it("keeps German travel requests with decision vocabulary in the travel frame", () => {
+    const prompt = generateFor(
+      { taskClass: "decision-support", domain: "general", recommendedProfile: "precise" },
+      {
+        text: "Plane eine Reise nach Japan; berücksichtige Alternativen und eine Entscheidungstabelle für das Budget.",
+      },
+    );
+
+    expect(trustedText(prompt)).toMatch(/travel planner|travel itinerary planning/i);
+  });
+
   it("changes trusted sections for unrelated user drafts instead of only changing the input JSON", () => {
     const codeReview = generateFor(
       {

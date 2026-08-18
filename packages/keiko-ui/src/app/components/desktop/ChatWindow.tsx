@@ -45,6 +45,7 @@ import { GroundedAnswer } from "./GroundedAnswer";
 import { ContextStatusPanel } from "./ContextStatusPanel";
 import { Icons } from "./Icons";
 import KeikoSelect from "./KeikoSelect";
+import { requestGatewayModelCatalogRefresh } from "./widgets/shared/gatewaySetupBus";
 import {
   NATIVE_BLOCK_STYLE,
   NATIVE_LIST_KEEP_PADDING_STYLE,
@@ -2095,6 +2096,9 @@ function ComposerContextControls({
           menuClassName="cmp-model-menu"
           menuMinWidth={controlsNarrow ? 118 : 280}
           mono
+          onOpen={() => {
+            requestGatewayModelCatalogRefresh();
+          }}
           sections={[
             {
               options: composerModelOptions(loading, noEligibleModels, models, t),
@@ -3554,6 +3558,7 @@ interface ScopeOption {
   readonly label: string;
   readonly badge?: string;
   readonly description?: string;
+  readonly disabled?: boolean;
 }
 
 const UNAVAILABLE_CAPSULE_LABEL = "Knowledge Pod";
@@ -3590,6 +3595,7 @@ function capsuleOptions(
       label: t("chat.grounding.unavailable", {
         label: UNAVAILABLE_CAPSULE_LABEL,
       }),
+      disabled: true,
     },
   ];
 }
@@ -3623,6 +3629,7 @@ function capsuleSetOptions(
       label: t("chat.grounding.unavailable", {
         label: UNAVAILABLE_CAPSULE_SET_LABEL,
       }),
+      disabled: true,
     },
   ];
 }
@@ -3632,7 +3639,9 @@ function capsuleSetOptions(
 interface KnowledgeCatalog {
   readonly capsules: readonly CapsuleListEntry[];
   readonly capsuleSets: readonly CapsuleSetListEntry[];
+  readonly loading: boolean;
   readonly loadError: string | null;
+  readonly refresh: () => void;
 }
 
 interface KnowledgeCatalogSnapshot {
@@ -3706,6 +3715,14 @@ async function loadKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot>
   return knowledgeCatalogPending;
 }
 
+// A grounding-picker reopen is a deliberate catalog lifecycle event, distinct from gateway
+// configuration changes. It bypasses only this read-only catalog's TTL; simultaneous chat windows
+// still share the in-flight request above.
+function refreshKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot> {
+  knowledgeCatalogCache = undefined;
+  return loadKnowledgeCatalogSnapshot();
+}
+
 export function clearKnowledgeCatalogCacheForTests(): void {
   knowledgeCatalogCache = undefined;
   knowledgeCatalogPending = undefined;
@@ -3713,25 +3730,67 @@ export function clearKnowledgeCatalogCacheForTests(): void {
 
 function useKnowledgeCatalog(): KnowledgeCatalog {
   const t = useTranslate();
+  const initialSnapshotRef = useRef<KnowledgeCatalogSnapshot | undefined>(
+    cachedKnowledgeCatalogSnapshot(Date.now()),
+  );
+  const mountedRef = useRef(true);
+  const requestGenerationRef = useRef(0);
   const [snapshot, setSnapshot] = useState<KnowledgeCatalogSnapshot>(
-    cachedKnowledgeCatalogSnapshot(Date.now()) ?? EMPTY_KNOWLEDGE_CATALOG,
+    initialSnapshotRef.current ?? EMPTY_KNOWLEDGE_CATALOG,
+  );
+  const [loading, setLoading] = useState(initialSnapshotRef.current === undefined);
+
+  const applyCatalogSnapshot = useCallback(
+    (load: () => Promise<KnowledgeCatalogSnapshot>): void => {
+      const requestGeneration = requestGenerationRef.current + 1;
+      requestGenerationRef.current = requestGeneration;
+      setLoading(true);
+      // Do not present a cached catalog as current while a deliberate reopen is resolving. Any
+      // active scope is retained by capsuleOptions/capsuleSetOptions as a disabled unavailable row.
+      setSnapshot(EMPTY_KNOWLEDGE_CATALOG);
+      void load().then((next) => {
+        if (!mountedRef.current || requestGeneration !== requestGenerationRef.current) return;
+        setSnapshot(next);
+        setLoading(false);
+      });
+    },
+    [],
   );
 
   useEffect(() => {
-    let cancelled = false;
-    void loadKnowledgeCatalogSnapshot().then((next) => {
-      if (!cancelled) setSnapshot(next);
-    });
+    if (initialSnapshotRef.current !== undefined) return;
+    applyCatalogSnapshot(loadKnowledgeCatalogSnapshot);
+  }, [applyCatalogSnapshot]);
+
+  useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      cancelled = true;
+      mountedRef.current = false;
+      requestGenerationRef.current += 1;
     };
   }, []);
+
+  const refresh = useCallback((): void => {
+    applyCatalogSnapshot(refreshKnowledgeCatalogSnapshot);
+  }, [applyCatalogSnapshot]);
 
   return {
     capsules: snapshot.capsules,
     capsuleSets: snapshot.capsuleSets,
+    loading,
     loadError: snapshot.loadError === null ? null : formatScopeUpdateError(snapshot.loadError, t),
+    refresh,
   };
+}
+
+const SELECTABLE_CAPSULE_SET_READINESS: ReadonlySet<string> = new Set(["ready", "degraded"]);
+
+function isSelectableGroundingCapsuleSet(capsuleSet: CapsuleSetListEntry): boolean {
+  const readiness = capsuleSet.knowledgePod?.readiness;
+  return (
+    capsuleSet.capsuleCount > 0 &&
+    (readiness === undefined || SELECTABLE_CAPSULE_SET_READINESS.has(readiness))
+  );
 }
 
 // Extracted from LocalKnowledgeScopeControl's handleChange (SonarCloud S3776) — the "Model only"
@@ -3838,6 +3897,115 @@ async function applyLocalKnowledgeScopeChange(
   }
 }
 
+function staticGroundingOptions(
+  value: string,
+  loading: boolean,
+  liveFilesAvailable: boolean,
+  t: I18nTranslate,
+): ScopeOption[] {
+  const options: ScopeOption[] = [
+    { value: "none", label: t("chat.grounding.modelOnly"), disabled: loading },
+    {
+      value: "files",
+      label: t("chat.grounding.liveFiles"),
+      disabled: loading || !liveFilesAvailable,
+      ...(liveFilesAvailable ? {} : { description: t("chat.grounding.liveFilesUnavailableHint") }),
+    },
+  ];
+  if (value === "multi") {
+    options.push({
+      value: "multi",
+      label: t("chat.grounding.multiple"),
+      disabled: true,
+    });
+  }
+  return options;
+}
+
+function catalogGroundingOption(option: ScopeOption, loading: boolean): ScopeOption {
+  return loading ? { ...option, disabled: true } : option;
+}
+
+function catalogGroundingOptions(
+  capsuleChoices: readonly ScopeOption[],
+  capsuleSetChoices: readonly ScopeOption[],
+  loading: boolean,
+): ScopeOption[] {
+  return [
+    ...capsuleChoices.map((capsule) => catalogGroundingOption(capsule, loading)),
+    ...capsuleSetChoices.map((capsuleSet) => catalogGroundingOption(capsuleSet, loading)),
+  ];
+}
+
+function GroundingModeSelect({
+  value,
+  loading,
+  disabled,
+  liveFilesAvailable,
+  capsuleChoices,
+  capsuleSetChoices,
+  t,
+  onOpen,
+  onValueChange,
+}: {
+  readonly value: string;
+  readonly loading: boolean;
+  readonly disabled: boolean;
+  readonly liveFilesAvailable: boolean;
+  readonly capsuleChoices: readonly ScopeOption[];
+  readonly capsuleSetChoices: readonly ScopeOption[];
+  readonly t: I18nTranslate;
+  readonly onOpen: () => void;
+  readonly onValueChange: (next: string) => void;
+}): ReactNode {
+  const options = [
+    ...staticGroundingOptions(value, loading, liveFilesAvailable, t),
+    ...catalogGroundingOptions(capsuleChoices, capsuleSetChoices, loading),
+  ];
+  return (
+    <KeikoSelect
+      triggerClassName="scope-grounding-select"
+      value={value}
+      disabled={disabled}
+      ariaLabel={t("chat.grounding.mode")}
+      menuTitle={t("chat.grounding.strategy")}
+      onOpen={onOpen}
+      sections={[{ options }]}
+      onValueChange={onValueChange}
+    />
+  );
+}
+
+function GroundingCatalogStatus({
+  loading,
+  empty,
+  error,
+  t,
+}: {
+  readonly loading: boolean;
+  readonly empty: boolean;
+  readonly error: string | null;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  return (
+    <>
+      {loading ? (
+        <span className="scope-connect-hint" role="status" aria-live="polite">
+          {t("chat.grounding.catalogLoading")}
+        </span>
+      ) : null}
+      {empty ? (
+        <span className="scope-connect-hint">{t("chat.grounding.catalogEmpty")}</span>
+      ) : null}
+      {error !== null ? (
+        <span role="alert" className="scope-connect-error">
+          {error}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
 function LocalKnowledgeScopeControl({
   chat,
   onChatChanged,
@@ -3850,9 +4018,10 @@ function LocalKnowledgeScopeControl({
   readonly connected: boolean;
 }): ReactNode {
   const t = useTranslate();
-  const { capsules, capsuleSets, loadError } = catalog;
+  const { capsules, capsuleSets, loading, loadError, refresh } = catalog;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const hasOpenedRef = useRef(false);
 
   async function handleChange(value: string): Promise<void> {
     setBusy(true);
@@ -3868,64 +4037,41 @@ function LocalKnowledgeScopeControl({
 
   const value = groundedModeValue(chat);
   const capsuleChoices = capsuleOptions(chat, capsules, t);
-  const capsuleSetChoices = capsuleSetOptions(chat, capsuleSets, t);
+  const capsuleSetChoices = capsuleSetOptions(
+    chat,
+    capsuleSets.filter(isSelectableGroundingCapsuleSet),
+    t,
+  );
   // Audit F-12 — a disabled option must say why: without a connected Files source the reason
   // for the greyed-out "Live Files context" entry is otherwise undiscoverable.
   const liveFilesAvailable = hasFolderGroundingScope(chat);
   // C172 — a catalog load failure surfaces here too; an update error wins.
   const displayedError = error ?? loadError;
+  const catalogEmpty = !loading && capsules.length === 0 && capsuleSetChoices.length === 0;
+  const controlsDisabled = busy || loading;
+  const handlePickerOpen = (): void => {
+    if (hasOpenedRef.current) refresh();
+    hasOpenedRef.current = true;
+  };
   // uiux-fix F041 (C178) — classed instead of inline-styled (theme/hover/focus
   // layer lives in globals.css; the select was the shell's only raw UA widget).
   return (
     <div className="scope-grounding" data-connected={connected ? "true" : "false"}>
       <span className="scope-grounding-label mono">{t("chat.grounding.label")}</span>
-      <KeikoSelect
-        triggerClassName="scope-grounding-select"
+      <GroundingModeSelect
         value={value}
-        disabled={busy}
-        ariaLabel={t("chat.grounding.mode")}
-        menuTitle={t("chat.grounding.strategy")}
-        sections={[
-          {
-            options: [
-              { value: "none", label: t("chat.grounding.modelOnly") },
-              {
-                value: "files",
-                label: t("chat.grounding.liveFiles"),
-                disabled: !liveFilesAvailable,
-                ...(liveFilesAvailable
-                  ? {}
-                  : { description: t("chat.grounding.liveFilesUnavailableHint") }),
-              },
-              ...(value === "multi"
-                ? [{ value: "multi", label: t("chat.grounding.multiple"), disabled: true }]
-                : []),
-              ...capsuleChoices.map((capsule) => ({
-                value: capsule.value,
-                label: capsule.label,
-                ...(capsule.badge !== undefined ? { badge: capsule.badge } : {}),
-                ...(capsule.description !== undefined ? { description: capsule.description } : {}),
-              })),
-              ...capsuleSetChoices.map((capsuleSet) => ({
-                value: capsuleSet.value,
-                label: capsuleSet.label,
-                ...(capsuleSet.badge !== undefined ? { badge: capsuleSet.badge } : {}),
-                ...(capsuleSet.description !== undefined
-                  ? { description: capsuleSet.description }
-                  : {}),
-              })),
-            ],
-          },
-        ]}
+        loading={loading}
+        disabled={controlsDisabled}
+        liveFilesAvailable={liveFilesAvailable}
+        capsuleChoices={capsuleChoices}
+        capsuleSetChoices={capsuleSetChoices}
+        t={t}
+        onOpen={handlePickerOpen}
         onValueChange={(next) => {
           void handleChange(next);
         }}
       />
-      {displayedError !== null ? (
-        <span role="alert" className="scope-connect-error">
-          {displayedError}
-        </span>
-      ) : null}
+      <GroundingCatalogStatus loading={loading} empty={catalogEmpty} error={displayedError} t={t} />
     </div>
   );
 }

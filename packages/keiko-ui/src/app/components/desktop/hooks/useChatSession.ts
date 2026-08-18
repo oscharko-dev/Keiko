@@ -49,7 +49,11 @@ import {
   loadMemoryAutonomyMode,
   rejectMemoryProposal,
 } from "@/lib/memory-api";
-import { GATEWAY_CONFIG_UPDATED_EVENT } from "../widgets/shared/gatewaySetupBus";
+import {
+  GATEWAY_CONFIG_UPDATED_EVENT,
+  GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
+  GATEWAY_MODEL_READINESS_UPDATED_EVENT,
+} from "../widgets/shared/gatewaySetupBus";
 import { sortProjects } from "@/lib/sidebar-sort";
 import {
   classifyRunReport,
@@ -71,7 +75,7 @@ import type {
 import { isConversationEligibleModel } from "@/lib/types";
 import { formatUserError } from "../format-error";
 import { canonicalVoiceSha256Hex } from "./canonical-voice-hasher";
-import { extractDocumentContext, type PendingDocument } from "./documentContext";
+import type { PendingDocument } from "./documentContext";
 import {
   currentConversationMemoryModeRevision,
   removeConversationMemorySettings,
@@ -655,7 +659,11 @@ export function notifyChatDeleted(chatId: string): void {
 // available. Callers must NOT fall back to a placeholder id — downstream
 // surfaces branch on undefined to show a clear "no model" error (AC #1 / #4).
 export function pickChatModelId(models: readonly ModelCapability[]): string | undefined {
-  return models.find(isConversationEligibleModel)?.id;
+  return models.find(isConversationReadyModel)?.id;
+}
+
+function isConversationReadyModel(model: ModelCapability): boolean {
+  return isConversationEligibleModel(model) && model.conversationReady === true;
 }
 
 // Reopened chats can persist a model id that is no longer present in the
@@ -667,7 +675,7 @@ export function resolveSelectedModelId(
 ): string | undefined {
   if (
     current !== undefined &&
-    models.some((model) => model.id === current && isConversationEligibleModel(model))
+    models.some((model) => model.id === current && isConversationReadyModel(model))
   ) {
     return current;
   }
@@ -1323,6 +1331,8 @@ export interface UseChatSessionResult {
   // so token deltas do not rewrite or scan the full conversation history.
   readonly streamingAssistantMessage?: ChatMessage | undefined;
   models: ModelCapability[];
+  /** True when the server catalog contains configured models, even if none is conversation-ready. */
+  readonly configuredModelsAvailable?: boolean | undefined;
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
   // undefined when no conversation-eligible model is configured (AC #1 / #4).
@@ -1418,9 +1428,15 @@ interface SessionState {
   chats: Chat[];
   messages: ChatMessage[];
   models: ModelCapability[];
+  configuredModelsAvailable: boolean;
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
   selectedModel: string | undefined;
+  // The user's last deliberate model choice, remembered across a pending catalog refresh:
+  // the pending clear must invalidate selectedModel synchronously (no stale id is sendable
+  // mid-refresh), but the success path restores this id when the refreshed catalog still
+  // contains it — otherwise merely opening the picker reset a non-default selection.
+  restorableModelId: string | undefined;
 }
 
 function chatBelongsToSessionCatalog(previous: SessionState, chat: Chat): boolean {
@@ -1463,9 +1479,11 @@ const INITIAL_STATE: SessionState = {
   chats: [],
   messages: [],
   models: [],
+  configuredModelsAvailable: false,
   activeProject: undefined,
   activeChat: undefined,
   selectedModel: undefined,
+  restorableModelId: undefined,
 };
 
 function canonicalProjectTarget(chat: Chat): CanonicalChatProjectTarget {
@@ -1488,6 +1506,7 @@ const sharedChatMessagesInflight = new Map<
   Promise<{ readonly messages: readonly ChatMessage[] }>
 >();
 type GatewayModelRefreshResult =
+  | { readonly kind: "pending" }
   | { readonly kind: "success"; readonly models: readonly ModelCapability[] }
   | { readonly kind: "failure"; readonly message: string };
 const gatewayModelRefreshSubscribers = new Set<(result: GatewayModelRefreshResult) => void>();
@@ -1502,6 +1521,10 @@ function refreshGatewayModels(): void {
   gatewayModelRefreshGeneration = generation;
   invalidateSharedBootstrap();
   resetModelRequestCache();
+  // A gateway change makes the prior catalog untrustworthy immediately. Keep the picker empty
+  // until this exact refresh succeeds so a stale model can never be selected during a request or
+  // after its failure.
+  publishGatewayModelRefresh({ kind: "pending" });
   void fetchModels().then(
     ({ models }): void => {
       if (generation === gatewayModelRefreshGeneration) {
@@ -1521,12 +1544,19 @@ function subscribeGatewayModelRefresh(
 ): () => void {
   if (gatewayModelRefreshSubscribers.size === 0) {
     window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
+    window.addEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, refreshGatewayModels);
+    window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, refreshGatewayModels);
   }
   gatewayModelRefreshSubscribers.add(subscriber);
   return (): void => {
     gatewayModelRefreshSubscribers.delete(subscriber);
     if (gatewayModelRefreshSubscribers.size === 0) {
       window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, refreshGatewayModels);
+      window.removeEventListener(
+        GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
+        refreshGatewayModels,
+      );
+      window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, refreshGatewayModels);
     }
   };
 }
@@ -1828,7 +1858,8 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   const modelPayload = await fetchModels();
   // Issue #144: source of truth is the helper, not an inline kind check. Pin
   // ACs #1 / #2 — only chat-eligible models reach the conversation dropdown.
-  const chatModels = modelPayload.models.filter(isConversationEligibleModel);
+  const chatModels = modelPayload.models.filter(isConversationReadyModel);
+  const configuredModelsAvailable = modelPayload.models.length > 0;
   const defaultModel = pickChatModelId(chatModels);
 
   const projectPayload = await fetchProjects();
@@ -1844,6 +1875,7 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
     const selectedModel = resolveSelectedModelId(latestChat.selectedModel, chatModels);
     return {
       models: chatModels,
+      configuredModelsAvailable,
       selectedModel,
       projects: Array.from(projects),
       activeProject: project,
@@ -1861,6 +1893,7 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   if (defaultModel === undefined || !autoCreate) {
     return {
       models: chatModels,
+      configuredModelsAvailable,
       selectedModel: defaultModel,
       projects: Array.from(projects),
       activeProject: project,
@@ -1878,6 +1911,7 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   notifyChatUpsert(created.chat);
   return {
     models: chatModels,
+    configuredModelsAvailable,
     selectedModel: created.chat.selectedModel,
     projects: Array.from(created.projects),
     activeProject: created.project,
@@ -1919,11 +1953,47 @@ function refreshSessionModels(
   previous: SessionState,
   capabilities: readonly ModelCapability[],
 ): SessionState {
-  const models = capabilities.filter(isConversationEligibleModel);
+  const models = capabilities.filter(isConversationReadyModel);
   return {
     ...previous,
     models,
-    selectedModel: resolveSelectedModelId(previous.selectedModel, models),
+    configuredModelsAvailable: capabilities.length > 0,
+    selectedModel: resolveSelectedModelId(
+      previous.selectedModel ?? previous.restorableModelId,
+      models,
+    ),
+    restorableModelId: undefined,
+  };
+}
+
+// A chat switch rebinds both the live selection and the pending-refresh memo to the newly
+// opened chat's persisted model, so a refresh that lands after a mid-pending switch cannot
+// restore the previous chat's choice.
+function selectionForChatSwitch(
+  persistedModelId: string | undefined,
+  models: readonly ModelCapability[],
+): Pick<SessionState, "selectedModel" | "restorableModelId"> {
+  return {
+    selectedModel: resolveSelectedModelId(persistedModelId, models),
+    restorableModelId: persistedModelId,
+  };
+}
+
+// Pending-refresh variant: empties the picker so a stale model cannot be selected mid-refresh,
+// but PRESERVES configuredModelsAvailable — AppShell reads (loading=false, error=undefined,
+// configuredModelsAvailable=false) as "gateway missing" and would mount the modal setup dialog
+// over a fully configured workspace for the duration of every catalog read.
+function clearSessionModelsForPendingRefresh(previous: SessionState): SessionState {
+  return {
+    ...previous,
+    models: [],
+    // Pinned choreography: the selection is invalidated synchronously so no send can target
+    // a model that may no longer exist — but the id is remembered so the success path can
+    // restore it against the refreshed catalog instead of falling back to the first ready
+    // model every time the picker is merely opened. A failed refresh leaves selectedModel
+    // undefined, so chained retries must keep the earliest memo.
+    selectedModel: undefined,
+    restorableModelId: previous.selectedModel ?? previous.restorableModelId,
   };
 }
 
@@ -2434,7 +2504,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       const extracted =
         documents.length === 0
           ? { entries: [] as readonly ConversationDocumentContextWire[], failures: [] }
-          : await extractDocumentContext(documents, t);
+          : await import("./documentContext").then(({ extractDocumentContext }) =>
+              extractDocumentContext(documents, t),
+            );
       const notices = extracted.failures;
       if (notices.length > 0) setError(notices.join(" "));
       const disclosures = extracted.entries.map((e) => ({
@@ -2725,6 +2797,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   useEffect(() => {
     return subscribeGatewayModelRefresh((result): void => {
+      if (result.kind === "pending") {
+        setError(undefined);
+        setState((previous) => clearSessionModelsForPendingRefresh(previous));
+        return;
+      }
       if (result.kind === "failure") {
         setError(result.message);
         return;
@@ -2927,9 +3004,12 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           chats: sortChats(created.chats),
           messages: Array.from(created.messages),
           models: state.models,
+          configuredModelsAvailable: state.configuredModelsAvailable,
           activeProject: created.project,
           activeChat: created.chat,
           selectedModel: created.chat.selectedModel,
+          // A freshly created chat starts a new selection scope: no pending-refresh memo.
+          restorableModelId: undefined,
         });
         return created.chat;
       } catch (error_) {
@@ -2937,7 +3017,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return undefined;
       }
     },
-    [resetComposerForConversationSwitch, state.selectedModel, state.activeProject, state.models],
+    [
+      resetComposerForConversationSwitch,
+      state.selectedModel,
+      state.activeProject,
+      state.models,
+      state.configuredModelsAvailable,
+    ],
   );
 
   const openProject = useCallback(
@@ -2975,12 +3061,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const messagePayload = await sharedFetchChatMessages(latest.id, project.path);
         if (activeProjectPathRef.current !== project.path) return;
         activeChatIdRef.current = latest.id;
-        const selectedModel = resolveSelectedModelId(latest.selectedModel, state.models);
         setState((previous) => ({
           ...previous,
           chats: sorted,
           activeChat: latest,
-          selectedModel,
+          ...selectionForChatSwitch(latest.selectedModel, state.models),
           messages: mergeCanonicalVoiceProjections(
             messagePayload.messages,
             latest.id,
@@ -3028,14 +3113,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       try {
         const messagePayload = await sharedFetchChatMessages(chat.id, chat.projectPath);
         if (!isStillActiveChat(chat.id)) return;
-        const selectedModel = resolveSelectedModelId(chat.selectedModel, state.models);
         setState((previous) => {
           const project = previous.projects.find((item) => item.path === chat.projectPath);
           return {
             ...previous,
             activeProject: project,
             activeChat: chat,
-            selectedModel,
+            ...selectionForChatSwitch(chat.selectedModel, state.models),
             messages: mergeCanonicalVoiceProjections(
               messagePayload.messages,
               chat.id,
@@ -4196,6 +4280,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       messages: state.messages,
       streamingAssistantMessage,
       models: state.models,
+      configuredModelsAvailable: state.configuredModelsAvailable,
       activeProject: state.activeProject,
       activeChat: state.activeChat,
       selectedModel: state.selectedModel,
@@ -4249,6 +4334,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       state.messages,
       streamingAssistantMessage,
       state.models,
+      state.configuredModelsAvailable,
       state.activeProject,
       state.activeChat,
       state.selectedModel,

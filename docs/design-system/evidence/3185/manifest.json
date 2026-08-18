@@ -1,0 +1,23 @@
+{
+  "issue": "#3185",
+  "epic": "#3179",
+  "generatedAt": "2026-08-17T21:03:37.947Z",
+  "command": "KEIKO_WRITE_TRACKED_EVIDENCE=1 npx playwright test tests/e2e/health-scan-3185.spec.ts --config tests/e2e/config/playwright.config.ts --project=chromium",
+  "receiptCommand": ".keiko-scripts/ui-verify-receipt.sh 3185 -- npx playwright test tests/e2e/health-scan-3185.spec.ts --config tests/e2e/config/playwright.config.ts --project=chromium",
+  "playwrightCommand": "npx playwright test tests/e2e/health-scan-3185.spec.ts --config tests/e2e/config/playwright.config.ts --project=chromium",
+  "artifacts": [
+    "01-dark-success.png",
+    "02-light-rate-limited.png",
+    "03-dark-high-contrast-rate-limited.png",
+    "04-forced-colors-rate-limited.png",
+    "05-responsive-rate-limited.png",
+    "health-scan-refresh-fidelity-proof.json",
+    "a11y-proof.json",
+    "manifest.json"
+  ],
+  "notes": [
+    "The desktop shell, dynamic MemoriaViva window, theme handling, focus behavior, and HealthScanFindings component are real.",
+    "Only GET /api/memory/health-scan is intercepted with contract-shaped success and rate-limit fixtures.",
+    "The phase-based route handler remains correct when React Strict Mode duplicates an initial request: all initial requests receive the same success fixture until the test deliberately changes phase."
+  ]
+}

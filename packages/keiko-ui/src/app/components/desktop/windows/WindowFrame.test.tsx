@@ -541,6 +541,40 @@ describe("WindowFrame content zoom controls", () => {
     vi.useRealTimers();
   });
 
+  it("does not let delayed text-entry focus raise a window after focus moves elsewhere", () => {
+    vi.useFakeTimers();
+    registerWindowRender("promptEnhancer", () => <textarea aria-label="Prompt" />);
+    const focus = vi.fn();
+
+    render(
+      <>
+        <button type="button">Settings</button>
+        <WindowFrame
+          win={appWindow({
+            id: "prompt-enhancer-1",
+            type: "promptEnhancer",
+            w: 860,
+            h: 680,
+          })}
+          top
+          connState={null}
+          linkRevision={0}
+          api={api({ focus })}
+          wsRef={createRef<HTMLElement>()}
+        />
+      </>,
+    );
+
+    const prompt = screen.getByRole("textbox", { name: "Prompt" });
+    prompt.focus();
+    fireEvent.pointerDown(prompt, { button: 0 });
+    screen.getByRole("button", { name: "Settings" }).focus();
+    vi.advanceTimersByTime(180);
+
+    expect(focus).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
   it("ignores header double clicks in the right-side control gutter", () => {
     const maximize = vi.fn();
     const { container } = render(

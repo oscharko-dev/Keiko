@@ -326,6 +326,18 @@ async function createChat(baseUrl, projectPath) {
   return body.chat.id;
 }
 
+async function verifyConversationReady(baseUrl) {
+  const report = await api(baseUrl, "/api/gateway/readiness", {
+    method: "POST",
+    body: JSON.stringify({ modelId: MODEL_ID, options: { probes: ["chat"] } }),
+  });
+  assert(
+    report.overallStatus === "ready" &&
+      report.probes?.some((probe) => probe.name === "chat" && probe.status === "passed"),
+    "basic-chat readiness probe did not pass for the memory-smoke model",
+  );
+}
+
 function memoryWire(projectPath, conversationId, enabled = true) {
   return {
     enabled,
@@ -439,6 +451,7 @@ async function main() {
     const homeHtml = await fetchText(`${ui.baseUrl}/`);
     assert(homeHtml.includes("Keiko"), "home page did not contain the Keiko shell marker");
     await assertFreshMemoryState(ui.baseUrl);
+    await verifyConversationReady(ui.baseUrl);
 
     const rememberChatId = await createChat(ui.baseUrl, projectA);
     const remember = await sendChat(
@@ -484,6 +497,7 @@ async function main() {
 
     await ui.stop();
     ui = await startInstalledUi(installRoot, configPath, uiDbPath, evidenceDir, memoryDir);
+    await verifyConversationReady(ui.baseUrl);
     const restartChatId = await createChat(ui.baseUrl, projectA);
     const afterRestart = await memoryContext(
       ui.baseUrl,
@@ -627,4 +641,4 @@ async function main() {
   }
 }
 
-void main();
+await main();

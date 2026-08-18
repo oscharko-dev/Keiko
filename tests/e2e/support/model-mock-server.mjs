@@ -104,7 +104,7 @@ function bufferedContent(rawRequest) {
   return JSON.stringify([
     {
       source: "user",
-      body: "The journal smoke fixture uses deterministic release windows.",
+      body: "KEIKO_E2E_JOURNAL_CAPTURE: remember the deterministic release window.",
       type: "fact",
       confidence: 0.91,
       scope: "project",
