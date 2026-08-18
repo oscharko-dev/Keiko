@@ -75,7 +75,64 @@ describe("immutable quality range resolution", () => {
         { base: undefined, eventName: "workflow_dispatch", head: HEAD },
         () => "",
       ),
-    ).toThrow("manual run base could not be resolved to the selected head's parent");
+    ).toThrow("run base could not be resolved to the head's parent");
+  });
+
+  it("bounds a branch-creating push at the merge-base with the fallback ref", () => {
+    const git = vi.fn((args) => {
+      if (args[0] === "merge-base" && args[1] !== "--is-ancestor") return BASE;
+      return "";
+    });
+    // A branch-creating push delivers before=0000…0. Scanning from the repository root swept
+    // 918 historical commits into the release/0.3.9 secret scan, and bounding at head^ would
+    // skip earlier commits of a multi-commit branch creation — the merge-base with dev
+    // precedes every commit the branch introduced.
+    expect(
+      resolveQualityRange(
+        { base: "0".repeat(40), eventName: "push", fallbackBaseRef: "origin/dev", head: HEAD },
+        git,
+      ),
+    ).toEqual({ base: BASE, head: HEAD });
+    expect(git).toHaveBeenCalledWith(["merge-base", "origin/dev", HEAD]);
+    expect(git).not.toHaveBeenCalledWith(["rev-list", "--max-parents=0", HEAD]);
+    expect(git).not.toHaveBeenCalledWith(["rev-parse", "--verify", `${HEAD}^`]);
+  });
+
+  it("fails closed for a branch-creating push without a fallback base ref", () => {
+    expect(() =>
+      resolveQualityRange({ base: "0".repeat(40), eventName: "push", head: HEAD }, () => BASE),
+    ).toThrow("a branch-creating push needs QUALITY_FALLBACK_BASE_REF to bound its scan range");
+  });
+
+  it.each([["empty", ""]])(
+    "fails closed for a branch-creating push with an %s fallback base ref",
+    (_label, fallbackBaseRef) => {
+      expect(() =>
+        resolveQualityRange(
+          { base: "0".repeat(40), eventName: "push", fallbackBaseRef, head: HEAD },
+          () => BASE,
+        ),
+      ).toThrow("a branch-creating push needs QUALITY_FALLBACK_BASE_REF to bound its scan range");
+    },
+  );
+
+  it.each([
+    ["option-like", "--fork-point"],
+    ["whitespace-embedding", "origin dev"],
+    ["control-character", "origin/dev\n"],
+    ["dash-terminated", "origin/dev-"],
+  ])("rejects a %s fallback base ref instead of passing it to git", (_label, fallbackBaseRef) => {
+    const git = vi.fn(() => BASE);
+    // A leading dash would reach `git merge-base` as an OPTION, not a ref; whitespace and
+    // control characters have no place in a workflow-provided ref. Each must fail closed
+    // before any git invocation with the hostile value.
+    expect(() =>
+      resolveQualityRange(
+        { base: "0".repeat(40), eventName: "push", fallbackBaseRef, head: HEAD },
+        git,
+      ),
+    ).toThrow("QUALITY_FALLBACK_BASE_REF must be a plain ref name");
+    expect(git).not.toHaveBeenCalledWith(["merge-base", fallbackBaseRef, HEAD]);
   });
 
   it("fails when the fallback is not an immutable commit", () => {
