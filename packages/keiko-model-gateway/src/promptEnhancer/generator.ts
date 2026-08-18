@@ -157,9 +157,15 @@ interface PromptIntentFrame {
   readonly uncertaintyHandling: readonly string[];
 }
 
+/**
+ * Lexical cue for an intent rule: plain entries match as substrings of the folded search text,
+ * RegExp entries match with their own semantics (e.g. word boundaries for standalone words).
+ */
+type IntentNeedle = string | RegExp;
+
 interface PromptIntentRule extends PromptIntentFrame {
-  readonly strong: readonly string[];
-  readonly weak: readonly string[];
+  readonly strong: readonly IntentNeedle[];
+  readonly weak: readonly IntentNeedle[];
   readonly taskClasses?: readonly PromptTaskClass[];
   readonly domains?: readonly PromptDomain[];
 }
@@ -172,10 +178,11 @@ function foldForSearch(text: string): string {
     .replaceAll("ß", "ss");
 }
 
-const countMatches = (haystack: string, needles: readonly string[]): number => {
+const countMatches = (haystack: string, needles: readonly IntentNeedle[]): number => {
   let count = 0;
   for (const needle of needles) {
-    if (haystack.includes(needle)) count += 1;
+    const matched = typeof needle === "string" ? haystack.includes(needle) : needle.test(haystack);
+    if (matched) count += 1;
   }
   return count;
 };
@@ -545,7 +552,24 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
       "hotel",
       "flug",
     ],
-    weak: ["oktober", "route", "budget", "transport", "unterkunft", "sightseeing"],
+    weak: [
+      // Standalone "Reise" scores travel only with a planning verb (plan/plane/planen,
+      // organisiere(n), buche(n)) within a 40-char window on either side. A bare or merely
+      // possessive mention is not planning intent — "Was bedeutet das Wort Reise?" and a
+      // translation request quoting "meine Reise" must stay out of the expert travel frame,
+      // while "Plane meine Reise durch Europa" keeps scoring. Embeddings such as "Preise" or
+      // "Reisepass" must not revive the substring false positive that removed the plain
+      // "reise" needle. The folded search text is lowercase and diacritic-free, but \b is
+      // ASCII-only, so Unicode letter/number lookarounds are the word boundary.
+      /(?<![\p{L}\p{N}])(?:plan(?:e|en)?|organisieren?|buchen?)(?![\p{L}\p{N}]).{0,40}(?<![\p{L}\p{N}])reise(?![\p{L}\p{N}])/su,
+      /(?<![\p{L}\p{N}])reise(?![\p{L}\p{N}]).{0,40}(?<![\p{L}\p{N}])(?:plan(?:e|en)?|organisieren?|buchen?)(?![\p{L}\p{N}])/su,
+      "oktober",
+      "route",
+      "budget",
+      "transport",
+      "unterkunft",
+      "sightseeing",
+    ],
     taskClasses: ["decision-support", "research"],
     role: "You are an expert travel planner.",
     goal: "Create a realistic itinerary with timing, route logic, budget assumptions, logistics, tradeoffs, and open questions.",

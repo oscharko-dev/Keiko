@@ -135,6 +135,12 @@ export interface UiStore {
     clientTurnId: string,
     terminalState?: Extract<ChatTurnState, "failed" | "cancelled">,
   ) => void;
+  readonly discardLegacyTurnUserMessage: (
+    chatId: string,
+    id: string,
+    restoreUpdatedAtMs: number,
+    expectedTouchedUpdatedAtMs: number | undefined,
+  ) => void;
   readonly updateMessage: (id: string, patch: UpdateChatMessagePatch) => ChatMessage;
   readonly attachGroundedAnswer: (
     id: string,

@@ -285,6 +285,107 @@ describe("generateEnhancedPrompt — intent-specific shaping", () => {
     expect(trustedText(prompt)).not.toMatch(
       /travel planner|itinerary|route|lodging|visa|destination/i,
     );
+
+    // Sharper pin on the original false positive: "Preise" embeds the letters "reise", and the
+    // standalone-Reise matcher must not regress to substring matching that revives it.
+    const pricing = generateForProductionInput("Vergleiche die Preise der Anbieter.");
+    expect(trustedText(pricing.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
+  it("keeps non-planning standalone Reise mentions out of the travel frame", () => {
+    // Standalone "Reise" alone is not planning intent: a vocabulary question and a translation
+    // request must not receive itinerary decomposition or volatile-price guidance.
+    const vocabulary = generateForProductionInput("Was bedeutet das Wort Reise?");
+    expect(trustedText(vocabulary.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+
+    const translation = generateForProductionInput("\u00dcbersetze den Satz: die Reise beginnt.");
+    expect(trustedText(translation.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
+  it("keeps possessive Reise phrases without a planning verb out of the travel frame", () => {
+    // A possessive alone is not planning intent: a translation request quoting "meine Reise"
+    // (or a narrated past trip) must not receive the expert travel-planner frame.
+    const quoted = generateForProductionInput(
+      "\u00dcbersetze \u201emeine Reise\u201c ins Englische.",
+    );
+    expect(trustedText(quoted.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+
+    const narrative = generateForProductionInput("Meine Reise war sch\u00f6n.");
+    expect(trustedText(narrative.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
+  it("classifies empty and control-only drafts deterministically without a travel frame", () => {
+    const empty = generateForProductionInput("");
+    expect(empty.analysis.taskClass).toBe("factual-qa");
+    expect(empty.prompt.input).toBe("(no input provided)");
+    expect(trustedText(empty.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+
+    // BEL/NUL/SOH are stripped by normalizePromptDraft, leaving an empty draft.
+    const control = generateForProductionInput("\u0007\u0000\u0001");
+    expect(control.analysis.taskClass).toBe("factual-qa");
+    expect(control.prompt.input).toBe("(no input provided)");
+    expect(trustedText(control.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
+  it("folds adversarial Unicode before matching travel cues", () => {
+    // Combining diacritics (NFKC in normalizePromptDraft, NFKD plus mark strip in the fold) must
+    // land on the same planning-scoped cues as the plain-text request.
+    const accented = generateForProductionInput(
+      "Pla\u0301ne me\u0301ine Re\u0301ise du\u0308rch Euro\u0301pa.",
+    );
+    expect(accented.analysis.taskClass).toBe("decision-support");
+    expect(trustedText(accented.prompt)).toMatch(/travel planner|travel itinerary planning/i);
+
+    // A zero-width space smuggled into "Preise" is stripped before folding, so the pricing
+    // request stays a pricing request instead of exposing a standalone "reise" token.
+    const smuggled = generateForProductionInput("Vergleiche die P\u200Breise der Anbieter.");
+    expect(smuggled.analysis.taskClass).toBe("decision-support");
+    expect(trustedText(smuggled.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
+  it("treats punctuation as a Reise word boundary but never compound embeddings", () => {
+    // Word-boundary side: trailing "." / "," after "Reise" still counts as standalone.
+    const period = generateForProductionInput("Organisiere unsere Reise.");
+    expect(trustedText(period.prompt)).toMatch(/travel planner|travel itinerary planning/i);
+
+    const comma = generateForProductionInput("Plane meine Reise, bitte.");
+    expect(trustedText(comma.prompt)).toMatch(/travel planner|travel itinerary planning/i);
+
+    // Compound side: "Abreise"/"Reisepass" never satisfy the standalone needle — even when a
+    // planning verb is present, the compound embedding must not count as the travel cue.
+    const departure = generateForProductionInput("Plane die Abreise.");
+    expect(trustedText(departure.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+
+    const passport = generateForProductionInput("Beantrage einen neuen Reisepass.");
+    expect(trustedText(passport.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
+  it("keeps standalone German Reise requests in the travel frame", () => {
+    const { analysis, prompt } = generateForProductionInput("Plane meine Reise durch Europa.");
+
+    expect(analysis.taskClass).toBe("decision-support");
+    expect(trustedText(prompt)).toMatch(/travel planner|travel itinerary planning/i);
+    expect(trustedText(prompt)).toMatch(/day-by-day route|fresh verification/i);
   });
 
   it("keeps the audited German knowledge-management request out of the travel frame", () => {

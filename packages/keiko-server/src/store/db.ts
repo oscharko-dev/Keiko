@@ -68,6 +68,7 @@ import {
   findMessageById as sqlFindMessageById,
   attachGroundedAnswer as sqlAttachGroundedAnswer,
   findGroundedPreviewCitations as sqlFindGroundedPreviewCitations,
+  discardLegacyTurnUserMessage as sqlDiscardLegacyTurnUserMessage,
   insertMessage as sqlInsertMessage,
   isLatestChatMessage as sqlIsLatestChatMessage,
   listMessages as sqlListMessages,
@@ -685,6 +686,20 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
       for (const [id, pending] of stagedTurnAssistants) {
         if (pending.clientTurnId === storedTurnId) stagedTurnAssistants.delete(id);
       }
+    },
+    discardLegacyTurnUserMessage: (
+      chatId: string,
+      id: string,
+      restoreUpdatedAtMs: number,
+      expectedTouchedUpdatedAtMs: number | undefined,
+    ): void => {
+      sqlDiscardLegacyTurnUserMessage(
+        db,
+        chatId,
+        id,
+        restoreUpdatedAtMs,
+        expectedTouchedUpdatedAtMs,
+      );
     },
     updateMessage: (id: string, patch: UpdateChatMessagePatch): ChatMessage =>
       sqlUpdateMessage(db, id, patch, options.redactString),

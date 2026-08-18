@@ -1585,6 +1585,195 @@ describe("desktop chat SSE streaming handler", () => {
     memoryVault.close();
   });
 
+  it("discards the persisted legacy user row when the stream is rejected after memory retrieval", async () => {
+    const chatId = seedChat();
+    const memoryDir = join(tmp, "legacy-streamed-readiness-generation-race");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const remembered = insertAcceptedMemory(memoryVault, "legacy streamed race candidate");
+    memoryVault.upsertEmbedding(remembered.id, {
+      provider: "test-provider",
+      modelId: "text-embedding-3-small",
+      metric: "cosine",
+      vector: Float32Array.from([1, 0]),
+    });
+    const embedding = deferred<OpenAIEmbeddingOutcome>();
+    const embeddingStarted = deferred<undefined>();
+    const holder = readyRuntimeGatewayConfig(chatAndEmbeddingConfig());
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("unused")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        yield { type: "done", response: normalizedResponse("must not run") };
+      },
+    };
+    const sharedDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      gatewayConfig: holder,
+      memoryVault,
+      modelPortFactory: () => model,
+      localKnowledgeEmbeddingRequest: () => {
+        embeddingStarted.resolve(undefined);
+        return embedding.promise;
+      },
+    });
+    const messagesBefore = sharedDeps.store.countMessages(chatId);
+    const captured = captureRes();
+    // No clientTurnId: the ledger cannot settle this turn, so the post-admission readiness
+    // rejection must discard the just-admitted user row — otherwise the rejected request
+    // leaves an orphaned message and every client retry duplicates it.
+    const outcome = handleSendDesktopChatStream(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: "legacy row must not survive rejection",
+          memory: { enabled: true, budgetTokens: 900, context: {} },
+        }),
+        captured.res,
+      ),
+      sharedDeps,
+    );
+    await embeddingStarted.promise;
+    replaceWithReadyRuntimeConfig(holder);
+    embedding.resolve({
+      ok: true,
+      value: { vector: Float32Array.from([1, 0]), modelId: "text-embedding-3-small" },
+    });
+
+    const rejected = await outcome;
+    expect(rejected).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+    expect(sharedDeps.store.countMessages(chatId)).toBe(messagesBefore);
+    expect(
+      sharedDeps.store
+        .listMessages(chatId)
+        .some((message) => message.content === "legacy row must not survive rejection"),
+    ).toBe(false);
+    memoryVault.close();
+  });
+
+  it("discards the persisted legacy user row when a buffered memory failure rejects the turn", async () => {
+    const chatId = seedChat();
+    const memoryDir = join(tmp, "legacy-buffered-memory-failure");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const holder = readyRuntimeGatewayConfig(chatAndEmbeddingConfig());
+    let providerCalls = 0;
+    const model: ModelPort = {
+      call: () => {
+        providerCalls += 1;
+        return Promise.resolve(normalizedResponse("must not run"));
+      },
+    };
+    // Retrieval-time vault failure, same class as the streamed settle pin above — but for a
+    // LEGACY request the ledger cannot settle, so the just-admitted user row must be discarded.
+    const explodingVault = new Proxy(memoryVault, {
+      get(target, prop, receiver): unknown {
+        if (prop === "close") return Reflect.get(target, prop, receiver);
+        return (): never => {
+          throw new Error("vault exploded");
+        };
+      },
+    });
+    const sharedDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      gatewayConfig: holder,
+      memoryVault: explodingVault,
+      modelPortFactory: () => model,
+      localKnowledgeEmbeddingRequest: () =>
+        Promise.resolve({
+          ok: true,
+          value: { vector: Float32Array.from([1, 0]), modelId: "text-embedding-3-small" },
+        }),
+    });
+    const messagesBefore = sharedDeps.store.countMessages(chatId);
+    const send = handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: "legacy buffered row must not survive rejection",
+          memory: { enabled: true, budgetTokens: 900, context: {} },
+        }),
+        captureRes().res,
+      ),
+      sharedDeps,
+    );
+    const outcome = await send.then(
+      (result) => result.status,
+      () => "rejected" as const,
+    );
+    expect(outcome === "rejected" || outcome >= 500).toBe(true);
+    expect(providerCalls).toBe(0);
+    expect(sharedDeps.store.countMessages(chatId)).toBe(messagesBefore);
+    memoryVault.close();
+  });
+
+  it("discards the legacy user row when cancellation lands during buffered memory retrieval", async () => {
+    const chatId = seedChat();
+    const memoryDir = join(tmp, "legacy-buffered-cancel-during-memory");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const remembered = insertAcceptedMemory(memoryVault, "legacy buffered cancel candidate");
+    memoryVault.upsertEmbedding(remembered.id, {
+      provider: "test-provider",
+      modelId: "text-embedding-3-small",
+      metric: "cosine",
+      vector: Float32Array.from([1, 0]),
+    });
+    let providerCalls = 0;
+    const model: ModelPort = {
+      call: () => {
+        providerCalls += 1;
+        return Promise.resolve(normalizedResponse("must not run"));
+      },
+    };
+    const captured = captureResWithEvents();
+    // The client disconnects DURING retrieval, and retrieval then completes NORMALLY: the
+    // vault read itself fires the close event and continues, so the abort is guaranteed to
+    // land inside the memory window regardless of the semantic-gate embedding path.
+    const abortingVault = new Proxy(memoryVault, {
+      get(target, property, receiver): unknown {
+        const original = Reflect.get(target, property, receiver) as unknown;
+        if (property === "listMemoriesByScope" && typeof original === "function") {
+          return (...args: unknown[]): unknown => {
+            captured.emitClose();
+            return (original as (...inner: unknown[]) => unknown).apply(target, args);
+          };
+        }
+        return original;
+      },
+    });
+    const sharedDeps = deps(model, {
+      config: chatAndEmbeddingConfig(),
+      gatewayConfig: readyRuntimeGatewayConfig(chatAndEmbeddingConfig()),
+      memoryVault: abortingVault,
+      modelPortFactory: () => model,
+      localKnowledgeEmbeddingRequest: () =>
+        Promise.resolve({
+          ok: true,
+          value: { vector: Float32Array.from([1, 0]), modelId: "text-embedding-3-small" },
+        }),
+    });
+    const messagesBefore = sharedDeps.store.countMessages(chatId);
+    const result = await handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: "legacy cancel during memory must discard the row",
+          memory: { enabled: true, budgetTokens: 900, context: {} },
+        }),
+        captured.res,
+      ),
+      sharedDeps,
+    );
+    expect(result.status).toBe(499);
+    expect(providerCalls).toBe(0);
+    expect(sharedDeps.store.countMessages(chatId)).toBe(messagesBefore);
+    memoryVault.close();
+  });
+
   it("rejects regeneration when the gateway generation changes during memory retrieval", async () => {
     const chatId = seedChat();
     seedMessage(chatId, "user", "original regeneration question");

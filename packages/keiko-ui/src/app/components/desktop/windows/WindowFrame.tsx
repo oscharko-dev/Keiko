@@ -781,6 +781,25 @@ function booleanDataAttribute(value: boolean): "true" | undefined {
   return value ? "true" : undefined;
 }
 
+// Raise counter across ALL frames: a pending delayed focus yields to any later interaction.
+let windowInteractionCount = 0;
+
+// EVERY direct window-raising interaction that bypasses focusWindowForTarget (resize grips,
+// the maximize control) must advance the counter AT PRESS TIME. Those handlers suppress or
+// bypass the browser's default focus move, so DOM focus can stay inside a previously armed
+// text-entry target — the token advance is then the only thing stopping that pending delayed
+// raise from re-raising the old window over the one the user is interacting with (PR #3212).
+function noteWindowInteraction(): void {
+  windowInteractionCount += 1;
+}
+
+// Direct user-interaction raises outside focusWindowForTarget (resize grips) count the
+// interaction and raise in one step, at the press that starts the gesture.
+function raiseWindowForInteraction(api: WorkspaceApi, id: string): void {
+  noteWindowInteraction();
+  api.focus(id);
+}
+
 function delayedFocusStillTargetsWindow(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return true;
   const activeElement = document.activeElement;
@@ -976,10 +995,14 @@ function WindowFrameImpl({
 
   const focusWindowForTarget = useCallback(
     (target: EventTarget | null): void => {
+      windowInteractionCount += 1;
       if (isTextEntryTarget(target)) {
+        const armedInteraction = windowInteractionCount;
         window.setTimeout((): void => {
           // The delay preserves text selection, but a later click may have moved focus to another
           // window. Never let this stale callback raise the old window over the user's new target.
+          // The counter catches later interactions whose preventDefault() left DOM focus here.
+          if (windowInteractionCount !== armedInteraction) return;
           if (delayedFocusStillTargetsWindow(target)) api.focus(win.id);
         }, 180);
         return;
@@ -1055,7 +1078,7 @@ function WindowFrameImpl({
         e.stopPropagation();
         resizeCleanupRef.current?.();
         resizeCleanupRef.current = null;
-        api.focus(win.id);
+        raiseWindowForInteraction(api, win.id);
         attachResizeListeners(
           api,
           {
@@ -1388,7 +1411,16 @@ function WindowFrameImpl({
                     ? t("window.restore", { label: windowTitle })
                     : t("window.fullscreen", { label: windowTitle })
                 }
-                onPointerDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  // Maximize IS a raise (makeMaximize bumps z), and this stopPropagation()
+                  // keeps focusWindowForTarget from counting the interaction — so invalidate
+                  // at PRESS time. Click time is too late: a press-and-hold across the 180ms
+                  // delay would let a pending delayed text-entry raise fire mid-hold, covering
+                  // this window and even retargeting the release. The raise itself stays on
+                  // click (traffic-button presses never reorder windows before the action).
+                  if (isPrimaryActivationPointer(e)) noteWindowInteraction();
+                }}
                 onDoubleClick={(e) => {
                   e.stopPropagation();
                 }}

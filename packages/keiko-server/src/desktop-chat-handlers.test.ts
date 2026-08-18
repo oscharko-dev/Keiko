@@ -1631,14 +1631,28 @@ describe("desktop chat routes", () => {
     memoryVault.close();
   });
 
-  it("persists the canonical user before a fallible buffered-memory retrieval", async () => {
+  // Relocated pin (#3204 follow-up): the persist-BEFORE-retrieval ordering this test always
+  // pinned still holds (no provider request is seen), but the terminal state for a LEGACY
+  // request changed by review decision — a turn rejected after admission and before any
+  // provider output must leave no orphaned user row, because the ledger cannot settle it and
+  // every client retry would duplicate it. Ledger turns keep their row and settle instead
+  // (see the settle pins in chat-stream-handlers.test.ts).
+  it("discards the legacy user row when buffered-memory retrieval fails before the provider", async () => {
     const memoryDir = join(tmp, "failing-buffered-memory-vault");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    // Strengthened relocation: the persist-BEFORE-retrieval ordering is asserted inside the
+    // failing callback itself — the user row must already exist when retrieval runs, and the
+    // final assertion proves the rejection then discards it. Both halves red-prove their arm.
+    let userRowsSeenAtRetrieval = -1;
+    let lastCreatedChatId = "";
     const failingMemoryVault = new Proxy(memoryVault, {
       get(target, property, receiver): unknown {
         if (property === "listMemoriesByScope") {
           return (): never => {
+            userRowsSeenAtRetrieval = store
+              .listMessages(lastCreatedChatId)
+              .filter((message) => message.role === "user").length;
             throw new Error("memory retrieval failed");
           };
         }
@@ -1652,6 +1666,7 @@ describe("desktop chat routes", () => {
       body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
     });
     const created = (await createRes.json()) as { chat: { id: string } };
+    lastCreatedChatId = created.chat.id;
 
     const sendRes = await fetch(`${base()}/api/desktop/chat`, {
       method: "POST",
@@ -1667,9 +1682,8 @@ describe("desktop chat routes", () => {
 
     expect(sendRes.status).toBe(500);
     expect(seenRequests).toEqual([]);
-    expect(store.listMessages(created.chat.id)).toMatchObject([
-      { role: "user", content: "Keep this buffered final transcript" },
-    ]);
+    expect(userRowsSeenAtRetrieval).toBe(1);
+    expect(store.listMessages(created.chat.id)).toEqual([]);
     memoryVault.close();
   });
 
