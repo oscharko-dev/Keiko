@@ -1737,6 +1737,12 @@ type IndexingTerminal =
   | { readonly kind: "job-failed"; readonly jobId: string };
 
 interface RunCapsuleIndexingJobOptions {
+  // The provider the HANDLER already resolved (exact or alias-repaired). Threading it through
+  // keeps ONE resolution point: re-deriving it here with the strict configured-modelId lookup
+  // diverged for gateways whose served model name differs from the configured id (LiteLLM
+  // aliases) — the alias-repaired capsule stores the served name, the strict lookup missed it,
+  // and indexing died as a silent job-failed with an empty jobId, no job row, no diagnostics.
+  readonly provider: ModelProviderConfig;
   readonly mode: CapsuleReindexMode | undefined;
   // O2-GAP-1 (Epic #189): reindex callers can request a full re-embed when the embedding
   // model has rotated. Start-indexing keeps force=false so a first-pass run never wipes
@@ -2207,10 +2213,7 @@ async function runCapsuleIndexingJob(
   capsule: KnowledgeCapsule,
   options: RunCapsuleIndexingJobOptions,
 ): Promise<IndexingTerminal | undefined> {
-  const provider = configuredProviderForCapsule(deps, capsule);
-  if (provider === undefined) {
-    return { kind: "job-failed", jobId: "" };
-  }
+  const provider = options.provider;
   canonicalizeCapsuleSourceRoots(store, capsule);
   const adapter = localKnowledgeEmbeddingAdapterForProvider(deps, provider);
   const embeddingPreflightCacheScope = embeddingPreflightCacheScopeForProvider(deps, provider);
@@ -2769,6 +2772,7 @@ export async function handleStartLocalKnowledgeCapsuleIndexing(
         return runningIndexingJobConflict(resolved.capsule.id, runningJobId);
       }
       const terminal = await runCapsuleIndexingJob(deps, env.store, resolved.capsule, {
+        provider: resolved.provider,
         mode: undefined,
         force: false,
       });
@@ -3136,6 +3140,7 @@ export async function handleReindexLocalKnowledgeCapsule(
       if (!provider.ok) return conflict(provider.message);
       const { resolved } = provider;
       const terminal = await runCapsuleIndexingJob(deps, env.store, resolved.capsule, {
+        provider: resolved.provider,
         mode,
         force,
         ...(preflight.resumeJob !== undefined ? { resumeJob: preflight.resumeJob } : {}),
