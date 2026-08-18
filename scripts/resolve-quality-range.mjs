@@ -28,10 +28,15 @@ function requireImmutableSha(value, message) {
 
 function candidateBase(base, head, eventName, git) {
   if (base !== ZERO_SHA && SHA.test(base ?? "")) return base;
-  if (eventName === "workflow_dispatch") {
+  if (eventName === "workflow_dispatch" || eventName === "push") {
+    // A push that creates a branch delivers the zero SHA as its before-pointer. Falling back
+    // to the repository root here scanned the ENTIRE history (918 commits on release/0.3.9)
+    // and failed the gate on long-accepted historical fixtures — the head's parent is the
+    // honest bound for the newly pushed work, and the pull_request run still covers the full
+    // PR range from its non-zero event base.
     return requireImmutableSha(
       git(["rev-parse", "--verify", `${head}^`]),
-      "manual run base could not be resolved to the selected head's parent",
+      "run base could not be resolved to the head's parent",
     );
   }
   return requireImmutableSha(

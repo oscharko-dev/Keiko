@@ -75,7 +75,23 @@ describe("immutable quality range resolution", () => {
         { base: undefined, eventName: "workflow_dispatch", head: HEAD },
         () => "",
       ),
-    ).toThrow("manual run base could not be resolved to the selected head's parent");
+    ).toThrow("run base could not be resolved to the head's parent");
+  });
+
+  it("uses the head parent for a new-branch push whose event base is the zero SHA", () => {
+    const git = vi.fn((args) => {
+      if (args[0] === "rev-parse") return BASE;
+      if (args[0] === "merge-base" && args[1] !== "--is-ancestor") return BASE;
+      return "";
+    });
+    // A branch-creating push delivers before=0000…0. Scanning from the repository root here
+    // swept 918 historical commits into the release/0.3.9 secret scan and failed the gate on
+    // long-accepted fixtures — the head's parent is the honest bound for the pushed work.
+    expect(
+      resolveQualityRange({ base: "0".repeat(40), eventName: "push", head: HEAD }, git),
+    ).toEqual({ base: BASE, head: HEAD });
+    expect(git).toHaveBeenCalledWith(["rev-parse", "--verify", `${HEAD}^`]);
+    expect(git).not.toHaveBeenCalledWith(["rev-list", "--max-parents=0", HEAD]);
   });
 
   it("fails when the fallback is not an immutable commit", () => {
