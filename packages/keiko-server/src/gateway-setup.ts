@@ -5360,23 +5360,29 @@ function persistVerifiedCapabilityUpdate(
   // Persistence is synchronous, so no configuration mutation can interleave between the
   // generation check in the handler and this consumption. Keep the live observation available
   // when durable storage fails, allowing the operator to retry the exact verified update.
-  const observation = gatewayConfig.verifiedCapability(modelId);
+  // set() wipes EVERY model's verified-capability observation and bumps the generation —
+  // correct for a credential/endpoint change, but THIS set applies values derived from a live
+  // observation against unchanged connections. Config cannot carry conversationReady (it is
+  // probe-only evidence), so snapshot every model's readiness BEFORE the wipe and re-record it
+  // under the new generation afterwards — otherwise every ready model (not just the applied
+  // one) vanishes from the chat pickers until the operator re-runs identical probes.
+  // Field-level apply stays consume-once: capability fields are NOT re-recorded, so a replayed
+  // apply still answers 409.
+  const readyObservations = updated.providers
+    .map((provider) => ({
+      modelId: provider.modelId,
+      observation: gatewayConfig.verifiedCapability(provider.modelId),
+    }))
+    .filter((entry) => entry.observation?.fields.conversationReady === true);
   if (!gatewayConfig.clearVerifiedCapability(modelId, generation)) {
     return staleCapabilityObservationResult();
   }
   gatewayConfig.set(updated, true);
-  // set() wipes every verified-capability observation and bumps the generation — correct for a
-  // credential/endpoint change, but THIS set applies values derived from the very observation
-  // just consumed against an unchanged connection. Config cannot carry conversationReady (it is
-  // probe-only evidence), so re-record JUST the readiness under the new generation — otherwise
-  // the just-verified model vanishes from every chat picker until the operator re-runs the
-  // identical probe. Field-level apply stays consume-once: the capability fields are NOT
-  // re-recorded, so a replayed apply still answers 409.
-  if (observation?.fields.conversationReady === true) {
+  for (const entry of readyObservations) {
     gatewayConfig.recordVerifiedCapability(
-      modelId,
+      entry.modelId,
       { conversationReady: true },
-      observation.checkedAt,
+      entry.observation?.checkedAt ?? new Date().toISOString(),
     );
   }
   return { status: 200, body: { ok: true, model: findConfiguredCapability(updated, modelId) } };
