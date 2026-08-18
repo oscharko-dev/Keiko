@@ -1652,6 +1652,77 @@ describe("local-knowledge handlers", () => {
     expect(jobs.n).toBe(1);
   });
 
+  it("indexes a capsule pinned to the second of two same-id providers instead of dying silently", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot);
+    writeFileSync(join(docsRoot, "guide.md"), "# Guide\n\nAliased endpoint document.\n", "utf8");
+
+    // Customer dead end (LiteLLM debugging leftover): TWO gateway entries share one model id.
+    // The strict first-match lookup always lands on the STALE first entry, while this capsule
+    // is pinned to the second endpoint's fingerprint. The handler's alias resolution finds the
+    // right provider — the job runner must USE that resolution instead of re-deriving strictly
+    // and dying as a silent job-failed with an empty jobId, no job row, and no diagnostics.
+    const sharedModelId = "multilingual-e5-large";
+    const staleProvider = {
+      modelId: sharedModelId,
+      baseUrl: "https://stale.llm.test/v1",
+      apiKey: "redacted",
+      timeoutMs: 30_000,
+      maxRetries: 1,
+      retryBaseDelayMs: 100,
+    };
+    const activeProvider = { ...staleProvider, baseUrl: "https://active.llm.test/v1" };
+    const config: GatewayConfig = {
+      providers: [staleProvider, activeProvider],
+      circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000, halfOpenProbes: 1 },
+      capabilities: [embeddingCapability(sharedModelId)],
+    };
+    const deps = depsFor(tmp, config);
+
+    const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: tmp });
+    const store = openKnowledgeStore({ dbPath });
+    const capId = capsuleId("cap-alias-pinned");
+    createCapsule(store, {
+      id: capId,
+      displayName: "Customer Pod",
+      tags: [],
+      retrievalEffort: "default",
+      outputMode: "snippets",
+      answerGroundingPolicy: "require-citations",
+      modelUsePolicy: standardPodModelUsePolicy(),
+      embeddingModelIdentity: {
+        provider: embeddingProviderIdentityForTest("https://active.llm.test/v1"),
+        modelId: sharedModelId,
+        vectorDimensions: 1536,
+        vectorMetric: "cosine",
+      },
+      lifecycleState: "draft",
+      storageReference: "capsules/cap-alias-pinned",
+    });
+    addSourceToCapsule(store, capId, {
+      id: "src-alias" as KnowledgeSourceId,
+      displayName: "Docs",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", {}), params: { capsuleId: capId } },
+      deps,
+    );
+
+    const after = openKnowledgeStore({ dbPath });
+    const jobs = after._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM indexing_jobs WHERE capsule_id = :c")
+      .get({ c: capId }) as { readonly n: number };
+    after.close();
+    expect(result.status).toBe(200);
+    expect(jobs.n).toBeGreaterThanOrEqual(1);
+  });
+
   it("blocks capsule creation when no embedding-capable model is configured", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
