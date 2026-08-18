@@ -1631,7 +1631,13 @@ describe("desktop chat routes", () => {
     memoryVault.close();
   });
 
-  it("persists the canonical user before a fallible buffered-memory retrieval", async () => {
+  // Relocated pin (#3204 follow-up): the persist-BEFORE-retrieval ordering this test always
+  // pinned still holds (no provider request is seen), but the terminal state for a LEGACY
+  // request changed by review decision — a turn rejected after admission and before any
+  // provider output must leave no orphaned user row, because the ledger cannot settle it and
+  // every client retry would duplicate it. Ledger turns keep their row and settle instead
+  // (see the settle pins in chat-stream-handlers.test.ts).
+  it("discards the legacy user row when buffered-memory retrieval fails before the provider", async () => {
     const memoryDir = join(tmp, "failing-buffered-memory-vault");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
@@ -1667,9 +1673,7 @@ describe("desktop chat routes", () => {
 
     expect(sendRes.status).toBe(500);
     expect(seenRequests).toEqual([]);
-    expect(store.listMessages(created.chat.id)).toMatchObject([
-      { role: "user", content: "Keep this buffered final transcript" },
-    ]);
+    expect(store.listMessages(created.chat.id)).toEqual([]);
     memoryVault.close();
   });
 

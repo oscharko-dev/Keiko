@@ -285,6 +285,21 @@ describe("generateEnhancedPrompt — intent-specific shaping", () => {
     expect(trustedText(prompt)).not.toMatch(
       /travel planner|itinerary|route|lodging|visa|destination/i,
     );
+
+    // Sharper pin on the original false positive: "Preise" embeds the letters "reise", and the
+    // standalone-Reise matcher must not regress to substring matching that revives it.
+    const pricing = generateForProductionInput("Vergleiche die Preise der Anbieter.");
+    expect(trustedText(pricing.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
+  it("keeps standalone German Reise requests in the travel frame", () => {
+    const { analysis, prompt } = generateForProductionInput("Plane meine Reise durch Europa.");
+
+    expect(analysis.taskClass).toBe("decision-support");
+    expect(trustedText(prompt)).toMatch(/travel planner|travel itinerary planning/i);
+    expect(trustedText(prompt)).toMatch(/day-by-day route|fresh verification/i);
   });
 
   it("keeps the audited German knowledge-management request out of the travel frame", () => {

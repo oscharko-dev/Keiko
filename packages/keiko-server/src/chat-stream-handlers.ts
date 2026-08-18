@@ -41,6 +41,7 @@ import {
   desktopChatErrorResult,
   emptyMemoryResult,
   failDesktopChatTurn,
+  settleRejectedDesktopChatTurn,
   gatewayHistoryPrefix,
   admitDesktopChatTurn,
   inspectDesktopChatTurn,
@@ -552,6 +553,7 @@ async function prepareDesktopChatProviderStream(
   executionAdmission: DesktopChatExecutionAdmission,
   legacyCall: StreamCall | undefined,
   controller: AbortController,
+  userMessage: ChatMessage,
 ): Promise<Pick<AdmittedDesktopChatStream, "callStream" | "memory"> | RouteResult> {
   let memory: AdmittedDesktopChatStream["memory"];
   try {
@@ -562,21 +564,27 @@ async function prepareDesktopChatProviderStream(
   } catch (error) {
     // The turn is already admitted: a memory failure here MUST settle it, or the
     // clientTurnId stays "pending" forever and every retry gets CHAT_TURN_IN_PROGRESS
-    // (the buffered path settles the same class in its catch).
+    // (the buffered path settles the same class in its catch). For a legacy request the
+    // settle discards the just-admitted user row instead — nothing ran yet.
     const cancelled = requestIsAborted(controller.signal);
-    failDesktopChatTurn(deps, prepared.request, cancelled ? "cancelled" : "failed");
+    settleRejectedDesktopChatTurn(
+      deps,
+      prepared.request,
+      userMessage,
+      cancelled ? "cancelled" : "failed",
+    );
     if (cancelled) {
       return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
     }
     return desktopChatErrorResult(error, deps);
   }
   if (requestIsAborted(controller.signal)) {
-    failDesktopChatTurn(deps, prepared.request, "cancelled");
+    settleRejectedDesktopChatTurn(deps, prepared.request, userMessage, "cancelled");
     return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
   }
   const callStream = legacyCall ?? resolveDesktopChatStreamCall(prepared, executionAdmission, deps);
   if (typeof callStream === "function") return { callStream, memory };
-  failDesktopChatTurn(deps, prepared.request);
+  settleRejectedDesktopChatTurn(deps, prepared.request, userMessage);
   return callStream;
 }
 
@@ -598,7 +606,7 @@ async function runAdmittedDesktopChatStream(
     preflight.legacyExecutionAdmission ??
     captureDesktopChatExecutionAdmission(prepared.request, prepared.chat, prepared.modelId, deps);
   if ("status" in executionAdmission) {
-    failDesktopChatTurn(deps, prepared.request);
+    settleRejectedDesktopChatTurn(deps, prepared.request, admission.userMessage);
     return executionAdmission;
   }
   const provider = await prepareDesktopChatProviderStream(
@@ -607,6 +615,7 @@ async function runAdmittedDesktopChatStream(
     executionAdmission,
     preflight.legacyCall,
     controller,
+    admission.userMessage,
   );
   if ("status" in provider) return provider;
   const gatewayTurn = captureGatewayTurnSnapshot(deps, prepared.request, admission.userMessage);

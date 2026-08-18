@@ -575,6 +575,58 @@ describe("WindowFrame content zoom controls", () => {
     vi.useRealTimers();
   });
 
+  it("cancels delayed text-entry focus when a later interaction raises another window", () => {
+    vi.useFakeTimers();
+    registerWindowRender("promptEnhancer", () => <textarea aria-label="Prompt" />);
+    const focus = vi.fn();
+    const sharedApi = api({ focus });
+
+    const { container } = render(
+      <>
+        <WindowFrame
+          win={appWindow({ id: "prompt-enhancer-1", type: "promptEnhancer", w: 860, h: 680 })}
+          top
+          connState={null}
+          linkRevision={0}
+          api={sharedApi}
+          wsRef={workspaceRef(domRect())}
+        />
+        <WindowFrame
+          win={appWindow({ id: "agents-1", type: "agents" })}
+          top={false}
+          connState={null}
+          linkRevision={0}
+          api={sharedApi}
+          wsRef={workspaceRef(domRect())}
+        />
+      </>,
+    );
+
+    const prompt = screen.getByRole("textbox", { name: "Prompt" });
+    prompt.focus();
+    fireEvent.pointerDown(prompt, { button: 0 });
+
+    // Within the 180ms delay, mousedown on the OTHER window's header: the header's
+    // preventDefault() keeps DOM focus in the prompt while the interaction raises agents-1.
+    const agentsHeader = container
+      .querySelector<HTMLElement>('[data-window-id="agents-1"]')
+      ?.querySelector<HTMLElement>(".win-head");
+    expect(agentsHeader).not.toBeNull();
+    fireEvent.pointerDown(agentsHeader as HTMLElement, { button: 0, clientX: 100, clientY: 90 });
+    fireEvent.pointerUp(window);
+
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(focus).toHaveBeenCalledWith("agents-1");
+    expect(document.activeElement).toBe(prompt);
+
+    vi.advanceTimersByTime(180);
+
+    // The stale timer must NOT raise prompt-enhancer-1 back over the newly raised window.
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(focus.mock.calls).toEqual([["agents-1"]]);
+    vi.useRealTimers();
+  });
+
   it("ignores header double clicks in the right-side control gutter", () => {
     const maximize = vi.fn();
     const { container } = render(

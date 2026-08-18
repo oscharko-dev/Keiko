@@ -157,9 +157,15 @@ interface PromptIntentFrame {
   readonly uncertaintyHandling: readonly string[];
 }
 
+/**
+ * Lexical cue for an intent rule: plain entries match as substrings of the folded search text,
+ * RegExp entries match with their own semantics (e.g. word boundaries for standalone words).
+ */
+type IntentNeedle = string | RegExp;
+
 interface PromptIntentRule extends PromptIntentFrame {
-  readonly strong: readonly string[];
-  readonly weak: readonly string[];
+  readonly strong: readonly IntentNeedle[];
+  readonly weak: readonly IntentNeedle[];
   readonly taskClasses?: readonly PromptTaskClass[];
   readonly domains?: readonly PromptDomain[];
 }
@@ -172,10 +178,11 @@ function foldForSearch(text: string): string {
     .replaceAll("ß", "ss");
 }
 
-const countMatches = (haystack: string, needles: readonly string[]): number => {
+const countMatches = (haystack: string, needles: readonly IntentNeedle[]): number => {
   let count = 0;
   for (const needle of needles) {
-    if (haystack.includes(needle)) count += 1;
+    const matched = typeof needle === "string" ? haystack.includes(needle) : needle.test(haystack);
+    if (matched) count += 1;
   }
   return count;
 };
@@ -545,7 +552,19 @@ const INTENT_FRAMES: readonly PromptIntentRule[] = [
       "hotel",
       "flug",
     ],
-    weak: ["oktober", "route", "budget", "transport", "unterkunft", "sightseeing"],
+    weak: [
+      // Standalone "Reise" must keep scoring travel (e.g. "Plane meine Reise durch Europa"),
+      // while embeddings such as "Preise" must not revive the pricing false positive that removed
+      // the plain "reise" substring. The folded search text is lowercase and diacritic-free, but
+      // \b is ASCII-only, so use Unicode letter/number lookarounds as the word boundary.
+      /(?<![\p{L}\p{N}])reise(?![\p{L}\p{N}])/u,
+      "oktober",
+      "route",
+      "budget",
+      "transport",
+      "unterkunft",
+      "sightseeing",
+    ],
     taskClasses: ["decision-support", "research"],
     role: "You are an expert travel planner.",
     goal: "Create a realistic itinerary with timing, route logic, budget assumptions, logistics, tradeoffs, and open questions.",

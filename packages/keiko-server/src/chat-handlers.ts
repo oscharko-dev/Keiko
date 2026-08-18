@@ -965,6 +965,24 @@ export function failDesktopChatTurn(
   }
 }
 
+// A turn rejected after admission but before any provider output must leave no state behind:
+// ledger turns settle through the turn record, but for a legacy request (no clientTurnId) the
+// ledger no-ops, so the just-admitted user row is discarded — restoring the pre-#3182
+// invariant that a rejected legacy request has no side effect. Post-provider failures keep
+// the row on purpose: the send was attempted and history stays honest.
+export function settleRejectedDesktopChatTurn(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  userMessage: ChatMessage,
+  terminalState: "failed" | "cancelled" = "failed",
+): void {
+  if (request.clientTurnId !== undefined) {
+    deps.store.failChatTurn(request.chatId, request.clientTurnId, terminalState);
+    return;
+  }
+  deps.store.discardLegacyTurnUserMessage(request.chatId, userMessage.id);
+}
+
 export function createAssistantMessage(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
@@ -1715,10 +1733,37 @@ function bufferedTurnCancellationResult(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   signal: AbortSignal,
+  preProviderUserMessage?: ChatMessage,
 ): RouteResult | undefined {
   if (!requestSignalAborted(signal)) return undefined;
-  failDesktopChatTurn(deps, request, "cancelled");
+  // Before any provider output the settle may still discard a legacy row; after the
+  // provider ran, history keeps the user message and only the ledger settles.
+  if (preProviderUserMessage !== undefined) {
+    settleRejectedDesktopChatTurn(deps, request, preProviderUserMessage, "cancelled");
+  } else {
+    failDesktopChatTurn(deps, request, "cancelled");
+  }
   return requestCancelledResult();
+}
+
+// Buffered mirror of the streaming memory guard: the turn is already admitted, so a memory
+// failure must settle it — and for a legacy request settling means discarding the
+// just-admitted user row, because nothing was sent to a provider yet.
+async function resolveBufferedMemory(
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatSend,
+  userMessage: ChatMessage,
+  abortSignal: AbortSignal,
+): Promise<ConversationMemoryResultWire | RouteResult> {
+  const { request, memoryContext } = prepared;
+  if (memoryContext === undefined) return emptyMemoryResult(false);
+  try {
+    return await buildMemoryResult(request, deps, memoryContext);
+  } catch (error) {
+    const cancelled = requestSignalAborted(abortSignal);
+    settleRejectedDesktopChatTurn(deps, request, userMessage, cancelled ? "cancelled" : "failed");
+    return cancelled ? requestCancelledResult() : desktopChatErrorResult(error, deps);
+  }
 }
 
 function admitBufferedModelTurn(
@@ -1788,17 +1833,13 @@ async function executeBufferedModelTurn(
   messageCountBeforeTurn: number,
   startedAt: number,
 ): Promise<RouteResult> {
-  const { request, modelId, memoryContext } = prepared;
+  const { request, modelId } = prepared;
   const admitted = admitBufferedModelTurn(deps, prepared);
   if (isRouteResult(admitted)) return admitted;
   const { userMessage, executionAdmission } = admitted;
   const gatewayTurn = captureGatewayTurnSnapshot(deps, request, userMessage);
-  const memory =
-    memoryContext === undefined
-      ? emptyMemoryResult(false)
-      : await buildMemoryResult(request, deps, memoryContext);
-  const cancelledAfterMemory = bufferedTurnCancellationResult(deps, request, abortSignal);
-  if (cancelledAfterMemory !== undefined) return cancelledAfterMemory;
+  const memory = await resolveBufferedMemory(deps, prepared, userMessage, abortSignal);
+  if (isRouteResult(memory)) return memory;
   const assembly = assemblyWithConversationImages(
     deps,
     request,
@@ -1807,7 +1848,7 @@ async function executeBufferedModelTurn(
   );
   const model = bufferedModelAtProviderBoundary(deps, modelId, executionAdmission);
   if (isRouteResult(model)) {
-    failDesktopChatTurn(deps, request);
+    settleRejectedDesktopChatTurn(deps, request, userMessage);
     return model;
   }
   const response = await model.call(

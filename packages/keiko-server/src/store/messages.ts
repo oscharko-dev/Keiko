@@ -766,6 +766,19 @@ export function findGroundedPreviewCitations(
 // redact+truncate pipeline. workflowStatus and taskType are validated before SQL is built. An
 // empty patch is an invalid_request — the route surface guards this earlier, but the store layer
 // also fails-closed.
+// A legacy turn (no clientTurnId) rejected AFTER admission has no settle surface: the ledger
+// no-ops without a turn id, so the just-admitted user row must be discarded or every rejected
+// request leaves an orphaned message and a retry duplicates it. The WHERE clause fails closed:
+// ledger rows (client_turn_id set) and non-user rows are never deletable through this path.
+const SQL_DISCARD_LEGACY_TURN_USER = `
+DELETE FROM chat_messages
+WHERE id = ? AND chat_id = ? AND role = 'user' AND client_turn_id IS NULL
+`;
+
+export function discardLegacyTurnUserMessage(db: DatabaseSync, chatId: string, id: string): void {
+  db.prepare(SQL_DISCARD_LEGACY_TURN_USER).run(id, chatId);
+}
+
 export function updateMessage(
   db: DatabaseSync,
   id: string,

@@ -781,6 +781,9 @@ function booleanDataAttribute(value: boolean): "true" | undefined {
   return value ? "true" : undefined;
 }
 
+// Raise counter across ALL frames: a pending delayed focus yields to any later interaction.
+let windowInteractionCount = 0;
+
 function delayedFocusStillTargetsWindow(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return true;
   const activeElement = document.activeElement;
@@ -976,10 +979,14 @@ function WindowFrameImpl({
 
   const focusWindowForTarget = useCallback(
     (target: EventTarget | null): void => {
+      windowInteractionCount += 1;
       if (isTextEntryTarget(target)) {
+        const armedInteraction = windowInteractionCount;
         window.setTimeout((): void => {
           // The delay preserves text selection, but a later click may have moved focus to another
           // window. Never let this stale callback raise the old window over the user's new target.
+          // The counter catches later interactions whose preventDefault() left DOM focus here.
+          if (windowInteractionCount !== armedInteraction) return;
           if (delayedFocusStillTargetsWindow(target)) api.focus(win.id);
         }, 180);
         return;
