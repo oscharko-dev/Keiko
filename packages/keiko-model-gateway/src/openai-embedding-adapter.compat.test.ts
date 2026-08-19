@@ -1,5 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
-import { requestOpenAIEmbedding, requestOpenAIEmbeddingBatch } from "./openai-embedding-adapter.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  requestOpenAIEmbedding,
+  requestOpenAIEmbeddingBatch,
+  resetStrictGatewayMemoForTests,
+} from "./openai-embedding-adapter.js";
+
+beforeEach(() => {
+  resetStrictGatewayMemoForTests();
+});
 
 // Strict-gateway compatibility ladder (customer field incident, 0.3.10): certain
 // OpenAI-compatible gateways (LiteLLM routes over TEI-style backends) answer HTTP 400 to
@@ -68,8 +76,9 @@ describe("strict-gateway embedding compat fallback", () => {
       expect(Array.from(outcome.value[0]?.vector ?? [])).toEqual([1, 0]);
       expect(Array.from(outcome.value[1]?.vector ?? [])).toEqual([0, 1]);
     }
-    // array+extras 400, minimal array 400, then per item: extras 400 + minimal 200 (×2).
-    expect(fetchImpl).toHaveBeenCalledTimes(6);
+    // array+extras 400, minimal array 400, item 1: extras 400 + minimal 200 (memoizes the
+    // strict shape), item 2: minimal-first 200 — the memo saves the doomed extras round trip.
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
   });
 
   it("keeps the batch shape when only encoding_format is rejected", async () => {
@@ -140,8 +149,63 @@ describe("strict-gateway embedding compat fallback", () => {
     });
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) {
-      expect(outcome.status).toBe(400);
+      // kind and status must be a coherent pair from the SAME response — the last answer on
+      // the wire was the 503, so the outcome reports the 503.
+      expect(outcome.kind).toBe("http-error");
+      expect(outcome.status).toBe(503);
     }
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("remembers a strict endpoint and skips the doomed extras round trip", async () => {
+    const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+      const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
+      if ("encoding_format" in body) {
+        return Promise.resolve(jsonResponse({ error: { message: "unknown field" } }, 400));
+      }
+      return Promise.resolve(jsonResponse(SCALAR_OK));
+    });
+    const request = {
+      endpoint: "https://siu.llm.intern/v1",
+      apiKey: "k",
+      modelId: "multilingual-e5-large",
+      input: "ping",
+      fetchImpl,
+    };
+    await requestOpenAIEmbedding(request);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const second = await requestOpenAIEmbedding(request);
+    expect(second.ok).toBe(true);
+    // The memoized strictness sends the minimal shape FIRST: exactly one additional call.
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect("encoding_format" in bodyOf(fetchImpl.mock.calls[2] as unknown[])).toBe(false);
+  });
+
+  it("stops the scalar fallback at the batch deadline", async () => {
+    const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+      const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
+      if (Array.isArray(body.input) || "encoding_format" in body) {
+        return Promise.resolve(jsonResponse({ error: { message: "bad" } }, 400));
+      }
+      return Promise.resolve(
+        jsonResponse({ data: [{ embedding: [1, 0] }], model: "multilingual-e5-large" }),
+      );
+    });
+    // timeoutMs 0: the ladder's absolute deadline is already exhausted when the scalar
+    // fallback starts — it must stop with a timeout instead of walking all inputs.
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://siu.llm.intern/v1",
+      apiKey: "k",
+      modelId: "multilingual-e5-large",
+      inputs: ["eins", "zwei", "drei"],
+      timeoutMs: 0,
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.kind).toBe("timeout");
+    }
+    // Only the two array rungs ran; no per-item scalar request was issued past the deadline.
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 

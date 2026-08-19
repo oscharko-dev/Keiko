@@ -42,11 +42,14 @@ interface FakeGatewayLog {
 
 function startStrictLiteLlm(log: FakeGatewayLog): Server {
   return createServer((req, res) => {
-    let raw = "";
+    const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => {
-      raw += chunk.toString("utf8");
+      chunks.push(chunk);
     });
     req.on("end", () => {
+      // Decode once after ALL chunks arrived: a multi-byte umlaut straddling a chunk
+      // boundary must not corrupt the JSON body.
+      const raw = Buffer.concat(chunks).toString("utf8");
       const url = req.url ?? "";
       if (url.endsWith("/model/info")) {
         json(res, {
@@ -83,10 +86,14 @@ function startStrictLiteLlm(log: FakeGatewayLog): Server {
 }
 
 function listen(server: Server): Promise<number> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
-      if (address === null || typeof address === "string") throw new Error("no port");
+      if (address === null || typeof address === "string") {
+        reject(new Error("no port"));
+        return;
+      }
       resolve(address.port);
     });
   });
@@ -218,18 +225,19 @@ describe("strict LiteLLM field twin", () => {
       const body = detail.body as {
         readonly capsule: { readonly lifecycleState: string };
         readonly health: { readonly documentCount: number; readonly vectorCount: number };
-        readonly indexingJobs?: readonly { readonly status: string }[];
-        readonly jobs?: readonly { readonly status: string }[];
+        readonly indexingJobs: readonly { readonly status: string }[];
       };
       expect(body.capsule.lifecycleState).toBe("ready");
       expect(body.health.documentCount).toBeGreaterThan(0);
       expect(body.health.vectorCount).toBeGreaterThan(0);
-      const jobs = body.jobs ?? body.indexingJobs ?? [];
-      expect(jobs.at(-1)?.status).toBe("succeeded");
+      expect(body.indexingJobs.at(0)?.status).toBe("succeeded");
 
       // The strict gateway rejected every extras-carrying request; the ladder must have
       // landed on minimal scalar requests — and at least one 400 was actually answered.
       expect(log.embeddingBodies.some((entry) => "encoding_format" in entry)).toBe(true);
+      // The batch-to-scalar degradation actually exercised the array rung: an array body was
+      // attempted (and rejected), and minimal scalar bodies carried the run.
+      expect(log.embeddingBodies.some((entry) => Array.isArray(entry.input))).toBe(true);
       expect(
         log.embeddingBodies.some(
           (entry) => !("encoding_format" in entry) && !Array.isArray(entry.input),

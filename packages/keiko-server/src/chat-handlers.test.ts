@@ -221,6 +221,10 @@ describe("desktop chat production gateway reuse", () => {
       // happen, but they carry only the static probe prompt. The load-bearing invariant is
       // unchanged and strengthened below: the USER'S content never reaches the provider, on
       // any call, in any body — and the probe outcome is recorded so retries stay probe-free.
+      // Evidence the on-demand probe actually happened, bounded: the create attempt probes
+      // once; the send attempt hits the recorded not-ready observation without re-probing.
+      expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+      expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(4);
       for (const call of fetchSpy.mock.calls) {
         const init = call[1] as { body?: unknown } | undefined;
         const body = typeof init?.body === "string" ? init.body : "";

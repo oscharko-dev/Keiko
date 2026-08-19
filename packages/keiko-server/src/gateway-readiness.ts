@@ -1293,19 +1293,58 @@ export async function ensureOnDemandConversationReadiness(
   if (holder === undefined || modelId.length === 0) return;
   if (currentConversationReady(deps, modelId)) return;
   if (holder.verifiedCapability(modelId)?.generation === holder.generation()) return;
-  const inFlight = onDemandReadinessProbes.get(modelId);
+  // The in-flight key carries the generation: a config replaced mid-probe must not hand the
+  // NEW generation's caller the OLD generation's discarded report.
+  const key = `${String(holder.generation())}:${modelId}`;
+  const inFlight = onDemandReadinessProbes.get(key);
   if (inFlight !== undefined) {
     await inFlight;
     return;
   }
-  const probe = runGatewayReadiness({ modelId, options: { probes: [] } }, deps)
-    .then(() => undefined)
-    .catch(() => undefined)
-    .finally(() => {
-      onDemandReadinessProbes.delete(modelId);
-    });
-  onDemandReadinessProbes.set(modelId, probe);
+  const probe = runOnDemandReadinessProbe(deps, holder, modelId).finally(() => {
+    onDemandReadinessProbes.delete(key);
+  });
+  onDemandReadinessProbes.set(key, probe);
   await probe;
+}
+
+async function runOnDemandReadinessProbe(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+): Promise<void> {
+  const generation = holder.generation();
+  try {
+    await runGatewayReadiness({ modelId, options: { probes: [] } }, deps);
+  } catch (error) {
+    // The route still answers with the honest unready result — but never silently: the
+    // underlying failure lands as a redacted operator diagnostic with a correlation id.
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: newCorrelationId(),
+        operation: "gateway.readiness",
+        source: "gateway-readiness.on-demand",
+        error,
+        summary: "A gateway readiness probe could not be completed.",
+        redact: (message): string => String(deps.redactor(message)),
+      }),
+    );
+  }
+  // A failed report CLEARS the capability entry; without a current-generation observation
+  // every subsequent chat attempt would probe the provider again. Persist an explicit
+  // not-ready so retries hit the guard instead of the wire (the settings probe replaces it).
+  if (
+    holder.generation() === generation &&
+    holder.verifiedCapability(modelId)?.generation !== generation
+  ) {
+    holder.recordVerifiedCapability(
+      modelId,
+      { conversationReady: false },
+      new Date().toISOString(),
+      generation,
+    );
+  }
 }
 
 export async function handleGatewayReadiness(
