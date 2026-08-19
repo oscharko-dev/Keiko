@@ -217,7 +217,7 @@ interface BuiltRequest {
   readonly callerSignal: AbortSignal | undefined;
 }
 
-function buildRequest(request: OpenAIEmbeddingRequest): BuiltRequest {
+function buildRequest(request: OpenAIEmbeddingRequest, minimalShape = false): BuiltRequest {
   const name = headerName(request.apiKeyHeaderName);
   // Reuse the shared Bearer-prefixing helper from config.ts so this transport handles the
   // same `bearer ` / `x-litellm-key` / `api-key` cases the chat adapter handles, including
@@ -226,10 +226,13 @@ function buildRequest(request: OpenAIEmbeddingRequest): BuiltRequest {
     "content-type": "application/json",
     [name]: apiKeyHeaderValue(name, request.apiKey),
   };
+  // minimalShape: strict OpenAI-compatible gateways (certain LiteLLM routes / TEI backends)
+  // answer 400 to optional extras a plain curl never sends. The compat retry drops the
+  // unconditional `encoding_format`; the float encoding is the OpenAI default anyway.
   const body = JSON.stringify({
     model: request.modelId,
     input: request.input,
-    encoding_format: "float",
+    ...(minimalShape ? {} : { encoding_format: "float" }),
     ...(request.dimensions !== undefined ? { dimensions: request.dimensions } : {}),
   });
   const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? 30_000);
@@ -304,15 +307,45 @@ export async function requestOpenAIEmbedding(
     return { ok: false, kind: dispatched };
   }
   if (!dispatched.ok) {
-    const kind = classifyStatus(dispatched.status) ?? "transport";
     await discardBody(dispatched);
+    if (isStrictGatewayRejection(dispatched.status)) {
+      return await requestMinimalShapeEmbedding(request, dispatched.status);
+    }
+    const kind = classifyStatus(dispatched.status) ?? "transport";
     return { ok: false, kind, status: dispatched.status };
   }
   return decodeSuccess(dispatched, request);
 }
 
+// A validation-shaped rejection (400/422) of a request that carried our optional extras: the
+// endpoint ANSWERED, so this is not transport flakiness — retry exactly once in the minimal
+// wire shape a plain curl would send. 401/403/404/429/5xx keep their existing semantics.
+function isStrictGatewayRejection(status: number): boolean {
+  return status === 400 || status === 422;
+}
+
+async function requestMinimalShapeEmbedding(
+  request: OpenAIEmbeddingRequest,
+  originalStatus: number,
+): Promise<OpenAIEmbeddingOutcome> {
+  const built = buildRequest(request, true);
+  const dispatched = await dispatch(built, request.fetchImpl, request.egress);
+  if (typeof dispatched === "string") {
+    return { ok: false, kind: dispatched };
+  }
+  if (!dispatched.ok) {
+    const kind = classifyStatus(dispatched.status) ?? "transport";
+    await discardBody(dispatched);
+    return { ok: false, kind, status: originalStatus };
+  }
+  return decodeSuccess(dispatched, request);
+}
+
 // ─── Array-batch transport (#189 GRD-004) ────────────────────────────────────
-function buildBatchRequest(request: OpenAIEmbeddingBatchRequest): BuiltRequest {
+function buildBatchRequest(
+  request: OpenAIEmbeddingBatchRequest,
+  minimalShape = false,
+): BuiltRequest {
   const name = headerName(request.apiKeyHeaderName);
   const headers: Record<string, string> = {
     "content-type": "application/json",
@@ -323,7 +356,7 @@ function buildBatchRequest(request: OpenAIEmbeddingBatchRequest): BuiltRequest {
   const body = JSON.stringify({
     model: request.modelId,
     input: request.inputs,
-    encoding_format: "float",
+    ...(minimalShape ? {} : { encoding_format: "float" }),
     ...(request.dimensions !== undefined ? { dimensions: request.dimensions } : {}),
   });
   const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? 30_000);
@@ -445,9 +478,62 @@ export async function requestOpenAIEmbeddingBatch(
     return { ok: false, kind: dispatched };
   }
   if (!dispatched.ok) {
-    const kind = classifyStatus(dispatched.status) ?? "transport";
     await discardBody(dispatched);
+    if (isStrictGatewayRejection(dispatched.status)) {
+      return await requestMinimalShapeEmbeddingBatch(request, dispatched.status);
+    }
+    const kind = classifyStatus(dispatched.status) ?? "transport";
     return { ok: false, kind, status: dispatched.status };
   }
   return decodeBatchSuccess(dispatched, request);
+}
+
+// Batch compat ladder for strict gateways: first the same array request without the optional
+// extras; if the endpoint rejects the ARRAY shape itself, degrade to per-item scalar requests
+// (each of which carries its own minimal-shape retry). The first failing item fails the batch.
+async function requestMinimalShapeEmbeddingBatch(
+  request: OpenAIEmbeddingBatchRequest,
+  originalStatus: number,
+): Promise<OpenAIEmbeddingBatchOutcome> {
+  const built = buildBatchRequest(request, true);
+  const dispatched = await dispatch(built, request.fetchImpl, request.egress);
+  if (typeof dispatched === "string") {
+    return { ok: false, kind: dispatched };
+  }
+  if (dispatched.ok) {
+    return decodeBatchSuccess(dispatched, request);
+  }
+  await discardBody(dispatched);
+  if (!isStrictGatewayRejection(dispatched.status)) {
+    const kind = classifyStatus(dispatched.status) ?? "transport";
+    return { ok: false, kind, status: originalStatus };
+  }
+  return await requestScalarFallbackBatch(request);
+}
+
+async function requestScalarFallbackBatch(
+  request: OpenAIEmbeddingBatchRequest,
+): Promise<OpenAIEmbeddingBatchOutcome> {
+  const value: OpenAIEmbeddingSuccess[] = [];
+  for (const input of request.inputs) {
+    const outcome = await requestOpenAIEmbedding({
+      endpoint: request.endpoint,
+      apiKey: request.apiKey,
+      ...(request.apiKeyHeaderName !== undefined
+        ? { apiKeyHeaderName: request.apiKeyHeaderName }
+        : {}),
+      modelId: request.modelId,
+      input,
+      ...(request.dimensions !== undefined ? { dimensions: request.dimensions } : {}),
+      ...(request.signal !== undefined ? { signal: request.signal } : {}),
+      ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
+      ...(request.fetchImpl !== undefined ? { fetchImpl: request.fetchImpl } : {}),
+      ...(request.egress !== undefined ? { egress: request.egress } : {}),
+    });
+    if (!outcome.ok) {
+      return outcome;
+    }
+    value.push(outcome.value);
+  }
+  return { ok: true, value };
 }
