@@ -44,6 +44,15 @@ export const DEFAULT_DISCOVERY_OPTIONS: DiscoveryOptions = {
   maxFiles: 5_000,
 } as const;
 
+// Absolute runaway backstops for caller-supplied discovery bounds (2026-08 field review). The
+// DEFAULTS above used to double as hard ceilings, so a 7,400-file corpus silently indexed only
+// the first 5,000 walk-ordered files with no way to raise the limit. Callers (the server
+// threads the operator's KEIKO_LOCAL_KNOWLEDGE_MAX_DISCOVERY_FILES / _MAX_DISCOVERY_DEPTH
+// through) may now RAISE the bounds up to these ceilings; the ceilings themselves exist only
+// so a malformed caller value cannot demand an unbounded walk.
+export const MAX_DISCOVERY_FILES_CEILING = 100_000;
+export const MAX_DISCOVERY_DEPTH_CEILING = 64;
+
 // ─── Error code surface ──────────────────────────────────────────────────────
 // Closed union. PATH_ESCAPE is the realpath-containment gate; UNSUPPORTED_FORMAT mirrors
 // the parser-registry sentinel; OVERSIZED_FILE mirrors the parser limit; CANCELLED is the
