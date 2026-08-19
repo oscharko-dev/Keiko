@@ -118,6 +118,59 @@ describe("strict-gateway embedding compat fallback", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it("surfaces a non-strict failure of the minimal batch retry with the original status", async () => {
+    let calls = 0;
+    const fetchImpl = vi.fn<typeof fetch>(() => {
+      calls += 1;
+      // First (extras) answer: strict 400. Minimal retry: hard 503 — NOT a shape problem, so
+      // the ladder must stop and report the ORIGINAL strict status through the taxonomy.
+      return Promise.resolve(
+        jsonResponse(
+          { error: { message: calls === 1 ? "shape" : "down" } },
+          calls === 1 ? 400 : 503,
+        ),
+      );
+    });
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://siu.llm.intern/v1",
+      apiKey: "k",
+      modelId: "multilingual-e5-large",
+      inputs: ["eins"],
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.status).toBe(400);
+    }
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails the scalar-fallback batch on the first failing item", async () => {
+    const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+      const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
+      if (Array.isArray(body.input) || "encoding_format" in body) {
+        return Promise.resolve(jsonResponse({ error: { message: "bad" } }, 400));
+      }
+      if (body.input === "zwei") {
+        return Promise.resolve(jsonResponse({ error: { message: "auth" } }, 401));
+      }
+      return Promise.resolve(
+        jsonResponse({ data: [{ embedding: [1, 0] }], model: "multilingual-e5-large" }),
+      );
+    });
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://siu.llm.intern/v1",
+      apiKey: "k",
+      modelId: "multilingual-e5-large",
+      inputs: ["eins", "zwei", "drei"],
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.kind).toBe("wrong-header");
+    }
+  });
+
   it("does not compat-retry auth failures", async () => {
     const fetchImpl = vi.fn<typeof fetch>(() =>
       Promise.resolve(jsonResponse({ error: { message: "auth" } }, 401)),
