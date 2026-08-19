@@ -1412,9 +1412,13 @@ export async function ensureAnyConversationReadyChatModel(
   deps: UiHandlerDeps,
   requestedModelId: string,
 ): Promise<void> {
-  await ensureOnDemandConversationReadiness(deps, requestedModelId);
-  if (currentConversationReady(deps, requestedModelId)) return;
+  // The budget covers the REQUESTED model's probe too (review finding on the first cut):
+  // computed after it, a hanging gateway burned the full provider timeout before the budget
+  // even started. The interactive create never waits longer than the budget, full stop.
   const deadlineAt = Date.now() + CHAT_MODEL_WALK_BUDGET_MS;
+  const firstProbe = ensureOnDemandConversationReadiness(deps, requestedModelId);
+  if (!(await settledWithinBudget(firstProbe, CHAT_MODEL_WALK_BUDGET_MS))) return;
+  if (currentConversationReady(deps, requestedModelId)) return;
   for (const capability of conversationWalkCandidates(deps, requestedModelId)) {
     const remainingMs = deadlineAt - Date.now();
     if (remainingMs <= 0) return;

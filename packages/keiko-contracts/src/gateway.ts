@@ -705,6 +705,7 @@ export function explainConversationIneligibility(
 const SPECIAL_PURPOSE_ID_TOKENS: ReadonlySet<string> = new Set([
   "ocr",
   "whisper",
+  "speech",
   "tts",
   "asr",
   "rerank",
@@ -740,4 +741,32 @@ export function preferredConversationModelOrder<
   T extends Pick<ModelCapability, "id" | "chatModeDeclared">,
 >(models: readonly T[]): readonly T[] {
   return [...models].sort((a, b) => conversationDefaultRank(a) - conversationDefaultRank(b));
+}
+
+/**
+ * Elects the DEFAULT conversation model. Tiers are walked in rank order; within a tier a
+ * VERIFIED conversation probe wins, then an UNPROBED model. Verification never promotes a
+ * worse-ranked model past a better-ranked candidate that is merely unprobed — a
+ * special-purpose engine that happened to answer one probe while warm would otherwise capture
+ * the default, which is the exact field capture this rank exists to prevent. A tier whose
+ * members are all OBSERVED-unready is exhausted, so the walk falls through to the next tier
+ * instead of forcing an admission already known to fail. Callers supply the tri-state
+ * observation (true = verified, false = observed unready, undefined = never probed) because
+ * the signal lives in different places (the UI reads the wire capability, the server reads
+ * its observation store).
+ */
+export function electConversationDefault<
+  T extends Pick<ModelCapability, "id" | "chatModeDeclared">,
+>(models: readonly T[], observation: (model: T) => boolean | undefined): T | undefined {
+  const ordered = preferredConversationModelOrder(models);
+  for (const tier of [0, 1, 2] as const) {
+    const members = ordered.filter((model) => conversationDefaultRank(model) === tier);
+    const pick =
+      members.find((model) => observation(model) === true) ??
+      members.find((model) => observation(model) === undefined);
+    if (pick !== undefined) return pick;
+  }
+  // Every candidate is observed-unready: return the best-ranked head so the caller's
+  // admission yields the precise "not ready" error for the most legitimate candidate.
+  return ordered.at(0);
 }

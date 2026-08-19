@@ -1828,6 +1828,7 @@ export {
   isConversationEligibleModel,
   explainConversationIneligibility,
   conversationDefaultRank,
+  electConversationDefault,
   preferredConversationModelOrder,
   modelSupportsInfilling,
   isAlignedInfillingModel,

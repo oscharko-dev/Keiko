@@ -59,7 +59,7 @@ describe("strict-gateway embedding compat fallback", () => {
       }
       return Promise.resolve(
         jsonResponse({
-          data: [{ embedding: body.input === "eins" ? [1, 0] : [0, 1] }],
+          data: [{ embedding: body.input === "one" ? [1, 0] : [0, 1] }],
           model: "multilingual-e5-large",
         }),
       );
@@ -68,7 +68,7 @@ describe("strict-gateway embedding compat fallback", () => {
       endpoint: "https://siu.llm.intern/v1",
       apiKey: "k",
       modelId: "multilingual-e5-large",
-      inputs: ["eins", "zwei"],
+      inputs: ["one", "two"],
       fetchImpl,
     });
     expect(outcome.ok).toBe(true);
@@ -102,7 +102,7 @@ describe("strict-gateway embedding compat fallback", () => {
       endpoint: "https://siu.llm.intern/v1",
       apiKey: "k",
       modelId: "multilingual-e5-large",
-      inputs: ["eins", "zwei"],
+      inputs: ["one", "two"],
       fetchImpl,
     });
     expect(outcome.ok).toBe(true);
@@ -145,7 +145,7 @@ describe("strict-gateway embedding compat fallback", () => {
       endpoint: "https://siu.llm.intern/v1",
       apiKey: "k",
       modelId: "multilingual-e5-large",
-      inputs: ["eins"],
+      inputs: ["single"],
       fetchImpl,
     });
     expect(outcome.ok).toBe(false);
@@ -195,31 +195,37 @@ describe("strict-gateway embedding compat fallback", () => {
   });
 
   it("completes a slow strict gateway batch that a flat per-batch budget would strangle", async () => {
-    const delayMs = 100;
-    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
-      const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
-      if (Array.isArray(body.input) || "encoding_format" in body) {
-        return jsonResponse({ error: { message: "bad" } }, 400);
-      }
-      await new Promise((resolve) => {
-        setTimeout(resolve, delayMs);
+    // Hermetic clock: each served item ADVANCES the faked Date by 100ms instead of sleeping,
+    // so the pin exercises exactly the budget arithmetic with zero wall-clock dependence.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+        const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
+        if (Array.isArray(body.input) || "encoding_format" in body) {
+          return Promise.resolve(jsonResponse({ error: { message: "bad" } }, 400));
+        }
+        vi.setSystemTime(Date.now() + 100);
+        return Promise.resolve(
+          jsonResponse({ data: [{ embedding: [1, 0] }], model: "multilingual-e5-large" }),
+        );
       });
-      return jsonResponse({ data: [{ embedding: [1, 0] }], model: "multilingual-e5-large" });
-    });
-    // Ten items at ~100ms each need ~1s of wire time. A FLAT budget of timeoutMs (300ms)
-    // expired after ~3 items — this pin fails against that shape. The scaled budget
-    // (10 × 300ms) completes the batch with 3x headroom.
-    const outcome = await requestOpenAIEmbeddingBatch({
-      endpoint: "https://siu.llm.intern/v1",
-      apiKey: "k",
-      modelId: "multilingual-e5-large",
-      inputs: Array.from({ length: 10 }, (_, i) => `chunk-${String(i)}`),
-      timeoutMs: 300,
-      fetchImpl,
-    });
-    expect(outcome.ok).toBe(true);
-    if (outcome.ok) {
-      expect(outcome.value).toHaveLength(10);
+      // Ten items at 100ms each need 1s of budget. A FLAT budget of timeoutMs (300ms)
+      // expired after ~3 items — this pin fails against that shape. The scaled budget
+      // (10 x 300ms) completes the batch with 3x headroom.
+      const outcome = await requestOpenAIEmbeddingBatch({
+        endpoint: "https://siu.llm.intern/v1",
+        apiKey: "k",
+        modelId: "multilingual-e5-large",
+        inputs: Array.from({ length: 10 }, (_, i) => `chunk-${String(i)}`),
+        timeoutMs: 300,
+        fetchImpl,
+      });
+      expect(outcome.ok).toBe(true);
+      if (outcome.ok) {
+        expect(outcome.value).toHaveLength(10);
+      }
+    } finally {
+      vi.useRealTimers();
     }
   });
 
@@ -239,7 +245,7 @@ describe("strict-gateway embedding compat fallback", () => {
       endpoint: "https://siu.llm.intern/v1",
       apiKey: "k",
       modelId: "multilingual-e5-large",
-      inputs: ["eins", "zwei", "drei"],
+      inputs: ["one", "two", "three"],
       timeoutMs: 0,
       fetchImpl,
     });
@@ -257,7 +263,7 @@ describe("strict-gateway embedding compat fallback", () => {
       if (Array.isArray(body.input) || "encoding_format" in body) {
         return Promise.resolve(jsonResponse({ error: { message: "bad" } }, 400));
       }
-      if (body.input === "zwei") {
+      if (body.input === "two") {
         return Promise.resolve(jsonResponse({ error: { message: "auth" } }, 401));
       }
       return Promise.resolve(
@@ -268,7 +274,7 @@ describe("strict-gateway embedding compat fallback", () => {
       endpoint: "https://siu.llm.intern/v1",
       apiKey: "k",
       modelId: "multilingual-e5-large",
-      inputs: ["eins", "zwei", "drei"],
+      inputs: ["one", "two", "three"],
       fetchImpl,
     });
     expect(outcome.ok).toBe(false);
@@ -317,7 +323,7 @@ describe("strict-gateway embedding compat fallback", () => {
         endpoint: "https://siu.llm.intern/v1",
         apiKey: "k",
         modelId: "multilingual-e5-large",
-        inputs: ["eins", "zwei", "drei", "vier", "fuenf"],
+        inputs: ["one", "two", "three", "four", "five"],
         timeoutMs: 50,
         fetchImpl,
       });
@@ -340,7 +346,7 @@ describe("strict-gateway embedding compat fallback", () => {
       if (Array.isArray(body.input) || "encoding_format" in body) {
         return Promise.resolve(jsonResponse({ error: { message: "bad" } }, 400));
       }
-      if (body.input === "drei") {
+      if (body.input === "three") {
         return Promise.resolve(jsonResponse({ error: { message: "busy" } }, 429));
       }
       return Promise.resolve(
@@ -351,7 +357,7 @@ describe("strict-gateway embedding compat fallback", () => {
       endpoint: "https://siu.llm.intern/v1",
       apiKey: "k",
       modelId: "multilingual-e5-large",
-      inputs: ["eins", "zwei", "drei", "vier"],
+      inputs: ["one", "two", "three", "four"],
       fetchImpl,
     });
     expect(outcome.ok).toBe(false);
@@ -373,7 +379,7 @@ describe("strict-gateway embedding compat fallback", () => {
       endpoint: "https://siu.llm.intern/v1",
       apiKey: "k",
       modelId: "multilingual-e5-large",
-      inputs: ["eins", "zwei"],
+      inputs: ["one", "two"],
       fetchImpl,
     });
     expect(outcome.ok).toBe(false);

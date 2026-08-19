@@ -233,6 +233,11 @@ describe("pickChatModelId tri-state readiness", () => {
         { ...chatModel("qwen-chat"), chatModeDeclared: true },
       ]),
     ).toBe("qwen-chat");
+    // Tier-first (review finding): a VERIFIED special-purpose model must not override an
+    // UNPROBED declared chat model — verification breaks ties only within the best tier.
+    expect(pickChatModelId([chatModel("dotsocr"), unprobedModel("qwen-chat", true)])).toBe(
+      "qwen-chat",
+    );
   });
 });
 

@@ -18,6 +18,7 @@ import {
 import {
   isDiscussionMode,
   isCodingWorkbenchMode,
+  electConversationDefault,
   preferredConversationModelOrder,
   DEFAULT_CONTEXT_PROFILE,
   type ConversationDocumentContextWire,
@@ -94,6 +95,7 @@ import type { UiHandlerDeps } from "./deps.js";
 import {
   currentAuditRedactString,
   currentConversationReady,
+  currentConversationReadinessObservation,
   currentContextProfileForModel,
   currentGatewayConfig,
   currentRedactionSecrets,
@@ -233,17 +235,20 @@ function defaultChatModelId(deps: UiHandlerDeps): string {
   );
   const conversationReady = (model: ModelCapability): boolean =>
     currentConversationReady(deps, model.id);
+  const readinessObservation = (model: ModelCapability): boolean | undefined =>
+    currentConversationReadinessObservation(deps, model.id);
   // The public create contract makes modelId optional, so the default must not hand
   // modelFromBody an unready model while another configured chat model has a current
   // successful probe — that turned an otherwise valid request into a 400. Readiness only
   // reorders the preference; when nothing is ready the unready default still flows into
   // the guard so the caller keeps the precise "not ready" error.
+  // Tier-first election (review finding on the first cut): a verified probe breaks ties only
+  // WITHIN the best rank tier — a warm special-purpose model that happened to pass one probe
+  // must not outrank an unprobed declared chat model.
   return (
     (
       chatModels.find((model) => model.id === DEFAULT_CHAT_MODEL && conversationReady(model)) ??
-      chatModels.find(conversationReady) ??
-      chatModels.find((model) => model.id === DEFAULT_CHAT_MODEL) ??
-      chatModels.at(0)
+      electConversationDefault(chatModels, readinessObservation)
     )?.id ?? DEFAULT_CHAT_MODEL
   );
 }
@@ -253,10 +258,9 @@ function explicitChatModelId(body: Record<string, unknown>): string | undefined 
 }
 
 function modelFromBody(body: Record<string, unknown>, deps: UiHandlerDeps): string | RouteResult {
-  const modelId =
-    typeof body.modelId === "string" && body.modelId.length > 0
-      ? body.modelId
-      : defaultChatModelId(deps);
+  // ONE explicitness predicate: the readiness path (create walk vs single probe) and this
+  // admission must never disagree on what counts as an explicit model id.
+  const modelId = explicitChatModelId(body) ?? defaultChatModelId(deps);
   const capability = chatCapability(deps, modelId);
   if (capability?.kind !== "chat") {
     return {

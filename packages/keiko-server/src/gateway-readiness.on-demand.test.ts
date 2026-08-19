@@ -162,7 +162,9 @@ function probeableDeps(checkedAt: string): {
 describe("ensureAnyConversationReadyChatModel budget", () => {
   it("stops waiting at the aggregate walk budget while slow probes keep running", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
-    const generation = 7;
+    // Unique per test run: the hanging m2 probe stays in the module-level in-flight map for
+    // the process lifetime, and a fixed generation would let a later test adopt it.
+    const generation = (nextGeneration += 1);
     const probed: string[] = [];
     const providers = ["m1", "m2", "m3"].map((modelId) => ({
       modelId,

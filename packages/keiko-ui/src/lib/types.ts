@@ -262,6 +262,7 @@ export { DEFAULT_TOKEN_ESTIMATOR_ID } from "@oscharko-dev/keiko-contracts";
 export {
   isConversationEligibleModel,
   explainConversationIneligibility,
+  electConversationDefault,
   preferredConversationModelOrder,
 } from "@oscharko-dev/keiko-contracts";
 

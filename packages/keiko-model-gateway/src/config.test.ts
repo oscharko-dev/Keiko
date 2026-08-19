@@ -795,10 +795,12 @@ describe("parseGatewayConfig", () => {
       })),
     );
     // Absence is NO signal and must stay absent — a coerced false would be indistinguishable
-    // from an affirmative "declared non-chat" record.
-    expect(
-      "chatModeDeclared" in (silent.capabilities?.find((c) => c.id === "modeless-chat") ?? {}),
-    ).toBe(false);
+    // from an affirmative "declared non-chat" record. Pin the capability first: with a bare
+    // `?? {}` fallback a parser regression that drops the inline capability entirely would
+    // still satisfy the absence check.
+    const modeless = silent.capabilities?.find((c) => c.id === "modeless-chat");
+    expect(modeless).toBeDefined();
+    expect(modeless !== undefined && "chatModeDeclared" in modeless).toBe(false);
   });
 
   // Mutation guard: the strict top-level path preserves absence (optionalDeterminismFlags only

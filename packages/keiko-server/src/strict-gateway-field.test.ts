@@ -41,7 +41,7 @@ function json(res: ServerResponse, payload: unknown, status = 200): void {
 
 interface FakeGatewayLog {
   embeddingBodies: Record<string, unknown>[];
-  chatModels?: string[];
+  chatModels: string[];
 }
 
 interface StrictLiteLlmOptions {
@@ -75,7 +75,7 @@ function answerChatCompletion(
   behavior: StrictLiteLlmBehavior,
 ): void {
   const body = JSON.parse(raw === "" ? "{}" : raw) as Record<string, unknown>;
-  if (typeof body.model === "string") (log.chatModels ??= []).push(body.model);
+  if (typeof body.model === "string") log.chatModels.push(body.model);
   const empty = typeof body.model === "string" && behavior.emptyChatModels.has(body.model);
   json(res, {
     choices: [
@@ -222,12 +222,12 @@ function fieldTmpDir(): string {
 }
 
 function probesSince(log: FakeGatewayLog, mark: number, modelId: string): number {
-  return (log.chatModels ?? []).slice(mark).filter((entry) => entry === modelId).length;
+  return log.chatModels.slice(mark).filter((entry) => entry === modelId).length;
 }
 
 describe("strict LiteLLM field twin", () => {
   it("opens the first chat although an unsuitable OCR model sits first in the list", async () => {
-    const log: FakeGatewayLog = { embeddingBodies: [] };
+    const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
     const behavior: StrictLiteLlmBehavior = { emptyChatModels: new Set() };
     const gateway = startStrictLiteLlm(log, { unsuitableFirstChatModel: true }, behavior);
     const port = await listen(gateway);
@@ -244,7 +244,7 @@ describe("strict LiteLLM field twin", () => {
       );
       // …and to be COLD from here on.
       behavior.emptyChatModels.add("dotsocr");
-      const mark = (log.chatModels ?? []).length;
+      const mark = log.chatModels.length;
       const chat = await handleCreateDesktopChat(
         ctx("POST", { projectPath: fixture.projectDir, title: "Erster Chat" }),
         deps,
@@ -267,7 +267,7 @@ describe("strict LiteLLM field twin", () => {
     // and a "first ready model wins" default then durably pinned every new chat to the OCR
     // engine. The conversation-default rank must prefer the mode-declared model even though
     // the OCR model would verify.
-    const log: FakeGatewayLog = { embeddingBodies: [] };
+    const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
     const gateway = startStrictLiteLlm(log, { unsuitableFirstChatModel: true });
     const port = await listen(gateway);
     let deps: UiHandlerDeps | undefined;
@@ -287,8 +287,42 @@ describe("strict LiteLLM field twin", () => {
     }
   });
 
+  it("keeps the defaulted create on the declared model even after the OCR model verified warm", async () => {
+    // Review finding on the first cut: readiness preference across tiers let a VERIFIED
+    // special-purpose model override an unprobed declared chat model. Warm dotsocr passes an
+    // explicit-create probe first — the next defaulted create must still elect qwen-chat.
+    const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
+    const gateway = startStrictLiteLlm(log, { unsuitableFirstChatModel: true });
+    const port = await listen(gateway);
+    let deps: UiHandlerDeps | undefined;
+    try {
+      const fixture = await setUpFieldGateway(port, fieldTmpDir());
+      deps = fixture.deps;
+      const explicit = await handleCreateDesktopChat(
+        ctx("POST", {
+          projectPath: fixture.projectDir,
+          title: "OCR direkt",
+          modelId: "dotsocr",
+        }),
+        deps,
+      );
+      // Warm dotsocr answers the probe: the explicit create succeeds and VERIFIES it.
+      expect(explicit.status).toBe(201);
+      const defaulted = await handleCreateDesktopChat(
+        ctx("POST", { projectPath: fixture.projectDir, title: "Standard danach" }),
+        deps,
+      );
+      expect(defaulted.status).toBe(201);
+      const body = defaulted.body as { readonly chat: { readonly selectedModel?: string } };
+      expect(body.chat.selectedModel).toBe("qwen-chat");
+    } finally {
+      await deps?.dispose?.();
+      await closeServer(gateway);
+    }
+  });
+
   it("walks to the warm OCR model when every declared chat model is down — preference, not a gate", async () => {
-    const log: FakeGatewayLog = { embeddingBodies: [] };
+    const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
     const behavior: StrictLiteLlmBehavior = { emptyChatModels: new Set() };
     const gateway = startStrictLiteLlm(log, { unsuitableFirstChatModel: true }, behavior);
     const port = await listen(gateway);
@@ -313,7 +347,7 @@ describe("strict LiteLLM field twin", () => {
   });
 
   it("probes ONLY the requested model for an explicit create — no sibling walk latency", async () => {
-    const log: FakeGatewayLog = { embeddingBodies: [] };
+    const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
     const behavior: StrictLiteLlmBehavior = { emptyChatModels: new Set() };
     const gateway = startStrictLiteLlm(log, { unsuitableFirstChatModel: true }, behavior);
     const port = await listen(gateway);
@@ -323,7 +357,7 @@ describe("strict LiteLLM field twin", () => {
       deps = fixture.deps;
       behavior.emptyChatModels.add("dotsocr");
       behavior.emptyChatModels.add("qwen-chat");
-      const mark = (log.chatModels ?? []).length;
+      const mark = log.chatModels.length;
       // Explicitly requesting the cold OCR model: the admission validates THAT model alone, so
       // probing its siblings could never change the 400 — it would only add their probe
       // latency to an already-decided answer (0.3.12 adversarial-review finding).
@@ -345,7 +379,7 @@ describe("strict LiteLLM field twin", () => {
   });
 
   it("carries the full fresh-install customer journey to indexed vectors", async () => {
-    const log: FakeGatewayLog = { embeddingBodies: [] };
+    const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
     const gateway = startStrictLiteLlm(log);
     const port = await listen(gateway);
     const tmp = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), "keiko-field-")));
@@ -453,7 +487,7 @@ describe("strict LiteLLM field twin", () => {
     // "not ready" until an ungrounded send or a manual settings probe happened to record an
     // observation, and the models wire told the UI that no model was usable at all. This twin
     // restarts the server half-way: same stored config, same UI DB, fresh process state.
-    const log: FakeGatewayLog = { embeddingBodies: [] };
+    const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
     const gateway = startStrictLiteLlm(log);
     const port = await listen(gateway);
     const tmp = fieldTmpDir();

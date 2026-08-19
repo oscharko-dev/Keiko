@@ -72,7 +72,7 @@ import type {
   ModelCapability,
   ProjectWithAvailability,
 } from "@/lib/types";
-import { isConversationEligibleModel, preferredConversationModelOrder } from "@/lib/types";
+import { electConversationDefault, isConversationEligibleModel } from "@/lib/types";
 import { formatUserError } from "../format-error";
 import { canonicalVoiceSha256Hex } from "./canonical-voice-hasher";
 import type { PendingDocument } from "./documentContext";
@@ -665,8 +665,10 @@ export function notifyChatDeleted(chatId: string): void {
 // 0.3.11). Preference: verified models first, then unknown — both in the shared
 // conversationDefaultRank order, so a mode-less OCR model never outranks a declared chat model.
 export function pickChatModelId(models: readonly ModelCapability[]): string | undefined {
-  const candidates = preferredConversationModelOrder(models.filter(isUsableConversationModel));
-  return (candidates.find((model) => model.conversationReady === true) ?? candidates.at(0))?.id;
+  return electConversationDefault(
+    models.filter(isUsableConversationModel),
+    (model) => model.conversationReady,
+  )?.id;
 }
 
 // Usable = conversation-eligible and not OBSERVED unready. Only an explicit false blocks; the

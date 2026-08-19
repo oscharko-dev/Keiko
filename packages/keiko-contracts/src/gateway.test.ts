@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
   conversationDefaultRank,
+  electConversationDefault,
   describeVoiceProviderAvailability,
   explainConversationIneligibility,
   preferredConversationModelOrder,
@@ -418,11 +419,56 @@ describe("conversationDefaultRank", () => {
     expect(conversationDefaultRank(cap({ id: "my-ocr-model" }))).toBe(2);
     expect(conversationDefaultRank(cap({ id: "whisper-large-v3" }))).toBe(2);
     expect(conversationDefaultRank(cap({ id: "bge-reranker-v2" }))).toBe(2);
+    // The documented marker set includes plain "speech" engines (review finding: the marker
+    // was documented but missing from the token set).
+    expect(conversationDefaultRank(cap({ id: "speech-to-text-general" }))).toBe(2);
   });
 
   it("treats an explicit chatModeDeclared: false like an absent signal", () => {
     expect(conversationDefaultRank(cap({ id: "qwen-chat", chatModeDeclared: false }))).toBe(1);
     expect(conversationDefaultRank(cap({ id: "dotsocr", chatModeDeclared: false }))).toBe(2);
+  });
+});
+
+describe("electConversationDefault", () => {
+  const observed = (m: ModelCapability): boolean | undefined => m.conversationReady;
+
+  it("lets a verified probe break ties only WITHIN the best rank tier", () => {
+    const models = [
+      cap({ id: "dotsocr", conversationReady: true }),
+      { ...cap({ id: "qwen-chat", chatModeDeclared: true }), conversationReady: undefined },
+    ];
+    // The warm special-purpose model is VERIFIED, the declared chat model is unprobed — the
+    // tier must win, or a single warm probe re-opens the default-capture the rank prevents.
+    expect(electConversationDefault(models, observed)?.id).toBe("qwen-chat");
+  });
+
+  it("prefers the verified model within the same tier", () => {
+    const models = [
+      { ...cap({ id: "mistral-small" }), conversationReady: undefined },
+      cap({ id: "llama-3-70b-instruct", conversationReady: true }),
+    ];
+    expect(electConversationDefault(models, observed)?.id).toBe("llama-3-70b-instruct");
+  });
+
+  it("falls through an exhausted tier: observed-unready declared models yield to a verified fallback", () => {
+    // The walk journey: the declared chat model failed its probe (observed false) while the
+    // special-purpose model verified warm — chat must still work, so the verified fallback
+    // wins over an admission already known to fail.
+    const models = [
+      cap({ id: "dotsocr", conversationReady: true }),
+      cap({ id: "qwen-chat", chatModeDeclared: true, conversationReady: false }),
+    ];
+    expect(electConversationDefault(models, observed)?.id).toBe("dotsocr");
+  });
+
+  it("returns the best-ranked head when everything is observed-unready, undefined when empty", () => {
+    const models = [
+      cap({ id: "dotsocr", conversationReady: false }),
+      cap({ id: "qwen-chat", chatModeDeclared: true, conversationReady: false }),
+    ];
+    expect(electConversationDefault(models, observed)?.id).toBe("qwen-chat");
+    expect(electConversationDefault([], observed)).toBeUndefined();
   });
 });
 
