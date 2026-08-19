@@ -50,6 +50,10 @@ Do not record API tokens, raw credentials, or private runtime logs in shared not
 
 ## Pass Criteria
 
+This is the execution team's working checklist. It overlaps with the pilot approvers'
+authoritative go/no-go set in [go-no-go.md § Decision Checklist](go-no-go.md); the two are
+kept aligned but the go/no-go document is authoritative for pilot-stage decisions.
+
 Keiko is ready for the next pilot stage when:
 
 - Setup works through the UI without developer assistance beyond installing Node.js and npm.

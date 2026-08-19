@@ -31,12 +31,6 @@ Generate the tracked artifact set intentionally:
 KEIKO_WRITE_TRACKED_EVIDENCE=1 npx playwright test tests/e2e/health-scan-3185.spec.ts --config tests/e2e/config/playwright.config.ts --project=chromium
 ```
 
-Issue UI-receipt command:
-
-```bash
-.keiko-scripts/ui-verify-receipt.sh 3185 -- npx playwright test tests/e2e/health-scan-3185.spec.ts --config tests/e2e/config/playwright.config.ts --project=chromium
-```
-
 Artifacts:
 
 - `01-dark-success.png`

@@ -787,6 +787,39 @@ describe("PdfCitationPreviewWindow", () => {
     expect(region).toHaveAttribute("tabindex", "0");
   });
 
+  // KEIKO-0512 — the rendered viewer DOM must not surface secret-shaped tokens (session handle,
+  // absolute paths, `file://` URLs, PDF byte prefixes, Bearer tokens). This replaces the previous
+  // 1637 harness's "unsafe DOM evidence scan", which scanned the harness's own synthesised HTML
+  // template and therefore could never fail.
+  it("does not surface preview-session, file paths, or Bearer tokens in the rendered DOM", async () => {
+    const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
+    const windowId = openPdfCitationPreviewWindow(add, PREVIEW);
+    const firstCall = add.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected preview window to open");
+
+    const { container } = render(
+      <PdfCitationPreviewWindow
+        cfg={firstCall[1] as Record<string, unknown>}
+        focusWindow={vi.fn()}
+        restoreWindow={vi.fn()}
+        updateCfg={vi.fn()}
+        windowId={windowId ?? "missing"}
+      />,
+    );
+
+    // Wait until the viewer body has rendered so we scan the productive DOM, not the placeholder.
+    await screen.findByRole("region", { name: /policy wording\.pdf pdf preview/i });
+
+    const forbidden = ["preview-session-", "/Users/", "file://", "JVBER", "Bearer ", "token="];
+    const html = container.innerHTML;
+    for (const needle of forbidden) {
+      expect(
+        html,
+        `Rendered DOM must not surface the token "${needle}" (KEIKO-0512).`,
+      ).not.toContain(needle);
+    }
+  });
+
   // GEN-UI-FOCUS-001 + GEN-UI-VISUAL-001 — the .tm-action chrome and its focus ring must be
   // re-declared under THIS module's scope (the TerminalWidget copy cannot match the PDF window's
   // CSS-module hash). jsdom cannot compute the ring, so guard the source rule at the string level.

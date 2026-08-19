@@ -504,7 +504,7 @@ if (missing.size) {
 }
 
 await browser.close();
-const failed = rDiffsGated.length > 0;
+const failed = rDiffsGated.length > 0 || missing.size > 0;
 console.log(
   `\n${failed ? "FAIL" : "PASS"} — Group R dark/light 0-diff: ${rDiffsGated.length === 0}`,
 );

@@ -251,12 +251,12 @@ Status after implementation and post-audit hardening on 2026-07-05:
 
 Baseline targeted verification before edits on 2026-07-05:
 
-- `npm test -- --run packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.test.ts packages/keiko-local-knowledge/src/evaluations/runner.test.ts packages/keiko-local-knowledge/src/evaluations/fixtures.test.ts`
+- `npm test -- --run packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.test.ts packages/keiko-evaluations/src/local-knowledge/runner.test.ts packages/keiko-evaluations/src/local-knowledge/fixtures.test.ts`
   - PASS; 3 files and 69 tests.
 
 Focused verification after the implementation pass:
 
-- `npm test -- --run packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.test.ts packages/keiko-local-knowledge/src/evaluations/runner.test.ts packages/keiko-local-knowledge/src/evaluations/fixtures.test.ts scripts/__tests__/check-retrieval-quality.test.mjs`
+- `npm test -- --run packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.test.ts packages/keiko-evaluations/src/local-knowledge/runner.test.ts packages/keiko-evaluations/src/local-knowledge/fixtures.test.ts scripts/__tests__/check-retrieval-quality.test.mjs`
   - PASS; 4 files and 80 tests.
 - `npm run check:retrieval-quality`
   - PASS; workspace retrieval cases: 15, top1 100.0%, recall@5 100.0%, MRR 1.000, nDCG@5 1.000,
@@ -269,9 +269,9 @@ Focused verification after post-audit hardening:
 - `npm test -- --run packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.test.ts`
   - PASS; 44 focused retrieval tests, including quoted-phrase exact retrieval and strategy-specific
     budget diagnostics.
-- `npm test -- --run packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.test.ts packages/keiko-local-knowledge/src/evaluations/runner.test.ts packages/keiko-local-knowledge/src/evaluations/fixtures.test.ts scripts/__tests__/check-retrieval-quality.test.mjs`
+- `npm test -- --run packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.test.ts packages/keiko-evaluations/src/local-knowledge/runner.test.ts packages/keiko-evaluations/src/local-knowledge/fixtures.test.ts scripts/__tests__/check-retrieval-quality.test.mjs`
   - PASS; 4 files and 82 tests after formatting.
-- `npm test -- --run packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.test.ts packages/keiko-local-knowledge/src/evaluations/runner.test.ts packages/keiko-local-knowledge/src/evaluations/runner-strategy.test.ts packages/keiko-local-knowledge/src/evaluations/fixtures.test.ts scripts/__tests__/check-retrieval-quality.test.mjs`
+- `npm test -- --run packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.test.ts packages/keiko-evaluations/src/local-knowledge/runner.test.ts packages/keiko-evaluations/src/local-knowledge/runner-strategy.test.ts packages/keiko-evaluations/src/local-knowledge/fixtures.test.ts scripts/__tests__/check-retrieval-quality.test.mjs`
   - PASS; 5 files and 87 tests after the final audit-repair pass. This includes exact identifier
     near-collision coverage, short acronym lookup, one-token quoted phrase lookup, strategy
     forwarding, and Local Knowledge quality-gate failure tests.
@@ -378,7 +378,7 @@ retrieval-quality criteria, but the audit found two evidence/architecture gaps t
 this ledger undercounted the current non-tautology probe set, and the server hybrid reranker still
 allowed a single oversized candidate to exceed ADR-0036's shared byte budget.
 
-- `npm test -- --run packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.test.ts packages/keiko-local-knowledge/src/evaluations/runner.test.ts packages/keiko-local-knowledge/src/evaluations/runner-strategy.test.ts packages/keiko-local-knowledge/src/evaluations/fixtures.test.ts scripts/__tests__/check-retrieval-quality.test.mjs`
+- `npm test -- --run packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.test.ts packages/keiko-evaluations/src/local-knowledge/runner.test.ts packages/keiko-evaluations/src/local-knowledge/runner-strategy.test.ts packages/keiko-evaluations/src/local-knowledge/fixtures.test.ts scripts/__tests__/check-retrieval-quality.test.mjs`
   — PASS; 5 files, 99 tests.
 - `npm run check:retrieval-quality` — PASS; workspace retrieval cases: 15 (top1 100.0%, recall@5
   100.0%, MRR 1.000, nDCG@5 1.000, line-hit 100.0%, generated leaks 0); Local Knowledge fixtures:
@@ -425,7 +425,7 @@ audit's one confirmed defect and its fix.
   non-tautology regression probes (`multi-space`, `exact-technical`, `semantic-paraphrase`,
   `multilingual-retrieval`, `html-manual-structure`, `code-repository`, `chained-question`) — all
   seven correctly drop below the pass floors when their ground truth is repointed at a decoy chunk.
-- `npm test -- --run packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.test.ts packages/keiko-local-knowledge/src/evaluations/runner.test.ts packages/keiko-local-knowledge/src/evaluations/runner-strategy.test.ts packages/keiko-local-knowledge/src/evaluations/fixtures.test.ts scripts/__tests__/check-retrieval-quality.test.mjs`
+- `npm test -- --run packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.test.ts packages/keiko-evaluations/src/local-knowledge/runner.test.ts packages/keiko-evaluations/src/local-knowledge/runner-strategy.test.ts packages/keiko-evaluations/src/local-knowledge/fixtures.test.ts scripts/__tests__/check-retrieval-quality.test.mjs`
   — PASS; 5 files, 108 tests (was 99; +7 from the html-manual-structure/code-repository/chained-question
   fixtures and probes, +1 from the cross-leg regression test added by this audit, +1 net from other
   interim coverage).

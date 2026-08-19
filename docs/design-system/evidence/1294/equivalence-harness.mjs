@@ -16,18 +16,40 @@
 // Writes computed-value-proof.json + 01-dark.png … 07-reduced-motion.png next to
 // itself and exits non-zero if any computed value differs between the two stylesheets.
 import { chromium } from "playwright";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveHostExecutable } from "../../../../scripts/lib/host-executable.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../..");
+const GIT_PATH = resolveHostExecutable("git", { workspaceRoot: REPO });
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
 const PRE_MIGRATION_BASE_REF = "ba113ac373ebf1114af7de217b07935036adba08";
 const BASE_REF = process.env.BASE_REF ?? PRE_MIGRATION_BASE_REF;
 
-const PRE = execSync(`git -C "${REPO}" show ${BASE_REF}:${CSS_PATH}`, {
+// Reject anything that is not a plausible git ref before it reaches execFileSync's argv. Mirrors
+// the guard in docs/design-system/evidence/1293/equivalence-harness.mjs so the two harnesses
+// enforce identical validation.
+const REF_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+if (
+  !REF_RE.test(BASE_REF) ||
+  BASE_REF.includes("..") ||
+  BASE_REF.includes("@{") ||
+  BASE_REF.endsWith(".lock") ||
+  BASE_REF.endsWith("/")
+) {
+  throw new Error(`refusing unsafe BASE_REF: ${BASE_REF}`);
+}
+
+const BASE_SHA = execFileSync(
+  GIT_PATH,
+  ["-C", REPO, "rev-parse", "--verify", `${BASE_REF}^{commit}`],
+  { encoding: "utf8" },
+).trim();
+
+const PRE = execFileSync(GIT_PATH, ["-C", REPO, "show", `${BASE_SHA}:${CSS_PATH}`], {
   encoding: "utf8",
   maxBuffer: 64 * 1024 * 1024,
 });
@@ -460,4 +482,4 @@ console.log(`DIFFERENCES (pre vs post): ${diffs.length}`);
 console.log(`MEDIA ISOLATION: ${mediaFailed ? "FAIL" : "PASS"}`);
 for (const d of diffs.slice(0, 80)) console.log(d);
 await browser.close();
-process.exit(diffs.length === 0 && !mediaFailed ? 0 : 1);
+process.exit(diffs.length === 0 && !mediaFailed && missing.size === 0 ? 0 : 1);

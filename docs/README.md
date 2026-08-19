@@ -77,12 +77,17 @@ Current package responsibilities:
 | `keiko-tools`                | Controlled execution, patch writing, terminal/browser adapters, git mutation primitives | Model routing, workflow policy, credentials        |
 | `keiko-harness`              | Agent runtime loop, cancellation, limits, orchestration seams                           | Direct provider SDK calls, raw FS reads            |
 | `keiko-workflows`            | Reviewable developer-assist workflows and reports                                       | Runtime server, UI components, credentials         |
+| `keiko-evaluations`          | Deterministic evaluation harness, scored dimensions, offline/live provider selector     | UI, direct provider network egress                 |
 | `keiko-evidence`             | Evidence manifests, retention, local artifact indexing                                  | Provider access, UI composition                    |
 | `keiko-verification`         | Deterministic verification planning and summaries                                       | UI, model/provider access                          |
 | `keiko-quality-intelligence` | Pure Quality Intelligence domain logic                                                  | Server routes, UI, provider calls                  |
 | `keiko-local-knowledge`      | Local Knowledge capsule store and extraction lifecycle                                  | Browser UI, direct ungoverned egress               |
+| `keiko-connectors`           | Governed Atlassian (Confluence/Jira) connector domain and bounded verification probe    | Direct network or filesystem; UI; composition root |
 | `keiko-memory-*`             | MemoriaViva capture, vault, retrieval, governance, consolidation                        | Unscoped memory use, plaintext secret storage      |
 | `keiko-editor`               | Browser-tier Monaco editor/diff UI and host port contracts                              | Retrieval, model routing, patching, server routes  |
+| `keiko-git`                  | Shared Git core primitives: hardened runner, path containment, porcelain parsers        | Direct model/provider calls; UI                    |
+| `keiko-sandbox`              | Reusable OS/container egress-isolation strategy and backend selection                   | Spawning (that stays in `keiko-tools`); UI         |
+| `keiko-sdk`                  | Internal SDK surface re-exported by the root product facade                             | Server routes, provider SDKs, UI                   |
 | `keiko-server`               | Loopback BFF, routes, CSP/host/CSRF gates, runtime wiring                               | Long-term domain contracts                         |
 | `keiko-cli`                  | CLI lifecycle and command surface                                                       | Domain logic that belongs in packages              |
 | `keiko-ui`                   | Next.js local UI, browser components, static export                                     | Filesystem IO, provider tokens, direct model calls |
@@ -93,22 +98,40 @@ Current package responsibilities:
 Use [adr/README.md](adr/README.md) only when you need the full decision catalog. For
 implementation, start with these clusters:
 
-- Package and release baseline: ADR-0019, ADR-0020, ADR-0021, ADR-0025.
+- Package and release baseline: ADR-0019, ADR-0020, ADR-0021, ADR-0025, ADR-0112,
+  ADR-0115, ADR-0130.
 - Workspace shell and task workspaces: ADR-0026 through ADR-0030, ADR-0088 through
-  ADR-0093, ADR-0097.
+  ADR-0093, ADR-0097. Workspace Trust and multi-root binding: ADR-0147, ADR-0155,
+  ADR-0160.
+- Multi-window and duplication: ADR-0123.
 - Relationship engine: ADR-0031 through ADR-0033.
-- Context, grounding, compaction: ADR-0034, ADR-0036, ADR-0052 through ADR-0057.
+- Context, grounding, compaction, retrieval substrate: ADR-0034, ADR-0036, ADR-0052
+  through ADR-0057, ADR-0144, ADR-0152, ADR-0153, ADR-0164, ADR-0172.
+- Chat sessions: ADR-0114.
 - Security, egress, credentials, evidence confidentiality: ADR-0035, ADR-0038,
-  ADR-0043, ADR-0046 through ADR-0048, ADR-0070.
+  ADR-0043, ADR-0046 through ADR-0048, ADR-0070, ADR-0113.
 - Design system: ADR-0039 through ADR-0041, ADR-0049 through ADR-0051.
-- Editor: ADR-0042, ADR-0045, ADR-0058 through ADR-0069 editor-specific records,
-  ADR-0097.
+- Editor and verification surface: ADR-0042, ADR-0045, ADR-0058 through ADR-0069
+  editor-specific records, ADR-0097, ADR-0119, ADR-0126, ADR-0127, ADR-0132,
+  ADR-0133, ADR-0136, ADR-0165.
 - Prompt Enhancer: ADR-0044.
 - Git delivery and Git client: ADR-0080 through ADR-0087, ADR-0098.
 - Voice and dialogue mode: voice-specific ADR-0100 through ADR-0111, ADR-0094
-  through ADR-0096.
+  through ADR-0096. Realtime voice live memory recall and Twin Voice: ADR-0116,
+  ADR-0154.
+- Memory (MemoriaViva): ADR-0117, ADR-0120, ADR-0146.
+- Portable install, native dialogs, and update authority: ADR-0118, ADR-0121,
+  ADR-0122.
+- Atlassian connector: ADR-0128.
+- Product-wide authority, gateway readiness, and coding autonomy: ADR-0129,
+  ADR-0138, ADR-0171.
 - Coding Workbench autonomy, sidecar runtime, and packaged qualification: ADR-0124,
   ADR-0125, ADR-0137, ADR-0140, ADR-0141, ADR-0163.
+- Deterministic `dev` delivery, quality gates, and reviewer settlement: ADR-0135,
+  ADR-0139, ADR-0145, ADR-0156, ADR-0157, ADR-0158, ADR-0159, ADR-0161, ADR-0162,
+  ADR-0170.
+- SonarCloud analysis and quality-signal governance: ADR-0131, ADR-0134, ADR-0142,
+  ADR-0143, ADR-0166, ADR-0167, ADR-0168, ADR-0169.
 
 ADR statuses matter. Proposed ADRs are design intent; Accepted ADRs are constraints
 unless superseded by later code or ADRs.
@@ -188,7 +211,8 @@ Primary docs:
 - [workspace/518-product-boundaries.md](workspace/518-product-boundaries.md)
 - [workspace/518-architecture-blueprint.md](workspace/518-architecture-blueprint.md)
 - [workspace/443-operator-runbook.md](workspace/443-operator-runbook.md)
-- ADR-0088 through ADR-0093.
+- [keiko-editor/2523-workspace-trust-security-review.md](keiko-editor/2523-workspace-trust-security-review.md) — Workspace Trust security review.
+- ADR-0088 through ADR-0093, ADR-0147, ADR-0155, ADR-0160.
 
 Rules:
 
@@ -199,6 +223,26 @@ Rules:
 - Path containment belongs to `keiko-workspace`; do not reimplement it in leaf
   contracts or UI code.
 
+### Relationship engine
+
+Primary docs:
+
+- [relationship-engine/architecture.md](relationship-engine/architecture.md)
+- [relationship-engine/api-contract.md](relationship-engine/api-contract.md)
+- [relationship-engine/audit.md](relationship-engine/audit.md)
+- [relationship-engine/lifecycle.md](relationship-engine/lifecycle.md)
+- [relationship-engine/storage.md](relationship-engine/storage.md)
+- [relationship-engine/retention-and-privacy.md](relationship-engine/retention-and-privacy.md)
+- ADR-0031 through ADR-0033.
+
+Rules:
+
+- Relationship storage/audit/UI decisions live in this subsystem; do not scatter
+  relationship graph state into other domain packages.
+- All relationship audit events remain body-free and redacted.
+- Retention and privacy invariants apply to every relationship record; consult the
+  retention-and-privacy contract before extending the schema.
+
 ### Context, grounding, Local Knowledge, and memory
 
 Primary docs:
@@ -208,6 +252,8 @@ Primary docs:
 - [local-knowledge/runtime-state-protection.md](local-knowledge/runtime-state-protection.md)
 - [local-knowledge/knowledge-pods.md](local-knowledge/knowledge-pods.md)
 - [local-knowledge/atlassian-connector-guide.md](local-knowledge/atlassian-connector-guide.md)
+- [local-knowledge/atlassian-connector-lifecycle-ledger.md](local-knowledge/atlassian-connector-lifecycle-ledger.md) — Atlassian connector lifecycle ledger (governed by ADR-0128).
+- [troubleshooting/atlassian-connector.md](troubleshooting/atlassian-connector.md) — operator troubleshooting for Atlassian connector failures.
 - [local-runtime-state-contract.md](local-runtime-state-contract.md)
 - [memory-verification-matrix.md](memory-verification-matrix.md)
 - [conversation-center-privacy.md](conversation-center-privacy.md)

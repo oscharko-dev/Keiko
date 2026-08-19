@@ -28,14 +28,6 @@ npx playwright test tests/e2e/prompt-enhancer-3180.spec.ts \
   --config tests/e2e/config/playwright.config.ts --project=chromium
 ```
 
-Issue receipt command:
-
-```bash
-.keiko-scripts/ui-verify-receipt.sh 3180 -- \
-  npx playwright test tests/e2e/prompt-enhancer-3180.spec.ts \
-    --config tests/e2e/config/playwright.config.ts --project=chromium
-```
-
 The plan drives the running product UI and asserts all three intent boundaries. The change adds no
 CSS, component tokens, layout, or interaction states; the screenshots therefore document the
 existing governed Prompt Enhancer surface rather than introduce a new visual baseline.

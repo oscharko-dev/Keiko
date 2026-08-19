@@ -34,12 +34,6 @@ Tracked evidence regeneration:
 KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:coding-workbench-1991
 ```
 
-Receipt command for the user-facing child gate:
-
-```bash
-.keiko-scripts/ui-verify-receipt.sh 1991 -- npm run test:e2e:coding-workbench-1991
-```
-
 The Playwright harness writes these artifacts in this directory:
 
 - `01-proposed-diff.png`
