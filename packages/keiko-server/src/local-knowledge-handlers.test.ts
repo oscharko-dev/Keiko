@@ -1652,6 +1652,56 @@ describe("local-knowledge handlers", () => {
     expect(jobs.n).toBe(1);
   });
 
+  it("threads operator discovery bounds from env and surfaces the truncation warning in capsule health", async () => {
+    // 2026-08 field review: buildIndexingOptions passed no discoveryOptions, so the built-in
+    // 5,000-file default was an unraisable hard ceiling and a truncated walk left only a
+    // buried job-history diagnostic while the pod reported ready. The env bound must reach
+    // the walk, and the truncation must surface as a capsule-health quality warning.
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot);
+    for (const name of ["a", "b", "c"]) {
+      writeFileSync(join(docsRoot, `${name}.md`), `# ${name}\n\nDocument ${name}.\n`, "utf8");
+    }
+    const base = depsFor(tmp);
+    const deps: UiHandlerDeps = {
+      ...base,
+      env: { KEIKO_LOCAL_KNOWLEDGE_MAX_DISCOVERY_FILES: "2" },
+    };
+    const created = await handleCreateLocalKnowledgeCapsule(
+      baseCtx(tmp, "POST", { displayName: "Truncated Corpus" }),
+      deps,
+    );
+    const body = created.body as { readonly capsule: { readonly id: KnowledgeCapsuleId } };
+    const store = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    addSourceToCapsule(store, body.capsule.id, {
+      id: "src-truncated" as KnowledgeSourceId,
+      displayName: "Docs",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const indexed = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", {}), params: { capsuleId: body.capsule.id } },
+      deps,
+    );
+    expect(indexed.status).toBe(200);
+    const detail = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: body.capsule.id } },
+      deps,
+    );
+    const health = (detail.body as { health: { qualityWarnings: readonly string[] } }).health;
+    expect(
+      health.qualityWarnings.some((warning) =>
+        warning.includes("KEIKO_LOCAL_KNOWLEDGE_MAX_DISCOVERY_FILES"),
+      ),
+    ).toBe(true);
+  });
+
   it("threads the operator-configured provider timeoutMs into every indexing embed call", async () => {
     // 0.3.12 adversarial-review finding: the embedding adapter factory dropped
     // provider.timeoutMs, so chunk embeds silently ran at the adapter's built-in 30s while the
@@ -2775,6 +2825,87 @@ describe("local-knowledge handlers", () => {
     inspect.close();
 
     expect(row?.context_status).toBe("generated");
+  });
+
+  it("elects the mode-declared chat model as fallback context model, never the first-listed OCR id", async () => {
+    // 2026-08 field review: with no explicit context model the old pure-costClass fallback let
+    // a mode-less OCR id FIRST in the configured list become the context model by position —
+    // warm, it "succeeds" and prefixes every chunk with OCR garbage that pollutes the
+    // embedding space until a full re-index. The shared conversation-default rank must prefer
+    // the declared chat model even though both tie on costClass.
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(
+      join(docsRoot, "policy.md"),
+      "# Policy\n\n" + "Fallback context-model election for TS-999.\n".repeat(24),
+      "utf8",
+    );
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const contextCalls: GatewayRequest[] = [];
+    const embeddingProvider = gatewayConfig("text-embedding-3-small").providers[0];
+    if (embeddingProvider === undefined) throw new Error("missing embedding provider");
+    const chatProvider = (modelId: string): GatewayConfig["providers"][number] => ({
+      modelId,
+      baseUrl: "https://gateway.example.test/v1",
+      apiKey: "redacted",
+      timeoutMs: 30_000,
+      maxRetries: 1,
+      retryBaseDelayMs: 100,
+    });
+    const base = depsFor(tmp, {
+      providers: [embeddingProvider, chatProvider("dotsocr"), chatProvider("qwen-chat")],
+      capabilities: [
+        embeddingCapability("text-embedding-3-small"),
+        // The customer shape: the OCR model declares no mode and sits FIRST; both chat
+        // entries tie on costClass, so the old selection picked dotsocr by position.
+        chatCapability("dotsocr"),
+        { ...chatCapability("qwen-chat"), chatModeDeclared: true },
+      ],
+      circuitBreaker: gatewayConfig("text-embedding-3-small").circuitBreaker,
+    });
+    const deps: UiHandlerDeps = {
+      ...base,
+      env: { KEIKO_LOCAL_KNOWLEDGE_CONTEXTUAL_RETRIEVAL: "true" },
+      localKnowledgeContextualRetrievalChatGateway: {
+        chat: (request) => {
+          contextCalls.push(request);
+          return Promise.resolve({
+            modelId: request.modelId,
+            content: "Context: fallback election journey.",
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "ctx-rank-1",
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "low",
+            },
+          });
+        },
+      },
+    };
+
+    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(contextCalls).not.toHaveLength(0);
+    expect(contextCalls.every((call) => call.modelId === "qwen-chat")).toBe(true);
   });
 
   it("uses per-capsule contextual retrieval settings and model id without the env flag", async () => {

@@ -62,7 +62,11 @@ import type {
   KnowledgePodSummaryKind,
   UnsupportedDocumentGuidanceCode,
 } from "@oscharko-dev/keiko-contracts";
-import { KnowledgeNotFoundError, KnowledgeStoreError } from "@oscharko-dev/keiko-local-knowledge";
+import {
+  DEFAULT_DISCOVERY_OPTIONS,
+  KnowledgeNotFoundError,
+  KnowledgeStoreError,
+} from "@oscharko-dev/keiko-local-knowledge";
 import {
   findIndexingRecoveryCandidate,
   openKnowledgeStoreForDeps,
@@ -71,8 +75,10 @@ import {
 import { runLocalTesseractCommand } from "./local-knowledge-ocr-runtime.js";
 import {
   CAPSULE_SET_MAX_MEMBERS,
+  conversationDefaultRank,
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
   isKnowledgePodEvidenceSafeText,
+  MODEL_COST_RANK,
   isSafeQualityWarning,
   standardPodModelUsePolicy,
   stripUnsafeFormatChars,
@@ -83,6 +89,7 @@ import {
   validateKnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  currentConversationReady,
   currentGateway,
   currentGatewayConfig,
   currentGatewayEgressConfig,
@@ -94,6 +101,7 @@ import {
   EMBEDDING_INSTRUCTION_VERSION,
   EMBEDDING_NORMALIZATION,
   findConfiguredCapability,
+  listConfiguredCapabilities,
   requestOpenAIEmbedding,
   requestOpenAIEmbeddingBatch,
   selectConfiguredModel,
@@ -1905,7 +1913,28 @@ function resolveContextualRetrievalModelId(
   if (configured !== undefined && configured.length > 0) {
     return configured;
   }
-  return config === undefined ? undefined : selectConfiguredModel(config, { kind: "chat" });
+  return config === undefined ? undefined : fallbackContextModelId(deps, config);
+}
+
+// Fallback context-model election for contextual retrieval (2026-08 field review). The old
+// pure-costClass selection let a mode-less special-purpose id FIRST in the configured list (the
+// customer's OCR model) become the context model by position: warm, it "succeeds" and prefixes
+// every chunk with OCR garbage that pollutes the embedding space until a full re-index. Order by
+// the shared conversation-default rank (declared chat mode first, special-purpose ids last),
+// prefer a model with a CURRENT successful conversation probe, and only then fall back to the
+// cheapest cost class the old selection optimized for — within a tier, configured order still
+// breaks ties.
+function fallbackContextModelId(deps: UiHandlerDeps, config: GatewayConfig): string | undefined {
+  const ranked = [...listConfiguredCapabilities(config)]
+    .filter((capability) => capability.kind === "chat")
+    .sort(
+      (a, b) =>
+        conversationDefaultRank(a) - conversationDefaultRank(b) ||
+        MODEL_COST_RANK[a.costClass] - MODEL_COST_RANK[b.costClass],
+    );
+  return (
+    ranked.find((capability) => currentConversationReady(deps, capability.id)) ?? ranked.at(0)
+  )?.id;
 }
 
 function contextModelCanChat(
@@ -2057,6 +2086,21 @@ interface BuildIndexingOptionsInput {
   readonly signal: AbortSignal;
 }
 
+// Operator-raisable discovery bounds (2026-08 field review): the built-in 5,000-file default
+// used to be an unraisable hard ceiling, so a larger corpus silently indexed only its first
+// walk-ordered slice. The orchestrator still clamps these to its runaway backstops.
+function operatorDiscoveryOptions(
+  deps: UiHandlerDeps,
+): Parameters<typeof runIndexingJob>[0]["discoveryOptions"] {
+  const maxFiles = envPositiveInt(deps.env.KEIKO_LOCAL_KNOWLEDGE_MAX_DISCOVERY_FILES);
+  const maxDepth = envPositiveInt(deps.env.KEIKO_LOCAL_KNOWLEDGE_MAX_DISCOVERY_DEPTH);
+  if (maxFiles === undefined && maxDepth === undefined) return undefined;
+  return {
+    maxFiles: maxFiles ?? DEFAULT_DISCOVERY_OPTIONS.maxFiles,
+    maxDepth: maxDepth ?? DEFAULT_DISCOVERY_OPTIONS.maxDepth,
+  };
+}
+
 function buildIndexingOptions(
   input: BuildIndexingOptionsInput,
 ): Parameters<typeof runIndexingJob>[0] {
@@ -2073,6 +2117,7 @@ function buildIndexingOptions(
     signal,
   } = input;
   const contextualRetrieval = localKnowledgeContextualRetrievalOptions(deps, capsule);
+  const discoveryOptions = operatorDiscoveryOptions(deps);
   return {
     capsuleId: capsule.id,
     ...(sourceSelection.shouldRun && sourceSelection.sourceIds !== undefined
@@ -2085,6 +2130,7 @@ function buildIndexingOptions(
     auditSink: createSqliteAuditSink(store),
     store,
     force: options.force,
+    ...(discoveryOptions !== undefined ? { discoveryOptions } : {}),
     ...(contextualRetrieval !== undefined ? { contextualRetrieval } : {}),
     largeDocumentPolicy: resolveLargeDocumentPolicy(),
     extractionCapabilities,
