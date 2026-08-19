@@ -421,7 +421,9 @@ function sourceAssertions() {
           "u",
         );
         const match = sourceText.session.match(pattern);
-        if (!match?.[1]) return true;
+        // Fail closed: a removed or renamed recovery reason must fail the evidence gate, not pass
+        // silently. If the source has no matching case, the matrix and product have drifted.
+        if (!match?.[1]) return false;
         return match[1] === (retry ? "true" : "false");
       }),
     },

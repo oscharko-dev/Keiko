@@ -147,15 +147,7 @@ const server = createServer(async (req, res) => {
     res.end("internal error");
   }
 });
-// Fail fast on a bound-port collision instead of silently deadlocking the harness on the pending
-// listen() promise.
-await new Promise((resolveListen, rejectListen) => {
-  server.once("error", rejectListen);
-  server.listen(4612, "127.0.0.1", () => {
-    server.off("error", rejectListen);
-    resolveListen();
-  });
-});
+await new Promise((r) => server.listen(4612, "127.0.0.1", r));
 const BASE = "http://127.0.0.1:4612";
 
 const MODES = [

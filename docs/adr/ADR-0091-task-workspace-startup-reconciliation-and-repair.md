@@ -178,10 +178,12 @@ interface WorkspaceReconciliationFacts {
 
 All fields are content-free (booleans and the persisted lifecycle enum — no path,
 no command output). The server assembles this struct from four distinct sources
-WITHOUT duplicating any subsystem: `pathContained` and `worktreeDirExists` from
-`keiko-workspace` `assertManagedTargetContained` (delegated — ADR-0088 D5);
-`gitPointerPresent`, `gitdirIdentityMatches`, `taskBranchPresent`, `headMatches`,
-and `uncommittedChanges` from the narrow `listWorktrees` / `localBranchExists` /
+WITHOUT duplicating any subsystem: `worktreeDirExists` from `node:fs` `existsSync`
+against `managedWorktreePath`; `pathContained` from `keiko-workspace`
+`assertManagedTargetContained` (delegated — ADR-0088 D5) — a distinct realpath
+check that never trusts the existence probe as a substitute; `gitPointerPresent`,
+`gitdirIdentityMatches`, `taskBranchPresent`, `headMatches`, and
+`uncommittedChanges` from the narrow `listWorktrees` / `localBranchExists` /
 status adapters already in `keiko-tools` (ADR-0089 D1); `lockPresent`, `lockLive`,
 and `lockedByOtherActor` from the TTL/ownership rules already encoded in the lock
 model.
@@ -235,11 +237,15 @@ otherwise-healthy workspace):
      (`operatorActionRequired: true`).
    - `uncommittedChanges` → status `drifted`, marker `uncommitted-changes`, hint
      `commit-or-stash-required` (`operatorActionRequired: true`).
-6. **`recovery-required`** (carry-forward): `facts.lifecycleState === "recovery-required"`
-   and none of the above triggered → status `recovery-required`, preserve the
-   stored `driftMarkers` and `recoveryHints` from the persisted instance (caller
-   passes them through unchanged). A `stale-lock` marker is appended if
-   `lockPresent && !lockLive`.
+6. **`recovery-required`** (lingering-lifecycle): `facts.lifecycleState === "recovery-required"`
+   and none of the above triggered → status `recovery-required` with empty
+   markers/hints (only a `stale-lock` marker is appended if
+   `lockPresent && !lockLive`). The classifier is pure and content-free, and
+   the shipped `outcome("recovery-required", withStaleLock([], facts))` returns
+   only what the CURRENT facts justify — it does NOT carry the persisted
+   `driftMarkers`/`recoveryHints` forward. If the caller needs the persisted
+   markers alongside a fresh recovery-required outcome (for a repair UI, for
+   example), it must merge them itself outside this classifier.
 7. **`drifted` (stale lock only)**: `facts.lockPresent && !facts.lockLive` on an
    otherwise-healthy workspace → status `drifted`, marker `lock-stale`, hint
    `release-stale-lock` (`operatorActionRequired: false`).
@@ -391,9 +397,16 @@ Per-instance reconciliation sequence (the IO the service performs, in order):
 5. Derive `lockPresent`, `lockLive`, and `lockedByOtherActor` from
    `instance.lock`, `expiresAt` vs `nowIso`, and the persisted lock owner.
 6. Call `classifyWorkspaceReconciliation(facts)` (pure, no IO).
-7. Compute the legal `lifecycleState` transition: if the classification status is
-   not `healthy` and the current lifecycle state is `active` or `paused`, transition
-   to `recovery-required` (legal per ADR-0088 transition table — no preconditions
+7. Compute the legal `lifecycleState` transition via
+   `reconciliationRequiresRecoveryFlag(status, lifecycleState)`: it returns `true`
+   only when the current lifecycle state is `active`, `paused`, or `handoff-ready`
+   AND the classification status is one of `missing`, `stale-pointer`, or
+   `unmanaged-path` — the "worktree gone or structurally unusable" set. `locked`
+   is a wait condition and never triggers a transition; `drifted` and
+   `partially-created` are surfaced via health + drift markers + hints without
+   forcing the workspace out of its lifecycle (crisp classification over
+   aggressive auto-healing). When the flag is `true`, transition to
+   `recovery-required` (legal per ADR-0088 transition table — no preconditions
    required). If the status is `healthy` and the current state was
    `recovery-required`, it stays `recovery-required` (automatic promotion to
    `active` is NOT performed — restoration is a controlled `setActive` call, not a
