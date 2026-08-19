@@ -181,7 +181,7 @@ async function sendBreakerChat(
 }
 
 describe("desktop chat production gateway reuse", () => {
-  it("rejects an unready configured model before provider fetch", async () => {
+  it("keeps user content off the provider while probing an unready model on demand", async () => {
     const fixture = await createGatewayBreakerFixture();
     try {
       fixture.deps.gatewayConfig?.clearVerifiedCapability("breaker-chat");
@@ -216,7 +216,24 @@ describe("desktop chat production gateway reuse", () => {
           },
         },
       });
-      expect(fetchSpy).not.toHaveBeenCalled();
+      // Relocated pin (fresh-install on-demand readiness): a never-observed model now gets a
+      // bounded on-demand READINESS PROBE before the honest rejection — so outbound calls may
+      // happen, but they carry only the static probe prompt. The load-bearing invariant is
+      // unchanged and strengthened below: the USER'S content never reaches the provider, on
+      // any call, in any body — and the probe outcome is recorded so retries stay probe-free.
+      // Evidence the on-demand probe actually happened, bounded: the create attempt probes
+      // once; the send attempt hits the recorded not-ready observation without re-probing.
+      expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+      expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(4);
+      for (const call of fetchSpy.mock.calls) {
+        const init = call[1] as { body?: unknown } | undefined;
+        const body = typeof init?.body === "string" ? init.body : "";
+        expect(body).not.toContain("must not leave the server");
+        expect(body).not.toContain("must not be created");
+      }
+      expect(
+        fixture.deps.gatewayConfig?.verifiedCapability("breaker-chat")?.fields.conversationReady,
+      ).not.toBe(true);
       expect(JSON.stringify(rejected.body)).not.toContain("must not leave the server");
     } finally {
       vi.unstubAllGlobals();

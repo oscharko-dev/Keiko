@@ -217,7 +217,7 @@ interface BuiltRequest {
   readonly callerSignal: AbortSignal | undefined;
 }
 
-function buildRequest(request: OpenAIEmbeddingRequest): BuiltRequest {
+function buildRequest(request: OpenAIEmbeddingRequest, minimalShape = false): BuiltRequest {
   const name = headerName(request.apiKeyHeaderName);
   // Reuse the shared Bearer-prefixing helper from config.ts so this transport handles the
   // same `bearer ` / `x-litellm-key` / `api-key` cases the chat adapter handles, including
@@ -226,10 +226,15 @@ function buildRequest(request: OpenAIEmbeddingRequest): BuiltRequest {
     "content-type": "application/json",
     [name]: apiKeyHeaderValue(name, request.apiKey),
   };
+  // minimalShape: strict OpenAI-compatible gateways (certain LiteLLM routes / TEI backends)
+  // answer 400 to the unconditional `encoding_format`, which a plain curl never sends; the
+  // float encoding is the OpenAI default anyway. `dimensions` is deliberately KEPT in the
+  // minimal shape: it is only ever present when a capsule pinned it, and dropping it would
+  // change the vector-space identity of the returned embeddings.
   const body = JSON.stringify({
     model: request.modelId,
     input: request.input,
-    encoding_format: "float",
+    ...(minimalShape ? {} : { encoding_format: "float" }),
     ...(request.dimensions !== undefined ? { dimensions: request.dimensions } : {}),
   });
   const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? 30_000);
@@ -298,21 +303,69 @@ async function decodeSuccess(
 export async function requestOpenAIEmbedding(
   request: OpenAIEmbeddingRequest,
 ): Promise<OpenAIEmbeddingOutcome> {
-  const built = buildRequest(request);
+  const built = buildRequest(request, strictShapeEndpoints.has(request.endpoint));
   const dispatched = await dispatch(built, request.fetchImpl, request.egress);
   if (typeof dispatched === "string") {
     return { ok: false, kind: dispatched };
   }
   if (!dispatched.ok) {
-    const kind = classifyStatus(dispatched.status) ?? "transport";
     await discardBody(dispatched);
+    if (
+      isStrictGatewayRejection(dispatched.status) &&
+      !strictShapeEndpoints.has(request.endpoint)
+    ) {
+      return await requestMinimalShapeEmbedding(request);
+    }
+    const kind = classifyStatus(dispatched.status) ?? "transport";
     return { ok: false, kind, status: dispatched.status };
   }
   return decodeSuccess(dispatched, request);
 }
 
+// A validation-shaped rejection (400/422) of a request that carried our optional extras: the
+// endpoint ANSWERED, so this is not transport flakiness — retry exactly once in the minimal
+// wire shape a plain curl would send. 401/403/404/429/5xx keep their existing semantics.
+function isStrictGatewayRejection(status: number): boolean {
+  return status === 400 || status === 422;
+}
+
+// Once a minimal retry SUCCEEDS after a strict rejection, the endpoint's strictness is
+// remembered so subsequent requests skip the doomed extras round trip — Knowledge Pod
+// indexing drives many batches, and re-discovering strictness per call would roughly
+// triple the request count against a strict gateway. The ladder itself stays in place as
+// the safety net; the memo only changes which rung is tried FIRST.
+const strictShapeEndpoints = new Set<string>();
+const arrayRejectingEndpoints = new Set<string>();
+
+export function resetStrictGatewayMemoForTests(): void {
+  strictShapeEndpoints.clear();
+  arrayRejectingEndpoints.clear();
+}
+
+async function requestMinimalShapeEmbedding(
+  request: OpenAIEmbeddingRequest,
+): Promise<OpenAIEmbeddingOutcome> {
+  const built = buildRequest(request, true);
+  const dispatched = await dispatch(built, request.fetchImpl, request.egress);
+  if (typeof dispatched === "string") {
+    return { ok: false, kind: dispatched };
+  }
+  if (!dispatched.ok) {
+    // kind and status come from the SAME response: a synthetic pair (retry kind + original
+    // status) would surface a contradiction in operator-visible readiness diagnostics.
+    const kind = classifyStatus(dispatched.status) ?? "transport";
+    await discardBody(dispatched);
+    return { ok: false, kind, status: dispatched.status };
+  }
+  strictShapeEndpoints.add(request.endpoint);
+  return decodeSuccess(dispatched, request);
+}
+
 // ─── Array-batch transport (#189 GRD-004) ────────────────────────────────────
-function buildBatchRequest(request: OpenAIEmbeddingBatchRequest): BuiltRequest {
+function buildBatchRequest(
+  request: OpenAIEmbeddingBatchRequest,
+  minimalShape = false,
+): BuiltRequest {
   const name = headerName(request.apiKeyHeaderName);
   const headers: Record<string, string> = {
     "content-type": "application/json",
@@ -323,7 +376,7 @@ function buildBatchRequest(request: OpenAIEmbeddingBatchRequest): BuiltRequest {
   const body = JSON.stringify({
     model: request.modelId,
     input: request.inputs,
-    encoding_format: "float",
+    ...(minimalShape ? {} : { encoding_format: "float" }),
     ...(request.dimensions !== undefined ? { dimensions: request.dimensions } : {}),
   });
   const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? 30_000);
@@ -439,15 +492,91 @@ export async function requestOpenAIEmbeddingBatch(
   if (request.inputs.length === 0) {
     return { ok: true, value: [] };
   }
-  const built = buildBatchRequest(request);
+  // One absolute deadline bounds the COMPLETE compatibility ladder: with 96 inputs and the
+  // 30s default, an unbounded scalar fallback could otherwise block for over an hour.
+  const deadlineAt = Date.now() + (request.timeoutMs ?? 30_000);
+  if (arrayRejectingEndpoints.has(request.endpoint)) {
+    return await requestScalarFallbackBatch(request, deadlineAt);
+  }
+  const built = buildBatchRequest(request, strictShapeEndpoints.has(request.endpoint));
   const dispatched = await dispatch(built, request.fetchImpl, request.egress);
   if (typeof dispatched === "string") {
     return { ok: false, kind: dispatched };
   }
   if (!dispatched.ok) {
-    const kind = classifyStatus(dispatched.status) ?? "transport";
     await discardBody(dispatched);
+    if (
+      isStrictGatewayRejection(dispatched.status) &&
+      !strictShapeEndpoints.has(request.endpoint)
+    ) {
+      return await requestMinimalShapeEmbeddingBatch(request, deadlineAt);
+    }
+    if (isStrictGatewayRejection(dispatched.status)) {
+      // Known strict-shape endpoint that STILL rejects the minimal array: the array shape
+      // itself is unsupported — degrade to scalars and remember.
+      arrayRejectingEndpoints.add(request.endpoint);
+      return await requestScalarFallbackBatch(request, deadlineAt);
+    }
+    const kind = classifyStatus(dispatched.status) ?? "transport";
     return { ok: false, kind, status: dispatched.status };
   }
   return decodeBatchSuccess(dispatched, request);
+}
+
+// Batch compat ladder for strict gateways: first the same array request without the optional
+// extras; if the endpoint rejects the ARRAY shape itself, degrade to per-item scalar requests
+// (each of which carries its own minimal-shape retry). The first failing item fails the batch.
+async function requestMinimalShapeEmbeddingBatch(
+  request: OpenAIEmbeddingBatchRequest,
+  deadlineAt: number,
+): Promise<OpenAIEmbeddingBatchOutcome> {
+  const built = buildBatchRequest(request, true);
+  const dispatched = await dispatch(built, request.fetchImpl, request.egress);
+  if (typeof dispatched === "string") {
+    return { ok: false, kind: dispatched };
+  }
+  if (dispatched.ok) {
+    strictShapeEndpoints.add(request.endpoint);
+    return decodeBatchSuccess(dispatched, request);
+  }
+  await discardBody(dispatched);
+  if (!isStrictGatewayRejection(dispatched.status)) {
+    // kind and status come from the SAME response (see the scalar helper).
+    const kind = classifyStatus(dispatched.status) ?? "transport";
+    return { ok: false, kind, status: dispatched.status };
+  }
+  arrayRejectingEndpoints.add(request.endpoint);
+  return await requestScalarFallbackBatch(request, deadlineAt);
+}
+
+async function requestScalarFallbackBatch(
+  request: OpenAIEmbeddingBatchRequest,
+  deadlineAt: number,
+): Promise<OpenAIEmbeddingBatchOutcome> {
+  const value: OpenAIEmbeddingSuccess[] = [];
+  for (const input of request.inputs) {
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) {
+      return { ok: false, kind: "timeout" };
+    }
+    const outcome = await requestOpenAIEmbedding({
+      endpoint: request.endpoint,
+      apiKey: request.apiKey,
+      ...(request.apiKeyHeaderName !== undefined
+        ? { apiKeyHeaderName: request.apiKeyHeaderName }
+        : {}),
+      modelId: request.modelId,
+      input,
+      ...(request.dimensions !== undefined ? { dimensions: request.dimensions } : {}),
+      ...(request.signal !== undefined ? { signal: request.signal } : {}),
+      timeoutMs: Math.min(remainingMs, request.timeoutMs ?? 30_000),
+      ...(request.fetchImpl !== undefined ? { fetchImpl: request.fetchImpl } : {}),
+      ...(request.egress !== undefined ? { egress: request.egress } : {}),
+    });
+    if (!outcome.ok) {
+      return outcome;
+    }
+    value.push(outcome.value);
+  }
+  return { ok: true, value };
 }
