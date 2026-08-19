@@ -1504,6 +1504,58 @@
         "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.11",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.11",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-19-keiko-0.3.11-strict-gateway-first-run",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 0.3.11 makes strict OpenAI-compatible gateways work end to end. Embedding requests now fall back to the minimal wire shape when a gateway answers HTTP 400 to optional extras (encoding_format, array input) \u2014 the failure mode that blocked Knowledge Pod indexing on certain LiteLLM/TEI deployments while chat and a plain curl succeeded. The fallback remembers a gateway's strictness, keeps one absolute deadline over the whole compatibility ladder, and reports coherent error causes. A fresh install also no longer rejects the first chat: conversation readiness is verified on demand at chat creation and send instead of requiring a manual readiness check in settings.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Knowledge Pod indexing works against strict OpenAI-compatible gateways: an answered HTTP 400/422 to Keiko's embedding request triggers a bounded fallback to the minimal wire shape (no encoding_format; array batches degrade to per-item requests), with per-endpoint strictness memory, one absolute deadline across the whole ladder, and error causes reported from the actual failing response.",
+        "A fresh install can chat immediately after saving gateway credentials: conversation readiness is verified on demand with the minimal chat probe at chat creation and send, honest rejections and observed not-ready states are respected without re-probing, and probe failures land as redacted operator diagnostics.",
+        "A field-twin end-to-end test drives the full fresh-install journey (credentials, immediate chat, Knowledge Pod, HTML+Markdown folder, indexing to vectors) against a simulated strict LiteLLM over the real production transports."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-19",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3218#5341253788",
+        "rationale": "The release owner directed this patch in the 2026-08-19 working session after the customer's strict LiteLLM deployment surfaced HTTP 400 on Keiko's embedding wire shape and the fresh install rejected the first chat until a manual readiness check. Both repairs are red-proven, reviewed (13 findings fixed), and verified end to end by the field-twin journey; Sonar passes with 86.5% new-code coverage."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
     }
   ]
 }
