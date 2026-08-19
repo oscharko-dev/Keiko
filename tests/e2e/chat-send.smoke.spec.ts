@@ -45,23 +45,6 @@ async function ensureProject(request: APIRequestContext, projectPath: string): P
   }
 }
 
-async function runVisibleReadiness(page: Page, request: APIRequestContext): Promise<void> {
-  await page.getByRole("button", { name: "Settings" }).click();
-  const settings = page.getByRole("region", { name: /^Settings/u });
-  await settings.getByRole("button", { name: "Run readiness check" }).click();
-  await expect(settings.getByText("Working today", { exact: true })).toBeVisible({
-    timeout: 30_000,
-  });
-
-  const catalog = await request.get("/api/models");
-  expect(catalog.status(), await catalog.text().catch(() => "")).toBe(200);
-  const body = (await catalog.json()) as {
-    readonly models: readonly { readonly id: string; readonly conversationReady: boolean }[];
-  };
-  expect(body.models.find((model) => model.id === CHAT_MODEL_ID)?.conversationReady).toBe(true);
-  await settings.getByRole("button", { name: "Close Settings window" }).click();
-}
-
 async function createChat(
   request: APIRequestContext,
 ): Promise<{ chat: ChatResponse["chat"]; projectPath: string }> {
@@ -122,11 +105,11 @@ test("sends a chat message and streams a persisted assistant reply @smoke", asyn
   await composer.click();
   await composer.fill("Ping the deterministic provider");
   const sendButton = chatWindow.getByRole("button", { name: "Send message" });
-  await expect(sendButton).toBeDisabled();
-
-  // The readiness result must refresh the already-mounted chat catalog. There is deliberately no
-  // navigation or reload between this visible Settings action and the enabled chat composer.
-  await runVisibleReadiness(page, request);
+  // Relocated pin (0.3.12, tri-state readiness — the customer restart incident): a model this
+  // process never probed is UNKNOWN, not blocked, so the very first send needs NO manual
+  // Settings readiness check and no reload. The send button is usable immediately; the send
+  // below succeeds because the SERVER verifies the model on demand at admission — this journey
+  // now proves the whole self-service path in a real browser.
   await expect(sendButton).toBeEnabled();
 
   await sendButton.click();
