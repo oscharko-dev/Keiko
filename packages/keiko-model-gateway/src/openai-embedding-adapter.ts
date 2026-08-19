@@ -60,7 +60,17 @@ export interface OpenAIEmbeddingBatchRequest {
 export type OpenAIEmbeddingBatchOutcome =
   // `value` is index-aligned to `inputs`: value[i] is the embedding for inputs[i].
   | { readonly ok: true; readonly value: readonly OpenAIEmbeddingSuccess[] }
-  | { readonly ok: false; readonly kind: OpenAIEmbeddingErrorKind; readonly status?: number };
+  | {
+      readonly ok: false;
+      readonly kind: OpenAIEmbeddingErrorKind;
+      readonly status?: number;
+      // Scalar-ladder failures carry the COMPLETED PREFIX (index-aligned to inputs[0..n-1]) so
+      // a retry can resume behind it instead of re-embedding from item zero. Without this, a
+      // ladder-deadline expiry was classified transient and every retry re-ran an identical
+      // doomed full-length trial, discarding all finished work each round — non-convergent
+      // whenever inputCount x per-item latency exceeds the ladder cap.
+      readonly partial?: readonly OpenAIEmbeddingSuccess[];
+    };
 
 export type OpenAIEmbeddingOutcome =
   | { readonly ok: true; readonly value: OpenAIEmbeddingSuccess }
@@ -492,9 +502,13 @@ export async function requestOpenAIEmbeddingBatch(
   if (request.inputs.length === 0) {
     return { ok: true, value: [] };
   }
-  // One absolute deadline bounds the COMPLETE compatibility ladder: with 96 inputs and the
-  // 30s default, an unbounded scalar fallback could otherwise block for over an hour.
-  const deadlineAt = Date.now() + (request.timeoutMs ?? 30_000);
+  // One absolute deadline bounds the COMPLETE compatibility ladder — but it must scale with
+  // the work: the scalar fallback serves ONE item per request, so a flat per-batch budget
+  // (the field incident: 30s for a whole batch against a CPU-served gateway) expires
+  // mid-batch, the batcher classifies the timeout as transient, retries DISCARD the partial
+  // progress, and indexing spins for hours without an error. Per item the budget stays the
+  // request timeout; the sum is capped at 15 minutes as the runaway backstop.
+  const deadlineAt = Date.now() + ladderDeadlineMs(request.inputs.length, request.timeoutMs);
   if (arrayRejectingEndpoints.has(request.endpoint)) {
     return await requestScalarFallbackBatch(request, deadlineAt);
   }
@@ -549,6 +563,32 @@ async function requestMinimalShapeEmbeddingBatch(
   return await requestScalarFallbackBatch(request, deadlineAt);
 }
 
+function perItemTimeoutMs(request: OpenAIEmbeddingBatchRequest): number {
+  return request.timeoutMs ?? 30_000;
+}
+
+// The complete-ladder budget scales with the WORK: the scalar fallback serves one item per
+// request, so a flat per-batch budget expires mid-batch on slow strict gateways, the batcher
+// retries the transient timeout, and every retry discards the partial progress — indexing
+// spins for hours without an error (customer field incident, 0.3.11). Capped at 15 minutes
+// as the runaway backstop. Exported for the budget-math pin.
+export function ladderDeadlineMs(inputCount: number, timeoutMs: number | undefined): number {
+  return Math.min((timeoutMs ?? 30_000) * Math.max(1, inputCount), 900_000);
+}
+
+// A mid-ladder failure keeps the completed prefix (see OpenAIEmbeddingBatchOutcome.partial):
+// the batcher resumes behind it on retry instead of re-paying every finished embedding.
+function scalarLadderFailure(
+  failure: {
+    readonly ok: false;
+    readonly kind: OpenAIEmbeddingErrorKind;
+    readonly status?: number;
+  },
+  completed: readonly OpenAIEmbeddingSuccess[],
+): OpenAIEmbeddingBatchOutcome {
+  return completed.length === 0 ? failure : { ...failure, partial: completed };
+}
+
 async function requestScalarFallbackBatch(
   request: OpenAIEmbeddingBatchRequest,
   deadlineAt: number,
@@ -557,7 +597,7 @@ async function requestScalarFallbackBatch(
   for (const input of request.inputs) {
     const remainingMs = deadlineAt - Date.now();
     if (remainingMs <= 0) {
-      return { ok: false, kind: "timeout" };
+      return scalarLadderFailure({ ok: false, kind: "timeout" }, value);
     }
     const outcome = await requestOpenAIEmbedding({
       endpoint: request.endpoint,
@@ -569,12 +609,12 @@ async function requestScalarFallbackBatch(
       input,
       ...(request.dimensions !== undefined ? { dimensions: request.dimensions } : {}),
       ...(request.signal !== undefined ? { signal: request.signal } : {}),
-      timeoutMs: Math.min(remainingMs, request.timeoutMs ?? 30_000),
+      timeoutMs: Math.min(remainingMs, perItemTimeoutMs(request)),
       ...(request.fetchImpl !== undefined ? { fetchImpl: request.fetchImpl } : {}),
       ...(request.egress !== undefined ? { egress: request.egress } : {}),
     });
     if (!outcome.ok) {
-      return outcome;
+      return scalarLadderFailure(outcome, value);
     }
     value.push(outcome.value);
   }

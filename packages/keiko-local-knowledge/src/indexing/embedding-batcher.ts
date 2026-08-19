@@ -27,6 +27,7 @@ import {
 import type {
   OpenAIEmbeddingAdapter,
   OpenAIEmbeddingBatchOutcome,
+  OpenAIEmbeddingBatchRequest,
   OpenAIEmbeddingErrorKind,
   OpenAIEmbeddingOutcome,
   OpenAIEmbeddingSuccess,
@@ -259,16 +260,12 @@ function errorFromKind(kind: OpenAIEmbeddingErrorKind, status?: number): Indexin
   return { code: "EMBEDDING_ADAPTER_FAILED", message: `embedding adapter returned ${detail}` };
 }
 
-async function embedArrayBatchWithRetry(
+function batchRequestFor(
   options: EmbedBatchOptions,
   inputs: readonly string[],
-): Promise<OpenAIEmbeddingBatchOutcome> {
+): OpenAIEmbeddingBatchRequest {
   const adapter = options.adapter;
-  const requestBatch = adapter.requestBatch;
-  if (requestBatch === undefined) {
-    return { ok: false, kind: "transport" };
-  }
-  const base = {
+  return {
     endpoint: adapter.endpoint,
     apiKey: adapter.apiKey,
     ...(adapter.apiKeyHeaderName !== undefined
@@ -281,20 +278,70 @@ async function embedArrayBatchWithRetry(
       : {}),
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
   };
+}
+
+// A transient failure that carries a completed prefix is PROGRESS: absorb it and retry only the
+// remainder. Progress resets the retry budget — only zero-progress attempts may burn it — so the
+// loop always terminates (the prefix grows at most inputs.length times) yet never abandons a
+// batch that is advancing. Without this, a scalar-ladder deadline expiry was classified
+// transient and every retry re-ran the identical full input list, discarding every finished
+// embedding each round: non-convergent whenever inputCount x per-item latency exceeds the
+// ladder cap (the 0.3.11 endless-indexing shape, one cap higher).
+function absorbPartialProgress(
+  outcome: OpenAIEmbeddingBatchOutcome,
+  completed: OpenAIEmbeddingSuccess[],
+  remaining: readonly string[],
+): readonly string[] | undefined {
+  if (outcome.ok || outcome.partial === undefined || outcome.partial.length === 0) {
+    return undefined;
+  }
+  completed.push(...outcome.partial);
+  return remaining.slice(outcome.partial.length);
+}
+
+function mergeCompletedPrefix(
+  completed: readonly OpenAIEmbeddingSuccess[],
+  outcome: OpenAIEmbeddingBatchOutcome,
+): OpenAIEmbeddingBatchOutcome {
+  if (completed.length === 0 || !outcome.ok) return outcome;
+  return { ok: true, value: [...completed, ...outcome.value] };
+}
+
+async function embedArrayBatchWithRetry(
+  options: EmbedBatchOptions,
+  inputs: readonly string[],
+): Promise<OpenAIEmbeddingBatchOutcome> {
+  const requestBatch = options.adapter.requestBatch;
+  if (requestBatch === undefined) {
+    return { ok: false, kind: "transport" };
+  }
   const retry = resolveRetry(options.retry);
-  let outcome = await requestBatch(base);
-  for (let attempt = 1; attempt <= retry.maxRetries; attempt += 1) {
+  const completed: OpenAIEmbeddingSuccess[] = [];
+  let remaining = inputs;
+  let outcome = await requestBatch(batchRequestFor(options, remaining));
+  let zeroProgressRetries = 0;
+  while (zeroProgressRetries < retry.maxRetries) {
     if (!isTransientBatchOutcome(outcome) || options.signal?.aborted === true) {
-      return outcome;
+      break;
+    }
+    const advanced = absorbPartialProgress(outcome, completed, remaining);
+    if (advanced === undefined) {
+      zeroProgressRetries += 1;
+    } else {
+      remaining = advanced;
+      zeroProgressRetries = 0;
     }
     try {
-      await retry.sleep(backoffMs(attempt, retry.baseDelayMs), options.signal);
+      await retry.sleep(
+        backoffMs(advanced === undefined ? zeroProgressRetries : 1, retry.baseDelayMs),
+        options.signal,
+      );
     } catch {
-      return outcome; // aborted mid-backoff; the abort gate converts this to CANCELLED
+      break; // aborted mid-backoff; the abort gate converts this to CANCELLED
     }
-    outcome = await requestBatch(base);
+    outcome = await requestBatch(batchRequestFor(options, remaining));
   }
-  return outcome;
+  return mergeCompletedPrefix(completed, outcome);
 }
 
 // Apply the per-vector identity gate exactly as the scalar path does. Order-independent:

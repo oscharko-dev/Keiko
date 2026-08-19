@@ -1827,6 +1827,9 @@ export type { ConversationIneligibilityReason } from "./gateway.js";
 export {
   isConversationEligibleModel,
   explainConversationIneligibility,
+  conversationDefaultRank,
+  electConversationDefault,
+  preferredConversationModelOrder,
   modelSupportsInfilling,
   isAlignedInfillingModel,
   isAsYouTypeCompletionModel,

@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -16,6 +17,7 @@ import {
   isEditorFirstLoadForbiddenSpecifier,
   isMonacoSpecifier,
   runEditorBundleSizeCheck,
+  requireInitialPageCeiling,
 } from "../editor-bundle-size.mjs";
 
 describe("gzipSizeBytes", () => {
@@ -293,6 +295,102 @@ describe("runEditorBundleSizeCheck (integration against the real repo state)", (
     expect(
       failures.length === 0 ||
         failures.some((m) => m.includes("packages/keiko-ui/out/index.html does not exist")),
+    ).toBe(true);
+  });
+});
+
+// Fail-closed budget-file guard (review finding on #3220): a missing or malformed first-load
+// ceiling used to SKIP the check silently — a typo in the budget key could disable a required
+// gate with a green run.
+describe("requireInitialPageCeiling", () => {
+  const failuresOf = (budget) => {
+    const failures = [];
+    requireInitialPageCeiling(budget, (message) => failures.push(message));
+    return failures;
+  };
+
+  it("accepts the committed ceiling", () => {
+    expect(failuresOf({ initialPageChunkGzipBytesCeiling: 348160 })).toEqual([]);
+  });
+
+  it.each([
+    ["missing", {}],
+    ["null", { initialPageChunkGzipBytesCeiling: null }],
+    ["string", { initialPageChunkGzipBytesCeiling: "348160" }],
+    ["NaN", { initialPageChunkGzipBytesCeiling: Number.NaN }],
+    ["zero", { initialPageChunkGzipBytesCeiling: 0 }],
+    ["negative", { initialPageChunkGzipBytesCeiling: -1 }],
+    ["fractional", { initialPageChunkGzipBytesCeiling: 1.5 }],
+  ])("refuses to run fail-open on a %s ceiling", (_label, budget) => {
+    expect(
+      failuresOf(budget).some((m) => m.includes("refusing to run the first-load gate fail-open")),
+    ).toBe(true);
+  });
+});
+
+// Wiring proof for the guard above (review finding on #3220): the direct pins call the helper,
+// so they stay green if the runner stops calling it. This drives the REAL gate path — a
+// synthetic static export small enough to pass every other check — and asserts the guard failure
+// surfaces through runEditorBundleSizeCheck itself. Unwire the guard at its call site and the
+// invalid-ceiling runs report only a generic (or no) failure, turning these red.
+describe("runEditorBundleSizeCheck fail-closed ceiling guard (synthetic static export)", () => {
+  const fixtureBudget = {
+    editorOwnCodeGzipBytesCeiling: 1024,
+    monacoEditorPinnedVersion: "1.0.0-fixture",
+    firstLoadRuntimeValueImporters: [],
+    initialPageChunkGzipBytesCeiling: 4096,
+  };
+
+  const buildFixtureRepo = () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-bundle-gate-"));
+    mkdirSync(join(root, "packages", "keiko-editor", "dist"), { recursive: true });
+    writeFileSync(
+      join(root, "packages", "keiko-editor", "package.json"),
+      JSON.stringify({
+        dependencies: { "monaco-editor": fixtureBudget.monacoEditorPinnedVersion },
+      }),
+    );
+    mkdirSync(join(root, "packages", "keiko-ui", "src"), { recursive: true });
+    const chunksDir = join(root, "packages", "keiko-ui", "out", "_next", "static", "chunks");
+    mkdirSync(chunksDir, { recursive: true });
+    writeFileSync(
+      join(root, "packages", "keiko-ui", "out", "index.html"),
+      '<html><head><script src="/_next/static/chunks/app.js" defer></script></head></html>',
+    );
+    writeFileSync(join(chunksDir, "app.js"), 'console.log("first load");');
+    return root;
+  };
+
+  const runOnFixture = (budget) => {
+    const root = buildFixtureRepo();
+    const failures = [];
+    try {
+      runEditorBundleSizeCheck({
+        repoRoot: root,
+        budget,
+        requireStaticExport: true,
+        fail: (message) => failures.push(message),
+        log: () => undefined,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+    return failures;
+  };
+
+  it("passes the synthetic export with a valid ceiling, proving the fixture reaches the guard", () => {
+    expect(runOnFixture(fixtureBudget)).toEqual([]);
+  });
+
+  const missingCeilingBudget = { ...fixtureBudget };
+  delete missingCeilingBudget.initialPageChunkGzipBytesCeiling;
+
+  it.each([
+    ["missing", missingCeilingBudget],
+    ["string-corrupted", { ...fixtureBudget, initialPageChunkGzipBytesCeiling: "4096" }],
+  ])("fails closed through the real gate path on a %s ceiling", (_label, budget) => {
+    expect(
+      runOnFixture(budget).some((m) => m.includes("refusing to run the first-load gate fail-open")),
     ).toBe(true);
   });
 });

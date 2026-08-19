@@ -181,6 +181,81 @@ describe("resolveSelectedModelId", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tri-state readiness + conversation-default rank (0.3.12 restart incident)
+// ---------------------------------------------------------------------------
+// `conversationReady` is tri-state on the wire: ABSENT means "this server process never probed
+// the model" — after every restart the volatile observation store makes EVERY model unknown.
+// Treating unknown as unusable emptied the picker until a manual probe plus reload (customer
+// field incident, 0.3.11); the server verifies unknown models on demand at create/send. Among
+// candidates the shared conversationDefaultRank keeps a mode-less OCR id from outranking a
+// declared chat model.
+
+function unprobedModel(id: string, chatModeDeclared?: boolean): ModelCapability {
+  const { conversationReady: _ready, ...rest } = chatModel(id);
+  return { ...rest, ...(chatModeDeclared === undefined ? {} : { chatModeDeclared }) };
+}
+
+function unreadyModel(id: string): ModelCapability {
+  return { ...chatModel(id), conversationReady: false };
+}
+
+describe("pickChatModelId tri-state readiness", () => {
+  it("keeps never-probed models usable — the picker survives a restart", () => {
+    expect(pickChatModelId([unprobedModel("qwen-chat")])).toBe("qwen-chat");
+  });
+
+  it("blocks only an OBSERVED not-ready model", () => {
+    expect(pickChatModelId([unreadyModel("cold-chat")])).toBeUndefined();
+    expect(pickChatModelId([unreadyModel("cold-chat"), unprobedModel("qwen-chat")])).toBe(
+      "qwen-chat",
+    );
+  });
+
+  it("prefers a verified model over an unknown one", () => {
+    expect(pickChatModelId([unprobedModel("unknown-first"), chatModel("verified-second")])).toBe(
+      "verified-second",
+    );
+  });
+
+  it("ranks a mode-less OCR id behind its siblings — unknown and verified alike", () => {
+    // Unknown tier: the declared chat model wins over the first-listed OCR id.
+    expect(pickChatModelId([unprobedModel("dotsocr"), unprobedModel("qwen-chat", true)])).toBe(
+      "qwen-chat",
+    );
+    // Even without mode metadata the id heuristic keeps the OCR engine last.
+    expect(pickChatModelId([unprobedModel("dotsocr"), unprobedModel("mistral-small")])).toBe(
+      "mistral-small",
+    );
+    // Verified tier: a WARM OCR model that passed a probe still loses to a verified chat model.
+    expect(
+      pickChatModelId([
+        chatModel("dotsocr"),
+        { ...chatModel("qwen-chat"), chatModeDeclared: true },
+      ]),
+    ).toBe("qwen-chat");
+    // Tier-first (review finding): a VERIFIED special-purpose model must not override an
+    // UNPROBED declared chat model — verification breaks ties only within the best tier.
+    expect(pickChatModelId([chatModel("dotsocr"), unprobedModel("qwen-chat", true)])).toBe(
+      "qwen-chat",
+    );
+  });
+});
+
+describe("resolveSelectedModelId tri-state readiness", () => {
+  it("keeps the persisted model of a reopened chat when its readiness is merely unknown", () => {
+    expect(
+      resolveSelectedModelId("qwen-chat", [unprobedModel("dotsocr"), unprobedModel("qwen-chat")]),
+    ).toBe("qwen-chat");
+  });
+
+  it("drops a persisted model only on an OBSERVED not-ready", () => {
+    expect(
+      resolveSelectedModelId("cold-chat", [unreadyModel("cold-chat"), unprobedModel("qwen-chat")]),
+    ).toBe("qwen-chat");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // AC #4 — chooseDefaultModel (NewWindowDialog)
 // ---------------------------------------------------------------------------
 

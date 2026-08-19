@@ -396,6 +396,14 @@ export interface GatewayDiscoveredModelMetadata {
   readonly contextWindow?: number | undefined;
   readonly maxOutputTokens?: number | undefined;
   readonly toolCalling?: boolean | undefined;
+  /**
+   * True when the discovery payload explicitly declared a chat-compatible mode for this model
+   * (LiteLLM `/model/info` `mode` of chat/completion/responses). Never false — absent means the
+   * gateway gave no signal either way. Flows into the persisted capability so the
+   * conversation-default preference can rank mode-declared models first (customer field
+   * incident: a mode-less OCR model first in the list captured the default for every new chat).
+   */
+  readonly chatModeDeclared?: boolean | undefined;
 }
 
 export interface GatewaySetupTestResult {
@@ -1124,6 +1132,26 @@ export function currentConversationReady(
   return (
     observation?.generation === holder.generation() && observation.fields.conversationReady === true
   );
+}
+
+/**
+ * Tri-state view for the models wire: `true`/`false` only when the CURRENT generation holds an
+ * actual basic-chat observation, `undefined` when this process never probed the model since the
+ * configuration was (re)loaded. The observation store is process-local by design, so collapsing
+ * "unknown" into "not ready" told the UI after every restart that no model was usable until a
+ * manual probe plus reload (customer field incident, 0.3.11). Admission guards keep using the
+ * strict boolean `currentConversationReady` — unknown never admits, it only defers to the
+ * on-demand probe at the conversation entry points.
+ */
+export function currentConversationReadinessObservation(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  modelId: string,
+): boolean | undefined {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) return undefined;
+  const observation = holder.verifiedCapability(modelId);
+  if (observation?.generation !== holder.generation()) return undefined;
+  return observation.fields.conversationReady;
 }
 
 function configuredChatContextProfile(

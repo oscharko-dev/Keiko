@@ -20,6 +20,7 @@ import type {
 import {
   gatewayVerificationFromProbeOutcome,
   maxUtf8BytesForTokenBudget,
+  preferredConversationModelOrder,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps, VerifiedModelCapabilityFields } from "./deps.js";
 import { currentConversationReady, currentGatewayConfig } from "./deps.js";
@@ -1281,9 +1282,27 @@ export async function runGatewayReadiness(
 // rejected as "not ready" until the user manually verified each model in the settings dialog.
 // When a conversation guard finds no CURRENT-GENERATION observation for the model, verify on
 // demand with the minimal chat probe. The admission stays honest — the probe must actually
-// pass, and an existing current-generation "not ready" observation is respected without a
-// re-probe. Concurrent callers share one in-flight probe per model.
+// pass. Concurrent callers share one in-flight probe per model.
 const onDemandReadinessProbes = new Map<string, Promise<void>>();
+
+// A failed probe must not pin the model for the whole configuration generation: a transient
+// gateway outage would brick every chat surface until a manual re-probe or restart (the
+// readiness twin of the 0.3.11 endless-indexing incident). It must not be re-probed on every
+// request either — each probe can burn the full provider timeout against a dead gateway. So a
+// current-generation non-ready observation answers the guard only within this window; after it,
+// the next conversation attempt re-probes and either heals or refreshes the pin.
+export const NOT_READY_REPROBE_COOLDOWN_MS = 30_000;
+
+function withinNotReadyCooldown(
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+): boolean {
+  const observation = holder.verifiedCapability(modelId);
+  if (observation?.generation !== holder.generation()) return false;
+  const ageMs = Date.now() - Date.parse(observation.checkedAt);
+  // A malformed timestamp fails open toward probing — never toward a permanent pin.
+  return Number.isFinite(ageMs) && ageMs < NOT_READY_REPROBE_COOLDOWN_MS;
+}
 
 export async function ensureOnDemandConversationReadiness(
   deps: UiHandlerDeps,
@@ -1292,7 +1311,7 @@ export async function ensureOnDemandConversationReadiness(
   const holder = deps.gatewayConfig;
   if (holder === undefined || modelId.length === 0) return;
   if (currentConversationReady(deps, modelId)) return;
-  if (holder.verifiedCapability(modelId)?.generation === holder.generation()) return;
+  if (withinNotReadyCooldown(holder, modelId)) return;
   // The in-flight key carries the generation: a config replaced mid-probe must not hand the
   // NEW generation's caller the OLD generation's discarded report.
   const key = `${String(holder.generation())}:${modelId}`;
@@ -1344,6 +1363,68 @@ async function runOnDemandReadinessProbe(
       new Date().toISOString(),
       generation,
     );
+  }
+}
+
+// Chat creation without an explicit model must not die on an unsuitable FIRST list entry
+// (customer field incident: an OCR model at position 1 legitimately fails the chat probe;
+// the single-model on-demand check then recorded not-ready and stopped, so every chat
+// create failed until a suitable model was probed MANUALLY). When the requested default is
+// not conversation-ready, walk the remaining configured chat models — mode-declared
+// candidates first (keiko-contracts conversationDefaultRank) — until one verifies; the
+// default-model selection then prefers the verified one.
+//
+// The walk is BOUNDED: probes are serial and each can burn the full provider timeout, so an
+// aggregate budget caps what one interactive create may wait (the unbounded-sum lesson of the
+// 0.3.11 embedding ladder, applied here). A probe that outlives the budget keeps running in
+// the shared in-flight map — its observation lands for the NEXT attempt — but this request
+// stops waiting.
+export const CHAT_MODEL_WALK_BUDGET_MS = 45_000;
+
+async function settledWithinBudget(probe: Promise<void>, budgetMs: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => {
+      resolve(false);
+    }, budgetMs);
+  });
+  try {
+    return await Promise.race([probe.then(() => true), expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function conversationWalkCandidates(
+  deps: UiHandlerDeps,
+  requestedModelId: string,
+): readonly ModelCapability[] {
+  const config = currentGatewayConfig(deps);
+  if (config === undefined) return [];
+  return preferredConversationModelOrder(
+    listConfiguredCapabilities(config).filter(
+      (capability) => capability.kind === "chat" && capability.id !== requestedModelId,
+    ),
+  );
+}
+
+export async function ensureAnyConversationReadyChatModel(
+  deps: UiHandlerDeps,
+  requestedModelId: string,
+): Promise<void> {
+  // The budget covers the REQUESTED model's probe too (review finding on the first cut):
+  // computed after it, a hanging gateway burned the full provider timeout before the budget
+  // even started. The interactive create never waits longer than the budget, full stop.
+  const deadlineAt = Date.now() + CHAT_MODEL_WALK_BUDGET_MS;
+  const firstProbe = ensureOnDemandConversationReadiness(deps, requestedModelId);
+  if (!(await settledWithinBudget(firstProbe, CHAT_MODEL_WALK_BUDGET_MS))) return;
+  if (currentConversationReady(deps, requestedModelId)) return;
+  for (const capability of conversationWalkCandidates(deps, requestedModelId)) {
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) return;
+    const probe = ensureOnDemandConversationReadiness(deps, capability.id);
+    if (!(await settledWithinBudget(probe, remainingMs))) return;
+    if (currentConversationReady(deps, capability.id)) return;
   }
 }
 

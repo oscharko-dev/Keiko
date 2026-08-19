@@ -6,8 +6,11 @@
 import { describe, expect, it } from "vitest";
 import {
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
+  conversationDefaultRank,
+  electConversationDefault,
   describeVoiceProviderAvailability,
   explainConversationIneligibility,
+  preferredConversationModelOrder,
   INFILLING_ALIGNMENTS,
   isCompleteRealtimeVoiceCapability,
   isAlignedInfillingModel,
@@ -390,5 +393,110 @@ describe("describeVoiceProviderAvailability", () => {
       realtimeVoice: false,
       personas: [],
     });
+  });
+});
+
+// Customer field incident (0.3.11): a mode-less OCR model FIRST in the configured list captured
+// the "first eligible model wins" default for every new chat. The rank is the shared preference
+// the UI picker and the server default selection both consult.
+describe("conversationDefaultRank", () => {
+  it("ranks a declared chat-compatible mode first, even on a special-purpose id", () => {
+    expect(conversationDefaultRank(cap({ id: "qwen-chat", chatModeDeclared: true }))).toBe(0);
+    // Declared mode is the gateway's affirmative statement; it beats the id heuristic.
+    expect(conversationDefaultRank(cap({ id: "dotsocr", chatModeDeclared: true }))).toBe(0);
+  });
+
+  it("ranks a mode-less ordinary id in the middle tier", () => {
+    expect(conversationDefaultRank(cap({ id: "qwen-chat" }))).toBe(1);
+    expect(conversationDefaultRank(cap({ id: "llama-3-70b-instruct" }))).toBe(1);
+    // "ocr" embedded mid-token is not a suffix: no down-rank for lookalike names.
+    expect(conversationDefaultRank(cap({ id: "procreate-chat" }))).toBe(1);
+  });
+
+  it("ranks mode-less special-purpose ids last — the dotsocr field shape", () => {
+    expect(conversationDefaultRank(cap({ id: "dotsocr" }))).toBe(2);
+    expect(conversationDefaultRank(cap({ id: "dots.ocr" }))).toBe(2);
+    expect(conversationDefaultRank(cap({ id: "my-ocr-model" }))).toBe(2);
+    expect(conversationDefaultRank(cap({ id: "whisper-large-v3" }))).toBe(2);
+    expect(conversationDefaultRank(cap({ id: "bge-reranker-v2" }))).toBe(2);
+    // The documented marker set includes plain "speech" engines (review finding: the marker
+    // was documented but missing from the token set).
+    expect(conversationDefaultRank(cap({ id: "speech-to-text-general" }))).toBe(2);
+  });
+
+  it("treats an explicit chatModeDeclared: false like an absent signal", () => {
+    expect(conversationDefaultRank(cap({ id: "qwen-chat", chatModeDeclared: false }))).toBe(1);
+    expect(conversationDefaultRank(cap({ id: "dotsocr", chatModeDeclared: false }))).toBe(2);
+  });
+});
+
+describe("electConversationDefault", () => {
+  const observed = (m: ModelCapability): boolean | undefined => m.conversationReady;
+
+  it("lets a verified probe break ties only WITHIN the best rank tier", () => {
+    const models = [
+      cap({ id: "dotsocr", conversationReady: true }),
+      { ...cap({ id: "qwen-chat", chatModeDeclared: true }), conversationReady: undefined },
+    ];
+    // The warm special-purpose model is VERIFIED, the declared chat model is unprobed — the
+    // tier must win, or a single warm probe re-opens the default-capture the rank prevents.
+    expect(electConversationDefault(models, observed)?.id).toBe("qwen-chat");
+  });
+
+  it("prefers the verified model within the same tier", () => {
+    const models = [
+      { ...cap({ id: "mistral-small" }), conversationReady: undefined },
+      cap({ id: "llama-3-70b-instruct", conversationReady: true }),
+    ];
+    expect(electConversationDefault(models, observed)?.id).toBe("llama-3-70b-instruct");
+  });
+
+  it("falls through an exhausted tier: observed-unready declared models yield to a verified fallback", () => {
+    // The walk journey: the declared chat model failed its probe (observed false) while the
+    // special-purpose model verified warm — chat must still work, so the verified fallback
+    // wins over an admission already known to fail.
+    const models = [
+      cap({ id: "dotsocr", conversationReady: true }),
+      cap({ id: "qwen-chat", chatModeDeclared: true, conversationReady: false }),
+    ];
+    expect(electConversationDefault(models, observed)?.id).toBe("dotsocr");
+  });
+
+  it("returns the best-ranked head when everything is observed-unready, undefined when empty", () => {
+    const models = [
+      cap({ id: "dotsocr", conversationReady: false }),
+      cap({ id: "qwen-chat", chatModeDeclared: true, conversationReady: false }),
+    ];
+    expect(electConversationDefault(models, observed)?.id).toBe("qwen-chat");
+    expect(electConversationDefault([], observed)).toBeUndefined();
+  });
+});
+
+describe("preferredConversationModelOrder", () => {
+  it("orders declared-mode models first and special-purpose ids last, keeping config order in ties", () => {
+    const models = [
+      cap({ id: "dotsocr" }),
+      cap({ id: "qwen-chat", chatModeDeclared: true }),
+      cap({ id: "mistral-small" }),
+      cap({ id: "llama-3-70b-instruct" }),
+    ];
+    expect(preferredConversationModelOrder(models).map((model) => model.id)).toEqual([
+      "qwen-chat",
+      "mistral-small",
+      "llama-3-70b-instruct",
+      "dotsocr",
+    ]);
+  });
+
+  it("is a preference, never an eligibility gate: a lone special-purpose model stays first", () => {
+    const models = [cap({ id: "dotsocr" })];
+    expect(preferredConversationModelOrder(models).map((model) => model.id)).toEqual(["dotsocr"]);
+  });
+
+  it("does not mutate its input", () => {
+    const models = [cap({ id: "dotsocr" }), cap({ id: "qwen-chat", chatModeDeclared: true })];
+    const snapshot = models.map((model) => model.id);
+    void preferredConversationModelOrder(models);
+    expect(models.map((model) => model.id)).toEqual(snapshot);
   });
 });

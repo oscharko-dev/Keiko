@@ -741,6 +741,68 @@ describe("parseGatewayConfig", () => {
     expect(cap?.supportsResponseFormat).toBe(true);
   });
 
+  // 0.3.12 conversation-default rank: the discovery-declared chat mode persists on the stored
+  // capability (setup writes it after /model/info), so the parser must round-trip it through
+  // BOTH capability paths — a dropped flag silently demotes every declared chat model to the
+  // same tier as a mode-less OCR entry and the default-model preference stops working after
+  // the next config reload.
+  it("round-trips chatModeDeclared through the strict top-level capabilities array", () => {
+    const raw = {
+      providers: [{ ...validProvider(), modelId: "declared-chat" }],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+      capabilities: [
+        {
+          id: "declared-chat",
+          kind: "chat",
+          contextWindow: 128_000,
+          maxOutputTokens: 4_096,
+          toolCalling: false,
+          structuredOutput: false,
+          streaming: false,
+          supportsImageInput: false,
+          supportsDocumentInput: false,
+          chatModeDeclared: true,
+          workflowEligible: false,
+          costClass: "medium",
+          latencyClass: "standard",
+          throughputHint: "declared endpoint",
+          preferredUseCases: ["Conversation"],
+          knownLimitations: [],
+        },
+      ],
+    };
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "declared-chat");
+    expect(cap?.chatModeDeclared).toBe(true);
+  });
+
+  it("round-trips chatModeDeclared through the inline provider capability path and preserves absence", () => {
+    const declared = parseGatewayConfig(
+      rawWithProvider((p) => ({
+        ...p,
+        modelId: "declared-chat",
+        capability: { kind: "chat", contextWindow: 8_192, chatModeDeclared: true },
+      })),
+    );
+    expect(declared.capabilities?.find((c) => c.id === "declared-chat")?.chatModeDeclared).toBe(
+      true,
+    );
+    const silent = parseGatewayConfig(
+      rawWithProvider((p) => ({
+        ...p,
+        modelId: "modeless-chat",
+        capability: { kind: "chat", contextWindow: 8_192 },
+      })),
+    );
+    // Absence is NO signal and must stay absent — a coerced false would be indistinguishable
+    // from an affirmative "declared non-chat" record. Pin the capability first: with a bare
+    // `?? {}` fallback a parser regression that drops the inline capability entirely would
+    // still satisfy the absence check.
+    const modeless = silent.capabilities?.find((c) => c.id === "modeless-chat");
+    expect(modeless).toBeDefined();
+    expect(modeless !== undefined && "chatModeDeclared" in modeless).toBe(false);
+  });
+
   // Mutation guard: the strict top-level path preserves absence (optionalDeterminismFlags only
   // materialises a flag when declared), so an omitted determinism flag must read back as undefined,
   // not a coerced false — the gate treats both as "not seed-capable" but the wire shape must not drift.
