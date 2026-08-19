@@ -100,13 +100,31 @@ describe("ensureOnDemandConversationReadiness guards", () => {
     await expect(ensureOnDemandConversationReadiness(deps, "chat-model")).resolves.toBeUndefined();
     expect(fetchCalls()).toBe(0);
   });
+
+  it("probes immediately when the current-generation observation carries no readiness field", async () => {
+    // Review finding on #3220: only an EXPLICIT failed probe earns the cooldown. A capability
+    // observation without a conversationReady field is unknown readiness — suppressing its
+    // probe converted unknown into a 30-second admission block.
+    const { deps, fetchCalls } = probeableDeps(new Date(Date.now() - 1_000).toISOString(), {});
+    await expect(ensureOnDemandConversationReadiness(deps, "chat-model")).resolves.toBeUndefined();
+    expect(fetchCalls()).toBeGreaterThan(0);
+  });
+
+  it("probes immediately when the not-ready timestamp lies in the future — fail-open on clock skew", async () => {
+    const { deps, fetchCalls } = probeableDeps(new Date(Date.now() + 60_000).toISOString());
+    await expect(ensureOnDemandConversationReadiness(deps, "chat-model")).resolves.toBeUndefined();
+    expect(fetchCalls()).toBeGreaterThan(0);
+  });
 });
 
 // Deps with ONE configured provider, a fake gateway transport that answers the minimal chat
 // probe, and a current-generation not-ready observation stamped `checkedAt`. Generation is
 // unique per call so the module-level in-flight probe map never collides across tests.
 let nextGeneration = 100;
-function probeableDeps(checkedAt: string): {
+function probeableDeps(
+  checkedAt: string,
+  fields: { conversationReady?: boolean } = { conversationReady: false },
+): {
   deps: UiHandlerDeps;
   fetchCalls: () => number;
   readyRecords: () => readonly (boolean | undefined)[];
@@ -128,7 +146,7 @@ function probeableDeps(checkedAt: string): {
         modelId: "chat-model",
         generation,
         checkedAt,
-        fields: { conversationReady: false },
+        fields,
       },
       generation,
     ),

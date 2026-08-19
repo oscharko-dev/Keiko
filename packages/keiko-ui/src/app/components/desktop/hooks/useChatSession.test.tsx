@@ -458,8 +458,11 @@ describe("useChatSession bootstrap", () => {
     const { result } = renderHook(() => useChatSession());
 
     await waitFor(() => expect(result.current.loading).toBe(false));
+    // Relocated pin (review finding on #3220): the bootstrap default is an AUTOMATIC election,
+    // so the create request OMITS modelId — the server's bounded readiness walk owns the
+    // election and can route around a failing preferred model. An explicit modelId here would
+    // turn the automatic default into an explicit request the server must not walk away from.
     expect(createDesktopChat).toHaveBeenCalledWith({
-      modelId: "chat-live",
       title: "New chat",
       projectPath: "/repo",
     });

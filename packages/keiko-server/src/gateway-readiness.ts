@@ -1299,9 +1299,15 @@ function withinNotReadyCooldown(
 ): boolean {
   const observation = holder.verifiedCapability(modelId);
   if (observation?.generation !== holder.generation()) return false;
+  // Only an EXPLICIT failed chat probe earns a cooldown. An observation without a
+  // conversationReady field (e.g. a capability record carrying other probe fields) is unknown
+  // readiness, and unknown must probe immediately — never sit out a 30-second admission block
+  // (review finding on #3220).
+  if (observation.fields.conversationReady !== false) return false;
   const ageMs = Date.now() - Date.parse(observation.checkedAt);
-  // A malformed timestamp fails open toward probing — never toward a permanent pin.
-  return Number.isFinite(ageMs) && ageMs < NOT_READY_REPROBE_COOLDOWN_MS;
+  // Malformed AND future timestamps fail open toward probing — never toward a pin: NaN and
+  // negative ages both miss the [0, cooldown) window.
+  return ageMs >= 0 && ageMs < NOT_READY_REPROBE_COOLDOWN_MS;
 }
 
 export async function ensureOnDemandConversationReadiness(

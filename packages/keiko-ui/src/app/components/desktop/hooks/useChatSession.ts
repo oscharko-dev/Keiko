@@ -677,6 +677,35 @@ function isUsableConversationModel(model: ModelCapability): boolean {
   return isConversationEligibleModel(model) && model.conversationReady !== false;
 }
 
+// Create-chat inputs preserve WHO chose the model (review finding on #3220): an AUTOMATIC
+// election (bootstrap default, fallback after a stale selection) is sent WITHOUT a modelId so
+// the server's bounded readiness walk can route around a failing preferred model, while a
+// user-selected or persisted model stays an explicit request the server validates as such.
+function createChatInput(
+  modelId: string,
+  automatic: boolean,
+  title: string,
+  projectPath?: string,
+): { modelId?: string; title: string; projectPath?: string } {
+  return {
+    ...(automatic ? {} : { modelId }),
+    title,
+    ...(projectPath !== undefined ? { projectPath } : {}),
+  };
+}
+
+// Whether the current selection names a live, usable model — a deliberate (user or persisted)
+// choice a create request must respect as an EXPLICIT model id.
+function isPreservedSelection(
+  selectedModel: string | undefined,
+  models: readonly ModelCapability[],
+): boolean {
+  return (
+    selectedModel !== undefined &&
+    models.some((model) => model.id === selectedModel && isUsableConversationModel(model))
+  );
+}
+
 // Reopened chats can persist a model id that is no longer present in the
 // current eligible model list. Fail closed to a live usable model, or to
 // undefined so the UI blocks sends with the no-model alert.
@@ -684,12 +713,7 @@ export function resolveSelectedModelId(
   current: string | undefined,
   models: readonly ModelCapability[],
 ): string | undefined {
-  if (
-    current !== undefined &&
-    models.some((model) => model.id === current && isUsableConversationModel(model))
-  ) {
-    return current;
-  }
+  if (isPreservedSelection(current, models)) return current;
   return pickChatModelId(models);
 }
 
@@ -1915,12 +1939,14 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
       messages: [],
     };
   }
-  const input: { modelId: string; title: string; projectPath?: string } = {
-    modelId: defaultModel,
-    title: DEFAULT_CHAT_TITLE,
-  };
-  if (project?.available === true) input.projectPath = project.path;
-  const created = await createDesktopChat(input);
+  const created = await createDesktopChat(
+    createChatInput(
+      defaultModel,
+      true,
+      DEFAULT_CHAT_TITLE,
+      project?.available === true ? project.path : undefined,
+    ),
+  );
   notifyChatUpsert(created.chat);
   return {
     models: chatModels,
@@ -2983,6 +3009,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       projectOverride?: ProjectWithAvailability,
       title?: string,
     ): Promise<Chat | undefined> => {
+      const preservedSelection = isPreservedSelection(state.selectedModel, state.models);
       const modelId = resolveSelectedModelId(state.selectedModel, state.models);
       if (modelId === undefined) {
         setError(NO_CONVERSATION_MODEL_MESSAGE);
@@ -2996,16 +3023,17 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       resetComposerForConversationSwitch();
       try {
         const trimmedTitle = title?.trim();
-        const input: { modelId: string; title: string; projectPath?: string } = {
-          modelId,
-          title:
+        const targetPath = projectOverride?.path ?? state.activeProject?.path;
+        const created = await createDesktopChat(
+          createChatInput(
+            modelId,
+            !preservedSelection,
             trimmedTitle !== undefined && trimmedTitle.length > 0
               ? trimmedTitle
               : DEFAULT_CHAT_TITLE,
-        };
-        const targetPath = projectOverride?.path ?? state.activeProject?.path;
-        if (targetPath !== undefined) input.projectPath = targetPath;
-        const created = await createDesktopChat(input);
+            targetPath,
+          ),
+        );
         notifyChatUpsert(created.chat);
         if (targetPath !== undefined && activeProjectPathRef.current !== targetPath) {
           return created.chat;
