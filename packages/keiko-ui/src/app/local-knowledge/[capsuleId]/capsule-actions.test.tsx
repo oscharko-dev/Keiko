@@ -123,6 +123,25 @@ function progressDetail(overrides: Partial<CapsuleDetail> = {}): CapsuleDetail {
   } as CapsuleDetail;
 }
 
+function terminalDetail(status: "succeeded" | "failed" = "succeeded"): CapsuleDetail {
+  const base = progressDetail();
+  return {
+    ...base,
+    capsule: { ...base.capsule, lifecycleState: status === "succeeded" ? "ready" : "error" },
+    indexingJobs: [
+      {
+        ...base.indexingJobs[0],
+        status,
+        finishedAt: Date.now(),
+        processedDocuments: 3,
+        ...(status === "failed"
+          ? { lastError: { code: "EMBEDDING_ADAPTER_FAILED", message: "gateway went away" } }
+          : {}),
+      },
+    ],
+  } as CapsuleDetail;
+}
+
 function connectedCapsuleResponse(): CapsuleDetailResponse {
   return { capsule: progressDetail().capsule };
 }
@@ -674,15 +693,14 @@ describe("CapsuleActions — delete typed-name confirmation", () => {
 // ---------------------------------------------------------------------------
 
 describe("CapsuleActions — refresh action", () => {
-  it("keeps long-running direct indexing visibly active with live progress", async () => {
+  it("keeps detached indexing visibly active and settles from the polled job row", async () => {
+    // Relocated pin (2026-08 field review): the start route now answers 202 immediately — the
+    // POLLING, not the start fetch, decides when indexing is over. Busy must survive the fast
+    // 202 and settle only when the job row reports a terminal state.
     const user = userEvent.setup();
-    let finishIndexing: ((value: CapsuleActionResponse) => void) | undefined;
-    const startIndexingImpl = vi.fn(
-      () =>
-        new Promise<CapsuleActionResponse>((resolve) => {
-          finishIndexing = resolve;
-        }),
-    );
+    const startIndexingImpl = vi
+      .fn<() => Promise<CapsuleActionResponse>>()
+      .mockResolvedValue({ ok: true, capsuleId: DEFAULT_ID });
     const fetchCapsuleDetailImpl = vi.fn().mockResolvedValue(progressDetail());
     const onActionComplete = vi.fn();
 
@@ -699,6 +717,7 @@ describe("CapsuleActions — refresh action", () => {
 
     await user.click(screen.getByRole("button", { name: /index this Knowledge Pod now/i }));
 
+    // The 202 resolved long ago, yet the run is visibly active from the polled job row.
     expect(await screen.findByText("Indexing documents")).toBeInTheDocument();
     expect(screen.getByText(/Still working/i)).toBeInTheDocument();
     expect(screen.getByText("running")).toBeInTheDocument();
@@ -707,11 +726,49 @@ describe("CapsuleActions — refresh action", () => {
     await waitFor(() => {
       expect(fetchCapsuleDetailImpl).toHaveBeenCalledWith(DEFAULT_ID);
     });
+    expect(onActionComplete).not.toHaveBeenCalled();
 
-    finishIndexing?.({ ok: true, capsuleId: DEFAULT_ID });
+    // The job reaches its terminal state server-side; the next poll settles the panel.
+    fetchCapsuleDetailImpl.mockResolvedValue(terminalDetail());
+    await waitFor(
+      () => {
+        expect(onActionComplete).toHaveBeenCalledOnce();
+      },
+      { timeout: 4_000 },
+    );
+  });
+
+  it("re-attaches to a running job on mount and surfaces a failed terminal state", async () => {
+    // Re-attach pin: a page reload during a multi-hour run (the run survives any transport
+    // blip server-side) must show live progress again WITHOUT a click — and a failed job must
+    // surface its error instead of silently re-enabling the Index button.
+    const fetchCapsuleDetailImpl = vi.fn().mockResolvedValue(progressDetail());
+    const onActionComplete = vi.fn();
+
+    render(
+      <CapsuleActions
+        {...defaultProps({
+          fetchCapsuleDetailImpl,
+          lifecycleState: "indexing",
+          onActionComplete,
+        })}
+      />,
+    );
+
+    // No click: the in-flight run attaches from the capsule's lifecycle state alone.
+    expect(await screen.findByText("Indexing documents")).toBeInTheDocument();
     await waitFor(() => {
-      expect(onActionComplete).toHaveBeenCalledOnce();
+      expect(fetchCapsuleDetailImpl).toHaveBeenCalledWith(DEFAULT_ID);
     });
+
+    fetchCapsuleDetailImpl.mockResolvedValue(terminalDetail("failed"));
+    await waitFor(
+      () => {
+        expect(onActionComplete).toHaveBeenCalledOnce();
+      },
+      { timeout: 4_000 },
+    );
+    expect(await screen.findByText(/Indexing failed/i)).toBeInTheDocument();
   });
 
   it("calls refreshCapsuleImpl when confirmed", async () => {

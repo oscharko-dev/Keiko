@@ -88,6 +88,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "The editor inline-completion model tier failed.",
   "Editor test generation failed.",
   "A gateway readiness probe could not be completed.",
+  "A detached capsule indexing run failed before reaching a terminal state.",
   "The coding sidecar gateway stream failed mid-response.",
   "Audit or evidence persistence failed.",
   "Debug production service composition failed.",

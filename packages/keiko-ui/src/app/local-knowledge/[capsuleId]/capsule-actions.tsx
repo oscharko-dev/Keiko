@@ -43,6 +43,7 @@ import type {
   CapsuleDetail,
   ConnectCapsuleSourceScope,
 } from "@/lib/local-knowledge-api";
+import type { IndexingJobRecord } from "@oscharko-dev/keiko-contracts";
 import { formatBytes, formatDurationCompact as formatDuration } from "@/lib/format";
 import {
   LOCAL_KNOWLEDGE_MAX_FILE_BYTES,
@@ -206,6 +207,20 @@ function isProgressActive(
   if (progress === null) return false;
   if (indexBusy) return true;
   return busy && confirm !== null && confirm.kind !== "delete";
+}
+
+// The start route answers 202 the moment the job is admitted (2026-08 field review: awaiting
+// the whole multi-hour run in one fetch decoupled the UI from a still-running job on any
+// transport blip). The 2s polling therefore SETTLES the busy state: this returns the latest
+// job once it is terminal AND finished within this panel's watch — a terminal row that
+// predates the watch is the PREVIOUS run showing through the short window before the new job
+// row exists, and must not settle anything.
+function settledJobFor(progress: ProgressState | null): IndexingJobRecord | undefined {
+  const job = progress?.detail?.indexingJobs[0];
+  if (progress === null || job === undefined || job.status === "running") return undefined;
+  return job.finishedAt !== undefined && job.finishedAt >= progress.startedAt - 5_000
+    ? job
+    : undefined;
 }
 
 // Delete can return affected Knowledge Pod Sets (AUDIT-E1821-001); routes the completion to
@@ -1402,18 +1417,48 @@ export function CapsuleActions({
     };
   }, [capsuleId, fetchCapsuleDetailImpl, progressActive, t]);
 
+  // Settle the detached run: the persisted job row is the source of truth, so the polling —
+  // not the start fetch — decides when indexing is over, surfaces a failed run, and refreshes.
+  useEffect(() => {
+    if (!indexBusy) return;
+    const job = settledJobFor(progress);
+    if (job === undefined) return;
+    setIndexBusy(false);
+    setProgress(null);
+    if (job.status === "failed") {
+      setIndexError(
+        t("localKnowledge.detail.index.runFailed", {
+          message: job.lastError?.message ?? job.status,
+        }),
+      );
+    }
+    onActionComplete();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onActionComplete is a stable page callback; re-running on its identity would re-settle the same terminal job.
+  }, [indexBusy, progress, t]);
+
+  // Re-attach after a page reload: a capsule mid-indexing (the run survives any transport
+  // blip server-side) shows its live progress again instead of a dead Index button that only
+  // answers "already running".
+  useEffect(() => {
+    if (lifecycleState !== "indexing" || indexBusy) return;
+    setProgress((current) => current ?? initialProgressState());
+    setIndexBusy(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- attach exactly when the capsule reports an in-flight run; indexBusy is read for idempotence, not as a trigger.
+  }, [lifecycleState]);
+
   async function handleIndex(): Promise<void> {
     if (indexBusy) return;
     setProgress(initialProgressState());
     setIndexBusy(true);
     setIndexError(null);
     try {
+      // 202: the job is admitted and runs server-side; the 2s polling drives the panel and
+      // settles the busy state when the persisted job reaches a terminal status. Clearing
+      // busy here would re-enable the button against a still-running job.
       await startIndexingImpl(capsuleId);
-      setProgress(null);
-      onActionComplete();
     } catch (error) {
       setIndexError(formatError(error, t));
-    } finally {
+      setProgress(null);
       setIndexBusy(false);
     }
   }
