@@ -129,9 +129,22 @@ export interface ModelCapability {
   /**
    * Transient server observation that this configured chat model passed a basic-chat probe for the
    * current runtime configuration generation. This is never persisted as provider capability
-   * metadata.
+   * metadata. Tri-state on the wire: `true`/`false` only when a current-generation observation
+   * exists; ABSENT when the model was never probed since the configuration was (re)loaded. A
+   * consumer must not collapse "unknown" into "not ready" — that turned every process restart
+   * into a dead model picker until a manual probe (customer field incident, 0.3.11).
    */
   readonly conversationReady?: boolean | undefined;
+  /**
+   * Whether the provider's discovery metadata explicitly declared a chat-compatible mode for this
+   * model (e.g. a LiteLLM `/model/info` `mode` of "chat" / "completion" / "responses"). Absent
+   * when discovery declared no mode either way — such models stay conversation-eligible but rank
+   * behind mode-declared ones as the DEFAULT conversation model (`conversationDefaultRank`),
+   * because a mode-less entry may be a special-purpose engine (customer field incident: an OCR
+   * model first in the configured list captured the default for every new chat). Additive
+   * optional flag — no contract version bump.
+   */
+  readonly chatModeDeclared?: boolean | undefined;
   readonly contextWindow: number;
   readonly maxOutputTokens: number;
   readonly toolCalling: boolean;
@@ -675,4 +688,56 @@ export function explainConversationIneligibility(
 ): ConversationIneligibilityReason | undefined {
   if (capability.kind === "chat") return undefined;
   return INELIGIBILITY_REASON_BY_KIND[capability.kind];
+}
+
+// ─── Conversation default preference ─────────────────────────────────────────
+// Choosing the DEFAULT conversation model among eligible chat capabilities ranks them in three
+// tiers; order within a tier is preserved by the stable sort below, so the configured order keeps
+// breaking ties. Pure and total; lives in contracts so the browser-tier UI picker and the
+// server-side default selection can never disagree (mirrors isConversationEligibleModel).
+//
+// Customer field incident (0.3.11): a mode-less OCR model sat FIRST in the configured list. It
+// answers a minimal chat probe while its backend is warm, so every "first eligible model wins"
+// default durably pinned new chats to an engine that is useless for conversation. A declared
+// chat-compatible mode is the only affirmative signal a gateway gives; a special-purpose id is
+// the strongest negative one. Ranking is a PREFERENCE, never an eligibility gate — with one
+// configured model the rank-2 entry is still chosen and still probed honestly.
+const SPECIAL_PURPOSE_ID_TOKENS: ReadonlySet<string> = new Set([
+  "ocr",
+  "whisper",
+  "tts",
+  "asr",
+  "rerank",
+  "reranker",
+]);
+
+// Token-wise match so "dots.ocr" and "my-ocr-model" rank down while ordinary chat ids never can.
+// The suffix form covers separator-free composites like "dotsocr"; it is deliberately limited to
+// "ocr" — the only marker observed fused into an id in the field — because broader suffix
+// matching starts swallowing legitimate names.
+function isLikelySpecialPurposeModelId(modelId: string): boolean {
+  const tokens = modelId.toLowerCase().split(/[^a-z0-9]+/u);
+  return tokens.some(
+    (token) => SPECIAL_PURPOSE_ID_TOKENS.has(token) || (token.length > 3 && token.endsWith("ocr")),
+  );
+}
+
+/**
+ * Preference tier for electing a DEFAULT conversation model:
+ * 0 — discovery explicitly declared a chat-compatible mode;
+ * 1 — no mode signal either way;
+ * 2 — no declared chat mode AND the id names a special-purpose engine (OCR, speech, reranking).
+ */
+export function conversationDefaultRank(
+  capability: Pick<ModelCapability, "id" | "chatModeDeclared">,
+): 0 | 1 | 2 {
+  if (capability.chatModeDeclared === true) return 0;
+  return isLikelySpecialPurposeModelId(capability.id) ? 2 : 1;
+}
+
+/** Stable rank-ordering of conversation candidates; configured order breaks ties within a tier. */
+export function preferredConversationModelOrder<
+  T extends Pick<ModelCapability, "id" | "chatModeDeclared">,
+>(models: readonly T[]): readonly T[] {
+  return [...models].sort((a, b) => conversationDefaultRank(a) - conversationDefaultRank(b));
 }

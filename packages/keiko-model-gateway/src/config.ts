@@ -1093,6 +1093,7 @@ function buildProviderCapabilityBody(
     maxOutputTokens: optionalNonNegativeInt(raw.maxOutputTokens, `${path}.maxOutputTokens`, 0),
     ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
     ...flags,
+    ...optionalChatModeDeclaredFlag(raw, path),
     ...resolveInfillingAlignment(raw, path, flags.supportsInfilling ?? false, kind),
     ...parseVoiceCapabilityFields(raw, path, kind),
     workflowEligible,
@@ -1170,6 +1171,7 @@ const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "supportsResponseFormat",
   "supportsInfilling",
   "infillingAlignment",
+  "chatModeDeclared",
   "supportsSpeechInput",
   "supportsSpeechOutput",
   "supportsSpeechSynthesisInstructions",
@@ -1205,6 +1207,20 @@ function requireStringArray(value: unknown, path: string): readonly string[] {
     throw new ConfigInvalidError(`${path} must be an array of strings`);
   }
   return value as readonly string[];
+}
+
+// Optional discovery-mode flag — preserved only when declared so a capability record round-trips
+// exactly. Records whether discovery explicitly declared a chat-compatible mode for this model
+// (LiteLLM `/model/info` `mode`); the conversation-default preference in keiko-contracts ranks
+// mode-declared models ahead of mode-less ones (customer field incident: a mode-less OCR model
+// first in the configured list captured the default for every new chat).
+function optionalChatModeDeclaredFlag(
+  value: Record<string, unknown>,
+  path: string,
+): Partial<Pick<ModelCapability, "chatModeDeclared">> {
+  return value.chatModeDeclared !== undefined
+    ? { chatModeDeclared: requireBoolean(value.chatModeDeclared, `${path}.chatModeDeclared`) }
+    : {};
 }
 
 // Optional determinism flags for the strict list parser — preserved only when declared so a
@@ -1295,6 +1311,7 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
       `${path}.supportsDocumentInput`,
     ),
     ...optionalDeterminismFlags(value, path),
+    ...optionalChatModeDeclaredFlag(value, path),
     ...optionalInfillingFlags(value, path, kind),
     ...parseVoiceCapabilityFields(value, path, kind),
     workflowEligible,

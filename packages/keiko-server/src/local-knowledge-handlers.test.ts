@@ -1652,6 +1652,49 @@ describe("local-knowledge handlers", () => {
     expect(jobs.n).toBe(1);
   });
 
+  it("threads the operator-configured provider timeoutMs into every indexing embed call", async () => {
+    // 0.3.12 adversarial-review finding: the embedding adapter factory dropped
+    // provider.timeoutMs, so chunk embeds silently ran at the adapter's built-in 30s while the
+    // readiness probes honoured the configured value — raising the timeout visibly fixed the
+    // probe and did nothing for indexing, sending the operator's diagnosis in circles.
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot);
+    writeFileSync(join(docsRoot, "small.md"), "# Small\n\nOne document.\n", "utf8");
+    const config = gatewayConfig("text-embedding-3-small");
+    const raised: GatewayConfig = {
+      ...config,
+      providers: config.providers.map((provider) => ({ ...provider, timeoutMs: 123_456 })),
+    };
+    const deps = depsFor(tmp, raised);
+    const created = await handleCreateLocalKnowledgeCapsule(
+      baseCtx(tmp, "POST", { displayName: "Timeout Threading" }),
+      deps,
+    );
+    const body = created.body as { readonly capsule: { readonly id: KnowledgeCapsuleId } };
+    const store = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    addSourceToCapsule(store, body.capsule.id, {
+      id: "src-timeout-threading" as KnowledgeSourceId,
+      displayName: "Small",
+      tags: [],
+      scope: { kind: "files", rootPath: docsRoot, files: ["small.md"] },
+    });
+    store.close();
+
+    const indexed = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", {}), params: { capsuleId: body.capsule.id } },
+      deps,
+    );
+    expect(indexed.status).toBe(200);
+    const seam = deps.localKnowledgeEmbeddingRequest as ReturnType<typeof vi.fn>;
+    const timeouts = seam.mock.calls.map((call) => (call[0] as OpenAIEmbeddingRequest).timeoutMs);
+    expect(timeouts.length).toBeGreaterThan(0);
+    expect(timeouts.every((value) => value === 123_456)).toBe(true);
+  });
+
   it("indexes a capsule pinned to the second of two same-id providers instead of dying silently", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);

@@ -72,7 +72,7 @@ import type {
   ModelCapability,
   ProjectWithAvailability,
 } from "@/lib/types";
-import { isConversationEligibleModel } from "@/lib/types";
+import { isConversationEligibleModel, preferredConversationModelOrder } from "@/lib/types";
 import { formatUserError } from "../format-error";
 import { canonicalVoiceSha256Hex } from "./canonical-voice-hasher";
 import type { PendingDocument } from "./documentContext";
@@ -655,19 +655,28 @@ export function notifyChatDeleted(chatId: string): void {
   window.dispatchEvent(new CustomEvent(CHAT_DELETE_EVENT, { detail: { chatId } }));
 }
 
-// Returns the id of the first eligible model, or undefined when no models are
+// Returns the id of the best usable model, or undefined when no models are
 // available. Callers must NOT fall back to a placeholder id — downstream
 // surfaces branch on undefined to show a clear "no model" error (AC #1 / #4).
+// `conversationReady` is TRI-STATE on the wire: absent means "never probed in this server
+// process" (the store is volatile — after every restart everything is unknown), and the server
+// verifies unknown models on demand at create/send. Treating unknown as unusable dead-locked the
+// whole picker after each restart until a manual probe plus reload (customer field incident,
+// 0.3.11). Preference: verified models first, then unknown — both in the shared
+// conversationDefaultRank order, so a mode-less OCR model never outranks a declared chat model.
 export function pickChatModelId(models: readonly ModelCapability[]): string | undefined {
-  return models.find(isConversationReadyModel)?.id;
+  const candidates = preferredConversationModelOrder(models.filter(isUsableConversationModel));
+  return (candidates.find((model) => model.conversationReady === true) ?? candidates.at(0))?.id;
 }
 
-function isConversationReadyModel(model: ModelCapability): boolean {
-  return isConversationEligibleModel(model) && model.conversationReady === true;
+// Usable = conversation-eligible and not OBSERVED unready. Only an explicit false blocks; the
+// server's on-demand probe is the honest authority for unknown models.
+function isUsableConversationModel(model: ModelCapability): boolean {
+  return isConversationEligibleModel(model) && model.conversationReady !== false;
 }
 
 // Reopened chats can persist a model id that is no longer present in the
-// current eligible model list. Fail closed to a live eligible model, or to
+// current eligible model list. Fail closed to a live usable model, or to
 // undefined so the UI blocks sends with the no-model alert.
 export function resolveSelectedModelId(
   current: string | undefined,
@@ -675,7 +684,7 @@ export function resolveSelectedModelId(
 ): string | undefined {
   if (
     current !== undefined &&
-    models.some((model) => model.id === current && isConversationReadyModel(model))
+    models.some((model) => model.id === current && isUsableConversationModel(model))
   ) {
     return current;
   }
@@ -1857,8 +1866,10 @@ function sharedRunSummaryPatch(
 async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionState>> {
   const modelPayload = await fetchModels();
   // Issue #144: source of truth is the helper, not an inline kind check. Pin
-  // ACs #1 / #2 — only chat-eligible models reach the conversation dropdown.
-  const chatModels = modelPayload.models.filter(isConversationReadyModel);
+  // ACs #1 / #2 — only chat-eligible models reach the conversation dropdown. Models the server
+  // never probed (tri-state: conversationReady ABSENT) stay usable — the on-demand probe at
+  // create/send decides honestly; only an observed `false` filters out.
+  const chatModels = modelPayload.models.filter(isUsableConversationModel);
   const configuredModelsAvailable = modelPayload.models.length > 0;
   const defaultModel = pickChatModelId(chatModels);
 
@@ -1953,7 +1964,7 @@ function refreshSessionModels(
   previous: SessionState,
   capabilities: readonly ModelCapability[],
 ): SessionState {
-  const models = capabilities.filter(isConversationReadyModel);
+  const models = capabilities.filter(isUsableConversationModel);
   return {
     ...previous,
     models,

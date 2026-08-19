@@ -147,6 +147,7 @@ import {
 } from "./grounded-citation-projection.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-identity.js";
+import { ensureOnDemandConversationReadiness } from "./gateway-readiness.js";
 import {
   captureConversationReadinessAdmission,
   mappedConversationReadinessError,
@@ -1771,11 +1772,11 @@ function admitGroundedUser(
   );
 }
 
-function admitGroundedModel(
+async function admitGroundedModel(
   prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
   allowInjectedModelSeam: boolean,
-): PreparedGroundedAsk | RouteResult {
+): Promise<PreparedGroundedAsk | RouteResult> {
   const requestedModelId = prepared.input.modelId ?? prepared.chat.selectedModel;
   const resolvedModelId = resolveGroundedModelId(deps, prepared.chat, prepared.input.modelId);
   if (typeof resolvedModelId !== "string") {
@@ -1789,6 +1790,15 @@ function admitGroundedModel(
     };
   }
   const modelId = resolvedModelId;
+  // Restart gap (customer field incident, 0.3.11): grounded asks were the only conversation
+  // entry point WITHOUT the on-demand readiness ensure. The observation store is process-local
+  // by design, so after every restart the first pod question answered 400 "not ready" until an
+  // ungrounded send or a manual settings probe happened to record an observation. Probe on
+  // demand exactly like the create/send paths; injected deterministic answer ports skip the
+  // probe as they skip the wire.
+  if (!allowInjectedModelSeam) {
+    await ensureOnDemandConversationReadiness(deps, modelId);
+  }
   const readinessAdmission = captureConversationReadinessAdmission(deps, modelId);
   return "status" in readinessAdmission
     ? readinessAdmission
@@ -1963,7 +1973,7 @@ async function executeGroundedAskInTurn(
   multiSource?: MultiSourceSeam,
   hybrid?: HybridSeam,
 ): Promise<RouteResult> {
-  const modelAdmitted = admitGroundedModel(
+  const modelAdmitted = await admitGroundedModel(
     prepared,
     deps,
     runner !== undefined || multiSource !== undefined || hybrid?.answer !== undefined,

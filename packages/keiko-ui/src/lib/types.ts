@@ -262,6 +262,7 @@ export { DEFAULT_TOKEN_ESTIMATOR_ID } from "@oscharko-dev/keiko-contracts";
 export {
   isConversationEligibleModel,
   explainConversationIneligibility,
+  preferredConversationModelOrder,
 } from "@oscharko-dev/keiko-contracts";
 
 // Issue #1557 / Epic #1556 (ADR-0094 D3/D5): pure, content-free voice-provider availability helpers

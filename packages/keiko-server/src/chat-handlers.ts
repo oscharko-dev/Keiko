@@ -18,6 +18,7 @@ import {
 import {
   isDiscussionMode,
   isCodingWorkbenchMode,
+  preferredConversationModelOrder,
   DEFAULT_CONTEXT_PROFILE,
   type ConversationDocumentContextWire,
   type CodingWorkbenchMode,
@@ -64,7 +65,10 @@ import {
   semanticRetrievalGateForText,
 } from "./memory-retrieval-signals.js";
 import { reinforcementAccessIdsForAssistantUse } from "./memory-reinforcement.js";
-import { ensureOnDemandConversationReadiness } from "./gateway-readiness.js";
+import {
+  ensureAnyConversationReadyChatModel,
+  ensureOnDemandConversationReadiness,
+} from "./gateway-readiness.js";
 import {
   extractCandidatesFromUserText,
   type CaptureContext,
@@ -220,7 +224,13 @@ function defaultChatModelId(deps: UiHandlerDeps): string {
   if (config === undefined) {
     return DEFAULT_CHAT_MODEL;
   }
-  const chatModels = listConfiguredCapabilities(config).filter((model) => model.kind === "chat");
+  // Rank-ordered (keiko-contracts conversationDefaultRank): mode-declared chat models first,
+  // mode-less special-purpose ids (the customer's first-listed OCR model) last — so neither a
+  // fresh generation nor a warm-probed OCR model can capture the default while a better
+  // candidate exists. Stable: configured order still breaks ties within a tier.
+  const chatModels = preferredConversationModelOrder(
+    listConfiguredCapabilities(config).filter((model) => model.kind === "chat"),
+  );
   const conversationReady = (model: ModelCapability): boolean =>
     currentConversationReady(deps, model.id);
   // The public create contract makes modelId optional, so the default must not hand
@@ -238,10 +248,8 @@ function defaultChatModelId(deps: UiHandlerDeps): string {
   );
 }
 
-function requestedChatModelId(body: Record<string, unknown>, deps: UiHandlerDeps): string {
-  return typeof body.modelId === "string" && body.modelId.length > 0
-    ? body.modelId
-    : defaultChatModelId(deps);
+function explicitChatModelId(body: Record<string, unknown>): string | undefined {
+  return typeof body.modelId === "string" && body.modelId.length > 0 ? body.modelId : undefined;
 }
 
 function modelFromBody(body: Record<string, unknown>, deps: UiHandlerDeps): string | RouteResult {
@@ -2016,9 +2024,16 @@ export async function handleCreateDesktopChat(
 ): Promise<RouteResult> {
   const body = await readJsonObject(ctx.req);
   if (isRouteResult(body)) return body;
-  // Fresh-install gap: verify the target model on demand BEFORE the sync readiness guard,
-  // so a configured-but-never-probed gateway does not reject the very first chat.
-  await ensureOnDemandConversationReadiness(deps, requestedChatModelId(body, deps));
+  // Fresh-install gap: verify a usable model on demand BEFORE the sync readiness guard —
+  // walking past an unsuitable default (e.g. an OCR model first in the list) so a
+  // configured-but-never-probed gateway does not reject the very first chat. The walk runs
+  // only for a DEFAULTED request: for an explicit modelId the admission validates that model
+  // alone, so probing its siblings could never change the outcome — it would only add their
+  // probe latency to an already-decided answer.
+  const explicitModelId = explicitChatModelId(body);
+  await (explicitModelId === undefined
+    ? ensureAnyConversationReadyChatModel(deps, defaultChatModelId(deps))
+    : ensureOnDemandConversationReadiness(deps, explicitModelId));
   const modelId = modelFromBody(body, deps);
   if (isRouteResult(modelId)) return modelId;
   try {

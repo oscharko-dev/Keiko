@@ -186,7 +186,13 @@ describe("GET /api/config", () => {
 });
 
 describe("GET /api/models", () => {
-  it("projects false, true, then false as conversation readiness becomes current and stale", () => {
+  // Relocated pin (0.3.11 → 0.3.12): the invariant is unchanged — only a CURRENT-generation
+  // observation may project readiness, and a config re-save structurally invalidates it. What
+  // changed is the projection of "never probed": tri-state ABSENT instead of a hard false,
+  // because collapsing unknown into not-ready emptied the UI's model picker after every process
+  // restart until a manual probe plus reload (customer field incident). An OBSERVED not-ready
+  // still projects false.
+  it("projects unknown, true, false, then unknown as observations arrive and go stale", () => {
     const gatewayConfig = probeVerifiedGatewayConfig(SAMPLE_CONFIG);
     gatewayConfig.clearVerifiedCapability("example-chat-model");
     const deps = depsWith({ gatewayConfig });
@@ -195,8 +201,14 @@ describe("GET /api/models", () => {
       const body = result.body as { models: { conversationReady?: boolean }[] };
       return body.models[0]?.conversationReady;
     };
+    const projectedFieldPresent = (): boolean => {
+      const result = handleModels(ctx("/api/models"), deps);
+      const body = result.body as { models: Record<string, unknown>[] };
+      return "conversationReady" in (body.models[0] ?? {});
+    };
 
-    expect(projectedReady()).toBe(false);
+    // Never probed in this process: UNKNOWN — the field is absent, never a synthetic false.
+    expect(projectedFieldPresent()).toBe(false);
     gatewayConfig.recordVerifiedCapability(
       "example-chat-model",
       { conversationReady: true },
@@ -205,8 +217,19 @@ describe("GET /api/models", () => {
     );
     expect(projectedReady()).toBe(true);
 
-    gatewayConfig.set(SAMPLE_CONFIG, true);
+    // An OBSERVED not-ready projects an explicit false — tri-state, not fail-open.
+    gatewayConfig.recordVerifiedCapability(
+      "example-chat-model",
+      { conversationReady: false },
+      "2026-08-16T00:00:01.000Z",
+      gatewayConfig.generation(),
+    );
     expect(projectedReady()).toBe(false);
+    expect(projectedFieldPresent()).toBe(true);
+
+    // A config re-save bumps the generation: every observation is stale → back to UNKNOWN.
+    gatewayConfig.set(SAMPLE_CONFIG, true);
+    expect(projectedFieldPresent()).toBe(false);
   });
 
   it("returns only configured models", () => {

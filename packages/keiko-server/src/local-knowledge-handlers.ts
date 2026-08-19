@@ -1278,16 +1278,22 @@ function createEmbeddingAdapter(
       : {}),
     ...(egress !== undefined ? { egress } : {}),
   };
+  // The operator-configured provider timeout must govern the indexing embed path too. Without
+  // this default the adapter fell back to its built-in 30s for every batch/scalar item while
+  // the readiness probes honoured the configured value — raising timeoutMs visibly fixed the
+  // probe and silently did nothing for indexing, sending the operator's diagnosis in circles.
+  // Spread FIRST so an explicit per-request timeout (e.g. a preflight quick check) still wins.
+  const timeoutDefault = { timeoutMs: provider.timeoutMs };
   return {
     ...providerCreds,
-    request: (request) => requestImpl({ ...request, ...providerCreds }),
+    request: (request) => requestImpl({ ...timeoutDefault, ...request, ...providerCreds }),
     // #189 GRD-004: the indexing batcher prefers this array-batch port when present, turning
     // up to batchSize per-chunk HTTPS round-trips into a single array call. Omitted when no
     // batch impl is wired (scalar-stub tests) so those keep the one-request-per-chunk path.
     ...(batchImpl !== undefined
       ? {
           requestBatch: (request: OpenAIEmbeddingBatchRequest) =>
-            batchImpl({ ...request, ...providerCreds }),
+            batchImpl({ ...timeoutDefault, ...request, ...providerCreds }),
         }
       : {}),
   };

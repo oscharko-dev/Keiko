@@ -455,6 +455,9 @@ function discoveredCapabilityFields(
       ? {}
       : { maxOutputTokens: discovered.maxOutputTokens }),
     ...(discovered?.toolCalling === undefined ? {} : { toolCalling: discovered.toolCalling }),
+    ...(discovered?.chatModeDeclared === undefined
+      ? {}
+      : { chatModeDeclared: discovered.chatModeDeclared }),
   };
 }
 
@@ -791,10 +794,16 @@ function metadataFromDiscoveryItem(item: Record<string, unknown>): GatewayDiscov
     "supports_function_calling",
     "supportsFunctionCalling",
   ]);
+  // An affirmative chat-compatible `mode` declaration ranks the model ahead of mode-less
+  // entries as the conversation default (keiko-contracts conversationDefaultRank). Only ever
+  // true — declared NON-chat modes never reach the chat list, and "no mode" is no signal.
+  const mode = modelModeFromDiscoveryItem(item);
+  const chatModeDeclared = mode !== undefined && CHAT_COMPATIBLE_MODES.has(mode);
   return {
     ...(contextWindow === undefined ? {} : { contextWindow }),
     ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
     ...(toolCalling === undefined ? {} : { toolCalling }),
+    ...(chatModeDeclared ? { chatModeDeclared } : {}),
   };
 }
 

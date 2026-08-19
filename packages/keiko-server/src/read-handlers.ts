@@ -43,7 +43,7 @@ import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import {
-  currentConversationReady,
+  currentConversationReadinessObservation,
   currentGatewayConfig,
   currentGatewayConfigPresent,
   currentGroundingLimits,
@@ -66,16 +66,23 @@ export function handleConfig(_ctx: RouteContext, deps: UiHandlerDeps): RouteResu
 }
 
 // Route 3 — models published by the resolved UI gateway config. If no config is resolved, no
-// model-backed run can start, so the endpoint returns an empty list.
+// model-backed run can start, so the endpoint returns an empty list. `conversationReady` is
+// TRI-STATE on the wire (see currentConversationReadinessObservation): the observation store is
+// process-local, so a hard `false` for never-probed models told the UI after every restart that
+// nothing was usable until a manual probe plus reload (customer field incident, 0.3.11). Absent
+// means "unknown — the on-demand probe at the conversation entry points decides honestly".
 export function handleModels(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const config = currentGatewayConfig(deps);
   const models =
     config === undefined
       ? []
-      : listSafeConfiguredCapabilities(config).map((model) => ({
-          ...model,
-          conversationReady: currentConversationReady(deps, model.id),
-        }));
+      : listSafeConfiguredCapabilities(config).map((model) => {
+          const conversationReady = currentConversationReadinessObservation(deps, model.id);
+          return {
+            ...model,
+            ...(conversationReady === undefined ? {} : { conversationReady }),
+          };
+        });
   return { status: 200, body: { models } };
 }
 

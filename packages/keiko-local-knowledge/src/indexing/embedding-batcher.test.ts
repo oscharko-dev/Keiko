@@ -1061,4 +1061,158 @@ describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
       cleanup();
     }
   });
+
+  // ─── Scalar-ladder partial progress (customer field incident, 0.3.12) ────────
+  // A ladder-deadline expiry is transient, but re-sending the identical full input list discards
+  // every finished embedding each round: non-convergent whenever inputCount x per-item latency
+  // exceeds the ladder cap — the 0.3.11 endless-indexing shape, one cap higher. A transient
+  // failure that carries the completed prefix must RESUME behind it, and progress must reset the
+  // retry budget so only zero-progress attempts burn it.
+  it("resumes an array batch behind the completed prefix instead of re-embedding from item zero", async () => {
+    const { store, cleanup, seeded, chunks } = buildFixture(
+      "alpha beta gamma delta epsilon zeta eta theta ".repeat(240),
+    );
+    const selected = chunks.slice(0, 3);
+    // Fixture-shape precondition: the resume journey needs three real chunks.
+    expect(selected).toHaveLength(3);
+    const vec = (t: string): Float32Array =>
+      deterministicVector(t, DEFAULT_EMBEDDING.vectorDimensions);
+    const requests: (readonly string[])[] = [];
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: "https://example.test/v1",
+      apiKey: ["sk-", "test"].join(""),
+      request: () => Promise.resolve({ ok: false, kind: "transport" }),
+      requestBatch: (request): Promise<OpenAIEmbeddingBatchOutcome> => {
+        requests.push(request.inputs);
+        if (requests.length === 1) {
+          return Promise.resolve({
+            ok: false,
+            kind: "timeout",
+            partial: request.inputs
+              .slice(0, 2)
+              .map((t) => ({ vector: vec(t), modelId: DEFAULT_EMBEDDING.modelId })),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          value: request.inputs.map((t) => ({
+            vector: vec(t),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          })),
+        });
+      },
+    };
+
+    try {
+      const result = await embedChunkBatch(selected, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 1,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        retry: { maxRetries: 2, baseDelayMs: 0, sleep: () => Promise.resolve() },
+      });
+
+      // The retry must carry ONLY the remainder — re-sending the full list is the
+      // non-convergent shape this pin exists to forbid.
+      expect(requests).toHaveLength(2);
+      expect(requests[1]).toEqual(requests[0]?.slice(2));
+      expect(result.errors).toEqual([]);
+      expect(result.vectors).toHaveLength(3);
+      expect(countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
+        3,
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("converges one item per deadline window because progress resets the retry budget", async () => {
+    const { store, cleanup, chunks } = buildFixture(
+      "alpha beta gamma delta epsilon zeta eta theta ".repeat(240),
+    );
+    const selected = chunks.slice(0, 3);
+    expect(selected).toHaveLength(3);
+    const vec = (t: string): Float32Array =>
+      deterministicVector(t, DEFAULT_EMBEDDING.vectorDimensions);
+    let calls = 0;
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: "https://example.test/v1",
+      apiKey: ["sk-", "test"].join(""),
+      request: () => Promise.resolve({ ok: false, kind: "transport" }),
+      requestBatch: (request): Promise<OpenAIEmbeddingBatchOutcome> => {
+        calls += 1;
+        if (request.inputs.length === 1) {
+          return Promise.resolve({
+            ok: true,
+            value: request.inputs.map((t) => ({
+              vector: vec(t),
+              modelId: DEFAULT_EMBEDDING.modelId,
+            })),
+          });
+        }
+        // Every window finishes exactly one item before the deadline expires.
+        return Promise.resolve({
+          ok: false,
+          kind: "timeout",
+          partial: request.inputs
+            .slice(0, 1)
+            .map((t) => ({ vector: vec(t), modelId: DEFAULT_EMBEDDING.modelId })),
+        });
+      },
+    };
+
+    try {
+      const result = await embedChunkBatch(selected, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 1,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        // With a STATIC budget of 1 this walk needs the progress reset to survive two
+        // consecutive expiries; without it the second expiry would be terminal.
+        retry: { maxRetries: 1, baseDelayMs: 0, sleep: () => Promise.resolve() },
+      });
+
+      expect(calls).toBe(3);
+      expect(result.errors).toEqual([]);
+      expect(result.vectors).toHaveLength(3);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("still gives up after maxRetries zero-progress expiries", async () => {
+    const { store, cleanup, chunks } = buildArrayBatchFixture();
+    let calls = 0;
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: "https://example.test/v1",
+      apiKey: ["sk-", "test"].join(""),
+      request: () => Promise.resolve({ ok: false, kind: "transport" }),
+      requestBatch: () => {
+        calls += 1;
+        return Promise.resolve({ ok: false as const, kind: "timeout" as const });
+      },
+    };
+
+    try {
+      const result = await embedChunkBatch(chunks.slice(0, 2), {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 1,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        retry: { maxRetries: 2, baseDelayMs: 0, sleep: () => Promise.resolve() },
+      });
+
+      expect(calls).toBe(3);
+      expect(result.vectors).toEqual([]);
+      expect(result.errors.every((error) => error.code === "EMBEDDING_ADAPTER_FAILED")).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
 });

@@ -192,12 +192,15 @@ function createEmbeddingAdapter(
       : { apiKeyHeaderName: provider.apiKeyHeaderName }),
     ...(egress === undefined ? {} : { egress }),
   };
+  // Mirror of the indexing adapter factory: the operator-configured provider timeout is the
+  // default for every remediation embed call; an explicit per-request timeout still wins.
+  const timeoutDefault = { timeoutMs: provider.timeoutMs };
   const requestImpl = options.embeddingRequest ?? requestOpenAIEmbedding;
   const batchImpl = options.embeddingBatchRequest ?? requestOpenAIEmbeddingBatch;
   return {
     ...providerCreds,
-    request: (request) => requestImpl({ ...request, ...providerCreds }),
-    requestBatch: (request) => batchImpl({ ...request, ...providerCreds }),
+    request: (request) => requestImpl({ ...timeoutDefault, ...request, ...providerCreds }),
+    requestBatch: (request) => batchImpl({ ...timeoutDefault, ...request, ...providerCreds }),
   };
 }
 

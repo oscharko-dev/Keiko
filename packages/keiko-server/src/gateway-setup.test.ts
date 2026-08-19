@@ -7897,6 +7897,28 @@ describe("normalizeDiscoveryPayload", () => {
     });
   });
 
+  it("records a declared chat-compatible mode and stays silent for mode-less models", () => {
+    // Customer field incident (0.3.12): a mode-less OCR model first in the list captured the
+    // conversation default. The affirmative `mode` declaration must survive discovery into the
+    // capability metadata so the conversation-default rank can prefer declared models; "no
+    // mode" is NO signal — it must never be recorded as false.
+    const normalized = normalizeDiscoveryPayloadForSetup({
+      data: [
+        { model_name: "test-modeless-1" },
+        { model_name: "test-chat-1", model_info: { mode: "chat" } },
+        { model_name: "test-completion-1", model_info: { mode: "completion" } },
+      ],
+    });
+    expect(normalized.chatModelIds).toEqual([
+      "test-modeless-1",
+      "test-chat-1",
+      "test-completion-1",
+    ]);
+    expect(normalized.modelMetadata?.["test-chat-1"]?.chatModeDeclared).toBe(true);
+    expect(normalized.modelMetadata?.["test-completion-1"]?.chatModeDeclared).toBe(true);
+    expect("chatModeDeclared" in (normalized.modelMetadata?.["test-modeless-1"] ?? {})).toBe(false);
+  });
+
   it("detects LiteLLM image-input chat models from metadata without keeping image generators", () => {
     const payload = {
       data: [

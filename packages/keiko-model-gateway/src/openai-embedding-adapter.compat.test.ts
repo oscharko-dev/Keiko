@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ladderDeadlineMs,
   requestOpenAIEmbedding,
   requestOpenAIEmbeddingBatch,
   resetStrictGatewayMemoForTests,
@@ -181,6 +182,47 @@ describe("strict-gateway embedding compat fallback", () => {
     expect("encoding_format" in bodyOf(fetchImpl.mock.calls[2] as unknown[])).toBe(false);
   });
 
+  it("scales the ladder budget per item instead of strangling slow gateways", () => {
+    // Field incident (0.3.11): a FLAT 30s budget for a 64-item batch served one item per
+    // request expired mid-batch; the batcher retried the transient timeout and discarded the
+    // partial progress every time — indexing spun for hours without an error. The budget is
+    // per-item times count, with the 15-minute runaway backstop.
+    expect(ladderDeadlineMs(64, 30_000)).toBe(900_000);
+    expect(ladderDeadlineMs(10, 200)).toBe(2_000);
+    expect(ladderDeadlineMs(1, undefined)).toBe(30_000);
+    expect(ladderDeadlineMs(0, 30_000)).toBe(30_000);
+    expect(ladderDeadlineMs(1_000, 30_000)).toBe(900_000);
+  });
+
+  it("completes a slow strict gateway batch that a flat per-batch budget would strangle", async () => {
+    const delayMs = 100;
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+      const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
+      if (Array.isArray(body.input) || "encoding_format" in body) {
+        return jsonResponse({ error: { message: "bad" } }, 400);
+      }
+      await new Promise((resolve) => {
+        setTimeout(resolve, delayMs);
+      });
+      return jsonResponse({ data: [{ embedding: [1, 0] }], model: "multilingual-e5-large" });
+    });
+    // Ten items at ~100ms each need ~1s of wire time. A FLAT budget of timeoutMs (300ms)
+    // expired after ~3 items — this pin fails against that shape. The scaled budget
+    // (10 × 300ms) completes the batch with 3x headroom.
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://siu.llm.intern/v1",
+      apiKey: "k",
+      modelId: "multilingual-e5-large",
+      inputs: Array.from({ length: 10 }, (_, i) => `chunk-${String(i)}`),
+      timeoutMs: 300,
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.value).toHaveLength(10);
+    }
+  });
+
   it("stops the scalar fallback at the batch deadline", async () => {
     const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
       const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
@@ -249,5 +291,95 @@ describe("strict-gateway embedding compat fallback", () => {
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.kind).toBe("wrong-header");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("carries the completed prefix when the ladder deadline expires mid-batch", async () => {
+    // Non-convergence pin: a deadline expiry that DISCARDS the completed scalar prefix makes the
+    // batcher's transient retry re-run an identical doomed full-length trial — indexing can then
+    // never finish once inputCount x per-item latency exceeds the ladder cap. The failure must
+    // hand the finished embeddings back so a retry resumes behind them.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      let scalarCalls = 0;
+      const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+        const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
+        if (Array.isArray(body.input) || "encoding_format" in body) {
+          return Promise.resolve(jsonResponse({ error: { message: "bad" } }, 400));
+        }
+        scalarCalls += 1;
+        // Each served item costs 100ms of wall clock against the 5 x 50ms = 250ms ladder budget.
+        vi.setSystemTime(Date.now() + 100);
+        return Promise.resolve(
+          jsonResponse({ data: [{ embedding: [1, 0] }], model: "multilingual-e5-large" }),
+        );
+      });
+      const outcome = await requestOpenAIEmbeddingBatch({
+        endpoint: "https://siu.llm.intern/v1",
+        apiKey: "k",
+        modelId: "multilingual-e5-large",
+        inputs: ["eins", "zwei", "drei", "vier", "fuenf"],
+        timeoutMs: 50,
+        fetchImpl,
+      });
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) {
+        expect(outcome.kind).toBe("timeout");
+        // Items 1-3 fit the budget (100/200/300ms checks pass at 0/100/200 elapsed); item 4 finds
+        // the 250ms deadline exhausted. The three finished embeddings survive the failure.
+        expect(outcome.partial).toHaveLength(3);
+      }
+      expect(scalarCalls).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("carries the completed prefix past a transient mid-batch item failure", async () => {
+    const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+      const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
+      if (Array.isArray(body.input) || "encoding_format" in body) {
+        return Promise.resolve(jsonResponse({ error: { message: "bad" } }, 400));
+      }
+      if (body.input === "drei") {
+        return Promise.resolve(jsonResponse({ error: { message: "busy" } }, 429));
+      }
+      return Promise.resolve(
+        jsonResponse({ data: [{ embedding: [1, 0] }], model: "multilingual-e5-large" }),
+      );
+    });
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://siu.llm.intern/v1",
+      apiKey: "k",
+      modelId: "multilingual-e5-large",
+      inputs: ["eins", "zwei", "drei", "vier"],
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.kind).toBe("rate-limited");
+      expect(outcome.partial).toHaveLength(2);
+    }
+  });
+
+  it("keeps a zero-progress failure partial-free so the batcher burns its retry budget", async () => {
+    const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+      const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
+      if (Array.isArray(body.input) || "encoding_format" in body) {
+        return Promise.resolve(jsonResponse({ error: { message: "bad" } }, 400));
+      }
+      return Promise.resolve(jsonResponse({ error: { message: "busy" } }, 429));
+    });
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://siu.llm.intern/v1",
+      apiKey: "k",
+      modelId: "multilingual-e5-large",
+      inputs: ["eins", "zwei"],
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.kind).toBe("rate-limited");
+      expect(outcome.partial).toBeUndefined();
+    }
   });
 });
