@@ -16,6 +16,7 @@ import {
   isEditorFirstLoadForbiddenSpecifier,
   isMonacoSpecifier,
   runEditorBundleSizeCheck,
+  requireInitialPageCeiling,
 } from "../editor-bundle-size.mjs";
 
 describe("gzipSizeBytes", () => {
@@ -293,6 +294,35 @@ describe("runEditorBundleSizeCheck (integration against the real repo state)", (
     expect(
       failures.length === 0 ||
         failures.some((m) => m.includes("packages/keiko-ui/out/index.html does not exist")),
+    ).toBe(true);
+  });
+});
+
+// Fail-closed budget-file guard (review finding on #3220): a missing or malformed first-load
+// ceiling used to SKIP the check silently — a typo in the budget key could disable a required
+// gate with a green run.
+describe("requireInitialPageCeiling", () => {
+  const failuresOf = (budget) => {
+    const failures = [];
+    requireInitialPageCeiling(budget, (message) => failures.push(message));
+    return failures;
+  };
+
+  it("accepts the committed ceiling", () => {
+    expect(failuresOf({ initialPageChunkGzipBytesCeiling: 348160 })).toEqual([]);
+  });
+
+  it.each([
+    ["missing", {}],
+    ["null", { initialPageChunkGzipBytesCeiling: null }],
+    ["string", { initialPageChunkGzipBytesCeiling: "348160" }],
+    ["NaN", { initialPageChunkGzipBytesCeiling: Number.NaN }],
+    ["zero", { initialPageChunkGzipBytesCeiling: 0 }],
+    ["negative", { initialPageChunkGzipBytesCeiling: -1 }],
+    ["fractional", { initialPageChunkGzipBytesCeiling: 1.5 }],
+  ])("refuses to run fail-open on a %s ceiling", (_label, budget) => {
+    expect(
+      failuresOf(budget).some((m) => m.includes("refusing to run the first-load gate fail-open")),
     ).toBe(true);
   });
 });
