@@ -25,6 +25,7 @@ import { LOCAL_KNOWLEDGE_FILE_FILTERS } from "@oscharko-dev/keiko-contracts";
 import type {
   KnowledgeCapsuleId,
   CapsuleLifecycleState,
+  IndexingJobRecord,
   LocalKnowledgeFileFilterId,
   NativeFileDialogFilter,
 } from "@oscharko-dev/keiko-contracts";
@@ -43,7 +44,6 @@ import type {
   CapsuleDetail,
   ConnectCapsuleSourceScope,
 } from "@/lib/local-knowledge-api";
-import type { IndexingJobRecord } from "@oscharko-dev/keiko-contracts";
 import { formatBytes, formatDurationCompact as formatDuration } from "@/lib/format";
 import {
   LOCAL_KNOWLEDGE_MAX_FILE_BYTES,

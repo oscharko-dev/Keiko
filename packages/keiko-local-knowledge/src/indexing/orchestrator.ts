@@ -2118,7 +2118,7 @@ function buildInitialState(
 
 function buildResult(
   state: RunState,
-  status: "succeeded" | "failed" | "cancelled",
+  status: IndexingResult["status"],
   finishedAt: number,
 ): IndexingResult {
   return {
@@ -2564,7 +2564,7 @@ function emit(state: RunState, event: IndexingEvent): IndexingEvent {
 // The failed run itself stays fully visible in the job history, counters, and health warnings.
 function terminalCapsuleState(
   state: RunState,
-  status: "succeeded" | "failed" | "cancelled",
+  status: IndexingResult["status"],
 ): "ready" | "error" {
   if (status === "succeeded") return "ready";
   if (state.lastError?.code === "INCOMPATIBLE_EMBEDDING_IDENTITY") return "error";
@@ -2575,7 +2575,7 @@ function terminalCapsuleState(
 function resolveJobStatus(
   state: RunState,
   fatalFailure: IndexingJobError | undefined,
-): "succeeded" | "failed" | "cancelled" {
+): IndexingResult["status"] {
   if (fatalFailure !== undefined) {
     state.lastError = fatalFailure;
     return "failed";
