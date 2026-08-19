@@ -324,7 +324,15 @@ function partialIndexMessage(
   t: I18nTranslate,
 ): string {
   const missingVectors = data.health.chunkCount - data.health.vectorCount;
-  if (job?.lastError?.code === "EMBEDDING_ADAPTER_FAILED") {
+  // EMBEDDING_GATEWAY_UNAVAILABLE (circuit-breaker abort) and MAJORITY_DOCUMENTS_FAILED are
+  // embedding-stopped shapes too: without them here the outage runs — exactly where the
+  // "embedding stopped" explanation matters most — fell through to the generic copy.
+  const embeddingStoppedCodes = new Set([
+    "EMBEDDING_ADAPTER_FAILED",
+    "EMBEDDING_GATEWAY_UNAVAILABLE",
+    "MAJORITY_DOCUMENTS_FAILED",
+  ]);
+  if (job?.lastError !== undefined && embeddingStoppedCodes.has(job.lastError.code)) {
     return t("localKnowledge.detail.index.embeddingStopped", {
       message: job.lastError.message,
       count: missingVectors,

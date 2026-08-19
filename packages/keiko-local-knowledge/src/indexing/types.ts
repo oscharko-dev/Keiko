@@ -97,6 +97,10 @@ export interface IndexingOptions {
   readonly concurrency?: number;
   // Pass-through to the chunking layer's pure options (token estimator, min/max/overlap).
   readonly chunkingOptions?: ChunkingOptions;
+  // Pass-through to the embedding batcher's transient-failure retry policy. Absent → the
+  // batcher's defaults. Lets a caller thread the operator-configured provider retry policy,
+  // and lets tests drive transient-failure journeys without real backoff sleeps.
+  readonly embedRetry?: EmbedRetryOptions;
   readonly contextualRetrieval?: ContextualRetrievalOptions;
   // Pass-through to the discovery layer's walker options (maxDepth, maxFiles).
   readonly discoveryOptions?: DiscoveryOptions;

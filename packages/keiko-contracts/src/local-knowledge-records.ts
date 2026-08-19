@@ -255,6 +255,15 @@ export interface CapsuleReindexRequest {
 export interface IndexingJobError {
   readonly code: string;
   readonly message: string;
+  /**
+   * True when the producing layer classified the underlying failure as TRANSIENT (network-
+   * flavoured: timeout, rate limit, torn transport, answered 5xx/408/425) — the same
+   * classification its retry policy used. Content-free. The indexing orchestrator's
+   * consecutive-failure circuit breaker counts only transient adapter failures, so a dead or
+   * saturated embedding gateway aborts the run quickly instead of grinding the full retry
+   * ladder for every remaining document. Absent means "deterministic or unclassified".
+   */
+  readonly transient?: boolean | undefined;
 }
 
 export interface IndexingJobRecord {
