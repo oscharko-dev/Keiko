@@ -14,7 +14,6 @@ const EVIDENCE_DIR = resolve(REPO_ROOT, "docs", "design-system", "evidence", "31
 const APP_ORIGIN = `http://127.0.0.1:${process.env.KEIKO_E2E_UI_PORT ?? "32183"}`;
 const PLAYWRIGHT_PLAN_COMMAND =
   "npx playwright test tests/e2e/health-scan-3185.spec.ts --config tests/e2e/config/playwright.config.ts --project=chromium";
-const UI_RECEIPT_COMMAND = `.keiko-scripts/ui-verify-receipt.sh 3185 -- ${PLAYWRIGHT_PLAN_COMMAND}`;
 
 const SCREENSHOT_ARTIFACTS = [
   "01-dark-success.png",
@@ -409,7 +408,6 @@ function writeManifest(generatedAt: string): void {
     epic: "#3179",
     generatedAt,
     command: `KEIKO_WRITE_TRACKED_EVIDENCE=1 ${PLAYWRIGHT_PLAN_COMMAND}`,
-    receiptCommand: UI_RECEIPT_COMMAND,
     playwrightCommand: PLAYWRIGHT_PLAN_COMMAND,
     artifacts: ARTIFACTS,
     notes: [

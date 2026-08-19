@@ -149,36 +149,44 @@ Each maps to an unambiguous action:
 
 **`WorkspaceReconciliationFacts` — the IO-gathered input to the pure classifier.**
 
-A readonly plain object assembled by the server reconciliation service (IO):
+A readonly plain object assembled by the server reconciliation service (IO). The
+authoritative shape lives in `packages/keiko-contracts/src/task-workspace.ts` under
+the `WorkspaceReconciliationFacts` interface; the fields below mirror it verbatim:
 
 ```ts
 interface WorkspaceReconciliationFacts {
-  readonly workspaceId: string;
   readonly lifecycleState: TaskWorkspaceLifecycleState;
-  readonly managedWorktreePath: string;
-  readonly gitdirIdentity: string;        // stored identity hash
-  readonly lastVerifiedHead: string | undefined;
-  readonly lock: WorkspaceLock | null;
-  readonly nowIso: string;                // ISO timestamp for TTL evaluation
-  // Server-gathered IO facts (booleans derived from filesystem/git):
-  readonly pathExists: boolean;
-  readonly pathContained: boolean;        // realpath check via keiko-workspace
-  readonly gitdirMatches: boolean;        // .git pointer identity == stored gitdirIdentity
-  readonly currentHead: string | undefined;  // current HEAD SHA from worktree adapter
-  readonly branchExists: boolean;         // task branch still present in refs
-  readonly lockExpired: boolean;          // lock !== null && expiresAt < nowIso
-  readonly isActivePointerTarget: boolean; // pointer's workspace_id === this workspaceId
+  // realpath containment of the persisted managed-worktree path inside the managed
+  // root — a persisted path is NEVER trusted without realpath verification.
+  readonly pathContained: boolean;
+  readonly worktreeDirExists: boolean;
+  // the worktree's `.git` linked-worktree pointer file is present and well-formed.
+  readonly gitPointerPresent: boolean;
+  // the pointer's content-free gitdir identity equals the persisted `gitdirIdentity`.
+  readonly gitdirIdentityMatches: boolean;
+  // the dedicated task branch still exists / the worktree is still bound to it.
+  readonly taskBranchPresent: boolean;
+  // the worktree HEAD equals the persisted `lastVerifiedHead`
+  // (true when no baseline was recorded).
+  readonly headMatches: boolean;
+  readonly uncommittedChanges: boolean;
+  readonly lockPresent: boolean;
+  readonly lockLive: boolean;
+  readonly lockedByOtherActor: boolean;
 }
 ```
 
-All fields are content-free (hashes, booleans, ISO timestamps, enums, opaque IDs).
-The server assembles this struct from four distinct sources WITHOUT duplicating any
-subsystem: `pathExists` and `pathContained` from `keiko-workspace`
-`assertManagedTargetContained` (delegated — ADR-0088 D5); `gitdirMatches`,
-`currentHead`, and `branchExists` from the narrow `listWorktrees` /
-`localBranchExists` adapter already in `keiko-tools` (ADR-0089 D1); `lockExpired`
-from the TTL rule already encoded in the lock model; `isActivePointerTarget` from
-the active pointer store (ADR-0090 D1).
+All fields are content-free (booleans and the persisted lifecycle enum — no path,
+no command output). The server assembles this struct from four distinct sources
+WITHOUT duplicating any subsystem: `worktreeDirExists` from `node:fs` `existsSync`
+against `managedWorktreePath`; `pathContained` from `keiko-workspace`
+`assertManagedTargetContained` (delegated — ADR-0088 D5) — a distinct realpath
+check that never trusts the existence probe as a substitute; `gitPointerPresent`,
+`gitdirIdentityMatches`, `taskBranchPresent`, `headMatches`, and
+`uncommittedChanges` from the narrow `listWorktrees` / `localBranchExists` /
+status adapters already in `keiko-tools` (ADR-0089 D1); `lockPresent`, `lockLive`,
+and `lockedByOtherActor` from the TTL/ownership rules already encoded in the lock
+model.
 
 **`classifyWorkspaceReconciliation(facts)` — pure, deterministic precedence chain.**
 
@@ -194,42 +202,61 @@ function classifyWorkspaceReconciliation(
 
 The classifier applies checks in a strict top-down precedence order. The first
 match wins; later checks are skipped. This makes the outcome deterministic and
-the reasoning auditable:
+the reasoning auditable. The order below matches the shipped
+`classifyWorkspaceReconciliation` in `packages/keiko-contracts/src/task-workspace.ts`
+verbatim (mnemonic: containment escape → live foreign lock → terminal lifecycle →
+partial-creation → on-disk drift → lingering recovery-required → stale lock on an
+otherwise-healthy workspace):
 
 1. **`unmanaged-path`**: `!facts.pathContained` → status `unmanaged-path`, marker
    `path-escape`, hint `operator-repair` (`operatorActionRequired: true`). This is
    highest precedence because a contained path is a security invariant; the
    remaining checks assume containment.
-2. **`missing`**: `!facts.pathExists` → status `missing`, marker `worktree-missing`,
-   hint `recreate-worktree` (`operatorActionRequired: false`). If additionally
-   `!facts.branchExists`, append marker `branch-deleted` and hint `reattach-branch`
-   (`operatorActionRequired: true`).
-3. **`partially-created`**: `facts.lifecycleState === "provisioning"` → status
-   `partially-created`, no additional drift marker (the state itself is
-   diagnostic), hint `recreate-worktree` (`operatorActionRequired: false`).
-4. **`locked`**: `facts.lockExpired` → status `locked`, marker `lock-stale`,
-   hint `release-stale-lock` (`operatorActionRequired: false`).
-5. **`stale-pointer`**: `facts.isActivePointerTarget && !facts.gitdirMatches` →
-   status `stale-pointer`, marker `pointer-stale`, hint `reconcile-pointer`
-   (`operatorActionRequired: false`).
-6. **`drifted`**: the worktree is present and usable but has diverged — a deleted
-   task branch (`branch-deleted` → `reattach-branch`, operator-required), a moved
-   HEAD (`head-moved` → `operator-repair`, operator-required), uncommitted work
-   (`uncommitted-changes` → `commit-or-stash-required`, operator-required), or a
-   stale lock (`lock-stale` → `release-stale-lock`, automatic). A `drifted`
-   workspace keeps its lifecycle (it is not forced to `recovery-required`); only a
-   gone/structurally-unusable worktree (`missing`/`stale-pointer`/`unmanaged-path`)
-   is flagged.
-7. **`recovery-required`** (carry-forward): `facts.lifecycleState === "recovery-required"`
-   and none of the above triggered → status `recovery-required`, preserve the
-   stored `driftMarkers` and `recoveryHints` from the persisted instance (caller
-   passes them through unchanged).
+2. **`locked`**: `facts.lockedByOtherActor` → status `locked`, no additional drift
+   marker (the state itself is diagnostic; a *live* foreign lock is a wait
+   condition, not a fault). The instance is left unchanged — reconciliation defers
+   until the other actor releases the lock or its TTL expires and it is
+   reclassified as a `stale` lock below.
+3. **`healthy` (terminal lifecycle)**: `TERMINAL_LIFECYCLE_STATES` (`merged`,
+   `archived`, `abandoned`, `cleanup-pending`) → status `healthy`, no markers. A
+   missing worktree for a terminal lifecycle is expected (cleanup), so it is
+   treated as settled rather than drifted.
+4. **`partially-created`**: `PARTIAL_LIFECYCLE_STATES` (`provisioning`, `failed`)
+   → status `partially-created`, with the partial-creation markers derived from
+   what is actually gone on disk (a `stale-lock` marker is appended if
+   `lockPresent && !lockLive`).
+5. **On-disk drift** (`classifyOnDiskDrift`), in order:
+   - `!worktreeDirExists` → status `missing`, marker `worktree-missing`, hint
+     `recreate-worktree`. If additionally `!taskBranchPresent`, append marker
+     `branch-deleted` and hint `reattach-branch` (`operatorActionRequired: true`).
+   - `!gitPointerPresent || !gitdirIdentityMatches` → status `stale-pointer`,
+     marker `pointer-stale`, hint `reconcile-pointer`.
+   - `!taskBranchPresent` → status `drifted`, marker `branch-deleted`, hint
+     `reattach-branch` (`operatorActionRequired: true`).
+   - `!headMatches` → status `drifted`, marker `head-moved`, hint `operator-repair`
+     (`operatorActionRequired: true`).
+   - `uncommittedChanges` → status `drifted`, marker `uncommitted-changes`, hint
+     `commit-or-stash-required` (`operatorActionRequired: true`).
+6. **`recovery-required`** (lingering-lifecycle): `facts.lifecycleState === "recovery-required"`
+   and none of the above triggered → status `recovery-required` with empty
+   markers/hints (only a `stale-lock` marker is appended if
+   `lockPresent && !lockLive`). The classifier is pure and content-free, and
+   the shipped `outcome("recovery-required", withStaleLock([], facts))` returns
+   only what the CURRENT facts justify — it does NOT carry the persisted
+   `driftMarkers`/`recoveryHints` forward. If the caller needs the persisted
+   markers alongside a fresh recovery-required outcome (for a repair UI, for
+   example), it must merge them itself outside this classifier.
+7. **`drifted` (stale lock only)**: `facts.lockPresent && !facts.lockLive` on an
+   otherwise-healthy workspace → status `drifted`, marker `lock-stale`, hint
+   `release-stale-lock` (`operatorActionRequired: false`).
 8. **`healthy`**: all checks passed → status `healthy`, empty markers and hints.
 
 This precedence means a path-escape always surfaces before a missing-path report
 (the path may technically "not exist" but the containment failure is the actionable
-fact). A stale lock surfaces before gitdir drift (the lock must be released before
-a worktree re-check is meaningful).
+fact). A live foreign lock defers before any disk classification because the disk
+may be mid-write on the other actor's side. A stale lock is *drift on an otherwise
+healthy workspace* — not a lock condition — so it surfaces only after all other
+classifications have been ruled out.
 
 **`planWorkspaceRecoveryHints(driftMarkers)` — pure mapping of markers to strategies.**
 
@@ -357,29 +384,37 @@ Per-instance reconciliation sequence (the IO the service performs, in order):
 
 1. Load instance from `WorkspaceInstanceStore.getById` (re-validates closed
    allowlist).
-2. Check `pathExists` via `node:fs` `existsSync` on `managedWorktreePath`.
+2. Check `worktreeDirExists` via `node:fs` `existsSync` on `managedWorktreePath`.
 3. Check `pathContained` by calling `@oscharko-dev/keiko-workspace`
    `assertManagedTargetContained(managedRoot, managedWorktreePath)`. **NEVER trust
    a persisted path without realpath verification.** This is a security invariant
    (ADR-0088 D5 / ADR-0089 SC2): a manipulated or migrated path must be
    re-verified before any classification, evidence write, or repair.
-4. Check `gitdirMatches` and gather `currentHead` and `branchExists` via the
-   **existing** keiko-tools worktree adapter's `listWorktrees()` +
-   `localBranchExists()` (ADR-0089 D1). No second git engine.
-5. Check `lockExpired` from `instance.lock?.expiresAt` vs `nowIso`.
-6. Check `isActivePointerTarget` from `activePointerStore.get()?.workspaceId`.
-7. Call `classifyWorkspaceReconciliation(facts)` (pure, no IO).
-8. Compute the legal `lifecycleState` transition: if the classification status is
-   not `healthy` and the current lifecycle state is `active` or `paused`, transition
-   to `recovery-required` (legal per ADR-0088 transition table — no preconditions
+4. Derive `gitPointerPresent`, `gitdirIdentityMatches`, `headMatches`,
+   `taskBranchPresent`, and `uncommittedChanges` via the **existing** keiko-tools
+   worktree adapter's `listWorktrees()` + `localBranchExists()` + status probes
+   (ADR-0089 D1). No second git engine.
+5. Derive `lockPresent`, `lockLive`, and `lockedByOtherActor` from
+   `instance.lock`, `expiresAt` vs `nowIso`, and the persisted lock owner.
+6. Call `classifyWorkspaceReconciliation(facts)` (pure, no IO).
+7. Compute the legal `lifecycleState` transition via
+   `reconciliationRequiresRecoveryFlag(status, lifecycleState)`: it returns `true`
+   only when the current lifecycle state is `active`, `paused`, or `handoff-ready`
+   AND the classification status is one of `missing`, `stale-pointer`, or
+   `unmanaged-path` — the "worktree gone or structurally unusable" set. `locked`
+   is a wait condition and never triggers a transition; `drifted` and
+   `partially-created` are surfaced via health + drift markers + hints without
+   forcing the workspace out of its lifecycle (crisp classification over
+   aggressive auto-healing). When the flag is `true`, transition to
+   `recovery-required` (legal per ADR-0088 transition table — no preconditions
    required). If the status is `healthy` and the current state was
    `recovery-required`, it stays `recovery-required` (automatic promotion to
    `active` is NOT performed — restoration is a controlled `setActive` call, not a
    background side-effect).
-9. Persist the updated `WorkspaceInstance` via `WorkspaceInstanceStore.upsert`,
+8. Persist the updated `WorkspaceInstance` via `WorkspaceInstanceStore.upsert`,
    gated by `validateWorkspaceInstance` (content-free closed-allowlist).
-10. Append a content-free `WorkspaceEvent` of type `drift-detected` or
-    `health-changed` via `appendWorkspaceLifecycleEvidence`.
+9. Append a content-free `WorkspaceEvent` of type `drift-detected` or
+   `health-changed` via `appendWorkspaceLifecycleEvidence`.
 
 After all instances are classified, call `resolveActiveRestoration` (pure) and
 execute its decision:
@@ -510,7 +545,7 @@ before returning to the browser.
 | `WorkspaceInstanceStore.upsert` + re-validate-on-read | ADR-0089 D4 | Reconciliation outcome persist |
 | `WorkspaceProvisioningService.provision()` re-materialization path | ADR-0089 D7 | `recreate-worktree` repair strategy |
 | `assertManagedTargetContained` (keiko-workspace) | ADR-0089 D2 | `pathContained` fact gathering (realpath — never trust persisted path) |
-| `listWorktrees` / `localBranchExists` (keiko-tools narrow adapter, `GIT_WORKTREE_COMMAND_RULES`) | ADR-0089 D1 | `gitdirMatches`, `currentHead`, `branchExists` fact gathering |
+| `listWorktrees` / `localBranchExists` (keiko-tools narrow adapter, `GIT_WORKTREE_COMMAND_RULES`) | ADR-0089 D1 | `gitPointerPresent`, `gitdirIdentityMatches`, `headMatches`, `taskBranchPresent`, `uncommittedChanges` fact gathering |
 | `ActiveWorkspacePointerStore.get` / `.set` / `.clear` | ADR-0090 D1 | Restoration decisions and repair `reconcile-pointer` |
 | `buildBinding(instance)` (exported from #446) | ADR-0090 D2 | `WorkspaceReconciliationReport.entries` derive binding if needed by callers |
 | Validator result shape `{ ok: true } \| { ok: false; reasons: string[] }` | `git-repository.ts` | `validateWorkspaceReconciliationEntry`, `validateWorkspaceReconciliationReport` |

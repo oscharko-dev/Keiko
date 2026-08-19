@@ -4048,6 +4048,32 @@ describe("Issue #1297 — table / data grid + dataviz foundation (Design System 
   });
 });
 
+// KEIKO-1037 — component-template.md Input/field claims about the invalid state must name the
+// concrete implementing selectors, and the selectors it names must exist. Pin the two directions:
+// (1) the doc names `.figma-snapshot-input` and `.qi-input` in the invalid-state description, and
+// (2) globals.css defines an `[aria-invalid="true"]` rule for both. If either drifts, the pin
+// re-fails.
+describe("component-template.md Input/field invalid-state contract (KEIKO-1037)", () => {
+  it("names .figma-snapshot-input and .qi-input as the concrete invalid-state carriers", () => {
+    const doc = readFileSync(
+      resolve(here, "../../../../docs/design-system/component-template.md"),
+      "utf8",
+    );
+    expect(doc).toContain(".figma-snapshot-input");
+    expect(doc).toContain(".qi-input");
+    // The canonical layout classes are the ones the earlier doc wrongly implicated in the visual
+    // contract; the doc must now explicitly disclaim that they own the invalid ring.
+    expect(doc).toMatch(
+      /\.c-form-row.*carries no.*\[aria-invalid="true"\]|\.c-form-row.*no.*aria-invalid.*styling/su,
+    );
+  });
+
+  it('globals.css ships an [aria-invalid="true"] rule for both .figma-snapshot-input and .qi-input', () => {
+    expect(css).toMatch(/\.figma-snapshot-input\[aria-invalid="true"\]/u);
+    expect(css).toMatch(/\.qi-input\[aria-invalid="true"\]/u);
+  });
+});
+
 // ─── Issue #1298 — input family + navigation + breakpoint + density coverage ───
 describe("Issue #1298 — input + navigation components (Design System 0.4.0)", () => {
   // ── 1. Value-preservation: every input/nav Tier-3 component token is a pure alias over an

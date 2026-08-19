@@ -403,10 +403,15 @@ function diffSets(a, b, probes, modeId, sink, counters, missing) {
 async function collectAccessibilityProof(page) {
   await applyMode(page, POST, MODES[0]);
   // keyboard / focus: Tab to the first focusable interactive control and assert it receives focus
-  // and a visible ring (WCAG 2.4.7 / 2.1.1).
+  // and a visible ring (WCAG 2.4.7 / 2.1.1). The proof is that the Tab loop reached the target on
+  // its own — never programmatically focus the element afterwards, because a forced focus() makes
+  // the assertion `activeIsBack === true` trivially true and the proof cannot fail. Hoist `reached`
+  // out of the loop and gate focusProof on it, so a Tab loop that never reached the target is
+  // reported as such instead of being papered over.
+  let reached = false;
   for (let i = 0; i < 25; i++) {
     await page.keyboard.press("Tab");
-    const reached = await page.evaluate(() => {
+    reached = await page.evaluate(() => {
       const a = document.activeElement;
       return !!a && a.closest(".c-back") !== null;
     });
@@ -414,7 +419,6 @@ async function collectAccessibilityProof(page) {
   }
   const focusProof = await page.evaluate(() => {
     const btn = document.querySelector(".c-back");
-    btn?.focus();
     const cs = btn ? getComputedStyle(btn) : null;
     return {
       activeIsBack: document.activeElement === btn,
@@ -424,6 +428,7 @@ async function collectAccessibilityProof(page) {
         !!cs && (cs.outlineStyle !== "none" || (cs.boxShadow !== "none" && cs.boxShadow !== "")),
     };
   });
+  focusProof.tabReached = reached;
   // name / role / value: combobox + grid sort header expose the correct ARIA contract.
   const nameRoleValue = await page.evaluate(() => {
     const combo = document.querySelector('.c-combo-input input[role="combobox"]');
@@ -537,6 +542,7 @@ const boundedRowSmoke = await runBoundedRowSmoke(page);
 await browser.close();
 
 const focusFailed =
+  accessibilityProof.focusProof.tabReached !== true ||
   accessibilityProof.focusProof.activeIsBack !== true ||
   accessibilityProof.focusProof.hasFocusRing !== true ||
   accessibilityProof.nameRoleValue.comboRole !== "combobox" ||
@@ -629,9 +635,16 @@ if (missing.size) {
 console.log(
   `ACCESSIBILITY: back-button focus=${accessibilityProof.focusProof.activeIsBack} ring=${accessibilityProof.focusProof.hasFocusRing}; combo role=${accessibilityProof.nameRoleValue.comboRole}; grid sort=${accessibilityProof.nameRoleValue.gridSort}`,
 );
-console.log(
-  `BOUNDED ROW SMOKE: ${boundedRowSmoke.rowCount} rows, ${boundedRowSmoke.durationMs.toFixed(2)}ms, sticky delta ${boundedRowSmoke.stickyHeaderDeltaPx.toFixed(2)}px`,
-);
+// Narrow on ok=true before formatting durationMs / stickyHeaderDeltaPx: runBoundedRowSmoke returns
+// `{ ok: false, reason }` when the DOM probe elements are absent, and calling .toFixed() on a
+// missing field would throw here — before process.exit is reached — so Chromium would leak.
+if (boundedRowSmoke.ok === true) {
+  console.log(
+    `BOUNDED ROW SMOKE: ${boundedRowSmoke.rowCount} rows, ${boundedRowSmoke.durationMs.toFixed(2)}ms, sticky delta ${boundedRowSmoke.stickyHeaderDeltaPx.toFixed(2)}px`,
+  );
+} else {
+  console.log(`BOUNDED ROW SMOKE: skipped — ${boundedRowSmoke.reason}`);
+}
 console.log(
   `\n${failed ? "FAIL" : "PASS"} — Group R dark/light 0-diff: ${rDiffsGated.length === 0}; missing selectors: ${missingSelectors.length}; media isolation: ${!mediaFailed}; a11y proof: ${!focusFailed}; bounded-row smoke: ${!perfFailed}`,
 );

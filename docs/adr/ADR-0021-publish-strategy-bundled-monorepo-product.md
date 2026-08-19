@@ -10,7 +10,7 @@ Accepted
 
 ## Version
 
-1.1
+1.2
 
 ## Context
 
@@ -368,3 +368,4 @@ version and record the reason in the Version History table below.
 | ------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | 1.0     | 2026-06-03 | Accepted bundled-monorepo publish strategy for Issue #169; resolves ADR-0020 deferred decision D7. |
 | 1.1     | 2026-08-13 | Replaced the Yarn-incompatible published bundle with isolated `file:` vendoring and mandatory npm/Yarn install proofs.               |
+| 1.2     | 2026-08-18 | Recorded that `@oscharko-dev/keiko-connectors` (ADR-0128) and `@oscharko-dev/keiko-git` (ADR-0115) joined the vendored inventory since v1.1. |

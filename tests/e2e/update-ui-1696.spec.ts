@@ -14,9 +14,6 @@ import { evidenceScreenshotPath } from "./support/evidence.js";
 const REPO_ROOT = resolve(process.cwd());
 const EVIDENCE_DIR = resolve(REPO_ROOT, "docs", "design-system", "evidence", "1696");
 const APP_ORIGIN = `http://127.0.0.1:${process.env.KEIKO_E2E_UI_PORT ?? "32201"}`;
-const PLAYWRIGHT_PLAN_COMMAND =
-  "npx playwright test --config tests/e2e/config/playwright.issue-1696-update-ui.config.ts --project=chromium";
-const UI_RECEIPT_COMMAND = `.keiko-scripts/ui-verify-receipt.sh 1696 -- ${PLAYWRIGHT_PLAN_COMMAND}`;
 const EVIDENCE_GENERATED_AT = "2026-06-30T17:11:30.507Z";
 const AXE_SOURCE = readFileSync(
   createRequire(import.meta.url).resolve("axe-core/axe.min.js"),
@@ -1201,7 +1198,6 @@ function writeManifest(ledgers: readonly UpdateRouteLedger[]): void {
     epic: "#1687",
     generatedAt: EVIDENCE_GENERATED_AT,
     command: "npm run test:e2e:update-ui-1696",
-    receiptCommand: UI_RECEIPT_COMMAND,
     artifacts: ARTIFACT_NAMES,
     routeLedger: routeLedgerSummary(ledgers),
     notes: [

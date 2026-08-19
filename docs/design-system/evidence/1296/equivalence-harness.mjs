@@ -372,4 +372,6 @@ if (dFailures.length > 0) {
 }
 
 await browser.close();
-process.exit(diffs.length === 0 && dFailures.length === 0 && !mediaFailed ? 0 : 1);
+process.exit(
+  diffs.length === 0 && dFailures.length === 0 && !mediaFailed && missing.size === 0 ? 0 : 1,
+);

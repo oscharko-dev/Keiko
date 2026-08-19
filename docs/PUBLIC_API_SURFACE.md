@@ -24,9 +24,11 @@ details of the shipped artifact:
 
 ```text
 @oscharko-dev/keiko-cli
+@oscharko-dev/keiko-connectors
 @oscharko-dev/keiko-contracts
 @oscharko-dev/keiko-evaluations
 @oscharko-dev/keiko-evidence
+@oscharko-dev/keiko-git
 @oscharko-dev/keiko-harness
 @oscharko-dev/keiko-local-knowledge
 @oscharko-dev/keiko-memory-capture

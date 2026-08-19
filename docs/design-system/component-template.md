@@ -150,17 +150,23 @@ column at `--bp-sm` (640px). Labelled reference: `design-system/inputs.html`.
 
 **05 — States.** From the [state-matrix.md](state-matrix.md) Input / field row, the applicable states
 are **Default**, **Hover**, **Focus**, **Active**, **Selected**, **Disabled**, and **Loading** — each
-proven in Dark, Light, and High Contrast. Invalid input is surfaced via `aria-invalid` plus text, and
-Disabled is never colour-only. **Non-applicable (by design):** Error, Empty, Syncing, Conflict — a
-single field carries no list-level empty/sync state and no async-conflict state (those belong to the
-Select/combobox, Table, or sync-item families). Evidence:
-[`evidence/1298/`](evidence/1298/README.md).
+proven in Dark, Light, and High Contrast. The canonical `.c-form-row`/`.c-form-grid` layout carries no
+`[aria-invalid="true"]` styling of its own; the concrete visual contract for the invalid state lives
+on the specialised input classes `.figma-snapshot-input` and `.qi-input` in
+`packages/keiko-ui/src/app/globals.css`, both matched by `[aria-invalid="true"]` selectors. Fields
+outside that pair use `aria-invalid` plus a text message for accessibility, but do not inherit a
+generic border/ring treatment from `.c-form-row`. Disabled is never colour-only.
+**Non-applicable (by design):** Error, Empty, Syncing, Conflict — a single field carries no
+list-level empty/sync state and no async-conflict state (those belong to the Select/combobox, Table,
+or sync-item families). Evidence: [`evidence/1298/`](evidence/1298/README.md).
 
 **06 — Accessibility.** Role: native `<input>` with a programmatically associated `<label>` (`for` /
 `id`). Focus: the global `:focus-visible` ring; Loading does not steal focus. Keyboard: standard text
 editing; the field is reachable and operable by keyboard alone. Contrast: label, value, placeholder,
 and the focus ring meet WCAG 2.2 AA in all three modes; the invalid state reads by `aria-invalid` and
-message text, not colour alone.
+message text, not colour alone. The `[aria-invalid="true"]` visual treatment is scoped to
+`.figma-snapshot-input` and `.qi-input`; other field classes surface invalidity through the
+`aria-invalid` attribute and associated error text only.
 
 **07 — Tokens.** Consumes the `--input-*` family (with `--checkbox-*`, `--radio-*`, `--stepper-*`,
 `--date-*`, `--tag-*` for the typed variants) from `design-system/keiko-semantic-tokens.css`, plus
@@ -170,7 +176,10 @@ block.
 **08 — Do / Don't.** Don't use placeholder text as the label — it disappears on input and fails the
 label-association contract; always pair a visible `<label>`. Don't signal an invalid field with a red
 border alone — pair it with `aria-invalid` and a text message so it survives High Contrast and
-colour-blind viewing.
+colour-blind viewing. Don't assume the canonical `.c-form-row`/`.c-form-grid` layout carries an
+`[aria-invalid="true"]` visual treatment; if a specific input requires one, use one of the classes
+that ship that selector (`.figma-snapshot-input`, `.qi-input`) or extend `globals.css` to add the
+selector alongside a matching pinned assertion in `globals.css.test.ts`.
 
 **09 — Status & owner.** Ready · `@core-ui` · since v0.1 (register row "Button · Field · Toggle ·
 Tabs"; the extended input family is Ready since v0.4).
