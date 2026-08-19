@@ -20,6 +20,7 @@ import {
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatMessage } from "./store/index.js";
+import { ensureOnDemandConversationReadiness } from "./gateway-readiness.js";
 import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
 import type {
   ConversationMemoryActionWire,
@@ -646,6 +647,12 @@ async function runDesktopChatStream(
   }
   if (start.kind === "outcome") return start.outcome;
   if (start.kind === "replay") return streamingReplayOutcome(ctx, start.response);
+  // Fresh-install gap: verify the target model on demand before the sync readiness guards,
+  // mirroring the create and buffered entries.
+  await ensureOnDemandConversationReadiness(
+    deps,
+    start.parsed.request.modelId ?? start.parsed.chat.selectedModel,
+  );
   const streamState: DesktopChatStreamState = { started: false };
   const result = await runSerializedChatTurn(
     deps,

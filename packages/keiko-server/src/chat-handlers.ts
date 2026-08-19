@@ -64,6 +64,7 @@ import {
   semanticRetrievalGateForText,
 } from "./memory-retrieval-signals.js";
 import { reinforcementAccessIdsForAssistantUse } from "./memory-reinforcement.js";
+import { ensureOnDemandConversationReadiness } from "./gateway-readiness.js";
 import {
   extractCandidatesFromUserText,
   type CaptureContext,
@@ -235,6 +236,12 @@ function defaultChatModelId(deps: UiHandlerDeps): string {
       chatModels.at(0)
     )?.id ?? DEFAULT_CHAT_MODEL
   );
+}
+
+function requestedChatModelId(body: Record<string, unknown>, deps: UiHandlerDeps): string {
+  return typeof body.modelId === "string" && body.modelId.length > 0
+    ? body.modelId
+    : defaultChatModelId(deps);
 }
 
 function modelFromBody(body: Record<string, unknown>, deps: UiHandlerDeps): string | RouteResult {
@@ -2009,6 +2016,9 @@ export async function handleCreateDesktopChat(
 ): Promise<RouteResult> {
   const body = await readJsonObject(ctx.req);
   if (isRouteResult(body)) return body;
+  // Fresh-install gap: verify the target model on demand BEFORE the sync readiness guard,
+  // so a configured-but-never-probed gateway does not reject the very first chat.
+  await ensureOnDemandConversationReadiness(deps, requestedChatModelId(body, deps));
   const modelId = modelFromBody(body, deps);
   if (isRouteResult(modelId)) return modelId;
   try {
@@ -2253,6 +2263,10 @@ export async function handleSendDesktopChat(
     const parsed = await parseDesktopChatSend(ctx, deps, cancellation.signal);
     if (cancellation.signal.aborted) return requestCancelledResult();
     if (isRouteResult(parsed)) return parsed;
+    await ensureOnDemandConversationReadiness(
+      deps,
+      parsed.request.modelId ?? parsed.chat.selectedModel,
+    );
     const prepared = validateDesktopChatSend(parsed, deps);
     if (isRouteResult(prepared)) return prepared;
     const inspection = inspectDesktopChatTurn(deps, prepared);
