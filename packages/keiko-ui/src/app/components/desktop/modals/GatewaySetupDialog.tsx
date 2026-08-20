@@ -1069,8 +1069,20 @@ async function performGatewaySubmission(
       skippedSummary:
         skippedModelSummary(result.skippedModelIds ?? []) + unusableModelSummary(t, result),
     }),
-    skippedModelCount: (result.skippedModelIds ?? []).length,
+    // Drives the reload delay, so it must count EVERY diagnostic the message carries. Counting
+    // only skippedModelIds reloaded after 800 ms over a message that also named unsupported,
+    // dropped or unverified models — long enough to render, too short to read.
+    skippedModelCount: reportedModelCount(result),
   };
+}
+
+function reportedModelCount(result: GatewaySetupResponse): number {
+  return (
+    (result.skippedModelIds ?? []).length +
+    (result.unsupportedModels ?? []).length +
+    (result.droppedEmbeddingModelIds ?? []).length +
+    (result.unverifiedEmbeddingModelIds ?? []).length
+  );
 }
 
 interface GatewayBaseUrlFieldProps {
