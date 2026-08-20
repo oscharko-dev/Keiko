@@ -1689,21 +1689,22 @@
       "releaseNoteCategory": "fixes",
       "releaseNotePriority": "high",
       "userVisibleChange": "observable",
-      "userVisibleSummary": "Keiko 0.3.14 fixes indexing against gateways that serve single embedding requests but fail requests carrying many texts at once. Keiko embeds a document's sections in one batched request, and fell back to sending them one at a time only when a gateway rejected the batch cleanly with HTTP 400 or 422. A gateway that answers such a batch with a server error, a timeout or a dropped connection was treated as briefly unavailable, so the identical request was retried unchanged \u2014 indexing produced no vectors, reported no error, and looked like it was running indefinitely. A batch failure of any kind now causes exactly one single-text attempt: if that succeeds, the batch shape is the problem, the gateway is remembered, and every later request for that endpoint is sent one text at a time. If it fails too, the original error is reported unchanged, so a genuine outage is still reported as an outage.",
+      "userVisibleSummary": "Keiko 0.3.14 fixes indexing against gateways that serve single embedding requests but fail requests carrying many texts at once. Keiko embeds a document's sections in one batched request, and fell back to sending them one at a time only when a gateway rejected the batch cleanly with HTTP 400 or 422. A gateway that answers such a batch with a server error, a timeout or a dropped connection was treated as briefly unavailable, so the identical request was retried unchanged - indexing produced no vectors, reported no error, and looked like it was running indefinitely. A failed multi-text request now causes exactly one single-text attempt, provided the run was not cancelled, the request carried more than one text, and its time budget has not run out. If that attempt succeeds, the batch shape is the problem and the gateway is remembered so later requests are sent one text at a time; a throttle (HTTP 429) is excluded from that memory. If it fails too, the original error is reported unchanged, so a genuine outage is still reported as an outage.",
       "affectedStateStores": [],
       "stateImpact": [],
       "releaseNoteBullets": [
         "Indexing now completes against gateways that answer a multi-text embedding request with a server error, a timeout or a dropped connection. Previously only a clean HTTP 400/422 rejection triggered the fallback to one-text-at-a-time requests, so such a gateway produced zero vectors while the job appeared to keep running.",
-        "The fallback costs exactly one extra request. Once a gateway has failed a multi-text request and single texts succeed, the endpoint is remembered and later documents skip the failing shape entirely.",
+        "The fallback costs exactly one extra request, and it is attempted only for a request that carried more than one text, in a run that was not cancelled, and while its time budget remains. Once single texts have succeeded, the gateway is remembered and later documents skip the failing shape entirely.",
+        "A throttle (HTTP 429) is deliberately excluded from that memory: \"try again later\" says nothing about the request shape, so the throttled request is still served one text at a time while the next one may use the faster batched form again.",
         "A genuine gateway outage is still reported as an outage: if single texts fail as well, the original error and status are surfaced unchanged rather than being reported as a request-format problem.",
-        "A cancelled indexing run no longer fans out into further requests, and a single-text request is never retried as if its shape were at fault."
+        "A cancelled indexing run no longer fans out into further requests - including a cancellation that arrives after the gateway already answered - and deployment routing is preserved on the single-text fallback, so an Azure deployment endpoint is probed at its own URL instead of the plain embeddings path."
       ],
       "review": {
         "status": "reviewed",
         "reviewer": "release-owner",
         "reviewedAt": "2026-08-20",
         "humanApproved": true,
-        "approvalReference": "PLACEHOLDER-github-comment",
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3204#5362641516",
         "rationale": "The release owner directed this fix after 0.3.13 did not resolve a customer's LiteLLM deployment. The customer's gateway was measured directly: a single input answered HTTP 200 in 0.21s, the same texts as an array answered HTTP 500 after 18.87s. The defect was then reproduced on a developer machine against an endpoint reproducing that exact response matrix, at two layers \u2014 the transport adapter and the real indexing job \u2014 with the product-level run failing as EMBEDDING_ADAPTER_FAILED at zero documents and zero vectors before the change and succeeding after it. Both proof suites were verified red by removing the repair and green by restoring it.",
         "traceability": null
       },
