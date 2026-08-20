@@ -724,6 +724,63 @@ function isLikelySpecialPurposeModelId(modelId: string): boolean {
 }
 
 /**
+ * The role a gateway's DECLARED model mode maps onto. "unsupported" means Keiko recognised the
+ * declaration and has no lane for it — deliberately distinct from "unknown", so a recognised
+ * rerank/audio/image engine is reported to the operator instead of silently disappearing.
+ */
+export type DeclaredModeRole = "chat" | "embedding" | "unsupported";
+
+/**
+ * Modes a provider may declare for a model. LiteLLM's `/model/info` `mode` is the vocabulary this
+ * covers; "responses" is accepted for OpenAI-style gateways that name the Responses lane.
+ */
+export type DeclaredModelMode =
+  | "chat"
+  | "completion"
+  | "responses"
+  | "embedding"
+  | "rerank"
+  | "image_generation"
+  | "audio_transcription"
+  | "audio_speech"
+  | "moderation";
+
+// Total over DeclaredModelMode: adding a mode to the union without a role here fails the compile.
+// A DECLARATION IS AUTHORITATIVE. Keiko is model-agnostic — a customer hosts whatever models they
+// like behind their gateway, so the only trustworthy statement about what a model IS comes from
+// the gateway itself. Name heuristics may express a PREFERENCE (conversationDefaultRank), never a
+// role: a field incident bound a rerank endpoint named "bge-reranker-v2-m3" to every Knowledge Pod
+// as its embedding model, purely because the id contains "bge".
+const DECLARED_MODE_ROLES: Record<DeclaredModelMode, DeclaredModeRole> = {
+  chat: "chat",
+  completion: "chat",
+  responses: "chat",
+  embedding: "embedding",
+  rerank: "unsupported",
+  image_generation: "unsupported",
+  audio_transcription: "unsupported",
+  audio_speech: "unsupported",
+  moderation: "unsupported",
+};
+
+/**
+ * Maps a declared mode string onto the role Keiko can use it for. Unrecognised declarations are
+ * "unsupported", NOT "chat": a gateway that names a mode Keiko does not know has still stated the
+ * model is something specific, and guessing from the id is what this function exists to prevent.
+ */
+export function modelKindForDeclaredMode(mode: string): DeclaredModeRole {
+  const normalized = mode.trim().toLowerCase();
+  return Object.hasOwn(DECLARED_MODE_ROLES, normalized)
+    ? DECLARED_MODE_ROLES[normalized as DeclaredModelMode]
+    : "unsupported";
+}
+
+/** True when a declared mode names a chat-compatible lane. Single source for the chat vocabulary. */
+export function isChatCompatibleDeclaredMode(mode: string): boolean {
+  return modelKindForDeclaredMode(mode) === "chat";
+}
+
+/**
  * Preference tier for electing a DEFAULT conversation model:
  * 0 — discovery explicitly declared a chat-compatible mode;
  * 1 — no mode signal either way;

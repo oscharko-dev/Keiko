@@ -105,6 +105,32 @@ function fetchInputUrl(url: Parameters<typeof fetch>[0]): string {
   return url instanceof URL ? url.href : url.url;
 }
 
+const NON_CONVERSATION_DEPLOYMENTS = new Set(["Mistral-Large-3", "text-embedding-3-large"]);
+
+function nonConversationRejection(modelId: string | undefined): Promise<Response> | undefined {
+  if (!NON_CONVERSATION_DEPLOYMENTS.has(modelId ?? "")) return undefined;
+  return Promise.resolve(
+    new Response(JSON.stringify({ error: { message: "not Keiko conversation compatible" } }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }),
+  );
+}
+
+// Shared stub: a gateway answers /embeddings even for a model that rejects chat. Extracted so the
+// individual fetch stubs stay within the complexity bar.
+function fakeEmbeddingProbeResponse(
+  url: Parameters<typeof fetch>[0],
+): Promise<Response> | undefined {
+  if (!fetchInputUrl(url).includes("/embeddings")) return undefined;
+  return Promise.resolve(
+    new Response(JSON.stringify({ data: [{ embedding: [0.1, 0.2, 0.3] }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+  );
+}
+
 // Reads the first provider's resolved apiKey from the in-memory runtime config (Issue #1320 keeps the
 // real credential live in memory while the persisted file holds only a reference). Extracted so the
 // optional-chain access does not inflate the calling test's cyclomatic complexity.
@@ -748,6 +774,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model-large"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) =>
         Promise.resolve([modelIds[0] ?? "example-chat-model"]),
     });
@@ -790,6 +817,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV, KEIKO_ALLOW_PRIVATE_EGRESS: "true" },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["local-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve([modelIds[0] ?? "local-model"]),
     });
 
@@ -821,6 +849,7 @@ describe("handleGatewaySetup", () => {
       },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["metadata-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve([modelIds[0] ?? "metadata-model"]),
     });
 
@@ -853,6 +882,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["model-a"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve([modelIds[0] ?? "model-a"]),
     });
     // Simulate an unavailable evidence directory AFTER buildUiHandlerDeps has captured the store.
@@ -914,6 +944,7 @@ describe("handleGatewaySetup", () => {
           "example-chat-model-fast",
           "example-vision-model",
         ]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) =>
         Promise.resolve([modelIds[0] ?? "example-chat-model"]),
     });
@@ -965,6 +996,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) =>
         Promise.resolve([modelIds[0] ?? "example-chat-model"]),
     });
@@ -995,6 +1027,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => {
         smokeCalls += 1;
         return Promise.resolve([modelIds[0] ?? "example-chat-model"]);
@@ -1033,6 +1066,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => {
         smokeCalls += 1;
         return Promise.resolve([modelIds[0] ?? "example-chat-model"]);
@@ -1101,6 +1135,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) =>
         Promise.resolve([modelIds[0] ?? "example-chat-model"]),
     });
@@ -1151,6 +1186,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) =>
         Promise.resolve([modelIds[0] ?? "example-chat-model"]),
     });
@@ -1207,6 +1243,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     expect(
@@ -1254,6 +1291,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     expect(
@@ -1298,6 +1336,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const result = await handleGatewaySetup(
@@ -1331,6 +1370,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const result = await handleGatewaySetup(
@@ -1366,6 +1406,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const fresh = await handleGatewaySetup(
@@ -1427,6 +1468,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-mistral-embed-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const gatewayConfig = deps.gatewayConfig;
@@ -1495,6 +1537,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-streaming-move-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const gatewayConfig = deps.gatewayConfig;
@@ -1558,6 +1601,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-fresh-toolcalling-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const gatewayConfig = deps.gatewayConfig;
@@ -1621,6 +1665,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-voice-move-protocol-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const gatewayConfig = deps.gatewayConfig;
@@ -1697,6 +1742,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-voice-move-stated-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const gatewayConfig = deps.gatewayConfig;
@@ -1777,6 +1823,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
 
@@ -1811,6 +1858,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
 
@@ -1843,6 +1891,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
 
@@ -2235,6 +2284,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     expect(
@@ -2300,6 +2350,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     await handleGatewaySetup(
@@ -2345,6 +2396,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     expect(
@@ -2409,6 +2461,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     expect(
@@ -3050,6 +3103,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     expect(
@@ -3654,6 +3708,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     expect(
@@ -3689,6 +3744,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
 
@@ -3763,6 +3819,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) =>
         Promise.resolve([modelIds[0] ?? "example-chat-model"]),
       figmaCredentialTester: (token, egress) => {
@@ -3800,6 +3857,10 @@ describe("handleGatewaySetup", () => {
     const originalFetch = globalThis.fetch;
     const seen: { readonly url: string; readonly token: string | null }[] = [];
     const fakeFetch: typeof fetch = (url, init) => {
+      // Setup probes the declared embedding models with a real request (LiteLLM field incident).
+      // A gateway that rejects chat for an embedding model still answers /embeddings.
+      const embeddingProbeResponse = fakeEmbeddingProbeResponse(url);
+      if (embeddingProbeResponse !== undefined) return embeddingProbeResponse;
       const href = fetchInputUrl(url);
       const headers = new Headers(init?.headers);
       seen.push({ url: href, token: headers.get("x-figma-token") });
@@ -3817,6 +3878,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) =>
         Promise.resolve([modelIds[0] ?? "example-chat-model"]),
     });
@@ -3853,6 +3915,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => {
         smokeCalls += 1;
         return Promise.resolve([modelIds[0] ?? "example-chat-model"]);
@@ -3904,6 +3967,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) =>
         Promise.resolve([modelIds[0] ?? "example-chat-model"]),
       figmaCredentialTester: () => Promise.reject(new FigmaConnectorError("FIGMA_TOKEN_INVALID")),
@@ -3938,6 +4002,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["text-chat", "vision-chat"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
 
@@ -3983,6 +4048,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["vision-chat"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
 
@@ -4038,6 +4104,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["stable-chat", "flaky-chat", "vision-chat"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => {
         probes += 1;
         // After the first setup, every probe transiently drops flaky-chat.
@@ -4089,6 +4156,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["text-chat", "vision-chat"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => {
         probes += 1;
         return Promise.resolve(modelIds);
@@ -4128,6 +4196,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => {
         probedModelIds.push(...modelIds);
         return Promise.resolve(modelIds);
@@ -4186,6 +4255,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir,
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => {
         probedModelIds.push(...modelIds);
         return Promise.resolve(modelIds.filter((modelId) => modelId !== "vectorizer-v2"));
@@ -4210,6 +4280,138 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("reports the models it refuses to configure instead of dropping them silently", async () => {
+    // Self-audit finding: the unsupported-model list was computed and then never left the server.
+    // An operator whose gateway offers a rerank engine must see that Keiko knows it and why it is
+    // unused — silence here is what made the field incident undiagnosable.
+    const uiDir = await tempDir("keiko-gw-ui-unsupported-report-");
+    const evidenceDir = await tempDir("keiko-gw-ev-unsupported-report-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () =>
+        Promise.resolve({
+          modelIds: ["example-chat"],
+          chatModelIds: ["example-chat"],
+          embeddingModelIds: [],
+          unsupportedModels: [{ id: "house-reranker", reason: "rerank" }],
+        }),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      unsupportedModels: [{ id: "house-reranker", reason: "rerank" }],
+    });
+    deps.store.close();
+  });
+
+  it("falls back to /models when /model/info exists but lists nothing usable", async () => {
+    // Self-audit finding: making discovery strict turned an EMPTY /model/info into a hard setup
+    // failure. Only "every entry declared an unsupported mode" is worth surfacing; an empty or
+    // unparseable answer is simply not this gateway's enrichment endpoint.
+    const uiDir = await tempDir("keiko-gw-ui-modelinfo-empty-");
+    const evidenceDir = await tempDir("keiko-gw-ev-modelinfo-empty-");
+    const originalFetch = globalThis.fetch;
+    const seenPaths: string[] = [];
+    const fakeFetch: typeof fetch = (url, init) => {
+      const href = fetchInputUrl(url);
+      seenPaths.push(href);
+      const embeddingProbeResponse = fakeEmbeddingProbeResponse(url);
+      if (embeddingProbeResponse !== undefined) return embeddingProbeResponse;
+      if (href.endsWith("/model/info")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      if (href.endsWith("/models")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: [{ id: "fallback-chat" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      void init;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 3, completion_tokens: 1 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    };
+    globalThis.fetch = fakeFetch;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...MOCK_FETCH_EGRESS_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expect(seenPaths.some((path) => path.endsWith("/models"))).toBe(true);
+      expect(currentGatewayConfig(deps)?.providers.map((p) => p.modelId)).toEqual([
+        "fallback-chat",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      deps.store.close();
+    }
+  });
+
+  it("does not persist a NEW embedding model that cannot answer an embedding request", async () => {
+    // Field incident (LiteLLM customer, 2026-08): embedding models were persisted on the strength
+    // of a classification alone. A declared embedding endpoint that cannot embed was bound to every
+    // new Knowledge Pod and indexing wrote zero vectors with no earlier signal.
+    const uiDir = await tempDir("keiko-gw-ui-embed-probe-");
+    const evidenceDir = await tempDir("keiko-gw-ev-embed-probe-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () =>
+        Promise.resolve({
+          modelIds: ["example-chat", "works-vectorizer", "broken-vectorizer"],
+          chatModelIds: ["example-chat"],
+          embeddingModelIds: ["works-vectorizer", "broken-vectorizer"],
+        }),
+      // Only one of the two declared embedding models actually answers /embeddings.
+      gatewayEmbeddingProbe: (_config, ids) =>
+        Promise.resolve(ids.filter((id) => id !== "broken-vectorizer")),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const storedIds = currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId);
+    expect(storedIds).toContain("works-vectorizer");
+    expect(storedIds).not.toContain("broken-vectorizer");
+    deps.store.close();
+  });
+
   it("preserves stored embedding kinds through preserve-mode rebuilds despite the name heuristic", async () => {
     // Review finding on #3031 (P1): a preserve-mode rebuild inherits the stored deployment ids
     // and reclassifies them by name. A stored embedding provider whose id the heuristic misses
@@ -4231,6 +4433,7 @@ describe("handleGatewaySetup", () => {
         }),
       // A realistic chat probe: an embedding endpoint cannot answer it, so a misclassified
       // embedding id would be dropped as "failed", not rejected loudly.
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) =>
         Promise.resolve(modelIds.filter((modelId) => modelId !== "vectorizer-v2")),
     });
@@ -4291,6 +4494,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-toolcalling-move-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const chatCapability = (id: string, toolCalling: boolean): Record<string, unknown> => ({
@@ -4356,6 +4560,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-mistral-note-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const gatewayConfig = deps.gatewayConfig;
@@ -4429,6 +4634,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir,
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => {
         probedModelIds.push(...modelIds);
         return Promise.resolve(
@@ -4633,6 +4839,7 @@ describe("handleGatewaySetup", () => {
         KEIKO_MODEL_EXAMPLE_CHAT_BASE_URL: "https://elsewhere.example.com/v1",
       },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) =>
         Promise.resolve(
           modelIds.filter((modelId) => modelId !== "scan-ocr" && modelId !== "remote-ocr"),
@@ -4700,6 +4907,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const fresh = await handleGatewaySetup(
@@ -4767,6 +4975,7 @@ describe("handleGatewaySetup", () => {
         KEIKO_MODEL_EXAMPLE_CHAT_BASE_URL: "https://elsewhere.example.com/v1",
       },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) =>
         Promise.resolve(modelIds.filter((modelId) => modelId !== "scan-ocr")),
     });
@@ -4817,6 +5026,7 @@ describe("handleGatewaySetup", () => {
         KEIKO_MODEL_EXAMPLE_CHAT_API_KEY: "transient-ops-token",
       },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) =>
         Promise.resolve(modelIds.filter((modelId) => modelId !== "scan-ocr")),
     });
@@ -4850,6 +5060,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const gatewayConfig = deps.gatewayConfig;
@@ -4913,6 +5124,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const gatewayConfig = deps.gatewayConfig;
@@ -4972,6 +5184,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const initial = await handleGatewaySetup(
@@ -5026,6 +5239,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir,
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => {
         probedModelIds.push(...modelIds);
         return Promise.resolve(modelIds.filter((modelId) => modelId !== "own-key-embedding"));
@@ -5091,6 +5305,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir,
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => {
         probedModelIds.push(...modelIds);
         return Promise.resolve(modelIds);
@@ -5126,6 +5341,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir,
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => {
         probedModelIds.push(...modelIds);
         return Promise.resolve(modelIds.filter((modelId) => modelId !== "vector-dedicated"));
@@ -5178,6 +5394,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["text-chat", "vision-chat"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: () => Promise.resolve(["text-chat"]),
     });
 
@@ -5215,6 +5432,7 @@ describe("handleGatewaySetup", () => {
         discoveryEgress = egress;
         return Promise.resolve(["example-chat-model"]);
       },
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (config, modelIds) => {
         testerEgress = config.egress;
         return Promise.resolve(modelIds);
@@ -5265,6 +5483,7 @@ describe("handleGatewaySetup", () => {
         discoveryEgress = egress;
         return Promise.resolve(["example-chat-model"]);
       },
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (config, modelIds) => {
         testerEgress = config.egress;
         return Promise.resolve(modelIds);
@@ -5304,6 +5523,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) =>
         Promise.resolve([modelIds[0] ?? "example-chat-model"]),
     });
@@ -5330,6 +5550,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(workspaceDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) =>
         Promise.resolve([modelIds[0] ?? "example-chat-model"]),
     });
@@ -5356,6 +5577,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (config, modelIds) => {
         const baseUrl = config.providers[0]?.baseUrl ?? "";
         if (!baseUrl.endsWith("/v1")) {
@@ -5384,6 +5606,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: () => Promise.reject(new Error("provider rejected credentials")),
     });
     const result = await handleGatewaySetup(
@@ -5409,6 +5632,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: () =>
         Promise.reject(new Error(`upstream returned 500 with body: ${providerBody}`)),
       diagnostics: { record: (record): void => void diagnostics.push(record) },
@@ -5461,6 +5685,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(parseModelDiscovery({ data: oversized })),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve([...modelIds]),
       diagnostics: { record: (record): void => void diagnostics.push(record) },
     });
@@ -5505,6 +5730,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(parseModelDiscovery({ data: withinCap })),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve([...modelIds]),
       diagnostics: { record: (record): void => void diagnostics.push(record) },
     });
@@ -5530,6 +5756,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.reject(networkError),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
     });
 
@@ -5559,6 +5786,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.reject(discoveryError),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
     });
 
@@ -5590,6 +5818,7 @@ describe("handleGatewaySetup", () => {
         }
         return Promise.reject(Object.assign(new Error("provider body hidden"), { status: 404 }));
       },
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
     });
 
@@ -5735,6 +5964,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.reject(discoveryError),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
     });
 
@@ -5786,6 +6016,7 @@ describe("handleGatewaySetup", () => {
         attempt += 1;
         return Promise.reject(attempt === 1 ? genericError : hostileError);
       },
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
     });
 
@@ -5817,6 +6048,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.reject(new Error("discovery should not run")),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
     });
     const result = await handleGatewaySetup(
@@ -5842,6 +6074,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.reject(new Error("discovery should not run")),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
     });
     const result = await handleGatewaySetup(
@@ -5863,6 +6096,10 @@ describe("handleGatewaySetup", () => {
     const originalFetch = globalThis.fetch;
     const seenModels: string[] = [];
     const fakeFetch: typeof fetch = (url, init) => {
+      // Setup probes the declared embedding models with a real request (LiteLLM field incident).
+      // A gateway that rejects chat for an embedding model still answers /embeddings.
+      const embeddingProbeResponse = fakeEmbeddingProbeResponse(url);
+      if (embeddingProbeResponse !== undefined) return embeddingProbeResponse;
       expect(fetchInputUrl(url)).not.toContain("/models");
       if (init?.body !== undefined && typeof init.body !== "string") {
         throw new Error("expected JSON string request body");
@@ -5937,6 +6174,10 @@ describe("handleGatewaySetup", () => {
       readonly firstRole: string | undefined;
     }[] = [];
     const fakeFetch: typeof fetch = (url, init) => {
+      // Setup probes the declared embedding models with a real request (LiteLLM field incident).
+      // A gateway that rejects chat for an embedding model still answers /embeddings.
+      const embeddingProbeResponse = fakeEmbeddingProbeResponse(url);
+      if (embeddingProbeResponse !== undefined) return embeddingProbeResponse;
       const href = fetchInputUrl(url);
       expect(href).not.toContain("api/projects/proj-oscharko-dev");
       if (init?.body !== undefined && typeof init.body !== "string") {
@@ -5947,17 +6188,8 @@ describe("handleGatewaySetup", () => {
         readonly messages?: readonly { readonly role?: string }[];
       };
       seen.push({ url: href, model: body.model, firstRole: body.messages?.[0]?.role });
-      if (body.model === "Mistral-Large-3" || body.model === "text-embedding-3-large") {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({ error: { message: "not Keiko conversation compatible" } }),
-            {
-              status: 400,
-              headers: { "content-type": "application/json" },
-            },
-          ),
-        );
-      }
+      const rejection = nonConversationRejection(body.model);
+      if (rejection !== undefined) return rejection;
       return Promise.resolve(
         new Response(
           JSON.stringify({
@@ -6025,6 +6257,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir,
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
 
@@ -6099,6 +6332,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-coding-safe-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
 
@@ -6131,6 +6365,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-coding-rotation-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     expect(
@@ -6173,6 +6408,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-coding-revoke-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => {
         verificationCalls += 1;
         if (verificationCalls > 1) {
@@ -6224,6 +6460,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-coding-update-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => {
         verificationCalls += 1;
         if (verificationCalls > 1) {
@@ -6266,6 +6503,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-coding-unknown-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     expect(
@@ -6304,6 +6542,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-workflow-egress-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     await handleGatewaySetup(
@@ -6354,6 +6593,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-coding-legacy-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => {
         verificationCalls += 1;
         return Promise.resolve(modelIds);
@@ -6396,6 +6636,10 @@ describe("handleGatewaySetup", () => {
     const seenModels: string[] = [];
     const seenAuthHeaders: { auth: string | null; custom: string | null }[] = [];
     const fakeFetch: typeof fetch = (url, init) => {
+      // Setup probes the declared embedding models with a real request (LiteLLM field incident).
+      // A gateway that rejects chat for an embedding model still answers /embeddings.
+      const embeddingProbeResponse = fakeEmbeddingProbeResponse(url);
+      if (embeddingProbeResponse !== undefined) return embeddingProbeResponse;
       const href = fetchInputUrl(url);
       seenUrls.push(href);
       const headers = new Headers(init?.headers);
@@ -6527,6 +6771,10 @@ describe("handleGatewaySetup", () => {
     const seenUrls: string[] = [];
     const seenAuthHeaders: { auth: string | null; custom: string | null }[] = [];
     const fakeFetch: typeof fetch = (url, init) => {
+      // Setup probes the declared embedding models with a real request (LiteLLM field incident).
+      // A gateway that rejects chat for an embedding model still answers /embeddings.
+      const embeddingProbeResponse = fakeEmbeddingProbeResponse(url);
+      if (embeddingProbeResponse !== undefined) return embeddingProbeResponse;
       const href = fetchInputUrl(url);
       seenUrls.push(href);
       const headers = new Headers(init?.headers);
@@ -6602,6 +6850,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir,
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
     });
     const result = await handleGatewaySetup(
@@ -6628,6 +6877,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.reject(new Error("discovery should not run")),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
     });
     const result = await handleGatewaySetup(
@@ -6654,6 +6904,7 @@ describe("handleGatewaySetup", () => {
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.reject(new Error("discovery should not run")),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
     });
     const result = await handleGatewaySetup(
@@ -6684,6 +6935,7 @@ describe("handleGatewaySetup", () => {
         discoveryCalls += 1;
         return Promise.resolve(["example-chat-model"]);
       },
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => {
         testerCalls += 1;
         return Promise.resolve(modelIds);
@@ -6722,6 +6974,7 @@ describe("handleGatewaySetup", () => {
         discoveryCalls += 1;
         return Promise.resolve(["example-chat-model"]);
       },
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => {
         testerCalls += 1;
         return Promise.resolve(modelIds);
@@ -6749,6 +7002,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir,
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
     });
     const result = await handleGatewaySetup(
@@ -6771,6 +7025,10 @@ describe("handleGatewaySetup", () => {
     const originalFetch = globalThis.fetch;
     const seenModels: string[] = [];
     const fakeFetch: typeof fetch = (url, init) => {
+      // Setup probes the declared embedding models with a real request (LiteLLM field incident).
+      // A gateway that rejects chat for an embedding model still answers /embeddings.
+      const embeddingProbeResponse = fakeEmbeddingProbeResponse(url);
+      if (embeddingProbeResponse !== undefined) return embeddingProbeResponse;
       if (fetchInputUrl(url).endsWith("/models")) {
         return Promise.resolve(
           new Response(
@@ -6865,6 +7123,7 @@ describe("handleGatewaySetup", () => {
       },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const result = await handleGatewaySetup(
@@ -6892,6 +7151,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-generic-azure-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const result = await handleGatewaySetup(
@@ -6946,6 +7206,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-shared-protocol-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) =>
         Promise.resolve(modelIds.filter((modelId) => modelId !== "scan-ocr")),
     });
@@ -7002,6 +7263,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-own-protocol-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) =>
         Promise.resolve(modelIds.filter((modelId) => modelId !== "scan-ocr")),
     });
@@ -7034,6 +7296,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-probe-protocol-"),
       env: { ...VAULT_ENV, KEIKO_DEFAULT_ENDPOINT_STYLE: "azure-openai-deployment" },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
 
@@ -7081,6 +7344,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-env-style-"),
       env: { ...VAULT_ENV, KEIKO_DEFAULT_ENDPOINT_STYLE: "azure-openai-deployment" },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
 
@@ -7131,6 +7395,7 @@ describe("handleGatewaySetup", () => {
         KEIKO_DEFAULT_API_VERSION: "2025-04-01-preview",
       },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
 
@@ -7163,6 +7428,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-default-protocol-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     deps.gatewayConfig?.set(
@@ -7212,6 +7478,7 @@ describe("handleGatewaySetup", () => {
         KEIKO_DEFAULT_API_VERSION: "2025-04-01-preview",
       },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
 
@@ -7257,6 +7524,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-embed-protocol-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) =>
         Promise.resolve(modelIds.filter((modelId) => modelId !== "embed-small")),
     });
@@ -7301,6 +7569,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-env-version-"),
       env: { ...VAULT_ENV, KEIKO_MODEL_EXAMPLE_CHAT_API_VERSION: "2025-04-01-preview" },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
 
@@ -7350,6 +7619,7 @@ describe("handleGatewaySetup", () => {
         KEIKO_DEFAULT_API_VERSION: "2025-04-01-preview",
       },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
 
@@ -7398,6 +7668,7 @@ describe("handleGatewaySetup", () => {
         KEIKO_DEFAULT_API_VERSION: "2025-04-01-preview",
       },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
 
@@ -7430,6 +7701,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-protocol-capability-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const gatewayConfig = deps.gatewayConfig;
@@ -7484,6 +7756,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-generic-primary-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const gatewayConfig = deps.gatewayConfig;
@@ -7542,6 +7815,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-azure-style-deployments-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const result = await handleGatewaySetup(
@@ -7567,6 +7841,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-generic-inherit-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const gatewayConfig = deps.gatewayConfig;
@@ -7634,6 +7909,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-protocol-atomic-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const gatewayConfig = deps.gatewayConfig;
@@ -7683,6 +7959,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-protocol-only-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const gatewayConfig = deps.gatewayConfig;
@@ -7733,6 +8010,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-orphan-version-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const orphan = await handleGatewaySetup(
@@ -7823,6 +8101,7 @@ describe("handleGatewaySetup", () => {
       evidenceDir: await tempDir("keiko-gw-ev-generic-style-bad-"),
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
     const result = await handleGatewaySetup(
@@ -7977,6 +8256,37 @@ describe("normalizeDiscoveryPayload", () => {
     expect(normalizeDiscoveryPayloadForSetup(payload)).toMatchObject({
       chatModelIds: ["chat-via-params"],
       embeddingModelIds: ["embedding-via-params"],
+    });
+  });
+
+  // Field incident (LiteLLM customer, 2026-08): the declared mode is the ONLY affirmative
+  // statement a gateway makes about what a model IS. A name heuristic that overrides it bound a
+  // rerank endpoint to every Knowledge Pod as its embedding model — unprobed — and indexing wrote
+  // zero vectors. Reproduced locally against a real LiteLLM before this pin was written.
+  it("never lets a model id override the declared mode", () => {
+    const payload = {
+      data: [
+        // Declared rerank, name matches the embedding id heuristic. Must NOT become an embedding.
+        { model_name: "bge-reranker-v2-m3", model_info: { mode: "rerank" } },
+        // Declared chat, name matches the embedding id heuristic. Must stay chat.
+        { model_name: "e5-house-chat", model_info: { mode: "chat" } },
+        // Declared embedding, name matches NOTHING. Must be recognised from the declaration alone.
+        { model_name: "hausvektor-v2", model_info: { mode: "embedding" } },
+      ],
+    };
+
+    expect(normalizeDiscoveryPayloadForSetup(payload)).toMatchObject({
+      chatModelIds: ["e5-house-chat"],
+      embeddingModelIds: ["hausvektor-v2"],
+    });
+  });
+
+  it("keeps the id heuristic for gateways that declare no mode at all", () => {
+    // /models-only gateways carry no mode field; the heuristic stays the fallback there.
+    const payload = { data: [{ id: "text-embedding-3-small" }, { id: "some-chat" }] };
+    expect(normalizeDiscoveryPayloadForSetup(payload)).toMatchObject({
+      chatModelIds: ["some-chat"],
+      embeddingModelIds: ["text-embedding-3-small"],
     });
   });
 
