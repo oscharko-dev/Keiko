@@ -800,7 +800,7 @@
       "remediation": "no-action-required",
       "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
-        "Every save is a restore point — browse, compare, and restore file history locally."
+        "Every save is a restore point \u2014 browse, compare, and restore file history locally."
       ],
       "internalOnly": false,
       "observableImpact": true,
@@ -1155,7 +1155,7 @@
         "Windows failures are visible: incomplete installs, a damaged app bundle, or a runtime that cannot start now surface a native error dialog instead of exiting silently.",
         "The Start Menu entry is a real shortcut; a legacy Keiko.bat from earlier releases is retired automatically during setup, repair, and the first start after an in-app update.",
         "The Windows archive pipeline fails closed on symlinks, NTFS alternate-data-stream names, encryption-marked and mistyped entries, and installer cleanup retries correctly under silent installs.",
-        "These builds carry evaluation signing, and the governed in-app updater does not offer them as a one-click update — download 0.3.4 from this release page. On Windows, SmartScreen may warn on first run: choose “More info”, then “Run anyway”. On macOS, right-click the app and choose “Open” on first launch."
+        "These builds carry evaluation signing, and the governed in-app updater does not offer them as a one-click update \u2014 download 0.3.4 from this release page. On Windows, SmartScreen may warn on first run: choose \u201cMore info\u201d, then \u201cRun anyway\u201d. On macOS, right-click the app and choose \u201cOpen\u201d on first launch."
       ],
       "review": {
         "status": "reviewed",
@@ -1483,7 +1483,7 @@
       "stateImpact": [],
       "releaseNoteBullets": [
         "Knowledge Pod indexing no longer dies silently when the pod is pinned to one of several gateway entries sharing a model id: the indexing job now runs with exactly the provider the request resolved (including alias-repaired pods), instead of re-deriving it with a strict first-match lookup that could miss and fail with an empty job id, no job history, and no diagnostics.",
-        "The same repair unblocks full re-embed maintenance runs whose embedding model had rotated — the previous silent branch made exactly those runs fail without a trace."
+        "The same repair unblocks full re-embed maintenance runs whose embedding model had rotated \u2014 the previous silent branch made exactly those runs fail without a trace."
       ],
       "review": {
         "status": "reviewed",
@@ -1529,7 +1529,7 @@
       "releaseNoteCategory": "fixes",
       "releaseNotePriority": "high",
       "userVisibleChange": "observable",
-      "userVisibleSummary": "Keiko 0.3.11 makes strict OpenAI-compatible gateways work end to end. Embedding requests now fall back to the minimal wire shape when a gateway answers HTTP 400 to optional extras (encoding_format, array input) — the failure mode that blocked Knowledge Pod indexing on certain LiteLLM/TEI deployments while chat and a plain curl succeeded. The fallback remembers a gateway's strictness, keeps one absolute deadline over the whole compatibility ladder, and reports coherent error causes. A fresh install also no longer rejects the first chat: conversation readiness is verified on demand at chat creation and send instead of requiring a manual readiness check in settings.",
+      "userVisibleSummary": "Keiko 0.3.11 makes strict OpenAI-compatible gateways work end to end. Embedding requests now fall back to the minimal wire shape when a gateway answers HTTP 400 to optional extras (encoding_format, array input) \u2014 the failure mode that blocked Knowledge Pod indexing on certain LiteLLM/TEI deployments while chat and a plain curl succeeded. The fallback remembers a gateway's strictness, keeps one absolute deadline over the whole compatibility ladder, and reports coherent error causes. A fresh install also no longer rejects the first chat: conversation readiness is verified on demand at chat creation and send instead of requiring a manual readiness check in settings.",
       "affectedStateStores": [],
       "stateImpact": [],
       "releaseNoteBullets": [
@@ -1585,7 +1585,7 @@
       "affectedStateStores": [],
       "stateImpact": [],
       "releaseNoteBullets": [
-        "New chats and the contextual-retrieval fallback default to a model whose gateway metadata declares a chat-compatible mode (LiteLLM /model/info); mode-less special-purpose ids (OCR, speech, reranking) rank last and cannot capture the default while warm — re-run the gateway verification once after updating so the mode metadata is stored.",
+        "New chats and the contextual-retrieval fallback default to a model whose gateway metadata declares a chat-compatible mode (LiteLLM /model/info); mode-less special-purpose ids (OCR, speech, reranking) rank last and cannot capture the default while warm \u2014 re-run the gateway verification once after updating so the mode metadata is stored.",
         "Conversation readiness self-heals: a failed probe retries after a 30s cooldown instead of pinning the model for the process lifetime; grounded Knowledge Pod questions verify readiness on demand (the first pod question after a restart answers without any manual probe); the models endpoint reports never-probed models as unknown/usable instead of unusable, so the picker no longer empties after every restart.",
         "Indexing runs detached: the start request answers immediately with the job id, the panel follows the persisted job (settling strictly on that job's identity), survives page reloads by re-attaching to the running job, and a duplicate start is refused instead of racing the in-flight run.",
         "Gateway outages stop runs early and honestly: five consecutive transient embedding failures trip EMBEDDING_GATEWAY_UNAVAILABLE instead of grinding through the corpus for hours; a run where most attempted documents failed reports MAJORITY_DOCUMENTS_FAILED; an intact partial index stays retrievable instead of being blacked out.",
@@ -1636,12 +1636,12 @@
       "releaseNoteCategory": "fixes",
       "releaseNotePriority": "high",
       "userVisibleChange": "observable",
-      "userVisibleSummary": "Keiko 0.3.13 makes model-role recognition model-agnostic. Keiko now takes a model's role from what the gateway DECLARES about it (a LiteLLM /model/info mode), not from a guess based on the model's name. A model a gateway declares as a reranking, speech, image or moderation engine is no longer stored as this gateway's embedding model just because its name resembles one — a field incident where exactly that happened bound a reranking endpoint to every new Knowledge Pod and indexing wrote zero vectors. Models Keiko cannot use are now reported with the reason the gateway gave, instead of disappearing silently, and every declared embedding model is verified with a real embedding request before it is stored, so an endpoint that cannot embed is never bound to a pod. The name heuristic remains only for gateways that declare nothing at all.",
+      "userVisibleSummary": "Keiko 0.3.13 makes model-role recognition model-agnostic. Keiko now takes a model's role from what the gateway DECLARES about it (a LiteLLM /model/info mode), not from a guess based on the model's name. A model a gateway declares as a reranking, speech, image or moderation engine is no longer stored as this gateway's embedding model just because its name resembles one \u2014 a field incident where exactly that happened bound a reranking endpoint to every new Knowledge Pod and indexing wrote zero vectors. Models Keiko cannot use are now reported with the reason the gateway gave, instead of disappearing silently, and every declared embedding model is verified with a real embedding request before it is stored, so an endpoint that cannot embed is never bound to a pod. The name heuristic remains only for gateways that declare nothing at all.",
       "affectedStateStores": [],
       "stateImpact": [],
       "releaseNoteBullets": [
         "A model's role now comes from the gateway's own declaration (LiteLLM /model/info mode) rather than from its name. A declared reranking, speech, image-generation or moderation engine can no longer be stored as an embedding model because its id happens to contain a token like \"bge\" or \"e5\"; the name heuristic applies only where a gateway declares nothing.",
-        "Models Keiko will not configure are now reported with the declared reason in the setup dialog instead of vanishing without a trace, and they no longer consume slots in the discovery limit — a gateway listing many speech or reranking endpoints can no longer push real chat models out of the configured set.",
+        "Models Keiko will not configure are now reported with the declared reason in the setup dialog instead of vanishing without a trace, and they no longer consume slots in the discovery limit \u2014 a gateway listing many speech or reranking endpoints can no longer push real chat models out of the configured set.",
         "Every declared embedding model is verified with one real embedding request during setup. A model that cannot answer is not stored as an embedding model; a model whose role you asserted explicitly, or that was already stored, is kept and flagged as unverified so a brief endpoint outage cannot unpin working Knowledge Pods.",
         "Gateways whose /model/info route is unavailable, restricted or rate-limited continue to set up exactly as before by falling back to the plain model list; only a response in which every model declares a mode Keiko cannot use is surfaced as an error."
       ],
@@ -1652,6 +1652,61 @@
         "humanApproved": true,
         "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3204#5358465374",
         "rationale": "The release owner directed this fix after three releases failed to resolve a customer's LiteLLM deployment: indexing produced zero vectors because model roles were guessed from model names. The defect was reproduced locally against a real LiteLLM container with invented model names before any code changed, and the repair was verified the same way: the customer corpus indexes to 347 vectors with the job succeeding, where it previously bound a reranking endpoint and failed with zero. An independent adversarial review of the first commit found seven further defects, five of which would have broken working deployments; all were repaired and pinned before merge."
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.14",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.14",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-20-keiko-0.3.14-embedding-batch-degradation",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 0.3.14 fixes indexing against gateways that serve single embedding requests but fail requests carrying many texts at once. Keiko embeds a document's sections in one batched request, and fell back to sending them one at a time only when a gateway rejected the batch cleanly with HTTP 400 or 422. A gateway that answers such a batch with a server error, a timeout or a dropped connection was treated as briefly unavailable, so the identical request was retried unchanged - indexing produced no vectors, reported no error, and looked like it was running indefinitely. A failed multi-text request now causes exactly one single-text attempt, provided the run was not cancelled, the request carried more than one text, and its time budget has not run out. If that attempt succeeds, the batch shape is the problem and the gateway is remembered so later requests are sent one text at a time; a throttle (HTTP 429) is excluded from that memory. If it fails too, the original error is reported unchanged, so a genuine outage is still reported as an outage.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Indexing now completes against gateways that answer a multi-text embedding request with a server error, a timeout or a dropped connection. Previously only a clean HTTP 400/422 rejection triggered the fallback to one-text-at-a-time requests, so such a gateway produced zero vectors while the job appeared to keep running.",
+        "The fallback costs exactly one extra request, and it is attempted only for a request that carried more than one text, in a run that was not cancelled, and while its time budget remains. Once single texts have succeeded, the gateway is remembered and later documents skip the failing shape entirely.",
+        "A throttle (HTTP 429) is deliberately excluded from that memory: \"try again later\" says nothing about the request shape, so the throttled request is still served one text at a time while the next one may use the faster batched form again.",
+        "A genuine gateway outage is still reported as an outage: if single texts fail as well, the original error and status are surfaced unchanged rather than being reported as a request-format problem.",
+        "A cancelled indexing run no longer fans out into further requests - including a cancellation that arrives after the gateway already answered - and deployment routing is preserved on the single-text fallback, so an Azure deployment endpoint is probed at its own URL instead of the plain embeddings path."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-20",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3204#5362641516",
+        "rationale": "The release owner directed this fix after 0.3.13 did not resolve a customer's LiteLLM deployment. The customer's gateway was measured directly: a single input answered HTTP 200 in 0.21s, the same texts as an array answered HTTP 500 after 18.87s. The defect was then reproduced on a developer machine against an endpoint reproducing that exact response matrix, at two layers \u2014 the transport adapter and the real indexing job \u2014 with the product-level run failing as EMBEDDING_ADAPTER_FAILED at zero documents and zero vectors before the change and succeeding after it. Both proof suites were verified red by removing the repair and green by restoring it.",
+        "traceability": null
       },
       "userActionRequired": true,
       "remediation": "restart-required",
