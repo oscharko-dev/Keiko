@@ -521,9 +521,11 @@ describe("batch failure that is not a clean shape rejection", () => {
     // reached deterministically rather than on a timing race.
     const fetchImpl = vi.fn<typeof fetch>(
       () =>
-        new Promise<Response>((_resolve, reject) =>
-          setTimeout(() => reject(new TypeError("socket hang up")), 25),
-        ),
+        new Promise<Response>((_resolve, reject) => {
+          setTimeout(() => {
+            reject(new TypeError("socket hang up"));
+          }, 25);
+        }),
     );
     const outcome = await requestOpenAIEmbeddingBatch({
       ...batchRequest(["a", "b", "c"], fetchImpl),
