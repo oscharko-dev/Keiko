@@ -2160,6 +2160,53 @@ describe("runIndexingJob — honest terminal status on overwhelming failure", ()
     }
   });
 
+  it("fails a run whose only outcomes are discovery failures — zero progress is never a success", async () => {
+    // Review finding on #3221 proposed excluding discovery failures from the zero-progress rule
+    // for symmetry with the majority ratio. The two rules answer different questions: the ratio
+    // scores the corpus the run SAW, while this rule guards a run that saw NOTHING succeed.
+    // With zero processed and zero skipped documents, a discovery-only failure run covered none
+    // of its corpus — reporting it "succeeded" would be a lie. The raw count stays authoritative.
+    const { store, cleanup } = freshStore();
+    const capsuleId = "cap-orch" as KnowledgeCapsuleId;
+    createCapsule(
+      store,
+      sampleCapsuleInput({ id: capsuleId, modelUsePolicy: standardPodModelUsePolicy() }),
+    );
+    const source = addSourceToCapsule(store, capsuleId, {
+      id: "src-orch" as KnowledgeSourceId,
+      displayName: "orch",
+      tags: [],
+      scope: folderScope(ROOT, { recursive: true }),
+    });
+    // An unreadable walk root — the shape a torn mount or revoked permission produces in the
+    // field: the whole run yields exactly one READ_FAILED scope-error and no document work.
+    const unreadableFs: WorkspaceFs = {
+      ...memoryFs(ROOT, []),
+      readDir: (): never => {
+        throw new Error("EACCES: permission denied");
+      },
+    };
+    const fixture: Fixture = {
+      store,
+      cleanup,
+      capsuleId,
+      sourceId: source.id,
+      source,
+      fs: unreadableFs,
+    };
+    try {
+      const events = await drain(runIndexingJob(buildOptions(fixture)));
+      const terminal = events.at(-1);
+      expect(terminal?.kind).toBe("job-failed");
+      if (terminal?.kind === "job-failed") {
+        expect(terminal.result.processedDocuments).toBe(0);
+        expect(terminal.result.failedDocuments).toBeGreaterThan(0);
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it("keeps a repair-style delta run succeeded when the healthy corpus is skipped alongside it", async () => {
     // Adversarial-review finding: a run-scoped ratio measured only the delta, so a repair run
     // fixing 1 of 3 stragglers on an otherwise healthy corpus reported MAJORITY_DOCUMENTS_FAILED

@@ -375,6 +375,8 @@ export interface CapsuleDetailResponse {
 export interface CapsuleActionResponse {
   readonly ok: true;
   readonly capsuleId: KnowledgeCapsuleId;
+  /** Job id a 202 indexing admission pinned; the panel settles its watch on this identity. */
+  readonly jobId?: string;
   readonly affectedCapsuleSetIds?: readonly CapsuleSetId[];
   readonly cleanupVerified?: boolean;
 }

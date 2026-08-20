@@ -77,7 +77,7 @@ import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-l
 import { newCorrelationId } from "./correlation.js";
 import {
   CAPSULE_SET_MAX_MEMBERS,
-  conversationDefaultRank,
+  electConversationDefault,
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
   isKnowledgePodEvidenceSafeText,
   MODEL_COST_RANK,
@@ -91,7 +91,7 @@ import {
   validateKnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
 import {
-  currentConversationReady,
+  currentConversationReadinessObservation,
   currentGateway,
   currentGatewayConfig,
   currentGatewayEgressConfig,
@@ -1938,21 +1938,17 @@ function resolveContextualRetrievalModelId(
 // Fallback context-model election for contextual retrieval (2026-08 field review). The old
 // pure-costClass selection let a mode-less special-purpose id FIRST in the configured list (the
 // customer's OCR model) become the context model by position: warm, it "succeeds" and prefixes
-// every chunk with OCR garbage that pollutes the embedding space until a full re-index. Order by
-// the shared conversation-default rank (declared chat mode first, special-purpose ids last),
-// prefer a model with a CURRENT successful conversation probe, and only then fall back to the
-// cheapest cost class the old selection optimized for — within a tier, configured order still
-// breaks ties.
+// every chunk with OCR garbage that pollutes the embedding space until a full re-index. Reuse
+// the shared tier-walk election: readiness is preferred only WITHIN a rank tier, so a verified
+// special-purpose model can never outrank an unprobed declared chat model (#3220 semantics).
+// The stable cost pre-sort keeps the old economy inside each tier — electConversationDefault
+// re-sorts by rank stably, so equal-rank candidates stay cheapest-first, configured order last.
 function fallbackContextModelId(deps: UiHandlerDeps, config: GatewayConfig): string | undefined {
-  const ranked = [...listConfiguredCapabilities(config)]
+  const byCost = [...listConfiguredCapabilities(config)]
     .filter((capability) => capability.kind === "chat")
-    .sort(
-      (a, b) =>
-        conversationDefaultRank(a) - conversationDefaultRank(b) ||
-        MODEL_COST_RANK[a.costClass] - MODEL_COST_RANK[b.costClass],
-    );
-  return (
-    ranked.find((capability) => currentConversationReady(deps, capability.id)) ?? ranked.at(0)
+    .sort((a, b) => MODEL_COST_RANK[a.costClass] - MODEL_COST_RANK[b.costClass]);
+  return electConversationDefault(byCost, (capability) =>
+    currentConversationReadinessObservation(deps, capability.id),
   )?.id;
 }
 
@@ -2844,8 +2840,12 @@ function launchDetachedCapsuleIndexing(
 ): void {
   const key = String(resolved.capsule.id);
   const run = (async (): Promise<void> => {
-    const env = openStoreForDeps(deps);
+    // The store open lives INSIDE the try: openKnowledgeStore throws on open/migration failure,
+    // and a throw before the handler would leave the rejection unhandled (production never awaits
+    // this promise) and leak the launch-map key — answering 409 for the process lifetime.
+    let env: ReturnType<typeof openStoreForDeps> | undefined;
     try {
+      env = openStoreForDeps(deps);
       await runCapsuleIndexingJob(deps, env.store, resolved.capsule, {
         provider: resolved.provider,
         mode: undefined,
@@ -2867,7 +2867,7 @@ function launchDetachedCapsuleIndexing(
         }),
       );
     } finally {
-      env.close();
+      env?.close();
       detachedIndexingRuns.delete(key);
     }
   })();

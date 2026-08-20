@@ -497,14 +497,51 @@ describe("useChatSession bootstrap", () => {
       opened = await result.current.openNewChat(project("/other"), "  Grounding release check  ");
     });
 
+    // Relocated pin (review finding on #3221): with no chats and no user pick, the bootstrap
+    // default is an ELECTED selection — the create request omits modelId so the server's
+    // bounded walk owns the election, exactly like the auto-create pin above.
     expect(createDesktopChat).toHaveBeenCalledWith({
-      modelId: "chat-live",
       title: "Grounding release check",
       projectPath: "/other",
     });
     expect(opened?.id).toBe("chat-project-override");
     expect(result.current.activeProject?.path).toBe("/other");
     expect(result.current.messages[0]?.id).toBe("created-msg");
+  });
+
+  it("omits modelId when a stale persisted selection resolved to an elected fallback", async () => {
+    // Review finding on #3221: hydration used to store the RESOLVED fallback id, so a stale
+    // persisted model laundered into a \"deliberate\" selection and the next create sent it as
+    // an explicit modelId — bypassing the server's bounded readiness walk. Provenance now
+    // travels with the selection: an elected fallback keeps the create request AUTOMATIC.
+    const resumed = chat({ id: "chat-stale", selectedModel: "model-retired", updatedAt: 40 });
+    const created = chat({ id: "chat-next", title: "New chat", updatedAt: 50 });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [resumed] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(createDesktopChat).mockResolvedValue({
+      chat: created,
+      project: project("/repo"),
+      projects: [project("/repo")],
+      chats: [created, resumed],
+      messages: [],
+    });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    // The stale persisted id resolved to the live fallback for display purposes…
+    expect(result.current.selectedModel).toBe("chat-live");
+
+    await act(async () => {
+      await result.current.openNewChat();
+    });
+
+    // …but the create request must NOT claim it as an explicit choice.
+    expect(createDesktopChat).toHaveBeenCalledWith({
+      title: "New chat",
+      projectPath: "/repo",
+    });
   });
 
   it("returns a persisted chat without replacing a project selected during creation", async (): Promise<void> => {

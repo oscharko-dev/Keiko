@@ -34,6 +34,7 @@ import type {
   DocumentId,
   EmbeddingModelIdentity,
   ExtractionCheckpointRecord,
+  INDEXING_EMBEDDING_STOPPED_ERROR_CODES,
   IndexingJobError,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
@@ -82,6 +83,7 @@ import {
 } from "../discovery/index.js";
 import {
   deleteDocumentRow,
+  deleteCapsuleDiagnosticsByCode,
   insertDiagnosticRow,
   listPersistedDocumentsForSource,
   readDocumentTextRow,
@@ -2380,11 +2382,11 @@ function persistDiscoveryLimitWarning(state: RunState): void {
 // folder) makes the warning disappear with the next index instead of shouting forever.
 function clearDiscoveryLimitWarning(state: RunState): void {
   try {
-    state.options.store._internal.db
-      .prepare(
-        "DELETE FROM parser_diagnostics WHERE capsule_id = :c AND document_id IS NULL AND code = :code",
-      )
-      .run({ c: state.capsule.id, code: DISCOVERY_LIMIT_WARNING_CODE });
+    deleteCapsuleDiagnosticsByCode(
+      state.options.store._internal.db,
+      state.capsule.id,
+      DISCOVERY_LIMIT_WARNING_CODE,
+    );
   } catch {
     // Informational surface — see persistDiscoveryLimitWarning.
   }
@@ -2508,7 +2510,11 @@ export async function* runIndexingJob(options: IndexingOptions): AsyncIterable<I
 // Deterministic failures and skips never count — they say nothing about the gateway.
 export const CONSECUTIVE_TRANSIENT_FAILURE_LIMIT = 5;
 
-export const EMBEDDING_GATEWAY_UNAVAILABLE_CODE = "EMBEDDING_GATEWAY_UNAVAILABLE";
+// `satisfies` pins both producer literals to the contract-owned code list: renaming or
+// dropping a code in keiko-contracts breaks this compile instead of silently drifting from
+// the capsule-detail consumer.
+export const EMBEDDING_GATEWAY_UNAVAILABLE_CODE =
+  "EMBEDDING_GATEWAY_UNAVAILABLE" satisfies (typeof INDEXING_EMBEDDING_STOPPED_ERROR_CODES)[number];
 
 function gatewayUnavailableError(state: RunState): IndexingJobError {
   return {
@@ -2604,7 +2610,7 @@ function resolveJobStatus(
     // document-failed events keep every individual cause, while the terminal error names why
     // the RUN as a whole is not a success.
     state.lastError = {
-      code: "MAJORITY_DOCUMENTS_FAILED",
+      code: "MAJORITY_DOCUMENTS_FAILED" satisfies (typeof INDEXING_EMBEDDING_STOPPED_ERROR_CODES)[number],
       message:
         `${String(embedFailedDocuments)} of ` +
         `${String(embedFailedDocuments + state.processedDocuments + state.skippedDocuments)} ` +

@@ -827,7 +827,7 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
     "Dieser Knowledge Pod wurde aus {count} Knowledge Pod Sets entfernt, zu denen er gehörte.",
   "localKnowledge.detail.index.title": "Indexstatus",
   "localKnowledge.detail.index.noJobRecorded": "Kein Job aufgezeichnet",
-  "localKnowledge.detail.index.runFailed": "Indizierung fehlgeschlagen: {message}",
+  "localKnowledge.detail.index.runFailed": "Indexierung fehlgeschlagen: {message}",
   "localKnowledge.detail.index.eta": "ETA {duration}",
   "localKnowledge.detail.index.updating": "Aktualisiert alle 2 s",
   "localKnowledge.detail.index.latestRun": "Letzter Lauf",

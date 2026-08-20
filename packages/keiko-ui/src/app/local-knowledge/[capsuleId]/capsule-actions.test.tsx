@@ -123,7 +123,10 @@ function progressDetail(overrides: Partial<CapsuleDetail> = {}): CapsuleDetail {
   } as CapsuleDetail;
 }
 
-function terminalDetail(status: "succeeded" | "failed" = "succeeded"): CapsuleDetail {
+function terminalDetail(
+  status: "succeeded" | "failed" = "succeeded",
+  overrides: { readonly id?: string; readonly finishedAt?: number } = {},
+): CapsuleDetail {
   const base = progressDetail();
   return {
     ...base,
@@ -131,8 +134,9 @@ function terminalDetail(status: "succeeded" | "failed" = "succeeded"): CapsuleDe
     indexingJobs: [
       {
         ...base.indexingJobs[0],
+        ...(overrides.id !== undefined ? { id: overrides.id } : {}),
         status,
-        finishedAt: Date.now(),
+        finishedAt: overrides.finishedAt ?? Date.now(),
         processedDocuments: 3,
         ...(status === "failed"
           ? { lastError: { code: "EMBEDDING_ADAPTER_FAILED", message: "gateway went away" } }
@@ -711,6 +715,7 @@ describe("CapsuleActions — refresh action", () => {
           lifecycleState: "draft",
           onActionComplete,
           startIndexingImpl,
+          pollIntervalMs: 25,
         })}
       />,
     );
@@ -738,6 +743,46 @@ describe("CapsuleActions — refresh action", () => {
     );
   });
 
+  it("never settles on a stale terminal row — only the job the 202 admitted", async () => {
+    // Review finding on #3221: settlement is identity-based. A previous run's terminal row —
+    // even one finishing moments before the click, inside the old 5 s wall-clock grace —
+    // must neither clear the busy state nor surface its stale error over the new run.
+    const user = userEvent.setup();
+    const startIndexingImpl = vi
+      .fn<() => Promise<CapsuleActionResponse>>()
+      .mockResolvedValue({ ok: true, capsuleId: DEFAULT_ID, jobId: "job-2" });
+    // The polled detail carries ONLY the previous run: id job-1, freshly finished, failed.
+    const fetchCapsuleDetailImpl = vi.fn().mockResolvedValue(terminalDetail("failed"));
+    const onActionComplete = vi.fn();
+
+    render(
+      <CapsuleActions
+        {...defaultProps({
+          fetchCapsuleDetailImpl,
+          lifecycleState: "draft",
+          onActionComplete,
+          startIndexingImpl,
+          pollIntervalMs: 25,
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /index this Knowledge Pod now/i }));
+
+    // Several polls deliver only the stale row; the watch must stay busy and error-free.
+    await waitFor(() => {
+      expect(fetchCapsuleDetailImpl.mock.calls.length).toBeGreaterThan(2);
+    });
+    expect(onActionComplete).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Indexing failed/i)).not.toBeInTheDocument();
+
+    // The admitted job's own terminal row settles the watch.
+    fetchCapsuleDetailImpl.mockResolvedValue(terminalDetail("succeeded", { id: "job-2" }));
+    await waitFor(() => {
+      expect(onActionComplete).toHaveBeenCalledOnce();
+    });
+  });
+
   it("re-attaches to a running job on mount and surfaces a failed terminal state", async () => {
     // Re-attach pin: a page reload during a multi-hour run (the run survives any transport
     // blip server-side) must show live progress again WITHOUT a click — and a failed job must
@@ -751,6 +796,7 @@ describe("CapsuleActions — refresh action", () => {
           fetchCapsuleDetailImpl,
           lifecycleState: "indexing",
           onActionComplete,
+          pollIntervalMs: 25,
         })}
       />,
     );

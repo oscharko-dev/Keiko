@@ -252,6 +252,15 @@ export interface CapsuleReindexRequest {
   readonly resumeJobId?: string;
 }
 
+// Job-level error codes whose meaning is "embedding stopped before the corpus was covered".
+// Contract-owned so the orchestrator (producer) and the capsule-detail UI (consumer) share one
+// definition — IndexingJobError.code is a plain string, so a type annotation cannot catch drift.
+export const INDEXING_EMBEDDING_STOPPED_ERROR_CODES = Object.freeze([
+  "EMBEDDING_ADAPTER_FAILED",
+  "EMBEDDING_GATEWAY_UNAVAILABLE",
+  "MAJORITY_DOCUMENTS_FAILED",
+] as const);
+
 export interface IndexingJobError {
   readonly code: string;
   readonly message: string;

@@ -1678,7 +1678,6 @@ describe("local-knowledge handlers", () => {
     mkdirSync(docsRoot);
     writeFileSync(join(docsRoot, "doc.md"), "# Doc\n\nOne document.\n", "utf8");
     const embeddingResult = deferred<OpenAIEmbeddingOutcome>();
-    let embedResolved = false;
     const deps: UiHandlerDeps = {
       ...depsFor(tmp),
       localKnowledgeEmbeddingRequest: vi.fn(() => embeddingResult.promise),
@@ -1710,7 +1709,21 @@ describe("local-knowledge handlers", () => {
     const acceptedBody = accepted.body as { readonly ok: boolean; readonly jobId?: string };
     expect(acceptedBody.ok).toBe(true);
     expect(acceptedBody.jobId).toBeDefined();
-    expect(embedResolved).toBe(false);
+    // The detached run persists its job row as RUNNING while the embedding — which only the
+    // code below resolves — is still pending: the response existed before the run could have
+    // finished. (A flag flipped after this line could never fail; the row status can.)
+    const inFlight = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const runningStatus = (): string | undefined =>
+      (
+        inFlight._internal.db
+          .prepare("SELECT status FROM indexing_jobs WHERE capsule_id = :c")
+          .get({ c: body.capsule.id }) as { readonly status: string } | undefined
+      )?.status;
+    await waitUntil(() => runningStatus() !== undefined);
+    expect(runningStatus()).toBe("running");
+    inFlight.close();
 
     // A duplicate POST inside the launch/run window must refuse, not race the in-flight run.
     const duplicate = await handleStartLocalKnowledgeCapsuleIndexing(
@@ -1719,7 +1732,6 @@ describe("local-knowledge handlers", () => {
     );
     expect(duplicate.status).toBe(409);
 
-    embedResolved = true;
     embeddingResult.resolve({
       ok: true,
       value: { vector: new Float32Array(1536).fill(0.5), modelId: "text-embedding-3-small" },
@@ -2974,6 +2986,99 @@ describe("local-knowledge handlers", () => {
             structuredOutput: null,
             usage: {
               requestId: "ctx-rank-1",
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "low",
+            },
+          });
+        },
+      },
+    };
+
+    const result = await startIndexingToTerminal(
+      { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(202);
+    expect(contextCalls).not.toHaveLength(0);
+    expect(contextCalls.every((call) => call.modelId === "qwen-chat")).toBe(true);
+  });
+
+  it("keeps the declared chat model as fallback even when only the OCR id is probe-verified", async () => {
+    // Review finding on #3221: the readiness preference must stay WITHIN a rank tier. A warm
+    // special-purpose engine that happened to answer one conversation probe must not outrank
+    // the unprobed declared chat model — the exact field capture the tier walk prevents.
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(
+      join(docsRoot, "policy.md"),
+      "# Policy\n\n" + "Tier-scoped readiness for the fallback election.\n".repeat(24),
+      "utf8",
+    );
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const contextCalls: GatewayRequest[] = [];
+    const embeddingProvider = gatewayConfig("text-embedding-3-small").providers[0];
+    if (embeddingProvider === undefined) throw new Error("missing embedding provider");
+    const chatProvider = (modelId: string): GatewayConfig["providers"][number] => ({
+      modelId,
+      baseUrl: "https://gateway.example.test/v1",
+      apiKey: "redacted",
+      timeoutMs: 30_000,
+      maxRetries: 1,
+      retryBaseDelayMs: 100,
+    });
+    const base = depsFor(tmp, {
+      providers: [embeddingProvider, chatProvider("dotsocr"), chatProvider("qwen-chat")],
+      capabilities: [
+        embeddingCapability("text-embedding-3-small"),
+        chatCapability("dotsocr"),
+        { ...chatCapability("qwen-chat"), chatModeDeclared: true },
+      ],
+      circuitBreaker: gatewayConfig("text-embedding-3-small").circuitBreaker,
+    });
+    const deps: UiHandlerDeps = {
+      ...base,
+      env: { KEIKO_LOCAL_KNOWLEDGE_CONTEXTUAL_RETRIEVAL: "true" },
+      // Holder stub: dotsocr carries a CURRENT conversation-ready observation, qwen-chat was
+      // never probed. The old cross-tier `ranked.find(ready)` elected dotsocr here.
+      gatewayConfig: {
+        current: () => base.config,
+        present: () => true,
+        generation: () => 7,
+        verifiedCapability: (modelId: string) =>
+          modelId === "dotsocr"
+            ? {
+                modelId,
+                generation: 7,
+                checkedAt: "2026-01-01T00:00:00.000Z",
+                fields: { conversationReady: true },
+              }
+            : undefined,
+      } as unknown as UiHandlerDeps["gatewayConfig"],
+      localKnowledgeContextualRetrievalChatGateway: {
+        chat: (request) => {
+          contextCalls.push(request);
+          return Promise.resolve({
+            modelId: request.modelId,
+            content: "Context: tier-scoped readiness journey.",
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "ctx-rank-2",
               promptTokens: 1,
               completionTokens: 1,
               latencyMs: 1,
