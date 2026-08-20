@@ -59,6 +59,7 @@ import {
   resolveNewCapsuleEmbeddingIdentity,
   selectEmbeddingModelId,
   stripTrailingSlashes,
+  awaitDetachedCapsuleIndexing,
 } from "./local-knowledge-handlers.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import { localKnowledgeIndexingRegistry } from "./local-knowledge-indexing-registry.js";
@@ -318,6 +319,20 @@ afterEach(() => {
     }
   }
 });
+
+// The start route answers 202 the moment the job is admitted (detached indexing, 2026-08
+// field review); journeys that need the terminal state await the detached run explicitly.
+async function startIndexingToTerminal(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const accepted = await handleStartLocalKnowledgeCapsuleIndexing(ctx, deps);
+  if (accepted.status === 202) {
+    const body = accepted.body as { readonly capsuleId: string };
+    await awaitDetachedCapsuleIndexing(body.capsuleId);
+  }
+  return accepted;
+}
 
 describe("stripTrailingSlashes", () => {
   it("strips one or more trailing slashes, matching the prior regex behaviour", () => {
@@ -1064,7 +1079,7 @@ describe("local-knowledge handlers", () => {
     });
     seeded.store.close();
 
-    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+    const result = await startIndexingToTerminal(
       { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
       depsFor(tmp),
     );
@@ -1652,6 +1667,139 @@ describe("local-knowledge handlers", () => {
     expect(jobs.n).toBe(1);
   });
 
+  it("answers 202 with the job id while the run is still in flight — the request never carries the job", async () => {
+    // 2026-08 field review: the start route awaited the WHOLE indexing job inside one HTTP
+    // POST — a multi-hour pending response, decoupled from the UI by any transport blip. The
+    // admission must return the moment the job is admitted, naming the job it launched; the
+    // persisted job row carries the run.
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot);
+    writeFileSync(join(docsRoot, "doc.md"), "# Doc\n\nOne document.\n", "utf8");
+    const embeddingResult = deferred<OpenAIEmbeddingOutcome>();
+    const deps: UiHandlerDeps = {
+      ...depsFor(tmp),
+      localKnowledgeEmbeddingRequest: vi.fn(() => embeddingResult.promise),
+    };
+    const created = await handleCreateLocalKnowledgeCapsule(
+      baseCtx(tmp, "POST", { displayName: "Detached Start" }),
+      deps,
+    );
+    const body = created.body as { readonly capsule: { readonly id: KnowledgeCapsuleId } };
+    const store = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    addSourceToCapsule(store, body.capsule.id, {
+      id: "src-detached" as KnowledgeSourceId,
+      displayName: "Docs",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    // The admission resolves although the embedding — and therefore the job — is still
+    // pending. Under the old synchronous contract this await would deadlock: the response
+    // could not exist before the embedding we only resolve BELOW.
+    const accepted = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", {}), params: { capsuleId: body.capsule.id } },
+      deps,
+    );
+    expect(accepted.status).toBe(202);
+    const acceptedBody = accepted.body as { readonly ok: boolean; readonly jobId?: string };
+    expect(acceptedBody.ok).toBe(true);
+    expect(acceptedBody.jobId).toBeDefined();
+    // The detached run persists its job row as RUNNING while the embedding — which only the
+    // code below resolves — is still pending: the response existed before the run could have
+    // finished. (A flag flipped after this line could never fail; the row status can.)
+    const inFlight = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const runningStatus = (): string | undefined =>
+      (
+        inFlight._internal.db
+          .prepare("SELECT status FROM indexing_jobs WHERE capsule_id = :c")
+          .get({ c: body.capsule.id }) as { readonly status: string } | undefined
+      )?.status;
+    await waitUntil(() => runningStatus() !== undefined);
+    expect(runningStatus()).toBe("running");
+    inFlight.close();
+
+    // A duplicate POST inside the launch/run window must refuse, not race the in-flight run.
+    const duplicate = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", {}), params: { capsuleId: body.capsule.id } },
+      deps,
+    );
+    expect(duplicate.status).toBe(409);
+
+    embeddingResult.resolve({
+      ok: true,
+      value: { vector: new Float32Array(1536).fill(0.5), modelId: "text-embedding-3-small" },
+    });
+    await awaitDetachedCapsuleIndexing(String(body.capsule.id));
+
+    // The 202 named exactly the job the run persisted.
+    const verify = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const row = verify._internal.db
+      .prepare("SELECT id, status FROM indexing_jobs WHERE capsule_id = :c")
+      .get({ c: body.capsule.id }) as { readonly id: string; readonly status: string };
+    verify.close();
+    expect(row.id).toBe(acceptedBody.jobId);
+    expect(row.status).toBe("succeeded");
+  });
+
+  it("threads operator discovery bounds from env and surfaces the truncation warning in capsule health", async () => {
+    // 2026-08 field review: buildIndexingOptions passed no discoveryOptions, so the built-in
+    // 5,000-file default was an unraisable hard ceiling and a truncated walk left only a
+    // buried job-history diagnostic while the pod reported ready. The env bound must reach
+    // the walk, and the truncation must surface as a capsule-health quality warning.
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot);
+    for (const name of ["a", "b", "c"]) {
+      writeFileSync(join(docsRoot, `${name}.md`), `# ${name}\n\nDocument ${name}.\n`, "utf8");
+    }
+    const base = depsFor(tmp);
+    const deps: UiHandlerDeps = {
+      ...base,
+      env: { KEIKO_LOCAL_KNOWLEDGE_MAX_DISCOVERY_FILES: "2" },
+    };
+    const created = await handleCreateLocalKnowledgeCapsule(
+      baseCtx(tmp, "POST", { displayName: "Truncated Corpus" }),
+      deps,
+    );
+    const body = created.body as { readonly capsule: { readonly id: KnowledgeCapsuleId } };
+    const store = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    addSourceToCapsule(store, body.capsule.id, {
+      id: "src-truncated" as KnowledgeSourceId,
+      displayName: "Docs",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const indexed = await startIndexingToTerminal(
+      { ...baseCtx(tmp, "POST", {}), params: { capsuleId: body.capsule.id } },
+      deps,
+    );
+    expect(indexed.status).toBe(202);
+    const detail = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: body.capsule.id } },
+      deps,
+    );
+    const health = (detail.body as { health: { qualityWarnings: readonly string[] } }).health;
+    expect(
+      health.qualityWarnings.some((warning) =>
+        warning.includes("KEIKO_LOCAL_KNOWLEDGE_MAX_DISCOVERY_FILES"),
+      ),
+    ).toBe(true);
+  });
+
   it("threads the operator-configured provider timeoutMs into every indexing embed call", async () => {
     // 0.3.12 adversarial-review finding: the embedding adapter factory dropped
     // provider.timeoutMs, so chunk embeds silently ran at the adapter's built-in 30s while the
@@ -1684,11 +1832,11 @@ describe("local-knowledge handlers", () => {
     });
     store.close();
 
-    const indexed = await handleStartLocalKnowledgeCapsuleIndexing(
+    const indexed = await startIndexingToTerminal(
       { ...baseCtx(tmp, "POST", {}), params: { capsuleId: body.capsule.id } },
       deps,
     );
-    expect(indexed.status).toBe(200);
+    expect(indexed.status).toBe(202);
     const seam = deps.localKnowledgeEmbeddingRequest as ReturnType<typeof vi.fn>;
     const timeouts = seam.mock.calls.map((call) => (call[0] as OpenAIEmbeddingRequest).timeoutMs);
     expect(timeouts.length).toBeGreaterThan(0);
@@ -1768,7 +1916,7 @@ describe("local-knowledge handlers", () => {
     });
     store.close();
 
-    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+    const result = await startIndexingToTerminal(
       { ...baseCtx(tmp, "POST", {}), params: { capsuleId: capId } },
       deps,
     );
@@ -1778,7 +1926,7 @@ describe("local-knowledge handlers", () => {
       .prepare("SELECT COUNT(*) AS n FROM indexing_jobs WHERE capsule_id = :c")
       .get({ c: capId }) as { readonly n: number };
     after.close();
-    expect(result.status).toBe(200);
+    expect(result.status).toBe(202);
     expect(jobs.n).toBeGreaterThanOrEqual(1);
     // The job must run against the ACTIVE endpoint the handler resolved — a runner that fell
     // back to the stale first-match entry would still satisfy the counts above.
@@ -2749,12 +2897,12 @@ describe("local-knowledge handlers", () => {
       ),
     };
 
-    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+    const result = await startIndexingToTerminal(
       { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
       deps,
     );
 
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(result.status, JSON.stringify(result.body)).toBe(202);
     expect(contextCalls).not.toHaveLength(0);
     expect(contextCalls[0]?.modelId).toBe("context-chat");
     expect(contextCalls[0]?.messages[1]?.content).toContain("<document>");
@@ -2775,6 +2923,180 @@ describe("local-knowledge handlers", () => {
     inspect.close();
 
     expect(row?.context_status).toBe("generated");
+  });
+
+  it("elects the mode-declared chat model as fallback context model, never the first-listed OCR id", async () => {
+    // 2026-08 field review: with no explicit context model the old pure-costClass fallback let
+    // a mode-less OCR id FIRST in the configured list become the context model by position —
+    // warm, it "succeeds" and prefixes every chunk with OCR garbage that pollutes the
+    // embedding space until a full re-index. The shared conversation-default rank must prefer
+    // the declared chat model even though both tie on costClass.
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(
+      join(docsRoot, "policy.md"),
+      "# Policy\n\n" + "Fallback context-model election for TS-999.\n".repeat(24),
+      "utf8",
+    );
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const contextCalls: GatewayRequest[] = [];
+    const embeddingProvider = gatewayConfig("text-embedding-3-small").providers[0];
+    if (embeddingProvider === undefined) throw new Error("missing embedding provider");
+    const chatProvider = (modelId: string): GatewayConfig["providers"][number] => ({
+      modelId,
+      baseUrl: "https://gateway.example.test/v1",
+      apiKey: "redacted",
+      timeoutMs: 30_000,
+      maxRetries: 1,
+      retryBaseDelayMs: 100,
+    });
+    const base = depsFor(tmp, {
+      providers: [embeddingProvider, chatProvider("dotsocr"), chatProvider("qwen-chat")],
+      capabilities: [
+        embeddingCapability("text-embedding-3-small"),
+        // The customer shape: the OCR model declares no mode and sits FIRST; both chat
+        // entries tie on costClass, so the old selection picked dotsocr by position.
+        chatCapability("dotsocr"),
+        { ...chatCapability("qwen-chat"), chatModeDeclared: true },
+      ],
+      circuitBreaker: gatewayConfig("text-embedding-3-small").circuitBreaker,
+    });
+    const deps: UiHandlerDeps = {
+      ...base,
+      env: { KEIKO_LOCAL_KNOWLEDGE_CONTEXTUAL_RETRIEVAL: "true" },
+      localKnowledgeContextualRetrievalChatGateway: {
+        chat: (request) => {
+          contextCalls.push(request);
+          return Promise.resolve({
+            modelId: request.modelId,
+            content: "Context: fallback election journey.",
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "ctx-rank-1",
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "low",
+            },
+          });
+        },
+      },
+    };
+
+    const result = await startIndexingToTerminal(
+      { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(202);
+    expect(contextCalls).not.toHaveLength(0);
+    expect(contextCalls.every((call) => call.modelId === "qwen-chat")).toBe(true);
+  });
+
+  it("keeps the declared chat model as fallback even when only the OCR id is probe-verified", async () => {
+    // Review finding on #3221: the readiness preference must stay WITHIN a rank tier. A warm
+    // special-purpose engine that happened to answer one conversation probe must not outrank
+    // the unprobed declared chat model — the exact field capture the tier walk prevents.
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(
+      join(docsRoot, "policy.md"),
+      "# Policy\n\n" + "Tier-scoped readiness for the fallback election.\n".repeat(24),
+      "utf8",
+    );
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const contextCalls: GatewayRequest[] = [];
+    const embeddingProvider = gatewayConfig("text-embedding-3-small").providers[0];
+    if (embeddingProvider === undefined) throw new Error("missing embedding provider");
+    const chatProvider = (modelId: string): GatewayConfig["providers"][number] => ({
+      modelId,
+      baseUrl: "https://gateway.example.test/v1",
+      apiKey: "redacted",
+      timeoutMs: 30_000,
+      maxRetries: 1,
+      retryBaseDelayMs: 100,
+    });
+    const base = depsFor(tmp, {
+      providers: [embeddingProvider, chatProvider("dotsocr"), chatProvider("qwen-chat")],
+      capabilities: [
+        embeddingCapability("text-embedding-3-small"),
+        chatCapability("dotsocr"),
+        { ...chatCapability("qwen-chat"), chatModeDeclared: true },
+      ],
+      circuitBreaker: gatewayConfig("text-embedding-3-small").circuitBreaker,
+    });
+    const deps: UiHandlerDeps = {
+      ...base,
+      env: { KEIKO_LOCAL_KNOWLEDGE_CONTEXTUAL_RETRIEVAL: "true" },
+      // Holder stub: dotsocr carries a CURRENT conversation-ready observation, qwen-chat was
+      // never probed. The old cross-tier `ranked.find(ready)` elected dotsocr here.
+      gatewayConfig: {
+        current: () => base.config,
+        present: () => true,
+        generation: () => 7,
+        verifiedCapability: (modelId: string) =>
+          modelId === "dotsocr"
+            ? {
+                modelId,
+                generation: 7,
+                checkedAt: "2026-01-01T00:00:00.000Z",
+                fields: { conversationReady: true },
+              }
+            : undefined,
+      } as unknown as UiHandlerDeps["gatewayConfig"],
+      localKnowledgeContextualRetrievalChatGateway: {
+        chat: (request) => {
+          contextCalls.push(request);
+          return Promise.resolve({
+            modelId: request.modelId,
+            content: "Context: tier-scoped readiness journey.",
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "ctx-rank-2",
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "low",
+            },
+          });
+        },
+      },
+    };
+
+    const result = await startIndexingToTerminal(
+      { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(202);
+    expect(contextCalls).not.toHaveLength(0);
+    expect(contextCalls.every((call) => call.modelId === "qwen-chat")).toBe(true);
   });
 
   it("uses per-capsule contextual retrieval settings and model id without the env flag", async () => {
@@ -2842,12 +3164,12 @@ describe("local-knowledge handlers", () => {
       ),
     };
 
-    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+    const result = await startIndexingToTerminal(
       { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
       deps,
     );
 
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(result.status, JSON.stringify(result.body)).toBe(202);
     expect(contextCalls.length).toBeGreaterThan(0);
     expect(contextCalls[0]?.modelId).toBe("capsule-chat");
     expect(
@@ -2921,12 +3243,12 @@ describe("local-knowledge handlers", () => {
       ),
     };
 
-    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+    const result = await startIndexingToTerminal(
       { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
       deps,
     );
 
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(result.status, JSON.stringify(result.body)).toBe(202);
     expect(contextCalls).toHaveLength(0);
     expect(embeddingInputs.some((input) => input.startsWith("Context:"))).toBe(false);
 
@@ -2959,12 +3281,12 @@ describe("local-knowledge handlers", () => {
     });
     store.close();
 
-    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+    const result = await startIndexingToTerminal(
       { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
       depsFor(tmp),
     );
 
-    expect(result.status).toBe(200);
+    expect(result.status).toBe(202);
     expect(result.body).toMatchObject({ ok: true, capsuleId: "cap-1" });
 
     const verify = openKnowledgeStore({
@@ -3018,12 +3340,12 @@ describe("local-knowledge handlers", () => {
     });
     store.close();
 
-    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+    const result = await startIndexingToTerminal(
       { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: String(capId) } },
       depsFor(tmp, "text-embedding-3-large"),
     );
 
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(result.status, JSON.stringify(result.body)).toBe(202);
     const verify = openKnowledgeStore({ dbPath });
     const capsule = getCapsule(verify, capId);
     const vectorRows = verify._internal.db
@@ -3104,12 +3426,12 @@ describe("local-knowledge handlers", () => {
       params: { capsuleId: String(body.capsule.id) },
     });
 
-    const first = await handleStartLocalKnowledgeCapsuleIndexing(context(), deps);
+    const first = await startIndexingToTerminal(context(), deps);
     const requestsAfterFirstRun = embeddingRequests;
-    const second = await handleStartLocalKnowledgeCapsuleIndexing(context(), deps);
+    const second = await startIndexingToTerminal(context(), deps);
 
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(202);
     expect(requestsAfterFirstRun).toBeGreaterThan(0);
     expect(embeddingRequests).toBe(requestsAfterFirstRun);
   });
@@ -3126,7 +3448,7 @@ describe("local-knowledge handlers", () => {
     const createdBody = created.body as { readonly capsule: { readonly id: KnowledgeCapsuleId } };
     const emptyCapsuleId = createdBody.capsule.id;
 
-    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+    const result = await startIndexingToTerminal(
       {
         ...baseCtx(tmp, "POST", { confirm: true }),
         params: { capsuleId: String(emptyCapsuleId) },
@@ -3197,11 +3519,13 @@ describe("local-knowledge handlers", () => {
       ),
     };
 
-    const start = await handleStartLocalKnowledgeCapsuleIndexing(
+    const start = await startIndexingToTerminal(
       { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
       deps,
     );
-    expect(start.status).toBe(409);
+    // Detached start: the run's terminal failure lives in the job row and capsule health,
+    // asserted below — the admission itself is a 202.
+    expect(start.status).toBe(202);
 
     const detail = await handleGetLocalKnowledgeCapsule(
       { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
@@ -3255,11 +3579,11 @@ describe("local-knowledge handlers", () => {
     });
     store.close();
 
-    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+    const result = await startIndexingToTerminal(
       { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
       depsFor(tmp),
     );
-    expect(result.status).toBe(200);
+    expect(result.status).toBe(202);
 
     const detail = await handleGetLocalKnowledgeCapsule(
       { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
@@ -3322,12 +3646,12 @@ describe("local-knowledge handlers", () => {
       }),
     };
 
-    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+    const result = await startIndexingToTerminal(
       { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
       deps,
     );
 
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(result.status, JSON.stringify(result.body)).toBe(202);
     expect(embeddingInputs.some((input) => input.includes("Scanned invoice total 42"))).toBe(true);
 
     const verify = openKnowledgeStore({
@@ -3724,6 +4048,7 @@ describe("local-knowledge handlers", () => {
       deps,
     );
     const startResult = await startPromise;
+    await awaitDetachedCapsuleIndexing("cap-1");
 
     const verify = openKnowledgeStore({
       dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
@@ -3740,11 +4065,9 @@ describe("local-knowledge handlers", () => {
     verify.close();
     expect(cancelResult.status).toBe(200);
     expect(cancelResult.body).toMatchObject({ ok: true, capsuleId: "cap-1" });
-    expect(startResult.status).toBe(409);
-    expect(startResult.body).toMatchObject({
-      error: { code: "indexing-cancelled" },
-      capsuleId: "cap-1",
-    });
+    // Detached start: the admission answered 202 long before the cancel; the CANCELLED
+    // terminal state lives in the job row asserted below.
+    expect(startResult.status).toBe(202);
     expect(row.status).toBe("cancelled");
     expect(row.finished_at).not.toBeNull();
     expect(row.cancellation_requested).toBe(1);
@@ -4062,7 +4385,7 @@ describe("local-knowledge handlers", () => {
       });
       store.close();
 
-      const indexed = await handleStartLocalKnowledgeCapsuleIndexing(
+      const indexed = await startIndexingToTerminal(
         {
           ...baseCtx(tmp, "POST", {}),
           params: { capsuleId: body.capsule.id },
@@ -4070,7 +4393,7 @@ describe("local-knowledge handlers", () => {
         deps,
       );
 
-      expect(indexed.status, JSON.stringify(indexed.body)).toBe(200);
+      expect(indexed.status, JSON.stringify(indexed.body)).toBe(202);
       const verify = openKnowledgeStore({
         dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
       });
@@ -4359,7 +4682,7 @@ describe("local-knowledge handlers", () => {
       ),
     };
 
-    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+    const result = await startIndexingToTerminal(
       {
         ...baseCtx(tmp, "POST", { confirm: true }),
         params: { capsuleId: "cap-litellm-alias" },
@@ -4367,7 +4690,7 @@ describe("local-knowledge handlers", () => {
       deps,
     );
 
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(result.status, JSON.stringify(result.body)).toBe(202);
     const verify = openKnowledgeStore({ dbPath });
     const capsule = getCapsule(verify, "cap-litellm-alias" as KnowledgeCapsuleId);
     const vectors = verify._internal.db

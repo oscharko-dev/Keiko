@@ -677,6 +677,52 @@ function isUsableConversationModel(model: ModelCapability): boolean {
   return isConversationEligibleModel(model) && model.conversationReady !== false;
 }
 
+// Create-chat inputs preserve WHO chose the model (review finding on #3220): an AUTOMATIC
+// election (bootstrap default, fallback after a stale selection) is sent WITHOUT a modelId so
+// the server's bounded readiness walk can route around a failing preferred model, while a
+// user-selected or persisted model stays an explicit request the server validates as such.
+function createChatInput(
+  modelId: string,
+  automatic: boolean,
+  title: string,
+  projectPath?: string,
+): { modelId?: string; title: string; projectPath?: string } {
+  return {
+    ...(automatic ? {} : { modelId }),
+    title,
+    ...(projectPath !== undefined ? { projectPath } : {}),
+  };
+}
+
+// Whether the current selection names a live, usable model — a deliberate (user or persisted)
+// choice a create request must respect as an EXPLICIT model id.
+function isPreservedSelection(
+  selectedModel: string | undefined,
+  models: readonly ModelCapability[],
+): boolean {
+  return (
+    selectedModel !== undefined &&
+    models.some((model) => model.id === selectedModel && isUsableConversationModel(model))
+  );
+}
+
+// Resolution WITH provenance (review finding on #3221): the resolved id alone cannot say WHO
+// chose it. A fallback elected here must never later masquerade as a deliberate choice — the
+// session state stores `elected` alongside the id so a create request built from an elected
+// selection stays an AUTOMATIC one the server's bounded walk may route around.
+interface ResolvedSelection {
+  readonly id: string | undefined;
+  readonly elected: boolean;
+}
+
+function resolveSelection(
+  current: string | undefined,
+  models: readonly ModelCapability[],
+): ResolvedSelection {
+  if (isPreservedSelection(current, models)) return { id: current, elected: false };
+  return { id: pickChatModelId(models), elected: true };
+}
+
 // Reopened chats can persist a model id that is no longer present in the
 // current eligible model list. Fail closed to a live usable model, or to
 // undefined so the UI blocks sends with the no-model alert.
@@ -684,13 +730,7 @@ export function resolveSelectedModelId(
   current: string | undefined,
   models: readonly ModelCapability[],
 ): string | undefined {
-  if (
-    current !== undefined &&
-    models.some((model) => model.id === current && isUsableConversationModel(model))
-  ) {
-    return current;
-  }
-  return pickChatModelId(models);
+  return resolveSelection(current, models).id;
 }
 
 function hasGroundingScope(chat: Chat): boolean {
@@ -1443,6 +1483,13 @@ interface SessionState {
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
   selectedModel: string | undefined;
+  // True when selectedModel was ELECTED (bootstrap default or fallback after a stale
+  // selection) rather than chosen by the user or carried by the chat's persisted record.
+  // Creates built from an elected selection omit modelId (review finding on #3221).
+  selectedModelElected: boolean;
+  // Provenance of restorableModelId — carried through the pending-refresh cycle so a restored
+  // ELECTED selection does not come back laundered as deliberate (review finding on #3221).
+  restorableModelElected: boolean;
   // The user's last deliberate model choice, remembered across a pending catalog refresh:
   // the pending clear must invalidate selectedModel synchronously (no stale id is sendable
   // mid-refresh), but the success path restores this id when the refreshed catalog still
@@ -1458,16 +1505,51 @@ function chatBelongsToSessionCatalog(previous: SessionState, chat: Chat): boolea
   );
 }
 
+// The full session state a successful create rebases onto — module scope so openNewChat stays
+// a thin wire-up. `preservedSelection` carries provenance: an omitted modelId let the server
+// elect, so the created chat's model is an ELECTED selection, not a deliberate one.
+function sessionAfterChatCreate(
+  state: SessionState,
+  created: Awaited<ReturnType<typeof createDesktopChat>>,
+  preservedSelection: boolean,
+): SessionState {
+  return {
+    ...state,
+    projects: Array.from(created.projects),
+    chats: sortChats(created.chats),
+    messages: Array.from(created.messages),
+    activeProject: created.project,
+    activeChat: created.chat,
+    selectedModel: created.chat.selectedModel,
+    selectedModelElected: !preservedSelection,
+    // A freshly created chat starts a new selection scope: no pending-refresh memo.
+    restorableModelId: undefined,
+    restorableModelElected: false,
+  };
+}
+
 function applyChatUpsert(previous: SessionState, chat: Chat): SessionState {
   if (!chatBelongsToSessionCatalog(previous, chat)) return previous;
+  const resolved = resolveSelection(chat.selectedModel, previous.models);
+  // An upsert that resolves to the id the session already shows carries no new provenance —
+  // keep ours. Without this, the server-persisted record of an AUTOMATIC creation laundered
+  // the elected default into a "deliberate" choice on the next upsert (review finding, #3221).
+  const selection =
+    previous.activeChat?.id === chat.id
+      ? {
+          id: resolved.id,
+          elected:
+            resolved.id === previous.selectedModel
+              ? previous.selectedModelElected
+              : resolved.elected,
+        }
+      : { id: previous.selectedModel, elected: previous.selectedModelElected };
   return {
     ...previous,
     chats: upsertChatIntoList(previous.chats, chat),
     activeChat: previous.activeChat?.id === chat.id ? chat : previous.activeChat,
-    selectedModel:
-      previous.activeChat?.id === chat.id
-        ? resolveSelectedModelId(chat.selectedModel, previous.models)
-        : previous.selectedModel,
+    selectedModel: selection.id,
+    selectedModelElected: selection.elected,
   };
 }
 
@@ -1494,6 +1576,8 @@ const INITIAL_STATE: SessionState = {
   activeProject: undefined,
   activeChat: undefined,
   selectedModel: undefined,
+  selectedModelElected: false,
+  restorableModelElected: false,
   restorableModelId: undefined,
 };
 
@@ -1885,11 +1969,12 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   const latestChat = pickResumableChat(sortedChats);
   if (project !== undefined && latestChat !== undefined) {
     const messagePayload = await sharedFetchChatMessages(latestChat.id, project.path);
-    const selectedModel = resolveSelectedModelId(latestChat.selectedModel, chatModels);
+    const selection = resolveSelection(latestChat.selectedModel, chatModels);
     return {
       models: chatModels,
       configuredModelsAvailable,
-      selectedModel,
+      selectedModel: selection.id,
+      selectedModelElected: selection.elected,
       projects: Array.from(projects),
       activeProject: project,
       chats: sortedChats,
@@ -1908,6 +1993,7 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
       models: chatModels,
       configuredModelsAvailable,
       selectedModel: defaultModel,
+      selectedModelElected: true,
       projects: Array.from(projects),
       activeProject: project,
       chats: sortedChats,
@@ -1915,17 +2001,21 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
       messages: [],
     };
   }
-  const input: { modelId: string; title: string; projectPath?: string } = {
-    modelId: defaultModel,
-    title: DEFAULT_CHAT_TITLE,
-  };
-  if (project?.available === true) input.projectPath = project.path;
-  const created = await createDesktopChat(input);
+  const created = await createDesktopChat(
+    createChatInput(
+      defaultModel,
+      true,
+      DEFAULT_CHAT_TITLE,
+      project?.available === true ? project.path : undefined,
+    ),
+  );
   notifyChatUpsert(created.chat);
   return {
     models: chatModels,
     configuredModelsAvailable,
     selectedModel: created.chat.selectedModel,
+    // The server's walk elected this model for the auto-created chat; no user chose it.
+    selectedModelElected: true,
     projects: Array.from(created.projects),
     activeProject: created.project,
     chats: sortChats(created.chats),
@@ -1967,14 +2057,22 @@ function refreshSessionModels(
   capabilities: readonly ModelCapability[],
 ): SessionState {
   const models = capabilities.filter(isUsableConversationModel);
+  const remembered = previous.selectedModel ?? previous.restorableModelId;
+  const selection = resolveSelection(remembered, models);
+  // Provenance survives a refresh that keeps the id: a live selection keeps its own flag, a
+  // restored pending memo carries the flag it was remembered with, and a freshly elected
+  // fallback is elected regardless.
+  const keptProvenance =
+    previous.selectedModel !== undefined
+      ? previous.selectedModelElected
+      : previous.restorableModelElected;
+  const selectedModelElected = selection.elected || keptProvenance;
   return {
     ...previous,
     models,
     configuredModelsAvailable: capabilities.length > 0,
-    selectedModel: resolveSelectedModelId(
-      previous.selectedModel ?? previous.restorableModelId,
-      models,
-    ),
+    selectedModel: selection.id,
+    selectedModelElected,
     restorableModelId: undefined,
   };
 }
@@ -1985,10 +2083,16 @@ function refreshSessionModels(
 function selectionForChatSwitch(
   persistedModelId: string | undefined,
   models: readonly ModelCapability[],
-): Pick<SessionState, "selectedModel" | "restorableModelId"> {
+): Pick<
+  SessionState,
+  "selectedModel" | "selectedModelElected" | "restorableModelId" | "restorableModelElected"
+> {
+  const selection = resolveSelection(persistedModelId, models);
   return {
-    selectedModel: resolveSelectedModelId(persistedModelId, models),
+    selectedModel: selection.id,
+    selectedModelElected: selection.elected,
     restorableModelId: persistedModelId,
+    restorableModelElected: false,
   };
 }
 
@@ -2006,7 +2110,12 @@ function clearSessionModelsForPendingRefresh(previous: SessionState): SessionSta
     // model every time the picker is merely opened. A failed refresh leaves selectedModel
     // undefined, so chained retries must keep the earliest memo.
     selectedModel: undefined,
+    selectedModelElected: false,
     restorableModelId: previous.selectedModel ?? previous.restorableModelId,
+    restorableModelElected:
+      previous.selectedModel !== undefined
+        ? previous.selectedModelElected
+        : previous.restorableModelElected,
   };
 }
 
@@ -2897,17 +3006,24 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     // Capture pre-update snapshot so the optimistic write can be rolled back if
     // the PATCH fails — without this the server and UI diverge permanently.
     let snapshot:
-      | { selectedModel: string | undefined; activeChat: Chat | undefined; chats: Chat[] }
+      | {
+          selectedModel: string | undefined;
+          selectedModelElected: boolean;
+          activeChat: Chat | undefined;
+          chats: Chat[];
+        }
       | undefined;
     setState((previous) => {
       snapshot = {
         selectedModel: previous.selectedModel,
+        selectedModelElected: previous.selectedModelElected,
         activeChat: previous.activeChat,
         chats: previous.chats,
       };
       return {
         ...previous,
         selectedModel: id,
+        selectedModelElected: false,
         activeChat:
           previous.activeChat === undefined
             ? previous.activeChat
@@ -2945,6 +3061,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setState((previous) => ({
           ...previous,
           selectedModel: result.chat.selectedModel,
+          selectedModelElected: false,
           activeChat:
             previous.activeChat?.id === result.chat.id ? result.chat : previous.activeChat,
           chats: replaceChatInList(previous.chats, result.chat),
@@ -2970,6 +3087,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
               previous.activeChat?.id === activeChatId
                 ? rollback.selectedModel
                 : previous.selectedModel,
+            selectedModelElected:
+              previous.activeChat?.id === activeChatId
+                ? rollback.selectedModelElected
+                : previous.selectedModelElected,
             activeChat:
               previous.activeChat?.id === activeChatId ? rollback.activeChat : previous.activeChat,
             chats: restoreChatSelectedModel(previous.chats, activeChatId, rollback.chats),
@@ -2983,6 +3104,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       projectOverride?: ProjectWithAvailability,
       title?: string,
     ): Promise<Chat | undefined> => {
+      const preservedSelection =
+        !state.selectedModelElected && isPreservedSelection(state.selectedModel, state.models);
       const modelId = resolveSelectedModelId(state.selectedModel, state.models);
       if (modelId === undefined) {
         setError(NO_CONVERSATION_MODEL_MESSAGE);
@@ -2996,34 +3119,24 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       resetComposerForConversationSwitch();
       try {
         const trimmedTitle = title?.trim();
-        const input: { modelId: string; title: string; projectPath?: string } = {
-          modelId,
-          title:
+        const targetPath = projectOverride?.path ?? state.activeProject?.path;
+        const created = await createDesktopChat(
+          createChatInput(
+            modelId,
+            !preservedSelection,
             trimmedTitle !== undefined && trimmedTitle.length > 0
               ? trimmedTitle
               : DEFAULT_CHAT_TITLE,
-        };
-        const targetPath = projectOverride?.path ?? state.activeProject?.path;
-        if (targetPath !== undefined) input.projectPath = targetPath;
-        const created = await createDesktopChat(input);
+            targetPath,
+          ),
+        );
         notifyChatUpsert(created.chat);
         if (targetPath !== undefined && activeProjectPathRef.current !== targetPath) {
           return created.chat;
         }
         activeChatIdRef.current = created.chat.id;
         activeProjectPathRef.current = created.project.path;
-        setState({
-          projects: Array.from(created.projects),
-          chats: sortChats(created.chats),
-          messages: Array.from(created.messages),
-          models: state.models,
-          configuredModelsAvailable: state.configuredModelsAvailable,
-          activeProject: created.project,
-          activeChat: created.chat,
-          selectedModel: created.chat.selectedModel,
-          // A freshly created chat starts a new selection scope: no pending-refresh memo.
-          restorableModelId: undefined,
-        });
+        setState((previous) => sessionAfterChatCreate(previous, created, preservedSelection));
         return created.chat;
       } catch (error_) {
         setError(errorMessage(error_));
@@ -3033,9 +3146,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     [
       resetComposerForConversationSwitch,
       state.selectedModel,
+      state.selectedModelElected,
       state.activeProject,
       state.models,
-      state.configuredModelsAvailable,
     ],
   );
 

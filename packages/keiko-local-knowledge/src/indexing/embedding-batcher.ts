@@ -257,7 +257,14 @@ function isTransientBatchOutcome(outcome: OpenAIEmbeddingBatchOutcome): boolean 
 // preflight and readiness safe messages.
 function errorFromKind(kind: OpenAIEmbeddingErrorKind, status?: number): IndexingJobError {
   const detail = status !== undefined ? `${kind} (HTTP ${String(status)})` : kind;
-  return { code: "EMBEDDING_ADAPTER_FAILED", message: `embedding adapter returned ${detail}` };
+  return {
+    code: "EMBEDDING_ADAPTER_FAILED",
+    message: `embedding adapter returned ${detail}`,
+    // The same classification the retry loop used: a transient failure that exhausted its
+    // retries is gateway-outage evidence the orchestrator's circuit breaker may count; a
+    // deterministic rejection is not.
+    ...(isTransientFailure(kind, status) ? { transient: true } : {}),
+  };
 }
 
 function batchRequestFor(

@@ -8,7 +8,17 @@ import {
 } from "./gateway-readiness.js";
 import type { UiHandlerDeps } from "./deps.js";
 
+// The cooldown maths compare an observation's checkedAt against the real clock inside the
+// production module, so these tests freeze Date.now to a fixed epoch instead of deriving
+// timestamps from the wall clock — a clock jump or a slow run can never move a "fresh"
+// observation across the 30 s boundary (review finding on #3221).
+const NOW = 1_700_000_000_000;
+function freezeNow(): void {
+  vi.spyOn(Date, "now").mockReturnValue(NOW);
+}
+
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -62,10 +72,11 @@ describe("ensureOnDemandConversationReadiness guards", () => {
   // design: a forever-pin turned one transient gateway outage into a bricked chat surface for
   // the rest of the process lifetime (walk amplification: every configured model pinned).
   it("respects a FRESH observed not-ready at the current generation without re-probing", async () => {
+    freezeNow();
     const verifiedCapability = vi.fn(() => ({
       modelId: "chat-model",
       generation: 3,
-      checkedAt: new Date(Date.now() - 1_000).toISOString(),
+      checkedAt: new Date(NOW - 1_000).toISOString(),
       fields: { conversationReady: false },
     }));
     const deps = {
@@ -78,8 +89,9 @@ describe("ensureOnDemandConversationReadiness guards", () => {
   });
 
   it("re-probes a not-ready observation older than the cooldown so an outage heals", async () => {
+    freezeNow();
     const { deps, fetchCalls, readyRecords } = probeableDeps(
-      new Date(Date.now() - NOT_READY_REPROBE_COOLDOWN_MS - 1_000).toISOString(),
+      new Date(NOW - NOT_READY_REPROBE_COOLDOWN_MS - 1_000).toISOString(),
     );
     // The within-cooldown pin above proves a FRESH not-ready observation returns before any
     // probing — a wire hit here is only possible because the stale pin expired. The recovered
@@ -96,9 +108,27 @@ describe("ensureOnDemandConversationReadiness guards", () => {
   });
 
   it("does not touch the wire for a fresh not-ready observation even with a live transport", async () => {
-    const { deps, fetchCalls } = probeableDeps(new Date(Date.now() - 1_000).toISOString());
+    freezeNow();
+    const { deps, fetchCalls } = probeableDeps(new Date(NOW - 1_000).toISOString());
     await expect(ensureOnDemandConversationReadiness(deps, "chat-model")).resolves.toBeUndefined();
     expect(fetchCalls()).toBe(0);
+  });
+
+  it("probes immediately when the current-generation observation carries no readiness field", async () => {
+    // Review finding on #3220: only an EXPLICIT failed probe earns the cooldown. A capability
+    // observation without a conversationReady field is unknown readiness — suppressing its
+    // probe converted unknown into a 30-second admission block.
+    freezeNow();
+    const { deps, fetchCalls } = probeableDeps(new Date(NOW - 1_000).toISOString(), {});
+    await expect(ensureOnDemandConversationReadiness(deps, "chat-model")).resolves.toBeUndefined();
+    expect(fetchCalls()).toBeGreaterThan(0);
+  });
+
+  it("probes immediately when the not-ready timestamp lies in the future — fail-open on clock skew", async () => {
+    freezeNow();
+    const { deps, fetchCalls } = probeableDeps(new Date(NOW + 60_000).toISOString());
+    await expect(ensureOnDemandConversationReadiness(deps, "chat-model")).resolves.toBeUndefined();
+    expect(fetchCalls()).toBeGreaterThan(0);
   });
 });
 
@@ -106,7 +136,10 @@ describe("ensureOnDemandConversationReadiness guards", () => {
 // probe, and a current-generation not-ready observation stamped `checkedAt`. Generation is
 // unique per call so the module-level in-flight probe map never collides across tests.
 let nextGeneration = 100;
-function probeableDeps(checkedAt: string): {
+function probeableDeps(
+  checkedAt: string,
+  fields: { conversationReady?: boolean } = { conversationReady: false },
+): {
   deps: UiHandlerDeps;
   fetchCalls: () => number;
   readyRecords: () => readonly (boolean | undefined)[];
@@ -128,7 +161,7 @@ function probeableDeps(checkedAt: string): {
         modelId: "chat-model",
         generation,
         checkedAt,
-        fields: { conversationReady: false },
+        fields,
       },
       generation,
     ),

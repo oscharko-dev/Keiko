@@ -67,6 +67,10 @@ const REMEDIATION_GUIDANCE: Readonly<Record<string, string>> = {
   POLICY_DENIED: "The pod's model-use policy denied the embedding operation; review the policy.",
   INCOMPATIBLE_EMBEDDING_IDENTITY: "The embedding model changed; re-index the manual to continue.",
   EMBEDDING_ADAPTER_FAILED: "The embedding provider was unavailable; retry indexing.",
+  EMBEDDING_GATEWAY_UNAVAILABLE:
+    "The embedding gateway stopped answering and the run was aborted early; retry indexing once the gateway is reachable.",
+  MAJORITY_DOCUMENTS_FAILED:
+    "Most documents in this run failed to index; review the job history, then repair failed documents or retry indexing.",
   DISCOVERY_FAILED: "The manual pages could not be read for indexing.",
   CHUNKING_FAILED: "A page could not be chunked for indexing.",
   PERSISTENCE_FAILED: "The index could not be written to local storage.",

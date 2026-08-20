@@ -18,6 +18,7 @@ import {
   handleCreateLocalKnowledgeCapsule,
   handleGetLocalKnowledgeCapsule,
   handleStartLocalKnowledgeCapsuleIndexing,
+  awaitDetachedCapsuleIndexing,
 } from "./local-knowledge-handlers.js";
 
 // Field twin of the customer's strict LiteLLM (2026-08 incident): chat completions answer
@@ -451,7 +452,10 @@ describe("strict LiteLLM field twin", () => {
         ctx("POST", {}, { capsuleId }),
         deps,
       );
-      expect(indexed.status).toBe(200);
+      // Detached indexing (2026-08): the route answers 202 the moment the job is admitted;
+      // the journey awaits the run's terminal state explicitly, as the UI does via polling.
+      expect(indexed.status).toBe(202);
+      await awaitDetachedCapsuleIndexing(capsuleId);
 
       const detail = await handleGetLocalKnowledgeCapsule(ctx("GET", {}, { capsuleId }), deps);
       const body = detail.body as {
@@ -526,7 +530,10 @@ describe("strict LiteLLM field twin", () => {
         ctx("POST", {}, { capsuleId }),
         deps,
       );
-      expect(indexed.status).toBe(200);
+      // Detached indexing (2026-08): the route answers 202 the moment the job is admitted;
+      // the journey awaits the run's terminal state explicitly, as the UI does via polling.
+      expect(indexed.status).toBe(202);
+      await awaitDetachedCapsuleIndexing(capsuleId);
       const scoped = await handleUpdateChat(
         ctx(
           "PATCH",

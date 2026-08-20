@@ -34,6 +34,7 @@ import type {
   DocumentId,
   EmbeddingModelIdentity,
   ExtractionCheckpointRecord,
+  INDEXING_EMBEDDING_STOPPED_ERROR_CODES,
   IndexingJobError,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
@@ -75,11 +76,14 @@ import {
 import { discoverAndExtract } from "../discovery/discovery-runner.js";
 import {
   DEFAULT_DISCOVERY_OPTIONS,
+  MAX_DISCOVERY_DEPTH_CEILING,
+  MAX_DISCOVERY_FILES_CEILING,
   documentIdFor,
   type DiscoveryOptions,
 } from "../discovery/index.js";
 import {
   deleteDocumentRow,
+  deleteCapsuleDiagnosticsByCode,
   insertDiagnosticRow,
   listPersistedDocumentsForSource,
   readDocumentTextRow,
@@ -164,16 +168,29 @@ function clampConcurrency(raw: number | undefined): number {
   return Math.max(1, Math.min(DEFAULT_INDEXING_CONCURRENCY, Math.floor(v)));
 }
 
-function clampDiscoveryInteger(raw: number | undefined, fallback: number): number {
+// Relocated pin (2026-08 field review): the caller bound used to be Math.min(DEFAULT, value) —
+// the default doubled as a hard ceiling, so an operator could LOWER the walk bounds but never
+// raise them, and a corpus above the default was silently truncated forever. The runaway guard
+// the old clamp provided lives on in the explicit CEILING: malformed or absurd caller values
+// still cannot demand an unbounded walk.
+function clampDiscoveryInteger(raw: number | undefined, fallback: number, ceiling: number): number {
   if (raw === undefined || !Number.isFinite(raw)) return fallback;
-  return Math.max(1, Math.min(fallback, Math.floor(raw)));
+  return Math.max(1, Math.min(ceiling, Math.floor(raw)));
 }
 
 function resolvedDiscoveryOptions(state: RunState): DiscoveryOptions {
   const raw = state.options.discoveryOptions;
   const base = {
-    maxDepth: clampDiscoveryInteger(raw?.maxDepth, DEFAULT_DISCOVERY_OPTIONS.maxDepth),
-    maxFiles: clampDiscoveryInteger(raw?.maxFiles, DEFAULT_DISCOVERY_OPTIONS.maxFiles),
+    maxDepth: clampDiscoveryInteger(
+      raw?.maxDepth,
+      DEFAULT_DISCOVERY_OPTIONS.maxDepth,
+      MAX_DISCOVERY_DEPTH_CEILING,
+    ),
+    maxFiles: clampDiscoveryInteger(
+      raw?.maxFiles,
+      DEFAULT_DISCOVERY_OPTIONS.maxFiles,
+      MAX_DISCOVERY_FILES_CEILING,
+    ),
     ...(raw?.respectGitIgnore === true ? { respectGitIgnore: true } : {}),
   };
   const signal = raw?.signal ?? state.options.signal;
@@ -238,6 +255,17 @@ interface RunState {
   vectorsPersisted: number;
   lastResumeToken: ChunkId | null;
   lastError?: IndexingJobError;
+  // Circuit breaker: transient adapter failures since the last successfully embedded document.
+  // A dead or saturated gateway produces ONLY transient failures, so this climbing without an
+  // intervening success is outage evidence; deterministic failures (parse errors, unsupported
+  // formats) and skips say nothing about the gateway and leave the count untouched.
+  consecutiveTransientEmbedFailures: number;
+  // At most one capsule-level truncation warning per run (multiple LIMIT_REACHED frames can
+  // surface from one truncated walk).
+  discoveryLimitWarningPersisted: boolean;
+  // Walk-level scope errors within failedDocuments. They are diagnostics about the WALK, not
+  // attempted documents, so the honest-status ratio subtracts them from its numerator.
+  discoveryFailedDocuments: number;
   // Pre-run per-document snapshots captured at "file-discovered" time (see the "Per-document
   // restore snapshot" section below), keyed by DocumentId. Restored only if that same
   // document's re-processing ends this run in failure.
@@ -847,6 +875,7 @@ async function embedOneChunkBatch(
     pinnedIdentity: state.capsule.embeddingModelIdentity,
     concurrency: state.concurrency,
     ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
+    ...(state.options.embedRetry !== undefined ? { retry: state.options.embedRetry } : {}),
     now: state.now,
     idSource: state.idSource,
     tokenizer: state.tokenizer,
@@ -1269,6 +1298,29 @@ function isCancellationOnlyEmbedResult(state: RunState, embedResult: EmbedDocume
   );
 }
 
+// Gateway-outage evidence for the circuit breaker (2026-08 field review, adversarially
+// re-verified): only a document that proves NOTHING answered may lengthen the streak. Any
+// persisted vector and any DETERMINISTIC (answered) rejection prove the gateway is alive and
+// reset it — a live-but-flaky gateway whose documents fail on one chunk out of dozens must
+// never trip the outage abort. Zero-chunk documents contact no gateway and are no evidence
+// either way; cancellations are the caller's own doing and are ignored. Both embed paths
+// (standard flushes and bounded large documents) route through applyEmbedResult, so this is
+// the single owning site.
+function trackGatewayEvidence(state: RunState, embedResult: EmbedDocumentResult): void {
+  const evidential = embedResult.errors.filter((error) => error.code !== "CANCELLED");
+  if (evidential.length === 0) {
+    if (embedResult.vectorCount > 0) state.consecutiveTransientEmbedFailures = 0;
+    return;
+  }
+  const answered =
+    embedResult.vectorCount > 0 || evidential.some((error) => error.transient !== true);
+  if (answered) {
+    state.consecutiveTransientEmbedFailures = 0;
+    return;
+  }
+  state.consecutiveTransientEmbedFailures += 1;
+}
+
 // Maps an EmbedDocumentResult into PersistedHandling events, mutating run-state counters.
 function applyEmbedResult(
   state: RunState,
@@ -1282,6 +1334,7 @@ function applyEmbedResult(
   if (isCancellationOnlyEmbedResult(state, embedResult)) {
     return { events };
   }
+  trackGatewayEvidence(state, embedResult);
   const identityErr = embedResult.errors.find((e) => e.code === "INCOMPATIBLE_EMBEDDING_IDENTITY");
   if (identityErr !== undefined) {
     return {
@@ -1426,6 +1479,7 @@ function boundedEmbedDeps(
     ...(state.options.contextualRetrieval !== undefined
       ? { contextualRetrieval: state.options.contextualRetrieval }
       : {}),
+    ...(state.options.embedRetry !== undefined ? { retry: state.options.embedRetry } : {}),
     ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
     onBatch: (cursor, lastId): void => {
       writeBoundedCheckpoint({
@@ -1843,6 +1897,10 @@ async function* handleDiscoveryEvent(
   }
   if (evt.kind === "scope-error") {
     state.failedDocuments += 1;
+    state.discoveryFailedDocuments += 1;
+    if (evt.error.code === "LIMIT_REACHED") {
+      persistDiscoveryLimitWarning(state);
+    }
     const err: IndexingJobError = {
       code: `DISCOVERY_FAILED:${evt.error.code}`,
       message: evt.error.message,
@@ -2054,12 +2112,15 @@ function buildInitialState(
     vectorsPersisted: 0,
     lastResumeToken: null,
     restoreSnapshots: new Map(),
+    consecutiveTransientEmbedFailures: 0,
+    discoveryLimitWarningPersisted: false,
+    discoveryFailedDocuments: 0,
   };
 }
 
 function buildResult(
   state: RunState,
-  status: "succeeded" | "failed" | "cancelled",
+  status: IndexingResult["status"],
   finishedAt: number,
 ): IndexingResult {
   return {
@@ -2285,6 +2346,52 @@ function modelUsePolicyPreflightFailure(
   return undefined;
 }
 
+// Loud truncation surfacing (2026-08 field review): LIMIT_REACHED used to be one buried
+// document-failed entry in job history while the capsule finished "ready" — a corpus silently
+// missing part of its files. A capsule-level quality warning (document_id NULL, so it survives
+// per-document cleanup and flows into the health surface's qualityWarnings) says so instead.
+// Content-free: no paths, no counts derived from file names.
+const DISCOVERY_LIMIT_WARNING =
+  "File discovery stopped at the configured limit before the whole connected folder was " +
+  "covered — part of the corpus is not indexed. Raise KEIKO_LOCAL_KNOWLEDGE_MAX_DISCOVERY_FILES " +
+  "(or _MAX_DISCOVERY_DEPTH) and re-index to cover the full corpus.";
+
+export const DISCOVERY_LIMIT_WARNING_CODE = "DISCOVERY_LIMIT_REACHED";
+
+function persistDiscoveryLimitWarning(state: RunState): void {
+  if (state.discoveryLimitWarningPersisted) return;
+  state.discoveryLimitWarningPersisted = true;
+  try {
+    insertDiagnosticRow(state.options.store._internal.db, {
+      id: state.idSource(),
+      capsuleId: state.capsule.id,
+      diagnostic: {
+        severity: "warning",
+        code: DISCOVERY_LIMIT_WARNING_CODE,
+        message: DISCOVERY_LIMIT_WARNING,
+      },
+      createdAt: state.now(),
+    });
+  } catch {
+    // Informational surface — a diagnostics write must never fail the run.
+  }
+}
+
+// A truncation warning describes the LAST completed walk. Each new run clears it up front and
+// re-asserts it only if this walk truncates again, so raising the limit (or shrinking the
+// folder) makes the warning disappear with the next index instead of shouting forever.
+function clearDiscoveryLimitWarning(state: RunState): void {
+  try {
+    deleteCapsuleDiagnosticsByCode(
+      state.options.store._internal.db,
+      state.capsule.id,
+      DISCOVERY_LIMIT_WARNING_CODE,
+    );
+  } catch {
+    // Informational surface — see persistDiscoveryLimitWarning.
+  }
+}
+
 function persistStartedJob(state: RunState, sources: readonly KnowledgeSource[]): void {
   insertJobRow(state.options.store._internal.db, {
     id: state.jobId,
@@ -2292,6 +2399,7 @@ function persistStartedJob(state: RunState, sources: readonly KnowledgeSource[])
     sourceIds: sources.map((source) => source.id),
     startedAt: state.startedAt,
   });
+  clearDiscoveryLimitWarning(state);
   try {
     updateCapsuleState(state.options.store, state.capsule.id, "indexing");
   } catch {
@@ -2394,8 +2502,43 @@ export async function* runIndexingJob(options: IndexingOptions): AsyncIterable<I
   yield* finalize(state, identityFailure);
 }
 
+// Gateway-outage circuit breaker (2026-08 field review): with a dead or saturated embedding
+// gateway, EVERY remaining document grinds through the full transient-retry ladder (attempts x
+// provider timeout + backoff — minutes per document), so a large corpus "runs" for days doing
+// nothing. Once this many transient adapter failures accumulate WITHOUT an intervening
+// successfully embedded document, the run aborts with a distinct terminal error instead.
+// Deterministic failures and skips never count — they say nothing about the gateway.
+export const CONSECUTIVE_TRANSIENT_FAILURE_LIMIT = 5;
+
+// `satisfies` pins both producer literals to the contract-owned code list: renaming or
+// dropping a code in keiko-contracts breaks this compile instead of silently drifting from
+// the capsule-detail consumer.
+export const EMBEDDING_GATEWAY_UNAVAILABLE_CODE =
+  "EMBEDDING_GATEWAY_UNAVAILABLE" satisfies (typeof INDEXING_EMBEDDING_STOPPED_ERROR_CODES)[number];
+
+function gatewayUnavailableError(state: RunState): IndexingJobError {
+  return {
+    code: EMBEDDING_GATEWAY_UNAVAILABLE_CODE,
+    message:
+      `embedding gateway unreachable: ${String(state.consecutiveTransientEmbedFailures)} ` +
+      "consecutive documents failed with transient adapter errors; aborting the run instead of " +
+      "retrying every remaining document against a dead gateway",
+    transient: true,
+  };
+}
+
+// Trip check only — the evidence itself is tracked at the single owning site
+// (trackGatewayEvidence in applyEmbedResult), which both embed paths route through.
+function breakerTripError(state: RunState): IndexingJobError | undefined {
+  return state.consecutiveTransientEmbedFailures >= CONSECUTIVE_TRANSIENT_FAILURE_LIMIT
+    ? gatewayUnavailableError(state)
+    : undefined;
+}
+
 // Drains one source's event stream, yielding each event to the outer generator.
-// Returns the identity-failure error if encountered, undefined otherwise.
+// Returns the fatal error (identity failure or tripped gateway breaker) if encountered,
+// undefined otherwise. An early return here closes the source generator chain, so the
+// discovery stream stops producing work for a run that is already lost.
 async function* iterateSourceEvents(
   state: RunState,
   source: KnowledgeSource,
@@ -2404,6 +2547,10 @@ async function* iterateSourceEvents(
     yield emit(state, evt);
     if (evt.kind === "document-failed" && evt.error.code === "INCOMPATIBLE_EMBEDDING_IDENTITY") {
       return evt.error;
+    }
+    const tripped = breakerTripError(state);
+    if (tripped !== undefined) {
+      return tripped;
     }
   }
   return undefined;
@@ -2414,16 +2561,63 @@ function emit(state: RunState, event: IndexingEvent): IndexingEvent {
   return event;
 }
 
+// Terminal capsule state reflects INDEX USABILITY, not run outcome (2026-08 field review,
+// adversarially re-verified). Grounded surfaces hard-refuse "error" capsules, so demoting a
+// capsule whose persisted vectors survived a failed or cancelled RUN intact takes a healthy
+// corpus out of retrieval over a run-scoped problem — a five-document gateway blip during a
+// nightly refresh must not black out thousands of indexed manuals. "error" is reserved for an
+// index that cannot be trusted or used: an identity violation, or no persisted vectors at all.
+// The failed run itself stays fully visible in the job history, counters, and health warnings.
+function terminalCapsuleState(
+  state: RunState,
+  status: IndexingResult["status"],
+): "ready" | "error" {
+  if (status === "succeeded") return "ready";
+  if (state.lastError?.code === "INCOMPATIBLE_EMBEDDING_IDENTITY") return "error";
+  const vectors = countVectorsForCapsule(state.options.store._internal.db, state.capsule.id);
+  return vectors > 0 ? "ready" : "error";
+}
+
 function resolveJobStatus(
   state: RunState,
   fatalFailure: IndexingJobError | undefined,
-): "succeeded" | "failed" | "cancelled" {
+): IndexingResult["status"] {
   if (fatalFailure !== undefined) {
     state.lastError = fatalFailure;
     return "failed";
   }
   if (cancellationRequested(state)) return "cancelled";
-  if (state.failedDocuments > 0 && state.processedDocuments === 0) return "failed";
+  // Relocated pin: "everything attempted failed" is terminal ONLY when the run saw no healthy
+  // corpus at all. A delta/repair run that re-attempts a handful of known-broken documents
+  // while skipping a verified-unchanged corpus is not a whole-run failure (adversarial
+  // review, 2026-08) — its per-document failures stay recorded, and the majority rule below
+  // still fails any run whose failures outweigh the corpus it saw.
+  if (state.failedDocuments > 0 && state.processedDocuments === 0 && state.skippedDocuments === 0) {
+    return "failed";
+  }
+  // Honest terminal status (2026-08 field review, adversarially re-verified): "succeeded
+  // whenever anything processed" reported SUCCEEDED for 800 processed / 4,200 failed while
+  // most of the corpus was silently absent from retrieval. The ratio is CORPUS-scoped, not
+  // run-scoped: skipped (verified-unchanged) documents are healthy-corpus evidence and count
+  // in the denominator, so a repair or incremental run over a mostly-healthy corpus whose
+  // small delta partially fails is still a success with recorded per-document failures —
+  // only a run that leaves the majority of the corpus it saw unindexed fails as a whole.
+  // Walk-level discovery diagnostics (LIMIT_REACHED frames et al.) are not attempted
+  // documents and stay out of the numerator.
+  const embedFailedDocuments = state.failedDocuments - state.discoveryFailedDocuments;
+  if (embedFailedDocuments > state.processedDocuments + state.skippedDocuments) {
+    // Job-level classification deliberately REPLACES the last per-document error: the
+    // document-failed events keep every individual cause, while the terminal error names why
+    // the RUN as a whole is not a success.
+    state.lastError = {
+      code: "MAJORITY_DOCUMENTS_FAILED" satisfies (typeof INDEXING_EMBEDDING_STOPPED_ERROR_CODES)[number],
+      message:
+        `${String(embedFailedDocuments)} of ` +
+        `${String(embedFailedDocuments + state.processedDocuments + state.skippedDocuments)} ` +
+        "documents in this run's scope failed; refusing to report this run as succeeded",
+    };
+    return "failed";
+  }
   return "succeeded";
 }
 
@@ -2443,11 +2637,7 @@ function* finalize(
   });
 
   try {
-    updateCapsuleState(
-      state.options.store,
-      state.capsule.id,
-      status === "succeeded" ? "ready" : "error",
-    );
+    updateCapsuleState(state.options.store, state.capsule.id, terminalCapsuleState(state, status));
   } catch {
     // informational only — see the started block for the rationale
   }

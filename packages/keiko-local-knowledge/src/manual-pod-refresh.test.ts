@@ -271,17 +271,16 @@ describe("refreshHtmlManualPod", () => {
     expect(result.summary.counts.documentCount).toBe(3);
   });
 
-  it("fails closed when the refresh indexing run itself fails: prior documents are kept, but the whole capsule's readiness flips to error", async () => {
-    // Regression for #1894 finding "refresh-indexing-failure-degrades-capsule-readiness-untested":
-    // no test previously injected a failing embeddingAdapter into a real refreshHtmlManualPod run,
-    // so this path (crawl succeeds, indexing fails) had zero end-to-end coverage anywhere. `runIndexingJob`
-    // is invoked with `sourceIds: [SOURCE_ID]`, but its generic `finalize()` (indexing/orchestrator.ts)
-    // still calls `updateCapsuleState(store, capsule.id, "error")` for the WHOLE capsule, unconditionally,
-    // on any indexing failure — not just this source. This test pins that CURRENT behaviour so a future
-    // change to it is a deliberate, reviewed decision rather than a silent regression either way. Whether
-    // a capsule-wide readiness downgrade is the right signal for a single-source refresh failure in a
-    // multi-source capsule is a production-code question (indexing/orchestrator.ts `finalize`), out of
-    // this test-file-only scope.
+  it("fails closed when the refresh indexing run itself fails: prior documents are kept and the intact index stays retrievable", async () => {
+    // Regression for #1894 finding "refresh-indexing-failure-degrades-capsule-readiness-untested",
+    // RELOCATED by the deliberate 2026-08 decision the original pin reserved this exact question
+    // for. The old behaviour downgraded the WHOLE capsule to "error" on any failed refresh — and
+    // grounded surfaces hard-refuse "error" capsules, so a transient gateway blip during a
+    // single-source refresh took a fully intact, previously-ready corpus out of retrieval
+    // (adversarially verified field risk). Terminal capsule state now reflects INDEX USABILITY:
+    // the failed refresh stays loud in indexing.status / changeSummary / job history, while the
+    // untouched prior documents remain "ready" and retrievable. "error" is reserved for an index
+    // that cannot be trusted or used (identity violation, or no persisted vectors at all).
     await createBasePod();
     const failingAdapter = scriptedAdapter({
       identity: DEFAULT_EMBEDDING,
@@ -302,9 +301,8 @@ describe("refreshHtmlManualPod", () => {
     expect(result.changeSummary.counts.failedPages).toBe(0);
     // The prior 3-page pod's data is preserved — a failed refresh never wipes or overwrites it.
     expect(result.summary.counts.documentCount).toBe(3);
-    // Documented current behaviour: capsule-wide readiness is downgraded to "error" even though this
-    // was a single-source refresh and the underlying documents were left untouched.
-    expect(result.summary.readiness).toBe("error");
+    // The intact prior index stays usable: the run failed, the capsule did not.
+    expect(result.summary.readiness).toBe("ready");
   });
 
   it("does not advance the fingerprint baseline for a page whose re-embed fails, even when another page in the same refresh succeeds", async () => {

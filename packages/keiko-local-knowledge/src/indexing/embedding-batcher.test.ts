@@ -931,6 +931,9 @@ describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
       expect(result.vectors).toEqual([]);
       expect(result.errors).toHaveLength(selected.length);
       expect(result.errors.every((error) => error.code === "EMBEDDING_ADAPTER_FAILED")).toBe(true);
+      // A deterministic rejection is NOT gateway-outage evidence: no transient flag, so the
+      // orchestrator's circuit breaker never counts it.
+      expect(result.errors.every((error) => error.transient === undefined)).toBe(true);
       expect(countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
         0,
       );
@@ -1211,6 +1214,9 @@ describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
       expect(calls).toBe(3);
       expect(result.vectors).toEqual([]);
       expect(result.errors.every((error) => error.code === "EMBEDDING_ADAPTER_FAILED")).toBe(true);
+      // Exhausted TRANSIENT retries carry the classification the orchestrator's gateway
+      // circuit breaker counts (2026-08 field review).
+      expect(result.errors.every((error) => error.transient === true)).toBe(true);
     } finally {
       cleanup();
     }

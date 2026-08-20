@@ -50,7 +50,11 @@ import { folderScope, memoryFs } from "../discovery/test-support.js";
 import { documentIdFor } from "../discovery/types.js";
 import { LEXICAL_ANALYZER_KEY } from "../retrieval/lexical-normalization.js";
 
-import { runIndexingJob } from "./orchestrator.js";
+import {
+  CONSECUTIVE_TRANSIENT_FAILURE_LIMIT,
+  EMBEDDING_GATEWAY_UNAVAILABLE_CODE,
+  runIndexingJob,
+} from "./orchestrator.js";
 import { selectJobById, rowToIndexingJobRecord } from "./job-persist.js";
 import {
   countVectorsForCapsule,
@@ -1992,6 +1996,459 @@ describe("runIndexingJob — partial adapter failure", () => {
   });
 });
 
+// ─── Gateway-outage circuit breaker + honest terminal status (2026-08 field review) ─────────
+// A dead gateway used to grind EVERY remaining document through the full transient-retry
+// ladder — days of nothing on a large corpus — and a run with most documents failed still
+// reported "succeeded" and flipped the capsule to "ready" while the corpus was absent from
+// retrieval. The breaker aborts on consecutive transient failures; the status rule refuses
+// "succeeded" when failures outnumber processed documents.
+
+const INSTANT_RETRY = {
+  maxRetries: 0,
+  baseDelayMs: 0,
+  sleep: (): Promise<void> => Promise.resolve(),
+};
+
+function isProbeInput(input: string): boolean {
+  return input === "ping" || input.startsWith("Keiko embedding space probe");
+}
+
+function okVector(input: string): OpenAIEmbeddingOutcome {
+  return {
+    ok: true,
+    value: {
+      vector: deterministicVector(input, DEFAULT_EMBEDDING.vectorDimensions),
+      modelId: DEFAULT_EMBEDDING.modelId,
+    },
+  };
+}
+
+describe("runIndexingJob — gateway-outage circuit breaker", () => {
+  const corpus = Object.fromEntries(
+    ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"].map((name) => [
+      `${name}.txt`,
+      `Document ${name} content. `.repeat(8),
+    ]),
+  );
+
+  it("aborts after consecutive transient failures instead of grinding every document", async () => {
+    const fixture = buildFixture(corpus);
+    try {
+      // Preflight passes (the gateway was healthy at job start), then the gateway dies:
+      // every chunk embedding times out — the transient shape a dead or saturated
+      // gateway produces.
+      const adapter = scriptedAdapter({
+        responder: (req) =>
+          isProbeInput(req.input) ? okVector(req.input) : { ok: false, kind: "timeout" },
+      });
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: adapter, embedRetry: INSTANT_RETRY }),
+        ),
+      );
+
+      const terminal = events.at(-1);
+      expect(terminal?.kind).toBe("job-failed");
+      if (terminal?.kind === "job-failed") {
+        expect(terminal.error.code).toBe(EMBEDDING_GATEWAY_UNAVAILABLE_CODE);
+      }
+      // The run stopped at the breaker limit — the remaining documents were NOT ground
+      // through the retry ladder against a dead gateway.
+      const failed = events.filter((e) => e.kind === "document-failed");
+      expect(failed).toHaveLength(CONSECUTIVE_TRANSIENT_FAILURE_LIMIT);
+      expect(Object.keys(corpus).length).toBeGreaterThan(CONSECUTIVE_TRANSIENT_FAILURE_LIMIT);
+      const capsule = getCapsule(fixture.store, fixture.capsuleId);
+      expect(capsule?.lifecycleState).toBe("error");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("does not trip on sub-threshold transient failures or deterministic ones", async () => {
+    const fixture = buildFixture({
+      "alpha.txt": "Lorem ipsum dolor. ".repeat(8),
+      "beta.txt": "Pack my box. ".repeat(8),
+      "gamma.txt": "Sphinx of black quartz. ".repeat(8),
+    });
+    try {
+      // One transient failure (alpha), two successes: far below the limit, and a success
+      // resets the streak — the job completes with a per-document failure, exactly as before.
+      const adapter = scriptedAdapter({
+        responder: (req) =>
+          !isProbeInput(req.input) && req.input.startsWith("Lorem")
+            ? { ok: false, kind: "timeout" }
+            : okVector(req.input),
+      });
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: adapter, embedRetry: INSTANT_RETRY }),
+        ),
+      );
+      expect(events.at(-1)?.kind).toBe("job-completed");
+      expect(events.filter((e) => e.kind === "document-failed")).toHaveLength(1);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("counts only transient adapter failures — deterministic rejections never open the breaker", async () => {
+    const fixture = buildFixture(corpus);
+    try {
+      // Every document fails DETERMINISTICALLY (malformed response). That is not gateway-outage
+      // evidence: the breaker must stay closed and every document must be attempted, ending in
+      // the all-failed terminal state — not the gateway-unavailable abort.
+      const adapter = scriptedAdapter({
+        responder: (req) =>
+          isProbeInput(req.input) ? okVector(req.input) : { ok: false, kind: "invalid-response" },
+      });
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: adapter, embedRetry: INSTANT_RETRY }),
+        ),
+      );
+      const terminal = events.at(-1);
+      expect(terminal?.kind).toBe("job-failed");
+      if (terminal?.kind === "job-failed") {
+        expect(terminal.error.code).not.toBe(EMBEDDING_GATEWAY_UNAVAILABLE_CODE);
+      }
+      expect(events.filter((e) => e.kind === "document-failed")).toHaveLength(
+        Object.keys(corpus).length,
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+});
+
+describe("runIndexingJob — honest terminal status on overwhelming failure", () => {
+  it("reports failed but keeps the usable index retrievable when failures outnumber processed documents", async () => {
+    const fixture = buildFixture({
+      "alpha.txt": "Lorem ipsum dolor. ".repeat(8),
+      "beta.txt": "Pack my box. ".repeat(8),
+      "gamma.txt": "Sphinx of black quartz. ".repeat(8),
+    });
+    try {
+      // Two of three documents fail deterministically; one succeeds. The old rule reported
+      // SUCCEEDED (processedDocuments > 0) while most of the corpus was silently absent from
+      // retrieval. The JOB must fail loudly — but the capsule keeps its usable partial index
+      // (grounded surfaces hard-refuse "error" capsules, so demoting it would also take the
+      // successfully indexed documents offline).
+      const adapter = scriptedAdapter({
+        responder: (req) =>
+          !isProbeInput(req.input) && req.input.startsWith("Pack")
+            ? okVector(req.input)
+            : isProbeInput(req.input)
+              ? okVector(req.input)
+              : { ok: false, kind: "invalid-response" },
+      });
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: adapter, embedRetry: INSTANT_RETRY }),
+        ),
+      );
+      const terminal = events.at(-1);
+      expect(terminal?.kind).toBe("job-failed");
+      if (terminal?.kind === "job-failed") {
+        expect(terminal.error.code).toBe("MAJORITY_DOCUMENTS_FAILED");
+        expect(terminal.result.processedDocuments).toBe(1);
+        expect(terminal.result.failedDocuments).toBe(2);
+      }
+      const capsule = getCapsule(fixture.store, fixture.capsuleId);
+      expect(capsule?.lifecycleState).toBe("ready");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("fails a run whose only outcomes are discovery failures — zero progress is never a success", async () => {
+    // Review finding on #3221 proposed excluding discovery failures from the zero-progress rule
+    // for symmetry with the majority ratio. The two rules answer different questions: the ratio
+    // scores the corpus the run SAW, while this rule guards a run that saw NOTHING succeed.
+    // With zero processed and zero skipped documents, a discovery-only failure run covered none
+    // of its corpus — reporting it "succeeded" would be a lie. The raw count stays authoritative.
+    const { store, cleanup } = freshStore();
+    const capsuleId = "cap-orch" as KnowledgeCapsuleId;
+    createCapsule(
+      store,
+      sampleCapsuleInput({ id: capsuleId, modelUsePolicy: standardPodModelUsePolicy() }),
+    );
+    const source = addSourceToCapsule(store, capsuleId, {
+      id: "src-orch" as KnowledgeSourceId,
+      displayName: "orch",
+      tags: [],
+      scope: folderScope(ROOT, { recursive: true }),
+    });
+    // An unreadable walk root — the shape a torn mount or revoked permission produces in the
+    // field: the whole run yields exactly one READ_FAILED scope-error and no document work.
+    const unreadableFs: WorkspaceFs = {
+      ...memoryFs(ROOT, []),
+      readDir: (): never => {
+        throw new Error("EACCES: permission denied");
+      },
+    };
+    const fixture: Fixture = {
+      store,
+      cleanup,
+      capsuleId,
+      sourceId: source.id,
+      source,
+      fs: unreadableFs,
+    };
+    try {
+      const events = await drain(runIndexingJob(buildOptions(fixture)));
+      const terminal = events.at(-1);
+      expect(terminal?.kind).toBe("job-failed");
+      if (terminal?.kind === "job-failed") {
+        expect(terminal.result.processedDocuments).toBe(0);
+        expect(terminal.result.failedDocuments).toBeGreaterThan(0);
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("keeps a repair-style delta run succeeded when the healthy corpus is skipped alongside it", async () => {
+    // Adversarial-review finding: a run-scoped ratio measured only the delta, so a repair run
+    // fixing 1 of 3 stragglers on an otherwise healthy corpus reported MAJORITY_DOCUMENTS_FAILED
+    // and (old semantics) blacked out the whole pod. Skipped (verified-unchanged) documents are
+    // healthy-corpus evidence and belong in the denominator.
+    const fixture = buildFixture({
+      "good-one.txt": "Healthy document one. ".repeat(8),
+      "good-two.txt": "Healthy document two. ".repeat(8),
+      "good-three.txt": "Healthy document three. ".repeat(8),
+      "bad-one.txt": "Broken document one. ".repeat(8),
+      "bad-two.txt": "Broken document two. ".repeat(8),
+    });
+    try {
+      const failBroken = scriptedAdapter({
+        responder: (req) =>
+          !isProbeInput(req.input) && req.input.startsWith("Broken")
+            ? { ok: false, kind: "invalid-response" }
+            : okVector(req.input),
+      });
+      // First run: 3 healthy documents index, 2 fail — minority failure, job completes.
+      const first = await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: failBroken, embedRetry: INSTANT_RETRY }),
+        ),
+      );
+      expect(first.at(-1)?.kind).toBe("job-completed");
+
+      // Delta run: the 3 healthy documents are skipped as unchanged; the 2 broken ones fail
+      // again. Run-scoped ratio would say 2 failed > 0 processed... but the corpus is fine.
+      const second = await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: failBroken, embedRetry: INSTANT_RETRY }),
+        ),
+      );
+      const terminal = second.at(-1);
+      expect(terminal?.kind).toBe("job-completed");
+      if (terminal?.kind === "job-completed") {
+        expect(terminal.result.skippedDocuments).toBe(3);
+        expect(terminal.result.failedDocuments).toBe(2);
+      }
+      expect(getCapsule(fixture.store, fixture.capsuleId)?.lifecycleState).toBe("ready");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("never counts walk-level discovery diagnostics as failed attempts in the ratio", async () => {
+    // Adversarial-review finding: LIMIT_REACHED can surface once per ancestor frame, so a
+    // truncated deep tree could out-count the processed documents and flip an otherwise
+    // healthy truncated run to failed. Walk diagnostics are not attempted documents.
+    const fixture = buildFixture({
+      "top.txt": "Top level document. ".repeat(8),
+      "a/nested-one.txt": "Nested document one. ".repeat(8),
+      "a/b/nested-two.txt": "Nested document two. ".repeat(8),
+      "a/b/c/nested-three.txt": "Nested document three. ".repeat(8),
+    });
+    try {
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            embedRetry: INSTANT_RETRY,
+            discoveryOptions: { maxFiles: 1, maxDepth: 12 },
+          }),
+        ),
+      );
+      const terminal = events.at(-1);
+      // One document indexed; every other document-failed is a LIMIT_REACHED walk frame.
+      expect(terminal?.kind).toBe("job-completed");
+      if (terminal?.kind === "job-completed") {
+        expect(terminal.result.processedDocuments).toBe(1);
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+});
+
+describe("runIndexingJob — breaker gateway evidence (adversarial re-verification)", () => {
+  it("never trips on a live-but-flaky gateway where every document keeps some answered chunks", async () => {
+    // Each document large enough to chunk multiple times: the FIRST chunk of each document
+    // times out, the rest answer. Documents fail — but every one of them carries persisted
+    // vectors, which is proof the gateway is alive. The breaker must stay closed and every
+    // document must be attempted.
+    // The poison sentence rides at the END of a multi-chunk document, so the earlier chunks
+    // answer and persist vectors before the final chunk times out — a genuinely flaky (not
+    // dead) gateway, robust to chunk-boundary placement.
+    const flakyCorpus = Object.fromEntries(
+      ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"].map((name) => [
+        `${name}.txt`,
+        `Follow-up ${name} content sentence. `.repeat(400) + `POISON ${name} tail.`,
+      ]),
+    );
+    const fixture = buildFixture(flakyCorpus);
+    try {
+      const adapter = scriptedAdapter({
+        responder: (req) =>
+          !isProbeInput(req.input) && req.input.includes("POISON")
+            ? { ok: false, kind: "timeout" }
+            : okVector(req.input),
+      });
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: adapter, embedRetry: INSTANT_RETRY }),
+        ),
+      );
+      // Every document legitimately fails (its poison chunk), so an honest job-failed is
+      // expected — but it must be the MAJORITY classification, never the gateway-outage
+      // abort, and every document must have been ATTEMPTED instead of abandoned early.
+      const terminal = events.at(-1);
+      expect(terminal?.kind).toBe("job-failed");
+      if (terminal?.kind === "job-failed") {
+        expect(terminal.error.code).not.toBe(EMBEDDING_GATEWAY_UNAVAILABLE_CODE);
+      }
+      const failed = events.filter((e) => e.kind === "document-failed");
+      expect(failed.length + events.filter((e) => e.kind === "document-embedded").length).toBe(
+        Object.keys(flakyCorpus).length,
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("does not let zero-chunk documents reset the outage streak they never observed", async () => {
+    // Empty documents contact no gateway. Interleaved between transient failures they must
+    // not launder the streak — the breaker still trips at the limit.
+    // Walk order is lexicographic: empties genuinely INTERLEAVE with the transient failures.
+    const fixture = buildFixture({
+      "a-fail.txt": "Content one. ".repeat(8),
+      "b-empty.html": "<html><body>   </body></html>",
+      "c-fail.txt": "Content two. ".repeat(8),
+      "d-empty.html": "<html><body> </body></html>",
+      "e-fail.txt": "Content three. ".repeat(8),
+      "f-fail.txt": "Content four. ".repeat(8),
+      "g-fail.txt": "Content five. ".repeat(8),
+      "h-fail.txt": "Content six. ".repeat(8),
+    });
+    try {
+      const adapter = scriptedAdapter({
+        responder: (req) =>
+          isProbeInput(req.input) ? okVector(req.input) : { ok: false, kind: "timeout" },
+      });
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: adapter, embedRetry: INSTANT_RETRY }),
+        ),
+      );
+      const terminal = events.at(-1);
+      expect(terminal?.kind).toBe("job-failed");
+      if (terminal?.kind === "job-failed") {
+        expect(terminal.error.code).toBe(EMBEDDING_GATEWAY_UNAVAILABLE_CODE);
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("resets the streak on an answered deterministic rejection — the gateway is alive", async () => {
+    // A gateway that ANSWERS (even with a deterministic 4xx-shaped rejection) is not down.
+    // Four transient failures, one answered rejection, four more transient failures: the
+    // streak never reaches the limit and every document is attempted.
+    // Walk order is lexicographic: exactly four timeouts, then the answered rejection, then
+    // four more timeouts — the streak peaks at four on either side of the reset.
+    const names = ["a1", "a2", "a3", "a4", "m-answered", "z1", "z2", "z3", "z4"];
+    const fixture = buildFixture(
+      Object.fromEntries(names.map((name) => [`${name}.txt`, `Doc ${name} content. `.repeat(8)])),
+    );
+    try {
+      const adapter = scriptedAdapter({
+        responder: (req) => {
+          if (isProbeInput(req.input)) return okVector(req.input);
+          if (req.input.startsWith("Doc m-answered"))
+            return { ok: false, kind: "invalid-response" };
+          return { ok: false, kind: "timeout" };
+        },
+      });
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: adapter, embedRetry: INSTANT_RETRY }),
+        ),
+      );
+      const terminal = events.at(-1);
+      if (terminal?.kind === "job-failed") {
+        expect(terminal.error.code).not.toBe(EMBEDDING_GATEWAY_UNAVAILABLE_CODE);
+      }
+      expect(events.filter((e) => e.kind === "document-failed")).toHaveLength(names.length);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("keeps a previously indexed capsule retrievable when the breaker aborts a delta refresh", async () => {
+    // Adversarial-review finding: the breaker abort used to flip the capsule to "error",
+    // taking thousands of intact, already-indexed documents out of grounded retrieval over a
+    // five-document gateway blip. The index survived — the capsule must stay ready; the failed
+    // job carries the outage in its history.
+    const healthy = Object.fromEntries(
+      ["one", "two", "three"].map((name) => [
+        `${name}.txt`,
+        `Established document ${name}. `.repeat(8),
+      ]),
+    );
+    const fixture = buildFixture(healthy);
+    try {
+      const first = await drain(
+        runIndexingJob(buildOptions(fixture, { embedRetry: INSTANT_RETRY })),
+      );
+      expect(first.at(-1)?.kind).toBe("job-completed");
+
+      // The gateway dies; a delta of new documents arrives (memoryFs is immutable, so run 2
+      // injects a widened filesystem over the same store and capsule).
+      const widenedFs = memoryFs(ROOT, [
+        ...Object.entries(healthy).map(([relativePath, content]) => ({ relativePath, content })),
+        ...["n1", "n2", "n3", "n4", "n5", "n6"].map((name) => ({
+          relativePath: `${name}.txt`,
+          content: `Late delta document ${name}. `.repeat(8),
+        })),
+      ]);
+      const dead = scriptedAdapter({
+        responder: (req) =>
+          isProbeInput(req.input) ? okVector(req.input) : { ok: false, kind: "timeout" },
+      });
+      const second = await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            embeddingAdapter: dead,
+            embedRetry: INSTANT_RETRY,
+            workspaceFs: widenedFs,
+          }),
+        ),
+      );
+      const terminal = second.at(-1);
+      expect(terminal?.kind).toBe("job-failed");
+      if (terminal?.kind === "job-failed") {
+        expect(terminal.error.code).toBe(EMBEDDING_GATEWAY_UNAVAILABLE_CODE);
+      }
+      expect(getCapsule(fixture.store, fixture.capsuleId)?.lifecycleState).toBe("ready");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+});
+
 describe("runIndexingJob — document snapshot restore atomicity", () => {
   it("rolls back every restored row when reinsertion fails mid-snapshot", async () => {
     const fixture = buildFixture({
@@ -2183,11 +2640,17 @@ describe("runIndexingJob — concurrency clamp", () => {
     expect(peak).toBeLessThanOrEqual(4);
   });
 
-  it("clamps oversized discovery maxDepth to the default bound", async () => {
-    const deepPath = `${Array.from({ length: 13 }, (_unused, i) => `d${String(i)}`).join("/")}/deep.txt`;
+  // Relocated pin (2026-08 field review): the DEFAULT used to double as a hard ceiling —
+  // Math.min(default, value) — so an operator could lower the walk bounds but never raise
+  // them, and a corpus above the default was silently truncated forever. The runaway
+  // invariant the old clamp provided lives on in the explicit CEILING.
+  it("lets a caller raise discovery bounds up to the runaway ceiling — never beyond", async () => {
+    const withinRaisedDepth = `${Array.from({ length: 13 }, (_unused, i) => `d${String(i)}`).join("/")}/deep.txt`;
+    const beyondCeiling = `${Array.from({ length: 65 }, (_unused, i) => `e${String(i)}`).join("/")}/too-deep.txt`;
     const single = buildFixture({
       "root.txt": "root document",
-      [deepPath]: "deep document",
+      [withinRaisedDepth]: "deep document",
+      [beyondCeiling]: "unreachably deep document",
     });
 
     try {
@@ -2203,9 +2666,80 @@ describe("runIndexingJob — concurrency clamp", () => {
         .map((event) => event.relativePath);
 
       expect(discovered).toContain("root.txt");
+      // Raising past the old default now works…
+      expect(discovered).toContain(withinRaisedDepth);
+      // …but an absurd caller value still cannot demand an unbounded walk.
+      expect(discovered).not.toContain(beyondCeiling);
+    } finally {
+      single.cleanup();
+    }
+  });
+
+  it("keeps the built-in defaults when the caller passes no discovery options", async () => {
+    const deepPath = `${Array.from({ length: 13 }, (_unused, i) => `d${String(i)}`).join("/")}/deep.txt`;
+    const single = buildFixture({
+      "root.txt": "root document",
+      [deepPath]: "deep document",
+    });
+
+    try {
+      const events = await drain(runIndexingJob(buildOptions(single)));
+      const discovered = events
+        .filter((event) => event.kind === "document-discovered")
+        .map((event) => event.relativePath);
+
+      expect(discovered).toContain("root.txt");
       expect(discovered).not.toContain(deepPath);
     } finally {
       single.cleanup();
+    }
+  });
+});
+
+// ─── Loud truncation surfacing (2026-08 field review) ────────────────────────
+// LIMIT_REACHED used to be one buried document-failed entry in job history while the capsule
+// finished "ready" — a corpus silently missing part of its files. A truncated walk must leave
+// a capsule-level quality warning that the health surface shows, and a later run that covers
+// the corpus must clear it again.
+describe("runIndexingJob — discovery truncation warning", () => {
+  const corpus = {
+    "a.txt": "Document a. ".repeat(8),
+    "b.txt": "Document b. ".repeat(8),
+    "c.txt": "Document c. ".repeat(8),
+    "d.txt": "Document d. ".repeat(8),
+  };
+
+  function truncationWarnings(fixture: Fixture): readonly { readonly message: string }[] {
+    return fixture.store._internal.db
+      .prepare(
+        "SELECT message FROM parser_diagnostics WHERE capsule_id = :c AND document_id IS NULL AND code = 'DISCOVERY_LIMIT_REACHED' AND severity = 'warning'",
+      )
+      .all({ c: fixture.capsuleId }) as unknown as readonly { readonly message: string }[];
+  }
+
+  it("persists ONE capsule-level warning when the walk truncates, and clears it once a later run covers the corpus", async () => {
+    const fixture = buildFixture(corpus);
+    try {
+      const truncated = await drain(
+        runIndexingJob(buildOptions(fixture, { discoveryOptions: { maxFiles: 2, maxDepth: 12 } })),
+      );
+      expect(
+        truncated.some(
+          (event) =>
+            event.kind === "document-failed" &&
+            event.error.code === "DISCOVERY_FAILED:LIMIT_REACHED",
+        ),
+      ).toBe(true);
+      const warnings = truncationWarnings(fixture);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]?.message).toContain("KEIKO_LOCAL_KNOWLEDGE_MAX_DISCOVERY_FILES");
+
+      // The warning describes the LAST walk: a run without the limit covers the corpus and
+      // must clear it instead of shouting forever.
+      await drain(runIndexingJob(buildOptions(fixture)));
+      expect(truncationWarnings(fixture)).toHaveLength(0);
+    } finally {
+      fixture.cleanup();
     }
   });
 });

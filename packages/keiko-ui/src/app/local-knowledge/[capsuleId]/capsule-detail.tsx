@@ -21,6 +21,7 @@ import type {
   CapsuleContextualRetrievalSettings,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  INDEXING_EMBEDDING_STOPPED_ERROR_CODES,
   isTerminalExtractionPhase,
   parseHtmlManualSourceTagMetadata,
 } from "@oscharko-dev/keiko-contracts";
@@ -324,7 +325,12 @@ function partialIndexMessage(
   t: I18nTranslate,
 ): string {
   const missingVectors = data.health.chunkCount - data.health.vectorCount;
-  if (job?.lastError?.code === "EMBEDDING_ADAPTER_FAILED") {
+  // Circuit-breaker aborts and majority failures are embedding-stopped shapes too: without
+  // them here the outage runs — exactly where the "embedding stopped" explanation matters
+  // most — fell through to the generic copy. The code list is contract-owned so producer and
+  // this consumer cannot drift.
+  const embeddingStoppedCodes = new Set<string>(INDEXING_EMBEDDING_STOPPED_ERROR_CODES);
+  if (job?.lastError !== undefined && embeddingStoppedCodes.has(job.lastError.code)) {
     return t("localKnowledge.detail.index.embeddingStopped", {
       message: job.lastError.message,
       count: missingVectors,
@@ -1691,6 +1697,9 @@ export function CapsuleDetail({
         contextualRebuildRequired={data.health.contextualRetrieval?.rebuildRequired ?? false}
         onActionComplete={reload}
         onDeleted={handleDeleted}
+        {...(data.indexingJobs[0]?.id !== undefined
+          ? { latestJobId: data.indexingJobs[0].id }
+          : {})}
       />
 
       {renderHtmlManualRefresh(capsuleId, data, reload)}

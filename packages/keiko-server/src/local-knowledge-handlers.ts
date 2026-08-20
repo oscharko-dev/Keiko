@@ -62,17 +62,25 @@ import type {
   KnowledgePodSummaryKind,
   UnsupportedDocumentGuidanceCode,
 } from "@oscharko-dev/keiko-contracts";
-import { KnowledgeNotFoundError, KnowledgeStoreError } from "@oscharko-dev/keiko-local-knowledge";
+import {
+  DEFAULT_DISCOVERY_OPTIONS,
+  KnowledgeNotFoundError,
+  KnowledgeStoreError,
+} from "@oscharko-dev/keiko-local-knowledge";
 import {
   findIndexingRecoveryCandidate,
   openKnowledgeStoreForDeps,
   type IndexingRecoveryCandidate,
 } from "./local-knowledge-store-open.js";
 import { runLocalTesseractCommand } from "./local-knowledge-ocr-runtime.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { newCorrelationId } from "./correlation.js";
 import {
   CAPSULE_SET_MAX_MEMBERS,
+  electConversationDefault,
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
   isKnowledgePodEvidenceSafeText,
+  MODEL_COST_RANK,
   isSafeQualityWarning,
   standardPodModelUsePolicy,
   stripUnsafeFormatChars,
@@ -83,6 +91,7 @@ import {
   validateKnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  currentConversationReadinessObservation,
   currentGateway,
   currentGatewayConfig,
   currentGatewayEgressConfig,
@@ -94,6 +103,7 @@ import {
   EMBEDDING_INSTRUCTION_VERSION,
   EMBEDDING_NORMALIZATION,
   findConfiguredCapability,
+  listConfiguredCapabilities,
   requestOpenAIEmbedding,
   requestOpenAIEmbeddingBatch,
   selectConfiguredModel,
@@ -1755,6 +1765,23 @@ interface RunCapsuleIndexingJobOptions {
   // a partially-built index.
   readonly force: boolean;
   readonly resumeJob?: IndexingJobRecord | undefined;
+  // Pre-generated job id so the detached start route can answer 202 with the id its job WILL
+  // persist (the orchestrator's first idSource() call becomes the job id). Standard path only —
+  // repository pods mint their id inside refreshRepositoryPod.
+  readonly jobId?: string | undefined;
+}
+
+// The orchestrator's first idSource() call becomes the job id; every later call mints vector
+// and diagnostic ids as usual.
+function firstCallIdSource(firstId: string): () => string {
+  let first = true;
+  return (): string => {
+    if (first) {
+      first = false;
+      return firstId;
+    }
+    return randomUUID();
+  };
 }
 
 type IndexingSourceSelection =
@@ -1905,7 +1932,24 @@ function resolveContextualRetrievalModelId(
   if (configured !== undefined && configured.length > 0) {
     return configured;
   }
-  return config === undefined ? undefined : selectConfiguredModel(config, { kind: "chat" });
+  return config === undefined ? undefined : fallbackContextModelId(deps, config);
+}
+
+// Fallback context-model election for contextual retrieval (2026-08 field review). The old
+// pure-costClass selection let a mode-less special-purpose id FIRST in the configured list (the
+// customer's OCR model) become the context model by position: warm, it "succeeds" and prefixes
+// every chunk with OCR garbage that pollutes the embedding space until a full re-index. Reuse
+// the shared tier-walk election: readiness is preferred only WITHIN a rank tier, so a verified
+// special-purpose model can never outrank an unprobed declared chat model (#3220 semantics).
+// The stable cost pre-sort keeps the old economy inside each tier — electConversationDefault
+// re-sorts by rank stably, so equal-rank candidates stay cheapest-first, configured order last.
+function fallbackContextModelId(deps: UiHandlerDeps, config: GatewayConfig): string | undefined {
+  const byCost = [...listConfiguredCapabilities(config)]
+    .filter((capability) => capability.kind === "chat")
+    .sort((a, b) => MODEL_COST_RANK[a.costClass] - MODEL_COST_RANK[b.costClass]);
+  return electConversationDefault(byCost, (capability) =>
+    currentConversationReadinessObservation(deps, capability.id),
+  )?.id;
 }
 
 function contextModelCanChat(
@@ -2057,6 +2101,21 @@ interface BuildIndexingOptionsInput {
   readonly signal: AbortSignal;
 }
 
+// Operator-raisable discovery bounds (2026-08 field review): the built-in 5,000-file default
+// used to be an unraisable hard ceiling, so a larger corpus silently indexed only its first
+// walk-ordered slice. The orchestrator still clamps these to its runaway backstops.
+function operatorDiscoveryOptions(
+  deps: UiHandlerDeps,
+): Parameters<typeof runIndexingJob>[0]["discoveryOptions"] {
+  const maxFiles = envPositiveInt(deps.env.KEIKO_LOCAL_KNOWLEDGE_MAX_DISCOVERY_FILES);
+  const maxDepth = envPositiveInt(deps.env.KEIKO_LOCAL_KNOWLEDGE_MAX_DISCOVERY_DEPTH);
+  if (maxFiles === undefined && maxDepth === undefined) return undefined;
+  return {
+    maxFiles: maxFiles ?? DEFAULT_DISCOVERY_OPTIONS.maxFiles,
+    maxDepth: maxDepth ?? DEFAULT_DISCOVERY_OPTIONS.maxDepth,
+  };
+}
+
 function buildIndexingOptions(
   input: BuildIndexingOptionsInput,
 ): Parameters<typeof runIndexingJob>[0] {
@@ -2073,6 +2132,7 @@ function buildIndexingOptions(
     signal,
   } = input;
   const contextualRetrieval = localKnowledgeContextualRetrievalOptions(deps, capsule);
+  const discoveryOptions = operatorDiscoveryOptions(deps);
   return {
     capsuleId: capsule.id,
     ...(sourceSelection.shouldRun && sourceSelection.sourceIds !== undefined
@@ -2085,6 +2145,8 @@ function buildIndexingOptions(
     auditSink: createSqliteAuditSink(store),
     store,
     force: options.force,
+    ...(options.jobId !== undefined ? { idSource: firstCallIdSource(options.jobId) } : {}),
+    ...(discoveryOptions !== undefined ? { discoveryOptions } : {}),
     ...(contextualRetrieval !== undefined ? { contextualRetrieval } : {}),
     largeDocumentPolicy: resolveLargeDocumentPolicy(),
     extractionCapabilities,
@@ -2748,6 +2810,70 @@ export async function handleGetLocalKnowledgeCapsule(
   });
 }
 
+// ─── Detached indexing runs (2026-08 field review) ───────────────────────────
+// The start route used to await the WHOLE indexing job inside one HTTP POST — a multi-hour
+// pending response with zero bytes written. Any transport blip (laptop sleep, BFF restart,
+// webview reload) rejected the fetch and decoupled the UI from a still-running job: the
+// progress panel vanished, the Index button re-enabled, and every click answered 409
+// "already running" — indistinguishable from a hang. The route now answers 202 the moment the
+// job is admitted; the persisted job row drives the UI's existing 2s polling, including
+// re-attach after a page reload. Each detached run owns its own store handle and reports its
+// failures through the job row plus a redacted operator diagnostic — never silently.
+const detachedIndexingRuns = new Map<string, Promise<void>>();
+
+// Test/shutdown seam: resolve once the capsule's detached run (if any) reaches its terminal
+// state. Production code never calls this — the job row is the production source of truth.
+export async function awaitDetachedCapsuleIndexing(capsuleId: string): Promise<void> {
+  const pending = detachedIndexingRuns.get(capsuleId);
+  if (pending !== undefined) await pending;
+}
+
+interface ResolvedIndexingProvider {
+  readonly capsule: KnowledgeCapsule;
+  readonly provider: ModelProviderConfig;
+}
+
+function launchDetachedCapsuleIndexing(
+  deps: UiHandlerDeps,
+  resolved: ResolvedIndexingProvider,
+  jobId: string | undefined,
+): void {
+  const key = String(resolved.capsule.id);
+  const run = (async (): Promise<void> => {
+    // The store open lives INSIDE the try: openKnowledgeStore throws on open/migration failure,
+    // and a throw before the handler would leave the rejection unhandled (production never awaits
+    // this promise) and leak the launch-map key — answering 409 for the process lifetime.
+    let env: ReturnType<typeof openStoreForDeps> | undefined;
+    try {
+      env = openStoreForDeps(deps);
+      await runCapsuleIndexingJob(deps, env.store, resolved.capsule, {
+        provider: resolved.provider,
+        mode: undefined,
+        force: false,
+        ...(jobId !== undefined ? { jobId } : {}),
+      });
+    } catch (error) {
+      // The job row already carries the terminal state for orchestrated failures; this catch
+      // is the backstop for failures BEFORE the orchestrator owns the run. Never silent.
+      emitServerDiagnostic(
+        deps.diagnostics,
+        serverDiagnosticFromError({
+          correlationId: newCorrelationId(),
+          operation: "local-knowledge.indexing",
+          source: "local-knowledge.detached-indexing",
+          error,
+          summary: "A detached capsule indexing run failed before reaching a terminal state.",
+          redact: (message): string => String(deps.redactor(message)),
+        }),
+      );
+    } finally {
+      env?.close();
+      detachedIndexingRuns.delete(key);
+    }
+  })();
+  detachedIndexingRuns.set(key, run);
+}
+
 export async function handleStartLocalKnowledgeCapsuleIndexing(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -2772,21 +2898,34 @@ export async function handleStartLocalKnowledgeCapsuleIndexing(
       }
       // LK-003 (Epic #189): refuse to start a second concurrent indexer for the same
       // capsule — the orchestrator persists running jobs, so a duplicate POST would
-      // race the in-flight one and corrupt vector counts.
+      // race the in-flight one and corrupt vector counts. The in-memory launch map closes
+      // the window between answering 202 and the detached run persisting its job row.
       const runningJobId = latestRunningJobId(env.store, resolved.capsule.id);
       if (runningJobId !== undefined) {
         return runningIndexingJobConflict(resolved.capsule.id, runningJobId);
       }
-      const terminal = await runCapsuleIndexingJob(deps, env.store, resolved.capsule, {
-        provider: resolved.provider,
-        mode: undefined,
-        force: false,
-      });
-      return indexingCompletionResponse(
-        resolved.capsule.id,
-        terminal,
-        "Capsule indexing failed. Review the capsule health diagnostics and job history for details.",
-      );
+      if (detachedIndexingRuns.has(String(resolved.capsule.id))) {
+        return conflict("An indexing job for this capsule is already starting.");
+      }
+      // Trust-boundary validation stays SYNCHRONOUS, before the 202: the deny-list is
+      // re-validated against the canonical (realpath-resolved) roots at index time, and a
+      // violation must answer this request as a 400 — detaching it would demote a refused
+      // credential-directory walk to a buried diagnostic. The detached run repeats the
+      // (idempotent) canonicalization harmlessly.
+      canonicalizeCapsuleSourceRoots(env.store, resolved.capsule);
+      // Repository pods mint their job id inside their own refresh flow; the standard path
+      // pins the id up front so the 202 names the job the caller can poll.
+      const jobId =
+        repositoryPodSourceId(env.store, resolved.capsule) === undefined ? randomUUID() : undefined;
+      launchDetachedCapsuleIndexing(deps, resolved, jobId);
+      return {
+        status: 202,
+        body: {
+          ok: true,
+          capsuleId: resolved.capsule.id,
+          ...(jobId !== undefined ? { jobId } : {}),
+        },
+      };
     } finally {
       env.close();
     }
