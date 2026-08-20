@@ -724,9 +724,11 @@ function isLikelySpecialPurposeModelId(modelId: string): boolean {
 }
 
 /**
- * The role a gateway's DECLARED model mode maps onto. "unsupported" means Keiko recognised the
- * declaration and has no lane for it — deliberately distinct from "unknown", so a recognised
- * rerank/audio/image engine is reported to the operator instead of silently disappearing.
+ * The role a gateway's DECLARED model mode maps onto, FOR DISCOVERY. "unsupported" means discovery
+ * will not configure the model from this declaration — deliberately distinct from "unknown", so a
+ * recognised rerank/speech/image engine is reported to the operator instead of silently
+ * disappearing. It does NOT mean the product has no lane for that capability: reranking and speech
+ * have their own configuration surfaces, which discovery does not populate.
  */
 export type DeclaredModeRole = "chat" | "embedding" | "unsupported";
 
@@ -751,6 +753,19 @@ export type DeclaredModelMode =
 // the gateway itself. Name heuristics may express a PREFERENCE (conversationDefaultRank), never a
 // role: a field incident bound a rerank endpoint named "bge-reranker-v2-m3" to every Knowledge Pod
 // as its embedding model, purely because the id contains "bge".
+/** Every mode Keiko recognises. Used to keep foreign mode strings out of logs and wire payloads. */
+export const DECLARED_MODEL_MODES: readonly DeclaredModelMode[] = [
+  "chat",
+  "completion",
+  "responses",
+  "embedding",
+  "rerank",
+  "image_generation",
+  "audio_transcription",
+  "audio_speech",
+  "moderation",
+];
+
 const DECLARED_MODE_ROLES: Record<DeclaredModelMode, DeclaredModeRole> = {
   chat: "chat",
   completion: "chat",

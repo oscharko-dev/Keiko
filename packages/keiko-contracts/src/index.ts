@@ -1833,6 +1833,7 @@ export {
   explainConversationIneligibility,
   conversationDefaultRank,
   electConversationDefault,
+  DECLARED_MODEL_MODES,
   isChatCompatibleDeclaredMode,
   modelKindForDeclaredMode,
   preferredConversationModelOrder,

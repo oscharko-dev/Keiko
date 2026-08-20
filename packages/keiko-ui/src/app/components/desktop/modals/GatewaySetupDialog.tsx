@@ -17,7 +17,12 @@ import {
   selectRealtimeVoiceCapability,
   selectSpeechOutputCapability,
 } from "@oscharko-dev/keiko-contracts";
-import { ApiError, setupGateway, type GatewaySetupInput } from "@/lib/api";
+import {
+  ApiError,
+  setupGateway,
+  type GatewaySetupInput,
+  type GatewaySetupResponse,
+} from "@/lib/api";
 import { useTranslate, type MessageValues } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
 import {
@@ -125,6 +130,27 @@ function skippedModelSummary(skippedModelIds: readonly string[]): string {
   // (rate-limit, timeout, content-filter), so the wording must not over-claim a permanent capability
   // verdict the smoke cannot prove.
   return ` Could not verify deployment${skippedModelIds.length === 1 ? "" : "s"}: ${skippedModelIds.join(", ")}.`;
+}
+
+// The operator must learn which models the gateway offered that Keiko will not use, and why. A
+// silent green "setup succeeded" over a gateway whose only embedding model was refused is what made
+// the LiteLLM field incident undiagnosable.
+function unusableModelSummary(result: GatewaySetupResponse): string {
+  const parts: string[] = [];
+  const unsupported = result.unsupportedModels ?? [];
+  if (unsupported.length > 0) {
+    const named = unsupported.map((entry) => `${entry.id} (${entry.reason})`).join(", ");
+    parts.push(` Not used (declared mode): ${named}.`);
+  }
+  const dropped = result.droppedEmbeddingModelIds ?? [];
+  if (dropped.length > 0) {
+    parts.push(` Not stored as embedding models — no embedding response: ${dropped.join(", ")}.`);
+  }
+  const unverified = result.unverifiedEmbeddingModelIds ?? [];
+  if (unverified.length > 0) {
+    parts.push(` Kept but unverified as embedding models: ${unverified.join(", ")}.`);
+  }
+  return parts.join("");
 }
 
 function storedVoiceModels(models: readonly ModelCapability[]): readonly string[] {
@@ -1037,7 +1063,8 @@ async function performGatewaySubmission(
       submittedGatewayCredentials,
       mode: successMode,
       verifiedModelSummary,
-      skippedSummary: skippedModelSummary(result.skippedModelIds ?? []),
+      skippedSummary:
+        skippedModelSummary(result.skippedModelIds ?? []) + unusableModelSummary(result),
     }),
     skippedModelCount: (result.skippedModelIds ?? []).length,
   };

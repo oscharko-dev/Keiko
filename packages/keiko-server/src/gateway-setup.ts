@@ -37,6 +37,7 @@ import {
   VOICE_PROVIDER_LOCALITIES,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
+  DECLARED_MODEL_MODES,
   GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
   isChatCompatibleDeclaredMode,
   modelKindForDeclaredMode,
@@ -57,6 +58,7 @@ import type {
   GatewayConfig,
   ModelCapability,
   ModelProviderConfig,
+  OpenAIEmbeddingOutcome,
   ParseGatewayConfigOptions,
   VoicePersonaVoice,
   VoiceProviderLocality,
@@ -1245,8 +1247,25 @@ interface ClassifiedDiscoveryModel {
   readonly kind: DiscoveryModelKind;
   readonly supportsImageInput: boolean;
   readonly metadata: GatewayDiscoveredModelMetadata;
-  /** Declared mode (or "chat-completion-disabled") that made this model unsupported. */
+  /** Why the model is unsupported. Always present on an "unsupported" entry, absent otherwise. */
   readonly reason?: string;
+}
+
+/** Narrowed view of an entry the classifier marked unsupported: the reason is guaranteed. */
+interface UnsupportedDiscoveryModel extends ClassifiedDiscoveryModel {
+  readonly kind: "unsupported";
+  readonly reason: string;
+}
+
+function isUnsupportedEntry(entry: ClassifiedDiscoveryModel): entry is UnsupportedDiscoveryModel {
+  return entry.kind === "unsupported" && entry.reason !== undefined;
+}
+
+// Foreign mode strings never leave this function: a mode Keiko knows is echoed as itself, anything
+// else collapses to one fixed marker.
+function boundedDeclaredModeReason(declaredMode: string): string {
+  const known: readonly string[] = DECLARED_MODEL_MODES;
+  return known.includes(declaredMode) ? declaredMode : "unrecognised-mode";
 }
 
 // Classification WITHOUT a declaration: the id heuristic is all a `/models`-only gateway gives us.
@@ -1285,7 +1304,11 @@ function classifyDiscoveryItem(item: unknown): ClassifiedDiscoveryModel | undefi
   if (declaredMode !== undefined) {
     const role = modelKindForDeclaredMode(declaredMode);
     if (role === "unsupported") {
-      return { id, kind: "unsupported", supportsImageInput: false, metadata, reason: declaredMode };
+      // The reason is drawn from a CLOSED vocabulary. A declared mode is gateway-controlled text of
+      // unbounded shape; echoing it verbatim would put foreign strings into the diagnostic channel
+      // and the setup response, which the redaction rules forbid.
+      const reason = boundedDeclaredModeReason(declaredMode);
+      return { id, kind: "unsupported", supportsImageInput: false, metadata, reason };
     }
     if (role === "embedding") {
       return { id, kind: "embedding", supportsImageInput: false, metadata };
@@ -1297,15 +1320,19 @@ function classifyDiscoveryItem(item: unknown): ClassifiedDiscoveryModel | undefi
       metadata,
     };
   }
-  // No declaration. An explicit `capabilities.chat_completion === false` still rules chat out.
+  // No declaration. `capabilities.chat_completion === false` states what the model is NOT, which
+  // is not a role: an embedding model legitimately carries it. So the id heuristic still decides,
+  // exactly as before — it just cannot fall through to "chat".
   if (isExplicitlyNonChatModel(item)) {
-    return {
-      id,
-      kind: "unsupported",
-      supportsImageInput: false,
-      metadata,
-      reason: "chat-completion-disabled",
-    };
+    return isLikelyEmbeddingModelId(id)
+      ? { id, kind: "embedding", supportsImageInput: false, metadata }
+      : {
+          id,
+          kind: "unsupported",
+          supportsImageInput: false,
+          metadata,
+          reason: "not-chat-capable",
+        };
   }
   return classifyUndeclaredDiscoveryItem(item, id, metadata);
 }
@@ -1327,25 +1354,34 @@ export function parseModelDiscovery(payload: unknown): GatewayDiscoveredModels {
   if (!isRecord(payload) || !Array.isArray(payload.data)) {
     throw new Error("model discovery response must contain a data array");
   }
-  const entries: ClassifiedDiscoveryModel[] = [];
-  const seen = new Set<string>();
+  // First occurrence wins, with ONE exception: a usable entry replaces an unsupported one for the
+  // same id. A LiteLLM `model_name` is a routing alias that can front several deployments, and an
+  // unusable one listed first must not shadow the usable duplicate behind it.
+  const byId = new Map<string, ClassifiedDiscoveryModel>();
   for (const item of payload.data) {
     const classified = classifyDiscoveryItem(item);
-    if (classified !== undefined && !seen.has(classified.id)) {
-      seen.add(classified.id);
-      entries.push(classified);
+    if (classified === undefined) continue;
+    const existing = byId.get(classified.id);
+    if (
+      existing === undefined ||
+      (existing.kind === "unsupported" && classified.kind !== "unsupported")
+    ) {
+      byId.set(classified.id, classified);
     }
   }
+  const entries: ClassifiedDiscoveryModel[] = [...byId.values()];
   // KEIKO-0325: raise a truncation flag alongside the limited slice so callers can
   // surface "N of M models discovered; add the rest by deployment name" instead of the
   // pre-fix silent drop. Kept optional-and-off-by-default so a fitting-within-cap
   // discovery does not carry a redundant `truncated: false` on the wire.
-  const wasTruncated = entries.length > MAX_DISCOVERED_MODELS;
-  const limited = entries.slice(0, MAX_DISCOVERED_MODELS);
   // Recognised-but-unusable models are reported, never configured: they get no provider entry and
   // no slot in any selection list, but the operator learns they exist and why they were skipped.
-  const unsupported = limited.filter((entry) => entry.kind === "unsupported");
-  const usable = limited.filter((entry) => entry.kind !== "unsupported");
+  // They are partitioned BEFORE the cap — a gateway listing 60 audio endpoints ahead of its chat
+  // aliases must not push the chat models past MAX_DISCOVERED_MODELS.
+  const unsupported = entries.filter(isUnsupportedEntry);
+  const usableEntries = entries.filter((entry) => entry.kind !== "unsupported");
+  const wasTruncated = usableEntries.length > MAX_DISCOVERED_MODELS;
+  const usable = usableEntries.slice(0, MAX_DISCOVERED_MODELS);
   assertDiscoveryYieldedUsableModels(usable, unsupported);
   return {
     modelIds: usable.map((entry) => entry.id),
@@ -1361,7 +1397,7 @@ export function parseModelDiscovery(payload: unknown): GatewayDiscoveredModels {
       ? {
           unsupportedModels: unsupported.map((entry) => ({
             id: entry.id,
-            reason: entry.reason ?? "unsupported",
+            reason: entry.reason,
           })),
         }
       : {}),
@@ -1371,7 +1407,7 @@ export function parseModelDiscovery(payload: unknown): GatewayDiscoveredModels {
 
 function assertDiscoveryYieldedUsableModels(
   usable: readonly ClassifiedDiscoveryModel[],
-  unsupported: readonly ClassifiedDiscoveryModel[],
+  unsupported: readonly UnsupportedDiscoveryModel[],
 ): void {
   if (usable.length > 0) return;
   const terminal =
@@ -1435,20 +1471,21 @@ async function fetchDiscoveryJson(
   }
 }
 
-// HTTP statuses that mean "this gateway simply does not serve /model/info". Anything else — 401,
-// 403, 429, 5xx — is the endpoint answering with a real problem and must NOT be papered over by
-// falling back to the mode-free /models list (AGENTS.md §7: no silent failures).
-const MODEL_INFO_ABSENT_STATUSES: ReadonlySet<number> = new Set([400, 404, 405, 501]);
-
-function modelInfoEndpointIsAbsent(cause: unknown): boolean {
-  const status = (cause as { httpStatus?: unknown } | null)?.httpStatus;
-  if (typeof status === "number") return MODEL_INFO_ABSENT_STATUSES.has(status);
-  // Only ONE discovery terminal is worth surfacing: the endpoint answered, Keiko understood every
-  // entry, and every one declared a mode with no lane. An empty or unparseable answer is simply
-  // not this gateway's enrichment endpoint — fall back to /models, exactly as before, or a
-  // gateway whose /model/info exists but lists nothing would stop setting up at all.
-  const code = (cause as { discoveryCode?: unknown } | null)?.discoveryCode;
-  return code !== "DISCOVERY_ALL_ENTRIES_UNSUPPORTED";
+// `/model/info` is a LiteLLM management route. Plenty of healthy deployments refuse it — an
+// ingress that exposes only /v1/*, a virtual key without management scope, a rate-limited proxy —
+// and they have always set up fine by degrading to the mode-free /models list. Losing mode
+// enrichment is not a silent failure: a genuinely bad credential still fails the chat smoke test
+// loudly. So EVERY transport or HTTP outcome falls back, exactly as before.
+//
+// Exactly one outcome must NOT fall back: the endpoint answered, Keiko understood every entry, and
+// every one declared a mode with no lane. Falling back there would re-read the same models from
+// /models WITHOUT their declarations and hand them to the id heuristic — resurrecting the very
+// misclassification this change exists to prevent.
+function modelInfoAnswerIsUnusable(cause: unknown): boolean {
+  return (
+    (cause as { discoveryCode?: unknown } | null)?.discoveryCode ===
+    "DISCOVERY_ALL_ENTRIES_UNSUPPORTED"
+  );
 }
 
 async function discoverLiteLlmModelInfo(
@@ -1457,22 +1494,15 @@ async function discoverLiteLlmModelInfo(
   apiKeyHeaderName: string,
   egress?: GatewayEgressConfig,
 ): Promise<GatewayDiscoveredModels | undefined> {
-  let lastRealFailure: unknown;
   for (const endpoint of modelInfoEndpointCandidates(baseUrl)) {
     try {
       return parseModelDiscovery(
         await fetchDiscoveryJson(endpoint, apiKey, apiKeyHeaderName, egress),
       );
     } catch (cause) {
-      // /model/info is a LiteLLM-specific enrichment endpoint. Absent => continue with
-      // OpenAI-compatible /models discovery. Present but unusable ("every entry declared an
-      // unsupported mode") => surface it: falling back would silently discard the declarations
-      // the whole classification depends on.
-      if (!modelInfoEndpointIsAbsent(cause)) lastRealFailure = cause;
+      if (modelInfoAnswerIsUnusable(cause) && cause instanceof Error) throw cause;
     }
   }
-  if (lastRealFailure instanceof Error) throw lastRealFailure;
-  if (lastRealFailure !== undefined) throw new Error("model discovery failed");
   return undefined;
 }
 
@@ -1818,26 +1848,51 @@ async function defaultGatewaySetupTester(
 // on CPU-served hardware four inputs per model would make setup crawl.
 const EMBEDDING_PROBE_INPUT = "Keiko embedding setup probe";
 
+// One embedding request against the model, using the SAME endpoint protocol the provider will
+// persist with — an Azure deployment path must not be probed at the OpenAI-compatible URL, or the
+// probe measures a 404 that production would never see.
+async function embedOnceForProbe(
+  provider: ModelProviderConfig,
+  modelId: string,
+): Promise<OpenAIEmbeddingOutcome> {
+  return requestOpenAIEmbedding({
+    endpoint: provider.baseUrl,
+    apiKey: provider.apiKey,
+    ...(provider.apiKeyHeaderName !== undefined
+      ? { apiKeyHeaderName: provider.apiKeyHeaderName }
+      : {}),
+    ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
+    ...(provider.endpointStyle !== undefined ? { endpointStyle: provider.endpointStyle } : {}),
+    ...(provider.apiVersion !== undefined ? { apiVersion: provider.apiVersion } : {}),
+    modelId,
+    input: EMBEDDING_PROBE_INPUT,
+    timeoutMs: provider.timeoutMs,
+  });
+}
+
+// Transient kinds get exactly ONE retry, matching the chat lane's `maxRetries: 1`: a single
+// rate-limit or cold-start blip must not permanently exclude a working embedding model, and
+// requestOpenAIEmbedding is a bare transport that does no retrying of its own.
+const RETRYABLE_PROBE_KINDS: ReadonlySet<string> = new Set([
+  "rate-limited",
+  "timeout",
+  "transport",
+]);
+
 async function defaultGatewayEmbeddingProbe(
   config: GatewayConfig,
   candidateModelIds: readonly string[],
+  failures?: ProbeFailureEvidence[],
 ): Promise<readonly string[]> {
   return passingCandidates(
     candidateModelIds,
     async (modelId) => {
       const provider = config.providers.find((entry) => entry.modelId === modelId);
       if (provider === undefined) throw new Error("embedding candidate has no provider entry");
-      const outcome = await requestOpenAIEmbedding({
-        endpoint: provider.baseUrl,
-        apiKey: provider.apiKey,
-        ...(provider.apiKeyHeaderName !== undefined
-          ? { apiKeyHeaderName: provider.apiKeyHeaderName }
-          : {}),
-        ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
-        modelId,
-        input: EMBEDDING_PROBE_INPUT,
-        timeoutMs: provider.timeoutMs,
-      });
+      let outcome = await embedOnceForProbe(provider, modelId);
+      if (!outcome.ok && RETRYABLE_PROBE_KINDS.has(outcome.kind)) {
+        outcome = await embedOnceForProbe(provider, modelId);
+      }
       if (!outcome.ok || outcome.value.vector.length === 0) {
         // Carry the classified status so an all-rejected aggregate keeps its specific guidance
         // (wrong credential, rate limit) instead of collapsing into a generic failure.
@@ -1847,6 +1902,7 @@ async function defaultGatewayEmbeddingProbe(
       }
     },
     SETUP_SMOKE_CONCURRENCY,
+    failures,
   );
 }
 
@@ -4093,8 +4149,10 @@ interface VerifiedSetup {
   readonly skippedModelIds: readonly string[];
   /** Recognised models the gateway declared as a mode Keiko has no lane for. */
   readonly unsupportedModels?: readonly GatewayUnsupportedDiscoveredModel[];
-  /** Stored embedding models retained despite a failed setup probe (A3b). */
+  /** Explicitly asserted embedding models kept despite a failed setup probe — still configured. */
   readonly unverifiedEmbeddingModelIds?: readonly string[];
+  /** Inferred embedding models removed because they could not answer an embedding request. */
+  readonly droppedEmbeddingModelIds?: readonly string[];
 }
 
 interface SetupVerificationInput {
@@ -4573,7 +4631,10 @@ function reportDiscoveryTruncation(
 
 interface EmbeddingAdmission {
   readonly admitted: readonly string[];
-  readonly unverified: readonly string[];
+  /** Failed the probe but stays configured, because its role was explicitly asserted. */
+  readonly retainedUnverified: readonly string[];
+  /** Failed the probe and is NOT configured — Keiko had only inferred the role. */
+  readonly droppedUnverified: readonly string[];
 }
 
 function probeConfigForModels(
@@ -4617,19 +4678,23 @@ async function admitEmbeddingCandidates(
   probeConfig: GatewayConfig,
   candidates: readonly string[],
 ): Promise<EmbeddingAdmission> {
-  if (candidates.length === 0) return { admitted: candidates, unverified: [] };
-  // Probe-gating applies only to models Keiko INFERRED. An id the operator named explicitly
-  // (deployment names, an uploaded config) or that is already stored is an operator statement:
-  // it is reported as unverified, never silently removed.
-  const asserted = new Set([
-    ...input.storedEmbeddingModelIds,
-    ...input.submittedEmbeddingModelIds,
-    ...(input.deploymentNames.length > 0 ? candidates : []),
-  ]);
+  if (candidates.length === 0) {
+    return { admitted: candidates, retainedUnverified: [], droppedUnverified: [] };
+  }
+  // Probe-gating applies to every model whose ROLE Keiko inferred. Only an explicit ROLE assertion
+  // is exempt: a stored embedding capability, or an embedding id the client asserted. Deployment
+  // NAMES are deliberately NOT exempt — naming a deployment states its identity, not its role; the
+  // role there still comes from Keiko's own id heuristic, which is exactly what the probe corrects.
+  const asserted = new Set([...input.storedEmbeddingModelIds, ...input.submittedEmbeddingModelIds]);
   const answered = new Set(await input.embeddingProbe(probeConfig, candidates));
   const admitted = candidates.filter((id) => answered.has(id) || asserted.has(id));
-  const unverified = candidates.filter((id) => !answered.has(id));
-  return { admitted, unverified };
+  // Split the failures: an asserted model stays configured and is flagged; an inferred one is gone.
+  const failed = candidates.filter((id) => !answered.has(id));
+  return {
+    admitted,
+    retainedUnverified: failed.filter((id) => asserted.has(id)),
+    droppedUnverified: failed.filter((id) => !asserted.has(id)),
+  };
 }
 
 // Body-free counterpart to reportDiscoveryTruncation: counts and reason codes only, never a model
@@ -4638,9 +4703,11 @@ async function admitEmbeddingCandidates(
 function reportUnusableDiscoveredModels(
   diagnostics: ServerDiagnosticSink | undefined,
   unsupported: readonly GatewayUnsupportedDiscoveredModel[],
-  unverifiedEmbeddingCount: number,
+  admission: EmbeddingAdmission,
 ): void {
-  if (unsupported.length === 0 && unverifiedEmbeddingCount === 0) return;
+  const retained = admission.retainedUnverified.length;
+  const dropped = admission.droppedUnverified.length;
+  if (unsupported.length === 0 && retained === 0 && dropped === 0) return;
   emitServerDiagnostic(diagnostics, {
     correlationId: randomUUID(),
     timestamp: new Date().toISOString(),
@@ -4651,8 +4718,11 @@ function reportUnusableDiscoveredModels(
       "Setup skipped models the gateway declared as unsupported modes or that failed the embedding probe.",
     code: "GATEWAY_DISCOVERY_UNUSABLE_MODELS",
     unsupportedModelCount: unsupported.length,
-    unsupportedReasons: [...new Set(unsupported.map((entry) => entry.reason))].sort(),
-    unverifiedEmbeddingModelCount: unverifiedEmbeddingCount,
+    unsupportedReasons: [...new Set(unsupported.map((entry) => entry.reason))].sort((a, b) =>
+      a.localeCompare(b),
+    ),
+    unverifiedEmbeddingModelCount: retained,
+    droppedEmbeddingModelCount: dropped,
   });
 }
 
@@ -4684,7 +4754,7 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
   reportUnusableDiscoveredModels(
     input.diagnostics,
     candidateModels.unsupportedModels ?? [],
-    embeddingAdmission.unverified.length,
+    embeddingAdmission,
   );
   const rawConfigWithOptionalBlocks = finalRawConfigForTestedSetup(
     input,
@@ -4724,8 +4794,11 @@ function verifiedSetupResult(
     ...(candidateModels.unsupportedModels !== undefined
       ? { unsupportedModels: candidateModels.unsupportedModels }
       : {}),
-    ...(embeddingAdmission.unverified.length > 0
-      ? { unverifiedEmbeddingModelIds: embeddingAdmission.unverified }
+    ...(embeddingAdmission.retainedUnverified.length > 0
+      ? { unverifiedEmbeddingModelIds: embeddingAdmission.retainedUnverified }
+      : {}),
+    ...(embeddingAdmission.droppedUnverified.length > 0
+      ? { droppedEmbeddingModelIds: embeddingAdmission.droppedUnverified }
       : {}),
   };
 }
@@ -4830,6 +4903,7 @@ function recordGatewaySetupAudit(
 interface SetupDiscoveryReport {
   readonly unsupportedModels?: readonly GatewayUnsupportedDiscoveredModel[];
   readonly unverifiedEmbeddingModelIds?: readonly string[];
+  readonly droppedEmbeddingModelIds?: readonly string[];
 }
 
 function setupSuccessResult(
@@ -4853,6 +4927,9 @@ function setupSuccessResult(
         : {}),
       ...(discoveryReport.unverifiedEmbeddingModelIds !== undefined
         ? { unverifiedEmbeddingModelIds: discoveryReport.unverifiedEmbeddingModelIds }
+        : {}),
+      ...(discoveryReport.droppedEmbeddingModelIds !== undefined
+        ? { droppedEmbeddingModelIds: discoveryReport.droppedEmbeddingModelIds }
         : {}),
       providerCount: config.providers.length,
       models: listConfiguredCapabilities(config),
@@ -5079,7 +5156,17 @@ function finalizeVerifiedCandidate(
     ...(verified.unverifiedEmbeddingModelIds !== undefined
       ? { unverifiedEmbeddingModelIds: verified.unverifiedEmbeddingModelIds }
       : {}),
+    ...(verified.droppedEmbeddingModelIds !== undefined
+      ? { droppedEmbeddingModelIds: verified.droppedEmbeddingModelIds }
+      : {}),
   });
+}
+
+/** The three injectable gateway seams, travelling together so the candidate loop stays readable. */
+interface SetupSeams {
+  readonly tester: GatewaySetupTester;
+  readonly discovery: GatewayModelDiscovery;
+  readonly embeddingProbe: GatewayEmbeddingProbe;
 }
 
 async function trySetupCandidate(
@@ -5087,13 +5174,11 @@ async function trySetupCandidate(
   request: SetupRequest,
   deps: UiHandlerDeps,
   gatewayConfig: RuntimeGatewayConfig,
-  tester: GatewaySetupTester,
-  discovery: GatewayModelDiscovery,
+  seams: SetupSeams,
   current: GatewayConfig | undefined,
-  embeddingProbe: GatewayEmbeddingProbe,
 ): Promise<RouteResult> {
   const verified = await verifySetupCandidate({
-    embeddingProbe,
+    embeddingProbe: seams.embeddingProbe,
     preserveExisting: request.preserveExisting,
     baseUrl,
     apiKey: request.apiKey,
@@ -5114,8 +5199,8 @@ async function trySetupCandidate(
       ? request.workflowEligibleModelIds
       : undefined,
     voiceProviders: request.voiceProviders,
-    tester,
-    discovery,
+    tester: seams.tester,
+    discovery: seams.discovery,
     env: deps.env,
     egress: egressForCandidateValidation(deps),
     figmaAccessToken: request.figmaAccessToken,
@@ -5426,9 +5511,11 @@ async function verifyAndSaveGatewaySetup(
   deps: UiHandlerDeps,
   gatewayConfig: RuntimeGatewayConfig,
 ): Promise<RouteResult> {
-  const tester = gatewaySetupTester(deps);
-  const embeddingProbe = gatewayEmbeddingProbe(deps);
-  const discovery = deps.gatewayModelDiscovery ?? defaultGatewayModelDiscovery;
+  const seams: SetupSeams = {
+    tester: gatewaySetupTester(deps),
+    embeddingProbe: gatewayEmbeddingProbe(deps),
+    discovery: deps.gatewayModelDiscovery ?? defaultGatewayModelDiscovery,
+  };
   const figmaFailure = await verifySubmittedFigmaCredential(request, deps);
   if (figmaFailure !== undefined) {
     return figmaFailure;
@@ -5440,16 +5527,7 @@ async function verifyAndSaveGatewaySetup(
   const errors: string[] = [];
   for (const baseUrl of baseUrlCandidates) {
     try {
-      return await trySetupCandidate(
-        baseUrl,
-        request,
-        deps,
-        gatewayConfig,
-        tester,
-        discovery,
-        current,
-        embeddingProbe,
-      );
+      return await trySetupCandidate(baseUrl, request, deps, gatewayConfig, seams, current);
     } catch (error) {
       reportSetupVerificationFailure(
         deps,

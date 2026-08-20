@@ -28,6 +28,9 @@ import {
   selectSpeechOutputCapability,
   VOICE_PERSONAS,
   VOICE_PROVIDER_LOCALITIES,
+  DECLARED_MODEL_MODES,
+  isChatCompatibleDeclaredMode,
+  modelKindForDeclaredMode,
 } from "./gateway.js";
 import type {
   CompletionModelSelection,
@@ -498,5 +501,61 @@ describe("preferredConversationModelOrder", () => {
     const snapshot = models.map((model) => model.id);
     void preferredConversationModelOrder(models);
     expect(models.map((model) => model.id)).toEqual(snapshot);
+  });
+});
+
+describe("modelKindForDeclaredMode", () => {
+  // A gateway's declared mode is the ONLY affirmative statement it makes about what a model IS.
+  // Keiko is model-agnostic: customers host arbitrary models, so a name may express a preference
+  // but never a role. Field incident: a "rerank" model named bge-reranker-v2-m3 was bound to every
+  // Knowledge Pod as its embedding model because the id contained "bge".
+  it("maps every chat-compatible mode onto chat", () => {
+    for (const mode of ["chat", "completion", "responses"]) {
+      expect(modelKindForDeclaredMode(mode)).toBe("chat");
+      expect(isChatCompatibleDeclaredMode(mode)).toBe(true);
+    }
+  });
+
+  it("maps the embedding mode onto embedding, and nothing else does", () => {
+    expect(modelKindForDeclaredMode("embedding")).toBe("embedding");
+    expect(isChatCompatibleDeclaredMode("embedding")).toBe(false);
+  });
+
+  it("refuses to give a role to modes discovery cannot configure", () => {
+    for (const mode of [
+      "rerank",
+      "image_generation",
+      "audio_transcription",
+      "audio_speech",
+      "moderation",
+    ]) {
+      expect(modelKindForDeclaredMode(mode)).toBe("unsupported");
+    }
+  });
+
+  it("treats an UNRECOGNISED declaration as unsupported, never as chat", () => {
+    // Guessing from the id here is exactly what the table exists to prevent: the gateway said the
+    // model is something specific, and Keiko does not know that something.
+    expect(modelKindForDeclaredMode("realtime")).toBe("unsupported");
+    expect(modelKindForDeclaredMode("vendor-private-mode")).toBe("unsupported");
+    expect(modelKindForDeclaredMode("")).toBe("unsupported");
+  });
+
+  it("normalises casing and surrounding whitespace", () => {
+    expect(modelKindForDeclaredMode("  EMBEDDING ")).toBe("embedding");
+    expect(modelKindForDeclaredMode("Chat")).toBe("chat");
+  });
+
+  it("does not resolve inherited object properties as modes", () => {
+    expect(modelKindForDeclaredMode("constructor")).toBe("unsupported");
+    expect(modelKindForDeclaredMode("toString")).toBe("unsupported");
+  });
+
+  it("covers every mode the exported vocabulary names", () => {
+    // Derived from the producer, never restated: a mode added to the union without a role here
+    // fails the compile, and this pin proves the exported list stays in step with the table.
+    for (const mode of DECLARED_MODEL_MODES) {
+      expect(["chat", "embedding", "unsupported"]).toContain(modelKindForDeclaredMode(mode));
+    }
   });
 });

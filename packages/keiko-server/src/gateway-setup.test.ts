@@ -4291,13 +4291,17 @@ describe("handleGatewaySetup", () => {
       evidenceDir,
       env: { ...VAULT_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
+      // Drives the REAL classifier: the payload declares a rerank model, and it is the classifier
+      // that must refuse it. Stubbing `unsupportedModels` here would assert the fixture instead.
       gatewayModelDiscovery: () =>
-        Promise.resolve({
-          modelIds: ["example-chat"],
-          chatModelIds: ["example-chat"],
-          embeddingModelIds: [],
-          unsupportedModels: [{ id: "house-reranker", reason: "rerank" }],
-        }),
+        Promise.resolve(
+          normalizeDiscoveryPayloadForSetup({
+            data: [
+              { model_name: "example-chat", model_info: { mode: "chat" } },
+              { model_name: "house-reranker", model_info: { mode: "rerank" } },
+            ],
+          }),
+        ),
       gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
       gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
     });
@@ -4312,6 +4316,144 @@ describe("handleGatewaySetup", () => {
       unsupportedModels: [{ id: "house-reranker", reason: "rerank" }],
     });
     deps.store.close();
+  });
+
+  it("keeps an embedding model whose role the operator asserted, even when its probe fails", async () => {
+    // A3b: a probe failure must never unpin a model an operator explicitly declared as an
+    // embedding model. A brief outage during a re-save would otherwise cut every working
+    // Knowledge Pod loose from its embedding space.
+    const uiDir = await tempDir("keiko-gw-ui-embed-retain-");
+    const evidenceDir = await tempDir("keiko-gw-ev-embed-retain-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () =>
+        Promise.resolve({
+          modelIds: ["example-chat", "asserted-vectorizer"],
+          chatModelIds: ["example-chat"],
+          embeddingModelIds: ["asserted-vectorizer"],
+        }),
+      // The endpoint answers nothing for the embedding candidate.
+      gatewayEmbeddingProbe: () => Promise.resolve([]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm-gateway.example.com",
+        apiKey: "example-secret-token",
+        embeddingModelIds: ["asserted-vectorizer"],
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId)).toContain(
+      "asserted-vectorizer",
+    );
+    expect(result.body).toMatchObject({ unverifiedEmbeddingModelIds: ["asserted-vectorizer"] });
+    deps.store.close();
+  });
+
+  it("keeps setting up when /model/info answers with an error status", async () => {
+    // Self-audit finding: a management route that answers 401/403/429/5xx is common (ingress rules,
+    // a virtual key without management scope, a rate-limited proxy). Those gateways set up fine by
+    // degrading to /models, and must keep doing so — only mode enrichment is lost, and a genuinely
+    // bad credential is still caught loudly by the chat smoke test.
+    const uiDir = await tempDir("keiko-gw-ui-modelinfo-401-");
+    const evidenceDir = await tempDir("keiko-gw-ev-modelinfo-401-");
+    const originalFetch = globalThis.fetch;
+    const fakeFetch: typeof fetch = (url, init) => {
+      const href = fetchInputUrl(url);
+      const embeddingProbeResponse = fakeEmbeddingProbeResponse(url);
+      if (embeddingProbeResponse !== undefined) return embeddingProbeResponse;
+      if (href.endsWith("/model/info")) {
+        return Promise.resolve(new Response("{}", { status: 403 }));
+      }
+      if (href.endsWith("/models")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: [{ id: "fallback-chat" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      void init;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 3, completion_tokens: 1 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    };
+    globalThis.fetch = fakeFetch;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...MOCK_FETCH_EGRESS_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expect(currentGatewayConfig(deps)?.providers.map((p) => p.modelId)).toEqual([
+        "fallback-chat",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      deps.store.close();
+    }
+  });
+
+  it("keeps embedding models that merely declare chat_completion: false", () => {
+    // Self-audit finding: making the classifier strict dropped these. `chat_completion: false`
+    // states what a model is NOT, which is not a role — an embedding model legitimately carries it.
+    expect(
+      normalizeDiscoveryPayloadForSetup({
+        data: [
+          { id: "house-chat" },
+          { id: "text-embedding-house", capabilities: { chat_completion: false } },
+        ],
+      }),
+    ).toMatchObject({
+      chatModelIds: ["house-chat"],
+      embeddingModelIds: ["text-embedding-house"],
+    });
+  });
+
+  it("lets a usable duplicate win over an unsupported entry with the same id", () => {
+    // A LiteLLM model_name is a routing alias that can front several deployments. An unusable one
+    // listed first must not shadow the usable duplicate behind it.
+    expect(
+      normalizeDiscoveryPayloadForSetup({
+        data: [
+          { model_name: "shared-alias", model_info: { mode: "rerank" } },
+          { model_name: "shared-alias", model_info: { mode: "chat" } },
+        ],
+      }),
+    ).toMatchObject({ chatModelIds: ["shared-alias"] });
+  });
+
+  it("never lets unsupported models consume discovery-cap slots", () => {
+    // Self-audit finding: unsupported entries were partitioned AFTER the cap, so a gateway listing
+    // many audio/rerank endpoints first pushed its real chat models out of the configured set.
+    const unsupportedEntries = Array.from({ length: MAX_DISCOVERED_MODELS }, (_value, index) => ({
+      model_name: `speech-${String(index)}`,
+      model_info: { mode: "audio_speech" },
+    }));
+    const parsed = normalizeDiscoveryPayloadForSetup({
+      data: [...unsupportedEntries, { model_name: "late-chat", model_info: { mode: "chat" } }],
+    });
+    expect(parsed.chatModelIds).toEqual(["late-chat"]);
+    expect(parsed.truncated).toBeUndefined();
   });
 
   it("falls back to /models when /model/info exists but lists nothing usable", async () => {
