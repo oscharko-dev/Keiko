@@ -517,24 +517,66 @@ describe("batch failure that is not a clean shape rejection", () => {
   // The ladder budget is the runaway backstop. An exhausted budget must not start a probe it
   // cannot finish — that would turn one expired batch into N more expiring requests.
   it("does not probe when the ladder budget is already exhausted", async () => {
-    // Fails well after the whole ladder budget (3 items x 1ms) has expired, so the guard is
-    // reached deterministically rather than on a timing race.
-    const fetchImpl = vi.fn<typeof fetch>(
-      () =>
-        new Promise<Response>((_resolve, reject) => {
-          setTimeout(() => {
-            reject(new TypeError("socket hang up"));
-          }, 25);
-        }),
-    );
+    // The clock is driven, not waited on: the array attempt itself consumes more than the whole
+    // ladder budget, which is what an expired budget looks like in the field. No sleeping, no
+    // ordering race — the guard is reached on every run or not at all.
+    let clock = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    const fetchImpl = vi.fn<typeof fetch>(() => {
+      clock += ladderDeadlineMs(3, undefined) + 1;
+      return Promise.reject(new TypeError("socket hang up"));
+    });
+    const outcome = await requestOpenAIEmbeddingBatch(batchRequest(["a", "b", "c"], fetchImpl));
+    expect(outcome.ok).toBe(false);
+    // One array attempt and nothing else: a budget with no room left must not start a probe it
+    // cannot finish.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    vi.restoreAllMocks();
+  });
+
+  // A cancellation that lands AFTER the gateway answered never reaches the error classifier, so
+  // the failure still reads "http-error" while the caller is already gone. Checking only the
+  // failure kind would fire the probe into a cancelled run.
+  it("does not probe when the caller aborted after the failed array answer", async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn<typeof fetch>(() => {
+      controller.abort();
+      return Promise.resolve(jsonResponse({ error: { message: "internal error" } }, 500));
+    });
     const outcome = await requestOpenAIEmbeddingBatch({
       ...batchRequest(["a", "b", "c"], fetchImpl),
-      timeoutMs: 1,
+      signal: controller.signal,
     });
     expect(outcome.ok).toBe(false);
-    if (outcome.ok) return;
-    expect(outcome.kind).toBe("timeout");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  // The routing fields decide the URL. A deployment-style endpoint whose array attempt fails
+  // must probe the SAME deployment URL — a probe sent to the plain /embeddings path tests a
+  // different endpoint and can only report a false outage.
+  it("keeps deployment routing on the scalar probe", async () => {
+    const urls: string[] = [];
+    const fetchImpl = vi.fn<typeof fetch>((url, init) => {
+      urls.push(typeof url === "string" ? url : url instanceof URL ? url.href : url.url);
+      const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
+      if (Array.isArray(body.input)) {
+        return Promise.resolve(jsonResponse({ error: { message: "internal error" } }, 500));
+      }
+      return Promise.resolve(jsonResponse(SCALAR_OK));
+    });
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://contoso.openai.azure.test",
+      apiKey: "k",
+      modelId: "deployment-name",
+      inputs: ["a", "b"],
+      endpointStyle: "azure-openai-deployment",
+      apiVersion: "2024-02-01",
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(true);
+    expect(urls).toHaveLength(3);
+    expect(urls.every((url) => url.includes("/openai/deployments/deployment-name/"))).toBe(true);
+    expect(urls.every((url) => url.includes("api-version=2024-02-01"))).toBe(true);
   });
 
   // A throttle is the one failure that says nothing about the shape. Serving this batch item

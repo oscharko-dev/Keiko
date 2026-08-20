@@ -47,18 +47,19 @@ const CAPSULE_ID = "cap-gateway-compat" as KnowledgeCapsuleId;
 const SOURCE_ID = "src-gateway-compat" as KnowledgeSourceId;
 // Deliberately not a real model name: the behaviour under test is the gateway's, and no
 // heuristic may be able to shortcut it.
-const MODEL_ID = "beliebiges-embedding-modell";
+const MODEL_ID = "arbitrary-embedding-model";
 const SERVED_DIMENSIONS = 1024;
 // What the capsule is created with. Not the width this gateway serves.
 const GUESSED_DIMENSIONS = 1536;
 
-// The strict-shape memo is keyed by endpoint and lives for the process, so each test needs a
-// distinct one or it would inherit the previous test's learned behaviour.
-let endpointCounter = 0;
-function freshEndpoint(): string {
-  endpointCounter += 1;
-  return `https://siu.llm.intern/v${String(endpointCounter)}`;
-}
+// The strict-shape memo in the adapter is keyed by endpoint and lives for the process, so each
+// test names its OWN endpoint. Deriving them from a shared counter would make what a test
+// inherits depend on execution order.
+const ENDPOINTS = {
+  completesRun: "https://gateway.test/completes-run",
+  adoptsWidth: "https://gateway.test/adopts-width",
+  stopsSendingArrays: "https://gateway.test/stops-sending-arrays",
+} as const;
 
 function jsonResponse(payload: unknown, status: number): Response {
   return new Response(JSON.stringify(payload), {
@@ -139,8 +140,8 @@ function buildFixture(): Fixture {
   });
   const fs = memoryFs(ROOT, [
     {
-      relativePath: "fachkonzept.md",
-      content: "Girokonto und Zahlungsverkehr, Abschnitt zur Kontofuehrung. ".repeat(400),
+      relativePath: "specification.md",
+      content: "Current account and payment traffic, section on account management. ".repeat(400),
     },
   ]);
   return { store, cleanup, fs };
@@ -152,13 +153,17 @@ async function drain(stream: AsyncIterable<IndexingEvent>): Promise<readonly Ind
   return out;
 }
 
-function runAgainst(fixture: Fixture, fetchImpl: typeof fetch): Promise<readonly IndexingEvent[]> {
+function runAgainst(
+  fixture: Fixture,
+  fetchImpl: typeof fetch,
+  endpoint: string,
+): Promise<readonly IndexingEvent[]> {
   return drain(
     runIndexingJob({
       capsuleId: CAPSULE_ID,
       parserRegistry: createDefaultParserRegistry(),
       workspaceFs: fixture.fs,
-      embeddingAdapter: adapterOver(fetchImpl, freshEndpoint()),
+      embeddingAdapter: adapterOver(fetchImpl, endpoint),
       store: fixture.store,
     }),
   );
@@ -184,7 +189,7 @@ describe("indexing against a gateway that serves single inputs and fails arrays"
 
   it("completes the run and persists vectors", async () => {
     const fetchImpl = customerGatewayFetch();
-    const events = await runAgainst(fixture, fetchImpl);
+    const events = await runAgainst(fixture, fetchImpl, ENDPOINTS.completesRun);
 
     expect(countVectorsForCapsule(fixture.store._internal.db, CAPSULE_ID)).toBeGreaterThan(0);
     const completed = events.find((evt) => evt.kind === "job-completed");
@@ -196,7 +201,7 @@ describe("indexing against a gateway that serves single inputs and fails arrays"
   });
 
   it("adopts the width the gateway actually serves instead of the creation-time guess", async () => {
-    await runAgainst(fixture, customerGatewayFetch());
+    await runAgainst(fixture, customerGatewayFetch(), ENDPOINTS.adoptsWidth);
 
     const identity = getCapsule(fixture.store, CAPSULE_ID)?.embeddingModelIdentity;
     expect(identity?.vectorDimensions).toBe(SERVED_DIMENSIONS);
@@ -205,7 +210,7 @@ describe("indexing against a gateway that serves single inputs and fails arrays"
 
   it("stops sending arrays once the gateway has failed one", async () => {
     const fetchImpl = customerGatewayFetch();
-    await runAgainst(fixture, fetchImpl);
+    await runAgainst(fixture, fetchImpl, ENDPOINTS.stopsSendingArrays);
 
     const bodies = bodiesOf(fetchImpl);
     const arrayAttempts = bodies.filter((body) => Array.isArray(body.input));

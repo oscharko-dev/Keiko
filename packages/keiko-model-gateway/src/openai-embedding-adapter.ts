@@ -512,7 +512,16 @@ async function degradeToScalarAfterBatchFailure(
 ): Promise<OpenAIEmbeddingBatchOutcome> {
   // A caller-cancelled batch must not fire N more requests, a single-item batch has no array
   // shape to blame, and an exhausted budget has no room left to probe.
-  if (failure.kind === "cancelled" || request.inputs.length <= 1 || Date.now() >= deadlineAt) {
+  //
+  // The signal is checked in ADDITION to the kind: a cancellation that lands after the gateway
+  // already answered — while the failed body is being drained — never reaches the error
+  // classifier, so the failure still reads "http-error" while the caller is long gone.
+  if (
+    failure.kind === "cancelled" ||
+    request.signal?.aborted === true ||
+    request.inputs.length <= 1 ||
+    Date.now() >= deadlineAt
+  ) {
     return failure;
   }
   const scalar = await requestScalarFallbackBatch(request, deadlineAt);
@@ -620,6 +629,19 @@ function perItemTimeoutMs(request: OpenAIEmbeddingBatchRequest): number {
   return request.timeoutMs ?? 30_000;
 }
 
+// The routing fields decide the URL itself: an azure-openai-deployment request resolves to
+// /openai/deployments/<id>/embeddings?api-version=…. Dropping them on the scalar fallback sent
+// every probe to the plain /embeddings path — a DIFFERENT endpoint than the array attempt just
+// used, so the probe could only ever fail and report a false outage.
+function deploymentRouting(
+  request: OpenAIEmbeddingBatchRequest,
+): Partial<Pick<OpenAIEmbeddingRequest, "endpointStyle" | "apiVersion">> {
+  return {
+    ...(request.endpointStyle !== undefined ? { endpointStyle: request.endpointStyle } : {}),
+    ...(request.apiVersion !== undefined ? { apiVersion: request.apiVersion } : {}),
+  };
+}
+
 // The complete-ladder budget scales with the WORK: the scalar fallback serves one item per
 // request, so a flat per-batch budget expires mid-batch on slow strict gateways, the batcher
 // retries the transient timeout, and every retry discards the partial progress — indexing
@@ -660,6 +682,7 @@ async function requestScalarFallbackBatch(
         : {}),
       modelId: request.modelId,
       input,
+      ...deploymentRouting(request),
       ...(request.dimensions !== undefined ? { dimensions: request.dimensions } : {}),
       ...(request.signal !== undefined ? { signal: request.signal } : {}),
       timeoutMs: Math.min(remainingMs, perItemTimeoutMs(request)),
