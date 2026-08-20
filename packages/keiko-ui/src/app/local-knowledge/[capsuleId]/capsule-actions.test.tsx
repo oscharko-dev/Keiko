@@ -783,6 +783,45 @@ describe("CapsuleActions — refresh action", () => {
     });
   });
 
+  it("settles a fast id-less run on identity difference, never on an observed running row", async () => {
+    // Review finding on #3221 (round 2): a repository-pod start pins no job id, and a fast run
+    // can finish BETWEEN two polls — no poll ever observes it running. The watch settles on
+    // identity: a terminal row whose id differs from the newest row that predated the click is
+    // the new run. The stale row itself (same id) must keep the panel busy.
+    const user = userEvent.setup();
+    const startIndexingImpl = vi
+      .fn<() => Promise<CapsuleActionResponse>>()
+      .mockResolvedValue({ ok: true, capsuleId: DEFAULT_ID });
+    // First polls: only the PREVIOUS run's terminal row (id job-1) — must not settle.
+    const fetchCapsuleDetailImpl = vi.fn().mockResolvedValue(terminalDetail("succeeded"));
+    const onActionComplete = vi.fn();
+
+    render(
+      <CapsuleActions
+        {...defaultProps({
+          fetchCapsuleDetailImpl,
+          latestJobId: "job-1",
+          lifecycleState: "draft",
+          onActionComplete,
+          startIndexingImpl,
+          pollIntervalMs: 25,
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /index this Knowledge Pod now/i }));
+    await waitFor(() => {
+      expect(fetchCapsuleDetailImpl.mock.calls.length).toBeGreaterThan(2);
+    });
+    expect(onActionComplete).not.toHaveBeenCalled();
+
+    // The new run's terminal row appears with a DIFFERENT id — never observed running.
+    fetchCapsuleDetailImpl.mockResolvedValue(terminalDetail("succeeded", { id: "job-9" }));
+    await waitFor(() => {
+      expect(onActionComplete).toHaveBeenCalledOnce();
+    });
+  });
+
   it("re-attaches to a running job on mount and surfaces a failed terminal state", async () => {
     // Re-attach pin: a page reload during a multi-hour run (the run survives any transport
     // blip server-side) must show live progress again WITHOUT a click — and a failed job must

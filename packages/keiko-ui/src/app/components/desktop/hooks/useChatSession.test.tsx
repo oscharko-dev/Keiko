@@ -544,6 +544,59 @@ describe("useChatSession bootstrap", () => {
     });
   });
 
+  it("keeps an elected selection automatic across a chat upsert of the same model", async () => {
+    // Review finding on #3221 (round 2): the server persists the ELECTED model on an
+    // auto-created chat, so the next upsert of that chat (title rename, message PATCH echo)
+    // used to launder the elected default into a \"deliberate\" selection — the following
+    // create then sent an explicit modelId, bypassing the server's bounded walk.
+    const created = chat({
+      id: "chat-created",
+      title: "New chat",
+      updatedAt: 30,
+      selectedModel: "chat-live",
+    });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    vi.mocked(createDesktopChat).mockResolvedValue({
+      chat: created,
+      project: project("/repo"),
+      projects: [project("/repo")],
+      chats: [created],
+      messages: [],
+    });
+
+    const { result } = renderHook(() => useChatSession());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.activeChat?.id).toBe("chat-created");
+
+    // An upsert echo of the SAME chat with the SAME persisted (elected) model id.
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("keiko:chat-upsert", { detail: { ...created, title: "Renamed" } }),
+      );
+    });
+
+    vi.mocked(createDesktopChat).mockClear();
+    const next = chat({ id: "chat-next", title: "New chat", updatedAt: 40 });
+    vi.mocked(createDesktopChat).mockResolvedValue({
+      chat: next,
+      project: project("/repo"),
+      projects: [project("/repo")],
+      chats: [next, created],
+      messages: [],
+    });
+    await act(async () => {
+      await result.current.openNewChat();
+    });
+
+    // Still automatic: the create omits modelId.
+    expect(createDesktopChat).toHaveBeenCalledWith({
+      title: "New chat",
+      projectPath: "/repo",
+    });
+  });
+
   it("returns a persisted chat without replacing a project selected during creation", async (): Promise<void> => {
     const created = chat({
       id: "chat-created-in-background",

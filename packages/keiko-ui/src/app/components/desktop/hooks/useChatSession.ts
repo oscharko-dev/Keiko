@@ -1487,6 +1487,9 @@ interface SessionState {
   // selection) rather than chosen by the user or carried by the chat's persisted record.
   // Creates built from an elected selection omit modelId (review finding on #3221).
   selectedModelElected: boolean;
+  // Provenance of restorableModelId — carried through the pending-refresh cycle so a restored
+  // ELECTED selection does not come back laundered as deliberate (review finding on #3221).
+  restorableModelElected: boolean;
   // The user's last deliberate model choice, remembered across a pending catalog refresh:
   // the pending clear must invalidate selectedModel synchronously (no stale id is sendable
   // mid-refresh), but the success path restores this id when the refreshed catalog still
@@ -1521,14 +1524,25 @@ function sessionAfterChatCreate(
     selectedModelElected: !preservedSelection,
     // A freshly created chat starts a new selection scope: no pending-refresh memo.
     restorableModelId: undefined,
+    restorableModelElected: false,
   };
 }
 
 function applyChatUpsert(previous: SessionState, chat: Chat): SessionState {
   if (!chatBelongsToSessionCatalog(previous, chat)) return previous;
+  const resolved = resolveSelection(chat.selectedModel, previous.models);
+  // An upsert that resolves to the id the session already shows carries no new provenance —
+  // keep ours. Without this, the server-persisted record of an AUTOMATIC creation laundered
+  // the elected default into a "deliberate" choice on the next upsert (review finding, #3221).
   const selection =
     previous.activeChat?.id === chat.id
-      ? resolveSelection(chat.selectedModel, previous.models)
+      ? {
+          id: resolved.id,
+          elected:
+            resolved.id === previous.selectedModel
+              ? previous.selectedModelElected
+              : resolved.elected,
+        }
       : { id: previous.selectedModel, elected: previous.selectedModelElected };
   return {
     ...previous,
@@ -1563,6 +1577,7 @@ const INITIAL_STATE: SessionState = {
   activeChat: undefined,
   selectedModel: undefined,
   selectedModelElected: false,
+  restorableModelElected: false,
   restorableModelId: undefined,
 };
 
@@ -2045,9 +2060,12 @@ function refreshSessionModels(
   const remembered = previous.selectedModel ?? previous.restorableModelId;
   const selection = resolveSelection(remembered, models);
   // Provenance survives a refresh that keeps the id: a live selection keeps its own flag, a
-  // restored pending memo is by definition deliberate, and a freshly elected fallback is not.
+  // restored pending memo carries the flag it was remembered with, and a freshly elected
+  // fallback is elected regardless.
   const keptProvenance =
-    previous.selectedModel !== undefined ? previous.selectedModelElected : false;
+    previous.selectedModel !== undefined
+      ? previous.selectedModelElected
+      : previous.restorableModelElected;
   const selectedModelElected = selection.elected || keptProvenance;
   return {
     ...previous,
@@ -2065,12 +2083,16 @@ function refreshSessionModels(
 function selectionForChatSwitch(
   persistedModelId: string | undefined,
   models: readonly ModelCapability[],
-): Pick<SessionState, "selectedModel" | "selectedModelElected" | "restorableModelId"> {
+): Pick<
+  SessionState,
+  "selectedModel" | "selectedModelElected" | "restorableModelId" | "restorableModelElected"
+> {
   const selection = resolveSelection(persistedModelId, models);
   return {
     selectedModel: selection.id,
     selectedModelElected: selection.elected,
     restorableModelId: persistedModelId,
+    restorableModelElected: false,
   };
 }
 
@@ -2090,6 +2112,10 @@ function clearSessionModelsForPendingRefresh(previous: SessionState): SessionSta
     selectedModel: undefined,
     selectedModelElected: false,
     restorableModelId: previous.selectedModel ?? previous.restorableModelId,
+    restorableModelElected:
+      previous.selectedModel !== undefined
+        ? previous.selectedModelElected
+        : previous.restorableModelElected,
   };
 }
 

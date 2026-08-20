@@ -1697,6 +1697,9 @@ export function CapsuleDetail({
         contextualRebuildRequired={data.health.contextualRetrieval?.rebuildRequired ?? false}
         onActionComplete={reload}
         onDeleted={handleDeleted}
+        {...(data.indexingJobs[0]?.id !== undefined
+          ? { latestJobId: data.indexingJobs[0].id }
+          : {})}
       />
 
       {renderHtmlManualRefresh(capsuleId, data, reload)}

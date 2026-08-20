@@ -86,6 +86,12 @@ interface ProgressState {
   readonly observedRunning: boolean;
   /** True when this watch attached to an already-running capsule instead of starting one. */
   readonly reattached: boolean;
+  /**
+   * Newest job id the DETAIL page knew before the click. A click watch without a pinned 202 id
+   * (repository pods) settles on identity difference: a terminal row with ANOTHER id is the new
+   * run — even one that finished between two polls without ever being observed running.
+   */
+  readonly precedingJobId: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -161,7 +167,11 @@ function progressStyle(value: number): { readonly width: string } {
   return { width: formatPercent(value) };
 }
 
-function initialProgressState(now = Date.now(), reattached = false): ProgressState {
+function initialProgressState(
+  now = Date.now(),
+  reattached = false,
+  precedingJobId: string | null = null,
+): ProgressState {
   return {
     detail: null,
     startedAt: now,
@@ -170,6 +180,7 @@ function initialProgressState(now = Date.now(), reattached = false): ProgressSta
     watchedJobId: null,
     observedRunning: false,
     reattached,
+    precedingJobId,
   };
 }
 
@@ -257,15 +268,29 @@ function terminalJobOf(progress: ProgressState | null): IndexingJobRecord | unde
   return job === undefined || job.status === "running" ? undefined : job;
 }
 
+// Fallback settlement for a watch WITHOUT a pinned job id. A reattached watch settles once the
+// capsule stops reporting an in-flight run; a click watch settles on a terminal row whose id
+// DIFFERS from the newest row that predated the click (identity, never wall clocks) — covering
+// a repository-pod run so fast that no poll ever observed it running.
+function fallbackSettledJob(
+  progress: ProgressState,
+  job: IndexingJobRecord,
+): IndexingJobRecord | undefined {
+  if (progress.observedRunning) return job;
+  if (progress.reattached) {
+    const capsuleStillIndexing = progress.detail?.capsule.lifecycleState === "indexing";
+    return capsuleStillIndexing ? undefined : job;
+  }
+  return job.id !== progress.precedingJobId ? job : undefined;
+}
+
 function settledJobFor(progress: ProgressState | null): IndexingJobRecord | undefined {
   const job = terminalJobOf(progress);
   if (progress === null || job === undefined) return undefined;
   if (progress.watchedJobId !== null) {
     return job.id === progress.watchedJobId ? job : undefined;
   }
-  if (progress.observedRunning) return job;
-  const capsuleStillIndexing = progress.detail?.capsule.lifecycleState === "indexing";
-  return progress.reattached && !capsuleStillIndexing ? job : undefined;
+  return fallbackSettledJob(progress, job);
 }
 
 // Delete can return affected Knowledge Pod Sets (AUDIT-E1821-001); routes the completion to
@@ -1408,6 +1433,8 @@ export interface CapsuleActionsProps {
   readonly fetchCapsuleDetailImpl?: typeof fetchCapsuleDetail;
   /** Poll cadence for in-flight runs; injectable so tests drive the loop without real 2s waits. */
   readonly pollIntervalMs?: number;
+  /** Newest indexing-job id the detail page currently shows; anchors id-difference settlement. */
+  readonly latestJobId?: string;
 }
 
 export function CapsuleActions({
@@ -1428,6 +1455,7 @@ export function CapsuleActions({
   startIndexingImpl = startIndexing,
   fetchCapsuleDetailImpl = fetchCapsuleDetail,
   pollIntervalMs = 2_000,
+  latestJobId,
 }: CapsuleActionsProps): ReactNode {
   const t = useTranslate();
   const locale = useLocale();
@@ -1496,7 +1524,7 @@ export function CapsuleActions({
 
   async function handleIndex(): Promise<void> {
     if (indexBusy) return;
-    setProgress(initialProgressState());
+    setProgress(initialProgressState(Date.now(), false, latestJobId ?? null));
     setIndexBusy(true);
     setIndexError(null);
     try {
