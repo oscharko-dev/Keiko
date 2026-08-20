@@ -37,16 +37,18 @@ import {
   VOICE_PROVIDER_LOCALITIES,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
-  DECLARED_MODEL_MODES,
+  boundedUnsupportedReason,
   GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
   isChatCompatibleDeclaredMode,
   modelKindForDeclaredMode,
   validateGatewaySetupAuditRecord,
 } from "@oscharko-dev/keiko-contracts";
 import type {
+  GatewayModelUnsupportedReason,
   GatewaySetupAuditRecord,
   GatewaySetupOutcomeKind,
   GatewaySetupTargetClass,
+  GatewayUnsupportedDiscoveredModel,
 } from "@oscharko-dev/keiko-contracts";
 import {
   classifyOutboundHost,
@@ -68,7 +70,6 @@ import { errorBody } from "./routes.js";
 import type {
   GatewayDiscoveredModelMetadata,
   GatewayDiscoveredModels,
-  GatewayUnsupportedDiscoveredModel,
   GatewayModelDiscoveryOutput,
   GatewaySetupTestResult,
   RuntimeGatewayConfig,
@@ -1248,24 +1249,17 @@ interface ClassifiedDiscoveryModel {
   readonly supportsImageInput: boolean;
   readonly metadata: GatewayDiscoveredModelMetadata;
   /** Why the model is unsupported. Always present on an "unsupported" entry, absent otherwise. */
-  readonly reason?: string;
+  readonly reason?: GatewayModelUnsupportedReason;
 }
 
 /** Narrowed view of an entry the classifier marked unsupported: the reason is guaranteed. */
 interface UnsupportedDiscoveryModel extends ClassifiedDiscoveryModel {
   readonly kind: "unsupported";
-  readonly reason: string;
+  readonly reason: GatewayModelUnsupportedReason;
 }
 
 function isUnsupportedEntry(entry: ClassifiedDiscoveryModel): entry is UnsupportedDiscoveryModel {
   return entry.kind === "unsupported" && entry.reason !== undefined;
-}
-
-// Foreign mode strings never leave this function: a mode Keiko knows is echoed as itself, anything
-// else collapses to one fixed marker.
-function boundedDeclaredModeReason(declaredMode: string): string {
-  const known: readonly string[] = DECLARED_MODEL_MODES;
-  return known.includes(declaredMode) ? declaredMode : "unrecognised-mode";
 }
 
 // Classification WITHOUT a declaration: the id heuristic is all a `/models`-only gateway gives us.
@@ -1307,7 +1301,7 @@ function classifyDiscoveryItem(item: unknown): ClassifiedDiscoveryModel | undefi
       // The reason is drawn from a CLOSED vocabulary. A declared mode is gateway-controlled text of
       // unbounded shape; echoing it verbatim would put foreign strings into the diagnostic channel
       // and the setup response, which the redaction rules forbid.
-      const reason = boundedDeclaredModeReason(declaredMode);
+      const reason = boundedUnsupportedReason(declaredMode);
       return { id, kind: "unsupported", supportsImageInput: false, metadata, reason };
     }
     if (role === "embedding") {
@@ -1878,11 +1872,13 @@ const RETRYABLE_PROBE_KINDS: ReadonlySet<string> = new Set([
   "timeout",
   "transport",
 ]);
+// An immediate retry against a gateway that just answered 429 answers 429 again, so it would burn a
+// request and change nothing. One short pause, matching the chat lane's backoff base.
+const EMBEDDING_PROBE_RETRY_DELAY_MS = 500;
 
 async function defaultGatewayEmbeddingProbe(
   config: GatewayConfig,
   candidateModelIds: readonly string[],
-  failures?: ProbeFailureEvidence[],
 ): Promise<readonly string[]> {
   return passingCandidates(
     candidateModelIds,
@@ -1891,18 +1887,17 @@ async function defaultGatewayEmbeddingProbe(
       if (provider === undefined) throw new Error("embedding candidate has no provider entry");
       let outcome = await embedOnceForProbe(provider, modelId);
       if (!outcome.ok && RETRYABLE_PROBE_KINDS.has(outcome.kind)) {
+        await new Promise((resolve) => setTimeout(resolve, EMBEDDING_PROBE_RETRY_DELAY_MS));
         outcome = await embedOnceForProbe(provider, modelId);
       }
+      // The per-model verdict is what the operator acts on, and it travels in
+      // droppedEmbeddingModelIds / unverifiedEmbeddingModelIds. passingCandidates drops the
+      // rejection, which is the intended contract here: a failed candidate is not admitted.
       if (!outcome.ok || outcome.value.vector.length === 0) {
-        // Carry the classified status so an all-rejected aggregate keeps its specific guidance
-        // (wrong credential, rate limit) instead of collapsing into a generic failure.
-        throw Object.assign(new Error("embedding probe returned no usable vector"), {
-          ...(!outcome.ok && outcome.status !== undefined ? { httpStatus: outcome.status } : {}),
-        });
+        throw new Error("embedding probe returned no usable vector");
       }
     },
     SETUP_SMOKE_CONCURRENCY,
-    failures,
   );
 }
 
@@ -4747,15 +4742,17 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
     ...candidateModels,
     embeddingModelIds: embeddingAdmission.admitted,
   };
-  const testResult = normalizeSetupTestResult(
-    await input.tester(candidateConfig, candidateModels.chatModelIds),
-  );
-  assertImageInputModelsWereTested(input.imageInputModelIds, testResult.testedModelIds);
+  // Emitted BEFORE the chat smoke test: the tester throws on an all-rejected gateway, and the
+  // record of what discovery refused is most valuable for exactly that failed attempt.
   reportUnusableDiscoveredModels(
     input.diagnostics,
     candidateModels.unsupportedModels ?? [],
     embeddingAdmission,
   );
+  const testResult = normalizeSetupTestResult(
+    await input.tester(candidateConfig, candidateModels.chatModelIds),
+  );
+  assertImageInputModelsWereTested(input.imageInputModelIds, testResult.testedModelIds);
   const rawConfigWithOptionalBlocks = finalRawConfigForTestedSetup(
     input,
     testResult,

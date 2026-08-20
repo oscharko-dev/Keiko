@@ -753,19 +753,6 @@ export type DeclaredModelMode =
 // the gateway itself. Name heuristics may express a PREFERENCE (conversationDefaultRank), never a
 // role: a field incident bound a rerank endpoint named "bge-reranker-v2-m3" to every Knowledge Pod
 // as its embedding model, purely because the id contains "bge".
-/** Every mode Keiko recognises. Used to keep foreign mode strings out of logs and wire payloads. */
-export const DECLARED_MODEL_MODES: readonly DeclaredModelMode[] = [
-  "chat",
-  "completion",
-  "responses",
-  "embedding",
-  "rerank",
-  "image_generation",
-  "audio_transcription",
-  "audio_speech",
-  "moderation",
-];
-
 const DECLARED_MODE_ROLES: Record<DeclaredModelMode, DeclaredModeRole> = {
   chat: "chat",
   completion: "chat",
@@ -779,6 +766,29 @@ const DECLARED_MODE_ROLES: Record<DeclaredModelMode, DeclaredModeRole> = {
 };
 
 /**
+ * Every mode Keiko recognises, DERIVED from the role table so the two cannot drift. Used to keep
+ * foreign mode strings out of logs and wire payloads.
+ */
+export const DECLARED_MODEL_MODES: readonly DeclaredModelMode[] = Object.keys(
+  DECLARED_MODE_ROLES,
+) as DeclaredModelMode[];
+
+/**
+ * Closed vocabulary for "why discovery will not configure this model". Either a mode the gateway
+ * declared and Keiko knows, or one of two fixed markers. A gateway-supplied string is never echoed:
+ * `mode` is unbounded third-party text, and this union is what keeps it out of the diagnostic
+ * channel and the setup response.
+ */
+export type GatewayModelUnsupportedReason =
+  DeclaredModelMode | "unrecognised-mode" | "not-chat-capable";
+
+/** One model discovery recognised but will not configure, with the reason it was refused. */
+export interface GatewayUnsupportedDiscoveredModel {
+  readonly id: string;
+  readonly reason: GatewayModelUnsupportedReason;
+}
+
+/**
  * Maps a declared mode string onto the role Keiko can use it for. Unrecognised declarations are
  * "unsupported", NOT "chat": a gateway that names a mode Keiko does not know has still stated the
  * model is something specific, and guessing from the id is what this function exists to prevent.
@@ -788,6 +798,17 @@ export function modelKindForDeclaredMode(mode: string): DeclaredModeRole {
   return Object.hasOwn(DECLARED_MODE_ROLES, normalized)
     ? DECLARED_MODE_ROLES[normalized as DeclaredModelMode]
     : "unsupported";
+}
+
+/**
+ * Narrows a gateway-declared mode onto the closed reason vocabulary. A mode Keiko knows is echoed
+ * as itself; anything else — including unbounded vendor text — collapses to one fixed marker.
+ */
+export function boundedUnsupportedReason(mode: string): GatewayModelUnsupportedReason {
+  const normalized = mode.trim().toLowerCase();
+  return Object.hasOwn(DECLARED_MODE_ROLES, normalized)
+    ? (normalized as DeclaredModelMode)
+    : "unrecognised-mode";
 }
 
 /** True when a declared mode names a chat-compatible lane. Single source for the chat vocabulary. */

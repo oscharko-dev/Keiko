@@ -144,7 +144,7 @@ function unusableModelSummary(result: GatewaySetupResponse): string {
   }
   const dropped = result.droppedEmbeddingModelIds ?? [];
   if (dropped.length > 0) {
-    parts.push(` Not stored as embedding models — no embedding response: ${dropped.join(", ")}.`);
+    parts.push(` Embedding verification failed, not stored: ${dropped.join(", ")}.`);
   }
   const unverified = result.unverifiedEmbeddingModelIds ?? [];
   if (unverified.length > 0) {
@@ -959,14 +959,17 @@ function resolveSuccessMessage(input: ResolveSuccessMessageInput): string {
     verifiedModelSummary,
     skippedSummary,
   } = input;
+  // The discovery findings ride on EVERY success branch: a preserve-mode save that only touched
+  // Figma or settings still re-ran discovery, so refusing to mention what it refused would put the
+  // operator back in front of a silent green message.
   if (submittedFigmaCredential && !submittedGatewaySettings) {
-    return figmaOnlyMessage(t, mode);
+    return `${figmaOnlyMessage(t, mode)}${skippedSummary}`;
   }
   if (submittedFigmaCredential && !submittedGatewayCredentials) {
-    return figmaAndGatewaySettingsMessage(t, mode);
+    return `${figmaAndGatewaySettingsMessage(t, mode)}${skippedSummary}`;
   }
   if (!submittedFigmaCredential && !submittedGatewayCredentials) {
-    return noFigmaNoGatewayCredentialsMessage(t, mode);
+    return `${noFigmaNoGatewayCredentialsMessage(t, mode)}${skippedSummary}`;
   }
   if (submittedFigmaCredential) {
     return figmaAndVerifiedModelsMessage(t, mode, verifiedModelSummary, skippedSummary);

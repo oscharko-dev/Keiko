@@ -29,6 +29,7 @@ import {
   VOICE_PERSONAS,
   VOICE_PROVIDER_LOCALITIES,
   DECLARED_MODEL_MODES,
+  boundedUnsupportedReason,
   isChatCompatibleDeclaredMode,
   modelKindForDeclaredMode,
 } from "./gateway.js";
@@ -551,11 +552,28 @@ describe("modelKindForDeclaredMode", () => {
     expect(modelKindForDeclaredMode("toString")).toBe("unsupported");
   });
 
-  it("covers every mode the exported vocabulary names", () => {
-    // Derived from the producer, never restated: a mode added to the union without a role here
-    // fails the compile, and this pin proves the exported list stays in step with the table.
+  it("exports exactly the vocabulary the role table defines", () => {
+    // Exact content, not membership: a membership loop passes for ANY list, so it could not catch
+    // a mode present in the union and the role table but missing from the exported array — which
+    // would silently degrade a KNOWN mode to "unrecognised-mode" in boundedUnsupportedReason.
+    expect([...DECLARED_MODEL_MODES]).toEqual([
+      "chat",
+      "completion",
+      "responses",
+      "embedding",
+      "rerank",
+      "image_generation",
+      "audio_transcription",
+      "audio_speech",
+      "moderation",
+    ]);
+  });
+
+  it("bounds every reason to the closed vocabulary", () => {
     for (const mode of DECLARED_MODEL_MODES) {
-      expect(["chat", "embedding", "unsupported"]).toContain(modelKindForDeclaredMode(mode));
+      expect(boundedUnsupportedReason(mode)).toBe(mode);
     }
+    expect(boundedUnsupportedReason("vendor-private-mode")).toBe("unrecognised-mode");
+    expect(boundedUnsupportedReason("  REALTIME ")).toBe("unrecognised-mode");
   });
 });

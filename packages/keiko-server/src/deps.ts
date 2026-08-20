@@ -64,6 +64,7 @@ import {
   type DebugProvisioning,
   deriveContextProfileFromCapability,
   type ContextProfile,
+  type GatewayUnsupportedDiscoveredModel,
   type GatewayVerificationState,
   type UpdatePreflightReport,
   type WorkspaceInstance,
@@ -394,12 +395,6 @@ export interface GatewayDiscoveredModels {
   // moderation, or an unrecognised value). Recognised, reported, never configured — so the
   // operator learns the model exists and why it was skipped instead of it vanishing silently.
   readonly unsupportedModels?: readonly GatewayUnsupportedDiscoveredModel[];
-}
-
-export interface GatewayUnsupportedDiscoveredModel {
-  readonly id: string;
-  /** The declared mode that made it unsupported, or "chat-completion-disabled". */
-  readonly reason: string;
 }
 
 export interface GatewayDiscoveredModelMetadata {

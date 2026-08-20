@@ -1827,6 +1827,8 @@ export type {
   ConversationIneligibilityReason,
   DeclaredModelMode,
   DeclaredModeRole,
+  GatewayModelUnsupportedReason,
+  GatewayUnsupportedDiscoveredModel,
 } from "./gateway.js";
 export {
   isConversationEligibleModel,
@@ -1834,6 +1836,7 @@ export {
   conversationDefaultRank,
   electConversationDefault,
   DECLARED_MODEL_MODES,
+  boundedUnsupportedReason,
   isChatCompatibleDeclaredMode,
   modelKindForDeclaredMode,
   preferredConversationModelOrder,
