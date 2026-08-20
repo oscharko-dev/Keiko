@@ -496,6 +496,52 @@ async function decodeBatchSuccess(
   return { ok: true, value };
 }
 
+// A batch failure that is NOT a clean shape rejection is not proof the gateway is down.
+// Field incident (0.3.13, self-hosted LiteLLM): the route answered ONE input in 0.2s and the
+// SAME 36 inputs as an array with HTTP 500 after 19s. Degrading only on 400/422 left the
+// batcher retrying the identical doomed array — every attempt paid the full 19s, wrote zero
+// vectors, and surfaced no error, which is indistinguishable from a hang. One scalar attempt
+// decides it: if the items embed one at a time, the ARRAY SHAPE is what this gateway cannot
+// serve, and the endpoint is remembered exactly like an explicitly rejecting one. If the
+// scalar attempt fails too, the gateway really is unavailable and the ORIGINAL failure is
+// returned unchanged — a genuine outage is never dressed up as a shape problem.
+async function degradeToScalarAfterBatchFailure(
+  request: OpenAIEmbeddingBatchRequest,
+  deadlineAt: number,
+  failure: Extract<OpenAIEmbeddingBatchOutcome, { readonly ok: false }>,
+): Promise<OpenAIEmbeddingBatchOutcome> {
+  // A caller-cancelled batch must not fire N more requests, a single-item batch has no array
+  // shape to blame, and an exhausted budget has no room left to probe.
+  //
+  // The signal is checked in ADDITION to the kind: a cancellation that lands after the gateway
+  // already answered — while the failed body is being drained — never reaches the error
+  // classifier, so the failure still reads "http-error" while the caller is long gone.
+  if (
+    failure.kind === "cancelled" ||
+    request.signal?.aborted === true ||
+    request.inputs.length <= 1 ||
+    Date.now() >= deadlineAt
+  ) {
+    return failure;
+  }
+  const scalar = await requestScalarFallbackBatch(request, deadlineAt);
+  // Partial progress is the same evidence as full success: items DID embed one at a time, so
+  // the array shape is the problem. Returning the scalar outcome also keeps the completed
+  // prefix the batcher resumes behind.
+  if (!scalar.ok && (scalar.partial ?? []).length === 0) {
+    return failure;
+  }
+  // A THROTTLED batch is the one failure that says nothing about the shape: "try again later"
+  // is not "arrays are unsupported", and a large request can trip a limit the same request
+  // clears a minute later. Memoizing it would turn a passing rate limit into a
+  // process-lifetime degradation, so this batch is served item by item and the next one is
+  // free to try the array again.
+  if (failure.kind !== "rate-limited") {
+    arrayRejectingEndpoints.add(request.endpoint);
+  }
+  return scalar;
+}
+
 export async function requestOpenAIEmbeddingBatch(
   request: OpenAIEmbeddingBatchRequest,
 ): Promise<OpenAIEmbeddingBatchOutcome> {
@@ -515,7 +561,10 @@ export async function requestOpenAIEmbeddingBatch(
   const built = buildBatchRequest(request, strictShapeEndpoints.has(request.endpoint));
   const dispatched = await dispatch(built, request.fetchImpl, request.egress);
   if (typeof dispatched === "string") {
-    return { ok: false, kind: dispatched };
+    return await degradeToScalarAfterBatchFailure(request, deadlineAt, {
+      ok: false,
+      kind: dispatched,
+    });
   }
   if (!dispatched.ok) {
     await discardBody(dispatched);
@@ -532,7 +581,11 @@ export async function requestOpenAIEmbeddingBatch(
       return await requestScalarFallbackBatch(request, deadlineAt);
     }
     const kind = classifyStatus(dispatched.status) ?? "transport";
-    return { ok: false, kind, status: dispatched.status };
+    return await degradeToScalarAfterBatchFailure(request, deadlineAt, {
+      ok: false,
+      kind,
+      status: dispatched.status,
+    });
   }
   return decodeBatchSuccess(dispatched, request);
 }
@@ -547,7 +600,10 @@ async function requestMinimalShapeEmbeddingBatch(
   const built = buildBatchRequest(request, true);
   const dispatched = await dispatch(built, request.fetchImpl, request.egress);
   if (typeof dispatched === "string") {
-    return { ok: false, kind: dispatched };
+    return await degradeToScalarAfterBatchFailure(request, deadlineAt, {
+      ok: false,
+      kind: dispatched,
+    });
   }
   if (dispatched.ok) {
     strictShapeEndpoints.add(request.endpoint);
@@ -555,9 +611,15 @@ async function requestMinimalShapeEmbeddingBatch(
   }
   await discardBody(dispatched);
   if (!isStrictGatewayRejection(dispatched.status)) {
-    // kind and status come from the SAME response (see the scalar helper).
+    // kind and status come from the SAME response (see the scalar helper). This is the rung
+    // the field incident actually lands on: the gateway rejects the extras with 400, then
+    // answers the minimal ARRAY with 500 — so the scalar probe has to happen here too.
     const kind = classifyStatus(dispatched.status) ?? "transport";
-    return { ok: false, kind, status: dispatched.status };
+    return await degradeToScalarAfterBatchFailure(request, deadlineAt, {
+      ok: false,
+      kind,
+      status: dispatched.status,
+    });
   }
   arrayRejectingEndpoints.add(request.endpoint);
   return await requestScalarFallbackBatch(request, deadlineAt);
@@ -565,6 +627,19 @@ async function requestMinimalShapeEmbeddingBatch(
 
 function perItemTimeoutMs(request: OpenAIEmbeddingBatchRequest): number {
   return request.timeoutMs ?? 30_000;
+}
+
+// The routing fields decide the URL itself: an azure-openai-deployment request resolves to
+// /openai/deployments/<id>/embeddings?api-version=…. Dropping them on the scalar fallback sent
+// every probe to the plain /embeddings path — a DIFFERENT endpoint than the array attempt just
+// used, so the probe could only ever fail and report a false outage.
+function deploymentRouting(
+  request: OpenAIEmbeddingBatchRequest,
+): Partial<Pick<OpenAIEmbeddingRequest, "endpointStyle" | "apiVersion">> {
+  return {
+    ...(request.endpointStyle !== undefined ? { endpointStyle: request.endpointStyle } : {}),
+    ...(request.apiVersion !== undefined ? { apiVersion: request.apiVersion } : {}),
+  };
 }
 
 // The complete-ladder budget scales with the WORK: the scalar fallback serves one item per
@@ -607,6 +682,7 @@ async function requestScalarFallbackBatch(
         : {}),
       modelId: request.modelId,
       input,
+      ...deploymentRouting(request),
       ...(request.dimensions !== undefined ? { dimensions: request.dimensions } : {}),
       ...(request.signal !== undefined ? { signal: request.signal } : {}),
       timeoutMs: Math.min(remainingMs, perItemTimeoutMs(request)),
