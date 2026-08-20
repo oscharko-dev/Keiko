@@ -237,6 +237,12 @@ export const DE_MESSAGES = {
   "gatewaySetup.workflowEligibleModels": "Für Coding-Workflows freigegebene Modelle",
   "gatewaySetup.workflowEligibleModelsPlaceholder":
     "Ausdrücklich freigegebene Coding-Modellnamen einfügen, einen pro Zeile",
+  "gatewaySetup.unusable.unsupported":
+    " Nicht verwendet (vom Gateway deklarierter Modus): {models}.",
+  "gatewaySetup.unusable.dropped":
+    " Embedding-Prüfung fehlgeschlagen, nicht gespeichert: {models}.",
+  "gatewaySetup.unusable.unverified":
+    " Übernommen, aber als Embedding-Modell nicht verifiziert: {models}.",
   "mode.group": "Agentenmodus",
   "mode.manual.title": "Du bestätigst jede privilegierte Aktion",
   "mode.manual.label": "Du",

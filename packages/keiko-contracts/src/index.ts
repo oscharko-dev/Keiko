@@ -1823,12 +1823,22 @@ export {
   isValidGatewayTopP,
   validateGatewaySamplingParameters,
 } from "./gateway.js";
-export type { ConversationIneligibilityReason } from "./gateway.js";
+export type {
+  ConversationIneligibilityReason,
+  DeclaredModelMode,
+  DeclaredModeRole,
+  GatewayModelUnsupportedReason,
+  GatewayUnsupportedDiscoveredModel,
+} from "./gateway.js";
 export {
   isConversationEligibleModel,
   explainConversationIneligibility,
   conversationDefaultRank,
   electConversationDefault,
+  DECLARED_MODEL_MODES,
+  boundedUnsupportedReason,
+  isChatCompatibleDeclaredMode,
+  modelKindForDeclaredMode,
   preferredConversationModelOrder,
   modelSupportsInfilling,
   isAlignedInfillingModel,

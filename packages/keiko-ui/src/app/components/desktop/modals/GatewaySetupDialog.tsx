@@ -17,7 +17,12 @@ import {
   selectRealtimeVoiceCapability,
   selectSpeechOutputCapability,
 } from "@oscharko-dev/keiko-contracts";
-import { ApiError, setupGateway, type GatewaySetupInput } from "@/lib/api";
+import {
+  ApiError,
+  setupGateway,
+  type GatewaySetupInput,
+  type GatewaySetupResponse,
+} from "@/lib/api";
 import { useTranslate, type MessageValues } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
 import {
@@ -125,6 +130,27 @@ function skippedModelSummary(skippedModelIds: readonly string[]): string {
   // (rate-limit, timeout, content-filter), so the wording must not over-claim a permanent capability
   // verdict the smoke cannot prove.
   return ` Could not verify deployment${skippedModelIds.length === 1 ? "" : "s"}: ${skippedModelIds.join(", ")}.`;
+}
+
+// The operator must learn which models the gateway offered that Keiko will not use, and why. A
+// silent green "setup succeeded" over a gateway whose only embedding model was refused is what made
+// the LiteLLM field incident undiagnosable.
+function unusableModelSummary(t: GatewaySetupTranslate, result: GatewaySetupResponse): string {
+  const parts: string[] = [];
+  const unsupported = result.unsupportedModels ?? [];
+  if (unsupported.length > 0) {
+    const models = unsupported.map((entry) => `${entry.id} (${entry.reason})`).join(", ");
+    parts.push(t("gatewaySetup.unusable.unsupported", { models }));
+  }
+  const dropped = result.droppedEmbeddingModelIds ?? [];
+  if (dropped.length > 0) {
+    parts.push(t("gatewaySetup.unusable.dropped", { models: dropped.join(", ") }));
+  }
+  const unverified = result.unverifiedEmbeddingModelIds ?? [];
+  if (unverified.length > 0) {
+    parts.push(t("gatewaySetup.unusable.unverified", { models: unverified.join(", ") }));
+  }
+  return parts.join("");
 }
 
 function storedVoiceModels(models: readonly ModelCapability[]): readonly string[] {
@@ -933,14 +959,17 @@ function resolveSuccessMessage(input: ResolveSuccessMessageInput): string {
     verifiedModelSummary,
     skippedSummary,
   } = input;
+  // The discovery findings ride on EVERY success branch: a preserve-mode save that only touched
+  // Figma or settings still re-ran discovery, so refusing to mention what it refused would put the
+  // operator back in front of a silent green message.
   if (submittedFigmaCredential && !submittedGatewaySettings) {
-    return figmaOnlyMessage(t, mode);
+    return `${figmaOnlyMessage(t, mode)}${skippedSummary}`;
   }
   if (submittedFigmaCredential && !submittedGatewayCredentials) {
-    return figmaAndGatewaySettingsMessage(t, mode);
+    return `${figmaAndGatewaySettingsMessage(t, mode)}${skippedSummary}`;
   }
   if (!submittedFigmaCredential && !submittedGatewayCredentials) {
-    return noFigmaNoGatewayCredentialsMessage(t, mode);
+    return `${noFigmaNoGatewayCredentialsMessage(t, mode)}${skippedSummary}`;
   }
   if (submittedFigmaCredential) {
     return figmaAndVerifiedModelsMessage(t, mode, verifiedModelSummary, skippedSummary);
@@ -1037,10 +1066,23 @@ async function performGatewaySubmission(
       submittedGatewayCredentials,
       mode: successMode,
       verifiedModelSummary,
-      skippedSummary: skippedModelSummary(result.skippedModelIds ?? []),
+      skippedSummary:
+        skippedModelSummary(result.skippedModelIds ?? []) + unusableModelSummary(t, result),
     }),
-    skippedModelCount: (result.skippedModelIds ?? []).length,
+    // Drives the reload delay, so it must count EVERY diagnostic the message carries. Counting
+    // only skippedModelIds reloaded after 800 ms over a message that also named unsupported,
+    // dropped or unverified models — long enough to render, too short to read.
+    skippedModelCount: reportedModelCount(result),
   };
+}
+
+function reportedModelCount(result: GatewaySetupResponse): number {
+  return (
+    (result.skippedModelIds ?? []).length +
+    (result.unsupportedModels ?? []).length +
+    (result.droppedEmbeddingModelIds ?? []).length +
+    (result.unverifiedEmbeddingModelIds ?? []).length
+  );
 }
 
 interface GatewayBaseUrlFieldProps {

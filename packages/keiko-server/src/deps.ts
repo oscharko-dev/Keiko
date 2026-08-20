@@ -64,6 +64,7 @@ import {
   type DebugProvisioning,
   deriveContextProfileFromCapability,
   type ContextProfile,
+  type GatewayUnsupportedDiscoveredModel,
   type GatewayVerificationState,
   type UpdatePreflightReport,
   type WorkspaceInstance,
@@ -390,6 +391,10 @@ export interface GatewayDiscoveredModels {
   // fit within the cap. Callers should surface this to the operator so the missing
   // models can be added via manual deployment names instead of being silently absent.
   readonly truncated?: boolean;
+  // Models the gateway DECLARED as a mode Keiko has no lane for (rerank, audio, image generation,
+  // moderation, or an unrecognised value). Recognised, reported, never configured — so the
+  // operator learns the model exists and why it was skipped instead of it vanishing silently.
+  readonly unsupportedModels?: readonly GatewayUnsupportedDiscoveredModel[];
 }
 
 export interface GatewayDiscoveredModelMetadata {
@@ -633,6 +638,12 @@ export interface UiHandlerDeps {
         config: GatewayConfig,
         candidateModelIds: readonly string[],
       ) => Promise<readonly string[] | GatewaySetupTestResult>)
+    | undefined;
+  // Test seam for the setup-time embedding probe. Production issues ONE real embedding request per
+  // declared embedding candidate, so a model that cannot embed is never persisted as this
+  // gateway's embedding model (LiteLLM field incident, 2026-08). Returns the ids that answered.
+  readonly gatewayEmbeddingProbe?:
+    | ((config: GatewayConfig, candidateModelIds: readonly string[]) => Promise<readonly string[]>)
     | undefined;
   // Test seam for model discovery. Production calls the OpenAI-compatible /models endpoint.
   readonly gatewayModelDiscovery?:
@@ -919,6 +930,11 @@ export interface BuildHandlerDepsOptions {
         config: GatewayConfig,
         candidateModelIds: readonly string[],
       ) => Promise<readonly string[] | GatewaySetupTestResult>)
+    | undefined;
+  // Optional setup-time embedding probe seam (tests); production issues one real embedding request
+  // per declared embedding candidate.
+  readonly gatewayEmbeddingProbe?:
+    | ((config: GatewayConfig, candidateModelIds: readonly string[]) => Promise<readonly string[]>)
     | undefined;
   // Optional setup discovery seam (tests); production calls the model-list endpoint.
   readonly gatewayModelDiscovery?:
@@ -3633,6 +3649,7 @@ type IntegrationUiHandlerDeps = ReturnType<typeof autonomousDeliveryFields> &
     | "redactionSecrets"
     | "gatewayConfig"
     | "gatewaySetupTester"
+    | "gatewayEmbeddingProbe"
     | "gatewayModelDiscovery"
     | "figmaCredentialTester"
     | "localKnowledgeKeyProvider"
@@ -3649,6 +3666,7 @@ function buildIntegrationUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): Integra
     redactionSecrets: runtimeRedactionSecrets(args.options.env, args.runtimeConfig, args.egress),
     gatewayConfig: args.runtimeConfig,
     gatewaySetupTester: args.options.gatewaySetupTester,
+    gatewayEmbeddingProbe: args.options.gatewayEmbeddingProbe,
     gatewayModelDiscovery: args.options.gatewayModelDiscovery,
     figmaCredentialTester: args.options.figmaCredentialTester,
     localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,

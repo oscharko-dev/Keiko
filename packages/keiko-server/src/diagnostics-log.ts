@@ -41,6 +41,19 @@ export interface ServerDiagnosticRecord {
   // rate-limited diagnostic fired — an aggregator summing that field must not pick up a model
   // count. A bounded count only; never a model id or an endpoint.
   readonly retainedModelCount?: number | undefined;
+  // How many discovered models setup refused to configure because the gateway declared a mode
+  // Keiko has no lane for (GATEWAY_DISCOVERY_UNUSABLE_MODELS), and how many declared embedding
+  // models failed their setup probe. Bounded counts plus the reason CODES only — never a model
+  // id or an endpoint; the ids belong in the setup response the operator reads.
+  readonly unsupportedModelCount?: number | undefined;
+  // Reason codes come from a CLOSED vocabulary (the declared modes Keiko knows, plus fixed
+  // markers). A gateway-supplied mode string is never echoed: an unrecognised one collapses to
+  // "unrecognised-mode" at classification time, so no foreign text reaches this record.
+  readonly unsupportedReasons?: readonly string[] | undefined;
+  // Embedding models that failed their setup probe: `unverified` were kept (their role was
+  // explicitly asserted), `dropped` were removed (Keiko had only inferred the role).
+  readonly unverifiedEmbeddingModelCount?: number | undefined;
+  readonly droppedEmbeddingModelCount?: number | undefined;
 }
 
 export interface ServerDiagnosticSink {

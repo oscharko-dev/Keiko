@@ -161,6 +161,7 @@ import {
   type GitEditorBlameResponse,
   type GitEditorDiffResponse,
   type GitEditorDiffScope,
+  type GatewayUnsupportedDiscoveredModel,
 } from "@oscharko-dev/keiko-contracts";
 import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
@@ -642,6 +643,12 @@ export interface GatewaySetupResponse {
   readonly testedModelId: string;
   readonly testedModelIds: readonly string[];
   readonly skippedModelIds?: readonly string[] | undefined;
+  // Models the gateway offered that setup will not use, with the reason it declared, plus embedding
+  // models that failed their setup probe (kept when their role was asserted, dropped when it was
+  // only inferred). Absent when there is nothing to report.
+  readonly unsupportedModels?: readonly GatewayUnsupportedDiscoveredModel[] | undefined;
+  readonly unverifiedEmbeddingModelIds?: readonly string[] | undefined;
+  readonly droppedEmbeddingModelIds?: readonly string[] | undefined;
   readonly providerCount: number;
   readonly models: ModelCapability[];
   readonly config: SafeGatewayConfig;
