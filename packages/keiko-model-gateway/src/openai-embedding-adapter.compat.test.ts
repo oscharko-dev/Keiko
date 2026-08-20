@@ -484,6 +484,89 @@ describe("batch failure that is not a clean shape rejection", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  // Items that DID embed one at a time are the same evidence as a fully successful fallback:
+  // the array shape is at fault, and the completed prefix must survive so the batcher resumes
+  // behind it instead of re-paying every finished embedding.
+  it("keeps partial scalar progress and still remembers the endpoint", async () => {
+    let scalarCalls = 0;
+    const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+      const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
+      if (Array.isArray(body.input)) {
+        return Promise.resolve(jsonResponse({ error: { message: "internal error" } }, 500));
+      }
+      scalarCalls += 1;
+      return Promise.resolve(
+        scalarCalls === 1
+          ? jsonResponse(SCALAR_OK)
+          : jsonResponse({ error: { message: "unavailable" } }, 503),
+      );
+    });
+    const first = await requestOpenAIEmbeddingBatch(batchRequest(["a", "b", "c"], fetchImpl));
+    expect(first.ok).toBe(false);
+    if (first.ok) return;
+    expect(first.partial).toHaveLength(1);
+
+    const bodiesBefore = fetchImpl.mock.calls.length;
+    await requestOpenAIEmbeddingBatch(batchRequest(["d", "e"], fetchImpl));
+    const laterBodies = fetchImpl.mock.calls
+      .slice(bodiesBefore)
+      .map((call) => bodyOf(call as unknown[]));
+    expect(laterBodies.some((body) => Array.isArray(body.input))).toBe(false);
+  });
+
+  // The ladder budget is the runaway backstop. An exhausted budget must not start a probe it
+  // cannot finish — that would turn one expired batch into N more expiring requests.
+  it("does not probe when the ladder budget is already exhausted", async () => {
+    // Fails well after the whole ladder budget (3 items x 1ms) has expired, so the guard is
+    // reached deterministically rather than on a timing race.
+    const fetchImpl = vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((_resolve, reject) =>
+          setTimeout(() => reject(new TypeError("socket hang up")), 25),
+        ),
+    );
+    const outcome = await requestOpenAIEmbeddingBatch({
+      ...batchRequest(["a", "b", "c"], fetchImpl),
+      timeoutMs: 1,
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.kind).toBe("timeout");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  // A throttle is the one failure that says nothing about the shape. Serving this batch item
+  // by item is right; remembering the endpoint as array-hostile because of it would turn a
+  // passing rate limit into a process-lifetime degradation.
+  it("serves a throttled batch item by item without memoizing the endpoint", async () => {
+    let arrayCalls = 0;
+    const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+      const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
+      if (Array.isArray(body.input)) {
+        arrayCalls += 1;
+        // Throttled while the limit holds, healthy once it passes.
+        return Promise.resolve(
+          arrayCalls === 1
+            ? jsonResponse({ error: { message: "slow down" } }, 429)
+            : jsonResponse({
+                data: [
+                  { index: 0, embedding: [0.6, 0.8] },
+                  { index: 1, embedding: [0.8, 0.6] },
+                ],
+                model: "multilingual-e5-large",
+              }),
+        );
+      }
+      return Promise.resolve(jsonResponse(SCALAR_OK));
+    });
+    const first = await requestOpenAIEmbeddingBatch(batchRequest(["a", "b"], fetchImpl));
+    expect(first.ok).toBe(true);
+    const second = await requestOpenAIEmbeddingBatch(batchRequest(["c", "d"], fetchImpl));
+    expect(second.ok).toBe(true);
+    // The second batch tried the array again instead of being permanently degraded.
+    expect(arrayCalls).toBeGreaterThanOrEqual(2);
+  });
+
   it("does not fan out into scalar requests when the caller cancelled the batch", async () => {
     const fetchImpl = vi.fn<typeof fetch>(() =>
       Promise.reject(new DOMException("aborted", "AbortError")),

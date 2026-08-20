@@ -522,7 +522,14 @@ async function degradeToScalarAfterBatchFailure(
   if (!scalar.ok && (scalar.partial ?? []).length === 0) {
     return failure;
   }
-  arrayRejectingEndpoints.add(request.endpoint);
+  // A THROTTLED batch is the one failure that says nothing about the shape: "try again later"
+  // is not "arrays are unsupported", and a large request can trip a limit the same request
+  // clears a minute later. Memoizing it would turn a passing rate limit into a
+  // process-lifetime degradation, so this batch is served item by item and the next one is
+  // free to try the array again.
+  if (failure.kind !== "rate-limited") {
+    arrayRejectingEndpoints.add(request.endpoint);
+  }
   return scalar;
 }
 
