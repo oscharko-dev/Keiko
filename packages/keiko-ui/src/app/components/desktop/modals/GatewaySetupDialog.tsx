@@ -135,20 +135,20 @@ function skippedModelSummary(skippedModelIds: readonly string[]): string {
 // The operator must learn which models the gateway offered that Keiko will not use, and why. A
 // silent green "setup succeeded" over a gateway whose only embedding model was refused is what made
 // the LiteLLM field incident undiagnosable.
-function unusableModelSummary(result: GatewaySetupResponse): string {
+function unusableModelSummary(t: GatewaySetupTranslate, result: GatewaySetupResponse): string {
   const parts: string[] = [];
   const unsupported = result.unsupportedModels ?? [];
   if (unsupported.length > 0) {
-    const named = unsupported.map((entry) => `${entry.id} (${entry.reason})`).join(", ");
-    parts.push(` Not used (declared mode): ${named}.`);
+    const models = unsupported.map((entry) => `${entry.id} (${entry.reason})`).join(", ");
+    parts.push(t("gatewaySetup.unusable.unsupported", { models }));
   }
   const dropped = result.droppedEmbeddingModelIds ?? [];
   if (dropped.length > 0) {
-    parts.push(` Embedding verification failed, not stored: ${dropped.join(", ")}.`);
+    parts.push(t("gatewaySetup.unusable.dropped", { models: dropped.join(", ") }));
   }
   const unverified = result.unverifiedEmbeddingModelIds ?? [];
   if (unverified.length > 0) {
-    parts.push(` Kept but unverified as embedding models: ${unverified.join(", ")}.`);
+    parts.push(t("gatewaySetup.unusable.unverified", { models: unverified.join(", ") }));
   }
   return parts.join("");
 }
@@ -1067,7 +1067,7 @@ async function performGatewaySubmission(
       mode: successMode,
       verifiedModelSummary,
       skippedSummary:
-        skippedModelSummary(result.skippedModelIds ?? []) + unusableModelSummary(result),
+        skippedModelSummary(result.skippedModelIds ?? []) + unusableModelSummary(t, result),
     }),
     skippedModelCount: (result.skippedModelIds ?? []).length,
   };

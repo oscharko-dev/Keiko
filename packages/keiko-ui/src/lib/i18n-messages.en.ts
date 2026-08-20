@@ -227,6 +227,9 @@ export const EN_MESSAGES = {
   "gatewaySetup.workflowEligibleModels": "Coding-safe workflow models",
   "gatewaySetup.workflowEligibleModelsPlaceholder":
     "Paste explicitly approved coding model names, one per line",
+  "gatewaySetup.unusable.unsupported": " Not used (mode declared by the gateway): {models}.",
+  "gatewaySetup.unusable.dropped": " Embedding verification failed, not stored: {models}.",
+  "gatewaySetup.unusable.unverified": " Kept but unverified as embedding models: {models}.",
   "mode.group": "Agent mode",
   "mode.manual.title": "You approve every privileged action",
   "mode.manual.label": "You",
