@@ -800,7 +800,7 @@
       "remediation": "no-action-required",
       "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
-        "Every save is a restore point \u2014 browse, compare, and restore file history locally."
+        "Every save is a restore point — browse, compare, and restore file history locally."
       ],
       "internalOnly": false,
       "observableImpact": true,
@@ -1155,7 +1155,7 @@
         "Windows failures are visible: incomplete installs, a damaged app bundle, or a runtime that cannot start now surface a native error dialog instead of exiting silently.",
         "The Start Menu entry is a real shortcut; a legacy Keiko.bat from earlier releases is retired automatically during setup, repair, and the first start after an in-app update.",
         "The Windows archive pipeline fails closed on symlinks, NTFS alternate-data-stream names, encryption-marked and mistyped entries, and installer cleanup retries correctly under silent installs.",
-        "These builds carry evaluation signing, and the governed in-app updater does not offer them as a one-click update \u2014 download 0.3.4 from this release page. On Windows, SmartScreen may warn on first run: choose \u201cMore info\u201d, then \u201cRun anyway\u201d. On macOS, right-click the app and choose \u201cOpen\u201d on first launch."
+        "These builds carry evaluation signing, and the governed in-app updater does not offer them as a one-click update — download 0.3.4 from this release page. On Windows, SmartScreen may warn on first run: choose “More info”, then “Run anyway”. On macOS, right-click the app and choose “Open” on first launch."
       ],
       "review": {
         "status": "reviewed",
@@ -1483,7 +1483,7 @@
       "stateImpact": [],
       "releaseNoteBullets": [
         "Knowledge Pod indexing no longer dies silently when the pod is pinned to one of several gateway entries sharing a model id: the indexing job now runs with exactly the provider the request resolved (including alias-repaired pods), instead of re-deriving it with a strict first-match lookup that could miss and fail with an empty job id, no job history, and no diagnostics.",
-        "The same repair unblocks full re-embed maintenance runs whose embedding model had rotated \u2014 the previous silent branch made exactly those runs fail without a trace."
+        "The same repair unblocks full re-embed maintenance runs whose embedding model had rotated — the previous silent branch made exactly those runs fail without a trace."
       ],
       "review": {
         "status": "reviewed",
@@ -1529,7 +1529,7 @@
       "releaseNoteCategory": "fixes",
       "releaseNotePriority": "high",
       "userVisibleChange": "observable",
-      "userVisibleSummary": "Keiko 0.3.11 makes strict OpenAI-compatible gateways work end to end. Embedding requests now fall back to the minimal wire shape when a gateway answers HTTP 400 to optional extras (encoding_format, array input) \u2014 the failure mode that blocked Knowledge Pod indexing on certain LiteLLM/TEI deployments while chat and a plain curl succeeded. The fallback remembers a gateway's strictness, keeps one absolute deadline over the whole compatibility ladder, and reports coherent error causes. A fresh install also no longer rejects the first chat: conversation readiness is verified on demand at chat creation and send instead of requiring a manual readiness check in settings.",
+      "userVisibleSummary": "Keiko 0.3.11 makes strict OpenAI-compatible gateways work end to end. Embedding requests now fall back to the minimal wire shape when a gateway answers HTTP 400 to optional extras (encoding_format, array input) — the failure mode that blocked Knowledge Pod indexing on certain LiteLLM/TEI deployments while chat and a plain curl succeeded. The fallback remembers a gateway's strictness, keeps one absolute deadline over the whole compatibility ladder, and reports coherent error causes. A fresh install also no longer rejects the first chat: conversation readiness is verified on demand at chat creation and send instead of requiring a manual readiness check in settings.",
       "affectedStateStores": [],
       "stateImpact": [],
       "releaseNoteBullets": [
@@ -1547,6 +1547,61 @@
       },
       "userActionRequired": false,
       "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.12",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.12",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-20-keiko-0.3.12-readiness-walk-and-resilient-indexing",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 0.3.12 makes conversation-model selection and Knowledge Pod indexing robust on gateways whose first-listed model is a special-purpose engine (for example an OCR model) and on slow, CPU-served hardware. The conversation default and the contextual-retrieval fallback now prefer models whose gateway metadata declares a chat-compatible mode, so a warm OCR model can no longer capture new chats or chunk-context generation. A failed readiness probe heals after a short cooldown instead of pinning the model until a restart, grounded Knowledge Pod questions verify readiness on demand, and the model list reports never-probed models as unknown instead of unusable. Indexing no longer holds one HTTP request open for the whole run: the start answers immediately and the panel follows the persisted job, surviving reloads. A gateway outage trips a circuit breaker after five consecutive transient failures instead of grinding for hours, terminal job status is honest about majority failures, discovery limits are operator-raisable and loudly reported when hit, the embedding path honours the configured provider timeout, and interrupted embedding batches resume behind their completed work.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "New chats and the contextual-retrieval fallback default to a model whose gateway metadata declares a chat-compatible mode (LiteLLM /model/info); mode-less special-purpose ids (OCR, speech, reranking) rank last and cannot capture the default while warm — re-run the gateway verification once after updating so the mode metadata is stored.",
+        "Conversation readiness self-heals: a failed probe retries after a 30s cooldown instead of pinning the model for the process lifetime; grounded Knowledge Pod questions verify readiness on demand (the first pod question after a restart answers without any manual probe); the models endpoint reports never-probed models as unknown/usable instead of unusable, so the picker no longer empties after every restart.",
+        "Indexing runs detached: the start request answers immediately with the job id, the panel follows the persisted job (settling strictly on that job's identity), survives page reloads by re-attaching to the running job, and a duplicate start is refused instead of racing the in-flight run.",
+        "Gateway outages stop runs early and honestly: five consecutive transient embedding failures trip EMBEDDING_GATEWAY_UNAVAILABLE instead of grinding through the corpus for hours; a run where most attempted documents failed reports MAJORITY_DOCUMENTS_FAILED; an intact partial index stays retrievable instead of being blacked out.",
+        "Discovery bounds are operator-raisable via KEIKO_LOCAL_KNOWLEDGE_MAX_DISCOVERY_FILES / _MAX_DISCOVERY_DEPTH (hard ceilings 100000 files / depth 64), and hitting a bound now surfaces a DISCOVERY_LIMIT_REACHED warning in capsule health instead of truncating silently.",
+        "Indexing throughput on slow gateways: the embedding path honours the operator-configured provider timeoutMs (it was silently pinned at 30s), and an expired per-batch ladder deadline carries completed embeddings into the retry, which resumes behind them instead of re-embedding from item zero."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-20",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3204#5351772246",
+        "rationale": "The release owner directed this last-chance patch across the 2026-08-19/20 working sessions after the customer's dotsocr-first LiteLLM configuration on slow shared hardware surfaced default-model capture, restart-bricked grounded asks, non-convergent indexing, and multi-hour hangs on gateway outages. Ten repairs across PRs #3220 and #3221 were adversarially verified (two multi-agent passes), every behavioural change is red-proven, and the field configuration is covered end to end by twin journeys including a process-restart grounded ask and an OCR-first fallback election."
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
       "portableRuntimeArtifactContract": {
         "programEpic": 1944,
         "parentEpic": 1942,
