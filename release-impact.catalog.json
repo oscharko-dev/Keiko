@@ -1611,6 +1611,59 @@
         "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.13",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.13",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-20-keiko-0.3.13-model-agnostic-role-recognition",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 0.3.13 makes model-role recognition model-agnostic. Keiko now takes a model's role from what the gateway DECLARES about it (a LiteLLM /model/info mode), not from a guess based on the model's name. A model a gateway declares as a reranking, speech, image or moderation engine is no longer stored as this gateway's embedding model just because its name resembles one — a field incident where exactly that happened bound a reranking endpoint to every new Knowledge Pod and indexing wrote zero vectors. Models Keiko cannot use are now reported with the reason the gateway gave, instead of disappearing silently, and every declared embedding model is verified with a real embedding request before it is stored, so an endpoint that cannot embed is never bound to a pod. The name heuristic remains only for gateways that declare nothing at all.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "A model's role now comes from the gateway's own declaration (LiteLLM /model/info mode) rather than from its name. A declared reranking, speech, image-generation or moderation engine can no longer be stored as an embedding model because its id happens to contain a token like \"bge\" or \"e5\"; the name heuristic applies only where a gateway declares nothing.",
+        "Models Keiko will not configure are now reported with the declared reason in the setup dialog instead of vanishing without a trace, and they no longer consume slots in the discovery limit — a gateway listing many speech or reranking endpoints can no longer push real chat models out of the configured set.",
+        "Every declared embedding model is verified with one real embedding request during setup. A model that cannot answer is not stored as an embedding model; a model whose role you asserted explicitly, or that was already stored, is kept and flagged as unverified so a brief endpoint outage cannot unpin working Knowledge Pods.",
+        "Gateways whose /model/info route is unavailable, restricted or rate-limited continue to set up exactly as before by falling back to the plain model list; only a response in which every model declares a mode Keiko cannot use is surfaced as an error."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-20",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3204#5358465374",
+        "rationale": "The release owner directed this fix after three releases failed to resolve a customer's LiteLLM deployment: indexing produced zero vectors because model roles were guessed from model names. The defect was reproduced locally against a real LiteLLM container with invented model names before any code changed, and the repair was verified the same way: the customer corpus indexes to 347 vectors with the job succeeding, where it previously bound a reranking endpoint and failed with zero. An independent adversarial review of the first commit found seven further defects, five of which would have broken working deployments; all were repaired and pinned before merge."
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
     }
   ]
 }
