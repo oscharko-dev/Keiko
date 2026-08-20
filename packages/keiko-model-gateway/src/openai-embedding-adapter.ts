@@ -496,6 +496,36 @@ async function decodeBatchSuccess(
   return { ok: true, value };
 }
 
+// A batch failure that is NOT a clean shape rejection is not proof the gateway is down.
+// Field incident (0.3.13, self-hosted LiteLLM): the route answered ONE input in 0.2s and the
+// SAME 36 inputs as an array with HTTP 500 after 19s. Degrading only on 400/422 left the
+// batcher retrying the identical doomed array — every attempt paid the full 19s, wrote zero
+// vectors, and surfaced no error, which is indistinguishable from a hang. One scalar attempt
+// decides it: if the items embed one at a time, the ARRAY SHAPE is what this gateway cannot
+// serve, and the endpoint is remembered exactly like an explicitly rejecting one. If the
+// scalar attempt fails too, the gateway really is unavailable and the ORIGINAL failure is
+// returned unchanged — a genuine outage is never dressed up as a shape problem.
+async function degradeToScalarAfterBatchFailure(
+  request: OpenAIEmbeddingBatchRequest,
+  deadlineAt: number,
+  failure: Extract<OpenAIEmbeddingBatchOutcome, { readonly ok: false }>,
+): Promise<OpenAIEmbeddingBatchOutcome> {
+  // A caller-cancelled batch must not fire N more requests, a single-item batch has no array
+  // shape to blame, and an exhausted budget has no room left to probe.
+  if (failure.kind === "cancelled" || request.inputs.length <= 1 || Date.now() >= deadlineAt) {
+    return failure;
+  }
+  const scalar = await requestScalarFallbackBatch(request, deadlineAt);
+  // Partial progress is the same evidence as full success: items DID embed one at a time, so
+  // the array shape is the problem. Returning the scalar outcome also keeps the completed
+  // prefix the batcher resumes behind.
+  if (!scalar.ok && (scalar.partial ?? []).length === 0) {
+    return failure;
+  }
+  arrayRejectingEndpoints.add(request.endpoint);
+  return scalar;
+}
+
 export async function requestOpenAIEmbeddingBatch(
   request: OpenAIEmbeddingBatchRequest,
 ): Promise<OpenAIEmbeddingBatchOutcome> {
@@ -515,7 +545,10 @@ export async function requestOpenAIEmbeddingBatch(
   const built = buildBatchRequest(request, strictShapeEndpoints.has(request.endpoint));
   const dispatched = await dispatch(built, request.fetchImpl, request.egress);
   if (typeof dispatched === "string") {
-    return { ok: false, kind: dispatched };
+    return await degradeToScalarAfterBatchFailure(request, deadlineAt, {
+      ok: false,
+      kind: dispatched,
+    });
   }
   if (!dispatched.ok) {
     await discardBody(dispatched);
@@ -532,7 +565,11 @@ export async function requestOpenAIEmbeddingBatch(
       return await requestScalarFallbackBatch(request, deadlineAt);
     }
     const kind = classifyStatus(dispatched.status) ?? "transport";
-    return { ok: false, kind, status: dispatched.status };
+    return await degradeToScalarAfterBatchFailure(request, deadlineAt, {
+      ok: false,
+      kind,
+      status: dispatched.status,
+    });
   }
   return decodeBatchSuccess(dispatched, request);
 }
@@ -547,7 +584,10 @@ async function requestMinimalShapeEmbeddingBatch(
   const built = buildBatchRequest(request, true);
   const dispatched = await dispatch(built, request.fetchImpl, request.egress);
   if (typeof dispatched === "string") {
-    return { ok: false, kind: dispatched };
+    return await degradeToScalarAfterBatchFailure(request, deadlineAt, {
+      ok: false,
+      kind: dispatched,
+    });
   }
   if (dispatched.ok) {
     strictShapeEndpoints.add(request.endpoint);
@@ -555,9 +595,15 @@ async function requestMinimalShapeEmbeddingBatch(
   }
   await discardBody(dispatched);
   if (!isStrictGatewayRejection(dispatched.status)) {
-    // kind and status come from the SAME response (see the scalar helper).
+    // kind and status come from the SAME response (see the scalar helper). This is the rung
+    // the field incident actually lands on: the gateway rejects the extras with 400, then
+    // answers the minimal ARRAY with 500 — so the scalar probe has to happen here too.
     const kind = classifyStatus(dispatched.status) ?? "transport";
-    return { ok: false, kind, status: dispatched.status };
+    return await degradeToScalarAfterBatchFailure(request, deadlineAt, {
+      ok: false,
+      kind,
+      status: dispatched.status,
+    });
   }
   arrayRejectingEndpoints.add(request.endpoint);
   return await requestScalarFallbackBatch(request, deadlineAt);

@@ -389,3 +389,112 @@ describe("strict-gateway embedding compat fallback", () => {
     }
   });
 });
+
+// Second field incident (0.3.13), measured against the customer's own endpoint:
+//   {"model":…,"input":"test"}                       -> HTTP 200 in 0.21s
+//   {"model":…,"input":[3 items],"encoding_format":…} -> HTTP 400 (UnsupportedParamsError)
+//   {"model":…,"input":[36 items]}                    -> HTTP 500 in 18.87s
+// The gateway serves single inputs and fails the ARRAY — but with 500, not with the 400/422
+// the ladder degraded on. So every attempt paid ~19s, returned a transient failure, and the
+// batcher retried the identical doomed array: zero vectors, no error surfaced, for as long as
+// an operator let it run. The capsule preflight embeds a 5-input probe batch through the same
+// path, so the run died before its first document — "0 of 1 documents, 0 of 36 vectors".
+describe("batch failure that is not a clean shape rejection", () => {
+  const CUSTOMER_GATEWAY = "https://siu.llm.intern/v1";
+
+  function batchRequest(
+    inputs: readonly string[],
+    fetchImpl: typeof fetch,
+  ): Parameters<typeof requestOpenAIEmbeddingBatch>[0] {
+    return {
+      endpoint: CUSTOMER_GATEWAY,
+      apiKey: "k",
+      modelId: "multilingual-e5-large",
+      inputs,
+      fetchImpl,
+    };
+  }
+
+  it("degrades to per-item scalars when the gateway answers the array with 500", async () => {
+    const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+      const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
+      if ("encoding_format" in body) {
+        return Promise.resolve(
+          jsonResponse({ error: { message: "litellm.UnsupportedParamsError" } }, 400),
+        );
+      }
+      if (Array.isArray(body.input)) {
+        return Promise.resolve(jsonResponse({ error: { message: "internal error" } }, 500));
+      }
+      return Promise.resolve(jsonResponse(SCALAR_OK));
+    });
+    const outcome = await requestOpenAIEmbeddingBatch(batchRequest(["a", "b", "c"], fetchImpl));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value).toHaveLength(3);
+  });
+
+  it("remembers the endpoint so the next batch skips the doomed array entirely", async () => {
+    const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+      const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
+      if ("encoding_format" in body) {
+        return Promise.resolve(jsonResponse({ error: { message: "unsupported" } }, 400));
+      }
+      if (Array.isArray(body.input)) {
+        return Promise.resolve(jsonResponse({ error: { message: "internal error" } }, 500));
+      }
+      return Promise.resolve(jsonResponse(SCALAR_OK));
+    });
+    await requestOpenAIEmbeddingBatch(batchRequest(["a", "b"], fetchImpl));
+    fetchImpl.mockClear();
+    const second = await requestOpenAIEmbeddingBatch(batchRequest(["c", "d"], fetchImpl));
+    expect(second.ok).toBe(true);
+    const arrayCalls = fetchImpl.mock.calls.filter((call) =>
+      Array.isArray(bodyOf(call as unknown[]).input),
+    );
+    expect(arrayCalls).toHaveLength(0);
+  });
+
+  it("degrades when the array attempt fails without any HTTP answer at all", async () => {
+    const fetchImpl = vi.fn<typeof fetch>((_url, init) => {
+      const body = JSON.parse((init as { body: string }).body) as Record<string, unknown>;
+      if (Array.isArray(body.input)) {
+        return Promise.reject(new TypeError("socket hang up"));
+      }
+      return Promise.resolve(jsonResponse(SCALAR_OK));
+    });
+    const outcome = await requestOpenAIEmbeddingBatch(batchRequest(["a", "b"], fetchImpl));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value).toHaveLength(2);
+  });
+
+  // The probe must never dress a real outage up as a shape problem, and must never turn one
+  // failed batch into N failed requests against a gateway that is genuinely down.
+  it("reports the original failure, after exactly one probe, when scalars fail too", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(jsonResponse({ error: { message: "service unavailable" } }, 503)),
+    );
+    const outcome = await requestOpenAIEmbeddingBatch(
+      batchRequest(["a", "b", "c", "d"], fetchImpl),
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.status).toBe(503);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not fan out into scalar requests when the caller cancelled the batch", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.reject(new DOMException("aborted", "AbortError")),
+    );
+    const outcome = await requestOpenAIEmbeddingBatch({
+      ...batchRequest(["a", "b", "c"], fetchImpl),
+      signal: AbortSignal.abort(),
+    });
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.kind).toBe("cancelled");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
