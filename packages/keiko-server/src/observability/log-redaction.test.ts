@@ -316,49 +316,78 @@ describe("log field redaction", () => {
     expect(fields).toStrictEqual({ error: REDACTED_KEY, survivor: 1 });
   });
 
-  it("bounds nesting depth, array length and field count", () => {
+  it("bounds nesting depth", () => {
     // MAX_LOG_FIELD_DEPTH nested objects below `extra` survive; the next one down does not.
     expect(redactLogFields({ a: { b: { c: 1 } } })).toStrictEqual({ a: { b: { c: 1 } } });
     expect(redactLogFields({ a: { b: { c: { d: { e: 1 } } } } })).toStrictEqual({
       a: { b: { c: { d: DROPPED_DEPTH } } },
     });
+  });
 
-    // 16 real elements survive, plus one bounded marker proving the bound actually fired — 17
-    // total, never merely "at most 16", so a reconstructing agent can tell a truncated list from a
-    // list that genuinely only had 16 entries.
-    const wide = redactLogFields({
-      list: Array.from({ length: MAX_LOG_ARRAY_LENGTH + 5 }, (_unused, index) => index),
-    });
-    expect(wide?.list).toHaveLength(MAX_LOG_ARRAY_LENGTH + 1);
-    expect((wide?.list as unknown[]).slice(0, MAX_LOG_ARRAY_LENGTH)).toStrictEqual(
-      Array.from({ length: MAX_LOG_ARRAY_LENGTH }, (_unused, index) => index),
+  function widthListOf(length: number): Record<string, unknown> {
+    return { list: Array.from({ length }, (_unused, index) => index) };
+  }
+
+  // The marker CONSUMES A SLOT, so the configured cap holds EXACTLY: MAX_LOG_ARRAY_LENGTH - 1 real
+  // elements survive, plus one bounded marker proving the bound actually fired —
+  // MAX_LOG_ARRAY_LENGTH total, never MAX_LOG_ARRAY_LENGTH + 1. A reconstructing agent can still
+  // tell a truncated list from one that genuinely only had that many entries (the marker), and a
+  // consumer that enforces the documented cap on array length no longer sees it exceeded by one
+  // every time truncation actually fires.
+  it("reserves one array slot for the truncation marker, so the length cap holds exactly", () => {
+    const wide = redactLogFields(widthListOf(MAX_LOG_ARRAY_LENGTH + 5));
+    expect(wide?.list).toHaveLength(MAX_LOG_ARRAY_LENGTH);
+    expect((wide?.list as unknown[]).slice(0, MAX_LOG_ARRAY_LENGTH - 1)).toStrictEqual(
+      Array.from({ length: MAX_LOG_ARRAY_LENGTH - 1 }, (_unused, index) => index),
     );
     expect((wide?.list as unknown[]).at(-1)).toBe(DROPPED_LENGTH);
+  });
 
-    // Exactly MAX_LOG_ARRAY_LENGTH elements is not a truncation: nothing was dropped, so no marker.
-    const exact = redactLogFields({
-      list: Array.from({ length: MAX_LOG_ARRAY_LENGTH }, (_unused, index) => index),
-    });
+  it("holds the array cap exactly one element over the limit, not one under it", () => {
+    // One element over the cap is the boundary the reserved slot exists for: still exactly
+    // MAX_LOG_ARRAY_LENGTH total, not MAX_LOG_ARRAY_LENGTH + 1.
+    const oneOver = redactLogFields(widthListOf(MAX_LOG_ARRAY_LENGTH + 1));
+    expect(oneOver?.list).toHaveLength(MAX_LOG_ARRAY_LENGTH);
+    expect((oneOver?.list as unknown[]).at(-1)).toBe(DROPPED_LENGTH);
+  });
+
+  it("passes an array exactly at the length cap through whole, with no marker", () => {
+    // Exactly MAX_LOG_ARRAY_LENGTH elements is not a truncation: nothing was dropped, so the whole
+    // array passes through with no marker and no slot reserved.
+    const exact = redactLogFields(widthListOf(MAX_LOG_ARRAY_LENGTH));
     expect(exact?.list).toHaveLength(MAX_LOG_ARRAY_LENGTH);
     expect((exact?.list as unknown[]).at(-1)).not.toBe(DROPPED_LENGTH);
+  });
 
-    // 48 accepted fields, plus one synthetic key proving the field-count bound fired — added AFTER
-    // the loop, so it is never itself subject to the count it reports on.
-    const many: Record<string, unknown> = {};
-    for (let index = 0; index < MAX_LOG_FIELD_COUNT + 10; index += 1) {
-      many[`f${String(index)}`] = index;
+  function fieldsOf(count: number): Record<string, unknown> {
+    const fields: Record<string, unknown> = {};
+    for (let index = 0; index < count; index += 1) {
+      fields[`f${String(index)}`] = index;
     }
-    const truncated = redactLogFields(many) ?? {};
-    expect(Object.keys(truncated)).toHaveLength(MAX_LOG_FIELD_COUNT + 1);
+    return fields;
+  }
+
+  it("reserves one field slot for the truncation marker, so the field-count cap holds exactly", () => {
+    // The marker CONSUMES A SLOT here too: MAX_LOG_FIELD_COUNT - 1 accepted fields, plus one
+    // synthetic key proving the field-count bound fired — MAX_LOG_FIELD_COUNT keys total, never
+    // MAX_LOG_FIELD_COUNT + 1.
+    const truncated = redactLogFields(fieldsOf(MAX_LOG_FIELD_COUNT + 10)) ?? {};
+    expect(Object.keys(truncated)).toHaveLength(MAX_LOG_FIELD_COUNT);
     expect(truncated._truncatedFieldCount).toBe(true);
+  });
 
+  it("holds the field-count cap exactly one field over the limit, not one under it", () => {
+    // One field over the cap is the boundary the reserved slot exists for: still exactly
+    // MAX_LOG_FIELD_COUNT keys total, not MAX_LOG_FIELD_COUNT + 1.
+    const oneOverFields = redactLogFields(fieldsOf(MAX_LOG_FIELD_COUNT + 1)) ?? {};
+    expect(Object.keys(oneOverFields)).toHaveLength(MAX_LOG_FIELD_COUNT);
+    expect(oneOverFields._truncatedFieldCount).toBe(true);
+  });
+
+  it("passes an object exactly at the field-count cap through whole, with no marker", () => {
     // Exactly MAX_LOG_FIELD_COUNT fields is not a truncation: every field was accepted, so no
-    // synthetic key is added.
-    const exactlyMany: Record<string, unknown> = {};
-    for (let index = 0; index < MAX_LOG_FIELD_COUNT; index += 1) {
-      exactlyMany[`f${String(index)}`] = index;
-    }
-    const notTruncated = redactLogFields(exactlyMany) ?? {};
+    // synthetic key is added and no slot is reserved.
+    const notTruncated = redactLogFields(fieldsOf(MAX_LOG_FIELD_COUNT)) ?? {};
     expect(Object.keys(notTruncated)).toHaveLength(MAX_LOG_FIELD_COUNT);
     expect(notTruncated._truncatedFieldCount).toBeUndefined();
   });

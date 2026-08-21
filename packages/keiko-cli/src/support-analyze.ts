@@ -1,6 +1,7 @@
 // `keiko support analyze` — pure logic: parsing, grouping, and ordering `server*.log` lines
-// (whether raw, or copied verbatim into a `keiko support export` bundle) by `correlationId`. This is the MINIMAL Wave 1 `LogTimeline`: `lines`, `firstTs`,
-// `lastTs`, `durationMs`, `errorKinds`. `frames`/`clusters`/`warnings`/`gatewayScript` are Wave 6
+// (whether raw, or copied verbatim into a `keiko support export` bundle) by `correlationId`. This
+// is the MINIMAL Wave 1 `LogTimeline`: `lines`, `firstTs`, `lastTs`, `durationMs`, `errorKinds`.
+// `frames`/`clusters`/`gatewayScript` and a PER-TIMELINE `warnings` are Wave 6 `LogTimeline`
 // fields — they read data (aggregated stack frames, gateway retry/replay detail, cross-timeline
 // clustering) that no producer emits yet, so they are omitted here entirely rather than stubbed
 // with placeholder values the analyzer would then have to lie about.
@@ -15,6 +16,15 @@
 // it ranks by its own file position. The result is ONE total order (rank, then seq) rather than a
 // comparator that switches rule per pair, which is not transitive and would hand `sort` an
 // undefined result the moment a pre-v2 line sits between two v2 lines of the same process.
+//
+// `AnalyzeAllResult` (whole-file scope, unlike the per-`LogTimeline` fields above) carries three
+// more fields the analyzer CAN populate honestly today (ADR-0173 D9/D10): `processes` — one
+// summary per process lifetime, built from every line with a full (pid, instanceId, seq) triple
+// regardless of correlationId, so the correlationId-less `process.*` lifecycle lines stay
+// reconstructable; `legacyLineCount` — lines successfully parsed but missing that triple; and
+// `warnings`, which carries exactly one entry naming `legacyLineCount` when it is nonzero. This is
+// the honest machine-readable admission that file-position ordering was used for some lines, which
+// Wave 6 extends rather than the analyzer silently omitting the caveat.
 //
 // `support.ts` owns argv parsing, file reads, and stdout/stderr; this file owns everything that
 // can be exercised on an in-memory string.
@@ -58,9 +68,35 @@ export interface LogTimeline {
   readonly errorKinds: readonly string[];
 }
 
+// A process lifetime summarised across ALL its lines, not only the ones that carry a
+// correlationId — `process.started`/`process.heartbeat`/`process.exiting` lines have none (ADR-0173
+// D9), so a timeline built only from `groupByCorrelationId` can never reconstruct them. Ordered
+// (like `timelines`) by first appearance in the file.
+export interface ProcessSummary {
+  readonly pid: number;
+  readonly instanceId: string;
+  readonly firstSeq: number;
+  readonly lastSeq: number;
+  readonly lineCount: number;
+  readonly firstTs: string;
+  readonly lastTs: string;
+  // The `process.started` line's `extra` bucket for this lifetime, when one was seen.
+  readonly started?: Readonly<Record<string, unknown>> | undefined;
+  // The `reason` field of the `process.exiting` line's `extra` bucket, when one was seen.
+  readonly exitReason?: string | undefined;
+}
+
 export interface AnalyzeAllResult {
   readonly timelines: readonly LogTimeline[];
   readonly malformedLineCount: number;
+  readonly processes: readonly ProcessSummary[];
+  // Lines successfully parsed as log records but missing the full (pid, instanceId, seq) v2
+  // identity triple — pre-v2 lines the sink's own retention window can still be holding.
+  readonly legacyLineCount: number;
+  // Exactly one entry when legacyLineCount > 0, naming the count; empty otherwise. The honest
+  // machine-readable admission that this analyzer fell back to file-position ordering for some
+  // lines — Wave 6 extends this rather than the analyzer silently omitting the caveat.
+  readonly warnings: readonly string[];
 }
 
 export type SourceKind = "bundle" | "raw-log";
@@ -118,7 +154,13 @@ function optionalStringArray(value: unknown): readonly string[] | undefined {
 function extraFields(
   record: Record<string, unknown>,
 ): Readonly<Record<string, unknown>> | undefined {
-  const extra: Record<string, unknown> = {};
+  // Null prototype: a `"__proto__"` key parsed out of a log line is an ordinary own property on
+  // `record` (`JSON.parse` defines it via `[[DefineOwnProperty]]`, not the exotic setter), but
+  // assigning it onto a plain `{}` here would hit `Object.prototype`'s inherited `__proto__`
+  // setter instead of defining an own property — silently dropping the field from the reported
+  // `extra` bucket (and, for an object value, replacing `extra`'s own prototype) rather than
+  // reporting it, which is exactly the silent skip this module's header states it must not do.
+  const extra: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   let hasAny = false;
   for (const key of Object.keys(record)) {
     if (KNOWN_ENVELOPE_KEYS.has(key)) continue;
@@ -295,6 +337,79 @@ function buildTimeline(correlationId: string, group: readonly ParsedLine[]): Log
   return { correlationId, lines: views, firstTs: first, lastTs: last, durationMs, errorKinds };
 }
 
+interface ProcessAccum {
+  pid: number;
+  instanceId: string;
+  firstSeq: number;
+  lastSeq: number;
+  lineCount: number;
+  firstTs: string;
+  lastTs: string;
+  started: Readonly<Record<string, unknown>> | undefined;
+  exitReason: string | undefined;
+}
+
+function exitReasonOf(view: ServerLogLineView): string | undefined {
+  const reason = view.extra?.reason;
+  return typeof reason === "string" ? reason : undefined;
+}
+
+function newProcessAccum(view: ServerLogLineView, pid: number, instanceId: string): ProcessAccum {
+  const seq = orZero(view.seq);
+  return {
+    pid,
+    instanceId,
+    firstSeq: seq,
+    lastSeq: seq,
+    lineCount: 1,
+    firstTs: view.ts,
+    lastTs: view.ts,
+    started: view.op === "process.started" ? view.extra : undefined,
+    exitReason: view.op === "process.exiting" ? exitReasonOf(view) : undefined,
+  };
+}
+
+function mergeIntoProcessAccum(accum: ProcessAccum, view: ServerLogLineView): void {
+  const seq = orZero(view.seq);
+  accum.lineCount += 1;
+  accum.firstSeq = Math.min(accum.firstSeq, seq);
+  accum.lastSeq = Math.max(accum.lastSeq, seq);
+  if (view.ts < accum.firstTs) accum.firstTs = view.ts;
+  if (view.ts > accum.lastTs) accum.lastTs = view.ts;
+  if (view.op === "process.started" && view.extra !== undefined) accum.started = view.extra;
+  if (view.op === "process.exiting") {
+    const reason = exitReasonOf(view);
+    if (reason !== undefined) accum.exitReason = reason;
+  }
+}
+
+// Summarises every process lifetime seen across ALL parsed lines — including the lifecycle lines
+// (`process.started`/`process.heartbeat`/`process.exiting`) that carry no correlationId and so
+// never enter a `LogTimeline` — in first-file-appearance order (a `Map`'s insertion order, the
+// same ranking rule `assignOrder` uses for timelines).
+function buildProcessSummaries(lines: readonly ParsedLine[]): readonly ProcessSummary[] {
+  const accums = new Map<string, ProcessAccum>();
+  for (const { view, hasFullIdentity } of lines) {
+    if (!hasFullIdentity || view.pid === undefined || view.instanceId === undefined) continue;
+    const key = `${String(view.pid)}:${view.instanceId}`;
+    const existing = accums.get(key);
+    if (existing === undefined) {
+      accums.set(key, newProcessAccum(view, view.pid, view.instanceId));
+    } else {
+      mergeIntoProcessAccum(existing, view);
+    }
+  }
+  return [...accums.values()];
+}
+
+function buildWarnings(legacyLineCount: number): readonly string[] {
+  return legacyLineCount > 0
+    ? [
+        `${String(legacyLineCount)} line(s) predate the v2 envelope and were ordered by file position`,
+      ]
+    : [];
+}
+
 // Parses `text` (the full content of a raw server.log OR a support bundle), groups every line
 // that carries a correlationId into one LogTimeline per id (first-occurrence order), and counts
 // every line that could not be read as a log record. A line with no correlationId at all
@@ -315,7 +430,10 @@ export function analyzeLogText(text: string): AnalyzeAllResult {
   const timelines = [...groups.entries()].map(([correlationId, group]) =>
     buildTimeline(correlationId, group),
   );
-  return { timelines, malformedLineCount };
+  const processes = buildProcessSummaries(parsedLines);
+  const legacyLineCount = parsedLines.filter((parsed) => !parsed.hasFullIdentity).length;
+  const warnings = buildWarnings(legacyLineCount);
+  return { timelines, malformedLineCount, processes, legacyLineCount, warnings };
 }
 
 export function findTimeline(
@@ -345,7 +463,36 @@ export function renderHumanTimeline(timeline: LogTimeline): string {
   return `${header}${body}\n`;
 }
 
+function renderProcessSummary(process: ProcessSummary): string {
+  const seqRange = `${String(process.firstSeq)}-${String(process.lastSeq)}`;
+  const started = process.started === undefined ? "" : " started=yes";
+  const exit = process.exitReason === undefined ? "" : ` exitReason=${process.exitReason}`;
+  return (
+    `  pid=${String(process.pid)} instanceId=${process.instanceId} ` +
+    `lines=${String(process.lineCount)} seq=${seqRange} ts=${process.firstTs}..${process.lastTs}` +
+    `${started}${exit}`
+  );
+}
+
+function renderProcessSummaries(processes: readonly ProcessSummary[]): string {
+  const header = `Processes: ${String(processes.length)}\n`;
+  const body = processes.map((process) => renderProcessSummary(process)).join("\n");
+  return `${header}${body}\n`;
+}
+
+function renderWarnings(warnings: readonly string[]): string {
+  const lines = warnings.map((warning) => `warning: ${warning}`);
+  return `${lines.join("\n")}\n`;
+}
+
 export function renderHumanAllTimelines(result: AnalyzeAllResult): string {
-  if (result.timelines.length === 0) return "No correlated events found.\n";
-  return result.timelines.map((timeline) => renderHumanTimeline(timeline)).join("\n");
+  const sections: string[] = [];
+  if (result.warnings.length > 0) sections.push(renderWarnings(result.warnings));
+  if (result.processes.length > 0) sections.push(renderProcessSummaries(result.processes));
+  sections.push(
+    result.timelines.length === 0
+      ? "No correlated events found.\n"
+      : result.timelines.map((timeline) => renderHumanTimeline(timeline)).join("\n"),
+  );
+  return sections.join("\n");
 }

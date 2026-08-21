@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -11,6 +11,7 @@ import {
   CURRENT_LOG_FILE_NAME,
   DEFAULT_MAX_BUNDLE_BYTES,
   discoverServerLogFiles,
+  readKeptFiles,
   readVerbatimLogLines,
   selectLogFilesWithinBudget,
   serializeBundleLines,
@@ -42,6 +43,7 @@ function baseManifestInput(
     stateDirSource: "default",
     sourceLogFiles: [],
     truncatedLogFiles: [],
+    skippedLogFiles: [],
     auditSummary: HEALTHY_AUDIT,
     evidenceIndexCount: 0,
     ...overrides,
@@ -65,26 +67,45 @@ describe("discoverServerLogFiles", () => {
     writeFileSync(join(dir, CURRENT_LOG_FILE_NAME), "c\n");
     writeFileSync(join(dir, "unrelated.txt"), "ignored\n");
 
-    const files = discoverServerLogFiles(dir);
+    const discovery = discoverServerLogFiles(dir);
 
-    expect(files.map((f) => f.name)).toEqual([
+    expect(discovery.files.map((f) => f.name)).toEqual([
       "server-2026-08-19.log",
       "server-2026-08-20.log",
       CURRENT_LOG_FILE_NAME,
     ]);
-    expect(files.every((f) => f.sizeBytes === 2)).toBe(true);
+    expect(discovery.files.every((f) => f.sizeBytes === 2)).toBe(true);
+    expect(discovery.skippedLogFiles).toEqual([]);
   });
 
   it("omits the current file from the ordering when it does not exist", () => {
     writeFileSync(join(dir, "server-2026-08-19.log"), "a\n");
 
-    const files = discoverServerLogFiles(dir);
+    const discovery = discoverServerLogFiles(dir);
 
-    expect(files.map((f) => f.name)).toEqual(["server-2026-08-19.log"]);
+    expect(discovery.files.map((f) => f.name)).toEqual(["server-2026-08-19.log"]);
   });
 
-  it("returns an empty list for a logs directory that does not exist, never throwing", () => {
-    expect(discoverServerLogFiles(join(dir, "does-not-exist"))).toEqual([]);
+  it("returns an empty result for a logs directory that does not exist, never throwing", () => {
+    expect(discoverServerLogFiles(join(dir, "does-not-exist"))).toEqual({
+      files: [],
+      skippedLogFiles: [],
+    });
+  });
+
+  // Regression-shaped: a name `readdirSync` returns can vanish before `statSync` runs (the sink's
+  // own rotation/retention pruning), one step earlier than the `readKeptFiles` race already pinned
+  // above. Reproduced with a broken symlink — `readdirSync` lists its name, but `statSync` follows
+  // it and throws ENOENT, a real race rather than a mock — so discovery must skip it (recording
+  // its name) instead of throwing out of the whole export.
+  it("skips a rotated file that vanishes between readdirSync and statSync, recording its name", () => {
+    writeFileSync(join(dir, "server-2026-08-19.log"), "a\n");
+    symlinkSync(join(dir, "does-not-exist-target.log"), join(dir, "server-2026-08-20.log"));
+
+    const discovery = discoverServerLogFiles(dir);
+
+    expect(discovery.files.map((f) => f.name)).toEqual(["server-2026-08-19.log"]);
+    expect(discovery.skippedLogFiles).toEqual(["server-2026-08-20.log"]);
   });
 });
 
@@ -167,12 +188,68 @@ describe("readVerbatimLogLines", () => {
   });
 });
 
+describe("readKeptFiles", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "keiko-support-export-read-kept-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reads every kept file's lines, in file order, into one contentLines array", () => {
+    const pathA = join(dir, "server-2026-08-19.log");
+    const pathB = join(dir, CURRENT_LOG_FILE_NAME);
+    writeFileSync(pathA, '{"ts":"a"}\n');
+    writeFileSync(pathB, '{"ts":"b"}\n');
+
+    const result = readKeptFiles([
+      { name: "server-2026-08-19.log", path: pathA, sizeBytes: 0 },
+      { name: CURRENT_LOG_FILE_NAME, path: pathB, sizeBytes: 0 },
+    ]);
+
+    expect(result.contentLines).toEqual(['{"ts":"a"}', '{"ts":"b"}']);
+    expect(result.skippedLogFiles).toEqual([]);
+  });
+
+  // Regression: a file present in the list `selectLogFilesWithinBudget` kept can still vanish
+  // (the sink's own rotation/retention pruning) before its bytes are actually read — a real race
+  // reproduced here by deleting it between the discovery/selection step and the read step, not by
+  // mocking. Before the fix, `readFileSync` threw straight out of `serializeBundleLines`, aborting
+  // the whole export. After the fix, the vanished file is skipped and named, and the surviving
+  // file's content still comes through.
+  it("skips a kept file that vanishes between discovery and the read, recording its name", () => {
+    const survivingPath = join(dir, "server-2026-08-19.log");
+    const vanishingPath = join(dir, CURRENT_LOG_FILE_NAME);
+    writeFileSync(survivingPath, '{"ts":"a"}\n');
+    writeFileSync(vanishingPath, '{"ts":"b"}\n');
+
+    const discovery = discoverServerLogFiles(dir);
+    const selection = selectLogFilesWithinBudget(discovery.files, DEFAULT_MAX_BUNDLE_BYTES);
+    expect(selection.kept.map((f) => f.name)).toEqual([
+      "server-2026-08-19.log",
+      CURRENT_LOG_FILE_NAME,
+    ]);
+
+    // The race: the current log file rotates out from under the export after it was selected.
+    rmSync(vanishingPath);
+
+    const result = readKeptFiles(selection.kept);
+
+    expect(result.contentLines).toEqual(['{"ts":"a"}']);
+    expect(result.skippedLogFiles).toEqual([CURRENT_LOG_FILE_NAME]);
+  });
+});
+
 describe("buildSupportBundleManifest", () => {
   it("produces the exact manifest shape for the minimal Wave 1 bundle", () => {
     const manifest = buildSupportBundleManifest(
       baseManifestInput({
         sourceLogFiles: ["server-2026-08-20.log", "server.log"],
         truncatedLogFiles: ["server-2026-08-18.log"],
+        skippedLogFiles: ["server-2026-08-17.log"],
         evidenceIndexCount: 3,
       }),
     );
@@ -191,6 +268,7 @@ describe("buildSupportBundleManifest", () => {
       redactionAttested: true,
       sourceLogFiles: ["server-2026-08-20.log", "server.log"],
       truncatedLogFiles: ["server-2026-08-18.log"],
+      skippedLogFiles: ["server-2026-08-17.log"],
       sectionsExcluded: [],
       auditSummary: REDACTED_HEALTHY_AUDIT,
       evidenceIndexCount: 3,
@@ -249,8 +327,9 @@ describe("serializeBundleLines and bundleText", () => {
       { name: CURRENT_LOG_FILE_NAME, path: currentPath, sizeBytes: 0 },
     ];
     const manifest = buildSupportBundleManifest(baseManifestInput());
+    const { contentLines } = readKeptFiles(files);
 
-    const lines = serializeBundleLines(manifest, files);
+    const lines = serializeBundleLines(manifest, contentLines);
 
     expect(lines[0]).toBe(JSON.stringify(manifest));
     expect(lines.slice(1)).toEqual([rotatedLine, currentLine]);

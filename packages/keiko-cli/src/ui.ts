@@ -105,6 +105,11 @@ export interface UiCliDeps {
   // here lets a test assert on the lifecycle events without loading the real server module graph
   // or writing outside its own fixture.
   readonly activityLog?: ServerLogSink | undefined;
+  // Test seam for `process.started`'s install-mode probe (ADR-0173). On the real CLI launch path
+  // this defaults to the real filesystem-based detector; injecting an override here — including
+  // one that throws — drives `probeInstallModeKind`'s try/catch contract through `runUiCli` itself
+  // without needing a real launch (which the injected-server path otherwise never probes at all).
+  readonly installModeProbe?: () => Promise<UpdateInstallModeKind | undefined>;
 }
 
 interface LiveCspSource {
@@ -316,6 +321,7 @@ function withDefaultLocalRuntimeStateEnv(
   stateDir: string,
   parsed: UiCliArgs,
   env: EnvSource,
+  cwd: string,
 ): EnvSource {
   const next: Record<string, string | undefined> = {
     ...env,
@@ -331,10 +337,17 @@ function withDefaultLocalRuntimeStateEnv(
   }
   // Guarded on `parsed.evidenceDir`, unlike `KEIKO_MEMORY_DIR` above (which has no CLI flag
   // counterpart): an explicit `--evidence-dir` must win in the child's env too, the same way
-  // `KEIKO_UI_DATA_DIR`'s default above is guarded on `parsed.uiDbPath`. Baking the DEFAULT in
-  // regardless would leak the wrong evidence directory to anything that inherits this env and
-  // reads `KEIKO_EVIDENCE_DIR` directly rather than re-deriving `EvidenceStore`'s own precedence.
-  if (parsed.evidenceDir === undefined && !hasEnvValue(next.KEIKO_EVIDENCE_DIR)) {
+  // `KEIKO_UI_DATA_DIR`'s default above is guarded on `parsed.uiDbPath`. Unlike the omit-when-
+  // explicit shape that guard used to have, the resolved absolute flag value is now PROPAGATED
+  // (resolved against `cwd` the same way `resolveRuntimeStateDir` resolves a relative
+  // `--state-dir`): a child process that reads `KEIKO_EVIDENCE_DIR` directly, rather than
+  // re-deriving `EvidenceStore`'s own precedence, must see the same directory the CLI itself
+  // resolved `--evidence-dir` against, not its own default.
+  if (parsed.evidenceDir !== undefined) {
+    next.KEIKO_EVIDENCE_DIR = isAbsolute(parsed.evidenceDir)
+      ? parsed.evidenceDir
+      : resolve(cwd, parsed.evidenceDir);
+  } else if (!hasEnvValue(next.KEIKO_EVIDENCE_DIR)) {
     next.KEIKO_EVIDENCE_DIR = join(stateDir, "evidence");
   }
   return next;
@@ -392,13 +405,31 @@ export interface WaitForShutdownActivity {
   readonly closeActivityLog?: (() => void) | undefined;
 }
 
+// The independent-channel idiom `knowledge-log.ts`'s `warnFailedKnowledgeLogSink` uses: when the
+// line that would normally carry a failure kind cannot be written at all (no activity log in
+// scope here), the report goes out on the one channel that does not depend on the log — a single,
+// body-free `process.emitWarning`. Only the error's CLASS travels in `detail`, never a message.
+function warnShutdownHookFailed(errorKind: string): void {
+  try {
+    process.emitWarning("Keiko UI shutdown hook failed; teardown may be incomplete.", {
+      type: "KeikoUiShutdown",
+      code: "KEIKO_SHUTDOWN_HOOK_FAILED",
+      detail: `errorKind=${errorKind}`,
+    });
+  } catch {
+    // The process warning channel is the last one there is; a report beyond it does not exist.
+  }
+}
+
 function writeProcessExiting(activity: WaitForShutdownActivity, reason: ProcessExitReason): void {
   // A throwing onShutdown must not suppress this line (see WaitForShutdownActivity's doc
   // comment) — caught here rather than left to propagate into the SIGINT/SIGTERM/server-close
   // listener that calls this function, which would turn a heartbeat-teardown failure into an
   // uncaught exception on the shutdown path itself. The failure is not swallowed silently: it is
   // recorded on the very line it must not suppress, so an agent reconstructing this shutdown from
-  // the log still sees it.
+  // the log still sees it — and when there is no line to carry it (no activity log in scope),
+  // `warnShutdownHookFailed` reports it on the independent process-warning channel instead, so a
+  // heartbeat-teardown failure never vanishes with the shutdown path that produced it.
   // Only the error's CLASS is recorded, never its message: a message is foreign free text, and
   // the producer side never reads one — the same rule every other instrumentation site follows.
   let onShutdownErrorKind: string | undefined;
@@ -408,7 +439,10 @@ function writeProcessExiting(activity: WaitForShutdownActivity, reason: ProcessE
     onShutdownErrorKind = error instanceof Error ? error.name : typeof error;
   }
   const { activityLog, startedAt, closeActivityLog } = activity;
-  if (activityLog === undefined || startedAt === undefined) return;
+  if (activityLog === undefined || startedAt === undefined) {
+    if (onShutdownErrorKind !== undefined) warnShutdownHookFailed(onShutdownErrorKind);
+    return;
+  }
   activityLog.write({
     category: "process",
     op: "process.exiting",
@@ -637,12 +671,30 @@ async function maybeWaitForShutdown(
 // process without its own volume control.
 const HEARTBEAT_INTERVAL_MS = 60_000;
 
-type EventLoopHistogram = ReturnType<typeof monitorEventLoopDelay>;
+// Narrowed to the four members this module actually calls, rather than the full Node
+// `RecordableHistogram` shape `monitorEventLoopDelay()` returns (which structurally satisfies
+// this interface with room to spare). The narrow shape is the injection seam
+// `startProcessHeartbeat`'s `createHistogram` parameter uses: a test double only needs to
+// implement these four methods to stand in for a real histogram.
+interface EventLoopHistogram {
+  enable(): void;
+  disable(): void;
+  reset(): void;
+  percentile(percentile: number): number;
+}
 // `percentile()` reports nanoseconds; the log field is documented in milliseconds.
 const NANOSECONDS_PER_MILLISECOND = 1_000_000;
 
+// `monitorEventLoopDelay()` accumulates samples cumulatively until `reset()` is called (Node docs);
+// left unreset, every later heartbeat's p99 would include every earlier interval's delay instead
+// of describing only the interval since the previous tick. Reading the percentile BEFORE
+// resetting, and resetting BEFORE the write, keeps each heartbeat interval-scoped: the value on
+// the line reflects only the window since the last heartbeat, and a slow interval's delay never
+// leaks into the next one (#2902 PR review).
 function writeHeartbeat(activityLog: ServerLogSink, histogram: EventLoopHistogram): void {
   const memory = process.memoryUsage();
+  const eventLoopDelayP99Ms = histogram.percentile(99) / NANOSECONDS_PER_MILLISECOND;
+  histogram.reset();
   activityLog.write({
     level: "info",
     category: "process",
@@ -652,7 +704,7 @@ function writeHeartbeat(activityLog: ServerLogSink, histogram: EventLoopHistogra
       heapUsedBytes: memory.heapUsed,
       heapTotalBytes: memory.heapTotal,
       externalBytes: memory.external,
-      eventLoopDelayP99Ms: histogram.percentile(99) / NANOSECONDS_PER_MILLISECOND,
+      eventLoopDelayP99Ms,
     },
   });
 }
@@ -662,11 +714,14 @@ function writeHeartbeat(activityLog: ServerLogSink, histogram: EventLoopHistogra
 // one-shot command alive, and only ever scheduled here — never at CLI module scope — preserving
 // GEN-PERF-CLI-001's per-command budget. Exported so the interval/histogram lifecycle (started,
 // produces a line, fully released on stop) can be unit-tested directly without booting a server.
+// `createHistogram` defaults to the real `monitorEventLoopDelay`; tests inject a deterministic
+// double through it to pin interval-scoping without depending on real event-loop timing.
 export function startProcessHeartbeat(
   activityLog: ServerLogSink,
   intervalMs: number = HEARTBEAT_INTERVAL_MS,
+  createHistogram: () => EventLoopHistogram = monitorEventLoopDelay,
 ): () => void {
-  const histogram = monitorEventLoopDelay();
+  const histogram = createHistogram();
   histogram.enable();
   const interval = setInterval(() => {
     writeHeartbeat(activityLog, histogram);
@@ -691,9 +746,31 @@ export function startProcessHeartbeat(
 // the filesystem from `process.argv[1]` looking for this package's own `package.json`, which is
 // environment-dependent and would make every injected-server test's `process.started` line
 // non-deterministic.
-async function resolveInstallModeKind(): Promise<UpdateInstallModeKind | undefined> {
+//
+// `reportProcessStarted` runs this AFTER `listen()` has already succeeded and the CLI has already
+// printed the listening URL, so a probe failure here (a permission error, an unreadable parent
+// directory) must never end a launch whose server is already up. Contained in its own try/catch
+// rather than left to propagate: the failure is reported via `installModeErrorKind` (content-free
+// class only), not swallowed, and `installMode` is then correctly absent rather than fabricated.
+interface InstallModeProbeResult {
+  readonly installMode: UpdateInstallModeKind | undefined;
+  readonly installModeErrorKind: string | undefined;
+}
+
+async function defaultInstallModeProbe(): Promise<UpdateInstallModeKind | undefined> {
   const { detectUpdateInstallMode, productionUpdateFacts } = await loadServerModule();
   return detectUpdateInstallMode(productionUpdateFacts(process.env), process.env).installKind;
+}
+
+async function probeInstallModeKind(
+  probe: () => Promise<UpdateInstallModeKind | undefined> = defaultInstallModeProbe,
+): Promise<InstallModeProbeResult> {
+  try {
+    return { installMode: await probe(), installModeErrorKind: undefined };
+  } catch (error) {
+    const installModeErrorKind = error instanceof Error ? error.name : typeof error;
+    return { installMode: undefined, installModeErrorKind };
+  }
 }
 
 interface ProcessStartedContext {
@@ -703,6 +780,12 @@ interface ProcessStartedContext {
   readonly handlerDeps: UiHandlerDeps;
   readonly stateDirSource: StateDirSource;
   readonly logLevel: string;
+  // Threaded from `UiCliDeps.installModeProbe`. Undefined on every real launch that does not
+  // override it (the real detector runs) and on the injected-server path with no override (no
+  // probe runs at all, matching today's behavior) — defined only when a test explicitly injects
+  // one, in which case it runs regardless of `isRealLaunch` so the try/catch contract is
+  // reachable through `runUiCli` without a real server bind.
+  readonly installModeProbe: (() => Promise<UpdateInstallModeKind | undefined>) | undefined;
 }
 
 // Writes `process.started` (when an activity log is in scope) and, on the real CLI path only,
@@ -713,8 +796,12 @@ async function reportProcessStarted(
   context: ProcessStartedContext,
 ): Promise<(() => void) | undefined> {
   const { activityLog, isRealLaunch, parsed, handlerDeps, stateDirSource, logLevel } = context;
+  const { installModeProbe } = context;
+  const shouldProbeInstallMode = isRealLaunch || installModeProbe !== undefined;
   if (activityLog === undefined) return undefined;
-  const installMode = isRealLaunch ? await resolveInstallModeKind() : undefined;
+  const { installMode, installModeErrorKind } = shouldProbeInstallMode
+    ? await probeInstallModeKind(installModeProbe)
+    : { installMode: undefined, installModeErrorKind: undefined };
   const gatewayProviderCount = handlerDeps.config?.providers.length;
   // No `instanceId` in `extra` here: `instanceId` is a RESERVED field name
   // (`log-redaction.ts`'s `RESERVED_FIELD_NAMES`), so `redactLogFields` silently drops it from
@@ -737,6 +824,7 @@ async function reportProcessStarted(
       stateDirSource,
       logLevel,
       ...(installMode === undefined ? {} : { installMode }),
+      ...(installModeErrorKind === undefined ? {} : { installModeErrorKind }),
       ...(gatewayProviderCount === undefined ? {} : { gatewayProviderCount }),
     },
   });
@@ -801,6 +889,7 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
     handlerDeps,
     stateDirSource,
     logLevel,
+    installModeProbe: deps.installModeProbe,
   });
   // Block only in the real CLI path (no injected factory). Injected-server tests skip blocking so
   // they don't hang; the real process must stay alive until signalled.
@@ -892,7 +981,7 @@ async function launchUiFromDeps(
   const handlerDeps = await buildHandlerDepsOrReport(
     parsed,
     cwd,
-    withDefaultLocalRuntimeStateEnv(stateDir, parsed, effectiveEnv),
+    withDefaultLocalRuntimeStateEnv(stateDir, parsed, effectiveEnv, cwd),
     io,
   );
   if (typeof handlerDeps === "number") return handlerDeps;

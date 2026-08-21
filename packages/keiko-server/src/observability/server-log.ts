@@ -362,15 +362,33 @@ interface ActiveLog {
   // stalled mid-line is remembered: the file ends mid-record and the next record must open with a
   // newline. See `writeRecord`.
   pendingNewline: boolean;
-  // The next `seq` value this ActiveLog will stamp. Monotonic per resolved log directory, not per
-  // sink: every sink sharing this ActiveLog (see `resolveActiveLog`) advances the SAME counter, so
-  // two independent sinks on one file still produce one ordering instead of two interleaved ones.
-  // It advances once a line clears the level gate, whether or not the write that follows actually
-  // lands — a dropped write is still evidence that something happened at that point in the
-  // sequence, and a silently reused number would be worse than a gap. Survives day rotation
-  // (nothing in `rotateIfNeeded` touches it) and resets only when the process restarts, because the
-  // registry itself is process-wide, in-memory state.
-  nextSeq: number;
+}
+
+// PROCESS-WIDE `seq` ALLOCATOR — one counter, one module, for the life of the process.
+//
+// It must NOT live on `ActiveLog`. Two independent state directories in the same process (a CLI
+// pointed at a workspace-local state dir, and the server logger's own default) each resolve to a
+// DIFFERENT `ActiveLog`; a counter kept per `ActiveLog` restarts at 1 for each one, so two lines
+// written moments apart — one to each directory — can carry the identical `(pid, instanceId, seq)`
+// tuple. That tuple is the join key ADR-0173 (D2) promises an agent a total, gap-free order on, and
+// a duplicate breaks the promise regardless of how many log directories the process happens to
+// have open. One allocator shared by every `ActiveLog`, every rotation, and every sink built on top
+// of any of them is what keeps the tuple unique process-wide.
+//
+// Claimed as soon as an event clears the level gate, in `createFileSinkFacade.write`, BEFORE the
+// write is attempted — never rolled back if that write then throws. The alternative, claiming only
+// after a successful write, would let two callers racing the same failure both observe the same
+// pre-failure counter value and then both claim the number that follows it, silently reusing a
+// sequence number for two different lines. A gap is not a bug in this counter: it is the evidence
+// that a line was not persisted, and `reportServerLogFailure`'s suppressed-notice count accounts
+// for the writes a gap represents. Monotonic per process; a gap marks a line the sink could not
+// persist.
+let nextProcessSeq = 1;
+
+function allocateServerLogSeq(): number {
+  const seq = nextProcessSeq;
+  nextProcessSeq += 1;
+  return seq;
 }
 
 function todayUtc(now: Date = new Date()): string {
@@ -555,7 +573,6 @@ function resolveActiveLog(directory: string, retentionDays: number): ActiveLog {
     currentDay: todayUtc(),
     handle: null,
     pendingNewline: false,
-    nextSeq: 1,
   };
   activeLogs.set(key, created);
   return created;
@@ -597,10 +614,9 @@ function createFileSinkFacade(active: ActiveLog, threshold: ServerLogThreshold):
       if (!serverLogLevelEnabled(eventLevel(event), threshold)) return;
       try {
         rotateIfNeeded(active);
-        // Claimed as soon as the event clears the gate, before the write is attempted: see the
-        // `nextSeq` field comment for why a dropped write must not roll this number back.
-        const seq = active.nextSeq;
-        active.nextSeq += 1;
+        // Claimed as soon as the event clears the gate, before the write is attempted: see
+        // `allocateServerLogSeq` for why a dropped write must not roll this number back.
+        const seq = allocateServerLogSeq();
         const identity: ServerLogIdentity = {
           schemaVersion: SERVER_LOG_SCHEMA_VERSION,
           pid: process.pid,

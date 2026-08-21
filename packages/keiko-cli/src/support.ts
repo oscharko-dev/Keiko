@@ -34,6 +34,7 @@ import {
   bundleText,
   DEFAULT_MAX_BUNDLE_BYTES,
   discoverServerLogFiles,
+  readKeptFiles,
   selectLogFilesWithinBudget,
   serializeBundleLines,
 } from "./support-export.js";
@@ -50,7 +51,9 @@ the oldest log files are dropped first when the cap would be exceeded, and alway
 manifest's truncatedLogFiles.
 
 analyze reads FILE (a support bundle or a raw server.log — auto-detected), groups its lines by
-correlationId, and prints one reconstructed timeline per id ordered by (pid, instanceId, seq).
+correlationId, and prints one reconstructed timeline per id. Each process lifetime is ordered by
+seq; lifetimes are ordered by the position of their first line in the file, because the log
+envelope promises no order across processes.
 --correlation-id narrows to a single id; --json emits the machine-readable form.
 `;
 
@@ -213,6 +216,48 @@ function resolveExportInstallMode(server: Awaited<ReturnType<typeof loadServer>>
   }
 }
 
+interface LogContent {
+  readonly contentLines: readonly string[];
+  readonly sourceLogFiles: readonly string[];
+  readonly truncatedLogFiles: readonly string[];
+  readonly skippedLogFiles: readonly string[];
+}
+
+// Discovers, budget-selects, and reads the state dir's server*.log files in one pass, tolerating
+// the sink's own rotation/retention pruning at both boundaries it can race
+// (support-export.ts's `discoverServerLogFiles`, between `readdirSync` and `statSync`, and
+// `readKeptFiles`, between selection and the actual read): `sourceLogFiles` names only the files
+// that actually contributed content; `skippedLogFiles` names every file that vanished at either
+// boundary, by name only, never by its absolute path.
+function collectLogContent(logsDir: string, maxBytes: number): LogContent {
+  const discovery = discoverServerLogFiles(logsDir);
+  const selection = selectLogFilesWithinBudget(discovery.files, maxBytes);
+  const read = readKeptFiles(selection.kept);
+  const readSkipped = new Set(read.skippedLogFiles);
+  const sourceLogFiles = selection.kept
+    .map((file) => file.name)
+    .filter((name) => !readSkipped.has(name));
+  return {
+    contentLines: read.contentLines,
+    sourceLogFiles,
+    truncatedLogFiles: selection.truncatedLogFiles,
+    skippedLogFiles: [...discovery.skippedLogFiles, ...read.skippedLogFiles],
+  };
+}
+
+// Content-free, same discipline as readAnalyzeSource: an fs error's message can quote the path it
+// was writing (AGENTS.md §7). Returns undefined on success, an exit code on failure.
+function writeBundleOrExitCode(outPath: string, contents: string, io: CliIo): number | undefined {
+  try {
+    writeFileSync(outPath, contents, "utf8");
+    return undefined;
+  } catch (error) {
+    const kind = error instanceof Error ? error.constructor.name : "Error";
+    io.err(`keiko support export: could not write the bundle: ${kind}\n`);
+    return 1;
+  }
+}
+
 function reportAuditFailure(error: unknown, io: CliIo): number {
   if (error instanceof AuditLoadError) {
     io.err(
@@ -238,8 +283,10 @@ async function runSupportExport(
   const now = deps.now ?? ((): Date => new Date());
   const stateDir = resolveStateDir(cwd, env, args.stateDir);
   const stateDirSource = resolveStateDirSource(env, args.stateDir);
-  const files = discoverServerLogFiles(join(stateDir, "logs"));
-  const selection = selectLogFilesWithinBudget(files, args.maxBytes ?? DEFAULT_MAX_BUNDLE_BYTES);
+  const logContent = collectLogContent(
+    join(stateDir, "logs"),
+    args.maxBytes ?? DEFAULT_MAX_BUNDLE_BYTES,
+  );
   const evidenceDir = env.KEIKO_EVIDENCE_DIR ?? join(stateDir, "evidence");
   const evidenceIndexCount = await resolveEvidenceIndexCount(evidenceDir, deps);
   // Not a hot path (`support analyze` never reaches this function), so loading the server module
@@ -263,15 +310,17 @@ async function runSupportExport(
     generatedAt: generatedAtDate.toISOString(),
     installMode: resolveExportInstallMode(server),
     stateDirSource,
-    sourceLogFiles: selection.kept.map((file) => file.name),
-    truncatedLogFiles: selection.truncatedLogFiles,
+    sourceLogFiles: logContent.sourceLogFiles,
+    truncatedLogFiles: logContent.truncatedLogFiles,
+    skippedLogFiles: logContent.skippedLogFiles,
     auditSummary,
     evidenceIndexCount,
   });
 
-  const lines = serializeBundleLines(manifest, selection.kept);
+  const lines = serializeBundleLines(manifest, logContent.contentLines);
   const outPath = resolveOutPath(cwd, args.out, generatedAtDate);
-  writeFileSync(outPath, bundleText(lines), "utf8");
+  const failureCode = writeBundleOrExitCode(outPath, bundleText(lines), io);
+  if (failureCode !== undefined) return failureCode;
   io.out(`Wrote ${String(lines.length)} lines to ${outPath}\n`);
   return 0;
 }

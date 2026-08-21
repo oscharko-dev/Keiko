@@ -489,7 +489,7 @@ describe("runUiCli", () => {
     }
   });
 
-  it("does not default KEIKO_EVIDENCE_DIR in the child env when --evidence-dir is explicit", async () => {
+  it("propagates the resolved --evidence-dir into the child env instead of leaving it unset", async () => {
     const { io } = captureIo();
     const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-evidence-flag-"));
     const evidenceDir = join(cwd, "custom-evidence");
@@ -507,15 +507,70 @@ describe("runUiCli", () => {
       const code = await runUiCli(["--evidence-dir", evidenceDir], io, {}, deps);
       expect(code).toBe(0);
       const handlerDeps = expectSingleHandlerDeps(captured);
-      // The explicit flag is passed straight through to `buildUiHandlerDeps`; the derived env
-      // must stay gap-free rather than baking in the DEFAULT `<stateDir>/evidence` next to it —
-      // otherwise a child process that reads `KEIKO_EVIDENCE_DIR` directly would see the wrong
-      // directory even though the CLI itself resolved the flag correctly.
-      expect(handlerDeps.env.KEIKO_EVIDENCE_DIR).toBeUndefined();
+      // The explicit flag is passed straight through to `buildUiHandlerDeps`, and the derived env
+      // must carry the SAME resolved directory rather than leaving `KEIKO_EVIDENCE_DIR` unset next
+      // to it — otherwise a child process that reads `KEIKO_EVIDENCE_DIR` directly, rather than
+      // re-deriving `EvidenceStore`'s own precedence, would fall back to its own default and see a
+      // different directory than the one the CLI actually resolved.
+      expect(handlerDeps.env.KEIKO_EVIDENCE_DIR).toBe(evidenceDir);
       handlerDeps.store.close();
       handlerDeps.memoryVault?.close();
     } finally {
       await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a relative --evidence-dir against cwd before propagating it to the child env", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-evidence-relative-"));
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli(["--evidence-dir", "relative-evidence"], io, {}, deps);
+      expect(code).toBe(0);
+      const handlerDeps = expectSingleHandlerDeps(captured);
+      expect(handlerDeps.env.KEIKO_EVIDENCE_DIR).toBe(join(cwd, "relative-evidence"));
+      handlerDeps.store.close();
+      handlerDeps.memoryVault?.close();
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  // No --evidence-dir flag: the else-if guard must leave an already-set KEIKO_EVIDENCE_DIR alone,
+  // the same way it always has, rather than overwriting it with the `<stateDir>/evidence` default.
+  it("keeps an already-set KEIKO_EVIDENCE_DIR when --evidence-dir is absent", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-evidence-preset-"));
+    const presetEvidenceDir = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-evidence-preset-env-"));
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli([], io, { KEIKO_EVIDENCE_DIR: presetEvidenceDir }, deps);
+      expect(code).toBe(0);
+      const handlerDeps = expectSingleHandlerDeps(captured);
+      expect(handlerDeps.env.KEIKO_EVIDENCE_DIR).toBe(presetEvidenceDir);
+      handlerDeps.store.close();
+      handlerDeps.memoryVault?.close();
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+      await rm(presetEvidenceDir, { recursive: true, force: true });
     }
   });
 
@@ -619,6 +674,145 @@ describe("runUiCli", () => {
       // and the sink is never closed — `runUiCli` resolving at all already proves that.
       expect(sink.events.some((event) => event.op === "process.heartbeat")).toBe(false);
       expect(sink.closeCallCount).toBe(0);
+      closeHandlerDeps(captured[0]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  // `reportProcessStarted` runs the install-mode probe AFTER `listen()` has already succeeded and
+  // the CLI has already printed the listening URL — a probe failure (a permission error, an
+  // unreadable parent directory) must never abort a launch whose server is already up.
+  it("omits installMode and records installModeErrorKind when the install-mode probe throws", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-install-mode-probe-"));
+    const sink = createRecordingSink();
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      activityLog: sink,
+      installModeProbe: () => Promise.reject(new Error("install-mode probe boom")),
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli([], io, {}, deps);
+      expect(code).toBe(0);
+      const started = sink.events.find((event) => event.op === "process.started");
+      expect(started).toBeDefined();
+      const extra = extraOf(started);
+      expect(extra.installMode).toBeUndefined();
+      // The class only — the raw message must never reach the line (it is foreign free text).
+      expect(extra.installModeErrorKind).toBe("Error");
+      expect(JSON.stringify(started)).not.toContain("install-mode probe boom");
+      closeHandlerDeps(captured[0]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  // The class-only fallback (`typeof error` rather than `error.name`) for a probe that rejects
+  // with something other than an Error — still recorded, never swallowed.
+  it("records installModeErrorKind as the thrown value's typeof when the probe rejects a non-Error", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-install-mode-probe-nonerror-"));
+    const sink = createRecordingSink();
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      activityLog: sink,
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- pinning the non-Error fallback
+      installModeProbe: () => Promise.reject("install-mode probe boom"),
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli([], io, {}, deps);
+      expect(code).toBe(0);
+      const started = sink.events.find((event) => event.op === "process.started");
+      const extra = extraOf(started);
+      expect(extra.installMode).toBeUndefined();
+      expect(extra.installModeErrorKind).toBe("string");
+      expect(JSON.stringify(started)).not.toContain("install-mode probe boom");
+      closeHandlerDeps(captured[0]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("records installMode when the injected install-mode probe resolves a value", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-install-mode-probe-resolved-"));
+    const sink = createRecordingSink();
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      activityLog: sink,
+      installModeProbe: () => Promise.resolve("package-manager"),
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli([], io, {}, deps);
+      expect(code).toBe(0);
+      const started = sink.events.find((event) => event.op === "process.started");
+      const extra = extraOf(started);
+      expect(extra.installMode).toBe("package-manager");
+      expect(extra.installModeErrorKind).toBeUndefined();
+      closeHandlerDeps(captured[0]);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("records gatewayProviderCount on process.started when a gateway config resolves providers", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-gateway-provider-count-"));
+    const configPath = join(cwd, "gateway.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://models.example.invalid/v1",
+            apiKey: "k",
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const sink = createRecordingSink();
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      activityLog: sink,
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli(["--config", configPath], io, {}, deps);
+      expect(code).toBe(0);
+      const handlerDeps = expectSingleHandlerDeps(captured);
+      expect(handlerDeps.config?.providers.length).toBe(1);
+      const started = sink.events.find((event) => event.op === "process.started");
+      expect(extraOf(started).gatewayProviderCount).toBe(1);
       closeHandlerDeps(captured[0]);
     } finally {
       await rm(cwd, { recursive: true, force: true });
@@ -1133,14 +1327,85 @@ describe("waitForShutdown", () => {
       });
     });
 
-    it("does nothing when no activity log was supplied", async () => {
+    // The class-only fallback (`typeof error` rather than `error.name`) for an onShutdown that
+    // throws something other than an Error — still recorded, never swallowed.
+    it("records onShutdownErrorKind as the thrown value's typeof when onShutdown throws a non-Error", async () => {
       await withIsolatedSignalListeners(async () => {
+        const { server } = fakeClosingServer();
+        const sink = createRecordingSink();
+        const onShutdown = vi.fn(() => {
+          // eslint-disable-next-line @typescript-eslint/only-throw-error -- pinning the non-Error fallback
+          throw "heartbeat teardown boom";
+        });
+        const promise = waitForShutdown(server, 3_000, {
+          activityLog: sink,
+          startedAt: Date.now(),
+          onShutdown,
+        });
+        process.emit("SIGINT");
+        await expect(promise).resolves.toBeUndefined();
+        const exiting = sink.events.find((event) => event.op === "process.exiting");
+        expect(extraOf(exiting).onShutdownErrorKind).toBe("string");
+        expect(JSON.stringify(exiting)).not.toContain("heartbeat teardown boom");
+      });
+    });
+
+    // `closeActivityLog` (threaded from `startUiServer`'s real-launch path) is the module's own
+    // `closeFileServerLogSinks`, reached directly rather than through `activityLog.close?.()` —
+    // when supplied, it must be the one actually called, not the sink's own `close`.
+    it("calls closeActivityLog instead of activityLog.close() when both are supplied", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const { server } = fakeClosingServer();
+        const sink = createRecordingSink();
+        const closeActivityLog = vi.fn();
+        const promise = waitForShutdown(server, 3_000, {
+          activityLog: sink,
+          startedAt: Date.now(),
+          closeActivityLog,
+        });
+        process.emit("SIGINT");
+        await expect(promise).resolves.toBeUndefined();
+        expect(closeActivityLog).toHaveBeenCalledTimes(1);
+        expect(sink.closeCallCount).toBe(0);
+      });
+    });
+
+    it("does nothing and never warns when no activity log was supplied and onShutdown succeeds", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
         const { server } = fakeClosingServer();
         const onShutdown = vi.fn();
         const promise = waitForShutdown(server, 3_000, { onShutdown });
         process.emit("SIGINT");
         await expect(promise).resolves.toBeUndefined();
         expect(onShutdown).toHaveBeenCalledTimes(1);
+        expect(warn).not.toHaveBeenCalled();
+      });
+    });
+
+    // No activity-log line can carry the failure kind on this path (no log in scope), so it must
+    // still reach an operator on the independent process-warning channel — the same idiom
+    // `knowledge-log.ts`'s dead-sink report uses — instead of vanishing with the shutdown path
+    // that produced it (#2902 PR review).
+    it("warns via process.emitWarning when onShutdown throws and no activity log is in scope", async () => {
+      await withIsolatedSignalListeners(async () => {
+        const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+        const { server } = fakeClosingServer();
+        const onShutdown = vi.fn(() => {
+          throw new Error("heartbeat teardown boom");
+        });
+        const promise = waitForShutdown(server, 3_000, { onShutdown });
+        process.emit("SIGINT");
+        await expect(promise).resolves.toBeUndefined();
+        expect(onShutdown).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledTimes(1);
+        const calls: readonly (readonly unknown[])[] = warn.mock.calls;
+        expect(calls[0]?.[1]).toMatchObject({
+          code: "KEIKO_SHUTDOWN_HOOK_FAILED",
+          detail: "errorKind=Error",
+        });
+        // The class only — the raw message must never reach the warning (it is foreign free text).
+        expect(JSON.stringify(warn.mock.calls)).not.toContain("heartbeat teardown boom");
       });
     });
   });
@@ -1176,6 +1441,51 @@ describe("startProcessHeartbeat", () => {
       expect(sink.events.filter((event) => event.op === "process.heartbeat")).toHaveLength(
         countAfterStop,
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // `monitorEventLoopDelay()` accumulates samples cumulatively until `reset()` is called (Node
+  // docs), so each heartbeat must read the percentile and THEN reset the histogram — otherwise a
+  // delay recorded during one interval keeps showing up in every later heartbeat's p99, long after
+  // the event loop that caused it recovered. A deterministic histogram double injected through
+  // `createHistogram` pins this without depending on real event-loop timing (#2902 PR review).
+  it("scopes eventLoopDelayP99Ms to the interval since the previous heartbeat", () => {
+    vi.useFakeTimers();
+    try {
+      let cumulativeNs = 0;
+      let resetCount = 0;
+      const histogram = {
+        enable: vi.fn(),
+        disable: vi.fn(),
+        percentile: (): number => cumulativeNs,
+        reset: (): void => {
+          resetCount += 1;
+          cumulativeNs = 0;
+        },
+      };
+      const sink = createRecordingSink();
+      const stop = startProcessHeartbeat(sink, 1_000, () => histogram);
+
+      // A delay accumulates during the first interval only.
+      cumulativeNs = 5_000_000; // 5ms, in the nanoseconds `percentile()` reports
+      vi.advanceTimersByTime(1_000);
+      const heartbeats = (): readonly ServerLogEvent[] =>
+        sink.events.filter((event) => event.op === "process.heartbeat");
+      expect(heartbeats()).toHaveLength(1);
+      expect(extraOf(heartbeats()[0]).eventLoopDelayP99Ms).toBe(5);
+      expect(resetCount).toBe(1);
+
+      // No further delay is simulated before the second tick — a fix that resets the histogram
+      // after reading it reports 0 here; a fix that never resets would still report 5, carrying
+      // the first interval's delay into the second.
+      vi.advanceTimersByTime(1_000);
+      expect(heartbeats()).toHaveLength(2);
+      expect(extraOf(heartbeats()[1]).eventLoopDelayP99Ms).toBe(0);
+      expect(resetCount).toBe(2);
+
+      stop();
     } finally {
       vi.useRealTimers();
     }

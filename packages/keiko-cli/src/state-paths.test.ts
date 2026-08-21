@@ -214,6 +214,9 @@ function seedRuntimeState(root: string): string {
   touch(join(stateDir, "updates", "snapshots", "snap-1", "manifest.json"));
   touch(join(stateDir, "logs", "server.log"));
   touch(join(stateDir, "logs", "server-2026-06-20.log"));
+  touch(join(stateDir, "logs", "operator-notes.txt")); // a foreign file — must be retained
+  mkdirSync(join(stateDir, "logs", "archive"), { recursive: true });
+  touch(join(stateDir, "logs", "archive", "old.log")); // nested dir — must be retained, not recursed
   touch(join(stateDir, "user-notes.txt")); // a customer file — must be retained
   return stateDir;
 }
@@ -327,6 +330,15 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(categoryOf(scan, "logs")).toBe("activity-log");
     expect(categoryOf(scan, "logs/server.log")).toBe("activity-log");
     expect(categoryOf(scan, "logs/server-2026-06-20.log")).toBe("activity-log");
+    // `logsSubtree` is classified, not `whole`: only the two recognized log-sink names are
+    // owned. A foreign file or an unexpected nested directory under `logs/` must be retained,
+    // not claimed by `repair`/`uninstall` (#2902 PR review).
+    expect(categoryOf(scan, "logs/operator-notes.txt")).toBeUndefined();
+    expect(categoryOf(scan, "logs/archive")).toBeUndefined();
+    const logsRetained = scan.retained.map((r) => r.relPath);
+    expect(logsRetained).toContain("logs/operator-notes.txt");
+    expect(logsRetained).toContain("logs/archive");
+    expect(logsRetained.some((relPath) => relPath.startsWith("logs/archive/"))).toBe(false);
   });
 
   it("classifies quarantined .corrupt.<ts> database and sidecar copies as owned", () => {

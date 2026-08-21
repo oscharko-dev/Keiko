@@ -190,6 +190,7 @@ describe("runSupportCli export", () => {
     expect(manifest.redactionAttested).toBe(true);
     expect(manifest.sourceLogFiles).toEqual(["server-2026-08-19.log", "server.log"]);
     expect(manifest.truncatedLogFiles).toEqual([]);
+    expect(manifest.skippedLogFiles).toEqual([]);
     expect(manifest.sectionsExcluded).toEqual([]);
     expect(manifest.evidenceIndexCount).toBe(2);
     // The manifest's auditSummary must carry the audit result MINUS the raw stateDir path (which
@@ -274,6 +275,42 @@ describe("runSupportCli export", () => {
     expect(existsSync(join(outDir, "should-not-exist.jsonl"))).toBe(false);
   });
 
+  it("sets stateDirSource to 'env-override' from a non-empty KEIKO_STATE_DIR alone, without --state-dir", async () => {
+    const c = makeIo();
+    const code = await runSupportCli(
+      ["export", "--out", join(outDir, "env-override.jsonl")],
+      c.io,
+      { ...AUDIT_ENV, KEIKO_STATE_DIR: stateDir },
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(0);
+    const manifest: Record<string, unknown> = JSON.parse(
+      readFileSync(join(outDir, "env-override.jsonl"), "utf8").split("\n")[0] ?? "{}",
+    ) as Record<string, unknown>;
+    expect(manifest.stateDirSource).toBe("env-override");
+  });
+
+  // AuditLoadError (thrown once the auditor was actually located and tried) is a distinct branch
+  // from the plain Error thrown when KEIKO_LOCAL_STATE_AUDITOR is unset at all (tested above) —
+  // both must fail closed with exit 1 and a clear message, never a raw stack.
+  it("fails closed with exit 1 when the located auditor module is malformed (AuditLoadError)", async () => {
+    const c = makeIo();
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", join(outDir, "audit-load-error.jsonl")],
+      c.io,
+      AUDIT_ENV,
+      {
+        auditDeps: { loadAuditor: () => Promise.resolve({} as never) },
+        evidenceStore: createInMemoryEvidenceStore(),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("local-state audit could not produce a result");
+    expect(existsSync(join(outDir, "audit-load-error.jsonl"))).toBe(false);
+  });
+
   it("reports evidenceIndexCount 0 (never throwing) when the evidence directory does not exist, using the real evidence package", async () => {
     const c = makeIo();
     const code = await runSupportCli(
@@ -288,6 +325,28 @@ describe("runSupportCli export", () => {
       readFileSync(join(outDir, "real-evidence.jsonl"), "utf8").split("\n")[0] ?? "{}",
     ) as Record<string, unknown>;
     expect(manifest.evidenceIndexCount).toBe(0);
+  });
+
+  // Regression: `writeFileSync` was unguarded, so a bad `--out` path (here, one whose parent
+  // directory does not exist) threw the raw fs error straight out of the CLI — no exit-1 message,
+  // no handling, and (per AGENTS.md §7) an fs error's message quotes the absolute path it tried to
+  // write. `readAnalyzeSource` already follows this discipline for the read side; the write side
+  // must match it.
+  it("exits 1 with a content-free message, never the raw fs error, when --out's parent directory does not exist", async () => {
+    const c = makeIo();
+    const badOutPath = join(outDir, "missing-parent", "bundle.jsonl");
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", badOutPath],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("keiko support export: could not write the bundle");
+    expect(c.err()).not.toContain("ENOENT:");
+    expect(c.err()).not.toContain(badOutPath);
+    expect(existsSync(badOutPath)).toBe(false);
   });
 });
 
@@ -357,6 +416,14 @@ describe("runSupportCli analyze", () => {
       "req-1",
       "req-2",
     ]);
+    // The whole-file `processes`/`legacyLineCount`/`warnings` fields (ADR-0173 D9/D10) travel
+    // through the CLI's --json output alongside `timelines` — none of these lines has full v2
+    // identity, so both are legacy and the analyzer says so.
+    expect(parsed.processes).toEqual([]);
+    expect(parsed.legacyLineCount).toBe(2);
+    expect(parsed.warnings).toEqual([
+      "2 line(s) predate the v2 envelope and were ordered by file position",
+    ]);
   });
 
   it("auto-detects a bundle (manifest first line) and analyzes only the log content", async () => {
@@ -406,6 +473,45 @@ describe("runSupportCli analyze", () => {
     expect(c.out()).toContain("correlationId=req-1");
   });
 
+  it("renders a single timeline as human-readable text when --correlation-id is given without --json", async () => {
+    const filePath = join(dir, "server.log");
+    writeFileSync(
+      filePath,
+      `${JSON.stringify({ ts: "2026-08-21T00:00:00.000Z", category: "http", op: "a", correlationId: "req-1" })}\n`,
+    );
+
+    const c = makeIo();
+    const code = await runSupportCli(["analyze", filePath, "--correlation-id", "req-1"], c.io);
+
+    expect(code).toBe(0);
+    expect(c.out()).toContain("correlationId=req-1");
+    expect(c.out()).not.toContain("{");
+  });
+
+  it("resolves a relative FILE argument against the launch cwd", async () => {
+    writeFileSync(
+      join(dir, "server.log"),
+      `${JSON.stringify({ ts: "2026-08-21T00:00:00.000Z", category: "http", op: "a", correlationId: "req-1" })}\n`,
+    );
+
+    const c = makeIo();
+    const code = await runSupportCli(["analyze", "server.log"], c.io, {}, { cwd: dir });
+
+    expect(code).toBe(0);
+    expect(c.out()).toContain("correlationId=req-1");
+  });
+
+  it("exits 2 when --correlation-id is missing its value", async () => {
+    const filePath = join(dir, "server.log");
+    writeFileSync(filePath, "");
+
+    const c = makeIo();
+    const code = await runSupportCli(["analyze", filePath, "--correlation-id"], c.io);
+
+    expect(code).toBe(2);
+    expect(c.err()).toContain("--correlation-id is missing its value");
+  });
+
   it("exits 1 without leaking the underlying fs error message for an unreadable file", async () => {
     const c = makeIo();
     const code = await runSupportCli(["analyze", join(dir, "does-not-exist.jsonl")], c.io);
@@ -421,6 +527,30 @@ describe("runSupportCli usage and help", () => {
     const c = makeIo();
     expect(await runSupportCli(["--help"], c.io)).toBe(0);
     expect(c.out()).toContain("keiko support export");
+  });
+
+  // Regression: the help text claimed timelines are "ordered by (pid, instanceId, seq)", but
+  // support-analyze.ts ranks process lifetimes by file position (never by pid value) and orders
+  // each lifetime's own lines by seq — an operator reading the old text would draw the wrong
+  // conclusion about a reconstructed timeline.
+  it("describes the analyzer's real ordering: seq within a lifetime, file position across lifetimes", async () => {
+    const c = makeIo();
+    await runSupportCli(["--help"], c.io);
+    expect(c.out()).toContain("Each process lifetime is ordered by");
+    expect(c.out()).toContain("seq");
+    expect(c.out()).not.toContain("(pid, instanceId, seq)");
+  });
+
+  it("prints usage and exits 0 for 'export --help', without requiring any export flags", async () => {
+    const c = makeIo();
+    expect(await runSupportCli(["export", "--help"], c.io)).toBe(0);
+    expect(c.out()).toContain("keiko support export");
+  });
+
+  it("prints usage and exits 0 for 'analyze --help', without requiring a FILE argument", async () => {
+    const c = makeIo();
+    expect(await runSupportCli(["analyze", "--help"], c.io)).toBe(0);
+    expect(c.out()).toContain("keiko support analyze");
   });
 
   it("exits 2 for an unknown subcommand", async () => {

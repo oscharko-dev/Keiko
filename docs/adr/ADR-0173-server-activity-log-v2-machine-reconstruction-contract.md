@@ -61,8 +61,10 @@ only (positional locators, never customer field names as object keys), not imple
   `instanceId` together, not `pid` alone, is the process-identity join key an agent uses. Neither
   field is a secret or customer-derived value, so reserving them costs nothing on the redaction
   side.
-- `seq: number` — monotonically increasing per `ActiveLog` (the same per-log-directory registry
-  `resolveActiveLog` already keys on), survives day rotation, resets only on process restart.
+- `seq: number` — allocated from one module-level counter shared by every `ActiveLog` in the
+  process (not one counter per resolved log directory), so a process writing to more than one
+  state directory still stamps one gap-free sequence, never two independently-numbered ones.
+  Survives day rotation and every `ActiveLog` reinitialization; resets only on process restart.
   Reserved because it is the ordering primitive (D2) — if a caller could set `extra.seq`, ordering
   claims would be forgeable.
 
@@ -83,11 +85,26 @@ today. Reserving them would prevent the very thing they exist to do.
 
 ### D2 — The ordering guarantee, stated with its explicit limit
 
-`(pid, instanceId, seq)` gives a **total, gap-free order within one process lifetime**. It does
-**not** give a true cross-process global order: two different `keiko` processes (a restarted server,
-or — in a future multi-process shape — two processes running concurrently) each maintain their own
-`seq` counting from the same starting point, so a line from process A carrying `seq: 40` is not
-orderable against a line from process B carrying `seq: 40` by the tuple alone.
+`(pid, instanceId, seq)` gives a **total order within one process lifetime, unique across every log
+directory that process writes to** — `seq` is allocated from the one process-wide counter D1
+describes, not from a counter scoped to a resolved log directory, so a process holding two state
+directories open at once cannot stamp the same `(pid, instanceId, seq)` tuple twice no matter how
+many directories it writes to. It does **not** give a true cross-process global order: two different
+`keiko` processes (a restarted server, or — in a future multi-process shape — two processes running
+concurrently) each maintain their own `seq` counting from the same starting point, so a line from
+process A carrying `seq: 40` is not orderable against a line from process B carrying `seq: 40` by
+the tuple alone.
+
+**"Gap-free" means every claimed `seq` is accounted for, not that every claimed `seq` reaches disk.**
+A `seq` value is claimed in `createFileSinkFacade.write` — before the write it numbers is attempted —
+and is never rolled back if that write then throws; this is claim-before-write by design, not an
+oversight. Two callers racing the same failure must not both observe the same pre-failure counter
+value and then both claim the number that follows it, silently reusing a sequence number for two
+different lines — a missing number is the strictly safer failure than a repeated one. A gap in the
+`seq` sequence therefore marks a line the sink attempted to persist and could not, and is never
+silent: `reportServerLogFailure` emits a throttled, independent-channel stderr notice
+(`server-log.write-failed`) whose `suppressedNotices` count accounts for exactly the failed writes a
+gap represents, so the throttle hides the failure's *repetition*, never its *scale*.
 
 The wall-clock `ts` field is the only cross-process ordering signal, and it is stated as exactly
 that — a **best-effort tiebreak hint**, not a guarantee. Clock skew, coarse timestamp resolution,
@@ -147,9 +164,12 @@ adds is additive to that doctrine, not an exception carved into it:
   escape hatch (`redactRoutePath`) already uses. This is the same escape-hatch architecture
   extended with two more named cases, not a second choke point.
 - Truncation becomes visible rather than silent: when array truncation actually drops elements, one
-  bounded marker element is appended; when the field-count cap breaks early, a synthetic
-  `_truncatedFieldCount: true` key is added. An agent reading a bundle can distinguish "nothing more
-  happened" from "more happened and was cut for size."
+  array slot is reserved for a bounded marker element; when the field-count cap breaks early, one
+  field is reserved for `_truncatedFieldCount: true`. The configured caps (`MAX_LOG_ARRAY_LENGTH`,
+  `MAX_LOG_FIELD_COUNT`) include these markers, so a truncated array or object never exceeds its
+  configured bound by one — the marker consumes a slot rather than riding along for free. An input
+  at or under the cap is untouched and carries no marker. An agent reading a bundle can distinguish
+  "nothing more happened" from "more happened and was cut for size."
 - A closed-vocabulary helper gives any future bounded-string-array field (starting with
   `unsupportedReasons`) the same structural `Set`-plus-fallback closure categories already have,
   replacing a comment-only closure with an enforced one.
@@ -196,6 +216,22 @@ A companion dev-time shape check asserts every extracted `op` literal matches a 
 pattern. This runs at generation/CI time **only** — never in the runtime request path. A bad `op`
 string fails the build; it never silently substitutes a marker for a real value at runtime, and it
 never adds a hot-path validation cost to logging itself.
+
+**Unresolvable `op` expressions are recorded, not treated as a build failure.** A small,
+enumerated set of positional logging helpers (`POSITIONAL_OP_HELPERS`) forward an `op` value they
+receive as a parameter one layer down into the real event call — a closure argument, a re-thrown
+failure context, a caller-supplied `ServerDiagnosticRecord.operation` — rather than minting a new
+vocabulary member of their own. The generator cannot statically resolve that kind of expression to
+a literal, and it does not guess: it records a `<dynamic>` catalog entry naming the call's own file
+and line, pinned byte-for-byte by the drift test exactly like every literal entry, so the site
+stays visible in the checked-in catalog rather than silently vanishing or being fabricated. This is
+sound only because it is paired with a closure obligation: every caller that hands such a helper an
+`op` value must itself pass a literal, which the generator resolves and catalogs at *that* call
+site — the vocabulary is closed at the literal's origin, not at the forwarding helper. A `<dynamic>`
+entry at a helper is therefore never the last word on what operation ran; it is a pointer to go read
+the actual call sites, all of which are separately, statically cataloged. Failing generation on
+these forwarding sites would make the generator unconditionally unable to run on unmodified, correct
+source, for no closure benefit the per-caller literal requirement does not already provide.
 
 ### D7 — Process lifecycle events give the log a subject
 
@@ -254,25 +290,51 @@ coherent noun groups the artifact producer and its own consumer under one verb s
   pieces in Wave 1's minimal form: the evidence index listing, the audit summary, and a plain
   read-and-concatenate of the rotated log files. No new redaction logic is written for the bulk of
   the file — every line copied in is a line that was already redacted at write time.
-- `keiko support analyze FILE [--correlation-id ID] [--json]` groups lines by `correlationId`,
-  ordered by `(pid, instanceId, seq)` (D2), and reports a malformed-line count. `--json` emits a
-  minimal per-correlation timeline in Wave 1; the fuller analyzer output (stack-frame unions,
-  gateway replay scripts, a reproduction-seed fixture emitter) is Wave 6 scope, once the fields it
-  reads exist.
+- `keiko support analyze FILE [--correlation-id ID] [--json]` reconstructs two complementary views
+  from the same parsed lines, because `correlationId` alone cannot carry everything Wave 1 needs to
+  reconstruct: a **per-correlation timeline** for every line that carries a `correlationId`, ordered
+  within one process lifetime by `seq` and across lifetimes by first file-position (D2); and a
+  **per-process-lifetime summary** (`processes[]`, keyed by `(pid, instanceId)`) built from every
+  line carrying the full v2 identity triple regardless of `correlationId`, so the lifecycle events
+  D7 introduces (`process.started`/`process.heartbeat`/`process.exiting`, which carry no
+  `correlationId` and so belong to no timeline) are still reconstructable — first/last `seq`,
+  first/last `ts`, line count, and the `process.started`/`process.exiting` payloads when seen. The
+  analyzer also reports `legacyLineCount` — lines it parsed successfully but that are missing the
+  full identity triple — and a `warnings[]` entry naming that count when it is nonzero, so the
+  admission that some lines fell back to file-position ordering is machine-readable rather than a
+  silent omission. Separately, `malformedLineCount` counts lines that could not be read as a log
+  record at all (not valid JSON, or valid JSON missing `ts`/`category`/`op`) — evidence of
+  corruption, never conflated with a legacy line, which parses cleanly and is merely missing the v2
+  identity triple. `--json` emits all of this in Wave 1; the fuller analyzer output (stack-frame
+  unions, gateway replay scripts, a reproduction-seed fixture emitter) is Wave 6 scope, once the
+  fields it reads exist.
 
 ### D10 — Why Wave 1 ships the exporter and analyzer alongside `seq`, not after it
 
 The obvious sequencing — ship the ordering primitive first, add tooling once there is something
 worth tooling — was considered and rejected. Shipping `seq`/`schemaVersion` and a minimal
-`support export`/`support analyze` in the **same** wave means the analyzer is never written against
-a log that lacks its own ordering field, so it never needs a pre-`seq` fallback heuristic (guessing
-order from timestamps and file-append position) that would then need to be maintained, tested, and
-eventually deleted once `seq` existed. Building the fallback and then retiring it is strictly more
-work than never building it, and a fallback heuristic is exactly the kind of undocumented, silently
-approximate behavior this contract exists to eliminate. Wave 1 therefore already changes what a
-customer can send Keiko's support channel — a support ticket opened the day this wave ships already
-gets an artifact an agent can order deterministically, rather than waiting for a later wave to make
-the exporter worth using.
+`support export`/`support analyze` in the **same** wave means the analyzer is never written, FOR V2
+LINES, against a log that lacks its own ordering field — there is no pre-`seq` fallback heuristic
+for any line that carries the full v2 identity triple, because no such line has ever existed without
+one. Building a v2 fallback and then retiring it is strictly more work than never building it, and a
+fallback heuristic is exactly the kind of undocumented, silently approximate behavior this contract
+exists to eliminate. Wave 1 therefore already changes what a customer can send Keiko's support
+channel — a support ticket opened the day this wave ships already gets an artifact an agent can
+order deterministically for every v2 line, rather than waiting for a later wave to make the exporter
+worth using.
+
+**This is a claim about v2 lines only — it is not a claim that no fallback ordering exists at all.**
+`server.log` keeps a 7-day retention window (#3230), so a log file spanning the upgrade to this
+contract can still hold lines written before `seq`/`schemaVersion` shipped: valid, successfully
+parsed log records with no `pid`, `instanceId`, or `seq` field to order by. D9's exporter copies
+these verbatim (D8's "one JSON-Lines file" format applies uniformly; there is no schema-aware
+filtering at export time), so the analyzer must define what happens to them rather than silently
+dropping or misordering them. The compatibility rule: a retained pre-v2 line is never discarded and
+never treated as malformed — it is ordered by its own position in the file (the same signal used to
+rank process lifetimes against each other, D2), counted in `legacyLineCount`, and surfaced through
+exactly one `warnings[]` entry when that count is nonzero. This is a stated, bounded compatibility
+window, not a permanent second ordering path: once a log file's 7-day retention has rolled fully
+past the upgrade, no pre-v2 line can appear in it again.
 
 ### D11 — `ERROR_KIND_PATTERN` consolidation (Wave 2) is a relocation, not a relaxation
 
@@ -329,8 +391,11 @@ copy without a single source of truth.
 This section is the operational summary of the join keys this ADR defines, stated once in one place
 rather than left implicit across the Decision section:
 
-1. **Within one process lifetime**, order every line by `(pid, instanceId, seq)` — exact, gap-free,
-   guaranteed (D2).
+1. **Within one process lifetime**, order every line carrying the full v2 identity triple by
+   `(pid, instanceId, seq)` — exact, gap-free (in the sense D2 defines: every claimed `seq` is
+   accounted for, whether or not its write landed), guaranteed (D2). A retained pre-v2 line carries
+   no such triple; it is ordered by its own file position instead, counted in `legacyLineCount`, and
+   never treated as belonging to a process lifetime (D10).
 2. **Across process lifetimes**, do not rely on the ordering tuple; use `ts` only as a best-effort
    hint, and prefer to reason about one logical operation (one request, one job) at a time, since
    that operation's lines all share one process lifetime by construction.
@@ -339,34 +404,61 @@ rather than left implicit across the Decision section:
 4. **Across a spawning relationship** (a background job triggered by a request), follow
    `parentCorrelationId` from the spawned operation's lines back to the spawning operation's
    `correlationId` (D5).
-5. **For an error**, read `errorKind` for the closed-vocabulary classification, and — once Wave 2
+5. **For process lifecycle events** (`process.started`/`process.heartbeat`/`process.exiting`), which
+   carry no `correlationId` and so never enter a per-correlation timeline, read the analyzer's
+   `processes[]` summaries instead — one entry per `(pid, instanceId)` lifetime (D9).
+6. **For an error**, read `errorKind` for the closed-vocabulary classification, and — once Wave 2
    ships — `extra.frames`/`extra.causeChain` for the dist-anchored Keiko-code stack, resolved against
    the exact tagged product version named in the support bundle's manifest (D3, D12).
-6. **For what could not be reconstructed**, read the analyzer's `warnings` array (Wave 6) rather than
-   assuming silence means nothing happened — a warning names exactly what evidence class is missing
-   and why, so an agent's report to a human names the actual gap instead of guessing.
+7. **For what could not be reconstructed**, read the analyzer's `warnings` array rather than assuming
+   silence means nothing happened — Wave 1 already populates it with exactly one entry naming
+   `legacyLineCount` when a retained pre-v2 line is present (D10); Wave 6 extends the same array
+   with further evidence-gap classes. A warning names exactly what evidence class is missing and
+   why, so an agent's report to a human names the actual gap instead of guessing.
 
 ## Consequences
 
 - A customer support ticket, from Wave 1 onward, already carries a deterministically orderable
   artifact — the sequencing decision in D10 means no wave has to build and then retire a fallback
-  heuristic.
+  heuristic for any v2 line.
 - The ordering guarantee is honestly bounded (D2): an agent that assumes cross-process global
   ordering from the envelope alone is reasoning outside what this contract promises, and must fall
-  back to `correlationId`/`parentCorrelationId` for cross-process causality.
+  back to `correlationId`/`parentCorrelationId` for cross-process causality. Within a process,
+  `(pid, instanceId, seq)` uniqueness holds across every log directory that process writes to,
+  because `seq` is allocated from one process-wide counter (D1), never one scoped per directory.
+  "Gap-free" is a claim about accounting, not delivery: a gap marks a write the sink attempted and
+  could not persist, and the throttled stderr failure notice's `suppressedNotices` count accounts
+  for exactly those gaps (D2).
+- Retained pre-v2 log lines are a real, bounded compatibility case, not an oversight: a line written
+  before this contract shipped can still appear in a log file inside the sink's 7-day retention
+  window. The analyzer never drops or misorders such a line — it orders it by file position, counts
+  it in `legacyLineCount`, and surfaces exactly one `warnings[]` entry naming that count (D9, D10).
+  An agent must read `warnings[]` before trusting that every line in a bundle came from an ordered
+  v2 process lifetime.
+- Process lifecycle events (`process.started`/`process.heartbeat`/`process.exiting`) carry no
+  `correlationId` and so never enter a per-correlation timeline; the analyzer's `processes[]`
+  summaries (D9) are the reconstruction path for them, keyed by `(pid, instanceId)` rather than by
+  operation.
 - The no-source-maps decision (D3) means reading a frame meaningfully requires building the exact
   tagged version the customer ran; this is a documented, deliberate cost, not a gap to be quietly
   worked around by enabling source maps later without amending this ADR.
 - `ui.log`'s default exclusion (D8) keeps the body-free contract intact by default, at the cost of
   an operator needing an explicit double-confirmation flag for the (rare, informed) case where they
   want it included anyway.
+- The op catalog's closed vocabulary (D6) is enforced at the literal's origin, not at every
+  forwarding call: a positional helper that cannot be statically resolved to a literal is recorded
+  as `<dynamic>` at its own call site rather than failing generation, on the condition that every
+  caller supplying that helper an `op` is itself a literal the generator catalogs separately. A
+  `<dynamic>` entry is a pointer to those call sites, never the last word on what operation ran.
 - The `ERROR_KIND_PATTERN` relocation (D11) deletes an existing drift test as part of making its
   invariant structurally unbreakable; this ADR is the documented justification a reviewer checks
   that deletion against, and no later change may cite this ADR to justify a second copy reappearing.
 - This ADR is Proposed, not Accepted, because Waves 2 through 6 have not landed yet. A reader relying
-  on this document today should treat D3 (stack frames), D6 (the finalized op catalog), D8's full
-  manifest shape, and D9's full analyzer output as forward references until the corresponding wave
-  merges; D1, D2, D5's minimal wiring, D7, and D10 are Wave 1 scope and load-bearing immediately.
+  on this document today should treat D3 (stack frames), D8's full manifest shape, and D9's fuller
+  analyzer output (stack-frame unions, gateway replay scripts, a reproduction-seed fixture emitter)
+  as forward references until the corresponding wave merges. D1, D2, D4's truncation markers, D5's
+  minimal wiring, D6's dynamic-entry policy, D7, D9's minimal analyzer output (`processes[]`,
+  `legacyLineCount`, `warnings[]`), and D10 are Wave 1 scope and load-bearing immediately.
 
 ## References
 

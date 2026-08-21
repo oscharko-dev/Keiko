@@ -36,9 +36,17 @@ export interface LogFileInfo {
   readonly sizeBytes: number;
 }
 
-function toLogFileInfo(logsDir: string, name: string): LogFileInfo {
+// The sink prunes rotated files on its own retention schedule, so a name `readdirSync` just
+// returned can already be gone by the time it is `stat`'d — a race, not a failed export. Returns
+// `undefined` so the caller can skip the entry (recorded by name only, never its absolute path)
+// and keep going.
+function toLogFileInfoOrUndefined(logsDir: string, name: string): LogFileInfo | undefined {
   const path = join(logsDir, name);
-  return { name, path, sizeBytes: statSync(path).size };
+  try {
+    return { name, path, sizeBytes: statSync(path).size };
+  } catch {
+    return undefined;
+  }
 }
 
 interface RotatedMatch {
@@ -63,21 +71,39 @@ function sortedRotatedNames(names: readonly string[]): readonly string[] {
   return matches.map((m) => m.name);
 }
 
+export interface LogFileDiscovery {
+  readonly files: readonly LogFileInfo[];
+  // Relative names only (never `LogFileInfo.path`, which is absolute) of entries `readdirSync`
+  // returned but that vanished before they could be `stat`'d — the sink's own rotation/retention
+  // pruning racing this scan. Named so it can be attested in the bundle manifest.
+  readonly skippedLogFiles: readonly string[];
+}
+
 // Lists the rotated + current server*.log files, oldest rotated file first, current file last —
 // exactly the order they are copied into the bundle. A missing logs directory (a state dir that
-// predates any server run, or one the operator moved) yields an empty list rather than throwing:
+// predates any server run, or one the operator moved) yields an empty result rather than throwing:
 // the bundle is still worth producing, just without log content.
-export function discoverServerLogFiles(logsDir: string): readonly LogFileInfo[] {
+export function discoverServerLogFiles(logsDir: string): LogFileDiscovery {
   let names: readonly string[];
   try {
     names = readdirSync(logsDir);
   } catch {
-    return [];
+    return { files: [], skippedLogFiles: [] };
   }
   const ordered = names.includes(CURRENT_LOG_FILE_NAME)
     ? [...sortedRotatedNames(names), CURRENT_LOG_FILE_NAME]
     : sortedRotatedNames(names);
-  return ordered.map((name) => toLogFileInfo(logsDir, name));
+  const files: LogFileInfo[] = [];
+  const skippedLogFiles: string[] = [];
+  for (const name of ordered) {
+    const info = toLogFileInfoOrUndefined(logsDir, name);
+    if (info === undefined) {
+      skippedLogFiles.push(name);
+    } else {
+      files.push(info);
+    }
+  }
+  return { files, skippedLogFiles };
 }
 
 export interface LogFileSelection {
@@ -117,6 +143,42 @@ export function readVerbatimLogLines(path: string): readonly string[] {
   return lines;
 }
 
+// Same rotation race as `discoverServerLogFiles`, one step later: a name that survived the
+// `readdirSync`→`statSync` gap and was kept for the bundle can still vanish before its bytes are
+// actually read. `undefined` signals that race to the caller (distinct from the legitimate `[]`
+// an empty-but-present file produces) so the file is skipped, not aborted.
+function readVerbatimLogLinesOrUndefined(path: string): readonly string[] | undefined {
+  try {
+    return readVerbatimLogLines(path);
+  } catch {
+    return undefined;
+  }
+}
+
+export interface ReadKeptFilesResult {
+  readonly contentLines: readonly string[];
+  // Relative names only, from `LogFileInfo.name` — never the absolute `LogFileInfo.path`.
+  readonly skippedLogFiles: readonly string[];
+}
+
+// Reads every kept log file's bytes verbatim, in file order, tolerating the same
+// discover-to-read rotation race `discoverServerLogFiles` guards against one step earlier. A file
+// that vanishes here contributes no lines and is skipped, not aborted — recorded by name so the
+// manifest can attest to it.
+export function readKeptFiles(keptFiles: readonly LogFileInfo[]): ReadKeptFilesResult {
+  const contentLines: string[] = [];
+  const skippedLogFiles: string[] = [];
+  for (const file of keptFiles) {
+    const fileLines = readVerbatimLogLinesOrUndefined(file.path);
+    if (fileLines === undefined) {
+      skippedLogFiles.push(file.name);
+    } else {
+      contentLines.push(...fileLines);
+    }
+  }
+  return { contentLines, skippedLogFiles };
+}
+
 // What the manifest is allowed to say about the audit: everything EXCEPT `stateDir`. `AuditResult`
 // (audit.ts) echoes back the absolute directory it audited — the exact same value
 // `resolveStateDir` computes by default, which embeds the operator's OS username on a real
@@ -146,6 +208,11 @@ export interface SupportBundleManifest {
   readonly redactionAttested: true;
   readonly sourceLogFiles: readonly string[];
   readonly truncatedLogFiles: readonly string[];
+  // Relative names only of files a directory listing named but that had vanished (the sink's own
+  // rotation/retention pruning) by the time this export tried to size or read them — never the
+  // files' absolute paths. Distinct from `truncatedLogFiles`: those were dropped on purpose for
+  // the size budget; these were simply gone.
+  readonly skippedLogFiles: readonly string[];
   // Always empty in this minimal version: ui.log gating and evidence/config-snapshot sections are
   // Wave 6 features, so nothing is yet excluded that this manifest could name.
   readonly sectionsExcluded: readonly string[];
@@ -175,6 +242,7 @@ export interface ManifestInput {
   readonly stateDirSource: "default" | "env-override";
   readonly sourceLogFiles: readonly string[];
   readonly truncatedLogFiles: readonly string[];
+  readonly skippedLogFiles: readonly string[];
   readonly auditSummary: AuditResult;
   readonly evidenceIndexCount: number;
 }
@@ -194,23 +262,22 @@ export function buildSupportBundleManifest(input: ManifestInput): SupportBundleM
     redactionAttested: true,
     sourceLogFiles: input.sourceLogFiles,
     truncatedLogFiles: input.truncatedLogFiles,
+    skippedLogFiles: input.skippedLogFiles,
     sectionsExcluded: [],
     auditSummary: redactedAuditSummary(input.auditSummary),
     evidenceIndexCount: input.evidenceIndexCount,
   };
 }
 
-// Line 1 (the manifest) plus one verbatim line per kept log file, in file order. Never touches an
-// already-copied line's bytes.
+// Line 1 (the manifest) plus every already-read content line, in file order. The manifest is
+// built from `readKeptFiles`'s result (see `support.ts`'s `runSupportExport`) so its
+// `sourceLogFiles`/`skippedLogFiles` reflect what was actually read, not merely what was kept
+// after the size budget — never touches an already-copied line's bytes.
 export function serializeBundleLines(
   manifest: SupportBundleManifest,
-  keptFiles: readonly LogFileInfo[],
+  contentLines: readonly string[],
 ): readonly string[] {
-  const lines: string[] = [JSON.stringify(manifest)];
-  for (const file of keptFiles) {
-    lines.push(...readVerbatimLogLines(file.path));
-  }
-  return lines;
+  return [JSON.stringify(manifest), ...contentLines];
 }
 
 // Joins lines with a single trailing newline, the same shape server-log.ts's own file sink writes

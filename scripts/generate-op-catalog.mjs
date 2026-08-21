@@ -51,7 +51,7 @@
 // in memory and pin it against the checked-in file, and `OP_NAME_PATTERN` so both this generator
 // and any future runtime-adjacent check share one definition of a well-formed op name.
 
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -68,17 +68,30 @@ const OUTPUT_RELATIVE_PATH = "docs/observability/op-catalog.generated.json";
 // output rather than a hand-picked example set.
 export const OP_NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}(\.[a-z][a-z0-9-]{0,31}){0,5}$/;
 
-// Package src roots this generator walks, in the order their entries appear when unsorted (the
-// catalog itself is sorted by package/op/site, so this order is cosmetic).
-const SCANNED_PACKAGE_ROOTS = [
-  "packages/keiko-server/src",
-  "packages/keiko-model-gateway/src",
-  "packages/keiko-local-knowledge/src",
-  "packages/keiko-harness/src",
-  "packages/keiko-security/src",
-  "packages/keiko-memory-consolidation/src",
-  "packages/keiko-cli/src",
-];
+// Codepoint comparison, never `localeCompare`: the catalog's entry order (and, transitively, the
+// order files are walked in) is checked-in output pinned by a drift test. `localeCompare` uses the
+// runtime's ICU collation and the ambient `LANG`, so the SAME source could sort two different ways
+// on two machines — turning the gate red with no source change, or masking a genuine reorder.
+function compareCodepoints(left, right) {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+
+// Every workspace package's `src` root, derived from `packages/*` rather than a hand-maintained
+// list — a hardcoded list can go stale the moment a new package adds `op:` instrumentation and
+// nobody remembers to add it here, and the catalog would then silently stay incomplete with a
+// green drift test. Sorted by codepoint so this root list — cosmetic today, since the final
+// catalog is sorted by package/op/site regardless — never depends on directory-listing order.
+function scannedPackageRoots(repoRoot) {
+  const packagesDir = join(repoRoot, "packages");
+  const names = readdirSync(packagesDir).filter((name) =>
+    statSync(join(packagesDir, name)).isDirectory(),
+  );
+  const roots = names
+    .filter((name) => existsSync(join(packagesDir, name, "src")))
+    .map((name) => `packages/${name}/src`);
+  return roots.toSorted(compareCodepoints);
+}
 
 // Explicit, checked-in table of helper functions/methods whose `op` is a positional argument
 // rather than a named object-literal property. Discovered by grepping each scanned package for a
@@ -139,7 +152,7 @@ function packageNameFromRoot(root) {
 // that exercise them.
 function walkTsFiles(dir) {
   const files = [];
-  for (const name of readdirSync(dir).sort((left, right) => left.localeCompare(right))) {
+  for (const name of readdirSync(dir).sort(compareCodepoints)) {
     if (name === "__tests__") continue;
     const full = join(dir, name);
     const stats = statSync(full);
@@ -174,6 +187,18 @@ function depthDelta(ch) {
   return 0;
 }
 
+// Advances `depth` by one character, clamped at zero. A stray unmatched closing bracket (e.g. an
+// apostrophe misread as a string boundary, or a bracket left over from a scan that started
+// mid-expression) must never push depth negative: once negative, depth can drift back up past
+// zero without ever landing ON zero again, and every top-level stop after it would be missed.
+// Clamping recovers on the very next open bracket instead of staying corrupted for the rest of the
+// scan. Split out of `scanBalanced` to keep that function's own branching under this repo's
+// complexity ceiling.
+function nextDepth(depth, ch) {
+  const next = depth + depthDelta(ch);
+  return Math.max(0, next);
+}
+
 // Scans `source` from `startIndex`, tracking bracket depth and string/template-literal spans (a
 // backslash escape inside a string never ends it, and nothing inside a string ever changes
 // depth), and returns the index of the first character for which `isStop(ch)` is true while at
@@ -195,7 +220,7 @@ function scanBalanced(source, startIndex, isStop) {
       continue;
     }
     if (depth === 0 && isStop(ch)) return i;
-    depth += depthDelta(ch);
+    depth = nextDepth(depth, ch);
   }
   return source.length;
 }
@@ -236,14 +261,32 @@ const VALUE_STOP = (ch) => ch === "," || ch === ";" || CLOSE_BRACKETS.has(ch);
 // Reads a property/argument value starting at `startIndex`, stopping at the first top-level
 // (depth-0) comma, closing brace/paren/bracket, or semicolon — the same bracket-depth scan as
 // `splitTopLevelArgs`, but for a value that is not itself inside a call's argument list (an
-// object-literal property, or a function parameter's type annotation).
+// object-literal property, or a function parameter's type annotation). Returns the stop character
+// alongside the value: `opPropertyEntries` uses it to tell a declaration from a real property (see
+// `closesOverDeclaration`).
 function readValueSpan(source, startIndex) {
-  return source.slice(startIndex, scanBalanced(source, startIndex, VALUE_STOP));
+  const stopIndex = scanBalanced(source, startIndex, VALUE_STOP);
+  return { value: source.slice(startIndex, stopIndex), stopChar: source[stopIndex] };
 }
 
 const SINGLE_LITERAL = /^"([^"\\]*)"$/;
-const TERNARY_OF_LITERALS = /^[\s\S]+?\?\s*"([^"\\]*)"\s*:\s*"([^"\\]*)"\s*$/;
+const TERNARY_BRANCHES = /^\s*"([^"\\]*)"\s*:\s*"([^"\\]*)"\s*$/;
 const CONST_IDENTIFIER = /^[A-Z][A-Z0-9_]*$/;
+
+// Resolves `condition ? "a" : "b"` — but ONLY when the condition (everything before the FIRST `?`
+// in the expression) contains no quoted literal. A quote there means either a nested ternary
+// (`flag ? "x" : other ? "y" : "z"`, whose true, only-two-literal branches sit after the SECOND
+// `?`) or a condition this generator cannot safely scan for its own top-level `?` (a quoted
+// literal can itself contain a `?` character, which would misdirect a plain `indexOf`). Either
+// way, guessing which `?` is the real ternary operator risks silently dropping a real literal —
+// see the nested-ternary case above, where a naive scan drops `"x"` entirely — so this returns
+// `null` (dynamic) instead.
+function ternaryOfLiterals(expr) {
+  const qIndex = expr.indexOf("?");
+  if (qIndex === -1 || expr.slice(0, qIndex).includes('"')) return null;
+  const branches = TERNARY_BRANCHES.exec(expr.slice(qIndex + 1));
+  return branches ? [branches[1], branches[2]] : null;
+}
 
 // Resolves a raw `op` expression (already trimmed) to the literal string(s) it can only ever be:
 // a plain string, a ternary between two strings, or a reference to a well-known UPPER_SNAKE_CASE
@@ -252,8 +295,8 @@ const CONST_IDENTIFIER = /^[A-Z][A-Z0-9_]*$/;
 function resolveLiteralValues(expr, constMap) {
   const single = SINGLE_LITERAL.exec(expr);
   if (single) return [single[1]];
-  const ternary = TERNARY_OF_LITERALS.exec(expr);
-  if (ternary) return [ternary[1], ternary[2]];
+  const ternary = ternaryOfLiterals(expr);
+  if (ternary) return ternary;
   if (CONST_IDENTIFIER.test(expr) && constMap.has(expr)) return [constMap.get(expr)];
   return null;
 }
@@ -330,16 +373,21 @@ function findSiblingCategory(lines, opLine) {
   return categoryAbove(lines, opLine, opIndent) ?? categoryBelow(lines, opLine);
 }
 
-// Removes `//` line comments and `/* … */` block comments from `source`, respecting string and
-// template-literal spans exactly like `scanBalanced` (a comment marker inside a string is not a
-// comment). Feeds only the file-level category-binding tier below: a doc comment illustrating a
-// call shape (this very file's own header, or `server-logger.ts`'s `log.info({ category:
-// "indexing", ... })` example) must never be mistaken for a real binding. Newlines inside a
-// stripped block comment are preserved as newlines so line-oriented callers are unaffected; nothing
-// here currently needs that, but it costs nothing and keeps this function safe to reuse later.
-// One step of `stripComments`'s string/template-literal branch: an escape consumes and re-emits
-// both characters (so an escaped quote never ends the string), the matching quote closes it,
-// anything else is emitted unchanged. Returns the next index to resume scanning from.
+// Blanks `//` line comments and `/* … */` block comments in `source` — replaces every comment
+// character with a space, character for character, while every OTHER character (including every
+// newline, whether inside a comment or not) passes through unchanged. Unlike removing comment
+// text outright, blanking preserves `source`'s exact length and every newline's exact offset, so
+// `entriesForFile` can compute `lines`/`offsets` once against the blanked text and every extractor
+// below sees line numbers that agree with the real file — no separate "raw vs. stripped" offset
+// bookkeeping, and no risk of a duplicated or dropped newline shifting later sites (the bug a
+// remove-based version of this function had for a `//` comment). Respects string and
+// template-literal spans exactly like `scanBalanced`: a comment marker inside a string is not a
+// comment, and a commented-out `op: "…"` — a doc-comment example, or this very file's own header —
+// can never surface as a catalog entry once every extractor scans the blanked text.
+// One step of `blankComments`'s string/template-literal branch: an escape consumes and re-emits
+// both characters unchanged (so an escaped quote never ends the string), the matching quote closes
+// it, anything else is copied unchanged. String contents are never blanked. Returns the next index
+// to resume scanning from.
 function stepInsideString(source, index, stringChar, appendChar) {
   const ch = source[index];
   appendChar(ch);
@@ -350,30 +398,47 @@ function stepInsideString(source, index, stringChar, appendChar) {
   return { index: index + 1, stringChar: ch === stringChar ? null : stringChar };
 }
 
-// Skips a `//` line comment, emitting a single newline in its place so line-oriented callers are
-// unaffected (none currently need that, but it costs nothing here).
-function skipLineComment(source, index, appendChar) {
+// Appends the blanked form of one source character: itself if it is a newline (so line layout
+// stays exact), a single space otherwise.
+function appendBlanked(ch, appendChar) {
+  appendChar(ch === "\n" ? "\n" : " ");
+}
+
+// Blanks a `//` line comment up to (not including) its terminating newline. The dispatch loop in
+// `blankComments` copies that newline unchanged on its very next step, so it is emitted exactly
+// once — the double-newline this function used to introduce (one appended here, one copied by the
+// dispatch loop) is gone because this function no longer appends a newline of its own at all.
+function blankLineComment(source, index, appendChar) {
   let i = index;
-  while (i < source.length && source[i] !== "\n") i += 1;
-  appendChar("\n");
+  while (i < source.length && source[i] !== "\n") {
+    appendBlanked(source[i], appendChar);
+    i += 1;
+  }
   return i;
 }
 
-// Skips a `/* … */` block comment, preserving every newline inside it so line numbers downstream
-// of a stripped comment stay aligned.
-function skipBlockComment(source, index, appendChar) {
+// Blanks a `/* … */` block comment, including its opening and closing markers, one character at a
+// time, so the blanked output is exactly as long as the comment it replaces.
+function blankBlockComment(source, index, appendChar) {
+  appendBlanked(source[index], appendChar);
+  appendBlanked(source[index + 1], appendChar);
   let i = index + 2;
   while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) {
-    if (source[i] === "\n") appendChar("\n");
+    appendBlanked(source[i], appendChar);
     i += 1;
   }
+  appendBlanked(source[i] ?? "", appendChar);
+  appendBlanked(source[i + 1] ?? "", appendChar);
   return i + 2;
 }
 
-// Removes `//` line comments and `/* … */` block comments from `source`, respecting string and
-// template-literal spans (a comment marker inside a string is not a comment). Each branch is its
-// own function above; this loop only dispatches between them.
-function stripComments(source) {
+// Blanks every `//` line comment and `/* … */` block comment in `source` (see the header comment
+// above for why blanking, not removing). Computed exactly once per file in `entriesForFile`, and
+// fed to every extractor — object-literal `op:` properties, positional-helper calls, collected
+// constants, and the file-level category binding — so a commented-out `op:` can never become a
+// catalog entry anywhere, not only in the one tier that originally guarded against it. Each branch
+// is its own function above; this loop only dispatches between them.
+function blankComments(source) {
   let out = "";
   const appendChar = (text) => {
     out += text;
@@ -393,11 +458,11 @@ function stripComments(source) {
       continue;
     }
     if (ch === "/" && source[i + 1] === "/") {
-      i = skipLineComment(source, i, appendChar);
+      i = blankLineComment(source, i, appendChar);
       continue;
     }
     if (ch === "/" && source[i + 1] === "*") {
-      i = skipBlockComment(source, i, appendChar);
+      i = blankBlockComment(source, i, appendChar);
       continue;
     }
     appendChar(ch);
@@ -412,9 +477,10 @@ const FILE_CATEGORY_LITERAL_PATTERN = /\bcategory\s*:\s*"([^"\\]*)"/g;
 // call, when — and only when — the whole file (comments excluded) agrees on exactly one distinct
 // value. Two or more distinct values, or none, return `undefined`, so the caller leaves those
 // entries "unknown" rather than guessing which of several bindings applies to a given call site.
+// `source` here is already the blanked text `entriesForFile` computed once for the whole file.
 function fileCategoryBinding(source) {
   const distinct = new Set();
-  for (const match of stripComments(source).matchAll(FILE_CATEGORY_LITERAL_PATTERN)) {
+  for (const match of source.matchAll(FILE_CATEGORY_LITERAL_PATTERN)) {
     distinct.add(match[1]);
   }
   return distinct.size === 1 ? [...distinct][0] : undefined;
@@ -435,13 +501,48 @@ function siteEntry(op, category, relPath, lineNumber) {
   return { op, category, site: `${relPath}:${lineNumber + 1}` };
 }
 
+// True when `stopChar` — the character `readValueSpan` stopped at — structurally rules out an
+// object-literal property: a semicolon closes an interface/type-literal member (`readonly op:
+// string;`), and a bare `op: Type` sitting directly in a parameter list closes over the enclosing
+// `)` with nothing of its own in between — including a nested function-type parameter, e.g. the
+// `op` in `(op: () => void) => …`, whose OWN value span ends at the outer `)`, never at a `,` or
+// `}` first. An object-literal property never does either: this codebase's "trailing commas
+// everywhere" Prettier rule means a non-final property always stops at `,`, and a final one closes
+// over `}` (an object literal is always parenthesized or braced before any enclosing `)`).
+function closesOverDeclaration(stopChar) {
+  return stopChar === ";" || stopChar === ")";
+}
+
+const TYPE_LIKE_IDENTIFIER = /^[A-Z]\w*$/;
+// A union of two or more quoted string-literal types, e.g. `"pull" | "put"` — TypeScript syntax
+// for a parameter's TYPE, never a runtime expression (`"a" | "b"` at runtime is bitwise-OR on two
+// strings coerced to `NaN`, which nothing in this codebase writes or would want).
+const STRING_LITERAL_UNION = /^"[^"\\]*"(\s*\|\s*"[^"\\]*")+$/;
+
+// True when `value` can only be naming a TypeScript type, never a runtime `op` value: the plain
+// annotation text this generator has always recognized, a function type (`(...) => ...`, which
+// `closesOverDeclaration` catches only when it is the WHOLE parameter list — this also catches one
+// broken across multiple lines with its own trailing comma), a union of quoted string-literal
+// types, or a bare PascalCase identifier that is not one of this file's collected
+// UPPER_SNAKE_CASE constants — a type reference such as `OpName` or `LogOp`. A genuine runtime
+// forward always reads a dotted expression (`record.operation`, `event.op`) or one of those
+// all-caps constants, never a bare PascalCase name, so this never mistakes a real dynamic site for
+// a declaration.
+function isTypeAnnotationValue(value, constMap) {
+  if (value === "string" || value === "string | undefined") return true;
+  if (value.startsWith("(")) return true;
+  if (STRING_LITERAL_UNION.test(value)) return true;
+  return TYPE_LIKE_IDENTIFIER.test(value) && !constMap.has(value);
+}
+
 // Scans one `op:` object-literal property match: skips TypeScript type annotations (`op: string`
-// on a function parameter or interface field), otherwise resolves the value and emits one entry
-// per resolved literal, or a single `<dynamic>` entry when the value cannot be enumerated.
+// or `op: SomeType` on a function parameter, function-type parameter, or interface/type field),
+// otherwise resolves the value and emits one entry per resolved literal, or a single `<dynamic>`
+// entry when the value cannot be enumerated.
 function opPropertyEntries(source, lines, offsets, constMap, relPath, colonEnd) {
-  const rawValue = readValueSpan(source, colonEnd);
+  const { value: rawValue, stopChar } = readValueSpan(source, colonEnd);
   const value = rawValue.trim();
-  if (value === "string" || value === "string | undefined") return [];
+  if (closesOverDeclaration(stopChar) || isTypeAnnotationValue(value, constMap)) return [];
   const opLine = lineNumberAt(offsets, colonEnd);
   const category = findSiblingCategory(lines, opLine) ?? "unknown";
   const literals = resolveLiteralValues(value, constMap);
@@ -474,13 +575,18 @@ function isFunctionDeclarationSite(source, matchIndex) {
 }
 
 // One helper call site's entries: reads the literal(s) out of the argument at `helper.argIndex`,
-// or a single `<dynamic>` entry when that argument is not enumerable.
+// or a single `<dynamic>` entry when that argument is not enumerable OR not readable at all — a
+// missing `args[helper.argIndex]` means `splitTopLevelArgs` could not read this call (end of file,
+// or a bracket scan confused by something upstream), not that the call carries no op. Recording it
+// as dynamic keeps the site visible instead of silently vanishing from the catalog.
 function helperCallEntries(source, offsets, constMap, relPath, helper, matchIndex) {
   const parenIndex = source.indexOf("(", matchIndex + helper.name.length - 1);
   const { args } = splitTopLevelArgs(source, parenIndex);
   const argText = args[helper.argIndex];
-  if (argText === undefined) return [];
   const callLine = lineNumberAt(offsets, matchIndex);
+  if (argText === undefined) {
+    return [siteEntry("<dynamic>", helper.category, relPath, callLine)];
+  }
   const literals = resolveLiteralValues(argText.trim(), constMap);
   if (literals === null) return [siteEntry("<dynamic>", helper.category, relPath, callLine)];
   return literals.map((literal) => siteEntry(literal, helper.category, relPath, callLine));
@@ -507,9 +613,13 @@ function applicableHelpers(relPath) {
 }
 
 // Every catalog entry contributed by one file: object-literal `op:` properties plus every
-// positional-helper call site that applies to this file.
+// positional-helper call site that applies to this file. Comments are blanked exactly once, here,
+// and every extractor below — including the file-level category-binding tier — scans that blanked
+// text, so a commented-out `op:` can never become an entry and no extractor sees raw comment text.
+// Blanking preserves length and every newline's offset (see `blankComments`), so `lines`/`offsets`
+// computed against it are exactly the real file's line numbers.
 function entriesForFile(absPath, relPath) {
-  const source = readFileSync(absPath, "utf8");
+  const source = blankComments(readFileSync(absPath, "utf8"));
   const lines = source.split("\n");
   const offsets = lineOffsets(source);
   const constMap = collectConstStrings(source);
@@ -524,9 +634,9 @@ function entriesForFile(absPath, relPath) {
 
 function compareEntries(left, right) {
   return (
-    left.package.localeCompare(right.package) ||
-    left.op.localeCompare(right.op) ||
-    left.site.localeCompare(right.site)
+    compareCodepoints(left.package, right.package) ||
+    compareCodepoints(left.op, right.op) ||
+    compareCodepoints(left.site, right.site)
   );
 }
 
@@ -541,7 +651,7 @@ function violationsIn(entries) {
 // file, and so the CLI entry point below only adds the write-to-disk step.
 export function generateOpCatalog(repoRoot = REPO_ROOT) {
   const entries = [];
-  for (const root of SCANNED_PACKAGE_ROOTS) {
+  for (const root of scannedPackageRoots(repoRoot)) {
     const pkg = packageNameFromRoot(root);
     const absRoot = join(repoRoot, ...root.split("/"));
     for (const absPath of walkTsFiles(absRoot)) {

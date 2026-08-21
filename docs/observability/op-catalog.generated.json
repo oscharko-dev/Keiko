@@ -5,19 +5,19 @@
     {
       "op": "process.exiting",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:414",
+      "site": "packages/keiko-cli/src/ui.ts:448",
       "package": "keiko-cli"
     },
     {
       "op": "process.heartbeat",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:649",
+      "site": "packages/keiko-cli/src/ui.ts:701",
       "package": "keiko-cli"
     },
     {
       "op": "process.started",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:729",
+      "site": "packages/keiko-cli/src/ui.ts:816",
       "package": "keiko-cli"
     },
     {
@@ -593,7 +593,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:617",
+      "site": "packages/keiko-server/src/observability/server-log.ts:633",
       "package": "keiko-server"
     },
     {
@@ -714,18 +714,6 @@
       "op": "indexing.detached-run.launched",
       "category": "indexing",
       "site": "packages/keiko-server/src/local-knowledge-handlers.ts:2953",
-      "package": "keiko-server"
-    },
-    {
-      "op": "indexing.job.skipped",
-      "category": "indexing",
-      "site": "packages/keiko-server/src/observability/server-logger.ts:11",
-      "package": "keiko-server"
-    },
-    {
-      "op": "indexing.job.started",
-      "category": "indexing",
-      "site": "packages/keiko-server/src/observability/server-logger.ts:10",
       "package": "keiko-server"
     },
     {

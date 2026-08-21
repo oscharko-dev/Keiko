@@ -233,6 +233,8 @@ const TOOL_RESULT_ARTIFACT_SUFFIX = ".tool-result.txt"; // keiko-evidence tool-r
 const PRODUCER_TEMP_SUFFIX = ".tmp"; // atomic-save temp files (`<target>.<random>.tmp`)
 const PRODUCER_TEMP_TOKEN = /^[A-Za-z0-9._-]{8,}$/u;
 const SECRET_VAULT_TEMP_FILE = /^\.secret-vault\.[1-9]\d*\.[0-9a-f]{16}\.tmp$/u;
+const SERVER_LOG_FILE = "server.log"; // keiko-server/src/observability/server-log.ts (createFileServerLogSink)
+const SERVER_LOG_ARCHIVE_FILE = /^server-\d{4}-\d{2}-\d{2}\.log$/u; // day-rotated archive (archiveCurrentDay)
 const QI_OWNED_SUFFIXES = [
   ".qi.json", // keiko-evidence/src/qualityIntelligence/store.ts
   ".candidates.json", // keiko-evidence/src/qualityIntelligence/candidatesArtifact.ts
@@ -383,6 +385,10 @@ function isEditorHotExitVaultFile(name: string): boolean {
   );
 }
 
+function isServerLogFile(name: string): boolean {
+  return name === SERVER_LOG_FILE || SERVER_LOG_ARCHIVE_FILE.test(name);
+}
+
 function dirHasSqliteFamilyArtifact(absDir: string, base: string): boolean {
   try {
     return readdirSync(absDir).some((name) => isSqliteFamily(base, name));
@@ -519,12 +525,14 @@ const updateSubtree: OwnedSubtree = {
 };
 
 // `logs/` holds only `server.log` and its day-rotated `server-<date>.log` archives
-// (`createFileServerLogSink`) — nothing else is ever written there, so the whole subtree is
-// Keiko-owned the same way the launcher/update temp trees above are.
+// (`createFileServerLogSink`). Classified rather than `whole`: an operator file dropped into
+// `logs/`, or an unexpected nested directory, must be retained rather than claimed by
+// `repair`/`uninstall` — a `whole` subtree here would let anything placed under `logs/` get
+// chmod'd or removed as if Keiko had written it (#2902 PR review).
 const logsSubtree: OwnedSubtree = {
   category: "activity-log",
-  whole: true,
-  ownsFile: OWNS_NO_FILE,
+  whole: false,
+  ownsFile: isServerLogFile,
   childSubtree: NO_CHILD,
 };
 

@@ -185,11 +185,15 @@ describe("server activity log", () => {
     expect(lines[0]).toMatchObject({ schemaVersion: SERVER_LOG_SCHEMA_VERSION, pid: process.pid });
     expect(lines[0]?.instanceId).toBe(serverLogInstanceId());
     expect(String(lines[0]?.instanceId)).toMatch(/^[0-9a-f]{8}$/);
-    // Monotonic per ActiveLog, starting at 1, and the SAME instanceId/pid on every line this
-    // process writes — two different process lifetimes are told apart by instanceId, never pid
+    // Monotonic PER PROCESS, not per file and not starting at a fixed value: the allocator is
+    // shared by every ActiveLog this process ever resolves, so an earlier test's sink may already
+    // have claimed numbers below this one — an absolute starting value is exactly what a
+    // process-wide counter makes unstable to assert. What the contract actually promises is that
+    // two lines written back to back by the SAME sink are exactly one apart, and carry the SAME
+    // instanceId/pid — two different process lifetimes are told apart by instanceId, never pid
     // alone, since the OS reuses pids across restarts.
-    expect(lines[0]?.seq).toBe(1);
-    expect(lines[1]?.seq).toBe(2);
+    expect(typeof lines[0]?.seq).toBe("number");
+    expect(lines[1]?.seq).toBe((lines[0]?.seq as number) + 1);
     expect(lines[1]?.instanceId).toBe(lines[0]?.instanceId);
     expect(lines[1]?.pid).toBe(lines[0]?.pid);
   });
@@ -210,13 +214,78 @@ describe("server activity log", () => {
     expect(lines[0]).toMatchObject({
       schemaVersion: SERVER_LOG_SCHEMA_VERSION,
       pid: process.pid,
-      seq: 1,
       keep: 1,
     });
     expect(lines[0]?.instanceId).toBe(serverLogInstanceId());
     expect(lines[0]?.pid).not.toBe(-1);
     expect(lines[0]?.instanceId).not.toBe("deadbeef");
+    // The real, process-allocated value, never the forged one. `seq` is not pinned to 1 here: the
+    // allocator is process-wide, so an earlier test's sink may already have advanced it — asserting
+    // "not the forged value, and a genuine positive integer" is what still holds regardless.
     expect(lines[0]?.seq).not.toBe(999_999);
+    expect(typeof lines[0]?.seq).toBe("number");
+    expect(lines[0]?.seq as number).toBeGreaterThan(0);
+  });
+
+  // ADR-0173 D2's join key is `(pid, instanceId, seq)`, promised unique PROCESS-WIDE — not merely
+  // within one log file. Before this fix `seq` lived on `ActiveLog`, one per resolved directory, so
+  // two state directories in the very same process each started counting at 1 and could stamp an
+  // identical tuple on two unrelated lines. A shared, module-scoped allocator is the only way two
+  // independent `ActiveLog`s can still hand out non-overlapping numbers.
+  it("shares one seq allocator across independent state directories, so seq never repeats", () => {
+    const otherStateDir = mkdtempSync(join(tmpdir(), "keiko-server-log-other-"));
+    try {
+      const sinkA = createFileServerLogSink(stateDir);
+      const sinkB = createFileServerLogSink(otherStateDir);
+      sinkA.write({ category: "http", op: "a1" });
+      sinkB.write({ category: "http", op: "b1" });
+      sinkA.write({ category: "http", op: "a2" });
+      sinkB.write({ category: "http", op: "b2" });
+      sinkB.close?.();
+
+      const seqA = readLines(stateDir).map((line) => line.seq as number);
+      const seqB = readLines(otherStateDir).map((line) => line.seq as number);
+
+      // No duplicate anywhere across the two directories: a per-directory counter would let
+      // seqA[0] and seqB[0] both be 1.
+      const combined = [...seqA, ...seqB];
+      expect(new Set(combined).size).toBe(combined.length);
+      // Strictly increasing within each directory's own lines, even though the two sinks'
+      // writes were interleaved and share one process-wide counter.
+      expect(seqA[1]).toBeGreaterThan(seqA[0] ?? Number.POSITIVE_INFINITY);
+      expect(seqB[1]).toBeGreaterThan(seqB[0] ?? Number.POSITIVE_INFINITY);
+    } finally {
+      rmSync(otherStateDir, { recursive: true, force: true });
+    }
+  });
+
+  // The counter is claimed BEFORE the write is attempted (see `allocateServerLogSeq`), so a write
+  // that throws still consumes a number. That number is never seen again — reusing it for the next
+  // line would be silently worse than the gap it would hide. The gap is therefore the expected,
+  // diagnosable outcome, not a bug: an agent reconstructing the run sees seq jump by two and knows
+  // exactly one line failed to persist at that point, which is what the stderr failure notice
+  // (asserted elsewhere) also reports.
+  it("leaves a gap in seq for a write that throws, and keeps allocating correctly after", () => {
+    const sink = createFileServerLogSink(stateDir, { level: "debug" });
+    sink.write({ category: "http", op: "before-failure" });
+    const before = readRawRecords(stateDir)[0]?.seq as number;
+
+    // A zero-byte budget means the descriptor accepts NOTHING for this record: `writeAll` throws
+    // on its first call before a single byte lands, so — unlike the short-write test below, which
+    // corrupts a partial record — this record leaves no bytes behind at all. `readRawRecords`
+    // filters the resulting blank line, which is why it (not `readLines`) is used here.
+    fsCalls.writeBudgetBytes = 0;
+    sink.write({ category: "http", op: "dropped" });
+    fsCalls.writeBudgetBytes = null;
+
+    sink.write({ category: "http", op: "after-failure" });
+    const records = readRawRecords(stateDir);
+
+    // Only the two writes that actually landed are on disk; the failed one never appears.
+    expect(records.map((record) => record?.op)).toStrictEqual(["before-failure", "after-failure"]);
+    // The gap is exactly one seq wide: the failed write claimed `before + 1` and never persisted
+    // it, so the next persisted line is `before + 2`, not `before + 1`.
+    expect(records[1]?.seq).toBe(before + 2);
   });
 
   // Envelope v2 widens the category union to include process-lifecycle lines; this proves the sink
@@ -675,19 +744,28 @@ describe("server activity log burst cost", () => {
     // re-deriving its byte math here — is what keeps this pin honest: a future change to what the
     // identity envelope carries shows up here automatically, the same way the single-width version
     // did before `seq` existed.
+    //
+    // `seq` is process-wide (ADR-0173 D2), not scoped to this burst's own sink, so the first line
+    // this burst wrote is NOT necessarily `1` — an earlier test in this file may already have
+    // advanced the shared allocator. The starting point is read back off the actual first
+    // persisted line instead of assumed, and the rest of the burst's numbers are derived from it:
+    // the allocator is claimed once per write with nothing else writing to this sink concurrently,
+    // so they are exactly consecutive.
+    const lines = readLines(stateDir);
+    const firstSeq = lines[0]?.seq as number;
     let expectedBytes = 0;
-    for (let seq = 1; seq <= BURST_EVENT_COUNT; seq += 1) {
+    for (let index = 0; index < BURST_EVENT_COUNT; index += 1) {
       expectedBytes += serverLogLineBytes(
         formatServerLogLine(event, undefined, {
           schemaVersion: SERVER_LOG_SCHEMA_VERSION,
           pid: process.pid,
           instanceId: serverLogInstanceId(),
-          seq,
+          seq: firstSeq + index,
         }),
       );
     }
     expect(statSync(join(stateDir, "logs", "server.log")).size).toBe(expectedBytes);
-    expect(readLines(stateDir)).toHaveLength(BURST_EVENT_COUNT);
+    expect(lines).toHaveLength(BURST_EVENT_COUNT);
   });
 
   it(`does no work at all for ${String(BURST_EVENT_COUNT)} below-threshold events`, () => {
