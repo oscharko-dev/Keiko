@@ -1719,6 +1719,61 @@
         "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.15",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.15",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-21-keiko-0.3.15-activity-log",
+      "releaseNoteCategory": "new-additions",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 0.3.15 adds an activity log. Keiko writes one structured line per operation to logs/server.log inside its state directory: every request with its duration and result, every indexing step from acceptance to completion, every call to the model gateway with the size sent, the time taken and the answer received, and every retry and fallback along the way. All lines belonging to one indexing run share a single job identifier, so the entire course of that run can be read with one search. The log is content-free by design \u2014 it records counts, sizes, durations, HTTP statuses and error classes, never document text, model output, credentials, file paths or names you chose yourself \u2014 so the file can be handed to support as it is. It is written from the moment Keiko starts, rotates daily and keeps seven days.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Keiko writes an activity log to logs/server.log inside its state directory: one JSON line per operation, active from startup, rotated daily with seven days kept.",
+        "All lines of one indexing run share the same job identifier, so acceptance, document discovery, extraction, chunking, embedding requests, retries, fallbacks and the final outcome can be followed with a single search of one file.",
+        "Calls to the model gateway are recorded before they are sent and again when they answer, with the number of items, the byte size, the configured timeout, the elapsed time and the HTTP status \u2014 so a request still in flight is visible as such, with the time it has been running.",
+        "The log is content-free by design: counts, sizes, durations, statuses, error classes, and identifiers reduced to digests. Document text, model output, credentials, request bodies, absolute file paths and names you chose yourself cannot reach it, so the file can be shared with support without disclosing anything.",
+        "Verbosity is adjustable through the KEIKO_LOG_LEVEL environment variable (debug, info, warn, error). The default records the course of every operation without per-item detail."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-21",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3204#5369466877",
+        "rationale": "The release owner directed this after four releases failed to resolve a customer's indexing incident. Each of those releases repaired a defect that had been inferred rather than observed, because the product recorded nothing an operator could send us; the actual gateway defect was eventually found by asking the customer to run curl by hand. The work was built in four multi-agent passes with adversarial verification between them, and those reviews caught defects that would otherwise have shipped: an entire first instrumentation layer that was wired to a no-op, three fail-open paths in the redaction guard itself, a behavioural regression from a changed async boundary, and a test that could not fail. The field scenario was replayed through the real transport against the customer's measured gateway behaviour: 198 events emitted, 198 carrying the run's correlation id, where an earlier revision measured 0 of 187.",
+        "traceability": null
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
     }
   ]
 }
