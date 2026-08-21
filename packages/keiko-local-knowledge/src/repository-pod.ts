@@ -46,6 +46,7 @@ import type { ParserRegistry } from "./parsers/index.js";
 import type { AuditEventSink } from "./privacy/index.js";
 import { addSourceToCapsule, listCapsuleSources } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
+import type { KnowledgeLogSink } from "./knowledge-log.js";
 
 export interface RepositoryPodDeps {
   readonly store: KnowledgeStore;
@@ -54,6 +55,7 @@ export interface RepositoryPodDeps {
   readonly now?: (() => number) | undefined;
   readonly idSource?: (() => string) | undefined;
   readonly auditSink?: AuditEventSink | undefined;
+  readonly logSink?: KnowledgeLogSink | undefined;
 }
 
 export interface RepositoryPodIndexingDeps extends RepositoryPodDeps {
@@ -270,6 +272,7 @@ function runRepositoryIndexing(
       store: deps.store,
       discoveryOptions,
       ...(deps.auditSink === undefined ? {} : { auditSink: deps.auditSink }),
+      ...(deps.logSink === undefined ? {} : { logSink: deps.logSink }),
       ...(deps.signal === undefined ? {} : { signal: deps.signal }),
       ...(deps.now === undefined ? {} : { now: deps.now }),
       ...(deps.idSource === undefined ? {} : { idSource: deps.idSource }),

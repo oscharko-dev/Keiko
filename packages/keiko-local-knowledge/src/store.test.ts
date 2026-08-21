@@ -22,6 +22,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { KnowledgeStoreError } from "./errors.js";
+import type { KnowledgeLogEvent, KnowledgeLogSink } from "./knowledge-log.js";
 import { LK_STORE_BUSY_TIMEOUT_MS, openKnowledgeStore } from "./store.js";
 
 interface CountRow {
@@ -706,5 +707,78 @@ describe("openKnowledgeStore — sidecar quarantine", () => {
     expect(corruptMain).toBe(true);
     expect(corruptWal).toBe(true);
     expect(corruptShm).toBe(true);
+  });
+});
+
+// ─── Activity log ────────────────────────────────────────────────────────────
+// Store recovery is otherwise invisible: a corrupt database is renamed aside and an EMPTY one
+// takes its place, and until these lines existed the only trace was a diagnostic sidecar
+// nobody looks for until the missing capsules are already noticed.
+describe("openKnowledgeStore — activity log", () => {
+  function recordingSink(): { sink: KnowledgeLogSink; events: KnowledgeLogEvent[] } {
+    const events: KnowledgeLogEvent[] = [];
+    return {
+      sink: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      events,
+    };
+  }
+
+  it("records a data-losing quarantine at error level, with the reopen outcome", () => {
+    const dbPath = join(tmp, "capsules.db");
+    writeFileSync(dbPath, "not a sqlite database — partial write");
+    const { sink, events } = recordingSink();
+
+    const store = openKnowledgeStore({ dbPath, logSink: sink });
+    store.close();
+
+    const quarantine = events.find((event) => event.op === "knowledge.store.quarantined");
+    expect(quarantine).toBeDefined();
+    expect(quarantine?.level).toBe("error");
+    expect(quarantine?.category).toBe("diagnostic");
+    expect(quarantine?.extra).toEqual({ reopened: true });
+    expect(typeof quarantine?.errorKind).toBe("string");
+  });
+
+  it("writes nothing when the store opens cleanly", () => {
+    const { sink, events } = recordingSink();
+    const store = openKnowledgeStore({ dbPath: join(tmp, "capsules.db"), logSink: sink });
+    store.close();
+    expect(events).toEqual([]);
+  });
+
+  it("never places the database path in a logged field", () => {
+    const dbPath = join(tmp, "capsules.db");
+    writeFileSync(dbPath, "not a sqlite database — partial write");
+    const { sink, events } = recordingSink();
+
+    const store = openKnowledgeStore({ dbPath, logSink: sink });
+    store.close();
+
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain(dbPath);
+    expect(serialized).not.toContain(tmp);
+    expect(serialized).not.toContain("capsules.db");
+  });
+
+  it("records the fail-closed rejection when the content cipher cannot be resolved", () => {
+    const dbPath = join(tmp, "capsules.db");
+    const { sink, events } = recordingSink();
+
+    expect(() =>
+      openKnowledgeStore({
+        dbPath,
+        logSink: sink,
+        protection: { mode: "encrypted-key-provider" },
+      }),
+    ).toThrow(KnowledgeStoreError);
+
+    const rejection = events.find((event) => event.op === "knowledge.store.encryption-rejected");
+    expect(rejection).toBeDefined();
+    expect(rejection?.level).toBe("error");
+    expect(rejection?.extra).toEqual({ protectionMode: "encrypted-key-provider" });
   });
 });

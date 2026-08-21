@@ -63,6 +63,7 @@ import type { AuditEventSink } from "./privacy/index.js";
 import type { ParserRegistry } from "./parsers/index.js";
 import { listCapsuleSources, updateSourceScopeInCapsule } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
+import type { KnowledgeLogSink } from "./knowledge-log.js";
 
 export interface RefreshHtmlManualPodDeps {
   readonly store: KnowledgeStore;
@@ -79,6 +80,7 @@ export interface RefreshHtmlManualPodDeps {
   readonly now?: () => number;
   readonly idSource?: () => string;
   readonly auditSink?: AuditEventSink;
+  readonly logSink?: KnowledgeLogSink | undefined;
   readonly onCrawlEvent?: (event: ManualCrawlEvent) => void;
   readonly onIndexEvent?: (event: IndexingEvent) => void;
 }
@@ -204,6 +206,7 @@ function runRefreshIndexing(
     embeddingAdapter: deps.embeddingAdapter,
     store: deps.store,
     ...(deps.auditSink !== undefined ? { auditSink: deps.auditSink } : {}),
+    ...(deps.logSink !== undefined ? { logSink: deps.logSink } : {}),
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
     ...(deps.now !== undefined ? { now: deps.now } : {}),
     ...(deps.idSource !== undefined ? { idSource: deps.idSource } : {}),

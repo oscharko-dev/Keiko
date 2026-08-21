@@ -76,6 +76,7 @@ import {
   updateSourceScopeInCapsule,
 } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
+import type { KnowledgeLogSink } from "./knowledge-log.js";
 
 // Synthetic absolute mount root (never touches disk; the in-memory page fs serves the bytes).
 const CONNECTOR_VIRTUAL_ROOT_PREFIX = "/keiko-connector-pod";
@@ -87,6 +88,7 @@ export interface ConnectorPodDeps {
   readonly now?: (() => number) | undefined;
   readonly idSource?: (() => string) | undefined;
   readonly auditSink?: AuditEventSink | undefined;
+  readonly logSink?: KnowledgeLogSink | undefined;
 }
 
 export interface ConnectorPodIndexingDeps extends ConnectorPodDeps {
@@ -301,6 +303,7 @@ function runConnectorIndexing(
     store: deps.store,
     ...(retainUndiscoveredDocuments ? { retainUndiscoveredDocuments: true } : {}),
     ...(deps.auditSink !== undefined ? { auditSink: deps.auditSink } : {}),
+    ...(deps.logSink !== undefined ? { logSink: deps.logSink } : {}),
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
     ...(deps.now !== undefined ? { now: deps.now } : {}),
     ...(deps.idSource !== undefined ? { idSource: deps.idSource } : {}),

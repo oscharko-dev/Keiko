@@ -1,11 +1,19 @@
 import type { IncomingMessage } from "node:http";
 import { PassThrough, Readable } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readBoundedRequestBody,
   RequestBodyCancelledError,
   RequestBodyTooLargeError,
 } from "./bounded-request-body.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type BufferedServerLogSink,
+  type ServerLogThreshold,
+} from "./observability/index.js";
 
 function asRequest(stream: PassThrough | Readable): IncomingMessage {
   return stream as unknown as IncomingMessage;
@@ -25,6 +33,14 @@ function expectTerminalErrorSink(req: IncomingMessage): void {
   expect(req.listenerCount("error")).toBe(1);
   expect(req.listenerCount("aborted")).toBe(0);
   expect(req.listenerCount("close")).toBe(1);
+}
+
+// Installs a buffered process logger at `level` and returns its sink. `resetServerLogger` in
+// `afterEach` puts the process-wide slot back so no suite shares it.
+function captureServerLog(level: ServerLogThreshold): BufferedServerLogSink {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level }));
+  return sink;
 }
 
 async function rejectionAfterMicrotask(outcome: Promise<string>): Promise<unknown> {
@@ -193,5 +209,126 @@ describe("bounded request body", () => {
     expectTerminalErrorSink(req);
     stream.emit("close");
     expectNoBodyListeners(req);
+  });
+});
+
+// The bounded reader is the server's size fail-closed. Its rejection is mapped to a 413 several
+// layers up, so the log line is the only place the limit and the observed size appear together.
+describe("bounded request body activity log", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  it("logs the fail-closed rejection with the limit, the observed bytes and the correlation id", async () => {
+    const sink = captureServerLog("info");
+    const stream = new PassThrough();
+    const req = asRequest(stream);
+    const outcome = readBoundedRequestBody(req, 4, undefined, "req-correlation-01");
+
+    stream.write(Buffer.from("12345"));
+
+    await expect(outcome).rejects.toBeInstanceOf(RequestBodyTooLargeError);
+    expect(sink.events).toEqual([
+      {
+        level: "warn",
+        category: "http",
+        op: "http.request.body.rejected",
+        correlationId: "req-correlation-01",
+        durationMs: undefined,
+        status: undefined,
+        errorKind: "RequestBodyTooLargeError",
+        extra: { maxBytes: 4, receivedBytes: 5, reason: "limit-exceeded" },
+      },
+    ]);
+    stream.end();
+  });
+
+  it("omits the correlation id when the caller could not supply one", async () => {
+    const sink = captureServerLog("info");
+    const stream = new PassThrough();
+    const outcome = readBoundedRequestBody(asRequest(stream), 2);
+
+    stream.write(Buffer.from("abc"));
+
+    await expect(outcome).rejects.toBeInstanceOf(RequestBodyTooLargeError);
+    expect(sink.events[0]?.correlationId).toBeUndefined();
+    expect(sink.events[0]?.op).toBe("http.request.body.rejected");
+    stream.end();
+  });
+
+  it("classifies a stream failure without reading its message", async () => {
+    const sink = captureServerLog("info");
+    const stream = new PassThrough();
+    const failure = Object.assign(new Error("connection reset by peer"), { code: "ECONNRESET" });
+    const outcome = readBoundedRequestBody(asRequest(stream), 128_000, undefined, "req-corr-02");
+
+    stream.emit("error", failure);
+
+    await expect(outcome).rejects.toBe(failure);
+    const [event] = sink.events;
+    expect(event?.op).toBe("http.request.body.failed");
+    expect(event?.level).toBe("warn");
+    expect(event?.errorKind).toBe("ECONNRESET");
+    expect(JSON.stringify(sink.events)).not.toContain("connection reset");
+    stream.destroy();
+  });
+
+  it("keeps a client disconnect at debug so a busy server does not warn on every abort", async () => {
+    const atInfo = captureServerLog("info");
+    const controller = new AbortController();
+    controller.abort("client disconnected");
+
+    await expect(
+      readBoundedRequestBody(asRequest(new PassThrough()), 128_000, controller.signal, "req-c-03"),
+    ).rejects.toBeInstanceOf(RequestBodyCancelledError);
+
+    expect(atInfo.events).toEqual([]);
+
+    const atDebug = captureServerLog("debug");
+    const second = new AbortController();
+    second.abort("client disconnected");
+
+    await expect(
+      readBoundedRequestBody(asRequest(new PassThrough()), 128_000, second.signal, "req-c-03"),
+    ).rejects.toBeInstanceOf(RequestBodyCancelledError);
+
+    expect(atDebug.events).toEqual([
+      {
+        level: "debug",
+        category: "http",
+        op: "http.request.body.cancelled",
+        correlationId: "req-c-03",
+        durationMs: undefined,
+        status: undefined,
+        errorKind: "RequestBodyCancelledError",
+        extra: { maxBytes: 128_000, receivedBytes: 0 },
+      },
+    ]);
+  });
+
+  it("writes nothing when the body stays inside the limit", async () => {
+    const sink = captureServerLog("debug");
+
+    await expect(
+      readBoundedRequestBody(asRequest(Readable.from([Buffer.from("hello")])), 5),
+    ).resolves.toBe("hello");
+
+    expect(sink.events).toEqual([]);
+  });
+
+  it("logs one rejection even when a late data event arrives after the read settled", async () => {
+    const sink = captureServerLog("info");
+    const stream = new PassThrough();
+    const req = asRequest(stream);
+    const outcome = readBoundedRequestBody(req, 1);
+
+    stream.write(Buffer.from("ab"));
+    await expect(outcome).rejects.toBeInstanceOf(RequestBodyTooLargeError);
+    // The reader detached its own listener, so re-entering it is the only way to reach the settled
+    // branch: a duplicate line here would double-count the rejection in every operator query.
+    req.emit("data", Buffer.from("cd"));
+
+    expect(sink.events).toHaveLength(1);
+    stream.end();
   });
 });

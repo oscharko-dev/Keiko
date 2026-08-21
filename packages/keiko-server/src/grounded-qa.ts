@@ -1417,7 +1417,7 @@ async function prepareGroundedAsk(
 ): Promise<PreparedGroundedAsk | RouteResult> {
   let raw: string;
   try {
-    raw = await readBoundedRequestBody(ctx.req, MAX_BODY_BYTES, signal);
+    raw = await readBoundedRequestBody(ctx.req, MAX_BODY_BYTES, signal, ctx.correlationId);
   } catch (error) {
     if (error instanceof RequestBodyTooLargeError) return payloadTooLarge();
     if (error instanceof RequestBodyCancelledError) return groundedCancelledResult();

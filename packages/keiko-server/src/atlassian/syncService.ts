@@ -68,6 +68,7 @@ import {
 import type { UiHandlerDeps } from "../deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { openKnowledgeStoreForDeps } from "../local-knowledge-store-open.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import {
   configuredProviderForCapsule,
   localKnowledgeEmbeddingAdapterForProvider,
@@ -532,6 +533,9 @@ async function applyCompletedOutcome(
       parserRegistry: createDefaultParserRegistry(),
       embeddingAdapter: localKnowledgeEmbeddingAdapterForProvider(context.deps, provider),
       signal: context.job.controller.signal,
+      // Connector pods index through the same orchestrator as folder pods; without this sink a
+      // connector sync is silent even though the folder lane writes a full spine.
+      logSink: processServerLogSink(),
       now: context.now,
     },
     {

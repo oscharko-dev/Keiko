@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -363,6 +363,44 @@ describe("runUiCli", () => {
       captured[0]?.memoryVault?.close();
     } finally {
       await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  // The activity-log sink mkdirs `<stateDir>/logs` the moment it is CONSTRUCTED. Two things
+  // therefore have to hold on the injected-server path: the state directory comes from the CLI's
+  // own resolution (launch cwd + the effective env, NOT `process.env`), and no sink is built at
+  // all — otherwise a unit test writes a log directory outside its fixture, wherever the process
+  // happens to be running.
+  it("resolves the state directory from the launch cwd and opens no log file under an injected server", async () => {
+    const { io, err } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-state-relative-"));
+    const processStateDir = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-process-state-"));
+    vi.stubEnv("KEIKO_STATE_DIR", processStateDir);
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli([], io, { KEIKO_STATE_DIR: ".keiko/runtime" }, deps);
+      expect(err.join("")).toBe("");
+      expect(code).toBe(0);
+      // Relative, so it resolves against the launch cwd — not against the process working
+      // directory and not against a bare `.keiko`.
+      expect(captured[0]?.env.KEIKO_STATE_DIR).toBe(join(cwd, ".keiko", "runtime"));
+      expect(existsSync(join(processStateDir, "logs"))).toBe(false);
+      expect(existsSync(join(cwd, ".keiko", "runtime", "logs"))).toBe(false);
+      captured[0]?.store.close();
+      captured[0]?.memoryVault?.close();
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(cwd, { recursive: true, force: true });
+      await rm(processStateDir, { recursive: true, force: true });
     }
   });
 

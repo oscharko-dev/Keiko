@@ -39,6 +39,7 @@ import {
   type KnowledgeStore,
 } from "@oscharko-dev/keiko-local-knowledge";
 import { localKnowledgeProtectionOptions } from "./localKnowledgeKeyProvider.js";
+import { processServerLogSink } from "./process-log-sink.js";
 import { refreshGroundedAnswerIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
 import { pathIsDenied } from "./files-deny.js";
 import {
@@ -1107,10 +1108,14 @@ function openLocalKnowledgeStoreForProjection(deps: UiHandlerDeps): {
   const root = dirname(deps.uiDbPath ?? resolve(process.cwd(), "keiko-ui.db"));
   const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: root });
   const protection = localKnowledgeProtectionOptions(deps.localKnowledgeKeyProvider);
+  // The chat-message projection opens the SAME store file as the capsule handlers, so it can be
+  // the call that first meets a corrupt or wrongly-keyed database. It carries the same sink for
+  // the same reason: a quarantine that leaves no line is a data-losing decision nobody can trace.
+  const logSink = processServerLogSink();
   const store =
     protection === undefined
-      ? openKnowledgeStore({ dbPath })
-      : openKnowledgeStore({ dbPath, protection });
+      ? openKnowledgeStore({ dbPath, logSink })
+      : openKnowledgeStore({ dbPath, protection, logSink });
   return {
     store,
     close: (): void => {

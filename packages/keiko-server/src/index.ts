@@ -373,3 +373,16 @@ export {
   computeLauncherPairingClaim,
   mintLauncherPairingAttestation,
 } from "./coding-app-session/launcherSessionPairingPort.js";
+
+// ADR-0018 D8 (observability): file-backed activity log sink for the BFF. The CLI wires it into
+// createUiServer so every HTTP request produces one JSON line in `<stateDir>/logs/server.log`,
+// giving operators diagnosable evidence without an env-var opt-in.
+// `createBufferedServerLogSink` is deliberately absent: it is a test-only helper, every consumer
+// is an in-package test importing it from `./observability/index.js`, and a packaged export is a
+// promise this package would then have to keep.
+export {
+  createFileServerLogSink,
+  nullServerLogSink,
+  type ServerLogSink,
+  type ServerLogEvent,
+} from "./observability/server-log.js";

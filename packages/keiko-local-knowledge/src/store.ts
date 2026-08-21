@@ -39,6 +39,12 @@ import {
 
 import { KnowledgeStoreError } from "./errors.js";
 import {
+  emitKnowledgeLogEvent,
+  knowledgeErrorKind,
+  type KnowledgeLogEvent,
+  type KnowledgeLogSink,
+} from "./knowledge-log.js";
+import {
   createEncryptedContentCipher,
   PLAINTEXT_CONTENT_CIPHER,
   type StoreContentCipher,
@@ -51,6 +57,11 @@ export interface OpenKnowledgeStoreOptions {
   readonly clock?: () => number;
   readonly protection?: KnowledgeStoreProtectionOptions;
   readonly vectorIndex?: VectorIndexOptions;
+  // Optional content-free activity log. Store recovery is otherwise SILENT: a corrupt database
+  // is renamed aside and a fresh empty one takes its place, and the only trace is a diagnostic
+  // sidecar nobody thinks to look for until after the missing capsules are noticed. Absent →
+  // nothing is written. The database path never reaches a field here.
+  readonly logSink?: KnowledgeLogSink;
 }
 
 export interface KnowledgeStoreKeyProviderContext {
@@ -430,12 +441,49 @@ function restrictStoreFilePermissions(dbPath: string): void {
   chmodIfPresent(`${dbPath}-shm`, FILE_MODE);
 }
 
+// Both log sites below sit inside a catch block whose contract is that it introduces NO new
+// failure: the quarantine path is mid-recovery, and the encryption path is about to rethrow the
+// cause the caller must see. An injected sink is foreign code — the server's file sink can hit a
+// full disk, and a test double can throw outright — so an unguarded `write` there would replace a
+// diagnosable store failure with a logging failure. Evidence about a failure must never become
+// the failure.
+//
+// The write is NOT swallowed, though: quarantine is the one data-losing decision this file makes,
+// and a lost line about it that nobody can see is how four releases shipped against silence.
+// `emitKnowledgeLogEvent` owns both halves — it never throws at this call site, AND it reports a
+// failing sink once through the sink itself, or through the process warning channel when the sink
+// is dead. Keeping that logic in `knowledge-log.ts` rather than here is deliberate: the same
+// guarantee is owed by the indexing orchestrator and the embedding batcher, and one implementation
+// cannot drift from itself.
+function writeStoreLog(opts: OpenKnowledgeStoreOptions, event: KnowledgeLogEvent): void {
+  emitKnowledgeLogEvent(opts.logSink, event);
+}
+
+// Recovering from confirmed SQLite corruption trades the old database for an empty one. That is
+// the correct fail-forward, but it is a DATA-LOSING decision, so it is recorded at `error` even
+// when the reopen succeeds — and separately when the reopen does not.
+function logStoreQuarantine(
+  opts: OpenKnowledgeStoreOptions,
+  cause: unknown,
+  reopened: boolean,
+): void {
+  writeStoreLog(opts, {
+    level: "error",
+    category: "diagnostic",
+    op: "knowledge.store.quarantined",
+    errorKind: knowledgeErrorKind(cause),
+    extra: { reopened },
+  });
+}
+
 export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeStore {
   ensureDirHardened(dirname(opts.dbPath));
   let attempt = tryOpenAndMigrate(opts.dbPath);
   if (attempt.status === "corrupt") {
-    quarantineFile(opts.dbPath, attempt.cause);
+    const corruptionCause = attempt.cause;
+    quarantineFile(opts.dbPath, corruptionCause);
     attempt = tryOpenAndMigrate(opts.dbPath);
+    logStoreQuarantine(opts, corruptionCause, attempt.status === "ok");
   }
   if (attempt.status !== "ok") {
     throw new KnowledgeStoreError(`Failed to open knowledge-capsule store at ${opts.dbPath}.`, {
@@ -453,6 +501,16 @@ export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeSt
     applyStoreContentEncryption(db, contentCipher);
   } catch (cause) {
     db.close();
+    // Fail-closed: a wrong key or a missing provider for an already-encrypted store. The throw
+    // reaches the caller, but the reason is buried in a cause chain the server surfaces as an
+    // opaque failure — the kind belongs in the log where an operator will actually find it.
+    writeStoreLog(opts, {
+      level: "error",
+      category: "diagnostic",
+      op: "knowledge.store.encryption-rejected",
+      errorKind: knowledgeErrorKind(cause),
+      extra: { protectionMode: opts.protection?.mode ?? "plaintext-local-file-permissions" },
+    });
     throw cause;
   }
   restrictStoreFilePermissions(opts.dbPath);

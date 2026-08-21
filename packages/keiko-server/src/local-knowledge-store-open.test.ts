@@ -8,13 +8,14 @@
 //   3. The base options (`mode`, native-runtime path resolution) are preserved when the shim
 //      rebinds the adapter.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   createCapsule,
   listCapsules,
+  resolveKnowledgeStorePath,
   searchVectorIndex,
 } from "@oscharko-dev/keiko-local-knowledge";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -24,6 +25,12 @@ import {
   openKnowledgeStoreForDeps,
   type OpenKnowledgeStoreForDeps,
 } from "./local-knowledge-store-open.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/db.js";
 
@@ -241,4 +248,46 @@ describe("openKnowledgeStoreForDeps composes the VectorIndexPort adapter", (): v
       }
     },
   );
+});
+
+// Store recovery is otherwise SILENT. A database confirmed corrupt is renamed aside and a fresh
+// empty one takes its place — a correct fail-forward, and a DATA-LOSING one whose only trace is a
+// diagnostic sidecar sitting next to the quarantined file. The store owns the line; this funnel is
+// the only production caller that can hand it somewhere an operator will actually look, and the
+// assertion below is on the line the STORE emitted, so deleting the `logSink` argument fails it.
+describe("openKnowledgeStoreForDeps wires the store's activity log", (): void => {
+  let fixture: DepsFixture;
+
+  beforeEach((): void => {
+    fixture = buildDepsFixture();
+  });
+
+  afterEach((): void => {
+    resetServerLogger();
+    fixture.cleanup();
+  });
+
+  it("records the quarantine that replaces a corrupt database with an empty one", (): void => {
+    const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: fixture.runtimeDir });
+    mkdirSync(dirname(dbPath), { recursive: true });
+    writeFileSync(dbPath, "not a sqlite database — a truncated copy");
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    const opened = openKnowledgeStoreForDeps(fixture.deps);
+    try {
+      expect(listCapsules(opened.store)).toEqual([]);
+    } finally {
+      opened.close();
+    }
+
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        category: "diagnostic",
+        op: "knowledge.store.quarantined",
+        extra: { reopened: true },
+      }),
+    );
+  });
 });

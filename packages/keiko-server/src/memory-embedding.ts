@@ -46,6 +46,7 @@ import {
   configuredEmbeddingProviders,
   selectEmbeddingModelId,
 } from "./local-knowledge-handlers.js";
+import { errorKindOf, getServerLogger, startLogTimer } from "./observability/index.js";
 
 const MEMORY_VECTOR_METRIC = "cosine" as const;
 export type MemoryEmbeddingKind = "query" | "document";
@@ -144,6 +145,69 @@ export type MemoryEmbedder = (
   kind?: MemoryEmbeddingKind,
 ) => Promise<MemoryEmbeddingInput | null>;
 
+// Graceful degradation is silent by design — every failure below returns `null` and the caller
+// keeps its pre-semantic behaviour. That is correct for the product and invisible to an operator
+// wondering why memory retrieval stopped finding anything, so each degradation gets one line.
+// Field policy: counts, a model id, a hashed provider identity and an error CLASSIFICATION. The
+// text being embedded, the vector and the provider's message never appear.
+// "No embedding-capable model is configured" is the default install's steady state, not a fault, so
+// it stays at debug and is there when an operator asks why memory retrieval finds nothing. A model
+// that WAS selected but whose provider is missing is an inconsistent configuration, and warns.
+function logEmbeddingUnavailable(reason: string, providerCount: number, faulty: boolean): void {
+  // A thunk in BOTH branches: the debug case must not allocate the event while the threshold is
+  // at info, and that is the case an unconfigured install reaches on every capture.
+  getServerLogger().log(faulty ? "warn" : "debug", () => ({
+    category: "embedding",
+    op: "embedding.memory.unavailable",
+    extra: { reason, providerCount },
+  }));
+}
+
+function logEmbeddingFailed(
+  provider: ModelProviderConfig,
+  errorKind: string,
+  durationMs: number,
+  status?: number,
+): void {
+  getServerLogger().warn({
+    category: "embedding",
+    op: "embedding.memory.failed",
+    durationMs,
+    errorKind,
+    ...(status === undefined ? {} : { status }),
+    extra: {
+      modelId: provider.modelId,
+      providerIdentity: memoryEmbeddingProviderIdentity(provider),
+    },
+  });
+}
+
+// A vault rejection of a freshly produced vector is swallowed on purpose — the write it belongs to
+// already succeeded and must not be undone — but "swallowed" must not mean "invisible". The error
+// is reduced to a classification; the vector and the vault's own message never appear.
+function logEmbeddingStoreRejected(op: string, error: unknown): void {
+  getServerLogger().warn({ category: "memory", op, errorKind: errorKindOf(error) });
+}
+
+function logEmbeddingSucceeded(
+  provider: ModelProviderConfig,
+  kind: MemoryEmbeddingKind,
+  dimensions: number,
+  durationMs: number,
+): void {
+  getServerLogger().debug(() => ({
+    category: "embedding",
+    op: "embedding.memory.succeeded",
+    durationMs,
+    extra: {
+      modelId: provider.modelId,
+      providerIdentity: memoryEmbeddingProviderIdentity(provider),
+      embeddingKind: kind,
+      dimensions,
+    },
+  }));
+}
+
 // Builds an embedder from a gateway config, or returns null when no embedding-capable model is
 // configured (or its provider is absent). The CLI backfill and the conversation paths both compose
 // through this single factory so capability-aware model selection lives in one place.
@@ -152,29 +216,55 @@ export function createMemoryEmbedder(
   requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,
 ): MemoryEmbedder | null {
   const providers = configuredEmbeddingProviders(config);
-  if (providers.length === 0) return null;
+  if (providers.length === 0) {
+    logEmbeddingUnavailable("no-embedding-capable-model", 0, false);
+    return null;
+  }
   const provider = providers[0];
-  if (provider === undefined) return null;
+  if (provider === undefined) {
+    logEmbeddingUnavailable("provider-absent", providers.length, true);
+    return null;
+  }
   const adapter = buildAdapter(provider, requestImpl);
-  return async (
+  // NOT `async`: an async arrow that merely returns an inner promise adopts it, adding two
+  // microtask ticks before the caller observes the result. Chat streaming interleaves cancellation
+  // with this exact resolution, and those two ticks moved a cancelled turn from "retryable" to
+  // "in-progress" (chat-stream-handlers: cancellation during memory preparation).
+  return (
     text: string,
     kind: MemoryEmbeddingKind = "document",
-  ): Promise<MemoryEmbeddingInput | null> => {
-    if (text.length === 0) return null;
-    try {
-      const outcome = await adapter.request({
-        endpoint: provider.baseUrl,
-        apiKey: provider.apiKey,
-        modelId: provider.modelId,
-        input: formatEmbeddingInput(provider.modelId, text, kind),
-        ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
-      });
-      if (outcome.ok) return toEmbeddingInput(memoryEmbeddingProviderIdentity(provider), outcome);
-    } catch {
-      // Model/transport boundary: a failed primary embedding provider disables this embedding pass.
+  ): Promise<MemoryEmbeddingInput | null> => requestMemoryEmbedding(adapter, provider, text, kind);
+}
+
+// Split out of the factory so the request path stays inside the function-length bar once the three
+// outcomes (refused, failed, succeeded) each carry a line.
+async function requestMemoryEmbedding(
+  adapter: OpenAIEmbeddingAdapter,
+  provider: ModelProviderConfig,
+  text: string,
+  kind: MemoryEmbeddingKind,
+): Promise<MemoryEmbeddingInput | null> {
+  if (text.length === 0) return null;
+  const elapsed = startLogTimer();
+  try {
+    const outcome = await adapter.request({
+      endpoint: provider.baseUrl,
+      apiKey: provider.apiKey,
+      modelId: provider.modelId,
+      input: formatEmbeddingInput(provider.modelId, text, kind),
+      ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
+    });
+    if (outcome.ok) {
+      const input = toEmbeddingInput(memoryEmbeddingProviderIdentity(provider), outcome);
+      logEmbeddingSucceeded(provider, kind, input.vector.length, elapsed());
+      return input;
     }
-    return null;
-  };
+    logEmbeddingFailed(provider, outcome.kind, elapsed(), outcome.status);
+  } catch (error) {
+    // Model/transport boundary: a failed primary embedding provider disables this embedding pass.
+    logEmbeddingFailed(provider, errorKindOf(error), elapsed());
+  }
+  return null;
 }
 
 // Embeds `text` against the configured embedding model. Returns null when no embedding-capable
@@ -203,11 +293,16 @@ export async function embedAndStoreMemory(
   if (input === null) return;
   try {
     vault.upsertEmbedding(memoryId, input);
-  } catch {
+  } catch (error) {
     // gateEmbeddingInput / storage rejection — capture already succeeded; drop the embedding.
+    logEmbeddingStoreRejected("memory.embedding.store-rejected", error);
   }
 }
 
+// Invalidation, not storage, is the invariant here: after a body edit the old vector is WRONG, so
+// every failure path below ends with the row deleted rather than left stale. Each of those paths
+// leaves the memory unsearchable by similarity until the next successful refresh, which is exactly
+// the state an operator needs named when semantic recall quietly stops returning a known memory.
 export async function refreshMemoryEmbeddingAfterBodyEdit(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
@@ -216,22 +311,34 @@ export async function refreshMemoryEmbeddingAfterBodyEdit(
 ): Promise<void> {
   const input = await embedMemoryText(deps, text, "document");
   if (input === null) {
-    try {
-      vault.deleteEmbedding(memoryId);
-    } catch {
-      // Missing memory / no existing row / storage rejection: the edit already succeeded, and the
-      // important invariant is that we never keep using a known stale vector when refresh fails.
-    }
+    logEmbeddingInvalidated("no-embedding");
+    deleteEmbeddingBestEffort(vault, memoryId);
     return;
   }
   try {
     vault.upsertEmbedding(memoryId, input);
-  } catch {
-    try {
-      vault.deleteEmbedding(memoryId);
-    } catch {
-      // Same best-effort invalidation boundary as above.
-    }
+  } catch (error) {
+    logEmbeddingStoreRejected("memory.embedding.store-rejected", error);
+    logEmbeddingInvalidated("store-rejected");
+    deleteEmbeddingBestEffort(vault, memoryId);
+  }
+}
+
+function logEmbeddingInvalidated(reason: string): void {
+  getServerLogger().warn({
+    category: "memory",
+    op: "memory.embedding.invalidated",
+    extra: { reason },
+  });
+}
+
+// Missing memory / no existing row / storage rejection: the edit already succeeded, and the
+// important invariant is that we never keep using a known stale vector when refresh fails.
+function deleteEmbeddingBestEffort(vault: MemoryVaultStore, memoryId: MemoryId): void {
+  try {
+    vault.deleteEmbedding(memoryId);
+  } catch (error) {
+    logEmbeddingStoreRejected("memory.embedding.invalidation-failed", error);
   }
 }
 
@@ -564,30 +671,54 @@ const SEMANTIC_SUPPRESSION_REASONS: readonly MemoryCaptureSuppressionReason[] = 
 // the forget check, the novelty check, and storage), so this replaces — not adds to — the prior
 // best-effort embed-on-capture call. Never throws past the vault's own guards; a null embedding
 // degrades to a plain insert.
+// The gate's three outcomes are indistinguishable from outside: two of them store nothing, and a
+// suppression in particular is a governed refusal the operator must be able to account for. One
+// line per decision, carrying the scope KIND (never the scoping id), whether an embedding was
+// available at all, the threshold that was applied and the neighbour count it was applied over.
+function logNoveltyDecision(
+  outcome: NoveltyInsertOutcome["kind"],
+  scopeKind: MemoryRecord["scope"]["kind"],
+  embedded: boolean,
+  fields: Readonly<Record<string, unknown>>,
+): void {
+  getServerLogger().info({
+    category: "memory",
+    op: "memory.capture.novelty-gate",
+    extra: { outcome, scopeKind, embedded, ...fields },
+  });
+}
+
 export async function insertSalienceMemoryWithNoveltyGate(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   record: MemoryRecord,
 ): Promise<NoveltyInsertOutcome> {
   const embedding = await embedMemoryText(deps, record.body, "document");
+  const embedded = embedding !== null;
+  const scopeKind = record.scope.kind;
   const calibration = embedding === null ? {} : memoryEmbeddingCalibrationFor(deps.env, embedding);
   const dedupThreshold = calibration.semanticDedupThreshold ?? SEMANTIC_DEDUP_COSINE_THRESHOLD;
   const suppression = semanticSuppressionReason(vault, record.scope, embedding, dedupThreshold);
   if (suppression !== null) {
+    logNoveltyDecision("suppressed", scopeKind, embedded, { reason: suppression, dedupThreshold });
     return { kind: "suppressed", reason: suppression };
   }
   const neighbors = gatherScopeEmbeddings(vault, record.scope);
+  const neighborCount = neighbors.size;
   const duplicateOf = findSemanticDuplicate(embedding, neighbors, dedupThreshold);
   if (duplicateOf !== null) {
     vault.recordAccess([duplicateOf], Date.now());
+    logNoveltyDecision("merged", scopeKind, embedded, { dedupThreshold, neighborCount });
     return { kind: "merged", mergedInto: duplicateOf };
   }
   const inserted = vault.insertMemory(record);
+  logNoveltyDecision("inserted", scopeKind, embedded, { dedupThreshold, neighborCount });
   if (embedding !== null) {
     try {
       vault.upsertEmbedding(inserted.id, embedding);
-    } catch {
+    } catch (error) {
       // gateEmbeddingInput / storage rejection — capture already succeeded; drop the embedding.
+      logEmbeddingStoreRejected("memory.embedding.store-rejected", error);
     }
     // A-MEM-style associative linking (#204, O-P4). Reuses the neighbour set already fetched for the
     // novelty gate — no extra IO. Opt-in (default off => no edges, byte-identical).

@@ -1,3 +1,4 @@
+import { createFileServerLogSink } from "./observability/server-log.js";
 // Server-side operator diagnostics sink (RB-6 / GEN-OBS-DIAGNOSTICS-901/602/603, STATUS-403).
 //
 // Before this module the top-level route-error catch, the buffered-send rethrow, and the streamed
@@ -60,15 +61,107 @@ export interface ServerDiagnosticSink {
   readonly record: (record: ServerDiagnosticRecord) => void;
 }
 
-// The default sink writes one structured JSON line to stderr. It is intentionally the only place in
-// the server request path that logs, so operators get a diagnosable trail without the browser ever
-// seeing raw content. Tests inject a capturing sink instead (via UiHandlerDeps.diagnostics).
+// The default sink writes one structured JSON line to stderr AND — when the server is running
+// under the CLI (KEIKO_STATE_DIR is set) — appends the same record to `<stateDir>/logs/server.log`.
+// The two-track design is deliberate: unit tests that capture the sink via UiHandlerDeps.diagnostics
+// keep observing stderr, while the shipped server writes a file the operator can read directly.
 export const defaultServerDiagnosticSink: ServerDiagnosticSink = {
   record(record: ServerDiagnosticRecord): void {
     // eslint-disable-next-line no-console
     console.error(`[keiko-server:diagnostic] ${JSON.stringify(record)}`);
+    appendDiagnosticToActivityLog(record);
   },
 };
+
+// Omits an absent value rather than writing it as `null`; see the projection contract below.
+function addBoundedField(
+  fields: Record<string, unknown>,
+  name: string,
+  value: string | number | undefined,
+): void {
+  if (value !== undefined) fields[name] = value;
+}
+
+// A diagnostic record is a CALLER-SUPPLIED object, so handing it to the activity log whole
+// (`extra: { record }`) made every field of it — including every field added to the type later —
+// a log field by default, and made the log's value guards the only thing standing between a
+// future producer and a leaked value. The record is PROJECTED onto the fields an operator reads
+// instead: counts, codes, hashes and labels, each named here in code. Anything not on this list
+// never reaches the file, whatever a producer puts on the record.
+//
+// `message` is deliberately absent — it is a code-declared summary the line does not need, and it
+// is the one field on the record shaped like prose. `timestamp` is absent because the line already
+// carries `ts`; `correlationId`, `operation` and `errorClass` ride on the envelope.
+function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<string, unknown> {
+  const fields: Record<string, unknown> = { source: record.source };
+  addBoundedField(fields, "code", record.code);
+  addBoundedField(fields, "gatewayRequestId", record.gatewayRequestId);
+  addBoundedField(fields, "occurrenceCount", record.occurrenceCount);
+  addBoundedField(fields, "frameBytes", record.frameBytes);
+  addBoundedField(fields, "retainedModelCount", record.retainedModelCount);
+  addBoundedField(fields, "unsupportedModelCount", record.unsupportedModelCount);
+  addBoundedField(fields, "unverifiedEmbeddingModelCount", record.unverifiedEmbeddingModelCount);
+  addBoundedField(fields, "droppedEmbeddingModelCount", record.droppedEmbeddingModelCount);
+  if (record.unsupportedReasons !== undefined) {
+    fields.unsupportedReasons = [...record.unsupportedReasons];
+  }
+  if (record.partialUsage !== undefined) {
+    fields.promptTokens = record.partialUsage.promptTokens;
+    fields.completionTokens = record.partialUsage.completionTokens;
+  }
+  return fields;
+}
+
+// Lazy file-log writer. Resolved from KEIKO_STATE_DIR, so the CLI wiring (which sets that env for
+// the child server) picks up the file sink without any explicit bootstrap call — a defense in
+// depth alongside UiServerDeps.activityLog: diagnostics emitted by code paths that do not go
+// through createUiServer (background workers, capsule preflights) still reach the same file. The
+// resolution is cached against the state directory it was resolved FOR, so a changed
+// KEIKO_STATE_DIR rebuilds instead of writing to the previous process's file.
+interface ActivityLogTarget {
+  readonly stateDir: string;
+  readonly write: (record: ServerDiagnosticRecord) => void;
+}
+
+let activityLogTarget: ActivityLogTarget | null = null;
+
+function buildActivityLogTarget(stateDir: string): ActivityLogTarget {
+  if (stateDir === "") {
+    return {
+      stateDir,
+      write: (): void => {
+        // No state directory: writes stay stderr-only.
+      },
+    };
+  }
+  const sink = createFileServerLogSink(stateDir);
+  return {
+    stateDir,
+    write: (record: ServerDiagnosticRecord): void => {
+      // Every record that reaches this sink is a FAILURE record — it carries an errorClass and a
+      // failure summary. Without an explicit level the line defaults to `info`, so
+      // `KEIKO_LOG_LEVEL=warn` would drop exactly the evidence an operator raised the threshold to
+      // isolate. `error` also matches what the server logger stamps on `category: "diagnostic"`
+      // lines, so both diagnostic paths land on the file at the same level.
+      sink.write({
+        level: "error",
+        category: "diagnostic",
+        op: record.operation,
+        correlationId: record.correlationId,
+        errorKind: record.errorClass,
+        extra: diagnosticActivityLogFields(record),
+      });
+    },
+  };
+}
+
+function appendDiagnosticToActivityLog(record: ServerDiagnosticRecord): void {
+  const stateDir = process.env.KEIKO_STATE_DIR ?? "";
+  if (activityLogTarget?.stateDir !== stateDir) {
+    activityLogTarget = buildActivityLogTarget(stateDir);
+  }
+  activityLogTarget.write(record);
+}
 
 export const DEFAULT_SERVER_DIAGNOSTIC_SUMMARY = "server-operation-failed";
 

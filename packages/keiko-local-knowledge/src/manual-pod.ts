@@ -47,6 +47,7 @@ import type { AuditEventSink } from "./privacy/index.js";
 import type { ParserRegistry } from "./parsers/index.js";
 import { addSourceToCapsule } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
+import type { KnowledgeLogSink } from "./knowledge-log.js";
 
 // Absolute synthetic root the crawled pages are mounted under for indexing. It never touches disk —
 // the in-memory page fs serves the bytes — but is a safe absolute path so the walker's containment
@@ -69,6 +70,7 @@ export interface CreateHtmlManualPodDeps {
   readonly now?: () => number;
   readonly idSource?: () => string;
   readonly auditSink?: AuditEventSink;
+  readonly logSink?: KnowledgeLogSink | undefined;
   readonly onCrawlEvent?: (event: ManualCrawlEvent) => void;
   readonly onIndexEvent?: (event: IndexingEvent) => void;
 }
@@ -189,6 +191,7 @@ function runManualIndexing(
     embeddingAdapter: deps.embeddingAdapter,
     store: deps.store,
     ...(deps.auditSink !== undefined ? { auditSink: deps.auditSink } : {}),
+    ...(deps.logSink !== undefined ? { logSink: deps.logSink } : {}),
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
     ...(deps.now !== undefined ? { now: deps.now } : {}),
     ...(deps.idSource !== undefined ? { idSource: deps.idSource } : {}),

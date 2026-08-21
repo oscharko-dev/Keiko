@@ -19,6 +19,7 @@ import { localKnowledgeIndexingRegistry } from "./local-knowledge-indexing-regis
 import { localKnowledgeProtectionOptions } from "./localKnowledgeKeyProvider.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { processServerLogSink } from "./process-log-sink.js";
 
 type ResumableIndexingJobRecord = NonNullable<ReturnType<typeof findResumableJob>>;
 
@@ -201,10 +202,15 @@ export function openKnowledgeStoreForDeps(
   const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: root });
   const protection = localKnowledgeProtectionOptions(deps.localKnowledgeKeyProvider);
   const openOptions = localKnowledgeVectorIndexOptions(deps);
+  // `logSink` is not optional decoration on this call: store recovery is otherwise SILENT. A
+  // database confirmed corrupt is renamed aside and a fresh empty one takes its place, and a
+  // wrong key against an encrypted store fails closed behind an opaque server error. Both are
+  // exactly the "my capsules vanished" reports this log exists to explain.
+  const logSink = processServerLogSink();
   const store = openKnowledgeStore(
     protection === undefined
-      ? { dbPath, vectorIndex: openOptions }
-      : { dbPath, protection, vectorIndex: openOptions },
+      ? { dbPath, vectorIndex: openOptions, logSink }
+      : { dbPath, protection, vectorIndex: openOptions, logSink },
   );
   if (options.recover === true) {
     recoverAbandonedIndexingJobs(store);

@@ -20,6 +20,7 @@ import {
   type RouteContext,
 } from "./routes.js";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
+import { nullServerLogSink, type ServerLogSink } from "./observability/server-log.js";
 import { CORRELATION_RESPONSE_HEADER, resolveCorrelationId } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { isVoiceDictationCapable, isVoiceRealtimeCapable } from "./read-handlers.js";
@@ -55,6 +56,10 @@ export interface UiServerDeps {
   // The JSON/SSE handler dependencies. Optional: when absent the server still serves static assets
   // and the health route, and the API handlers degrade gracefully (null config, empty evidence).
   readonly handlerDeps?: UiHandlerDeps | undefined;
+  // Structured activity log sink. When present, every incoming HTTP request writes one line
+  // (method, path, status, duration, correlation id) into a plain-text JSON log the operator
+  // can read. Absent by default so unit tests stay hermetic; the CLI wires the file-backed sink.
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 function acceptsGzip(acceptEncoding: string | readonly string[] | undefined): boolean {
@@ -298,16 +303,40 @@ function createVoicePlanes(
 // terminal tool is now bounded-exec over plain HTTP (ADR-0018 D1/D8). Issue #497 (ADR-0100 D3,
 // ADR-0101) re-opens the upgrade for the single loopback voice control path `/api/voice/control`, and
 // ONLY when the deployment is full-realtime voice capable; every other upgrade keeps the hard reject.
+
+// Every incoming HTTP request emits ONE structured line in the activity log on close, with the
+// correlation id echoed in the response header. Extracted from the createServer callback so the
+// top-level handler stays under the 50-line ceiling; the payload is intentionally content-free
+// (method, path, status, duration).
+function logRequestOnClose(
+  req: IncomingMessage,
+  res: ServerResponse,
+  correlationId: string,
+  activityLog: ServerLogSink,
+): void {
+  const startedAt = Date.now();
+  const requestUrl = req.url ?? "";
+  const method = req.method ?? "GET";
+  res.on("close", () => {
+    activityLog.write({
+      category: "http",
+      op: "request",
+      correlationId,
+      status: res.statusCode,
+      durationMs: Date.now() - startedAt,
+      extra: { method, path: requestUrl.split("?")[0] },
+    });
+  });
+}
+
 export function createUiServer(deps: UiServerDeps): Server {
   const handlerDeps = deps.handlerDeps ?? fallbackDeps();
   const { voiceControl, liveDictation } = createVoicePlanes(deps.port, handlerDeps);
+  const activityLog: ServerLogSink = deps.activityLog ?? nullServerLogSink();
   const server = createServer((req, res) => {
-    // RB-6: mint (or reuse a well-formed UI-supplied) correlation id at request entry and echo it on
-    // every response BEFORE handling, so even a streamed/committed response and a top-level failure
-    // carry the same traceable id. `setHeader` survives the later SSE `writeHead(200, SSE_HEADERS)`
-    // (Node merges previously-set headers), so streamed chat responses are covered too.
     const correlationId = resolveCorrelationId(req);
     res.setHeader(CORRELATION_RESPONSE_HEADER, correlationId);
+    logRequestOnClose(req, res, correlationId, activityLog);
     void handle(deps, handlerDeps, req, res, correlationId).catch((error: unknown) => {
       // The cause is no longer discarded: it is routed — REDACTED — to the operator diagnostic sink,
       // keyed by the correlation id, and the id is folded into the opaque 500 body so a user-reported
