@@ -12,7 +12,7 @@
 // entire contract is that it carries counts, hashes and statuses and never customer data.
 //
 // A route is now reduced to its TEMPLATE: every segment that is a literal in the server's declared
-// route patterns survives, and every other segment is replaced by a digest of its value. The
+// route patterns survives, and every other segment is replaced by a fixed `{id}` placeholder. The
 // direction of the unknown case is the whole point — an unrecognised segment is elided, never
 // echoed — so a route added tomorrow degrades to a less readable line instead of leaking.
 //
@@ -28,18 +28,19 @@
 // route handler, and every route handler reaches the logger — importing it here would close a
 // module cycle straight through the redaction choke point. `route-template.test.ts` imports
 // `API_ROUTES` instead and asserts set equality, so the copy cannot drift silently: adding a route
-// without adding its literals turns that test red rather than quietly digesting the new route.
+// without adding its literals turns that test red rather than quietly eliding the new route.
 //
-// THE DIGEST IS THE SAME ONE THE INDEXING LOG USES
+// WHY THERE IS NO DIGEST HERE
 //
-// 16 hex characters of a sha-256, matching `logDigest` in the indexing orchestrator. That is not
-// cosmetic: it means the digest in `POST /api/local-knowledge/capsules/{d}/index` is character-for
-// -character the `capsuleIdDigest` on every indexing line for that run, so the request that
-// started a stuck job and the job's own lines join on a single grep — the exact question the field
-// incident could not answer.
-
-// A one-way digest of the whole segment, so it carries nothing back about the value it stands for.
-// 64 bits is collision-free across every identifier one log file can hold.
+// An earlier revision digested the segment so a request line could be joined to a job's own lines.
+// That digest was an unsalted sha-256 over a low-entropy, customer-chosen value — reversible by
+// brute force, and a stable per-value token for anything secret-shaped is an oracle that confirms a
+// guess without ever being reversed. CodeQL found a flow reaching it from an api-key header name,
+// and no guard placed in front of a fast hash makes that construction right.
+//
+// Nothing is lost. The join key an operator greps is the correlation id, which every line of a run
+// carries, and the domain lines add `capsuleIdDigest` where a capsule is genuinely the subject
+// (`indexingRouteLog`). The request line only has to say WHICH ROUTE was called.
 
 // The declared route table is 8 segments deep at its deepest. 12 leaves room for growth and bounds
 // the work this function can be made to do by a hostile request line.
@@ -328,7 +329,7 @@ function isTemplatableRoute(segments: readonly string[]): boolean {
 
 // Reduces an absolute request path to its route template, or returns `undefined` when the value is
 // not a route this server serves — in which case the caller must treat it as a filesystem path and
-// refuse it. `maxLength` is the caller's own string cap: eliding a short segment to a digest makes
+// refuse it. `maxLength` is the caller's own string cap: eliding a short segment to a placeholder makes
 // a template LONGER than the path it came from, and a value over the cap must be refused rather
 // than truncated.
 export function redactRoutePath(pathname: string, maxLength: number): string | undefined {
