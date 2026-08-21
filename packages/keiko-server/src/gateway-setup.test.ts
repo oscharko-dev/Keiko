@@ -13,11 +13,17 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
 import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
 import { currentGatewayConfig } from "./deps.js";
 import { buildUiHandlerDeps } from "./deps.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 import { gatewaySetupTargetClass } from "./gateway-setup.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
@@ -8759,5 +8765,79 @@ describe("rawConfigFromCurrent — voice persona persistence round-trip", () => 
     const reloaded = parseGatewayConfig(rawConfigFromCurrent(config, undefined));
 
     expect(reloaded.providers[0]?.outputTokenParameter).toBe("max_completion_tokens");
+  });
+});
+
+// First-run setup is where an operator's endpoint is wrong in a way no UI message can name: a
+// proxy that blocks CONNECT, a gateway that answers 404 for every model, an embedding route that
+// rejects what the chat route accepts. Both model-gateway surfaces setup drives — the smoke
+// Gateway and the embedding probe — reach the activity log only through a sink this module has to
+// pass. The assertions below are on lines `keiko-model-gateway` writes, so deleting either wiring
+// fails them; nothing here inspects a constructor argument.
+describe("gateway setup writes the process activity log", () => {
+  afterEach(() => {
+    resetServerLogger();
+    // The stubbed fetch is undone here rather than in the test body: a throw between installing it
+    // and entering the `try` would otherwise leave the patched global installed for every later
+    // test in this file. `afterEach` runs whatever the test did.
+    vi.unstubAllGlobals();
+  });
+
+  function answerSetupCall(url: Parameters<typeof fetch>[0]): Promise<Response> {
+    // The embedding route answers 500 while chat succeeds — the shape of the field incident, and
+    // the one that makes the probe emit an outcome line instead of a silent success.
+    if (fetchInputUrl(url).endsWith("/embeddings")) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ error: { message: "unavailable" } }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    }
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 3, completion_tokens: 1 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+  }
+
+  it("records the smoke-test chat call and the rejected embedding probe", async () => {
+    const uiDir = await tempDir("keiko-gw-activity-ui-");
+    const evidenceDir = await tempDir("keiko-gw-activity-ev-");
+    vi.stubGlobal("fetch", (url: Parameters<typeof fetch>[0]): Promise<Response> =>
+      answerSetupCall(url),
+    );
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    try {
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://llm-gateway.example.com/v1",
+          apiKey: "example-secret-token",
+          deploymentNames: ["chat-model", "text-embedding-3-small"],
+        }),
+        deps,
+      );
+
+      expect(result.status).toBe(200);
+      // `new Gateway(config)` without deps resolves the frozen no-op sink: no smoke call, no
+      // retry and no breaker trip would appear here no matter how logging is configured.
+      expect(sink.events.map((event) => event.op)).toContain("gateway.chat.completed");
+      // …and the probe's own request carries the sink independently of the Gateway's.
+      expect(sink.events.find((event) => event.category === "embedding")).toBeDefined();
+    } finally {
+      deps.store.close();
+    }
   });
 });

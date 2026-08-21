@@ -10,6 +10,7 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge";
 import { recoverAbandonedIndexingJobs } from "./local-knowledge-store-open.js";
 import { localKnowledgeProtectionOptions } from "./localKnowledgeKeyProvider.js";
+import { processServerLogSink } from "./process-log-sink.js";
 
 export interface LocalKnowledgeRemediationScope {
   readonly capsules: number;
@@ -76,7 +77,16 @@ export function openRemediationStore(options: OpenRemediationStoreOptions): Stor
   }
   const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: options.runtimeStateDir });
   const protection = localKnowledgeProtectionOptions(options.keyProvider);
-  const store = openKnowledgeStore(protection === undefined ? { dbPath } : { dbPath, protection });
+  // Both open shapes carry the sink. Remediation is the tool an operator reaches for AFTER the
+  // Knowledge Pod has already misbehaved, and opening the store is where the two failures that
+  // brought them here are decided: a confirmed-corruption quarantine trades the database for an
+  // empty one, and a wrong-key rejection refuses to open it at all. Unwired, the recovery tool
+  // performed the data-losing decision in silence and the operator learned about it from the
+  // missing capsules — which is the same "no error, no evidence" shape as the field incident.
+  const logSink = processServerLogSink();
+  const store = openKnowledgeStore(
+    protection === undefined ? { dbPath, logSink } : { dbPath, protection, logSink },
+  );
   recoverAbandonedIndexingJobs(store);
   return {
     store,

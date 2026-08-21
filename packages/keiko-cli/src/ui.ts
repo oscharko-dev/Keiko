@@ -287,12 +287,14 @@ function resolveRuntimeStateDir(cwd: string, env: EnvSource): string {
   return resolve(cwd, DEFAULT_STATE_DIR);
 }
 
+// Takes the ALREADY-RESOLVED state directory rather than resolving its own: the activity-log sink
+// opens `<stateDir>/logs` and must land in the same place the runtime env points the child at, so
+// `resolveRuntimeStateDir` runs once per launch and both consumers read that one value.
 function withDefaultLocalRuntimeStateEnv(
-  cwd: string,
+  stateDir: string,
   parsed: UiCliArgs,
   env: EnvSource,
 ): EnvSource {
-  const stateDir = resolveRuntimeStateDir(cwd, env);
   const next: Record<string, string | undefined> = {
     ...env,
     KEIKO_STATE_DIR: stateDir,
@@ -529,23 +531,36 @@ async function maybeWaitForShutdown(server: Server, deps: UiCliDeps): Promise<vo
   await waitForShutdown(server);
 }
 
-async function startUiServer(
-  staticRoot: string,
-  csp: string,
-  cspProvider: (() => string | Promise<string>) | undefined,
-  parsed: UiCliArgs,
-  handlerDeps: UiHandlerDeps,
-  io: CliIo,
-  deps: UiCliDeps,
-): Promise<void> {
-  // Injected-server tests must not force-load the real server module graph.
+// One options object rather than a positional list: the parameters are all context for the same
+// launch, and the list had grown past the point where a call site reads correctly.
+interface StartUiServerOptions {
+  readonly staticRoot: string;
+  readonly csp: string;
+  readonly cspProvider: (() => string | Promise<string>) | undefined;
+  readonly parsed: UiCliArgs;
+  readonly handlerDeps: UiHandlerDeps;
+  readonly io: CliIo;
+  readonly deps: UiCliDeps;
+  readonly stateDir: string;
+}
+
+async function startUiServer(options: StartUiServerOptions): Promise<void> {
+  const { staticRoot, csp, cspProvider, parsed, handlerDeps, io, deps, stateDir } = options;
+  // Injected-server tests must not force-load the real server module graph. The same rule governs
+  // the activity log: `createFileServerLogSink` mkdirs `<stateDir>/logs` on construction, so
+  // building it on the injected path would write a directory outside the test's fixture.
   const factory = deps.createServer ?? (await loadServerModule()).createUiServer;
+  const activityLog =
+    deps.createServer === undefined
+      ? (await loadServerModule()).createFileServerLogSink(stateDir)
+      : undefined;
   const server = await factory({
     staticRoot,
     csp,
     ...(cspProvider === undefined ? {} : { cspProvider }),
     port: parsed.port,
     handlerDeps,
+    ...(activityLog === undefined ? {} : { activityLog }),
   });
   applyServerTimeouts(server);
   await listen(server, parsed.port);
@@ -618,17 +633,27 @@ async function launchUiFromDeps(
   io: CliIo,
   deps: UiCliDeps,
 ): Promise<number> {
+  const stateDir = resolveRuntimeStateDir(cwd, effectiveEnv);
   const handlerDeps = await buildHandlerDepsOrReport(
     parsed,
     cwd,
-    withDefaultLocalRuntimeStateEnv(cwd, parsed, effectiveEnv),
+    withDefaultLocalRuntimeStateEnv(stateDir, parsed, effectiveEnv),
     io,
   );
   if (typeof handlerDeps === "number") return handlerDeps;
   try {
     const launchProjectResult = await registerLaunchProjectOrReport(cwd, handlerDeps, io);
     if (launchProjectResult !== null) return launchProjectResult;
-    await startUiServer(staticRoot, csp.csp, csp.cspProvider, parsed, handlerDeps, io, deps);
+    await startUiServer({
+      staticRoot,
+      csp: csp.csp,
+      cspProvider: csp.cspProvider,
+      parsed,
+      handlerDeps,
+      io,
+      deps,
+      stateDir,
+    });
     return 0;
   } finally {
     if (deps.createServer === undefined) await handlerDeps.dispose?.();

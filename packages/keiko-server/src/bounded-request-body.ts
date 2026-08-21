@@ -1,5 +1,7 @@
 import type { IncomingMessage } from "node:http";
 
+import { errorKindOf, getServerLogger } from "./observability/index.js";
+
 export class RequestBodyTooLargeError extends Error {
   public constructor() {
     super("request body too large");
@@ -53,6 +55,57 @@ function requestAlreadyTerminated(req: IncomingMessage): boolean {
   return req.readableAborted || req.destroyed || req.closed;
 }
 
+// The three outcomes this reader can reach, as an operator sees them. Only counts and a
+// classification cross the boundary: `receivedBytes` is the number of bytes observed before the
+// decision, never a byte of the body itself, and the error is reduced through `errorKindOf`, which
+// reads `code`/`name` and never a message.
+interface BoundedBodyOutcomeFields {
+  readonly maxBytes: number;
+  readonly receivedBytes: number;
+}
+
+function logBodyRejected(
+  correlationId: string | undefined,
+  fields: BoundedBodyOutcomeFields,
+): void {
+  getServerLogger().warn({
+    category: "http",
+    op: "http.request.body.rejected",
+    ...(correlationId === undefined ? {} : { correlationId }),
+    errorKind: "RequestBodyTooLargeError",
+    extra: { ...fields, reason: "limit-exceeded" },
+  });
+}
+
+function logBodyCancelled(
+  correlationId: string | undefined,
+  fields: BoundedBodyOutcomeFields,
+): void {
+  // A client that disconnects mid-upload is routine, not a fault: it stays at debug so a busy
+  // server does not fill the log with it, while still being available when a stall is investigated.
+  getServerLogger().debug(() => ({
+    category: "http" as const,
+    op: "http.request.body.cancelled",
+    ...(correlationId === undefined ? {} : { correlationId }),
+    errorKind: "RequestBodyCancelledError",
+    extra: { ...fields },
+  }));
+}
+
+function logBodyFailed(
+  correlationId: string | undefined,
+  fields: BoundedBodyOutcomeFields,
+  error: unknown,
+): void {
+  getServerLogger().warn({
+    category: "http",
+    op: "http.request.body.failed",
+    ...(correlationId === undefined ? {} : { correlationId }),
+    errorKind: errorKindOf(error),
+    extra: { ...fields },
+  });
+}
+
 class BoundedRequestBodyReader {
   private readonly chunks: Buffer[] = [];
   private total = 0;
@@ -62,9 +115,14 @@ class BoundedRequestBodyReader {
     private readonly req: IncomingMessage,
     private readonly maxBytes: number,
     private readonly signal: AbortSignal | undefined,
+    private readonly correlationId: string | undefined,
     private readonly resolve: (body: string) => void,
     private readonly reject: (error: Error) => void,
   ) {}
+
+  private get outcomeFields(): BoundedBodyOutcomeFields {
+    return { maxBytes: this.maxBytes, receivedBytes: this.total };
+  }
 
   public start(): void {
     this.signal?.addEventListener("abort", this.onCancellation, { once: true });
@@ -101,6 +159,10 @@ class BoundedRequestBodyReader {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     this.total += buffer.length;
     if (this.total > this.maxBytes) {
+      // Fail closed on the size boundary. The line is emitted before `rejectOnce` clears the
+      // accumulated chunks so `receivedBytes` still reports what was actually observed, and only
+      // when this call is the one that settles the read — a late queued event must not log twice.
+      if (!this.settled) logBodyRejected(this.correlationId, this.outcomeFields);
       this.rejectOnce(new RequestBodyTooLargeError(), true, true);
       return;
     }
@@ -115,10 +177,12 @@ class BoundedRequestBodyReader {
   };
 
   private readonly onCancellation = (): void => {
+    if (!this.settled) logBodyCancelled(this.correlationId, this.outcomeFields);
     this.rejectOnce(new RequestBodyCancelledError(), true, true);
   };
 
   private readonly onRequestError = (error: Error): void => {
+    if (!this.settled) logBodyFailed(this.correlationId, this.outcomeFields, error);
     this.rejectOnce(error, false, true);
   };
 }
@@ -127,8 +191,12 @@ export function readBoundedRequestBody(
   req: IncomingMessage,
   maxBytes: number,
   signal?: AbortSignal,
+  // RB-6 continuity: when the caller already holds the request-scoped correlation id, the
+  // fail-closed rejection below is traceable to the same request as the 4xx the caller returns.
+  // Optional because most callers read the body from a helper that never received the RouteContext.
+  correlationId?: string,
 ): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    new BoundedRequestBodyReader(req, maxBytes, signal, resolve, reject).start();
+    new BoundedRequestBodyReader(req, maxBytes, signal, correlationId, resolve, reject).start();
   });
 }

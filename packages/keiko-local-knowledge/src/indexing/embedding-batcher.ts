@@ -43,10 +43,110 @@ import {
   type ChunkToEmbed,
   type EmbedBatchOptions,
   type EmbedBatchResult,
+  type IndexingLogContext,
 } from "./types.js";
 import type { KnowledgeStore } from "../store.js";
 import { chunkDedupeKey } from "../chunking/chunker.js";
+import {
+  emitKnowledgeLogEvent,
+  knowledgeErrorKind,
+  startKnowledgeLogTimer,
+  type KnowledgeLogEvent,
+  type KnowledgeLogLevel,
+} from "../knowledge-log.js";
 import { conservativeTokenEstimatorTokenizer } from "../chunking/token-estimator.js";
+
+// ─── Activity log ────────────────────────────────────────────────────────────
+// Every line this module writes is content-free: counts, byte-free sizes, durations, HTTP
+// statuses, error kinds, and vector dimensions. Chunk text and embeddings never appear. The
+// sink is optional and defaults to nothing, so an unwired caller pays a single undefined check.
+
+// `scheme://host[:port]` and nothing else — no userinfo, no path, no query, no fragment. The
+// endpoint is what separates "the operator pointed the Pod at a gateway that is not there" from
+// "the configured gateway is slow", and it is the field an operator reads first next to
+// `durationMs`; the path and query are where a provider URL historically carried a deployment
+// id, an api-version, or an outright credential, so they are dropped rather than redacted. An
+// unparseable endpoint yields `undefined` instead of echoing the raw string back.
+//
+// This deliberately mirrors `logEndpointHost` in `keiko-model-gateway/src/observability.ts`,
+// which is not on that package's public barrel — importing it would mean widening another
+// package's exported surface (and its packaged-surface contract) from here.
+export function embeddingEndpointHost(endpoint: string | undefined): string | undefined {
+  if (endpoint === undefined) return undefined;
+  try {
+    const parsed = new URL(endpoint);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return undefined;
+  }
+}
+
+// The correlation fields ride in `extra` rather than replacing `correlationId`, which carries
+// the job id alone so an operator can grep one run out of a file interleaving four of them.
+function correlationExtra(
+  context: IndexingLogContext | undefined,
+): Readonly<Record<string, unknown>> {
+  if (context === undefined) return {};
+  return {
+    capsuleIdDigest: context.capsuleIdDigest,
+    ...(context.documentIdDigest !== undefined
+      ? { documentIdDigest: context.documentIdDigest }
+      : {}),
+  };
+}
+
+function logEmbedding(
+  options: EmbedBatchOptions,
+  event: Omit<KnowledgeLogEvent, "category" | "correlationId">,
+): void {
+  const sink = options.logSink;
+  if (sink === undefined) return;
+  const context = options.logContext;
+  const extra = { ...correlationExtra(context), ...event.extra };
+  // A throwing sink must not escape into the retry ladder, the pinned-identity gate, or
+  // `persistAndReport`: those read their own control flow from what the adapter returned, and a
+  // logging failure landing there would be accounted as an embedding failure. `emitKnowledgeLogEvent`
+  // also makes a permanently failing sink report itself once — see `knowledge-log.ts`.
+  emitKnowledgeLogEvent(sink, {
+    ...event,
+    category: "embedding",
+    ...(context !== undefined ? { correlationId: context.jobId } : {}),
+    ...(Object.keys(extra).length > 0 ? { extra } : {}),
+  });
+}
+
+// Omitted rather than written as `undefined` when the endpoint does not parse: a field that is
+// present but empty reads as "the gateway has no host", which is a different diagnosis.
+function endpointExtra(options: EmbedBatchOptions): Readonly<Record<string, unknown>> {
+  const host = embeddingEndpointHost(options.adapter.endpoint);
+  return host === undefined ? {} : { endpointHost: host };
+}
+
+// One shape for both transports' retry lines. The `ok` guard is what narrows the union down to
+// the failure variants that actually carry `kind` and `status`.
+//
+// `durationMs` and `endpointHost` are on every one of them because without the pair a hang is
+// unreadable: "refused instantly" (a gateway that is not listening, ~0 ms) and "burned the full
+// provider deadline" (a gateway that accepted the connection and never answered, ~60 s) produce
+// the SAME error kind, and telling them apart is the whole diagnosis during the six-minute stall
+// this instrumentation exists for.
+function logEmbeddingRetry(
+  options: EmbedBatchOptions,
+  outcome: OpenAIEmbeddingOutcome | OpenAIEmbeddingBatchOutcome,
+  op: string,
+  durationMs: number,
+  extra: Readonly<Record<string, unknown>>,
+): void {
+  if (outcome.ok) return;
+  logEmbedding(options, {
+    level: "warn",
+    op,
+    errorKind: outcome.kind,
+    status: outcome.status,
+    durationMs,
+    extra: { ...extra, ...endpointExtra(options) },
+  });
+}
 
 // ─── Concurrency primitive ───────────────────────────────────────────────────
 // Hand-rolled bounded-concurrency runner. Avoids pulling in `p-limit` (the local-knowledge
@@ -87,6 +187,7 @@ async function embedSingleChunkWithModel(
   chunk: ChunkToEmbed,
   pinnedIdentity: EmbeddingModelIdentity,
   signal: AbortSignal | undefined,
+  logContext: IndexingLogContext | undefined,
 ): Promise<OpenAIEmbeddingOutcome> {
   return adapter.request({
     endpoint: adapter.endpoint,
@@ -100,6 +201,8 @@ async function embedSingleChunkWithModel(
       ? { dimensions: pinnedIdentity.dimensionsParam }
       : {}),
     ...(signal !== undefined ? { signal } : {}),
+    // Same join key as the batch path above.
+    ...(logContext === undefined ? {} : { logContext: { correlationId: logContext.jobId } }),
   });
 }
 
@@ -165,34 +268,72 @@ function resolveRetry(retry: EmbedBatchOptions["retry"]): ResolvedRetry {
   };
 }
 
+// One timed attempt. The duration measured here is the ADAPTER call alone — backoff is excluded
+// so `durationMs` answers "how long did the gateway take to fail?" rather than "how long has
+// this loop been running?", which is the number that separates a refusal from a deadline.
+interface TimedOutcome<T> {
+  readonly outcome: T;
+  readonly durationMs: number;
+}
+
+async function timedAttempt<T>(call: () => Promise<T>): Promise<TimedOutcome<T>> {
+  const elapsed = startKnowledgeLogTimer();
+  const outcome = await call();
+  return { outcome, durationMs: elapsed() };
+}
+
+// `attempt` MEANS THE SAME THING ON BOTH TRANSPORTS: adapter round-trips issued so far. It is a
+// field an operator greps across the whole log, so it may not be a loop index here and a count
+// there. This path used to log the loop's retry number, and on exhaustion `retry.maxRetries` — the
+// BUDGET, which is the exact defect the array-batch counter in `BatchRetryState` was introduced to
+// fix, and it read one lower than the round-trips actually spent because the first call is not a
+// retry. `maxRetries` remains the separate budget field, so "2 of 3 round-trips, budget 2" stays
+// readable on one line.
 async function embedChunkWithRetry(
   options: EmbedBatchOptions,
   chunk: ChunkToEmbed,
 ): Promise<OpenAIEmbeddingOutcome> {
   const retry = resolveRetry(options.retry);
-  let outcome = await embedSingleChunkWithModel(
-    options.adapter,
-    chunk,
-    options.pinnedIdentity,
-    options.signal,
-  );
-  for (let attempt = 1; attempt <= retry.maxRetries; attempt += 1) {
-    if (!isTransientOutcome(outcome) || options.signal?.aborted === true) {
-      return outcome;
-    }
-    try {
-      await retry.sleep(backoffMs(attempt, retry.baseDelayMs), options.signal);
-    } catch {
-      return outcome; // aborted mid-backoff; the abort gate converts this to CANCELLED
-    }
-    outcome = await embedSingleChunkWithModel(
-      options.adapter,
-      chunk,
-      options.pinnedIdentity,
-      options.signal,
+  let attempts = 0;
+  const attemptOnce = async (): Promise<TimedOutcome<OpenAIEmbeddingOutcome>> => {
+    attempts += 1;
+    return timedAttempt(async () =>
+      embedSingleChunkWithModel(
+        options.adapter,
+        chunk,
+        options.pinnedIdentity,
+        options.signal,
+        options.logContext,
+      ),
     );
+  };
+  let attempted = await attemptOnce();
+  for (let retryNumber = 1; retryNumber <= retry.maxRetries; retryNumber += 1) {
+    if (!isTransientOutcome(attempted.outcome) || options.signal?.aborted === true) {
+      return attempted.outcome;
+    }
+    const delayMs = backoffMs(retryNumber, retry.baseDelayMs);
+    logEmbeddingRetry(options, attempted.outcome, "embedding.chunk.retry", attempted.durationMs, {
+      attempt: attempts,
+      maxRetries: retry.maxRetries,
+      delayMs,
+      transport: "scalar",
+    });
+    try {
+      await retry.sleep(delayMs, options.signal);
+    } catch {
+      return attempted.outcome; // aborted mid-backoff; the abort gate converts this to CANCELLED
+    }
+    attempted = await attemptOnce();
   }
-  return outcome;
+  logEmbeddingRetry(
+    options,
+    attempted.outcome,
+    "embedding.chunk.retry-exhausted",
+    attempted.durationMs,
+    { attempt: attempts, maxRetries: retry.maxRetries, transport: "scalar" },
+  );
+  return attempted.outcome;
 }
 
 // ─── Array-batch embedding (#189 GRD-004) ────────────────────────────────────
@@ -284,6 +425,13 @@ function batchRequestFor(
       ? { dimensions: options.pinnedIdentity.dimensionsParam }
       : {}),
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    // The gateway writes ~150 of the ~168 lines an indexing incident produces. Without this the
+    // outbound half of the file carries no correlation id and cannot be joined to the knowledge
+    // lines that caused it — two disjoint islands the moment concurrency puts a second document
+    // in flight. The job id is a uuid and is safe verbatim.
+    ...(options.logContext === undefined
+      ? {}
+      : { logContext: { correlationId: options.logContext.jobId } }),
   };
 }
 
@@ -314,46 +462,129 @@ function mergeCompletedPrefix(
   return { ok: true, value: [...completed, ...outcome.value] };
 }
 
+// Mutable bookkeeping for one array-batch retry sequence. Held in a record so the decision
+// step below can absorb progress, re-budget, and log in one place — keeping the loop itself
+// small enough to read at a glance.
+interface BatchRetryState {
+  readonly completed: OpenAIEmbeddingSuccess[];
+  remaining: readonly string[];
+  zeroProgressRetries: number;
+  // The number of adapter round-trips issued so far. Distinct from `zeroProgressRetries`, which
+  // is a BUDGET that a partial prefix resets to zero: reporting the budget as "attempt" made
+  // every `embedding.batch.partial-progress` line read `attempt: 0`, so the one shape an
+  // operator most needs to see — a batch grinding forward one item per round-trip — looked like
+  // a single first try repeated forever. This counter only ever climbs.
+  attempts: number;
+}
+
+// Absorb any completed prefix, spend or reset the retry budget, record the decision, and
+// return the backoff to wait before the next attempt. A retry that made progress is a
+// DIFFERENT event from one that did not: only the second kind can exhaust the budget, and an
+// operator watching a long batch needs to tell "advancing slowly" from "wedged".
+function advanceBatchRetry(
+  options: EmbedBatchOptions,
+  attempted: TimedOutcome<OpenAIEmbeddingBatchOutcome>,
+  state: BatchRetryState,
+  retry: ResolvedRetry,
+): number {
+  const advanced = absorbPartialProgress(attempted.outcome, state.completed, state.remaining);
+  const progressed = advanced !== undefined;
+  if (advanced === undefined) {
+    state.zeroProgressRetries += 1;
+  } else {
+    state.remaining = advanced;
+    state.zeroProgressRetries = 0;
+  }
+  const delayMs = backoffMs(progressed ? 1 : state.zeroProgressRetries, retry.baseDelayMs);
+  logEmbeddingRetry(
+    options,
+    attempted.outcome,
+    progressed ? "embedding.batch.partial-progress" : "embedding.batch.retry",
+    attempted.durationMs,
+    {
+      attempt: state.attempts,
+      zeroProgressRetries: state.zeroProgressRetries,
+      maxRetries: retry.maxRetries,
+      delayMs,
+      remainingCount: state.remaining.length,
+      completedCount: state.completed.length,
+      transport: "array-batch",
+    },
+  );
+  return delayMs;
+}
+
 async function embedArrayBatchWithRetry(
   options: EmbedBatchOptions,
   inputs: readonly string[],
 ): Promise<OpenAIEmbeddingBatchOutcome> {
   const requestBatch = options.adapter.requestBatch;
   if (requestBatch === undefined) {
+    logEmbedding(options, {
+      level: "debug",
+      op: "embedding.batch.transport-unavailable",
+      extra: { itemCount: inputs.length, transport: "array-batch" },
+    });
     return { ok: false, kind: "transport" };
   }
   const retry = resolveRetry(options.retry);
-  const completed: OpenAIEmbeddingSuccess[] = [];
-  let remaining = inputs;
-  let outcome = await requestBatch(batchRequestFor(options, remaining));
-  let zeroProgressRetries = 0;
-  while (zeroProgressRetries < retry.maxRetries) {
-    if (!isTransientBatchOutcome(outcome) || options.signal?.aborted === true) {
+  const state: BatchRetryState = {
+    completed: [],
+    remaining: inputs,
+    zeroProgressRetries: 0,
+    attempts: 0,
+  };
+  const attemptOnce = async (): Promise<TimedOutcome<OpenAIEmbeddingBatchOutcome>> => {
+    state.attempts += 1;
+    return timedAttempt(async () => requestBatch(batchRequestFor(options, state.remaining)));
+  };
+  let attempted = await attemptOnce();
+  while (state.zeroProgressRetries < retry.maxRetries) {
+    if (!isTransientBatchOutcome(attempted.outcome) || options.signal?.aborted === true) {
       break;
     }
-    const advanced = absorbPartialProgress(outcome, completed, remaining);
-    if (advanced === undefined) {
-      zeroProgressRetries += 1;
-    } else {
-      remaining = advanced;
-      zeroProgressRetries = 0;
-    }
+    const delayMs = advanceBatchRetry(options, attempted, state, retry);
     try {
-      await retry.sleep(
-        backoffMs(advanced === undefined ? zeroProgressRetries : 1, retry.baseDelayMs),
-        options.signal,
-      );
+      await retry.sleep(delayMs, options.signal);
     } catch {
       break; // aborted mid-backoff; the abort gate converts this to CANCELLED
     }
-    outcome = await requestBatch(batchRequestFor(options, remaining));
+    attempted = await attemptOnce();
   }
-  return mergeCompletedPrefix(completed, outcome);
+  return mergeCompletedPrefix(state.completed, attempted.outcome);
 }
 
 // Apply the per-vector identity gate exactly as the scalar path does. Order-independent:
 // once `state.identityFailure` is set, embedChunkBatch persists nothing, so which concurrent
 // batch first observes the drift is irrelevant to the outcome.
+// Both transports reach the identity gate, and both must record the rejection identically —
+// so the state mutation AND its log line live here rather than being duplicated at each call
+// site. The safe message is deliberately NOT logged: the line carries the two dimensions that
+// explain the drift, which is the whole diagnosis and none of the prose.
+function recordIdentityFailure(
+  options: EmbedBatchOptions,
+  state: BuildOutcomesState,
+  observed: EmbeddingModelIdentity,
+  safeMessage: string,
+): IndexingJobError {
+  const failure: IndexingJobError = {
+    code: "INCOMPATIBLE_EMBEDDING_IDENTITY",
+    message: safeMessage,
+  };
+  state.identityFailure = failure;
+  logEmbedding(options, {
+    level: "error",
+    op: "embedding.identity.rejected",
+    errorKind: failure.code,
+    extra: {
+      pinnedDimensions: options.pinnedIdentity.vectorDimensions,
+      observedDimensions: observed.vectorDimensions,
+      pinnedNormalization: options.pinnedIdentity.normalization ?? EMBEDDING_NORMALIZATION,
+    },
+  });
+  return failure;
+}
+
 function gateVectorOutcome(
   representative: ChunkToEmbed,
   success: OpenAIEmbeddingSuccess,
@@ -366,11 +597,8 @@ function gateVectorOutcome(
   const observed = identityFromAdapter(options.pinnedIdentity, success);
   const compat = assertCompatibleEmbeddingIdentity(options.pinnedIdentity, observed);
   if (!compat.ok) {
-    state.identityFailure = {
-      code: "INCOMPATIBLE_EMBEDDING_IDENTITY",
-      message: compat.safeMessage,
-    };
-    return { ok: false, chunk: representative, error: state.identityFailure };
+    const failure = recordIdentityFailure(options, state, observed, compat.safeMessage);
+    return { ok: false, chunk: representative, error: failure };
   }
   return { ok: true, chunk: representative, success };
 }
@@ -388,12 +616,31 @@ async function embedUniqueBatch(
   if (abortError !== undefined) {
     return batch.map((r) => ({ ok: false as const, chunk: r.representative, error: abortError }));
   }
-  const outcome = await embedArrayBatchWithRetry(
-    options,
-    batch.map((r) => r.representative.text),
+  const attempted = await timedAttempt(async () =>
+    embedArrayBatchWithRetry(
+      options,
+      batch.map((r) => r.representative.text),
+    ),
   );
+  const outcome = attempted.outcome;
   if (!outcome.ok) {
     const error = errorFromKind(outcome.kind, outcome.status);
+    // The duration here spans the whole retry ladder for this batch — backoff included — which
+    // is deliberately a different number from the per-attempt duration on the retry lines: it
+    // is how long the RUN spent on these items before giving up on them.
+    logEmbedding(options, {
+      level: "warn",
+      op: "embedding.batch.failed",
+      errorKind: outcome.kind,
+      status: outcome.status,
+      durationMs: attempted.durationMs,
+      extra: {
+        itemCount: batch.length,
+        transient: isTransientFailure(outcome.kind, outcome.status),
+        transport: "array-batch",
+        ...endpointExtra(options),
+      },
+    });
     return batch.map((r) => ({ ok: false as const, chunk: r.representative, error }));
   }
   return batch.map((request, i) => {
@@ -528,11 +775,8 @@ async function buildUniqueChunkOutcome(
   const observed = identityFromAdapter(options.pinnedIdentity, outcome.value);
   const compat = assertCompatibleEmbeddingIdentity(options.pinnedIdentity, observed);
   if (!compat.ok) {
-    state.identityFailure = {
-      code: "INCOMPATIBLE_EMBEDDING_IDENTITY",
-      message: compat.safeMessage,
-    };
-    return { ok: false, chunk: request.representative, error: state.identityFailure };
+    const failure = recordIdentityFailure(options, state, observed, compat.safeMessage);
+    return { ok: false, chunk: request.representative, error: failure };
   }
   return { ok: true, chunk: request.representative, success: outcome.value };
 }
@@ -553,6 +797,47 @@ function expandUniqueOutcomes(
   return outcomes;
 }
 
+// Array-batch path: collapse the unique requests into ceil(N / itemCap) HTTP calls, run those
+// calls with bounded concurrency, then flatten back into request order. A tokenizer failure
+// while budgeting degrades the WHOLE set to errors without a single request being issued —
+// a silent outcome from the event stream's point of view, so it gets its own line.
+async function embedViaArrayBatches(
+  uniqueRequests: readonly UniqueChunkRequest[],
+  options: EmbedBatchOptions,
+  state: BuildOutcomesState,
+): Promise<readonly ChunkOutcome[]> {
+  let batches: readonly (readonly UniqueChunkRequest[])[];
+  try {
+    batches = groupIntoBatches(uniqueRequests, options);
+  } catch (cause) {
+    logEmbedding(options, {
+      level: "warn",
+      op: "embedding.batch.budgeting-failed",
+      errorKind: knowledgeErrorKind(cause),
+      extra: { uniqueChunkCount: uniqueRequests.length },
+    });
+    return tokenBudgetErrorOutcomes(uniqueRequests, cause);
+  }
+  // Info, not debug: the number of HTTP round-trips this flush will issue is the run's request
+  // profile. One batch of 96 that never answers and 96 batches of one that each answer are the
+  // same chunk count and completely different investigations, and an operator reading the file
+  // at the default level must be able to tell which one is in front of them.
+  logEmbedding(options, {
+    level: "info",
+    op: "embedding.batch.grouped",
+    extra: {
+      uniqueChunkCount: uniqueRequests.length,
+      batchCount: batches.length,
+      concurrency: options.concurrency,
+      ...endpointExtra(options),
+    },
+  });
+  const batchOutcomes = await runBounded(batches, options.concurrency, async (batch) =>
+    embedUniqueBatch(batch, options, state),
+  );
+  return batchOutcomes.flat();
+}
+
 // Build all per-chunk outcomes BEFORE we open a write transaction. The identity gate runs
 // after every successful response so we fail fast on dimension mismatch.
 async function buildChunkOutcomes(
@@ -564,27 +849,31 @@ async function buildChunkOutcomes(
 }> {
   const state: BuildOutcomesState = { identityFailure: undefined };
   const uniqueRequests = dedupeEmbeddingRequests(chunks);
-  let uniqueOutcomes: readonly ChunkOutcome[];
-  if (typeof options.adapter.requestBatch === "function") {
-    // Array-batch path: collapse the unique requests into ceil(N / itemCap) HTTP calls,
-    // run those calls with bounded concurrency, then flatten back into request order.
-    let batches: readonly (readonly UniqueChunkRequest[])[];
-    try {
-      batches = groupIntoBatches(uniqueRequests, options);
-    } catch (cause) {
-      const uniqueErrorOutcomes = tokenBudgetErrorOutcomes(uniqueRequests, cause);
-      return { outcomes: expandUniqueOutcomes(uniqueRequests, uniqueErrorOutcomes) };
-    }
-    const batchOutcomes = await runBounded(batches, options.concurrency, async (batch) =>
-      embedUniqueBatch(batch, options, state),
-    );
-    uniqueOutcomes = batchOutcomes.flat();
-  } else {
-    // Scalar fallback (adapters/stubs without `requestBatch`): one HTTP call per unique chunk.
-    uniqueOutcomes = await runBounded(uniqueRequests, options.concurrency, async (request) => {
-      return buildUniqueChunkOutcome(request, options, state);
-    });
-  }
+  const arrayBatchCapable = typeof options.adapter.requestBatch === "function";
+  // Info, not debug. The transport choice is invisible in the job's event stream, yet it decides
+  // the whole request profile of the run: scalar issues one HTTP call per unique chunk where
+  // array-batch issues one per ~96, so "36 vectors, no progress" means something different under
+  // each. The dedupe ratio beside it explains a request count that does not match the chunk
+  // count, which otherwise reads as lost work. One line per flush, not per chunk — the per-chunk
+  // detail stays at debug.
+  logEmbedding(options, {
+    level: "info",
+    op: "embedding.batch.transport-selected",
+    extra: {
+      transport: arrayBatchCapable ? "array-batch" : "scalar",
+      chunkCount: chunks.length,
+      uniqueChunkCount: uniqueRequests.length,
+      dedupedCount: chunks.length - uniqueRequests.length,
+      concurrency: options.concurrency,
+      ...endpointExtra(options),
+    },
+  });
+  // Scalar fallback (adapters/stubs without `requestBatch`): one HTTP call per unique chunk.
+  const uniqueOutcomes = arrayBatchCapable
+    ? await embedViaArrayBatches(uniqueRequests, options, state)
+    : await runBounded(uniqueRequests, options.concurrency, async (request) =>
+        buildUniqueChunkOutcome(request, options, state),
+      );
   const outcomes = expandUniqueOutcomes(uniqueRequests, uniqueOutcomes);
   return state.identityFailure === undefined
     ? { outcomes }
@@ -641,6 +930,86 @@ function persistOutcomes(
 }
 
 // ─── Public entrypoint ───────────────────────────────────────────────────────
+interface BatchClosingCounts {
+  readonly chunkCount: number;
+  readonly vectorCount: number;
+  readonly errorCount: number;
+  readonly durationMs: number;
+  readonly errorKind?: string | undefined;
+}
+
+// One shape for every way a batch can end, so an operator can grep a single op prefix and see
+// how many chunks went in, how many vectors came out, and how long it took.
+function logBatchClosed(
+  options: EmbedBatchOptions,
+  level: KnowledgeLogLevel,
+  op: string,
+  counts: BatchClosingCounts,
+): void {
+  logEmbedding(options, {
+    level,
+    op,
+    errorKind: counts.errorKind,
+    durationMs: counts.durationMs,
+    extra: {
+      chunkCount: counts.chunkCount,
+      vectorCount: counts.vectorCount,
+      errorCount: counts.errorCount,
+    },
+  });
+}
+
+// Vector persistence is the LAST step of a flush and the only one that throws instead of
+// returning an error: `persistOutcomes` opens a transaction, and a failing insert (a disk-full
+// sqlite write, a foreign-key violation from a concurrently deleted chunk row) propagates out of
+// `embedChunkBatch` past every closing line below. The run then ends with an exception the
+// orchestrator turns into a document failure, and the activity log shows a batch that started,
+// grouped, embedded — and simply stopped, with the successful gateway round-trip still recorded
+// as if it were the last thing that happened. This is the one line that names the write.
+function persistOutcomesLogged(
+  options: EmbedBatchOptions,
+  outcomes: readonly ChunkOutcome[],
+  chunkCount: number,
+  elapsed: () => number,
+): readonly VectorRecord[] {
+  try {
+    return persistOutcomes(
+      options.store,
+      outcomes,
+      options.pinnedIdentity,
+      options.idSource,
+      options.now,
+    );
+  } catch (cause) {
+    logBatchClosed(options, "error", "embedding.batch.persist-failed", {
+      chunkCount,
+      vectorCount: 0,
+      errorCount: outcomes.filter((outcome) => !outcome.ok).length,
+      durationMs: elapsed(),
+      errorKind: knowledgeErrorKind(cause),
+    });
+    throw cause;
+  }
+}
+
+function persistAndReport(
+  options: EmbedBatchOptions,
+  outcomes: readonly ChunkOutcome[],
+  errors: readonly IndexingJobError[],
+  chunkCount: number,
+  elapsed: () => number,
+): EmbedBatchResult {
+  const vectors = persistOutcomesLogged(options, outcomes, chunkCount, elapsed);
+  const durationMs = elapsed();
+  logBatchClosed(options, errors.length === 0 ? "info" : "warn", "embedding.batch.completed", {
+    chunkCount,
+    vectorCount: vectors.length,
+    errorCount: errors.length,
+    durationMs,
+  });
+  return { vectors, errors };
+}
+
 export async function embedChunkBatch(
   chunks: readonly ChunkToEmbed[],
   options: EmbedBatchOptions,
@@ -648,26 +1017,36 @@ export async function embedChunkBatch(
   if (chunks.length === 0) {
     return { vectors: [], errors: [] };
   }
+  const elapsed = startKnowledgeLogTimer();
   const { outcomes, identityFailure } = await buildChunkOutcomes(chunks, options);
   const errors = outcomes
     .filter((o): o is Extract<ChunkOutcome, { ok: false }> => !o.ok)
     .map((o) => o.error);
 
-  // Identity drift OR cancellation: refuse to persist ANY row from this batch.
+  // Identity drift OR cancellation: refuse to persist ANY row from this batch. Both are
+  // fail-closed rejections that discard completed work, so both are logged at the level that
+  // says so rather than being inferred from a missing "completed" line.
   if (identityFailure !== undefined) {
+    logBatchClosed(options, "error", "embedding.batch.rejected", {
+      chunkCount: chunks.length,
+      vectorCount: 0,
+      errorCount: errors.length,
+      durationMs: elapsed(),
+      errorKind: identityFailure.code,
+    });
     return { vectors: [], errors };
   }
   const abortError = checkAbort(options.signal);
   if (abortError !== undefined) {
+    logBatchClosed(options, "warn", "embedding.batch.cancelled", {
+      chunkCount: chunks.length,
+      vectorCount: 0,
+      errorCount: errors.length + 1,
+      durationMs: elapsed(),
+      errorKind: abortError.code,
+    });
     return { vectors: [], errors: [...errors, abortError] };
   }
 
-  const vectors = persistOutcomes(
-    options.store,
-    outcomes,
-    options.pinnedIdentity,
-    options.idSource,
-    options.now,
-  );
-  return { vectors, errors };
+  return persistAndReport(options, outcomes, errors, chunks.length, elapsed);
 }

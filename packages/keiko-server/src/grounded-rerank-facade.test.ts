@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts";
 import type {
@@ -15,6 +15,14 @@ import {
   fallbackRerankSelection,
   rerankSelection,
 } from "./grounded-rerank-facade.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type BufferedServerLogSink,
+  type ServerLogThreshold,
+} from "./observability/index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 
 type EgressConfig = NonNullable<GatewayConfig["egress"]>;
@@ -664,5 +672,131 @@ describe("rerank facade selection properties", () => {
     // Both branches must actually be exercised, otherwise the loop above proves only one of them.
     expect(mappedCount).toBeGreaterThan(0);
     expect(rejectedCount).toBeGreaterThan(0);
+  });
+});
+
+// Every non-applied outcome hands the caller a usable selection, so nothing upstream can tell the
+// provider was never asked, refused, or answered unusably. The log line is the only trace.
+describe("rerankSelection activity log", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  function capture(level: ServerLogThreshold): BufferedServerLogSink {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level }));
+    return sink;
+  }
+
+  const CANDIDATES = ["alpha document", "beta document", "gamma document"] as const;
+
+  async function runSelection(
+    deps: UiHandlerDeps,
+    policy?: { readonly externalReranking: "allow" | "deny"; readonly localReranking: "allow" },
+  ): Promise<void> {
+    await rerankSelection({
+      deps,
+      query: "alpha",
+      candidates: CANDIDATES,
+      documentFor: (candidate) => candidate,
+      topN: 2,
+      fallbackMode: "slice-topN",
+      ...(policy === undefined ? {} : { policy }),
+    });
+  }
+
+  it("warns when policy denies external reranking and reports what the caller kept instead", async () => {
+    const deps = depsWith(gatewayConfig(), () => Promise.reject(new Error("never called")));
+    const sink = capture("info");
+
+    await runSelection(deps, { externalReranking: "deny", localReranking: "allow" });
+
+    const [event] = sink.events;
+    expect(event?.level).toBe("warn");
+    expect(event?.op).toBe("search.rerank.completed");
+    expect(event?.category).toBe("search");
+    expect(event?.errorKind).toBe("policy-denied");
+    expect(event?.extra).toMatchObject({
+      outcome: "denied",
+      mode: "local-only",
+      candidateCount: 3,
+      keptCount: 2,
+      fallbackMode: "slice-topN",
+      topN: 2,
+    });
+  });
+
+  it("warns on a provider fault and records the fallback size the caller silently received", async () => {
+    const deps = depsWith(gatewayConfig(), () =>
+      Promise.resolve({ ok: false, kind: "timeout" } as RerankOutcome),
+    );
+    const sink = capture("info");
+
+    await runSelection(deps);
+
+    const [event] = sink.events;
+    expect(event?.level).toBe("warn");
+    expect(event?.errorKind).toBe("timeout");
+    expect(event?.extra).toMatchObject({
+      outcome: "unavailable",
+      mode: "provider-backed",
+      documentCount: 3,
+      keptCount: 2,
+    });
+  });
+
+  it("warns when the provider answers with a mapping the facade cannot use", async () => {
+    const deps = depsWith(gatewayConfig(), () =>
+      Promise.resolve(successfulOutcome([{ index: 99 }])),
+    );
+    const sink = capture("info");
+
+    await runSelection(deps);
+
+    const [event] = sink.events;
+    expect(event?.level).toBe("warn");
+    expect(event?.errorKind).toBe("invalid-response");
+    expect(event?.extra).toMatchObject({ outcome: "invalid-response", keptCount: 2 });
+  });
+
+  it("keeps the applied path and the unconfigured default install at debug", async () => {
+    const applied = depsWith(gatewayConfig(), () =>
+      Promise.resolve(successfulOutcome([{ index: 1 }, { index: 0 }])),
+    );
+    const unconfigured = depsWith({ ...gatewayConfig(), reranker: undefined }, () =>
+      Promise.reject(new Error("never called")),
+    );
+
+    const atInfo = capture("info");
+    await runSelection(applied);
+    await runSelection(unconfigured);
+    expect(atInfo.events).toEqual([]);
+
+    const atDebug = capture("debug");
+    await runSelection(applied);
+    await runSelection(unconfigured);
+    expect(atDebug.events.map((event) => event.extra?.outcome)).toEqual(["applied", "disabled"]);
+    expect(atDebug.events.map((event) => event.level)).toEqual(["debug", "debug"]);
+    expect(atDebug.events[1]?.errorKind).toBe("not-configured");
+  });
+
+  it("carries a duration and never a query, a document or the reranker credential", async () => {
+    const deps = depsWith(gatewayConfig(), () =>
+      Promise.resolve(successfulOutcome([{ index: 0 }, { index: 1 }])),
+    );
+    const sink = capture("debug");
+
+    await runSelection(deps);
+
+    const [event] = sink.events;
+    expect(typeof event?.durationMs).toBe("number");
+    expect(event?.extra).toHaveProperty("transportLatencyMs");
+    const serialized = sink.lines().join("\n");
+    // The query text, the candidate bodies and the reranker credential. `documentCount` is a
+    // count and is expected to survive, so the assertion names the document TEXT, not the word.
+    expect(serialized).not.toContain("alpha");
+    expect(serialized).not.toContain("beta");
+    expect(serialized).not.toContain("gamma");
+    expect(serialized).not.toContain("reranker-test-key");
   });
 });

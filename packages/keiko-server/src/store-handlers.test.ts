@@ -6,7 +6,7 @@ import { EventEmitter } from "node:events";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, Server } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UI_HOST } from "./server.js";
@@ -44,6 +44,73 @@ import {
   type CreateCapsuleInput,
 } from "@oscharko-dev/keiko-local-knowledge";
 import { createWorkspaceScriptTrustService } from "./workspace-script-trust.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
+
+// One persisted assistant turn whose grounded answer carries an `indexLifecycle` block — the only
+// shape that makes the messages route open the local-knowledge store at all. Returns the assistant
+// message id so a caller can assert the turn was actually written.
+function seedGroundedLifecycleTurn(
+  uiStore: UiStore,
+  chatId: string,
+  capsuleId: KnowledgeCapsuleId,
+): string {
+  const blank = {
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  };
+  const user = uiStore.createMessage({
+    chatId,
+    role: "user",
+    content: "what changed?",
+    timestamp: 1,
+    ...blank,
+  });
+  const assistant = uiStore.createMessage({
+    chatId,
+    role: "assistant",
+    content: "Answer [1].",
+    timestamp: 2,
+    ...blank,
+  });
+  const answer: GroundedAnswer = {
+    groundingKind: "local-knowledge",
+    userMessageId: user.id,
+    assistantMessageId: assistant.id,
+    content: "Answer [1].",
+    citations: [],
+    uncertainty: [],
+    omittedCount: 0,
+    elapsedMs: 1,
+    noEvidence: false,
+    contextPack: {
+      kind: "local-knowledge",
+      scopeKind: "capsule",
+      scopeId: String(capsuleId),
+      scopeLabel: "Quarantined Capsule",
+      capsuleCount: 1,
+      sourceCount: 0,
+      citationCount: 0,
+      referenceBudget: 16,
+      referencesUsed: 0,
+      indexLifecycle: {
+        schemaVersion: "local-knowledge-index-lifecycle-v1",
+        capturedAt: 1,
+        capsules: [{ capsuleId, updatedAt: 1 }],
+        stale: false,
+      },
+    },
+  };
+  uiStore.attachGroundedAnswer(assistant.id, answer);
+  return assistant.id;
+}
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const PATCH_HEADERS = POST_HEADERS;
@@ -1975,6 +2042,46 @@ describe("GET /api/chats/messages", () => {
       staleCapsuleIds: [capsule.id],
     });
     expect(answer.contextPack.indexLifecycle?.stale).toBe(false);
+  });
+
+  // The projection opens the SAME knowledge database as the capsule handlers, so it can be the
+  // call that first meets a corrupt file. `openKnowledgeStore` then renames it aside and returns a
+  // fresh empty one — a correct fail-forward, and a DATA-LOSING one. Asserted through the line the
+  // STORE writes, so removing `logSink` from this call site fails the test.
+  it("records the knowledge-store quarantine the message projection triggers", async () => {
+    const runtimeDir = join(tmp, "quarantine-runtime");
+    mkdirSync(runtimeDir);
+    await restartWithDeps({ uiDbPath: join(runtimeDir, "keiko-ui.db") });
+    const capsuleId = "cap-quarantine" as KnowledgeCapsuleId;
+    const knowledgeDbPath = resolveKnowledgeStorePath({ runtimeStateDir: runtimeDir });
+    mkdirSync(dirname(knowledgeDbPath), { recursive: true });
+    writeFileSync(knowledgeDbPath, "not a sqlite database - a truncated copy");
+
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const assistantId = seedGroundedLifecycleTurn(store, c.id, capsuleId);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    try {
+      const res = await fetch(
+        url(
+          `/api/chats/messages?chatId=${encodeURIComponent(c.id)}&projectPath=${encodeURIComponent(projDir)}`,
+        ),
+      );
+
+      expect(res.status).toBe(200);
+      expect(assistantId).not.toBe("");
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          level: "error",
+          category: "diagnostic",
+          op: "knowledge.store.quarantined",
+        }),
+      );
+    } finally {
+      resetServerLogger();
+    }
   });
 
   it("filters legacy empty-response placeholders from persisted chat history", async () => {

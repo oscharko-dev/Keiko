@@ -40,6 +40,7 @@ import {
   resolveNewCapsuleEmbeddingIdentity,
 } from "../local-knowledge-handlers.js";
 import { currentGatewayEgressConfig, type UiHandlerDeps } from "../deps.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -316,6 +317,7 @@ function refreshRun(
       capsuleId: request.capsuleId as KnowledgeCapsuleId,
       sourceId: request.sourceId as KnowledgeSourceId,
       signal: controller.signal,
+      logSink: processServerLogSink(),
       onCrawlEvent,
     })
       .then((result) => ({
@@ -345,6 +347,7 @@ function createRun(
         capsuleId: ids.capsuleId as KnowledgeCapsuleId,
         sourceId: ids.sourceId as KnowledgeSourceId,
         signal: controller.signal,
+        logSink: processServerLogSink(),
         onCrawlEvent,
       },
       source,

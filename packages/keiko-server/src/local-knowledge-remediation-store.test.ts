@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createCapsule,
@@ -10,6 +10,12 @@ import {
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { localKnowledgeIndexingRegistry } from "./local-knowledge-indexing-registry.js";
 import {
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type ServerLogEvent,
+} from "./observability/index.js";
+import {
   inspectRemediationStore,
   openRemediationStore,
 } from "./local-knowledge-remediation-store.js";
@@ -17,6 +23,7 @@ import {
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  resetServerLogger();
   localKnowledgeIndexingRegistry.reset();
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
@@ -131,5 +138,41 @@ describe("local-knowledge remediation store", () => {
 
   it("throws when the runtime-state path is unavailable", () => {
     expect(() => openRemediationStore({})).toThrow(/runtime-state path is unavailable/u);
+  });
+
+  // Remediation is the tool an operator reaches for AFTER the Knowledge Pod has misbehaved, and
+  // opening the store is where the data-losing decision is taken: confirmed SQLite corruption
+  // trades the database for a fresh empty one. Unwired, the recovery tool made that trade in
+  // silence — the operator learned about it from the capsules that were no longer there, which is
+  // the same "no error, no evidence" shape the activity log exists to end. The store already
+  // writes the line; this asserts the remediation open is one of the call sites that receives it.
+  it("records a corruption quarantine through the process activity log", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-remediation-"));
+    tempDirs.push(tmp);
+    const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: tmp });
+    mkdirSync(dirname(dbPath), { recursive: true });
+    writeFileSync(dbPath, "not a sqlite database - partial write");
+
+    const events: ServerLogEvent[] = [];
+    setServerLogger(
+      createServerLogger({
+        level: "debug",
+        sink: {
+          write(event: ServerLogEvent): void {
+            events.push(event);
+          },
+        },
+      }),
+    );
+
+    const env = openRemediationStore({ runtimeStateDir: tmp });
+    env.close();
+
+    const quarantine = events.find((event) => event.op === "knowledge.store.quarantined");
+    expect(quarantine).toBeDefined();
+    expect(quarantine?.level).toBe("error");
+    expect(quarantine?.extra).toMatchObject({ reopened: true });
+    // Evidence, not content: the line classifies the failure and never names the file it moved.
+    expect(JSON.stringify(quarantine)).not.toContain(tmp);
   });
 });

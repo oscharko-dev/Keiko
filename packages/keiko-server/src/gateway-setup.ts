@@ -83,6 +83,7 @@ import {
   type ServerDiagnosticSink,
 } from "./diagnostics-log.js";
 import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
+import { processServerLogSink } from "./process-log-sink.js";
 import {
   classifyFigmaTransportError,
   FigmaConnectorError,
@@ -1807,7 +1808,10 @@ async function defaultGatewaySetupTester(
   config: GatewayConfig,
   candidateModelIds: readonly string[],
 ): Promise<GatewaySetupTestResult> {
-  const gateway = new Gateway(config);
+  // Wired to the process activity log: first-run setup is where an operator's endpoint is wrong
+  // in a way no UI message can name (a proxy that blocks CONNECT, a provider that answers 404 for
+  // every model). Without the sink the smoke loop's retries and rejections are invisible.
+  const gateway = new Gateway(config, { log: processServerLogSink() });
   const testedModelIds = await smokeTestCandidates(
     candidateModelIds,
     async (modelId) => {
@@ -1861,6 +1865,10 @@ async function embedOnceForProbe(
     modelId,
     input: EMBEDDING_PROBE_INPUT,
     timeoutMs: provider.timeoutMs,
+    // The probe exists because an embedding model used to be persisted on a classification alone.
+    // The sink is what turns a rejected probe into a line naming the status and the error kind,
+    // rather than a model that silently fails to make the candidate list.
+    log: processServerLogSink(),
   });
 }
 

@@ -29,6 +29,7 @@ import type { DiscoveryOptions } from "../discovery/index.js";
 import { KnowledgeStoreError } from "../errors.js";
 import type { ParserRegistry, ProgressiveExtractor } from "../parsers/index.js";
 import type { AuditEventSink } from "../privacy/index.js";
+import type { KnowledgeLogSink } from "../knowledge-log.js";
 import type { KnowledgeStore } from "../store.js";
 
 // ─── Defaults (declared up-front so callers can reason about behaviour) ──────
@@ -67,6 +68,27 @@ export class IndexingError extends KnowledgeStoreError {
   }
 }
 
+// ─── Activity-log correlation ────────────────────────────────────────────────
+// With `concurrency` up to 4, several documents and several embedding batches are in flight at
+// the same time, so a log line without an owner cannot be attributed to the work that produced
+// it — which is exactly what made the six-minute "0 of 1 documents, 0 of 36 vectors" field
+// incident undiagnosable. Every line this layer writes carries this context.
+//
+// `jobId` is a v4 uuid minted by the orchestrator (or an injected id source in tests). It is
+// caller-opaque, carries nothing about the customer, and is what an operator greps, so it rides
+// verbatim in `correlationId`.
+//
+// The other two members are DIGESTS, not identifiers, because their raw forms are not safe to
+// write: a `KnowledgeCapsuleId` is supplied by the caller and routinely IS the Pod's
+// customer-chosen name, and a `DocumentId` is `doc:<capsuleId>:<sourceId>:<relativePath>` — it
+// embeds the document's path, i.e. a customer file name. A truncated sha-256 correlates lines
+// exactly as well as the raw value and names nothing.
+export interface IndexingLogContext {
+  readonly jobId: string;
+  readonly capsuleIdDigest: string;
+  readonly documentIdDigest?: string | undefined;
+}
+
 // ─── Orchestrator inputs ─────────────────────────────────────────────────────
 export interface IndexingOptions {
   readonly capsuleId: KnowledgeCapsuleId;
@@ -87,6 +109,11 @@ export interface IndexingOptions {
   // file logger) use this rather than driving the async iterator manually.
   readonly progress?: (event: IndexingEvent) => void;
   readonly auditSink?: AuditEventSink;
+  // Optional content-free activity log. The `progress` stream above already reports every job
+  // and document STATE CHANGE, so this sink deliberately carries only the decisions that stream
+  // cannot see: which embedding transport was chosen, every retry and backoff, an absorbed
+  // partial batch, and a fail-closed identity rejection. Absent → nothing is written.
+  readonly logSink?: KnowledgeLogSink;
   // When true: re-extract, re-chunk, and re-embed every document — does NOT honour the
   // chunking-layer incremental skip. Existing chunk and vector rows for in-scope documents
   // are deleted at the start of each document's work.
@@ -276,6 +303,11 @@ export interface EmbedBatchOptions {
   readonly tokenizer?: LocalKnowledgeTokenizer;
   // Optional; defaults to 2 retries with a 200 ms exponential backoff.
   readonly retry?: EmbedRetryOptions;
+  // Optional content-free activity log; absent → the batcher writes nothing.
+  readonly logSink?: KnowledgeLogSink;
+  // Correlation identity stamped on every line the batcher writes. Absent → the lines are still
+  // written, but unattributable; the orchestrator always supplies it.
+  readonly logContext?: IndexingLogContext;
 }
 
 export interface EmbedBatchResult {

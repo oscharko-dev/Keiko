@@ -30,10 +30,19 @@ import {
   memoryEmbeddingCalibrationFor,
   type NoveltyInsertOutcome,
   memoryEmbeddingProviderIdentity,
+  refreshMemoryEmbeddingAfterBodyEdit,
   RELATED_LINK_COSINE_THRESHOLD,
   selectMemoryEmbeddingModelId,
 } from "./memory-embedding.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type BufferedServerLogSink,
+  type ServerLogThreshold,
+} from "./observability/index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 
 const EMBEDDING_MODEL = "text-embedding-3-large";
@@ -739,5 +748,186 @@ describe("insertSalienceMemoryWithNoveltyGate auto-linking (#204, O-P4)", () => 
     await insertSalienceMemoryWithNoveltyGate(deps, vault, makeRecord("alpha note", "id-alpha"));
     await insertSalienceMemoryWithNoveltyGate(deps, vault, makeRecord("beta note", "id-beta"));
     expect(vault.listOutgoingEdges(memoryId("id-beta"))).toEqual([]);
+  });
+});
+
+// Every failure in this module degrades silently by contract: the caller keeps its pre-semantic
+// behaviour and never learns that memory stopped being embedded, deduplicated or searchable.
+// These lines are the only signal an operator has that semantic memory is not actually running.
+describe("memory embedding activity log", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  function capture(level: ServerLogThreshold): BufferedServerLogSink {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level }));
+    return sink;
+  }
+
+  function opsIn(sink: BufferedServerLogSink): readonly string[] {
+    return sink.events.map((event) => event.op);
+  }
+
+  it("classifies a refused embedding request without reading the provider's message", async () => {
+    const deps = makeDeps({
+      embeddingRequest: () =>
+        Promise.resolve({ ok: false as const, kind: "rate-limited" as const, status: 429 }),
+    });
+    const sink = capture("info");
+
+    expect(await embedMemoryText(deps, "the user prefers tabs")).toBeNull();
+
+    const [event] = sink.events;
+    expect(event?.level).toBe("warn");
+    expect(event?.category).toBe("embedding");
+    expect(event?.op).toBe("embedding.memory.failed");
+    expect(event?.errorKind).toBe("rate-limited");
+    expect(event?.status).toBe(429);
+    expect(event?.extra).toMatchObject({ modelId: EMBEDDING_MODEL });
+    expect(sink.lines().join("\n")).not.toContain("the user prefers tabs");
+  });
+
+  it("classifies a thrown transport failure by its code and never by its message", async () => {
+    const deps = makeDeps({
+      embeddingRequest: () =>
+        Promise.reject(Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" })),
+    });
+    const sink = capture("info");
+
+    expect(await embedMemoryText(deps, "a durable preference")).toBeNull();
+
+    expect(sink.events[0]?.errorKind).toBe("ENOTFOUND");
+    expect(sink.lines().join("\n")).not.toContain("getaddrinfo");
+  });
+
+  it("keeps an unconfigured install at debug and reports the dimensions of a success there too", async () => {
+    const unconfigured = makeDeps({ modelId: CHAT_MODEL });
+    const configured = makeDeps({ embeddingRequest: okAdapter(8) });
+
+    const atInfo = capture("info");
+    expect(await embedMemoryText(unconfigured, "no model here")).toBeNull();
+    expect(await embedMemoryText(configured, "a durable preference")).not.toBeNull();
+    expect(atInfo.events).toEqual([]);
+
+    const atDebug = capture("debug");
+    expect(await embedMemoryText(unconfigured, "no model here")).toBeNull();
+    expect(await embedMemoryText(configured, "a durable preference")).not.toBeNull();
+
+    expect(opsIn(atDebug)).toEqual(["embedding.memory.unavailable", "embedding.memory.succeeded"]);
+    expect(atDebug.events[0]?.extra).toEqual({
+      reason: "no-embedding-capable-model",
+      providerCount: 0,
+    });
+    expect(atDebug.events[1]?.extra).toMatchObject({ dimensions: 8, embeddingKind: "document" });
+    expect(typeof atDebug.events[1]?.durationMs).toBe("number");
+  });
+
+  it("names the novelty gate's decision for an insert and for a merge", async () => {
+    const deps = makeDeps();
+    const vault = makeVault();
+    const sink = capture("info");
+
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, makeRecord("the user prefers postgres"));
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, makeRecord("the user's db is postgres"));
+
+    const decisions = sink.events.filter((event) => event.op === "memory.capture.novelty-gate");
+    expect(decisions.map((event) => event.extra?.outcome)).toEqual(["inserted", "merged"]);
+    expect(decisions[0]?.category).toBe("memory");
+    expect(decisions[0]?.extra).toMatchObject({
+      scopeKind: "user",
+      embedded: true,
+      neighborCount: 0,
+    });
+    expect(decisions[1]?.extra).toMatchObject({ neighborCount: 1 });
+    // The scoping id and the memory body are the two things this line must never carry.
+    expect(sink.lines().join("\n")).not.toContain("local-operator");
+    expect(sink.lines().join("\n")).not.toContain("postgres");
+  });
+
+  it("records that a capture was suppressed as a paraphrase of a refusal, and why", async () => {
+    const vDark = Float32Array.from([1, 0, 0, 0]);
+    const deps = makeDeps({
+      embeddingRequest: () =>
+        Promise.resolve({ ok: true as const, value: { vector: vDark, modelId: EMBEDDING_MODEL } }),
+    });
+    const vault = makeVault();
+    const rejected = makeRecord("the user dislikes dark mode", "id-rejected");
+    vault.insertMemory({ ...rejected, status: "rejected" });
+    vault.upsertEmbedding(rejected.id, {
+      provider: memoryEmbeddingProviderIdentity({
+        modelId: EMBEDDING_MODEL,
+        baseUrl: "https://gateway.example.test/v1",
+        apiKey: "redacted",
+        timeoutMs: 30_000,
+        maxRetries: 2,
+        retryBaseDelayMs: 500,
+      }),
+      modelId: EMBEDDING_MODEL,
+      metric: "cosine",
+      vector: vDark,
+    });
+    const sink = capture("info");
+
+    const outcome = await insertSalienceMemoryWithNoveltyGate(
+      deps,
+      vault,
+      makeRecord("dark mode is not for this user", "id-paraphrase"),
+    );
+
+    expect(outcome.kind).toBe("suppressed");
+    const [decision] = sink.events.filter((event) => event.op === "memory.capture.novelty-gate");
+    expect(decision?.extra).toMatchObject({ outcome: "suppressed", embedded: true });
+    expect(decision?.extra?.reason).toBe(
+      outcome.kind === "suppressed" ? outcome.reason : undefined,
+    );
+  });
+
+  it("surfaces a vault rejection that the capture path deliberately swallows", async () => {
+    const deps = makeDeps();
+    const vault = makeVault();
+    const rejection = Object.assign(new Error("dimension mismatch"), { code: "EDIMENSION" });
+    vi.spyOn(vault, "upsertEmbedding").mockImplementation(() => {
+      throw rejection;
+    });
+    const sink = capture("info");
+
+    await expect(
+      embedAndStoreMemory(deps, vault, memoryId("mem-store-reject"), "a durable preference"),
+    ).resolves.toBeUndefined();
+
+    expect(sink.events).toEqual([
+      {
+        level: "warn",
+        category: "memory",
+        op: "memory.embedding.store-rejected",
+        correlationId: undefined,
+        durationMs: undefined,
+        status: undefined,
+        errorKind: "EDIMENSION",
+        extra: undefined,
+      },
+    ]);
+    expect(sink.lines().join("\n")).not.toContain("dimension mismatch");
+  });
+
+  it("names the stale-vector invalidation a body edit falls back to when re-embedding fails", async () => {
+    const deps = makeDeps({ modelId: CHAT_MODEL });
+    const vault = makeVault();
+    const stored = insertAccepted(vault, "the user prefers tabs");
+    vault.upsertEmbedding(stored.id, {
+      provider: "openai-compatible:0123456789abcdef",
+      modelId: EMBEDDING_MODEL,
+      metric: "cosine",
+      vector: Float32Array.from([1, 0, 0, 0]),
+    });
+    const sink = capture("info");
+
+    await refreshMemoryEmbeddingAfterBodyEdit(deps, vault, stored.id, "the user prefers spaces");
+
+    expect(vault.getEmbedding(stored.id)).toBeUndefined();
+    expect(opsIn(sink)).toEqual(["memory.embedding.invalidated"]);
+    expect(sink.events[0]?.level).toBe("warn");
+    expect(sink.events[0]?.extra).toEqual({ reason: "no-embedding" });
   });
 });

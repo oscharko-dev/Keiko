@@ -9,7 +9,7 @@
 //   * concurrency cap: only up to N adapter calls in flight at once.
 //   * abort: in-flight responses do not lead to inserts.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
 import type {
@@ -29,7 +29,8 @@ import {
   seedDocumentWithChunks,
   type SeededFixture,
 } from "./_support.js";
-import type { ChunkToEmbed } from "./types.js";
+import type { ChunkToEmbed, IndexingLogContext } from "./types.js";
+import type { KnowledgeLogEvent, KnowledgeLogSink } from "../knowledge-log.js";
 import type { KnowledgeStore } from "../store.js";
 
 interface Fixture {
@@ -1218,6 +1219,732 @@ describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
       // circuit breaker counts (2026-08 field review).
       expect(result.errors.every((error) => error.transient === true)).toBe(true);
     } finally {
+      cleanup();
+    }
+  });
+});
+
+// ─── Activity log ────────────────────────────────────────────────────────────
+// The orchestrator's IndexingEvent stream reports job and document STATE CHANGES. It cannot
+// see which embedding transport was chosen, how many round-trips a batch actually cost, that a
+// batch was retried four times, or that a partial prefix was absorbed instead of discarded —
+// and those are exactly the facts an operator needs when a run is slow rather than broken.
+// These tests pin that those decisions reach the sink, and that no chunk text goes with them.
+describe("embedChunkBatch — activity log", () => {
+  function recordingSink(): {
+    sink: KnowledgeLogSink;
+    events: KnowledgeLogEvent[];
+    ops: () => readonly string[];
+    find: (op: string) => KnowledgeLogEvent | undefined;
+  } {
+    const events: KnowledgeLogEvent[] = [];
+    return {
+      sink: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      events,
+      ops: (): readonly string[] => events.map((event) => event.op),
+      find: (op): KnowledgeLogEvent | undefined => events.find((event) => event.op === op),
+    };
+  }
+
+  const noBackoff = {
+    maxRetries: 2,
+    baseDelayMs: 0,
+    sleep: (): Promise<void> => Promise.resolve(),
+  };
+
+  // Ten real chunk rows. The `vectors` table has a foreign key onto `chunks`, so a test that
+  // needs several distinct chunks has to seed them through the real chunker rather than
+  // fabricating ids.
+  function buildTenChunkFixture(): Fixture {
+    return buildFixture("alpha beta gamma delta epsilon zeta eta theta ".repeat(400));
+  }
+
+  const CONTEXT: IndexingLogContext = {
+    jobId: "11111111-2222-3333-4444-555555555555",
+    capsuleIdDigest: "0123456789abcdef",
+    documentIdDigest: "fedcba9876543210",
+  };
+
+  it("records the array-batch transport choice, the grouping, and the completion", async () => {
+    const { store, cleanup, chunks } = buildArrayBatchFixture();
+    const { adapter } = batchAdapter();
+    const log = recordingSink();
+    try {
+      const result = await embedChunkBatch(chunks, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 4,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        logSink: log.sink,
+      });
+
+      const selected = log.find("embedding.batch.transport-selected");
+      // `info`, not `debug`: the transport and the request profile are the run's spine, and an
+      // operator reading the file at the default level must see them.
+      expect(selected?.level).toBe("info");
+      expect(selected?.category).toBe("embedding");
+      expect(selected?.extra).toEqual({
+        transport: "array-batch",
+        chunkCount: chunks.length,
+        uniqueChunkCount: chunks.length,
+        dedupedCount: 0,
+        concurrency: 4,
+        endpointHost: "https://example.test",
+      });
+
+      const grouped = log.find("embedding.batch.grouped");
+      expect(grouped?.level).toBe("info");
+      expect(grouped?.extra).toEqual({
+        uniqueChunkCount: chunks.length,
+        batchCount: 1,
+        concurrency: 4,
+        endpointHost: "https://example.test",
+      });
+
+      const completed = log.find("embedding.batch.completed");
+      expect(completed?.level).toBe("info");
+      expect(completed?.extra).toEqual({
+        chunkCount: chunks.length,
+        vectorCount: result.vectors.length,
+        errorCount: 0,
+      });
+      expect(completed?.durationMs).toBeGreaterThanOrEqual(0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("names the scalar transport and the dedupe ratio when the adapter has no requestBatch", async () => {
+    const { store, cleanup, chunks } = buildTenChunkFixture();
+    // Real seeded chunk rows (the vectors table has a foreign key onto them), all carrying the
+    // SAME payload so the dedupe collapses three chunks into one request.
+    const repeated: readonly ChunkToEmbed[] = chunks
+      .slice(0, 3)
+      .map((chunk) => ({ ...chunk, text: "identical payload for every chunk" }));
+    expect(repeated).toHaveLength(3);
+    const log = recordingSink();
+    try {
+      await embedChunkBatch(repeated, {
+        adapter: happyAdapter(),
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 2,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        logSink: log.sink,
+      });
+
+      expect(log.find("embedding.batch.transport-selected")?.extra).toEqual({
+        transport: "scalar",
+        chunkCount: repeated.length,
+        uniqueChunkCount: 1,
+        dedupedCount: 2,
+        concurrency: 2,
+        endpointHost: "https://example.test",
+      });
+      expect(log.ops()).not.toContain("embedding.batch.grouped");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("records a zero-progress retry with its attempt, backoff, and error kind", async () => {
+    const { store, cleanup, chunks } = buildArrayBatchFixture();
+    const identity = DEFAULT_EMBEDDING;
+    let calls = 0;
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: "https://example.test/v1",
+      apiKey: ["sk-", "test"].join(""),
+      request: () => Promise.resolve({ ok: false, kind: "transport" }),
+      requestBatch: (request): Promise<OpenAIEmbeddingBatchOutcome> => {
+        calls += 1;
+        if (calls === 1) {
+          return Promise.resolve({ ok: false, kind: "timeout", status: 504 });
+        }
+        return Promise.resolve({
+          ok: true,
+          value: request.inputs.map((text) => ({
+            vector: deterministicVector(text, identity.vectorDimensions),
+            modelId: identity.modelId,
+          })),
+        });
+      },
+    };
+    const log = recordingSink();
+    try {
+      const result = await embedChunkBatch(chunks.slice(0, 2), {
+        adapter,
+        store,
+        pinnedIdentity: identity,
+        concurrency: 1,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        retry: noBackoff,
+        logSink: log.sink,
+      });
+
+      expect(result.errors).toEqual([]);
+      const retry = log.find("embedding.batch.retry");
+      expect(retry?.level).toBe("warn");
+      expect(retry?.errorKind).toBe("timeout");
+      expect(retry?.status).toBe(504);
+      expect(retry?.extra).toEqual({
+        attempt: 1,
+        zeroProgressRetries: 1,
+        maxRetries: 2,
+        delayMs: 0,
+        remainingCount: 2,
+        completedCount: 0,
+        transport: "array-batch",
+        endpointHost: "https://example.test",
+      });
+      // "Refused instantly" and "burned the provider deadline" are the same error kind; only
+      // the duration separates them, so the field has to be on the line.
+      expect(retry?.durationMs).toBeGreaterThanOrEqual(0);
+      expect(log.ops()).not.toContain("embedding.batch.partial-progress");
+    } finally {
+      cleanup();
+    }
+  });
+
+  // Regression pin for the always-zero attempt number. A batch that inches forward one item per
+  // round-trip is the exact shape of the field incident ("0 of 36 vectors" while the gateway is
+  // technically answering), and reporting the RESET retry budget as `attempt` made every one of
+  // those lines read `attempt: 0` — indistinguishable from a single first try. Two consecutive
+  // partial rounds: the attempt number must climb 1 → 2 while the zero-progress budget, which is
+  // reset by progress, stays at 0.
+  it("counts real round-trips on a partial prefix instead of the reset retry budget", async () => {
+    const { store, cleanup, chunks } = buildTenChunkFixture();
+    const identity = DEFAULT_EMBEDDING;
+    const selected = chunks.slice(0, 3);
+    expect(selected).toHaveLength(3);
+    const embed = (text: string): { vector: Float32Array; modelId: string } => ({
+      vector: deterministicVector(text, identity.vectorDimensions),
+      modelId: identity.modelId,
+    });
+    let calls = 0;
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: "https://example.test/v1",
+      apiKey: ["sk-", "test"].join(""),
+      request: () => Promise.resolve({ ok: false, kind: "transport" }),
+      requestBatch: (request): Promise<OpenAIEmbeddingBatchOutcome> => {
+        calls += 1;
+        const head = request.inputs[0];
+        if (calls <= 2 && head !== undefined) {
+          return Promise.resolve({ ok: false, kind: "timeout", partial: [embed(head)] });
+        }
+        return Promise.resolve({ ok: true, value: request.inputs.map(embed) });
+      },
+    };
+    const log = recordingSink();
+    try {
+      const result = await embedChunkBatch(selected, {
+        adapter,
+        store,
+        pinnedIdentity: identity,
+        concurrency: 1,
+        // Three inches forward need a budget that progress keeps resetting; two zero-progress
+        // rounds still exhaust it, so the pin is about the counter and not about the budget.
+        retry: { maxRetries: 2, baseDelayMs: 0, sleep: (): Promise<void> => Promise.resolve() },
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        logSink: log.sink,
+      });
+
+      expect(result.vectors).toHaveLength(3);
+      const progress = log.events.filter(
+        (event) => event.op === "embedding.batch.partial-progress",
+      );
+      expect(progress).toHaveLength(2);
+      expect(progress.map((event) => event.extra?.attempt)).toEqual([1, 2]);
+      expect(progress.map((event) => event.extra?.zeroProgressRetries)).toEqual([0, 0]);
+      expect(progress.map((event) => event.extra?.completedCount)).toEqual([1, 2]);
+      expect(progress.map((event) => event.extra?.remainingCount)).toEqual([2, 1]);
+      expect(progress[0]?.level).toBe("warn");
+      expect(progress[0]?.errorKind).toBe("timeout");
+      expect(progress[0]?.extra?.endpointHost).toBe("https://example.test");
+      expect(progress[0]?.durationMs).toBeGreaterThanOrEqual(0);
+      expect(log.ops()).not.toContain("embedding.batch.retry");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("records the exhausted batch with its transient classification and item count", async () => {
+    const { store, cleanup, chunks } = buildArrayBatchFixture();
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: "https://example.test/v1",
+      apiKey: ["sk-", "test"].join(""),
+      request: () => Promise.resolve({ ok: false, kind: "transport" }),
+      requestBatch: () => Promise.resolve({ ok: false as const, kind: "timeout" as const }),
+    };
+    const log = recordingSink();
+    try {
+      const result = await embedChunkBatch(chunks.slice(0, 2), {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 1,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        retry: noBackoff,
+        logSink: log.sink,
+      });
+
+      expect(result.vectors).toEqual([]);
+      const failed = log.find("embedding.batch.failed");
+      expect(failed?.level).toBe("warn");
+      expect(failed?.errorKind).toBe("timeout");
+      expect(failed?.extra).toEqual({
+        itemCount: 2,
+        transient: true,
+        transport: "array-batch",
+        endpointHost: "https://example.test",
+      });
+      expect(failed?.durationMs).toBeGreaterThanOrEqual(0);
+      // The batch still "completed" — with zero vectors and two errors, at warn.
+      const completed = log.find("embedding.batch.completed");
+      expect(completed?.level).toBe("warn");
+      expect(completed?.extra).toEqual({ chunkCount: 2, vectorCount: 0, errorCount: 2 });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("records the fail-closed identity rejection with both dimensions and zero vectors", async () => {
+    const { store, cleanup, chunks } = buildFixture();
+    const adapter = scriptedAdapter({
+      responder: (req) => ({
+        ok: true,
+        value: { vector: deterministicVector(req.input, 768), modelId: DEFAULT_EMBEDDING.modelId },
+      }),
+    });
+    const log = recordingSink();
+    try {
+      const result = await embedChunkBatch(chunks, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 1,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        logSink: log.sink,
+      });
+
+      expect(result.vectors).toEqual([]);
+      const rejectedIdentity = log.find("embedding.identity.rejected");
+      expect(rejectedIdentity?.level).toBe("error");
+      expect(rejectedIdentity?.errorKind).toBe("INCOMPATIBLE_EMBEDDING_IDENTITY");
+      expect(rejectedIdentity?.extra).toEqual({
+        pinnedDimensions: DEFAULT_EMBEDDING.vectorDimensions,
+        observedDimensions: 768,
+        pinnedNormalization: "l2",
+      });
+
+      const rejectedBatch = log.find("embedding.batch.rejected");
+      expect(rejectedBatch?.level).toBe("error");
+      expect(rejectedBatch?.errorKind).toBe("INCOMPATIBLE_EMBEDDING_IDENTITY");
+      expect(rejectedBatch?.extra).toMatchObject({ vectorCount: 0, chunkCount: chunks.length });
+      expect(log.ops()).not.toContain("embedding.batch.completed");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("records a tokenizer budgeting failure that degrades the whole set without a request", async () => {
+    const { store, cleanup, chunks } = buildArrayBatchFixture();
+    const { adapter, batchCallSizes } = batchAdapter();
+    const throwingTokenizer: LocalKnowledgeTokenizer = {
+      identity: "throwing-test-tokenizer",
+      kind: "estimator",
+      countTokens: (): number => {
+        throw new RangeError("tokenizer exploded");
+      },
+    };
+    const log = recordingSink();
+    try {
+      const result = await embedChunkBatch(chunks, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 1,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        tokenizer: throwingTokenizer,
+        logSink: log.sink,
+      });
+
+      expect(batchCallSizes).toEqual([]);
+      expect(result.vectors).toEqual([]);
+      const budgeting = log.find("embedding.batch.budgeting-failed");
+      expect(budgeting?.level).toBe("warn");
+      expect(budgeting?.errorKind).toBe("RangeError");
+      expect(budgeting?.extra).toEqual({ uniqueChunkCount: chunks.length });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("records the cancellation exit instead of a completion", async () => {
+    const { store, cleanup, chunks } = buildFixture();
+    const controller = new AbortController();
+    const adapter = scriptedAdapter({
+      responder: (req) => {
+        controller.abort();
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+    const log = recordingSink();
+    try {
+      await embedChunkBatch(chunks, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 1,
+        signal: controller.signal,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        logSink: log.sink,
+      });
+
+      const cancelled = log.find("embedding.batch.cancelled");
+      expect(cancelled?.level).toBe("warn");
+      expect(cancelled?.errorKind).toBe("CANCELLED");
+      expect(cancelled?.extra).toMatchObject({ vectorCount: 0 });
+      expect(log.ops()).not.toContain("embedding.batch.completed");
+    } finally {
+      cleanup();
+    }
+  });
+
+  // The leak proof. Every line above carries counts and kinds; none may carry the payload.
+  it("never lets chunk text, the api key, or the endpoint reach a logged field", async () => {
+    const { store, cleanup, chunks } = buildArrayBatchFixture();
+    const { adapter } = batchAdapter();
+    const log = recordingSink();
+    try {
+      await embedChunkBatch(chunks, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 4,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        logSink: log.sink,
+      });
+
+      expect(log.events.length).toBeGreaterThan(0);
+      const serialized = JSON.stringify(log.events);
+      expect(serialized).not.toContain("alpha beta gamma");
+      expect(serialized).not.toContain(adapter.apiKey);
+      expect(serialized).not.toContain(adapter.endpoint);
+      for (const chunk of chunks) {
+        expect(serialized).not.toContain(chunk.text);
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  // Defect: a throw out of `persistOutcomes` skipped every closing line, so the file ended on a
+  // SUCCESSFUL gateway round-trip and an operator saw a batch that embedded fine and then simply
+  // stopped. The write is the last step of a flush and the only one that throws.
+  it("records the vector-persistence failure on the throwing path", async () => {
+    const { store, cleanup, chunks } = buildArrayBatchFixture();
+    const { adapter } = batchAdapter();
+    const log = recordingSink();
+    const explodingIdSource = (): string => {
+      throw new RangeError("storage reference source exploded");
+    };
+    try {
+      await expect(
+        embedChunkBatch(chunks, {
+          adapter,
+          store,
+          pinnedIdentity: DEFAULT_EMBEDDING,
+          concurrency: 1,
+          now: fixedClock(),
+          idSource: explodingIdSource,
+          logSink: log.sink,
+          logContext: CONTEXT,
+        }),
+      ).rejects.toThrow(/vector persistence failed/);
+
+      const persistFailed = log.find("embedding.batch.persist-failed");
+      expect(persistFailed?.level).toBe("error");
+      expect(persistFailed?.category).toBe("embedding");
+      // The batcher wraps the cause in an IndexingError, so the KIND an operator sees is the
+      // persistence code — not the tokenizer/transport codes every other failure line carries.
+      expect(persistFailed?.errorKind).toBe("PERSISTENCE_FAILED");
+      expect(persistFailed?.durationMs).toBeGreaterThanOrEqual(0);
+      expect(persistFailed?.extra).toMatchObject({
+        chunkCount: chunks.length,
+        vectorCount: 0,
+        capsuleIdDigest: CONTEXT.capsuleIdDigest,
+      });
+      // The whole point: the run must NOT look like it completed.
+      expect(log.ops()).not.toContain("embedding.batch.completed");
+    } finally {
+      cleanup();
+    }
+  });
+
+  // Defect: with concurrency 4 several documents embed at once, so an uncorrelated line cannot be
+  // attributed to the work that produced it.
+  it("stamps the job id and both digests on every line it writes", async () => {
+    const { store, cleanup, chunks } = buildArrayBatchFixture();
+    const { adapter } = batchAdapter();
+    const log = recordingSink();
+    try {
+      await embedChunkBatch(chunks, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 4,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        logSink: log.sink,
+        logContext: CONTEXT,
+      });
+
+      expect(log.events.length).toBeGreaterThan(0);
+      for (const event of log.events) {
+        expect(event.correlationId).toBe(CONTEXT.jobId);
+        expect(event.extra?.capsuleIdDigest).toBe(CONTEXT.capsuleIdDigest);
+        expect(event.extra?.documentIdDigest).toBe(CONTEXT.documentIdDigest);
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("times and locates every scalar retry so a refusal is distinguishable from a deadline", async () => {
+    const { store, cleanup, chunks } = buildFixture();
+    let calls = 0;
+    const adapter = scriptedAdapter({
+      endpoint: "https://gateway.test:8443/v1/embeddings?api-version=2024-02-01",
+      responder: (req) => {
+        calls += 1;
+        if (calls === 1) return { ok: false, kind: "timeout", status: 504 };
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+    const log = recordingSink();
+    try {
+      await embedChunkBatch(chunks, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 1,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        retry: noBackoff,
+        logSink: log.sink,
+        logContext: CONTEXT,
+      });
+
+      const retry = log.find("embedding.chunk.retry");
+      expect(retry?.level).toBe("warn");
+      expect(retry?.errorKind).toBe("timeout");
+      expect(retry?.status).toBe(504);
+      expect(retry?.durationMs).toBeGreaterThanOrEqual(0);
+      // Port kept (it is part of "which gateway"), api-version query and path dropped.
+      expect(retry?.extra).toMatchObject({
+        attempt: 1,
+        maxRetries: 2,
+        transport: "scalar",
+        endpointHost: "https://gateway.test:8443",
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  // `attempt` is ROUND-TRIPS ISSUED on both transports, never the retry budget — the budget is
+  // `maxRetries` and is reported beside it. The expectation is derived from what the adapter
+  // actually received rather than restated as a literal: every chunk here fails identically, so
+  // the calls the adapter counted, divided by the chunks, IS the number of round-trips the
+  // exhausted line must report. Pinning the budget instead read one low and made an exhausted
+  // scalar chunk look like it had spent one fewer call than it had.
+  it("exhausts the scalar ladder with the attempt count, the duration, and the host", async () => {
+    const { store, cleanup, chunks } = buildFixture();
+    let calls = 0;
+    const adapter = scriptedAdapter({
+      responder: () => {
+        calls += 1;
+        return { ok: false, kind: "transport" };
+      },
+    });
+    const log = recordingSink();
+    try {
+      const result = await embedChunkBatch(chunks, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 1,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        retry: noBackoff,
+        logSink: log.sink,
+        logContext: CONTEXT,
+      });
+
+      expect(result.vectors).toEqual([]);
+      const roundTripsPerChunk = calls / chunks.length;
+      expect(roundTripsPerChunk).toBe(noBackoff.maxRetries + 1);
+      const exhausted = log.find("embedding.chunk.retry-exhausted");
+      expect(exhausted?.level).toBe("warn");
+      expect(exhausted?.errorKind).toBe("transport");
+      expect(exhausted?.durationMs).toBeGreaterThanOrEqual(0);
+      expect(exhausted?.extra).toMatchObject({
+        attempt: roundTripsPerChunk,
+        maxRetries: noBackoff.maxRetries,
+        transport: "scalar",
+        endpointHost: "https://example.test",
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  // The endpoint is diagnostic, its path and query are not: a provider URL has historically
+  // carried a deployment id, an api-version and an outright credential in exactly those places.
+  it("reduces the endpoint to scheme://host, never its userinfo, path, or query", async () => {
+    const { store, cleanup, chunks } = buildFixture();
+    const adapter = scriptedAdapter({
+      endpoint: "https://svc:hunter2@gateway.test/v1/embeddings?api_key=leaked-value",
+      responder: () => ({ ok: false, kind: "transport" }),
+    });
+    const log = recordingSink();
+    try {
+      await embedChunkBatch(chunks, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 1,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        retry: noBackoff,
+        logSink: log.sink,
+        logContext: CONTEXT,
+      });
+
+      expect(log.find("embedding.chunk.retry-exhausted")?.extra?.endpointHost).toBe(
+        "https://gateway.test",
+      );
+      const serialized = JSON.stringify(log.events);
+      expect(serialized).not.toContain("hunter2");
+      expect(serialized).not.toContain("leaked-value");
+      expect(serialized).not.toContain("/v1/embeddings");
+      expect(serialized).not.toContain("api_key");
+    } finally {
+      cleanup();
+    }
+  });
+
+  // Two runs over the same failing path, differing only in the endpoint: an unparseable endpoint
+  // must OMIT the field rather than write `undefined` ("the gateway has no host" is a different
+  // diagnosis from "we could not read the configuration"), while a parseable one must carry it.
+  // The parseable half is what keeps this from passing when the field is dropped everywhere.
+  it("omits the endpoint field when the endpoint does not parse, and carries it when it does", async () => {
+    const failEverything = (): { ok: false; kind: "transport" } => ({
+      ok: false,
+      kind: "transport",
+    });
+    const exhaustedExtraFor = async (endpoint: string): Promise<Record<string, unknown>> => {
+      const { store, cleanup, chunks } = buildFixture();
+      const log = recordingSink();
+      try {
+        await embedChunkBatch(chunks, {
+          adapter: scriptedAdapter({ endpoint, responder: failEverything }),
+          store,
+          pinnedIdentity: DEFAULT_EMBEDDING,
+          concurrency: 1,
+          now: fixedClock(),
+          idSource: fixedIds("vec"),
+          retry: noBackoff,
+          logSink: log.sink,
+        });
+        const exhausted = log.find("embedding.chunk.retry-exhausted");
+        expect(exhausted).toBeDefined();
+        return { ...exhausted?.extra };
+      } finally {
+        cleanup();
+      }
+    };
+
+    expect(await exhaustedExtraFor("not-a-url")).not.toHaveProperty("endpointHost");
+    expect(await exhaustedExtraFor("https://gateway.test/v1")).toHaveProperty(
+      "endpointHost",
+      "https://gateway.test",
+    );
+  });
+
+  it("is inert when no sink is wired", async () => {
+    const { store, cleanup, chunks } = buildArrayBatchFixture();
+    const { adapter } = batchAdapter();
+    try {
+      const result = await embedChunkBatch(chunks, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 4,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+      });
+      expect(result.vectors).toHaveLength(chunks.length);
+    } finally {
+      cleanup();
+    }
+  });
+
+  // The sink is caller-supplied code and every embedding decision is logged, so an unguarded
+  // write would put a logging defect inside the transport choice, the retry ladder, the pinned-
+  // identity gate and `persistAndReport` alike — a batch that embedded perfectly would be
+  // reported as failed because writing the line about it threw.
+  it("embeds the whole batch even when every write to the sink throws", async () => {
+    const { store, cleanup, chunks } = buildArrayBatchFixture();
+    const { adapter } = batchAdapter();
+    const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const dead: KnowledgeLogSink = {
+      write: (): never => {
+        throw new Error("sink is down");
+      },
+    };
+    try {
+      const result = await embedChunkBatch(chunks, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 4,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        logSink: dead,
+      });
+
+      expect(result.vectors).toHaveLength(chunks.length);
+      // Not silent, and not once per line either: one report for the dead sink.
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
       cleanup();
     }
   });

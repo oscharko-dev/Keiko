@@ -34,6 +34,7 @@ import { isDenied } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { localKnowledgeIndexingRegistry } from "./local-knowledge-indexing-registry.js";
 import { latestRunningJobId } from "./local-knowledge-handlers.js";
+import { processServerLogSink } from "./process-log-sink.js";
 import {
   inspectRemediationStore,
   openRemediationStore,
@@ -192,15 +193,18 @@ function createEmbeddingAdapter(
       : { apiKeyHeaderName: provider.apiKeyHeaderName }),
     ...(egress === undefined ? {} : { egress }),
   };
-  // Mirror of the indexing adapter factory: the operator-configured provider timeout is the
-  // default for every remediation embed call; an explicit per-request timeout still wins.
-  const timeoutDefault = { timeoutMs: provider.timeoutMs };
+  // Mirror of the indexing adapter factory: the operator-configured provider timeout and the
+  // process activity-log sink are the defaults for every remediation embed call; an explicit
+  // per-request value still wins. Remediation runs unattended after a failed upgrade, so it is
+  // the path an operator is LEAST able to watch — leaving it unlogged would reproduce the
+  // original incident inside the tool meant to recover from it.
+  const requestDefaults = { timeoutMs: provider.timeoutMs, log: processServerLogSink() };
   const requestImpl = options.embeddingRequest ?? requestOpenAIEmbedding;
   const batchImpl = options.embeddingBatchRequest ?? requestOpenAIEmbeddingBatch;
   return {
     ...providerCreds,
-    request: (request) => requestImpl({ ...timeoutDefault, ...request, ...providerCreds }),
-    requestBatch: (request) => batchImpl({ ...timeoutDefault, ...request, ...providerCreds }),
+    request: (request) => requestImpl({ ...requestDefaults, ...request, ...providerCreds }),
+    requestBatch: (request) => batchImpl({ ...requestDefaults, ...request, ...providerCreds }),
   };
 }
 
@@ -244,6 +248,7 @@ async function reindexCapsule(
       workspaceFs: nodeWorkspaceFs,
       embeddingAdapter: createEmbeddingAdapter(options, resolved.provider),
       auditSink: createSqliteAuditSink(store),
+      logSink: processServerLogSink(),
       store,
       force: true,
       resume: true,

@@ -10,6 +10,17 @@ import {
   UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { findConfiguredCapability } from "./model-selection.js";
+import {
+  logEndpointHost,
+  logErrorKind,
+  logLevelEnabled,
+  logTimer,
+  resolveLogSink,
+  type ModelGatewayLogContext,
+  type ModelGatewayLogEvent,
+  type ModelGatewayLogLevel,
+  type ModelGatewayLogSink,
+} from "./observability.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import { CircuitBreaker, executeWithRetry, systemClock } from "./resilience.js";
 import { assertValidGatewaySamplingParameters } from "./types.js";
@@ -32,6 +43,52 @@ export interface GatewayDeps {
   // that pin exact sleep/budget arithmetic stay deterministic (same philosophy
   // as the injectable Clock). Defaults to Math.random.
   readonly random?: (() => number) | undefined;
+  // Activity-log sink (ADR-0019: declared as a local port in `observability.ts`, never imported
+  // from the server). Unset means no-op — the Gateway behaves exactly as it did before.
+  readonly log?: ModelGatewayLogSink | undefined;
+}
+
+// A gateway call plus the caller's log context.
+//
+// `GatewayRequest` is a wire contract owned by `keiko-contracts` and a correlation id is not wire
+// data — it is a local diagnostic handle — so the field is added HERE, as an optional extension of
+// the contract type. Every existing caller keeps compiling and keeps passing a plain
+// `GatewayRequest`: the extra property is optional, so the contract type is still assignable to
+// this one.
+export interface GatewayCallRequest extends GatewayRequest {
+  readonly logContext?: ModelGatewayLogContext | undefined;
+}
+
+// The two ids a single gateway call carries.
+//
+// `requestId` is minted here per call and is what `usage.requestId` and a thrown GatewayError
+// report. `correlationId` is what the LINES are tagged with, and the caller's id wins when it
+// supplied one: an operator diagnosing a frozen indexing run greps for the id of the RUN, and a
+// gateway line tagged with an id that exists nowhere outside this process would not be found by
+// that grep. The two are never lost — `callIdFields` puts the request id on the line whenever it
+// differs from the correlation id, so the join between the two id spaces is on record.
+interface CallIds {
+  readonly requestId: string;
+  readonly correlationId: string;
+}
+
+function callIds(requestId: string, request: GatewayCallRequest): CallIds {
+  return { requestId, correlationId: request.logContext?.correlationId ?? requestId };
+}
+
+function callIdFields(ids: CallIds): Readonly<Record<string, unknown>> {
+  return ids.correlationId === ids.requestId ? {} : { requestId: ids.requestId };
+}
+
+function gatewayEvent(
+  level: ModelGatewayLogLevel,
+  op: string,
+  correlationId: string | undefined,
+  extra: Readonly<Record<string, unknown>>,
+  durationMs?: number,
+  errorKind?: string,
+): ModelGatewayLogEvent {
+  return { level, category: "gateway", op, correlationId, durationMs, errorKind, extra };
 }
 
 // RB-6 (GEN-OBS-CORRELATION-503): tag a thrown GatewayError with the gateway's per-call request id
@@ -55,6 +112,7 @@ export class Gateway {
   private readonly adapter: ProviderAdapter | undefined;
   private readonly providers: ReadonlyMap<string, ModelProviderConfig>;
   private readonly breakers = new Map<string, CircuitBreaker>();
+  private readonly log: ModelGatewayLogSink;
 
   constructor(
     private readonly config: GatewayConfig,
@@ -63,21 +121,25 @@ export class Gateway {
     this.clock = deps.clock ?? systemClock;
     this.random = deps.random ?? Math.random;
     this.adapter = deps.adapter;
+    this.log = resolveLogSink(deps.log);
     this.providers = new Map(config.providers.map((p) => [p.modelId, p]));
   }
 
-  async chat(request: GatewayRequest): Promise<NormalizedResponse> {
-    const route = this.route(request.modelId);
+  async chat(request: GatewayCallRequest): Promise<NormalizedResponse> {
+    const route = this.route(request.modelId, request.logContext?.correlationId);
     assertValidGatewaySamplingParameters(request);
     const breaker = this.breakerFor(route.provider);
     const requestId = randomUUID();
+    const ids = callIds(requestId, request);
     const start = this.clock.now();
+    const elapsed = logTimer();
     const adapter = this.adapterFor(requestId, route.capability);
+    this.logCallStarted(ids, route, false);
     let result;
     try {
       result = await executeWithRetry(
         (attemptTimeoutMs) =>
-          this.invoke(breaker, adapter, request, {
+          this.invoke(breaker, adapter, request, ids.correlationId, {
             ...route.provider,
             ...(attemptTimeoutMs === undefined ? {} : { timeoutMs: attemptTimeoutMs }),
           }),
@@ -85,13 +147,16 @@ export class Gateway {
         this.clock,
         request.cancellationSignal,
         this.random,
+        { sink: this.log, modelId: route.provider.modelId, correlationId: ids.correlationId },
       );
     } catch (error) {
       // RB-6: stamp the gateway request id onto the thrown error so a FAILED buffered call is
       // traceable to the gateway record (previously requestId was attached only on success/usage).
       attachGatewayRequestId(error, requestId);
+      this.logCallFailed(ids, route, elapsed(), error);
       throw error;
     }
+    this.logCallCompleted(ids, route, result, elapsed());
     return {
       ...result,
       usage: {
@@ -107,41 +172,218 @@ export class Gateway {
   // breaker, but is NOT wrapped in executeWithRetry: a mid-stream retry would replay
   // already-emitted tokens. An adapter without a streaming variant falls back to a
   // single delta+done synthesised from its buffered call().
-  async *chatStream(request: GatewayRequest): AsyncGenerator<GatewayStreamChunk> {
-    const route = this.route(request.modelId);
+  async *chatStream(request: GatewayCallRequest): AsyncGenerator<GatewayStreamChunk> {
+    const route = this.route(request.modelId, request.logContext?.correlationId);
     assertValidGatewaySamplingParameters(request);
     const breaker = this.breakerFor(route.provider);
-    breaker.assertAllowed();
     const requestId = randomUUID();
+    const ids = callIds(requestId, request);
+    breaker.assertAllowed(ids.correlationId);
     const start = this.clock.now();
+    const elapsed = logTimer();
     const adapter = this.adapterFor(requestId, route.capability);
+    this.logCallStarted(ids, route, true);
+    let chunkCount = 0;
+    // EVERY started stream needs exactly one outcome line. Set the moment an outcome is written,
+    // so the `finally` can tell "the consumer walked away" from the two paths that already spoke.
+    let settled = false;
     try {
-      for await (const chunk of this.streamFrom(adapter, request, route.provider)) {
+      for await (const chunk of this.streamFrom(adapter, request, route.provider, ids)) {
+        chunkCount += 1;
         yield chunk.type === "done"
           ? { type: "done", response: this.enrich(chunk.response, requestId, start, route) }
           : chunk;
       }
-      breaker.recordSuccess();
+      breaker.recordSuccess(ids.correlationId);
+      settled = true;
     } catch (error) {
       // A client-initiated cancel is not a provider fault — skip the breaker.
       if (!(error instanceof CancelledError)) {
-        breaker.recordFailure();
+        breaker.recordFailure(ids.correlationId);
       }
       // RB-6: stamp the gateway request id onto the thrown error (mid-stream failure traceability).
       attachGatewayRequestId(error, requestId);
+      settled = true;
+      this.logStreamFailed(ids, route, chunkCount, elapsed(), error);
       throw error;
+    } finally {
+      // A consumer that stops iterating (client disconnect, request abort, `break`) closes this
+      // generator through `return()`: the loop is left without running either outcome branch, so
+      // without this line the log keeps `gateway.stream.started` with nothing after it — the exact
+      // shape of a wedged provider. Not a failure and not a fault, so it is an outcome of its own.
+      if (!settled) {
+        this.logStreamAbandoned(ids, route, chunkCount, elapsed());
+      }
     }
+    // Outside the try on purpose: a sink that throws here must not be caught above and reported as
+    // a mid-stream provider failure — which would also trip the circuit breaker on a logging fault.
+    this.logStreamCompleted(ids, route, chunkCount, elapsed());
+  }
+
+  // THE ATTEMPT LINE for a model call — written BEFORE the adapter is invoked, not after it
+  // returns. A provider that accepts the connection and then goes quiet produces no completion
+  // and no failure, so without this the gateway is silent for exactly the window an operator is
+  // trying to diagnose. `timeoutMs` and `maxRetries` are on it because the pair bounds how long
+  // this silence can legitimately last: an attempt line whose deadline has already passed with no
+  // outcome is a wedge, not a slow provider.
+  private logCallStarted(ids: CallIds, route: RoutedCall, streaming: boolean): void {
+    if (!logLevelEnabled(this.log, "info")) return;
+    this.log.write(
+      gatewayEvent(
+        "info",
+        streaming ? "gateway.stream.started" : "gateway.chat.started",
+        ids.correlationId,
+        {
+          ...callIdFields(ids),
+          modelId: route.provider.modelId,
+          endpoint: logEndpointHost(route.provider.baseUrl),
+          costClass: route.capability.costClass,
+          timeoutMs: route.provider.timeoutMs,
+          maxRetries: route.provider.maxRetries,
+          streaming,
+        },
+      ),
+    );
+  }
+
+  private logCallFailed(ids: CallIds, route: RoutedCall, durationMs: number, error: unknown): void {
+    this.log.write(
+      gatewayEvent(
+        "warn",
+        "gateway.chat.failed",
+        ids.correlationId,
+        { ...callIdFields(ids), modelId: route.provider.modelId, streaming: false },
+        durationMs,
+        logErrorKind(error),
+      ),
+    );
+  }
+
+  private logStreamCompleted(
+    ids: CallIds,
+    route: RoutedCall,
+    chunkCount: number,
+    durationMs: number,
+  ): void {
+    this.log.write(
+      gatewayEvent(
+        "info",
+        "gateway.stream.completed",
+        ids.correlationId,
+        {
+          ...callIdFields(ids),
+          modelId: route.provider.modelId,
+          costClass: route.capability.costClass,
+          chunkCount,
+        },
+        durationMs,
+      ),
+    );
+  }
+
+  // The third stream outcome: the provider never finished because nobody was listening any more.
+  // `info`, not `warn` — a user pressing stop is routine, and the line exists to close the
+  // started/outcome pair an operator scans for, not to report a fault. `chunkCount` says how much
+  // of the answer had already been paid for and thrown away.
+  private logStreamAbandoned(
+    ids: CallIds,
+    route: RoutedCall,
+    chunkCount: number,
+    durationMs: number,
+  ): void {
+    this.log.write(
+      gatewayEvent(
+        "info",
+        "gateway.stream.abandoned",
+        ids.correlationId,
+        {
+          ...callIdFields(ids),
+          modelId: route.provider.modelId,
+          costClass: route.capability.costClass,
+          streaming: true,
+          chunkCount,
+          reason: "consumer-stopped-iterating",
+        },
+        durationMs,
+      ),
+    );
+  }
+
+  private logStreamFailed(
+    ids: CallIds,
+    route: RoutedCall,
+    chunkCount: number,
+    durationMs: number,
+    error: unknown,
+  ): void {
+    this.log.write(
+      gatewayEvent(
+        "warn",
+        "gateway.stream.failed",
+        ids.correlationId,
+        {
+          ...callIdFields(ids),
+          modelId: route.provider.modelId,
+          streaming: true,
+          chunkCount,
+          // A mid-stream failure has already handed tokens to the caller and cannot be retried
+          // (chatStream is deliberately outside executeWithRetry); the count is how far it got.
+          afterFirstChunk: chunkCount > 0,
+        },
+        durationMs,
+        logErrorKind(error),
+      ),
+    );
+  }
+
+  // Buffered completions only: the streaming path has its own outcome lines with their own fields
+  // (`gateway.stream.completed` / `.abandoned` / `.failed`). The `streaming: false` here is a
+  // constant of THIS op rather than a parameter — a caller able to pass `true` would emit
+  // `gateway.chat.completed` for a stream and break the op naming every reader filters on.
+  private logCallCompleted(
+    ids: CallIds,
+    route: RoutedCall,
+    result: NormalizedResponse,
+    durationMs: number,
+  ): void {
+    this.log.write(
+      gatewayEvent(
+        "info",
+        "gateway.chat.completed",
+        ids.correlationId,
+        {
+          ...callIdFields(ids),
+          modelId: route.provider.modelId,
+          costClass: route.capability.costClass,
+          finishReason: result.finishReason,
+          toolCallCount: result.toolCalls.length,
+          streaming: false,
+        },
+        durationMs,
+      ),
+    );
   }
 
   private async *streamFrom(
     adapter: ProviderAdapter,
-    request: GatewayRequest,
+    request: GatewayCallRequest,
     provider: ModelProviderConfig,
+    ids: CallIds,
   ): AsyncGenerator<GatewayStreamChunk> {
     if (adapter.callStream !== undefined) {
       yield* adapter.callStream(request, provider);
       return;
     }
+    // Degradation: this adapter has no streaming variant, so the caller gets ONE synthetic delta
+    // after the full buffered latency instead of incremental tokens. Silently, that reads to an
+    // operator as a provider that took seconds to emit its first token.
+    this.log.write(
+      gatewayEvent("warn", "gateway.stream.buffered-fallback", ids.correlationId, {
+        ...callIdFields(ids),
+        modelId: provider.modelId,
+        reason: "adapter-has-no-stream",
+      }),
+    );
     const response = await adapter.call(request, provider);
     yield { type: "delta", token: response.content };
     yield { type: "done", response };
@@ -179,33 +421,57 @@ export class Gateway {
   private async invoke(
     breaker: CircuitBreaker,
     adapter: ProviderAdapter,
-    request: GatewayRequest,
+    request: GatewayCallRequest,
+    correlationId: string,
     provider: ModelProviderConfig,
   ): Promise<NormalizedResponse> {
-    breaker.assertAllowed();
+    breaker.assertAllowed(correlationId);
     try {
       const response = await adapter.call(request, provider);
-      breaker.recordSuccess();
+      breaker.recordSuccess(correlationId);
       return response;
     } catch (error) {
       // A client-initiated cancel is not a provider fault — skip the breaker.
       if (!(error instanceof CancelledError)) {
-        breaker.recordFailure();
+        breaker.recordFailure(correlationId);
       }
       throw error;
     }
   }
 
-  private route(modelId: string): RoutedCall {
+  // Fail-closed routing. Each of the three refusals is a DIFFERENT operator problem — an unknown
+  // model id, a configured provider with no capability metadata, and a correctly configured model
+  // of the wrong kind — and all three surface to the caller as the same UnknownModelError, so the
+  // reason label is the only thing that separates them after the fact.
+  //
+  // Routing happens BEFORE this call has a request id of its own, so the caller's correlation id
+  // is the only thing that can attribute a refusal to the operation that provoked it — and a
+  // refusal is exactly the "never started" case an operator has to separate from "started and
+  // hung". Absent when the caller supplied none, as before.
+  private logRouteRejected(
+    modelId: string,
+    correlationId: string | undefined,
+    reason: string,
+    kind?: string,
+  ): void {
+    this.log.write(
+      gatewayEvent("warn", "gateway.route.rejected", correlationId, { modelId, reason, kind }),
+    );
+  }
+
+  private route(modelId: string, correlationId?: string): RoutedCall {
     const provider = this.providers.get(modelId);
     if (provider === undefined) {
+      this.logRouteRejected(modelId, correlationId, "no-provider-configured");
       throw new UnknownModelError(`no provider configured for model '${modelId}'`);
     }
     const capability = findConfiguredCapability(this.config, modelId);
     if (capability === undefined) {
+      this.logRouteRejected(modelId, correlationId, "no-capability-metadata");
       throw new UnknownModelError(`model '${modelId}' has no capability metadata`);
     }
     if (capability.kind !== "chat") {
+      this.logRouteRejected(modelId, correlationId, "wrong-model-kind", capability.kind);
       throw new UnknownModelError(
         `model '${modelId}' has kind '${capability.kind}'; the chat path requires a chat model`,
       );
@@ -222,7 +488,7 @@ export class Gateway {
     // GatewayConfig.circuitBreaker when the provider did not declare its own — every existing
     // config keeps its exact behaviour.
     const breakerConfig = provider.circuitBreaker ?? this.config.circuitBreaker;
-    const breaker = new CircuitBreaker(provider.modelId, breakerConfig, this.clock);
+    const breaker = new CircuitBreaker(provider.modelId, breakerConfig, this.clock, this.log);
     this.breakers.set(provider.modelId, breaker);
     return breaker;
   }

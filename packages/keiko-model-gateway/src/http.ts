@@ -13,6 +13,16 @@ import {
   outboundAddressBlockedReason,
   outboundTargetBlockedReason,
 } from "./egress-policy.js";
+import {
+  logEndpointHost,
+  logErrorKind,
+  logLevelEnabled,
+  logTimer,
+  resolveLogSink,
+  withCorrelationId,
+  type ModelGatewayLogContext,
+  type ModelGatewayLogSink,
+} from "./observability.js";
 import type { OutboundHttpEgressConfig } from "./types.js";
 
 export type { OutboundHttpEgressConfig } from "./types.js";
@@ -44,6 +54,13 @@ export interface GatewayFetchOptions extends RequestInit {
   readonly timeoutMs?: number | undefined;
   // Override the default 10 MB cap for this fetch (e.g. large Figma render images).
   readonly maxResponseBytes?: number | undefined;
+  // Activity-log sink (ADR-0019: a local port, see `observability.ts` — this package must not
+  // import the BFF's logger). Unset means no-op.
+  readonly log?: ModelGatewayLogSink | undefined;
+  // The enclosing operation's correlation id. Every line this call writes carries it, which is
+  // what makes one of N concurrent in-flight requests identifiable as the stuck one. Stripped
+  // from the options before they reach the transport — it never becomes a RequestInit field.
+  readonly logContext?: ModelGatewayLogContext | undefined;
 }
 
 export type OutboundHttpEgressErrorCode =
@@ -1124,24 +1141,41 @@ function attemptPrimaryFetch(
     : doFetch(url, init);
 }
 
+// Everything the direct (non-proxied) transport needs for one call, grouped so the two helpers
+// below stay well under the parameter budget once the log sink is threaded through them — the
+// alternative was an eighth positional argument on an already seven-argument function.
+interface DirectFetchPlan {
+  readonly doFetch: typeof fetch;
+  readonly useCaFallback: boolean;
+  readonly egress: OutboundHttpEgressConfig | undefined;
+  readonly maxResponseBytes: number | undefined;
+  readonly pinnedAddresses: readonly LookupAddress[] | undefined;
+  readonly log: ModelGatewayLogSink;
+}
+
 // Extracted from fetchDirectWithCaFallback to keep its cyclomatic complexity within the limit.
 async function attemptCaBundleFallback(
   url: string,
   init: RequestInit,
-  egress: OutboundHttpEgressConfig | undefined,
-  maxResponseBytes: number | undefined,
-  pinnedAddresses: readonly LookupAddress[] | undefined,
+  plan: DirectFetchPlan,
 ): Promise<Response> {
   try {
     return await fetchWithCaBundle(
       url,
       init,
-      egress,
-      maxResponseBytes,
-      pinnedAddresses !== undefined ? pinnedLookup(pinnedAddresses) : undefined,
+      plan.egress,
+      plan.maxResponseBytes,
+      plan.pinnedAddresses !== undefined ? pinnedLookup(plan.pinnedAddresses) : undefined,
     );
   } catch (fallbackError) {
     if (isRecoverableTlsTrustError(fallbackError)) {
+      plan.log.write({
+        level: "warn",
+        category: "http",
+        op: "http.gateway.tls.trust-failed",
+        errorKind: logErrorKind(fallbackError),
+        extra: { endpoint: logEndpointHost(url), afterCaBundleFallback: true },
+      });
       throw tlsCaFailureError();
     }
     throw fallbackError;
@@ -1152,19 +1186,38 @@ async function attemptCaBundleFallback(
 async function fetchDirectWithCaFallback(
   url: string,
   init: RequestInit,
-  doFetch: typeof fetch,
-  useCaFallback: boolean,
-  egress: OutboundHttpEgressConfig | undefined,
-  maxResponseBytes: number | undefined,
-  pinnedAddresses: readonly LookupAddress[] | undefined,
+  plan: DirectFetchPlan,
 ): Promise<Response> {
   try {
-    return await attemptPrimaryFetch(url, init, doFetch, maxResponseBytes, pinnedAddresses);
+    return await attemptPrimaryFetch(
+      url,
+      init,
+      plan.doFetch,
+      plan.maxResponseBytes,
+      plan.pinnedAddresses,
+    );
   } catch (error) {
-    if (useCaFallback && usesHttps(url) && isRecoverableTlsTrustError(error)) {
-      return attemptCaBundleFallback(url, init, egress, maxResponseBytes, pinnedAddresses);
+    const recoverable = usesHttps(url) && isRecoverableTlsTrustError(error);
+    if (plan.useCaFallback && recoverable) {
+      // Degradation: the default trust store rejected the peer, so the call is retried against
+      // Keiko's assembled CA set. Silently, this shows up only as a doubled connect latency.
+      plan.log.write({
+        level: "warn",
+        category: "http",
+        op: "http.gateway.tls.ca-bundle-fallback",
+        errorKind: logErrorKind(error),
+        extra: { endpoint: logEndpointHost(url) },
+      });
+      return attemptCaBundleFallback(url, init, plan);
     }
-    if (usesHttps(url) && isRecoverableTlsTrustError(error)) {
+    if (recoverable) {
+      plan.log.write({
+        level: "warn",
+        category: "http",
+        op: "http.gateway.tls.trust-failed",
+        errorKind: logErrorKind(error),
+        extra: { endpoint: logEndpointHost(url), afterCaBundleFallback: false },
+      });
       throw tlsCaFailureError();
     }
     throw error;
@@ -1245,15 +1298,12 @@ interface GatewayDnsResolution {
 // lookup: the direct-path pinned set (AUDIT-SEC-001), the proxy-path pinned address (ADR-0038 D6),
 // and the resolveDns flag the redirect re-check must reuse.
 async function resolveGatewayDns(
-  target: URL,
+  plan: GatewayProxyPlan,
   egress: OutboundHttpEgressConfig | undefined,
-  usesRealTransport: boolean,
-  proxy: URL | undefined,
-  doFetch: typeof globalThis.fetch,
 ): Promise<GatewayDnsResolution> {
-  const dns = planGatewayDns(usesRealTransport, proxy, doFetch, egress);
+  const dns = planGatewayDns(plan.usesRealTransport, plan.proxy, plan.doFetch, egress);
   const resolveDns = dns.pinForConnect || dns.pinForProxyConnect;
-  const vettedAddresses = await enforceOutboundTargetPolicy(target, egress, { resolveDns });
+  const vettedAddresses = await enforceOutboundTargetPolicy(plan.target, egress, { resolveDns });
   return {
     pinnedAddresses: dns.pinForConnect ? vettedAddresses : undefined,
     proxyPinnedAddress: dns.pinForProxyConnect ? requirePinnedAddress(vettedAddresses) : undefined,
@@ -1273,6 +1323,7 @@ function planGatewayProxy(
   url: string,
   fetchImpl: typeof fetch | undefined,
   egress: OutboundHttpEgressConfig | undefined,
+  log: ModelGatewayLogSink,
 ): GatewayProxyPlan {
   const doFetch = fetchImpl ?? globalThis.fetch;
   const target = new URL(url);
@@ -1281,59 +1332,193 @@ function planGatewayProxy(
   // Validate the configured proxy before target DNS work so malformed/credentialed proxy settings
   // fail with their deterministic policy error rather than an unrelated target lookup failure.
   const proxy = proxyRaw === undefined ? undefined : parseProxyUrl(proxyRaw);
+  // WHICH ROUTE this call took is the first question asked of a stuck outbound request, and it is
+  // decided entirely by configuration the operator cannot see from the failure. Both endpoints are
+  // reduced to scheme://host:port — a proxy URL may carry credentials in its userinfo.
+  //
+  // Gated: this is a `debug` line on the hot path of every outbound call, and the two
+  // `logEndpointHost` calls below each parse a URL. Asking the sink first means an operator
+  // running at the default `info` threshold pays a predicate call instead of two URL parses and
+  // two allocations per request.
+  if (logLevelEnabled(log, "debug")) {
+    log.write({
+      level: "debug",
+      category: "http",
+      op: "http.gateway.egress.planned",
+      extra: {
+        endpoint: logEndpointHost(target),
+        proxied: proxy !== undefined,
+        proxyEndpoint: logEndpointHost(proxy),
+        transport: usesRealTransport ? "native" : "injected",
+      },
+    });
+  }
   return { doFetch, target, usesRealTransport, proxy };
 }
 
-export async function gatewayFetch(
-  url: string,
-  options: GatewayFetchOptions = {},
-): Promise<Response> {
+// Compose caller signal + optional timeout into a single signal for all paths.
+function gatewayRequestInit(rest: RequestInit, timeoutMs: number | undefined): RequestInit {
+  const composedSignal = composeSignal(rest.signal, timeoutMs);
+  return composedSignal !== undefined
+    ? { ...rest, redirect: "manual", signal: composedSignal }
+    : { ...rest, redirect: "manual" };
+}
+
+// The fetch itself. Split out of `gatewayFetch` so the outcome line can wrap it without pushing
+// either half past the function-length budget.
+async function performGatewayFetch(url: string, options: GatewayFetchOptions): Promise<Response> {
   const {
     fetchImpl,
     useCaFallback = fetchImpl === undefined,
     egress,
     timeoutMs,
     maxResponseBytes,
+    log: logOption,
     ...rest
   } = options;
-  // Compose caller signal + optional timeout into a single signal for all paths.
-  const composedSignal = composeSignal(rest.signal, timeoutMs);
-  const init: RequestInit =
-    composedSignal !== undefined
-      ? { ...rest, redirect: "manual", signal: composedSignal }
-      : { ...rest, redirect: "manual" };
-  const { doFetch, target, usesRealTransport, proxy } = planGatewayProxy(url, fetchImpl, egress);
-  refuseUnpinnableResearchEgress(proxy, egress);
-  const { pinnedAddresses, proxyPinnedAddress, redirectPolicy } = await resolveGatewayDns(
-    target,
-    egress,
-    usesRealTransport,
-    proxy,
-    doFetch,
-  );
-  if (proxy !== undefined) {
+  const log = resolveLogSink(logOption);
+  const init = gatewayRequestInit(rest, timeoutMs);
+  const plan = planGatewayProxy(url, fetchImpl, egress, log);
+  refuseUnpinnableResearchEgress(plan.proxy, egress);
+  const dns = await resolveGatewayDns(plan, egress);
+  if (plan.proxy !== undefined) {
     const response = await fetchViaProxy(
-      target,
+      plan.target,
       init,
-      proxy,
+      plan.proxy,
       egress,
       maxResponseBytes,
-      proxyPinnedAddress,
+      dns.proxyPinnedAddress,
     );
-    await enforceRedirectTargetPolicy(target, response, egress, redirectPolicy);
+    await enforceRedirectTargetPolicy(plan.target, response, egress, dns.redirectPolicy);
     return response;
   }
-  const response = await fetchDirectWithCaFallback(
-    url,
-    init,
-    doFetch,
+  const response = await fetchDirectWithCaFallback(url, init, {
+    doFetch: plan.doFetch,
     useCaFallback,
     egress,
     maxResponseBytes,
-    pinnedAddresses,
-  );
-  await enforceRedirectTargetPolicy(target, response, egress, redirectPolicy);
+    pinnedAddresses: dns.pinnedAddresses,
+    log,
+  });
+  await enforceRedirectTargetPolicy(plan.target, response, egress, dns.redirectPolicy);
   return response;
+}
+
+// Size of the request body for the attempt line, for the shapes this transport sends verbatim —
+// a JSON string, or bytes for a multipart audio payload. Anything else reports nothing rather
+// than being coerced to find out: serialising a body to measure it costs an allocation on the hot
+// path, and reading a stream to count it would consume the body the call is about to send. No
+// size field is worth changing what goes on the wire, and an absent field is honest.
+//
+// BYTES, not characters. `String.length` counts UTF-16 code units, so it under-reports every
+// multi-byte character an embedding payload is full of — CJK text, accented European text and
+// emoji all send roughly two to four times the bytes it claims — and the field exists to be
+// compared against a gateway's request-size limit. `Buffer.byteLength` measures the UTF-8 encoding
+// without allocating a copy of the body.
+function requestBodyBytes(body: BodyInit | null | undefined): number | undefined {
+  if (typeof body === "string") return Buffer.byteLength(body, "utf8");
+  if (body instanceof Uint8Array) return body.byteLength;
+  if (body instanceof Blob) return body.size;
+  return undefined;
+}
+
+// THE ATTEMPT LINE — the one this whole file exists for.
+//
+// Every other line in this module is written when a call RETURNS. A request that never returns is
+// exactly the incident being diagnosed (a wedged proxy CONNECT, a gateway that accepts the
+// connection and then goes quiet), and it produces no completion, no failure, and therefore no
+// evidence at all: the log stays empty for precisely the window an operator is staring at. This
+// line is written BEFORE the socket work starts, so a stuck call leaves a `started` with no
+// matching `completed` — which names both the endpoint and the deadline it is hanging against.
+//
+// `info`, not `debug`: a line only readable after an operator has already reproduced the hang
+// under a raised threshold is not evidence of the hang.
+function logFetchStarted(
+  log: ModelGatewayLogSink,
+  url: string,
+  options: GatewayFetchOptions,
+): void {
+  if (!logLevelEnabled(log, "info")) return;
+  log.write({
+    level: "info",
+    category: "http",
+    op: "http.gateway.fetch.started",
+    extra: {
+      endpoint: logEndpointHost(url),
+      method: options.method ?? "GET",
+      requestBytes: requestBodyBytes(options.body),
+      timeoutMs: options.timeoutMs,
+    },
+  });
+}
+
+// THE OUTCOME LINE — `info` for a successful response, `warn` for an answered error.
+//
+// A 2xx completion used to be `debug`, which meant that at the default `info` threshold a healthy
+// outbound request produced NOTHING: the attempt line went out and the log fell silent whether the
+// request came back in 40ms or never came back at all. That is precisely the distinction an
+// operator staring at a frozen run needs — "requests are flowing, the gateway is just slow" versus
+// "nothing is being sent" versus "one request went out and never returned" — and it is unanswerable
+// from a log that only records failures. The pairing is the evidence: a `started` with a matching
+// `completed` is a call that returned, and a `started` without one is the wedge.
+//
+// The volume is bounded by network round-trips, not by data: one line per outbound HTTP call, on a
+// path that has just paid TLS and a socket. Genuinely per-item chatter stays at `debug` and behind
+// `logLevelEnabled` — the route-planning line below (one per call, pure configuration echo, no
+// news once the deployment is understood) and the circuit breaker's repeat refusals in
+// `resilience.ts`, which multiply by caller rather than by round-trip.
+function logFetchCompleted(
+  log: ModelGatewayLogSink,
+  url: string,
+  response: Response,
+  durationMs: number,
+): void {
+  const level = response.ok ? "info" : "warn";
+  if (!logLevelEnabled(log, level)) return;
+  log.write({
+    level,
+    category: "http",
+    op: "http.gateway.fetch.completed",
+    status: response.status,
+    durationMs,
+    extra: { endpoint: logEndpointHost(url) },
+  });
+}
+
+// Outcome line for one outbound gateway call, paired with the attempt line above. `errorKind`
+// carries the egress taxonomy code verbatim (`PROXY_BLOCKED_BY_POLICY`, `PROXY_UNREACHABLE`,
+// `TLS_CA_FAILURE`, …), which is how every fail-closed rejection in this module — literal-address
+// policy, DNS-resolved-to-blocked, redirect target, unpinnable research egress, missing pinned
+// address, oversized CONNECT header — becomes visible without threading a sink through each
+// individual guard.
+export async function gatewayFetch(
+  url: string,
+  options: GatewayFetchOptions = {},
+): Promise<Response> {
+  // `logContext` is separated from the transport options here, once, for two reasons: the sink
+  // every line below writes through is bound to its correlation id (see `withCorrelationId`), and
+  // the remaining options are the ones that may reach `RequestInit` — a correlation id must never
+  // travel on the wire.
+  const { logContext, ...fetchOptions } = options;
+  const log = withCorrelationId(resolveLogSink(options.log), logContext?.correlationId);
+  const elapsed = logTimer();
+  logFetchStarted(log, url, options);
+  try {
+    const response = await performGatewayFetch(url, { ...fetchOptions, log });
+    logFetchCompleted(log, url, response, elapsed());
+    return response;
+  } catch (error) {
+    log.write({
+      level: "warn",
+      category: "http",
+      op: "http.gateway.fetch.failed",
+      durationMs: elapsed(),
+      errorKind: logErrorKind(error),
+      extra: { endpoint: logEndpointHost(url) },
+    });
+    throw error;
+  }
 }
 
 export async function readJsonCapped(

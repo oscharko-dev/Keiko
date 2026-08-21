@@ -25,7 +25,7 @@
 // Recovery mode (partial vector coverage, non-force): re-embeds using existing chunks
 // only — the chunker runs with force=false so it reuses the already-correct chunk rows.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import type {
@@ -89,7 +89,12 @@ import {
   readDocumentTextRow,
   updateDocumentStatusRow,
 } from "../discovery/persist.js";
-import type { ExtractionEvent, ExtractionResult } from "../discovery/types.js";
+import type {
+  DiscoveryError,
+  ExtractionEvent,
+  ExtractionOutcome,
+  ExtractionResult,
+} from "../discovery/types.js";
 import { listCapsuleSources } from "../source-lifecycle.js";
 import { LEXICAL_ANALYZER_KEY } from "../retrieval/lexical-normalization.js";
 import {
@@ -108,7 +113,13 @@ import {
   updateJobCounters,
   type JobCounters,
 } from "./job-persist.js";
-import { embedChunkBatch } from "./embedding-batcher.js";
+import { embedChunkBatch, embeddingEndpointHost } from "./embedding-batcher.js";
+import {
+  emitKnowledgeLogEvent,
+  knowledgeErrorKind,
+  startKnowledgeLogTimer,
+  type KnowledgeLogEvent,
+} from "../knowledge-log.js";
 import {
   countVectorsForCapsule,
   countVectorsForDocument,
@@ -128,6 +139,7 @@ import {
   type ChunkToEmbed,
   type EmbedBatchResult,
   type IndexingEvent,
+  type IndexingLogContext,
   type IndexingOptions,
   type IndexingResult,
 } from "./types.js";
@@ -241,6 +253,13 @@ interface RunState {
   readonly jobId: string;
   capsule: KnowledgeCapsule;
   readonly options: IndexingOptions;
+  // Correlation identity stamped on every activity-log line this run writes. Built once at job
+  // start — the capsule digest is computed a single time rather than per line.
+  readonly logContext: IndexingLogContext;
+  // Monotonic wall time since the job started, for the closing line. Deliberately NOT
+  // `finishedAt - startedAt`: `now` is an injectable clock that tests pin to a counter, so that
+  // subtraction reports a tick count rather than a duration.
+  readonly elapsed: () => number;
   readonly batchSize: number;
   readonly concurrency: number;
   readonly now: () => number;
@@ -297,6 +316,96 @@ function emitProgress(options: IndexingOptions, event: IndexingEvent): void {
   } catch {
     // intentionally swallowed — progress sinks must not affect run correctness
   }
+}
+
+// ─── Activity log ─────────────────────────────────────────────────────────────
+// WHY THESE LINES EXIST ON TOP OF THE EVENT STREAM
+//
+// `IndexingEvent` reports STATE, and only to a consumer that is actively driving the async
+// iterator. The field incident this instrumentation was written for is a run that produced no
+// state change at all — "0 of 1 documents, 0 of 36 vectors" for six minutes, then an operator
+// cancellation. There was nothing to report, so nothing was reported, and four releases went by
+// guessing. These lines are the run's SPINE: one per lifecycle transition, at `info`, so an
+// operator who opens `server.log` at the default level sees which step a stuck run reached and
+// never started the next one — without attaching a consumer to anything.
+//
+// CORRELATION. Concurrency is up to 4, so several documents and several embedding flushes are in
+// flight at once and a line without an owner cannot be attributed to the work that produced it.
+// Every line carries the run's `IndexingLogContext`: the job uuid verbatim in `correlationId`,
+// and the capsule (always) and document (where known) as DIGESTS — see the type's own note for
+// why the raw ids are not writable.
+const LOG_DIGEST_LENGTH = 16;
+
+// A truncated sha-256. 16 hex characters is 64 bits: collision-free across every capsule and
+// document a single log file can hold, short enough to read at the start of a line, and — being
+// a one-way digest of the whole value — carries nothing back about the name it stands for.
+function logDigest(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, LOG_DIGEST_LENGTH);
+}
+
+// `scheme://host` for the configured embedding gateway, omitted when the endpoint does not
+// parse. Never the path or the query — see `embeddingEndpointHost`.
+function endpointHostExtra(state: RunState): Readonly<Record<string, unknown>> {
+  const host = embeddingEndpointHost(state.options.embeddingAdapter.endpoint);
+  return host === undefined ? {} : { endpointHost: host };
+}
+
+function documentLogContext(state: RunState, documentId: DocumentId): IndexingLogContext {
+  return { ...state.logContext, documentIdDigest: logDigest(String(documentId)) };
+}
+
+// Routed through `emitKnowledgeLogEvent` for the same reason `emitProgress` above wraps the
+// progress callback: the sink is caller-supplied code, and a run's correctness may not depend on
+// it. Without the guard a throwing sink would abort whichever step happened to be logging —
+// mid-document, inside a retry ladder, or in the failure path that is about to report the real
+// cause — and a logging defect would be indistinguishable from an indexing failure. The seam also
+// keeps a broken sink from going unnoticed; see `knowledge-log.ts`.
+function writeKnowledgeLog(
+  state: RunState,
+  context: IndexingLogContext,
+  event: Omit<KnowledgeLogEvent, "correlationId">,
+): void {
+  emitKnowledgeLogEvent(state.options.logSink, {
+    ...event,
+    correlationId: context.jobId,
+    extra: {
+      capsuleIdDigest: context.capsuleIdDigest,
+      ...(context.documentIdDigest !== undefined
+        ? { documentIdDigest: context.documentIdDigest }
+        : {}),
+      ...event.extra,
+    },
+  });
+}
+
+// Job-scoped lifecycle line.
+function logIndexing(
+  state: RunState,
+  event: Omit<KnowledgeLogEvent, "category" | "correlationId">,
+): void {
+  writeKnowledgeLog(state, state.logContext, { ...event, category: "indexing" });
+}
+
+// Job-scoped line about the embedding gateway rather than the corpus. The category has to match
+// the op prefix: an `embedding.*` op filed under `indexing` is invisible to the grep an operator
+// runs when the gateway is the suspect.
+function logEmbeddingRun(
+  state: RunState,
+  event: Omit<KnowledgeLogEvent, "category" | "correlationId">,
+): void {
+  writeKnowledgeLog(state, state.logContext, { ...event, category: "embedding" });
+}
+
+// Document-scoped lifecycle line — same shape, plus the document digest.
+function logDocument(
+  state: RunState,
+  documentId: DocumentId,
+  event: Omit<KnowledgeLogEvent, "category" | "correlationId">,
+): void {
+  writeKnowledgeLog(state, documentLogContext(state, documentId), {
+    ...event,
+    category: "indexing",
+  });
 }
 
 function clearDocumentArtifacts(
@@ -379,16 +488,7 @@ function eligibleForRestoreSnapshot(
   return countVectorsForDocument(db, capsuleId, documentId) > 0;
 }
 
-function captureRestoreSnapshotIfEligible(
-  state: RunState,
-  source: KnowledgeSource,
-  relativePath: string,
-): void {
-  const documentId = documentIdFor({
-    capsuleId: state.capsule.id,
-    sourceId: source.id,
-    relativePath,
-  });
+function captureRestoreSnapshotIfEligible(state: RunState, documentId: DocumentId): void {
   const db = state.options.store._internal.db;
   if (!eligibleForRestoreSnapshot(db, state.capsule.id, documentId)) return;
   const document = selectDocumentRow(db, state.capsule.id, documentId);
@@ -854,7 +954,20 @@ async function prepareChunksToEmbedSafely(
 ): Promise<readonly ChunkToEmbed[] | null> {
   try {
     return await prepareChunksToEmbed(state, documentId, sourceText);
-  } catch {
+  } catch (cause) {
+    // The caller converts `null` into a CONTEXTUAL_RETRIEVAL_FAILED document error, which tells
+    // an operator that a document failed but not which stage threw. The error KIND is the one
+    // fact that separates a chat-gateway outage from a chunker defect, and it is lost here
+    // unless this line records it. The message is never read — it can carry document text, and
+    // neither is the raw document id, which IS the document's relative path (`doc:<capsule>:
+    // <source>:<relativePath>`): the digest correlates it to every other line of this document's
+    // work without writing a customer file name into the log.
+    logDocument(state, documentId, {
+      level: "warn",
+      op: "indexing.chunking.failed",
+      errorKind: knowledgeErrorKind(cause),
+      extra: { sourceTextLength: sourceText.length, lane: "standard" },
+    });
     return null;
   }
 }
@@ -867,6 +980,7 @@ function lastChunkIdOfBatch(vectors: EmbedBatchResult["vectors"]): ChunkId | nul
 
 async function embedOneChunkBatch(
   state: RunState,
+  documentId: DocumentId,
   batch: readonly ChunkToEmbed[],
 ): Promise<EmbedBatchResult> {
   return embedChunkBatch(batch, {
@@ -879,11 +993,18 @@ async function embedOneChunkBatch(
     now: state.now,
     idSource: state.idSource,
     tokenizer: state.tokenizer,
+    // The batcher's lines are the ones an operator reads during a stall, and with concurrency 4
+    // they interleave across documents — so they carry the same correlation context as the
+    // orchestrator's own, down to the document.
+    ...(state.options.logSink !== undefined
+      ? { logSink: state.options.logSink, logContext: documentLogContext(state, documentId) }
+      : {}),
   });
 }
 
 async function embedChunkBatches(
   state: RunState,
+  documentId: DocumentId,
   batches: readonly (readonly ChunkToEmbed[])[],
 ): Promise<EmbedDocumentResult> {
   const errors: IndexingJobError[] = [];
@@ -891,7 +1012,7 @@ async function embedChunkBatches(
   let lastChunkId: ChunkId | null = null;
   for (const batch of batches) {
     if (cancellationRequested(state)) break;
-    const result = await embedOneChunkBatch(state, batch);
+    const result = await embedOneChunkBatch(state, documentId, batch);
     vectorCount += result.vectors.length;
     errors.push(...result.errors);
     const batchLastChunkId = lastChunkIdOfBatch(result.vectors);
@@ -925,18 +1046,33 @@ async function embedDocumentChunks(
     return { vectorCount: 0, errors: [], lastChunkId: null };
   }
   const batches = sliceIntoBatches(chunks, state.batchSize);
-  return embedChunkBatches(state, batches);
+  // The flush plan for this document: how many chunks became how many batches at which cap. It
+  // is the last line before the first outbound call, so a run that stalls in embedding stops
+  // exactly here — with the count of work it was about to issue.
+  logDocument(state, documentId, {
+    level: "info",
+    op: "indexing.document.embedding-started",
+    extra: { chunkCount: chunks.length, batchCount: batches.length, batchSize: state.batchSize },
+  });
+  return embedChunkBatches(state, documentId, batches);
 }
 
 // ─── Document handlers ────────────────────────────────────────────────────────
 function handleExtractionSkipped(state: RunState, result: ExtractionResult): IndexingEvent {
   state.skippedDocuments += 1;
+  const documentId =
+    result.outcome.kind === "skipped" ? result.outcome.document.id : ("" as DocumentId);
+  logDocument(state, documentId, {
+    level: "info",
+    op: "indexing.document.skipped",
+    extra: { reason: "unchanged", skippedDocuments: state.skippedDocuments },
+  });
   return {
     kind: "document-skipped",
     jobId: state.jobId,
     capsuleId: state.capsule.id,
     sourceId: result.sourceId,
-    documentId: result.outcome.kind === "skipped" ? result.outcome.document.id : ("" as DocumentId),
+    documentId,
     reason: "unchanged",
   };
 }
@@ -945,55 +1081,104 @@ function handleExtractionSkipped(state: RunState, result: ExtractionResult): Ind
 // incremental refresh. Mirrors the gate in discovery/extract.ts buildFailureResult.
 const TRANSIENT_DISCOVERY_CODES: ReadonlySet<string> = new Set(["READ_FAILED", "STAT_FAILED"]);
 
-function handleExtractionFailed(state: RunState, result: ExtractionResult): IndexingEvent {
-  const errMessage =
-    result.outcome.kind === "failed" ? result.outcome.error.message : "extraction failed";
-  const errCode = result.outcome.kind === "failed" ? result.outcome.error.code : "READ_FAILED";
-  if (result.outcome.kind === "failed") {
-    const documentId = result.outcome.document.id;
-    // GRD-010: a transient re-read failure on a document that still has a prior good index
-    // (extract.ts preserved its chunks/vectors) is reported as a non-destructive skip, NOT a
-    // failure — the retrievable content survives until a successful re-extraction.
-    if (
-      TRANSIENT_DISCOVERY_CODES.has(errCode) &&
-      countChunksForDocument(state.options.store._internal.db, state.capsule.id, documentId) > 0
-    ) {
-      state.skippedDocuments += 1;
-      return {
-        kind: "document-skipped",
-        jobId: state.jobId,
-        capsuleId: state.capsule.id,
-        sourceId: result.sourceId,
-        documentId,
-        reason: "unchanged",
-      };
-    }
-    state.failedDocuments += 1;
-    clearDocumentArtifacts(state, documentId, { deleteChunks: true });
-    markDocumentFailed(state, documentId);
-    const error: IndexingJobError = { code: `DISCOVERY_FAILED:${errCode}`, message: errMessage };
-    state.lastError = error;
-    return {
-      kind: "document-failed",
-      jobId: state.jobId,
-      capsuleId: state.capsule.id,
-      sourceId: result.sourceId,
-      documentId,
-      relativePath: result.relativePath,
-      error,
-    };
-  }
+// The extraction lane does NOT reach `appendDocumentFailure` (see the note there), so until this
+// line existed a READ_FAILED, a STAT_FAILED, a PATH_ESCAPE or any parse failure produced a
+// `DISCOVERY_FAILED:<code>` event for a consumer driving the iterator and nothing at all in the
+// file an operator opens. `errorKind` carries the discovery code — the part that says WHY, and
+// the part that decides the repair: an unreadable mount, an unstattable entry and a parser that
+// rejected the bytes are three different problems. The message is never written; it quotes the
+// path, or the fragment of content that failed to parse.
+function logExtractionFailed(state: RunState, documentId: DocumentId, discoveryCode: string): void {
+  logDocument(state, documentId, {
+    level: "warn",
+    op: "indexing.document.extraction-failed",
+    errorKind: discoveryCode,
+    extra: { failedDocuments: state.failedDocuments },
+  });
+}
+
+// The GRD-010 downgrade, made visible. A transient re-read failure on a document whose previous
+// chunks survived is reported to the consumer as `document-skipped` with reason "unchanged" —
+// byte-identical to what a genuinely unchanged document produces. The flattening is deliberate
+// (the retrievable content really did survive), but it hides that this document was NOT
+// refreshed this run, which is exactly the state behind "the pod keeps answering from the old
+// version of the file". At `warn`, with the discovery code that caused the downgrade.
+function transientRereadSkip(
+  state: RunState,
+  result: ExtractionResult,
+  documentId: DocumentId,
+  discoveryCode: string,
+  preservedChunkCount: number,
+): IndexingEvent {
+  state.skippedDocuments += 1;
+  logDocument(state, documentId, {
+    level: "warn",
+    op: "indexing.document.skipped",
+    errorKind: discoveryCode,
+    extra: {
+      reason: "transient-read-failure",
+      preservedChunkCount,
+      skippedDocuments: state.skippedDocuments,
+    },
+  });
+  return {
+    kind: "document-skipped",
+    jobId: state.jobId,
+    capsuleId: state.capsule.id,
+    sourceId: result.sourceId,
+    documentId,
+    reason: "unchanged",
+  };
+}
+
+function failExtractedDocument(
+  state: RunState,
+  result: ExtractionResult,
+  documentId: DocumentId,
+  discoveryCode: string,
+  message: string,
+): IndexingEvent {
   state.failedDocuments += 1;
-  const error: IndexingJobError = { code: `DISCOVERY_FAILED:${errCode}`, message: errMessage };
+  logExtractionFailed(state, documentId, discoveryCode);
+  clearDocumentArtifacts(state, documentId, { deleteChunks: true });
+  markDocumentFailed(state, documentId);
+  const error: IndexingJobError = { code: `DISCOVERY_FAILED:${discoveryCode}`, message };
   state.lastError = error;
   return {
     kind: "document-failed",
     jobId: state.jobId,
     capsuleId: state.capsule.id,
     sourceId: result.sourceId,
+    documentId,
     relativePath: result.relativePath,
     error,
   };
+}
+
+// The failed outcome is threaded in already narrowed, rather than re-tested here. The old shape
+// re-derived it from `result.outcome` and carried an `else` branch for an outcome that the single
+// call site's own guard makes unreachable — a branch no test could ever reach, and therefore a
+// log line no test could ever pin.
+type FailedExtractionOutcome = Extract<ExtractionOutcome, { readonly kind: "failed" }>;
+
+function handleExtractionFailed(
+  state: RunState,
+  result: ExtractionResult,
+  outcome: FailedExtractionOutcome,
+): IndexingEvent {
+  const documentId = outcome.document.id;
+  const errCode = outcome.error.code;
+  // GRD-010: a transient re-read failure on a document that still has a prior good index
+  // (extract.ts preserved its chunks/vectors) is reported as a non-destructive skip, NOT a
+  // failure — the retrievable content survives until a successful re-extraction. The chunk
+  // count is only read for a transient code, exactly as before.
+  const preservedChunks = TRANSIENT_DISCOVERY_CODES.has(errCode)
+    ? countChunksForDocument(state.options.store._internal.db, state.capsule.id, documentId)
+    : 0;
+  if (preservedChunks > 0) {
+    return transientRereadSkip(state, result, documentId, errCode, preservedChunks);
+  }
+  return failExtractedDocument(state, result, documentId, errCode, outcome.error.message);
 }
 
 interface PersistedHandling {
@@ -1104,6 +1289,19 @@ function chunkedDocumentEvents(
   relativePath: string,
   chunkCount: number,
 ): readonly IndexingEvent[] {
+  // The per-document half of the spine. `chunkCount` is the denominator of the "0 of 36 vectors"
+  // the operator sees: with this line an operator can say the chunker produced 36 and embedding
+  // never returned, which is a different bug from the chunker producing nothing. The relative
+  // path is deliberately absent — it is a customer file name; the document digest identifies it.
+  logDocument(state, documentId, {
+    level: "info",
+    op: "indexing.document.extracted",
+  });
+  logDocument(state, documentId, {
+    level: "info",
+    op: "indexing.document.chunked",
+    extra: { chunkCount },
+  });
   return [
     {
       kind: "document-extracted",
@@ -1214,32 +1412,33 @@ function tryChunkDocument(
 ): { readonly chunked: ReturnType<typeof chunkPersistedDocument> } | PersistedHandling {
   try {
     return { chunked: chunkPersistedDocument(state, result) };
-  } catch {
+  } catch (cause) {
     if (cancellationRequested(state)) {
       clearDocumentArtifacts(state, documentId, { deleteChunks: true });
       return { events: [] };
     }
-    state.failedDocuments += 1;
-    clearDocumentArtifacts(state, documentId, { deleteChunks: true });
-    markDocumentFailed(state, documentId);
-    const error: IndexingJobError = {
-      code: "CHUNKING_FAILED",
-      message: "document chunking failed",
-    };
-    state.lastError = error;
-    return {
-      events: [
-        {
-          kind: "document-failed",
-          jobId: state.jobId,
-          capsuleId: state.capsule.id,
-          sourceId: result.sourceId,
-          documentId,
-          relativePath: result.relativePath,
-          error,
-        },
-      ],
-    };
+    // Same class as the contextual lane above and the bounded lane below: the document error is
+    // flattened to CHUNKING_FAILED, so the real cause exists nowhere else. One shared op name
+    // across all three lanes, distinguished by `lane`, so an operator greps once.
+    logDocument(state, documentId, {
+      level: "warn",
+      op: "indexing.chunking.failed",
+      errorKind: knowledgeErrorKind(cause),
+      extra: { lane: "standard-chunker" },
+    });
+    // Routed through the shared failure sink rather than a hand-built copy of it: this branch
+    // used to duplicate the counter bump, the artifact cleanup, the status write and the event,
+    // which is how it ended up as the one document failure with no `indexing.document.failed`
+    // line. One owner, one shape, every lane.
+    return appendDocumentFailure(
+      state,
+      [],
+      result.sourceId,
+      documentId,
+      result.relativePath,
+      { code: "CHUNKING_FAILED", message: "document chunking failed" },
+      { deleteChunks: true },
+    );
   }
 }
 
@@ -1256,6 +1455,22 @@ function appendDocumentFailure(
   clearDocumentArtifacts(state, documentId, options);
   markDocumentFailed(state, documentId);
   state.lastError = error;
+  // Every POST-EXTRACTION lane funnels through here — standard, bounded, identity gate and
+  // chunker alike — so this is the single site that records their failures. It is NOT every
+  // failing lane: a document that never got past discovery/extraction fails inside
+  // `handleExtractionFailed`, which owns its own `indexing.document.extraction-failed` line for
+  // exactly that reason. Claiming otherwise here is what left that lane silent through four
+  // releases of field guesswork. The error CODE is written, never the message: a document
+  // error's message can quote the content that failed to parse.
+  logDocument(state, documentId, {
+    level: "warn",
+    op: "indexing.document.failed",
+    errorKind: error.code,
+    extra: {
+      transient: error.transient === true,
+      consecutiveTransientEmbedFailures: state.consecutiveTransientEmbedFailures,
+    },
+  });
   events.push({
     kind: "document-failed",
     jobId: state.jobId,
@@ -1278,6 +1493,15 @@ function completeEmbeddedDocument(
   state.processedDocuments += 1;
   state.vectorsPersisted += embedResult.vectorCount;
   if (embedResult.lastChunkId !== null) state.lastResumeToken = embedResult.lastChunkId;
+  logDocument(state, documentId, {
+    level: "info",
+    op: "indexing.document.embedded",
+    extra: {
+      vectorCount: embedResult.vectorCount,
+      vectorsPersistedSoFar: state.vectorsPersisted,
+      processedDocuments: state.processedDocuments,
+    },
+  });
   events.push({
     kind: "document-embedded",
     jobId: state.jobId,
@@ -1527,6 +1751,25 @@ function prepareBoundedChunks(
   return countChunksForDocument(db, state.capsule.id, documentId);
 }
 
+// The bounded large-document lane had the same hole the standard lane did: every non-policy cause
+// is relabelled `CHUNKING_FAILED` with a fixed message, so an out-of-memory page window, a corrupt
+// checkpoint and a real chunker defect are indistinguishable downstream. It gets the identical
+// line, under the identical op name, tagged with its lane — including the cancellation branch,
+// which otherwise returns zero events and leaves an operator with a document that simply stopped
+// existing in the run.
+function logBoundedChunkFailure(state: RunState, documentId: DocumentId, cause: unknown): void {
+  logDocument(state, documentId, {
+    level: "warn",
+    op: "indexing.chunking.failed",
+    errorKind: knowledgeErrorKind(cause),
+    extra: {
+      lane: "bounded",
+      cancelled: cause instanceof BoundedIndexingCancelledError || cancellationRequested(state),
+      policyRejection: cause instanceof BoundedIndexingPolicyError,
+    },
+  });
+}
+
 function boundedChunkPreparationFailure(
   state: RunState,
   result: ExtractionResult,
@@ -1536,6 +1779,7 @@ function boundedChunkPreparationFailure(
   cause: unknown,
 ): PersistedHandling {
   const db = state.options.store._internal.db;
+  logBoundedChunkFailure(state, documentId, cause);
   if (cause instanceof BoundedIndexingCancelledError || cancellationRequested(state)) {
     updateDocumentStatusRow(db, state.capsule.id, documentId, "pending");
     writeBoundedCheckpoint({
@@ -1733,6 +1977,21 @@ function* handleUnsupportedDocument(
 ): Generator<IndexingEvent> {
   clearDocumentArtifacts(state, documentId, { deleteChunks: true });
   state.skippedDocuments += 1;
+  // This pair — extracted, then immediately skipped — is a whole document that will never
+  // produce a vector, and it wrote nothing. An operator reading "0 of 1 documents" against a
+  // scanned PDF or an image saw a run that looked identical to one wedged in the gateway. The
+  // `extracted` line keeps this lane countable next to the chunked lane's own; `documentStatus`
+  // is the closed enum the extractor assigned, never a file name.
+  logDocument(state, documentId, { level: "info", op: "indexing.document.extracted" });
+  logDocument(state, documentId, {
+    level: "info",
+    op: "indexing.document.skipped",
+    extra: {
+      reason: "unsupported",
+      documentStatus: result.outcome.document.status,
+      skippedDocuments: state.skippedDocuments,
+    },
+  });
   yield {
     kind: "document-extracted",
     jobId: state.jobId,
@@ -1832,8 +2091,9 @@ function* handleExtractionSkippedEvents(
 function* handleExtractionFailedEvents(
   state: RunState,
   result: ExtractionResult,
+  outcome: FailedExtractionOutcome,
 ): Generator<IndexingEvent> {
-  yield handleExtractionFailed(state, result);
+  yield handleExtractionFailed(state, result, outcome);
 }
 
 // Routes a file-extracted event: force-skipped docs are re-shaped to persisted so the
@@ -1871,7 +2131,7 @@ async function* handleFileExtracted(
     return;
   }
   if (result.outcome.kind === "failed") {
-    yield* handleExtractionFailedEvents(state, result);
+    yield* handleExtractionFailedEvents(state, result, result.outcome);
     return;
   }
   yield* handlePersistedDocument(state, result);
@@ -1884,7 +2144,13 @@ async function* handleDiscoveryEvent(
 ): AsyncGenerator<IndexingEvent> {
   if (evt.kind === "file-discovered") {
     state.totalDocuments += 1;
-    captureRestoreSnapshotIfEligible(state, source, evt.relativePath);
+    const documentId = documentIdFor({
+      capsuleId: state.capsule.id,
+      sourceId: source.id,
+      relativePath: evt.relativePath,
+    });
+    captureRestoreSnapshotIfEligible(state, documentId);
+    logDocumentExtractionStarted(state, documentId, evt.sizeBytes);
     yield {
       kind: "document-discovered",
       jobId: state.jobId,
@@ -1896,24 +2162,7 @@ async function* handleDiscoveryEvent(
     return;
   }
   if (evt.kind === "scope-error") {
-    state.failedDocuments += 1;
-    state.discoveryFailedDocuments += 1;
-    if (evt.error.code === "LIMIT_REACHED") {
-      persistDiscoveryLimitWarning(state);
-    }
-    const err: IndexingJobError = {
-      code: `DISCOVERY_FAILED:${evt.error.code}`,
-      message: evt.error.message,
-    };
-    state.lastError = err;
-    yield {
-      kind: "document-failed",
-      jobId: state.jobId,
-      capsuleId: state.capsule.id,
-      sourceId: source.id,
-      ...(evt.error.relativePath !== undefined ? { relativePath: evt.error.relativePath } : {}),
-      error: err,
-    };
+    yield scopeErrorEvent(state, source, evt.error);
     return;
   }
   if (evt.kind === "cancelled" || evt.kind === "completed") {
@@ -1926,6 +2175,81 @@ async function* handleDiscoveryEvent(
   // the snapshot it owns, but the "genuinely unchanged" and "extraction failed" outcomes never
   // reach that function — discard is a no-op if it already ran.
   discardRestoreSnapshot(state, evt.result.outcome.document.id);
+}
+
+// The discovery lane's progress tick AND the extraction-start marker, deliberately one line.
+// `discoverAndExtract` yields `file-discovered` and only THEN awaits that file's extraction, so
+// the instant this runs is both "the walk found another file" and "extraction of that file is
+// about to begin" — two lines here would carry the same timestamp and the same facts.
+//
+// It closes both halves of the field incident's silent middle. Between
+// `indexing.source.started` and `indexing.source.completed` a slow walk now advances a visible
+// counter instead of showing nothing, and a document that hangs mid-extraction leaves this line
+// with no `indexing.document.extracted` partner — which is what separates "the walk never
+// reached it" from "extraction started and never returned".
+//
+// `discoveredCount` is the running job-wide total: the "1" in "0 of 1 documents". The relative
+// path is a customer file name and is never written — the document digest carries identity, and
+// it is the same digest every later line for this document uses, so one grep follows the
+// document from here to its terminal line.
+function logDocumentExtractionStarted(
+  state: RunState,
+  documentId: DocumentId,
+  sizeBytes: number,
+): void {
+  logDocument(state, documentId, {
+    level: "info",
+    op: "indexing.document.extraction-started",
+    extra: { discoveredCount: state.totalDocuments, sizeBytes },
+  });
+}
+
+// Every walk-level rejection an operator can act on: a PATH_ESCAPE containment refusal, an
+// unreadable or unstattable directory, an invalid scope, and the LIMIT_REACHED truncation
+// frames. Each of them bumped two counters and produced a `document-failed` event that only a
+// consumer driving the iterator ever saw. `errorKind` is the discovery code; the message is
+// never written because a walk error's message quotes the path that produced it. Note that a
+// deny-list match is dropped inside the walk without an error at all and cannot reach here.
+function logDiscoveryScopeError(state: RunState, error: DiscoveryError): void {
+  logIndexing(state, {
+    level: "warn",
+    op: "indexing.discovery.scope-error",
+    errorKind: error.code,
+    extra: {
+      scopedToFile: error.relativePath !== undefined,
+      discoveryFailedDocuments: state.discoveryFailedDocuments,
+    },
+  });
+}
+
+// Returns the event rather than yielding it, so the caller keeps its `yield` direct. Delegating
+// with `yield*` from an async generator to a sync one routes every value through
+// AsyncFromSyncIterator and inserts extra microtask ticks between producing this event and the
+// cancellation re-check that follows it — a timing change this instrumentation must not make.
+function scopeErrorEvent(
+  state: RunState,
+  source: KnowledgeSource,
+  error: DiscoveryError,
+): IndexingEvent {
+  state.failedDocuments += 1;
+  state.discoveryFailedDocuments += 1;
+  logDiscoveryScopeError(state, error);
+  if (error.code === "LIMIT_REACHED") {
+    persistDiscoveryLimitWarning(state);
+  }
+  const err: IndexingJobError = {
+    code: `DISCOVERY_FAILED:${error.code}`,
+    message: error.message,
+  };
+  state.lastError = err;
+  return {
+    kind: "document-failed",
+    jobId: state.jobId,
+    capsuleId: state.capsule.id,
+    sourceId: source.id,
+    ...(error.relativePath !== undefined ? { relativePath: error.relativePath } : {}),
+    error: err,
+  };
 }
 
 function shouldStopAfterEvent(event: IndexingEvent): boolean {
@@ -1948,11 +2272,11 @@ async function* streamDiscoveryEvent(
 }
 
 // ─── Per-source pipeline ──────────────────────────────────────────────────────
-async function* runOneSource(
+function discoveryStreamFor(
   state: RunState,
   source: KnowledgeSource,
-): AsyncGenerator<IndexingEvent> {
-  const stream = discoverAndExtract(
+): ReturnType<typeof discoverAndExtract> {
+  return discoverAndExtract(
     {
       fs: state.options.workspaceFs,
       store: state.options.store,
@@ -1971,13 +2295,60 @@ async function* runOneSource(
     },
     sourceDiscoveryParams(state, source),
   );
+}
 
+// Paired with `indexing.source.completed`. A walk that never returns — an unreachable network
+// mount, a directory tree that does not terminate — leaves this line with no partner, which is
+// the ONLY evidence that a run stalled in discovery rather than in embedding. The source id is
+// digested for the same reason the capsule id is: it is caller-supplied.
+function logSourceStarted(state: RunState, source: KnowledgeSource, sourceDigest: string): void {
+  logIndexing(state, {
+    level: "info",
+    op: "indexing.source.started",
+    extra: { sourceIdDigest: sourceDigest, scopeKind: source.scope.kind },
+  });
+}
+
+// The discovered count is the number the field incident's operator was staring at ("0 of 1
+// documents"): it is what the walk actually found, as opposed to what got indexed.
+function logSourceCompleted(
+  state: RunState,
+  progress: SourceRunProgress,
+  counts: {
+    readonly sourceDigest: string;
+    readonly failedCount: number;
+    readonly durationMs: number;
+  },
+): void {
+  logIndexing(state, {
+    level: "info",
+    op: "indexing.source.completed",
+    durationMs: counts.durationMs,
+    extra: {
+      sourceIdDigest: counts.sourceDigest,
+      discoveredCount: progress.discoveredPaths.size,
+      failedCount: counts.failedCount,
+      walkCompleted: progress.completed,
+      cancelled: progress.cancelled,
+      sawScopeError: progress.sawScopeError,
+    },
+  });
+}
+
+async function* runOneSource(
+  state: RunState,
+  source: KnowledgeSource,
+): AsyncGenerator<IndexingEvent> {
+  const stream = discoveryStreamFor(state, source);
   const progress: SourceRunProgress = {
     cancelled: false,
     sawScopeError: false,
     completed: false,
     discoveredPaths: new Set<string>(),
   };
+  const sourceDigest = logDigest(String(source.id));
+  const sourceElapsed = startKnowledgeLogTimer();
+  logSourceStarted(state, source, sourceDigest);
   // Snapshot the job-wide failure counter before this source's documents are processed so
   // finalizeSourceRun can tell whether ANY document belonging to THIS source failed during this
   // run, without conflating it with failures from other sources in the same multi-source job.
@@ -1999,7 +2370,13 @@ async function* runOneSource(
       break;
     }
   }
-  finalizeSourceRun(state, source, progress, state.failedDocuments - failedDocumentsBefore);
+  const failedCount = state.failedDocuments - failedDocumentsBefore;
+  logSourceCompleted(state, progress, {
+    sourceDigest,
+    failedCount,
+    durationMs: sourceElapsed(),
+  });
+  finalizeSourceRun(state, source, progress, failedCount);
 }
 
 interface SourceRunProgress {
@@ -2098,6 +2475,8 @@ function buildInitialState(
     jobId,
     capsule,
     options,
+    logContext: { jobId, capsuleIdDigest: logDigest(String(capsule.id)) },
+    elapsed: startKnowledgeLogTimer(),
     batchSize: clampBatchSize(options.batchSize),
     concurrency: clampConcurrency(options.concurrency),
     now: options.now ?? options.store._internal.now,
@@ -2221,21 +2600,141 @@ function cacheSuccessfulEmbeddingPreflight(
   for (const key of keys) cache.set(key, { result, expiresAt });
 }
 
+// ─── Preflight instrumentation ────────────────────────────────────────────────
+// The capability preflight is the FIRST outbound call of every run and, until now, the only
+// step of it that could take six minutes while emitting nothing at all: it runs before the first
+// `document-discovered` event, so a run wedged here shows an operator a started job and no
+// progress whatsoever — precisely the field incident's shape. Three facts have to be on the
+// record: that a probe was attempted, whether it was answered from the cache instead (a cached
+// preflight makes NO outbound call, so its absence from the file is not evidence of a hang), and
+// how it ended with how long it took.
+//
+// The log arrives as a callback rather than the RunState because the preflight cache is
+// deliberately shared across runs and must not gain a dependency on any one of them.
+type PreflightLog = (event: Omit<KnowledgeLogEvent, "category" | "correlationId">) => void;
+
+// Provider and model id are gateway configuration, not customer data, and they are the pair that
+// makes a preflight failure actionable. The endpoint is reduced to `scheme://host`.
+function preflightProbeExtra(
+  adapter: OpenAIEmbeddingAdapter,
+  options: EmbeddingProbeOptions,
+): Readonly<Record<string, unknown>> {
+  const host = embeddingEndpointHost(adapter.endpoint);
+  return {
+    provider: options.provider,
+    modelId: options.modelId,
+    ...(options.expectedDimensions !== undefined
+      ? { expectedDimensions: options.expectedDimensions }
+      : {}),
+    fingerprinted: options.includeSpaceFingerprint === true,
+    ...(host === undefined ? {} : { endpointHost: host }),
+  };
+}
+
+async function probeEmbeddingCapability(
+  adapter: OpenAIEmbeddingAdapter,
+  options: EmbeddingProbeOptions,
+  log: PreflightLog,
+): Promise<EmbeddingCapabilityCheck> {
+  const probe = preflightProbeExtra(adapter, options);
+  log({ level: "info", op: "embedding.preflight.started", extra: { ...probe, cached: false } });
+  const elapsed = startKnowledgeLogTimer();
+  const result = await verifyEmbeddingCapability(adapter, options);
+  const durationMs = elapsed();
+  if (!result.ok) {
+    log({
+      level: "error",
+      op: "embedding.preflight.failed",
+      errorKind: result.reason,
+      durationMs,
+      extra: probe,
+    });
+    return result;
+  }
+  log({
+    level: "info",
+    op: "embedding.preflight.completed",
+    durationMs,
+    extra: { ...probe, observedDimensions: result.identity.vectorDimensions },
+  });
+  return result;
+}
+
 async function verifyEmbeddingPreflightCapability(
   adapter: OpenAIEmbeddingAdapter,
   options: EmbeddingProbeOptions,
   cacheScope: object | undefined,
   now: () => number,
+  log: PreflightLog,
 ): Promise<EmbeddingCapabilityCheck> {
-  if (cacheScope === undefined) return await verifyEmbeddingCapability(adapter, options);
-  const cache = embeddingPreflightCacheFor(cacheScope);
-  const key = embeddingPreflightCacheKey(options);
-  const cached = cache.get(key);
-  if (cached !== undefined && cached.expiresAt > now()) return cached.result;
-  const result = await verifyEmbeddingCapability(adapter, options);
-  if (!result.ok) return result;
+  const cache = cacheScope === undefined ? undefined : embeddingPreflightCacheFor(cacheScope);
+  const cached = cache?.get(embeddingPreflightCacheKey(options));
+  if (cached !== undefined && cached.expiresAt > now()) {
+    log({
+      level: "info",
+      op: "embedding.preflight.cache-hit",
+      extra: { ...preflightProbeExtra(adapter, options), cached: true },
+    });
+    return cached.result;
+  }
+  const result = await probeEmbeddingCapability(adapter, options, log);
+  if (cache === undefined || !result.ok) return result;
   cacheSuccessfulEmbeddingPreflight(cache, options, result, now() + EMBEDDING_PREFLIGHT_TTL_MS);
   return result;
+}
+
+// The preflight ANSWERED and the gateway's identity was still refused. This is the one outcome
+// an operator most often mistakes for an outage, so it gets its own line carrying both
+// dimensions — the whole diagnosis, and none of the safe message's prose.
+function logPreflightIdentityRejected(state: RunState, observed: EmbeddingModelIdentity): void {
+  logEmbeddingRun(state, {
+    level: "error",
+    op: "embedding.preflight.identity-rejected",
+    errorKind: "INCOMPATIBLE_EMBEDDING_IDENTITY",
+    extra: {
+      pinnedDimensions: state.capsule.embeddingModelIdentity.vectorDimensions,
+      observedDimensions: observed.vectorDimensions,
+    },
+  });
+}
+
+function adoptPreflightIdentity(
+  state: RunState,
+  identity: EmbeddingModelIdentity,
+  op: string,
+): void {
+  state.capsule = updateCapsuleEmbeddingModelIdentity(
+    state.options.store,
+    state.capsule.id,
+    identity,
+  );
+  logEmbeddingRun(state, {
+    level: "info",
+    op,
+    extra: { observedDimensions: identity.vectorDimensions, provider: identity.provider },
+  });
+}
+
+function embeddingPreflightSuccess(
+  state: RunState,
+  result: Extract<EmbeddingCapabilityCheck, { readonly ok: true }>,
+): IndexingJobError | undefined {
+  if (hasProvisionalIdentity(state)) {
+    adoptPreflightIdentity(state, result.identity, "embedding.preflight.identity-adopted");
+    return undefined;
+  }
+  const compatibility = assertCompatibleEmbeddingIdentity(
+    state.capsule.embeddingModelIdentity,
+    result.identity,
+  );
+  if (!compatibility.ok) {
+    logPreflightIdentityRejected(state, result.identity);
+    return { code: "INCOMPATIBLE_EMBEDDING_IDENTITY", message: compatibility.safeMessage };
+  }
+  if (embeddingIdentityChanged(state.capsule.embeddingModelIdentity, compatibility.identity)) {
+    adoptPreflightIdentity(state, compatibility.identity, "embedding.preflight.identity-refreshed");
+  }
+  return undefined;
 }
 
 function embeddingPreflightFailure(
@@ -2243,32 +2742,7 @@ function embeddingPreflightFailure(
   result: EmbeddingCapabilityCheck,
 ): IndexingJobError | undefined {
   if (result.ok) {
-    if (hasProvisionalIdentity(state)) {
-      state.capsule = updateCapsuleEmbeddingModelIdentity(
-        state.options.store,
-        state.capsule.id,
-        result.identity,
-      );
-      return undefined;
-    }
-    const compatibility = assertCompatibleEmbeddingIdentity(
-      state.capsule.embeddingModelIdentity,
-      result.identity,
-    );
-    if (!compatibility.ok) {
-      return {
-        code: "INCOMPATIBLE_EMBEDDING_IDENTITY",
-        message: compatibility.safeMessage,
-      };
-    }
-    if (embeddingIdentityChanged(state.capsule.embeddingModelIdentity, compatibility.identity)) {
-      state.capsule = updateCapsuleEmbeddingModelIdentity(
-        state.options.store,
-        state.capsule.id,
-        compatibility.identity,
-      );
-    }
-    return undefined;
+    return embeddingPreflightSuccess(state, result);
   }
   return {
     code:
@@ -2296,26 +2770,47 @@ function embeddingIdentityChanged(
   );
 }
 
+// A THROWN preflight is the worst case for an operator: the adapter did not answer with a
+// classified failure, it blew up, and the run ends with a generic EMBEDDING_ADAPTER_FAILED whose
+// message says nothing about the cause. The kind — never the message, which carries the endpoint
+// and often the response body — is the whole difference between a DNS failure and a TLS refusal.
+function preflightThrowFailure(
+  state: RunState,
+  log: PreflightLog,
+  cause: unknown,
+): IndexingJobError {
+  const cancelled =
+    cancellationRequested(state) || (cause instanceof DOMException && cause.name === "AbortError");
+  log({
+    level: cancelled ? "warn" : "error",
+    op: "embedding.preflight.failed",
+    errorKind: cancelled ? "CANCELLED" : knowledgeErrorKind(cause),
+    extra: { threw: true, ...endpointHostExtra(state) },
+  });
+  if (cancelled) {
+    return { code: "CANCELLED", message: "indexing aborted via AbortSignal" };
+  }
+  return {
+    code: "EMBEDDING_ADAPTER_FAILED",
+    message: "embedding capability preflight failed before indexing started",
+  };
+}
+
 async function verifyEmbeddingPreflight(state: RunState): Promise<IndexingJobError | undefined> {
+  const log: PreflightLog = (event): void => {
+    logEmbeddingRun(state, event);
+  };
   try {
     const result = await verifyEmbeddingPreflightCapability(
       state.options.embeddingAdapter,
       embeddingPreflightOptions(state),
       state.options.embeddingPreflightCacheScope,
       state.now,
+      log,
     );
     return embeddingPreflightFailure(state, result);
   } catch (cause) {
-    if (
-      cancellationRequested(state) ||
-      (cause instanceof DOMException && cause.name === "AbortError")
-    ) {
-      return { code: "CANCELLED", message: "indexing aborted via AbortSignal" };
-    }
-    return {
-      code: "EMBEDDING_ADAPTER_FAILED",
-      message: "embedding capability preflight failed before indexing started",
-    };
+    return preflightThrowFailure(state, log, cause);
   }
 }
 
@@ -2361,6 +2856,22 @@ export const DISCOVERY_LIMIT_WARNING_CODE = "DISCOVERY_LIMIT_REACHED";
 function persistDiscoveryLimitWarning(state: RunState): void {
   if (state.discoveryLimitWarningPersisted) return;
   state.discoveryLimitWarningPersisted = true;
+  // Truncation is the one discovery outcome where the run SUCCEEDS and the corpus is still
+  // incomplete, so the operator has no failing signal to chase — they only notice later, when a
+  // grounded answer is missing a document nobody knows was never indexed. The capsule diagnostic
+  // below reaches the health surface; this line puts the same fact, plus the two caps that
+  // produced it, in the file. Written once per run behind the guard above, because LIMIT_REACHED
+  // surfaces once per ancestor frame.
+  const discovery = resolvedDiscoveryOptions(state);
+  logIndexing(state, {
+    level: "warn",
+    op: "indexing.discovery.limit-reached",
+    extra: {
+      discoveredCount: state.totalDocuments,
+      maxFiles: discovery.maxFiles,
+      maxDepth: discovery.maxDepth,
+    },
+  });
   try {
     insertDiagnosticRow(state.options.store._internal.db, {
       id: state.idSource(),
@@ -2427,6 +2938,22 @@ function emitJobStarted(state: RunState, sources: readonly KnowledgeSource[]): I
     jobId: state.jobId,
     occurredAt: state.startedAt,
   });
+  // The first line of the run's spine, and the only place the run's shape is stated: how many
+  // sources it will walk, and the two caps that decide the whole request profile. Everything
+  // downstream is read against these numbers.
+  logIndexing(state, {
+    level: "info",
+    op: "indexing.job.started",
+    extra: {
+      sourceCount: sources.length,
+      batchSize: state.batchSize,
+      concurrency: state.concurrency,
+      force: state.options.force === true,
+      resume: state.options.resume === true,
+      contextualRetrieval: state.options.contextualRetrieval?.enabled === true,
+      ...endpointHostExtra(state),
+    },
+  });
   return emit(state, event);
 }
 
@@ -2462,13 +2989,41 @@ async function* runSourcesWithProgress(
   return identityFailure;
 }
 
+// The run's prologue — capsule resolution, source resolution, the tokenizer load and the
+// started-job write — all happens BEFORE `indexing.job.started` can be emitted, and every one of
+// those steps can throw or hang: a missing capsule, a source filter matching nothing, a
+// tokenizer read off disk, a locked database. Until this line existed, a job that died or wedged
+// in its prologue produced exactly what a job that was never launched produces — nothing — and
+// no operator could tell the two apart. It is written before the first of those steps runs, and
+// it is the only line that cannot use `RunState`, because no state exists yet.
+//
+// The capsule id is caller-supplied, so it is digested here by the same function the rest of the
+// run uses: the prologue line and every later line share one correlation key.
+function logJobReceived(options: IndexingOptions, jobId: string): void {
+  emitKnowledgeLogEvent(options.logSink, {
+    level: "info",
+    category: "indexing",
+    op: "indexing.job.received",
+    correlationId: jobId,
+    extra: {
+      capsuleIdDigest: logDigest(String(options.capsuleId)),
+      sourceIdFilterCount: options.sourceIds?.length ?? 0,
+      force: options.force === true,
+      resume: options.resume === true,
+    },
+  });
+}
+
 // ─── Public entrypoint ────────────────────────────────────────────────────────
 export async function* runIndexingJob(options: IndexingOptions): AsyncIterable<IndexingEvent> {
+  // The job id is minted first so the prologue line can carry the correlation key every later
+  // line uses. `idSource` is called exactly once here, as before.
+  const idSource = options.idSource ?? ((): string => randomUUID());
+  const jobId = idSource();
+  logJobReceived(options, jobId);
   const capsule = resolveCapsule(options);
   const sources = resolveSources(options, capsule);
   const startedAt = (options.now ?? options.store._internal.now)();
-  const idSource = options.idSource ?? ((): string => randomUUID());
-  const jobId = idSource();
   const policyFailure = modelUsePolicyPreflightFailure(capsule, options);
   const tokenizer =
     policyFailure === undefined
@@ -2621,6 +3176,38 @@ function resolveJobStatus(
   return "succeeded";
 }
 
+// The closing line of the run's spine, and the one an operator reads first. It restates every
+// counter the UI shows next to the terminal status and the total wall time, so "cancelled after
+// six minutes with zero vectors" is a single greppable line rather than an inference across the
+// whole file. `warn` for a cancellation and `error` for a failure: a run that did not succeed
+// must be visible at a level an operator filters TO, not one they filter out.
+const JOB_FINISH_LEVELS = {
+  succeeded: "info",
+  cancelled: "warn",
+  failed: "error",
+} as const satisfies Record<IndexingResult["status"], KnowledgeLogEvent["level"]>;
+
+function logJobFinished(state: RunState, result: IndexingResult): void {
+  logIndexing(state, {
+    level: JOB_FINISH_LEVELS[result.status],
+    op: "indexing.job.finished",
+    durationMs: state.elapsed(),
+    ...(state.lastError !== undefined ? { errorKind: state.lastError.code } : {}),
+    extra: {
+      // NOT `status`. The sink flattens `extra` onto the same record as the envelope, whose
+      // `status` field is the numeric HTTP status every operator query and dashboard filter
+      // reads. A run's terminal state written under that name puts the string "succeeded" where
+      // a number belongs and silently poisons those queries for every other line's `status`.
+      jobStatus: result.status,
+      totalDocuments: result.totalDocuments,
+      processedDocuments: result.processedDocuments,
+      failedDocuments: result.failedDocuments,
+      skippedDocuments: result.skippedDocuments,
+      vectorsPersisted: result.vectorsPersisted,
+    },
+  });
+}
+
 function* finalize(
   state: RunState,
   fatalFailure: IndexingJobError | undefined,
@@ -2643,6 +3230,7 @@ function* finalize(
   }
 
   const result = buildResult(state, status, finishedAt);
+  logJobFinished(state, result);
   if (status === "cancelled") {
     yield emit(state, { kind: "job-cancelled", jobId: state.jobId, result });
     return;

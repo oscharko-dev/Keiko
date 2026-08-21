@@ -13,6 +13,7 @@ import {
 
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig } from "./deps.js";
+import { getServerLogger, startLogTimer } from "./observability/index.js";
 
 export type RerankFallbackMode = "slice-topN" | "identity";
 
@@ -304,7 +305,53 @@ async function configuredSelection<T>(
     : { selected, diagnostics: withKeptCount(diagnostics, selected.length) };
 }
 
+// Every non-applied outcome below is a SILENT degradation from the caller's point of view: the
+// caller still receives a usable selection, so nothing upstream can tell that the provider was
+// never asked, refused, timed out, or answered with an unusable mapping. The activity row carries
+// the diagnostics for one query in the UI; this line is the same decision in the operator's log.
+// `denied`, `unavailable` and `invalid-response` warn — those are a policy rejection and two
+// provider faults. `applied` and `disabled` stay at debug: the first is the happy path and the
+// second is the steady state of a default install with no reranker configured.
+function rerankLogLevel(diagnostics: GroundedRerankerDiagnostics): "debug" | "warn" {
+  return diagnostics.status === "applied" || diagnostics.status === "disabled" ? "debug" : "warn";
+}
+
+function logRerankOutcome(
+  diagnostics: GroundedRerankerDiagnostics,
+  fallbackMode: RerankFallbackMode,
+  topN: number,
+  durationMs: number,
+): void {
+  getServerLogger().log(rerankLogLevel(diagnostics), {
+    category: "search",
+    op: "search.rerank.completed",
+    durationMs,
+    ...(diagnostics.failureKind === undefined ? {} : { errorKind: diagnostics.failureKind }),
+    extra: {
+      // `outcome`, not `status`: the envelope's `status` is an HTTP code, and the reranker's is a
+      // word. Sharing the name would put a string where every operator query expects a number.
+      outcome: diagnostics.status,
+      mode: diagnostics.mode,
+      candidateCount: diagnostics.candidateCount,
+      documentCount: diagnostics.documentCount,
+      keptCount: diagnostics.keptCount,
+      transportLatencyMs: diagnostics.latencyMs,
+      fallbackMode,
+      topN,
+    },
+  });
+}
+
 export async function rerankSelection<T>(
+  input: RerankSelectionInput<T>,
+): Promise<RerankSelection<T>> {
+  const elapsed = startLogTimer();
+  const selection = await resolveRerankSelection(input);
+  logRerankOutcome(selection.diagnostics, input.fallbackMode, input.topN, elapsed());
+  return selection;
+}
+
+async function resolveRerankSelection<T>(
   input: RerankSelectionInput<T>,
 ): Promise<RerankSelection<T>> {
   const fallback = fallbackRerankSelection(input.candidates, input.topN, input.fallbackMode);
