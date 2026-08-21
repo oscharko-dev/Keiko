@@ -147,6 +147,8 @@
     "check:editor-doc-links": "node scripts/check-editor-doc-links.mjs",
     "check:e2e-suite-wiring": "node scripts/check-e2e-suite-wiring.mjs",
     "check:adr-index": "node scripts/check-adr-index.mjs",
+    "check:op-catalog": "vitest run scripts/__tests__/op-catalog-drift.test.mjs",
+    "generate:op-catalog": "node scripts/generate-op-catalog.mjs",
     "check:package-graph": "node scripts/check-package-graph.mjs",
     "check:version-consistency": "node scripts/check-version-consistency.mjs",
     "check:release-required-workflows": "node scripts/check-release-required-workflow-names.mjs",

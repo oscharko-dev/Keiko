@@ -23,25 +23,31 @@ import type { CliIo } from "./runner.js";
 // The bin entry (src/cli/index.ts) resolves the packaged path and passes it through
 // KEIKO_LOCAL_STATE_AUDITOR, the same convention already used for KEIKO_UI_STATIC_ROOT and
 // KEIKO_CLI_BIN_PATH: the installation layout is the bin's business, not this package's.
+//
+// `--json` and `auditLocalStateResult` exist so another in-process caller (e.g. `keiko bundle
+// export`'s manifest assembly) can obtain the same `AuditResult` this command prints, without
+// shelling out to a second `keiko audit` process and re-parsing its stdout.
 
 const USAGE = `Usage:
-  keiko audit local-state [--state-dir PATH]   audit a local .keiko tree
+  keiko audit local-state [--state-dir PATH] [--json]   audit a local .keiko tree
 
 Without --state-dir the target is $KEIKO_STATE_DIR when set, otherwise <cwd>/.keiko.
+--json prints the AuditResult as a single JSON line instead of the human report; the exit
+code is unchanged.
 
 Read-only. Never decrypts and never mutates the tree; no vault key is required.
 Exit code: 0 healthy, 1 audit failure, 2 usage error.`;
 
 const TAG: Readonly<Record<string, string>> = { pass: "PASS", fail: "FAIL", skip: "skip" };
 
-interface AuditClass {
+export interface AuditClass {
   readonly id: string;
   readonly title: string;
   readonly status: string;
   readonly findings: readonly string[];
 }
 
-interface AuditResult {
+export interface AuditResult {
   readonly ok: boolean;
   readonly stateDir: string;
   readonly classes: readonly AuditClass[];
@@ -54,7 +60,7 @@ interface AuditorModule {
 type ParsedArgs =
   | { readonly kind: "help" }
   | { readonly kind: "usage" }
-  | { readonly kind: "args"; readonly stateDir: string | undefined };
+  | { readonly kind: "args"; readonly stateDir: string | undefined; readonly json: boolean };
 
 /** A value that looks like a flag is a typo, not a path: swallowing it would audit the wrong tree
  * and report on a directory the operator never named. Same guard as check-local-state.mjs. */
@@ -64,16 +70,21 @@ function isPathValue(value: string | undefined): value is string {
 
 function parseLocalStateFlags(argv: readonly string[]): ParsedArgs {
   let stateDir: string | undefined;
+  let json = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--help" || arg === "-h") return { kind: "help" };
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
     if (arg !== "--state-dir") return { kind: "usage" };
     const value = argv[index + 1];
     if (!isPathValue(value)) return { kind: "usage" };
     stateDir = value;
     index += 1;
   }
-  return { kind: "args", stateDir };
+  return { kind: "args", stateDir, json };
 }
 
 export function parseAuditArgs(argv: readonly string[]): ParsedArgs {
@@ -160,43 +171,130 @@ function asAuditResult(value: unknown): AuditResult | undefined {
   return value as AuditResult;
 }
 
-async function runLocalStateAudit(
+/** Why `loadAuditResult` failed, kept as a closed set rather than a raw message: `threw` is the
+ * only branch whose cause can quote the state tree it was reading, and it is reduced to the
+ * constructor name — body-free, same discipline as the rest of this command (AGENTS.md §7). */
+type AuditLoadFailureReason = "missing-export" | "invalid-result" | "threw";
+
+/** Thrown by {@link loadAuditResult} (and so by {@link auditLocalStateResult}) instead of a plain
+ * `Error` so an in-process caller — e.g. `keiko bundle export`'s manifest assembly — can branch on
+ * `reason` without string-matching a message, the same way `runLocalStateAudit` does for the CLI's
+ * own text/JSON output. */
+export class AuditLoadError extends Error {
+  readonly reason: AuditLoadFailureReason;
+  readonly causeConstructorName: string | undefined;
+
+  constructor(reason: AuditLoadFailureReason, causeConstructorName?: string) {
+    super(`keiko audit: local-state audit could not produce a result (${reason})`);
+    this.name = "AuditLoadError";
+    this.reason = reason;
+    this.causeConstructorName = causeConstructorName;
+  }
+}
+
+/** Loads the auditor module, runs it, and validates its output — the one code path shared by the
+ * CLI's text/JSON rendering and the programmatic {@link auditLocalStateResult} entry point. Throws
+ * {@link AuditLoadError} rather than returning a sentinel so neither caller can forget to check. */
+async function loadAuditResult(
   stateDir: string,
   auditorPath: string,
-  io: CliIo,
   deps: AuditCliDeps,
-): Promise<number> {
+): Promise<AuditResult> {
   const load = deps.loadAuditor ?? importAuditor;
-  let result: AuditResult;
   try {
     const auditor: unknown = await load(pathToFileURL(auditorPath).href);
     const audit = (auditor as Partial<AuditorModule> | null)?.auditLocalState;
     if (typeof audit !== "function") {
-      io.err(
-        "keiko audit: the module at the configured auditor path does not export " +
-          "auditLocalState; the installation is incomplete or the path is wrong.\n",
-      );
-      return 1;
+      throw new AuditLoadError("missing-export");
     }
     const validated = asAuditResult(audit(stateDir));
     if (validated === undefined) {
-      io.err(
-        "keiko audit: the auditor returned a result this CLI cannot read. Refusing to report a " +
-          "verdict rather than guess one.\n",
-      );
-      return 1;
+      throw new AuditLoadError("invalid-result");
     }
-    result = validated;
+    return validated;
   } catch (error) {
+    if (error instanceof AuditLoadError) throw error;
     // Type, not message: the auditor reads the state tree, so its failure text can quote a path
     // or a file fragment it was parsing. The class of failure is the actionable part, and it is
     // body-free (AGENTS.md §7; review finding on #3159).
-    io.err(
-      `keiko audit: local-state audit could not run — ${
-        error instanceof Error ? error.constructor.name : typeof error
-      }\n`,
+    throw new AuditLoadError(
+      "threw",
+      error instanceof Error ? error.constructor.name : typeof error,
     );
+  }
+}
+
+/**
+ * Programmatic twin of `keiko audit local-state --json`: runs the same auditor against `stateDir`
+ * and returns the validated {@link AuditResult}, for a caller that wants the value in-process (e.g.
+ * `keiko bundle export`'s manifest) instead of shelling out to a second `keiko` process and
+ * re-parsing its stdout. Resolves the auditor path from `env.KEIKO_LOCAL_STATE_AUDITOR` the same
+ * way `runAuditCli` does; the caller resolves `stateDir` itself (default-state-dir precedence is a
+ * CLI-argument concern, not this function's).
+ *
+ * Rejects with {@link AuditLoadError} once it has actually tried the auditor — never resolves with
+ * a guessed verdict. Rejects with a plain `Error` first if the auditor was never located at all
+ * (mirrors `runAuditCli`'s own "KEIKO_LOCAL_STATE_AUDITOR is unset" precondition, which is a
+ * configuration problem, not a load failure, so it is kept out of {@link AuditLoadError}'s closed
+ * `reason` set).
+ */
+export async function auditLocalStateResult(
+  stateDir: string,
+  env: Readonly<Record<string, string | undefined>>,
+  deps: AuditCliDeps = {},
+): Promise<AuditResult> {
+  const auditorPath = env.KEIKO_LOCAL_STATE_AUDITOR;
+  if (auditorPath === undefined || auditorPath === "") {
+    throw new Error(
+      "keiko audit: the local-state auditor was not located in this installation " +
+        "(KEIKO_LOCAL_STATE_AUDITOR is unset).",
+    );
+  }
+  return loadAuditResult(stateDir, auditorPath, deps);
+}
+
+function reportLoadFailure(error: AuditLoadError, io: CliIo): void {
+  if (error.reason === "missing-export") {
+    io.err(
+      "keiko audit: the module at the configured auditor path does not export " +
+        "auditLocalState; the installation is incomplete or the path is wrong.\n",
+    );
+    return;
+  }
+  if (error.reason === "invalid-result") {
+    io.err(
+      "keiko audit: the auditor returned a result this CLI cannot read. Refusing to report a " +
+        "verdict rather than guess one.\n",
+    );
+    return;
+  }
+  io.err(
+    `keiko audit: local-state audit could not run — ${error.causeConstructorName ?? "Error"}\n`,
+  );
+}
+
+async function runLocalStateAudit(
+  stateDir: string,
+  auditorPath: string,
+  io: CliIo,
+  json: boolean,
+  deps: AuditCliDeps,
+): Promise<number> {
+  let result: AuditResult;
+  try {
+    result = await loadAuditResult(stateDir, auditorPath, deps);
+  } catch (error) {
+    if (!(error instanceof AuditLoadError)) throw error;
+    reportLoadFailure(error, io);
     return 1;
+  }
+
+  if (json) {
+    // Exactly the serialized result plus a newline, nothing else on stdout: a consumer piping
+    // this into `jq` (or `keiko bundle export`'s own manifest assembly, run out of process) must
+    // never have to strip human report lines out of its input first.
+    io.out(`${JSON.stringify(result)}\n`);
+    return result.ok ? 0 : 1;
   }
 
   renderReport(result, io);
@@ -246,5 +344,5 @@ export async function runAuditCli(
       ? configuredStateDir
       : join(deps.cwd ?? process.cwd(), ".keiko");
   const stateDir = parsed.stateDir ?? defaultStateDir;
-  return runLocalStateAudit(stateDir, auditorPath, io, deps);
+  return runLocalStateAudit(stateDir, auditorPath, io, parsed.json, deps);
 }

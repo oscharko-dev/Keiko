@@ -6,15 +6,15 @@
   "policy": "Packages below target are ratcheted at their recorded baseline until domain tests raise them; non-strict ratchet floors allow 0.10 percentage points of platform noise. Per-file floors are governed per entry: \"ratcheted\" floors are re-derived from measurement and allow 0.50 points, \"absolute\" floors encode policy, survive regeneration and allow none.",
   "packages": {
     "keiko-cli": {
-      "files": 41,
+      "files": 44,
       "uncoveredFiles": 0,
-      "uncoveredLines": 381,
-      "totalLines": 4435,
+      "uncoveredLines": 390,
+      "totalLines": 4762,
       "coverage": {
-        "lines": 91.41,
-        "statements": 89.53,
-        "branches": 84.02,
-        "functions": 92.58
+        "lines": 91.81,
+        "statements": 89.95,
+        "branches": 84.35,
+        "functions": 93.01
       }
     },
     "keiko-connectors": {
@@ -105,12 +105,12 @@
       "files": 128,
       "uncoveredFiles": 0,
       "uncoveredLines": 754,
-      "totalLines": 9369,
+      "totalLines": 9384,
       "coverage": {
-        "lines": 91.95,
-        "statements": 89.56,
+        "lines": 91.97,
+        "statements": 89.58,
         "branches": 80.95,
-        "functions": 94.3
+        "functions": 94.31
       }
     },
     "keiko-memory-capture": {
@@ -176,13 +176,13 @@
     "keiko-model-gateway": {
       "files": 42,
       "uncoveredFiles": 0,
-      "uncoveredLines": 187,
-      "totalLines": 3228,
+      "uncoveredLines": 184,
+      "totalLines": 3249,
       "coverage": {
-        "lines": 94.21,
-        "statements": 93.2,
-        "branches": 87.36,
-        "functions": 96.96
+        "lines": 94.34,
+        "statements": 93.33,
+        "branches": 87.43,
+        "functions": 96.99
       }
     },
     "keiko-quality-intelligence": {
@@ -236,13 +236,13 @@
     "keiko-server": {
       "files": 578,
       "uncoveredFiles": 0,
-      "uncoveredLines": 4515,
-      "totalLines": 56017,
+      "uncoveredLines": 4514,
+      "totalLines": 56114,
       "coverage": {
-        "lines": 91.94,
-        "statements": 89.24,
-        "branches": 81.84,
-        "functions": 94.84
+        "lines": 91.96,
+        "statements": 89.26,
+        "branches": 81.86,
+        "functions": 94.85
       }
     },
     "keiko-tools": {
@@ -265,7 +265,7 @@
       "coverage": {
         "lines": 92.47,
         "statements": 89.51,
-        "branches": 81.79,
+        "branches": 81.78,
         "functions": 91.28
       }
     },

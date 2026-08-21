@@ -16,11 +16,13 @@ import { MAX_LOG_FIELD_COUNT, REDACTED_KEY, REDACTED_SHAPE } from "./log-redacti
 import {
   MAX_LOG_LINE_BYTES,
   SERVER_LOG_LEVEL_ENV,
+  SERVER_LOG_SCHEMA_VERSION,
   closeFileServerLogSinks,
   createBufferedServerLogSink,
   createFileServerLogSink,
   formatServerLogLine,
   resetServerLogFailureNotices,
+  serverLogInstanceId,
   serverLogLineBytes,
   serverLogLineWithinCap,
 } from "./server-log.js";
@@ -168,6 +170,61 @@ describe("server activity log", () => {
       items: 36,
     });
     expect(typeof lines[0]?.ts).toBe("string");
+  });
+
+  // Envelope v2 (#2902): every line the file sink writes carries a process/sequence identity an
+  // agent joins a run across a rotated multi-day file on. This is the functional counterpart to the
+  // spoofing test below — it proves the real values actually land on disk, not merely that a forged
+  // one is stripped.
+  it("stamps schemaVersion, pid, instanceId and seq on every file-sink line", () => {
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "http", op: "one" });
+    sink.write({ category: "http", op: "two" });
+    const lines = readLines(stateDir);
+
+    expect(lines[0]).toMatchObject({ schemaVersion: SERVER_LOG_SCHEMA_VERSION, pid: process.pid });
+    expect(lines[0]?.instanceId).toBe(serverLogInstanceId());
+    expect(String(lines[0]?.instanceId)).toMatch(/^[0-9a-f]{8}$/);
+    // Monotonic per ActiveLog, starting at 1, and the SAME instanceId/pid on every line this
+    // process writes — two different process lifetimes are told apart by instanceId, never pid
+    // alone, since the OS reuses pids across restarts.
+    expect(lines[0]?.seq).toBe(1);
+    expect(lines[1]?.seq).toBe(2);
+    expect(lines[1]?.instanceId).toBe(lines[0]?.instanceId);
+    expect(lines[1]?.pid).toBe(lines[0]?.pid);
+  });
+
+  // The reserved-field defense-in-depth this envelope depends on: `RESERVED_FIELD_NAMES` in
+  // `log-redaction.ts` strips a same-named `extra` key before the real identity is ever applied, so
+  // a caller (or a hostile upstream value merged into `extra`) cannot make its own line look like a
+  // different process or a different position in the sequence.
+  it("never lets extra spoof schemaVersion, pid, instanceId or seq", () => {
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({
+      category: "http",
+      op: "spoof-attempt",
+      extra: { schemaVersion: 999, pid: -1, instanceId: "deadbeef", seq: 999_999, keep: 1 },
+    });
+    const lines = readLines(stateDir);
+
+    expect(lines[0]).toMatchObject({
+      schemaVersion: SERVER_LOG_SCHEMA_VERSION,
+      pid: process.pid,
+      seq: 1,
+      keep: 1,
+    });
+    expect(lines[0]?.instanceId).toBe(serverLogInstanceId());
+    expect(lines[0]?.pid).not.toBe(-1);
+    expect(lines[0]?.instanceId).not.toBe("deadbeef");
+    expect(lines[0]?.seq).not.toBe(999_999);
+  });
+
+  // Envelope v2 widens the category union to include process-lifecycle lines; this proves the sink
+  // actually accepts and persists the new member rather than only the type system allowing it.
+  it("accepts the process category alongside every existing one", () => {
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "process", op: "process.started" });
+    expect(readLines(stateDir)[0]).toMatchObject({ category: "process", op: "process.started" });
   });
 
   it("stamps every line with a level, defaulting to info", () => {
@@ -611,9 +668,25 @@ describe("server activity log burst cost", () => {
     sink.close?.();
     expect(fsCalls.close).toBe(1);
 
-    // Linear output, not quadratic: the file is exactly N identical lines and nothing else.
-    const lineBytes = serverLogLineBytes(formatServerLogLine(event));
-    expect(statSync(join(stateDir, "logs", "server.log")).size).toBe(lineBytes * BURST_EVENT_COUNT);
+    // Linear output, not quadratic — but lines are no longer byte-identical now that the envelope
+    // carries `seq`: its digit width grows at each power-of-ten boundary the burst crosses
+    // (9 -> 10, 99 -> 100, 999 -> 1000), so the total is the SUM of each line's own width rather
+    // than one width times the count. Summing through the production formatter itself — not
+    // re-deriving its byte math here — is what keeps this pin honest: a future change to what the
+    // identity envelope carries shows up here automatically, the same way the single-width version
+    // did before `seq` existed.
+    let expectedBytes = 0;
+    for (let seq = 1; seq <= BURST_EVENT_COUNT; seq += 1) {
+      expectedBytes += serverLogLineBytes(
+        formatServerLogLine(event, undefined, {
+          schemaVersion: SERVER_LOG_SCHEMA_VERSION,
+          pid: process.pid,
+          instanceId: serverLogInstanceId(),
+          seq,
+        }),
+      );
+    }
+    expect(statSync(join(stateDir, "logs", "server.log")).size).toBe(expectedBytes);
     expect(readLines(stateDir)).toHaveLength(BURST_EVENT_COUNT);
   });
 

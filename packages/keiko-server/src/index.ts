@@ -374,15 +374,42 @@ export {
   mintLauncherPairingAttestation,
 } from "./coding-app-session/launcherSessionPairingPort.js";
 
-// ADR-0018 D8 (observability): file-backed activity log sink for the BFF. The CLI wires it into
-// createUiServer so every HTTP request produces one JSON line in `<stateDir>/logs/server.log`,
-// giving operators diagnosable evidence without an env-var opt-in.
+// ADR-0173 (server activity log v2): file-backed activity log sink for the BFF. The CLI wires it
+// into createUiServer so every HTTP request produces one JSON line in `<stateDir>/logs/server.log`,
+// giving operators diagnosable evidence without an env-var opt-in. The additional names below
+// (envelope identity/schema helpers, the log-level threshold resolver and its env constants, and
+// the category/level/threshold types) are exported for `keiko-cli`'s process-lifecycle logging
+// (`ui.ts`) and its support-bundle exporter (`support-export.ts`), which previously had to mirror
+// this package's log-level resolution and shutdown-close logic locally instead of reusing it.
 // `createBufferedServerLogSink` is deliberately absent: it is a test-only helper, every consumer
 // is an in-package test importing it from `./observability/index.js`, and a packaged export is a
 // promise this package would then have to keep.
 export {
   createFileServerLogSink,
   nullServerLogSink,
+  closeFileServerLogSinks,
+  serverLogInstanceId,
+  SERVER_LOG_SCHEMA_VERSION,
+  resolveServerLogThreshold,
+  SERVER_LOG_LEVEL_ENV,
+  DEFAULT_SERVER_LOG_LEVEL,
   type ServerLogSink,
   type ServerLogEvent,
+  type ServerLogCategory,
+  type ServerLogLevel,
+  type ServerLogThreshold,
 } from "./observability/server-log.js";
+
+// Install-mode detection for `keiko-cli`'s process-lifecycle (`process.started`) and
+// support-bundle manifest fields. `detectUpdateInstallMode`/`productionUpdateFacts` are exported
+// rather than `detectPortableUpdateInstallMode` (the narrower portable-only branch in
+// `./update-portable-install-mode.js`): the portable detector returns `undefined` for every
+// non-portable install, which is the common case, so it cannot answer "which install mode is this
+// process running in" on its own. `detectUpdateInstallMode` calls the portable detector internally
+// and falls through to package-manager detection, so it is the one call that always answers the
+// question. Both functions run synchronously, take no lock, and are the exact pair
+// `UpdateSessionManagerImpl.getStatus()` already calls under the hood (`defaultDetectorFor` in
+// `./update-session-support.js`) — exporting them lets a caller that only wants the install mode
+// (not the full update-session machinery: locks, run history, command execution) skip
+// constructing an `UpdateSessionManager` entirely.
+export { detectUpdateInstallMode, productionUpdateFacts } from "./update-install-mode.js";

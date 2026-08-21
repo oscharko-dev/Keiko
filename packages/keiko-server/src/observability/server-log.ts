@@ -17,14 +17,17 @@
 // The cost is bounded and pinned by COUNTING, not by timing. The sink holds ONE append-mode
 // descriptor open for the life of the file, so a line costs a single `write(2)` rather than the
 // open/write/close triple `appendFileSync` pays per call. `server-log.test.ts` asserts exactly
-// that over a burst — one `openSync`, one `writeSync` per line, and a file whose size is N times
-// one line — so a regression to per-write open/close, or to a quadratic format path, fails the
-// suite deterministically instead of showing up as latency in production. A wall-clock budget
-// would measure the runner's disk instead, and go red on a diff that never touched this file.
+// that over a burst — one `openSync`, one `writeSync` per line, and a file whose size is the SUM of
+// each line's own byte length (lines are no longer byte-identical once `seq` is in the envelope: its
+// digit width grows at each power-of-ten boundary the burst crosses) — so a regression to per-write
+// open/close, or to a quadratic format path, fails the suite deterministically instead of showing up
+// as latency in production. A wall-clock budget would measure the runner's disk instead, and go red
+// on a diff that never touched this file.
 //
 // Levels are the volume control instead: an event below the configured threshold returns before
 // any string or JSON work happens at all (`KEIKO_LOG_LEVEL`, default `info`).
 
+import { randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -70,6 +73,8 @@ export {
   REDACTED_SECRET,
   REDACTED_SHAPE,
   DROPPED_DEPTH,
+  DROPPED_LENGTH,
+  closeReasonVocabulary,
   isDeniedLogFieldName,
   normalizeLogFieldName,
   redactLogFields,
@@ -79,9 +84,19 @@ export {
 export { redactRoutePath } from "./route-template.js";
 
 // Coarse routing label. Kept a closed union so a typo cannot invent a category an operator's
-// grep will never find; `memory` was added for the vault/retrieval surface.
+// grep will never find; `memory` was added for the vault/retrieval surface, `process` for the
+// process-lifecycle lines (`process.started`/`process.heartbeat`/`process.exiting`) envelope v2
+// adds.
 export type ServerLogCategory =
-  "http" | "gateway" | "embedding" | "indexing" | "setup" | "search" | "memory" | "diagnostic";
+  | "http"
+  | "gateway"
+  | "embedding"
+  | "indexing"
+  | "setup"
+  | "search"
+  | "memory"
+  | "diagnostic"
+  | "process";
 
 export interface ServerLogEvent {
   // Omitted means `info`. An event below the sink threshold costs nothing.
@@ -93,6 +108,34 @@ export interface ServerLogEvent {
   readonly status?: number | undefined;
   readonly errorKind?: string | undefined;
   readonly extra?: Readonly<Record<string, unknown>> | undefined;
+}
+
+// Bumped only on a breaking change to the line FORMAT (a reserved field renamed, removed, or
+// retyped) — never on an additive change, which is what every wave of this schema so far has been.
+export const SERVER_LOG_SCHEMA_VERSION = 2;
+
+// One instance id per process, computed once from a single `randomUUID()` call so every line this
+// process ever writes carries the SAME value. A pid alone is not a process-identity key: the OS
+// reuses pids across restarts, so two different process lifetimes can share one in a rotated
+// multi-day file. `pid` + `instanceId` together, never `pid` alone, is what an agent joins on.
+const INSTANCE_ID = randomUUID().replaceAll("-", "").slice(0, 8);
+
+// Exposed so a future consumer (the CLI's support-bundle manifest) can name the same instance the
+// running process is stamping onto its own lines, without recomputing or guessing at the value.
+export function serverLogInstanceId(): string {
+  return INSTANCE_ID;
+}
+
+// The four fields the sink stamps once, at the physical write boundary — never left to a caller,
+// and never spoofable through `extra` (see `RESERVED_FIELD_NAMES` in `log-redaction.ts`). Bundled
+// as one optional parameter on `formatServerLogLine` rather than four, because a caller either
+// wants the full process/sequence identity or none of it: the file sink always passes one, and the
+// in-memory buffered test sink is free to omit it entirely.
+export interface ServerLogIdentity {
+  readonly schemaVersion: number;
+  readonly pid: number;
+  readonly instanceId: string;
+  readonly seq: number;
 }
 
 export interface ServerLogSink {
@@ -234,17 +277,30 @@ function applyEnvelopeFields(record: Record<string, unknown>, event: ServerLogEv
   if (event.errorKind !== undefined) record.errorKind = redactLogLabel(event.errorKind);
 }
 
-// `ts`, `level`, `category` and `op` are written first and are reserved inside `redactLogFields`,
-// so `extra` cannot spoof the identity of a line. The remaining envelope fields are applied AFTER
-// `extra` so an explicit `durationMs`/`status`/`errorKind` on the event wins, while an
-// instrumentation site that carries the same name in its field list still gets it logged.
-export function formatServerLogLine(event: ServerLogEvent, now: Date = new Date()): string {
-  const record: Record<string, unknown> = {
-    ts: now.toISOString(),
-    level: eventLevel(event),
-    category: event.category,
-    op: redactLogLabel(event.op),
-  };
+// `ts`, `schemaVersion`, `pid`, `instanceId`, `seq`, `level`, `category` and `op` are written first
+// and are reserved inside `redactLogFields`, so `extra` cannot spoof the identity of a line. The
+// remaining envelope fields are applied AFTER `extra` so an explicit `durationMs`/`status`/
+// `errorKind` on the event wins, while an instrumentation site that carries the same name in its
+// field list still gets it logged.
+//
+// `identity` is optional so the in-memory buffered sink (tests only) can format a line without a
+// process/sequence context; the file sink below always supplies one, so every line that actually
+// reaches disk carries the full v2 envelope.
+export function formatServerLogLine(
+  event: ServerLogEvent,
+  now: Date = new Date(),
+  identity?: ServerLogIdentity,
+): string {
+  const record: Record<string, unknown> = { ts: now.toISOString() };
+  if (identity !== undefined) {
+    record.schemaVersion = identity.schemaVersion;
+    record.pid = identity.pid;
+    record.instanceId = identity.instanceId;
+    record.seq = identity.seq;
+  }
+  record.level = eventLevel(event);
+  record.category = event.category;
+  record.op = redactLogLabel(event.op);
   const extra = redactLogFields(event.extra);
   if (extra !== undefined) Object.assign(record, extra);
   applyEnvelopeFields(record, event);
@@ -271,14 +327,18 @@ export function serverLogLineWithinCap(line: string): boolean {
 }
 
 function oversizedLine(record: Record<string, unknown>, lineBytes: number): string {
-  const replacement = {
-    ts: record.ts,
-    level: record.level,
-    category: record.category,
-    op: record.op,
-    errorKind: "log-line-oversized",
-    droppedLineBytes: lineBytes,
-  };
+  // The identity fields ride along when present: an agent joining lines by (pid, instanceId, seq)
+  // must not see a gap in that join key just because the ORIGINAL event happened to be oversized.
+  const replacement: Record<string, unknown> = { ts: record.ts };
+  if (record.schemaVersion !== undefined) replacement.schemaVersion = record.schemaVersion;
+  if (record.pid !== undefined) replacement.pid = record.pid;
+  if (record.instanceId !== undefined) replacement.instanceId = record.instanceId;
+  if (record.seq !== undefined) replacement.seq = record.seq;
+  replacement.level = record.level;
+  replacement.category = record.category;
+  replacement.op = record.op;
+  replacement.errorKind = "log-line-oversized";
+  replacement.droppedLineBytes = lineBytes;
   return `${JSON.stringify(replacement)}\n`;
 }
 
@@ -302,6 +362,15 @@ interface ActiveLog {
   // stalled mid-line is remembered: the file ends mid-record and the next record must open with a
   // newline. See `writeRecord`.
   pendingNewline: boolean;
+  // The next `seq` value this ActiveLog will stamp. Monotonic per resolved log directory, not per
+  // sink: every sink sharing this ActiveLog (see `resolveActiveLog`) advances the SAME counter, so
+  // two independent sinks on one file still produce one ordering instead of two interleaved ones.
+  // It advances once a line clears the level gate, whether or not the write that follows actually
+  // lands — a dropped write is still evidence that something happened at that point in the
+  // sequence, and a silently reused number would be worse than a gap. Survives day rotation
+  // (nothing in `rotateIfNeeded` touches it) and resets only when the process restarts, because the
+  // registry itself is process-wide, in-memory state.
+  nextSeq: number;
 }
 
 function todayUtc(now: Date = new Date()): string {
@@ -486,6 +555,7 @@ function resolveActiveLog(directory: string, retentionDays: number): ActiveLog {
     currentDay: todayUtc(),
     handle: null,
     pendingNewline: false,
+    nextSeq: 1,
   };
   activeLogs.set(key, created);
   return created;
@@ -527,7 +597,17 @@ function createFileSinkFacade(active: ActiveLog, threshold: ServerLogThreshold):
       if (!serverLogLevelEnabled(eventLevel(event), threshold)) return;
       try {
         rotateIfNeeded(active);
-        writeRecord(active, ensureHandle(active), formatServerLogLine(event));
+        // Claimed as soon as the event clears the gate, before the write is attempted: see the
+        // `nextSeq` field comment for why a dropped write must not roll this number back.
+        const seq = active.nextSeq;
+        active.nextSeq += 1;
+        const identity: ServerLogIdentity = {
+          schemaVersion: SERVER_LOG_SCHEMA_VERSION,
+          pid: process.pid,
+          instanceId: INSTANCE_ID,
+          seq,
+        };
+        writeRecord(active, ensureHandle(active), formatServerLogLine(event, undefined, identity));
       } catch (error) {
         // Writing must never take the server down; a full disk, a permission change or a file
         // removed under us drops the line and forces a reopen on the next write. It does NOT drop

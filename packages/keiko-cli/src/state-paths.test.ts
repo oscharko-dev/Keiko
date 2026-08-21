@@ -157,6 +157,7 @@ function seedRuntimeState(root: string): string {
   mkdirSync(join(stateDir, "evidence", "qi", "figma-snapshots", "run-1"), { recursive: true });
   mkdirSync(join(stateDir, "editor-hot-exit"), { recursive: true });
   mkdirSync(join(stateDir, "updates", "snapshots", "snap-1"), { recursive: true });
+  mkdirSync(join(stateDir, "logs"), { recursive: true });
   touch(join(stateDir, "ui.pid"));
   touch(join(stateDir, "ui.log"));
   touch(join(stateDir, "launcher-state.json"));
@@ -211,6 +212,8 @@ function seedRuntimeState(root: string): string {
   touch(join(stateDir, "updates", "runtime-state.json"));
   touch(join(stateDir, "updates", "update-audit.jsonl"));
   touch(join(stateDir, "updates", "snapshots", "snap-1", "manifest.json"));
+  touch(join(stateDir, "logs", "server.log"));
+  touch(join(stateDir, "logs", "server-2026-06-20.log"));
   touch(join(stateDir, "user-notes.txt")); // a customer file — must be retained
   return stateDir;
 }
@@ -321,6 +324,9 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(categoryOf(scan, "updates/runtime-state.json")).toBe("update-recovery");
     expect(categoryOf(scan, "updates/update-audit.jsonl")).toBe("update-recovery");
     expect(categoryOf(scan, "updates/snapshots/snap-1/manifest.json")).toBe("update-recovery");
+    expect(categoryOf(scan, "logs")).toBe("activity-log");
+    expect(categoryOf(scan, "logs/server.log")).toBe("activity-log");
+    expect(categoryOf(scan, "logs/server-2026-06-20.log")).toBe("activity-log");
   });
 
   it("classifies quarantined .corrupt.<ts> database and sidecar copies as owned", () => {

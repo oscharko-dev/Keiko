@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DROPPED_DEPTH,
+  DROPPED_LENGTH,
   MAX_LOG_ARRAY_LENGTH,
   MAX_LOG_FIELD_COUNT,
   MAX_LOG_STRING_LENGTH,
@@ -11,6 +12,7 @@ import {
   REDACTED_PERSONAL,
   REDACTED_SECRET,
   REDACTED_SHAPE,
+  closeReasonVocabulary,
   isDeniedLogFieldName,
   normalizeLogFieldName,
   OPAQUE_TOKEN_RUN_LENGTH,
@@ -89,15 +91,25 @@ describe("log field redaction", () => {
   });
 
   it("never lets an extra field spoof the identity of a line", () => {
-    // ts/level/category/op are what every operator query keys on and are reserved outright.
-    // status is not reserved — an instrumentation site legitimately carries it as a field, and
-    // the formatter applies the envelope after `extra` so an explicit envelope value still wins.
+    // ts/level/category/op are what every operator query keys on and are reserved outright, and
+    // envelope v2 (#2902) adds the process/sequence identity to that reserved set: schemaVersion,
+    // pid, instanceId and seq are stamped once by the sink itself, so an `extra.pid`/`extra.seq`/
+    // `extra.schemaVersion`/`extra.instanceId` planted by a caller (or by a hostile value merged
+    // into `extra`) must be dropped before the real identity is ever applied — never merely
+    // overridden by it, which would still leave the spoofed key in the record if the real value
+    // were absent. status is not reserved — an instrumentation site legitimately carries it as a
+    // field, and the formatter applies the envelope after `extra` so an explicit envelope value
+    // still wins.
     expect(
       redactLogFields({
         ts: "1970",
         level: "debug",
         category: "http",
         op: "spoof",
+        schemaVersion: 999,
+        pid: 1,
+        instanceId: "deadbeef",
+        seq: 999_999,
         status: 200,
         keep: 1,
       }),
@@ -311,16 +323,44 @@ describe("log field redaction", () => {
       a: { b: { c: { d: DROPPED_DEPTH } } },
     });
 
+    // 16 real elements survive, plus one bounded marker proving the bound actually fired — 17
+    // total, never merely "at most 16", so a reconstructing agent can tell a truncated list from a
+    // list that genuinely only had 16 entries.
     const wide = redactLogFields({
       list: Array.from({ length: MAX_LOG_ARRAY_LENGTH + 5 }, (_unused, index) => index),
     });
-    expect(wide?.list).toHaveLength(MAX_LOG_ARRAY_LENGTH);
+    expect(wide?.list).toHaveLength(MAX_LOG_ARRAY_LENGTH + 1);
+    expect((wide?.list as unknown[]).slice(0, MAX_LOG_ARRAY_LENGTH)).toStrictEqual(
+      Array.from({ length: MAX_LOG_ARRAY_LENGTH }, (_unused, index) => index),
+    );
+    expect((wide?.list as unknown[]).at(-1)).toBe(DROPPED_LENGTH);
 
+    // Exactly MAX_LOG_ARRAY_LENGTH elements is not a truncation: nothing was dropped, so no marker.
+    const exact = redactLogFields({
+      list: Array.from({ length: MAX_LOG_ARRAY_LENGTH }, (_unused, index) => index),
+    });
+    expect(exact?.list).toHaveLength(MAX_LOG_ARRAY_LENGTH);
+    expect((exact?.list as unknown[]).at(-1)).not.toBe(DROPPED_LENGTH);
+
+    // 48 accepted fields, plus one synthetic key proving the field-count bound fired — added AFTER
+    // the loop, so it is never itself subject to the count it reports on.
     const many: Record<string, unknown> = {};
     for (let index = 0; index < MAX_LOG_FIELD_COUNT + 10; index += 1) {
       many[`f${String(index)}`] = index;
     }
-    expect(Object.keys(redactLogFields(many) ?? {})).toHaveLength(MAX_LOG_FIELD_COUNT);
+    const truncated = redactLogFields(many) ?? {};
+    expect(Object.keys(truncated)).toHaveLength(MAX_LOG_FIELD_COUNT + 1);
+    expect(truncated._truncatedFieldCount).toBe(true);
+
+    // Exactly MAX_LOG_FIELD_COUNT fields is not a truncation: every field was accepted, so no
+    // synthetic key is added.
+    const exactlyMany: Record<string, unknown> = {};
+    for (let index = 0; index < MAX_LOG_FIELD_COUNT; index += 1) {
+      exactlyMany[`f${String(index)}`] = index;
+    }
+    const notTruncated = redactLogFields(exactlyMany) ?? {};
+    expect(Object.keys(notTruncated)).toHaveLength(MAX_LOG_FIELD_COUNT);
+    expect(notTruncated._truncatedFieldCount).toBeUndefined();
   });
 
   it("yields no fields for a non-object, an array or an empty object", () => {
@@ -409,6 +449,31 @@ describe("redaction cannot be defeated through extra", () => {
     // Unsupported types leave no trace at all rather than a marker.
     expect(fields.bytes).toBeUndefined();
     expect(fields.thrown).toBeUndefined();
+  });
+});
+
+// closeReasonVocabulary generalises the same "structural, not caller discipline" guard
+// KNOWN_CATEGORIES/readCategory already give categories to any closed-vocabulary array field
+// (#2902 g33) — a producer's own type is a compile-time promise, not a runtime one, so the log
+// layer closes the vocabulary again at the point that writes the value.
+describe("closeReasonVocabulary", () => {
+  const VOCAB = new Set(["chat", "embedding", "not-chat-capable"]);
+
+  it("passes a recognised value through unchanged", () => {
+    expect(closeReasonVocabulary(VOCAB, "chat", "unrecognised-mode")).toBe("chat");
+    expect(closeReasonVocabulary(VOCAB, "not-chat-capable", "unrecognised-mode")).toBe(
+      "not-chat-capable",
+    );
+  });
+
+  it("collapses anything outside the vocabulary to the caller's fallback", () => {
+    expect(closeReasonVocabulary(VOCAB, "vendor-private-mode", "unrecognised-mode")).toBe(
+      "unrecognised-mode",
+    );
+    // A short, space-free, credential-free string is exactly what would otherwise sail through
+    // every generic value guard untouched — this closure is the only thing that stops it.
+    expect(closeReasonVocabulary(VOCAB, "REALTIME", "unrecognised-mode")).toBe("unrecognised-mode");
+    expect(closeReasonVocabulary(VOCAB, "", "unrecognised-mode")).toBe("unrecognised-mode");
   });
 });
 
