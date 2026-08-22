@@ -392,6 +392,26 @@ describe("log field redaction", () => {
     expect(notTruncated._truncatedFieldCount).toBeUndefined();
   });
 
+  it("counts only eligible fields toward the cap, never a reserved or invalid name at the boundary", () => {
+    // Regression: the cap check used to run BEFORE the reserved-name and pattern filters, so an
+    // ineligible key sitting right at the boundary consumed the last counted slot, dropped a real
+    // accepted field, and reported a truncation that never actually happened.
+    const lastValidKey = `f${String(MAX_LOG_FIELD_COUNT - 1)}`;
+    const withReservedTail = { ...fieldsOf(MAX_LOG_FIELD_COUNT), seq: 999 };
+    const reservedResult = redactLogFields(withReservedTail) ?? {};
+    expect(Object.keys(reservedResult)).toHaveLength(MAX_LOG_FIELD_COUNT);
+    expect(reservedResult._truncatedFieldCount).toBeUndefined();
+    // The last accepted field must have survived, not been evicted to make room for `seq`.
+    expect(reservedResult[lastValidKey]).toBe(MAX_LOG_FIELD_COUNT - 1);
+    expect(reservedResult.seq).toBeUndefined();
+
+    const withInvalidTail = { ...fieldsOf(MAX_LOG_FIELD_COUNT), "bad name!": 1 };
+    const invalidResult = redactLogFields(withInvalidTail) ?? {};
+    expect(Object.keys(invalidResult)).toHaveLength(MAX_LOG_FIELD_COUNT);
+    expect(invalidResult._truncatedFieldCount).toBeUndefined();
+    expect(invalidResult[lastValidKey]).toBe(MAX_LOG_FIELD_COUNT - 1);
+  });
+
   it("yields no fields for a non-object, an array or an empty object", () => {
     expect(redactLogFields(undefined)).toBeUndefined();
     expect(redactLogFields(null)).toBeUndefined();

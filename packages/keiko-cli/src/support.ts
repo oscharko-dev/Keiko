@@ -33,10 +33,12 @@ import {
   buildSupportBundleManifest,
   bundleText,
   DEFAULT_MAX_BUNDLE_BYTES,
+  describeErrorKind,
   discoverServerLogFiles,
   readKeptFiles,
   selectLogFilesWithinBudget,
   serializeBundleLines,
+  type SkippedLogFile,
 } from "./support-export.js";
 
 const USAGE = `Usage:
@@ -220,7 +222,7 @@ interface LogContent {
   readonly contentLines: readonly string[];
   readonly sourceLogFiles: readonly string[];
   readonly truncatedLogFiles: readonly string[];
-  readonly skippedLogFiles: readonly string[];
+  readonly skippedLogFiles: readonly SkippedLogFile[];
 }
 
 // Discovers, budget-selects, and reads the state dir's server*.log files in one pass, tolerating
@@ -233,7 +235,7 @@ function collectLogContent(logsDir: string, maxBytes: number): LogContent {
   const discovery = discoverServerLogFiles(logsDir);
   const selection = selectLogFilesWithinBudget(discovery.files, maxBytes);
   const read = readKeptFiles(selection.kept);
-  const readSkipped = new Set(read.skippedLogFiles);
+  const readSkipped = new Set(read.skippedLogFiles.map((skipped) => skipped.name));
   const sourceLogFiles = selection.kept
     .map((file) => file.name)
     .filter((name) => !readSkipped.has(name));
@@ -246,14 +248,16 @@ function collectLogContent(logsDir: string, maxBytes: number): LogContent {
 }
 
 // Content-free, same discipline as readAnalyzeSource: an fs error's message can quote the path it
-// was writing (AGENTS.md §7). Returns undefined on success, an exit code on failure.
+// was writing (AGENTS.md §7). Reports `describeErrorKind`'s result — the fs error's own `code`
+// (ENOENT/EACCES/EROFS) when it has one, since a Node fs error is always a plain `Error` and
+// `error.constructor.name` is therefore always just `"Error"`, telling an operator nothing the
+// generic prefix didn't already say. Returns undefined on success, an exit code on failure.
 function writeBundleOrExitCode(outPath: string, contents: string, io: CliIo): number | undefined {
   try {
     writeFileSync(outPath, contents, "utf8");
     return undefined;
   } catch (error) {
-    const kind = error instanceof Error ? error.constructor.name : "Error";
-    io.err(`keiko support export: could not write the bundle: ${kind}\n`);
+    io.err(`keiko support export: could not write the bundle: ${describeErrorKind(error)}\n`);
     return 1;
   }
 }

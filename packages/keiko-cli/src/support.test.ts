@@ -343,8 +343,9 @@ describe("runSupportCli export", () => {
     );
 
     expect(code).toBe(1);
-    expect(c.err()).toContain("keiko support export: could not write the bundle");
-    expect(c.err()).not.toContain("ENOENT:");
+    // The fs error's `code` (ENOENT here — the parent directory does not exist), never its
+    // `constructor.name` (always just "Error" for a Node fs error, so it told an operator nothing).
+    expect(c.err()).toContain("keiko support export: could not write the bundle: ENOENT");
     expect(c.err()).not.toContain(badOutPath);
     expect(existsSync(badOutPath)).toBe(false);
   });

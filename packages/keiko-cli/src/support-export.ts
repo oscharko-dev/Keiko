@@ -36,16 +36,44 @@ export interface LogFileInfo {
   readonly sizeBytes: number;
 }
 
+// A file the export skipped instead of failing for: `name` is relative only (never the absolute
+// path an fs error's own message can quote, AGENTS.md §7), and `errorKind` is the one diagnosable
+// fact about why — the fs error's `code` (ENOENT, EACCES, EISDIR, EMFILE, …) when it has one, else
+// its constructor name. Recording nothing here (as the previous string[] shape did) turned every
+// skip into "rotation pruned this file", even when the real cause was a permission error or a
+// directory sitting where a log file was expected — a wrong diagnosis for an operator reading the
+// bundle.
+export interface SkippedLogFile {
+  readonly name: string;
+  readonly errorKind: string;
+}
+
+const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]*$/;
+
+// Identifies an unknown error for redacted diagnostics without ever surfacing its `message` (which
+// an fs error uses to quote the absolute path it failed on, AGENTS.md §7): Node's own fs errors
+// set a short, all-caps `code` (ENOENT, EACCES, EISDIR, EMFILE, EROFS, …); anything else — no
+// `code` at all, or a `code` that is not shaped like one of those short identifiers — falls back to
+// the error's own constructor name.
+export function describeErrorKind(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (typeof code === "string" && ERROR_CODE_PATTERN.test(code)) return code;
+  return error instanceof Error ? error.constructor.name : "Error";
+}
+
 // The sink prunes rotated files on its own retention schedule, so a name `readdirSync` just
 // returned can already be gone by the time it is `stat`'d — a race, not a failed export. Returns
-// `undefined` so the caller can skip the entry (recorded by name only, never its absolute path)
-// and keep going.
-function toLogFileInfoOrUndefined(logsDir: string, name: string): LogFileInfo | undefined {
+// the skip (name plus the fs error's diagnosable kind — never its absolute path) so the caller can
+// record it and keep going; the export must never fail for one unreadable log file.
+function toLogFileInfoOrSkip(
+  logsDir: string,
+  name: string,
+): { readonly info: LogFileInfo } | { readonly skip: SkippedLogFile } {
   const path = join(logsDir, name);
   try {
-    return { name, path, sizeBytes: statSync(path).size };
-  } catch {
-    return undefined;
+    return { info: { name, path, sizeBytes: statSync(path).size } };
+  } catch (error) {
+    return { skip: { name, errorKind: describeErrorKind(error) } };
   }
 }
 
@@ -73,10 +101,11 @@ function sortedRotatedNames(names: readonly string[]): readonly string[] {
 
 export interface LogFileDiscovery {
   readonly files: readonly LogFileInfo[];
-  // Relative names only (never `LogFileInfo.path`, which is absolute) of entries `readdirSync`
-  // returned but that vanished before they could be `stat`'d — the sink's own rotation/retention
-  // pruning racing this scan. Named so it can be attested in the bundle manifest.
-  readonly skippedLogFiles: readonly string[];
+  // Entries `readdirSync` returned but that vanished before they could be `stat`'d — the sink's
+  // own rotation/retention pruning racing this scan — named (never `LogFileInfo.path`, which is
+  // absolute) alongside the fs error kind that caused the skip, so it can be attested in the
+  // bundle manifest and diagnosed by an operator.
+  readonly skippedLogFiles: readonly SkippedLogFile[];
 }
 
 // Lists the rotated + current server*.log files, oldest rotated file first, current file last —
@@ -94,13 +123,13 @@ export function discoverServerLogFiles(logsDir: string): LogFileDiscovery {
     ? [...sortedRotatedNames(names), CURRENT_LOG_FILE_NAME]
     : sortedRotatedNames(names);
   const files: LogFileInfo[] = [];
-  const skippedLogFiles: string[] = [];
+  const skippedLogFiles: SkippedLogFile[] = [];
   for (const name of ordered) {
-    const info = toLogFileInfoOrUndefined(logsDir, name);
-    if (info === undefined) {
-      skippedLogFiles.push(name);
+    const lookup = toLogFileInfoOrSkip(logsDir, name);
+    if ("info" in lookup) {
+      files.push(lookup.info);
     } else {
-      files.push(info);
+      skippedLogFiles.push(lookup.skip);
     }
   }
   return { files, skippedLogFiles };
@@ -145,35 +174,41 @@ export function readVerbatimLogLines(path: string): readonly string[] {
 
 // Same rotation race as `discoverServerLogFiles`, one step later: a name that survived the
 // `readdirSync`→`statSync` gap and was kept for the bundle can still vanish before its bytes are
-// actually read. `undefined` signals that race to the caller (distinct from the legitimate `[]`
-// an empty-but-present file produces) so the file is skipped, not aborted.
-function readVerbatimLogLinesOrUndefined(path: string): readonly string[] | undefined {
+// actually read. The `skip` branch signals that race to the caller (distinct from the legitimate
+// `lines: []` an empty-but-present file produces) — with the fs error's diagnosable kind — so the
+// file is skipped, not aborted.
+function readVerbatimLogLinesOrSkip(
+  path: string,
+): { readonly lines: readonly string[] } | { readonly skip: string } {
   try {
-    return readVerbatimLogLines(path);
-  } catch {
-    return undefined;
+    return { lines: readVerbatimLogLines(path) };
+  } catch (error) {
+    return { skip: describeErrorKind(error) };
   }
 }
 
 export interface ReadKeptFilesResult {
   readonly contentLines: readonly string[];
   // Relative names only, from `LogFileInfo.name` — never the absolute `LogFileInfo.path`.
-  readonly skippedLogFiles: readonly string[];
+  readonly skippedLogFiles: readonly SkippedLogFile[];
 }
 
 // Reads every kept log file's bytes verbatim, in file order, tolerating the same
 // discover-to-read rotation race `discoverServerLogFiles` guards against one step earlier. A file
 // that vanishes here contributes no lines and is skipped, not aborted — recorded by name so the
-// manifest can attest to it.
+// manifest can attest to it. Lines are appended one at a time rather than via
+// `contentLines.push(...fileLines)`: a spread of a large array as call arguments can throw
+// `RangeError: Maximum call stack size exceeded` (observed at ~262k elements on Node v24), and a
+// single oversized rotated log file must not abort the whole export.
 export function readKeptFiles(keptFiles: readonly LogFileInfo[]): ReadKeptFilesResult {
   const contentLines: string[] = [];
-  const skippedLogFiles: string[] = [];
+  const skippedLogFiles: SkippedLogFile[] = [];
   for (const file of keptFiles) {
-    const fileLines = readVerbatimLogLinesOrUndefined(file.path);
-    if (fileLines === undefined) {
-      skippedLogFiles.push(file.name);
+    const lookup = readVerbatimLogLinesOrSkip(file.path);
+    if ("lines" in lookup) {
+      for (const line of lookup.lines) contentLines.push(line);
     } else {
-      contentLines.push(...fileLines);
+      skippedLogFiles.push({ name: file.name, errorKind: lookup.skip });
     }
   }
   return { contentLines, skippedLogFiles };
@@ -208,11 +243,11 @@ export interface SupportBundleManifest {
   readonly redactionAttested: true;
   readonly sourceLogFiles: readonly string[];
   readonly truncatedLogFiles: readonly string[];
-  // Relative names only of files a directory listing named but that had vanished (the sink's own
-  // rotation/retention pruning) by the time this export tried to size or read them — never the
-  // files' absolute paths. Distinct from `truncatedLogFiles`: those were dropped on purpose for
-  // the size budget; these were simply gone.
-  readonly skippedLogFiles: readonly string[];
+  // Files a directory listing named but that had vanished (the sink's own rotation/retention
+  // pruning) by the time this export tried to size or read them — named (never the files'
+  // absolute paths) alongside the fs error kind that caused the skip. Distinct from
+  // `truncatedLogFiles`: those were dropped on purpose for the size budget; these were simply gone.
+  readonly skippedLogFiles: readonly SkippedLogFile[];
   // Always empty in this minimal version: ui.log gating and evidence/config-snapshot sections are
   // Wave 6 features, so nothing is yet excluded that this manifest could name.
   readonly sectionsExcluded: readonly string[];
@@ -242,7 +277,7 @@ export interface ManifestInput {
   readonly stateDirSource: "default" | "env-override";
   readonly sourceLogFiles: readonly string[];
   readonly truncatedLogFiles: readonly string[];
-  readonly skippedLogFiles: readonly string[];
+  readonly skippedLogFiles: readonly SkippedLogFile[];
   readonly auditSummary: AuditResult;
   readonly evidenceIndexCount: number;
 }

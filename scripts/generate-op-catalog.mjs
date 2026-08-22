@@ -519,18 +519,38 @@ const TYPE_LIKE_IDENTIFIER = /^[A-Z]\w*$/;
 // strings coerced to `NaN`, which nothing in this codebase writes or would want).
 const STRING_LITERAL_UNION = /^"[^"\\]*"(\s*\|\s*"[^"\\]*")+$/;
 
+const CLOSE_PAREN_STOP = (ch) => ch === ")";
+
+// True when `value` — which the caller has already confirmed starts with `(` — is a function
+// type such as `(x: string) => void`, including one broken across multiple lines with its own
+// trailing comma. Finds the paren that MATCHES value's own opening one with the same depth- and
+// string-aware scan the rest of this file already uses (`scanBalanced`) — starting just past that
+// opening paren so it is never counted itself, depth returns to zero exactly at the match — rather
+// than a regex, so a parenthesized RUNTIME value that merely starts with `(`, e.g.
+// `op: (flag ? "a" : "b")` or `op: (await resolve()).name`, is correctly told apart from a
+// function type: only a top-level `=>` immediately after the MATCHING close paren counts. Anything
+// else falls through to `resolveLiteralValues`, which reports it `<dynamic>` instead of silently
+// dropping the site.
+function isParenthesizedFunctionType(value) {
+  const closeIndex = scanBalanced(value, 1, CLOSE_PAREN_STOP);
+  if (closeIndex >= value.length) return false;
+  return value
+    .slice(closeIndex + 1)
+    .trimStart()
+    .startsWith("=>");
+}
+
 // True when `value` can only be naming a TypeScript type, never a runtime `op` value: the plain
-// annotation text this generator has always recognized, a function type (`(...) => ...`, which
-// `closesOverDeclaration` catches only when it is the WHOLE parameter list — this also catches one
-// broken across multiple lines with its own trailing comma), a union of quoted string-literal
-// types, or a bare PascalCase identifier that is not one of this file's collected
-// UPPER_SNAKE_CASE constants — a type reference such as `OpName` or `LogOp`. A genuine runtime
-// forward always reads a dotted expression (`record.operation`, `event.op`) or one of those
-// all-caps constants, never a bare PascalCase name, so this never mistakes a real dynamic site for
-// a declaration.
+// annotation text this generator has always recognized, a function type (see
+// `isParenthesizedFunctionType` — `closesOverDeclaration` catches the common case only when it is
+// the WHOLE parameter list), a union of quoted string-literal types, or a bare PascalCase
+// identifier that is not one of this file's collected UPPER_SNAKE_CASE constants — a type
+// reference such as `OpName` or `LogOp`. A genuine runtime forward always reads a dotted
+// expression (`record.operation`, `event.op`) or one of those all-caps constants, never a bare
+// PascalCase name, so this never mistakes a real dynamic site for a declaration.
 function isTypeAnnotationValue(value, constMap) {
   if (value === "string" || value === "string | undefined") return true;
-  if (value.startsWith("(")) return true;
+  if (value.startsWith("(") && isParenthesizedFunctionType(value)) return true;
   if (STRING_LITERAL_UNION.test(value)) return true;
   return TYPE_LIKE_IDENTIFIER.test(value) && !constMap.has(value);
 }

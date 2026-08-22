@@ -204,8 +204,16 @@ export interface ServerLogFailureContext {
 const failureNotice = { lastAt: null as number | null, suppressed: 0 };
 
 // Tests reset this so one suite's notice cannot silence the next suite's assertion; the server
-// resets it on shutdown for the same reason.
+// resets it on shutdown for the same reason. Either caller is clearing `suppressed` — a count that
+// otherwise only ever surfaces on the NEXT unthrottled failure — so a suppressed count sitting here
+// when the reset runs is flushed to stderr first: without this, a clean shutdown (or a suite that
+// never sees another failure) would clear the counter with nothing ever having reported it, and
+// `reportServerLogFailure`'s "suppressed notices are counted and reported on the next one" promise
+// would be broken for whatever window was still open.
 export function resetServerLogFailureNotices(): void {
+  if (failureNotice.suppressed > 0) {
+    emitShutdownFlushNotice(failureNotice.suppressed, Date.now());
+  }
   failureNotice.lastAt = null;
   failureNotice.suppressed = 0;
 }
@@ -234,6 +242,16 @@ export function reportServerLogFailure(
   emitFailureNotice(error, context, suppressed, now);
 }
 
+// Shared by every stderr notice this module emits: a diagnostic that cannot itself be delivered
+// must not fail the operation (or the shutdown) it was describing. There is no third channel.
+function writeStderrNotice(notice: Record<string, unknown>): void {
+  try {
+    process.stderr.write(`${JSON.stringify(notice)}\n`);
+  } catch {
+    // Nothing left to report to; swallow.
+  }
+}
+
 function emitFailureNotice(
   error: unknown,
   context: ServerLogFailureContext,
@@ -252,12 +270,28 @@ function emitFailureNotice(
     notice.correlationId = redactLogLabel(context.correlationId);
   }
   if (suppressed > 0) notice.suppressedNotices = suppressed;
-  try {
-    process.stderr.write(`${JSON.stringify(notice)}\n`);
-  } catch {
-    // There is no third channel. A diagnostic that cannot be delivered must not fail the
-    // operation it was describing.
-  }
+  writeStderrNotice(notice);
+}
+
+// The last-resort flush: whatever `suppressed` count was still sitting unreported when the notice
+// state was reset (a clean process shutdown, or a suite boundary) is announced here, ONCE, before
+// `resetServerLogFailureNotices` clears it. This has the same body-free shape as a throttled
+// failure notice, plus `reason` so a reader can tell "reported because another failure arrived"
+// from "reported because the counter was about to be cleared with nothing else coming."
+//
+// This still cannot promise EXACT accounting across every possible exit: a hard kill (SIGKILL,
+// power loss, or any crash the process never gets to handle) skips this flush entirely, same as it
+// skips every other cleanup path. The `seq` gap for such a window still marks that a write failed;
+// only the count of how many is not recoverable after that kind of exit.
+function emitShutdownFlushNotice(suppressed: number, now: number): void {
+  writeStderrNotice({
+    ts: new Date(now).toISOString(),
+    level: "error",
+    category: "diagnostic",
+    op: LOG_FAILURE_NOTICE_OP,
+    reason: "shutdown-flush",
+    suppressedNotices: suppressed,
+  });
 }
 
 function eventLevel(event: ServerLogEvent): ServerLogLevel {

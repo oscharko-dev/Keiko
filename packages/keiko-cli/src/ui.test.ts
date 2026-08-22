@@ -1373,13 +1373,17 @@ describe("waitForShutdown", () => {
     it("does nothing and never warns when no activity log was supplied and onShutdown succeeds", async () => {
       await withIsolatedSignalListeners(async () => {
         const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
-        const { server } = fakeClosingServer();
-        const onShutdown = vi.fn();
-        const promise = waitForShutdown(server, 3_000, { onShutdown });
-        process.emit("SIGINT");
-        await expect(promise).resolves.toBeUndefined();
-        expect(onShutdown).toHaveBeenCalledTimes(1);
-        expect(warn).not.toHaveBeenCalled();
+        try {
+          const { server } = fakeClosingServer();
+          const onShutdown = vi.fn();
+          const promise = waitForShutdown(server, 3_000, { onShutdown });
+          process.emit("SIGINT");
+          await expect(promise).resolves.toBeUndefined();
+          expect(onShutdown).toHaveBeenCalledTimes(1);
+          expect(warn).not.toHaveBeenCalled();
+        } finally {
+          warn.mockRestore();
+        }
       });
     });
 
@@ -1390,23 +1394,41 @@ describe("waitForShutdown", () => {
     it("warns via process.emitWarning when onShutdown throws and no activity log is in scope", async () => {
       await withIsolatedSignalListeners(async () => {
         const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
-        const { server } = fakeClosingServer();
-        const onShutdown = vi.fn(() => {
-          throw new Error("heartbeat teardown boom");
-        });
-        const promise = waitForShutdown(server, 3_000, { onShutdown });
-        process.emit("SIGINT");
-        await expect(promise).resolves.toBeUndefined();
-        expect(onShutdown).toHaveBeenCalledTimes(1);
-        expect(warn).toHaveBeenCalledTimes(1);
-        const calls: readonly (readonly unknown[])[] = warn.mock.calls;
-        expect(calls[0]?.[1]).toMatchObject({
-          code: "KEIKO_SHUTDOWN_HOOK_FAILED",
-          detail: "errorKind=Error",
-        });
-        // The class only — the raw message must never reach the warning (it is foreign free text).
-        expect(JSON.stringify(warn.mock.calls)).not.toContain("heartbeat teardown boom");
+        try {
+          const { server } = fakeClosingServer();
+          const onShutdown = vi.fn(() => {
+            throw new Error("heartbeat teardown boom");
+          });
+          const promise = waitForShutdown(server, 3_000, { onShutdown });
+          process.emit("SIGINT");
+          await expect(promise).resolves.toBeUndefined();
+          expect(onShutdown).toHaveBeenCalledTimes(1);
+          expect(warn).toHaveBeenCalledTimes(1);
+          const calls: readonly (readonly unknown[])[] = warn.mock.calls;
+          expect(calls[0]?.[1]).toMatchObject({
+            code: "KEIKO_SHUTDOWN_HOOK_FAILED",
+            detail: "errorKind=Error",
+          });
+          // The class only — the raw message must never reach the warning (it is foreign free text).
+          expect(JSON.stringify(warn.mock.calls)).not.toContain("heartbeat teardown boom");
+        } finally {
+          warn.mockRestore();
+        }
       });
+    });
+
+    // Regression: this workspace's vitest config does not enable `restoreMocks`/`mockReset`, so a
+    // `vi.spyOn(process, "emitWarning")` left unrestored by either test above would leak into
+    // every later test in this file — not just the next one. Both tests above must restore the
+    // spy in a `finally` (so a failed assertion inside them cannot skip the restore) rather than
+    // rely on cleanup this project does not configure.
+    it("leaves no leaked process.emitWarning spy behind for later tests", () => {
+      // Read via the property descriptor, not `process.emitWarning` directly: the latter is a
+      // bound-`this` method reference (flagged by `@typescript-eslint/unbound-method` the moment
+      // it is used as a value rather than called), and this check only needs the current function
+      // value's identity, never to invoke it with `process` as `this`.
+      const emitWarning: unknown = Object.getOwnPropertyDescriptor(process, "emitWarning")?.value;
+      expect(vi.isMockFunction(emitWarning)).toBe(false);
     });
   });
 });

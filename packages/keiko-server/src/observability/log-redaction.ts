@@ -522,9 +522,12 @@ function collectAcceptedLogFields(
 ): AcceptedLogFields {
   const entries: (readonly [string, unknown])[] = [];
   for (const [name, fieldValue] of Object.entries(value)) {
-    if (entries.length >= MAX_LOG_FIELD_COUNT) return { entries, truncated: true };
+    // Ineligible names are filtered FIRST: the cap counts only fields that would actually be kept,
+    // so a reserved or pattern-invalid key sitting right at the boundary can never consume the last
+    // counted slot and falsely report a truncation that dropped a real, accepted field.
     if (reserved?.has(name) === true) continue;
     if (!FIELD_NAME_PATTERN.test(name)) continue;
+    if (entries.length >= MAX_LOG_FIELD_COUNT) return { entries, truncated: true };
     const redactedValue = isDeniedLogFieldName(name)
       ? REDACTED_KEY
       : redactLogValue(fieldValue, depth);

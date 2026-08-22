@@ -193,12 +193,27 @@ describe("op catalog drift", () => {
 
   // A type/interface/parameter declaration named `op` must be skipped entirely — no entry at all,
   // dynamic or otherwise — because it never carries a runtime value.
+  // Covers both new `isTypeAnnotationValue` branches this change added — a bare PascalCase type
+  // reference (`OpName`) and a quoted string-literal union (`"pull" | "put"`) — neither of which
+  // the pre-existing `op: string;`/`op: () => Promise<void>` cases below exercise. Both new
+  // members deliberately end WITHOUT a `;`, closing over their interface's own `}` instead: a
+  // `;`- or `)`-terminated member is already skipped by `closesOverDeclaration` regardless of
+  // `isTypeAnnotationValue`, so ending on `;`/`)` would let either new branch be silently deleted
+  // without ever failing this test.
   it("skips op type declarations without emitting a dynamic entry", () => {
     withFixturePackage(
       "zzz-fixture-type-declarations",
       [
         "interface FixtureEvent {",
         "  readonly op: string;",
+        "}",
+        "",
+        "interface FixtureTypedEvent {",
+        "  readonly op: OpName",
+        "}",
+        "",
+        "interface FixtureUnionEvent {",
+        '  readonly op: "pull" | "put"',
         "}",
         "",
         "function fixtureHelper(op: () => Promise<void>): void {",
@@ -215,6 +230,30 @@ describe("op catalog drift", () => {
         const fixtureEntries = catalog.entries.filter((entry) => entry.site.includes("fixture.ts"));
         expect(fixtureEntries).toHaveLength(1);
         expect(fixtureEntries[0]?.op).toBe("fixture.real.declaration-check");
+      },
+    );
+  });
+
+  // Regression: before this fix, `isTypeAnnotationValue`'s parenthesis branch matched ANY value
+  // starting with `(`, so a parenthesized RUNTIME value (not a function type) was skipped like a
+  // type annotation — no entry at all, not even `<dynamic>`. Requiring a top-level `=>` after the
+  // MATCHING close paren (found by depth, not a regex) narrows the branch to actual function
+  // types, so a parenthesized runtime expression now falls through to `resolveLiteralValues`
+  // (which cannot enumerate a ternary whose match is broken by the trailing `)`) and reports
+  // `<dynamic>` instead of silently vanishing from the catalog.
+  it("reports a parenthesized runtime value as dynamic instead of dropping it as a type", () => {
+    withFixturePackage(
+      "zzz-fixture-parenthesized-runtime-value",
+      [
+        "export function fixtureRuntimeParen(flag) {",
+        '  return { category: "custom", op: (flag ? "a" : "b") };',
+        "}",
+        "",
+      ].join("\n"),
+      (root) => {
+        const catalog = generateOpCatalog(root);
+        const fixtureEntries = catalog.entries.filter((entry) => entry.site.includes("fixture.ts"));
+        expect(fixtureEntries.map((entry) => entry.op)).toEqual(["<dynamic>"]);
       },
     );
   });

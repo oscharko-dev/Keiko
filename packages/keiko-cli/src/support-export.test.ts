@@ -10,6 +10,7 @@ import {
   buildSupportBundleManifest,
   CURRENT_LOG_FILE_NAME,
   DEFAULT_MAX_BUNDLE_BYTES,
+  describeErrorKind,
   discoverServerLogFiles,
   readKeptFiles,
   readVerbatimLogLines,
@@ -97,15 +98,18 @@ describe("discoverServerLogFiles", () => {
   // own rotation/retention pruning), one step earlier than the `readKeptFiles` race already pinned
   // above. Reproduced with a broken symlink — `readdirSync` lists its name, but `statSync` follows
   // it and throws ENOENT, a real race rather than a mock — so discovery must skip it (recording
-  // its name) instead of throwing out of the whole export.
-  it("skips a rotated file that vanishes between readdirSync and statSync, recording its name", () => {
+  // its name and the real fs error code, never a path) instead of throwing out of the whole
+  // export.
+  it("skips a rotated file that vanishes between readdirSync and statSync, recording its name and error kind", () => {
     writeFileSync(join(dir, "server-2026-08-19.log"), "a\n");
     symlinkSync(join(dir, "does-not-exist-target.log"), join(dir, "server-2026-08-20.log"));
 
     const discovery = discoverServerLogFiles(dir);
 
     expect(discovery.files.map((f) => f.name)).toEqual(["server-2026-08-19.log"]);
-    expect(discovery.skippedLogFiles).toEqual(["server-2026-08-20.log"]);
+    expect(discovery.skippedLogFiles).toEqual([
+      { name: "server-2026-08-20.log", errorKind: "ENOENT" },
+    ]);
   });
 });
 
@@ -218,9 +222,9 @@ describe("readKeptFiles", () => {
   // (the sink's own rotation/retention pruning) before its bytes are actually read — a real race
   // reproduced here by deleting it between the discovery/selection step and the read step, not by
   // mocking. Before the fix, `readFileSync` threw straight out of `serializeBundleLines`, aborting
-  // the whole export. After the fix, the vanished file is skipped and named, and the surviving
-  // file's content still comes through.
-  it("skips a kept file that vanishes between discovery and the read, recording its name", () => {
+  // the whole export. After the fix, the vanished file is skipped (named, with the real fs error
+  // code), and the surviving file's content still comes through.
+  it("skips a kept file that vanishes between discovery and the read, recording its name and error kind", () => {
     const survivingPath = join(dir, "server-2026-08-19.log");
     const vanishingPath = join(dir, CURRENT_LOG_FILE_NAME);
     writeFileSync(survivingPath, '{"ts":"a"}\n');
@@ -239,7 +243,51 @@ describe("readKeptFiles", () => {
     const result = readKeptFiles(selection.kept);
 
     expect(result.contentLines).toEqual(['{"ts":"a"}']);
-    expect(result.skippedLogFiles).toEqual([CURRENT_LOG_FILE_NAME]);
+    expect(result.skippedLogFiles).toEqual([{ name: CURRENT_LOG_FILE_NAME, errorKind: "ENOENT" }]);
+  });
+
+  // Regression for #2902 PR review: `contentLines.push(...fileLines)` spreads the entire file's
+  // lines as call arguments. A 50MB rotated file with short lines produces hundreds of thousands
+  // of them, and V8 throws `RangeError: Maximum call stack size exceeded` well before that —
+  // reproduced here with 300,000 short lines built directly as a string (never touching the real
+  // 50MB budget, so the test stays fast) rather than an element-wise push. Every line must survive
+  // the round trip, in order, with the exact count.
+  it("reads a very large kept file without throwing, returning every line in order", () => {
+    const lineCount = 300_000;
+    const path = join(dir, CURRENT_LOG_FILE_NAME);
+    const text = `${Array.from({ length: lineCount }, (_, i) => `line-${String(i)}`).join("\n")}\n`;
+    writeFileSync(path, text);
+
+    const result = readKeptFiles([{ name: CURRENT_LOG_FILE_NAME, path, sizeBytes: 0 }]);
+
+    expect(result.contentLines).toHaveLength(lineCount);
+    expect(result.contentLines[0]).toBe("line-0");
+    expect(result.contentLines.at(-1)).toBe(`line-${String(lineCount - 1)}`);
+    expect(result.skippedLogFiles).toEqual([]);
+  });
+});
+
+describe("describeErrorKind", () => {
+  it("reports the fs error's code when it has one, never the message or a path", () => {
+    const error = Object.assign(new Error("ENOENT: no such file or directory, open '/secret'"), {
+      code: "ENOENT",
+    });
+
+    expect(describeErrorKind(error)).toBe("ENOENT");
+  });
+
+  it("falls back to the error's constructor name when there is no code", () => {
+    expect(describeErrorKind(new TypeError("boom"))).toBe("TypeError");
+  });
+
+  it("falls back to the error's constructor name when code is not a short identifier", () => {
+    const error = Object.assign(new Error("boom"), { code: "/absolute/path/leak" });
+
+    expect(describeErrorKind(error)).toBe("Error");
+  });
+
+  it("falls back to the generic Error kind for a thrown non-Error value", () => {
+    expect(describeErrorKind("not an error")).toBe("Error");
   });
 });
 
@@ -249,7 +297,7 @@ describe("buildSupportBundleManifest", () => {
       baseManifestInput({
         sourceLogFiles: ["server-2026-08-20.log", "server.log"],
         truncatedLogFiles: ["server-2026-08-18.log"],
-        skippedLogFiles: ["server-2026-08-17.log"],
+        skippedLogFiles: [{ name: "server-2026-08-17.log", errorKind: "ENOENT" }],
         evidenceIndexCount: 3,
       }),
     );
@@ -268,7 +316,7 @@ describe("buildSupportBundleManifest", () => {
       redactionAttested: true,
       sourceLogFiles: ["server-2026-08-20.log", "server.log"],
       truncatedLogFiles: ["server-2026-08-18.log"],
-      skippedLogFiles: ["server-2026-08-17.log"],
+      skippedLogFiles: [{ name: "server-2026-08-17.log", errorKind: "ENOENT" }],
       sectionsExcluded: [],
       auditSummary: REDACTED_HEALTHY_AUDIT,
       evidenceIndexCount: 3,

@@ -21,13 +21,14 @@ import {
   createBufferedServerLogSink,
   createFileServerLogSink,
   formatServerLogLine,
+  reportServerLogFailure,
   resetServerLogFailureNotices,
   serverLogInstanceId,
   serverLogLineBytes,
   serverLogLineWithinCap,
 } from "./server-log.js";
 import type { ServerLogEvent } from "./server-log.js";
-import { getServerLogger, resetServerLogger } from "./server-logger.js";
+import { getServerLogger, resetServerLogger, shutdownServerLogging } from "./server-logger.js";
 
 // A line the file holds, or `null` when those bytes are not a parseable record. Used by the
 // short-write test, which is about exactly that distinction.
@@ -274,9 +275,16 @@ describe("server activity log", () => {
     // on its first call before a single byte lands, so — unlike the short-write test below, which
     // corrupts a partial record — this record leaves no bytes behind at all. `readRawRecords`
     // filters the resulting blank line, which is why it (not `readLines`) is used here.
+    //
+    // The restore runs in `finally` so this shared fixture cannot leak a nonzero budget into a
+    // later test if anything above throws before the plain reset would have run — belt-and-braces
+    // alongside the file's own unconditional `afterEach` reset.
     fsCalls.writeBudgetBytes = 0;
-    sink.write({ category: "http", op: "dropped" });
-    fsCalls.writeBudgetBytes = null;
+    try {
+      sink.write({ category: "http", op: "dropped" });
+    } finally {
+      fsCalls.writeBudgetBytes = null;
+    }
 
     sink.write({ category: "http", op: "after-failure" });
     const records = readRawRecords(stateDir);
@@ -411,14 +419,18 @@ describe("server activity log", () => {
     const sink = createFileServerLogSink(stateDir, { level: "debug" });
     sink.write({ category: "http", op: "first" });
     // The descriptor takes 10 bytes of the next line and then reports 0 — a short write that never
-    // completes. The bytes it accepted cannot be recalled.
+    // completes. The bytes it accepted cannot be recalled. Restored in `finally` so a failed
+    // assertion above cannot leave the shared fixture's budget mutated for a later test.
     fsCalls.writeBudgetBytes = 10;
-    expect(() => {
-      sink.write({ category: "http", op: "stalled" });
-    }).not.toThrow();
-    fsCalls.writeBudgetBytes = null;
-    fsCalls.linkErrorCode = null;
-    fsCalls.rename = 0;
+    try {
+      expect(() => {
+        sink.write({ category: "http", op: "stalled" });
+      }).not.toThrow();
+    } finally {
+      fsCalls.writeBudgetBytes = null;
+      fsCalls.linkErrorCode = null;
+      fsCalls.rename = 0;
+    }
     sink.write({ category: "http", op: "second" });
 
     const records = readRawRecords(stateDir);
@@ -434,11 +446,20 @@ describe("server activity log", () => {
   it("announces a write failure on stderr instead of dropping the line in silence", () => {
     const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     const sink = createFileServerLogSink(stateDir, { level: "debug" });
+    // Restored in `finally` so a failed assertion below cannot leave the shared fixture's budget
+    // mutated for a later test.
     fsCalls.writeBudgetBytes = 0;
-    sink.write({ category: "indexing", op: "indexing.document.persisted", correlationId: "job-7" });
-    fsCalls.writeBudgetBytes = null;
-    fsCalls.linkErrorCode = null;
-    fsCalls.rename = 0;
+    try {
+      sink.write({
+        category: "indexing",
+        op: "indexing.document.persisted",
+        correlationId: "job-7",
+      });
+    } finally {
+      fsCalls.writeBudgetBytes = null;
+      fsCalls.linkErrorCode = null;
+      fsCalls.rename = 0;
+    }
 
     expect(stderr).toHaveBeenCalledTimes(1);
     const notice = JSON.parse(String(stderr.mock.calls[0]?.[0])) as Record<string, unknown>;
@@ -451,6 +472,36 @@ describe("server activity log", () => {
     });
     // Body-free, exactly like a log line: a classification, never the thrown message.
     expect(String(stderr.mock.calls[0]?.[0])).not.toContain("accepted no bytes");
+  });
+
+  // Regression for ADR-0173 D2's accounting promise: a suppressed count otherwise surfaces only on
+  // the NEXT unthrottled failure. Without a shutdown flush, a count with no further failure to
+  // report it is silently lost the instant the notice state is cleared — exactly what a clean
+  // process shutdown does.
+  it("flushes an unreported suppressed count to stderr instead of losing it on shutdown", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T00:00:00Z"));
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+
+    reportServerLogFailure(new Error("first"), { op: "indexing.persist" });
+    expect(stderr).toHaveBeenCalledTimes(1);
+
+    // Inside the one-minute throttle window: counted, not emitted.
+    vi.setSystemTime(new Date("2026-08-21T00:00:10Z"));
+    reportServerLogFailure(new Error("second"), { op: "indexing.persist" });
+    expect(stderr).toHaveBeenCalledTimes(1);
+
+    shutdownServerLogging();
+
+    expect(stderr).toHaveBeenCalledTimes(2);
+    const flushNotice = JSON.parse(String(stderr.mock.calls[1]?.[0])) as Record<string, unknown>;
+    expect(flushNotice).toMatchObject({
+      level: "error",
+      category: "diagnostic",
+      op: "server-log.write-failed",
+      reason: "shutdown-flush",
+      suppressedNotices: 1,
+    });
   });
 
   it("closes the descriptor it holds and reopens on the next write", () => {

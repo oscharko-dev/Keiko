@@ -95,16 +95,26 @@ concurrently) each maintain their own `seq` counting from the same starting poin
 process A carrying `seq: 40` is not orderable against a line from process B carrying `seq: 40` by
 the tuple alone.
 
-**"Gap-free" means every claimed `seq` is accounted for, not that every claimed `seq` reaches disk.**
-A `seq` value is claimed in `createFileSinkFacade.write` — before the write it numbers is attempted —
-and is never rolled back if that write then throws; this is claim-before-write by design, not an
-oversight. Two callers racing the same failure must not both observe the same pre-failure counter
-value and then both claim the number that follows it, silently reusing a sequence number for two
-different lines — a missing number is the strictly safer failure than a repeated one. A gap in the
-`seq` sequence therefore marks a line the sink attempted to persist and could not, and is never
-silent: `reportServerLogFailure` emits a throttled, independent-channel stderr notice
-(`server-log.write-failed`) whose `suppressedNotices` count accounts for exactly the failed writes a
-gap represents, so the throttle hides the failure's *repetition*, never its *scale*.
+**"Gap-free" means every claimed `seq` is accounted for, not that every claimed `seq` reaches disk —
+and that accounting is delivered on the next notice or at shutdown, never guaranteed against every
+possible exit.** A `seq` value is claimed in `createFileSinkFacade.write` — before the write it
+numbers is attempted — and is never rolled back if that write then throws; this is claim-before-write
+by design, not an oversight. Two callers racing the same failure must not both observe the same
+pre-failure counter value and then both claim the number that follows it, silently reusing a sequence
+number for two different lines — a missing number is the strictly safer failure than a repeated one.
+A gap in the `seq` sequence therefore marks a line the sink attempted to persist and could not, and is
+not silently lost on a clean exit: `reportServerLogFailure` emits a throttled, independent-channel
+stderr notice (`server-log.write-failed`) whose `suppressedNotices` count accounts for the failed
+writes a gap represents, so the throttle hides the failure's *repetition*, never its *scale*. That
+count is delivered one of two ways — on the next unthrottled failure notice, or, if none arrives
+first, flushed once by `resetServerLogFailureNotices` (called on every clean shutdown via
+`shutdownServerLogging`, and by test teardown) before the counter is cleared. **The stated limit**:
+a hard kill the process never gets to handle — `SIGKILL`, a container OOM-kill, power loss — skips
+shutdown entirely, and whatever count was still open in that instant is lost with it. The `seq` gap
+itself still marks that a write failed even then; only the *count* of how many is not recoverable
+after that kind of exit. Exact accounting across every conceivable process exit was never a promise
+this design can keep, and this ADR states that limit rather than the stricter claim the code cannot
+back.
 
 The wall-clock `ts` field is the only cross-process ordering signal, and it is stated as exactly
 that — a **best-effort tiebreak hint**, not a guarantee. Clock skew, coarse timestamp resolution,
