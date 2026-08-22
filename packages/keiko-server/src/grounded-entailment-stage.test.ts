@@ -1,7 +1,7 @@
 // Tests for the grounded entailment STAGE (Issue #2563): policy gating, active flagging, fail-closed
 // degradation, and the body-free operator diagnostic. All model calls hit a fake ModelPort.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
   type ConnectedContextPack,
@@ -16,7 +16,7 @@ import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { UiHandlerDeps } from "./deps.js";
-import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import { defaultServerDiagnosticSink, type ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
@@ -210,6 +210,25 @@ describe("createEntailmentStage — inertness", () => {
     const inert = records.filter((r) => r.errorClass === "EntailmentStageInert");
     expect(inert).toHaveLength(1);
     expect(inert[0]?.message).toBe("model-port-unavailable");
+  });
+
+  it("never lets a CRLF-bearing correlationId reach the stderr line through its direct sink.record() call", () => {
+    // The stage hands its record to `ServerDiagnosticSink.record()` directly rather than through
+    // `emitServerDiagnostic`; the default sink itself must therefore be the sanitizing writer.
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const deps = depsWith(portReturning("{}"));
+      createEntailmentStage(deps, [], "unconfigured-model", {
+        diagnostics: defaultServerDiagnosticSink,
+        correlationId: "corr-1\r\ninjected-fake-log-line-marker",
+      });
+      expect(stderrSpy).toHaveBeenCalledTimes(1);
+      const [line] = stderrSpy.mock.calls[0] as [string];
+      expect(line).not.toContain("injected-fake-log-line-marker");
+      expect(line).not.toContain("\r\n");
+    } finally {
+      stderrSpy.mockRestore();
+    }
   });
 
   it("stays inert rather than throwing when the diagnostics sink throws (KEIKO-0359)", () => {

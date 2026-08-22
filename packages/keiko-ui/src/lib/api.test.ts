@@ -81,6 +81,7 @@ import {
   synthesizeAssistantSpeech,
   verifyUpdateRestart,
   ApiError,
+  StreamingUnavailableError,
   type StreamHandlers,
   fetchEditorLocalHistory,
   fetchEditorLocalHistoryEntry,
@@ -95,6 +96,7 @@ import {
   MANAGED_LSP_TEST_LANGUAGES,
   managedLspTestConfigurationDefaults,
 } from "@/test-utils/managed-lsp-settings-fixture";
+import { CORRELATION_HEADER } from "./bff-correlation";
 
 const API_SOURCE = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "api.ts"), "utf8");
 const MANAGED_LSP_VALIDATORS_SOURCE = readFileSync(
@@ -2564,6 +2566,89 @@ describe("sendDesktopChatStream — SSE residual lineBuffer flush", () => {
     });
 
     expect(handlers.onToken).not.toHaveBeenCalled();
+  });
+});
+
+// RB-6 / ADR-0173 D5 — sendDesktopChatStream is rebuilt on the same buildBffHeaders /
+// newClientCorrelationId path bffFetchJson (./http) already uses, instead of a hand-built header
+// object with no correlation id at all.
+describe("sendDesktopChatStream — correlation id threading", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends a well-formed X-Keiko-Correlation-Id header on the stream request", async () => {
+    const stream = makeSseStream([
+      `event: done\ndata: ${JSON.stringify({ chat: {}, messages: [] })}\n\n`,
+    ]);
+    const fetchMock = vi.fn().mockResolvedValue(makeSseResponse(stream));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sendDesktopChatStream(
+      { chatId: "c5", projectPath: "/repo", content: "hello" },
+      new AbortController().signal,
+      makeStreamHandlers(),
+    );
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    // buildBffHeaders returns a plain record (#3241 review: it merges every HeadersInit shape into
+    // it); normalize through the Headers API so the assertion stays case-insensitive.
+    const headers = new Headers(init.headers);
+    expect(headers.get(CORRELATION_HEADER)).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+    expect(headers.get("Accept")).toBe("text/event-stream");
+    expect(headers.get("Content-Type")).toBe("application/json");
+    expect(headers.get("X-Keiko-CSRF")).toBe("1");
+  });
+
+  it("attaches the server-echoed correlation id to a pre-stream StreamingUnavailableError", async () => {
+    const response = new Response(
+      JSON.stringify({ error: { code: "STREAMING_UNSUPPORTED", message: "no stream" } }),
+      {
+        status: 409,
+        headers: {
+          "Content-Type": "application/json",
+          [CORRELATION_HEADER]: "server-echoed-stream-000123",
+        },
+      },
+    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+
+    try {
+      await sendDesktopChatStream(
+        { chatId: "c6", projectPath: "/repo", content: "hello" },
+        new AbortController().signal,
+        makeStreamHandlers(),
+      );
+      expect.unreachable("expected sendDesktopChatStream to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(StreamingUnavailableError);
+      expect((error as StreamingUnavailableError).correlationId).toBe(
+        "server-echoed-stream-000123",
+      );
+    }
+  });
+
+  it("falls back to the client-generated correlation id when the pre-stream response carries none", async () => {
+    // #3241 review — a well-formed-ID match also passes if the thrown error carries a SECOND,
+    // unrelated generated id instead of the id the request actually sent. Read the id off the
+    // mocked fetch call and assert the thrown error's id is exactly that one.
+    const fetchMock = vi.fn().mockResolvedValue(new Response("stack", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await sendDesktopChatStream(
+        { chatId: "c7", projectPath: "/repo", content: "hello" },
+        new AbortController().signal,
+        makeStreamHandlers(),
+      );
+      expect.unreachable("expected sendDesktopChatStream to throw");
+    } catch (error) {
+      const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      const sentCorrelationId = new Headers(init.headers).get(CORRELATION_HEADER);
+      expect(sentCorrelationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+      expect(error).toBeInstanceOf(StreamingUnavailableError);
+      expect((error as StreamingUnavailableError).correlationId).toBe(sentCorrelationId);
+    }
   });
 });
 

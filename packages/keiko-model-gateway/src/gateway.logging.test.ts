@@ -88,7 +88,14 @@ const REQUEST = {
 };
 
 function gatewayWith(adapter: ProviderAdapter, log: Recorder): Gateway {
-  return new Gateway(config([provider()]), { adapter, clock: stubClock(), log: log.sink });
+  const gateway = new Gateway(config([provider()]), { adapter, clock: stubClock(), log: log.sink });
+  // Construction itself now writes one `gateway.config.resolved` line (its own dedicated describe
+  // block below asserts that line directly, on an ungated `new Gateway(...)`). Every other test in
+  // this file wires a recorder through this helper to observe what a CALL does, so the
+  // construction-time line is cleared here rather than left for each call-scoped assertion to
+  // filter out.
+  log.events.length = 0;
+  return gateway;
 }
 
 async function drainStream(stream: AsyncGenerator<GatewayStreamChunk>): Promise<number> {
@@ -98,6 +105,81 @@ async function drainStream(stream: AsyncGenerator<GatewayStreamChunk>): Promise<
   }
   return chunks.length;
 }
+
+// The ONE-TIME configuration snapshot, written by the constructor itself — before any call has
+// happened, and never repeated for a Gateway instance that goes on to serve many calls.
+describe("Gateway construction — activity log", () => {
+  it("logs a config-resolved line naming every provider's safe fields, once", () => {
+    const log = recorder();
+    const providers = [
+      provider({
+        modelId: "chat-a",
+        baseUrl: "https://provider-a.example/v1",
+        timeoutMs: 5000,
+        maxRetries: 2,
+        retryBaseDelayMs: 250,
+      }),
+      provider({
+        modelId: "chat-b",
+        baseUrl: "https://provider-b.example:8443/deploy/v2",
+        timeoutMs: 9000,
+        maxRetries: 0,
+        retryBaseDelayMs: 100,
+      }),
+    ];
+    new Gateway(config(providers), { clock: stubClock(), log: log.sink });
+    expect(ops(log.events)).toEqual(["gateway.config.resolved"]);
+    const resolved = eventFor(log.events, "gateway.config.resolved");
+    expect(resolved.level).toBe("info");
+    expect(resolved.category).toBe("gateway");
+    expect(resolved.extra?.providers).toEqual([
+      {
+        modelId: "chat-a",
+        endpointHost: "provider-a.example",
+        timeoutMs: 5000,
+        maxRetries: 2,
+        retryBaseDelayMs: 250,
+      },
+      {
+        modelId: "chat-b",
+        endpointHost: "provider-b.example",
+        timeoutMs: 9000,
+        maxRetries: 0,
+        retryBaseDelayMs: 100,
+      },
+    ]);
+  });
+
+  // AUDIT-SEC-002-adjacent: a misconfigured provider entry can carry a bare token as URL userinfo
+  // or a deployment id in the path. `endpointHost` must survive that — reducing to the bare
+  // hostname, never the baseUrl the operator actually typed.
+  it("never lets a provider's baseUrl, embedded credentials, or path reach the config-resolved line", () => {
+    const log = recorder();
+    const leaky = provider({
+      modelId: "chat-leaky",
+      baseUrl: "https://sk-embedded-secret-9876543210@leaky.example/deploy/v1/secret-path",
+    });
+    new Gateway(config([leaky]), { clock: stubClock(), log: log.sink });
+    const resolved = eventFor(log.events, "gateway.config.resolved");
+    expect(resolved.extra?.providers).toMatchObject([
+      { modelId: "chat-leaky", endpointHost: "leaky.example" },
+    ]);
+    const serialized = JSON.stringify(resolved);
+    expect(serialized).not.toContain("sk-embedded-secret-9876543210");
+    expect(serialized).not.toContain("secret-path");
+    expect(serialized).not.toContain(leaky.baseUrl);
+  });
+
+  it("never reads or logs a provider's apiKey", () => {
+    const log = recorder();
+    new Gateway(config([provider({ apiKey: "sk-do-not-log-me-1234567890ab" })]), {
+      clock: stubClock(),
+      log: log.sink,
+    });
+    const resolved = eventFor(log.events, "gateway.config.resolved");
+    expect(JSON.stringify(resolved)).not.toContain("sk-do-not-log-me-1234567890ab");
+  });
+});
 
 describe("Gateway routing — activity log", () => {
   it("names the reason for each of the three fail-closed routing refusals", async () => {
@@ -240,6 +322,8 @@ describe("Gateway.chat — activity log", () => {
       modelId: "example-chat-model",
       finishReason: "stop",
       toolCallCount: 0,
+      promptTokens: 1,
+      completionTokens: 1,
       streaming: false,
     });
     expect(typeof completed.durationMs).toBe("number");
@@ -284,7 +368,15 @@ describe("Gateway.chatStream — activity log", () => {
       modelId: "example-chat-model",
       reason: "adapter-has-no-stream",
     });
-    expect(eventFor(log.events, "gateway.stream.completed").extra).toMatchObject({ chunkCount: 2 });
+    const streamCompleted = eventFor(log.events, "gateway.stream.completed");
+    expect(streamCompleted.extra).toMatchObject({
+      chunkCount: 2,
+      promptTokens: 1,
+      completionTokens: 1,
+    });
+    // The synthesised fallback delta carries the WHOLE answer, so the caller's first (and only)
+    // content arrives on it — the timing is captured, not silently skipped.
+    expect(typeof streamCompleted.extra?.firstTokenMs).toBe("number");
   });
 
   it("writes no fallback line when the adapter streams natively", async () => {
@@ -298,7 +390,31 @@ describe("Gateway.chatStream — activity log", () => {
     };
     await drainStream(gatewayWith(adapter, log).chatStream(REQUEST));
     expect(ops(log.events)).not.toContain("gateway.stream.buffered-fallback");
-    expect(eventFor(log.events, "gateway.stream.completed").extra).toMatchObject({ chunkCount: 2 });
+    const streamCompleted = eventFor(log.events, "gateway.stream.completed");
+    expect(streamCompleted.extra).toMatchObject({
+      chunkCount: 2,
+      promptTokens: 1,
+      completionTokens: 1,
+    });
+    expect(typeof streamCompleted.extra?.firstTokenMs).toBe("number");
+  });
+
+  it("skips a leading empty delta and times firstTokenMs off the first real one", async () => {
+    const log = recorder();
+    const adapter: ProviderAdapter = {
+      call: () => Promise.resolve(okResponse("example-chat-model")),
+      callStream: async function* (): AsyncGenerator<GatewayStreamChunk> {
+        // A role-only / empty delta is not "the caller saw content" — it must not be mistaken
+        // for the first token.
+        yield { type: "delta", token: "" };
+        yield { type: "delta", token: "a" };
+        yield { type: "done", response: await Promise.resolve(okResponse("example-chat-model")) };
+      },
+    };
+    await drainStream(gatewayWith(adapter, log).chatStream(REQUEST));
+    const streamCompleted = eventFor(log.events, "gateway.stream.completed");
+    expect(streamCompleted.extra).toMatchObject({ chunkCount: 3 });
+    expect(typeof streamCompleted.extra?.firstTokenMs).toBe("number");
   });
 
   it("records how far a mid-stream failure got before it broke", async () => {
@@ -363,7 +479,43 @@ describe("Gateway.chatStream — activity log", () => {
     };
     await drainStream(gatewayWith(adapter, log).chatStream(REQUEST));
     expect(ops(log.events)).not.toContain("gateway.stream.abandoned");
-    expect(eventFor(log.events, "gateway.stream.completed").extra).toMatchObject({ chunkCount: 1 });
+    const streamCompleted = eventFor(log.events, "gateway.stream.completed");
+    // Usage still rides on the terminal chunk even with zero prior deltas — but no delta ever
+    // arrived, so there is no first-token moment to report.
+    expect(streamCompleted.extra).toMatchObject({
+      chunkCount: 1,
+      promptTokens: 1,
+      completionTokens: 1,
+    });
+    expect(streamCompleted.extra).not.toHaveProperty("firstTokenMs");
+  });
+
+  it("omits promptTokens/completionTokens when the provider never supplied a usage chunk", async () => {
+    const log = recorder();
+    const zeroUsage = {
+      ...okResponse("example-chat-model"),
+      usage: {
+        requestId: "x",
+        promptTokens: 0,
+        completionTokens: 0,
+        latencyMs: 1,
+        costClass: "low" as const,
+      },
+    };
+    const adapter: ProviderAdapter = {
+      call: () => Promise.resolve(okResponse("example-chat-model")),
+      callStream: async function* (): AsyncGenerator<GatewayStreamChunk> {
+        yield { type: "delta", token: "a" };
+        yield { type: "done", response: await Promise.resolve(zeroUsage) };
+      },
+    };
+    await drainStream(gatewayWith(adapter, log).chatStream(REQUEST));
+    const streamCompleted = eventFor(log.events, "gateway.stream.completed");
+    // A zero/zero pair is the accumulator's untouched initial value, not a provider-reported
+    // fact — printing it would claim "this call cost nothing", which nobody measured.
+    expect(streamCompleted.extra).not.toHaveProperty("promptTokens");
+    expect(streamCompleted.extra).not.toHaveProperty("completionTokens");
+    expect(typeof streamCompleted.extra?.firstTokenMs).toBe("number");
   });
 
   it("writes no abandoned line when the stream fails mid-flight", async () => {

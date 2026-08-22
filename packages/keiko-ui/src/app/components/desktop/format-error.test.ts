@@ -122,6 +122,56 @@ describe("formatUserError", () => {
     });
   });
 
+  // RB-6 / ADR-0173 D5 — the correlation id gains its own structured field and a matching trailing
+  // segment in the formatted string, so the round trip every desktop chat error surface already
+  // uses (formatUserError -> setError(string) -> toUserErrorNotice) does not silently drop it.
+  it("appends a support id segment to the formatted string when the ApiError carries one", () => {
+    const error = new ApiError("GATEWAY_UPSTREAM_FAILURE", "Model timed out", 502);
+    error.correlationId = "req-a1b2c3d4";
+    expect(formatUserError(error, "Retry")).toBe(
+      "Model timed out (GATEWAY_UPSTREAM_FAILURE) [correlationId:req-a1b2c3d4]",
+    );
+  });
+
+  it("omits the support id segment when the ApiError carries none", () => {
+    expect(
+      formatUserError(new ApiError("GATEWAY_UPSTREAM_FAILURE", "Model timed out", 502), "Retry"),
+    ).toBe("Model timed out (GATEWAY_UPSTREAM_FAILURE)");
+  });
+
+  it("puts the ApiError's correlationId directly on the structured notice", () => {
+    const error = new ApiError("GATEWAY_TIMEOUT", "GATEWAY_TIMEOUT", 503);
+    error.correlationId = "req-timeout-9999";
+    expect(toUserErrorNotice(error, "Could not send message.").correlationId).toBe(
+      "req-timeout-9999",
+    );
+  });
+
+  it("leaves correlationId undefined on the structured notice when the ApiError carries none", () => {
+    const notice = toUserErrorNotice(
+      new ApiError("GATEWAY_TIMEOUT", "GATEWAY_TIMEOUT", 503),
+      "Could not send message.",
+    );
+    expect(notice.correlationId).toBeUndefined();
+  });
+
+  it("recovers the correlationId and the trailing code from a formatUserError round trip", () => {
+    const error = new ApiError("GATEWAY_UPSTREAM_FAILURE", "Model timed out", 502);
+    error.correlationId = "req-roundtrip-0007";
+    const formatted = formatUserError(error, "Retry");
+
+    const notice = toUserErrorNotice(formatted, "Retry");
+    expect(notice.message).toBe("Model timed out");
+    expect(notice.code).toBe("GATEWAY_UPSTREAM_FAILURE");
+    expect(notice.correlationId).toBe("req-roundtrip-0007");
+  });
+
+  it("does not mistake an unrelated trailing bracket for a support id segment", () => {
+    const notice = toUserErrorNotice("Path not found [some/other/note]", "Retry");
+    expect(notice.correlationId).toBeUndefined();
+    expect(notice.message).toBe("Path not found [some/other/note]");
+  });
+
   it("stays fast against an adversarial message with no trailing support code (S8786)", () => {
     // The former `/\s+\(([A-Z][A-Z0-9_/-]{2,})\)\s*$/` has an unanchored leading `\s+`, so a long
     // internal whitespace run that never reaches a "(CODE)" suffix drove O(n²) backtracking
@@ -133,5 +183,84 @@ describe("formatUserError", () => {
     const notice = toUserErrorNotice(adversarial, "Retry");
     expect(Date.now() - start).toBeLessThan(1500);
     expect(notice.code).toBeUndefined();
+  });
+
+  // #3241 review — the trailing "[correlationId:...]" segment is peeled off with plain string
+  // search (extractTrailingSupportId), not a validating parser: it accepts whatever sits between
+  // the prefix and the final "]". These cases pin that malformed/hostile input is never silently
+  // dropped — either the value is extracted verbatim, or (when extraction can't apply cleanly) the
+  // raw text stays fully visible in notice.message instead of vanishing.
+  it("keeps an empty support id suffix fully visible instead of silently dropping it", () => {
+    const notice = toUserErrorNotice(
+      "Model timed out (GATEWAY_UPSTREAM_FAILURE) [correlationId:]",
+      "Retry",
+    );
+    expect(notice.correlationId).toBeUndefined();
+    expect(notice.message).toBe("Model timed out (GATEWAY_UPSTREAM_FAILURE) [correlationId:]");
+  });
+
+  it("accepts an oversized (>128 char) correlation id without truncating it", () => {
+    const longId = "a".repeat(200);
+    const notice = toUserErrorNotice(
+      `Model timed out (CODE_XYZ) [correlationId:${longId}]`,
+      "Retry",
+    );
+    expect(notice.correlationId).toBe(longId);
+    expect(notice.correlationId).toHaveLength(200);
+    expect(notice.message).toBe("Model timed out");
+    expect(notice.code).toBe("CODE_XYZ");
+  });
+
+  it("uses the last of two repeated support id suffixes and keeps the first one visible in the message", () => {
+    const notice = toUserErrorNotice(
+      "Model timed out (GATEWAY_UPSTREAM_FAILURE) [correlationId:req-first] [correlationId:req-second]",
+      "Retry",
+    );
+    expect(notice.correlationId).toBe("req-second");
+    expect(notice.message).toBe(
+      "Model timed out (GATEWAY_UPSTREAM_FAILURE) [correlationId:req-first]",
+    );
+  });
+
+  it("carries a CRLF-hostile correlation id through verbatim without corrupting the message", () => {
+    const hostileId = "req-1\r\nX-Injected: evil";
+    const notice = toUserErrorNotice(
+      `Model timed out (CODE_XYZ) [correlationId:${hostileId}]`,
+      "Retry",
+    );
+    expect(notice.correlationId).toBe(hostileId);
+    expect(notice.message).toBe("Model timed out");
+    expect(notice.code).toBe("CODE_XYZ");
+  });
+
+  it("carries an HTML-hostile correlation id through verbatim without corrupting the message", () => {
+    const hostileId = "<script>alert(1)</script>";
+    const notice = toUserErrorNotice(
+      `Model timed out (CODE_XYZ) [correlationId:${hostileId}]`,
+      "Retry",
+    );
+    expect(notice.correlationId).toBe(hostileId);
+    expect(notice.message).toBe("Model timed out");
+    expect(notice.code).toBe("CODE_XYZ");
+  });
+
+  it("does not crash on a correlation id value that itself embeds a second support id prefix, and keeps the leftover text visible", () => {
+    const notice = toUserErrorNotice(
+      "Model timed out (CODE) [correlationId:evil[correlationId:nested]]",
+      "Retry",
+    );
+    expect(notice.correlationId).toBe("nested]");
+    expect(notice.message).toBe("Model timed out (CODE) [correlationId:evil");
+  });
+
+  it("does not treat a literal 'Support ID:' label in the message text as the internal correlation id marker", () => {
+    const notice = toUserErrorNotice(
+      "Model timed out (GATEWAY_UPSTREAM_FAILURE) Support ID: req-visible-999",
+      "Retry",
+    );
+    expect(notice.correlationId).toBeUndefined();
+    expect(notice.message).toBe(
+      "Model timed out (GATEWAY_UPSTREAM_FAILURE) Support ID: req-visible-999",
+    );
   });
 });

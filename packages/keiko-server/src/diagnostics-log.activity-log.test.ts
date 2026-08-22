@@ -15,7 +15,6 @@ import {
 } from "./diagnostics-log.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { closeFileServerLogSinks, SERVER_LOG_LEVEL_ENV } from "./observability/index.js";
-import { FRAME_SHAPE_PATTERN } from "./observability/stack-frames.js";
 
 function readActivityLine(stateDir: string): Record<string, unknown> {
   const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8").trim();
@@ -54,6 +53,9 @@ describe("diagnostic records on the activity log", () => {
       code: "GATEWAY_ERROR",
       occurrenceCount: 2,
       partialUsage: { promptTokens: 10, completionTokens: 4 },
+      parentCorrelationId: "job-parent-1f2e3d",
+      httpStatus: 503,
+      retryAfterMs: 2_000,
       notes: "JaneDoe1985",
     } as ServerDiagnosticRecord & { readonly notes: string };
 
@@ -76,6 +78,9 @@ describe("diagnostic records on the activity log", () => {
       promptTokens: 10,
       completionTokens: 4,
       diagnosticSummary: "Provider verification failed without exposing upstream response details.",
+      parentCorrelationId: "job-parent-1f2e3d",
+      httpStatus: 503,
+      retryAfterMs: 2_000,
     });
 
     // Nothing else. Not the undeclared field, not the whole record under a `record` key, and not
@@ -168,18 +173,12 @@ describe("diagnostic records on the activity log", () => {
 
     expect(line.frames).toBeInstanceOf(Array);
     const frames = line.frames as readonly string[];
-    // Only "at least one frame survives, and every surviving frame has the reducer's shape" is a
-    // property of the reducer under test here. The exact surviving frame COUNT is a property of the
-    // runtime (V8 inlining, `Error.stackTraceLimit`, Vitest's transform), so the count is pinned
-    // instead in `diagnostics-log.test.ts` against an injected synthetic stack. Likewise, a fixed
-    // `src/` prefix depends on how Vitest reports this module's path (workspace root vs. package
-    // root as cwd), so every frame is checked against the reducer's own exported shape pattern and
-    // at least one is required to name this test's own package directory instead.
-    expect(frames.length).toBeGreaterThanOrEqual(1);
+    // `levelThree`, `levelTwo`, `levelOne` and the `try` block itself are four distinct call sites
+    // in THIS file, so at least three frames survive the dist/src anchor.
+    expect(frames.length).toBeGreaterThanOrEqual(3);
     for (const frame of frames) {
-      expect(frame).toMatch(FRAME_SHAPE_PATTERN);
+      expect(frame).toMatch(/^packages\/keiko-server\/src\//);
     }
-    expect(frames.some((frame) => frame.startsWith("packages/keiko-server/"))).toBe(true);
   });
 
   it("omits an absent optional field rather than writing it as null", () => {
@@ -198,6 +197,30 @@ describe("diagnostic records on the activity log", () => {
     expect(Object.keys(line)).not.toContain("code");
     expect(Object.keys(line)).not.toContain("gatewayRequestId");
     expect(Object.keys(line)).not.toContain("promptTokens");
+    expect(Object.keys(line)).not.toContain("parentCorrelationId");
+    expect(Object.keys(line)).not.toContain("httpStatus");
+    expect(Object.keys(line)).not.toContain("retryAfterMs");
+  });
+
+  // `parentCorrelationId` is shape-guarded, not merely redacted, the same way `server-log.ts`'s
+  // `applyEnvelopeFields` guards its own `parentCorrelationId` envelope field: a value that does
+  // not fit `isValidCorrelationId`'s shape (`^[A-Za-z0-9._-]{8,128}$`) is dropped outright rather
+  // than written under a marker, even though it is short enough and plain enough to sail through
+  // every generic value guard `log-redaction.ts` applies to an ordinary string field.
+  it("drops a malformed parentCorrelationId instead of writing it through the generic value guards", () => {
+    defaultServerDiagnosticSink.record({
+      correlationId: "req-shape-guard",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      operation: "chat.stream",
+      source: "server.top-level-catch",
+      errorClass: "GatewayError",
+      message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      parentCorrelationId: "not a real id",
+    });
+    const line = readActivityLine(stateDir);
+
+    expect(Object.keys(line)).not.toContain("parentCorrelationId");
+    expect(JSON.stringify(line)).not.toContain("not a real id");
   });
 
   // Raising the threshold is what an operator does to isolate a failure. An unstamped line

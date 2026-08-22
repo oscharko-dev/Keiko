@@ -400,7 +400,12 @@ function mapHttpError(
     throw new AuthenticationError(`provider rejected credentials for '${modelId}'`, secrets);
   }
   if (response.status === 429) {
-    throw new RateLimitError(`provider rate limited '${modelId}'`, retryAfterMs(response), secrets);
+    throw new RateLimitError(
+      `provider rate limited '${modelId}'`,
+      retryAfterMs(response),
+      secrets,
+      response.status,
+    );
   }
   throw new ProviderError(
     `provider returned HTTP ${String(response.status)} for '${modelId}'`,

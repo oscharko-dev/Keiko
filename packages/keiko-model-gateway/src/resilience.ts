@@ -6,6 +6,7 @@ import {
   CancelledError,
   CircuitOpenError,
   GatewayError,
+  ProviderError,
   RateLimitError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
@@ -145,6 +146,39 @@ export interface RetryLogContext {
   readonly correlationId?: string | undefined;
 }
 
+// The provider-specific detail that turns "a retry happened" into "the provider said 503" or
+// "the provider said wait 2000ms", mirroring `logErrorKind`'s shape: it reads only fields these
+// error classes already type and already redact at construction (never `message`, which is where
+// a provider response body ends up), so a plain `TransportError`, a `CancelledError`, or any
+// non-`GatewayError` contributes nothing here. Both fields are optional because most retryable
+// errors carry neither. `httpStatus` is read off BOTH `ProviderError` and `RateLimitError`: a
+// rate-limited call is always HTTP 429 by definition, and a consumer building a replay/reproduction
+// artifact from these lines (e.g. `GatewayReplayAttempt.httpStatus`) should never have to infer the
+// status from `errorKind === GATEWAY_RATE_LIMIT` when the error itself already carries it —
+// restating it here costs one field and removes that inference entirely. `retryAfterMs` stays
+// `RateLimitError`-only: `ProviderError` never carries a server-supplied retry delay.
+export interface ProviderErrorDetail {
+  readonly httpStatus?: number | undefined;
+  readonly retryAfterMs?: number | undefined;
+}
+
+export function providerErrorDetail(error: unknown): ProviderErrorDetail {
+  return {
+    httpStatus: providerErrorHttpStatus(error),
+    retryAfterMs: error instanceof RateLimitError ? (error.retryAfterMs ?? undefined) : undefined,
+  };
+}
+
+function providerErrorHttpStatus(error: unknown): number | undefined {
+  if (error instanceof ProviderError) {
+    return error.httpStatus;
+  }
+  if (error instanceof RateLimitError) {
+    return error.httpStatus;
+  }
+  return undefined;
+}
+
 function retryEvent(
   context: RetryLogContext,
   level: ModelGatewayLogLevel,
@@ -181,6 +215,7 @@ function budgetExhaustedError(
     retryEvent(context, "warn", "gateway.retry.budget-exhausted", durationMs, error, {
       attempt,
       hadPriorFailure: lastError !== undefined,
+      ...providerErrorDetail(error),
     }),
   );
   return error;
@@ -216,6 +251,7 @@ export async function executeWithRetry<T>(
           retryEvent(logContext, "warn", "gateway.retry.exhausted", elapsed(), lastError, {
             attempt,
             maxRetries: config.maxRetries,
+            ...providerErrorDetail(lastError),
           }),
         );
         throw lastError;
@@ -225,6 +261,7 @@ export async function executeWithRetry<T>(
           attempt,
           maxRetries: config.maxRetries,
           delayMs: sleepMs,
+          ...providerErrorDetail(lastError),
         }),
       );
       await sleepWithCancellation(clock, sleepMs, signal);
