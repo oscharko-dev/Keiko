@@ -141,6 +141,33 @@ const POSITIONAL_OP_HELPERS = [
   { name: "adoptPreflightIdentity", argIndex: 2, category: "embedding" },
 ];
 
+// Functions that receive the whole log-event object literal as an argument and hardcode their own
+// `category` before forwarding it to the sink (orchestrator.ts's logIndexing/logEmbeddingRun/
+// logDocument, #2902 W5). Unlike POSITIONAL_OP_HELPERS, `op` here is a NAMED PROPERTY inside the
+// object-literal argument, not a bare positional string — tier 1 (findSiblingCategory) never finds
+// a sibling `category:` at these call sites because the category lives inside the callee's body,
+// not the caller's object literal, and tier 3 (fileCategoryBinding) backs off for this file because
+// it binds two distinct categories ("indexing" and "embedding") depending on which of these three
+// functions is called. `file` scopes every entry, exactly like POSITIONAL_OP_HELPERS' scoped
+// entries, so a same-named helper anywhere else is never misattributed.
+const OBJECT_ARG_CATEGORY_FUNCTIONS = [
+  {
+    name: "logIndexing",
+    category: "indexing",
+    file: "packages/keiko-local-knowledge/src/indexing/orchestrator.ts",
+  },
+  {
+    name: "logEmbeddingRun",
+    category: "embedding",
+    file: "packages/keiko-local-knowledge/src/indexing/orchestrator.ts",
+  },
+  {
+    name: "logDocument",
+    category: "indexing",
+    file: "packages/keiko-local-knowledge/src/indexing/orchestrator.ts",
+  },
+];
+
 function packageNameFromRoot(root) {
   const match = /^packages\/([^/]+)\/src$/.exec(root);
   if (match?.[1] === undefined) throw new Error(`Unexpected scanned root shape: ${root}`);
@@ -373,6 +400,61 @@ function findSiblingCategory(lines, opLine) {
   return categoryAbove(lines, opLine, opIndent) ?? categoryBelow(lines, opLine);
 }
 
+// The identifier that ends `text` (ignoring trailing whitespace), found by a backward scan rather
+// than an end-anchored regex — `([\w$]*)\s*$` backtracks super-linearly on long lines (Sonar S8786).
+function trailingIdentifier(text) {
+  let end = text.length;
+  while (end > 0 && /\s/.test(text[end - 1])) end -= 1;
+  let start = end;
+  while (start > 0 && /[\w$]/.test(text[start - 1])) start -= 1;
+  if (start === end || /\d/.test(text[start])) return undefined;
+  return text.slice(start, end);
+}
+
+// Walks backward from `fromIndex` (exclusive) tracking bracket depth, and returns the index of the
+// nearest UNMATCHED opening bracket — the bracket that encloses `fromIndex` one level up. Every
+// closing bracket seen first increments `depth` (one more matching opener is now owed before we are
+// back to the enclosing level); every opening bracket either satisfies one of those or, at depth 0,
+// IS the answer. Mirrors `scanBalanced`'s forward depth bookkeeping, run in reverse, so the object
+// literal an `op:` property lives in — and, one level further out, the call it is an argument
+// to — can be found without a full AST. Like every other extractor in this file, this does not
+// track string/template spans on the way back; on this codebase's Prettier-formatted, one-property-
+// per-line source that risk is the same one `findSiblingCategory`'s line scan already accepts.
+function enclosingOpenBracketIndex(source, fromIndex) {
+  let depth = 0;
+  for (let i = fromIndex - 1; i >= 0; i -= 1) {
+    const ch = source[i];
+    if (CLOSE_BRACKETS.has(ch)) {
+      depth += 1;
+    } else if (OPEN_BRACKETS.has(ch)) {
+      if (depth === 0) return i;
+      depth -= 1;
+    }
+  }
+  return -1;
+}
+
+// Tier 2.5 (see OBJECT_ARG_CATEGORY_FUNCTIONS' header comment): resolves the category for an
+// `op:` property whose enclosing object literal is itself an argument to one of those checked-in
+// functions — a shape tiers 1 and 3 cannot see, since the category lives inside the callee's body,
+// never near the call site. Finds the object literal's own opening `{` first (must be a `{`, not
+// some other enclosing bracket — a `[`/`(` there means `op:` is not sitting in a plain object-
+// literal argument), then the call's opening `(` one level further out, then reads the identifier
+// immediately before it. Returns undefined — never a guess — the moment any of those structural
+// expectations fails, exactly like `fileCategoryBinding`'s own "no single safe answer" contract.
+function objectArgCategory(source, colonEnd, relPath) {
+  const braceIndex = enclosingOpenBracketIndex(source, colonEnd);
+  if (braceIndex === -1 || source[braceIndex] !== "{") return undefined;
+  const parenIndex = enclosingOpenBracketIndex(source, braceIndex);
+  if (parenIndex === -1 || source[parenIndex] !== "(") return undefined;
+  const name = trailingIdentifier(source.slice(0, parenIndex));
+  if (name === undefined) return undefined;
+  const match = OBJECT_ARG_CATEGORY_FUNCTIONS.find(
+    (entry) => entry.name === name && entry.file === relPath,
+  );
+  return match?.category;
+}
+
 // Blanks `//` line comments and `/* … */` block comments in `source` — replaces every comment
 // character with a space, character for character, while every OTHER character (including every
 // newline, whether inside a comment or not) passes through unchanged. Unlike removing comment
@@ -555,7 +637,8 @@ function opPropertyEntries(source, lines, offsets, constMap, relPath, colonEnd) 
   const value = rawValue.trim();
   if (closesOverDeclaration(stopChar) || isTypeAnnotationValue(value, constMap)) return [];
   const opLine = lineNumberAt(offsets, colonEnd);
-  const category = findSiblingCategory(lines, opLine) ?? "unknown";
+  const category =
+    findSiblingCategory(lines, opLine) ?? objectArgCategory(source, colonEnd, relPath) ?? "unknown";
   const literals = resolveLiteralValues(value, constMap);
   if (literals === null) return [siteEntry("<dynamic>", category, relPath, opLine)];
   return literals.map((literal) => siteEntry(literal, category, relPath, opLine));

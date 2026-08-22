@@ -213,6 +213,26 @@ describe("runUiCli", () => {
     expect(err.join("")).toContain("UI database path must be absolute");
   });
 
+  // process-guards.ts's fatal-crash handler reads `process.env.KEIKO_STATE_DIR` directly (it has
+  // no other seam into a real, non-injected launch). This drives the REAL (non-injected) launch
+  // path — `deps.createServer` is left undefined — but stops before any socket binds by forcing
+  // the same early `UiStoreError` bail as "fails fast when --ui-db is relative" above, so the
+  // real process.env mutation is observable without ever starting a real server.
+  it("sets the real process.env.KEIKO_STATE_DIR on a direct (non-injected) launch before any crash could occur", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-real-launch-state-env-"));
+    vi.stubEnv("KEIKO_STATE_DIR", "");
+    try {
+      expect(process.env.KEIKO_STATE_DIR).toBe("");
+      const code = await runUiCli(["--ui-db", ".keiko/ui.db"], io, {}, { staticRoot, cwd });
+      expect(code).toBe(2);
+      expect(process.env.KEIKO_STATE_DIR).toBe(join(cwd, ".keiko"));
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("fails fast when --ui-db is inside the current workspace", async () => {
     const { io, err } = captureIo();
     const nested = join(process.cwd(), ".keiko-test-ui", "ui.db");

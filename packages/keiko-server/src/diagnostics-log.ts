@@ -82,6 +82,11 @@ export interface ServerDiagnosticRecord {
   // explicitly asserted), `dropped` were removed (Keiko had only inferred the role).
   readonly unverifiedEmbeddingModelCount?: number | undefined;
   readonly droppedEmbeddingModelCount?: number | undefined;
+  // How many candidate memories the conversation-retrieval semantic reranker skipped for a stored
+  // embedding whose identity did not match the query's, and how many candidates were in play when
+  // it did. Bounded counts only; never a memory id, model id, or embedding vector.
+  readonly semanticSkippedCount?: number | undefined;
+  readonly semanticCandidateCount?: number | undefined;
   // Keiko-code stack frames the error passed through, nearest-to-throw-site first, reduced by
   // `keikoStackFrames` (ADR-0173 D3) to their dist/src-anchored form — never an absolute path, never
   // a `node_modules`/`node:internal` frame. Capped at 8; absent when the error carried no `.stack`
@@ -102,8 +107,19 @@ export interface ServerDiagnosticSink {
 // keep observing stderr, while the shipped server writes a file the operator can read directly.
 export const defaultServerDiagnosticSink: ServerDiagnosticSink = {
   record(record: ServerDiagnosticRecord): void {
+    // The stderr line must carry the SAME redaction guarantee as the activity-log file line: the
+    // raw caller-supplied `record` is never serialised directly. `diagnosticActivityLogFields`
+    // already projects it onto allowlisted, bounded fields for the file sink (ADR-0173 D11 g29);
+    // reused here rather than a second ad-hoc redaction so both channels share one contract.
+    const safeLine = {
+      correlationId: record.correlationId,
+      timestamp: record.timestamp,
+      operation: record.operation,
+      errorClass: record.errorClass,
+      ...diagnosticActivityLogFields(record),
+    };
     // eslint-disable-next-line no-console
-    console.error(`[keiko-server:diagnostic] ${JSON.stringify(record)}`);
+    console.error(`[keiko-server:diagnostic] ${JSON.stringify(safeLine)}`);
     appendDiagnosticToActivityLog(record);
   },
 };
@@ -161,6 +177,8 @@ function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<str
   addBoundedField(fields, "unsupportedModelCount", record.unsupportedModelCount);
   addBoundedField(fields, "unverifiedEmbeddingModelCount", record.unverifiedEmbeddingModelCount);
   addBoundedField(fields, "droppedEmbeddingModelCount", record.droppedEmbeddingModelCount);
+  addBoundedField(fields, "semanticSkippedCount", record.semanticSkippedCount);
+  addBoundedField(fields, "semanticCandidateCount", record.semanticCandidateCount);
   addBoundedField(fields, "diagnosticSummary", allowlistedSummary(record.message));
   if (record.unsupportedReasons !== undefined) {
     fields.unsupportedReasons = record.unsupportedReasons.map((reason) =>
@@ -273,6 +291,8 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "Debug production service composition failed.",
   "Managed task-workspace boundary materialization failed.",
   "Evidence retention deleted manifests.",
+  "Semantic memory retrieval skipped incompatible embeddings.",
+  "Semantic memory retrieval was disabled for this turn.",
 ] as const;
 
 export type ServerDiagnosticSummary = (typeof SERVER_DIAGNOSTIC_SUMMARIES)[number];

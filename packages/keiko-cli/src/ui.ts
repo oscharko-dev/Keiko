@@ -965,6 +965,18 @@ async function launchUiFromDeps(
   deps: UiCliDeps,
 ): Promise<number> {
   const stateDir = resolveRuntimeStateDir(cwd, effectiveEnv);
+  // process-guards.ts's fatal-crash handler is installed before any CLI parsing happens and reads
+  // the REAL process.env directly (it cannot receive this value any other way) -- without this
+  // assignment, a direct `keiko ui` launch (no --state-dir / KEIKO_STATE_DIR from the operator)
+  // never has process.env.KEIKO_STATE_DIR set, so a crash inside startUiServer/the real server
+  // factory below writes only the generic stderr line and silently drops the structured
+  // process.fatal record. Mirrors what lifecycle.ts's spawnUiProcess already gives the CHILD
+  // `keiko ui` process for free. Gated on the same "real launch" condition `startUiServer`
+  // computes (`deps.createServer === undefined`) so injected-server unit tests never mutate the
+  // real process.env.
+  if (deps.createServer === undefined) {
+    process.env.KEIKO_STATE_DIR = stateDir;
+  }
   // Captured from the ORIGINAL env, before `withDefaultLocalRuntimeStateEnv` unconditionally sets
   // `KEIKO_STATE_DIR` on the derived copy below — otherwise every launch would read back as
   // `env-override` regardless of what the operator actually configured.

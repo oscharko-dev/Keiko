@@ -89,6 +89,47 @@ describe("diagnostic records on the activity log", () => {
     expect(JSON.stringify(line)).not.toContain("JaneDoe1985");
   });
 
+  it("redacts the stderr line the same way as the activity-log line", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const record = {
+      correlationId: "req-1f2e3d",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      operation: "chat.stream",
+      source: "server.top-level-catch",
+      errorClass: "GatewayError",
+      message: "Provider verification failed without exposing upstream response details.",
+      code: "GATEWAY_ERROR",
+      notes: "JaneDoe1985",
+    } as ServerDiagnosticRecord & { readonly notes: string };
+
+    defaultServerDiagnosticSink.record(record);
+    const stderrLine = errorSpy.mock.calls[0]?.[0] as string;
+
+    // The undeclared, caller-supplied field must never reach stderr, exactly as it never reaches
+    // the activity-log file.
+    expect(stderrLine).not.toContain("JaneDoe1985");
+    // The allowlisted summary still makes it through, projected the same way the file line
+    // projects it.
+    expect(stderrLine).toContain(
+      "Provider verification failed without exposing upstream response details.",
+    );
+
+    // A message NOT in the closed vocabulary must not appear verbatim on stderr either.
+    errorSpy.mockClear();
+    const foreignRecord: ServerDiagnosticRecord = {
+      correlationId: "req-foreign",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      operation: "chat.stream",
+      source: "server.top-level-catch",
+      errorClass: "GatewayError",
+      message: "not-in-the-closed-vocabulary",
+    };
+    defaultServerDiagnosticSink.record(foreignRecord);
+    const foreignStderrLine = errorSpy.mock.calls[0]?.[0] as string;
+    expect(foreignStderrLine).not.toContain("not-in-the-closed-vocabulary");
+  });
+
   // ADR-0173 D3/D11 (g2, g29): a thrown Error carries its stack and its allowlisted summary all
   // the way to the persisted line, through `serverDiagnosticFromError` → `defaultServerDiagnosticSink`
   // → the file sink's redaction pass — not merely through `describeError` in isolation.
