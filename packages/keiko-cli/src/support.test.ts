@@ -493,6 +493,26 @@ describe("runSupportCli export", () => {
       expect.not.arrayContaining([{ store: "ui", reasonKind: "open-failed" }]),
     );
   });
+
+  // Finding 1 (minor): store fingerprint collection runs a synchronous full-DB quick_check plus
+  // per-table row counts with nothing printed while it runs, so a slow run against a large
+  // local-knowledge index looks hung to the operator. A stderr progress line before the call
+  // fixes that. RED (before fix): no such line was ever written to stderr.
+  it("prints a stderr progress line before computing store fingerprints", async () => {
+    const c = makeIo();
+    const outPath = join(outDir, "progress-line.jsonl");
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(0);
+    expect(c.err()).toContain(
+      "keiko support export: computing store fingerprints (may take a while on a large local-knowledge index)...",
+    );
+  });
 });
 
 describe("runSupportCli analyze", () => {

@@ -32,10 +32,16 @@ import {
 
 export { chmodIfPresent, ensureDirHardened };
 
+// Issue #639's busy_timeout bound, shared by the production open path (`preparedDatabase` below)
+// and the read-only diagnostic open (`openMemoryDatabaseReadOnly`, Finding 2) so both connections
+// wait the same short, bounded interval for a concurrent writer's lock instead of failing
+// immediately with SQLITE_BUSY.
+const MEMORY_VAULT_BUSY_TIMEOUT_MS = 5_000;
+
 export function preparedDatabase(target: string): DatabaseSync {
   const db = new DatabaseSync(target);
   db.exec("PRAGMA foreign_keys = ON");
-  db.exec("PRAGMA busy_timeout = 5000");
+  db.exec(`PRAGMA busy_timeout = ${String(MEMORY_VAULT_BUSY_TIMEOUT_MS)}`);
   return db;
 }
 
@@ -172,7 +178,13 @@ export function openMemoryDatabase(
 // `PRAGMA user_version`/`quick_check` and fixed `SELECT COUNT(*)` reads, none of which need write
 // access.
 export function openMemoryDatabaseReadOnly(dbPath: string): DatabaseSync {
-  return new DatabaseSync(dbPath, { readOnly: true });
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  // A short busy_timeout (Finding 2) so a reader opened with no wait bound does not spuriously
+  // report the store `open-failed` on an immediate SQLITE_BUSY from a concurrent WAL checkpoint
+  // or schema-changing transaction on a live production server. Connection-local PRAGMA: no write,
+  // does not throw on a `readOnly: true` handle, so the read-only guarantee above is unaffected.
+  db.exec(`PRAGMA busy_timeout = ${String(MEMORY_VAULT_BUSY_TIMEOUT_MS)}`);
+  return db;
 }
 
 // ─── computeStoreFingerprint (Wave 4a, epic #3233 §6.2) ────────────────────────────────────────

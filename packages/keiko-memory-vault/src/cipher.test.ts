@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { chmodSync, mkdtempSync, rmSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -8,6 +16,7 @@ import {
   keyFromKeychain,
   NO_KEYCHAIN,
   resolveVaultKey,
+  resolveVaultKeyReadOnly,
 } from "./cipher.js";
 import { MemoryStorageError } from "./errors.js";
 
@@ -165,6 +174,37 @@ describe("resolveVaultKey — keychain tier", () => {
     );
     expect(resolved.source).toBe("keyfile");
     expect(resolved.key).toHaveLength(32);
+  });
+});
+
+describe("resolveVaultKeyReadOnly (Finding 0 — read-only diagnostic export seam)", () => {
+  it("never writes a keyfile when the env and keychain tiers both miss, and reports no key", () => {
+    const resolved = resolveVaultKeyReadOnly({}, () => undefined);
+    expect(resolved.key).toBeUndefined();
+    expect(resolved.source).toBeUndefined();
+    // The RED assertion: `resolveVaultKey({}, dir, NO_KEYCHAIN)` against this same empty dir
+    // would call `keyFromKeyfile`, which mints and writes `vault.key`. The read-only resolver
+    // must leave the directory exactly as it found it — no file of any name appears.
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it("still honors the env tier, and never touches the keychain when the env key is present", () => {
+    const raw = randomBytes(32);
+    let keychainCalls = 0;
+    const resolved = resolveVaultKeyReadOnly({ KEIKO_MEMORY_KEY: raw.toString("base64") }, () => {
+      keychainCalls += 1;
+      return undefined;
+    });
+    expect(resolved.source).toBe("env");
+    expect(resolved.key?.equals(raw)).toBe(true);
+    expect(keychainCalls).toBe(0);
+  });
+
+  it("reports the keychain tier when a read-only lookup finds a stored key, without minting one", () => {
+    const stored = randomBytes(32);
+    const resolved = resolveVaultKeyReadOnly({}, () => stored);
+    expect(resolved.source).toBe("keychain");
+    expect(resolved.key?.equals(stored)).toBe(true);
   });
 });
 

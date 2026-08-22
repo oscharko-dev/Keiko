@@ -1022,7 +1022,16 @@ export function openNodeUiDatabase(dbPath: string, sink?: ServerLogSink): Databa
 // can never flip a `client_turn_state`, apply a migration, or quarantine the very file an operator
 // is trying to inspect.
 export function openNodeUiDatabaseReadOnly(dbPath: string): DatabaseSync {
-  return new DatabaseSync(dbPath, { readOnly: true });
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  // Issue #639's busy_timeout applies here too (Finding 2): without it, a reader opened with no
+  // wait bound can receive an immediate SQLITE_BUSY from a concurrent WAL checkpoint or
+  // schema-changing transaction on a live production server — exactly the moment `keiko support
+  // export` needs the fingerprint to work — and spuriously report the store `open-failed` for a
+  // purely transient reason. This is a connection-local PRAGMA; it performs no write and does not
+  // throw on a `readOnly: true` handle, so it does not affect the genuinely-read-only guarantee
+  // documented above.
+  db.exec(`PRAGMA busy_timeout = ${String(UI_DB_BUSY_TIMEOUT_MS)}`);
+  return db;
 }
 
 export function buildUiStoreOverDatabase(db: DatabaseSync, opts?: UiStoreFactoryOptions): UiStore {

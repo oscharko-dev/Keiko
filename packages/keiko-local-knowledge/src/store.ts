@@ -545,7 +545,13 @@ export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeSt
 // a store. `computeStoreFingerprint` below needs only `PRAGMA user_version`/`quick_check` and fixed
 // `SELECT COUNT(*)` reads, none of which need write access.
 export function openKnowledgeStoreReadOnly(dbPath: string): DatabaseSync {
-  return new DatabaseSync(dbPath, { readOnly: true });
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  // A short busy_timeout (Finding 2) so a reader opened with no wait bound does not spuriously
+  // report the store `open-failed` on an immediate SQLITE_BUSY from a concurrent WAL checkpoint
+  // or schema-changing transaction on a live production server. Connection-local PRAGMA: no write,
+  // does not throw on a `readOnly: true` handle, so the read-only guarantee above is unaffected.
+  db.exec(`PRAGMA busy_timeout = ${String(LK_STORE_BUSY_TIMEOUT_MS)}`);
+  return db;
 }
 
 // Reuses the SAME source list and comparison `runMigrations` already applies (`version` vs the

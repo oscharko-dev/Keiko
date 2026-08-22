@@ -268,6 +268,16 @@ function writeBundleOrExitCode(outPath: string, contents: string, io: CliIo): nu
   }
 }
 
+// Finding 1 (minor): store fingerprint collection runs a synchronous full-DB `quick_check` plus
+// a row count per table for each store, which can take a while against a large local-knowledge
+// index with nothing printed while it runs. This progress line keeps a slow run from looking
+// hung, without changing the collection's synchronous, untimed behavior itself.
+function reportStoreFingerprintProgress(io: CliIo): void {
+  io.err(
+    "keiko support export: computing store fingerprints (may take a while on a large local-knowledge index)...\n",
+  );
+}
+
 function reportAuditFailure(error: unknown, io: CliIo): number {
   if (error instanceof AuditLoadError) {
     io.err(
@@ -312,6 +322,7 @@ async function runSupportExport(
 
   // Deferred until after the audit's own fail-closed check: opening three real stores is real
   // I/O, wasted if the export is about to be refused anyway.
+  reportStoreFingerprintProgress(io);
   const storeFingerprintCollection = await server.collectStoreFingerprints({ stateDir, env });
   const generatedAtDate = now();
   const manifest = buildSupportBundleManifest({

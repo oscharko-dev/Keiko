@@ -341,7 +341,7 @@
     {
       "op": "memory-vault.store.quarantined",
       "category": "diagnostic",
-      "site": "packages/keiko-memory-vault/src/db.ts:121",
+      "site": "packages/keiko-memory-vault/src/db.ts:127",
       "package": "keiko-memory-vault"
     },
     {

@@ -17,6 +17,7 @@ import {
   chmodIfPresent,
   computeStoreFingerprint,
   openMemoryDatabase,
+  openMemoryDatabaseReadOnly,
   quarantineCorruptDb,
 } from "./db.js";
 import { MEMORY_VAULT_SCHEMA_VERSION } from "./schema.js";
@@ -361,6 +362,28 @@ describe("computeStoreFingerprint", () => {
     };
     expect(row.n).toBe(1);
     db.close();
+  });
+});
+
+describe("openMemoryDatabaseReadOnly (Finding 2 — busy_timeout on the read-only diagnostic open)", () => {
+  // RED (before fix): `node:sqlite`'s default busy_timeout is 0, so a reader started against a
+  // live production server can receive an immediate SQLITE_BUSY from a concurrent WAL checkpoint
+  // and spuriously report the vault `open-failed`, exactly the moment `keiko support export`
+  // needs the fingerprint to work.
+  it("sets the active PRAGMA busy_timeout, matching the production open path", () => {
+    const dir = freshDir();
+    const dbPath = join(dir, "keiko-memory.db");
+    openMemoryDatabase(dbPath, TEST_CIPHER).close();
+
+    const db = openMemoryDatabaseReadOnly(dbPath);
+    try {
+      const rows = db.prepare("PRAGMA busy_timeout").all() as unknown as readonly {
+        timeout: number;
+      }[];
+      expect(rows[0]?.timeout).toBe(5000);
+    } finally {
+      db.close();
+    }
   });
 });
 

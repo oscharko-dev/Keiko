@@ -12,6 +12,7 @@
 
 import { randomBytes } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -197,5 +198,29 @@ describe("collectStoreFingerprints", () => {
     expect(uiEntry).toBeDefined();
     expect(uiEntry?.quickCheckOk).toBe(false);
     expect(result.unavailable.some((entry) => entry.store === "ui")).toBe(false);
+  });
+
+  // Finding 0 (blocker): a memory-vault db that exists with KEIKO_MEMORY_KEY unset must never
+  // mint and persist a brand-new `vault.key` into the state dir as a side effect of a read-only
+  // diagnostic collection — regardless of what the OS keychain tier answers on the machine
+  // running the test (it may legitimately hold a real "keiko-memory-vault" entry on a dev
+  // machine that has run the product). RED (before fix): `memoryVaultStoreFingerprintOutcome`
+  // called the mutating `resolveVaultKey`, which falls through to `keyFromKeyfile` whenever the
+  // keychain tier misses and writes the keyfile; the deterministic, keychain-independent proof
+  // that this can never happen again lives in cipher.test.ts's
+  // "resolveVaultKeyReadOnly (Finding 0 …)" suite, which injects a fake keychain reader. This
+  // test additionally pins the invariant at the layer `keiko support export` actually calls.
+  it("never mints a vault.key as a side effect of fingerprinting a memory vault whose key is unresolved", async () => {
+    seedMemoryVault(stateDir, memoryKeyBase64);
+
+    const result = await collectStoreFingerprints({ stateDir, env: {} });
+
+    expect(existsSync(join(stateDir, "memory", "vault.key"))).toBe(false);
+    // The store is still fingerprinted, never reported open-failed just because the key could
+    // not be resolved, and `keySource` is never "keyfile" — the one value that could only be
+    // produced by minting and persisting a new key.
+    const memoryEntry = result.fingerprints.find((entry) => entry.store === "memory-vault");
+    expect(memoryEntry).toBeDefined();
+    expect(memoryEntry?.keySource).not.toBe("keyfile");
   });
 });

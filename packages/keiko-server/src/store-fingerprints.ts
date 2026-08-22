@@ -34,7 +34,7 @@ import {
   computeStoreFingerprint as computeMemoryVaultStoreFingerprint,
   MEMORY_DB_FILENAME,
   openMemoryDatabaseReadOnly,
-  resolveVaultKey,
+  resolveVaultKeyReadOnly,
 } from "@oscharko-dev/keiko-memory-vault";
 import {
   computeStoreFingerprint as computeUiStoreFingerprint,
@@ -125,7 +125,11 @@ function memoryVaultStoreFingerprintOutcome(
     const memoryDir = env.KEIKO_MEMORY_DIR ?? join(stateDir, MEMORY_STATE_SUBDIR);
     const dbPath = join(memoryDir, MEMORY_DB_FILENAME);
     if (!existsSync(dbPath)) return unavailableOutcome("memory-vault", "missing");
-    const resolved = resolveVaultKey(env, memoryDir);
+    // `resolveVaultKeyReadOnly` (never the mutating `resolveVaultKey`) — a db that exists but
+    // answers to neither the env key nor the OS keychain must degrade `keySource` to `undefined`
+    // (computeMemoryVaultStoreFingerprint tolerates that), never mint and persist a brand-new
+    // keyfile into the very state dir this diagnostic export is trying to inspect (Finding 0).
+    const resolved = resolveVaultKeyReadOnly(env);
     const db = openMemoryDatabaseReadOnly(dbPath);
     try {
       return { fingerprint: computeMemoryVaultStoreFingerprint(db, resolved.source) };

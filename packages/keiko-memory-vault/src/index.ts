@@ -30,7 +30,9 @@ export { memoryBodySuppressionHash } from "./body-fingerprint.js";
 export {
   createMemoryContentCipher,
   resolveVaultKey,
+  resolveVaultKeyReadOnly,
   type MemoryContentCipher,
+  type ResolvedVaultKeyReadOnly,
   type VaultKeySource,
 } from "./cipher.js";
 export { computeStoreFingerprint, openMemoryDatabase, openMemoryDatabaseReadOnly } from "./db.js";

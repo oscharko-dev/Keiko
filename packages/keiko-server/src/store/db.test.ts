@@ -24,6 +24,7 @@ import {
   createInMemoryUiStore,
   createNodeUiStore,
   openNodeUiDatabase,
+  openNodeUiDatabaseReadOnly,
   SCHEMA_VERSION,
   UI_DB_BUSY_TIMEOUT_MS,
   type GroundedAnswer,
@@ -1082,6 +1083,26 @@ describe("UI DB busy_timeout (issue #639)", () => {
     const store = createInMemoryUiStore();
     expect(store.listProjects()).toEqual([]);
     store.close();
+  });
+
+  // Finding 2: the read-only diagnostic open (`keiko support export`'s fingerprint collection)
+  // must set the same busy_timeout as the production open, so a reader started against a live
+  // production server does not spuriously report the store `open-failed` on an immediate
+  // SQLITE_BUSY from a concurrent WAL checkpoint. RED (before fix): `node:sqlite`'s default
+  // busy_timeout is 0, so this assertion fails against the un-pragma'd read-only open.
+  it("sets the active PRAGMA busy_timeout on the read-only node UI database open", () => {
+    const dbPath = join(tmpDir, "busy-readonly.db");
+    openNodeUiDatabase(dbPath).close();
+
+    const db = openNodeUiDatabaseReadOnly(dbPath);
+    try {
+      const rows = db.prepare("PRAGMA busy_timeout").all() as unknown as readonly {
+        timeout: number;
+      }[];
+      expect(rows[0]?.timeout).toBe(UI_DB_BUSY_TIMEOUT_MS);
+    } finally {
+      db.close();
+    }
   });
 });
 

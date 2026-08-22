@@ -27,6 +27,7 @@ import {
   computeStoreFingerprint,
   LK_STORE_BUSY_TIMEOUT_MS,
   openKnowledgeStore,
+  openKnowledgeStoreReadOnly,
   type KnowledgeStoreKeyProvider,
 } from "./store.js";
 import { STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS } from "./store-content-encryption.js";
@@ -940,6 +941,23 @@ describe("computeStoreFingerprint", () => {
     } finally {
       store._internal.db.prepare = originalPrepare;
       store.close();
+    }
+  });
+});
+
+describe("openKnowledgeStoreReadOnly (Finding 2 — busy_timeout on the read-only diagnostic open)", () => {
+  it("sets the active PRAGMA busy_timeout to LK_STORE_BUSY_TIMEOUT_MS, not node:sqlite's default of 0", () => {
+    const dbPath = join(tmp, "capsules.db");
+    openKnowledgeStore({ dbPath }).close();
+
+    const db = openKnowledgeStoreReadOnly(dbPath);
+    try {
+      const rows = db.prepare("PRAGMA busy_timeout").all() as unknown as readonly {
+        timeout: number;
+      }[];
+      expect(rows[0]?.timeout).toBe(LK_STORE_BUSY_TIMEOUT_MS);
+    } finally {
+      db.close();
     }
   });
 });
